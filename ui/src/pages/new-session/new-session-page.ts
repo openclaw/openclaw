@@ -45,6 +45,10 @@ function folderDisplayName(path: string): string {
   return path.split(/[\\/]/).findLast((segment) => segment.length > 0) ?? path;
 }
 
+/** Focusable rows for the menu keyboard contract (menu items + browser rows). */
+const MENU_ITEM_SELECTOR =
+  ".session-menu__item:not(:disabled), .new-session-page__browser-entry:not(:disabled)";
+
 class NewSessionPage extends OpenClawLightDomElement {
   @property({ attribute: false }) data: NewSessionRouteData | undefined;
 
@@ -140,6 +144,41 @@ class NewSessionPage extends OpenClawLightDomElement {
         other.open = false;
       }
     }
+    // Keyboard contract of the replaced native selects: opening moves focus
+    // into the menu (browser content renders on the next Lit update). The
+    // summary sits outside the menu div, so this only skips when the user
+    // already focused menu content (e.g. a field).
+    void this.updateComplete.then(() => {
+      if (!details.open) {
+        return;
+      }
+      const menu = details.querySelector(".new-session-page__menu");
+      if (menu && !menu.contains(document.activeElement)) {
+        menu.querySelector<HTMLElement>(MENU_ITEM_SELECTOR)?.focus();
+      }
+    });
+  };
+
+  /** ArrowUp/Down wrap through the menu's items; Home/End jump to the edges. */
+  private readonly handleMenuKeydown = (event: KeyboardEvent) => {
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+      return;
+    }
+    const items = [
+      ...(event.currentTarget as HTMLElement).querySelectorAll<HTMLElement>(MENU_ITEM_SELECTOR),
+    ];
+    if (items.length === 0) {
+      return;
+    }
+    event.preventDefault();
+    const index = items.indexOf(document.activeElement as HTMLElement);
+    const target =
+      event.key === "Home"
+        ? items[0]
+        : event.key === "End"
+          ? items.at(-1)
+          : items[(index + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length];
+    target?.focus();
   };
 
   override updated() {
@@ -373,6 +412,11 @@ class NewSessionPage extends OpenClawLightDomElement {
   }
 
   private selectAgentId(agentId: string) {
+    // Re-picking the checked agent must not reset the draft (the native
+    // select never fired change for the same option).
+    if (normalizeAgentId(agentId) === normalizeAgentId(this.agentId)) {
+      return;
+    }
     this.agentId = normalizeAgentId(agentId);
     this.folder = this.execNode ? "" : this.workspacePath();
     this.worktree = false;
@@ -671,7 +715,12 @@ class NewSessionPage extends OpenClawLightDomElement {
             >${icons.chevronDown}</span
           >
         </summary>
-        <div class="new-session-page__menu" role="menu" aria-label=${t("newSession.agent")}>
+        <div
+          class="new-session-page__menu"
+          role="menu"
+          aria-label=${t("newSession.agent")}
+          @keydown=${this.handleMenuKeydown}
+        >
           ${agents.map((option) =>
             this.renderMenuItem({
               label: option.identity?.name ?? option.name ?? option.id,
@@ -716,7 +765,12 @@ class NewSessionPage extends OpenClawLightDomElement {
             >${icons.chevronDown}</span
           >
         </summary>
-        <div class="new-session-page__menu" role="menu" aria-label=${t("newSession.where")}>
+        <div
+          class="new-session-page__menu"
+          role="menu"
+          aria-label=${t("newSession.where")}
+          @keydown=${this.handleMenuKeydown}
+        >
           ${showNodes
             ? html`
                 <div class="new-session-page__menu-title">${t("newSession.where")}</div>
@@ -843,7 +897,10 @@ class NewSessionPage extends OpenClawLightDomElement {
             >${icons.chevronDown}</span
           >
         </summary>
-        <div class="new-session-page__menu new-session-page__menu--browser">
+        <div
+          class="new-session-page__menu new-session-page__menu--browser"
+          @keydown=${this.handleMenuKeydown}
+        >
           ${this.renderBrowser()}
         </div>
       </details>
