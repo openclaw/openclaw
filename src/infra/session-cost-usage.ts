@@ -2,12 +2,17 @@
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
+import { expectDefined } from "@openclaw/normalization-core";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { NormalizedUsage, UsageLike } from "../agents/usage.js";
 import { normalizeUsage } from "../agents/usage.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
+import {
+  materializeSessionArchiveForRead,
+  SESSION_ARCHIVE_ZSTD_SUFFIX,
+} from "../config/sessions/archive-compression.js";
 import {
   isPrimarySessionTranscriptFileName,
   isSessionArchiveArtifactName,
@@ -415,6 +420,23 @@ async function listUsageCountedTranscriptFileStats(
       if (params?.minMtimeMs !== undefined && stats.mtimeMs < params.minMtimeMs) {
         return undefined;
       }
+      // Compressed archives normalize to their materialized plain-JSONL cache
+      // at discovery, so every downstream size, incremental offset, and cache
+      // signature measures decompressed bytes; mixing offset spaces would
+      // truncate or overcount archived usage.
+      if (filePath.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX)) {
+        try {
+          const materialized = materializeSessionArchiveForRead(filePath);
+          const materializedStats = await fs.promises.stat(materialized);
+          return {
+            filePath: materialized,
+            size: materializedStats.size,
+            mtimeMs: stats.mtimeMs,
+          };
+        } catch {
+          return undefined;
+        }
+      }
       return { filePath, size: stats.size, mtimeMs: stats.mtimeMs };
     });
   const { results } = await runTasksWithConcurrency({
@@ -499,6 +521,19 @@ async function resolveUsageCostTranscriptFile(
       sessionId: marker.sessionId,
       size: stats.sizeBytes,
     };
+  }
+  if (sessionFile.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX)) {
+    try {
+      const materialized = materializeSessionArchiveForRead(sessionFile);
+      const materializedStats = await fs.promises.stat(materialized);
+      return {
+        filePath: materialized,
+        size: materializedStats.size,
+        mtimeMs: materializedStats.mtimeMs,
+      };
+    } catch {
+      return undefined;
+    }
   }
   const stats = await fs.promises.stat(sessionFile).catch(() => null);
   return stats ? { filePath: sessionFile, size: stats.size, mtimeMs: stats.mtimeMs } : undefined;
@@ -1195,9 +1230,9 @@ const computeLatencyStats = (values: number[]): SessionLatencyStats | undefined 
   return {
     count,
     avgMs: total / count,
-    p95Ms: sorted[p95Index] ?? sorted[count - 1],
-    minMs: sorted[0],
-    maxMs: sorted[count - 1],
+    p95Ms: sorted[p95Index] ?? expectDefined(sorted[count - 1], "last latency sample"),
+    minMs: expectDefined(sorted[0], "sorted entry at 0"),
+    maxMs: expectDefined(sorted[count - 1], "sorted entry at count 1"),
   };
 };
 
@@ -1382,6 +1417,13 @@ async function* readTranscriptRecords(
     for (const event of loadSqliteUsageTranscriptEvents(marker)) {
       yield event;
     }
+    return;
+  }
+  // Discovery normalizes compressed archives to their materialized cache, so
+  // this branch only serves direct callers that pass a raw .zst path; those
+  // callers never carry persisted offsets, keeping the range space coherent.
+  if (filePath.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX)) {
+    yield* readJsonlRecords(materializeSessionArchiveForRead(filePath), startOffset, endOffset);
     return;
   }
   yield* readJsonlRecords(filePath, startOffset, endOffset);

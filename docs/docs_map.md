@@ -1491,6 +1491,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Structured health checks
   - H2: Check selection
   - H2: Post-upgrade mode
+  - H2: Shared state SQLite compaction
   - H2: Session SQLite migration
   - H3: Downgrading After Session SQLite Migration
   - H2: Notes
@@ -1506,11 +1507,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Tenant IDs
   - H2: fleet create
   - H3: Create options
+  - H3: Disk limits
+  - H3: Egress policy
   - H2: fleet list
   - H2: fleet status
   - H2: fleet logs
   - H2: fleet start, fleet stop, and fleet restart
   - H2: fleet upgrade
+  - H2: fleet backup and fleet restore
+  - H2: fleet doctor
   - H2: fleet rm
   - H2: Storage and container layout
   - H2: Security profile
@@ -3962,6 +3967,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Auth detail codes quick map
   - H2: Gateway service not running
   - H2: macOS gateway silently stops responding, then resumes when you touch the dashboard
+  - H2: macOS launchd supervisor loop with duplicate gateway/node LaunchAgents
   - H2: Gateway exits during high memory use
   - H2: Gateway rejected invalid config
   - H2: Gateway probe warnings
@@ -4987,6 +4993,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H4: Gateway Canvas Host (recommended for web content)
   - H3: 8. Voice + expanded Android command surface
   - H3: 9. Workspace files (read-only)
+  - H2: Review command approvals
   - H2: Assistant entrypoints
   - H2: Notification forwarding
   - H2: Related
@@ -5025,6 +5032,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: What it does
   - H2: Requirements
   - H2: Quick start (pair + connect)
+  - H2: Review command approvals
   - H2: Optional direct Apple Watch node
   - H2: Relay-backed push for official builds
   - H2: Background alive beacons
@@ -8289,6 +8297,36 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Static Bans
   - H2: Done Criteria
 
+## refactor/operator-approvals.md
+
+- Route: /refactor/operator-approvals
+- Headings:
+  - H1: Multi-surface operator approvals
+  - H2: Goals
+  - H2: Non-goals
+  - H2: Existing system and evidence map
+  - H2: Prior art
+  - H2: Architecture and ownership
+  - H2: Persistent record
+  - H2: State machine and compare-and-set
+  - H2: Gateway API
+  - H2: Events and portable actions
+  - H2: Control UI
+  - H2: Authorization and privacy
+  - H2: Audience projection
+  - H2: Delivered-surface convergence
+  - H2: Restart, timeout, and route semantics
+  - H2: Compatibility plan
+  - H2: Rollout
+  - H3: PR 1: durable lifecycle
+  - H3: PR 2: typed actions and channel callbacks
+  - H3: PR 3: Control UI deep link
+  - H3: PR 4: native clients
+  - H3: PR 5: propagation and fail-closed behavior
+  - H2: Tests
+  - H2: Observability
+  - H2: Open decisions
+
 ## reference/AGENTS.default.md
 
 - Route: /reference/AGENTS.default
@@ -9402,6 +9440,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Plugin approval forwarding
   - H3: Same-chat approvals on any channel
   - H3: Native approval delivery
+  - H3: Official mobile operator apps
   - H3: macOS IPC flow
   - H2: FAQ
   - H3: When would accountId and threadId be used on an approval target?
@@ -10104,7 +10143,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Content security policy
   - H2: Avatar route auth
   - H2: Assistant media route auth
-  - H2: Building the UI
+  - H2: Approval links
   - H2: Blank Control UI page
   - H2: Debugging/testing: dev server + remote Gateway
   - H2: Related

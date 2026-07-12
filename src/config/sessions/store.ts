@@ -1,6 +1,7 @@
 // Session store facade coordinates reads, writes, maintenance, delivery metadata, and exports.
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalAgentRuntimeId } from "../../agents/agent-runtime-id.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
@@ -343,7 +344,7 @@ export type DeletedAgentSessionEntryPurgeParams = {
 };
 
 function cloneSessionEntry(entry: SessionEntry): SessionEntry {
-  return cloneSessionStoreRecord({ entry }).entry;
+  return expectDefined(cloneSessionStoreRecord({ entry }).entry, "cloned session entry");
 }
 
 function cloneSessionEntries(store: Record<string, SessionEntry>): Record<string, SessionEntry> {
@@ -1292,7 +1293,11 @@ export async function applySessionEntryPatchProjection<
       ...target,
       entries: cloneSessionEntryProjectionSnapshot(store).entries,
       ...(store[target.primaryKey]
-        ? { existingEntry: cloneSessionEntry(store[target.primaryKey]) }
+        ? {
+            existingEntry: cloneSessionEntry(
+              expectDefined(store[target.primaryKey], "store entry at target.primary key"),
+            ),
+          }
         : {}),
     });
     if (projected.ok) {
@@ -1508,6 +1513,32 @@ export async function rollbackAgentHarnessSessionEntryLifecycle(
     !isValidAgentHarnessSessionStoreEntry(params.target.canonicalKey, params.expectedEntry)
   ) {
     throw new Error(expectedEntryError ?? MODEL_SELECTION_LOCK_REMOVAL_MESSAGE);
+  }
+  return await deleteSessionEntryLifecycleInternal(params, true);
+}
+
+/** Rolls back the exact locked CLI row created by a failed plugin initializer. */
+export async function rollbackPluginOwnedSessionEntryLifecycle(
+  params: DeleteSessionEntryLifecycleParams & {
+    expectedEntry: SessionEntry;
+    expectedPluginOwnerId: string;
+  },
+): Promise<DeleteSessionEntryLifecycleResult> {
+  const hasExactTarget =
+    params.target.storeKeys.length === 1 &&
+    params.target.storeKeys[0] === params.target.canonicalKey;
+  const expectedEntry = params.expectedEntry;
+  const validPluginOwner = normalizeOptionalString(expectedEntry.pluginOwnerId);
+  const expectedPluginOwner = normalizeOptionalString(params.expectedPluginOwnerId);
+  if (
+    !hasExactTarget ||
+    isAgentHarnessSessionKey(params.target.canonicalKey) ||
+    expectedEntry.agentHarnessId !== undefined ||
+    expectedEntry.modelSelectionLocked !== true ||
+    !validPluginOwner ||
+    validPluginOwner !== expectedPluginOwner
+  ) {
+    throw new Error(MODEL_SELECTION_LOCK_REMOVAL_MESSAGE);
   }
   return await deleteSessionEntryLifecycleInternal(params, true);
 }

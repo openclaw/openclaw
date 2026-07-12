@@ -2,9 +2,18 @@
 
 ## Unreleased
 
+Routes exec approval review through the Gateway's durable approval records, including first-answer-wins results from other authorized surfaces, fail-closed reconciliation after ambiguous writes, and compatibility with older Gateway v4 peers.
 Shows the localized app version, Git commit, and build date together on the About screen, with real provenance in repository-backed debug builds.
 
 Recovers Android permission prompts after timeouts or cancellation without exhausting future requests. Thanks @NianJiuZst.
+
+Requires a clear in-app disclosure and fresh consent before Installed Apps can share app names, package IDs, and status with a paired Gateway; existing opt-ins must consent again. Thanks @joshavant.
+
+Adds an Android system share target that stages bounded text and image shares for review without losing existing composer drafts. Thanks @NianJiuZst.
+
+Displays configured agent avatars across Android overview, settings, and chat, with bounded data and public remote image loading. Thanks @guarismo.
+
+Shows source-configured provider model inventory, capabilities, and route-aware availability in Android without exposing runtime route details. Thanks @snowzlmbot.
 
 ## 2026.7.1 - 2026-07-08
 

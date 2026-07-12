@@ -1,4 +1,5 @@
 // Control Ui Mock Dev script supports OpenClaw repository automation.
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import qrcode from "qrcode";
@@ -34,6 +35,10 @@ const TOTAL_TELEGRAM_SESSIONS = 180;
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const uiRoot = path.join(repoRoot, "ui");
+
+function mockFileHash(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
 
 function parseArgs(args: string[]): CliOptions {
   const options: CliOptions = { allowedHosts: [], host: "127.0.0.1", port: 5187 };
@@ -753,6 +758,22 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       file: {
         ...file,
         content: sessionFileContentByPath.get(file.path) ?? "",
+        // Fake CAS token so the file panel offers edit mode against the mock.
+        hash: mockFileHash(sessionFileContentByPath.get(file.path) ?? ""),
+      },
+      root: sessionWorkspaceRoot,
+      sessionKey: "agent:alpha",
+    },
+  }));
+  const sessionFileSetCases = sessionFiles.map((file) => ({
+    match: { sessionKey: "agent:alpha", path: file.path },
+    response: {
+      file: {
+        ...file,
+        kind: "modified",
+        workspacePath: file.path,
+        hash: mockFileHash(`${file.path}:saved`),
+        updatedAtMs: baseTime,
       },
       root: sessionWorkspaceRoot,
       sessionKey: "agent:alpha",
@@ -810,7 +831,7 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
     assistantAgentId: "openclaw-mock",
     assistantName: "OpenClaw mock",
     defaultAgentId: "openclaw-mock",
-    featureMethods: ["chat.metadata", "chat.startup", "sessions.diff"],
+    featureMethods: ["chat.metadata", "chat.startup", "sessions.diff", "sessions.files.set"],
     historyMessages: buildScrollableChatHistory(baseTime),
     methodResponses: {
       "sessions.diff": buildSessionDiffMock(),
@@ -1010,6 +1031,9 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       },
       "sessions.files.get": {
         cases: sessionFileGetCases,
+      },
+      "sessions.files.set": {
+        cases: sessionFileSetCases,
       },
       "sessions.files.list": {
         cases: [
