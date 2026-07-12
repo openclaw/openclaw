@@ -4730,8 +4730,8 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         }
 
         let status = try #require(watchService.lastSentAppSnapshot?.gatewayStatus)
-        #expect(status.code == .legacy)
-        #expect(status.verbatim == "Connecting…")
+        #expect(status.code == .gatewayConnecting)
+        #expect(status.verbatim == nil)
         #expect(watchService.lastSentAppSnapshot?.gatewayStatusText == "Connecting…")
     }
 
@@ -4778,6 +4778,29 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         }
 
         #expect(watchService.lastSentAppSnapshot?.talkStatus.code == .talkThinking)
+    }
+
+    @Test @MainActor func `watch app snapshot preserves terminal push to talk failure`() async {
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(watchMessagingService: watchService)
+        appModel.talkMode._test_handleRealtimeRelayStatus("Backend rejected realtime request")
+
+        watchService.emitAppSnapshotRequest(
+            WatchAppSnapshotRequestEvent(
+                requestId: "app-snapshot-push-to-talk-failure",
+                sentAtMs: 123,
+                transport: "sendMessage"))
+        for _ in 0..<20 {
+            if watchService.lastSentAppSnapshot != nil {
+                break
+            }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        #expect(watchService.lastSentAppSnapshot?.talkStatus.code == .talkFailure)
+        #expect(
+            watchService.lastSentAppSnapshot?.talkStatus.verbatim
+                == "Backend rejected realtime request")
     }
 
     @Test @MainActor func `watch app snapshot publishes online when operator reconnects`() async {

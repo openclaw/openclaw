@@ -6051,10 +6051,16 @@ extension NodeAppModel {
         let statusText = self.gatewayStatusText == "Connected"
             ? self.operatorStatusText
             : self.gatewayStatusText
-        if statusText != "Offline" {
+        switch statusText {
+        case "Connecting…":
+            return OpenClawWatchAppStatus(code: .gatewayConnecting)
+        case "Reconnecting…":
+            return OpenClawWatchAppStatus(code: .gatewayReconnecting)
+        case "Offline":
+            return OpenClawWatchAppStatus(code: .gatewayOffline)
+        default:
             return OpenClawWatchAppStatus(code: .legacy, verbatim: statusText)
         }
-        return OpenClawWatchAppStatus(code: .gatewayOffline)
     }
 
     private static func makeWatchGatewayProblemStatus(
@@ -6099,6 +6105,12 @@ extension NodeAppModel {
         }
         if self.talkMode.hasActivePushToTalkSession {
             return self.makeWatchTalkPresentationStatus()
+        }
+        switch self.talkMode.watchPresentation {
+        case .localized, .verbatim:
+            return self.makeWatchTalkPresentationStatus()
+        case .phase:
+            break
         }
         if !self.talkMode.isEnabled {
             return OpenClawWatchAppStatus(code: .talkOff)

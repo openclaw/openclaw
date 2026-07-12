@@ -72,6 +72,7 @@ typealias WatchAppCommand = OpenClawWatchAppCommand
 
 enum WatchStatusLocalizationKey: String {
     case connected
+    case reconnecting
     case offline
     case gatewayProblemRequestIDFormat
     case ready
@@ -117,6 +118,8 @@ enum WatchStatusLocalizationKey: String {
         switch self {
         case .connected:
             String(localized: "Connected")
+        case .reconnecting:
+            String(localized: "Reconnecting…")
         case .offline:
             String(localized: "Offline")
         case .gatewayProblemRequestIDFormat:
@@ -878,6 +881,10 @@ extension OpenClawWatchAppStatus {
         return switch self.code {
         case .gatewayConnected:
             localize(.connected)
+        case .gatewayConnecting:
+            localize(.connecting)
+        case .gatewayReconnecting:
+            localize(.reconnecting)
         case .gatewayOffline:
             localize(.offline)
         case .gatewayProblem:

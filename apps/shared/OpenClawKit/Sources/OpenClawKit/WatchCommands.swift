@@ -278,6 +278,8 @@ public struct OpenClawWatchChatCompletionMessage: Codable, Sendable, Equatable {
 
 public enum OpenClawWatchAppStatusCode: String, Codable, Sendable, Equatable {
     case gatewayConnected
+    case gatewayConnecting
+    case gatewayReconnecting
     case gatewayOffline
     case gatewayProblem
     case gatewayProblemWithRequestID
@@ -611,6 +613,8 @@ public struct OpenClawWatchAppSnapshotMessage: Codable, Sendable, Equatable {
         }
         return switch status.code {
         case .gatewayConnected: "Connected"
+        case .gatewayConnecting: "Connecting…"
+        case .gatewayReconnecting: "Reconnecting…"
         case .gatewayOffline: "Offline"
         case .gatewayProblem, .gatewayProblemWithRequestID: "Gateway unavailable"
         case .talkOff: "Off"
