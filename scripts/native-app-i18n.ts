@@ -1532,14 +1532,13 @@ function choosePreviousTranslation(
 ): string | undefined {
   const counts = new Map<string, number>();
   for (const entry of entries) {
-    if (!entry.translated.trim()) {
+    if (!entry.translated.trim() || entry.translated === source) {
       continue;
     }
     counts.set(entry.translated, (counts.get(entry.translated) ?? 0) + 1);
   }
   return [...counts].toSorted(([leftValue, leftCount], [rightValue, rightCount]) => {
-    const sourcePenalty = Number(leftValue === source) - Number(rightValue === source);
-    return sourcePenalty || rightCount - leftCount || compareCodePoints(leftValue, rightValue);
+    return rightCount - leftCount || compareCodePoints(leftValue, rightValue);
   })[0]?.[0];
 }
 

@@ -697,6 +697,42 @@ describe("native app i18n inventory", () => {
       expect(
         refreshedArtifact.entries.every((entry) => entry.translated.startsWith("refreshed:")),
       ).toBe(true);
+
+      const fallbackEntries = [
+        {
+          id: "native.apple.fallback",
+          kind: "ui-call",
+          line: 1,
+          path: "apps/ios/example.swift",
+          source: "Try again",
+          surface: "apple",
+        },
+      ] satisfies NativeI18nEntry[];
+      await writeFile(
+        artifactPath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            locale: "sv",
+            glossaryHash: refreshedArtifact.glossaryHash,
+            entries: [
+              {
+                id: "native.apple.fallback.previous",
+                source: fallbackEntries[0].source,
+                translated: fallbackEntries[0].source,
+              },
+            ],
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      const retried = await syncNativeLocale("sv", fallbackEntries, {
+        glossary: [{ source: "Request", target: "Begäran" }],
+        translationsDir,
+        translate: async (pending) => new Map(pending.map((entry) => [entry.id, "Försök igen"])),
+      });
+      expect(retried).toEqual({ changed: true, translated: 1 });
     } finally {
       cleanupTempDirs(tempDirs);
     }

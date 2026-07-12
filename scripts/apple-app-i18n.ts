@@ -681,11 +681,7 @@ function validateCatalog(pathName: string, catalog: Catalog): number {
           `Apple catalog ${pathName} is missing ${locale} for ${JSON.stringify(key)}`,
         );
       }
-      if (
-        locale !== "en" &&
-        unit?.state !== "translated" &&
-        (unit?.state !== "new" || value === key)
-      ) {
+      if (locale !== "en" && unit?.state !== "translated" && unit?.state !== "new") {
         throw new Error(
           `Apple catalog ${pathName} has untranslated ${locale} copy for ${JSON.stringify(key)}`,
         );
