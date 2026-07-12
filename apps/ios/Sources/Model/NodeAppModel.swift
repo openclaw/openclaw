@@ -6103,7 +6103,7 @@ extension NodeAppModel {
     private static func makeWatchGatewayProblemStatus(
         _ problem: GatewayConnectionProblem) -> OpenClawWatchAppStatus
     {
-        let requestID = switch problem.kind {
+        let requestID: String? = switch problem.kind {
         case .pairingRequired, .pairingRoleUpgradeRequired, .pairingScopeUpgradeRequired,
              .pairingMetadataUpgradeRequired, .protocolMismatch:
             problem.requestId
