@@ -132,6 +132,10 @@
     "target": "Gateway RPC 参考"
   },
   {
+    "source": "Gateway protocol",
+    "target": "Gateway 协议"
+  },
+  {
     "source": "Secure file operations",
     "target": "安全文件操作"
   },

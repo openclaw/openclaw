@@ -8814,28 +8814,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Live Proof Policy
   - H2: Related
 
-## specs/durable-runtime-agent-session-pr-proof-2026-07-01.md
-
-- Route: /specs/durable-runtime-agent-session-pr-proof-2026-07-01
-- Headings:
-  - H1: Durable Runtime Agent/Session Wiring PR Proof - 2026-07-01
-  - H2: Scope
-  - H2: Dependency
-  - H2: Validation Snapshot
-  - H2: Typecheck and Schema Proof
-  - H2: Local Build Note
-  - H2: Remaining Proof To Add Before PR Submission
-
-## specs/durable-runtime-foundation-pr-proof-2026-07-01.md
-
-- Route: /specs/durable-runtime-foundation-pr-proof-2026-07-01
-- Headings:
-  - H1: Durable Runtime Foundation PR Proof - 2026-07-01
-  - H2: Scope
-  - H2: Review Boundary
-  - H2: Validation Checklist
-  - H2: Known Follow-Ups
-
 ## start/bootstrapping.md
 
 - Route: /start/bootstrapping
