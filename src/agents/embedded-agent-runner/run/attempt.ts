@@ -93,6 +93,7 @@ import {
 } from "../../../trajectory/metadata.js";
 import {
   createTrajectoryRuntimeRecorder,
+  recordTrajectoryToolResult,
   toTrajectoryToolDefinitions,
 } from "../../../trajectory/runtime.js";
 import { resolveUserPath } from "../../../utils.js";
@@ -3960,7 +3961,10 @@ export async function runEmbeddedAttempt(
           shouldEmitToolOutput: params.shouldEmitToolOutput,
           sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
           hasDeliveredMessageToolOnlySourceReply: () => didDeliverSourceReplyViaMessageTool,
-          onAgentToolResult: params.onAgentToolResult,
+          onAgentToolResult: (event) => {
+            recordTrajectoryToolResult(trajectoryRecorder, event);
+            params.onAgentToolResult?.(event);
+          },
           onToolResult: params.onToolResult,
           onReasoningStream: params.onReasoningStream,
           streamReasoningInNonStreamModes: params.streamReasoningInNonStreamModes,

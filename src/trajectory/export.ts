@@ -482,43 +482,6 @@ function buildTranscriptEvents(params: {
   return events;
 }
 
-/**
- * Reads the canonical active transcript branch and returns only safe tool-result
- * identifiers. Result content never crosses this boundary.
- */
-export async function readSafeTranscriptToolResultEvents(params: {
-  sessionFile: string;
-  sessionId: string;
-  sessionKey: string;
-}): Promise<TrajectoryEvent[]> {
-  const { branchEntries } = await readSessionBranch(params.sessionFile);
-  return buildTranscriptEvents({
-    entries: branchEntries,
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    workspaceDir: path.dirname(params.sessionFile),
-    traceId: params.sessionId,
-  }).flatMap((event) => {
-    if (event.type !== "tool.result" || !isRecord(event.data?.message)) {
-      return [];
-    }
-    const message = event.data.message;
-    if (message.role !== "toolResult" || typeof message.toolName !== "string") {
-      return [];
-    }
-    return [
-      {
-        ...event,
-        workspaceDir: undefined,
-        data: {
-          name: message.toolName,
-          isError: message.isError === true,
-        },
-      },
-    ];
-  });
-}
-
 function sortTrajectoryEvents(events: TrajectoryEvent[]): TrajectoryEvent[] {
   const sourceOrder: Record<TrajectoryEvent["source"], number> = {
     runtime: 0,

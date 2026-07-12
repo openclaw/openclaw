@@ -46,6 +46,23 @@ type TrajectoryRuntimeRecorder = {
   describeFlushState: () => string | undefined;
 };
 
+type SafeTrajectoryToolResult = {
+  toolName: string;
+  isError: boolean;
+};
+
+/** Records only the fields needed to prove callability for the recorder-owned run. */
+export function recordTrajectoryToolResult(
+  recorder: Pick<TrajectoryRuntimeRecorder, "recordEvent"> | null,
+  event: SafeTrajectoryToolResult,
+): void {
+  recorder?.recordEvent("tool.result", {
+    name: event.toolName,
+    success: !event.isError,
+    isError: event.isError,
+  });
+}
+
 const writers = new Map<string, TrajectoryRuntimeWriter>();
 const windowFlushes = new KeyedAsyncQueue();
 const MAX_TRAJECTORY_WRITERS = 100;

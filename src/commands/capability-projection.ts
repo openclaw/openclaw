@@ -62,7 +62,7 @@ export function resolveCapabilityProjectionTrajectoryPath(params: {
   agentId?: string;
   storePath?: string;
   env?: NodeJS.ProcessEnv;
-}): { sessionId: string; sessionFile: string; trajectoryPath: string } | null {
+}): { sessionId: string; trajectoryPath: string } | null {
   const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
   const entry = loadSessionEntry({
     agentId,
@@ -83,7 +83,6 @@ export function resolveCapabilityProjectionTrajectoryPath(params: {
   );
   return {
     sessionId: entry.sessionId,
-    sessionFile,
     trajectoryPath: resolveTrajectoryFilePath({
       env: params.env,
       sessionFile,
@@ -104,16 +103,11 @@ export async function collectCapabilityProjectionTrajectory(params: {
   if (!target) {
     return { compiled: null, successfulToolResults: [], errorCode: "MISSING_SESSION_PROJECTION" };
   }
-  return await collectExactTurnFromTrajectory(
-    target.trajectoryPath,
-    params.selection,
-    {
-      sessionId: target.sessionId,
-      sessionKey: params.sessionKey,
-      evidenceWindow: params.evidenceWindow,
-    },
-    target.sessionFile,
-  );
+  return await collectExactTurnFromTrajectory(target.trajectoryPath, params.selection, {
+    sessionId: target.sessionId,
+    sessionKey: params.sessionKey,
+    evidenceWindow: params.evidenceWindow,
+  });
 }
 
 function selectionMode(

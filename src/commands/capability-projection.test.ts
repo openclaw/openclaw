@@ -786,13 +786,11 @@ describe("capability projection acceptance fixtures", () => {
     expect(wrongSession.errorCode).toBe("MISSING_SESSION_PROJECTION");
   });
 
-  it("verifies a successful tool result from the canonical transcript branch", async () => {
+  it("verifies only a runtime tool result carrying the selected run identity", async () => {
     const dir = await makeTempDir();
     const trajectory = path.join(dir, "fixture.trajectory.jsonl");
-    const transcript = path.join(dir, "fixture.jsonl");
-    await fs.writeFile(
-      trajectory,
-      `${JSON.stringify({
+    const events = [
+      {
         traceSchema: "openclaw-trajectory",
         schemaVersion: 1,
         traceId: "t",
@@ -804,36 +802,22 @@ describe("capability projection acceptance fixtures", () => {
         sessionKey,
         runId,
         data: { tools: [{ name: "memory_get" }] },
-      })}\n`,
-    );
-    await fs.writeFile(
-      transcript,
-      `${[
-        {
-          type: "session",
-          version: 3,
-          id: "s",
-          timestamp: "2026-07-12T15:59:00.000Z",
-          cwd: dir,
-        },
-        {
-          type: "message",
-          id: "result-1",
-          parentId: null,
-          timestamp: "2026-07-12T16:00:00.500Z",
-          message: {
-            role: "toolResult",
-            toolCallId: "call-1",
-            toolName: "memory_get",
-            content: [{ type: "text", text: "private result must be discarded" }],
-            isError: false,
-            timestamp: Date.parse("2026-07-12T16:00:00.500Z"),
-          },
-        },
-      ]
-        .map((entry) => JSON.stringify(entry))
-        .join("\n")}\n`,
-    );
+      },
+      {
+        traceSchema: "openclaw-trajectory",
+        schemaVersion: 1,
+        traceId: "t",
+        source: "runtime",
+        type: "tool.result",
+        ts: "2026-07-12T16:00:00.500Z",
+        seq: 2,
+        sessionId: "s",
+        sessionKey,
+        runId,
+        data: { name: "memory_get", success: true, result: "private result must be discarded" },
+      },
+    ];
+    await fs.writeFile(trajectory, `${events.map((event) => JSON.stringify(event)).join("\n")}\n`);
     const collected = await collectExactTurnFromTrajectory(
       trajectory,
       { mode: "exact_run_id", runId },
@@ -842,7 +826,6 @@ describe("capability projection acceptance fixtures", () => {
         sessionKey,
         evidenceWindow: { start: "2026-07-12T15:59:00Z", end: "2026-07-12T16:01:00Z" },
       },
-      transcript,
     );
     expect(collected.successfulToolResults).toEqual([
       {

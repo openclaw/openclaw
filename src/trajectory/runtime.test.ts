@@ -9,7 +9,11 @@ import {
   resolveTrajectoryPointerFilePath,
   resolveTrajectoryPointerOpenFlags,
 } from "./paths.js";
-import { createTrajectoryRuntimeRecorder, toTrajectoryToolDefinitions } from "./runtime.js";
+import {
+  createTrajectoryRuntimeRecorder,
+  recordTrajectoryToolResult,
+  toTrajectoryToolDefinitions,
+} from "./runtime.js";
 
 type TrajectoryRuntimeRecorder = NonNullable<ReturnType<typeof createTrajectoryRuntimeRecorder>>;
 
@@ -103,6 +107,38 @@ describe("trajectory runtime", () => {
     expect(JSON.stringify(parsed.data)).not.toContain("sk-other-secret-token");
     expect(JSON.stringify(parsed.data)).not.toContain("ya29.fake-access-token");
     expect(JSON.stringify(parsed.data)).not.toContain("abcd-efgh-ijkl-mnop");
+  });
+
+  it("records tool completion without arguments or result content", () => {
+    const writes: string[] = [];
+    const recorder = expectTrajectoryRuntimeRecorder(
+      createTrajectoryRuntimeRecorder({
+        runId: "run-1",
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        writer: {
+          filePath: "/tmp/session.trajectory.jsonl",
+          write: (line) => {
+            writes.push(line);
+          },
+          flush: async () => undefined,
+        },
+      }),
+    );
+
+    recordTrajectoryToolResult(recorder, { toolName: "memory_get", isError: false });
+
+    const parsed = JSON.parse(writes[0]);
+    expect(parsed).toMatchObject({
+      type: "tool.result",
+      source: "runtime",
+      runId: "run-1",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      data: { name: "memory_get", success: true, isError: false },
+    });
+    expect(parsed.data).not.toHaveProperty("result");
+    expect(parsed.data).not.toHaveProperty("arguments");
   });
 
   it("bounds large runtime event fields before serialization", () => {

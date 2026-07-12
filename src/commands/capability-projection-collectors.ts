@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { readSafeTranscriptToolResultEvents } from "../trajectory/export.js";
 import type { TrajectoryEvent } from "../trajectory/types.js";
 import type {
   CapabilityName,
@@ -351,8 +350,11 @@ function successfulResult(
   runId: string,
   expected: ExpectedTrajectoryContext,
 ): SafeExistingToolResult | null {
+  // Transcript timestamps do not prove run ownership. Only runtime events with
+  // the selected run identity may upgrade callability to verified.
   if (
-    (event.source === "runtime" ? event.runId !== runId : event.source !== "transcript") ||
+    event.source !== "runtime" ||
+    event.runId !== runId ||
     event.sessionId !== expected.sessionId ||
     event.sessionKey !== expected.sessionKey ||
     event.type !== "tool.result" ||
@@ -375,9 +377,7 @@ function successfulResult(
         ? event.data.toolName
         : null;
   const success =
-    event.data.success === true ||
-    (event.source === "transcript" && event.data.isError !== true) ||
-    (event.data.isError !== true && event.data.status === "ok");
+    event.data.success === true || (event.data.isError !== true && event.data.status === "ok");
   return toolName && success ? { ts: event.ts, runId, toolName, success: true } : null;
 }
 
@@ -389,7 +389,6 @@ export async function collectExactTurnFromTrajectory(
   trajectoryPath: string,
   selection: ExactTurnSelection,
   expected: ExpectedTrajectoryContext,
-  transcriptPath?: string,
 ): Promise<TrajectoryCollection> {
   try {
     const evidenceWindowStart = Date.parse(expected.evidenceWindow.start);
@@ -425,31 +424,9 @@ export async function collectExactTurnFromTrajectory(
       return { compiled: null, successfulToolResults: [], errorCode: "EVIDENCE_COLLECTION_FAILED" };
     }
     const lines = (await fs.readFile(trajectoryPath, "utf8")).split("\n");
-    const runtimeEvents = lines.flatMap((line) => {
+    const events = lines.flatMap((line) => {
       const event = parseEvent(line);
       return event ? [event] : [];
-    });
-    const transcriptEvents = transcriptPath
-      ? await readSafeTranscriptToolResultEvents({
-          sessionFile: transcriptPath,
-          sessionId: expected.sessionId,
-          sessionKey: expected.sessionKey,
-        })
-      : [];
-    const sourceOrder: Record<TrajectoryEvent["source"], number> = {
-      runtime: 0,
-      transcript: 1,
-      export: 2,
-    };
-    const events = [...runtimeEvents, ...transcriptEvents].toSorted((left, right) => {
-      const byTimestamp = Date.parse(left.ts) - Date.parse(right.ts);
-      if (byTimestamp !== 0) {
-        return byTimestamp;
-      }
-      const bySource = sourceOrder[left.source] - sourceOrder[right.source];
-      return bySource !== 0
-        ? bySource
-        : (left.sourceSeq ?? left.seq) - (right.sourceSeq ?? right.seq);
     });
     const candidates = events.flatMap((event, index) => {
       const compiled = toCompiled(event);
