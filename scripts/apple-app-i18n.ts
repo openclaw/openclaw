@@ -538,6 +538,8 @@ function appleCatalogValue(value: string): string {
 }
 
 function chooseTranslation(source: string, translations: readonly string[]): string {
+  // Apple catalogs key by source, so duplicate native contexts must converge.
+  // Preserve shipped values first; otherwise choose deterministically and report every conflict.
   const counts = new Map<string, number>();
   for (const translation of translations) {
     counts.set(translation, (counts.get(translation) ?? 0) + 1);
