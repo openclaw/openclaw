@@ -76,7 +76,7 @@ const updatePairedDeviceMetadataMock = vi.hoisted(() => vi.fn().mockResolvedValu
 const updatePairedNodeMetadataMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
 
 const runtimeMocks = vi.hoisted(() => ({
-  agentCommandFromIngress: ingressAgentCommandMock,
+  agentCommand: ingressAgentCommandMock,
   buildOutboundSessionContext: vi.fn(({ sessionKey }: { sessionKey: string }) => ({
     key: sessionKey,
     agentId: "main",
@@ -158,7 +158,7 @@ import {
 const enqueueSystemEventMock = runtimeMocks.enqueueSystemEvent;
 const requestHeartbeatMock = runtimeMocks.requestHeartbeat;
 const loadConfigMock = runtimeMocks.getRuntimeConfig;
-const agentCommandMock = runtimeMocks.agentCommandFromIngress;
+const agentCommandMock = runtimeMocks.agentCommand;
 const canonicalizeSessionEntryAliasesMock = runtimeMocks.canonicalizeSessionEntryAliases;
 const loadSessionEntryMock = runtimeMocks.loadSessionEntry;
 const registerApnsRegistrationVi = runtimeMocks.registerApnsRegistration;

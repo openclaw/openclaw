@@ -337,7 +337,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/string-coerce-runtime` | Narrow primitive record/string coercion and normalization helpers without markdown/logging imports |
     | `plugin-sdk/host-runtime` | Hostname and SCP host normalization helpers |
     | `plugin-sdk/retry-runtime` | Retry config and retry runner helpers |
-    | `plugin-sdk/agent-runtime` | Deprecated broad barrel for agent dir/identity/workspace helpers, including `resolveAgentDir`, `resolveDefaultAgentDir`, and the deprecated `resolveOpenClawAgentDir` compatibility export; prefer focused agent/runtime subpaths |
+    | `plugin-sdk/agent-runtime` | Deprecated broad barrel for agent dir/identity/workspace helpers and the channel-only `agentCommandFromIngress` compatibility API. The trusted host command is not exported. Raw ingress calls must include explicit conversation identity facts; prefer focused agent/runtime subpaths and the shared channel inbound runner. |
     | `plugin-sdk/directory-runtime` | Config-backed directory query/dedup |
     | `plugin-sdk/keyed-async-queue` | `KeyedAsyncQueue` |
   </Accordion>

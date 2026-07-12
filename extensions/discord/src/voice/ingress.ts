@@ -2,6 +2,7 @@
 import { agentCommandFromIngress } from "openclaw/plugin-sdk/agent-runtime";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveRealtimeBootstrapContextInstructions } from "openclaw/plugin-sdk/realtime-bootstrap-context";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import { createSubsystemLogger, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatMention } from "../mentions.js";
@@ -16,6 +17,18 @@ const DISCORD_VOICE_MESSAGE_PROVIDER = "discord-voice";
 const logger = createSubsystemLogger("discord/voice");
 
 export type DiscordVoiceIngressContext = {
+  /** Optional only for compatibility with callers that predate raw-ingress admission. */
+  conversationIdentity?: {
+    origin: "channel";
+    senderIsConfiguredOwner: boolean;
+    source: {
+      channel: string;
+      accountId: string;
+      peer: { kind: "channel"; id: string };
+      guildId: string;
+      memberRoleIds: string[];
+    };
+  };
   extraSystemPrompt?: string;
   senderIsOwner: boolean;
   speakerLabel: string;
@@ -97,7 +110,19 @@ export async function resolveDiscordVoiceIngressContext(params: {
   if (!access.ok) {
     return null;
   }
+  const conversationIdentity = {
+    origin: "channel",
+    senderIsConfiguredOwner: speaker.senderIsOwner,
+    source: {
+      channel: "discord",
+      accountId: entry.route.accountId ?? DEFAULT_ACCOUNT_ID,
+      peer: { kind: "channel", id: entry.sessionChannelId },
+      guildId: entry.guildId,
+      memberRoleIds: speakerIdentity.memberRoleIds,
+    },
+  } as const;
   return {
+    conversationIdentity,
     extraSystemPrompt: buildDiscordGroupSystemPrompt(access.channelConfig),
     senderIsOwner: speaker.senderIsOwner,
     speakerLabel: speaker.label,
@@ -144,6 +169,7 @@ export async function runDiscordVoiceAgentTurn(params: {
       model: voiceModel,
       toolsAllow: params.toolsAllow,
       deliver: false,
+      conversationIdentity: context.conversationIdentity,
     },
     params.runtime,
   );

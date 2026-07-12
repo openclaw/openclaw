@@ -9,6 +9,32 @@ const LEGACY_CONFIG_MIGRATE_TEST_PATH = [
 
 export const PLUGIN_COMPAT_RECORDS = [
   {
+    code: "agent-runtime-trusted-command-export",
+    status: "removed",
+    owner: "agent-runtime",
+    introduced: "2026-07-11",
+    replacement: "channel-scoped `agentCommandFromIngress(...)`",
+    docsPath: "/plugins/sdk-runtime#raw-agent-ingress-identity",
+    surfaces: ["openclaw/plugin-sdk/agent-runtime agentCommand"],
+    diagnostics: ["Plugin SDK import/export failure for the removed trusted entrypoint"],
+    tests: ["src/commands/agent.test.ts", "src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "The trusted `agentCommand` host entrypoint is no longer exported through the Plugin SDK; channel plugins must use the audience-checked ingress API.",
+  },
+  {
+    code: "agent-ingress-missing-conversation-identity",
+    status: "removed",
+    owner: "agent-runtime",
+    introduced: "2026-07-11",
+    replacement: "explicit `conversationIdentity` on `agentCommandFromIngress(...)`",
+    docsPath: "/plugins/sdk-runtime#raw-agent-ingress-identity",
+    surfaces: ["openclaw/plugin-sdk/agent-runtime agentCommandFromIngress"],
+    diagnostics: ["agent ingress compatibility warning followed by fail-closed denial"],
+    tests: ["src/commands/agent.test.ts", "src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "Raw agent ingress now requires explicit conversation provenance; omitted provenance remains type-compatible but is denied at runtime.",
+  },
+  {
     code: "legacy-before-agent-start",
     status: "deprecated",
     owner: "sdk",

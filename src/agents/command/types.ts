@@ -6,6 +6,7 @@ import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import type { SpawnedRunMetadata } from "../../agents/spawned-context.js";
 import type { PromptMode } from "../../agents/system-prompt.types.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
+import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { PluginHookChannelContext } from "../../plugins/hook-types.js";
@@ -110,6 +111,12 @@ export type AgentCommandOpts = {
   bashElevated?: ExecElevatedDefaults;
   /** Trusted sender identity bit for command/channel-action auth; defaults true for local CLI calls. */
   senderIsOwner?: boolean;
+  /** Internal raw-ingress admission request; validated before execution setup. */
+  ingressAdmission?: {
+    conversationIdentity?: AgentCommandIngressConversationIdentityContext;
+  };
+  /** Internal host call should emit the raw-ingress model usage diagnostic. */
+  emitIngressModelUsageDiagnostic?: boolean;
   /** Whether this caller is authorized to use provider/model per-run overrides. */
   allowModelOverride?: boolean;
   /** Optional runtime tool allow-list; when set, only these tools are exposed for this run. */
@@ -184,11 +191,34 @@ export type AgentCommandOpts = {
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
 };
 
+export type AgentCommandIngressConversationIdentityContext = {
+  origin: "channel";
+  senderIsConfiguredOwner: boolean;
+  source: {
+    channel: string;
+    accountId?: string | null;
+    peer?: { kind: ChatType; id: string } | null;
+    parentPeer?: { kind: ChatType; id: string } | null;
+    guildId?: string | null;
+    teamId?: string | null;
+    memberRoleIds?: string[];
+  };
+};
+
 /** Restricted option surface for external ingress callsites. */
 export type AgentCommandIngressOpts = Omit<
   AgentCommandOpts,
-  "senderIsOwner" | "allowModelOverride" | "resultMetaOverrides"
+  | "senderIsOwner"
+  | "allowModelOverride"
+  | "resultMetaOverrides"
+  | "ingressAdmission"
+  | "emitIngressModelUsageDiagnostic"
 > & {
+  /**
+   * Required provenance for a raw agent ingress run. Kept optional in the type
+   * only so existing plugins compile; omission fails closed at runtime.
+   */
+  conversationIdentity?: AgentCommandIngressConversationIdentityContext;
   /** Trusted sender identity bit for command/channel-action auth; defaults false for ingress. */
   senderIsOwner?: boolean;
   /** Ingress callsites must always pass explicit model-override authorization state. */

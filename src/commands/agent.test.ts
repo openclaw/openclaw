@@ -33,6 +33,7 @@ import {
 } from "../infra/agent-events.js";
 import type { PluginProviderRegistration } from "../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { resolveAgentRoute } from "../routing/resolve-route.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-harness-session-key.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
@@ -42,7 +43,11 @@ import {
   createOutboundTestPlugin,
   createTestRegistry,
 } from "../test-utils/channel-plugins.js";
-import { agentCommand, agentCommandFromIngress, testing as agentCommandTesting } from "./agent.js";
+import {
+  agentCommand,
+  agentCommandFromIngress as agentCommandFromIngressActual,
+  testing as agentCommandTesting,
+} from "./agent.js";
 import { createThrowingTestRuntime } from "./test-runtime-config-helpers.js";
 
 const configIoMocks = vi.hoisted(() => ({
@@ -262,6 +267,20 @@ vi.mock("../config/sessions/transcript-resolve.runtime.js", () => {
 
 const runtime = createThrowingTestRuntime();
 
+function agentCommandFromIngress(...args: Parameters<typeof agentCommandFromIngressActual>) {
+  const [opts, runtimeOverride, deps] = args;
+  const { conversationIdentity: _conversationIdentity, ...commandOpts } = opts;
+  return agentCommand(
+    {
+      ...commandOpts,
+      senderIsOwner: opts.senderIsOwner ?? false,
+      emitIngressModelUsageDiagnostic: true,
+    },
+    runtimeOverride,
+    deps,
+  );
+}
+
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(fn, {
     prefix: "openclaw-agent-",
@@ -293,6 +312,10 @@ function mockConfig(
     },
   } as OpenClawConfig;
   configIoMocks.loadConfig.mockReturnValue(cfg);
+  configIoMocks.readConfigFileSnapshotForWrite.mockResolvedValue({
+    snapshot: { valid: true, resolved: cfg },
+    writeOptions: {},
+  });
   return cfg;
 }
 
@@ -393,6 +416,7 @@ beforeEach(() => {
   clearSessionStoreCacheForTest();
   resetAgentEventsForTest();
   resetAgentRunContextForTest();
+  agentCommandTesting.resetIngressIdentityWarningForTest();
   acpManagerTesting.resetAcpSessionManagerForTests();
   runtimeSnapshotModule.clearRuntimeConfigSnapshot();
   vi.mocked(runEmbeddedAgent).mockResolvedValue(createDefaultAgentResult());
@@ -465,7 +489,7 @@ describe("agentCommand", () => {
   it("enforces ingress model override authorization", async () => {
     await expect(
       // Runtime guard for non-TS callers; TS callsites are statically typed.
-      agentCommandFromIngress(
+      agentCommandFromIngressActual(
         {
           message: "hi",
           to: "+1555",
@@ -473,6 +497,336 @@ describe("agentCommand", () => {
         runtime,
       ),
     ).rejects.toThrow("allowModelOverride must be explicitly set for ingress agent runs.");
+  });
+
+  it("keeps legacy ingress options source-compatible but fails closed before workspace setup", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+      const legacyOptions: Parameters<typeof agentCommandFromIngressActual>[0] = {
+        message: "hi",
+        agentId: "main",
+        allowModelOverride: false,
+      };
+
+      await expect(agentCommandFromIngressActual(legacyOptions, runtime)).rejects.toThrow(
+        "conversationIdentity must be explicitly set for ingress agent runs.",
+      );
+
+      expect(ensureAgentWorkspace).not.toHaveBeenCalled();
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+      expect(configIoMocks.readConfigFileSnapshotForWrite).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("denies unknown ingress identity origins", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store, undefined, undefined, [{ id: "main", default: true }]);
+
+      await expect(
+        agentCommandFromIngressActual(
+          {
+            message: "hi",
+            agentId: "main",
+            allowModelOverride: false,
+            conversationIdentity: { origin: "unknown" } as never,
+          },
+          runtime,
+        ),
+      ).rejects.toThrow("This conversation is not configured for agent access.");
+
+      expect(ensureAgentWorkspace).not.toHaveBeenCalled();
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rejects host-only origins on the public ingress API", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+
+      await expect(
+        agentCommandFromIngressActual(
+          {
+            message: "operator request",
+            agentId: "main",
+            allowModelOverride: false,
+            conversationIdentity: { origin: "operator" },
+          } as never,
+          runtime,
+        ),
+      ).rejects.toThrow("This conversation is not configured for agent access.");
+
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("admits direct configured-owner ingress to the default personal agent", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const cfg = mockConfig(home, store, undefined, undefined, [{ id: "main", default: true }]);
+      const conversationIdentity = {
+        origin: "channel",
+        senderIsConfiguredOwner: true,
+        source: {
+          channel: "discord",
+          accountId: "default",
+          peer: { kind: "direct", id: "owner" },
+        },
+      } as const;
+      const sessionKey = resolveAgentRoute({ cfg, ...conversationIdentity.source }).sessionKey;
+
+      await agentCommandFromIngressActual(
+        {
+          message: "private request",
+          agentId: "main",
+          sessionKey,
+          allowModelOverride: false,
+          conversationIdentity,
+        },
+        runtime,
+      );
+
+      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("does not let the legacy owner bit override channel provenance", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const cfg = mockConfig(home, store, undefined, undefined, [{ id: "main", default: true }]);
+      const source = {
+        channel: "discord",
+        accountId: "default",
+        peer: { kind: "direct" as const, id: "guest" },
+      };
+      const sessionKey = resolveAgentRoute({ cfg, ...source }).sessionKey;
+
+      await expect(
+        agentCommandFromIngressActual(
+          {
+            message: "private request",
+            agentId: "main",
+            sessionKey,
+            senderIsOwner: true,
+            allowModelOverride: false,
+            conversationIdentity: {
+              origin: "channel",
+              senderIsConfiguredOwner: false,
+              source,
+            },
+          },
+          runtime,
+        ),
+      ).rejects.toThrow("This conversation is not configured for agent access.");
+
+      expect(ensureAgentWorkspace).not.toHaveBeenCalled();
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("admits a shared ingress only when its current binding selects the service agent", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const cfg = mockConfig(home, store, undefined, undefined, [
+        { id: "main", default: true },
+        { id: "referrals" },
+      ]);
+      cfg.bindings = [
+        {
+          agentId: "referrals",
+          match: { channel: "discord", peer: { kind: "channel", id: "referrals" } },
+        },
+      ];
+      const conversationIdentity = {
+        origin: "channel",
+        senderIsConfiguredOwner: false,
+        source: {
+          channel: "discord",
+          accountId: "default",
+          peer: { kind: "channel", id: "referrals" },
+        },
+      } as const;
+      const sessionKey = resolveAgentRoute({ cfg, ...conversationIdentity.source }).sessionKey;
+
+      await agentCommandFromIngressActual(
+        {
+          message: "submit referral",
+          agentId: "referrals",
+          sessionKey,
+          allowModelOverride: false,
+          conversationIdentity,
+        },
+        runtime,
+      );
+
+      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+    });
+  });
+
+  it.each([
+    {
+      name: "another same-agent session",
+      selectors: { sessionKey: "agent:referrals:discord:channel:other" },
+    },
+    {
+      name: "an explicit session id",
+      selectors: { sessionId: "other-session" },
+    },
+    {
+      name: "an alternate recipient selector",
+      selectors: { to: "agent:referrals:discord:channel:other" },
+    },
+  ])("denies channel ingress targeting $name", async ({ selectors }) => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const cfg = mockConfig(home, store, undefined, undefined, [
+        { id: "main", default: true },
+        { id: "referrals" },
+      ]);
+      cfg.bindings = [
+        {
+          agentId: "referrals",
+          match: { channel: "discord", peer: { kind: "channel", id: "referrals" } },
+        },
+      ];
+      const source = {
+        channel: "discord",
+        accountId: "default",
+        peer: { kind: "channel" as const, id: "referrals" },
+      };
+      const canonicalSessionKey = resolveAgentRoute({ cfg, ...source }).sessionKey;
+
+      await expect(
+        agentCommandFromIngressActual(
+          {
+            message: "cross-audience request",
+            agentId: "referrals",
+            sessionKey: canonicalSessionKey,
+            ...selectors,
+            allowModelOverride: false,
+            conversationIdentity: {
+              origin: "channel",
+              senderIsConfiguredOwner: false,
+              source,
+            },
+          },
+          runtime,
+        ),
+      ).rejects.toThrow("This conversation is not configured for agent access.");
+
+      expect(configIoMocks.readConfigFileSnapshotForWrite).toHaveBeenCalledOnce();
+      expect(ensureAgentWorkspace).not.toHaveBeenCalled();
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("ignores extra route-source keys instead of accepting caller-supplied config", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const cfg = mockConfig(home, store, undefined, undefined, [
+        { id: "main", default: true },
+        { id: "referrals" },
+      ]);
+      const attackerConfig = structuredClone(cfg);
+      attackerConfig.bindings = [
+        {
+          agentId: "referrals",
+          match: { channel: "discord", peer: { kind: "channel", id: "general" } },
+        },
+      ];
+      const attackerRoute = resolveAgentRoute({
+        cfg: attackerConfig,
+        channel: "discord",
+        accountId: "default",
+        peer: { kind: "channel", id: "general" },
+      });
+
+      await expect(
+        agentCommandFromIngressActual(
+          {
+            message: "forged binding",
+            agentId: "referrals",
+            sessionKey: attackerRoute.sessionKey,
+            allowModelOverride: false,
+            conversationIdentity: {
+              origin: "channel",
+              senderIsConfiguredOwner: false,
+              source: {
+                channel: "discord",
+                accountId: "default",
+                peer: { kind: "channel", id: "general" },
+                cfg: attackerConfig,
+              } as never,
+            },
+          },
+          runtime,
+        ),
+      ).rejects.toThrow("This conversation is not configured for agent access.");
+
+      expect(configIoMocks.readConfigFileSnapshotForWrite).toHaveBeenCalledOnce();
+      expect(ensureAgentWorkspace).not.toHaveBeenCalled();
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each([
+    {
+      name: "unbound shared audience",
+      agentId: "main",
+      sessionKey: "agent:main:discord:channel:general",
+      senderIsConfiguredOwner: true,
+      peer: { kind: "channel" as const, id: "general" },
+    },
+    {
+      name: "non-owner personal audience",
+      agentId: "main",
+      sessionKey: "agent:main:discord:direct:guest",
+      senderIsConfiguredOwner: false,
+      peer: { kind: "direct" as const, id: "guest" },
+    },
+    {
+      name: "mismatched service target",
+      agentId: "main",
+      sessionKey: "agent:main:discord:channel:referrals",
+      senderIsConfiguredOwner: false,
+      peer: { kind: "channel" as const, id: "referrals" },
+    },
+  ])("denies $name before workspace setup", async (testCase) => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const cfg = mockConfig(home, store, undefined, undefined, [
+        { id: "main", default: true },
+        { id: "referrals" },
+      ]);
+      cfg.bindings = [
+        {
+          agentId: "referrals",
+          match: { channel: "discord", peer: { kind: "channel", id: "referrals" } },
+        },
+      ];
+
+      await expect(
+        agentCommandFromIngressActual(
+          {
+            message: "blocked",
+            agentId: testCase.agentId,
+            sessionKey: testCase.sessionKey,
+            allowModelOverride: false,
+            conversationIdentity: {
+              origin: "channel",
+              senderIsConfiguredOwner: testCase.senderIsConfiguredOwner,
+              source: { channel: "discord", accountId: "default", peer: testCase.peer },
+            },
+          },
+          runtime,
+        ),
+      ).rejects.toThrow("This conversation is not configured for agent access.");
+
+      expect(ensureAgentWorkspace).not.toHaveBeenCalled();
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    });
   });
 
   it("rejects a missing harness-owned session before local CLI dispatch", async () => {
