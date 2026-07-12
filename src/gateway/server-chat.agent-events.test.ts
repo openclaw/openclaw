@@ -3212,7 +3212,7 @@ describe("agent event handler", () => {
       data: { phase: "end", aborted: true, stopReason: "aborted" },
     });
 
-    expect(chatBroadcastCalls(broadcast)[0][1]).toMatchObject({
+    expect(chatBroadcastCalls(broadcast)[0]?.[1]).toMatchObject({
       runId: "client-validation-loop",
       sessionKey: "session-validation-loop",
       state: "aborted",
@@ -3247,7 +3247,7 @@ describe("agent event handler", () => {
       data: { phase: "error", aborted: true, stopReason: "aborted" },
     });
 
-    expect(chatBroadcastCalls(broadcast)[0][1]).toMatchObject({
+    expect(chatBroadcastCalls(broadcast)[0]?.[1]).toMatchObject({
       runId: "client-validation-loop",
       sessionKey: "session-validation-loop",
       state: "aborted",
