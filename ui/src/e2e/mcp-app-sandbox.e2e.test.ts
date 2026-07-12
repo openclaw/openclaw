@@ -232,6 +232,15 @@ describeControlUiE2e("MCP App sandbox proxy", () => {
       await expect.poll(() => outerFrame.getAttribute("style")).toContain("height: 360px");
 
       await outerFrame.evaluate((element) => element.setAttribute("data-e2e-instance", "stable"));
+      await toolRow.click();
+      await expect.poll(() => toolRow.getAttribute("aria-expanded")).toBe("true");
+      await expect.poll(() => outerFrame.getAttribute("data-e2e-instance")).toBe("stable");
+      await app.getByText("initialized input:circle result:ready").waitFor({
+        state: "visible",
+        timeout: 10_000,
+      });
+      expect(resourceRequestCount).toBe(1);
+
       await gateway.emitChatFinal({ runId: "rerender", text: "rerender complete" });
       await page.getByText("rerender complete").waitFor({ state: "visible", timeout: 10_000 });
       await expect.poll(() => outerFrame.getAttribute("data-e2e-instance")).toBe("stable");

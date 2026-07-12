@@ -7,9 +7,10 @@ import { buildControlUiCspHeader } from "./control-ui-csp.js";
 import { respondNotFound } from "./control-ui-http-utils.js";
 
 const TICKET_SCOPE = "mcp-app-sandbox";
-const TICKET_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_CSP_DOMAINS = 64;
 const MAX_CSP_ORIGIN_CHARS = 512;
+// Page capabilities remain valid for this process lifetime; restart rotates the
+// signing secret and invalidates every open page without a separate token store.
 const ticketSecret = randomBytes(32);
 
 export type ControlUiMcpAppCsp = {
@@ -132,18 +133,18 @@ export function buildControlUiMcpAppSandboxCspHeader(csp: ControlUiMcpAppCsp): s
   ].join("; ");
 }
 
-export function createControlUiMcpAppSandboxTicket(now = Date.now()): string {
+export function createControlUiMcpAppSandboxTicket(): string {
   const payload = Buffer.from(
     JSON.stringify({
       scope: TICKET_SCOPE,
-      exp: now + TICKET_TTL_MS,
+      nonce: randomBytes(16).toString("base64url"),
     }),
   ).toString("base64url");
   const signature = createHmac("sha256", ticketSecret).update(payload).digest("base64url");
   return `${payload}.${signature}`;
 }
 
-function verifyTicket(ticket: string | null, now = Date.now()): boolean {
+function verifyTicket(ticket: string | null): boolean {
   if (!ticket) {
     return false;
   }
@@ -164,13 +165,12 @@ function verifyTicket(ticket: string | null, now = Date.now()): boolean {
   try {
     const parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as {
       scope?: unknown;
-      exp?: unknown;
+      nonce?: unknown;
     };
     return (
       parsed.scope === TICKET_SCOPE &&
-      typeof parsed.exp === "number" &&
-      Number.isFinite(parsed.exp) &&
-      parsed.exp >= now
+      typeof parsed.nonce === "string" &&
+      /^[A-Za-z0-9_-]{22}$/.test(parsed.nonce)
     );
   } catch {
     return false;

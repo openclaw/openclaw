@@ -964,6 +964,25 @@ describe("handleControlUiHttpRequest", () => {
   it("serves the fixed MCP App sandbox proxy without putting a ticket in its URL", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
+        const indexResponse = makeMockHttpResponse();
+        await handleControlUiHttpRequest(
+          { url: "/", method: "GET" } as IncomingMessage,
+          indexResponse.res,
+          { root: { kind: "resolved", path: tmp } },
+        );
+        const ticket = responseBody(indexResponse.end).match(
+          new RegExp(`${CONTROL_UI_MCP_APP_SANDBOX_TICKET_ATTRIBUTE}="([^"]+)"`),
+        )?.[1];
+        expect(ticket).toBeTruthy();
+        const ticketPayload = JSON.parse(
+          Buffer.from(ticket?.split(".")[0] ?? "", "base64url").toString("utf8"),
+        ) as Record<string, unknown>;
+        expect(ticketPayload).toMatchObject({
+          scope: "mcp-app-sandbox",
+          nonce: expect.stringMatching(/^[A-Za-z0-9_-]{22}$/),
+        });
+        expect(ticketPayload).not.toHaveProperty("exp");
+
         const csp = encodeURIComponent(
           JSON.stringify({
             connectDomains: [
