@@ -7,13 +7,14 @@ import {
   mergeScopedSearchConfig,
   parseIsoDateRange,
   readCachedSearchPayload,
+  readConfiguredSecretString,
   readPositiveIntegerParam,
+  readProviderEnvValue,
   readStringParam,
   resolveProviderWebSearchPluginConfig,
   resolveSearchCacheTtlMs,
   resolveSearchTimeoutSeconds,
   resolveSiteName,
-  resolveWebSearchProviderCredential,
   type SearchConfigRecord,
   withTrustedWebSearchEndpoint,
   wrapWebContent,
@@ -36,7 +37,7 @@ const EXA_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 const EXA_SEARCH_JSON_MAX_BYTES = 16 * 1024 * 1024;
 
 type ExaConfig = {
-  apiKey?: unknown;
+  apiKey?: string;
   baseUrl?: string;
 };
 
@@ -110,11 +111,10 @@ function resolveExaConfig(searchConfig?: SearchConfigRecord): ExaConfig {
 }
 
 function resolveExaApiKey(exa?: ExaConfig): string | undefined {
-  return resolveWebSearchProviderCredential({
-    credentialValue: exa?.apiKey,
-    path: "tools.web.search.exa.apiKey",
-    envVars: ["EXA_API_KEY"],
-  });
+  return (
+    readConfiguredSecretString(exa?.apiKey, "tools.web.search.exa.apiKey") ??
+    readProviderEnvValue(["EXA_API_KEY"])
+  );
 }
 
 function invalidBaseUrlPayload(value: string) {

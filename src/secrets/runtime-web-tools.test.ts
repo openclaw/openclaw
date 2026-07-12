@@ -6,7 +6,7 @@ import type {
   PluginWebSearchProviderEntry,
 } from "../plugins/types.js";
 
-type ProviderUnderTest = "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "duckduckgo";
+type ProviderUnderTest = "brave" | "exa" | "gemini" | "grok" | "kimi" | "perplexity" | "duckduckgo";
 
 const { resolvePluginWebSearchProvidersMock } = vi.hoisted(() => ({
   resolvePluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
@@ -44,6 +44,7 @@ const {
     "brave",
     "duckduckgo",
     "google",
+    "exa",
     "moonshot",
     "perplexity",
     "xai",
@@ -54,6 +55,7 @@ const {
       (
         ({
           brave: "brave",
+          exa: "exa",
           firecrawl: "firecrawl",
           gemini: "google",
           grok: "xai",
@@ -232,6 +234,7 @@ function buildTestWebSearchProviders(): PluginWebSearchProviderEntry[] {
     createTestProvider({ provider: "grok", pluginId: "xai", order: 30 }),
     createTestProvider({ provider: "kimi", pluginId: "moonshot", order: 40 }),
     createTestProvider({ provider: "perplexity", pluginId: "perplexity", order: 50 }),
+    createTestProvider({ provider: "exa", pluginId: "exa", order: 60 }),
     createTestProvider({ provider: "duckduckgo", pluginId: "duckduckgo", order: 100 }),
   ];
 }
@@ -632,6 +635,11 @@ describe("runtime web tools resolution", () => {
       resolvedKey: "brave-provider-key",
     },
     {
+      provider: "exa" as const,
+      envRefId: "EXA_PROVIDER_REF",
+      resolvedKey: "dummy",
+    },
+    {
       provider: "gemini" as const,
       envRefId: "GEMINI_PROVIDER_REF",
       resolvedKey: "gemini-provider-key",
@@ -715,6 +723,31 @@ describe("runtime web tools resolution", () => {
     expect(context.warnings.map((warning) => warning.path)).not.toContain(
       "plugins.entries.google.config.webSearch.apiKey",
     );
+  });
+
+  it("uses EXA_API_KEY recovery for unresolved configured Exa SecretRefs", async () => {
+    const { metadata, resolvedConfig, context } = await runRuntimeWebTools({
+      config: createProviderSecretRefConfig("exa", "MISSING_EXA_PROVIDER_REF"),
+      env: {
+        EXA_API_KEY: "placeholder",
+      },
+    });
+
+    expect(metadata.search.providerConfigured).toBe("exa");
+    expect(metadata.search.providerSource).toBe("configured");
+    expect(metadata.search.selectedProvider).toBe("exa");
+    expect(metadata.search.selectedProviderKeySource).toBe("env");
+    expect(readProviderKey(resolvedConfig, "exa")).toBe("placeholder");
+    expectDiagnostic(context.warnings, {
+      code: "WEB_SEARCH_KEY_UNRESOLVED_FALLBACK_USED",
+      path: "plugins.entries.exa.config.webSearch.apiKey",
+      messageIncludes: "MISSING_EXA_PROVIDER_REF",
+    });
+    expectDiagnostic(metadata.search.diagnostics, {
+      code: "WEB_SEARCH_KEY_UNRESOLVED_FALLBACK_USED",
+      path: "plugins.entries.exa.config.webSearch.apiKey",
+      messageIncludes: "EXA_API_KEY",
+    });
   });
 
   it("auto-detects provider precedence across all configured providers", async () => {
