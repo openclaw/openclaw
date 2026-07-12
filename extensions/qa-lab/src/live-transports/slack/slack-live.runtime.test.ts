@@ -338,7 +338,11 @@ describe("Slack live QA runtime helpers", () => {
         commentaryTs: "2.000000",
         toolProgress: "absent",
       },
-      { id: "slack-progress-commentary-false", toolProgress: "absent" },
+      {
+        id: "slack-progress-commentary-false",
+        commentaryTs: undefined,
+        toolProgress: "absent",
+      },
       {
         id: "slack-progress-commentary-omitted",
         commentaryTs: "2.000000",
