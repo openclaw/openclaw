@@ -490,14 +490,9 @@ const defaultFleetContainerCommandExecutor: FleetContainerCommandExecutor = asyn
   return normalized;
 };
 
-// Line-buffered so a secret can never straddle an emitted chunk boundary
-// (secrets are single-line by the environment-file contract); unterminated
-// lines flush at 64 KiB while retaining any partial secret prefix in-buffer.
-const STREAM_REDACT_FLUSH_BYTES = 64 * 1024;
-
 // Longest suffix of `text` that is a proper prefix of any secret. Retaining it
-// across a forced flush guarantees no complete secret is ever split between
-// two emitted chunks, and emitted text can never grow into a match later.
+// across emissions guarantees no complete secret is ever split between two
+// emitted chunks, and emitted text can never grow into a match later.
 function secretPrefixSuffixLength(text: string, redactValues: readonly string[]): number {
   let longest = 0;
   for (const value of redactValues) {
@@ -536,19 +531,18 @@ function createRedactingStreamWriter(
     return target.write(redact(text));
   };
   return {
+    // Emit everything except a possible secret prefix at the tail on every
+    // chunk, so unterminated output (progress lines, prompts) streams live
+    // instead of stalling until a newline arrives.
     write: (chunk) => {
-      let writable = true;
       pending += decoder.write(chunk);
-      const lastNewline = pending.lastIndexOf("\n");
-      if (lastNewline >= 0) {
-        writable = emit(pending.slice(0, lastNewline + 1)) && writable;
-        pending = pending.slice(lastNewline + 1);
+      const keep = secretPrefixSuffixLength(pending, redactValues);
+      const cut = pending.length - keep;
+      if (cut <= 0) {
+        return true;
       }
-      if (pending.length >= STREAM_REDACT_FLUSH_BYTES) {
-        const keep = secretPrefixSuffixLength(pending, redactValues);
-        writable = emit(pending.slice(0, pending.length - keep)) && writable;
-        pending = keep > 0 ? pending.slice(pending.length - keep) : "";
-      }
+      const writable = emit(pending.slice(0, cut));
+      pending = pending.slice(cut);
       return writable;
     },
     flush: () => {

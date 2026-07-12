@@ -517,6 +517,8 @@ export async function restoreFleetCell(params: {
   let preserveTemp = false;
   let stoppedForRestore = false;
   let containerRemoved = false;
+  let previousDisplaced = false;
+  let stateSwapped = false;
   // Captured outside the try so the failure path can recognize the replacement
   // generation by attempt label.
   let replacementAttemptId = "";
@@ -699,6 +701,7 @@ export async function restoreFleetCell(params: {
     await params.containers.remove(params.record.runtime, params.record.containerName, false);
     containerRemoved = true;
     params.checkpoint();
+    previousDisplaced = true;
     if (dataTarget) {
       await fs.rename(dataTarget, path.join(replacedRoot, "data"));
     }
@@ -707,6 +710,7 @@ export async function restoreFleetCell(params: {
     }
     await fs.rename(extractedData, params.record.dataDir);
     await fs.rename(extractedAuth, authSecretDir);
+    stateSwapped = true;
     await prepareCellDirectories(params.record, authSecretDir, imageOwner);
     if (imageOwner) {
       await Promise.all([
@@ -760,13 +764,25 @@ export async function restoreFleetCell(params: {
           await params.containers.stop(params.record.runtime, params.record.containerName);
           replacementNote =
             " The interrupted replacement container was stopped; retry fleet restore to rotate a fresh Gateway token.";
+        } else if (current.kind === "unavailable") {
+          // An unavailable runtime cannot prove the replacement is down.
+          replacementNote =
+            " The replacement container state could not be verified; stop it manually before retrying fleet restore.";
         }
       } catch {
         replacementNote =
           " The interrupted replacement container could not be stopped; stop it manually before retrying fleet restore.";
       }
+      // Report where each tree actually is for the failure phase: before the
+      // swap the previous data never moved; after it, the restored trees are
+      // already live and only the displaced originals sit under replaced/.
+      const recoveryNote = stateSwapped
+        ? ` Restored data is already in place under the cell directories; displaced previous data is preserved at ${tempDir}/replaced.`
+        : previousDisplaced
+          ? ` Previous data is preserved at ${tempDir}/replaced and the extracted archive remains at ${tempDir}.`
+          : ` Previous cell data remains in place; the extracted archive remains at ${tempDir}.`;
       throw new Error(
-        `Fleet restore for ${params.record.tenantId} was interrupted after the cell container was removed: ${errorMessage(error)}.${replacementNote} Previous data is preserved at ${tempDir}/replaced and the extracted archive remains at ${tempDir}.`,
+        `Fleet restore for ${params.record.tenantId} was interrupted after the cell container was removed: ${errorMessage(error)}.${replacementNote}${recoveryNote}`,
         { cause: error },
       );
     }

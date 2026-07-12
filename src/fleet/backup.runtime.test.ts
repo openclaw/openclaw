@@ -505,8 +505,8 @@ describe("fleet restore runtime", () => {
     } catch (error) {
       message = error instanceof Error ? error.message : String(error);
     }
-    expect(message).toMatch(/Previous data is preserved at .*\/replaced/iu);
-    const preserved = message.match(/preserved at (.+)\/replaced and/u)?.[1];
+    expect(message).toMatch(/displaced previous data is preserved at .*\/replaced/iu);
+    const preserved = message.match(/preserved at (.+)\/replaced\./u)?.[1];
     expect(preserved).toBeTruthy();
     await expect(
       fs.readFile(path.join(preserved ?? "", "replaced", "data", "state.txt"), "utf8"),
