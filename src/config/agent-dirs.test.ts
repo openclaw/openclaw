@@ -1,5 +1,8 @@
 // Covers agent directory resolution across config and environment overrides.
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withTempDir } from "../test-helpers/temp-dir.js";
 import { findDuplicateAgentDirs } from "./agent-dirs.js";
 import type { OpenClawConfig } from "./types.js";
 
@@ -44,5 +47,55 @@ describe("resolveEffectiveAgentDir via findDuplicateAgentDirs", () => {
     // No duplicates for a single default agent
     const dupes = findDuplicateAgentDirs(cfg, { env });
     expect(dupes).toHaveLength(0);
+  });
+
+  it("keeps case-distinct agent dirs separate on a case-sensitive macOS volume", async () => {
+    await withTempDir({ prefix: "openclaw-agent-dirs-case-" }, async (root) => {
+      const upper = path.join(root, "AgentState");
+      const lower = path.join(root, "agentstate");
+      await fs.mkdir(upper);
+      try {
+        await fs.mkdir(lower);
+      } catch {
+        return;
+      }
+
+      const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+      try {
+        const dupes = findDuplicateAgentDirs({
+          agents: {
+            list: [
+              { id: "upper", agentDir: upper },
+              { id: "lower", agentDir: lower },
+            ],
+          },
+        });
+        expect(dupes).toHaveLength(0);
+      } finally {
+        platformSpy.mockRestore();
+      }
+    });
+  });
+
+  it("rejects agent dirs that alias the same directory through a symlink", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    await withTempDir({ prefix: "openclaw-agent-dirs-alias-" }, async (root) => {
+      const target = path.join(root, "target");
+      const alias = path.join(root, "alias");
+      await fs.mkdir(target);
+      await fs.symlink(target, alias);
+      const dupes = findDuplicateAgentDirs({
+        agents: {
+          list: [
+            { id: "target", agentDir: target },
+            { id: "alias", agentDir: alias },
+          ],
+        },
+      });
+      expect(dupes).toHaveLength(1);
+      expect(dupes[0]?.agentIds).toEqual(["target", "alias"]);
+    });
   });
 });
