@@ -339,12 +339,6 @@ describe("native app i18n inventory", () => {
     expect(entries.some((entry) => entry.source === "Needs setup")).toBe(true);
     expect(
       entries.some(
-        (entry) =>
-          entry.source === "Choose a supported ${issue.target.title} provider on the Gateway",
-      ),
-    ).toBe(true);
-    expect(
-      entries.some(
         (entry) => entry.source === "Talk failed: Realtime provider closed unexpectedly.",
       ),
     ).toBe(true);

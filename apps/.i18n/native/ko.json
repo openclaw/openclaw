@@ -89,12 +89,12 @@
       "translated": "계정 $it"
     },
     {
-      "id": "native.android.d55616e142c8be0f",
+      "id": "native.android.67f2f22fa99358b1",
       "source": "Off",
-      "translated": "끄기"
+      "translated": "꺼짐"
     },
     {
-      "id": "native.android.f59b83f58086eb89",
+      "id": "native.android.f5fa3a841ce8c234",
       "source": "Default",
       "translated": "기본값"
     },
@@ -274,57 +274,57 @@
       "translated": "확인되지 않음"
     },
     {
-      "id": "native.android.66f091d1fc047eff",
+      "id": "native.android.90241f592c7c1cce",
       "source": "${state.provider.label} via Gateway relay",
       "translated": "Gateway 릴레이를 통한 ${state.provider.label}"
     },
     {
-      "id": "native.android.859f7fec2019b314",
+      "id": "native.android.a24ef3a97a2c8c07",
       "source": "Gateway talk catalog not loaded",
       "translated": "Gateway 토크 카탈로그가 로드되지 않음"
     },
     {
-      "id": "native.android.ecb051798c98537f",
+      "id": "native.android.9c86ef6aed5b3720",
       "source": "Could not load Gateway talk catalog",
       "translated": "Gateway 토크 카탈로그를 로드할 수 없음"
     },
     {
-      "id": "native.android.95b5551fcb519c1f",
+      "id": "native.android.7ac71cb673d6399e",
       "source": "Gateway did not return ${issue.target.title} setup",
       "translated": "Gateway에서 ${issue.target.title} 설정을 반환하지 않았습니다"
     },
     {
-      "id": "native.android.328d435e93e9a2b2",
+      "id": "native.android.1349ccf44bb43398",
       "source": "No ${issue.target.title} provider is configured on the Gateway",
       "translated": "Gateway에 ${issue.target.title} 제공자가 구성되어 있지 않습니다"
     },
     {
-      "id": "native.android.b3ee0bd7fd90a9e7",
+      "id": "native.android.384d856d68320eb2",
       "source": "Gateway selected unknown provider ${issue.providerId}",
       "translated": "Gateway에서 알 수 없는 제공자 ${issue.providerId}을(를) 선택했습니다"
     },
     {
-      "id": "native.android.04086b6aed3c2ce5",
+      "id": "native.android.1409da872534c08c",
       "source": "Gateway did not return ${issue.target.title} readiness",
       "translated": "Gateway에서 ${issue.target.title} 준비 상태를 반환하지 않았습니다"
     },
     {
-      "id": "native.android.27f61e5f9b33b6f9",
+      "id": "native.android.3ea36b85bb5ae44c",
       "source": "Configure a ${issue.target.title} provider on the Gateway",
       "translated": "Gateway에서 ${issue.target.title} 제공자를 구성하세요"
     },
     {
-      "id": "native.android.e4fe3a325a6d6299",
+      "id": "native.android.f6cec337d1e0980e",
       "source": "Gateway did not identify the active ${issue.target.title} provider",
       "translated": "Gateway에서 활성 ${issue.target.title} 제공자를 식별하지 않았습니다"
     },
     {
-      "id": "native.android.7e6b01f6e7c9bc92",
+      "id": "native.android.8fadd97a13ca7651",
       "source": "Choose a supported ${issue.target.title} provider on the Gateway",
       "translated": "Gateway에서 지원되는 ${issue.target.title} 제공자를 선택하세요"
     },
     {
-      "id": "native.android.39bdbc9a546c7f1d",
+      "id": "native.android.394044d0402d59e5",
       "source": "Configure ${issue.providerLabel} on the Gateway",
       "translated": "Gateway에서 ${issue.providerLabel} 구성"
     },
@@ -529,12 +529,12 @@
       "translated": "이 cron 작업에는 이미 대기 중인 실행이 있습니다."
     },
     {
-      "id": "native.android.fef5049bc20826c7",
+      "id": "native.android.1ebef3822941cdb6",
       "source": "Cron job started.",
       "translated": "Cron 작업이 시작되었습니다."
     },
     {
-      "id": "native.android.c39fb6f80dbf6820",
+      "id": "native.android.d8ba5136a17f7618",
       "source": "Cron run queued.",
       "translated": "Cron 실행이 대기열에 추가되었습니다."
     },
@@ -544,12 +544,12 @@
       "translated": "Gateway가 cron 실행을 거부했습니다."
     },
     {
-      "id": "native.android.b878b2913410055a",
+      "id": "native.android.8a758d2851f3db17",
       "source": "Cron job disabled.",
       "translated": "Cron 작업이 비활성화되었습니다."
     },
     {
-      "id": "native.android.a45ec59239fbfff0",
+      "id": "native.android.fda9390dc0d4bdea",
       "source": "Cron job enabled.",
       "translated": "Cron 작업이 활성화되었습니다."
     },
@@ -1989,47 +1989,47 @@
       "translated": "${if (tls) \"https\" else \"http\"}://$displayHost:$port"
     },
     {
-      "id": "native.android.458f8fd9ad7485a7",
+      "id": "native.android.180483eb1b7a4ff1",
       "source": "Setup code points to an insecure remote gateway. $remoteGatewaySecurityRule $remoteGatewaySecurityFix",
       "translated": "설정 코드가 안전하지 않은 원격 gateway를 가리킵니다. $remoteGatewaySecurityRule $remoteGatewaySecurityFix"
     },
     {
-      "id": "native.android.1a15475cf8d92de8",
+      "id": "native.android.9504a95ceefca5e8",
       "source": "QR code points to an insecure remote gateway. $remoteGatewaySecurityRule $remoteGatewaySecurityFix",
       "translated": "QR 코드가 안전하지 않은 원격 gateway를 가리킵니다. $remoteGatewaySecurityRule $remoteGatewaySecurityFix"
     },
     {
-      "id": "native.android.a77d1e3d811ad9d8",
+      "id": "native.android.9373db8f4269091a",
       "source": "$remoteGatewaySecurityRule $remoteGatewaySecurityFix",
       "translated": "$remoteGatewaySecurityRule $remoteGatewaySecurityFix"
     },
     {
-      "id": "native.android.d5230e4551045851",
+      "id": "native.android.84ea70ae0976dca7",
       "source": "Setup code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname.",
       "translated": "설정 코드가 IPv6 영역 ID를 사용합니다. 범위가 지정되지 않은 IPv6 주소 또는 LAN 호스트 이름을 사용하세요."
     },
     {
-      "id": "native.android.ca9fc2ce10f4028a",
+      "id": "native.android.1c32685b70f0585d",
       "source": "QR code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname.",
       "translated": "QR 코드가 IPv6 영역 ID를 사용합니다. 범위가 지정되지 않은 IPv6 주소 또는 LAN 호스트 이름을 사용하세요."
     },
     {
-      "id": "native.android.141236601fece71e",
+      "id": "native.android.b1ab0f426dacc83f",
       "source": "IPv6 zone IDs are not supported. Use an unscoped IPv6 address or a LAN hostname.",
       "translated": "IPv6 영역 ID는 지원되지 않습니다. 범위가 지정되지 않은 IPv6 주소 또는 LAN 호스트 이름을 사용하세요."
     },
     {
-      "id": "native.android.47e3c19d55f0150b",
+      "id": "native.android.b35f854c0bf08eda",
       "source": "Setup code has invalid gateway URL.",
       "translated": "설정 코드에 유효하지 않은 gateway URL이 있습니다."
     },
     {
-      "id": "native.android.b0cc3253031d22c2",
+      "id": "native.android.9598911ada12ef86",
       "source": "QR code did not contain a valid setup code.",
       "translated": "QR 코드에 유효한 설정 코드가 포함되어 있지 않습니다."
     },
     {
-      "id": "native.android.732f5b59ba7e1513",
+      "id": "native.android.864a4b7e75710d7c",
       "source": "Enter a valid manual endpoint to connect.",
       "translated": "연결할 유효한 수동 엔드포인트를 입력하세요."
     },
@@ -2614,7 +2614,7 @@
       "translated": "Android 설정 가이드"
     },
     {
-      "id": "native.android.d514a981f80779e9",
+      "id": "native.android.87e734a42506c768",
       "source": "Setup Gateway",
       "translated": "Gateway 설정"
     },
@@ -2714,7 +2714,7 @@
       "translated": "설정 코드 사용"
     },
     {
-      "id": "native.android.073c93545602b198",
+      "id": "native.android.1f58a38c5434782d",
       "source": "Manual setup",
       "translated": "수동 설정"
     },
@@ -2854,12 +2854,12 @@
       "translated": "approve 명령에서 대기 중인 명령의 requestId를 사용하세요."
     },
     {
-      "id": "native.android.53bcd45eeb574d74",
+      "id": "native.android.0c2d81ab522c7d65",
       "source": "I have approved",
       "translated": "승인했습니다"
     },
     {
-      "id": "native.android.0d4dd8ed358a6fb2",
+      "id": "native.android.ec205ff9768fd7e6",
       "source": "Checking approval…",
       "translated": "승인 확인 중…"
     },
@@ -2894,7 +2894,7 @@
       "translated": "뒤로"
     },
     {
-      "id": "native.android.f3f0527db434d756",
+      "id": "native.android.4f47ce320ad8c52c",
       "source": "Permissions",
       "translated": "권한"
     },
@@ -3169,12 +3169,12 @@
       "translated": "허용되지 않음"
     },
     {
-      "id": "native.android.437599c024df158e",
+      "id": "native.android.794d39baacf4ce44",
       "source": "Granted",
       "translated": "허용됨"
     },
     {
-      "id": "native.android.cf8344d3562e28e3",
+      "id": "native.android.5fc5b5bd849534e0",
       "source": "Not granted",
       "translated": "허용되지 않음"
     },
@@ -5424,12 +5424,12 @@
       "translated": "터미널"
     },
     {
-      "id": "native.android.68c6f975e8448995",
+      "id": "native.android.345d2424511d2d53",
       "source": "Speaker muted",
       "translated": "스피커 음소거됨"
     },
     {
-      "id": "native.android.2ee6a4bee2bffe2a",
+      "id": "native.android.8a1bf1154936cef1",
       "source": "Speaker on",
       "translated": "스피커 켜짐"
     },
@@ -5454,17 +5454,17 @@
       "translated": "알림"
     },
     {
-      "id": "native.android.e471a3620a50dd42",
+      "id": "native.android.69b33c2492973ac3",
       "source": "Smart delivery",
       "translated": "스마트 전송"
     },
     {
-      "id": "native.android.e51cc066a8b41880",
+      "id": "native.android.b93e11ff55b87203",
       "source": "Camera enabled",
       "translated": "카메라 활성화됨"
     },
     {
-      "id": "native.android.a6179e3618d40108",
+      "id": "native.android.c373c56a0e1486b9",
       "source": "Locked",
       "translated": "잠김"
     },
@@ -7319,12 +7319,12 @@
       "translated": "위치"
     },
     {
-      "id": "native.android.c5e56f0e8af094fb",
+      "id": "native.android.1b90d84b8fbff362",
       "source": "Speaking · waiting for reply",
       "translated": "말하는 중 · 응답 대기 중"
     },
     {
-      "id": "native.android.7228c229ce9f97c6",
+      "id": "native.android.63722e202a33bd02",
       "source": "Speaking…",
       "translated": "말하는 중…"
     },
@@ -7344,7 +7344,7 @@
       "translated": "마이크 권한이 필요합니다"
     },
     {
-      "id": "native.android.6fbf0916309dbaba",
+      "id": "native.android.1369ecf9bc8adc90",
       "source": "Mic on · waiting for gateway",
       "translated": "마이크 켜짐 · Gateway 대기 중"
     },
@@ -7354,17 +7354,17 @@
       "translated": "텍스트 변환을 사용할 수 없습니다: $message"
     },
     {
-      "id": "native.android.9dda2b87d9668a4b",
+      "id": "native.android.ca2190761f679d29",
       "source": "Mic off · sending…",
       "translated": "마이크 꺼짐 · 보내는 중…"
     },
     {
-      "id": "native.android.d84c6c14e42763ff",
+      "id": "native.android.fd6e35016b990650",
       "source": "Mic off",
       "translated": "마이크 꺼짐"
     },
     {
-      "id": "native.android.01ac388cd8ae0732",
+      "id": "native.android.8dd66e315d86e834",
       "source": "Sending queued voice",
       "translated": "대기 중인 음성 보내는 중"
     },
@@ -7394,7 +7394,7 @@
       "translated": "텍스트 변환 실패: $message"
     },
     {
-      "id": "native.android.c802b757f76226d9",
+      "id": "native.android.04465040125a492a",
       "source": "Listening · sending queued voice",
       "translated": "듣는 중 · 대기 중인 음성 보내는 중"
     },
@@ -7419,7 +7419,7 @@
       "translated": "듣는 중(PTT)"
     },
     {
-      "id": "native.android.b88e4278ead724ba",
+      "id": "native.android.47a59f8798682ea0",
       "source": "Ready",
       "translated": "준비됨"
     },
@@ -7434,17 +7434,17 @@
       "translated": "연결 중…"
     },
     {
-      "id": "native.android.8d8230088f3baa2a",
+      "id": "native.android.24bc808758b925ca",
       "source": "Off",
       "translated": "꺼짐"
     },
     {
-      "id": "native.android.d6b7f86564ac3147",
+      "id": "native.android.fcd38b57e71b0a44",
       "source": "Talk failed: Realtime provider closed unexpectedly.",
       "translated": "토크 실패: 실시간 제공자가 예기치 않게 닫혔습니다."
     },
     {
-      "id": "native.android.eb6ac739ad55e63a",
+      "id": "native.android.508073ba8ce8dbab",
       "source": "Talk failed: Realtime provider closed: $reason",
       "translated": "토크 실패: 실시간 제공자가 닫혔습니다: $reason"
     },
@@ -7459,12 +7459,12 @@
       "translated": "Gateway가 연결되지 않았습니다"
     },
     {
-      "id": "native.android.13531fe081a45711",
+      "id": "native.android.a052faac05102427",
       "source": "Aborted",
       "translated": "중단됨"
     },
     {
-      "id": "native.android.42af8acef7e61a34",
+      "id": "native.android.d74e945c050d1270",
       "source": "Chat error",
       "translated": "채팅 오류"
     },
@@ -7529,7 +7529,7 @@
       "translated": "서버 오류"
     },
     {
-      "id": "native.android.b4f67e96603515bd",
+      "id": "native.android.7b4dacae0686d138",
       "source": "Listening",
       "translated": "듣는 중"
     },
@@ -13654,26 +13654,6 @@
       "translated": "필수"
     },
     {
-      "id": "native.apple.ff860c1c4be92ede",
-      "source": "Context",
-      "translated": "컨텍스트"
-    },
-    {
-      "id": "native.apple.185e2d2285227daf",
-      "source": "No active sessions",
-      "translated": "활성 세션 없음"
-    },
-    {
-      "id": "native.apple.285a3ac6017334f9",
-      "source": "main",
-      "translated": "main"
-    },
-    {
-      "id": "native.apple.7d8890e2fc64e695",
-      "source": "000k/000k",
-      "translated": "000k/000k"
-    },
-    {
       "id": "native.apple.ae89998eb6f436e0",
       "source": "Context",
       "translated": "컨텍스트"
@@ -15692,11 +15672,6 @@
       "id": "native.apple.3e248379359c7593",
       "source": "Disconnected (using System default)",
       "translated": "연결 해제됨(시스템 기본값 사용)"
-    },
-    {
-      "id": "native.apple.0c726ae72b63e9dc",
-      "source": "\\(firstLine.prefix(87))…",
-      "translated": "\\(firstLine.prefix(87))…"
     },
     {
       "id": "native.apple.5a99e1ae62fe0ab9",

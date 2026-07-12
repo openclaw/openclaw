@@ -129,6 +129,7 @@ const ANDROID_BUILTIN_UI_CALLS = new Set([
   "LazyRow",
   "nativeString",
   "nativeStringResource",
+  "nativeText",
   "OutlinedButton",
   "OutlinedTextField",
   "RadioButton",

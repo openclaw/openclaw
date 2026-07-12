@@ -89,12 +89,12 @@
       "translated": "账户 $it"
     },
     {
-      "id": "native.android.d55616e142c8be0f",
+      "id": "native.android.67f2f22fa99358b1",
       "source": "Off",
       "translated": "关闭"
     },
     {
-      "id": "native.android.f59b83f58086eb89",
+      "id": "native.android.f5fa3a841ce8c234",
       "source": "Default",
       "translated": "默认"
     },
@@ -274,57 +274,57 @@
       "translated": "未验证"
     },
     {
-      "id": "native.android.66f091d1fc047eff",
+      "id": "native.android.90241f592c7c1cce",
       "source": "${state.provider.label} via Gateway relay",
       "translated": "${state.provider.label} 通过 Gateway 中继"
     },
     {
-      "id": "native.android.859f7fec2019b314",
+      "id": "native.android.a24ef3a97a2c8c07",
       "source": "Gateway talk catalog not loaded",
       "translated": "Gateway 对话目录未加载"
     },
     {
-      "id": "native.android.ecb051798c98537f",
+      "id": "native.android.9c86ef6aed5b3720",
       "source": "Could not load Gateway talk catalog",
       "translated": "无法加载 Gateway 对话目录"
     },
     {
-      "id": "native.android.95b5551fcb519c1f",
+      "id": "native.android.7ac71cb673d6399e",
       "source": "Gateway did not return ${issue.target.title} setup",
       "translated": "Gateway 未返回 ${issue.target.title} 设置"
     },
     {
-      "id": "native.android.328d435e93e9a2b2",
+      "id": "native.android.1349ccf44bb43398",
       "source": "No ${issue.target.title} provider is configured on the Gateway",
       "translated": "Gateway 上未配置 ${issue.target.title} 提供商"
     },
     {
-      "id": "native.android.b3ee0bd7fd90a9e7",
+      "id": "native.android.384d856d68320eb2",
       "source": "Gateway selected unknown provider ${issue.providerId}",
       "translated": "Gateway 选择了未知提供商 ${issue.providerId}"
     },
     {
-      "id": "native.android.04086b6aed3c2ce5",
+      "id": "native.android.1409da872534c08c",
       "source": "Gateway did not return ${issue.target.title} readiness",
       "translated": "Gateway 未返回 ${issue.target.title} 就绪状态"
     },
     {
-      "id": "native.android.27f61e5f9b33b6f9",
+      "id": "native.android.3ea36b85bb5ae44c",
       "source": "Configure a ${issue.target.title} provider on the Gateway",
       "translated": "在 Gateway 上配置 ${issue.target.title} 提供商"
     },
     {
-      "id": "native.android.e4fe3a325a6d6299",
+      "id": "native.android.f6cec337d1e0980e",
       "source": "Gateway did not identify the active ${issue.target.title} provider",
       "translated": "Gateway 未识别活动的 ${issue.target.title} 提供商"
     },
     {
-      "id": "native.android.7e6b01f6e7c9bc92",
+      "id": "native.android.8fadd97a13ca7651",
       "source": "Choose a supported ${issue.target.title} provider on the Gateway",
       "translated": "在 Gateway 上选择受支持的 ${issue.target.title} 提供商"
     },
     {
-      "id": "native.android.39bdbc9a546c7f1d",
+      "id": "native.android.394044d0402d59e5",
       "source": "Configure ${issue.providerLabel} on the Gateway",
       "translated": "在 Gateway 上配置 ${issue.providerLabel}"
     },
@@ -529,12 +529,12 @@
       "translated": "此 cron 作业已有一个排队等待运行的任务。"
     },
     {
-      "id": "native.android.fef5049bc20826c7",
+      "id": "native.android.1ebef3822941cdb6",
       "source": "Cron job started.",
       "translated": "Cron 作业已启动。"
     },
     {
-      "id": "native.android.c39fb6f80dbf6820",
+      "id": "native.android.d8ba5136a17f7618",
       "source": "Cron run queued.",
       "translated": "Cron 运行已加入队列。"
     },
@@ -544,12 +544,12 @@
       "translated": "Gateway 拒绝了此次 cron 运行。"
     },
     {
-      "id": "native.android.b878b2913410055a",
+      "id": "native.android.8a758d2851f3db17",
       "source": "Cron job disabled.",
       "translated": "Cron 作业已禁用。"
     },
     {
-      "id": "native.android.a45ec59239fbfff0",
+      "id": "native.android.fda9390dc0d4bdea",
       "source": "Cron job enabled.",
       "translated": "Cron 作业已启用。"
     },
@@ -1989,47 +1989,47 @@
       "translated": "${if (tls) \"https\" else \"http\"}://$displayHost:$port"
     },
     {
-      "id": "native.android.458f8fd9ad7485a7",
+      "id": "native.android.180483eb1b7a4ff1",
       "source": "Setup code points to an insecure remote gateway. $remoteGatewaySecurityRule $remoteGatewaySecurityFix",
       "translated": "设置代码指向不安全的远程 Gateway。$remoteGatewaySecurityRule $remoteGatewaySecurityFix"
     },
     {
-      "id": "native.android.1a15475cf8d92de8",
+      "id": "native.android.9504a95ceefca5e8",
       "source": "QR code points to an insecure remote gateway. $remoteGatewaySecurityRule $remoteGatewaySecurityFix",
       "translated": "二维码指向不安全的远程 Gateway。$remoteGatewaySecurityRule $remoteGatewaySecurityFix"
     },
     {
-      "id": "native.android.a77d1e3d811ad9d8",
+      "id": "native.android.9373db8f4269091a",
       "source": "$remoteGatewaySecurityRule $remoteGatewaySecurityFix",
       "translated": "$remoteGatewaySecurityRule $remoteGatewaySecurityFix"
     },
     {
-      "id": "native.android.d5230e4551045851",
+      "id": "native.android.84ea70ae0976dca7",
       "source": "Setup code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname.",
       "translated": "设置代码使用了 IPv6 区域 ID。请使用无作用域的 IPv6 地址或 LAN 主机名。"
     },
     {
-      "id": "native.android.ca9fc2ce10f4028a",
+      "id": "native.android.1c32685b70f0585d",
       "source": "QR code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname.",
       "translated": "二维码使用了 IPv6 区域 ID。请使用无作用域的 IPv6 地址或 LAN 主机名。"
     },
     {
-      "id": "native.android.141236601fece71e",
+      "id": "native.android.b1ab0f426dacc83f",
       "source": "IPv6 zone IDs are not supported. Use an unscoped IPv6 address or a LAN hostname.",
       "translated": "不支持 IPv6 区域 ID。请使用无作用域的 IPv6 地址或 LAN 主机名。"
     },
     {
-      "id": "native.android.47e3c19d55f0150b",
+      "id": "native.android.b35f854c0bf08eda",
       "source": "Setup code has invalid gateway URL.",
       "translated": "设置代码包含无效的 Gateway URL。"
     },
     {
-      "id": "native.android.b0cc3253031d22c2",
+      "id": "native.android.9598911ada12ef86",
       "source": "QR code did not contain a valid setup code.",
       "translated": "二维码不包含有效的设置代码。"
     },
     {
-      "id": "native.android.732f5b59ba7e1513",
+      "id": "native.android.864a4b7e75710d7c",
       "source": "Enter a valid manual endpoint to connect.",
       "translated": "请输入有效的手动端点以连接。"
     },
@@ -2614,7 +2614,7 @@
       "translated": "Android 设置指南"
     },
     {
-      "id": "native.android.d514a981f80779e9",
+      "id": "native.android.87e734a42506c768",
       "source": "Setup Gateway",
       "translated": "设置 Gateway"
     },
@@ -2714,7 +2714,7 @@
       "translated": "使用设置代码"
     },
     {
-      "id": "native.android.073c93545602b198",
+      "id": "native.android.1f58a38c5434782d",
       "source": "Manual setup",
       "translated": "手动设置"
     },
@@ -2854,12 +2854,12 @@
       "translated": "在批准命令中使用待处理命令中的 requestId。"
     },
     {
-      "id": "native.android.53bcd45eeb574d74",
+      "id": "native.android.0c2d81ab522c7d65",
       "source": "I have approved",
       "translated": "我已批准"
     },
     {
-      "id": "native.android.0d4dd8ed358a6fb2",
+      "id": "native.android.ec205ff9768fd7e6",
       "source": "Checking approval…",
       "translated": "正在检查批准状态…"
     },
@@ -2894,7 +2894,7 @@
       "translated": "返回"
     },
     {
-      "id": "native.android.f3f0527db434d756",
+      "id": "native.android.4f47ce320ad8c52c",
       "source": "Permissions",
       "translated": "权限"
     },
@@ -3169,12 +3169,12 @@
       "translated": "不允许"
     },
     {
-      "id": "native.android.437599c024df158e",
+      "id": "native.android.794d39baacf4ce44",
       "source": "Granted",
       "translated": "已授予"
     },
     {
-      "id": "native.android.cf8344d3562e28e3",
+      "id": "native.android.5fc5b5bd849534e0",
       "source": "Not granted",
       "translated": "未授予"
     },
@@ -5424,12 +5424,12 @@
       "translated": "终端"
     },
     {
-      "id": "native.android.68c6f975e8448995",
+      "id": "native.android.345d2424511d2d53",
       "source": "Speaker muted",
       "translated": "扬声器已静音"
     },
     {
-      "id": "native.android.2ee6a4bee2bffe2a",
+      "id": "native.android.8a1bf1154936cef1",
       "source": "Speaker on",
       "translated": "扬声器已开启"
     },
@@ -5454,17 +5454,17 @@
       "translated": "通知"
     },
     {
-      "id": "native.android.e471a3620a50dd42",
+      "id": "native.android.69b33c2492973ac3",
       "source": "Smart delivery",
       "translated": "智能投递"
     },
     {
-      "id": "native.android.e51cc066a8b41880",
+      "id": "native.android.b93e11ff55b87203",
       "source": "Camera enabled",
       "translated": "相机已启用"
     },
     {
-      "id": "native.android.a6179e3618d40108",
+      "id": "native.android.c373c56a0e1486b9",
       "source": "Locked",
       "translated": "已锁定"
     },
@@ -7319,14 +7319,14 @@
       "translated": "位置"
     },
     {
-      "id": "native.android.c5e56f0e8af094fb",
+      "id": "native.android.1b90d84b8fbff362",
       "source": "Speaking · waiting for reply",
       "translated": "正在说话 · 等待回复"
     },
     {
-      "id": "native.android.7228c229ce9f97c6",
+      "id": "native.android.63722e202a33bd02",
       "source": "Speaking…",
-      "translated": "正在说话…"
+      "translated": "正在朗读…"
     },
     {
       "id": "native.android.6105f54c40fb5d38",
@@ -7344,7 +7344,7 @@
       "translated": "需要麦克风权限"
     },
     {
-      "id": "native.android.6fbf0916309dbaba",
+      "id": "native.android.1369ecf9bc8adc90",
       "source": "Mic on · waiting for gateway",
       "translated": "麦克风开启 · 正在等待 Gateway"
     },
@@ -7354,17 +7354,17 @@
       "translated": "转录不可用：$message"
     },
     {
-      "id": "native.android.9dda2b87d9668a4b",
+      "id": "native.android.ca2190761f679d29",
       "source": "Mic off · sending…",
       "translated": "麦克风关闭 · 正在发送…"
     },
     {
-      "id": "native.android.d84c6c14e42763ff",
+      "id": "native.android.fd6e35016b990650",
       "source": "Mic off",
       "translated": "麦克风关闭"
     },
     {
-      "id": "native.android.01ac388cd8ae0732",
+      "id": "native.android.8dd66e315d86e834",
       "source": "Sending queued voice",
       "translated": "正在发送排队语音"
     },
@@ -7394,7 +7394,7 @@
       "translated": "转录失败：$message"
     },
     {
-      "id": "native.android.c802b757f76226d9",
+      "id": "native.android.04465040125a492a",
       "source": "Listening · sending queued voice",
       "translated": "正在聆听 · 正在发送排队语音"
     },
@@ -7419,7 +7419,7 @@
       "translated": "正在聆听（按住说话）"
     },
     {
-      "id": "native.android.b88e4278ead724ba",
+      "id": "native.android.47a59f8798682ea0",
       "source": "Ready",
       "translated": "就绪"
     },
@@ -7434,17 +7434,17 @@
       "translated": "正在连接…"
     },
     {
-      "id": "native.android.8d8230088f3baa2a",
+      "id": "native.android.24bc808758b925ca",
       "source": "Off",
       "translated": "关闭"
     },
     {
-      "id": "native.android.d6b7f86564ac3147",
+      "id": "native.android.fcd38b57e71b0a44",
       "source": "Talk failed: Realtime provider closed unexpectedly.",
       "translated": "对话失败：实时提供商意外关闭。"
     },
     {
-      "id": "native.android.eb6ac739ad55e63a",
+      "id": "native.android.508073ba8ce8dbab",
       "source": "Talk failed: Realtime provider closed: $reason",
       "translated": "对话失败：实时提供商已关闭：$reason"
     },
@@ -7459,12 +7459,12 @@
       "translated": "Gateway 未连接"
     },
     {
-      "id": "native.android.13531fe081a45711",
+      "id": "native.android.a052faac05102427",
       "source": "Aborted",
       "translated": "已中止"
     },
     {
-      "id": "native.android.42af8acef7e61a34",
+      "id": "native.android.d74e945c050d1270",
       "source": "Chat error",
       "translated": "聊天错误"
     },
@@ -7529,7 +7529,7 @@
       "translated": "服务器错误"
     },
     {
-      "id": "native.android.b4f67e96603515bd",
+      "id": "native.android.7b4dacae0686d138",
       "source": "Listening",
       "translated": "正在聆听"
     },
@@ -13654,26 +13654,6 @@
       "translated": "必填"
     },
     {
-      "id": "native.apple.ff860c1c4be92ede",
-      "source": "Context",
-      "translated": "上下文"
-    },
-    {
-      "id": "native.apple.185e2d2285227daf",
-      "source": "No active sessions",
-      "translated": "没有活动会话"
-    },
-    {
-      "id": "native.apple.285a3ac6017334f9",
-      "source": "main",
-      "translated": "main"
-    },
-    {
-      "id": "native.apple.7d8890e2fc64e695",
-      "source": "000k/000k",
-      "translated": "000k/000k"
-    },
-    {
       "id": "native.apple.ae89998eb6f436e0",
       "source": "Context",
       "translated": "上下文"
@@ -15692,11 +15672,6 @@
       "id": "native.apple.3e248379359c7593",
       "source": "Disconnected (using System default)",
       "translated": "已断开连接（使用系统默认）"
-    },
-    {
-      "id": "native.apple.0c726ae72b63e9dc",
-      "source": "\\(firstLine.prefix(87))…",
-      "translated": "\\(firstLine.prefix(87))…"
     },
     {
       "id": "native.apple.5a99e1ae62fe0ab9",
