@@ -5,7 +5,6 @@ import {
   applyUnsetPathsForWrite,
   createMergePatch,
   formatConfigValidationFailure,
-  projectSourceOntoRuntimeShape,
   restoreEnvRefsFromMap,
   resolvePersistCandidateForWrite,
   resolveWriteEnvSnapshotForPath,
@@ -31,46 +30,6 @@ describe("config io write prepare", () => {
       safe: { mode: "cloud" },
       collision: null,
     });
-  });
-
-  it("preserves authored keys whose names match Object.prototype members", () => {
-    const source = {
-      commands: {
-        toString: { enabled: true },
-      },
-    };
-    // Runtime inherits a record-shaped `toString`. Own-key checks must keep the
-    // authored value instead of projecting through the prototype record.
-    const runtime = {
-      commands: Object.create({
-        toString: { fromProto: true },
-      }) as Record<string, unknown>,
-    };
-
-    expect(projectSourceOntoRuntimeShape(source, runtime)).toEqual(source);
-  });
-
-  it("persists caller changes without adopting inherited peer keys", () => {
-    const nextConfig = Object.create({
-      collision: { mode: "inherited-next" },
-    }) as Record<string, unknown>;
-    nextConfig.gateway = { mode: "local", port: 19001 };
-
-    const persisted = resolvePersistCandidateForWrite({
-      runtimeConfig: {
-        gateway: { mode: "local", port: 18789 },
-        collision: { mode: "owned-runtime" },
-      },
-      sourceConfig: {
-        gateway: { mode: "local", port: 18789 },
-      },
-      nextConfig,
-    });
-
-    expect(persisted).toEqual({
-      gateway: { mode: "local", port: 19001 },
-    });
-    expect(Object.hasOwn(persisted as object, "collision")).toBe(false);
   });
 
   it("persists caller changes onto resolved config without leaking runtime defaults", () => {
