@@ -68,6 +68,15 @@ function createDefaultRealtimeTalkOptions(): RealtimeTalkOptions {
   };
 }
 
+function parseVadThresholdOption(value: string): number | undefined {
+  const normalized = value.trim();
+  if (!normalized) {
+    return undefined;
+  }
+  const threshold = Number(normalized);
+  return Number.isFinite(threshold) && threshold >= 0 && threshold <= 1 ? threshold : undefined;
+}
+
 export function createInitialChatRealtimeState(inputDeviceId = "") {
   return {
     realtimeTalkActive: false,
@@ -187,7 +196,7 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
     const launchOptions: RealtimeTalkLaunchOptions = {
       model: options.model.trim() || undefined,
       voice: options.voice.trim() || undefined,
-      vadThreshold: Number(options.vadThreshold) || undefined,
+      vadThreshold: parseVadThresholdOption(options.vadThreshold),
     };
     state.realtimeTalkInputDeviceId = inputDeviceId ?? "";
     state.realtimeTalkActive = true;

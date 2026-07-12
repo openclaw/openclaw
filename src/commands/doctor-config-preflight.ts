@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
+import { cloneEnvWithPlatformSemantics } from "../config/env-vars.js";
 import {
   readConfigFileSnapshot,
   recoverConfigFromJsonRootSuffix,
@@ -100,9 +101,17 @@ export function shouldSkipPluginValidationForDoctorConfigPreflight(
   return isTruthyEnvValue(env.OPENCLAW_UPDATE_IN_PROGRESS);
 }
 
-function noteStateMigrationResult(result: { changes: string[]; warnings: string[] }): void {
+function noteStateMigrationResult(result: {
+  changes: string[];
+  warnings: string[];
+  notices?: string[];
+}): void {
   if (result.changes.length > 0) {
     note(result.changes.map((entry) => `- ${entry}`).join("\n"), "Doctor changes");
+  }
+  const notices = result.notices ?? [];
+  if (notices.length > 0) {
+    note(notices.map((entry) => `- ${entry}`).join("\n"), "Doctor notices");
   }
   if (result.warnings.length > 0) {
     note(result.warnings.map((entry) => `- ${entry}`).join("\n"), "Doctor warnings");
@@ -150,6 +159,12 @@ function formatStartupMigrationFailure(params: { warnings: string[]; blockers: s
   ].join("\n");
 }
 
+function throwStartupMigrationGuardRejected(): never {
+  throw new Error(
+    "OpenClaw startup migrations were skipped because the selected config changed during startup; refusing to report the gateway ready. Retry startup so the new config can be validated.",
+  );
+}
+
 /**
  * Runs early doctor config checks before the main config repair flow.
  *
@@ -163,22 +178,36 @@ export async function runDoctorConfigPreflight(
     repairPrefixedConfig?: boolean;
     recoverCorruptTargetStore?: boolean;
     invalidConfigNote?: string | false;
+    observe?: boolean;
+    /** Return false or reject on config drift; the preflight always unwinds owned resources. */
     beforeStateMigrations?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
     requireStartupMigrationCheckpoint?: boolean;
+    /**
+     * Allows legacy imports whose source lives in the DEFAULT home state dir
+     * while OPENCLAW_STATE_DIR points elsewhere. Only explicit doctor repair
+     * runs opt in; the implicit CLI/gateway preflight must never archive
+     * files that belong to another install's state dir.
+     */
+    crossStateDirImports?: boolean;
   } = {},
 ): Promise<DoctorConfigPreflightResult> {
-  const stateMigrations =
-    options.migrateState !== false ? await loadDoctorStateMigrations() : undefined;
+  const stateMigrationsRequested = options.migrateState !== false;
   const startupCheckpoint =
     options.requireStartupMigrationCheckpoint === true
       ? await import("../infra/startup-migration-checkpoint.js")
       : undefined;
+  let stateMigrations: Awaited<ReturnType<typeof loadDoctorStateMigrations>> | undefined;
+  let startupMigrationEnv = process.env;
   let shouldRecordStartupCheckpoint = false;
   let startupMigrationLease: StartupMigrationLease | undefined;
   let startupMigrationHeartbeat: ReturnType<typeof setInterval> | undefined;
   let startupMigrationHeartbeatError: unknown;
   const startupMigrationWarnings: string[] = [];
-  const noteStartupStateMigrationResult = (result: { changes: string[]; warnings: string[] }) => {
+  const noteStartupStateMigrationResult = (result: {
+    changes: string[];
+    warnings: string[];
+    notices?: string[];
+  }) => {
     startupMigrationWarnings.push(...result.warnings);
     noteStateMigrationResult(result);
   };
@@ -186,20 +215,20 @@ export async function runDoctorConfigPreflight(
     // The gateway uses this last-moment guard to ensure its prepared config did not change before
     // any automatic migration mutates state. A rejected guard skips every state migration stage.
     const stateMigrationsAllowed =
-      stateMigrations === undefined ||
+      !stateMigrationsRequested ||
       options.beforeStateMigrations === undefined ||
       (await options.beforeStateMigrations());
     if (startupCheckpoint && !stateMigrationsAllowed) {
-      throw new Error(
-        "OpenClaw startup migrations were skipped because the selected config changed during startup; refusing to report the gateway ready. Retry startup so the new config can be validated.",
-      );
+      throwStartupMigrationGuardRejected();
     }
     if (startupCheckpoint) {
+      // Later config reads can apply state selectors. Pin the accepted lease target for its lifetime.
+      startupMigrationEnv = cloneEnvWithPlatformSemantics(process.env);
       shouldRecordStartupCheckpoint = startupCheckpoint.needsStartupMigrationCheckpoint({
-        env: process.env,
+        env: startupMigrationEnv,
       });
       startupMigrationLease = shouldRecordStartupCheckpoint
-        ? startupCheckpoint.acquireStartupMigrationLease({ env: process.env })
+        ? startupCheckpoint.acquireStartupMigrationLease({ env: startupMigrationEnv })
         : undefined;
       if (startupMigrationLease) {
         startupMigrationHeartbeat = setInterval(() => {
@@ -212,6 +241,12 @@ export async function runDoctorConfigPreflight(
         startupMigrationHeartbeat.unref?.();
       }
     }
+    // A current version checkpoint proves this state root already completed every automatic
+    // migration. Keep repeated Gateway boots out of the legacy/plugin migration import graph.
+    stateMigrations =
+      stateMigrationsRequested && (!startupCheckpoint || shouldRecordStartupCheckpoint)
+        ? await loadDoctorStateMigrations()
+        : undefined;
     if (stateMigrations && stateMigrationsAllowed) {
       const { autoMigrateLegacyStateDir } = stateMigrations;
       const stateDirResult = await autoMigrateLegacyStateDir({ env: process.env });
@@ -226,6 +261,7 @@ export async function runDoctorConfigPreflight(
     }
 
     const readOptions = {
+      ...(options.observe === false ? { observe: false } : {}),
       skipPluginValidation: shouldSkipPluginValidationForDoctorConfigPreflight(),
     };
     let snapshot = addDoctorLegacyIssues(await readConfigFileSnapshot(readOptions));
@@ -265,12 +301,15 @@ export async function runDoctorConfigPreflight(
 
     const baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
     const stateMigrationInput = resolveStateMigrationConfigInput({ snapshot, baseConfig });
-    const configStateMigrationsAllowed =
-      stateMigrations !== undefined &&
-      stateMigrationsAllowed &&
-      (options.beforeStateMigrations === undefined ||
-        (await options.beforeStateMigrations(snapshot)));
-    if (stateMigrations && configStateMigrationsAllowed) {
+    const freshConfigGuardAllowed =
+      stateMigrations === undefined ||
+      !stateMigrationsAllowed ||
+      options.beforeStateMigrations === undefined ||
+      (await options.beforeStateMigrations(snapshot));
+    if (startupCheckpoint && !freshConfigGuardAllowed) {
+      throwStartupMigrationGuardRejected();
+    }
+    if (stateMigrations && stateMigrationsAllowed && freshConfigGuardAllowed) {
       const {
         autoMigrateLegacyState,
         autoMigrateLegacyPluginDoctorState,
@@ -291,6 +330,7 @@ export async function runDoctorConfigPreflight(
                 : {}),
               env: process.env,
               recoverCorruptTargetStore: options.recoverCorruptTargetStore,
+              crossStateDirImports: options.crossStateDirImports,
             }),
           );
         } else if (stateMigrationInput.pluginDoctorConfig) {
@@ -301,12 +341,18 @@ export async function runDoctorConfigPreflight(
             }),
           );
           noteStartupStateMigrationResult(
-            await autoMigrateLegacyTaskStateSidecars({ env: process.env }),
+            await autoMigrateLegacyTaskStateSidecars({
+              env: process.env,
+              crossStateDirImports: options.crossStateDirImports,
+            }),
           );
         }
       } else {
         noteStartupStateMigrationResult(
-          await autoMigrateLegacyTaskStateSidecars({ env: process.env }),
+          await autoMigrateLegacyTaskStateSidecars({
+            env: process.env,
+            crossStateDirImports: options.crossStateDirImports,
+          }),
         );
       }
     }
@@ -332,7 +378,7 @@ export async function runDoctorConfigPreflight(
         );
       }
       startupCheckpoint?.recordSuccessfulStartupMigrations({
-        env: process.env,
+        env: startupMigrationEnv,
         lease: startupMigrationLease,
       });
     }

@@ -1,6 +1,7 @@
 // In-process gateway run loop, restart signaling, drain, and update respawn handling.
 import { randomUUID } from "node:crypto";
 import net from "node:net";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   captureGatewayRestartTraceHandoff,
@@ -145,7 +146,7 @@ export async function runGatewayLoop(params: {
   let activeRestartRequest: GatewayRunSignalRequest | null = null;
   let forceActiveRestartExit: (() => void) | null = null;
   let pendingStartupForceExitTimer: ReturnType<typeof setTimeout> | null = null;
-  let restartDrainingMarkPromise: Promise<void> | null = null;
+  let restartDrainingMarked = false;
   let startupFailedWithoutServerHandle = false;
   const processInstanceId = randomUUID();
   const waitForHealthyChild = params.waitForHealthyChild ?? waitForHealthyGatewayChild;
@@ -407,17 +408,15 @@ export async function runGatewayLoop(params: {
       return DEFAULT_RESTART_DRAIN_TIMEOUT_MS;
     }
   };
-  const markRestartDraining = async () => {
-    if (!restartDrainingMarkPromise) {
-      restartDrainingMarkPromise = (async () => {
-        const { markGatewayDraining } = await loadGatewayLifecycleRuntimeModule();
-        markGatewayDraining();
-      })().catch((err: unknown) => {
-        restartDrainingMarkPromise = null;
-        throw err;
-      });
+  const markRestartDraining = () => {
+    if (restartDrainingMarked) {
+      return;
     }
-    await restartDrainingMarkPromise;
+    // The lifecycle module is primed before listeners are installed. Keep this
+    // transition synchronous so an accepted signal cannot yield between token
+    // handling and closing process-wide root admission.
+    eagerLifecycleRuntime.markGatewayDraining();
+    restartDrainingMarked = true;
   };
 
   const runAcceptedRequest = (acceptedRequest: GatewayRunSignalRequest) => {
@@ -571,7 +570,7 @@ export async function runGatewayLoop(params: {
 
               // Reject new enqueues immediately during the drain window so
               // sessions get an explicit restart error instead of silent task loss.
-              await markRestartDraining();
+              markRestartDraining();
               const activeTasks = getActiveTaskCount();
               const activeRuns = getActiveEmbeddedRunCount();
               activeTasksAtDrainStart = activeTasks;
@@ -735,8 +734,11 @@ export async function runGatewayLoop(params: {
       gatewayLog.info(`received ${signal} during shutdown; ignoring`);
       return;
     }
-    shuttingDown = true;
     const isRestart = action === "restart";
+    if (isRestart) {
+      markRestartDraining();
+    }
+    shuttingDown = true;
     gatewayLog.info(`received ${signal}; ${isRestart ? "restarting" : "shutting down"}`);
     if (isRestart) {
       startGatewayRestartTrace("restart.signal.received", [
@@ -757,9 +759,6 @@ export async function runGatewayLoop(params: {
     }
     if (!server || !restartResolver) {
       pendingStartupRequest = acceptedRequest;
-      void markRestartDraining().catch((err: unknown) => {
-        gatewayLog.warn(`failed to mark gateway draining for startup restart: ${String(err)}`);
-      });
       armPendingStartupForceExitTimer();
       return;
     }
@@ -767,7 +766,9 @@ export async function runGatewayLoop(params: {
   };
 
   const onSigterm = () => {
-    gatewayLog.info("signal SIGTERM received");
+    // Debug-level: every accepted signal is announced by request()'s
+    // "received <signal>; ..." line, so an info pre-log would double up.
+    gatewayLog.debug("signal SIGTERM received");
     void (async () => {
       const { consumeGatewayRestartIntentPayloadSync } = await loadGatewayLifecycleRuntimeModule();
       const restartIntent = consumeGatewayRestartIntentPayloadSync();
@@ -783,11 +784,11 @@ export async function runGatewayLoop(params: {
     });
   };
   const onSigint = () => {
-    gatewayLog.info("signal SIGINT received");
+    gatewayLog.debug("signal SIGINT received");
     request("stop", "SIGINT");
   };
   const onSigusr1 = () => {
-    gatewayLog.info("signal SIGUSR1 received");
+    gatewayLog.debug("signal SIGUSR1 received");
     void (async () => {
       const {
         abortPendingChannelReloads,
@@ -802,7 +803,9 @@ export async function runGatewayLoop(params: {
       const restartIntent = consumeGatewayRestartIntentPayloadSync();
       if (restartIntent) {
         abortPendingChannelReloads();
-        if (consumeGatewaySigusr1RestartAuthorization()) {
+        const authorized = consumeGatewaySigusr1RestartAuthorization();
+        markRestartDraining();
+        if (authorized) {
           markGatewaySigusr1RestartHandled();
         }
         request("restart", "SIGUSR1", restartIntent.reason ?? "gateway.restart", restartIntent);
@@ -835,6 +838,7 @@ export async function runGatewayLoop(params: {
       abortPendingChannelReloads();
       const sigusr1RestartIntent = consumeGatewaySigusr1RestartIntent();
       const restartReason = peekGatewaySigusr1RestartReason();
+      markRestartDraining();
       markGatewaySigusr1RestartHandled();
       request(
         "restart",
@@ -855,6 +859,14 @@ export async function runGatewayLoop(params: {
       } catch {
         // Best-effort: the eager reference itself is the recovery path.
       }
+      try {
+        eagerLifecycleRuntime.rollbackGatewayRestartSignalAdmission();
+        // A later signal must repeat the synchronous close transition even if
+        // this handler failed after marking the one-way drain.
+        restartDrainingMarked = false;
+      } catch {
+        // Keep admission recovery independent from restart-token recovery.
+      }
     });
   };
 
@@ -873,7 +885,7 @@ export async function runGatewayLoop(params: {
       const {
         abortActiveCronTaskRuns,
         advanceCronActiveJobGeneration,
-        reloadTaskRegistryFromStore,
+        reloadTaskRuntimeStateFromStore,
         retireActiveCronTaskRunTracking,
         resetCronActiveJobs,
         resetAllLanes,
@@ -898,7 +910,7 @@ export async function runGatewayLoop(params: {
       resetAllLanes();
       clearRuntimeConfigSnapshot();
       resetGatewayRestartStateForInProcessRestart();
-      reloadTaskRegistryFromStore();
+      reloadTaskRuntimeStateFromStore();
       markGatewayRestartTrace("restart.next-start");
     });
 
@@ -906,11 +918,13 @@ export async function runGatewayLoop(params: {
     // SIGTERM/SIGINT still exit after a graceful shutdown.
     let isFirstStart = true;
     for (;;) {
-      await onIteration();
-      restartDrainingMarkPromise = null;
-      startupStartedAt = Date.now();
+      // The restart hook reopens admission before reloading durable state. Clear
+      // its local mirror first so a failed reload cannot skip the next drain.
+      restartDrainingMarked = false;
       let startupFailedBeforeServerHandle = false;
       try {
+        await onIteration();
+        startupStartedAt = Date.now();
         await params.beginBoot?.(startupStartedAt);
         server = await params.start({ startupStartedAt });
         startupFailedWithoutServerHandle = false;
@@ -918,7 +932,7 @@ export async function runGatewayLoop(params: {
       } catch (err) {
         params.completeBoot?.({
           outcome: "startup_failed",
-          reason: formatErrorMessage(err).slice(0, 500),
+          reason: truncateUtf16Safe(formatErrorMessage(err), 500),
         });
         // On initial startup, let the error propagate so the outer handler
         // can report "Gateway failed to start" and exit non-zero. Only

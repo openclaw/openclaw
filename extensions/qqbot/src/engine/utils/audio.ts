@@ -11,6 +11,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { readRegularFileSync } from "openclaw/plugin-sdk/security-runtime";
 import { formatErrorMessage } from "./format.js";
 import { debugLog, debugError, debugWarn } from "./log.js";
@@ -118,7 +119,11 @@ export async function convertSilkToWav(
 
 /** Check whether an attachment is a voice file (by MIME type or extension). */
 export function isVoiceAttachment(att: { content_type?: string; filename?: string }): boolean {
-  if (att.content_type === "voice" || att.content_type?.startsWith("audio/")) {
+  // MIME types are case-insensitive (RFC 2045) and relays may emit mixed-case
+  // values; the bare "voice" platform sentinel gets the same treatment.
+  // Compare lowercased like the extension check below.
+  const contentType = normalizeLowercase(att.content_type);
+  if (contentType === "voice" || contentType.startsWith("audio/")) {
     return true;
   }
   const ext = att.filename ? normalizeLowercase(path.extname(att.filename)) : "";
@@ -391,14 +396,14 @@ async function wasmDecodeMp3ToPCM(buf: Buffer, targetRate: number): Promise<Buff
 
     let floatMono: Float32Array;
     if (decoded.channelData.length === 1) {
-      floatMono = decoded.channelData[0];
+      floatMono = expectDefined(decoded.channelData.at(0), "single decoded MP3 channel");
     } else {
       floatMono = new Float32Array(decoded.samplesDecoded);
       const channels = decoded.channelData.length;
       for (let i = 0; i < decoded.samplesDecoded; i++) {
         let sum = 0;
-        for (let ch = 0; ch < channels; ch++) {
-          sum += decoded.channelData[ch][i];
+        for (const channel of decoded.channelData) {
+          sum += expectDefined(channel.at(i), "decoded MP3 channel sample");
         }
         floatMono[i] = sum / channels;
       }
@@ -407,7 +412,8 @@ async function wasmDecodeMp3ToPCM(buf: Buffer, targetRate: number): Promise<Buff
     const s16 = new Uint8Array(floatMono.length * 2);
     const view = new DataView(s16.buffer);
     for (let i = 0; i < floatMono.length; i++) {
-      const clamped = Math.max(-1, Math.min(1, floatMono[i]));
+      const sample = expectDefined(floatMono.at(i), "mono MP3 sample index");
+      const clamped = Math.max(-1, Math.min(1, sample));
       const val = clamped < 0 ? clamped * 32768 : clamped * 32767;
       view.setInt16(i * 2, Math.round(val), true);
     }

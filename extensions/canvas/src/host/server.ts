@@ -1,7 +1,6 @@
 /**
  * Canvas host server and static-file/live-reload handler implementation.
  */
-import * as fsSync from "node:fs";
 import fs from "node:fs/promises";
 import http, { type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { createRequire } from "node:module";
@@ -223,16 +222,30 @@ async function prepareCanvasRoot(rootDir: string) {
   return rootReal;
 }
 
+/** Reads the owning document manifest to decide whether HTML gets a CSP sandbox header. */
+async function resolveDocumentCspSandbox(
+  rootReal: string,
+  realPath: string,
+): Promise<"scripts" | undefined> {
+  const relative = path.relative(rootReal, realPath);
+  const segments = relative.split(path.sep);
+  if (segments[0] !== "documents" || segments.length < 3) {
+    return undefined;
+  }
+  try {
+    const manifestRaw = await fs.readFile(
+      path.join(rootReal, segments[0], segments[1] ?? "", "manifest.json"),
+      "utf8",
+    );
+    const manifest = JSON.parse(manifestRaw) as { cspSandbox?: unknown };
+    return manifest.cspSandbox === "scripts" ? "scripts" : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function resolveDefaultCanvasRoot(): string {
-  const candidates = [path.join(resolveStateDir(), "canvas")];
-  const existing = candidates.find((dir) => {
-    try {
-      return fsSync.statSync(dir).isDirectory();
-    } catch {
-      return false;
-    }
-  });
-  return existing ?? candidates[0];
+  return path.join(resolveStateDir(), "canvas");
 }
 
 function resolveDefaultWatchFactory(): ChokidarWatch {
@@ -430,6 +443,16 @@ export async function createCanvasHostHandler(
       if (mime === "text/html") {
         const html = data.toString("utf8");
         res.setHeader("Content-Type", "text/html; charset=utf-8");
+        // Sandbox-marked documents (agent-authored widgets) must get an opaque
+        // origin even when navigated to directly; the iframe sandbox attribute
+        // only protects embedded views. Skips live reload: its bridge script is
+        // useless without same-origin access.
+        const cspSandbox = await resolveDocumentCspSandbox(rootReal, realPath);
+        if (cspSandbox) {
+          res.setHeader("Content-Security-Policy", "sandbox allow-scripts");
+          res.end(html);
+          return true;
+        }
         res.end(liveReload ? injectCanvasLiveReload(html) : html);
         return true;
       }

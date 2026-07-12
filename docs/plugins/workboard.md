@@ -19,17 +19,26 @@ other team project management systems.
 
 Workboard is bundled but disabled by default:
 
+1. Open **Plugins** in the Control UI, or use `/settings/plugins` relative to
+   the configured Control UI base path. For example, a base path of `/openclaw`
+   uses `/openclaw/settings/plugins`.
+2. Find **Workboard** and choose **Enable**. Because Workboard is included with
+   OpenClaw, it does not need an **Install** action.
+3. If the UI reports that a restart is required, restart the Gateway.
+
+The Workboard tab appears in the dashboard nav after the plugin runtime loads.
+While it is disabled, the tab stays hidden from navigation. Opening the
+`/workboard` route directly while the plugin is disabled or blocked by
+`plugins.allow`/`plugins.deny` shows a plugin-unavailable state instead of card
+data.
+
+The equivalent CLI workflow is:
+
 ```bash
 openclaw plugins enable workboard
 openclaw gateway restart
 openclaw dashboard
 ```
-
-The Workboard tab appears in the dashboard nav once the plugin is enabled;
-while it is disabled the tab stays hidden from navigation. Opening the
-`/workboard` route directly while the plugin is disabled or blocked by
-`plugins.allow`/`plugins.deny` shows a plugin-unavailable state instead of
-card data.
 
 ## Configuration
 
@@ -87,7 +96,7 @@ Unlinked cards can start work directly:
 
 - **Run Codex** / **Run Claude** starts a task-tracked agent run with an
   explicit engine, sends the card prompt, and marks the card `running`. Codex
-  runs use `openai/gpt-5.5`; Claude runs use `anthropic/claude-sonnet-4-6`.
+  runs use `openai/gpt-5.6-sol`; Claude runs use `anthropic/claude-sonnet-4-6`.
 - **Open Codex** / **Open Claude** creates a linked dashboard session without
   sending the card prompt or moving the card, for manual work that stays
   attached to the board.

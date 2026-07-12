@@ -92,6 +92,7 @@ describe("model provider localService config", () => {
   });
 
   it.each([
+    { provider: "x-ai", name: "xAI alias" },
     { provider: "xiaomi-token-plan", name: "Xiaomi Token Plan" },
     { provider: "tencent-tokenplan", name: "Tencent TokenPlan" },
   ] as const)("accepts standalone timeout overlays for $name", ({ provider }) => {
@@ -716,6 +717,39 @@ describe("plugins.entries.*.hooks", () => {
         },
       });
       expect(result.success).toBe(false);
+    }
+  });
+});
+
+describe("mcp.apps.enabled", () => {
+  it.each([true, false])("accepts %s", (enabled) => {
+    expect(OpenClawSchema.safeParse({ mcp: { apps: { enabled } } }).success).toBe(true);
+  });
+
+  it("rejects non-boolean values", () => {
+    expect(OpenClawSchema.safeParse({ mcp: { apps: { enabled: "yes" } } }).success).toBe(false);
+  });
+
+  it("accepts only a bare HTTP(S) sandbox origin", () => {
+    expect(
+      OpenClawSchema.safeParse({
+        mcp: {
+          apps: {
+            enabled: true,
+            sandboxOrigin: "https://mcp-apps.example.com",
+            sandboxPort: 29000,
+          },
+        },
+      }).success,
+    ).toBe(true);
+    expect(OpenClawSchema.safeParse({ mcp: { apps: { sandboxPort: 65536 } } }).success).toBe(false);
+    for (const sandboxOrigin of [
+      "https://mcp-apps.example.com/path",
+      "https://mcp-apps.example.com?query=1",
+      "https://user:pass@mcp-apps.example.com",
+      "data:text/html,hello",
+    ]) {
+      expect(OpenClawSchema.safeParse({ mcp: { apps: { sandboxOrigin } } }).success).toBe(false);
     }
   });
 });

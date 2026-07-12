@@ -32,6 +32,18 @@
         "command"
       ]
     },
+    "computer": {
+      "emoji": "🖱️",
+      "title": "Computer",
+      "detailKeys": [
+        "action",
+        "coordinate",
+        "text",
+        "node",
+        "nodeId",
+        "screenIndex"
+      ]
+    },
     "process": {
       "emoji": "🧰",
       "title": "Process",
@@ -514,6 +526,15 @@
         "sessionKey",
         "limit",
         "includeTools"
+      ]
+    },
+    "sessions_search": {
+      "emoji": "🔎",
+      "title": "Session Search",
+      "detailKeys": [
+        "query",
+        "sessionKey",
+        "limit"
       ]
     },
     "transcripts": {

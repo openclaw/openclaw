@@ -84,12 +84,15 @@ extension AgentProTab {
                         .buttonStyle(.plain)
                     }
                 }
-                Picker("Status", selection: self.$skillStatusFilter) {
+                Picker(selection: self.$skillStatusFilter) {
                     ForEach(SkillStatusFilter.allCases) { filter in
                         Text(filter.title)
                             .font(OpenClawType.captionSemiBold)
                             .tag(filter)
                     }
+                } label: {
+                    Text("Status")
+                        .font(OpenClawType.captionSemiBold)
                 }
                 .pickerStyle(.segmented)
                 .controlSize(.small)
@@ -342,14 +345,15 @@ extension AgentProTab {
     }
 
     func skillToggle(_ skill: SkillStatusEntryLite, title: String) -> some View {
-        Toggle(
-            title,
-            isOn: Binding(
-                get: { self.isSkillAllowed(skill) },
-                set: { enabled in
-                    Task { await self.setSkillAllowed(skill, enabled: enabled) }
-                }))
-                .labelsHidden()
+        Toggle(isOn: Binding(
+            get: { self.isSkillAllowed(skill) },
+            set: { enabled in
+                Task { await self.setSkillAllowed(skill, enabled: enabled) }
+            })) {
+                Text(title)
+                    .font(OpenClawType.body)
+            }
+            .labelsHidden()
                 .disabled(self.skillMutationBusy)
                 .toggleStyle(.switch)
                 .controlSize(.mini)

@@ -3,6 +3,7 @@ package ai.openclaw.app.chat
 import java.util.Locale
 
 private val visibleChatMessageRoles = setOf("user", "assistant", "system", "custom")
+internal const val CHAT_IMAGE_MAX_BASE64_CHARS = 300 * 1024
 
 /** Keeps transcript rows limited to roles Android renders as user-visible chat. */
 internal fun normalizeVisibleChatMessageRole(role: String?): String? =
@@ -45,6 +46,30 @@ data class ChatPendingToolCall(
   val isError: Boolean? = null,
 )
 
+/** Gateway-advertised thinking choice for the active provider/model pair. */
+data class ChatThinkingLevelOption(
+  val id: String,
+  val label: String,
+)
+
+/** Thinking choices currently shown by chat, including whether the Gateway supplied them. */
+data class ChatThinkingLevelSelection(
+  val options: List<ChatThinkingLevelOption>,
+  val isGatewayProvided: Boolean,
+)
+
+internal val defaultChatThinkingLevelSelection =
+  ChatThinkingLevelSelection(
+    options =
+      listOf(
+        ChatThinkingLevelOption(id = "off", label = "off"),
+        ChatThinkingLevelOption(id = "low", label = "low"),
+        ChatThinkingLevelOption(id = "medium", label = "medium"),
+        ChatThinkingLevelOption(id = "high", label = "high"),
+      ),
+    isGatewayProvided = false,
+  )
+
 /**
  * Stable session selector row; [key] is the gateway session key used in chat requests.
  */
@@ -63,6 +88,9 @@ data class ChatSessionEntry(
   val totalTokensFresh: Boolean? = null,
   val modelProvider: String? = null,
   val model: String? = null,
+  val thinkingLevel: String? = null,
+  val thinkingLevels: List<ChatThinkingLevelOption>? = null,
+  val thinkingDefault: String? = null,
   val contextTokens: Long? = null,
   val hasContextUsageMetadata: Boolean = totalTokens != null || totalTokensFresh != null || contextTokens != null,
 )

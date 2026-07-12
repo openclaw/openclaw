@@ -16,6 +16,7 @@ struct GeneralSettings: View {
 
     @Bindable var state: AppState
     @AppStorage(cameraEnabledKey) private var cameraEnabled: Bool = false
+    @AppStorage(computerControlEnabledKey) private var computerControlEnabled: Bool = false
     let page: Page
     let isActive: Bool
     private let healthStore = HealthStore.shared
@@ -73,12 +74,17 @@ struct GeneralSettings: View {
             SettingsCardGroup("App") {
                 SettingsCardToggleRow(
                     title: "Launch at login",
-                    subtitle: "Automatically start OpenClaw after you sign in.",
+                    subtitle: self.state.bundleLocationAllowsPersistentIntegration
+                        ? "Automatically start OpenClaw after you sign in."
+                        : "Move OpenClaw to Applications before enabling launch at login.",
                     binding: self.$state.launchAtLogin)
+                    .disabled(!self.state.bundleLocationAllowsPersistentIntegration && !self.state.launchAtLogin)
 
                 SettingsCardToggleRow(
                     title: "Show Dock icon",
-                    subtitle: "Keep OpenClaw visible in the Dock. When off, windows still show the Dock icon while open.",
+                    subtitle: """
+                    Keep OpenClaw visible in the Dock. When off, windows still show the Dock icon while open.
+                    """,
                     binding: self.$state.showDockIcon)
 
                 SettingsCardToggleRow(
@@ -100,10 +106,46 @@ struct GeneralSettings: View {
                     binding: self.$cameraEnabled)
 
                 SettingsCardToggleRow(
+                    title: "Allow Computer Control",
+                    subtitle: """
+                    Let an authorized agent move the pointer, click, and type on this Mac. \
+                    Also requires Accessibility, Screen Recording, and gateway command authorization. High risk.
+                    """,
+                    binding: self.$computerControlEnabled)
+
+                SettingsCardToggleRow(
                     title: "Enable Peekaboo Bridge",
                     subtitle: "Allow signed tools (e.g. `peekaboo`) to drive UI automation via PeekabooBridge.",
                     binding: self.$state.peekabooBridgeEnabled,
                     showsDivider: false)
+            }
+
+            SettingsCardGroup("Browser") {
+                SettingsCardRow(
+                    title: "Browser login",
+                    subtitle: "Copy cookies from a Chrome-family profile into an isolated managed profile.",
+                    showsDivider: false)
+                {
+                    Button("Import…") {
+                        Task { @MainActor in
+                            switch await BrowserProfileImportModel.shared.refresh(force: true) {
+                            case .offering:
+                                // The banner lives in the dashboard window; force
+                                // offers must surface it even if that window is closed.
+                                AppNavigationActions.openDashboard()
+                            case let .unavailable(title, message):
+                                let alert = NSAlert()
+                                alert.messageText = title
+                                alert.informativeText = message
+                                alert.addButton(withTitle: "OK")
+                                alert.runModal()
+                            }
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(self.state.connectionMode != .local)
+                }
             }
 
             SettingsCardGroup("Developer") {
@@ -317,7 +359,9 @@ struct GeneralSettings: View {
             if self.state.connectionMode == .unconfigured {
                 SettingsCardRow(
                     title: "Setup needed",
-                    subtitle: "Local is best for this Mac. Remote is best when the Gateway already runs on a Mac Studio or server.",
+                    subtitle: """
+                    Local is best for this Mac. Remote is best when the Gateway already runs on a Mac Studio or server.
+                    """,
                     showsDivider: false)
                 {
                     Image(systemName: "exclamationmark.triangle.fill")
@@ -757,8 +801,8 @@ extension GeneralSettings {
     }
 
     private func applyDiscoveredGateway(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) {
-        MacNodeModeCoordinator.shared.setPreferredGatewayStableID(gateway.stableID)
         GatewayDiscoverySelectionSupport.applyRemoteSelection(gateway: gateway, state: self.state)
+        MacNodeModeCoordinator.shared.setPreferredGatewayStableID(gateway.stableID, state: self.state)
     }
 }
 

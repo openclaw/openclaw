@@ -505,8 +505,9 @@ export function markdownFileLinkFromEvent(
 
 function splitFileLineSuffix(raw: string): { path: string; line: number | null } {
   const match = FILE_LINE_SUFFIX_RE.exec(raw);
-  return match
-    ? { path: raw.slice(0, match.index), line: Number.parseInt(match[1], 10) }
+  const line = match?.[1];
+  return match && line
+    ? { path: raw.slice(0, match.index), line: Number.parseInt(line, 10) }
     : { path: raw, line: null };
 }
 
@@ -684,8 +685,14 @@ function normalizeMarkdownImageLabel(text?: string | null): string {
   return trimmed ? trimmed : "image";
 }
 
+function normalizeMarkdownLineBreaks(value: string): string {
+  return value.replace(/\r\n?|[\u2028\u2029]/g, "\n");
+}
+
 function normalizeMarkdownInput(markdownLocal: string): string {
-  const input = stripUnsupportedCitationControlMarkers(markdownLocal).trim();
+  const input = normalizeMarkdownLineBreaks(
+    stripUnsupportedCitationControlMarkers(markdownLocal),
+  ).trim();
   if (!input) {
     return "";
   }
@@ -694,7 +701,7 @@ function normalizeMarkdownInput(markdownLocal: string): string {
 
 function formatTruncatedMarkdownInput(input: string): string {
   const truncated = truncateText(input, MARKDOWN_CHAR_LIMIT);
-  return appendMarkdownTruncationNotice(truncated).replace(/\r\n?/g, "\n");
+  return appendMarkdownTruncationNotice(truncated);
 }
 
 function appendMarkdownTruncationNotice(truncated: {
@@ -709,7 +716,7 @@ function appendMarkdownTruncationNotice(truncated: {
 }
 
 export function isMarkdownBlockArtText(value: string): boolean {
-  const lines = value.replace(/\r\n?/g, "\n").split("\n");
+  const lines = normalizeMarkdownLineBreaks(value).split("\n");
   const artLines = lines.filter((line) => line.trim().length > 0);
   if (artLines.length < 2) {
     return false;
@@ -733,7 +740,10 @@ function getFenceMarker(line: string): { marker: "`" | "~"; length: number } | n
     return null;
   }
   const fence = match[1];
-  const marker = fence[0] as "`" | "~";
+  if (!fence) {
+    return null;
+  }
+  const marker = fence.charAt(0) as "`" | "~";
   return { marker, length: fence.length };
 }
 
@@ -755,8 +765,12 @@ function isFenceClose(line: string, fence: { marker: "`" | "~"; length: number }
   if (!match) {
     return false;
   }
-  const marker = match[1][0];
-  if (marker !== fence.marker || match[1].length < fence.length) {
+  const markerText = match[1];
+  if (!markerText) {
+    return false;
+  }
+  const marker = markerText.charAt(0);
+  if (marker !== fence.marker || markerText.length < fence.length) {
     return false;
   }
   return trimmed.slice(match[0].length).trim() === "";
@@ -997,7 +1011,7 @@ md.linkify.add("www", {
     for (const [close, open] of Object.entries(balancePairs)) {
       balance[close] = 0;
       for (let i = 0; i < len; i++) {
-        const c = tail[i];
+        const c = tail.charAt(i);
         if (open === close) {
           // Self-matching pair (e.g., "") — toggle between 0 and 1
           if (c === open) {
@@ -1005,15 +1019,15 @@ md.linkify.add("www", {
           }
         } else if (c === open) {
           // Distinct open/close (e.g., ())
-          balance[close]++;
+          balance[close] = (balance[close] ?? 0) + 1;
         } else if (c === close) {
-          balance[close]--;
+          balance[close] = (balance[close] ?? 0) - 1;
         }
       }
     }
 
     while (len > 0) {
-      const ch = tail[len - 1];
+      const ch = tail.charAt(len - 1);
       // GFM trailing punctuation: ?, !, ., ,, :, *, _, ~ stripped unconditionally.
       // Semicolon is handled specially below (entity reference rule).
       if (/[?!.,:*_~]/.test(ch)) {
@@ -1025,11 +1039,11 @@ md.linkify.add("www", {
       if (ch === ";") {
         // Backward scan to find & (O(n) total, avoids string allocation)
         let j = len - 2;
-        while (j >= 0 && /[a-zA-Z0-9]/.test(tail[j])) {
+        while (j >= 0 && /[a-zA-Z0-9]/.test(tail.charAt(j))) {
           j--;
         }
         // j < len - 2 ensures at least one alphanumeric between & and ;
-        if (j >= 0 && tail[j] === "&" && j < len - 2) {
+        if (j >= 0 && tail.charAt(j) === "&" && j < len - 2) {
           len = j;
           continue;
         }
@@ -1041,14 +1055,14 @@ md.linkify.add("www", {
       if (open !== undefined) {
         if (open === ch) {
           // Self-matching: strip if odd count (unbalanced)
-          if (balance[ch] !== 0) {
+          if ((balance[ch] ?? 0) !== 0) {
             balance[ch] = 0;
             len--;
             continue;
           }
-        } else if (balance[ch] < 0) {
+        } else if ((balance[ch] ?? 0) < 0) {
           // Distinct pair: strip if more closes than opens
-          balance[ch]++;
+          balance[ch] = (balance[ch] ?? 0) + 1;
           len--;
           continue;
         }
@@ -1086,6 +1100,9 @@ md.core.ruler.after("linkify", "linkify-cjk-trim", (state) => {
     const children = blockToken.children;
     for (let i = children.length - 1; i >= 0; i--) {
       const token = children[i];
+      if (!token) {
+        continue;
+      }
       if (token.type !== "link_open") {
         continue;
       }
@@ -1105,7 +1122,7 @@ md.core.ruler.after("linkify", "linkify-cjk-trim", (state) => {
       // Middle CJK must be preserved (e.g. https://example.com/你/test stays intact);
       // only strip a contiguous CJK tail adjacent to non-URL text.
       let cjkIdx = displayText.length;
-      while (cjkIdx > 0 && CJK_RE.test(displayText[cjkIdx - 1])) {
+      while (cjkIdx > 0 && CJK_RE.test(displayText.charAt(cjkIdx - 1))) {
         cjkIdx--;
       }
       if (cjkIdx <= 0 || cjkIdx === displayText.length) {
@@ -1123,7 +1140,7 @@ md.core.ruler.after("linkify", "linkify-cjk-trim", (state) => {
       textToken.content = trimmedDisplay;
       // Find link_close and insert CJK text after it
       for (let j = i + 1; j < children.length; j++) {
-        if (children[j].type === "link_close") {
+        if (children[j]?.type === "link_close") {
           const tailToken = new state.Token("text", "", 0);
           tailToken.content = cjkTail;
           children.splice(j + 1, 0, tailToken);
@@ -1157,6 +1174,9 @@ md.core.ruler.after("linkify", "file-links", (state) => {
     let linkDepth = 0;
     for (let index = 0; index < children.length; index += 1) {
       const token = children[index];
+      if (!token) {
+        continue;
+      }
       if (token.type === "link_open") {
         const href = token.attrGet("href");
         if (href) {
@@ -1255,23 +1275,28 @@ md.use(markdownItTaskLists, { enabled: false, label: false });
 md.core.ruler.after("github-task-lists", "task-list-allowlist", (state) => {
   const tokens = state.tokens;
   for (let i = 2; i < tokens.length; i++) {
-    if (tokens[i].type !== "inline" || !tokens[i].children) {
-      continue;
-    }
-    if (tokens[i - 1].type !== "paragraph_open") {
-      continue;
-    }
-    if (tokens[i - 2].type !== "list_item_open") {
-      continue;
-    }
+    const token = tokens[i];
+    const paragraph = tokens[i - 1];
     const listItem = tokens[i - 2];
+    if (!token || !paragraph || !listItem) {
+      continue;
+    }
+    if (token.type !== "inline" || !token.children) {
+      continue;
+    }
+    if (paragraph.type !== "paragraph_open") {
+      continue;
+    }
+    if (listItem.type !== "list_item_open") {
+      continue;
+    }
     const cls = listItem.attrGet("class") ?? "";
     if (!cls.includes("task-list-item")) {
       continue;
     }
     // Only trust the checkbox <input> token from the plugin, not other user-supplied HTML.
     // The plugin inserts an <input> at the start; user HTML elsewhere must stay escaped.
-    for (const child of tokens[i].children!) {
+    for (const child of token.children) {
       if (child.type === "html_inline" && /^<input\s/i.test(child.content)) {
         child.meta = { taskListPlugin: true };
         break; // Only one checkbox per item
@@ -1284,11 +1309,17 @@ md.core.ruler.after("github-task-lists", "task-list-allowlist", (state) => {
 // Exception: html_inline tokens marked by a trusted plugin (meta.taskListPlugin)
 // are allowed through — they are generated by our own plugin pipeline, not user input,
 // and DOMPurify provides the final safety net regardless.
+// Renderer rules degrade to empty output on impossible token misses instead of
+// throwing mid-render; markdown input is untrusted and the chat view must not crash.
 md.renderer.rules.html_block = (tokens, idx) => {
-  return escapeHtml(tokens[idx].content) + "\n";
+  const token = tokens[idx];
+  return token ? escapeHtml(token.content) + "\n" : "";
 };
 md.renderer.rules.html_inline = (tokens, idx) => {
   const token = tokens[idx];
+  if (!token) {
+    return "";
+  }
   if (token.meta?.taskListPlugin === true) {
     return token.content;
   }
@@ -1298,7 +1329,8 @@ md.renderer.rules.html_inline = (tokens, idx) => {
 md.renderer.rules.code_inline = (tokens, idx, options, env, self) => {
   const rendered = defaultCodeInlineRenderer(tokens, idx, options, env, self);
   const renderEnv = env as Partial<MarkdownRenderEnv> | undefined;
-  const target = renderEnv?.fileLinks === true ? parseFileLinkTarget(tokens[idx].content) : null;
+  const token = tokens[idx];
+  const target = token && renderEnv?.fileLinks === true ? parseFileLinkTarget(token.content) : null;
   if (!target) {
     return rendered;
   }
@@ -1310,6 +1342,9 @@ md.renderer.rules.code_inline = (tokens, idx, options, env, self) => {
 // Override image to only allow base64 data URIs (#15437)
 md.renderer.rules.image = (tokens, idx) => {
   const token = tokens[idx];
+  if (!token) {
+    return "";
+  }
   const src = token.attrGet("src")?.trim() ?? "";
   // Use token.content which preserves raw markdown formatting (e.g. **bold**)
   // to match original marked.js behavior.
@@ -1323,6 +1358,9 @@ md.renderer.rules.image = (tokens, idx) => {
 // Override fenced code blocks with copy button + JSON collapse
 md.renderer.rules.fence = (tokens, idx, _options, env) => {
   const token = tokens[idx];
+  if (!token) {
+    return "";
+  }
   // token.info contains the full fence info string (e.g., "json title=foo");
   // extract only the first whitespace-separated token as the language.
   const lang = token.info.trim().split(/\s+/)[0] || "";
@@ -1333,7 +1371,10 @@ md.renderer.rules.fence = (tokens, idx, _options, env) => {
 
 // Override indented code blocks (code_block) with the same treatment as fence
 md.renderer.rules.code_block = (tokens, idx, _options, env) => {
-  const content = tokens[idx].content;
+  const content = tokens[idx]?.content;
+  if (content === undefined) {
+    return "";
+  }
   return renderCodeBlock(content, "", env, {
     copyText: codeBlockCopyTextFromMarkdownToken(content),
   });
@@ -1344,7 +1385,9 @@ export function toSanitizedMarkdownHtml(
   options: MarkdownRenderOptions = {},
 ): string {
   const renderOptions = normalizeMarkdownRenderOptions(options);
-  const rawInput = stripUnsupportedCitationControlMarkers(markdownLocal).replace(/\r\n?/g, "\n");
+  const rawInput = normalizeMarkdownLineBreaks(
+    stripUnsupportedCitationControlMarkers(markdownLocal),
+  );
   const input = rawInput.trim();
   if (!input) {
     return "";
@@ -1397,7 +1440,7 @@ export function toSanitizedMarkdownHtml(
 }
 
 function toEscapedPlainTextHtml(value: string): string {
-  return `<div class="markdown-plain-text-fallback">${escapeHtml(value.replace(/\r\n?/g, "\n"))}</div>`;
+  return `<div class="markdown-plain-text-fallback">${escapeHtml(normalizeMarkdownLineBreaks(value))}</div>`;
 }
 
 export function toStreamingPlainTextHtml(markdownLocal: string): string {
@@ -1412,7 +1455,9 @@ export function toStreamingMarkdownHtml(
   markdownLocal: string,
   options: MarkdownRenderOptions = {},
 ): string {
-  const rawInput = stripUnsupportedCitationControlMarkers(markdownLocal).replace(/\r\n?/g, "\n");
+  const rawInput = normalizeMarkdownLineBreaks(
+    stripUnsupportedCitationControlMarkers(markdownLocal),
+  );
   if (isMarkdownBlockArtText(rawInput)) {
     const truncated = truncateText(rawInput, MARKDOWN_CHAR_LIMIT);
     installHooks();
@@ -1427,10 +1472,11 @@ export function toStreamingMarkdownHtml(
     );
   }
 
-  const input = normalizeMarkdownInput(markdownLocal);
-  if (!input) {
+  const trimmedInput = rawInput.trim();
+  if (!trimmedInput) {
     return "";
   }
+  const input = formatTruncatedMarkdownInput(trimmedInput);
 
   const boundary = findStableStreamingMarkdownBoundary(input);
   if (boundary <= 0) {

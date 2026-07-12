@@ -339,16 +339,17 @@ async function mapLimit<T, R>(
   }
   const results: R[] = [];
   results.length = items.length;
-  let nextIndex = 0;
+  const pendingItems = items.entries();
   const workerCount = Math.max(1, Math.min(limit, items.length));
   await Promise.all(
     Array.from({ length: workerCount }, async () => {
       while (true) {
-        const idx = nextIndex++;
-        if (idx >= items.length) {
+        const next = pendingItems.next();
+        if (next.done) {
           return;
         }
-        results[idx] = await fn(items[idx]);
+        const [idx, item] = next.value;
+        results[idx] = await fn(item);
       }
     }),
   );
@@ -367,6 +368,7 @@ export async function resolveSlackMedia(params: {
   readIdleTimeoutMs?: number;
   totalTimeoutMs?: number;
   abortSignal?: AbortSignal;
+  preloadedMedia?: ReadonlyMap<SlackFile, SlackMediaResult>;
 }): Promise<SlackMediaResult[] | null> {
   const files = params.files ?? [];
   const limitedFiles =
@@ -376,6 +378,12 @@ export async function resolveSlackMedia(params: {
     limitedFiles,
     MAX_SLACK_MEDIA_CONCURRENCY,
     async (file) => {
+      // Audio preflight keys the original event file object so admission can
+      // reuse that exact download without turning this into a persistent cache.
+      const preloaded = params.preloadedMedia?.get(file);
+      if (preloaded) {
+        return preloaded;
+      }
       const eventUrl = file.url_private_download ?? file.url_private;
       const url = eventUrl ?? (await fetchFreshSlackFileUrl({ file, client: params.client }));
       if (!url) {

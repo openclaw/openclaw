@@ -1,14 +1,20 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.AndroidLicenseNotice
+import ai.openclaw.app.AppLanguage
 import ai.openclaw.app.AppearanceThemeMode
 import ai.openclaw.app.BuildConfig
+import ai.openclaw.app.CronEditorDraftState
 import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.GatewayConnectionDisplay
 import ai.openclaw.app.GatewayConnectionProblem
+import ai.openclaw.app.GatewayCronActionState
 import ai.openclaw.app.GatewayCronJobDetail
 import ai.openclaw.app.GatewayCronJobDetailState
+import ai.openclaw.app.GatewayCronJobEdit
 import ai.openclaw.app.GatewayCronJobSummary
+import ai.openclaw.app.GatewayCronRunHistoryState
+import ai.openclaw.app.GatewayExecApprovalNotice
 import ai.openclaw.app.GatewayExecApprovalSummary
 import ai.openclaw.app.GatewayTalkSetupReadiness
 import ai.openclaw.app.GatewayTalkSetupState
@@ -17,7 +23,10 @@ import ai.openclaw.app.LocationMode
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NotificationPackageFilterMode
 import ai.openclaw.app.SensitiveFeatureConfig
+import ai.openclaw.app.appLanguageRowSubtitle
 import ai.openclaw.app.chat.ChatPendingToolCall
+import ai.openclaw.app.currentAppLanguage
+import ai.openclaw.app.currentSystemLanguageTag
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gatewayTalkSetupDescription
 import ai.openclaw.app.gatewayTalkSetupStatusText
@@ -27,6 +36,9 @@ import ai.openclaw.app.loadAndroidLicenseNotices
 import ai.openclaw.app.locationModeAfterBackgroundSettings
 import ai.openclaw.app.node.DeviceNotificationListenerService
 import ai.openclaw.app.photoReadPermissionsForRequest
+import ai.openclaw.app.reconcileRestoredAction
+import ai.openclaw.app.setAppLanguage
+import ai.openclaw.app.ui.design.ClawAgentAvatar
 import ai.openclaw.app.ui.design.ClawDetailRow
 import ai.openclaw.app.ui.design.ClawIconBadge
 import ai.openclaw.app.ui.design.ClawListItem
@@ -44,6 +56,9 @@ import ai.openclaw.app.ui.design.ClawTextBadge
 import ai.openclaw.app.ui.design.ClawTextField
 import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.design.OpenClawMascot
+import ai.openclaw.app.ui.design.TalkWaveform
+import ai.openclaw.app.ui.design.TalkWaveformPhase
+import ai.openclaw.app.ui.design.agentAvatarSource
 import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -59,6 +74,7 @@ import android.os.Looper
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -82,6 +98,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
@@ -91,11 +108,13 @@ import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Mic
@@ -124,6 +143,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontFamily
@@ -151,6 +171,7 @@ internal enum class SettingsRoute {
   CronJobs,
   Usage,
   Skills,
+  SkillWorkshop,
   NodesDevices,
   Channels,
   Dreaming,
@@ -184,6 +205,7 @@ internal fun SettingsDetailScreen(
     SettingsRoute.CronJobs -> CronJobsSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Usage -> UsageSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Skills -> SkillsSettingsScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.SkillWorkshop -> SkillWorkshopSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.NodesDevices -> NodesDevicesSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Channels -> ChannelsSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Dreaming -> DreamingSettingsScreen(viewModel = viewModel, onBack = onBack)
@@ -289,7 +311,7 @@ private fun CronJobsSettingsScreen(
     )
     ClawSecondaryButton(text = if (cronRefreshing) "Refreshing" else "Refresh", onClick = viewModel::refreshCronJobs, enabled = isConnected && !cronRefreshing, modifier = Modifier.fillMaxWidth())
     ClawPanel {
-      Text(text = "Android shows scheduled work status. Create and edit schedules from the desktop app.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+      Text(text = "Open a job to inspect its configuration and run history. Admin-scoped connections can also run, edit, enable, disable, or delete it.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
     }
     cronErrorText?.let { errorText ->
       ClawPanel {
@@ -305,7 +327,7 @@ private fun CronJobsSettingsScreen(
         ClawPanel {
           Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(text = "No scheduled jobs.", style = ClawTheme.type.section, color = ClawTheme.colors.text)
-            Text(text = "Create recurring OpenClaw work from the desktop app.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+            Text(text = "Scheduled work created on the gateway will appear here.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
           }
         }
       else -> CronJobsPanel(jobs = cronJobs, onJobClick = { selectedJobId = it.id })
@@ -320,13 +342,29 @@ private fun CronJobDetailSettingsScreen(
   jobName: String?,
   onBack: () -> Unit,
 ) {
-  BackHandler(onBack = onBack)
+  fun leaveDetail() {
+    viewModel.cronEditorDraftMemory.clear(jobId)
+    viewModel.dismissCronActionNotice(jobId)
+    onBack()
+  }
+  BackHandler(onBack = ::leaveDetail)
 
   val detailState by viewModel.cronJobDetailState.collectAsState()
+  val historyState by viewModel.cronRunHistoryState.collectAsState()
+  val actionState by viewModel.cronActionState.collectAsState()
+  val pendingCronRunJobIds by viewModel.pendingCronRunJobIds.collectAsState()
+  val operatorAdminScopeAvailable by viewModel.operatorAdminScopeAvailable.collectAsState()
   val isConnected by viewModel.isConnected.collectAsState()
+  val activity = LocalActivity.current
 
-  DisposableEffect(viewModel, jobId) {
-    onDispose { viewModel.clearCronJobDetail() }
+  DisposableEffect(activity, viewModel, jobId) {
+    onDispose {
+      viewModel.clearCronJobDetail()
+      if (cronDetailDisposalClearsTransientState(activity?.isChangingConfigurations == true)) {
+        viewModel.cronEditorDraftMemory.clear(jobId)
+        viewModel.dismissCronActionNotice(jobId)
+      }
+    }
   }
 
   LaunchedEffect(isConnected, jobId) {
@@ -336,18 +374,75 @@ private fun CronJobDetailSettingsScreen(
   }
 
   val current = (detailState as? GatewayCronJobDetailState.Loaded)?.job?.takeIf { it.id == jobId }
+  var editorDraft by remember(viewModel, jobId) {
+    mutableStateOf(viewModel.cronEditorDraftMemory.get(jobId))
+  }
+  var restoredDraftNeedsActionCheck by remember(viewModel, jobId) {
+    mutableStateOf(editorDraft?.savePending == true)
+  }
+
+  fun updateEditorDraft(value: CronEditorDraftState?) {
+    editorDraft = value
+    viewModel.cronEditorDraftMemory.set(jobId, value)
+  }
+  LaunchedEffect(isConnected, actionState, restoredDraftNeedsActionCheck) {
+    if (restoredDraftNeedsActionCheck) {
+      updateEditorDraft(
+        editorDraft?.reconcileRestoredAction(
+          isConnected = isConnected,
+          jobId = jobId,
+          actionState = actionState,
+        ),
+      )
+      restoredDraftNeedsActionCheck = false
+    }
+  }
+  LaunchedEffect(isConnected) {
+    if (!isConnected) updateEditorDraft(editorDraft?.saveAborted())
+  }
+  LaunchedEffect(current) {
+    current?.let { job ->
+      updateEditorDraft(editorDraft?.observeJob(job) ?: CronEditorDraftState.from(job))
+    }
+  }
+  LaunchedEffect(actionState, current) {
+    val notice = actionState as? GatewayCronActionState.Notice
+    if (notice?.id == jobId) {
+      val observed = editorDraft?.observeSaveNotice(notice.kind)
+      updateEditorDraft(
+        current?.let { job ->
+          observed?.observeJob(job) ?: CronEditorDraftState.from(job)
+        } ?: observed,
+      )
+    }
+  }
   val loading = (detailState as? GatewayCronJobDetailState.Loading)?.id == jobId
   val errorText = (detailState as? GatewayCronJobDetailState.Error)?.takeIf { it.id == jobId }?.message
+  val deleted =
+    (actionState as? GatewayCronActionState.Notice)
+      ?.takeIf { it.id == jobId }
+      ?.deleted == true
+
+  LaunchedEffect(deleted) {
+    if (deleted) leaveDetail()
+  }
   SettingsDetailFrame(
     title = current?.name ?: jobName ?: "Cron Job",
     subtitle = "Inspect scheduled gateway work.",
     icon = Icons.Default.Bolt,
-    onBack = onBack,
+    onBack = ::leaveDetail,
   ) {
     ClawSecondaryButton(
       text = if (loading) "Refreshing" else "Refresh",
       onClick = { viewModel.loadCronJobDetail(jobId) },
-      enabled = isConnected && !loading,
+      enabled =
+        cronDetailRefreshEnabled(
+          isConnected = isConnected,
+          loading = loading,
+          hasCurrentJob = current != null,
+          draftRequiresResolution = editorDraft?.requiresResolution == true,
+          saveSucceeded = editorDraft?.saveSucceeded == true,
+        ),
       modifier = Modifier.fillMaxWidth(),
     )
 
@@ -364,10 +459,39 @@ private fun CronJobDetailSettingsScreen(
         ClawPanel {
           Text(text = if (loading) "Loading cron job…" else "Cron job not loaded.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
         }
-      else -> CronJobDetailPanel(current)
+      else ->
+        CronJobDetailPanel(
+          job = current,
+          editorDraft = editorDraft ?: CronEditorDraftState.from(current),
+          onEditorDraftChange = ::updateEditorDraft,
+          historyState = historyState,
+          actionState = actionState,
+          runPending = jobId in pendingCronRunJobIds,
+          operatorAdminScopeAvailable = operatorAdminScopeAvailable,
+          onRun = { viewModel.runCronJob(current.id) },
+          onToggleEnabled = {
+            viewModel.setCronJobEnabled(id = current.id, enabled = !current.enabled)
+          },
+          onSave = { edit -> viewModel.updateCronJob(original = current, edit = edit) },
+          onRefreshHistory = { viewModel.refreshCronRunHistory(current.id) },
+          onDelete = { viewModel.deleteCronJob(current.id) },
+        )
     }
   }
 }
+
+internal fun cronDetailRefreshEnabled(
+  isConnected: Boolean,
+  loading: Boolean,
+  hasCurrentJob: Boolean,
+  draftRequiresResolution: Boolean,
+  saveSucceeded: Boolean,
+): Boolean =
+  isConnected &&
+    !loading &&
+    (!hasCurrentJob || !draftRequiresResolution || saveSucceeded)
+
+internal fun cronDetailDisposalClearsTransientState(isChangingConfigurations: Boolean): Boolean = !isChangingConfigurations
 
 @Composable
 private fun AgentsSettingsScreen(
@@ -415,6 +539,7 @@ private fun ApprovalsSettingsScreen(
   val execApprovals by viewModel.execApprovals.collectAsState()
   val execApprovalsRefreshing by viewModel.execApprovalsRefreshing.collectAsState()
   val execApprovalsErrorText by viewModel.execApprovalsErrorText.collectAsState()
+  val execApprovalsNotice by viewModel.execApprovalsNotice.collectAsState()
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
   val issueCount = execApprovals.count { it.errorText != null } + pendingToolCalls.count { it.isError == true }
@@ -446,6 +571,11 @@ private fun ApprovalsSettingsScreen(
         Text(text = execApprovalsErrorText ?: "", style = ClawTheme.type.body, color = ClawTheme.colors.warning)
       }
     }
+    // Terminal outcomes always retire their card first, so the notice renders as a
+    // standalone banner above the list; it stays visible until the user dismisses it.
+    execApprovalsNotice?.let { notice ->
+      ExecApprovalNotice(notice = notice, onDismiss = { viewModel.dismissExecApprovalsNotice(notice) })
+    }
     if (!isConnected) {
       ClawPanel {
         Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -461,7 +591,10 @@ private fun ApprovalsSettingsScreen(
         }
       }
     } else {
-      ExecApprovalsPanel(approvals = execApprovals, onResolve = viewModel::resolveExecApproval)
+      ExecApprovalsPanel(
+        approvals = execApprovals,
+        onResolve = viewModel::resolveExecApproval,
+      )
     }
     if (pendingToolCalls.isNotEmpty()) {
       Text(text = "Session activity", style = ClawTheme.type.section, color = ClawTheme.colors.text)
@@ -620,16 +753,12 @@ private fun SettingsWaveformPanel(
       horizontalArrangement = Arrangement.spacedBy(5.dp),
     ) {
       Icon(imageVector = Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(24.dp), tint = ClawTheme.colors.text)
-      Row(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
-        listOf(6, 12, 18, 11, 28, 34, 18, 10, 8, 24, 38, 31, 12, 8, 18, 30, 40, 22, 12, 8, 20, 29, 16, 8).forEachIndexed { index, height ->
-          Box(
-            modifier =
-              Modifier
-                .size(width = 2.dp, height = (if (active) height else 7 + index % 4 * 4).dp)
-                .background(if (active) ClawTheme.colors.text else ClawTheme.colors.textSubtle, RoundedCornerShape(999.dp)),
-          )
-        }
-      }
+      // Thinking is the preview phase: no capture runs on this screen, so the
+      // synthetic swell demonstrates the animation without touching the mic.
+      TalkWaveform(
+        phase = if (active) TalkWaveformPhase.Thinking else TalkWaveformPhase.Idle,
+        modifier = Modifier.weight(1f).height(48.dp),
+      )
     }
   }
 }
@@ -648,6 +777,7 @@ private fun NotificationSettingsScreen(
   onBack: () -> Unit,
 ) {
   val context = LocalContext.current
+  val lifecycleOwner = LocalLifecycleOwner.current
   val enabled by viewModel.notificationForwardingEnabled.collectAsState()
   val mode by viewModel.notificationForwardingMode.collectAsState()
   val packages by viewModel.notificationForwardingPackages.collectAsState()
@@ -670,6 +800,18 @@ private fun NotificationSettingsScreen(
       )
     }
   var listenerEnabled by remember { mutableStateOf(DeviceNotificationListenerService.isAccessEnabled(context)) }
+
+  DisposableEffect(lifecycleOwner, context) {
+    val observer =
+      LifecycleEventObserver { _, event ->
+        if (event == Lifecycle.Event.ON_RESUME) {
+          listenerEnabled = DeviceNotificationListenerService.isAccessEnabled(context)
+        }
+      }
+    lifecycleOwner.lifecycle.addObserver(observer)
+    onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+  }
+
   val notificationPermissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
       viewModel.setNotificationForwardingEnabled(granted)
@@ -712,7 +854,6 @@ private fun NotificationSettingsScreen(
         text = if (listenerEnabled) "Check Access" else "Open System Access",
         onClick = {
           openNotificationListenerSettings(context)
-          listenerEnabled = DeviceNotificationListenerService.isAccessEnabled(context)
         },
         modifier = Modifier.weight(1f),
       )
@@ -871,6 +1012,7 @@ private fun PhoneCapabilitiesScreen(
   var pendingAlwaysPreviousModeRaw by rememberSaveable { mutableStateOf<String?>(null) }
   var awaitingBackgroundSettings by rememberSaveable { mutableStateOf(false) }
   var showBackgroundLocationExplanation by rememberSaveable { mutableStateOf(false) }
+  var showInstalledAppsDisclosure by rememberSaveable { mutableStateOf(false) }
   var pendingPreciseLocation by rememberSaveable { mutableStateOf(false) }
   val backgroundPermissionLabel =
     remember(context) {
@@ -1041,6 +1183,14 @@ private fun PhoneCapabilitiesScreen(
     }
   }
 
+  fun setInstalledAppsSharing(checked: Boolean) {
+    if (checked) {
+      showInstalledAppsDisclosure = true
+    } else {
+      viewModel.revokeInstalledAppsDisclosureConsent()
+    }
+  }
+
   SettingsDetailFrame(title = "Phone Capabilities", subtitle = "Choose what this phone can share.", icon = Icons.AutoMirrored.Filled.ScreenShare, onBack = onBack) {
     SettingsTogglePanel(
       rows =
@@ -1063,7 +1213,7 @@ private fun PhoneCapabilitiesScreen(
             if (installedAppsSharingEnabled) "OpenClaw can list launcher-visible apps." else "App list stays on this phone.",
             Icons.Default.Storage,
             installedAppsSharingEnabled,
-            viewModel::setInstalledAppsSharingEnabled,
+            ::setInstalledAppsSharing,
           ),
           SettingsToggleRow("Keep Awake", "Keep the node available during active work.", Icons.Default.Bolt, preventSleep, viewModel::setPreventSleep),
           SettingsToggleRow("Canvas Status", "Show screen-sharing debug state.", Icons.AutoMirrored.Filled.ScreenShare, canvasDebugStatusEnabled, viewModel::setCanvasDebugStatusEnabled),
@@ -1086,6 +1236,16 @@ private fun PhoneCapabilitiesScreen(
         }
       }
     }
+  }
+
+  if (showInstalledAppsDisclosure) {
+    InstalledAppsDisclosureDialog(
+      onDismiss = { showInstalledAppsDisclosure = false },
+      onAgree = {
+        showInstalledAppsDisclosure = false
+        viewModel.grantInstalledAppsDisclosureConsent()
+      },
+    )
   }
 
   if (showBackgroundLocationExplanation) {
@@ -1129,6 +1289,37 @@ private fun PhoneCapabilitiesScreen(
       },
     )
   }
+}
+
+@Composable
+private fun InstalledAppsDisclosureDialog(
+  onDismiss: () -> Unit,
+  onAgree: () -> Unit,
+) {
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    title = { Text("Share installed app information?") },
+    text = {
+      Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(
+          "OpenClaw collects and sends the names, package IDs, and status of apps visible on this phone when your paired OpenClaw Gateway asks for them. This lets your assistant answer questions and take actions using installed apps.",
+        )
+        Text(
+          "Your phone sends this information to your Gateway, not to a server run by OpenClaw. Your Gateway may include it in requests to the AI provider you chose.",
+        )
+      }
+    },
+    confirmButton = {
+      TextButton(onClick = onAgree) {
+        Text("Agree and Enable")
+      }
+    },
+    dismissButton = {
+      TextButton(onClick = onDismiss) {
+        Text("Not Now")
+      }
+    },
+  )
 }
 
 @Composable
@@ -1383,12 +1574,16 @@ private fun AppearanceSettingsScreen(
   onBack: () -> Unit,
 ) {
   val themeMode by viewModel.appearanceThemeMode.collectAsState()
+  val context = LocalContext.current
+  var appLanguage by remember { mutableStateOf(currentAppLanguage()) }
+  val systemLanguageTag = currentSystemLanguageTag(context)
 
-  SettingsDetailFrame(title = "Appearance", subtitle = "A calm, high-contrast OpenClaw interface.", icon = Icons.Default.Palette, onBack = onBack) {
+  SettingsDetailFrame(title = "Appearance", subtitle = "Theme and translated Android text.", icon = Icons.Default.Palette, onBack = onBack) {
     SettingsMetricPanel(
       rows =
         listOf(
           SettingsMetric("Theme", appearanceThemeSummary(themeMode)),
+          SettingsMetric("Language", appLanguage.displayName),
           SettingsMetric("Contrast", "High"),
           SettingsMetric("Typography", "Readable"),
         ),
@@ -1403,7 +1598,57 @@ private fun AppearanceSettingsScreen(
         )
       }
     }
+    ClawPanel {
+      Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(text = "App language", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+        Text(
+          text = "Changes Android text that OpenClaw has translated. Screens with English-only copy stay unchanged.",
+          style = ClawTheme.type.caption,
+          color = ClawTheme.colors.textMuted,
+        )
+        AppLanguage.entries.forEachIndexed { index, language ->
+          if (index > 0) HorizontalDivider(color = ClawTheme.colors.border)
+          AppLanguageRow(
+            language = language,
+            selected = language == appLanguage,
+            systemLanguageTag = systemLanguageTag,
+            onClick = {
+              appLanguage = language
+              setAppLanguage(language)
+            },
+          )
+        }
+      }
+    }
   }
+}
+
+@Composable
+private fun AppLanguageRow(
+  language: AppLanguage,
+  selected: Boolean,
+  systemLanguageTag: String,
+  onClick: () -> Unit,
+) {
+  ClawListItem(
+    title = language.displayName,
+    subtitle = appLanguageRowSubtitle(language = language, systemLanguageTag = systemLanguageTag),
+    leading = { ClawIconBadge(Icons.Default.Language) },
+    trailing =
+      if (selected) {
+        {
+          Icon(
+            imageVector = Icons.Default.Check,
+            contentDescription = "Selected",
+            modifier = Modifier.size(18.dp),
+            tint = ClawTheme.colors.primary,
+          )
+        }
+      } else {
+        null
+      },
+    onClick = onClick,
+  )
 }
 
 internal fun appearanceThemeSummary(mode: AppearanceThemeMode): String = mode.displayLabel
@@ -1468,14 +1713,20 @@ private fun AboutSettingsScreen(
   val updateAvailable by viewModel.gatewayUpdateAvailable.collectAsState()
   val latestVersion = updateAvailable?.latestVersion?.takeIf { it.isNotBlank() }
   val currentGatewayVersion = updateAvailable?.currentVersion?.takeIf { it.isNotBlank() } ?: gatewayVersion
+  val appLocale = LocalConfiguration.current.locales[0]
 
   SettingsDetailFrame(title = "About", subtitle = "OpenClaw for Android.", icon = Icons.Default.Info, onBack = onBack) {
     AboutHeroPanel()
+    AboutBuildIdentityPanel(
+      versionName = BuildConfig.VERSION_NAME,
+      versionCode = BuildConfig.VERSION_CODE,
+      gitCommit = BuildConfig.GIT_COMMIT,
+      buildTimestamp = BuildConfig.BUILD_TIMESTAMP,
+      locale = appLocale,
+    )
     SettingsMetricPanel(
       rows =
         listOf(
-          SettingsMetric("Android App", BuildConfig.VERSION_NAME),
-          SettingsMetric("Build", BuildConfig.VERSION_CODE.toString()),
           SettingsMetric("Channel", androidDistributionChannel()),
           SettingsMetric("Gateway", currentGatewayVersion ?: "Not connected"),
         ),
@@ -1735,7 +1986,10 @@ private fun ExecApprovalsPanel(
 ) {
   Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
     approvals.forEach { approval ->
-      ExecApprovalCard(approval = approval, onResolve = onResolve)
+      ExecApprovalCard(
+        approval = approval,
+        onResolve = onResolve,
+      )
     }
   }
 }
@@ -1750,43 +2004,102 @@ private fun ExecApprovalCard(
     Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
       Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-          Text(text = approval.commandText, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 2, overflow = TextOverflow.Ellipsis)
+          Text(text = "Command approval", style = ClawTheme.type.section, color = ClawTheme.colors.text)
           approval.commandPreview?.let { preview ->
             Text(text = preview, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
           }
         }
         ClawStatusPill(text = if (resolving) "Sending" else "Review", status = if (resolving) ClawStatus.Warning else ClawStatus.Success)
       }
+      ExecApprovalCommandReview(approval.commandText)
+      approval.warningText?.let { warningText ->
+        Text(text = warningText, style = ClawTheme.type.body, color = ClawTheme.colors.warning)
+      }
       Text(text = execApprovalMetadata(approval), style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle, maxLines = 2, overflow = TextOverflow.Ellipsis)
       approval.errorText?.let { errorText ->
         Text(text = errorText, style = ClawTheme.type.caption, color = ClawTheme.colors.warning)
       }
-      Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        if ("allow-once" in approval.allowedDecisions) {
-          ClawPrimaryButton(
-            text = if (approval.resolvingDecision == "allow-once") "Allowing" else "Allow Once",
-            onClick = { onResolve(approval.id, "allow-once") },
-            enabled = !resolving,
-            modifier = Modifier.weight(1f),
-          )
-        }
-        if ("allow-always" in approval.allowedDecisions) {
-          ClawSecondaryButton(
-            text = if (approval.resolvingDecision == "allow-always") "Saving" else "Always",
-            onClick = { onResolve(approval.id, "allow-always") },
-            enabled = !resolving,
-            modifier = Modifier.weight(1f),
-          )
-        }
-        if ("deny" in approval.allowedDecisions) {
-          ClawSecondaryButton(
-            text = if (approval.resolvingDecision == "deny") "Denying" else "Deny",
-            onClick = { onResolve(approval.id, "deny") },
-            enabled = !resolving,
-            modifier = Modifier.weight(1f),
-          )
+      Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        execApprovalActions(approval.allowedDecisions).forEach { action ->
+          if (action.decision == "allow-once") {
+            ClawPrimaryButton(
+              text = action.label,
+              onClick = { onResolve(approval.id, action.decision) },
+              enabled = !resolving,
+              modifier = Modifier.fillMaxWidth(),
+            )
+          } else {
+            ClawSecondaryButton(
+              text = action.label,
+              onClick = { onResolve(approval.id, action.decision) },
+              enabled = !resolving,
+              modifier = Modifier.fillMaxWidth(),
+            )
+          }
         }
       }
+    }
+  }
+}
+
+@Composable
+private fun ExecApprovalCommandReview(commandText: String) {
+  Surface(
+    modifier = Modifier.fillMaxWidth(),
+    shape = RoundedCornerShape(8.dp),
+    color = ClawTheme.colors.surfacePressed,
+    border = BorderStroke(1.dp, ClawTheme.colors.border),
+  ) {
+    SelectionContainer {
+      Text(
+        text = commandText,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+        style = ClawTheme.type.body.copy(fontFamily = FontFamily.Monospace),
+        color = ClawTheme.colors.text,
+      )
+    }
+  }
+}
+
+internal data class ExecApprovalAction(
+  val decision: String,
+  val label: String,
+)
+
+internal fun execApprovalActions(allowedDecisions: List<String>): List<ExecApprovalAction> =
+  allowedDecisions.mapNotNull { decision ->
+    when (decision) {
+      "allow-once" -> ExecApprovalAction(decision, "Allow Once")
+      "allow-always" -> ExecApprovalAction(decision, "Allow Always")
+      "deny" -> ExecApprovalAction(decision, "Deny")
+      else -> null
+    }
+  }
+
+@Composable
+private fun ExecApprovalNotice(
+  notice: GatewayExecApprovalNotice,
+  onDismiss: () -> Unit,
+) {
+  ClawPanel {
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+      Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Text(
+          text = notice.message,
+          style = ClawTheme.type.body,
+          color = if (notice.warning) ClawTheme.colors.warning else ClawTheme.colors.success,
+        )
+        // The retired card is gone by the time this renders; keep the id association
+        // so the outcome stays attributable while other approval cards remain visible.
+        Text(
+          text = "Approval ${notice.approvalId}",
+          style = ClawTheme.type.caption,
+          color = ClawTheme.colors.textSubtle,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+        )
+      }
+      ClawPlainIconButton(icon = Icons.Default.Close, contentDescription = "Dismiss approval notice", onClick = onDismiss)
     }
   }
 }
@@ -1845,7 +2158,7 @@ private fun CronJobListRow(
   ClawDetailRow(
     title = job.name,
     subtitle = cronJobSubtitle(job),
-    modifier = Modifier.clickable(onClick = onClick),
+    modifier = Modifier.clickable(onClickLabel = "Open cron job detail", onClick = onClick),
     leading = { ClawIconBadge(icon = Icons.Default.Bolt) },
     trailing = {
       Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -1859,7 +2172,32 @@ private fun CronJobListRow(
 @Composable
 private fun CronJobDetailPanel(
   job: GatewayCronJobDetail,
+  editorDraft: CronEditorDraftState,
+  onEditorDraftChange: (CronEditorDraftState) -> Unit,
+  historyState: GatewayCronRunHistoryState,
+  actionState: GatewayCronActionState,
+  runPending: Boolean,
+  operatorAdminScopeAvailable: Boolean,
+  onRun: () -> Unit,
+  onToggleEnabled: () -> Unit,
+  onSave: (GatewayCronJobEdit) -> Unit,
+  onRefreshHistory: () -> Unit,
+  onDelete: () -> Unit,
 ) {
+  CronJobManagementPanel(
+    job = job,
+    editorDraft = editorDraft,
+    onEditorDraftChange = onEditorDraftChange,
+    historyState = historyState,
+    actionState = actionState,
+    runPending = runPending,
+    operatorAdminScopeAvailable = operatorAdminScopeAvailable,
+    onRun = onRun,
+    onToggleEnabled = onToggleEnabled,
+    onSave = onSave,
+    onRefreshHistory = onRefreshHistory,
+    onDelete = onDelete,
+  )
   SettingsMetricPanel(
     rows =
       listOf(
@@ -1991,7 +2329,11 @@ private fun AgentListRow(
   ClawDetailRow(
     title = agent.name?.takeIf { it.isNotBlank() } ?: agent.id,
     subtitle = if (isDefault) "Default assistant" else "Ready",
-    leading = { ClawTextBadge(text = agentBadge(agent)) },
+    leading = {
+      ClawAgentAvatar(source = agentAvatarSource(agent), size = 30.dp) {
+        ClawTextBadge(text = agentBadge(agent))
+      }
+    },
     trailing = { ClawStatusPill(text = if (isDefault) "Default" else "Ready", status = ClawStatus.Success) },
   )
 }
