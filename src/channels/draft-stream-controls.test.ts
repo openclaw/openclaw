@@ -64,22 +64,61 @@ describe("draft-stream-controls", () => {
     expect(deleteMessage).not.toHaveBeenCalled();
   });
 
-  it("clearFinalizableDraftMessage warns when delete fails", async () => {
+  it("clearFinalizableDraftMessage retains failed deletes for retry", async () => {
     const warn = vi.fn();
+    let messageId: string | undefined = "m-3";
+    const deleteMessage = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error("boom"))
+      .mockResolvedValueOnce(undefined);
+    const clear = async () => {
+      await clearFinalizableDraftMessage({
+        stopForClear: async () => {},
+        readMessageId: () => messageId,
+        clearMessageId: () => {
+          messageId = undefined;
+        },
+        isValidMessageId: (value): value is string => typeof value === "string",
+        deleteMessage,
+        warn,
+        warnPrefix: "cleanup failed",
+      });
+    };
 
-    await clearFinalizableDraftMessage({
+    await clear();
+
+    expect(messageId).toBe("m-3");
+    expect(warn).toHaveBeenCalledWith("cleanup failed: boom");
+
+    await clear();
+
+    expect(deleteMessage).toHaveBeenCalledTimes(2);
+    expect(messageId).toBeUndefined();
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("clearFinalizableDraftMessage preserves a replacement id while delete is in flight", async () => {
+    let messageId: string | undefined = "preview-old";
+    const pendingDelete = Promise.withResolvers<void>();
+    const deleteMessage = vi.fn(() => pendingDelete.promise);
+
+    const clearPromise = clearFinalizableDraftMessage({
       stopForClear: async () => {},
-      readMessageId: () => "m-3",
-      clearMessageId: () => {},
-      isValidMessageId: (value): value is string => typeof value === "string",
-      deleteMessage: async () => {
-        throw new Error("boom");
+      readMessageId: () => messageId,
+      clearMessageId: () => {
+        messageId = undefined;
       },
-      warn,
+      isValidMessageId: (value): value is string => typeof value === "string",
+      deleteMessage,
       warnPrefix: "cleanup failed",
     });
+    await vi.waitFor(() => expect(deleteMessage).toHaveBeenCalledWith("preview-old"));
 
-    expect(warn).toHaveBeenCalledWith("cleanup failed: boom");
+    messageId = "preview-new";
+    pendingDelete.resolve();
+    await clearPromise;
+
+    expect(messageId).toBe("preview-new");
   });
 
   it("controls ignore updates after final", async () => {

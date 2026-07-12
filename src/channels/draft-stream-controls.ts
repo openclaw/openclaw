@@ -133,16 +133,17 @@ export async function takeMessageIdAfterStop<T>(
 export async function clearFinalizableDraftMessage<T>(
   params: ClearFinalizableDraftMessageParams<T>,
 ): Promise<void> {
-  const messageId = await takeMessageIdAfterStop({
-    stopForClear: params.stopForClear,
-    readMessageId: params.readMessageId,
-    clearMessageId: params.clearMessageId,
-  });
+  await params.stopForClear();
+  const messageId = params.readMessageId();
   if (!params.isValidMessageId(messageId)) {
+    params.clearMessageId();
     return;
   }
   try {
     await params.deleteMessage(messageId);
+    if (Object.is(params.readMessageId(), messageId)) {
+      params.clearMessageId();
+    }
     params.onDeleteSuccess?.(messageId);
   } catch (err) {
     params.warn?.(`${params.warnPrefix}: ${formatErrorMessage(err)}`);
