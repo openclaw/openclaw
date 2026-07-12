@@ -11,7 +11,14 @@ type CreateOptions = {
   onResize?: (size: { columns: number; rows: number }) => void;
 };
 
-const createGhosttyTerminalMock = vi.hoisted(() => vi.fn());
+// Vitest resets this test module but can retain terminal-panel.ts. Reuse one
+// mock so retained imports and the current test graph share the same identity.
+const createGhosttyTerminalMock = vi.hoisted(() => {
+  const scope = globalThis as typeof globalThis & {
+    __openclawTestCreateGhosttyTerminalMock?: ReturnType<typeof vi.fn>;
+  };
+  return (scope.__openclawTestCreateGhosttyTerminalMock ??= vi.fn());
+});
 
 function createTerminalController(dispose: () => void = vi.fn()) {
   return {
