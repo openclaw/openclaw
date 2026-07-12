@@ -140,27 +140,28 @@ describe.runIf(browserMode)("chat file editor", () => {
   });
 
   it("restores an unsaved draft after the detail panel is closed", async () => {
-    const edit = { hash: "hash-1", save: vi.fn(), fetchLatest: vi.fn() };
+    const originalEdit = { hash: "hash-1", save: vi.fn(), fetchLatest: vi.fn() };
     const first = await mountFile({
       kind: "file",
       draftKey: "session-a\u0000notes.txt",
       path: "notes.txt",
       name: "notes.txt",
       content: "before",
-      edit,
+      edit: originalEdit,
     });
 
     await userEvent.click(button(first, "Edit file"));
     await userEvent.fill(first.querySelector<HTMLElement>(".cm-content")!, "unsaved draft");
     first.remove();
 
+    const save = vi.fn().mockResolvedValue({ ok: true, hash: "hash-3" });
     const reopened = await mountFile({
       kind: "file",
       draftKey: "session-a\u0000notes.txt",
       path: "notes.txt",
       name: "notes.txt",
-      content: "before",
-      edit,
+      content: "latest",
+      edit: { hash: "hash-2", save, fetchLatest: vi.fn() },
     });
     await expect
       .poll(() => reopened.querySelector(".cm-content")?.textContent)
@@ -169,6 +170,11 @@ describe.runIf(browserMode)("chat file editor", () => {
     expect(button(reopened, "Save").disabled).toBe(false);
 
     await userEvent.click(button(reopened, "Discard"));
+    await userEvent.click(button(reopened, "Edit file"));
+    await userEvent.fill(reopened.querySelector<HTMLElement>(".cm-content")!, "new edit");
+    await userEvent.click(button(reopened, "Save"));
+    await expect.poll(() => save.mock.calls.length).toBe(1);
+    expect(save).toHaveBeenCalledWith({ content: "new edit", expectedHash: "hash-2" });
   });
 
   it("scopes retained drafts to the session file identity", async () => {

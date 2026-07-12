@@ -853,6 +853,9 @@ class ChatDetailPanel extends OpenClawLightDomElement {
           if (dirty !== this.fileDirty) {
             this.fileDirty = dirty;
           }
+          if (!dirty && this.visibleContent?.kind === "file") {
+            this.fileHash = this.visibleContent.edit?.hash ?? "";
+          }
           setRetainedFileDraft(
             current,
             dirty ? { content: nextContent, expectedHash: this.fileHash } : null,
@@ -1018,6 +1021,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     const content = this.visibleContent;
     if (content?.kind === "file") {
       setRetainedFileDraft(content, null);
+      this.fileHash = content.edit?.hash ?? "";
     }
     this.fileDirty = false;
     this.fileSaveNotice = null;
