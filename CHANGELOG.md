@@ -198,7 +198,7 @@ Docs: https://docs.openclaw.ai
 
 ### Complete contribution record
 
-This audited record covers the complete 66e676d29b92d040716376a75aca32bad655cfac..d638b491cf34c3d520d7e8efe01ea401426096ad history: 1528 merged PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
+This audited record covers the complete 66e676d29b92d040716376a75aca32bad655cfac..602f90e01c8211bbbdb22a399a462808919e4395 history: 1530 merged PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
 
 Shipped baseline exclusions: v2026.6.11 (10 PRs: #87298, #89949, #90811, #92020, #92657, #93466, #93650, #93767, #93810, #97118).
 
@@ -1732,6 +1732,9 @@ Shipped baseline exclusions: v2026.6.11 (10 PRs: #87298, #89949, #90811, #92020,
 - **PR #105133** test(ui): bound chat hover browser wait.
 - **PR #105055** fix(release): support explicit provenance overrides. Thanks @vincentkoc.
 - **PR #105405** fix(update): preserve ClawHub plugins after cutover. Thanks @vincentkoc.
+- **PR #105401** fix(qa): align mock catalog with selected models.
+- **PR #105444** fix(qa): preserve Codex mock routing.
+
 ## 2026.6.11
 
 We heard the feedback. v2026.6.11 focuses on the rough edges that make OpenClaw feel less dependable, with fixes for misplaced replies, stuck sends, reconnects, model setup failures, and safer admin defaults.
