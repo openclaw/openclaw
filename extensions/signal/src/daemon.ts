@@ -67,6 +67,8 @@ function bindSignalCliOutput(params: {
   if (!params.stream) {
     return;
   }
+  // Process pipe chunks can split both log lines and UTF-8 code points. Readline owns that
+  // framing so classification sees complete text, including the final unterminated line.
   const lines = createInterface({ input: params.stream });
   lines.on("line", (line) => {
     const kind = classifySignalCliLogLine(line);
