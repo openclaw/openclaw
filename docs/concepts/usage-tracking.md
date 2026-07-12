@@ -243,15 +243,20 @@ empty (so a `when` guard or a `|fallback` keeps the piece clean).
 
 Pipe a value through verbs left to right; a non-verb segment is the fallback.
 
-| Verb            | Effect                                | Example                           |
-| --------------- | ------------------------------------- | --------------------------------- |
-| `num`           | compact count                         | `272000 -> 272k`                  |
-| `fixed:N`       | N decimals (default 2)                | `0.0377`                          |
-| `dur`           | seconds to duration                   | `14820 -> 4h07m`                  |
-| `pct`           | append `%`                            | `96 -> 96%`                       |
-| `inv`           | `100 - x`                             | for used to remaining             |
-| `alias:TABLE`   | lookup in `aliases`, echo if unlisted | `medium -> 🌗`                    |
-| `meter:W:SCALE` | W-cell glyph bar over a 0-100 value   | `[⣿⣿⠐⠐⠐]` (`meter:1` = one glyph) |
+| Verb            | Effect                                 | Example                           |
+| --------------- | -------------------------------------- | --------------------------------- |
+| `num`           | compact count                          | `272000 -> 272k`                  |
+| `fixed:N`       | N decimals (`0..100`, default 2)       | `0.0377`                          |
+| `dur`           | seconds to duration                    | `14820 -> 4h07m`                  |
+| `pct`           | append `%`                             | `96 -> 96%`                       |
+| `inv`           | `100 - x`                              | for used to remaining             |
+| `alias:TABLE`   | lookup in `aliases`, echo if unlisted  | `medium -> 🌗`                    |
+| `meter:W:SCALE` | W-cell glyph bar (`1..100`, default 5) | `[⣿⣿⠐⠐⠐]` (`meter:1` = one glyph) |
+
+Numeric verb arguments must be complete decimal integer tokens. Values outside
+the ranges above, partial values such as `12junk`, scientific notation, and
+unsafe integers do not render the custom piece. If that leaves the custom
+footer empty, OpenClaw uses the existing built-in footer.
 
 ### Piece forms
 

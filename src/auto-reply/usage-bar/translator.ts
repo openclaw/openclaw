@@ -130,7 +130,7 @@ function applyVerb(name: string, args: string[], value: unknown, vocab: Vocab): 
     case "num":
       return num(value);
     case "fixed": {
-      const digits = parseBoundedIntegerArg(args[0], { defaultValue: 2, min: 0, max: 20 });
+      const digits = parseBoundedIntegerArg(args[0], { defaultValue: 2, min: 0, max: 100 });
       return digits === undefined ? "" : fixed(value, digits);
     }
     case "dur":
