@@ -20386,38 +20386,6 @@
       "id": "native.apple.8faaac6dab276c0a"
     },
     {
-      "kind": "ui-localized-call",
-      "line": 89,
-      "path": "apps/ios/Sources/LiveActivity/OpenClawActivityAttributes.swift",
-      "source": "Reconnecting...",
-      "surface": "apple",
-      "id": "native.apple.9b83da469676875f"
-    },
-    {
-      "kind": "ui-localized-call",
-      "line": 92,
-      "path": "apps/ios/Sources/LiveActivity/OpenClawActivityAttributes.swift",
-      "source": "Connecting...",
-      "surface": "apple",
-      "id": "native.apple.539ed43d18535451"
-    },
-    {
-      "kind": "ui-localized-call",
-      "line": 97,
-      "path": "apps/ios/Sources/LiveActivity/OpenClawActivityAttributes.swift",
-      "source": "Approval needed",
-      "surface": "apple",
-      "id": "native.apple.c93f541cd62d6ef7"
-    },
-    {
-      "kind": "ui-localized-call",
-      "line": 100,
-      "path": "apps/ios/Sources/LiveActivity/OpenClawActivityAttributes.swift",
-      "source": "Action required",
-      "surface": "apple",
-      "id": "native.apple.5a35dfbc93beb66d"
-    },
-    {
       "kind": "conditional-branch",
       "line": 43,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
@@ -22555,7 +22523,31 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3719,
+      "line": 3720,
+      "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
+      "source": "Realtime failed before connecting",
+      "surface": "apple",
+      "id": "native.apple.bd65682a00615345"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 3722,
+      "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
+      "source": "Realtime disconnected",
+      "surface": "apple",
+      "id": "native.apple.f3cfe789550ebfa8"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 3724,
+      "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
+      "source": "OpenClaw unavailable",
+      "surface": "apple",
+      "id": "native.apple.deb282fd61fd2de3"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 3735,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Listening (Realtime)",
       "surface": "apple",
@@ -22563,7 +22555,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3721,
+      "line": 3737,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Thinking",
       "surface": "apple",
@@ -22571,7 +22563,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3723,
+      "line": 3739,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Thinking…",
       "surface": "apple",
@@ -22579,7 +22571,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3725,
+      "line": 3741,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Speaking",
       "surface": "apple",
@@ -22587,7 +22579,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3727,
+      "line": 3743,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Speaking…",
       "surface": "apple",
@@ -22595,7 +22587,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3729,
+      "line": 3745,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Connecting realtime…",
       "surface": "apple",
@@ -22603,7 +22595,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3731,
+      "line": 3747,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Waiting for realtime…",
       "surface": "apple",
@@ -22611,7 +22603,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3733,
+      "line": 3749,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Ready",
       "surface": "apple",
@@ -22619,7 +22611,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3772,
+      "line": 3791,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Listening",
       "surface": "apple",
@@ -22627,7 +22619,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4038,
+      "line": 4057,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Gateway Relay",
       "surface": "apple",
@@ -22635,7 +22627,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4040,
+      "line": 4059,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Native WebRTC",
       "surface": "apple",
@@ -22643,7 +22635,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4041,
+      "line": 4060,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Native",
       "surface": "apple",
@@ -22651,7 +22643,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4102,
+      "line": 4121,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Gateway permission required",
       "surface": "apple",
@@ -22659,7 +22651,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4125,
+      "line": 4144,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Not loaded",
       "surface": "apple",
@@ -22667,7 +22659,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4143,
+      "line": 4162,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Approval requested",
       "surface": "apple",
@@ -22675,7 +22667,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4588,
+      "line": 4610,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Listening (PTT)",
       "surface": "apple",
@@ -23411,7 +23403,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 471,
+      "line": 507,
       "path": "apps/ios/WatchApp/Sources/WatchInboxMessages.swift",
       "source": "Main",
       "surface": "apple",
@@ -23419,7 +23411,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 506,
+      "line": 542,
       "path": "apps/ios/WatchApp/Sources/WatchInboxMessages.swift",
       "source": "^[\\(chatCount) recent message](inflect: true)",
       "surface": "apple",

@@ -12744,26 +12744,6 @@
       "translated": "需要採取動作"
     },
     {
-      "id": "native.apple.9b83da469676875f",
-      "source": "Reconnecting...",
-      "translated": "重新連線中..."
-    },
-    {
-      "id": "native.apple.539ed43d18535451",
-      "source": "Connecting...",
-      "translated": "正在連線..."
-    },
-    {
-      "id": "native.apple.c93f541cd62d6ef7",
-      "source": "Approval needed",
-      "translated": "需要核准"
-    },
-    {
-      "id": "native.apple.5a35dfbc93beb66d",
-      "source": "Action required",
-      "translated": "需要採取動作"
-    },
-    {
       "id": "native.apple.cf0450b542893fb5",
       "source": "Off",
       "translated": "關閉"
@@ -14097,6 +14077,21 @@
       "id": "native.apple.1e5894f81fd2d432",
       "source": "Gateway Default",
       "translated": "Gateway 預設"
+    },
+    {
+      "id": "native.apple.bd65682a00615345",
+      "source": "Realtime failed before connecting",
+      "translated": "即時連線在建立前失敗"
+    },
+    {
+      "id": "native.apple.f3cfe789550ebfa8",
+      "source": "Realtime disconnected",
+      "translated": "即時連線已中斷"
+    },
+    {
+      "id": "native.apple.deb282fd61fd2de3",
+      "source": "OpenClaw unavailable",
+      "translated": "OpenClaw 無法使用"
     },
     {
       "id": "native.apple.21357c0b806135e9",

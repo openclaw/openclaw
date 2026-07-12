@@ -102001,6 +102001,142 @@
         }
       }
     },
+    "OpenClaw unavailable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw unavailable"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw 不可用"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw 無法使用"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw indisponível"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw nicht verfügbar"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw no está disponible"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClawは利用できません"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw를 사용할 수 없습니다"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw indisponible"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw उपलब्ध नहीं है"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw غير متاح"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw non disponibile"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw kullanılamıyor"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw недоступний"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw tidak tersedia"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw jest niedostępny"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw ไม่พร้อมใช้งาน"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw không khả dụng"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw niet beschikbaar"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw در دسترس نیست"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw недоступен"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw är inte tillgängligt"
+          }
+        }
+      }
+    },
     "Opening QR scanner...": {
       "localizations": {
         "en": {
@@ -112061,6 +112197,278 @@
           "stringUnit": {
             "state": "new",
             "value": "Redo att ansluta"
+          }
+        }
+      }
+    },
+    "Realtime disconnected": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Realtime disconnected"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "new",
+            "value": "实时连接已断开"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "new",
+            "value": "即時連線已中斷"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Tempo real desconectado"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Echtzeitverbindung getrennt"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Conexión en tiempo real interrumpida"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Realtimeが切断されました"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "실시간 연결이 끊어졌습니다"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Temps réel déconnecté"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Realtime डिस्कनेक्ट हो गया"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "انقطع الاتصال في الوقت الفعلي"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Connessione in tempo reale interrotta"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gerçek zamanlı bağlantı kesildi"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "new",
+            "value": "З’єднання в реальному часі розірвано"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Realtime terputus"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Połączenie w czasie rzeczywistym zostało przerwane"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "การเชื่อมต่อแบบเรียลไทม์ถูกตัด"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Đã ngắt kết nối thời gian thực"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Realtime-verbinding verbroken"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "new",
+            "value": "اتصال بلادرنگ قطع شد"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Подключение в реальном времени разорвано"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Realtidsanslutningen kopplades från"
+          }
+        }
+      }
+    },
+    "Realtime failed before connecting": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Realtime failed before connecting"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "new",
+            "value": "实时连接尚未建立即失败"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "new",
+            "value": "即時連線在建立前失敗"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Falha no tempo real antes da conexão"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Echtzeitverbindung vor dem Verbindungsaufbau fehlgeschlagen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "La conexión en tiempo real falló antes de establecerse"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "new",
+            "value": "接続前にRealtimeでエラーが発生しました"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "실시간 연결 전에 실패했습니다"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Échec du temps réel avant la connexion"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "कनेक्ट होने से पहले Realtime विफल हो गया"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "فشل الاتصال في الوقت الفعلي قبل إنشائه"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Connessione in tempo reale non riuscita prima di essere stabilita"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gerçek zamanlı bağlantı kurulmadan önce başarısız oldu"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Не вдалося підключитися в реальному часі"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Realtime gagal sebelum terhubung"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Połączenie w czasie rzeczywistym nie powiodło się przed nawiązaniem"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "การเชื่อมต่อแบบเรียลไทม์ล้มเหลวก่อนเชื่อมต่อสำเร็จ"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Kết nối thời gian thực không thành công trước khi được thiết lập"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Realtime mislukt vóór het verbinden"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "new",
+            "value": "اتصال بلادرنگ پیش از برقراری ناموفق بود"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Не удалось установить подключение в реальном времени"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Realtidsanslutningen misslyckades före anslutning"
           }
         }
       }

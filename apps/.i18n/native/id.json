@@ -12744,26 +12744,6 @@
       "translated": "Tindakan diperlukan"
     },
     {
-      "id": "native.apple.9b83da469676875f",
-      "source": "Reconnecting...",
-      "translated": "Menghubungkan ulang..."
-    },
-    {
-      "id": "native.apple.539ed43d18535451",
-      "source": "Connecting...",
-      "translated": "Menghubungkan..."
-    },
-    {
-      "id": "native.apple.c93f541cd62d6ef7",
-      "source": "Approval needed",
-      "translated": "Persetujuan diperlukan"
-    },
-    {
-      "id": "native.apple.5a35dfbc93beb66d",
-      "source": "Action required",
-      "translated": "Tindakan diperlukan"
-    },
-    {
       "id": "native.apple.cf0450b542893fb5",
       "source": "Off",
       "translated": "Mati"
@@ -14097,6 +14077,21 @@
       "id": "native.apple.1e5894f81fd2d432",
       "source": "Gateway Default",
       "translated": "Default Gateway"
+    },
+    {
+      "id": "native.apple.bd65682a00615345",
+      "source": "Realtime failed before connecting",
+      "translated": "Realtime gagal sebelum terhubung"
+    },
+    {
+      "id": "native.apple.f3cfe789550ebfa8",
+      "source": "Realtime disconnected",
+      "translated": "Realtime terputus"
+    },
+    {
+      "id": "native.apple.deb282fd61fd2de3",
+      "source": "OpenClaw unavailable",
+      "translated": "OpenClaw tidak tersedia"
     },
     {
       "id": "native.apple.21357c0b806135e9",
