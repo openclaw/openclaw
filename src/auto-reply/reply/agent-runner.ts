@@ -42,6 +42,7 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginHookReplyUsageState } from "../../plugins/hook-types.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
@@ -131,6 +132,7 @@ import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
+const releaseDebugLogger = createSubsystemLogger("release-debug/reply-runner");
 
 function markBeforeAgentRunBlockedPayloads(payloads: ReplyPayload[]): ReplyPayload[] {
   return payloads.map((payload) =>
@@ -1727,7 +1729,7 @@ export async function runReplyAgent(params: {
     }
 
     const payloadArray = runResult.payloads ?? [];
-    logVerbose(
+    releaseDebugLogger.debug(
       `[release-debug] reply runner input runId=${runId} payloads=${payloadArray.length} ` +
         `blockStreamed=${blockReplyPipeline?.didStream() === true ? "yes" : "no"} ` +
         `blockAborted=${blockReplyPipeline?.isAborted() === true ? "yes" : "no"} ` +
@@ -2071,7 +2073,7 @@ export async function runReplyAgent(params: {
       normalizeMediaPaths: replyMediaContext.normalizePayload,
     });
     const { replyPayloads } = payloadResult;
-    logVerbose(
+    releaseDebugLogger.debug(
       `[release-debug] reply runner output runId=${runId} payloads=${replyPayloads.length} ` +
         `blockStreamed=${blockReplyPipeline?.didStream() === true ? "yes" : "no"} ` +
         `blockAborted=${blockReplyPipeline?.isAborted() === true ? "yes" : "no"}`,

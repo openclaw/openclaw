@@ -148,6 +148,7 @@ export { getTelegramReplyFenceSizeForTests, resetTelegramReplyFenceForTests };
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 const silentReplyDispatchLogger = createSubsystemLogger("telegram/silent-reply-dispatch");
+const releaseDebugLogger = createSubsystemLogger("release-debug/telegram-dispatch");
 
 /** Minimum chars before sending first streaming message (improves push notification UX) */
 const DRAFT_MIN_INITIAL_CHARS = 30;
@@ -1851,7 +1852,7 @@ export const dispatchTelegramMessage = async ({
                     return undefined;
                   },
                   deliver: async (payload, info) => {
-                    logVerbose(
+                    releaseDebugLogger.debug(
                       `[release-debug] telegram deliver kind=${info.kind} ` +
                         `text=${resolveSendableOutboundReplyParts(payload).trimmedText ? "yes" : "no"} ` +
                         `media=${resolveSendableOutboundReplyParts(payload).hasMedia ? "yes" : "no"}`,
@@ -2406,7 +2407,7 @@ export const dispatchTelegramMessage = async ({
         return { kind: "completed" };
       }
       ({ queuedFinal } = turnResult.dispatchResult);
-      logVerbose(
+      releaseDebugLogger.debug(
         `[release-debug] telegram dispatch result dispatched=yes queuedFinal=${queuedFinal ? "yes" : "no"} ` +
           `delivered=${deliveryState.snapshot().delivered ? "yes" : "no"} ` +
           `roomEvent=${isRoomEvent ? "yes" : "no"}`,
