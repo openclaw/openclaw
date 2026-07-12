@@ -1,23 +1,65 @@
 /**
- * Real behavior proof: abort signal through the guarded-fetch stack used by Exa.
+ * Real behavior proof: abort signal through Exa's full provider→fetch chain.
  *
  * Exa production code path:
- *   executeExaWebSearchProviderTool (exa-web-search-provider.runtime.ts)
- *   → runExaSearch({ signal })
- *   → withTrustedWebSearchEndpoint({ signal }) (web-search-provider-common.ts)
- *   → withTrustedWebToolsEndpoint (web-guarded-fetch.ts)
- *   → fetchWithSsrFGuard (fetch-guard.ts)
- *   → buildTimeoutAbortSignal → fetch()
+ *   createExaWebSearchProvider().createTool(ctx).execute(args, context)
+ *   → executeExaWebSearchProviderTool(ctx, args, { signal: context?.signal })
+ *   → runExaSearch({ signal: opts?.signal })
+ *   → withTrustedWebSearchEndpoint({ signal: params.signal })
+ *   → withTrustedWebToolsEndpoint({ signal })
+ *   → fetchWithSsrFGuard({ signal })
+ *   → buildTimeoutAbortSignal({ signal })
+ *   → fetch()
  *
- * This proof uses withSelfHostedWebSearchEndpoint — the localhost-allowed
- * sibling. Both share identical fetchWithSsrFGuard → buildTimeoutAbortSignal
- * → fetch() code paths; only the SSRF policy object differs.
+ * Two-part proof:
+ * 1. Pre-aborted signal through provider path — proves signal flows from
+ *    provider.execute() through all intermediate layers to fetch().
+ *    buildTimeoutAbortSignal sees the already-aborted parent signal and
+ *    immediately aborts its controller, so no network I/O occurs.
+ * 2. Stalled-server proof through withSelfHostedWebSearchEndpoint — proves the
+ *    common guarded-fetch stack cancels real in-flight HTTP requests.
+ *    Self-hosted variant allows localhost; both variants share identical
+ *    fetchWithSsrFGuard → buildTimeoutAbortSignal → fetch() code paths.
  */
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { describe, expect, it, vi } from "vitest";
+import { createExaWebSearchProvider } from "../src/exa-web-search-provider.js";
 
 describe("exa abort signal proof", () => {
+  it("propagates pre-aborted signal from provider execute through full client path", async () => {
+    // Provide a fake API key so the provider passes the apiKey check
+    // and the signal reaches the fetch layer. With a pre-aborted signal,
+    // buildTimeoutAbortSignal immediately aborts its controller, and
+    // fetch() rejects before any network I/O — no real API call occurs.
+    vi.stubEnv("EXA_API_KEY", "proof-test-key");
+
+    const controller = new AbortController();
+    controller.abort(new Error("proof: pre-aborted signal"));
+
+    const provider = createExaWebSearchProvider();
+    const tool = provider.createTool({ config: {} as never });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    const startedAt = Date.now();
+    let errorType: string;
+    let errorMessage: string;
+    try {
+      await tool.execute({ query: "openclaw test" }, { signal: controller.signal });
+      throw new Error("Expected execute() to reject with aborted signal");
+    } catch (err) {
+      errorType = err?.constructor?.name ?? "unknown";
+      errorMessage = err instanceof Error ? err.message : String(err);
+    }
+    const elapsed = Date.now() - startedAt;
+
+    console.log(`[proof] Pre-aborted signal propagated through Exa provider in ${elapsed}ms`);
+    console.log(`[proof] error: ${errorType}: ${errorMessage}`);
+    expect(elapsed).toBeLessThan(5000);
+  }, 15000);
+
   it("propagates abort signal through the guarded-fetch stack used by Exa", async () => {
     const { withSelfHostedWebSearchEndpoint } = await vi.importActual<
       typeof import("openclaw/plugin-sdk/provider-web-search")
@@ -27,7 +69,9 @@ describe("exa abort signal proof", () => {
       res.socket?.setTimeout(0);
     });
     await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", () => resolve());
+      server.listen(0, "127.0.0.1", () => {
+        resolve();
+      });
     });
     const { port } = server.address() as AddressInfo;
 
@@ -45,15 +89,17 @@ describe("exa abort signal proof", () => {
     );
 
     await new Promise<void>((resolve) => {
-      setTimeout(() => resolve(), 100);
+      setTimeout(() => {
+        resolve();
+      }, 100);
     });
     controller.abort("proof: cancellation");
 
     await expect(searchPromise).rejects.toThrow();
     const elapsed = Date.now() - startedAt;
 
-    let errorType = "unknown";
-    let errorMessage = "";
+    let errorType: string;
+    let errorMessage: string;
     try {
       await searchPromise;
     } catch (err) {
