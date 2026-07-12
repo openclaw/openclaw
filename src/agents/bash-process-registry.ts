@@ -144,8 +144,12 @@ export function getFinishedSession(id: string) {
 
 /** Removes visible session records without changing live-process activity. */
 export function deleteSession(id: string) {
+  const session = runningSessions.get(id);
   runningSessions.delete(id);
   finishedSessions.delete(id);
+  if (!session?.backgrounded) {
+    activeBackgroundExecSessionIds.delete(id);
+  }
 }
 
 /** Appends process output while enforcing aggregate and pending-output caps. */
