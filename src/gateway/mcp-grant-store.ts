@@ -7,6 +7,8 @@ import type {
 } from "../auto-reply/get-reply-options.types.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 
 export type McpLoopbackRequestContext = {
   sessionKey: string;
@@ -73,6 +75,22 @@ const MAX_TTL_MS = 12 * 60 * 60 * 1000;
 
 const grantsByToken = new Map<string, McpAttachGrant>();
 const clientGrantsByToken = new Map<string, StoredMcpLoopbackClientGrant>();
+let sessionDeletionObserverStarted = false;
+
+function ensureSessionDeletionObserver(): void {
+  if (sessionDeletionObserverStarted) {
+    return;
+  }
+  sessionDeletionObserverStarted = true;
+  onSessionIdentityMutation((mutation) => {
+    if (mutation.kind !== "delete") {
+      return;
+    }
+    for (const sessionKey of mutation.previous.sessionKeys) {
+      revokeAttachGrantsForSession(sessionKey);
+    }
+  });
+}
 
 function clampTtlMs(ttlMs: number | undefined): number {
   if (!Number.isFinite(ttlMs) || (ttlMs as number) <= 0) {
@@ -91,6 +109,7 @@ export function mintAttachGrant(params: {
     throw new Error("mintAttachGrant: sessionKey is required");
   }
   const nowMs = params.nowMs ?? Date.now();
+  ensureSessionDeletionObserver();
   // Mint sweeps stale entries so abandoned grants do not accumulate.
   sweepExpiredAttachGrants(nowMs);
   const grant: McpAttachGrant = {
@@ -127,6 +146,18 @@ export function revokeAttachGrantsForSession(sessionKey: string): number {
   let removed = 0;
   for (const [token, grant] of grantsByToken) {
     if (grant.sessionKey === key) {
+      grantsByToken.delete(token);
+      removed += 1;
+    }
+  }
+  return removed;
+}
+
+export function revokeAttachGrantsForAgent(agentId: string): number {
+  const normalizedAgentId = normalizeAgentId(agentId);
+  let removed = 0;
+  for (const [token, grant] of grantsByToken) {
+    if (parseAgentSessionKey(grant.sessionKey)?.agentId === normalizedAgentId) {
       grantsByToken.delete(token);
       removed += 1;
     }

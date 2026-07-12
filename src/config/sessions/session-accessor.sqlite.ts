@@ -1022,7 +1022,10 @@ async function deleteSqliteSessionEntryLifecycleInternal(
         kind: "delete",
         previous: {
           ...(current.entry.sessionId ? { sessionId: current.entry.sessionId } : {}),
-          sessionKeys: targetSnapshot.rows.map((row) => row.sessionKey),
+          sessionKeys: uniqueStrings([
+            normalizeSqliteSessionKey(params.target.canonicalKey),
+            ...targetSnapshot.rows.map((row) => row.sessionKey),
+          ]),
         },
       });
     }

@@ -6,7 +6,10 @@ import { attachHandlers } from "./attach.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const loadSessionEntryMock = vi.hoisted(() =>
-  vi.fn((_sessionKey: string) => ({ entry: undefined as Record<string, unknown> | undefined })),
+  vi.fn((sessionKey: string) => ({
+    canonicalKey: sessionKey,
+    entry: undefined as Record<string, unknown> | undefined,
+  })),
 );
 
 vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
@@ -29,7 +32,10 @@ describe("attach gateway methods", () => {
   beforeEach(() => {
     resetAttachGrantsForTest();
     loadSessionEntryMock.mockReset();
-    loadSessionEntryMock.mockReturnValue({ entry: undefined });
+    loadSessionEntryMock.mockImplementation((sessionKey: string) => ({
+      canonicalKey: sessionKey,
+      entry: undefined,
+    }));
   });
   afterEach(async () => {
     resetAttachGrantsForTest();
@@ -64,6 +70,23 @@ describe("attach gateway methods", () => {
     expect(resolveAttachGrant(body.token)?.sessionKey).toBe("agent:main:attach-method");
   });
 
+  it("attach.grant binds aliases to the canonical logical session key", async () => {
+    loadSessionEntryMock.mockReturnValue({
+      canonicalKey: "agent:main:discord:group:attach",
+      entry: { sessionId: "alias-session" },
+    });
+    const respond = vi.fn();
+
+    await expectDefined(
+      attachHandlers["attach.grant"],
+      'attachHandlers["attach.grant"] test invariant',
+    )(grantOpts("discord:group:attach", respond));
+
+    const body = respond.mock.calls[0]?.[1] as { sessionKey: string; token: string };
+    expect(body.sessionKey).toBe("agent:main:discord:group:attach");
+    expect(resolveAttachGrant(body.token)?.sessionKey).toBe(body.sessionKey);
+  });
+
   it("rejects attach grants for reserved harness sessions", async () => {
     const respond = vi.fn();
     await expectDefined(
@@ -82,6 +105,7 @@ describe("attach gateway methods", () => {
 
   it("allows an existing unlocked legacy harness-prefixed session", async () => {
     loadSessionEntryMock.mockReturnValue({
+      canonicalKey: "agent:main:harness:legacy-notes",
       entry: { sessionId: "legacy-session", modelSelectionLocked: false },
     });
     const respond = vi.fn();
@@ -101,6 +125,7 @@ describe("attach gateway methods", () => {
 
   it("rejects attach grants for existing locked harness sessions", async () => {
     loadSessionEntryMock.mockReturnValue({
+      canonicalKey: "agent:main:harness:codex:supervision:native-thread",
       entry: {
         sessionId: "locked-session",
         agentHarnessId: "codex",

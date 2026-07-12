@@ -32,10 +32,10 @@ export const attachHandlers: GatewayRequestHandlers = {
   "attach.grant": async ({ params, respond, context }) => {
     const grantParams = paramRecord(params);
     const cfg = context.getRuntimeConfig();
-    const sessionKey = readString(grantParams, "sessionKey") ?? resolveMainSessionKey(cfg);
-    const harnessEntry = isAgentHarnessSessionKey(sessionKey)
-      ? resolveSessionEntryAccessTarget({ cfg, sessionKey }).entry
-      : undefined;
+    const requestedSessionKey = readString(grantParams, "sessionKey") ?? resolveMainSessionKey(cfg);
+    const sessionTarget = resolveSessionEntryAccessTarget({ cfg, sessionKey: requestedSessionKey });
+    const sessionKey = sessionTarget.canonicalKey;
+    const harnessEntry = isAgentHarnessSessionKey(sessionKey) ? sessionTarget.entry : undefined;
     if (
       isAgentHarnessSessionKey(sessionKey) &&
       (!harnessEntry || isAgentHarnessSessionStoreEntryProtected(sessionKey, harnessEntry))

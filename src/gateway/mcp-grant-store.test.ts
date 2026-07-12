@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { emitSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import {
   activateMcpLoopbackClientGrantCapture,
   attachGrantStoreSize,
@@ -71,6 +72,34 @@ describe("mcp-grant-store", () => {
     mintAttachGrant({ sessionKey: "agent:main:y", nowMs: T0 });
     expect(revokeAttachGrantsForSession("agent:main:x")).toBe(2);
     expect(attachGrantStoreSize()).toBe(1);
+  });
+
+  it("revokes only grants bound to a committed session deletion", () => {
+    const target = mintAttachGrant({ sessionKey: "agent:main:target", nowMs: T0 });
+    const unrelated = mintAttachGrant({ sessionKey: "agent:main:unrelated", nowMs: T0 });
+
+    emitSessionIdentityMutation({
+      kind: "delete",
+      previous: {
+        sessionId: "target-session-id",
+        sessionKeys: ["agent:main:target"],
+      },
+    });
+
+    expect(resolveAttachGrant(target.token, T0)).toBeUndefined();
+    expect(resolveAttachGrant(unrelated.token, T0)).toBeDefined();
+  });
+
+  it("preserves grants when session identity is reset instead of deleted", () => {
+    const target = mintAttachGrant({ sessionKey: "agent:main:target", nowMs: T0 });
+
+    emitSessionIdentityMutation({
+      kind: "reset",
+      previous: { sessionId: "old-session-id", sessionKeys: ["agent:main:target"] },
+      current: { sessionId: "new-session-id", sessionKeys: ["agent:main:target"] },
+    });
+
+    expect(resolveAttachGrant(target.token, T0)).toBeDefined();
   });
 
   it("clamps TTL: default for non-positive, ceiling at 12h", () => {
