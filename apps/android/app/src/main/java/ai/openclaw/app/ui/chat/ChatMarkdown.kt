@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.chat.CHAT_IMAGE_MAX_BASE64_CHARS
+import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.mobileAccent
 import ai.openclaw.app.ui.mobileCallout
 import ai.openclaw.app.ui.mobileCaption1
@@ -727,7 +728,7 @@ private fun InlineBase64Image(
     )
   } else if (imageState.failed) {
     Text(
-      text = "Image unavailable",
+      text = nativeString("Image unavailable"),
       modifier = Modifier.padding(vertical = 2.dp),
       style = mobileCaption1,
       color = mobileTextSecondary,

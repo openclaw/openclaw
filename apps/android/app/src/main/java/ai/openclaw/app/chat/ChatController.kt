@@ -6,6 +6,7 @@ import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.parseChatSendAck
+import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.parseGatewayModels
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
 import ai.openclaw.app.ui.chat.thinkingSupportedForSelection
@@ -701,7 +702,7 @@ class ChatController internal constructor(
     val parentKey = normalizeRequestedSessionKey(_sessionKey.value)
     if (parentKey.isEmpty()) return false
     if (_pendingRunCount.value > 0) {
-      updateErrorText("Wait for the current response to finish before starting a new chat.")
+      updateErrorText(nativeString("Wait for the current response to finish before starting a new chat."))
       return false
     }
     if (!newChatCreateInFlight.compareAndSet(false, true)) {
@@ -798,7 +799,7 @@ class ChatController internal constructor(
           } catch (err: CancellationException) {
             throw err
           } catch (err: Throwable) {
-            updateErrorText(err.message ?: "Could not update model.")
+            updateErrorText(err.message ?: nativeString("Could not update model."))
             false
           }
         }
@@ -946,7 +947,7 @@ class ChatController internal constructor(
       when (val outbox = commandOutbox) {
         null -> {
           if (!_healthOk.value) {
-            updateErrorText("Gateway health not OK; cannot send")
+            updateErrorText(nativeString("Gateway health not OK; cannot send"))
             return false
           }
           null
@@ -1077,7 +1078,7 @@ class ChatController internal constructor(
               // Terminal timeout/error means the gateway did not accept a runnable turn.
               // Surface failed acceptance instead of letting a cleared composer look successful.
               unresolvedRepliesByRunId.remove(actualRunId)
-              updateErrorText("Chat failed before the run started; try again.")
+              updateErrorText(nativeString("Chat failed before the run started; try again."))
               // The parked row owns the input; restoring the draft would duplicate it.
               journaled != null
             }
@@ -1820,7 +1821,7 @@ class ChatController internal constructor(
     attachments: List<OutgoingAttachment>,
   ): ChatOutboxItem? {
     if (outboxScope == null) {
-      updateErrorText("Gateway health not OK; cannot send")
+      updateErrorText(nativeString("Gateway health not OK; cannot send"))
       return null
     }
     val payloads =
@@ -1835,7 +1836,7 @@ class ChatController internal constructor(
           )
         }
       } catch (_: IllegalArgumentException) {
-        updateErrorText("Could not stage an attachment for sending.")
+        updateErrorText(nativeString("Could not stage an attachment for sending."))
         return null
       }
     // Slash commands are connection-gated: they may auto-send only inside the connection epoch
@@ -1855,7 +1856,7 @@ class ChatController internal constructor(
       } catch (err: CancellationException) {
         throw err
       } catch (_: Throwable) {
-        updateErrorText("Could not queue message for later delivery.")
+        updateErrorText(nativeString("Could not queue message for later delivery."))
         return null
       }
     return when (result) {
@@ -1865,19 +1866,19 @@ class ChatController internal constructor(
         result.item
       }
       ChatOutboxEnqueueResult.QueueFull -> {
-        updateErrorText("Offline queue is full ($OUTBOX_MAX_QUEUED messages); delete queued items first.")
+        updateErrorText(nativeString("Offline queue is full (\$OUTBOX_MAX_QUEUED messages); delete queued items first.", OUTBOX_MAX_QUEUED))
         null
       }
       ChatOutboxEnqueueResult.AttachmentsTooLarge -> {
-        updateErrorText("Attachments are too large to queue for one message; remove some and try again.")
+        updateErrorText(nativeString("Attachments are too large to queue for one message; remove some and try again."))
         null
       }
       ChatOutboxEnqueueResult.StorageFull -> {
-        updateErrorText("Offline attachment storage is full; delete queued items first.")
+        updateErrorText(nativeString("Offline attachment storage is full; delete queued items first."))
         null
       }
       ChatOutboxEnqueueResult.Unavailable -> {
-        updateErrorText("Gateway health not OK; cannot send")
+        updateErrorText(nativeString("Gateway health not OK; cannot send"))
         null
       }
     }
@@ -2483,7 +2484,7 @@ class ChatController internal constructor(
             pendingToolCallsById.clear()
             publishPendingToolCalls()
             _streamingAssistantText.value = null
-            updateErrorText(if (state == "error") payload["errorMessage"].asStringOrNull() ?: "Chat failed" else null)
+            updateErrorText(if (state == "error") payload["errorMessage"].asStringOrNull() ?: nativeString("Chat failed") else null)
           }
           refreshCurrentHistoryBestEffort(updateSessionInfo = true)
           return
@@ -2497,7 +2498,7 @@ class ChatController internal constructor(
           return
         }
         if (state == "error") {
-          updateErrorText(payload["errorMessage"].asStringOrNull() ?: "Chat failed")
+          updateErrorText(payload["errorMessage"].asStringOrNull() ?: nativeString("Chat failed"))
         }
         if (runId != null) {
           clearPendingRun(runId)
@@ -2600,7 +2601,7 @@ class ChatController internal constructor(
         }
       }
       "error" -> {
-        updateErrorText("Event stream interrupted; try refreshing.")
+        updateErrorText(nativeString("Event stream interrupted; try refreshing."))
         clearPendingRuns()
         pendingToolCallsById.clear()
         publishPendingToolCalls()
@@ -2680,7 +2681,7 @@ class ChatController internal constructor(
         unresolvedRepliesByRunId.remove(runId)
         terminalWithoutReplyRunIds.remove(runId)
         timedOutRunIds.add(runId)
-        updateErrorText("Timed out waiting for a reply; try again or refresh.")
+        updateErrorText(nativeString("Timed out waiting for a reply; try again or refresh."))
         // The optimistic bubble is gone, so the journaled row must stay visible for review;
         // history proof still retires it later if the turn did persist.
         parkUnconfirmedDurableSend(runId)
@@ -2872,7 +2873,7 @@ class ChatController internal constructor(
         unresolvedRunIds.forEach(::removeOptimisticMessage)
         unresolvedRunIds.forEach(unresolvedRepliesByRunId::remove)
         unresolvedRunIds.forEach(terminalWithoutReplyRunIds::remove)
-        updateErrorText("Timed out confirming the sent message; refresh to check delivery.")
+        updateErrorText(nativeString("Timed out confirming the sent message; refresh to check delivery."))
         // Ownership expired without proof; keep the journaled copies visible for manual review.
         for (unresolvedRunId in unresolvedRunIds) {
           parkUnconfirmedDurableSend(unresolvedRunId)
@@ -3111,7 +3112,7 @@ class ChatController internal constructor(
             label = option.label.trim().takeIf { it.isNotEmpty() } ?: id,
           )
         }.distinctBy { it.id }
-        .ifEmpty { listOf(ChatThinkingLevelOption(id = "off", label = "off")) }
+        .ifEmpty { listOf(ChatThinkingLevelOption(id = "off", label = nativeString("Off"))) }
     _thinkingLevelSelection.value =
       ChatThinkingLevelSelection(
         options = options,
