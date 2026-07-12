@@ -1582,9 +1582,7 @@ describe("ci workflow guards", () => {
         "${{ needs.preflight.outputs.compatibility_target }}",
       );
     }
-    expect(iosInstallStep.run).toContain(
-      'swiftformat_link="$(brew --prefix)/bin/swiftformat"',
-    );
+    expect(iosInstallStep.run).toContain('swiftformat_link="$(brew --prefix)/bin/swiftformat"');
     expect(iosInstallStep.run).toContain(
       'ln -sfn "$swift_tools_dir/swiftformat" "$swiftformat_link"',
     );
