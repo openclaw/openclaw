@@ -63,7 +63,9 @@ export function emitSessionsChanged(
           sessionKey: payload.sessionKey,
           reason: payload.reason,
           ts: Date.now(),
-          ...(payload.sessionKey === "global" && payload.agentId ? { agentId: payload.agentId } : {}),
+          ...(payload.sessionKey === "global" && payload.agentId
+            ? { agentId: payload.agentId }
+            : {}),
         },
         drainConnIds,
       );

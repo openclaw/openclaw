@@ -551,7 +551,6 @@ function resolveScopedAbortKey(params: {
   });
 }
 
-
 async function interruptSessionRunIfActive(params: {
   req: GatewayRequestHandlerOptions["req"];
   context: GatewayRequestContext;
