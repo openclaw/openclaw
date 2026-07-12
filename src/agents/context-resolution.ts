@@ -23,6 +23,7 @@ export type ContextTokenResolutionParams = {
   cfg?: OpenClawConfig;
   sourceCfg?: OpenClawConfig | null;
   provider?: string;
+  configuredProvider?: string;
   model?: string;
   contextTokensOverride?: number;
   fallbackContextTokens?: number;
@@ -150,20 +151,17 @@ function resolveProviderQualifiedModel(provider: string, model: string): string 
   return prefixedProvider === normalizeProviderId(provider) && bareModel ? bareModel : undefined;
 }
 
-function resolveKnownRuntimeCanonicalProvider(provider: string): string | undefined {
-  return normalizeProviderId(provider) === "claude-cli" ? "anthropic" : undefined;
-}
-
 function resolveConfiguredRuntimeContextTokens(
   cfg: OpenClawConfig | null | undefined,
   provider: string,
+  configuredProvider: string | undefined,
   model: string,
 ): ConfiguredContextTokens | undefined {
   const explicitResult = resolveConfiguredProviderContextTokens(cfg, provider, model);
   if (explicitResult) {
     return explicitResult;
   }
-  const canonicalProvider = resolveKnownRuntimeCanonicalProvider(provider);
+  const canonicalProvider = configuredProvider?.trim();
   if (
     !canonicalProvider ||
     normalizeProviderId(canonicalProvider) === normalizeProviderId(provider)
@@ -236,12 +234,14 @@ export function resolveContextTokensForModelFromCache(
     const configuredWindow = resolveConfiguredRuntimeContextTokens(
       params.cfg,
       explicitProvider,
+      params.configuredProvider,
       ref.model,
     );
     const sourceConfig = params.sourceCfg === undefined ? params.cfg : params.sourceCfg;
     const sourceConfiguredWindow = resolveConfiguredRuntimeContextTokens(
       sourceConfig,
       explicitProvider,
+      params.configuredProvider,
       ref.model,
     );
     const fixedContextWindow = resolveAnthropicFixedContextWindow(ref.provider, ref.model);

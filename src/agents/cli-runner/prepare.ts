@@ -649,6 +649,7 @@ export async function prepareCliRunContext(
     ? resolveContextTokensForModel({
         cfg: params.config,
         provider: params.provider,
+        configuredProvider: backendResolved.modelProvider,
         model: resolveClaudeCliContextModelId(modelId),
         fallbackContextTokens: 200_000,
         allowAsyncLoad: false,

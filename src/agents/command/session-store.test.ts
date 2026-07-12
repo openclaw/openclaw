@@ -493,7 +493,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
-  it("persists Anthropic configured contextTokens for claude-cli runtime sessions", async () => {
+  it("reconciles an existing claude-cli session to its prepared context budget", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {
         agents: {
@@ -517,6 +517,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         [sessionKey]: {
           sessionId,
           updatedAt: 1,
+          contextTokens: 1_048_576,
         },
       };
       await seedSessionStore(storePath, sessionStore);
@@ -537,6 +538,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
               sessionId,
               provider: "claude-cli",
               model: "claude-opus-4-7",
+              contextTokens: 100_000,
             },
           },
         } as EmbeddedAgentRunResult,

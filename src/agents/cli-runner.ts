@@ -1117,6 +1117,7 @@ export async function runPreparedCliAgent(
           sessionId: agentSessionId,
           provider: params.provider,
           model: context.modelId,
+          contextTokens: context.contextWindowInfo.tokens,
           usage: resultParams.output.usage,
           ...(resultParams.output.usage ? { lastCallUsage: resultParams.output.usage } : {}),
           ...(persistedCliSessionId

@@ -335,6 +335,7 @@ describe("runCliTurnCompactionLifecycle", () => {
       sessionId,
       updatedAt: 1,
       sessionFile,
+      contextTokens: 1_048_576,
       totalTokens: 90_000,
       totalTokensFresh: true,
     };
@@ -361,6 +362,7 @@ describe("runCliTurnCompactionLifecycle", () => {
             sessionId,
             provider: "claude-cli",
             model: "claude-opus-4-7",
+            contextTokens: 100_000,
           },
         },
       } as never,

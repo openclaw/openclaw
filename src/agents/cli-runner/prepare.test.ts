@@ -182,6 +182,7 @@ function createCliBackendConfig(
 function setClaudeCliBackendForPrepareTest(
   params: {
     liveSession?: boolean;
+    modelProvider?: string;
     sessionMode?: "always" | "existing" | "none";
     reseedFromRawTranscriptWhenUncompacted?: boolean;
   } = {},
@@ -194,6 +195,7 @@ function setClaudeCliBackendForPrepareTest(
       {
         id: "claude-cli",
         pluginId: "anthropic",
+        modelProvider: params.modelProvider ?? "anthropic",
         bundleMcp: false,
         config: {
           command: "claude",
@@ -257,6 +259,46 @@ function appendTranscriptEntry(
 }
 
 describe("shouldSkipLocalCliCredentialEpoch", () => {
+  it("uses the prepared backend model provider for Claude CLI context tokens", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      setClaudeCliBackendForPrepareTest({ modelProvider: "fixture-anthropic" });
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "claude-cli",
+        model: "claude-opus-4-7",
+        timeoutMs: 1_000,
+        runId: "run-configured-context-budget",
+        config: {
+          ...createCliBackendConfig(),
+          models: {
+            providers: {
+              "fixture-anthropic": {
+                models: [
+                  {
+                    id: "claude-opus-4-7",
+                    name: "Claude Opus 4.7",
+                    contextWindow: 200_000,
+                    maxTokens: 8_192,
+                    contextTokens: 100_000,
+                  },
+                ],
+              },
+            },
+          },
+        } satisfies OpenClawConfig,
+      });
+
+      expect(context.backendResolved.modelProvider).toBe("fixture-anthropic");
+      expect(context.contextWindowInfo.tokens).toBe(100_000);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   beforeEach(() => {
     // Install narrow test doubles for external runtime seams so preparation
     // remains about data flow, not bundled plugin or loopback startup cost.
