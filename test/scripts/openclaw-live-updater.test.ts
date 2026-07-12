@@ -337,6 +337,21 @@ describe("openclaw live updater", () => {
       macAppRebuild: true,
       macUiVerification: true,
     });
+    expect(
+      classifyActions(["apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift"], {
+        buildProvenanceKnown: true,
+        buildRequired: true,
+        nodeModulesPresent: true,
+      }),
+    ).toEqual({
+      dependencyInstall: false,
+      gatewayBuild: true,
+      gatewayProbe: true,
+      gatewayRestart: true,
+      gatewaySelfHeal: false,
+      macAppRebuild: true,
+      macUiVerification: true,
+    });
   });
 
   test("accepts only the delayed exact target bundle process", () => {

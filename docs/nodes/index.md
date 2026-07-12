@@ -203,8 +203,13 @@ node skill files; the node host does not watch the skills directory.
 
 Node-hosted skill entries identify their node and carry their execution
 location. Skill files, referenced relative paths, and binaries remain on that
-node. Load instructions and run commands with
-`exec host=node node=<node-id>` so relative paths resolve on the node rather
+node. The agent reads the advertised `node://.../SKILL.md` location with the
+normal `read` tool. `file_fetch` accepts operator-approved absolute node paths,
+not node skill locators; runtimes without the normal read tool can instead run
+`cat SKILL.md` through `exec host=node node=<node-id>` with the advertised
+`node://.../skills/<name>` directory as `workdir`. Referenced files and binaries
+use the same exec target and workdir. The node host resolves that locator against
+its active OpenClaw state directory, so relative paths resolve on the node rather
 than the Gateway machine. The publishing node must have approved `system.run`,
 and the agent's exec policy must allow `host=node`; otherwise the skill stays
 out of that agent's snapshot.

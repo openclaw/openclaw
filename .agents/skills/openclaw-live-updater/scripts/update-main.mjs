@@ -118,7 +118,13 @@ export function classifyActions(
   changedPaths,
   { buildProvenanceKnown, buildRequired, nodeModulesPresent },
 ) {
-  const runMacos = changedPaths.length > 0 && detectChangedScope(changedPaths).runMacos;
+  // CI skips generated protocol-only macOS jobs, but the live app embeds these Swift sources.
+  const generatedMacProtocolChanged = changedPaths.some((changedPath) =>
+    /^apps\/shared\/OpenClawKit\/Sources\/OpenClawProtocol\//u.test(changedPath),
+  );
+  const runMacos =
+    changedPaths.length > 0 &&
+    (detectChangedScope(changedPaths).runMacos || generatedMacProtocolChanged);
   const macUiVerification =
     runMacos &&
     changedPaths.some((changedPath) =>

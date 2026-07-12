@@ -562,7 +562,6 @@ import {
   WebPushTestParamsSchema,
   type PresenceEntry,
   PresenceEntrySchema,
-  ProtocolSchemas,
   type RequestFrame,
   RequestFrameSchema,
   type ResponseFrame,
@@ -633,6 +632,10 @@ import {
   SessionsFilesGetParamsSchema,
   type SessionsFilesGetResult,
   SessionsFilesGetResultSchema,
+  type SessionsFilesSetParams,
+  SessionsFilesSetParamsSchema,
+  type SessionsFilesSetResult,
+  SessionsFilesSetResultSchema,
   type SessionsFilesListParams,
   SessionsFilesListParamsSchema,
   type SessionsFilesListResult,
@@ -1159,6 +1162,9 @@ export const validateSessionsFilesListParams = lazyCompile<SessionsFilesListPara
 );
 export const validateSessionsFilesGetParams = lazyCompile<SessionsFilesGetParams>(
   SessionsFilesGetParamsSchema,
+);
+export const validateSessionsFilesSetParams = lazyCompile<SessionsFilesSetParams>(
+  SessionsFilesSetParamsSchema,
 );
 export const validateSessionsDiffParams = lazyCompile<SessionsDiffParams>(SessionsDiffParamsSchema);
 export const validateSessionsCreateParams = lazyCompile<SessionsCreateParams>(
@@ -1689,6 +1695,8 @@ export {
   SessionFileRelevanceSchema,
   SessionsFilesGetParamsSchema,
   SessionsFilesGetResultSchema,
+  SessionsFilesSetParamsSchema,
+  SessionsFilesSetResultSchema,
   SessionsFilesListParamsSchema,
   SessionsFilesListResultSchema,
   SessionDiffFileSchema,
@@ -1964,7 +1972,6 @@ export {
   FsDirEntrySchema,
   FsListDirParamsSchema,
   FsListDirResultSchema,
-  ProtocolSchemas,
   MIN_CLIENT_PROTOCOL_VERSION,
   MIN_NODE_PROTOCOL_VERSION,
   MIN_PROBE_PROTOCOL_VERSION,
@@ -2116,6 +2123,8 @@ export type {
   SessionsFilesListResult,
   SessionsFilesGetParams,
   SessionsFilesGetResult,
+  SessionsFilesSetParams,
+  SessionsFilesSetResult,
   SessionDiffFile,
   SessionDiffFileStatus,
   SessionsDiffParams,
