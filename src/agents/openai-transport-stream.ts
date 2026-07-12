@@ -3246,12 +3246,119 @@ async function processOpenAICompletionsStream(
     chunkPushedEvent = true;
     stream.push(event);
   };
+  // Finds the index of the `}` that closes the Gemma4 args object opened at
+  // `openBraceIndex`, tracking nested `{}`/`[]` depth and skipping over
+  // `<|"|>`-delimited string values so braces/brackets inside string
+  // arguments don't perturb the count. Returns -1 if unterminated.
+  const findGemma4ArgsEnd = (text: string, openBraceIndex: number): number => {
+    let depth = 0;
+    let i = openBraceIndex;
+    const n = text.length;
+    while (i < n) {
+      if (text.startsWith('<|"|>', i)) {
+        const next = text.indexOf('<|"|>', i + 5);
+        if (next === -1) {
+          return -1;
+        }
+        i = next + 5;
+        continue;
+      }
+      if (text.startsWith('<｜"｜>', i)) {
+        const next = text.indexOf('<｜"｜>', i + 5);
+        if (next === -1) {
+          return -1;
+        }
+        i = next + 5;
+        continue;
+      }
+      const ch = text[i];
+      if (ch === "{" || ch === "[") {
+        depth += 1;
+      } else if (ch === "}" || ch === "]") {
+        depth -= 1;
+        if (depth === 0) {
+          return i;
+        }
+      }
+      i += 1;
+    }
+    return -1;
+  };
   const finishCurrentBlock = () => {
     if (!currentBlock) {
       return;
     }
     if (currentBlock.type === "toolCall") {
       currentBlock.arguments = parseStreamingJson(currentBlock.partialArgs);
+    } else if (currentBlock.type === "text") {
+      const openRegex = /<[|｜]tool_call[>＞]call:([a-zA-Z0-9_-]+)\{/gi;
+      const found: Array<{ start: number; end: number; name: string; rawArgs: string }> = [];
+      let openMatch: RegExpExecArray | null;
+      while ((openMatch = openRegex.exec(currentBlock.text))) {
+        const name = openMatch[1];
+        const braceStart = openMatch.index + openMatch[0].length - 1;
+        const braceEnd = findGemma4ArgsEnd(currentBlock.text, braceStart);
+        if (braceEnd === -1) {
+          break;
+        }
+        const rawArgs = currentBlock.text.slice(braceStart + 1, braceEnd);
+        const afterBrace = currentBlock.text.slice(braceEnd + 1);
+        const closeTagMatch = afterBrace.match(/^<[|｜]?tool_call[|｜]?[>＞]/i);
+        const end = braceEnd + 1 + (closeTagMatch ? closeTagMatch[0].length : 0);
+        found.push({ start: openMatch.index, end, name, rawArgs });
+        openRegex.lastIndex = end;
+      }
+      if (found.length > 0) {
+        const blocks: typeof output.content = [];
+        let cursor = 0;
+        for (const { start, end, name, rawArgs } of found) {
+          const preText = currentBlock.text.slice(cursor, start).trim();
+          if (preText) {
+            blocks.push({ type: "text", text: preText });
+          }
+          if (name && rawArgs !== undefined) {
+            let normalizedArgs = rawArgs
+              .replace(/<[|｜]"/g, '"')
+              .replace(/"[|｜]>/g, '"')
+              .replace(/<[|｜]'/g, "'")
+              .replace(/'[|｜]>/g, "'");
+            // Unlike the original single-regex capture, rawArgs here has its
+            // enclosing braces already stripped (see findGemma4ArgsEnd), so
+            // the first key has no leading `{`/`,` — match start-of-string too.
+            normalizedArgs = normalizedArgs.replace(/(^|[{,])\s*([a-zA-Z0-9_-]+)\s*:/g, '$1"$2":');
+            normalizedArgs = normalizedArgs.replace(/'([^']*)'/g, '"$1"');
+            try {
+              const parsedArgs = JSON.parse(`{${normalizedArgs}}`);
+              if (parsedArgs && typeof parsedArgs === "object" && !Array.isArray(parsedArgs)) {
+                blocks.push({
+                  type: "toolCall",
+                  id: `call_${randomUUID()}`,
+                  name,
+                  arguments: parsedArgs,
+                  partialArgs: JSON.stringify(parsedArgs),
+                });
+              } else {
+                blocks.push({ type: "text", text: currentBlock.text.slice(start, end) });
+              }
+            } catch {
+              blocks.push({ type: "text", text: currentBlock.text.slice(start, end) });
+            }
+          }
+          cursor = end;
+        }
+        const postText = currentBlock.text.slice(cursor).trim();
+        if (postText) {
+          blocks.push({ type: "text", text: postText });
+        }
+        if (blocks.length > 0) {
+          const idx = blockIndex();
+          output.content.splice(idx, 1, ...blocks);
+          const hasToolCalls = blocks.some((b) => b.type === "toolCall");
+          if (hasToolCalls) {
+            output.stopReason = "toolUse";
+          }
+        }
+      }
     }
   };
   const finishAllToolCallBlocks = () => {
@@ -3641,6 +3748,7 @@ async function processOpenAICompletionsStream(
   flushReasoningTagTextPartitionerAtEnd();
   flushDeepSeekToolCallRecovererAtEnd();
   flushDeepSeekTextFilterAtEnd();
+  finishCurrentBlock();
   finishAllToolCallBlocks();
   currentBlock = null;
   flushPendingPostToolCallDeltas();
