@@ -1413,10 +1413,10 @@ Opt in to Slack native progress task cards:
 
 Legacy keys:
 
-- `channels.slack.streamMode` (`replace | status_final | append`) is a legacy runtime alias for `channels.slack.streaming.mode`.
-- boolean `channels.slack.streaming` is a legacy runtime alias for `channels.slack.streaming.mode` and `channels.slack.streaming.nativeTransport`.
-- top-level `channels.slack.chunkMode` and `channels.slack.nativeStreaming` are legacy runtime aliases for `channels.slack.streaming.chunkMode` and `channels.slack.streaming.nativeTransport`.
-- Run `openclaw doctor --fix` to rewrite persisted Slack streaming config to the canonical keys.
+- `channels.slack.streamMode` (`replace | status_final | append`) is a legacy alias for `channels.slack.streaming.mode`.
+- boolean `channels.slack.streaming` is a legacy alias for `channels.slack.streaming.mode` and `channels.slack.streaming.nativeTransport`.
+- top-level `channels.slack.chunkMode` and `channels.slack.nativeStreaming` are legacy aliases for `channels.slack.streaming.chunkMode` and `channels.slack.streaming.nativeTransport`.
+- Legacy aliases are not read at runtime; run `openclaw doctor --fix` to rewrite persisted Slack streaming config to the canonical keys.
 
 ## Typing reaction fallback
 

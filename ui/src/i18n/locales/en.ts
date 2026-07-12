@@ -473,6 +473,7 @@ export const en: TranslationMap = {
     noEvents: "No events yet.",
   },
   quickSettings: {
+    language: "Language",
     appearance: {
       lobsterVisits: "Lobster visits",
       lobsterVisitsOn: "Drops by occasionally",
@@ -608,10 +609,10 @@ export const en: TranslationMap = {
   tabs: {
     agents: "Agents",
     activity: "Activity",
-    overview: "Overview",
     workboard: "Workboard",
     worktrees: "Worktrees",
     channels: "Channels",
+    connection: "Connection",
     sessions: "Sessions",
     usage: "Usage",
     cron: "Cron Jobs",
@@ -638,10 +639,10 @@ export const en: TranslationMap = {
   subtitles: {
     agents: "Workspaces, tools, identities.",
     activity: "Browser-local tool activity summaries.",
-    overview: "Status, entry points, health.",
     workboard: "Agent work queue and session handoff.",
     worktrees: "Isolated agent task checkouts and recovery snapshots.",
     channels: "Channels and settings.",
+    connection: "Gateway endpoint, credentials, and handshake status.",
     sessions: "Active sessions and defaults.",
     usage: "API usage and costs.",
     cron: "Wakeups and recurring runs.",
@@ -1282,7 +1283,11 @@ export const en: TranslationMap = {
     eventUnarchived: "Unarchived",
     eventStale: "Stale session",
   },
-  overview: {
+  connection: {
+    lostTitle: "Gateway connection lost",
+    reconnecting: "Reconnecting…",
+    offlineHint: "Live updates and actions are paused until the connection returns.",
+    retryNow: "Retry now",
     access: {
       title: "Gateway Access",
       subtitle: "Where the dashboard connects and how it authenticates.",
@@ -1291,7 +1296,6 @@ export const en: TranslationMap = {
       password: "Password (not stored)",
       passwordPlaceholder: "system or shared password",
       sessionKey: "Default Session Key",
-      language: "Language",
       connectHint: "Click Connect to apply connection changes.",
       trustedProxy: "Authenticated via trusted proxy.",
       showToken: "Show token",
@@ -1308,127 +1312,49 @@ export const en: TranslationMap = {
       uptime: "Uptime",
       tickInterval: "Tick Interval",
       lastChannelsRefresh: "Last Channels Refresh",
-      channelsHint: "Use Channels to link WhatsApp, Telegram, Discord, Signal, or iMessage.",
     },
-    stats: {
-      instances: "Instances",
-      instancesHint: "Presence beacons in the last 5 minutes.",
-      sessions: "Sessions",
-      sessionsHint: "Recent session keys tracked by the gateway.",
-      cron: "Cron",
-      cronNext: "Next wake {time}",
-    },
-    notes: {
-      title: "Notes",
-      subtitle: "Quick reminders for remote control setups.",
-      tailscaleTitle: "Tailscale serve",
-      tailscaleText: "Prefer serve mode to keep the gateway on loopback with tailnet auth.",
-      sessionTitle: "Session hygiene",
-      sessionText: "Use /new or sessions.patch to reset context.",
-      cronTitle: "Cron reminders",
-      cronText: "Use isolated sessions for recurring runs.",
-    },
-    auth: {
-      required: "This gateway requires auth. Add a token or password, then click Connect.",
-      failed:
-        "Auth failed. Re-copy a tokenized URL with {command}, or update the token, then click Connect.",
-    },
-    pairing: {
-      hint: "This device needs pairing approval from the gateway host.",
-      scopeUpgradeTitle: "Scope upgrade pending approval.",
-      scopeUpgradeSummary:
-        "This device is already paired, but the requested wider scope is waiting for approval.",
-      roleUpgradeTitle: "Role upgrade pending approval.",
-      roleUpgradeSummary:
-        "This device is already paired, but the requested role change is waiting for approval.",
-      metadataUpgradeTitle: "Device metadata change pending approval.",
-      metadataUpgradeSummary:
-        "This device is already paired, but the metadata change is waiting for approval.",
-      mobileHint:
-        "On mobile? Copy the full URL (including #token=...) from openclaw dashboard --no-open on your desktop.",
-      docsTitle: "Device pairing docs (opens in new tab)",
-      docsLink: "Docs: Device pairing",
-    },
-    insecure: {
-      hint: "This page is HTTP, so the browser blocks device identity. Use HTTPS (Tailscale Serve) or open {url} on the gateway host.",
-      stayHttp: "If you must stay on HTTP, set {config} (token-only).",
-    },
-    connection: {
+    help: {
       title: "How to connect",
       step1: "Start the gateway on your host machine:",
       step2: "Get a tokenized dashboard URL:",
       step3: "Paste the WebSocket URL and token above, or open the tokenized URL directly.",
-      step4: "Or generate a reusable token:",
-      docsHint: "For remote access, Tailscale Serve is recommended. ",
       docsLink: "Read the docs →",
-      authDocsTitle: "Control UI auth docs (opens in new tab)",
-      authDocsLink: "Docs: Control UI auth",
-      tailscaleDocsTitle: "Tailscale Serve docs (opens in new tab)",
-      tailscaleDocsLink: "Docs: Tailscale Serve",
-      insecureHttpDocsTitle: "Insecure HTTP docs (opens in new tab)",
-      insecureHttpDocsLink: "Docs: Insecure HTTP",
       copyCommand: "Copy command",
       copyCommandAria: "Copy command: {command}",
     },
-    cards: {
-      cost: "Cost",
+  },
+  attention: {
+    cronFailed: "{count} cron job(s) failed",
+    cronOverdue: "{count} cron job(s) overdue",
+    modelAuthExpired: "Model auth expired: {providers}",
+    modelAuthExpiring: "Model auth expiring: {providers}",
+  },
+  palette: {
+    placeholder: "Search chats and commands…",
+    noResults: "No results",
+    categories: {
+      search: "Search",
+      navigation: "Navigation",
       skills: "Skills",
-      recentSessions: "Recent Sessions",
-      modelAuth: "Model Auth",
-      modelAuthOk: "{count} ok",
-      modelAuthExpired: "{count} expired",
-      modelAuthExpiring: "{count} expiring",
-      modelAuthProviders: "{count} providers",
-      modelAuthUsageLeft: "{pct}% left",
-      modelAuthExpiresIn: "expires {when}",
-      modelAuthAttentionExpiredTitle: "Model auth expired",
-      modelAuthAttentionExpiringTitle: "Model auth expiring soon",
-      modelAuthAttentionExpiredDesc: "{providers} — re-authenticate with openclaw models auth",
-      modelAuthAttentionExpiringEntry: "{provider} ({when})",
     },
-    attention: {
-      title: "Attention",
+    items: {
+      sessions: "Sessions",
+      scheduled: "Scheduled",
+      skills: "Skills",
+      plugins: "Plugins",
+      settings: "Settings",
+      agents: "Agents",
+      shellCommand: "Shell Command",
+      debugMode: "Debug Mode",
     },
-    eventLog: {
-      title: "Event Log",
+    descriptions: {
+      shellCommand: "Run shell",
+      debugMode: "Toggle debug",
     },
-    logTail: {
-      title: "Gateway Logs",
-    },
-    quickActions: {
-      newSession: "New Session",
-      automation: "Automation",
-      refreshAll: "Refresh All",
-      terminal: "Terminal",
-    },
-    palette: {
-      placeholder: "Search chats and commands…",
-      noResults: "No results",
-      categories: {
-        search: "Search",
-        navigation: "Navigation",
-        skills: "Skills",
-      },
-      items: {
-        overview: "Overview",
-        sessions: "Sessions",
-        scheduled: "Scheduled",
-        skills: "Skills",
-        plugins: "Plugins",
-        settings: "Settings",
-        agents: "Agents",
-        shellCommand: "Shell Command",
-        debugMode: "Debug Mode",
-      },
-      descriptions: {
-        shellCommand: "Run shell",
-        debugMode: "Toggle debug",
-      },
-      footer: {
-        navigate: "navigate",
-        select: "select",
-        close: "close",
-      },
+    footer: {
+      navigate: "navigate",
+      select: "select",
+      close: "close",
     },
   },
   dreaming: {
@@ -1931,12 +1857,6 @@ export const en: TranslationMap = {
           "Reopen the dashboard with openclaw dashboard --no-open to recopy the current URL and auth details.",
       },
     },
-  },
-  connection: {
-    lostTitle: "Gateway connection lost",
-    reconnecting: "Reconnecting…",
-    offlineHint: "Live updates and actions are paused until the connection returns.",
-    retryNow: "Retry now",
   },
   chat: {
     disconnected: "Disconnected from gateway.",

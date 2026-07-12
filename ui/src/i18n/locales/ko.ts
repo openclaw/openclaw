@@ -474,6 +474,7 @@ export const ko: TranslationMap = {
     noEvents: "No events yet.",
   },
   quickSettings: {
+    language: "언어",
     appearance: {
       lobsterVisits: "바닷가재 방문",
       lobsterVisitsOn: "가끔 들릅니다",
@@ -607,10 +608,10 @@ export const ko: TranslationMap = {
   tabs: {
     agents: "에이전트",
     activity: "활동",
-    overview: "개요",
     workboard: "워크보드",
     worktrees: "Worktree",
     channels: "채널",
+    connection: "연결",
     sessions: "세션",
     usage: "사용량",
     cron: "Cron 작업",
@@ -637,10 +638,10 @@ export const ko: TranslationMap = {
   subtitles: {
     agents: "워크스페이스, 도구, 정체성.",
     activity: "브라우저 로컬 도구 활동 요약입니다.",
-    overview: "상태, 진입점, 상태 정보.",
     workboard: "에이전트 작업 대기열 및 세션 인계.",
     worktrees: "격리된 에이전트 작업 체크아웃 및 복구 스냅샷입니다.",
     channels: "채널 및 설정.",
+    connection: "Gateway 엔드포인트, 자격 증명 및 핸드셰이크 상태.",
     sessions: "활성 세션 및 기본값.",
     usage: "API 사용량 및 비용.",
     cron: "웨이크업 및 반복 실행.",
@@ -1286,7 +1287,11 @@ export const ko: TranslationMap = {
     eventUnarchived: "보관 해제됨",
     eventStale: "오래된 세션",
   },
-  overview: {
+  connection: {
+    lostTitle: "Gateway 연결이 끊어졌습니다",
+    reconnecting: "다시 연결 중…",
+    offlineHint: "연결이 복구될 때까지 실시간 업데이트와 작업이 일시 중지됩니다.",
+    retryNow: "지금 다시 시도",
     access: {
       title: "Gateway 액세스",
       subtitle: "대시보드가 연결되는 위치와 인증 방식입니다.",
@@ -1295,8 +1300,7 @@ export const ko: TranslationMap = {
       password: "비밀번호(저장되지 않음)",
       passwordPlaceholder: "시스템 또는 공유 비밀번호",
       sessionKey: "기본 세션 키",
-      language: "언어",
-      connectHint: "연결 변경 사항을 적용하려면 Connect를 클릭하세요.",
+      connectHint: "연결 변경 사항을 적용하려면 연결을 클릭하세요.",
       trustedProxy: "신뢰할 수 있는 프록시를 통해 인증되었습니다.",
       showToken: "토큰 표시",
       hideToken: "토큰 숨기기",
@@ -1307,134 +1311,54 @@ export const ko: TranslationMap = {
     },
     snapshot: {
       title: "스냅샷",
-      subtitle: "최신 Gateway 핸드셰이크 정보입니다.",
+      subtitle: "최신 Gateway 핸드셰이크 정보.",
       status: "상태",
       uptime: "가동 시간",
       tickInterval: "틱 간격",
       lastChannelsRefresh: "마지막 채널 새로고침",
-      channelsHint:
-        "Channels를 사용해 WhatsApp, Telegram, Discord, Signal 또는 iMessage를 연결하세요.",
     },
-    stats: {
-      instances: "인스턴스",
-      instancesHint: "최근 5분 내 프레즌스 비콘입니다.",
-      sessions: "세션",
-      sessionsHint: "Gateway가 추적 중인 최근 세션 키입니다.",
-      cron: "Cron",
-      cronNext: "다음 실행 {time}",
-    },
-    notes: {
-      title: "메모",
-      subtitle: "원격 제어 설정을 위한 빠른 안내입니다.",
-      tailscaleTitle: "Tailscale serve",
-      tailscaleText: "Gateway를 루프백과 tailnet 인증으로 유지하려면 serve 모드를 권장합니다.",
-      sessionTitle: "세션 관리",
-      sessionText: "컨텍스트를 재설정하려면 /new 또는 sessions.patch를 사용하세요.",
-      cronTitle: "Cron 알림",
-      cronText: "반복 실행에는 격리된 세션을 사용하세요.",
-    },
-    auth: {
-      required:
-        "이 Gateway에는 인증이 필요합니다. 토큰이나 비밀번호를 추가한 다음 Connect를 클릭하세요.",
-      failed:
-        "인증에 실패했습니다. {command}로 토큰이 포함된 URL을 다시 복사하거나 토큰을 업데이트한 다음 Connect를 클릭하세요.",
-    },
-    pairing: {
-      hint: "이 디바이스는 gateway host의 페어링 승인이 필요합니다.",
-      scopeUpgradeTitle: "범위 업그레이드가 승인 대기 중입니다.",
-      scopeUpgradeSummary:
-        "이 기기는 이미 페어링되어 있지만, 요청된 더 넓은 범위는 승인을 기다리고 있습니다.",
-      roleUpgradeTitle: "역할 업그레이드가 승인 대기 중입니다.",
-      roleUpgradeSummary:
-        "이 기기는 이미 페어링되어 있지만, 요청된 역할 변경은 승인을 기다리고 있습니다.",
-      metadataUpgradeTitle: "기기 메타데이터 변경이 승인 대기 중입니다.",
-      metadataUpgradeSummary:
-        "이 기기는 이미 페어링되어 있지만, 메타데이터 변경은 승인을 기다리고 있습니다.",
-      mobileHint:
-        "모바일에서 사용 중이신가요? 데스크톱에서 openclaw dashboard --no-open으로 전체 URL(#token=... 포함)을 복사하세요.",
-      docsTitle: "기기 페어링 문서(새 탭에서 열림)",
-      docsLink: "문서: 기기 페어링",
-    },
-    insecure: {
-      hint: "이 페이지는 HTTP이므로 브라우저가 디바이스 ID를 차단합니다. HTTPS(Tailscale Serve)를 사용하거나 gateway host에서 {url}을 여세요.",
-      stayHttp: "HTTP를 계속 사용해야 한다면 {config}를 설정하세요(토큰 전용).",
-    },
-    connection: {
+    help: {
       title: "연결 방법",
-      step1: "호스트 머신에서 gateway를 시작하세요:",
+      step1: "호스트 머신에서 Gateway를 시작하세요:",
       step2: "토큰이 포함된 대시보드 URL을 가져오세요:",
       step3: "위에 WebSocket URL과 토큰을 붙여넣거나, 토큰이 포함된 URL을 직접 여세요.",
-      step4: "또는 재사용 가능한 토큰을 생성하세요:",
-      docsHint: "원격 액세스에는 Tailscale Serve를 권장합니다. ",
       docsLink: "문서 읽기 →",
-      authDocsTitle: "Control UI 인증 문서(새 탭에서 열림)",
-      authDocsLink: "문서: Control UI 인증",
-      tailscaleDocsTitle: "Tailscale Serve 문서(새 탭에서 열림)",
-      tailscaleDocsLink: "문서: Tailscale Serve",
-      insecureHttpDocsTitle: "안전하지 않은 HTTP 문서(새 탭에서 열림)",
-      insecureHttpDocsLink: "문서: 안전하지 않은 HTTP",
-      copyCommand: "명령 복사",
-      copyCommandAria: "명령 복사: {command}",
+      copyCommand: "명령어 복사",
+      copyCommandAria: "명령어 복사: {command}",
     },
-    cards: {
-      cost: "비용",
+  },
+  attention: {
+    cronFailed: "cron 작업 {count}개 실패",
+    cronOverdue: "cron 작업 {count}개 기한 초과",
+    modelAuthExpired: "모델 인증 만료됨: {providers}",
+    modelAuthExpiring: "모델 인증 만료 예정: {providers}",
+  },
+  palette: {
+    placeholder: "채팅 및 명령어 검색…",
+    noResults: "결과 없음",
+    categories: {
+      search: "검색",
+      navigation: "탐색",
       skills: "Skills",
-      recentSessions: "최근 세션",
-      modelAuth: "모델 인증",
-      modelAuthOk: "{count}개 정상",
-      modelAuthExpired: "{count}개 만료됨",
-      modelAuthExpiring: "{count}개 곧 만료됨",
-      modelAuthProviders: "{count}개 제공업체",
-      modelAuthUsageLeft: "{pct}% 남음",
-      modelAuthExpiresIn: "{when} 후 만료",
-      modelAuthAttentionExpiredTitle: "모델 인증이 만료됨",
-      modelAuthAttentionExpiringTitle: "모델 인증이 곧 만료됨",
-      modelAuthAttentionExpiredDesc: "{providers} — openclaw models auth로 다시 인증하세요",
-      modelAuthAttentionExpiringEntry: "{provider} ({when})",
     },
-    attention: {
-      title: "주의",
+    items: {
+      sessions: "세션",
+      scheduled: "예약됨",
+      skills: "Skills",
+      plugins: "플러그인",
+      settings: "설정",
+      agents: "에이전트",
+      shellCommand: "셸 명령",
+      debugMode: "디버그 모드",
     },
-    eventLog: {
-      title: "이벤트 로그",
+    descriptions: {
+      shellCommand: "셸 실행",
+      debugMode: "디버그 전환",
     },
-    logTail: {
-      title: "Gateway 로그",
-    },
-    quickActions: {
-      newSession: "새 세션",
-      automation: "자동화",
-      refreshAll: "모두 새로고침",
-      terminal: "터미널",
-    },
-    palette: {
-      placeholder: "명령을 입력하세요…",
-      noResults: "결과 없음",
-      categories: {
-        search: "검색",
-        navigation: "탐색",
-        skills: "Skills",
-      },
-      items: {
-        overview: "개요",
-        sessions: "세션",
-        scheduled: "예약됨",
-        skills: "Skills",
-        plugins: "플러그인",
-        settings: "설정",
-        agents: "에이전트",
-        shellCommand: "셸 명령",
-        debugMode: "디버그 모드",
-      },
-      descriptions: {
-        shellCommand: "셸 실행",
-        debugMode: "디버그 전환",
-      },
-      footer: {
-        navigate: "탐색",
-        select: "선택",
-        close: "닫기",
-      },
+    footer: {
+      navigate: "이동",
+      select: "선택",
+      close: "닫기",
     },
   },
   dreaming: {
@@ -1936,12 +1860,6 @@ export const ko: TranslationMap = {
           "openclaw dashboard --no-open으로 dashboard를 다시 열어 현재 URL과 인증 세부 정보를 다시 복사하세요.",
       },
     },
-  },
-  connection: {
-    lostTitle: "Gateway 연결이 끊어졌습니다",
-    reconnecting: "다시 연결 중…",
-    offlineHint: "연결이 복구될 때까지 실시간 업데이트와 작업이 일시 중지됩니다.",
-    retryNow: "지금 다시 시도",
   },
   chat: {
     disconnected: "Gateway와 연결이 끊어졌습니다.",
