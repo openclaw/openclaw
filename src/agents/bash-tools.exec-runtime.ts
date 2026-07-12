@@ -374,6 +374,7 @@ export function buildApprovalPendingMessage(params: {
   approvalSlug: string;
   approvalId: string;
   allowedDecisions?: readonly ExecApprovalDecision[];
+  ask?: string | null;
   command: string;
   cwd: string | undefined;
   host: "gateway" | "node";
