@@ -6,6 +6,7 @@ import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
 } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
@@ -42,6 +43,13 @@ const OPENAI_ENV_KEY_REF = {
 } as const;
 
 type SecretsRuntimeEnvSnapshot = ReturnType<typeof captureEnv>;
+
+function readPluginWebSearchApiKey(config: OpenClawConfig, pluginId: string): unknown {
+  const pluginConfig = config.plugins?.entries?.[pluginId]?.config as
+    | { webSearch?: { apiKey?: unknown } }
+    | undefined;
+  return pluginConfig?.webSearch?.apiKey;
+}
 
 function beginSecretsRuntimeIsolationForTest(): SecretsRuntimeEnvSnapshot {
   const envSnapshot = captureEnv([
@@ -272,6 +280,101 @@ describe("secrets runtime snapshot core lanes", () => {
       provider: "default",
       id: "OPENAI_API_KEY",
     });
+  });
+
+  it("does not resolve a disabled web-search provider SecretRef", async () => {
+    const missingRef = {
+      source: "env",
+      provider: "default",
+      id: "MISSING_GEMINI_WEB_SEARCH_KEY",
+    } as const;
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: { web: { search: { enabled: false, provider: "gemini" } } },
+        plugins: {
+          entries: {
+            google: { enabled: true, config: { webSearch: { apiKey: missingRef } } },
+          },
+        },
+      }),
+      env: {},
+      includeAuthStoreRefs: false,
+      loadablePluginOrigins: new Map([["google", "bundled"]]),
+    });
+
+    expect(readPluginWebSearchApiKey(snapshot.config, "google")).toEqual(missingRef);
+    expect(snapshot.webTools.search.selectedProvider).toBeUndefined();
+    expect(snapshot.warnings).toContainEqual(
+      expect.objectContaining({
+        code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+        path: "plugins.entries.google.config.webSearch.apiKey",
+      }),
+    );
+  });
+
+  it("resolves only the selected web-search provider SecretRef", async () => {
+    const missingRef = {
+      source: "env",
+      provider: "default",
+      id: "MISSING_GEMINI_WEB_SEARCH_KEY",
+    } as const;
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: { web: { search: { provider: "brave" } } },
+        plugins: {
+          entries: {
+            brave: {
+              enabled: true,
+              config: {
+                webSearch: {
+                  apiKey: { source: "env", provider: "default", id: "BRAVE_WEB_SEARCH_KEY" },
+                },
+              },
+            },
+            google: { enabled: true, config: { webSearch: { apiKey: missingRef } } },
+          },
+        },
+      }),
+      env: { BRAVE_WEB_SEARCH_KEY: "brave-runtime-key" },
+      includeAuthStoreRefs: false,
+      loadablePluginOrigins: new Map([
+        ["brave", "bundled"],
+        ["google", "bundled"],
+      ]),
+    });
+
+    expect(readPluginWebSearchApiKey(snapshot.config, "brave")).toBe("brave-runtime-key");
+    expect(readPluginWebSearchApiKey(snapshot.config, "google")).toEqual(missingRef);
+    expect(snapshot.webTools.search.selectedProvider).toBe("brave");
+  });
+
+  it("still rejects an unresolved SecretRef for the selected web-search provider", async () => {
+    await expect(
+      prepareSecretsRuntimeSnapshot({
+        config: asConfig({
+          tools: { web: { search: { provider: "gemini" } } },
+          plugins: {
+            entries: {
+              google: {
+                enabled: true,
+                config: {
+                  webSearch: {
+                    apiKey: {
+                      source: "env",
+                      provider: "default",
+                      id: "MISSING_GEMINI_WEB_SEARCH_KEY",
+                    },
+                  },
+                },
+              },
+            },
+          },
+        }),
+        env: {},
+        includeAuthStoreRefs: false,
+        loadablePluginOrigins: new Map([["google", "bundled"]]),
+      }),
+    ).rejects.toThrow("[WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK]");
   });
 
   it("activates runtime snapshots for loadConfig", async () => {

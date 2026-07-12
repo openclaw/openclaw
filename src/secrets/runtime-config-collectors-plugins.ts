@@ -76,6 +76,7 @@ export function collectPluginConfigAssignments(params: {
           pluginId,
           {
             origin: metadata.origin,
+            contracts: metadata.contracts,
             bundledDefaultEnabled: secretInputs.bundledDefaultEnabled,
             paths: secretInputs.paths,
           },
@@ -123,6 +124,9 @@ export function collectPluginConfigAssignments(params: {
       pluginConfig,
       secretPaths: secretInputs.paths,
       active: enableState.enabled,
+      runtimeOwnedPathPrefixes: secretInputs.contracts?.webSearchProviders?.length
+        ? ["webSearch."]
+        : [],
       inactiveReason: enableState.reason ?? "plugin is disabled.",
       defaults: params.defaults,
       context: params.context,
@@ -135,12 +139,21 @@ function collectConfiguredPluginSecretAssignments(params: {
   pluginConfig: Record<string, unknown>;
   secretPaths: ReadonlyArray<{ path: string; expected?: "string" }>;
   active: boolean;
+  runtimeOwnedPathPrefixes?: readonly string[];
   inactiveReason: string;
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
 }): void {
   const seenPaths = new Set<string>();
   for (const secretPath of params.secretPaths) {
+    if (
+      params.active &&
+      params.runtimeOwnedPathPrefixes?.some((prefix) => secretPath.path.startsWith(prefix))
+    ) {
+      // Web provider selection owns these credentials. Resolving them here would make an
+      // inactive or non-selected provider block the whole runtime snapshot.
+      continue;
+    }
     for (const match of collectPluginConfigContractMatches({
       root: params.pluginConfig,
       pathPattern: secretPath.path,

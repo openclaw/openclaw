@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { findBundledPluginMetadataById } from "./bundled-plugin-metadata.js";
 import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
-import type { PluginManifestConfigContracts } from "./manifest.js";
+import type { PluginManifestConfigContracts, PluginManifestContracts } from "./manifest.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 export { collectPluginConfigContractMatches } from "./config-contract-matches.js";
@@ -12,6 +12,8 @@ export { collectPluginConfigContractMatches } from "./config-contract-matches.js
 type PluginConfigContractMetadata = {
   /** Runtime origin that supplied the contract metadata. */
   origin: PluginOrigin;
+  /** Capability contracts that determine runtime ownership of config subtrees. */
+  contracts?: PluginManifestContracts;
   /** Manifest-declared config contract paths used by secret/security/config scanners. */
   configContracts: PluginManifestConfigContracts;
 };
@@ -36,6 +38,7 @@ export function resolvePluginConfigContractsById(params: {
     normalizeSortedUniqueStringEntries(params.fallbackBundledPluginIds),
   );
   const bundledContractFallbacks = new Map<string, PluginManifestConfigContracts | undefined>();
+  const bundledCapabilityContractFallbacks = new Map<string, PluginManifestContracts | undefined>();
   const findBundledConfigContracts = (
     pluginId: string,
   ): PluginManifestConfigContracts | undefined => {
@@ -57,6 +60,7 @@ export function resolvePluginConfigContractsById(params: {
     });
     for (const plugin of registry.plugins) {
       bundledContractFallbacks.set(plugin.id, plugin.configContracts);
+      bundledCapabilityContractFallbacks.set(plugin.id, plugin.contracts);
     }
     if (bundledContractFallbacks.get(pluginId) === undefined) {
       const bundledMetadata = findBundledPluginMetadataById(pluginId, {
@@ -66,11 +70,22 @@ export function resolvePluginConfigContractsById(params: {
       if (bundledMetadata?.manifest.configContracts) {
         bundledContractFallbacks.set(pluginId, bundledMetadata.manifest.configContracts);
       }
+      if (bundledMetadata?.manifest.contracts) {
+        bundledCapabilityContractFallbacks.set(pluginId, bundledMetadata.manifest.contracts);
+      }
     }
     if (!bundledContractFallbacks.has(pluginId)) {
       bundledContractFallbacks.set(pluginId, undefined);
     }
     return bundledContractFallbacks.get(pluginId);
+  };
+  const findBundledCapabilityContracts = (
+    pluginId: string,
+  ): PluginManifestContracts | undefined => {
+    if (!bundledCapabilityContractFallbacks.has(pluginId)) {
+      findBundledConfigContracts(pluginId);
+    }
+    return bundledCapabilityContractFallbacks.get(pluginId);
   };
 
   const resolvedPluginOrigins = new Map<string, PluginOrigin>();
@@ -90,6 +105,7 @@ export function resolvePluginConfigContractsById(params: {
     }
     matches.set(plugin.id, {
       origin: plugin.origin,
+      ...(plugin.contracts ? { contracts: plugin.contracts } : {}),
       configContracts: plugin.configContracts,
     });
   }
@@ -103,11 +119,15 @@ export function resolvePluginConfigContractsById(params: {
           fallbackBundledPluginIds.has(pluginId));
       if (shouldHydrateBundledMatch) {
         const bundledConfigContracts = findBundledConfigContracts(pluginId);
+        const bundledCapabilityContracts = findBundledCapabilityContracts(pluginId);
         if (bundledConfigContracts) {
           // Bundled metadata can carry richer contract declarations than installed registry entries;
           // installed declarations still win except for bundled secret input coverage.
           matches.set(pluginId, {
             origin: fallbackBundledPluginIds.has(pluginId) ? "bundled" : existing.origin,
+            ...(existing.contracts || bundledCapabilityContracts
+              ? { contracts: existing.contracts ?? bundledCapabilityContracts }
+              : {}),
             configContracts: {
               ...bundledConfigContracts,
               ...existing.configContracts,
@@ -131,11 +151,13 @@ export function resolvePluginConfigContractsById(params: {
         continue;
       }
       const bundledConfigContracts = findBundledConfigContracts(pluginId);
+      const bundledCapabilityContracts = findBundledCapabilityContracts(pluginId);
       if (!bundledConfigContracts) {
         continue;
       }
       matches.set(pluginId, {
         origin: "bundled",
+        ...(bundledCapabilityContracts ? { contracts: bundledCapabilityContracts } : {}),
         configContracts: bundledConfigContracts,
       });
     }
