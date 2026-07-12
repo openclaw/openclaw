@@ -3159,6 +3159,12 @@ async function runEmbeddedAgentInternal(
             didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
             heartbeatToolResponse: attempt.heartbeatToolResponse,
           });
+          log.debug(
+            `[release-debug] embedded payloads runId=${params.runId} ` +
+              `assistantTexts=${attempt.assistantTexts.length} ` +
+              `currentAssistant=${currentAttemptAssistant ? "yes" : "no"} ` +
+              `lastAssistant=${attempt.lastAssistant ? "yes" : "no"} payloads=${payloads.length}`,
+          );
           const payloadsWithToolMedia = mergeAttemptToolMediaPayloads({
             payloads,
             toolMediaUrls: attempt.toolMediaUrls,

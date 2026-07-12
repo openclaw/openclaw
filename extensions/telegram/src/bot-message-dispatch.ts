@@ -1851,6 +1851,11 @@ export const dispatchTelegramMessage = async ({
                     return undefined;
                   },
                   deliver: async (payload, info) => {
+                    logVerbose(
+                      `[release-debug] telegram deliver kind=${info.kind} ` +
+                        `text=${resolveSendableOutboundReplyParts(payload).trimmedText ? "yes" : "no"} ` +
+                        `media=${resolveSendableOutboundReplyParts(payload).hasMedia ? "yes" : "no"}`,
+                    );
                     if (isDispatchSuperseded()) {
                       return;
                     }
@@ -2401,6 +2406,11 @@ export const dispatchTelegramMessage = async ({
         return { kind: "completed" };
       }
       ({ queuedFinal } = turnResult.dispatchResult);
+      logVerbose(
+        `[release-debug] telegram dispatch result dispatched=yes queuedFinal=${queuedFinal ? "yes" : "no"} ` +
+          `delivered=${deliveryState.snapshot().delivered ? "yes" : "no"} ` +
+          `roomEvent=${isRoomEvent ? "yes" : "no"}`,
+      );
       suppressSilentReplyFallback =
         turnResult.dispatchResult.sourceReplyDeliveryMode === "message_tool_only";
     } catch (err) {
