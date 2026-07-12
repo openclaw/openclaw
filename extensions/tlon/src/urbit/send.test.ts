@@ -82,3 +82,23 @@ describe("sendDm", () => {
     expect(result.receipt.threadId).toBe("~nec/general");
   });
 });
+
+describe("buildMediaStory", () => {
+  it("keeps image URLs with fragments as image blocks", async () => {
+    const { buildMediaStory } = await import("./send.js");
+
+    expect(buildMediaStory("caption", "https://cdn.example/image.png#preview")).toEqual([
+      { inline: ["caption"] },
+      {
+        block: {
+          image: {
+            src: "https://cdn.example/image.png#preview",
+            height: 0,
+            width: 0,
+            alt: "",
+          },
+        },
+      },
+    ]);
+  });
+});
