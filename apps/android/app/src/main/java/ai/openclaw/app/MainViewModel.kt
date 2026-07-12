@@ -395,6 +395,7 @@ class MainViewModel(
   val execApprovals: StateFlow<List<GatewayExecApprovalSummary>> = runtimeState(initial = emptyList()) { it.execApprovals }
   val execApprovalsRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.execApprovalsRefreshing }
   val execApprovalsErrorText: StateFlow<String?> = runtimeState(initial = null) { it.execApprovalsErrorText }
+  val execApprovalsNotice: StateFlow<GatewayExecApprovalNotice?> = runtimeState(initial = null) { it.execApprovalsNotice }
 
   val canvas: CanvasController
     get() = ensureRuntime().canvas
@@ -541,16 +542,6 @@ class MainViewModel(
         }
       }
     }
-  }
-
-  /** Per-gateway proxy credential headers; values are secrets and must never be logged. */
-  fun gatewayCustomHeaders(stableId: String): Map<String, String> = prefs.loadGatewayCustomHeaders(stableId)
-
-  fun setGatewayCustomHeaders(
-    stableId: String,
-    headers: Map<String, String>,
-  ) {
-    prefs.saveGatewayCustomHeaders(stableId, headers)
   }
 
   /** Marks onboarding complete and starts the runtime before UI observes connected-state flows. */
@@ -770,12 +761,6 @@ class MainViewModel(
     }
   }
 
-  fun connectInBackground(endpoint: GatewayEndpoint) {
-    viewModelScope.launch(Dispatchers.Default) {
-      ensureRuntime().connectSwitchingGateway(endpoint)
-    }
-  }
-
   fun connect(
     endpoint: GatewayEndpoint,
     token: String?,
@@ -980,6 +965,10 @@ class MainViewModel(
     decision: String,
   ) {
     ensureRuntime().resolveExecApproval(id = id, decision = decision)
+  }
+
+  fun dismissExecApprovalsNotice(expected: GatewayExecApprovalNotice) {
+    ensureRuntime().dismissExecApprovalsNotice(expected)
   }
 
   fun refreshChannels() {
