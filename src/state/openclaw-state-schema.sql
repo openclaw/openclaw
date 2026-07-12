@@ -1551,6 +1551,8 @@ CREATE TABLE IF NOT EXISTS durable_runtime_wake_delivery_attempts (
   delivered_at INTEGER,
   failed_at INTEGER,
   unknown_at INTEGER,
+  delivery_claimed_by TEXT,
+  delivery_claim_expires_at INTEGER,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   metadata_json TEXT,
@@ -1564,6 +1566,10 @@ CREATE INDEX IF NOT EXISTS idx_durable_runtime_wake_delivery_attempts_wake
 
 CREATE INDEX IF NOT EXISTS idx_durable_runtime_wake_delivery_attempts_status
   ON durable_runtime_wake_delivery_attempts(status, scheduled_at, delivery_attempt_id);
+
+CREATE INDEX IF NOT EXISTS idx_durable_runtime_wake_delivery_attempts_claim
+  ON durable_runtime_wake_delivery_attempts(status, delivery_claim_expires_at, updated_at)
+  WHERE status = 'attempted';
 
 CREATE INDEX IF NOT EXISTS idx_durable_runtime_wake_delivery_attempts_route
   ON durable_runtime_wake_delivery_attempts(route_kind, route_ref, status, scheduled_at)

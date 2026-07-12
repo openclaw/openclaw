@@ -115,13 +115,18 @@ describe("openclaw state database", () => {
       )
       .all() as Array<{ name: string }>;
     expect(tables.map((row) => row.name)).toEqual([
+      "durable_runtime_continuation_cleanup",
+      "durable_runtime_dedupe_ledger",
       "durable_runtime_events",
       "durable_runtime_links",
+      "durable_runtime_parent_wakes",
       "durable_runtime_refs",
       "durable_runtime_runs",
       "durable_runtime_signals",
       "durable_runtime_steps",
       "durable_runtime_timers",
+      "durable_runtime_uncertainty_facts",
+      "durable_runtime_wake_delivery_attempts",
     ]);
     const indexes = database.db
       .prepare(
@@ -133,8 +138,19 @@ describe("openclaw state database", () => {
       )
       .all() as Array<{ name: string }>;
     expect(indexes.map((row) => row.name)).toEqual([
+      "idx_durable_runtime_cleanup_dedupe",
+      "idx_durable_runtime_cleanup_run",
+      "idx_durable_runtime_cleanup_target",
+      "idx_durable_runtime_dedupe_ledger_status",
       "idx_durable_runtime_events_type",
       "idx_durable_runtime_links_child",
+      "idx_durable_runtime_parent_wakes_dedupe",
+      "idx_durable_runtime_parent_wakes_owner",
+      "idx_durable_runtime_parent_wakes_parent_run",
+      "idx_durable_runtime_parent_wakes_parent_session",
+      "idx_durable_runtime_parent_wakes_report_route",
+      "idx_durable_runtime_parent_wakes_status",
+      "idx_durable_runtime_parent_wakes_target",
       "idx_durable_runtime_refs_run",
       "idx_durable_runtime_runs_idempotency",
       "idx_durable_runtime_runs_report_route",
@@ -145,6 +161,13 @@ describe("openclaw state database", () => {
       "idx_durable_runtime_steps_idempotency",
       "idx_durable_runtime_steps_status",
       "idx_durable_runtime_timers_due",
+      "idx_durable_runtime_uncertainty_dedupe",
+      "idx_durable_runtime_uncertainty_source",
+      "idx_durable_runtime_uncertainty_status",
+      "idx_durable_runtime_wake_delivery_attempts_claim",
+      "idx_durable_runtime_wake_delivery_attempts_route",
+      "idx_durable_runtime_wake_delivery_attempts_status",
+      "idx_durable_runtime_wake_delivery_attempts_wake",
     ]);
   });
 

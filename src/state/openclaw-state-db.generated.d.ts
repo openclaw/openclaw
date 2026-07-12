@@ -700,6 +700,8 @@ export interface DurableRuntimeWakeDeliveryAttempts {
   dedupe_key: string;
   delivered_at: number | null;
   delivery_attempt_id: string;
+  delivery_claim_expires_at: number | null;
+  delivery_claimed_by: string | null;
   error_message: string | null;
   evidence_json: string | null;
   failed_at: number | null;
