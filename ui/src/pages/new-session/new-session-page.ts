@@ -35,7 +35,11 @@ type DraftBranches = {
 type DraftNode = {
   nodeId: string;
   displayName: string;
+  canExec: boolean;
+  canBrowse: boolean;
 };
+
+type BrowserTarget = { nodeId: string; label: string };
 
 const WORKTREE_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
@@ -61,6 +65,7 @@ class NewSessionPage extends OpenClawLightDomElement {
   @state() private browserLoading = false;
   @state() private browserError: string | null = null;
   @state() private browserListing: FsListDirResult | null = null;
+  @state() private browserTarget: BrowserTarget | null = null;
 
   private openedFor: string | null = null;
   private agentsHydrated = false;
@@ -109,6 +114,10 @@ class NewSessionPage extends OpenClawLightDomElement {
   private selectedAgent() {
     const agentId = normalizeAgentId(this.agentId);
     return this.agents().find((agent) => normalizeAgentId(agent.id) === agentId);
+  }
+
+  private execNodes(): DraftNode[] {
+    return this.nodes.filter((node) => node.canExec);
   }
 
   private isAdmin(): boolean {
@@ -166,26 +175,50 @@ class NewSessionPage extends OpenClawLightDomElement {
     try {
       const result = await client.request<{ nodes?: unknown }>("node.list", {});
       const rawNodes = Array.isArray(result?.nodes) ? (result.nodes as Array<unknown>) : [];
-      this.nodes = rawNodes.flatMap((raw) => {
-        const node = raw as {
-          nodeId?: unknown;
-          displayName?: unknown;
-          connected?: unknown;
-          commands?: unknown;
-        };
-        const nodeId = normalizeOptionalString(node.nodeId);
-        const commands = Array.isArray(node.commands) ? (node.commands as string[]) : [];
-        if (!nodeId || node.connected !== true || !commands.includes("system.run")) {
-          return [];
-        }
-        return [{ nodeId, displayName: normalizeOptionalString(node.displayName) ?? nodeId }];
-      });
+      this.nodes = rawNodes
+        .flatMap((raw) => {
+          const node = raw as {
+            nodeId?: unknown;
+            displayName?: unknown;
+            connected?: unknown;
+            commands?: unknown;
+          };
+          const nodeId = normalizeOptionalString(node.nodeId);
+          const commands = Array.isArray(node.commands)
+            ? node.commands.filter((command): command is string => typeof command === "string")
+            : [];
+          if (!nodeId) {
+            return [];
+          }
+          const connected = node.connected === true;
+          const canExec = connected && commands.includes("system.run");
+          return [
+            {
+              nodeId,
+              displayName: normalizeOptionalString(node.displayName) ?? nodeId,
+              canExec,
+              canBrowse: canExec && commands.includes("fs.listDir"),
+            },
+          ];
+        })
+        .toSorted(
+          (left, right) =>
+            left.displayName.localeCompare(right.displayName) ||
+            left.nodeId.localeCompare(right.nodeId),
+        );
     } catch {
       this.nodes = [];
     }
   }
 
   private maybeLoadBranches() {
+    if (this.execNode) {
+      this.branchesRequestToken += 1;
+      this.branches = null;
+      this.branchesLoading = false;
+      this.baseRef = "";
+      return;
+    }
     const repoRoot = this.folder.trim() || this.workspacePath();
     const agent = this.selectedAgent();
     const usesWorkspace = repoRoot === this.workspacePath();
@@ -221,6 +254,9 @@ class NewSessionPage extends OpenClawLightDomElement {
   }
 
   private worktreeAvailable(): boolean {
+    if (this.execNode) {
+      return false;
+    }
     if (this.usesCustomFolder()) {
       return this.isAdmin();
     }
@@ -236,7 +272,10 @@ class NewSessionPage extends OpenClawLightDomElement {
     if (this.agents().length === 0) {
       return false;
     }
-    if (this.usesCustomFolder() && (!this.worktree || !this.isAdmin())) {
+    if (this.usesCustomFolder() && (!this.isAdmin() || (!this.execNode && !this.worktree))) {
+      return false;
+    }
+    if (this.execNode && this.worktree) {
       return false;
     }
     if (this.worktree && !this.worktreeAvailable()) {
@@ -282,25 +321,39 @@ class NewSessionPage extends OpenClawLightDomElement {
 
   private selectAgentId(agentId: string) {
     this.agentId = normalizeAgentId(agentId);
-    this.folder = this.workspacePath();
+    this.folder = this.execNode ? "" : this.workspacePath();
     this.worktree = false;
     this.worktreeName = "";
     this.closeBrowser();
     this.maybeLoadBranches();
   }
 
-  private applyFolder(folder: string) {
+  private applyFolder(folder: string, execNode = this.execNode) {
+    this.execNode = execNode;
     this.folder = folder.trim();
-    if (this.usesCustomFolder()) {
+    if (this.execNode) {
+      this.worktree = false;
+    } else if (this.usesCustomFolder()) {
       // Explicit host paths only materialize through a managed worktree.
       this.worktree = true;
     }
     this.maybeLoadBranches();
   }
 
+  private selectExecNode(execNode: string) {
+    if (execNode === this.execNode) {
+      return;
+    }
+    this.execNode = execNode;
+    // Folder paths belong to one host; never carry a Gateway or node path to another host.
+    this.folder = execNode ? "" : this.workspacePath();
+    this.worktree = false;
+    this.closeBrowser();
+    this.maybeLoadBranches();
+  }
+
   private browseAvailable(): boolean {
-    // fs.listDir walks the gateway host; node-bound sessions need a typed path.
-    return this.isAdmin() && !this.execNode;
+    return this.isAdmin();
   }
 
   private closeBrowser() {
@@ -309,6 +362,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.browserLoading = false;
     this.browserError = null;
     this.browserListing = null;
+    this.browserTarget = null;
   }
 
   private toggleBrowser() {
@@ -317,13 +371,33 @@ class NewSessionPage extends OpenClawLightDomElement {
       return;
     }
     this.browserOpen = true;
+    this.showBrowserRoot();
+  }
+
+  private showBrowserRoot() {
+    this.browserRequestToken += 1;
+    this.browserLoading = false;
+    this.browserError = null;
+    this.browserListing = null;
+    this.browserTarget = null;
+  }
+
+  private selectBrowserTarget(target: BrowserTarget) {
     const folder = this.folder.trim();
-    this.loadBrowser(folder.startsWith("/") || /^[A-Za-z]:[\\/]/.test(folder) ? folder : undefined);
+    const matchesCurrentTarget = target.nodeId === this.execNode;
+    const path =
+      matchesCurrentTarget &&
+      (folder.startsWith("/") || folder.startsWith("\\") || /^[A-Za-z]:[\\/]/.test(folder))
+        ? folder
+        : undefined;
+    this.browserTarget = target;
+    this.loadBrowser(path);
   }
 
   private loadBrowser(path: string | undefined) {
     const client = this.context?.gateway.snapshot.client;
-    if (!client) {
+    const target = this.browserTarget;
+    if (!client || !target) {
       return;
     }
     const requestId = ++this.browserRequestToken;
@@ -333,7 +407,10 @@ class NewSessionPage extends OpenClawLightDomElement {
     // request is in flight would let "Use this folder" apply the stale path.
     this.browserListing = null;
     void client
-      .request<FsListDirResult>("fs.listDir", path ? { path } : {})
+      .request<FsListDirResult>("fs.listDir", {
+        ...(path ? { path } : {}),
+        ...(target.nodeId ? { nodeId: target.nodeId } : {}),
+      })
       .then((result) => {
         if (requestId !== this.browserRequestToken) {
           return;
@@ -363,6 +440,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       return nothing;
     }
     const listing = this.browserListing;
+    const target = this.browserTarget;
     return html`
       <div class="new-session-page__browser">
         <div class="new-session-page__browser-head">
@@ -371,13 +449,23 @@ class NewSessionPage extends OpenClawLightDomElement {
             class="new-session-page__browser-nav"
             title=${t("newSession.browserUp")}
             aria-label=${t("newSession.browserUp")}
-            ?disabled=${!listing?.parent}
-            @click=${() => listing?.parent && this.loadBrowser(listing.parent)}
+            ?disabled=${!target || (!listing && this.browserLoading)}
+            @click=${() => {
+              if (listing?.parent) {
+                this.loadBrowser(listing.parent);
+              } else if (target) {
+                this.showBrowserRoot();
+              }
+            }}
           >
             ${icons.arrowLeft}
           </button>
           <span class="new-session-page__browser-path"
-            >${listing?.path ?? (this.browserLoading ? t("common.loading") : "")}</span
+            >${target
+              ? `${target.label}${listing?.path ? ` · ${listing.path}` : ""}`
+              : t("newSession.where")}${this.browserLoading
+              ? ` · ${t("common.loading")}`
+              : ""}</span
           >
           <button
             type="button"
@@ -393,36 +481,72 @@ class NewSessionPage extends OpenClawLightDomElement {
           ? html`<div class="new-session-page__error">${this.browserError}</div>`
           : nothing}
         <div class="new-session-page__browser-list" role="listbox">
+          ${!target
+            ? html`
+                <button
+                  type="button"
+                  class="new-session-page__browser-entry"
+                  @click=${() =>
+                    this.selectBrowserTarget({ nodeId: "", label: t("newSession.gateway") })}
+                >
+                  <span class="new-session-page__target-icon" aria-hidden="true"
+                    >${icons.monitor}</span
+                  >
+                  <span>${t("newSession.gateway")}</span>
+                </button>
+                ${this.nodes.map(
+                  (node) => html`
+                    <button
+                      type="button"
+                      class="new-session-page__browser-entry"
+                      ?disabled=${!node.canBrowse}
+                      @click=${() =>
+                        this.selectBrowserTarget({
+                          nodeId: node.nodeId,
+                          label: node.displayName,
+                        })}
+                    >
+                      <span class="new-session-page__target-icon" aria-hidden="true"
+                        >${icons.monitor}</span
+                      >
+                      <span>${node.displayName}</span>
+                    </button>
+                  `,
+                )}
+              `
+            : nothing}
           ${listing && listing.entries.length === 0 && !this.browserLoading
             ? html`<div class="new-session-page__browser-empty">
                 ${t("newSession.browserEmpty")}
               </div>`
             : nothing}
-          ${(listing?.entries ?? []).map(
-            (entry) => html`
-              <button
-                type="button"
-                class="new-session-page__browser-entry ${entry.hidden
-                  ? "new-session-page__browser-entry--hidden"
-                  : ""}"
-                @click=${() => this.loadBrowser(entry.path)}
-              >
-                <span class="new-session-page__target-icon" aria-hidden="true"
-                  >${icons.folder}</span
-                >
-                <span>${entry.name}</span>
-              </button>
-            `,
-          )}
+          ${target
+            ? (listing?.entries ?? []).map(
+                (entry) => html`
+                  <button
+                    type="button"
+                    class="new-session-page__browser-entry ${entry.hidden
+                      ? "new-session-page__browser-entry--hidden"
+                      : ""}"
+                    @click=${() => this.loadBrowser(entry.path)}
+                  >
+                    <span class="new-session-page__target-icon" aria-hidden="true"
+                      >${icons.folder}</span
+                    >
+                    <span>${entry.name}</span>
+                  </button>
+                `,
+              )
+            : nothing}
         </div>
         <div class="new-session-page__browser-actions">
           <button
             type="button"
             class="new-session-page__browser-use"
-            ?disabled=${!listing}
+            ?disabled=${!listing || !target}
             @click=${() => {
-              if (listing) {
-                this.applyFolder(listing.path);
+              if (listing && target) {
+                this.applyFolder(listing.path, target.nodeId);
                 this.closeBrowser();
               }
             }}
@@ -436,6 +560,7 @@ class NewSessionPage extends OpenClawLightDomElement {
 
   private renderTargetBar() {
     const agents = this.agents();
+    const execNodes = this.execNodes();
     const isAdmin = this.isAdmin();
     const customFolder = this.usesCustomFolder();
     const worktreeAvailable = this.worktreeAvailable();
@@ -466,7 +591,7 @@ class NewSessionPage extends OpenClawLightDomElement {
               </label>
             `
           : nothing}
-        ${isAdmin && this.nodes.length > 0
+        ${isAdmin && execNodes.length > 0
           ? html`
               <label class="new-session-page__target" title=${t("newSession.where")}>
                 <span class="new-session-page__target-icon" aria-hidden="true"
@@ -476,14 +601,11 @@ class NewSessionPage extends OpenClawLightDomElement {
                   aria-label=${t("newSession.where")}
                   .value=${this.execNode}
                   @change=${(event: Event) => {
-                    this.execNode = (event.target as HTMLSelectElement).value;
-                    if (this.execNode) {
-                      this.closeBrowser();
-                    }
+                    this.selectExecNode((event.target as HTMLSelectElement).value);
                   }}
                 >
                   <option value="" ?selected=${!this.execNode}>${t("newSession.gateway")}</option>
-                  ${this.nodes.map(
+                  ${execNodes.map(
                     (node) => html`
                       <option value=${node.nodeId} ?selected=${this.execNode === node.nodeId}>
                         ${node.displayName}
@@ -502,7 +624,9 @@ class NewSessionPage extends OpenClawLightDomElement {
           <input
             type="text"
             aria-label=${t("newSession.folder")}
-            placeholder=${this.workspacePath() || t("newSession.folderPlaceholder")}
+            placeholder=${this.execNode
+              ? t("newSession.folderPlaceholder")
+              : this.workspacePath() || t("newSession.folderPlaceholder")}
             .value=${this.folder}
             ?disabled=${!isAdmin}
             @input=${(event: Event) => {

@@ -1040,6 +1040,7 @@ export const validateWorktreesBranchesParams = lazyCompile<WorktreesBranchesPara
   WorktreesBranchesParamsSchema,
 );
 export const validateFsListDirParams = lazyCompile<FsListDirParams>(FsListDirParamsSchema);
+export const validateFsListDirResult = lazyCompile<FsListDirResult>(FsListDirResultSchema);
 export const validateAgentsCreateParams = lazyCompile<AgentsCreateParams>(AgentsCreateParamsSchema);
 export const validateAgentsUpdateParams = lazyCompile<AgentsUpdateParams>(AgentsUpdateParamsSchema);
 export const validateAgentsDeleteParams = lazyCompile<AgentsDeleteParams>(AgentsDeleteParamsSchema);

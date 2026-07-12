@@ -19,6 +19,7 @@ import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import {
   NODE_EXEC_APPROVALS_COMMANDS,
+  NODE_FS_LIST_DIR_COMMAND,
   NODE_MCP_TOOLS_CALL_COMMAND,
   NODE_SYSTEM_RUN_COMMANDS,
 } from "../infra/node-commands.js";
@@ -370,6 +371,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     commands: [
       ...NODE_SYSTEM_RUN_COMMANDS,
       ...NODE_EXEC_APPROVALS_COMMANDS,
+      NODE_FS_LIST_DIR_COMMAND,
       NODE_MCP_TOOLS_CALL_COMMAND,
       ...pluginNodeHost.commands,
     ],

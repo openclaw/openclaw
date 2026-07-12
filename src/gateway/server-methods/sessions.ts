@@ -1272,19 +1272,35 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const cfg = context.getRuntimeConfig();
     const initialMessage = resolveOptionalInitialSessionMessage(p);
     const requestedCwd = normalizeOptionalString(p.cwd);
-    if (requestedCwd && p.worktree !== true) {
+    const requestedExecNode = normalizeOptionalString(p.execNode);
+    if (requestedCwd && p.worktree !== true && !requestedExecNode) {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "sessions.create cwd requires worktree=true"),
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "sessions.create cwd requires worktree=true or execNode",
+        ),
       );
       return;
     }
-    if (requestedCwd && !path.isAbsolute(requestedCwd)) {
+    const cwdIsAbsolute =
+      !requestedCwd ||
+      path.isAbsolute(requestedCwd) ||
+      Boolean(requestedExecNode && path.win32.isAbsolute(requestedCwd));
+    if (!cwdIsAbsolute) {
       respond(
         false,
         undefined,
         errorShape(ErrorCodes.INVALID_REQUEST, "sessions.create cwd must be absolute"),
+      );
+      return;
+    }
+    if (requestedExecNode && p.worktree === true) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "sessions.create worktree cannot target execNode"),
       );
       return;
     }
@@ -1301,10 +1317,10 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const requestedExecNode = normalizeOptionalString(p.execNode);
     let sessionKey = p.key;
     let sessionAgentId = p.agentId;
     let sessionWorktree: Awaited<ReturnType<typeof managedWorktrees.create>> | undefined;
+    const sessionExecCwd = requestedExecNode ? requestedCwd : undefined;
     let sessionCwd: string | undefined;
     let sessionSourceRoot: string | undefined;
     let provisionedSessionWorktree = false;
@@ -1460,6 +1476,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           }
         : undefined,
       execNode: requestedExecNode,
+      execCwd: sessionExecCwd,
+      clearExecBinding: !requestedExecNode,
       // A plain New Chat that resets an existing session must not inherit its prior worktree cwd.
       clearSpawnedCwd: p.worktree !== true,
       fork: p.fork,

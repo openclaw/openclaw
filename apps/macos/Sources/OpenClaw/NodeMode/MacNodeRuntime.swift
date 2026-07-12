@@ -162,6 +162,8 @@ actor MacNodeRuntime {
                 return try await self.handleSystemExecApprovalsGet(req)
             case OpenClawSystemCommand.execApprovalsSet.rawValue:
                 return try await self.handleSystemExecApprovalsSet(req)
+            case OpenClawFileSystemCommand.listDir.rawValue:
+                return try self.handleFileSystemListDir(req)
             case MacNodeCodexThreadCatalogContract.listCommand,
                  MacNodeCodexThreadCatalogContract.turnsCommand:
                 return try await self.handleCodexThreadInvoke(req)
@@ -188,6 +190,73 @@ actor MacNodeRuntime {
 
     private func isCanvasCommand(_ command: String) -> Bool {
         command.hasPrefix("canvas.") || command.hasPrefix("canvas.a2ui.")
+    }
+
+    private func handleFileSystemListDir(_ req: BridgeInvokeRequest) throws -> BridgeInvokeResponse {
+        struct Params: Decodable {
+            var path: String?
+        }
+        struct Entry: Encodable {
+            var name: String
+            var path: String
+            var hidden: Bool?
+        }
+        struct Payload: Encodable {
+            var path: String
+            var parent: String?
+            var home: String
+            var entries: [Entry]
+        }
+
+        let params: Params = if req.paramsJSON == nil {
+            Params(path: nil)
+        } else {
+            try Self.decodeParams(Params.self, from: req.paramsJSON)
+        }
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let requested = params.path?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawPath = requested.flatMap { $0.isEmpty ? nil : $0 } ?? home
+        guard NSString(string: rawPath).isAbsolutePath else {
+            return Self.errorResponse(
+                req,
+                code: .invalidRequest,
+                message: "INVALID_REQUEST: fs.listDir path must be absolute")
+        }
+
+        let directory = URL(fileURLWithPath: rawPath, isDirectory: true).standardizedFileURL
+        let children = try FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [])
+        var entries: [Entry] = []
+        for child in children {
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: child.path, isDirectory: &isDirectory),
+                  isDirectory.boolValue
+            else { continue }
+            let name = child.lastPathComponent
+            entries.append(Entry(
+                name: name,
+                path: directory.appendingPathComponent(name, isDirectory: true).path,
+                hidden: name.hasPrefix(".") ? true : nil))
+        }
+        entries.sort { lhs, rhs in
+            if (lhs.hidden != nil) != (rhs.hidden != nil) {
+                return lhs.hidden == nil
+            }
+            return lhs.name.utf8.lexicographicallyPrecedes(rhs.name.utf8)
+        }
+
+        let parentPath = directory.deletingLastPathComponent().path
+        let payload = Payload(
+            path: directory.path,
+            parent: parentPath == directory.path ? nil : parentPath,
+            home: home,
+            entries: entries)
+        return try BridgeInvokeResponse(
+            id: req.id,
+            ok: true,
+            payloadJSON: Self.encodePayload(payload))
     }
 
     private func handleCodexThreadInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {

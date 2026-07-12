@@ -363,7 +363,7 @@ export const SessionsCreateParamsSchema = Type.Object(
       Type.String({
         minLength: 1,
         description:
-          "Absolute source directory for a managed worktree. Requires worktree=true and operator.admin.",
+          "Absolute source directory for a managed worktree, or the working directory on execNode. Requires operator.admin.",
       }),
     ),
   },

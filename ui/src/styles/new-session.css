@@ -165,6 +165,16 @@
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
 }
 
+.new-session-page__browser-entry:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.new-session-page__browser-entry:disabled:hover {
+  background: transparent;
+}
+
 .new-session-page__browser-entry--hidden {
   color: var(--muted);
 }

@@ -1829,15 +1829,19 @@ public struct FsDirEntry: Codable, Sendable {
 
 public struct FsListDirParams: Codable, Sendable {
     public let path: String?
+    public let nodeid: String?
 
     public init(
-        path: String? = nil)
+        path: String? = nil,
+        nodeid: String? = nil)
     {
         self.path = path
+        self.nodeid = nodeid
     }
 
     private enum CodingKeys: String, CodingKey {
         case path
+        case nodeid = "nodeId"
     }
 }
 
