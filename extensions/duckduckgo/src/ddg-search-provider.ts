@@ -35,7 +35,7 @@ export function createDuckDuckGoWebSearchProvider(): WebSearchProviderPlugin {
       description:
         "Search the web using DuckDuckGo. Returns titles, URLs, and snippets with no API key required.",
       parameters: DuckDuckGoSearchSchema,
-      execute: async (args) => {
+      execute: async (args, context) => {
         const { runDuckDuckGoSearch } = await loadDuckDuckGoClientModule();
         return await runDuckDuckGoSearch({
           config: ctx.config,
@@ -50,6 +50,7 @@ export function createDuckDuckGoWebSearchProvider(): WebSearchProviderPlugin {
             | "moderate"
             | "off"
             | undefined,
+          signal: context?.signal,
         });
       },
     }),
