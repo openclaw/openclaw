@@ -3029,6 +3029,8 @@ export const uk: TranslationMap = {
     },
     pullRequests: {
       linkLabel: "Pull request #{number}: {title}",
+      createPr: "Створити PR",
+      createPrLabel: "Створити запит на злиття для {branch}",
       dismiss: "Відхилити pull request #{number}",
       open: "Відкрито",
       draft: "Чернетка",
@@ -3355,6 +3357,12 @@ export const uk: TranslationMap = {
         activityErrorOne: "Активність: {count} інструмент, містить помилки.",
         activityErrorMany: "Активність: {count} інструментів, містить помилки.",
       },
+    },
+    workRun: {
+      workedFor: "Працював протягом {duration}",
+      worked: "Працював",
+      workedForError: "Працював протягом {duration}, виникли помилки.",
+      workedError: "Працював, виникли помилки.",
     },
     backgroundTasks: {
       label: "Фонові завдання",

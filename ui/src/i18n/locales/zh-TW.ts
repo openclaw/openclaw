@@ -2964,6 +2964,8 @@ export const zh_TW: TranslationMap = {
     },
     pullRequests: {
       linkLabel: "Pull request #{number}: {title}",
+      createPr: "建立 PR",
+      createPrLabel: "為 {branch} 建立提取要求",
       dismiss: "關閉 pull request #{number}",
       open: "開啟",
       draft: "草稿",
@@ -3284,6 +3286,12 @@ export const zh_TW: TranslationMap = {
         activityErrorOne: "活動：{count} 個工具，包含錯誤。",
         activityErrorMany: "活動：{count} 個工具，包含錯誤。",
       },
+    },
+    workRun: {
+      workedFor: "已執行 {duration}",
+      worked: "已執行",
+      workedForError: "已執行 {duration}，期間發生錯誤。",
+      workedError: "已執行，期間發生錯誤。",
     },
     backgroundTasks: {
       label: "背景任務",

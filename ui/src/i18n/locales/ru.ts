@@ -3046,6 +3046,8 @@ export const ru: TranslationMap = {
     },
     pullRequests: {
       linkLabel: "Pull request #{number}: {title}",
+      createPr: "Создать PR",
+      createPrLabel: "Создать запрос на слияние для ветки {branch}",
       dismiss: "Скрыть pull request #{number}",
       open: "Открыть",
       draft: "Черновик",
@@ -3371,6 +3373,12 @@ export const ru: TranslationMap = {
         activityErrorOne: "Активность: {count} инструмент, содержит ошибки.",
         activityErrorMany: "Активность: {count} инструментов, содержит ошибки.",
       },
+    },
+    workRun: {
+      workedFor: "Работал в течение {duration}",
+      worked: "Работал",
+      workedForError: "Работал в течение {duration}, возникли ошибки.",
+      workedError: "Работал, возникли ошибки.",
     },
     backgroundTasks: {
       label: "Фоновые задачи",

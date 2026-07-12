@@ -3018,6 +3018,8 @@ export const fa: TranslationMap = {
     },
     pullRequests: {
       linkLabel: "درخواست pull شماره {number}: {title}",
+      createPr: "ایجاد PR",
+      createPrLabel: "ایجاد درخواست ادغام برای {branch}",
       dismiss: "بستن درخواست pull شماره {number}",
       open: "باز",
       draft: "پیش‌نویس",
@@ -3342,6 +3344,12 @@ export const fa: TranslationMap = {
         activityErrorOne: "فعالیت: {count} ابزار، شامل خطاها.",
         activityErrorMany: "فعالیت: {count} ابزار، شامل خطاها.",
       },
+    },
+    workRun: {
+      workedFor: "به‌مدت {duration} کار کرد",
+      worked: "کار کرد",
+      workedForError: "به‌مدت {duration} کار کرد، شامل خطاها.",
+      workedError: "کار کرد، شامل خطاها.",
     },
     backgroundTasks: {
       label: "وظایف پس‌زمینه",

@@ -3008,6 +3008,8 @@ export const ko: TranslationMap = {
     },
     pullRequests: {
       linkLabel: "Pull request #{number}: {title}",
+      createPr: "PR 만들기",
+      createPrLabel: "{branch}에 대한 풀 리퀘스트 만들기",
       dismiss: "Pull request #{number} 해제",
       open: "열림",
       draft: "초안",
@@ -3334,6 +3336,12 @@ export const ko: TranslationMap = {
         activityErrorOne: "활동: 도구 {count}개, 오류 포함.",
         activityErrorMany: "활동: 도구 {count}개, 오류 포함.",
       },
+    },
+    workRun: {
+      workedFor: "{duration} 동안 작업함",
+      worked: "작업함",
+      workedForError: "{duration} 동안 작업했으며, 오류가 포함되어 있습니다.",
+      workedError: "작업했으며, 오류가 포함되어 있습니다.",
     },
     backgroundTasks: {
       label: "백그라운드 작업",

@@ -2992,6 +2992,8 @@ export const hi: TranslationMap = {
     },
     pullRequests: {
       linkLabel: "Pull request #{number}: {title}",
+      createPr: "PR बनाएँ",
+      createPrLabel: "{branch} के लिए पुल अनुरोध बनाएँ",
       dismiss: "Pull request #{number} खारिज करें",
       open: "खोलें",
       draft: "ड्राफ्ट",
@@ -3315,6 +3317,12 @@ export const hi: TranslationMap = {
         activityErrorOne: "गतिविधि: {count} टूल, त्रुटियाँ शामिल हैं.",
         activityErrorMany: "गतिविधि: {count} टूल, त्रुटियाँ शामिल हैं.",
       },
+    },
+    workRun: {
+      workedFor: "{duration} तक काम किया",
+      worked: "काम किया",
+      workedForError: "{duration} तक काम किया, इसमें त्रुटियाँ शामिल हैं।",
+      workedError: "काम किया, इसमें त्रुटियाँ शामिल हैं।",
     },
     backgroundTasks: {
       label: "बैकग्राउंड कार्य",

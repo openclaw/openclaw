@@ -3025,6 +3025,8 @@ export const id: TranslationMap = {
     },
     pullRequests: {
       linkLabel: "Pull request #{number}: {title}",
+      createPr: "Buat PR",
+      createPrLabel: "Buat pull request untuk {branch}",
       dismiss: "Tutup pull request #{number}",
       open: "Terbuka",
       draft: "Draf",
@@ -3349,6 +3351,12 @@ export const id: TranslationMap = {
         activityErrorOne: "Aktivitas: {count} alat, termasuk kesalahan.",
         activityErrorMany: "Aktivitas: {count} alat, mencakup kesalahan.",
       },
+    },
+    workRun: {
+      workedFor: "Berjalan selama {duration}",
+      worked: "Berjalan",
+      workedForError: "Berjalan selama {duration}, termasuk kesalahan.",
+      workedError: "Berjalan, termasuk kesalahan.",
     },
     backgroundTasks: {
       label: "Tugas latar belakang",

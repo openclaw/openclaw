@@ -3034,6 +3034,8 @@ export const nl: TranslationMap = {
     },
     pullRequests: {
       linkLabel: "Pull request #{number}: {title}",
+      createPr: "PR aanmaken",
+      createPrLabel: "Een pull request aanmaken voor {branch}",
       dismiss: "Pull request #{number} negeren",
       open: "Open",
       draft: "Concept",
@@ -3360,6 +3362,12 @@ export const nl: TranslationMap = {
         activityErrorOne: "Activiteit: {count} tool, bevat fouten.",
         activityErrorMany: "Activiteit: {count} tools, bevat fouten.",
       },
+    },
+    workRun: {
+      workedFor: "Gewerkt gedurende {duration}",
+      worked: "Gewerkt",
+      workedForError: "Gewerkt gedurende {duration}, bevat fouten.",
+      workedError: "Gewerkt, bevat fouten.",
     },
     backgroundTasks: {
       label: "Achtergrondtaken",

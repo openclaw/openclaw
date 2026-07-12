@@ -2996,6 +2996,8 @@ export const ar: TranslationMap = {
     },
     pullRequests: {
       linkLabel: "طلب سحب رقم {number}: {title}",
+      createPr: "إنشاء طلب سحب",
+      createPrLabel: "إنشاء طلب سحب للفرع {branch}",
       dismiss: "تجاهل طلب السحب رقم {number}",
       open: "مفتوح",
       draft: "مسودة",
@@ -3320,6 +3322,12 @@ export const ar: TranslationMap = {
         activityErrorOne: "النشاط: {count} أداة، يتضمن أخطاء.",
         activityErrorMany: "النشاط: {count} أدوات، يتضمن أخطاء.",
       },
+    },
+    workRun: {
+      workedFor: "عمل لمدة {duration}",
+      worked: "عمل",
+      workedForError: "عمل لمدة {duration}، مع وجود أخطاء.",
+      workedError: "عمل، مع وجود أخطاء.",
     },
     backgroundTasks: {
       label: "المهام في الخلفية",

@@ -2971,6 +2971,8 @@ export const th: TranslationMap = {
     },
     pullRequests: {
       linkLabel: "Pull request #{number}: {title}",
+      createPr: "สร้าง PR",
+      createPrLabel: "สร้าง pull request สำหรับ {branch}",
       dismiss: "ปิด Pull request #{number}",
       open: "เปิด",
       draft: "ฉบับร่าง",
@@ -3293,6 +3295,12 @@ export const th: TranslationMap = {
         activityErrorOne: "กิจกรรม: เครื่องมือ {count} รายการ มีข้อผิดพลาด",
         activityErrorMany: "กิจกรรม: เครื่องมือ {count} รายการ มีข้อผิดพลาดรวมอยู่ด้วย",
       },
+    },
+    workRun: {
+      workedFor: "ทำงานเป็นเวลา {duration}",
+      worked: "ทำงานแล้ว",
+      workedForError: "ทำงานเป็นเวลา {duration} โดยมีข้อผิดพลาด",
+      workedError: "ทำงานแล้ว โดยมีข้อผิดพลาด",
     },
     backgroundTasks: {
       label: "งานเบื้องหลัง",

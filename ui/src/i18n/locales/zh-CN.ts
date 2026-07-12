@@ -2960,6 +2960,8 @@ export const zh_CN: TranslationMap = {
     },
     pullRequests: {
       linkLabel: "拉取请求 #{number}：{title}",
+      createPr: "创建 PR",
+      createPrLabel: "为 {branch} 创建拉取请求",
       dismiss: "关闭拉取请求 #{number}",
       open: "打开",
       draft: "草稿",
@@ -3279,6 +3281,12 @@ export const zh_CN: TranslationMap = {
         activityErrorOne: "活动：{count} 个工具，包含错误。",
         activityErrorMany: "活动：{count} 个工具，包含错误。",
       },
+    },
+    workRun: {
+      workedFor: "工作了 {duration}",
+      worked: "已工作",
+      workedForError: "工作了 {duration}，期间出现错误。",
+      workedError: "已工作，期间出现错误。",
     },
     backgroundTasks: {
       label: "后台任务",

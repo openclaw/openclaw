@@ -3049,6 +3049,8 @@ export const es: TranslationMap = {
     },
     pullRequests: {
       linkLabel: "Pull request n.º {number}: {title}",
+      createPr: "Crear PR",
+      createPrLabel: "Crear una solicitud de extracción para {branch}",
       dismiss: "Descartar pull request n.º {number}",
       open: "Abierto",
       draft: "Borrador",
@@ -3377,6 +3379,12 @@ export const es: TranslationMap = {
         activityErrorOne: "Actividad: {count} herramienta, incluye errores.",
         activityErrorMany: "Actividad: {count} herramientas, incluye errores.",
       },
+    },
+    workRun: {
+      workedFor: "Trabajó durante {duration}",
+      worked: "Trabajó",
+      workedForError: "Trabajó durante {duration}, con errores.",
+      workedError: "Trabajó, con errores.",
     },
     backgroundTasks: {
       label: "Tareas en segundo plano",

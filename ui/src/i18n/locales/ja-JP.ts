@@ -3032,6 +3032,8 @@ export const ja_JP: TranslationMap = {
     },
     pullRequests: {
       linkLabel: "プルリクエスト #{number}: {title}",
+      createPr: "PRを作成",
+      createPrLabel: "{branch} のプルリクエストを作成",
       dismiss: "プルリクエスト #{number} を非表示",
       open: "オープン",
       draft: "下書き",
@@ -3356,6 +3358,12 @@ export const ja_JP: TranslationMap = {
         activityErrorOne: "アクティビティ: {count} 個のツール、エラーを含みます。",
         activityErrorMany: "アクティビティ: {count} 個のツール、エラーを含みます。",
       },
+    },
+    workRun: {
+      workedFor: "{duration}作業しました",
+      worked: "作業しました",
+      workedForError: "{duration}作業しました（エラーを含みます）。",
+      workedError: "作業しました（エラーを含みます）。",
     },
     backgroundTasks: {
       label: "バックグラウンドタスク",

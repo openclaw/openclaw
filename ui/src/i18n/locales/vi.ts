@@ -3014,6 +3014,8 @@ export const vi: TranslationMap = {
     },
     pullRequests: {
       linkLabel: "Pull request #{number}: {title}",
+      createPr: "Tạo PR",
+      createPrLabel: "Tạo yêu cầu kéo cho {branch}",
       dismiss: "Bỏ qua pull request #{number}",
       open: "Mở",
       draft: "Bản nháp",
@@ -3338,6 +3340,12 @@ export const vi: TranslationMap = {
         activityErrorOne: "Hoạt động: {count} công cụ, bao gồm lỗi.",
         activityErrorMany: "Hoạt động: {count} công cụ, bao gồm lỗi.",
       },
+    },
+    workRun: {
+      workedFor: "Đã hoạt động trong {duration}",
+      worked: "Đã hoạt động",
+      workedForError: "Đã hoạt động trong {duration}, có lỗi.",
+      workedError: "Đã hoạt động, có lỗi.",
     },
     backgroundTasks: {
       label: "Tác vụ nền",

@@ -3042,6 +3042,8 @@ export const tr: TranslationMap = {
     },
     pullRequests: {
       linkLabel: "Pull request #{number}: {title}",
+      createPr: "PR oluştur",
+      createPrLabel: "{branch} için bir pull request oluştur",
       dismiss: "Pull request #{number} öğesini kapat",
       open: "Açık",
       draft: "Taslak",
@@ -3367,6 +3369,12 @@ export const tr: TranslationMap = {
         activityErrorOne: "Etkinlik: {count} araç, hatalar içeriyor.",
         activityErrorMany: "Etkinlik: {count} araç, hatalar içeriyor.",
       },
+    },
+    workRun: {
+      workedFor: "{duration} boyunca çalıştı",
+      worked: "Çalıştı",
+      workedForError: "{duration} boyunca çalıştı, hatalar içeriyor.",
+      workedError: "Çalıştı, hatalar içeriyor.",
     },
     backgroundTasks: {
       label: "Arka plan görevleri",
