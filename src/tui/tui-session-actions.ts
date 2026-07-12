@@ -565,29 +565,17 @@ export function createSessionActions(context: SessionActionContext) {
           }
           continue;
         }
-        if (message.role === "bashExecution") {
-          // A user-run `!`/`!!` local shell command, not an agent tool call: always
-          // shown on replay regardless of verbose level, matching the live echo in
-          // tui-local-shell.ts (which itself never gates on verbose either).
-          const command = asString(message.command, "");
-          chatLog.addSystem(`[local] $ ${command}`);
-          const output = asString(message.output, "");
-          if (output) {
-            for (const outputLine of output.split("\n")) {
-              chatLog.addSystem(`[local] ${outputLine}`);
-            }
-          }
-          const exitCode = typeof message.exitCode === "number" ? message.exitCode : undefined;
-          const cancelled = message.cancelled === true;
-          chatLog.addSystem(`[local] exit ${cancelled ? "cancelled" : (exitCode ?? "?")}`);
-          continue;
-        }
         if (message.role === "toolResult") {
-          if (!showTools) {
-            continue;
-          }
           const toolCallId = asString(message.toolCallId, "");
           const toolName = asString(message.toolName, "tool");
+          if (!showTools) {
+            // A hidden card is still a segment boundary. Route through the same
+            // verbose-off path a live run uses: it freezes the pre-tool text so
+            // this turn's later cumulative text starts a new component instead
+            // of rewriting the old one, and restores the activity summary line.
+            chatLog.recordToolActivity(historyTurnRunId, toolName, toolCallId);
+            continue;
+          }
           const component = chatLog.startTool(toolCallId, toolName, {});
           component.setResult(
             {

@@ -1637,33 +1637,30 @@ describe("tui session actions", () => {
     expect(firstCall[1]).not.toBe(secondCall[1]);
   });
 
-  it("replays a persisted bashExecution (`!`/`!!`) message as local-echo system lines", async () => {
+  it("records a segment boundary for replayed tool calls even when verbose is off", async () => {
+    // Default verbose level hides tool cards on replay. The hidden card must
+    // still freeze the pre-tool assistant text (via the verbose-off activity
+    // path), or the turn's later cumulative text rewrites the earlier component
+    // in place, reproducing the chronology defect on the default resume path.
     const loadHistory = vi.fn().mockResolvedValue({
       sessionId: "session-main",
       messages: [
-        {
-          role: "bashExecution",
-          command: "echo hi",
-          output: "hi",
-          exitCode: 0,
-          excludeFromContext: false,
-        },
-        {
-          role: "bashExecution",
-          command: "false",
-          output: "",
-          exitCode: 1,
-          cancelled: false,
-          excludeFromContext: true,
-        },
+        { role: "user", content: "question" },
+        { role: "assistant", content: [{ type: "text", text: "before tool" }] },
+        { role: "toolResult", toolCallId: "call-1", toolName: "read", content: [] },
+        { role: "assistant", content: [{ type: "text", text: "before tool\n\nafter tool" }] },
       ],
     });
-    const addSystem = vi.fn();
+    const updateAssistant = vi.fn();
+    const startTool = vi.fn();
+    const recordToolActivity = vi.fn();
     const chatLog = {
-      addSystem,
+      addSystem: vi.fn(),
       addUser: vi.fn(),
-      updateAssistant: vi.fn(),
+      updateAssistant,
       finalizeAssistant: vi.fn(),
+      startTool,
+      recordToolActivity,
       clearAll: vi.fn(),
       clearPendingUsers: vi.fn(),
       reconcilePendingUsers: vi.fn().mockReturnValue([]),
@@ -1678,13 +1675,16 @@ describe("tui session actions", () => {
 
     await runLoadHistory();
 
-    // Rendered regardless of excludeFromContext: that flag only controls whether the
-    // model sees it, never whether the TUI shows it back to the user on resume.
-    expect(addSystem).toHaveBeenCalledWith("[local] $ echo hi");
-    expect(addSystem).toHaveBeenCalledWith("[local] hi");
-    expect(addSystem).toHaveBeenCalledWith("[local] exit 0");
-    expect(addSystem).toHaveBeenCalledWith("[local] $ false");
-    expect(addSystem).toHaveBeenCalledWith("[local] exit 1");
+    expect(startTool).not.toHaveBeenCalled();
+    expect(recordToolActivity).toHaveBeenCalledTimes(1);
+    const [activityRunId, toolName, toolCallId] = recordToolActivity.mock.calls[0];
+    expect(toolName).toBe("read");
+    expect(toolCallId).toBe("call-1");
+    // The boundary must key to the same turn runId the surrounding assistant
+    // text streams under, or freezing it would not affect that text at all.
+    expect(updateAssistant).toHaveBeenCalledTimes(2);
+    expect(updateAssistant.mock.calls[0][1]).toBe(activityRunId);
+    expect(updateAssistant.mock.calls[1][1]).toBe(activityRunId);
   });
 
   it("force-renders after rebuilding chat history so transient status rows are cleared", async () => {
