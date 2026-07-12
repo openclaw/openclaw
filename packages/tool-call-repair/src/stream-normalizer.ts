@@ -12,6 +12,8 @@ import {
   utf8ByteLengthWithinLimit,
 } from "./grammar.js";
 import {
+  parseJsonToolCallBlocksAt,
+  scanJsonObject,
   scanPlainTextToolCall,
   type PlainTextToolCallNameMatcher,
   type PlainTextToolCallScan,
@@ -422,6 +424,22 @@ export function projectScrubbedPlainTextToolCallMessage(params: {
     : undefined;
 }
 
+// Fast heuristic: does partial JSON text resemble a tool-call object?
+// When stream chunks start with `{` at line start we must decide whether to
+// buffer (withhold from visible text) or emit immediately.  Buffering a
+// false positive is cheap — the classifyPending gate replays non-tool-call
+// JSON once the object completes.
+function looksLikeJsonToolCall(text: string): boolean {
+  return (
+    text.includes('"name"') ||
+    text.includes('"tool_calls"') ||
+    text.includes('"toolCalls"') ||
+    text.includes('"function"') ||
+    text.includes('"tool_name"') ||
+    text.includes('"function_name"')
+  );
+}
+
 function findPotentialCallStart(
   text: string,
   atLineStart: boolean,
@@ -435,6 +453,15 @@ function findPotentialCallStart(
       continue;
     }
     const start = skipLineIndentation(text, index);
+    // Bare JSON tool-call objects: bracket/XML/Harmony scanners don't
+    // recognize a line-start `{`, so we must capture them here.  Shape
+    // heuristic avoids buffering ordinary JSON prose like {"status":"ok"}.
+    // When the heuristic fires for a non-tool-call JSON object (e.g.
+    // {"name":"read","status":"ok"}), classifyPending validates and
+    // replays it as a false-positive — at most one extra classify cycle.
+    if (text[start] === "{" && looksLikeJsonToolCall(text.slice(start))) {
+      return index;
+    }
     const scan = scanPlainTextToolCall(text, start, {
       matcher,
       maxPayloadBytes: MAX_PAYLOAD_BYTES,
@@ -760,6 +787,47 @@ function classifyPending(
 ): PendingClassification {
   const candidate = { text: pending.buffer, parts: pending.parts };
   const view = createCandidateScanView(candidate);
+
+  // Pre-check: bare JSON tool-call objects.  The bracket/XML/Harmony
+  // scanner does not recognize line-start `{`, so we must validate and
+  // classify buffered JSON candidates here.  When the JSON completes
+  // as a valid tool call the normalizer keeps it for terminal promotion;
+  // a non-tool-call shape is replayed as a false-positive so ordinary
+  // JSON prose is never dropped.
+  const jsonStart = skipLineIndentation(view.text, 0);
+  if (view.text[jsonStart] === "{" && looksLikeJsonToolCall(view.text.slice(jsonStart))) {
+    const json = scanJsonObject(view.text, jsonStart);
+    if (json.kind === "prefix") {
+      return pending.bufferBytes > MAX_PAYLOAD_BYTES
+        ? { kind: "false-positive" }
+        : { kind: "incomplete" };
+    }
+    const blocks = parseJsonToolCallBlocksAt(view.text, jsonStart);
+    if (blocks !== null && blocks.length > 0) {
+      const afterJson = skipWhitespace(view.text, json.end);
+      if (afterJson < view.text.length) {
+        // Trailing text after a complete JSON tool call.  The normalizer
+        // may duplicate the buffer when a suppress→candidate transition
+        // re-appends the same chunk; treat the stronger leading match as
+        // authoritative instead of yielding the trailing copy as text.
+        const trailingJsonStart = skipLineIndentation(view.text, afterJson);
+        if (
+          view.text[trailingJsonStart] === "{" &&
+          parseJsonToolCallBlocksAt(view.text, trailingJsonStart) !== null
+        ) {
+          return { kind: "complete" };
+        }
+        return { kind: "stripped", text: view.text.slice(afterJson) };
+      }
+      if (jsonStart > 0) {
+        return { kind: "stripped", text: view.text.slice(0, jsonStart) };
+      }
+      return { kind: "complete" };
+    }
+    // Complete JSON that does not parse as a tool call — replay as text.
+    return { kind: "false-positive" };
+  }
+
   const terminalScan = scanPlainTextToolCall(view.text, skipLineIndentation(view.text, 0), {
     matcher,
     maxPayloadBytes: MAX_PAYLOAD_BYTES,

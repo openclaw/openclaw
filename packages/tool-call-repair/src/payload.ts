@@ -270,7 +270,7 @@ function scanHarmonyOpening(text: string, start: number): PlainTextJsonToolCallO
   return { kind: "complete", cursor, value };
 }
 
-function scanJsonObject(
+export function scanJsonObject(
   text: string,
   start: number,
 ): {
@@ -705,7 +705,7 @@ function extractJsonToolCallNameAndArgs(
   return [];
 }
 
-function parseJsonToolCallBlocksAt(
+export function parseJsonToolCallBlocksAt(
   text: string,
   start: number,
   options?: PlainTextToolCallParseOptions,

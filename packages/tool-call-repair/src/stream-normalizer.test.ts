@@ -1183,4 +1183,162 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
 
     expect(events).toEqual([]);
   });
+
+  describe("bare JSON tool-call stream buffering", () => {
+    it("buffers a bare JSON tool-call chunk so it is never leaked as text_delta", async () => {
+      // Stream a JSON tool-call object split across two chunks.
+      // Neither chunk should appear in the text_delta output.
+      const raw = '{"name":"read","arguments":{"path":"/tmp"}}';
+      const half = Math.floor(raw.length / 2);
+      const events = await normalize([
+        textDelta(raw.slice(0, half), raw.slice(0, half)),
+        textDelta(raw.slice(half), raw),
+      ]);
+
+      const deltas = textDeltas(events);
+      expect(deltas).toEqual([]);
+    });
+
+    it("buffers a complete bare JSON tool-call object in one chunk", async () => {
+      const raw = '{"name":"read","arguments":{"path":"/tmp"}}';
+      const events = await normalize([textDelta(raw, raw)]);
+
+      const deltas = textDeltas(events);
+      expect(deltas).toEqual([]);
+    });
+
+    it("yields non-tool-call JSON prose as visible text", async () => {
+      // {"status":"ok"} contains no tool-call name or arguments keys.
+      const raw = 'Extraction complete: {"status":"ok","count":42}';
+      const events = await normalize([textDelta(raw, raw)]);
+
+      const deltas = textDeltas(events);
+      expect(deltas).toEqual([raw]);
+    });
+
+    it("yields name-only JSON (no arguments) as visible text", async () => {
+      // {"name":"read","status":"ok"} has a name but no arguments —
+      // not a valid tool call, must pass through as prose.
+      const raw = '{"name":"read","status":"ok"}';
+      const events = await normalize([textDelta(raw, raw)]);
+
+      const deltas = textDeltas(events);
+      expect(deltas).toEqual([raw]);
+    });
+
+    it("yields plain JSON object without tool shape as visible text", async () => {
+      const raw = '{"city":"Beijing","temp":25}';
+      const events = await normalize([textDelta(raw, raw)]);
+
+      const deltas = textDeltas(events);
+      expect(deltas).toEqual([raw]);
+    });
+
+    it("buffers a tool_calls wrapper across multiple chunks", async () => {
+      const raw = '{"tool_calls":[{"function":{"name":"read","arguments":{"path":"/tmp"}}}]}';
+      const half = Math.floor(raw.length / 2);
+      const events = await normalize([
+        textDelta(raw.slice(0, half), raw.slice(0, half)),
+        textDelta(raw.slice(half), raw),
+      ]);
+
+      const deltas = textDeltas(events);
+      expect(deltas).toEqual([]);
+    });
+
+    it("promotes a buffered bare JSON tool call at terminal done", async () => {
+      const raw = '{"name":"read","arguments":{"path":"/tmp"}}';
+      async function* source() {
+        yield textDelta(raw, raw);
+        yield {
+          type: "done",
+          reason: "stop",
+          message: { role: "assistant", content: textContent(raw), stopReason: "stop" },
+        };
+      }
+      const promotedMessage = {
+        role: "assistant",
+        content: [{ type: "toolCall", name: "read", arguments: { path: "/tmp" } }],
+        stopReason: "toolUse",
+      };
+      const events: Record<string, unknown>[] = [];
+      for await (const event of normalizePlainTextToolCallStreamEvents(source(), {
+        matcher,
+        createPromotedToolCallEvents: () => [],
+        normalizeTerminalMessage: () => ({
+          kind: "promoted",
+          message: promotedMessage,
+          sourceToProjectedContentIndex: new Map(),
+        }),
+      })) {
+        events.push(event as Record<string, unknown>);
+      }
+
+      // No raw JSON text_delta leaked; done carries the promoted tool-call.
+      // The promoted message itself contains the arguments — that is expected.
+      // What must NOT happen is a text_delta event with the raw JSON payload.
+      const deltaTexts = textDeltas(events);
+      const rawJsonLeaked = deltaTexts.some(
+        (d) => typeof d === "string" && d.includes('"path":"/tmp"'),
+      );
+      expect(rawJsonLeaked).toBe(false);
+      expect(events.at(-1)).toMatchObject({
+        type: "done",
+        reason: "toolUse",
+        message: promotedMessage,
+      });
+    });
+
+    it("buffers a multi-call tool_calls wrapper without leaking entries as text", async () => {
+      const raw =
+        '{"tool_calls":[{"function":{"name":"read","arguments":{"path":"a"}}},{"function":{"name":"write","arguments":{"path":"b"}}}]}';
+      const third = Math.floor(raw.length / 3);
+      const events = await normalize([
+        textDelta(raw.slice(0, third), raw.slice(0, third)),
+        textDelta(raw.slice(third, third * 2), raw.slice(0, third * 2)),
+        textDelta(raw.slice(third * 2), raw),
+      ]);
+
+      const deltas = textDeltas(events);
+      expect(deltas).toEqual([]);
+    });
+
+    it("replays buffered non-tool-call JSON as false-positive at done", async () => {
+      // A JSON object that looks tool-call-like (has "name") but lacks
+      // valid arguments.  The stream heuristic buffers it, classifyPending
+      // validates, and the done path replays it as text.
+      const raw = '{"name":"read","status":"ok"}';
+      const events = await normalize([
+        textDelta(raw.slice(0, -1), raw.slice(0, -1)),
+        textDelta(raw.slice(-1), raw),
+        {
+          type: "done",
+          reason: "stop",
+          message: { role: "assistant", content: textContent(raw), stopReason: "stop" },
+        },
+      ]);
+
+      // The scrubbed message should still contain the JSON text since it's
+      // not a valid tool call.
+      expect(JSON.stringify(events.at(-1)?.message)).toContain("read");
+    });
+
+    it("yields visible prefix before a line-start JSON tool call", async () => {
+      // Text before a newline-bare-JSON: the prefix is visible, the JSON is buffered.
+      const prefix = "Here is the result:\n";
+      const json = '{"name":"read","arguments":{"path":"/tmp"}}';
+      const raw = prefix + json;
+      const events = await normalize([textDelta(raw, raw)]);
+
+      const deltas = textDeltas(events);
+      expect(deltas).toEqual([prefix]);
+    });
+
+    // Note: over-cap suppress → JSON buffering currently yields the JSON
+    // as part of the suppress-suffix text_delta path.  The suppress→buffer
+    // transition duplicates the candidate buffer, and classifyPending
+    // strips the second copy as trailing text.  Add targeted coverage when
+    // the normalizer is refactored to avoid buffer duplication across
+    // suppress→candidate transitions.
+  });
 });
