@@ -1,5 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { i18n } from "../../i18n/index.ts";
 import { findSettingsSearchBlocks } from "./settings-search.ts";
+
+afterEach(async () => {
+  await i18n.setLocale("en");
+});
 
 describe("findSettingsSearchBlocks", () => {
   it("uses word prefixes instead of arbitrary substrings for short queries", () => {
@@ -87,6 +92,25 @@ describe("findSettingsSearchBlocks", () => {
         search: "?section=tools",
         hash: "#config-section-tools",
       },
+    ]);
+  });
+
+  it("searches and displays static settings blocks in the active locale", async () => {
+    await i18n.setLocale("es");
+
+    const matches = findSettingsSearchBlocks({
+      query: "apariencia",
+      schema: null,
+      value: null,
+      uiHints: {},
+    });
+
+    expect(matches).toEqual([
+      expect.objectContaining({
+        routeId: "config",
+        label: "Apariencia",
+        hash: "#settings-general-appearance",
+      }),
     ]);
   });
 

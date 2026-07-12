@@ -7,6 +7,7 @@ import {
   parseConfigSearchQuery,
 } from "../../components/config-form.search.ts";
 import { schemaType, type JsonSchema } from "../../components/config-form.shared.ts";
+import { t } from "../../i18n/index.ts";
 import {
   AI_AGENTS_SECTION_KEYS,
   APPEARANCE_SECTION_KEYS,
@@ -20,6 +21,12 @@ import {
   GENERAL_SETTINGS_TARGET_IDS,
 } from "./settings-targets.ts";
 
+type StaticSettingsBlockDescriptor = Omit<SettingsSearchBlock, "label"> & {
+  labelKey: string;
+  searchKeys: readonly string[];
+  aliases?: string;
+};
+
 type StaticSettingsBlock = SettingsSearchBlock & {
   searchText: string;
 };
@@ -27,83 +34,168 @@ type StaticSettingsBlock = SettingsSearchBlock & {
 const GENERAL_SETTINGS_BLOCKS = {
   model: {
     routeId: "config",
-    label: "Model & Thinking",
+    labelKey: "quickSettings.model.title",
     hash: `#${GENERAL_SETTINGS_TARGET_IDS.model}`,
-    searchText: "model thinking fast mode auto standard",
+    searchKeys: [
+      "quickSettings.model.model",
+      "quickSettings.model.thinking",
+      "quickSettings.model.fastMode",
+      "quickSettings.model.thinkingLevels.off",
+      "quickSettings.model.thinkingLevels.low",
+      "quickSettings.model.thinkingLevels.medium",
+      "quickSettings.model.thinkingLevels.high",
+      "quickSettings.model.fastModes.auto",
+      "quickSettings.model.fastModes.fast",
+      "quickSettings.model.fastModes.standard",
+    ],
   },
   channels: {
     routeId: "config",
-    label: "Channels",
+    labelKey: "quickSettings.channels.title",
     hash: `#${GENERAL_SETTINGS_TARGET_IDS.channels}`,
-    searchText: "channels telegram discord slack whatsapp signal imessage connected configure",
+    searchKeys: [
+      "quickSettings.channels.connectedCount",
+      "quickSettings.channels.empty",
+      "quickSettings.channels.connect",
+    ],
+    aliases: "telegram discord slack whatsapp signal imessage",
   },
   security: {
     routeId: "config",
-    label: "Security",
+    labelKey: "quickSettings.security.title",
     hash: `#${GENERAL_SETTINGS_TARGET_IDS.security}`,
-    searchText: "security gateway auth exec policy device auth browser tool profile",
+    searchKeys: [
+      "quickSettings.security.gatewayAuth",
+      "quickSettings.security.execPolicy",
+      "quickSettings.security.deviceAuth",
+      "quickSettings.security.browserEnabled",
+      "quickSettings.security.toolProfile",
+    ],
   },
   system: {
     routeId: "config",
-    label: "Gateway Host",
+    labelKey: "quickSettings.system.gatewayHost",
     hash: `#${GENERAL_SETTINGS_TARGET_IDS.system}`,
-    searchText: "gateway host system cpu memory disk uptime node address",
+    searchKeys: [
+      "quickSettings.system.cpu",
+      "quickSettings.system.memory",
+      "quickSettings.system.disk",
+      "quickSettings.system.loadAverage",
+      "quickSettings.system.runtime",
+    ],
+    aliases: "system uptime node address pid",
   },
   appearance: {
     routeId: "config",
-    label: "Appearance",
+    labelKey: "quickSettings.appearance.title",
     hash: `#${GENERAL_SETTINGS_TARGET_IDS.appearance}`,
-    searchText: "appearance theme mode text size lobster",
+    searchKeys: [
+      "quickSettings.appearance.theme",
+      "quickSettings.appearance.textSize",
+      "quickSettings.appearance.importedTheme",
+      "quickSettings.appearance.lobsterVisits",
+      "quickSettings.appearance.lobsterSounds",
+      "quickSettings.appearance.lobsterdex",
+    ],
+    aliases: "mode",
   },
   personal: {
     routeId: "config",
-    label: "Personal",
+    labelKey: "quickSettings.personal.title",
     hash: `#${GENERAL_SETTINGS_TARGET_IDS.personal}`,
-    searchText: "personal user assistant identity avatar image",
+    searchKeys: [
+      "quickSettings.personal.user",
+      "quickSettings.personal.assistant",
+      "quickSettings.personal.localIdentity",
+      "quickSettings.personal.assistantIdentity",
+      "quickSettings.personal.avatarText",
+      "quickSettings.personal.chooseImage",
+      "quickSettings.personal.browserOnly",
+    ],
+    aliases: "avatar image",
   },
   automations: {
     routeId: "config",
-    label: "Automations",
+    labelKey: "quickSettings.automation.title",
     hash: `#${GENERAL_SETTINGS_TARGET_IDS.automations}`,
-    searchText: "automations scheduled tasks cron skills mcp servers",
+    searchKeys: [
+      "quickSettings.automation.scheduledTask",
+      "quickSettings.automation.scheduledTasks",
+      "quickSettings.automation.installedSkill",
+      "quickSettings.automation.installedSkills",
+      "quickSettings.automation.mcpServer",
+      "quickSettings.automation.mcpServers",
+      "quickSettings.automation.manage",
+      "quickSettings.automation.browse",
+      "quickSettings.automation.configure",
+    ],
+    aliases: "cron",
   },
-} as const satisfies Record<string, StaticSettingsBlock>;
+} as const satisfies Record<string, StaticSettingsBlockDescriptor>;
 
 const APPEARANCE_SETTINGS_BLOCKS = {
   theme: {
     routeId: "appearance",
-    label: "Theme",
+    labelKey: "configView.appearance.theme",
     search: "?section=__appearance__",
     hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.theme}`,
-    searchText: "theme family import tweakcn light dark system",
+    searchKeys: [
+      "configView.appearance.chooseTheme",
+      "configView.appearance.importedTheme",
+      "configView.appearance.import",
+      "configView.appearance.importFromTweakcn",
+      "configView.appearance.browseTweakcn",
+    ],
+    aliases: "tweakcn light dark system",
   },
   textSize: {
     routeId: "appearance",
-    label: "Text size",
+    labelKey: "configView.appearance.textSize",
     search: "?section=__appearance__",
     hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.textSize}`,
-    searchText: "text size scale small default large xl xxl",
+    searchKeys: [
+      "configView.textSizes.small",
+      "configView.textSizes.default",
+      "configView.textSizes.large",
+      "configView.textSizes.xl",
+      "configView.textSizes.xxl",
+    ],
+    aliases: "scale",
   },
   connection: {
     routeId: "appearance",
-    label: "Connection",
+    labelKey: "configView.connection.title",
     search: "?section=__appearance__",
     hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.connection}`,
-    searchText: "connection gateway status assistant version",
+    searchKeys: [
+      "configView.connection.gateway",
+      "configView.connection.status",
+      "configView.connection.assistant",
+    ],
+    aliases: "version",
   },
-} as const satisfies Record<string, StaticSettingsBlock>;
+} as const satisfies Record<string, StaticSettingsBlockDescriptor>;
 
 const COMMUNICATION_SETTINGS_BLOCKS = {
   notifications: {
     routeId: "communications",
-    label: "Push notifications",
+    labelKey: "configView.notifications.title",
     search: "?section=__notifications__",
     hash: `#${COMMUNICATION_SETTINGS_TARGET_IDS.notifications}`,
-    searchText: "push notifications browser permission subscription vapid gateway",
+    searchKeys: [
+      "configView.notifications.hint",
+      "configView.notifications.browserSupport",
+      "configView.notifications.permission",
+      "configView.notifications.status",
+      "configView.notifications.subscribed",
+      "configView.notifications.notSubscribed",
+      "configView.notifications.enable",
+    ],
+    aliases: "vapid gateway",
   },
-} as const satisfies Record<string, StaticSettingsBlock>;
+} as const satisfies Record<string, StaticSettingsBlockDescriptor>;
 
-const STATIC_SETTINGS_BLOCKS: readonly StaticSettingsBlock[] = [
+const STATIC_SETTINGS_BLOCKS: readonly StaticSettingsBlockDescriptor[] = [
   ...Object.values(GENERAL_SETTINGS_BLOCKS),
   ...Object.values(APPEARANCE_SETTINGS_BLOCKS),
   ...Object.values(COMMUNICATION_SETTINGS_BLOCKS),
@@ -114,6 +206,16 @@ const APPEARANCE_SECTIONS = new Set<string>(APPEARANCE_SECTION_KEYS);
 const AUTOMATION_SECTIONS = new Set<string>(AUTOMATION_SECTION_KEYS);
 const INFRASTRUCTURE_SECTIONS = new Set<string>(INFRASTRUCTURE_SECTION_KEYS);
 const AI_AGENTS_SECTIONS = new Set<string>(AI_AGENTS_SECTION_KEYS);
+
+function resolveStaticSettingsBlock(block: StaticSettingsBlockDescriptor): StaticSettingsBlock {
+  const { labelKey, searchKeys, aliases, ...destination } = block;
+  const label = t(labelKey);
+  return {
+    ...destination,
+    label,
+    searchText: [label, ...searchKeys.map((key) => t(key)), aliases ?? ""].join(" "),
+  };
+}
 
 function routeForConfigSection(key: string): RouteId {
   if (key === "mcp") {
@@ -149,8 +251,8 @@ export function findSettingsSearchBlocks(params: {
   const criteria = parseConfigSearchQuery(params.query);
   const matches: SettingsSearchBlock[] =
     criteria.tags.length === 0 && criteria.text
-      ? STATIC_SETTINGS_BLOCKS.filter((block) =>
-          settingsSearchTextMatches(`${block.label} ${block.searchText}`, criteria.text),
+      ? STATIC_SETTINGS_BLOCKS.map(resolveStaticSettingsBlock).filter((block) =>
+          settingsSearchTextMatches(block.searchText, criteria.text),
         )
       : [];
   const schema =
