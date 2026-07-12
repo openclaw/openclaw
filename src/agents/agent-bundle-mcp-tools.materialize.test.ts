@@ -327,6 +327,31 @@ describe("createBundleMcpToolRuntime", () => {
     expect(runtime.tools.map((tool) => tool.name)).toEqual(["bundleProbe__bundle_probe-2"]);
   });
 
+  it("reuses one-shot reserved names for App-only policy projections", async () => {
+    function* reservedToolNames() {
+      yield "demo__app_tool";
+    }
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeToolRuntime({
+        serverName: "demo",
+        tools: [
+          {
+            serverName: "demo",
+            safeServerName: "demo",
+            toolName: "app_tool",
+            inputSchema: { type: "object" },
+            fallbackDescription: "app",
+            uiVisibility: ["app"],
+          },
+        ],
+      }),
+      reservedToolNames: reservedToolNames(),
+    });
+
+    expect(runtime.tools).toEqual([]);
+    expect(runtime.appTools?.map((tool) => tool.name)).toEqual(["demo__app_tool-2"]);
+  });
+
   it("preserves catalog diagnostics when MCP servers fail tool listing", async () => {
     const diagnostics = [
       {

@@ -408,9 +408,12 @@ export async function materializeBundleMcpToolsForRun(params: {
     releaseLease?.();
     throw error;
   }
+  const reservedToolNames = params.reservedToolNames
+    ? Array.from(params.reservedToolNames)
+    : undefined;
   const tools = buildBundleMcpToolsFromCatalog({
     catalog,
-    reservedToolNames: params.reservedToolNames,
+    reservedToolNames,
     createExecute: (tool) => async (_toolCallId: string, input: unknown) => {
       params.runtime.markUsed();
       const result = await params.runtime.callTool(tool.serverName, tool.toolName, input);
@@ -487,7 +490,7 @@ export async function materializeBundleMcpToolsForRun(params: {
   const appTools = buildAppToolPolicyProjections({
     catalog,
     modelTools: tools,
-    reservedToolNames: params.reservedToolNames,
+    reservedToolNames,
   });
 
   return {
