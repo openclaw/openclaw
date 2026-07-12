@@ -375,7 +375,7 @@ describe("SIDEBAR_NAV_ROUTES", () => {
     expect(isPluginsHubRoute("plugins")).toBe(true);
     expect(isPluginsHubRoute("skills")).toBe(true);
     expect(isPluginsHubRoute("skill-workshop")).toBe(true);
-    expect(isPluginsHubRoute("overview")).toBe(false);
+    expect(isPluginsHubRoute("sessions")).toBe(false);
   });
 
   it("keeps detailed settings slices routed but out of the customizable sidebar", () => {
