@@ -30,7 +30,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Cron memory search:** preserve global embedding model, provider, credentials, and sources when isolated or trigger cron runs target an agent with a partial memory-search override. (#104196) Thanks @AnthonyStainer.
 - **Session retry classification:** stop permanent provider errors whose identifiers or payload details merely contain 429/5xx digit sequences from re-sending full context, and share bounded rate-limit-window parsing across retry paths. (#105258) Thanks @destire-mio.
 - **LINE directive templates:** suppress confirms and buttons with blank required fields or unlabeled actions while preserving valid titleless buttons and surrounding reply text. (#105520) Thanks @edenfunf.
 - **SQLite maintenance schema validation:** reject current-version global and agent databases with missing or drifted canonical tables, constraints, indexes, triggers, or table options before compaction, while accepting supported additive-migration layouts.
@@ -226,6 +225,7 @@ Docs: https://docs.openclaw.ai
 - **Task state migration:** canonicalize legacy `not-requested` delivery statuses during sidecar import and existing shared-database open so upgraded task registries and linked TaskFlows recover without manual SQL, and surface rejected persisted values in compact console diagnostics. (#103946) Thanks @bek91.
 - **Reply pre-delivery recovery:** bound each pre-delivery callback with an owner-overridable deadline, release serialized reply lanes after hung plugin work, and preserve durable final-delivery retry state only when transport never started. (#104256) Thanks @NianJiuZst.
 - **Signal native quote replies:** preserve the active inbound message as a native quote across agent, explicit, durable, and chunked sends while keeping reply-mode policy inside the Signal plugin. (#105347) Thanks @jesse-merhi.
+- **Cron memory search:** preserve global embedding model, provider, credentials, and sources when isolated or trigger cron runs target an agent with a partial memory-search override. (#104196) Thanks @AnthonyStainer.
 
 ## 2026.7.1
 
