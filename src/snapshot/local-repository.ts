@@ -1221,10 +1221,14 @@ function parseMacosAclEntries(output: string, pathname: string): MacosAclEntry[]
     if (!match) {
       throw new Error(`Unable to parse macOS ACL for SQLite staging: ${pathname}`);
     }
+    const [, principal, effect, permissions] = match;
+    if (!principal || !permissions || (effect !== "allow" && effect !== "deny")) {
+      throw new Error(`Unable to parse macOS ACL for SQLite staging: ${pathname}`);
+    }
     entries.push({
-      principal: normalizeAclPrincipal(match[1]),
-      effect: match[2] as MacosAclEntry["effect"],
-      permissions: new Set(match[3].split(",")),
+      principal: normalizeAclPrincipal(principal),
+      effect,
+      permissions: new Set(permissions.split(",")),
     });
   }
   if (/^[^\s]{10}\+/u.test(header) && entries.length === 0) {
