@@ -407,12 +407,16 @@ describe("loadSettings default gateway URL derivation", () => {
       string,
       unknown
     >;
+    persisted.sidebarPinnedRoutes = [];
+    localStorage.setItem(scopedKey, JSON.stringify(persisted));
+    expect(loadSettings().sidebarPinnedRoutes).toEqual([]);
+
     persisted.sidebarPinnedRoutes = "sessions";
     persisted.sidebarMoreExpanded = "yes";
     persisted.navWidth = 220;
     localStorage.setItem(scopedKey, JSON.stringify(persisted));
 
-    expect(loadSettings().sidebarPinnedRoutes).toEqual(["cron"]);
+    expect(loadSettings().sidebarPinnedRoutes).toEqual(["usage", "cron", "plugins"]);
     expect(loadSettings().sidebarMoreExpanded).toBe(false);
     expect(loadSettings().navWidth).toBe(258);
   });

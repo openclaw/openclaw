@@ -91,6 +91,20 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
     await server?.close();
   });
 
+  it("opens the new-session start screen from the brand instead of a session", async () => {
+    const { context, page } = await openSidebarTestPage();
+    try {
+      const brand = page.locator("openclaw-app-sidebar .sidebar-brand__identity");
+      await expect.poll(() => brand.getAttribute("href")).toBe("/new");
+      await brand.click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
+      await expect.poll(() => new URL(page.url()).search).toBe("");
+      await page.locator(".new-session-page").waitFor();
+    } finally {
+      await context.close();
+    }
+  });
+
   it("pins routes, restores defaults, and persists navigation state across reloads", async () => {
     if (captureUiProofEnabled) {
       await mkdir(uiProofArtifactDir, { recursive: true });
@@ -114,8 +128,9 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
 
       const sidebar = page.locator("openclaw-app-sidebar");
       const pinnedItems = sidebar.locator(".sidebar-nav > .nav-section__items > .nav-item");
-      // Nothing is pinned by default; sessions are the sidebar's core content.
-      await expect.poll(() => pinnedItems.count()).toBe(0);
+      await expect
+        .poll(() => trimmedTextContents(pinnedItems))
+        .toEqual(["Usage", "Cron Jobs", "Plugins"]);
       await expect.poll(() => sidebar.locator(".sidebar-brand").count()).toBe(1);
       // Desktop renders no topbar row: the sidebar owns navigation.
       await expect.poll(() => page.locator(".topbar").isVisible()).toBe(false);
@@ -201,7 +216,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await settingsSearch.fill("system");
       await expect
         .poll(() => trimmedTextContents(settingsLinks))
-        .toEqual(["Infrastructure", "Worktrees", "Debug", "Logs", "About"]);
+        .toEqual(["Infrastructure", "Worktrees", "Debug", "Logs", "Activity", "About"]);
       await captureSettingsSidebarProof(settingsSidebar, "01c-settings-search-group.png");
       await holdUiProof(page);
       await settingsSearch.fill("does-not-exist");
@@ -271,20 +286,32 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       const sessionsItem = menu.getByRole("menuitemcheckbox", { name: "Sessions" });
       await expect.poll(() => sessionsItem.getAttribute("aria-checked")).toBe("false");
       const usageItem = menu.getByRole("menuitemcheckbox", { name: "Usage" });
-      await expect.poll(() => usageItem.getAttribute("aria-checked")).toBe("false");
+      await expect.poll(() => usageItem.getAttribute("aria-checked")).toBe("true");
+      await expect
+        .poll(() =>
+          menu.getByRole("menuitemcheckbox", { name: "Cron Jobs" }).getAttribute("aria-checked"),
+        )
+        .toBe("true");
+      await expect
+        .poll(() =>
+          menu.getByRole("menuitemcheckbox", { name: "Plugins" }).getAttribute("aria-checked"),
+        )
+        .toBe("true");
       await expect
         .poll(() => sessionsItem.evaluate((element) => element === document.activeElement))
         .toBe(true);
       await captureUiProof(page, "02-customize-menu.png");
 
       await usageItem.click();
-      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Usage"]);
+      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Cron Jobs", "Plugins"]);
       await sessionsItem.click();
-      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Usage", "Sessions"]);
-      await usageItem.click();
-      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Sessions"]);
+      await expect
+        .poll(() => trimmedTextContents(pinnedItems))
+        .toEqual(["Cron Jobs", "Plugins", "Sessions"]);
       await page.reload();
-      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Sessions"]);
+      await expect
+        .poll(() => trimmedTextContents(pinnedItems))
+        .toEqual(["Cron Jobs", "Plugins", "Sessions"]);
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("true");
       await expect
         .poll(() =>
@@ -297,7 +324,9 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
 
       await customizeButton.click();
       await menu.getByRole("menuitem", { name: "Reset pinned items" }).click();
-      await expect.poll(() => pinnedItems.count()).toBe(0);
+      await expect
+        .poll(() => trimmedTextContents(pinnedItems))
+        .toEqual(["Usage", "Cron Jobs", "Plugins"]);
 
       // The sidebar search field is the command palette entry point.
       const searchButton = sidebar.locator(".sidebar-search");
