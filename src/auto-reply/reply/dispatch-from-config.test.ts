@@ -13626,10 +13626,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     const applyPolicy = (text: string) =>
       applyOperationalReplyPolicy({
         cfg,
-        payload: setReplyPayloadMetadata(
-          { text },
-          { deliverDespiteSourceReplySuppression: true },
-        ),
+        payload: setReplyPayloadMetadata({ text }, { deliverDespiteSourceReplySuppression: true }),
         explicitCommandTurn: false,
         sendPolicyDenied: false,
         sourceChannel: "visiblechat",

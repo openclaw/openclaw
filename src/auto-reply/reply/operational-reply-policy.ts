@@ -195,7 +195,10 @@ function finalizeOperationalReplyOnceKeys(params: {
   const deliveredKeys = params.keys.filter(
     (key) => key !== params.deliveredKey && !stillPendingKeys.has(key),
   );
-  return [...boundOperationalReplyOnceKeys([...deliveredKeys, params.deliveredKey]), ...pendingKeys];
+  return [
+    ...boundOperationalReplyOnceKeys([...deliveredKeys, params.deliveredKey]),
+    ...pendingKeys,
+  ];
 }
 
 function resolveOperationalReplySourceScope(params: {
