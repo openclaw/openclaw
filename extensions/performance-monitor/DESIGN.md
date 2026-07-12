@@ -3,7 +3,33 @@
 > **插件 ID**: `performance-monitor`  
 > **包名**: `@openclaw/performance-monitor`  
 > **最低 OpenClaw 版本**: `>=2026.4.25`（`pluginApi >= 2026.6.10`）  
-> **文档目的**: 仅依赖本文档 + OpenClaw 源码，即可完整复现插件功能与 HTTP 接口协议。
+> **文档版本**: 与 `openclaw_performance_monitor` 分支实现同步（含 `timing-log`、`logTimingEvents`、batch 聚合脚本）
+
+---
+
+## 0. 如何使用本文档（给复现者 / 大模型）
+
+本文档是 **唯一规格来源**。复现目标 = **插件运行时 + Core 硬依赖 + 测试 + 可选运维脚本**。
+
+**复现顺序（严格）：**
+
+1. 读 §4 → 在 OpenClaw Core 实现/合并 hook/tool/llm 诊断埋点
+2. 读 §5–§11 → 创建 `extensions/performance-monitor/` 全部源文件
+3. 读 §14 → 编写并通过测试
+4. 读 §15 → 集成 catalog / labeler
+5. 读 §16 → Gateway 运行时验证
+
+**禁止：**
+
+- 插件 prod 代码 `import` Core `src/**` 或其它 extension `src/**`
+- 在插件内自行 wrap hook 做近似计时（必须消费 Core `hook.handler.completed`）
+- 在 `--local` agent 进程期望 HTTP 报告（service 仅 Gateway 启动）
+
+**SDK 入口（插件只允许）：**
+
+- `openclaw/plugin-sdk/plugin-entry` — `definePluginEntry`, `registerService`, `registerHttpRoute`
+- `openclaw/plugin-sdk/diagnostic-runtime` — `DiagnosticEventPayload`, `isInternalDiagnosticEventMetadata`
+- `openclaw/plugin-sdk/logging-core` — `createSubsystemLogger`（文件日志）
 
 ---
 
@@ -11,217 +37,226 @@
 
 ### 1.1 产品目标
 
-在 **Gateway 进程** 内，订阅 OpenClaw **trusted internal diagnostics** 事件流，按 **agent run（一轮对话 / 一次 agent turn）** 聚合以下耗时数据：
+在 **Gateway 进程** 内，订阅 OpenClaw **trusted internal diagnostics** 事件流，按 **agent run（一轮对话 / 一次 agent turn）** 聚合：
 
-| 维度                 | 说明                                                     |
-| -------------------- | -------------------------------------------------------- |
-| **环节（phase）**    | Core pipeline 阶段，来自 `diagnostic.phase.completed`    |
-| **插件 Hook**        | 每个插件、每个 hook 点位的 **单个 handler** 耗时         |
-| **工具调用（tool）** | 每次 tool execution 耗时，含 extension / handlerRef 归属 |
-| **模型调用（LLM）**  | 每次 model call 耗时，含 provider plugin / harness 归属  |
-| **Harness**          | 外部 harness 运行耗时（可选）                            |
-| **Run 汇总**         | 整轮 wall-clock 与分类汇总、breakdown 分析               |
+| 维度             | 说明                                        | 数据来源                              |
+| ---------------- | ------------------------------------------- | ------------------------------------- |
+| **phase**        | Core pipeline 阶段                          | `diagnostic.phase.completed`          |
+| **hook_handler** | 每个插件、每个 hook 点位的 **单个 handler** | `hook.handler.completed`（Core 埋点） |
+| **tool**         | 每次 tool execution                         | `tool.execution.completed` / `error`  |
+| **llm**          | 每次 model call                             | `model.call.completed` / `error`      |
+| **harness**      | 外部 harness 运行                           | `harness.run.completed` / `error`     |
+| **run**          | 整轮起止                                    | `run.started` / `run.completed`       |
 
-数据存储在 **进程内存** 的有界 ring 结构中，通过 **HTTP JSON API** 暴露给 trusted operator（Gateway Bearer Token）。
+**双输出：**
+
+1. **进程内存** — 有界 ring buffer + HTTP JSON API（重启丢失）
+2. **共享文件日志（可选）** — `logTimingEvents: true`（默认）时，每条终态事件写一行 `perf timing:` 到 OpenClaw 文件日志（默认 `/tmp/openclaw/openclaw-YYYY-MM-DD.log`），与 Gateway 其它日志同管道，便于 `runId` / `traceId` 关联排查
 
 ### 1.2 非目标
 
-- 不持久化到 SQLite / 文件（重启 Gateway 即丢失）。
-- 不订阅 untrusted 外部 diagnostic 事件（防伪造）。
-- 不在 `--local` 独立 agent 进程内工作（plugin service 仅 Gateway 启动）。
-- 不替代 `diagnostics-prometheus` / `diagnostics-otel` 的全局 metrics 导出。
-- 不自行注册 hook 观察者做近似计时（per-handler 计时由 **Core 埋点** 提供）。
+- 不把 monitor 内存 trace **持久化到 SQLite**（重启 Gateway 即丢失内存数据；文件日志行可保留）
+- 不订阅 untrusted 外部 diagnostic 事件
+- 不在 `openclaw agent --local` 独立进程工作
+- 不替代 `diagnostics-prometheus` / `diagnostics-otel`
+- 聚合脚本（§12）是 **运维/测试工具**，不是插件运行时必需
 
-### 1.3 一轮对话的定义
+### 1.3 Run 定义
 
-- **主键**: `runId`（来自 `run.started` / `run.completed` 及各 diagnostic 事件的 `runId` 字段）。
-- 若事件缺少 `runId` 但有 `sessionKey`，fallback 为 `sessionKey`；再缺则为 `"unknown"`。
-- 用户发送一条消息 → Agent 完成回复，通常对应 **一个** `runId`。
+- **主键**: `runId`（diagnostic 事件字段；缺失时 fallback `sessionKey`，再缺 `"unknown"`）
+- 用户一条消息 → agent 完成回复 ≈ **一个** `runId`
+- **traceId** / **spanId**：来自 diagnostic `event.trace`，写入 `PerformanceEvent` 与文件日志 meta，用于跨 turn / 跨子系统关联（不替代 `runId`）
 
 ---
 
 ## 2. 系统架构
 
-### 2.1 总体架构
-
 ```mermaid
 flowchart TB
-  subgraph Core["OpenClaw Core（必须存在）"]
-    HR[src/plugins/hooks.ts<br/>invoke*HookHandlerWithDiagnostics]
-    HD[src/plugins/hook-handler-diagnostics.ts]
-    TC[src/agents/agent-tools.before-tool-call.ts<br/>tool attribution]
-    MC[src/agents/embedded-agent-runner/run/<br/>attempt.model-diagnostic-events.ts]
-    DE[src/infra/diagnostic-events.ts<br/>async queue + trusted listeners]
-    PS[src/plugins/services.ts<br/>internalDiagnostics grant]
+  subgraph Core["OpenClaw Core（硬依赖）"]
+    HR[hooks.ts → invoke*HookHandlerWithDiagnostics]
+    HD[hook-handler-diagnostics.ts]
+    TC[agent-tools.before-tool-call.ts]
+    MC[attempt.model-diagnostic-events.ts]
+    DE[diagnostic-events.ts]
+    PS[services.ts → internalDiagnostics grant]
   end
 
   subgraph Plugin["extensions/performance-monitor"]
-    IDX[index.ts<br/>register service + HTTP]
-    SVC[src/service.ts<br/>subscribe + map events]
-    MON[src/monitor.ts<br/>in-memory store]
-    BRK[src/breakdown.ts<br/>aggregate on read]
+    IDX[index.ts]
+    SVC[service.ts]
+    MON[monitor.ts]
+    BRK[breakdown.ts]
+    TL[timing-log.ts]
     HTTP["GET /api/performance-monitor/*"]
+  end
+
+  subgraph Log["OpenClaw file log"]
+    FL["/tmp/openclaw/openclaw-*.log<br/>perf timing: kind=..."]
   end
 
   HR --> HD --> DE
   TC --> DE
   MC --> DE
   DE -->|onTrustedInternalDiagnosticEvent| PS
-  PS -->|ctx.internalDiagnostics.onEvent| SVC
+  PS --> SVC
   SVC --> MON
+  SVC --> TL --> FL
   MON --> BRK
   IDX --> SVC
-  IDX --> HTTP
   MON --> HTTP
 ```
 
-### 2.2 数据流（单轮 run）
+### 2.1 单轮事件时序（典型）
 
 ```
 run.started
-  → diagnostic.phase.completed (若干)
-  → hook.handler.completed (每个插件 handler 一次)
-  → model.call.completed / error (每轮 LLM 一次或多次)
-  → tool.execution.completed / error (每次 tool 一次)
-  → harness.run.* (可选)
-  → run.completed → finalizeRun(totalDurationMs)
+  → diagnostic.phase.completed × N
+  → hook.handler.completed × M        （每个 plugin handler 一次）
+  → model.call.completed × K
+  → tool.execution.completed × T      （可能穿插在 model 之间）
+  → harness.run.*                     （可选）
+  → run.completed → finalizeRun()
 ```
 
-Gateway HTTP 读取时：
+### 2.2 部署约束
 
-```
-StoredRunTrace (events + summary)
-  → buildRunPerformanceBreakdown()
-  → RunPerformanceTrace (含 breakdown)
-```
-
-### 2.3 进程与部署约束
-
-| 组件                          | 运行位置                           | 说明                                                |
-| ----------------------------- | ---------------------------------- | --------------------------------------------------- |
-| Core diagnostic 发射          | Gateway **或** embedded agent 进程 | 同进程 `emitDiagnosticEvent`                        |
-| `performance-monitor` service | **仅 Gateway**                     | `startPluginServices()` 在 `src/gateway/server*.ts` |
-| HTTP 路由                     | Gateway HTTP server                | `auth: gateway` + `trusted-operator` surface        |
-| Agent `--local`               | 独立进程                           | **不会** 启动 plugin service；报告为空              |
-
-**复现要求**: 必须通过 Gateway 跑 agent turn，且 Gateway 启用本插件。
+| 组件                        | 位置                           | 说明                                    |
+| --------------------------- | ------------------------------ | --------------------------------------- |
+| Diagnostic 发射             | Gateway 或 embedded agent 进程 | 同进程 `emitDiagnosticEvent`            |
+| performance-monitor service | **仅 Gateway**                 | `startPluginServices()`                 |
+| HTTP 路由                   | Gateway HTTP                   | `auth: gateway` + `trusted-operator`    |
+| 文件 `perf timing:`         | Gateway 日志子系统             | subsystem=`plugins/performance-monitor` |
+| `agent --local`             | 独立进程                       | **无** plugin service → 无 monitor      |
 
 ---
 
-## 3. 目录结构
+## 3. 目录结构与文件契约
 
 ```
 extensions/performance-monitor/
-├── DESIGN.md                          # 本文档
-├── index.ts                           # 插件入口：registerService + registerHttpRoute
-├── api.ts                             # 对外 barrel：SDK 类型 re-export
-├── openclaw.plugin.json               # manifest：id、configSchema、activation
-├── package.json                       # npm 包 + openclaw.extensions 声明
-├── scripts/
-│   └── demo-user-turn.mjs             # 可选：live / simulate 演示脚本（非运行时必需）
+├── DESIGN.md                              # 本文档
+├── index.ts                               # 插件入口
+├── api.ts                                 # 对外 barrel（SDK re-export）
+├── openclaw.plugin.json                   # manifest
+├── package.json                           # npm + openclaw.extensions
+├── scripts/                               # 非运行时；测试/运维
+│   ├── run-batch-with-monitor.mjs         # N 条 query + 导出 TSV
+│   ├── aggregate-run-timing-from-logs.mjs # 从文件日志聚合
+│   ├── demo-user-turn.mjs                 # 单轮演示
+│   └── lib/
+│       └── aggregate-run-timing.mjs       # 日志/monitor trace → TSV
 └── src/
-    ├── types.ts                       # 全部 JSON 契约类型
-    ├── monitor.ts                     # PerformanceMonitor 内存存储
-    ├── breakdown.ts                   # 按 run 聚合 breakdown
-    ├── service.ts                     # diagnostic 订阅 + HTTP handler + service 生命周期
-    ├── monitor.test.ts                # monitor + service 单测
-    ├── breakdown.test.ts              # breakdown 单测
-    └── demo.simulate.test.ts          # 端到端模拟场景单测（可选）
-
-# OpenClaw 仓库级集成（发布/CI，非运行时逻辑）
-.github/labeler.yml                    # label: extensions: performance-monitor
-scripts/lib/official-external-plugin-catalog.json  # 官方插件目录条目
+    ├── types.ts                           # JSON / 内存契约
+    ├── monitor.ts                         # PerformanceMonitor 类
+    ├── breakdown.ts                       # buildRunPerformanceBreakdown
+    ├── service.ts                         # 订阅 + HTTP + service 生命周期
+    ├── timing-log.ts                      # perf timing: 文件日志
+    ├── monitor.test.ts
+    ├── breakdown.test.ts
+    ├── timing-log.test.ts
+    ├── aggregate-run-timing.test.ts
+    └── demo.simulate.test.ts
 ```
 
-### 3.1 模块职责
+### 3.1 各文件职责与对外导出
 
-| 文件           | 职责                                                                                                                                              |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `index.ts`     | `definePluginEntry`；创建 `createPerformanceMonitorService()`；注册 service id=`performance-monitor`；注册 HTTP prefix `/api/performance-monitor` |
-| `api.ts`       | 从 `openclaw/plugin-sdk` re-export `DiagnosticEventPayload`、`OpenClawPluginService` 等，避免插件 prod 代码 import core `src/**`                  |
-| `types.ts`     | `PerformanceEvent`、`RunPerformanceTrace`、`PerformanceMonitorReport` 等 **HTTP 响应契约**                                                        |
-| `monitor.ts`   | 有界存储、`recordEvent`、`finalizeRun`、`getRunTrace`、`getReport`；读取时 attach `breakdown`                                                     |
-| `breakdown.ts` | 纯函数 `buildRunPerformanceBreakdown(trace)`                                                                                                      |
-| `service.ts`   | `recordDiagnosticEvent` 映射表；`shouldRecordDiagnosticEvent`；HTTP 路由分发                                                                      |
+| 文件            | 必须实现                                  | 关键导出                                                                                                     |
+| --------------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `index.ts`      | `definePluginEntry` 注册 service + HTTP   | `default` plugin entry                                                                                       |
+| `api.ts`        | SDK 类型 re-export，禁止 deep import core | `DiagnosticEventPayload`, `OpenClawPluginService`, …                                                         |
+| `types.ts`      | 全部数据结构                              | `PerformanceEvent`, `RunPerformanceTrace`, `PerformanceMonitorConfig`, …                                     |
+| `monitor.ts`    | 有界存储                                  | `PerformanceMonitor`, `createPerformanceMonitor`, `__test__`                                                 |
+| `breakdown.ts`  | 纯聚合                                    | `buildRunPerformanceBreakdown`, `__test__`                                                                   |
+| `service.ts`    | 映射 + HTTP + lifecycle                   | `createPerformanceMonitorService`, `__test__`                                                                |
+| `timing-log.ts` | 文件日志                                  | `createPerformanceTimingLogger`, `diagnosticEventToTimingLogFields`, `logPerformanceTimingEvent`, `__test__` |
 
 ---
 
-## 4. OpenClaw Core 依赖（复现必读）
+## 4. OpenClaw Core 硬依赖（必须先做）
 
-插件 **单独无法** 产生 per-plugin hook 计时；以下 Core 改动是 **硬依赖**。复现时需对照源码实现或 cherry-pick。
+插件 **无法单独** 产生 per-handler hook 计时与 tool/llm `handlerRef`。复现时对照以下文件 **逐行实现或 cherry-pick**。
 
-### 4.1 Hook handler 计时
+### 4.1 Hook handler 计时 — `src/plugins/hook-handler-diagnostics.ts`
 
-**文件**: `src/plugins/hook-handler-diagnostics.ts`
+**导出：**
 
-- `invokeSyncHookHandlerWithDiagnostics()` — 同步 hook（`tool_result_persist`、`before_message_write`）
-- `invokeHookHandlerWithDiagnostics()` — 异步 hook（void / modifying / claiming / reply_payload 等）
-- 使用 `performance.now()` 计时，精度四舍五入到 0.1ms
-- 仅当 `areDiagnosticsEnabledForProcess()` 为 true 时发射
-- 发射事件类型: `**hook.handler.completed`\*\*
+- `buildHookHandlerRef({ pluginId, hookName, handlerName?, handlerSource? })`
+- `resolveHookHandlerDiagnosticIdentity(hook)`
+- `invokeSyncHookHandlerWithDiagnostics({ hook, event, ctx, invoke })`
+- `invokeHookHandlerWithDiagnostics({ hook, event, ctx, invoke })` — async
 
-**接入点**: `src/plugins/hooks.ts` — 所有 hook handler 执行路径替换为上述 wrapper（搜索 `invokeHookHandlerWithDiagnostics` / `invokeSyncHookHandlerWithDiagnostics`）。
+**行为：**
 
-**单测**: `src/plugins/hook-handler-diagnostics.test.ts`
+- `performance.now()` 计时，`roundMs = Math.round(x*10)/10`
+- 仅 `areDiagnosticsEnabledForProcess()` 为 true 时发射
+- 事件类型 **`hook.handler.completed`**
 
-### 4.2 Diagnostic 事件类型扩展
+**handlerRef 规则（Core 生成，插件只消费）：**
 
-**文件**: `src/infra/diagnostic-events.ts`
+```
+base = hook:{pluginId}:{hookName}
+若 handlerName 非空 → {base}@{handlerName}
+否则若 handlerSource 非空 → {base}#{basename(source)}
+否则 → base
+```
 
-新增 / 扩展类型：
+**handlerName**：`fn.name`，跳过 `anonymous`；`bound foo` → `foo`  
+**handlerSource**：注册源文件 `path.basename(source)`
+
+**emit 字段：**
 
 ```typescript
-// hook.handler.completed
-export type DiagnosticHookHandlerCompletedEvent = DiagnosticBaseEvent & {
+{
   type: "hook.handler.completed";
-  hookName: string;
   pluginId: string;
+  hookName: string;
+  handlerName?: string;
+  handlerSource?: string;
+  handlerRef: string;
   durationMs: number;
   outcome: "completed" | "error";
   runId?: string;
   sessionKey?: string;
   sessionId?: string;
-};
-
-// tool.execution.* 基类扩展字段
-handlerName?: string;
-handlerRef?: string;
-mcpServerName?: string;
-mcpToolName?: string;
-
-// model.call.* 基类扩展字段
-providerPluginId?: string;
-harnessId?: string;
-handlerRef?: string;
+}
 ```
 
-**Async 队列**: `hook.handler.completed` 必须加入 `ASYNC_DIAGNOSTIC_EVENT_TYPES`（与 tool/model 事件一样异步 dispatch 到 trusted listeners）。
+**接入：** `src/plugins/hooks.ts` 所有 handler 执行路径调用上述 wrapper（搜索 `invokeHookHandlerWithDiagnostics`）。
 
-### 4.3 Tool 归属与 handlerRef
+**测试：** `src/plugins/hook-handler-diagnostics.test.ts`
 
-**文件**: `src/agents/agent-tools.before-tool-call.ts`
+### 4.2 Diagnostic 类型 — `src/infra/diagnostic-events.ts`
 
-- `resolveToolDiagnosticIdentity(tool)` 返回 `toolSource`、`toolOwner`、`handlerName`、`handlerRef`、`mcp`\*
-- `buildToolHandlerRef()` 规则见 [§6.3](#63-handlerref-规范)
-- spread 进 `tool.execution.started|completed|error|blocked` 的 `eventBase`
+- 增加 `DiagnosticHookHandlerCompletedEvent`（含 `handlerName`, `handlerSource`, `handlerRef`）
+- `tool.execution.*` 扩展：`handlerName`, `handlerRef`, `mcpServerName`, `mcpToolName`
+- `model.call.*` 扩展：`providerPluginId`, `harnessId`, `handlerRef`
+- `hook.handler.completed` 加入 **`ASYNC_DIAGNOSTIC_EVENT_TYPES`**（与 tool/model 一样异步 dispatch）
 
-### 4.4 LLM 归属与 handlerRef
+### 4.3 Tool 归属 — `src/agents/agent-tools.before-tool-call.ts`
 
-**文件**: `src/agents/embedded-agent-runner/run/attempt.model-diagnostic-events.ts`
+- `resolveToolDiagnosticIdentity(tool)` → `toolSource`, `toolOwner`, `handlerName`, `handlerRef`, `mcp*`
+- `buildToolHandlerRef()`:
 
-- `ModelCallDiagnosticContext` 增加 `providerPluginId?`、`harnessId?`
-- `buildModelCallHandlerRef()` + `baseModelCallEvent()` 写入 `handlerRef`
+| toolSource | handlerRef                       |
+| ---------- | -------------------------------- |
+| `core`     | `core:{toolName}`                |
+| `plugin`   | `plugin:{pluginId}:{toolName}`   |
+| `channel`  | `channel:{channelId}:{toolName}` |
+| `mcp`      | `mcp:{serverName}:{mcpToolName}` |
 
-**调用方注入 context**:
+- spread 进 `tool.execution.started|completed|error|blocked`
 
-- `src/agents/embedded-agent-runner/run/attempt.ts` — `getProviderRuntimeHandle().plugin` → `providerPluginId`；`params.runtimePlan?.observability.harnessId`
-- `src/agents/embedded-agent-runner/compact.ts` — compaction 路径同理
+### 4.4 LLM 归属 — `src/agents/embedded-agent-runner/run/attempt.model-diagnostic-events.ts`
 
-### 4.5 internalDiagnostics 授权
+- `buildModelCallHandlerRef()` 优先级：`harnessId` > `providerPluginId` > `provider`
+- 格式：`harness:{id}/{surface}` | `provider-plugin:{id}/{surface}` | `provider:{id}/{surface}`
+- `surface = api || transport || "stream"`
+- `attempt.ts` / `compact.ts` 注入 `providerPluginId`, `harnessId`
 
-**文件**: `src/plugins/services.ts`
+### 4.5 internalDiagnostics 授权 — `src/plugins/services.ts`
 
-`createServiceContext()` 中，除 `diagnostics-otel` / `diagnostics-prometheus` 外，**bundled 或 trustedOfficialInstall** 的 `performance-monitor` service 必须获得：
+`createServiceContext()` 对 **`performance-monitor`**（与 otel/prometheus 同等门控）授予：
 
 ```typescript
 internalDiagnostics: {
@@ -230,26 +265,20 @@ internalDiagnostics: {
 }
 ```
 
-**条件**:
+**条件：** `pluginId === service.id === "performance-monitor"` 且 `origin === "bundled"` 或 `trustedOfficialInstall === true`
 
-- `pluginId === service.id === "performance-monitor"`
-- `origin === "bundled"` **或** `trustedOfficialInstall === true`
+**测试：** `src/plugins/services.test.ts`
 
-**单测**: `src/plugins/services.test.ts` — `"grants internal diagnostics only to trusted diagnostics exporter services"` 含 performance-monitor bundled 用例。
+### 4.6 Stability 日志（可选）— `src/logging/diagnostic-stability.ts`
 
-### 4.6 Stability 日志映射（可选但已实现）
-
-**文件**: `src/logging/diagnostic-stability.ts`
-
-- `hook.handler.completed` → `record.pluginId`、`record.phase`（hookName）、`record.durationMs`
-- tool/model 事件 → `record.handler`（handlerRef 或 handlerName）
-- 类型 `DiagnosticStabilityEventRecord` 含 `handler?: string`
+- `hook.handler.completed` → `record.pluginId`, `record.phase`（hookName）, `record.durationMs`, `record.handler`
+- tool/model → `record.handler` = handlerRef 或 handlerName
 
 ---
 
-## 5. 插件注册与配置
+## 5. 插件实现规格
 
-### 5.1 Manifest — `openclaw.plugin.json`
+### 5.1 `openclaw.plugin.json`
 
 ```json
 {
@@ -261,50 +290,37 @@ internalDiagnostics: {
     "type": "object",
     "additionalProperties": false,
     "properties": {
-      "maxRuns": {
-        "type": "integer",
-        "minimum": 1,
-        "maximum": 1000,
-        "default": 100
-      },
-      "maxEventsPerRun": {
-        "type": "integer",
-        "minimum": 10,
-        "maximum": 10000,
-        "default": 500
+      "maxRuns": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 100 },
+      "maxEventsPerRun": { "type": "integer", "minimum": 10, "maximum": 10000, "default": 500 },
+      "logTimingEvents": {
+        "type": "boolean",
+        "default": true,
+        "description": "Write hook/tool/llm timing lines to the shared OpenClaw file log (/tmp/openclaw by default)."
       }
     }
   }
 }
 ```
 
-### 5.2 用户配置 — `openclaw.json`
+### 5.2 `package.json` 要点
 
 ```json
 {
-  "diagnostics": { "enabled": true },
-  "plugins": {
-    "entries": {
-      "performance-monitor": { "enabled": true }
-    }
+  "name": "@openclaw/performance-monitor",
+  "type": "module",
+  "devDependencies": { "@openclaw/plugin-sdk": "workspace:*" },
+  "openclaw": {
+    "extensions": ["./index.ts"],
+    "compat": { "pluginApi": ">=2026.6.10" }
   }
 }
 ```
 
-| 配置项                                        | 默认              | 说明                                             |
-| --------------------------------------------- | ----------------- | ------------------------------------------------ |
-| `diagnostics.enabled`                         | Gateway 默认 true | 为 false 时 Core 不发射 hook/tool/model 计时事件 |
-| `plugins.entries.performance-monitor.enabled` | —                 | 必须 true                                        |
-| `maxRuns`                                     | 100               | 内存中保留的最大 run 数（FIFO 淘汰最旧）         |
-| `maxEventsPerRun`                             | 500               | 单 run 最大事件数，超出后 **静默丢弃** 新事件    |
-
-### 5.3 入口 — `index.ts` 契约
+### 5.3 `index.ts`
 
 ```typescript
 export default definePluginEntry({
   id: "performance-monitor",
-  name: "Performance Monitor",
-  description: "...",
   register(api) {
     const exporter = createPerformanceMonitorService(api.pluginConfig);
     api.registerService(exporter.service); // id: "performance-monitor"
@@ -319,496 +335,336 @@ export default definePluginEntry({
 });
 ```
 
----
+### 5.4 `types.ts` — 完整契约
 
-## 6. 输入协议：Diagnostic 事件 → PerformanceEvent 映射
+见源码 `extensions/performance-monitor/src/types.ts`。复现时 **逐字段复制**，包括：
 
-### 6.1 信任过滤
+- `PerformanceMonitorConfig`: `maxRuns`, `maxEventsPerRun`, `logTimingEvents`
+- `PerformanceEvent`: `kind`, `at`, `durationMs`, `extensionId`, `hookName`, `handlerName`, `handlerSource`, `handlerRef`, `toolName`, `toolSource`, `mcp*`, `provider`, `model`, `providerPluginId`, `harnessId`, `api`, `transport`, `phaseName`, `callId`, `toolCallId`, `traceId`, `spanId`, `metadata`
+- `RunPerformanceSummary`, `RunPerformanceBreakdown`, `RunPerformanceTrace`, `PerformanceMonitorReport`
+
+### 5.5 `monitor.ts` — 内存模型
+
+**类 `PerformanceMonitor`：**
+
+- 内部 `#runs: Map<string, StoredRunTrace>`, `#runOrder: string[]`（FIFO）
+- `recordEvent(params)`:
+  - `runId = resolveRunId(params.runId, params.sessionKey)`
+  - 若 `events.length >= maxEventsPerRun` → **静默丢弃**
+  - 构造 `PerformanceEvent`，`durationMs` 经 `roundMs`
+  - `bumpSummary` 仅对 hook/phase/tool/llm 累计
+- `finalizeRun({ runId, durationMs, outcome })` — 在 `run.completed` 后调用，然后 `#trimRuns()`
+- `getRunTrace(runId)` — clone + `attachBreakdown`
+- `getReport()` — 所有 run 的 summary + breakdown（**无 events**）
+- `reset()` — service stop 时清空
+
+**默认配置：** `maxRuns=100`, `maxEventsPerRun=500`（`logTimingEvents` 在 service 层 parse）
+
+### 5.6 `breakdown.ts` — 聚合算法
+
+`buildRunPerformanceBreakdown(trace)` 纯函数：
+
+1. 遍历 `trace.events`，按 `kind` 分流到 `phases` / `hookHandlers` / `tools` / `llmCalls` / `byExtension` Map
+2. **Key 规则：**
+   - phase: `phaseName || "phase"`
+   - hook: `handlerRef` 或 `hook:{pluginId}:{hookName}`
+   - tool: `handlerRef` 或 `tool:{extensionId}:{toolName}`
+   - llm: `handlerRef` 或 `llm:{provider}/{model}`
+   - byExtension: `{extensionId}:{kind}`，仅 `durationMs>0` 且 kind ∈ `{hook_handler,tool,llm,harness}`
+3. **Label 规则：** hook 优先 `{pluginId} → {hookName} → {handlerName}`
+4. `categoryTotals.measuredMs = phase + hook + tool + llm + harness`
+5. `unaccountedMs = max(0, totalDurationMs - measuredMs)`（当 `run.completed` 提供了 `totalDurationMs`）
+6. 各数组 `sortedEntries`：`totalMs` 降序，tie → `label` 字典序
+
+### 5.7 `service.ts` — 事件映射与 HTTP
+
+#### 信任过滤
 
 ```typescript
-function shouldRecordDiagnosticEvent(metadata: DiagnosticEventMetadata): boolean {
+function shouldRecordDiagnosticEvent(metadata): boolean {
   return metadata.trusted || isInternalDiagnosticEventMetadata(metadata);
 }
 ```
 
-- 仅处理 **trusted** 或 **internal** 来源事件。
-- 映射实现: `service.ts` → `recordDiagnosticEvent()`。
+#### `parsePluginConfig`
 
-### 6.2 完整映射表
+- `maxRuns`: clamp `[1, 1000]`，默认 100
+- `maxEventsPerRun`: clamp `[10, 10000]`，默认 500
+- `logTimingEvents`: 默认 **true**（仅显式 `false` 关闭）
 
-| Diagnostic `type`            | `PerformanceEvent.kind` | 关键字段映射                                                                                                             |
-| ---------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `hook.handler.completed`     | `hook_handler`          | `extensionId←pluginId`, `hookName`, `handlerRef←hook:${pluginId}:${hookName}`, `durationMs`, `outcome`                   |
-| `diagnostic.phase.completed` | `phase`                 | `phaseName←name`, `durationMs`, `at←endedAt??startedAt`, `metadata←details`                                              |
-| `tool.execution.completed`   | `tool`                  | `extensionId←toolOwner??toolSource`, `toolName`, `handlerName`, `handlerRef`, `toolSource`, `mcp`\*, `outcome=completed` |
-| `tool.execution.error`       | `tool`                  | 同上 + `outcome=error`, `metadata.errorCategory`                                                                         |
-| `model.call.completed`       | `llm`                   | `extensionId←providerPluginId??harnessId??provider`, `provider`, `model`, `handlerRef`, `api`, `transport`, `callId`     |
-| `model.call.error`           | `llm`                   | 同上 + `outcome=error`                                                                                                   |
-| `run.started`                | `run`                   | 无 duration                                                                                                              |
-| `run.completed`              | `run`                   | `durationMs`, `outcome` + **调用** `finalizeRun()`                                                                       |
-| `harness.run.completed`      | `harness`               | `extensionId←pluginId??harnessId`, `metadata.harnessId`                                                                  |
-| `harness.run.error`          | `harness`               | 同上 + `metadata.phase`, `errorCategory`                                                                                 |
-| _其他_                       | —                       | **忽略**                                                                                                                 |
+#### Diagnostic → PerformanceEvent 完整映射表
 
-**未订阅**: `tool.execution.started`、`model.call.started`（仅终态计时）。
+| Diagnostic `type`            | `kind`         | 字段映射要点                                                                                                                                                                     |
+| ---------------------------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `hook.handler.completed`     | `hook_handler` | `extensionId←pluginId`, `hookName`, `handlerName`, `handlerSource`, `handlerRef`（fallback `hook:{pluginId}:{hookName}`）, `durationMs`, `outcome`, `traceId/spanId←event.trace` |
+| `diagnostic.phase.completed` | `phase`        | `phaseName←name`, `at←endedAt??startedAt`, `metadata←details`                                                                                                                    |
+| `tool.execution.completed`   | `tool`         | `extensionId←toolOwner??toolSource`, `toolName`, `handlerRef`, `toolCallId`, `outcome=completed`                                                                                 |
+| `tool.execution.error`       | `tool`         | 同上 + `outcome=error`, `metadata.errorCategory`                                                                                                                                 |
+| `model.call.completed`       | `llm`          | `extensionId←providerPluginId??harnessId??provider`, `handlerRef`, `callId`, `metadata.timeToFirstByteMs?`                                                                       |
+| `model.call.error`           | `llm`          | 同上 + `outcome=error`                                                                                                                                                           |
+| `run.started`                | `run`          | 无 duration                                                                                                                                                                      |
+| `run.completed`              | `run`          | `durationMs`, `outcome` + **`finalizeRun()`**                                                                                                                                    |
+| `harness.run.completed`      | `harness`      | `extensionId←pluginId??harnessId`, `metadata.harnessId`                                                                                                                          |
+| `harness.run.error`          | `harness`      | 同上 + error metadata                                                                                                                                                            |
+| 其它                         | —              | 忽略                                                                                                                                                                             |
 
-### 6.3 handlerRef 规范
+**未订阅：** `tool.execution.started`, `model.call.started`（仅终态）
 
-Core 侧生成规则（插件 **只消费**，不重新推导 hook/model；tool/llm 以 Core 字段为准）：
+**每条映射后：** 若 `diagnosticEventToTimingLogFields(event)` 非空且 `logTimingEvents` → `logPerformanceTimingEvent(timingLogger, fields)`
 
-**Tool** (`buildToolHandlerRef`):
+#### HTTP 路由
 
-| toolSource | 格式                             | 示例                              |
-| ---------- | -------------------------------- | --------------------------------- |
-| `core`     | `core:{toolName}`                | `core:read`                       |
-| `plugin`   | `plugin:{pluginId}:{toolName}`   | `plugin:browser:browser_navigate` |
-| `channel`  | `channel:{channelId}:{toolName}` | `channel:telegram:send`           |
-| `mcp`      | `mcp:{serverName}:{mcpToolName}` | `mcp:my-server:search`            |
+| 路径                                   | 方法     | 响应                                   |
+| -------------------------------------- | -------- | -------------------------------------- |
+| `/api/performance-monitor/report`      | GET/HEAD | `PerformanceMonitorReport`             |
+| `/api/performance-monitor/runs/:runId` | GET/HEAD | `RunPerformanceTrace`（含 `events[]`） |
+| 其它                                   | —        | 404 `{ error: "not_found" }`           |
+| 非 GET/HEAD                            | —        | 405                                    |
 
-**LLM** (`buildModelCallHandlerRef`):
+`:runId` 需 URL 编码。响应头：`Cache-Control: no-store`, `Content-Type: application/json; charset=utf-8`
 
-优先级: `harnessId` > `providerPluginId` > `provider`
+#### Service 生命周期
 
-| 条件                | 格式                             | 示例                                        |
-| ------------------- | -------------------------------- | ------------------------------------------- |
-| 有 harnessId        | `harness:{harnessId}/{surface}`  | `harness:codex/responses`                   |
-| 有 providerPluginId | `provider-plugin:{id}/{surface}` | `provider-plugin:openai/openai-completions` |
-| 否则                | `provider:{provider}/{surface}`  | `provider:openai/stream`                    |
+- `start(ctx)`: 订阅 `ctx.internalDiagnostics.onEvent`；缺失则 `logger.warn("internal diagnostics unavailable...")`
+- `stop()`: unsubscribe + `monitor.reset()`
 
-其中 `surface = api || transport || "stream"`。
+### 5.8 `timing-log.ts` — 文件日志
 
-**Hook**（插件侧生成）: `hook:{pluginId}:{hookName}`
+**子系统 logger：**
+
+```typescript
+createSubsystemLogger("plugins/performance-monitor");
+```
+
+**消息格式（单行）：**
+
+```
+perf timing: kind=tool toolName=exec handlerRef=core:exec durationMs=2482 outcome=completed runId=... traceId=... sessionKey=...
+```
+
+- 前缀常量：`PERF_TIMING_PREFIX = "perf timing:"`
+- KV 顺序见 `buildPerformanceTimingLogMessage`
+- **Meta 对象**（结构化日志字段）：`perfTiming: true`, `runId`, `traceId`, `spanId`, `trace: { traceId, spanId?, parentSpanId? }`, …
+
+**`diagnosticEventToTimingLogFields`：** 与 `service.ts` 映射表同构，将 diagnostic payload 转为 `PerformanceTimingLogFields`；不支持的 type 返回 `undefined`
+
+**默认日志路径：** 与 Gateway 相同 — 通常 `/tmp/openclaw/openclaw-YYYY-MM-DD.log`（或 `logging.file` 配置）
 
 ---
 
-## 7. 输出协议：HTTP API
-
-**Base path**: `/api/performance-monitor`  
-**Auth**: Gateway Bearer Token（`gateway.auth.token`）  
-**Methods**: `GET`、`HEAD`  
-**Cache**: `Cache-Control: no-store`  
-**Content-Type**: `application/json; charset=utf-8`
-
-### 7.1 `GET /api/performance-monitor/report`
-
-**200 响应** — `PerformanceMonitorReport`:
-
-```typescript
-{
-  generatedAt: number; // Unix ms
-  runCount: number;
-  runs: Array<{
-    runId: string;
-    sessionKey?: string;
-    startedAt: number;
-    updatedAt: number;
-    totalDurationMs?: number;
-    outcome?: string;
-    summary: RunPerformanceSummary;
-    breakdown: RunPerformanceBreakdown;
-  }>;
-}
-```
-
-`runs` 顺序: **FIFO 插入顺序**（最旧在前）。每项含 summary + breakdown，**不含** events 明细。
-
-### 7.2 `GET /api/performance-monitor/runs/:runId`
-
-**200** — 完整 `RunPerformanceTrace`（含 `events[]` + `summary` + `breakdown`）。
-
-**404**:
+## 6. 用户配置
 
 ```json
-{ "error": "run_not_found", "runId": "<decoded-runId>" }
-```
-
-`:runId` 需 URL 编码（支持 UUID 等）。
-
-### 7.3 其他响应
-
-| 条件        | Status | Body                                      |
-| ----------- | ------ | ----------------------------------------- |
-| 未知路径    | 404    | `{ "error": "not_found" }`                |
-| 非 GET/HEAD | 405    | `Method Not Allowed` + `Allow: GET, HEAD` |
-
-### 7.4 JSON 类型定义（完整）
-
-见 `src/types.ts`。核心结构：
-
-`**PerformanceEvent**`:
-
-```typescript
 {
-  kind: "hook_handler" | "phase" | "tool" | "llm" | "run" | "harness";
-  at: number;
-  durationMs?: number;
-  outcome?: string;
-  extensionId?: string;
-  hookName?: string;
-  toolName?: string;
-  handlerName?: string;
-  handlerRef?: string;
-  toolSource?: string;
-  mcpServerName?: string;
-  mcpToolName?: string;
-  provider?: string;
-  model?: string;
-  providerPluginId?: string;
-  harnessId?: string;
-  api?: string;
-  transport?: string;
-  phaseName?: string;
-  callId?: string;
-  toolCallId?: string;
-  metadata?: Record<string, string | number | boolean>;
+  "diagnostics": { "enabled": true },
+  "plugins": {
+    "entries": {
+      "performance-monitor": {
+        "enabled": true,
+        "config": {
+          "maxRuns": 100,
+          "maxEventsPerRun": 500,
+          "logTimingEvents": true
+        }
+      }
+    }
+  }
 }
 ```
 
-`**RunPerformanceSummary**` — 累计计数与总毫秒（仅含 hook/phase/tool/llm 四类）:
+| 项                    | 默认 | 说明                                       |
+| --------------------- | ---- | ------------------------------------------ |
+| `diagnostics.enabled` | true | false → Core 不发射 hook/tool/model 计时   |
+| 插件 `enabled`        | —    | 必须 true                                  |
+| `logTimingEvents`     | true | false → 仅内存 + HTTP，不写 `perf timing:` |
+| `maxRuns`             | 100  | FIFO 淘汰最旧 run                          |
+| `maxEventsPerRun`     | 500  | 超出后静默丢弃新事件                       |
 
-```typescript
-{
-  hookHandlerCount: number;
-  totalHookHandlerMs: number;
-  phaseCount: number;
-  totalPhaseMs: number;
-  toolCallCount: number;
-  totalToolMs: number;
-  llmCallCount: number;
-  totalLlmMs: number;
-}
-```
+### 6.1 正常运行时何时有数据
 
-`**PerformanceBreakdownEntry**`:
-
-```typescript
-{
-  key: string;
-  label: string;
-  count: number;
-  totalMs: number;
-  avgMs: number;
-  maxMs: number;
-  errorCount?: number;
-}
-```
-
-`**RunPerformanceBreakdown**`:
-
-```typescript
-{
-  phases: PerformanceBreakdownEntry[];
-  hookHandlers: PerformanceBreakdownEntry[];
-  tools: PerformanceBreakdownEntry[];
-  llmCalls: PerformanceBreakdownEntry[];
-  byExtension: PerformanceBreakdownEntry[];  // key: "{extensionId}:{kind}"
-  categoryTotals: {
-    phaseMs: number;
-    hookHandlerMs: number;
-    toolMs: number;
-    llmMs: number;
-    harnessMs: number;
-    measuredMs: number;           // 上述五类之和
-    totalDurationMs?: number;     // 来自 run.completed
-    unaccountedMs?: number;       // totalDurationMs - measuredMs，≥0
-  };
-}
-```
-
-**Breakdown 排序**: 各数组按 `totalMs` **降序**；tie-break 按 `label` 字典序。
-
-`**byExtension` 规则\*\*: 仅统计 `durationMs > 0` 且 `kind ∈ {hook_handler, tool, llm, harness}` 的事件；key=`${extensionId}:${kind}`。
+| 场景                             | hook                        | tool               | llm             | 文件日志                |
+| -------------------------------- | --------------------------- | ------------------ | --------------- | ----------------------- |
+| Gateway + 插件启用 + diagnostics | 有 plugin lifecycle hook 时 | agent 调用 tool 时 | 每次 model call | `perf timing:` 实时追加 |
+| 纯问答、无 tool                  | 取决于已启用插件            | 0                  | 有              | llm/run 行              |
+| `plugins.slots.memory: "none"`   | 通常 **0**                  | —                  | 有              | 无 hook 行              |
+| `agent --local`                  | ✗                           | ✗                  | ✗               | ✗                       |
+| 全局 npm Gateway 未装本插件      | ✗                           | ✗                  | ✗               | ✗                       |
 
 ---
 
-## 8. 内存模型与边界行为
+## 7. 安全模型
 
-### 8.1 Run 生命周期
-
-1. 首个带 `runId`（或 fallback）的事件 → 创建 `StoredRunTrace`，`startedAt = event.at`
-2. 持续 `recordEvent` → 追加 `events`，更新 `summary`，`updatedAt = event.at`
-3. `run.completed` → `finalizeRun({ runId, durationMs, outcome })` 写入 `totalDurationMs`
-4. `finalizeRun` 后可能触发 `#trimRuns()`
-
-### 8.2 有界策略
-
-- `**maxRuns`\*\*: `#runOrder` FIFO；超出则 `shift()` 并 `delete` 最旧 run
-- `**maxEventsPerRun**`: 达到上限后 **丢弃** 后续事件（不报错、不 partial flag）
-
-### 8.3 数值精度
-
-- 所有 `durationMs` 存储前 `roundMs(x) = Math.round(x * 10) / 10`（0.1ms 精度）
-
-### 8.4 Service 生命周期
-
-| 阶段         | 行为                                                                          |
-| ------------ | ----------------------------------------------------------------------------- |
-| `start(ctx)` | 订阅 `ctx.internalDiagnostics.onEvent`；无 subscription 则 `logger.warn(...)` |
-| `stop()`     | unsubscribe + `monitor.reset()` 清空全部数据                                  |
+| 风险                         | 缓解                                                          |
+| ---------------------------- | ------------------------------------------------------------- |
+| 伪造 diagnostic              | 仅 `metadata.trusted \|\| internal`                           |
+| 非官方插件读 internal stream | `services.ts` pluginId===service.id + bundled/trustedOfficial |
+| HTTP 泄露                    | Gateway Bearer token + trusted-operator surface               |
+| 内存耗尽                     | maxRuns + maxEventsPerRun 硬上限                              |
 
 ---
 
-## 9. 安全模型
+## 8. 运维脚本（非运行时，复现可选）
 
-| 风险                                                  | 缓解                                                                              |
-| ----------------------------------------------------- | --------------------------------------------------------------------------------- | --- | --------- |
-| 伪造 diagnostic 刷量                                  | 仅 `metadata.trusted                                                              |     | internal` |
-| 非官方插件冒充 performance-monitor 读 internal stream | `services.ts` 仅对 bundled/trustedOfficialInstall 且 `pluginId===service.id` 授权 |
-| HTTP 数据泄露                                         | `auth: gateway` + `trusted-operator` surface；需 Gateway token                    |
-| 内存耗尽                                              | `maxRuns` + `maxEventsPerRun` 硬上限                                              |
+### 8.1 `scripts/run-batch-with-monitor.mjs`
+
+- 克隆用户 config → 隔离 state（`.tmp/perf-batch-monitor/state`）
+- 强制 `diagnostics.enabled: true`，启用 performance-monitor
+- **`node openclaw.mjs`** 启动 gateway + agent（避免 `run-node.mjs` dirty-tree 重建竞态）
+- 默认 10 条 query（含 exec/read tool 用例）
+- 输出：`per-run-stage-summary.tsv`, `stage-average.tsv`, `breakdown.tsv`, `events.tsv`, `monitor-traces.json`
+
+### 8.2 `scripts/lib/aggregate-run-timing.mjs`
+
+- 解析 OpenClaw 文件日志中的 `perf timing:` 行
+- 合并 monitor trace JSON
+- 导出 TSV：`formatPerRunStageSummaryTsv`, `formatStageAverageTsv`, `formatBreakdownTsv`, `formatEventsTsv`
+
+### 8.3 `scripts/aggregate-run-timing-from-logs.mjs`
+
+CLI 包装：从 `/tmp/openclaw` 日志聚合
 
 ---
 
-## 10. 测试用例规范
-
-运行命令（仓库根目录）:
+## 9. 测试规范
 
 ```bash
 pnpm test extensions/performance-monitor
 pnpm test src/plugins/hook-handler-diagnostics.test.ts
 pnpm test src/plugins/services.test.ts -t "grants internal diagnostics"
-pnpm test src/agents/embedded-agent-runner/run/attempt.model-diagnostic-events.test.ts
 ```
 
-### 10.1 Core — `hook-handler-diagnostics.test.ts`
-
-| ID   | 用例               | 断言                                                                                                                 |
-| ---- | ------------------ | -------------------------------------------------------------------------------------------------------------------- |
-| HD-1 | 正常 async handler | 发射 `hook.handler.completed`；含 `pluginId`, `hookName`, `runId`, `sessionKey`, `durationMs>0`, `outcome=completed` |
-| HD-2 | handler throw      | `outcome=error`；异常继续向上抛                                                                                      |
-| HD-3 | diagnostics 关闭   | listener 不被调用                                                                                                    |
-
-### 10.2 Core — `services.test.ts`
-
-| ID   | 用例                                  | 断言                                          |
-| ---- | ------------------------------------- | --------------------------------------------- |
-| PS-1 | bundled `performance-monitor`         | `ctx.internalDiagnostics.onEvent` 为 function |
-| PS-2 | bundled `diagnostics-otel/prometheus` | 同上（回归）                                  |
-| PS-3 | workspace 未信任 `diagnostics-otel`   | `internalDiagnostics` undefined               |
-| PS-4 | pluginId 与 service.id 不匹配         | 无 internalDiagnostics                        |
-
-### 10.3 Core — `attempt.model-diagnostic-events.test.ts`
-
-| ID   | 用例                         | 断言                                                                                |
-| ---- | ---------------------------- | ----------------------------------------------------------------------------------- |
-| MC-1 | 基本 stream                  | `handlerRef = provider:{provider}/{api}`                                            |
-| MC-2 | providerPluginId + harnessId | `handlerRef = harness:{harnessId}/{api}`；字段 `providerPluginId`, `harnessId` 存在 |
-
-### 10.4 Plugin — `monitor.test.ts`
-
-| ID    | 用例                    | 断言                                                |
-| ----- | ----------------------- | --------------------------------------------------- |
-| MON-1 | hook_handler 记录       | summary.hookHandlerCount=1, totalHookHandlerMs 精确 |
-| MON-2 | tool + llm + handlerRef | events 含 handlerRef；summary 总 ms 正确            |
-| MON-3 | maxRuns=2 淘汰          | run-a 被淘汰，report.runCount=2                     |
-| MON-4 | roundMs                 | 12.345 → 12.3                                       |
-
-### 10.5 Plugin — `service.test.ts`（经 `__test_`\_ API）
-
-| ID    | 用例               | 断言                                                                                                                 |
-| ----- | ------------------ | -------------------------------------------------------------------------------------------------------------------- |
-| SVC-1 | 完整 diagnostic 链 | hook+tool+llm+run.completed → summary 计数正确；breakdown.hookHandlers[0].key=`hook:memory-core:before_prompt_build` |
-| SVC-2 | untrusted metadata | `shouldRecordDiagnosticEvent({trusted:false})===false`                                                               |
-
-### 10.6 Plugin — `breakdown.test.ts`
-
-| ID    | 用例     | 断言                                                                 |
-| ----- | -------- | -------------------------------------------------------------------- |
-| BRK-1 | 四类聚合 | phases/hookHandlers/tools/llmCalls/categoryTotals/unaccountedMs 正确 |
-| BRK-2 | 排序     | hookHandlers 按 totalMs 降序                                         |
-
-### 10.7 Plugin — `demo.simulate.test.ts`（场景测试）
-
-| ID     | 用例           | 说明                                                                                                                     |
-| ------ | -------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| DEMO-1 | 多插件一轮对话 | 模拟 session-memory / feishu / command-logger hooks + core tools + 2× LLM + run.completed；stdout 打印 breakdown（可选） |
-
-### 10.8 手工 / 集成验证
-
-```bash
-# 1. 启用配置并重启 Gateway
-# 2. 通过 Gateway 发 agent turn（勿用 --local）
-pnpm openclaw agent --session-key perf-demo --message "hello"
-
-# 3. 拉报告
-curl -s -H "Authorization: Bearer $TOKEN" \
-  http://127.0.0.1:18789/api/performance-monitor/report | jq .
-
-curl -s -H "Authorization: Bearer $TOKEN" \
-  "http://127.0.0.1:18789/api/performance-monitor/runs/<runId>" | jq .
-```
-
-**期望**: `runCount >= 1`；`breakdown.llmCalls` 非空（有模型调用时）；`hookHandlers` 随已启用插件变化。
+| 文件                                  | 覆盖                                            |
+| ------------------------------------- | ----------------------------------------------- |
+| `monitor.test.ts`                     | recordEvent, summary, maxRuns 淘汰, roundMs     |
+| `breakdown.test.ts`                   | 四类聚合, 排序, unaccountedMs                   |
+| `service.test.ts`                     | 完整 diagnostic 链, trust 过滤, logTimingEvents |
+| `timing-log.test.ts`                  | 消息格式, diagnostic→fields, meta.trace         |
+| `aggregate-run-timing.test.ts`        | perf timing 日志解析, TSV formatter             |
+| `demo.simulate.test.ts`               | 多插件 hook + tool + llm 场景                   |
+| Core hook-handler-diagnostics.test.ts | emit 字段, error 路径, diagnostics off          |
+| Core services.test.ts                 | internalDiagnostics grant                       |
 
 ---
 
-## 11. 从零复现检查清单
+## 10. 从零复现检查清单
 
-按顺序执行，可仅依赖本文档 + OpenClaw 源码完整复现。
+### Phase A — Core
 
-### Phase A — Core 埋点
-
-- [ ] 实现 `src/plugins/hook-handler-diagnostics.ts` + 测试
-- [ ] `src/plugins/hooks.ts` 全部 handler 路径接入 wrapper
-- [ ] `src/infra/diagnostic-events.ts` 增加 `DiagnosticHookHandlerCompletedEvent` 及 tool/model 扩展字段；加入 async 队列
-- [ ] `src/agents/agent-tools.before-tool-call.ts` 实现 tool `handlerRef` 归属
-- [ ] `src/agents/embedded-agent-runner/run/attempt.model-diagnostic-events.ts` 实现 model `handlerRef`
-- [ ] `attempt.ts` / `compact.ts` 注入 `providerPluginId` / `harnessId`
-- [ ] `src/plugins/services.ts` 授权 `performance-monitor` internalDiagnostics
-- [ ] `src/logging/diagnostic-stability.ts` 映射新字段（可选）
-- [ ] 通过 Phase A 全部 Core 测试
+- [ ] `hook-handler-diagnostics.ts` + hooks.ts 全路径接入
+- [ ] `diagnostic-events.ts` 类型 + async 队列
+- [ ] tool `handlerRef` + model `handlerRef`
+- [ ] `services.ts` performance-monitor internalDiagnostics
+- [ ] Core 测试绿
 
 ### Phase B — 插件包
 
-- [ ] 创建 `extensions/performance-monitor/` 目录树（§3）
-- [ ] 实现 `types.ts` / `monitor.ts` / `breakdown.ts` / `service.ts` / `index.ts` / `api.ts`
-- [ ] 编写 `openclaw.plugin.json` + `package.json`
-- [ ] 通过 Phase B 全部插件测试
+- [ ] `types.ts`, `monitor.ts`, `breakdown.ts`, `service.ts`, `timing-log.ts`
+- [ ] `index.ts`, `api.ts`, manifest, package.json
+- [ ] 插件测试绿
 
 ### Phase C — 仓库集成
 
-- [ ] `scripts/lib/official-external-plugin-catalog.json` 增加 `@openclaw/performance-monitor`
-- [ ] `.github/labeler.yml` 增加 `extensions: performance-monitor`
-- [ ] `pnpm install` 更新 lockfile
+- [ ] `scripts/lib/official-external-plugin-catalog.json`
+- [ ] `.github/labeler.yml`
 
-### Phase D — 运行时验证
+### Phase D — 运行时
 
-- [ ] `diagnostics.enabled: true`
-- [ ] `plugins.entries.performance-monitor.enabled: true`
-- [ ] Gateway 重启后日志 **无** `internal diagnostics unavailable`
-- [ ] HTTP report 返回非空 runs
+- [ ] Gateway 启用插件 + diagnostics
+- [ ] `curl .../api/performance-monitor/report` 非空
+- [ ] `grep 'perf timing:' /tmp/openclaw/openclaw-*.log` 有输出
 
----
+### Phase E — Hook 路径验证（可选）
 
-## 12. 与 sibling 插件对比
-
-| 能力                | diagnostics-prometheus  | performance-monitor     |
-| ------------------- | ----------------------- | ----------------------- |
-| internalDiagnostics | ✓                       | ✓（同等 trust 门控）    |
-| 输出                | Prometheus text         | JSON HTTP               |
-| 粒度                | metrics 计数/直方图     | 每 run 事件 + breakdown |
-| 存储                | 进程内 metrics registry | 进程内 trace ring       |
-| Per-hook handler    | ✗（无单独 metric）      | ✓                       |
+- [ ] batch config 启用 memory 类插件（非 `memory: none`）
+- [ ] breakdown.hookHandlers 非空
 
 ---
 
-## 13. 版本与兼容
+## 11. HTTP 示例
 
-| 字段                      | 值                                           |
-| ------------------------- | -------------------------------------------- |
-| package.json version      | `2026.6.10`                                  |
-| openclaw.compat.pluginApi | `>=2026.6.10`                                |
-| 依赖 SDK                  | `@openclaw/plugin-sdk` workspace barrel only |
-
-**向前兼容**: HTTP JSON 字段均为 additive；新增 diagnostic 类型映射时在 `recordDiagnosticEvent` switch 扩展即可。
-
----
-
-## 14. 参考源码索引
-
-| 主题                  | 路径                                                                              |
-| --------------------- | --------------------------------------------------------------------------------- |
-| 插件入口              | `extensions/performance-monitor/index.ts`                                         |
-| 事件映射              | `extensions/performance-monitor/src/service.ts`                                   |
-| HTTP 契约             | `extensions/performance-monitor/src/types.ts`                                     |
-| Hook 计时             | `src/plugins/hook-handler-diagnostics.ts`                                         |
-| Diagnostic 类型       | `src/infra/diagnostic-events.ts:439-448,458-473,597-617,861-876`                  |
-| Tool 归属             | `src/agents/agent-tools.before-tool-call.ts:432-509`                              |
-| LLM 归属              | `src/agents/embedded-agent-runner/run/attempt.model-diagnostic-events.ts:286-326` |
-| Service 授权          | `src/plugins/services.ts:31-38`                                                   |
-| Plugin service 启动   | `src/gateway/server-startup-post-attach.ts`（`startPluginServices`）              |
-| SDK diagnostic barrel | `src/plugin-sdk/diagnostic-runtime.ts`                                            |
-
----
-
-## 15. 附录：示例 HTTP 响应（节选）
-
-`**GET .../runs/demo-run-001`\*\* 结构示例:
+`GET /api/performance-monitor/runs/{runId}` 节选：
 
 ```json
 {
-  "runId": "6759b9c2-29ff-4a4a-8472-fad0eae454dc",
-  "sessionKey": "agent:main:perf-demo",
-  "startedAt": 1783607325308,
-  "updatedAt": 1783607328608,
-  "totalDurationMs": 3300,
-  "outcome": "completed",
+  "runId": "d0cb098a-e07a-4cad-819c-640454a40861",
+  "sessionKey": "agent:main:demo",
   "summary": {
-    "hookHandlerCount": 4,
-    "totalHookHandlerMs": 53,
-    "phaseCount": 2,
-    "totalPhaseMs": 160,
+    "hookHandlerCount": 0,
+    "totalHookHandlerMs": 0,
     "toolCallCount": 2,
-    "totalToolMs": 57,
-    "llmCallCount": 2,
-    "totalLlmMs": 2750
+    "totalToolMs": 4964,
+    "llmCallCount": 4,
+    "totalLlmMs": 9528
   },
   "breakdown": {
-    "phases": [
-      {
-        "key": "prompt_build",
-        "label": "prompt_build",
-        "count": 1,
-        "totalMs": 120,
-        "avgMs": 120,
-        "maxMs": 120
-      }
-    ],
-    "hookHandlers": [
-      {
-        "key": "hook:session-memory:before_prompt_build",
-        "label": "session-memory → before_prompt_build",
-        "count": 1,
-        "totalMs": 28,
-        "avgMs": 28,
-        "maxMs": 28
-      }
-    ],
     "tools": [
       {
-        "key": "core:read",
-        "label": "core:read",
-        "count": 1,
-        "totalMs": 35,
-        "avgMs": 35,
-        "maxMs": 35
+        "key": "core:exec",
+        "label": "core → exec",
+        "count": 2,
+        "totalMs": 4964,
+        "avgMs": 2482,
+        "maxMs": 2482
       }
     ],
     "llmCalls": [
       {
-        "key": "provider-plugin:openai/openai-completions",
-        "label": "provider-plugin:openai/openai-completions",
-        "count": 2,
-        "totalMs": 2750,
-        "avgMs": 1375,
-        "maxMs": 1800
-      }
-    ],
-    "byExtension": [
-      {
-        "key": "openai:llm",
-        "label": "openai (llm)",
-        "count": 2,
-        "totalMs": 2750,
-        "avgMs": 1375,
-        "maxMs": 1800
+        "key": "harness:openclaw/openai-completions",
+        "label": "harness:openclaw/openai-completions",
+        "count": 4,
+        "totalMs": 9528,
+        "avgMs": 2382,
+        "maxMs": 2612
       }
     ],
     "categoryTotals": {
-      "phaseMs": 160,
-      "hookHandlerMs": 53,
-      "toolMs": 57,
-      "llmMs": 2750,
+      "toolMs": 4964,
+      "llmMs": 9528,
       "harnessMs": 0,
-      "measuredMs": 3020,
-      "totalDurationMs": 3300,
-      "unaccountedMs": 280
+      "measuredMs": 14492,
+      "totalDurationMs": 7988,
+      "unaccountedMs": 0
     }
   },
-  "events": ["..."]
+  "events": []
 }
+```
+
+文件日志行示例：
+
+```
+perf timing: kind=tool toolName=exec handlerRef=core:exec durationMs=2482 outcome=completed runId=d0cb098a-... traceId=abc123... sessionKey=agent:main:demo
 ```
 
 ---
 
-_文档版本与实现同步于 OpenClaw `performance-monitor` 分支；Core 依赖以 `src/` 当前源码为准。_
+## 12. 与 sibling 对比
+
+| 能力                | diagnostics-prometheus | performance-monitor      |
+| ------------------- | ---------------------- | ------------------------ |
+| internalDiagnostics | ✓                      | ✓                        |
+| 输出                | Prometheus text        | JSON HTTP + 可选文件日志 |
+| 粒度                | metrics                | 每 run 事件 + breakdown  |
+| Per-hook handler    | ✗                      | ✓                        |
+| 持久化              | 进程内                 | 内存；文件日志行可保留   |
+
+---
+
+## 13. 参考源码索引
+
+| 主题            | 路径                                                                      |
+| --------------- | ------------------------------------------------------------------------- |
+| 插件入口        | `extensions/performance-monitor/index.ts`                                 |
+| 事件映射        | `extensions/performance-monitor/src/service.ts`                           |
+| 文件日志        | `extensions/performance-monitor/src/timing-log.ts`                        |
+| HTTP 契约       | `extensions/performance-monitor/src/types.ts`                             |
+| Hook 计时       | `src/plugins/hook-handler-diagnostics.ts`                                 |
+| Diagnostic 类型 | `src/infra/diagnostic-events.ts`                                          |
+| Tool 归属       | `src/agents/agent-tools.before-tool-call.ts`                              |
+| LLM 归属        | `src/agents/embedded-agent-runner/run/attempt.model-diagnostic-events.ts` |
+| Service 授权    | `src/plugins/services.ts`                                                 |
+| SDK barrel      | `src/plugin-sdk/diagnostic-runtime.ts`                                    |
+
+---
+
+_文档与 `extensions/performance-monitor/` 源码一致；Core 依赖以 `src/` 当前实现为准。_
