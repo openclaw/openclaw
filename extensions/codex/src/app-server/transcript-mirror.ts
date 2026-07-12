@@ -700,9 +700,7 @@ export async function mirrorCodexAppServerTranscript(params: {
         ...transcriptTarget,
         update: {
           ...(params.agentId ? { agentId: params.agentId } : {}),
-          message: update.message,
-          messageId: update.messageId,
-          messageSeq: update.messageSeq,
+          ...buildMirrorTranscriptPublishedUpdate(update),
           sessionKey: transcriptTarget.sessionKey,
         },
       });
@@ -716,6 +714,30 @@ export async function mirrorCodexAppServerTranscript(params: {
   }
 
   return { assistantMirrorIdentitiesOwned, userMessagesPresent };
+}
+
+function buildMirrorTranscriptPublishedUpdate(update: {
+  messageId: string;
+  message: AgentMessage;
+  messageSeq: number;
+}): {
+  message?: AgentMessage;
+  messageId: string;
+  messageSeq: number;
+} {
+  // Tool results belong in the durable transcript, but live inline updates
+  // are consumed by source-chat delivery paths and must contain only messages
+  // intended for the user. Preserve the sequence-only update so consumers can
+  // still observe that the transcript advanced without receiving tool output.
+  return {
+    ...(isInlineMirrorTranscriptUpdateMessage(update.message) ? { message: update.message } : {}),
+    messageId: update.messageId,
+    messageSeq: update.messageSeq,
+  };
+}
+
+function isInlineMirrorTranscriptUpdateMessage(message: AgentMessage): boolean {
+  return message.role === "user" || message.role === "assistant";
 }
 
 function resolveCodexMirrorTranscriptTarget(params: {

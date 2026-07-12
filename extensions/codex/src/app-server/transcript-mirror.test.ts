@@ -749,6 +749,48 @@ describe("mirrorCodexAppServerTranscript", () => {
     });
   });
 
+  it("keeps failed bash tool output out of source-chat inline updates", async () => {
+    const target = await createSqliteMirrorTarget("openclaw-codex-mirror-bash-failure-");
+    const toolResultMessage = attachCodexMirrorIdentity(
+      castAgentMessage({
+        role: "toolResult",
+        toolCallId: "call-headless-check",
+        toolName: "bash",
+        isError: true,
+        content: [
+          {
+            type: "toolResult",
+            toolCallId: "call-headless-check",
+            toolName: "bash",
+            content:
+              "Bash failed: jq -e '.browser.headless == true' ~/.openclaw/openclaw.json && diff -u before after",
+          },
+        ],
+        timestamp: Date.now(),
+      }),
+      "turn-1:tool:call-headless-check:result",
+    ) as MirroredAgentMessage;
+
+    await mirrorCodexAppServerTranscript({
+      ...target,
+      messages: [toolResultMessage],
+      idempotencyScope: "codex-app-server:thread-1",
+    });
+
+    const raw = await readMirrorRaw(target);
+    expect(raw).toContain('"role":"toolResult"');
+    expect(raw).toContain("Bash failed: jq -e");
+
+    const updates = publishSessionTranscriptUpdateByIdentityMock.mock.calls.map(
+      ([update]) => update as Record<string, unknown> & { update?: Record<string, unknown> },
+    );
+    expect(updates).toHaveLength(1);
+    expect(updates[0]?.update?.message).toBeUndefined();
+    expect(updates[0]?.update?.messageId).toEqual(expect.any(String));
+    expect(updates[0]?.update?.messageSeq).toBe(1);
+    expect(JSON.stringify(updates)).not.toContain("Bash failed: jq -e");
+  });
+
   it("emits stable sequence numbers for multi-message mirror batches", async () => {
     const target = await createSqliteMirrorTarget("openclaw-codex-mirror-seq-");
 
@@ -763,9 +805,26 @@ describe("mirrorCodexAppServerTranscript", () => {
           "turn-1:prompt",
         ),
         attachCodexMirrorIdentity(
+          castAgentMessage({
+            role: "toolResult",
+            toolCallId: "call-headless-check",
+            toolName: "bash",
+            content: [
+              {
+                type: "toolResult",
+                toolCallId: "call-headless-check",
+                toolName: "bash",
+                content: "private tool output",
+              },
+            ],
+            timestamp: Date.now() + 1,
+          }),
+          "turn-1:tool:call-headless-check:result",
+        ),
+        attachCodexMirrorIdentity(
           makeAgentAssistantMessage({
             content: [{ type: "text", text: "second" }],
-            timestamp: Date.now() + 1,
+            timestamp: Date.now() + 2,
           }),
           "turn-1:assistant",
         ),
@@ -776,13 +835,14 @@ describe("mirrorCodexAppServerTranscript", () => {
     const updates = publishSessionTranscriptUpdateByIdentityMock.mock.calls.map(
       ([update]) => update as Record<string, unknown> & { update?: Record<string, unknown> },
     );
-    expect(updates.map((update) => update.update?.messageSeq)).toEqual([1, 2]);
+    expect(updates.map((update) => update.update?.messageSeq)).toEqual([1, 2, 3]);
     expect(
       updates.map((update) => {
         const message = update.update?.message as { role?: string } | undefined;
         return message?.role;
       }),
-    ).toEqual(["user", "assistant"]);
+    ).toEqual(["user", undefined, "assistant"]);
+    expect(JSON.stringify(updates)).not.toContain("private tool output");
   });
 
   it("keeps assistant ownership when live update publication fails", async () => {
