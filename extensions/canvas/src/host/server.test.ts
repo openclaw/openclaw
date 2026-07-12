@@ -139,7 +139,9 @@ function runInjectedScript(WebSocket: (this: MockLiveReloadSocket) => void) {
     URLSearchParams,
     WebSocket,
     addEventListener: (event: string, listener: () => void) => {
-      if (event === "pagehide") pagehide = listener;
+      if (event === "pagehide") {
+        pagehide = listener;
+      }
     },
     console: { error: consoleError },
     encodeURIComponent,
