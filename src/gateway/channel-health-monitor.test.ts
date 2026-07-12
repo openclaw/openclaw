@@ -566,6 +566,45 @@ describe("channel-health-monitor", () => {
     monitor.stop();
   });
 
+  it("caps pending recovery restarts at the configured maxRestartsPerHour", async () => {
+    const account: Partial<ChannelAccountSnapshot> = disconnectedAccount(Date.now() - 300_000);
+    let callCount = 0;
+    const manager = createSnapshotManager(
+      {
+        discord: {
+          default: account,
+        },
+      },
+      {
+        startChannel: vi.fn(async () => {
+          callCount++;
+          account.running = false;
+          account.connected = false;
+          account.restartPending = true;
+          account.reconnectAttempts = 0;
+        }),
+      },
+    );
+    const monitor = startDefaultMonitor(manager, {
+      checkIntervalMs: 1_000,
+      cooldownCycles: 1,
+      maxRestartsPerHour: 2,
+    });
+
+    // Run enough checks to trigger pending restarts beyond the limit
+    await vi.advanceTimersByTimeAsync(30_001);
+
+    // Without the fix, pending restarts bypass maxRestartsPerHour
+    // and startChannel would be called many times (one per check tick).
+    // With the fix, pending restarts count toward the hourly limit
+    // so startChannel should not exceed maxRestartsPerHour.
+    expect(callCount).toBeLessThanOrEqual(2);
+
+    // Verify at least one pending restart completed before the cap
+    expect(callCount).toBeGreaterThanOrEqual(1);
+    monitor.stop();
+  });
+
   it("counts failed restart attempts toward cooldown and hourly caps", async () => {
     const manager = createSnapshotManager(
       {
