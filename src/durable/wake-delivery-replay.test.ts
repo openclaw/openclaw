@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { openDurableRuntimeSqliteStore } from "./sqlite-store.js";
 import type { DurableRuntimeStore, DurableWakeDeliveryAttemptStatus } from "./types.js";
 import { replayDurableWakeDeliveryAttempts } from "./wake-delivery-replay.js";
@@ -300,6 +300,100 @@ describe("durable wake delivery replay", () => {
       }
     } finally {
       fs.rmSync(path.dirname(dbPath), { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a slow in-flight delivery hook claim through ttl-expired competing replay", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const { store, cleanup } = tempStore();
+    try {
+      const wake = createPendingWake(store, "slow-hook-claim", 100);
+      const hookCalls: string[] = [];
+      let releaseFirstHook!: () => void;
+      let markFirstHookStarted!: () => void;
+      const firstHookStarted = new Promise<void>((resolve) => {
+        markFirstHookStarted = resolve;
+      });
+      const firstHookRelease = new Promise<void>((resolve) => {
+        releaseFirstHook = resolve;
+      });
+
+      const firstReplay = replayDurableWakeDeliveryAttempts({
+        store,
+        replayPassId: "pass:slow-first",
+        claimTtlMs: 10,
+        deliveryHook: async () => {
+          hookCalls.push("first");
+          markFirstHookStarted();
+          await firstHookRelease;
+          return {
+            status: "delivered",
+            evidence: { kind: "slow_first_delivered" },
+          };
+        },
+      });
+      await firstHookStarted;
+
+      await vi.advanceTimersByTimeAsync(11);
+
+      const competingReplay = await replayDurableWakeDeliveryAttempts({
+        store,
+        replayPassId: "pass:competing-second",
+        claimTtlMs: 10,
+        deliveryHook: () => {
+          hookCalls.push("second");
+          return {
+            status: "failed",
+            error: "competing hook should not run",
+          };
+        },
+      });
+
+      expect(competingReplay).toMatchObject({
+        scanned: 1,
+        recorded: 0,
+        delivered: 0,
+        failed: 0,
+        pending: 1,
+      });
+      expect(hookCalls).toEqual(["first"]);
+      expect(store.listWakeDeliveryAttempts({ wakeId: wake.wakeId })).toEqual([
+        expect.objectContaining({
+          status: "attempted",
+          deliveryClaimedBy: "pass:slow-first",
+          deliveryClaimExpiresAt: 1_020,
+        }),
+      ]);
+
+      releaseFirstHook();
+      const firstResult = await firstReplay;
+
+      expect(firstResult).toMatchObject({
+        scanned: 1,
+        recorded: 1,
+        delivered: 1,
+      });
+      expect(hookCalls).toEqual(["first"]);
+      expect(store.listWakeDeliveryAttempts({ wakeId: wake.wakeId })).toEqual([
+        expect.objectContaining({
+          status: "delivered",
+          replayPassId: "pass:slow-first",
+          deliveredAt: 1_011,
+          evidence: expect.objectContaining({ kind: "slow_first_delivered" }),
+        }),
+      ]);
+      expect(store.listWakeDeliveryAttempts({ wakeId: wake.wakeId })[0]).not.toHaveProperty(
+        "deliveryClaimedBy",
+      );
+      expect(store.getDurableWake(wake.wakeId)).toMatchObject({
+        status: "delivered",
+        attemptCount: 1,
+        lastAttemptAt: 1_011,
+      });
+    } finally {
+      cleanup();
+      vi.useRealTimers();
     }
   });
 

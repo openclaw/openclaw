@@ -72,6 +72,7 @@ import type {
   RecordDurableContinuationCleanupInput,
   RecordDurableDedupeLedgerInput,
   RecordDurableWakeDeliveryAttemptInput,
+  RenewDurableWakeDeliveryAttemptClaimInput,
   ResolveDurableSideEffectUncertaintyFactInput,
   UpdateDurableParentWakeInput,
   UpdateDurableWakeDeliveryAttemptInput,
@@ -1040,7 +1041,8 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
         input.status === "delivered" || input.status === "failed" || input.status === "unknown"
           ? { delivery_claimed_by: null, delivery_claim_expires_at: null }
           : {};
-      executeQuery(
+      const expectedClaimedBy = optionalText(input.expectedClaimedBy);
+      const affected = executeQuery(
         db,
         durableDb
           .updateTable("durable_runtime_wake_delivery_attempts")
@@ -1056,8 +1058,14 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
             updated_at: now,
             metadata_json: nextMetadataJson,
           })
-          .where("delivery_attempt_id", "=", input.deliveryAttemptId),
+          .where("delivery_attempt_id", "=", input.deliveryAttemptId)
+          .$if(Boolean(expectedClaimedBy), (qb) =>
+            qb.where("delivery_claimed_by", "=", expectedClaimedBy!),
+          ),
       );
+      if (affected !== 1) {
+        return undefined;
+      }
       const row = queryFirst<DurableWakeDeliveryAttemptRow>(
         db,
         durableDb
@@ -1066,6 +1074,42 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
           .where("delivery_attempt_id", "=", input.deliveryAttemptId),
       );
       return rowToWakeDeliveryAttempt(row!);
+    });
+  };
+
+  const renewWakeDeliveryAttemptClaimRecord = (
+    input: RenewDurableWakeDeliveryAttemptClaimInput,
+  ): DurableWakeDeliveryAttempt | undefined => {
+    const now = input.now ?? Date.now();
+    const claimExpiresAt = now + input.claimTtlMs;
+    const replayPassId = optionalText(input.replayPassId);
+    if (!replayPassId) {
+      return undefined;
+    }
+    return runSqliteImmediateTransactionSync(db, () => {
+      const affected = executeQuery(
+        db,
+        durableDb
+          .updateTable("durable_runtime_wake_delivery_attempts")
+          .set({
+            delivery_claim_expires_at: claimExpiresAt,
+            updated_at: now,
+          })
+          .where("delivery_attempt_id", "=", input.deliveryAttemptId)
+          .where("status", "=", "attempted")
+          .where("delivery_claimed_by", "=", replayPassId),
+      );
+      if (affected !== 1) {
+        return undefined;
+      }
+      const row = queryFirst<DurableWakeDeliveryAttemptRow>(
+        db,
+        durableDb
+          .selectFrom("durable_runtime_wake_delivery_attempts")
+          .selectAll()
+          .where("delivery_attempt_id", "=", input.deliveryAttemptId),
+      );
+      return row ? rowToWakeDeliveryAttempt(row) : undefined;
     });
   };
 
@@ -2473,6 +2517,12 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
       input: ClaimDurableWakeDeliveryAttemptInput,
     ): DurableWakeDeliveryAttempt | undefined {
       return claimWakeDeliveryAttemptRecord(input);
+    },
+
+    renewWakeDeliveryAttemptClaim(
+      input: RenewDurableWakeDeliveryAttemptClaimInput,
+    ): DurableWakeDeliveryAttempt | undefined {
+      return renewWakeDeliveryAttemptClaimRecord(input);
     },
 
     updateWakeDeliveryAttempt(
