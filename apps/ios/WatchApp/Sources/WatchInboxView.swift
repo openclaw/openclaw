@@ -608,7 +608,7 @@ private struct WatchControlSurfaceView: View {
     }
 }
 
-private enum WatchClawStyle {
+enum WatchClawStyle {
     static let accent = Color(red: 1.0, green: 0.2, blue: 0.22)
     static let background = Color(red: 0.015, green: 0.015, blue: 0.02)
     static let surface = Color.white.opacity(0.075)
