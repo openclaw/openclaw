@@ -6175,7 +6175,6 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     const { onBlockReply } = await runMessagingCase({
       agentResult: {
         payloads: [],
-        didDeliverSourceReplyViaMessageTool: true,
         messagingToolSentTexts: ["visible recovered reply"],
         messagingToolSentTargets: [{ tool: "message", provider: "discord", to: "channel:C1" }],
       },
@@ -6215,6 +6214,54 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
         originatingTo: "channel:C1",
         run: {
           ...queued.run,
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      } as FollowupRun,
+    });
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    expect(routeReplyMock.mock.calls[0]?.[0]?.payload?.text).toBe(
+      "I generated a reply but could not deliver it to this chat. Please try again.",
+    );
+  });
+
+  it("routes retry diagnostics when visible delivery and source-route matching come from different targets", async () => {
+    const queued = baseQueuedRun("discord");
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        payloads: [],
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "discord",
+            accountId: "source-account",
+            to: "channel:OTHER",
+            threadId: "thread:other",
+            text: "Visible reply sent to another conversation",
+          },
+          {
+            tool: "message",
+            provider: "discord",
+            accountId: "source-account",
+            to: "channel:C1",
+            threadId: "thread:source",
+            text: "",
+          },
+        ],
+      },
+      queued: {
+        ...queued,
+        summaryLine: "stranded-reply-retry",
+        strandedReplyRetry: true,
+        originatingAccountId: "source-account",
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        originatingThreadId: "thread:source",
+        run: {
+          ...queued.run,
+          agentAccountId: "source-account",
+          messageProvider: "discord",
           sourceReplyDeliveryMode: "message_tool_only",
         },
       } as FollowupRun,

@@ -59,7 +59,7 @@ function hasNonEmptyStringArray(value: unknown): boolean {
   return Array.isArray(value) && value.some(hasNonEmptyString);
 }
 
-function hasVisibleMessagingToolTarget(value: unknown): boolean {
+export function hasVisibleMessagingToolTarget(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
   }

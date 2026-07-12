@@ -3402,6 +3402,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     strandedReplyRetry?: boolean;
     sendPolicyDenied?: boolean;
     isHeartbeat?: boolean;
+    originatingThreadId?: string;
     replyOperation?: ReturnType<typeof createReplyOperation>;
     queuedLifecycle?: FollowupRun["queuedLifecycle"];
   }) {
@@ -3452,6 +3453,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
       AccountId: "primary",
       MessageSid: "msg",
       ChatType: "direct",
+      ...(params.originatingThreadId ? { MessageThreadId: params.originatingThreadId } : {}),
       ...(params.inboundEventKind ? { InboundEventKind: params.inboundEventKind } : {}),
     } as unknown as TemplateContext;
     const followupRun = {
@@ -3622,7 +3624,15 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
 
   it("does not warn or enqueue retry when the message tool delivered this turn", async () => {
     await runPrivateFinalCase({
-      didDeliverSourceReplyViaMessageTool: true,
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: "whatsapp",
+          accountId: "primary",
+          to: "+15550001111",
+          text: "Visible reply",
+        },
+      ],
     });
     expect(warnPrivateFinalSpy).not.toHaveBeenCalled();
     expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
@@ -3632,6 +3642,33 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     await runPrivateFinalCase({
       messagingToolSentTargets: [{ tool: "message", provider: "whatsapp", to: "+15559998888" }],
     });
+    expect(warnPrivateFinalSpy).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+  });
+
+  it("still retries when visible delivery and source-route matching come from different targets", async () => {
+    await runPrivateFinalCase({
+      originatingThreadId: "thread:source",
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: "whatsapp",
+          accountId: "primary",
+          to: "+15559998888",
+          threadId: "thread:other",
+          text: "Visible reply sent to another conversation",
+        },
+        {
+          tool: "message",
+          provider: "whatsapp",
+          accountId: "primary",
+          to: "+15550001111",
+          threadId: "thread:source",
+          text: "",
+        },
+      ],
+    });
+
     expect(warnPrivateFinalSpy).toHaveBeenCalledTimes(1);
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
   });
