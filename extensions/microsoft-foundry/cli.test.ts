@@ -4,6 +4,15 @@ import { PassThrough } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
+const {
+  forceKillChildProcessTreeMock,
+  shouldDetachChildForProcessTreeMock,
+  signalChildProcessTreeMock,
+} = vi.hoisted(() => ({
+  forceKillChildProcessTreeMock: vi.fn(),
+  shouldDetachChildForProcessTreeMock: vi.fn(() => false),
+  signalChildProcessTreeMock: vi.fn(),
+}));
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -13,10 +22,17 @@ vi.mock("node:child_process", async () => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/process-runtime", () => ({
+  forceKillChildProcessTree: forceKillChildProcessTreeMock,
+  shouldDetachChildForProcessTree: shouldDetachChildForProcessTreeMock,
+  signalChildProcessTree: signalChildProcessTreeMock,
+}));
+
 import { azLoginDeviceCodeWithOptions } from "./cli.js";
 
 function createAzLoginProcess() {
   const proc = new EventEmitter() as EventEmitter & {
+    pid?: number;
     stdout: PassThrough;
     stderr: PassThrough;
     kill: ReturnType<typeof vi.fn>;
@@ -30,6 +46,10 @@ function createAzLoginProcess() {
 describe("azLoginDeviceCodeWithOptions", () => {
   beforeEach(() => {
     spawnMock.mockReset();
+    forceKillChildProcessTreeMock.mockReset();
+    shouldDetachChildForProcessTreeMock.mockReset();
+    shouldDetachChildForProcessTreeMock.mockReturnValue(false);
+    signalChildProcessTreeMock.mockReset();
   });
 
   it("rejects cleanly when az login stdio streams error", async () => {
@@ -45,20 +65,23 @@ describe("azLoginDeviceCodeWithOptions", () => {
       expect(() => proc[streamName].emit("error", new Error("EPIPE"))).not.toThrow();
       expect(() => proc.stderr.emit("error", new Error("duplicate EPIPE"))).not.toThrow();
       expect(() => proc.emit("error", new Error("late child error"))).not.toThrow();
-      expect(proc.kill).toHaveBeenCalledTimes(1);
+      expect(signalChildProcessTreeMock).toHaveBeenCalledWith(proc, "SIGTERM");
+      expect(proc.kill).not.toHaveBeenCalled();
       proc.emit("close", 1);
       await expect(loginPromise).rejects.toThrow(`az login ${streamName} stream failed: EPIPE`);
-      expect(proc.kill).toHaveBeenCalledWith("SIGTERM");
     }
 
     expect(spawnMock).toHaveBeenCalledWith(
       "az",
       ["login", "--use-device-code", "--tenant", "tenant-1", "--allow-no-subscriptions"],
       {
+        detached: false,
         stdio: ["inherit", "pipe", "pipe"],
         shell: process.platform === "win32",
       },
     );
+    expect(signalChildProcessTreeMock).toHaveBeenCalledTimes(2);
+    expect(forceKillChildProcessTreeMock).not.toHaveBeenCalled();
   });
 
   it("rejects after child exit when a stream-error close event never arrives", async () => {
@@ -83,8 +106,9 @@ describe("azLoginDeviceCodeWithOptions", () => {
       await vi.advanceTimersByTimeAsync(1);
 
       await expect(loginPromise).rejects.toThrow("az login stdout stream failed: EPIPE");
-      expect(proc.kill).toHaveBeenCalledTimes(1);
-      expect(proc.kill).toHaveBeenCalledWith("SIGTERM");
+      expect(signalChildProcessTreeMock).toHaveBeenCalledExactlyOnceWith(proc, "SIGTERM");
+      expect(forceKillChildProcessTreeMock).not.toHaveBeenCalled();
+      expect(proc.kill).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }
@@ -108,14 +132,30 @@ describe("azLoginDeviceCodeWithOptions", () => {
       expect(() => proc.stdout.emit("error", new Error("EPIPE"))).not.toThrow();
       await vi.advanceTimersByTimeAsync(1_000);
       expect(rejected).toBe(false);
-      expect(proc.kill).toHaveBeenCalledWith("SIGTERM");
-      expect(proc.kill).toHaveBeenCalledWith("SIGKILL");
+      expect(signalChildProcessTreeMock).toHaveBeenCalledExactlyOnceWith(proc, "SIGTERM");
+      expect(forceKillChildProcessTreeMock).toHaveBeenCalledExactlyOnceWith(proc);
       await vi.advanceTimersByTimeAsync(1_000);
 
       await expect(loginPromise).rejects.toThrow("az login stdout stream failed: EPIPE");
-      expect(proc.kill).toHaveBeenCalledTimes(2);
+      expect(proc.kill).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("spawns az login in a detached process group when the SDK helper needs it", async () => {
+    shouldDetachChildForProcessTreeMock.mockReturnValue(true);
+    const proc = createAzLoginProcess();
+    spawnMock.mockReturnValueOnce(proc);
+
+    const loginPromise = azLoginDeviceCodeWithOptions({});
+    proc.emit("close", 0);
+
+    await expect(loginPromise).resolves.toBeUndefined();
+    expect(spawnMock).toHaveBeenCalledWith("az", ["login", "--use-device-code"], {
+      detached: true,
+      stdio: ["inherit", "pipe", "pipe"],
+      shell: process.platform === "win32",
+    });
   });
 });

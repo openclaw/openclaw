@@ -1,7 +1,7 @@
 // Microsoft Foundry tests cover real local az substitute process behavior.
 import type { ChildProcess } from "node:child_process";
 import { once } from "node:events";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -25,18 +25,28 @@ import { azLoginDeviceCodeWithOptions } from "./cli.js";
 const originalPath = process.env.PATH;
 const tempDirs: string[] = [];
 
-function installFakeAzExecutable(options?: { ignoreSigterm?: boolean }): void {
+function installFakeAzExecutable(options?: { ignoreSigterm?: boolean; pidFile?: string }): void {
   const binDir = mkdtempSync(path.join(tmpdir(), "openclaw-foundry-az-"));
   tempDirs.push(binDir);
   const scriptPath = path.join(binDir, "fake-az.mjs");
   const sigtermHandler = options?.ignoreSigterm
     ? "process.on('SIGTERM', () => {});"
     : ["process.on('SIGTERM', () => {", "  process.exit(0);", "});"].join("\n");
+  const pidRecorder = options?.pidFile
+    ? [
+        'import { writeFileSync } from "node:fs";',
+        `writeFileSync(${JSON.stringify(options.pidFile)}, String(process.pid));`,
+      ].join("\n")
+    : "";
   writeFileSync(
     scriptPath,
-    [sigtermHandler, "process.stderr.write('ready\\n');", "setInterval(() => {}, 1000);", ""].join(
-      "\n",
-    ),
+    [
+      pidRecorder,
+      sigtermHandler,
+      "process.stderr.write('ready\\n');",
+      "setInterval(() => {}, 1000);",
+      "",
+    ].join("\n"),
     {
       mode: 0o755,
     },
@@ -73,6 +83,35 @@ async function waitForChildReady(child: ChildProcess): Promise<void> {
   await once(child.stderr, "data");
 }
 
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function spyProcessKillThrough() {
+  const originalKill = process.kill.bind(process);
+  return vi
+    .spyOn(process, "kill")
+    .mockImplementation(((pid: number, signal?: string | number) =>
+      originalKill(pid, signal)) as typeof process.kill);
+}
+
+async function waitForProcessExit(pid: number, timeoutMs = 2_000): Promise<void> {
+  const start = Date.now();
+  while (isProcessAlive(pid)) {
+    if (Date.now() - start >= timeoutMs) {
+      throw new Error(`Process ${String(pid)} remained alive after ${String(timeoutMs)}ms`);
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 50);
+    });
+  }
+}
+
 afterEach(() => {
   process.env.PATH = originalPath;
   for (const child of spawnedChildren) {
@@ -98,8 +137,9 @@ describe.skipIf(process.platform === "win32")(
       });
       const child = requireSpawnedChild();
       await waitForChildReady(child);
-      const originalKill = child.kill.bind(child);
-      const killSpy = vi.spyOn(child, "kill").mockImplementation((signal) => originalKill(signal));
+      const childPid = child.pid;
+      expect(childPid).toEqual(expect.any(Number));
+      const killSpy = spyProcessKillThrough();
       let closeSeen = false;
       let settledBeforeClose = false;
       child.on("close", () => {
@@ -122,7 +162,9 @@ describe.skipIf(process.platform === "win32")(
       );
       expect(closeSeen).toBe(true);
       expect(settledBeforeClose).toBe(false);
-      expect(killSpy.mock.calls.filter(([signal]) => signal === "SIGTERM")).toHaveLength(1);
+      expect(
+        killSpy.mock.calls.filter(([pid, signal]) => pid === -childPid! && signal === "SIGTERM"),
+      ).toHaveLength(1);
       console.info(
         `[proof] local az substitute pid=${
           child.pid ?? "unknown"
@@ -138,8 +180,9 @@ describe.skipIf(process.platform === "win32")(
       });
       const child = requireSpawnedChild();
       await waitForChildReady(child);
-      const originalKill = child.kill.bind(child);
-      const killSpy = vi.spyOn(child, "kill").mockImplementation((signal) => originalKill(signal));
+      const childPid = child.pid;
+      expect(childPid).toEqual(expect.any(Number));
+      const killSpy = spyProcessKillThrough();
       let closeSeen = false;
       let settledBeforeClose = false;
       child.on("close", () => {
@@ -158,12 +201,55 @@ describe.skipIf(process.platform === "win32")(
       );
       expect(closeSeen).toBe(true);
       expect(settledBeforeClose).toBe(false);
-      expect(killSpy.mock.calls.filter(([signal]) => signal === "SIGTERM")).toHaveLength(1);
-      expect(killSpy.mock.calls.filter(([signal]) => signal === "SIGKILL")).toHaveLength(1);
+      expect(
+        killSpy.mock.calls.filter(([pid, signal]) => pid === -childPid! && signal === "SIGTERM"),
+      ).toHaveLength(1);
+      expect(
+        killSpy.mock.calls.filter(([pid, signal]) => pid === -childPid! && signal === "SIGKILL"),
+      ).toHaveLength(1);
       console.info(
         `[proof] local az substitute pid=${
           child.pid ?? "unknown"
         } ignored SIGTERM; SIGKILL escalation closed child before rejection`,
+      );
+    });
+  },
+);
+
+describe.skipIf(process.platform !== "win32")(
+  "azLoginDeviceCodeWithOptions Windows shell-wrapper stream errors",
+  () => {
+    it("waits for the shell-launched az descendant to exit before rejection", async () => {
+      const pidFile = path.join(
+        mkdtempSync(path.join(tmpdir(), "openclaw-foundry-az-pid-")),
+        "pid",
+      );
+      tempDirs.push(path.dirname(pidFile));
+      installFakeAzExecutable({ ignoreSigterm: true, pidFile });
+      const loginPromise = azLoginDeviceCodeWithOptions({
+        tenantId: "tenant-1",
+        allowNoSubscriptions: true,
+      });
+      const child = requireSpawnedChild();
+      await waitForChildReady(child);
+      const descendantPid = Number(readFileSync(pidFile, "utf8"));
+      if (!Number.isInteger(descendantPid) || descendantPid <= 0) {
+        throw new Error(
+          `Expected a valid fake az descendant pid, received ${String(descendantPid)}`,
+        );
+      }
+
+      child.stdout?.destroy(new Error("EPIPE from Windows shell wrapper stdout"));
+
+      await expect(loginPromise).rejects.toThrow(
+        "az login stdout stream failed: EPIPE from Windows shell wrapper stdout",
+      );
+      await waitForProcessExit(descendantPid);
+      expect(isProcessAlive(descendantPid)).toBe(false);
+      console.info(
+        `[proof] Windows shell wrapper pid=${
+          child.pid ?? "unknown"
+        } descendant pid=${descendantPid} exited before stream-error rejection`,
       );
     });
   },

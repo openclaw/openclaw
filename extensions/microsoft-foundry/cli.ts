@@ -1,6 +1,11 @@
 // Microsoft Foundry plugin module implements cli behavior.
 import { execFile, execFileSync, spawn } from "node:child_process";
 import {
+  forceKillChildProcessTree,
+  shouldDetachChildForProcessTree,
+  signalChildProcessTree,
+} from "openclaw/plugin-sdk/process-runtime";
+import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -168,6 +173,7 @@ export async function azLoginDeviceCodeWithOptions(params: {
       ...(params.allowNoSubscriptions ? ["--allow-no-subscriptions"] : []),
     ];
     const child = spawn("az", args, {
+      detached: shouldDetachChildForProcessTree(),
       stdio: ["inherit", "pipe", "pipe"],
       shell: process.platform === "win32",
     });
@@ -228,7 +234,7 @@ export async function azLoginDeviceCodeWithOptions(params: {
       }
       streamError = new Error(`az login ${streamName} stream failed: ${error.message}`);
       try {
-        child.kill("SIGTERM");
+        signalChildProcessTree(child, "SIGTERM");
       } catch {
         // Ignore kill failures; the stream error is already the actionable failure.
       }
@@ -237,7 +243,7 @@ export async function azLoginDeviceCodeWithOptions(params: {
       streamKillTimer = setTimeout(() => {
         streamKillTimer = undefined;
         try {
-          child.kill("SIGKILL");
+          forceKillChildProcessTree(child);
         } catch {
           // Process may have exited after the grace timer was armed.
         }
