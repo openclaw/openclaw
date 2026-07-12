@@ -406,10 +406,11 @@ describe("handleMSTeamsLifecycleRemove", () => {
     );
 
     expect(result.sessionsReset).toBe(1);
-    expect(store["msteams:direct:user-aad"].sessionId).not.toBe("legacy-user-selection-session");
-    expect(store["msteams:direct:user-aad"].providerOverride).toBe("openai");
-    expect(store["msteams:direct:user-aad"].modelOverride).toBe("gpt-5");
-    expect(store["msteams:direct:user-aad"].modelOverrideSource).toBe("user");
+    const resetEntry = store["msteams:direct:user-aad"]!;
+    expect(resetEntry.sessionId).not.toBe("legacy-user-selection-session");
+    expect(resetEntry.providerOverride).toBe("openai");
+    expect(resetEntry.modelOverride).toBe("gpt-5");
+    expect(resetEntry.modelOverrideSource).toBe("user");
   });
 
   it("does not recount a clean zero-timestamp session that has no Teams provider bindings", async () => {
