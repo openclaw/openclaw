@@ -472,20 +472,44 @@ public struct OpenClawWatchAppSnapshotMessage: Codable, Sendable, Equatable {
         self.snapshotId = try container.decodeIfPresent(String.self, forKey: .snapshotId)
 
         let gatewayStatusText = try container.decodeIfPresent(String.self, forKey: .gatewayStatusText)
-        self.gatewayStatus = (try? container.decode(
+        if let gatewayStatus = try? container.decode(
             OpenClawWatchAppStatus.self,
-            forKey: .gatewayStatus)) ?? Self.decodeLegacyGatewayStatus(
-            text: gatewayStatusText,
-            connected: self.gatewayConnected)
+            forKey: .gatewayStatus)
+        {
+            self.gatewayStatus = gatewayStatus
+        } else if container.contains(.gatewayStatus),
+                  let gatewayStatusText,
+                  !gatewayStatusText.isEmpty
+        {
+            self.gatewayStatus = OpenClawWatchAppStatus(
+                code: .legacy,
+                verbatim: gatewayStatusText)
+        } else {
+            self.gatewayStatus = Self.decodeLegacyGatewayStatus(
+                text: gatewayStatusText,
+                connected: self.gatewayConnected)
+        }
         self.gatewayStatusText = gatewayStatusText ?? Self.legacyText(for: self.gatewayStatus)
         let talkStatusText = try container.decodeIfPresent(String.self, forKey: .talkStatusText)
-        self.talkStatus = (try? container.decode(
+        if let talkStatus = try? container.decode(
             OpenClawWatchAppStatus.self,
-            forKey: .talkStatus)) ?? Self.decodeLegacyTalkStatus(
-            text: talkStatusText,
-            enabled: self.talkEnabled,
-            listening: self.talkListening,
-            speaking: self.talkSpeaking)
+            forKey: .talkStatus)
+        {
+            self.talkStatus = talkStatus
+        } else if container.contains(.talkStatus),
+                  let talkStatusText,
+                  !talkStatusText.isEmpty
+        {
+            self.talkStatus = OpenClawWatchAppStatus(
+                code: .legacy,
+                verbatim: talkStatusText)
+        } else {
+            self.talkStatus = Self.decodeLegacyTalkStatus(
+                text: talkStatusText,
+                enabled: self.talkEnabled,
+                listening: self.talkListening,
+                speaking: self.talkSpeaking)
+        }
         self.talkStatusText = talkStatusText ?? Self.legacyText(for: self.talkStatus)
         let chatStatusText = try container.decodeIfPresent(String.self, forKey: .chatStatusText)
         let chatStatusCode = try container.decodeIfPresent(String.self, forKey: .chatStatusCode)
