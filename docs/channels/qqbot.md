@@ -72,6 +72,7 @@ Default-account env vars (top-level account only):
 
 - `QQBOT_APP_ID`
 - `QQBOT_CLIENT_SECRET`
+- `QQBOT_DATA_DIR` (optional): custom data directory path for QQBot storage. Defaults to `~/.openclaw/qqbot`.
 
 File-backed AppSecret:
 
