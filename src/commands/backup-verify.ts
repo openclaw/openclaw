@@ -656,6 +656,14 @@ async function assertSqliteSnapshotFileShape(
   if (!validPageSize || expectedSize % pageSize !== 0) {
     throw new Error(`SQLite snapshot ${archivePath} has an invalid page layout.`);
   }
+
+  const changeCounter = header.readUInt32BE(24);
+  const declaredPageCount = header.readUInt32BE(28);
+  const versionValidFor = header.readUInt32BE(92);
+  const hasAuthoritativePageCount = declaredPageCount !== 0 && changeCounter === versionValidFor;
+  if (hasAuthoritativePageCount && declaredPageCount !== expectedSize / pageSize) {
+    throw new Error(`SQLite snapshot ${archivePath} has an invalid page layout.`);
+  }
 }
 
 async function verifySqliteSnapshots(params: {

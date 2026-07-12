@@ -486,6 +486,46 @@ describe("backupVerifyCommand", () => {
     );
   });
 
+  it("rejects a page-aligned truncated plugin SQLite snapshot", async () => {
+    const stateAssetArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw`;
+    const sqliteArchivePath = `${stateAssetArchivePath}/plugins/dedicated/corrupt.sqlite`;
+    const sqlitePayload = await createSqlitePayload((database) => {
+      database.exec("CREATE TABLE records (id INTEGER PRIMARY KEY, value TEXT NOT NULL);");
+      const insert = database.prepare("INSERT INTO records (value) VALUES (?)");
+      for (let index = 0; index < 100; index += 1) {
+        insert.run(`record-${index}-${"x".repeat(100)}`);
+      }
+    });
+    const encodedPageSize = sqlitePayload.readUInt16BE(16);
+    const pageSize = encodedPageSize === 1 ? 65_536 : encodedPageSize;
+    const declaredPageCount = sqlitePayload.readUInt32BE(28);
+    expect(sqlitePayload.readUInt32BE(24)).toBe(sqlitePayload.readUInt32BE(92));
+    expect(declaredPageCount).toBeGreaterThan(1);
+    expect(declaredPageCount).toBe(sqlitePayload.byteLength / pageSize);
+    const truncatedPayload = sqlitePayload.subarray(0, sqlitePayload.byteLength - pageSize);
+    expect(truncatedPayload.byteLength % pageSize).toBe(0);
+
+    await withBrokenArchiveFixture(
+      {
+        tempPrefix: "openclaw-backup-page-truncated-sqlite-",
+        manifestAssetArchivePath: stateAssetArchivePath,
+        payloads: [
+          {
+            fileName: "corrupt.sqlite",
+            contents: truncatedPayload,
+            archivePath: sqliteArchivePath,
+          },
+        ],
+      },
+      async (archivePath) => {
+        const runtime = createBackupVerifyRuntime();
+        await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
+          /Backup SQLite snapshot failed verification.*corrupt\.sqlite/iu,
+        );
+      },
+    );
+  });
+
   it("rejects a canonical SQLite snapshot with the wrong database role", async () => {
     const stateAssetArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw`;
     const sqliteArchivePath = `${stateAssetArchivePath}/state/openclaw.sqlite`;
