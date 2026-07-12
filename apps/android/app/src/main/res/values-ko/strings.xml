@@ -1,9 +1,0 @@
-<resources>
-    <string name="app_name">OpenClaw Node</string>
-    <string name="trust_this_gateway">이 게이트웨이를 신뢰하시겠습니까?</string>
-    <string name="trust_and_continue">신뢰하고 계속</string>
-    <string name="cancel">취소</string>
-    <string name="new_chat_in_worktree">worktree에서 새 채팅</string>
-    <string name="gateway_trust_first_seen">이 게이트웨이를 신뢰하기 전에 인증서 지문을 확인하세요.\n\n%1$s</string>
-    <string name="gateway_trust_changed">게이트웨이 인증서가 변경되었습니다. 예상한 변경인 경우에만 계속하세요.\n\n이전 SHA-256:\n%1$s\n\n새 SHA-256:\n%2$s</string>
-</resources>

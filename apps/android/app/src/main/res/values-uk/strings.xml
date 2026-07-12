@@ -1,9 +1,0 @@
-<resources>
-    <string name="app_name">OpenClaw Node</string>
-    <string name="trust_this_gateway">Довіряти цьому шлюзу?</string>
-    <string name="trust_and_continue">Довіряти й продовжити</string>
-    <string name="cancel">Скасувати</string>
-    <string name="new_chat_in_worktree">Новий чат у worktree</string>
-    <string name="gateway_trust_first_seen">Перевірте відбиток сертифіката, перш ніж довіряти цьому шлюзу.\n\n%1$s</string>
-    <string name="gateway_trust_changed">Сертифікат шлюзу змінився. Продовжуйте, лише якщо ви очікували цю зміну.\n\nСтарий SHA-256:\n%1$s\n\nНовий SHA-256:\n%2$s</string>
-</resources>

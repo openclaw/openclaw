@@ -1,9 +1,0 @@
-<resources>
-    <string name="app_name">OpenClaw Node</string>
-    <string name="trust_this_gateway">Faire confiance à cette passerelle ?</string>
-    <string name="trust_and_continue">Faire confiance et continuer</string>
-    <string name="cancel">Annuler</string>
-    <string name="new_chat_in_worktree">Nouveau chat dans le worktree</string>
-    <string name="gateway_trust_first_seen">Vérifiez l’empreinte du certificat avant d’accorder votre confiance à cette passerelle.\n\n%1$s</string>
-    <string name="gateway_trust_changed">Le certificat de la passerelle a changé. Continuez uniquement si vous vous attendiez à ce changement.\n\nAncien SHA-256 :\n%1$s\n\nNouveau SHA-256 :\n%2$s</string>
-</resources>

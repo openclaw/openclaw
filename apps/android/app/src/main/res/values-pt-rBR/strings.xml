@@ -1,9 +1,0 @@
-<resources>
-    <string name="app_name">OpenClaw Node</string>
-    <string name="trust_this_gateway">Confiar neste gateway?</string>
-    <string name="trust_and_continue">Confiar e continuar</string>
-    <string name="cancel">Cancelar</string>
-    <string name="new_chat_in_worktree">Novo chat no worktree</string>
-    <string name="gateway_trust_first_seen">Verifique a impressão digital do certificado antes de confiar neste gateway.\n\n%1$s</string>
-    <string name="gateway_trust_changed">O certificado do gateway foi alterado. Continue somente se você esperava essa alteração.\n\nSHA-256 antigo:\n%1$s\n\nSHA-256 novo:\n%2$s</string>
-</resources>

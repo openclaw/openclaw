@@ -1,9 +1,0 @@
-<resources>
-    <string name="app_name">OpenClaw Node</string>
-    <string name="trust_this_gateway">Tin cậy cổng này?</string>
-    <string name="trust_and_continue">Tin cậy và tiếp tục</string>
-    <string name="cancel">Hủy</string>
-    <string name="new_chat_in_worktree">Trò chuyện mới trong worktree</string>
-    <string name="gateway_trust_first_seen">Xác minh dấu vân tay chứng chỉ trước khi tin cậy cổng này.\n\n%1$s</string>
-    <string name="gateway_trust_changed">Chứng chỉ cổng đã thay đổi. Chỉ tiếp tục nếu bạn mong đợi thay đổi này.\n\nSHA-256 cũ:\n%1$s\n\nSHA-256 mới:\n%2$s</string>
-</resources>

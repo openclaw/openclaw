@@ -1,9 +1,0 @@
-<resources>
-    <string name="app_name">OpenClaw Node</string>
-    <string name="trust_this_gateway">به این دروازه اعتماد دارید؟</string>
-    <string name="trust_and_continue">اعتماد و ادامه</string>
-    <string name="cancel">لغو</string>
-    <string name="new_chat_in_worktree">چت جدید در worktree</string>
-    <string name="gateway_trust_first_seen">پیش از اعتماد به این دروازه، اثر انگشت گواهی را تأیید کنید.\n\n%1$s</string>
-    <string name="gateway_trust_changed">گواهی دروازه تغییر کرده است. فقط در صورتی ادامه دهید که انتظار این تغییر را داشتید.\n\nSHA-256 قدیمی:\n%1$s\n\nSHA-256 جدید:\n%2$s</string>
-</resources>

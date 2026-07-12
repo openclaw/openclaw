@@ -1,9 +1,0 @@
-<resources>
-    <string name="app_name">OpenClaw Node</string>
-    <string name="trust_this_gateway">Percayai gateway ini?</string>
-    <string name="trust_and_continue">Percayai dan lanjutkan</string>
-    <string name="cancel">Batal</string>
-    <string name="new_chat_in_worktree">Chat baru di worktree</string>
-    <string name="gateway_trust_first_seen">Verifikasi sidik jari sertifikat sebelum memercayai gateway ini.\n\n%1$s</string>
-    <string name="gateway_trust_changed">Sertifikat gateway berubah. Lanjutkan hanya jika Anda mengharapkan perubahan ini.\n\nSHA-256 lama:\n%1$s\n\nSHA-256 baru:\n%2$s</string>
-</resources>
