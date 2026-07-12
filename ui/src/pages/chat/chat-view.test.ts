@@ -554,6 +554,12 @@ function requireElement(container: Element, selector: string, label: string): El
   return element;
 }
 
+function createDragEvent(type: string, types = ["Files"]): Event {
+  const event = new Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "dataTransfer", { value: { types } });
+  return event;
+}
+
 function itemAt<T>(items: ArrayLike<T>, index: number, label: string): T {
   return expectDefined(items[index], `${label} ${index}`);
 }
@@ -3532,18 +3538,13 @@ describe("chat attachment picker", () => {
     const second = renderChatView();
     const firstChat = requireElement(first, "section.card.chat", "first chat drop target");
     const secondChat = requireElement(second, "section.card.chat", "second chat drop target");
-    const fileDragEvent = (type: string) => {
-      const event = new Event(type, { bubbles: true, cancelable: true });
-      Object.defineProperty(event, "dataTransfer", { value: { types: ["Files"] } });
-      return event;
-    };
 
-    secondChat.dispatchEvent(fileDragEvent("dragenter"));
+    secondChat.dispatchEvent(createDragEvent("dragenter"));
 
     expect(firstChat.hasAttribute("data-attachment-drop-active")).toBe(false);
     expect(secondChat.hasAttribute("data-attachment-drop-active")).toBe(true);
 
-    secondChat.dispatchEvent(fileDragEvent("dragleave"));
+    secondChat.dispatchEvent(createDragEvent("dragleave"));
 
     expect(secondChat.hasAttribute("data-attachment-drop-active")).toBe(false);
   });
@@ -3551,25 +3552,16 @@ describe("chat attachment picker", () => {
   it("keeps the file drop overlay stable across nested drag targets", () => {
     const container = renderChatView();
     const chat = requireElement(container, "section.card.chat", "chat drop target");
-    const fileDragEvent = (type: string) => {
-      const event = new Event(type, { bubbles: true, cancelable: true });
-      Object.defineProperty(event, "dataTransfer", { value: { types: ["Files"] } });
-      return event;
-    };
 
-    chat.dispatchEvent(fileDragEvent("dragenter"));
-    chat.dispatchEvent(fileDragEvent("dragenter"));
-    chat.dispatchEvent(fileDragEvent("dragleave"));
+    chat.dispatchEvent(createDragEvent("dragenter"));
+    chat.dispatchEvent(createDragEvent("dragenter"));
+    chat.dispatchEvent(createDragEvent("dragleave"));
     expect(chat.hasAttribute("data-attachment-drop-active")).toBe(true);
 
-    chat.dispatchEvent(fileDragEvent("dragleave"));
+    chat.dispatchEvent(createDragEvent("dragleave"));
     expect(chat.hasAttribute("data-attachment-drop-active")).toBe(false);
 
-    const sessionDrag = new Event("dragenter", { bubbles: true, cancelable: true });
-    Object.defineProperty(sessionDrag, "dataTransfer", {
-      value: { types: ["application/x-openclaw-session"] },
-    });
-    chat.dispatchEvent(sessionDrag);
+    chat.dispatchEvent(createDragEvent("dragenter", ["application/x-openclaw-session"]));
     expect(chat.hasAttribute("data-attachment-drop-active")).toBe(false);
   });
 
