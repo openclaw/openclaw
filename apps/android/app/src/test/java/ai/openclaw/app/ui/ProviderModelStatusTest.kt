@@ -170,22 +170,52 @@ class ProviderModelStatusTest {
     assertEquals("video", modelCapabilities(model))
   }
 
+  @Test
+  fun modelCapabilitiesLocalizeControlledLabelsWithoutChangingGatewayMetadata() {
+    val model =
+      model(
+        provider = "custom-provider",
+        id = "model/internal-id",
+        name = "Model Display Name",
+        supportsReasoning = true,
+        supportsVision = true,
+        supportsAudio = true,
+        supportsVideo = true,
+        supportsDocuments = true,
+        contextTokens = 128_000,
+      )
+
+    assertEquals(
+      "reasoning / image / audio / video / document / 128k context",
+      modelCapabilities(model),
+    )
+    assertEquals("custom-provider", model.provider)
+    assertEquals("model/internal-id", model.id)
+    assertEquals("Model Display Name", model.name)
+  }
+
   private fun model(
     provider: String,
     id: String,
     name: String = id,
     available: Boolean? = null,
+    supportsReasoning: Boolean = false,
+    supportsVision: Boolean = false,
+    supportsAudio: Boolean = false,
+    supportsVideo: Boolean = false,
+    supportsDocuments: Boolean = false,
+    contextTokens: Long? = null,
   ): GatewayModelSummary =
     GatewayModelSummary(
       id = id,
       name = name,
       provider = provider,
-      supportsVision = false,
-      supportsAudio = false,
-      supportsVideo = false,
-      supportsDocuments = false,
-      supportsReasoning = false,
-      contextTokens = null,
+      supportsVision = supportsVision,
+      supportsAudio = supportsAudio,
+      supportsVideo = supportsVideo,
+      supportsDocuments = supportsDocuments,
+      supportsReasoning = supportsReasoning,
+      contextTokens = contextTokens,
       available = available,
     )
 }

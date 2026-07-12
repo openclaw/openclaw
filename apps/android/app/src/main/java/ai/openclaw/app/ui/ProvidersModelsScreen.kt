@@ -3,6 +3,7 @@ package ai.openclaw.app.ui
 import ai.openclaw.app.GatewayModelProviderSummary
 import ai.openclaw.app.GatewayModelSummary
 import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.currentAppLanguage
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.providerDisplayName
 import ai.openclaw.app.ui.design.ClawEmptyState
@@ -237,7 +238,7 @@ private fun LazyListScope.providerListItems(
         row =
           ProviderRow(
             id = "loading",
-            name = "Provider catalog",
+            name = nativeString("Provider catalog"),
             status = if (refreshing) nativeString("Loading") else nativeString("No providers"),
             availability = ProviderAvailability.Unknown,
             modelCount = 0,
@@ -378,12 +379,12 @@ private fun Boolean?.toProviderAvailability(): ProviderAvailability =
 
 internal fun modelCapabilities(model: GatewayModelSummary): String =
   buildList {
-    if (model.supportsReasoning) add("reasoning")
-    if (model.supportsVision) add("image")
-    if (model.supportsAudio) add("audio")
-    if (model.supportsVideo) add("video")
-    if (model.supportsDocuments) add("document")
-    model.contextTokens?.let { add("${formatContextTokens(it)} context") }
+    if (model.supportsReasoning) add(nativeString("reasoning"))
+    if (model.supportsVision) add(nativeString("image"))
+    if (model.supportsAudio) add(nativeString("audio"))
+    if (model.supportsVideo) add(nativeString("video"))
+    if (model.supportsDocuments) add(nativeString("document"))
+    model.contextTokens?.let { add(nativeString("\$context context", formatContextTokens(it))) }
   }.joinToString(" / ")
 
 private fun formatContextTokens(tokens: Long): String = if (tokens >= 1_000) "${tokens / 1_000}k" else tokens.toString()
@@ -409,7 +410,11 @@ private fun providerInitials(value: String): String =
 @Composable
 private fun ProviderSectionLabel(title: String) {
   Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-    Text(text = title.uppercase(), style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted)
+    Text(
+      text = localizedUppercase(title, currentAppLanguage().languageTag),
+      style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp),
+      color = ClawTheme.colors.textMuted,
+    )
   }
 }
 
