@@ -285,12 +285,14 @@ describe("searchMemoryWiki", () => {
     let started = 0;
     const originalReadFile = fs.readFile.bind(fs);
     const readFileSpy = vi.spyOn(fs, "readFile").mockImplementation(async (file, encoding) => {
-      const filePath =
-        typeof file === "string"
-          ? file
-          : file instanceof URL
-            ? file.pathname
-            : file.toString();
+      let filePath: string;
+      if (typeof file === "string") {
+        filePath = file;
+      } else if (Buffer.isBuffer(file)) {
+        filePath = file.toString("utf8");
+      } else {
+        filePath = file.pathname;
+      }
       if (!filePath.includes(`${path.sep}sources${path.sep}page-`)) {
         return originalReadFile(file, encoding as BufferEncoding);
       }
