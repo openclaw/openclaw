@@ -4275,15 +4275,18 @@ describe("dispatchReplyFromConfig", () => {
       const dispatcher = createDispatcher();
       type CapturedReplyOptions = GetReplyOptions & {
         sessionPromptSourceReplyDeliveryMode?: GetReplyOptions["sourceReplyDeliveryMode"];
+        sessionMessageToolAvailable?: boolean;
       };
       const seen: Array<{
         effective?: GetReplyOptions["sourceReplyDeliveryMode"];
         stable?: GetReplyOptions["sourceReplyDeliveryMode"];
+        messageToolAvailable?: boolean;
       }> = [];
       const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: CapturedReplyOptions) => {
         seen.push({
           effective: opts?.sourceReplyDeliveryMode,
           stable: opts?.sessionPromptSourceReplyDeliveryMode,
+          messageToolAvailable: opts?.sessionMessageToolAvailable,
         });
         return { text: "done" } satisfies ReplyPayload;
       });
@@ -4318,8 +4321,16 @@ describe("dispatchReplyFromConfig", () => {
       });
 
       expect(seen).toEqual([
-        { effective: expectedUserRequestMode, stable: expectedStableMode },
-        { effective: "message_tool_only", stable: expectedStableMode },
+        {
+          effective: expectedUserRequestMode,
+          stable: expectedStableMode,
+          messageToolAvailable: true,
+        },
+        {
+          effective: "message_tool_only",
+          stable: expectedStableMode,
+          messageToolAvailable: true,
+        },
       ]);
     },
   );

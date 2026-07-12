@@ -7,6 +7,7 @@ import { streamSimple } from "../../llm/stream.js";
 import { createAnthropicVertexStreamFnForModel } from "../anthropic-vertex-stream.js";
 import { createBoundaryAwareStreamFnForModel } from "../provider-transport-stream.js";
 import type { StreamFn } from "../runtime/index.js";
+import { isDefaultSessionStreamFn } from "../sessions/default-stream.js";
 import type { EmbeddedRunAttemptParams } from "./run/types.js";
 
 let embeddedAgentBaseStreamFnCache = new WeakMap<object, StreamFn | undefined>();
@@ -63,7 +64,10 @@ function resolveOpenClawNativeCodexResponsesStreamFn(params: {
   if (!isOpenAICodexResponsesModel(params.model)) {
     return undefined;
   }
-  if (!isDefaultOpenClawStreamFnForModel(params.model, params.currentStreamFn)) {
+  if (
+    !isDefaultOpenClawStreamFnForModel(params.model, params.currentStreamFn) &&
+    !isDefaultSessionStreamFn(params.currentStreamFn)
+  ) {
     return undefined;
   }
   return openClawNativeCodexResponsesStreamFnForTest ?? params.currentStreamFn ?? streamSimple;

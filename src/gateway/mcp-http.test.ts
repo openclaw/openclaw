@@ -190,6 +190,7 @@ vi.mock("./tool-resolution.js", () => ({
     resolveGatewayScopedToolsMock(...args),
 }));
 
+import { resolveToolAccessPolicy } from "../agents/tool-access-policy.js";
 import {
   activateMcpLoopbackClientGrantCapture,
   deactivateMcpLoopbackClientGrantCapture,
@@ -198,6 +199,7 @@ import {
   resetAttachGrantsForTest,
   resetMcpLoopbackClientGrantsForTest,
   revokeMcpLoopbackClientGrant,
+  type McpLoopbackRequestContext,
 } from "./mcp-grant-store.js";
 import { handleMcpJsonRpc } from "./mcp-http.handlers.js";
 import {
@@ -465,6 +467,25 @@ async function startLoopbackServerForTest(port = 0) {
     throw new Error("expected active MCP loopback runtime");
   }
   return { port: server.port, runtime };
+}
+
+function mintActiveLoopbackClientGrant(params: {
+  runtime: NonNullable<ReturnType<typeof getActiveMcpLoopbackRuntime>>;
+  context: McpLoopbackRequestContext;
+  captureKey: string;
+}) {
+  const grant = mintMcpLoopbackClientGrant({
+    context: params.context,
+    runtimeOwnerToken: params.runtime.ownerToken,
+  });
+  expect(
+    activateMcpLoopbackClientGrantCapture({
+      token: grant.token,
+      runtimeOwnerToken: params.runtime.ownerToken,
+      captureKey: params.captureKey,
+    }),
+  ).toBe(true);
+  return grant;
 }
 
 async function readMcpPayload(response: Response): Promise<McpToolResultPayload> {
@@ -1806,6 +1827,116 @@ describe("mcp loopback server", () => {
     expect(cronExecute).toHaveBeenCalledTimes(1);
     expect(getBeforeToolCallHookInput(0).params).toEqual(args);
     expect(cronExecute.mock.calls[0]?.[1]).toEqual(args);
+    expectMcpResultText(payload, "CRON_EXECUTED");
+  });
+
+  it("denies protected non-owner loopback calls before hooks or execution", async () => {
+    const cronExecute = vi.fn<MockGatewayTool["execute"]>(async () => ({
+      content: [{ type: "text", text: "CRON_EXECUTED" }],
+    }));
+    mockScopedTools([makeCronTool({ execute: cronExecute })]);
+    const { runtime } = await startLoopbackServerForTest();
+
+    const payload = await callMainSessionTool({
+      token: runtime?.nonOwnerToken,
+      name: "cron",
+      args: { action: "status" },
+    });
+
+    expect(cronExecute).not.toHaveBeenCalled();
+    expect(runBeforeToolCallHookMock).not.toHaveBeenCalled();
+    expect(payload.result?.isError).toBe(true);
+    const text = payload.result?.content?.[0]?.text;
+    expect(text).toEqual(expect.any(String));
+    expect(JSON.parse(text as string)).toEqual({
+      error: expect.objectContaining({
+        code: "TOOL_ACCESS_DENIED",
+        tool: "cron",
+        reason: "non_owner_sender",
+        retryable: false,
+      }),
+    });
+  });
+
+  it("denies owner ambient capabilities even when the request claims a user turn", async () => {
+    const cronExecute = vi.fn<MockGatewayTool["execute"]>(async () => ({
+      content: [{ type: "text", text: "CRON_EXECUTED" }],
+    }));
+    mockScopedTools([makeCronTool({ execute: cronExecute })]);
+    const { runtime } = await startLoopbackServerForTest();
+    const captureKey = "owner-ambient-policy";
+    const grant = mintActiveLoopbackClientGrant({
+      runtime,
+      captureKey,
+      context: {
+        sessionKey: "agent:main:main",
+        senderIsOwner: true,
+        inboundEventKind: "room_event",
+        toolAccessPolicy: resolveToolAccessPolicy({
+          senderIsOwner: true,
+          inboundEventKind: "room_event",
+        }),
+      },
+    });
+
+    const response = await sendLoopbackToolCall({
+      token: grant.token,
+      name: "cron",
+      args: { action: "status" },
+      headers: {
+        ...MAIN_SESSION_HEADER,
+        "x-openclaw-cli-capture-key": captureKey,
+        "x-openclaw-inbound-event-kind": "user_request",
+      },
+    });
+    const payload = await readOkMcpPayload(response);
+
+    expect(cronExecute).not.toHaveBeenCalled();
+    expect(runBeforeToolCallHookMock).not.toHaveBeenCalled();
+    expect(payload.result?.isError).toBe(true);
+    const text = payload.result?.content?.[0]?.text;
+    expect(text).toEqual(expect.any(String));
+    expect(JSON.parse(text as string)).toEqual({
+      error: expect.objectContaining({
+        code: "TOOL_ACCESS_DENIED",
+        tool: "cron",
+        reason: "ambient_room_event",
+        retryable: false,
+      }),
+    });
+  });
+
+  it("executes protected tools for trusted internal capabilities", async () => {
+    const cronExecute = vi.fn<MockGatewayTool["execute"]>(async () => ({
+      content: [{ type: "text", text: "CRON_EXECUTED" }],
+    }));
+    mockScopedTools([makeCronTool({ execute: cronExecute })]);
+    const { runtime } = await startLoopbackServerForTest();
+    const captureKey = "trusted-internal-policy";
+    const grant = mintActiveLoopbackClientGrant({
+      runtime,
+      captureKey,
+      context: {
+        sessionKey: "agent:main:main",
+        senderIsOwner: true,
+        toolAccessPolicy: resolveToolAccessPolicy({ trigger: "heartbeat" }),
+      },
+    });
+
+    const payload = await readOkMcpPayload(
+      await sendLoopbackToolCall({
+        token: grant.token,
+        name: "cron",
+        args: { action: "status" },
+        headers: {
+          ...MAIN_SESSION_HEADER,
+          "x-openclaw-cli-capture-key": captureKey,
+        },
+      }),
+    );
+
+    expect(cronExecute).toHaveBeenCalledTimes(1);
+    expect(runBeforeToolCallHookMock).toHaveBeenCalledTimes(1);
     expectMcpResultText(payload, "CRON_EXECUTED");
   });
 

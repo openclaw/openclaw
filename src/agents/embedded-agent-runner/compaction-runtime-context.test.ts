@@ -24,6 +24,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       currentChannelId: "C123",
       currentThreadTs: "thread-9",
       currentMessageId: "msg-42",
+      currentInboundEventKind: "room_event",
       authProfileId: "openai:p1",
       workspaceDir: "/tmp/workspace",
       cwd: "/tmp/task-repo",
@@ -46,6 +47,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.currentChannelId).toBe("C123");
     expect(result.currentThreadTs).toBe("thread-9");
     expect(result.currentMessageId).toBe("msg-42");
+    expect(result.currentInboundEventKind).toBe("room_event");
     expect(result.authProfileId).toBe("openai:p1");
     expect(result.workspaceDir).toBe("/tmp/workspace");
     expect(result.cwd).toBe("/tmp/task-repo");

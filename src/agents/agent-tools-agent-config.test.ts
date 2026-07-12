@@ -479,7 +479,7 @@ describe("Agent-specific tool filtering", () => {
     expect(names).not.toContain("process");
   });
 
-  it("keeps core tools for owner WebChat while restricting non-owners", () => {
+  it("keeps protected schemas for non-owners while enforcing access at execution", async () => {
     const cfg: OpenClawConfig = {
       tools: {
         toolsBySender: {
@@ -494,21 +494,31 @@ describe("Agent-specific tool filtering", () => {
         senderIsOwner,
         workspaceDir: "/tmp/test-webchat-owner-policy",
         agentDir: "/tmp/agent-webchat-owner-policy",
-      }).map((tool) => tool.name);
+      });
 
     const ownerTools = createWebChatTools(true);
     const nonOwnerTools = createWebChatTools(false);
+    const ownerNames = ownerTools.map((tool) => tool.name);
+    const nonOwnerNames = nonOwnerTools.map((tool) => tool.name);
 
-    expect(ownerTools).toContain("exec");
-    expect(ownerTools).toContain("process");
-    expect(ownerTools).toContain("cron");
-    expect(ownerTools).toContain("gateway");
-    expect(ownerTools).toContain("nodes");
-    expect(nonOwnerTools).not.toContain("exec");
-    expect(nonOwnerTools).not.toContain("process");
-    expect(nonOwnerTools).not.toContain("cron");
-    expect(nonOwnerTools).not.toContain("gateway");
-    expect(nonOwnerTools).not.toContain("nodes");
+    expect(ownerNames).toContain("exec");
+    expect(ownerNames).toContain("process");
+    expect(nonOwnerNames).not.toContain("exec");
+    expect(nonOwnerNames).not.toContain("process");
+    for (const name of ["cron", "gateway", "nodes"]) {
+      expect(ownerNames).toContain(name);
+      expect(nonOwnerNames).toContain(name);
+    }
+
+    const gateway = nonOwnerTools.find((tool) => tool.name === "gateway");
+    expect(gateway).toBeDefined();
+    const result = await gateway?.execute?.("call-non-owner", { action: "config.get" });
+    expect((result as { details?: unknown } | undefined)?.details).toEqual(
+      expect.objectContaining({
+        status: "blocked",
+        deniedReason: "tool-access-policy",
+      }),
+    );
   });
 
   it("should let agent per-sender policy override global sender wildcard", () => {

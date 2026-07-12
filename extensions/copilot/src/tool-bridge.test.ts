@@ -1,6 +1,10 @@
 // Copilot tests cover tool bridge plugin behavior.
 import type { Tool as SdkTool, ToolInvocation, ToolResultObject } from "@github/copilot-sdk";
-import type { AnyAgentTool, SandboxContext } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type {
+  AnyAgentTool,
+  EmbeddedRunAttemptParams,
+  SandboxContext,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createCopilotToolBridge,
@@ -476,6 +480,8 @@ describe("createCopilotToolBridge", () => {
           requireExplicitMessageTarget: true,
           disableMessageTool: false,
           forceMessageTool: true,
+          sourceReplyDeliveryMode: "message_tool_only",
+          promptSourceReplyDeliveryMode: "automatic",
           enableHeartbeatTool: true,
           forceHeartbeatTool: false,
         } as never,
@@ -509,8 +515,49 @@ describe("createCopilotToolBridge", () => {
         replyToMode: "first",
         requireExplicitMessageTarget: true,
         forceMessageTool: true,
+        sourceReplyDeliveryMode: "message_tool_only",
+        promptSourceReplyDeliveryMode: "automatic",
         enableHeartbeatTool: true,
       });
+    });
+
+    it("forwards the resolved tool access policy without hiding protected tool schemas", async () => {
+      const protectedTool = makeTool({ name: "gateway" });
+      const createOpenClawCodingTools = vi.fn(async () => [protectedTool]);
+      const toolAccessPolicy = {
+        version: "tap-room-event",
+        allowedToolNames: [],
+        deniedToolNames: ["computer", "cron", "gateway", "nodes"],
+        eventKind: "room_event",
+        senderClass: "owner",
+        reason: "ambient_room_event",
+      } as const satisfies EmbeddedRunAttemptParams["toolAccessPolicy"];
+
+      const result = await createCopilotToolBridge({
+        agentId: "agent-1",
+        attemptParams: {
+          currentInboundEventKind: "room_event",
+          toolAccessPolicy,
+        } as never,
+        createOpenClawCodingTools,
+        modelId: "gpt-4o",
+        modelProvider: "github-copilot",
+        sessionId: "session-1",
+      });
+
+      expect(createOpenClawCodingTools).toHaveBeenCalledWith(
+        expect.objectContaining({
+          inboundEventKind: "room_event",
+          toolAccessPolicy,
+        }),
+      );
+      expect(result.sourceTools).toEqual([protectedTool]);
+      expect(result.sdkTools).toEqual([
+        expect.objectContaining({
+          name: "gateway",
+          parameters: protectedTool.parameters,
+        }),
+      ]);
     });
 
     it("falls back messageProvider to attemptParams.messageChannel when messageProvider is absent (codex parity)", async () => {
@@ -1031,6 +1078,28 @@ describe("createCopilotToolBridge", () => {
         sessionId: "session-1",
       });
       expect(result.sourceTools.map((tool) => tool.name)).toEqual(["message"]);
+    });
+
+    it("uses the prompt-facing delivery mode for a stable Copilot tool catalog", async () => {
+      const createOpenClawCodingTools = vi.fn(async () => [
+        makeTool({ name: "read" }),
+        makeTool({ name: "message" }),
+      ]);
+      const result = await createCopilotToolBridge({
+        agentId: "agent-1",
+        attemptParams: {
+          toolsAllow: [],
+          sourceReplyDeliveryMode: "message_tool_only",
+          promptSourceReplyDeliveryMode: "automatic",
+        } as never,
+        createOpenClawCodingTools,
+        modelId: "gpt-4o",
+        modelProvider: "github-copilot",
+        sessionId: "session-1",
+      });
+
+      expect(result.sourceTools).toEqual([]);
+      expect(createOpenClawCodingTools).not.toHaveBeenCalled();
     });
 
     it('appends "message" to a narrow allowlist when forceMessageTool is true', async () => {

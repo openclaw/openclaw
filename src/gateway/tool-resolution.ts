@@ -208,10 +208,10 @@ export function resolveGatewayScopedTools(params: {
     surface === "http"
       ? DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter((name) => !gatewayToolsCfg?.allow?.includes(name))
       : [];
+  // HTTP keeps its reduced inventory. Loopback MCP keeps a stable catalogue and
+  // enforces current-turn protected-tool access before hooks or execution.
   const ownerOnlyGatewayDeny =
-    params.senderIsOwner === false || (surface === "http" && params.senderIsOwner !== true)
-      ? [...GATEWAY_OWNER_ONLY_CORE_TOOLS]
-      : [];
+    surface === "http" && params.senderIsOwner !== true ? [...GATEWAY_OWNER_ONLY_CORE_TOOLS] : [];
   // HTTP callers start with additional surface denies because they cross auth only.
   const workspaceDir = resolveAgentWorkspaceDir(
     params.cfg,

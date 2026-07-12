@@ -6,11 +6,21 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { PassThrough, Writable } from "node:stream";
+import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { vi } from "vitest";
 import { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerClientFactory, CodexAppServerClientOptions } from "./shared-client.js";
+
+export const CODEX_TEST_TOOL_ACCESS_POLICY = {
+  version: "test-policy",
+  allowedToolNames: ["computer", "cron", "gateway", "nodes"],
+  deniedToolNames: [],
+  eventKind: "user_request",
+  senderClass: "owner",
+  reason: "authorized_owner",
+} as const satisfies EmbeddedRunAttemptParams["toolAccessPolicy"];
 
 /** Creates temp directories that are removed by the supplied test cleanup hook. */
 export function useAutoCleanupTempDirTracker(registerCleanup: (cleanup: () => void) => unknown) {

@@ -566,6 +566,19 @@ function buildCopilotCompactionHookContext(params: AgentHarnessCompactParams) {
   };
 }
 
+function injectCopilotToolAccessPolicyPrompt(
+  params: AgentHarnessAttemptParams,
+): AgentHarnessAttemptParams {
+  const policyPrompt = params.toolAccessPolicyPrompt?.trim();
+  if (!policyPrompt) {
+    return params;
+  }
+  return {
+    ...params,
+    prompt: `${policyPrompt}\n\n${params.prompt}`,
+  };
+}
+
 export function createCopilotAgentHarness(
   options?: CreateCopilotAgentHarnessOptions,
 ): AgentHarness {
@@ -704,6 +717,7 @@ export function createCopilotAgentHarness(
     },
 
     async runAttempt(params: AgentHarnessAttemptParams): Promise<AgentHarnessAttemptResult> {
+      const attemptParams = injectCopilotToolAccessPolicyPrompt(params);
       const attemptPromise = (async () => {
         if (disposed) {
           throw new Error("[copilot] harness has been disposed; cannot start new attempts");
@@ -718,18 +732,18 @@ export function createCopilotAgentHarness(
         }
         let poolAcquire: ReturnType<typeof resolvePoolAcquire>;
         try {
-          poolAcquire = resolvePoolAcquire(params as never);
+          poolAcquire = resolvePoolAcquire(attemptParams as never);
         } catch (error) {
           // Keep invalid forced BYOK model configuration on the normal attempt
           // result path so callers receive `model_not_supported` instead of an
           // uncaught harness rejection. Other auth/pool errors remain fatal.
           if (isCopilotByokUnsupportedProviderError(error)) {
-            return runCopilotAttempt(params, { pool });
+            return runCopilotAttempt(attemptParams, { pool });
           }
           throw error;
         }
         const openclawSessionId =
-          typeof params.sessionId === "string" ? params.sessionId : undefined;
+          typeof attemptParams.sessionId === "string" ? attemptParams.sessionId : undefined;
 
         // Dogfood finding #4: reuse the SDK session across turns within
         // the same OpenClaw session so that the GitHub Copilot agent runtime's prompt
@@ -751,8 +765,8 @@ export function createCopilotAgentHarness(
         //     `replay-shim` (`resumeFailureRecovered:true`) and falls
         //     back to `createSession`, so a stale-session error never
         //     surfaces as a prompt error.
-        const currentCompatKey = computeSessionCompatKey(params);
-        const currentCompactKey = computeSessionCompactKey(params);
+        const currentCompatKey = computeSessionCompatKey(attemptParams);
+        const currentCompactKey = computeSessionCompactKey(attemptParams);
         const compactionCleanupPending =
           openclawSessionId !== undefined && hasPendingDeferredCompactionCleanup(openclawSessionId);
         const replayBlocked =
@@ -773,13 +787,13 @@ export function createCopilotAgentHarness(
               : undefined;
         const effectiveParams: AgentHarnessAttemptParams = resumableSessionId
           ? ({
-              ...params,
+              ...attemptParams,
               initialReplayState: {
-                ...params.initialReplayState,
+                ...attemptParams.initialReplayState,
                 sdkSessionId: resumableSessionId,
               },
             } as AgentHarnessAttemptParams)
-          : params;
+          : attemptParams;
 
         return runCopilotAttempt(effectiveParams, {
           pool,

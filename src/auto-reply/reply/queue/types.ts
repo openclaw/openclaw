@@ -171,6 +171,8 @@ export type FollowupRun = {
     extraSystemPrompt?: string;
     sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
     taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
+    promptSourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+    forceMessageTool?: boolean;
     silentReplyPromptMode?: SilentReplyPromptMode;
     extraSystemPromptStatic?: string;
     cliSessionBindingFacts?: CliSessionBindingFacts;
@@ -180,6 +182,7 @@ export type FollowupRun = {
     allowEmptyAssistantReplyAsSilent?: boolean;
     suppressNextUserMessagePersistence?: boolean;
     suppressTranscriptOnlyAssistantPersistence?: boolean;
+    forceToolAccessPolicySnapshot?: boolean;
   };
 };
 

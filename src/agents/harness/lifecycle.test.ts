@@ -17,6 +17,7 @@ import {
   type DiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import type { EmbeddedRunAttemptResult } from "../embedded-agent-runner/run/types.js";
+import { resolveToolAccessPolicy } from "../tool-access-policy.js";
 import { createOpenClawAgentHarness } from "./builtin-openclaw.js";
 import { runAgentHarnessLifecycleAttempt } from "./lifecycle.js";
 import type { AgentHarness, AgentHarnessAttemptParams } from "./types.js";
@@ -39,6 +40,7 @@ function createAttemptParams(): AgentHarnessAttemptParams {
     thinkLevel: "low",
     messageChannel: "qa",
     trigger: "manual",
+    toolAccessPolicy: resolveToolAccessPolicy({ inboundEventKind: "user_request" }),
   } as AgentHarnessAttemptParams;
 }
 

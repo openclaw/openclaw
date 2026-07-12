@@ -24,6 +24,11 @@ import {
 import type { SubagentRunRecord } from "../../subagent-registry.types.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import {
+  buildToolAccessPolicySnapshot,
+  resolveToolAccessPolicy,
+  TOOL_ACCESS_POLICY_CUSTOM_TYPE,
+} from "../../tool-access-policy.js";
+import {
   type AttemptContextEngine,
   buildLoopPromptCacheInfo,
   assembleAttemptContextEngine,
@@ -311,6 +316,78 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(toolSearchControlsCase.toolSearchCatalogRef).toEqual({});
   });
 
+  it("uses prompt-stable source reply delivery mode for embedded system prompts", async () => {
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        sourceReplyDeliveryMode: "message_tool_only",
+        promptSourceReplyDeliveryMode: "automatic",
+      },
+    });
+
+    const promptInput = hoisted.embeddedSystemPromptInputs.at(-1) as {
+      sourceReplyDeliveryMode?: string;
+    };
+    expect(promptInput.sourceReplyDeliveryMode).toBe("automatic");
+  });
+
+  it("uses prompt-stable source reply delivery mode for embedded tool construction", async () => {
+    await createContextEngineAttemptRunner({
+      contextEngine: {
+        assemble: async ({ messages }) => ({ messages, estimatedTokens: 1 }),
+      },
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        disableTools: false,
+        sourceReplyDeliveryMode: "message_tool_only",
+        promptSourceReplyDeliveryMode: "automatic",
+        forceMessageTool: true,
+      },
+    });
+
+    const options = mockParams(
+      hoisted.createOpenClawCodingToolsMock,
+      0,
+      "createOpenClawCodingTools options",
+    );
+    expect(options.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(options.promptSourceReplyDeliveryMode).toBe("automatic");
+    expect(options.forceMessageTool).toBe(true);
+  });
+
+  it("forwards effective and prompt-facing delivery modes to afterTurn", async () => {
+    const afterTurn = vi.fn(async () => {});
+
+    await createContextEngineAttemptRunner({
+      contextEngine: {
+        ...createContextEngineBootstrapAndAssemble(),
+        afterTurn,
+      },
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        sourceReplyDeliveryMode: "message_tool_only",
+        promptSourceReplyDeliveryMode: "automatic",
+        senderId: "owner-1",
+        senderIsOwner: true,
+      },
+    });
+
+    expect(afterTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimeContext: expect.objectContaining({
+          sourceReplyDeliveryMode: "message_tool_only",
+          promptSourceReplyDeliveryMode: "automatic",
+          senderId: "owner-1",
+          senderIsOwner: true,
+        }),
+      }),
+    );
+  });
+
   it("keeps client tool names out of context engine capability guidance", async () => {
     const contextEngine = createContextEngineBootstrapAndAssemble();
 
@@ -577,6 +654,25 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     });
 
     expect(seenSystemPrompt).toBe("system prompt");
+  });
+
+  it("keeps owner-only tool authorization out of the system prompt", async () => {
+    let seenSystemPrompt: string | undefined;
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        senderIsOwner: false,
+      },
+      sessionPrompt: async (activeSession) => {
+        seenSystemPrompt = activeSession.agent.state.systemPrompt;
+      },
+    });
+
+    expect(seenSystemPrompt).toBeDefined();
+    expect(seenSystemPrompt).not.toContain("Current Turn Tool Authorization");
   });
 
   it("enforces code-mode payload surface from active-agent config during an embedded attempt", async () => {
@@ -908,6 +1004,50 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       expect(String(value)).not.toContain("OPENCLAW_INTERNAL_CONTEXT");
       expect(String(value)).not.toContain("secret runtime context");
     }
+  });
+
+  it("persists a trusted tool-access snapshot before the active user prompt", async () => {
+    const seen: { prompt?: string; messages?: unknown[] } = {};
+    const toolAccessPolicy = resolveToolAccessPolicy({
+      senderIsOwner: true,
+      inboundEventKind: "room_event",
+    });
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        prompt: "current room event",
+        transcriptPrompt: "current room event",
+        currentInboundEventKind: "room_event",
+        toolAccessPolicy,
+        toolAccessPolicyPrompt: buildToolAccessPolicySnapshot(toolAccessPolicy),
+      },
+      sessionPrompt: async (session, prompt) => {
+        seen.prompt = prompt;
+        seen.messages = [...session.messages];
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "done", timestamp: 2 },
+        ];
+      },
+    });
+
+    expect(seen.prompt).toBe("current room event");
+    const messages = requireRecords(seen.messages, "seen messages");
+    const policyIndex = messages.findIndex(
+      (message) => message.customType === TOOL_ACCESS_POLICY_CUSTOM_TYPE,
+    );
+    expect(policyIndex).toBeGreaterThanOrEqual(0);
+    expect(messages[policyIndex]).toEqual(
+      expect.objectContaining({
+        role: "custom",
+        display: false,
+        content: expect.stringContaining(`Policy version: ${toolAccessPolicy.version}`),
+      }),
+    );
+    expect(JSON.stringify(messages)).not.toContain("current room event");
   });
 
   it("filters heartbeat response-tool transcript artifacts before normal prompt snapshots", async () => {
@@ -3567,6 +3707,11 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
 
   it("routes aggregate prompt-history truncation to compact-then-truncate before prompt submission", async () => {
     let sawPrompt = false;
+    const onToolAccessPolicyPromptPersisted = vi.fn();
+    const toolAccessPolicy = resolveToolAccessPolicy({
+      senderIsOwner: true,
+      inboundEventKind: "room_event",
+    });
     const sessionMessages: AgentMessage[] = [{ role: "user", content: "seed", timestamp: 1 }];
     for (let index = 0; index < 5; index += 1) {
       sessionMessages.push({
@@ -3598,6 +3743,9 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
       sessionMessages,
       attemptOverrides: {
         contextTokenBudget: 1_000,
+        toolAccessPolicy,
+        toolAccessPolicyPrompt: buildToolAccessPolicySnapshot(toolAccessPolicy),
+        onToolAccessPolicyPromptPersisted,
       },
       sessionPrompt: async (session) => {
         sawPrompt = true;
@@ -3608,6 +3756,7 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
     expect(sawPrompt).toBe(false);
     expect(result.promptErrorSource).toBe("precheck");
     expect(result.preflightRecovery).toEqual({ route: "compact_then_truncate" });
+    expect(onToolAccessPolicyPromptPersisted).toHaveBeenCalledWith(embeddedSessionId);
     expect(hoisted.preemptiveCompactionCalls).toHaveLength(0);
   });
 

@@ -19,6 +19,7 @@ import {
 } from "./session-binding.test-helpers.js";
 import {
   adaptCodexTestClientFactory,
+  CODEX_TEST_TOOL_ACCESS_POLICY,
   createCodexTestModel,
   type CodexTestAppServerClientFactory,
 } from "./test-support.js";
@@ -70,6 +71,7 @@ function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAtt
     provider: AUTH_PROFILE_RUNTIME_CONTRACT.codexHarnessProvider,
     modelId: "gpt-5.4-codex",
     model: createCodexTestModel(AUTH_PROFILE_RUNTIME_CONTRACT.codexHarnessProvider),
+    toolAccessPolicy: CODEX_TEST_TOOL_ACCESS_POLICY,
     thinkLevel: "medium",
     disableTools: true,
     timeoutMs: 5_000,

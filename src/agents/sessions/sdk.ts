@@ -21,6 +21,7 @@ import {
 import { AgentSession, type AgentSessionWriteLockRunner } from "./agent-session.js";
 import { formatNoModelsAvailableMessage } from "./auth-guidance.js";
 import { AuthStorage } from "./auth-storage.js";
+import { markDefaultSessionStreamFn } from "./default-stream.js";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
 import type {
   ExtensionRunner,
@@ -410,7 +411,7 @@ export async function createAgentSession(
       tools: [],
     },
     convertToLlm: convertToLlmWithBlockImages,
-    streamFn: async (modelResult, context, optionsLocal) => {
+    streamFn: markDefaultSessionStreamFn(async (modelResult, context, optionsLocal) => {
       const auth = await modelRegistry.getApiKeyAndHeaders(modelResult);
       if (!auth.ok) {
         throw new Error(auth.error);
@@ -428,7 +429,7 @@ export async function createAgentSession(
             ? { ...attributionHeaders, ...auth.headers, ...optionsLocal?.headers }
             : undefined,
       });
-    },
+    }),
     onPayload: async (payload, modelValue) => {
       void modelValue;
       const runner = extensionRunnerRef.current;

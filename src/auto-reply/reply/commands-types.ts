@@ -5,6 +5,7 @@ import type { ChannelId } from "../../channels/plugins/types.public.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SkillCommandSpec } from "../../skills/types.js";
+import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import type { MsgContext } from "../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -60,6 +61,8 @@ export type HandleCommandsParams = {
   sessionScope?: SessionScope;
   workspaceDir: string;
   opts?: GetReplyOptions;
+  /** Session-stable prompt mode, distinct from this command turn's delivery mode. */
+  promptSourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   defaultGroupActivation: () => "always" | "mention";
   resolvedThinkLevel?: ThinkLevel;
   resolvedFastMode?: FastMode;

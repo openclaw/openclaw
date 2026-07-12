@@ -162,7 +162,11 @@ describe("handleCompactCommand", () => {
           SenderE164: "+15551234567",
         },
         agentDir: "/tmp/openclaw-agent-compact",
-        opts: { abortSignal: abortController.signal },
+        opts: {
+          abortSignal: abortController.signal,
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+        promptSourceReplyDeliveryMode: "automatic",
         sessionEntry: {
           sessionId: "session-1",
           updatedAt: Date.now(),
@@ -192,11 +196,15 @@ describe("handleCompactCommand", () => {
     expect(call.groupSpace).toBe("workspace-1");
     expect(call.spawnedBy).toBe("agent:main:parent");
     expect(call.senderId).toBe("owner");
+    expect(call.senderIsOwner).toBe(false);
     expect(call.senderName).toBe("Alice");
     expect(call.senderUsername).toBe("alice_u");
     expect(call.senderE164).toBe("+15551234567");
     expect(call.agentDir).toBe("/tmp/openclaw-agent-compact");
     expect(call.authProfileId).toBe("github-copilot:work");
+    expect(call.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(call.promptSourceReplyDeliveryMode).toBe("automatic");
+    expect(call.currentInboundEventKind).toBe("user_request");
     expect(call.authProfileIdSource).toBe("user");
     expect(vi.mocked(abortEmbeddedAgentRun)).not.toHaveBeenCalled();
     expect(vi.mocked(waitForEmbeddedAgentRunEnd)).not.toHaveBeenCalled();

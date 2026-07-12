@@ -53,6 +53,12 @@ import {
   isEmbeddedAgentRunHandleActive,
   setActiveEmbeddedRun,
 } from "./runs.js";
+import {
+  getEmbeddedSessionPromptState,
+  markToolAccessPolicySnapshotSent,
+  reserveToolAccessPolicySnapshot,
+  testing as sessionPromptStateTesting,
+} from "./session-prompt-state.js";
 
 let compactEmbeddedAgentSessionDirect: typeof import("./compact.js").compactEmbeddedAgentSessionDirect;
 let compactEmbeddedAgentSession: typeof import("./compact.queued.js").compactEmbeddedAgentSession;
@@ -220,6 +226,16 @@ function wrappedCompactionArgs(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function satisfyToolAccessPolicySnapshot(sessionId: string) {
+  const state = getEmbeddedSessionPromptState(sessionId).toolAccessPolicy;
+  markToolAccessPolicySnapshotSent(state, {
+    policyVersion: "policy-v1",
+    routeKey: "route-v1",
+    snapshotGeneration: reserveToolAccessPolicySnapshot(state),
+  });
+  return state;
+}
+
 function createPreparedCodexCompactionPlans(modelId = "gpt-5.5") {
   const modelRoute = {
     provider: "openai",
@@ -309,6 +325,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   resetCompactHooksHarnessMocks();
+  sessionPromptStateTesting.reset();
 });
 
 describe("compactEmbeddedAgentSessionDirect hooks", () => {
@@ -792,6 +809,24 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     );
     expect(createdSession.session.setActiveToolsByName.mock.invocationCallOrder[0]).toBeLessThan(
       createdSession.session.setBaseSystemPrompt.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("uses the stable prompt delivery mode when rebuilding compaction tools and prompt", async () => {
+    await compactEmbeddedAgentSessionDirect({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      sourceReplyDeliveryMode: "message_tool_only",
+      promptSourceReplyDeliveryMode: "automatic",
+    });
+
+    expect(createOpenClawCodingToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceReplyDeliveryMode: "automatic" }),
+    );
+    expect(buildEmbeddedSystemPromptMock).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceReplyDeliveryMode: "automatic" }),
     );
   });
 
@@ -1811,6 +1846,8 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       sessionFile: "/tmp/rotated-session.jsonl",
       leafId: "rotated-leaf",
     });
+    const previousPolicyState = satisfyToolAccessPolicySnapshot("session-1");
+    const successorPolicyState = satisfyToolAccessPolicySnapshot("rotated-session");
 
     try {
       const result = await compactEmbeddedAgentSessionDirect({
@@ -1860,6 +1897,8 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       expectRecordFields(mockCallArg(hookRunner.runAfterCompaction, 0, 1), {
         sessionId: "rotated-session",
       });
+      expect(previousPolicyState.forceSnapshot).toBe(true);
+      expect(successorPolicyState.forceSnapshot).toBe(true);
     } finally {
       cleanup();
     }
@@ -2404,6 +2443,8 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         sessionId: rotatedSessionId,
       },
     } as never);
+    const previousPolicyState = satisfyToolAccessPolicySnapshot(TEST_SESSION_ID);
+    const successorPolicyState = satisfyToolAccessPolicySnapshot(rotatedSessionId);
 
     const result = await compactEmbeddedAgentSession(
       wrappedCompactionArgs({ cwd: "/tmp/task-repo" }),
@@ -2418,6 +2459,8 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       sessionId: rotatedSessionId,
       sessionKey: TEST_SESSION_KEY,
     });
+    expect(previousPolicyState.forceSnapshot).toBe(true);
+    expect(successorPolicyState.forceSnapshot).toBe(true);
   });
 
   it("emits a transcript update and post-compaction memory sync on the engine-owned path", async () => {
@@ -2599,6 +2642,65 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       authProfileId: "openai:p1",
       currentTokenCount: 333,
     });
+  });
+
+  it("forwards the stable prompt delivery mode to queued context-engine compaction", async () => {
+    await compactEmbeddedAgentSession(
+      wrappedCompactionArgs({
+        sourceReplyDeliveryMode: "message_tool_only",
+        promptSourceReplyDeliveryMode: "automatic",
+        currentInboundEventKind: "room_event",
+      }),
+    );
+
+    const compactArg = mockCallArg(contextEngineCompactMock) as {
+      runtimeContext?: Record<string, unknown>;
+    };
+    expectRecordFields(compactArg.runtimeContext, {
+      sourceReplyDeliveryMode: "message_tool_only",
+      promptSourceReplyDeliveryMode: "automatic",
+      currentInboundEventKind: "room_event",
+    });
+  });
+
+  it("requires snapshots for native harness compaction and its successor", async () => {
+    const successorSessionId = "native-successor-session";
+    const dispose = vi.fn(async () => {});
+    resolveContextEngineMock.mockResolvedValue({
+      info: { ownsCompaction: false },
+      compact: contextEngineCompactMock,
+      dispose,
+    } as never);
+    resolveAgentHarnessPolicyMock.mockReturnValue({
+      runtime: "codex",
+      runtimeSource: "model",
+    } as never);
+    maybeCompactAgentHarnessSessionMock.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: {
+        summary: "harness",
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 100,
+        sessionId: successorSessionId,
+      },
+    });
+    const previousPolicyState = satisfyToolAccessPolicySnapshot(TEST_SESSION_ID);
+    const successorPolicyState = satisfyToolAccessPolicySnapshot(successorSessionId);
+
+    const result = await compactEmbeddedAgentSession(
+      wrappedCompactionArgs({
+        provider: "openai",
+        model: "gpt-5.5",
+        agentHarnessId: "codex",
+      }),
+    );
+
+    expect(result).toMatchObject({ ok: true, compacted: true });
+    expect(contextEngineCompactMock).not.toHaveBeenCalled();
+    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(previousPolicyState.forceSnapshot).toBe(true);
+    expect(successorPolicyState.forceSnapshot).toBe(true);
   });
 
   it("runs selected Codex harness queued compaction on canonical OpenAI context", async () => {
@@ -3443,6 +3545,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         },
       },
     });
+    const successorPolicyState = satisfyToolAccessPolicySnapshot(successorSessionId);
 
     const result = await compactEmbeddedAgentSession(
       wrappedCompactionArgs({
@@ -3457,6 +3560,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(result.ok).toBe(true);
     expect(result.compacted).toBe(true);
     expect(result.result?.summary).toBe("engine-summary");
+    expect(successorPolicyState.forceSnapshot).toBe(true);
     expect(contextEngineCompactMock).toHaveBeenCalledTimes(1);
     expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledTimes(1);
     expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledWith(

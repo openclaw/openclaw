@@ -48,6 +48,7 @@ type CommandsRuntime = typeof import("./commands.runtime.js");
 
 type InternalGetReplyOptions = GetReplyOptions & {
   onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
+  sessionPromptSourceReplyDeliveryMode?: GetReplyOptions["sourceReplyDeliveryMode"];
 };
 
 const skillCommandsRuntimeLoader = createLazyImportLoader<SkillCommandsRuntime>(
@@ -543,6 +544,7 @@ export async function handleInlineActions(params: {
       sessionScope,
       workspaceDir,
       opts,
+      promptSourceReplyDeliveryMode: internalOpts?.sessionPromptSourceReplyDeliveryMode,
       defaultGroupActivation: defaultActivation,
       resolvedThinkLevel,
       resolvedVerboseLevel: resolvedVerboseLevel ?? "off",

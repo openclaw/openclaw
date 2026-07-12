@@ -350,6 +350,129 @@ describe("streamOpenAICodexResponses transport", () => {
     expect(connections).toBe(2);
   });
 
+  it.each([
+    { id: "gpt-5.5", name: "GPT-5.5" },
+    { id: "gpt-5.6-sol", name: "GPT-5.6 Sol" },
+  ])("continues $name turns across unchanged and changed tool policies", async ({ id, name }) => {
+    const sentBodies: Array<Record<string, unknown>> = [];
+
+    class CachedContextWebSocket extends EventTarget {
+      readyState = 1;
+
+      constructor() {
+        super();
+        queueMicrotask(() => this.dispatchEvent(new Event("open")));
+      }
+
+      send(data: string): void {
+        sentBodies.push(JSON.parse(data) as Record<string, unknown>);
+        const responseId = `resp_${sentBodies.length}`;
+        queueMicrotask(() => {
+          this.dispatchEvent(
+            Object.assign(new Event("message"), {
+              data: JSON.stringify({
+                type: "response.completed",
+                response: {
+                  id: responseId,
+                  status: "completed",
+                  output: [],
+                  usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
+                },
+              }),
+            }),
+          );
+        });
+      }
+
+      close(): void {
+        this.readyState = 3;
+      }
+    }
+
+    vi.stubGlobal("WebSocket", CachedContextWebSocket);
+    const apiKey = createJwt({
+      "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
+    });
+    const sessionId = `cached-context-${id}`;
+    const activeModel = { ...model, id, name };
+    // Hidden custom policy snapshots reach provider contexts as user messages.
+    const initialPolicyText = [
+      "[OpenClaw runtime tool policy]",
+      "Policy version: tap-initial",
+      "Event kind: room_event",
+      "Sender class: owner",
+    ].join("\n");
+    const changedPolicyText = initialPolicyText.replace("tap-initial", "tap-changed");
+    const initialContext = {
+      messages: [
+        {
+          role: "user" as const,
+          content: [{ type: "text" as const, text: initialPolicyText }],
+          timestamp: 1,
+        },
+        { role: "user" as const, content: "first", timestamp: 2 },
+      ],
+    } satisfies Context;
+
+    const firstResponse = await streamOpenAICodexResponses(activeModel, initialContext, {
+      apiKey,
+      sessionId,
+      transport: "auto",
+    }).result();
+    const unchangedPolicyContext = {
+      messages: [
+        ...initialContext.messages,
+        firstResponse,
+        { role: "user" as const, content: "second", timestamp: 3 },
+      ],
+    } satisfies Context;
+    const secondResponse = await streamOpenAICodexResponses(activeModel, unchangedPolicyContext, {
+      apiKey,
+      sessionId,
+      transport: "auto",
+    }).result();
+    await streamOpenAICodexResponses(
+      activeModel,
+      {
+        messages: [
+          ...unchangedPolicyContext.messages,
+          secondResponse,
+          {
+            role: "user",
+            content: [{ type: "text", text: changedPolicyText }],
+            timestamp: 4,
+          },
+          { role: "user", content: "third", timestamp: 5 },
+        ],
+      },
+      { apiKey, sessionId, transport: "auto" },
+    ).result();
+
+    expect(sentBodies).toHaveLength(3);
+    expect(sentBodies[0]?.previous_response_id).toBeUndefined();
+    expect(sentBodies[1]?.previous_response_id).toBe("resp_1");
+    expect(sentBodies[1]?.input).toEqual([
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "second" }],
+      },
+    ]);
+    expect(sentBodies[2]?.previous_response_id).toBe("resp_2");
+    expect(sentBodies[2]?.input).toEqual([
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: changedPolicyText }],
+      },
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "third" }],
+      },
+    ]);
+  });
+
   it("preserves max for GPT-5.6 simple Codex Responses requests", async () => {
     let capturedPayload: Record<string, unknown> | undefined;
     const stream = streamSimpleOpenAICodexResponses(

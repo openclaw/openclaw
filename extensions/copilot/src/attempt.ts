@@ -464,6 +464,7 @@ export async function runCopilotAttempt(
   let handle: PooledClient | undefined;
   let session: SessionLike | undefined;
   let bridge: ReturnType<typeof attachEventBridge> | undefined;
+  let submittedUserMessageContents: ReadonlySet<string> | undefined;
   const nativeSubagentTaskMirror = createCopilotNativeSubagentTaskMirror({
     agentId: sessionAgentId,
     now,
@@ -890,6 +891,20 @@ export async function runCopilotAttempt(
           ctx: hookContext,
         });
       },
+      onUserMessagePersisted: (event) => {
+        const expectedContents = submittedUserMessageContents;
+        if (
+          settled ||
+          !expectedContents ||
+          (!expectedContents.has(event.data.content) &&
+            !expectedContents.has(event.data.transformedContent ?? ""))
+        ) {
+          return false;
+        }
+        submittedUserMessageContents = undefined;
+        input.onToolAccessPolicyPromptPersisted?.(input.sessionId);
+        return true;
+      },
       getSdkSessionId: () => sdkSessionId,
       isAborted: () => aborted,
     });
@@ -924,6 +939,11 @@ export async function runCopilotAttempt(
       sandbox,
       workspaceOnly: effectiveFsWorkspaceOnly,
     });
+    submittedUserMessageContents = new Set(
+      [messageOptions.prompt, messageOptions.displayPrompt].filter(
+        (content): content is string => typeof content === "string" && content.length > 0,
+      ),
+    );
     promptImagesCount = messageOptions.attachments?.length ?? 0;
     if (abortRequested || params.abortSignal?.aborted) {
       aborted = true;

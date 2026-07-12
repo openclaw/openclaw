@@ -656,10 +656,37 @@ describe("createOpenClawCodingTools", () => {
       config: testConfig,
       forceMessageTool: true,
       sourceReplyDeliveryMode: "message_tool_only",
+      promptSourceReplyDeliveryMode: "automatic",
     });
 
     expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
     expect(latestCreateOpenClawToolsOptions().sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(latestCreateOpenClawToolsOptions().promptSourceReplyDeliveryMode).toBe("automatic");
+    expect(latestCreateOpenClawToolsOptions().forceMessageTool).toBe(true);
+  });
+
+  it("keeps the message tool catalogue stable across effective delivery modes", () => {
+    const buildNames = (sourceReplyDeliveryMode: "automatic" | "message_tool_only") =>
+      toolNameList(
+        createOpenClawCodingTools({
+          config: { tools: { profile: "minimal" } },
+          forceMessageTool: true,
+          sourceReplyDeliveryMode,
+          promptSourceReplyDeliveryMode: "automatic",
+          toolConstructionPlan: {
+            includeBaseCodingTools: false,
+            includeShellTools: false,
+            includeChannelTools: false,
+            includeOpenClawTools: true,
+            includePluginTools: false,
+          },
+        }),
+      );
+
+    const automaticNames = buildNames("automatic");
+    const roomEventNames = buildNames("message_tool_only");
+    expect(automaticNames).toContain("message");
+    expect(roomEventNames).toEqual(automaticNames);
   });
 
   it("passes configured filesystem policy to OpenClaw tool construction", () => {
@@ -707,6 +734,54 @@ describe("createOpenClawCodingTools", () => {
     });
 
     expect(latestCreateOpenClawToolsOptions().cwd).toBe("/task/repo");
+  });
+
+  it("keeps protected tool schemas stable across sender and room-event policy changes", async () => {
+    const ownerDirectTools = createOpenClawCodingTools({ config: testConfig, senderIsOwner: true });
+    const ownerRoomEventTools = createOpenClawCodingTools({
+      config: testConfig,
+      senderIsOwner: true,
+      inboundEventKind: "room_event",
+    });
+    const nonOwnerRoomEventTools = createOpenClawCodingTools({
+      config: testConfig,
+      senderIsOwner: false,
+      inboundEventKind: "room_event",
+    });
+    const ownerDirectAgainTools = createOpenClawCodingTools({
+      config: testConfig,
+      senderIsOwner: true,
+    });
+
+    const schemaDigest = (tools: OpenClawCodingTool[]) =>
+      JSON.stringify(
+        tools.map((tool) => ({
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.parameters,
+        })),
+      );
+
+    expect(schemaDigest(ownerRoomEventTools)).toBe(schemaDigest(ownerDirectTools));
+    expect(schemaDigest(nonOwnerRoomEventTools)).toBe(schemaDigest(ownerDirectTools));
+    expect(schemaDigest(ownerDirectAgainTools)).toBe(schemaDigest(ownerDirectTools));
+
+    for (const name of ["cron", "gateway", "nodes"]) {
+      expect(toolNameList(ownerDirectTools)).toContain(name);
+      expect(toolNameList(ownerRoomEventTools)).toContain(name);
+      expect(toolNameList(nonOwnerRoomEventTools)).toContain(name);
+    }
+
+    const deniedGateway = requireTool(nonOwnerRoomEventTools, "gateway");
+    const result = await requireToolExecute(deniedGateway)("call-denied", {
+      action: "config.get",
+    });
+    expect(result.details).toEqual(
+      expect.objectContaining({
+        status: "blocked",
+        deniedReason: "tool-access-policy",
+      }),
+    );
   });
 
   it("skips unrelated tool families when construction is planned from a narrow allowlist", () => {

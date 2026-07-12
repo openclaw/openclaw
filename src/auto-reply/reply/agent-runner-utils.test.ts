@@ -195,6 +195,27 @@ describe("agent-runner-utils", () => {
     expect(resolved.runBaseParams.promptCacheKey).toBe("stable-session-cache-key");
   });
 
+  it("threads prompt-facing delivery mode through embedded execution params", () => {
+    const run = makeRun({
+      sourceReplyDeliveryMode: "message_tool_only",
+      promptSourceReplyDeliveryMode: "automatic",
+      forceToolAccessPolicySnapshot: true,
+    } as Partial<FollowupRun["run"]>);
+
+    const resolved = buildEmbeddedRunExecutionParams({
+      run,
+      sessionCtx: { Provider: "webchat" },
+      hasRepliedRef: undefined,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      runId: "run-1",
+    });
+
+    expect(resolved.runBaseParams.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(resolved.runBaseParams.promptSourceReplyDeliveryMode).toBe("automatic");
+    expect(resolved.runBaseParams.forceToolAccessPolicySnapshot).toBe(true);
+  });
+
   it("uses session chat type over stale queued metadata for embedded execution params", () => {
     const run = makeRun({ chatType: "direct" });
 

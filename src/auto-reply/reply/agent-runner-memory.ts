@@ -956,6 +956,7 @@ export async function runPreflightCompactionIfNeeded(params: {
       groupChannel: entry.groupChannel ?? params.followupRun.run.groupChannel,
       groupSpace: entry.space ?? params.followupRun.run.groupSpace,
       senderId: params.followupRun.run.senderId,
+      senderIsOwner: params.followupRun.run.senderIsOwner,
       senderName: params.followupRun.run.senderName,
       senderUsername: params.followupRun.run.senderUsername,
       senderE164: params.followupRun.run.senderE164,
@@ -986,6 +987,9 @@ export async function runPreflightCompactionIfNeeded(params: {
       deferOwningContextEngineCompaction: false,
       contextTokenBudget: contextWindowTokens,
       currentTokenCount: tokenCountForCompaction ?? freshPersistedTokens,
+      sourceReplyDeliveryMode: params.followupRun.run.sourceReplyDeliveryMode,
+      currentInboundEventKind: params.followupRun.currentInboundEventKind,
+      promptSourceReplyDeliveryMode: params.followupRun.run.promptSourceReplyDeliveryMode,
       ownerNumbers: params.followupRun.run.ownerNumbers,
       abortSignal: params.replyOperation.abortSignal,
     });

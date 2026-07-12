@@ -213,6 +213,7 @@ type TranscriptMirror = SourceReplyTranscriptMirror & {
 type InternalReplyResolverOptions = {
   onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
   onSessionPrepared?: (binding: ReplySessionBinding) => void;
+  sessionMessageToolAvailable?: boolean;
 };
 
 function createFinalDispatchPayloadDedupeKey(payload: ReplyPayload): string {
@@ -3853,6 +3854,7 @@ async function dispatchReplyFromConfigInner(
                   ...getReplyOptions(),
                   sourceReplyDeliveryMode,
                   sessionPromptSourceReplyDeliveryMode: sessionStableSourceReplyDeliveryMode,
+                  sessionMessageToolAvailable: messageToolAvailable,
                   ...({
                     onSessionMetadataChanges: notifySessionMetadataChanges,
                     onSessionPrepared: notePreparedSession,

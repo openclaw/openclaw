@@ -31,6 +31,7 @@ import {
 import type { CodexAppServerClientFactory, CodexAppServerClientOptions } from "./shared-client.js";
 import {
   adaptCodexTestClientFactory,
+  CODEX_TEST_TOOL_ACCESS_POLICY,
   createCodexTestModel,
   type CodexTestAppServerClientFactory,
 } from "./test-support.js";
@@ -195,6 +196,7 @@ export function createParams(sessionFile: string, workspaceDir: string): Embedde
     provider: "codex",
     modelId: "gpt-5.4-codex",
     model: createCodexTestModel("codex"),
+    toolAccessPolicy: CODEX_TEST_TOOL_ACCESS_POLICY,
     contextTokenBudget: 150_000,
     contextWindowInfo: {
       tokens: 150_000,

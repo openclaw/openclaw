@@ -35,6 +35,7 @@ type AgentDefaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults
 type SkillCommandsRuntime = typeof import("../../skills/discovery/chat-commands.runtime.js");
 type InternalGetReplyOptions = GetReplyOptions & {
   onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
+  sessionPromptSourceReplyDeliveryMode?: GetReplyOptions["sourceReplyDeliveryMode"];
 };
 
 const commandsRuntimeLoader = createLazyImportLoader(() => import("./commands.runtime.js"));
@@ -252,6 +253,8 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     sessionScope: sessionState.sessionScope,
     workspaceDir: params.workspaceDir,
     opts: params.opts,
+    promptSourceReplyDeliveryMode: (params.opts as InternalGetReplyOptions | undefined)
+      ?.sessionPromptSourceReplyDeliveryMode,
     defaultGroupActivation: () => "always",
     resolvedThinkLevel: undefined,
     resolvedVerboseLevel: "off",

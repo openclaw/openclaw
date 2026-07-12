@@ -72,6 +72,10 @@ import {
 import { buildAgentRuntimeOutcomePlan } from "../../agents/runtime-plan/build.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { resolveCandidateThinkingLevel } from "../../agents/thinking-runtime.js";
+import {
+  buildToolAccessPolicySnapshot,
+  resolveToolAccessPolicy,
+} from "../../agents/tool-access-policy.js";
 import { resolveGroupSessionKey, type SessionEntry } from "../../config/sessions.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveSilentReplyPolicy } from "../../config/silent-reply.js";
@@ -2064,6 +2068,17 @@ async function runAgentTurnWithFallbackInternal(
               const cliCurrentMessageId = isRestartSentinelContinuation
                 ? params.sessionCtx.ReplyToId
                 : (params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid);
+              const cliTrigger = params.isHeartbeat ? "heartbeat" : "user";
+              const cliToolAccessPolicy = resolveToolAccessPolicy({
+                senderIsOwner: params.followupRun.run.senderIsOwner,
+                hasSenderIdentity: Boolean(params.followupRun.run.senderId?.trim()),
+                inboundEventKind: params.followupRun.currentInboundEventKind,
+                trigger: cliTrigger,
+              });
+              // Generic CLI harnesses may rebuild their own context, so a full
+              // trusted snapshot belongs in the current turn rather than a
+              // reusable system/session prefix.
+              const cliPrompt = `${buildToolAccessPolicySnapshot(cliToolAccessPolicy)}\n\n${params.commandBody}`;
               const cliToolSummaryTracker = createCliToolSummaryTracker({
                 detailMode: params.toolProgressDetail,
                 shouldEmitToolResult: params.shouldEmitToolResult,
@@ -2178,12 +2193,12 @@ async function runAgentTurnWithFallbackInternal(
                       params.followupRun.run.runtimePolicySessionKey ??
                       params.runtimePolicySessionKey,
                     agentId: params.followupRun.run.agentId,
-                    trigger: params.isHeartbeat ? "heartbeat" : "user",
+                    trigger: cliTrigger,
                     sessionFile: params.followupRun.run.sessionFile,
                     workspaceDir: params.followupRun.run.workspaceDir,
                     cwd: params.followupRun.run.cwd,
                     config: runtimeConfig,
-                    prompt: params.commandBody,
+                    prompt: cliPrompt,
                     transcriptPrompt: params.transcriptCommandBody,
                     suppressNextUserMessagePersistence: suppressQueuedUserPersistenceForCandidate,
                     userTurnTranscriptRecorder,
@@ -2255,6 +2270,7 @@ async function runAgentTurnWithFallbackInternal(
                     currentInboundAudio: hasInboundAudio(params.sessionCtx),
                     agentAccountId: params.followupRun.run.agentAccountId,
                     senderIsOwner: params.followupRun.run.senderIsOwner,
+                    toolAccessPolicy: cliToolAccessPolicy,
                     approvalReviewerDeviceId: params.followupRun.run.approvalReviewerDeviceId,
                     toolsAllow: params.opts?.toolsAllow,
                     disableTools: params.opts?.disableTools,
@@ -2397,7 +2413,10 @@ async function runAgentTurnWithFallbackInternal(
                     currentInboundContext: params.followupRun.currentInboundContext,
                     extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
                     sourceReplyDeliveryMode: params.followupRun.run.sourceReplyDeliveryMode,
+                    promptSourceReplyDeliveryMode:
+                      params.followupRun.run.promptSourceReplyDeliveryMode,
                     forceMessageTool:
+                      params.followupRun.run.forceMessageTool ??
                       params.followupRun.run.sourceReplyDeliveryMode === "message_tool_only",
                     silentReplyPromptMode: params.followupRun.run.silentReplyPromptMode,
                     suppressNextUserMessagePersistence: suppressQueuedUserPersistenceForCandidate,

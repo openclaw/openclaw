@@ -2952,8 +2952,11 @@ describe("runPreparedReply media-only handling", () => {
       const primaryRun = requireRunReplyAgentCall(1).followupRun.run;
       const heartbeatRun = requireRunReplyAgentCall(2).followupRun.run;
       expect(roomEventRun.sourceReplyDeliveryMode).toBe("message_tool_only");
+      expect(roomEventRun.promptSourceReplyDeliveryMode).toBe(stableMode);
       expect(primaryRun.sourceReplyDeliveryMode).toBe(stableMode);
+      expect(primaryRun.promptSourceReplyDeliveryMode).toBe(stableMode);
       expect(heartbeatRun.sourceReplyDeliveryMode).toBe(stableMode);
+      expect(heartbeatRun.promptSourceReplyDeliveryMode).toBe(stableMode);
       expect(roomEventRun.extraSystemPrompt).toBe(expectedPrompt);
       expect(requireRunReplyAgentCall(0).followupRun.currentInboundContext?.text).toContain(
         "your final text here stays private either way",

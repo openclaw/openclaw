@@ -2677,6 +2677,7 @@ export function buildTurnStartParams(
     skillsCollaborationInstructions?: string;
     memoryCollaborationInstructions?: string;
     heartbeatCollaborationInstructions?: string;
+    dynamicTools?: readonly CodexDynamicToolSpec[];
     preserveNativeTurnSettings?: boolean;
   },
 ): CodexTurnStartParams {
@@ -2728,6 +2729,7 @@ export function buildTurnStartParams(
             skillsCollaborationInstructions: options.skillsCollaborationInstructions,
             memoryCollaborationInstructions: options.memoryCollaborationInstructions,
             heartbeatCollaborationInstructions: options.heartbeatCollaborationInstructions,
+            dynamicTools: options.dynamicTools,
           }),
         }
       : {}),
@@ -2773,6 +2775,7 @@ export function buildTurnCollaborationMode(
     skillsCollaborationInstructions?: string;
     memoryCollaborationInstructions?: string;
     heartbeatCollaborationInstructions?: string;
+    dynamicTools?: readonly CodexDynamicToolSpec[];
   } = {},
 ): CodexTurnCollaborationMode {
   const model = options.model ?? params.modelId;
@@ -2790,19 +2793,23 @@ export function buildTurnCollaborationMode(
   };
 }
 
-function buildTurnScopedCollaborationInstructions(
+export function buildTurnScopedCollaborationInstructions(
   params: EmbeddedRunAttemptParams,
   options: {
     turnScopedDeveloperInstructions?: string;
     skillsCollaborationInstructions?: string;
     memoryCollaborationInstructions?: string;
     heartbeatCollaborationInstructions?: string;
+    dynamicTools?: readonly CodexDynamicToolSpec[];
+    includeDefaultModeContract?: boolean;
   } = {},
 ): string | null {
   const contextInstructions = joinPresentSections(
     options.turnScopedDeveloperInstructions,
     options.memoryCollaborationInstructions,
     options.skillsCollaborationInstructions,
+    buildVisibleReplyInstruction(params, options.dynamicTools),
+    params.toolAccessPolicyPrompt,
   );
   if (params.trigger === "cron") {
     return joinPresentSections(buildCronCollaborationInstructions(), contextInstructions);
@@ -2815,6 +2822,9 @@ function buildTurnScopedCollaborationInstructions(
     );
   }
   if (contextInstructions?.trim()) {
+    if (options.includeDefaultModeContract === false) {
+      return contextInstructions;
+    }
     return joinPresentSections(buildDefaultCollaborationInstructions(), contextInstructions);
   }
   return null;
@@ -3057,7 +3067,7 @@ export function buildDeveloperInstructions(
     // models (codex-rs spec_plan add_collaboration_tools). Without this hint
     // models cannot see spawn_agent and grab the always-direct sessions_spawn.
     "Use Codex native `spawn_agent` for Codex subagents. `spawn_agent` and the other native collaboration tools may be deferred: when `spawn_agent` is not directly listed, load it with `tool_search` before spawning. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent`.",
-    buildVisibleReplyInstruction(params, options.dynamicTools),
+    "Source-reply delivery is turn-scoped. Reply normally in your final assistant message unless the current turn instructs you to use `message(action=send)`; a current-turn instruction overrides this default.",
     nativeCommandGuidance,
     params.extraSystemPrompt,
   ];
@@ -3096,17 +3106,14 @@ function buildSkillWorkshopInstruction(
 function buildVisibleReplyInstruction(
   params: EmbeddedRunAttemptParams,
   dynamicTools: readonly CodexDynamicToolSpec[] | undefined,
-): string {
+): string | undefined {
   const messageToolAvailable = dynamicTools
     ? flattenCodexDynamicToolFunctions(dynamicTools).some((tool) => tool.name.trim() === "message")
     : params.disableMessageTool !== true;
   if (params.sourceReplyDeliveryMode === "message_tool_only" && messageToolAvailable) {
     return "Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. Do not repeat that visible content in your final answer.";
   }
-  if (messageToolAvailable) {
-    return "For the current source conversation, reply normally in your final assistant message; OpenClaw will deliver it through the active source conversation. Use `message` only for explicit out-of-band sends, media/file sends, or sends to a different target.";
-  }
-  return "For the current source conversation, reply normally in your final assistant message; OpenClaw will deliver it through the active source conversation.";
+  return undefined;
 }
 
 function buildUserInput(

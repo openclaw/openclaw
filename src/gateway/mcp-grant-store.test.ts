@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { resolveToolAccessPolicy } from "../agents/tool-access-policy.js";
 import {
   activateMcpLoopbackClientGrantCapture,
   attachGrantStoreSize,
@@ -112,6 +113,10 @@ describe("mcp-grant-store", () => {
       taskSuggestionDeliveryMode: "gateway" as const,
       requireExplicitMessageTarget: true,
       senderIsOwner: false,
+      toolAccessPolicy: resolveToolAccessPolicy({
+        senderIsOwner: false,
+        inboundEventKind: "room_event",
+      }),
     };
     const grant = mintMcpLoopbackClientGrant({
       context,
@@ -127,6 +132,9 @@ describe("mcp-grant-store", () => {
 
     context.clientCaps.push("caller-mutation");
     grant.context.clientCaps?.push("return-value-mutation");
+    (grant.context.toolAccessPolicy?.deniedToolNames as string[] | undefined)?.push(
+      "return-value-mutation",
+    );
 
     expect(
       resolveMcpLoopbackClientGrant({

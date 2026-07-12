@@ -978,6 +978,7 @@ async function createCodexSideToolBridge(input: {
       ...(input.params.senderIsOwner !== undefined
         ? { senderIsOwner: input.params.senderIsOwner }
         : {}),
+      inboundEventKind: "user_request",
       ...(input.params.currentChannelId ? { currentChannelId: input.params.currentChannelId } : {}),
       hookChannelId: buildAgentHookContextChannelFields({
         sessionKey: input.params.sessionKey,

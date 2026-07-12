@@ -5,6 +5,10 @@ import { ContentBlockSchema, type ContentBlock } from "@modelcontextprotocol/sdk
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { runBeforeToolCallHook, type HookContext } from "../agents/agent-tools.before-tool-call.js";
 import {
+  buildToolAccessDeniedResult,
+  type ToolAccessPolicy,
+} from "../agents/tool-access-policy.js";
+import {
   formatToolExecutionErrorMessage,
   resolveToolExecutionErrorKind,
   resolveToolResultFailureKind,
@@ -60,6 +64,7 @@ export async function handleMcpJsonRpc(params: {
   message: JsonRpcRequest;
   tools: McpLoopbackTool[];
   toolSchema: McpToolSchemaEntry[];
+  toolAccessPolicy?: ToolAccessPolicy;
   hookContext?: HookContext;
   signal?: AbortSignal;
   /** Revalidate short-lived client authority immediately before side effects. */
@@ -137,6 +142,14 @@ export async function handleMcpJsonRpc(params: {
           // Observability callbacks must never alter the tool result returned to the MCP client.
         }
       };
+      if (params.toolAccessPolicy?.deniedToolNames.includes(toolName)) {
+        const denial = buildToolAccessDeniedResult(toolName, params.toolAccessPolicy);
+        reportToolCallResult({ outcome: "blocked", deniedReason: "tool-access-policy" });
+        return jsonRpcResult(id, {
+          content: normalizeToolCallContent(denial),
+          isError: true,
+        });
+      }
       try {
         const preparedToolArgs = tool.prepareBeforeToolCallParams
           ? await tool.prepareBeforeToolCallParams(toolArgs, {

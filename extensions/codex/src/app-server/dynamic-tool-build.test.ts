@@ -34,7 +34,7 @@ import {
 } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
-import { createCodexTestModel } from "./test-support.js";
+import { CODEX_TEST_TOOL_ACCESS_POLICY, createCodexTestModel } from "./test-support.js";
 
 let tempDir: string;
 
@@ -53,6 +53,7 @@ function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAtt
     provider: "codex",
     modelId: "gpt-5.4-codex",
     model: createCodexTestModel("codex"),
+    toolAccessPolicy: CODEX_TEST_TOOL_ACCESS_POLICY,
     contextTokenBudget: 150_000,
     contextWindowInfo: {
       tokens: 150_000,
@@ -361,6 +362,32 @@ describe("Codex app-server dynamic tool build", () => {
     await buildDynamicToolsForTest(params, workspaceDir, { computerContextEpoch });
 
     expect(receivedEpoch).toBe(computerContextEpoch);
+  });
+
+  it("forwards the runtime tool access policy into coding tool assembly", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    const toolAccessPolicy = {
+      version: "restricted-test-policy",
+      allowedToolNames: [],
+      deniedToolNames: ["computer", "cron", "gateway", "nodes"],
+      eventKind: "room_event",
+      senderClass: "owner",
+      reason: "ambient_room_event",
+    } as const satisfies EmbeddedRunAttemptParams["toolAccessPolicy"];
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.toolAccessPolicy = toolAccessPolicy;
+    const factory = vi.fn(() => [createRuntimeDynamicTool("message")]);
+    setOpenClawCodingToolsFactoryForTests(factory as never);
+
+    await buildDynamicToolsForTest(params, workspaceDir);
+
+    expect(factory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolAccessPolicy,
+      }),
+    );
   });
 
   it("reports hosted search denied when effective tool policy removes web_search", async () => {
@@ -1667,6 +1694,48 @@ describe("Codex app-server dynamic tool build", () => {
     params.disableMessageTool = false;
     params.sourceReplyDeliveryMode = "automatic";
     expect(shouldForceMessageTool(params)).toBe(false);
+  });
+
+  it("uses prompt-facing delivery mode for Codex dynamic tool construction", async () => {
+    const messageTool = createRuntimeDynamicTool("message");
+    const factory = vi.fn(() => [messageTool]);
+    setOpenClawCodingToolsFactoryForTests(factory as never);
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.sourceReplyDeliveryMode = "message_tool_only";
+    params.promptSourceReplyDeliveryMode = "automatic";
+
+    await expect(buildDynamicToolsForTest(params, workspaceDir)).resolves.toEqual([messageTool]);
+    expect(factory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceReplyDeliveryMode: "message_tool_only",
+        promptSourceReplyDeliveryMode: "automatic",
+        forceMessageTool: true,
+      }),
+    );
+  });
+
+  it("honors an explicit forced message tool on automatic turns", async () => {
+    const messageTool = createRuntimeDynamicTool("message");
+    const factory = vi.fn(() => [messageTool]);
+    setOpenClawCodingToolsFactoryForTests(factory as never);
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.sourceReplyDeliveryMode = "automatic";
+    params.forceMessageTool = true;
+    params.toolsAllow = [];
+
+    await expect(buildDynamicToolsForTest(params, workspaceDir)).resolves.toEqual([messageTool]);
+    expect(factory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceReplyDeliveryMode: "automatic",
+        forceMessageTool: true,
+      }),
+    );
   });
 
   it("retains forced message policy for the registered schema override", () => {

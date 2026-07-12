@@ -60,6 +60,7 @@ interface EventBridgeOptions {
   }) => void | Promise<void>;
   onCompactionStart?: () => void | Promise<void>;
   onContextCompacted?: () => void;
+  onUserMessagePersisted?: (event: Extract<SessionEvent, { type: "user.message" }>) => boolean;
   getSdkSessionId: () => string | undefined;
   isAborted: () => boolean;
 }
@@ -128,6 +129,7 @@ export function attachEventBridge(
     resolveSessionIdle = resolve;
   });
   let firstDeltaError: unknown;
+  let observedPersistedUserMessage = false;
   let detached = false;
   const unsubscribeFns: Array<() => void> = [];
 
@@ -166,6 +168,21 @@ export function attachEventBridge(
       }
     });
     void deltaChain.catch(() => undefined);
+  });
+
+  registerListener(session, unsubscribeFns, "user.message", (event) => {
+    if (observedPersistedUserMessage || event.ephemeral === true || !isRootSessionEvent(event)) {
+      return;
+    }
+    const onUserMessagePersisted = options.onUserMessagePersisted;
+    if (!onUserMessagePersisted) {
+      return;
+    }
+    try {
+      observedPersistedUserMessage = onUserMessagePersisted(event);
+    } catch {
+      // Prompt-state bookkeeping cannot break the provider attempt.
+    }
   });
 
   registerListener(session, unsubscribeFns, "assistant.reasoning_delta", (event) => {

@@ -96,6 +96,7 @@ import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
 import { ensureSandboxWorkspaceForSession } from "../sandbox.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
+import { resolveToolAccessPolicy, type ToolAccessPolicy } from "../tool-access-policy.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import {
   DEFAULT_BOOTSTRAP_FILENAME,
@@ -257,6 +258,7 @@ function buildCliMcpGrantContext(params: {
   agentId: string;
   modelProvider: string;
   modelId: string;
+  toolAccessPolicy: ToolAccessPolicy;
 }): McpLoopbackRequestContext {
   const sessionKey = resolveCliMcpSessionKey(params.run, params.config, params.agentId);
   const clientCaps = uniqueStrings(
@@ -296,6 +298,7 @@ function buildCliMcpGrantContext(params: {
     taskSuggestionDeliveryMode: params.run.taskSuggestionDeliveryMode,
     requireExplicitMessageTarget: params.requireExplicitMessageTarget ? true : undefined,
     senderIsOwner: params.run.senderIsOwner === true,
+    toolAccessPolicy: params.toolAccessPolicy,
     nodeExecAllowed: true,
     ...(execSession ? { execSession } : {}),
     ...(execOverrides ? { execOverrides } : {}),
@@ -771,6 +774,14 @@ export async function prepareCliRunContext(
     );
   }
   const mcpDeliveryCaptureEnabled = bundleMcpEnabled && Boolean(mcpLoopbackRuntime);
+  const toolAccessPolicy =
+    params.toolAccessPolicy ??
+    resolveToolAccessPolicy({
+      senderIsOwner: params.senderIsOwner,
+      hasSenderIdentity: Boolean(params.senderId?.trim()),
+      inboundEventKind: params.currentInboundEventKind,
+      trigger: params.trigger,
+    });
   let cleanupPreparedResources: (() => Promise<void>) | undefined;
   let preparedExecution: Awaited<ReturnType<NonNullable<typeof backendResolved.prepareExecution>>> =
     undefined;
@@ -784,6 +795,7 @@ export async function prepareCliRunContext(
             agentId: sessionAgentId,
             modelProvider,
             modelId,
+            toolAccessPolicy,
           }),
           runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
         })
@@ -986,8 +998,8 @@ export async function prepareCliRunContext(
             messageProvider: resolveCliMcpMessageProvider(params),
             clientCaps: params.clientCaps,
             currentChannelId: params.currentChannelId,
-            // CLI binding hashes omit per-message facts, but identity, owner, and
-            // model policy must match the runtime MCP grant's advertised tools.
+            // CLI binding hashes omit per-turn facts. Owner authorization stays
+            // in the immutable runtime grant so the prompt catalogue remains stable.
             currentThreadTs: undefined,
             currentMessageId: undefined,
             currentInboundAudio: undefined,
@@ -996,7 +1008,7 @@ export async function prepareCliRunContext(
             sourceReplyDeliveryMode: bindingSourceReplyDeliveryMode,
             taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
             requireExplicitMessageTarget: bindingRequireExplicitMessageTarget,
-            senderIsOwner: params.senderIsOwner === true,
+            senderIsOwner: undefined,
             nodeExecAllowed: true,
             modelProvider,
             modelId,
