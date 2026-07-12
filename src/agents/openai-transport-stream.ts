@@ -1326,11 +1326,14 @@ function convertResponsesMessages(
                     : []),
                 ...msg.content
                   .filter((item) => item.type === "image" && hasInlineMediaData(item))
-                  .map((item) => ({
-                    type: "input_image",
-                    detail: "auto",
-                    image_url: `data:${item.mimeType};base64,${item.data}`,
-                  })),
+                  .map((item) => {
+                    const image = item as { mimeType: string; data: string };
+                    return {
+                      type: "input_image",
+                      detail: "auto",
+                      image_url: `data:${image.mimeType};base64,${image.data}`,
+                    };
+                  }),
               ] as ResponseFunctionCallOutputItemList)
             : sanitizeNonEmptyTransportPayloadText(textResult, mediaPlaceholder ?? "(no output)"),
       });
