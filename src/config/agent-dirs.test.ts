@@ -79,7 +79,6 @@ describe("resolveEffectiveAgentDir via findDuplicateAgentDirs", () => {
 
   it("probes missing agent dirs without creating them", async () => {
     await withTempDir({ prefix: "openclaw-agent-dirs-missing-" }, async (root) => {
-      await fs.writeFile(path.join(root, "VolumeProbe"), "probe");
       const upper = path.join(root, "FutureState");
       const lower = path.join(root, "futurestate");
       const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
@@ -95,6 +94,7 @@ describe("resolveEffectiveAgentDir via findDuplicateAgentDirs", () => {
         expect(dupes).toHaveLength(0);
         await expect(fs.stat(upper)).rejects.toMatchObject({ code: "ENOENT" });
         await expect(fs.stat(lower)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(fs.readdir(root)).resolves.toEqual([]);
       } finally {
         platformSpy.mockRestore();
       }

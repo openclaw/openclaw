@@ -1,4 +1,5 @@
-// Detects path-local filesystem case semantics without mutating the filesystem.
+// Detects path-local filesystem case semantics with a cleaned probe for empty directories.
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -20,7 +21,7 @@ function probeDirectoryEntry(dir: string, name: string): boolean | undefined {
   }
   try {
     const names = fs.readdirSync(dir);
-    if (names.includes(swapped)) {
+    if (names.includes(name) && names.includes(swapped)) {
       // Two exact case variants can coexist only when lookup is case-sensitive.
       return false;
     }
@@ -53,6 +54,31 @@ function probeDirectoryContents(dir: string): boolean | undefined {
   return undefined;
 }
 
+function probeEmptyDirectory(dir: string): boolean | undefined {
+  const name = `.openclaw-case-probe-${randomUUID()}`;
+  const probePath = path.join(dir, name);
+  let created = false;
+  try {
+    // An empty directory has no read-only lookup evidence. Use one exclusive,
+    // zero-byte entry and remove it before config validation can continue.
+    fs.writeFileSync(probePath, "", { flag: "wx", mode: 0o600 });
+    created = true;
+    return probeDirectoryEntry(dir, name);
+  } catch {
+    return undefined;
+  } finally {
+    if (created) {
+      try {
+        fs.unlinkSync(probePath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw error;
+        }
+      }
+    }
+  }
+}
+
 function defaultPathCaseInsensitive(): boolean {
   return process.platform === "darwin" || process.platform === "win32";
 }
@@ -78,7 +104,11 @@ export function isPathCaseInsensitive(value: string): boolean {
       if (stat.isDirectory()) {
         // The missing entry will be created inside this directory, so probe
         // lookup within it rather than the mount point's name in its parent.
-        return probeDirectoryContents(candidate) ?? defaultPathCaseInsensitive();
+        return (
+          probeDirectoryContents(candidate) ??
+          probeEmptyDirectory(candidate) ??
+          defaultPathCaseInsensitive()
+        );
       }
     } catch {
       // Keep walking to the nearest readable existing directory.
