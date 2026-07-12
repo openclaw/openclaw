@@ -146,6 +146,8 @@ import {
 } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import {
+  isCronSessionKey,
+  isSubagentSessionKey,
   parseCronRunScopeSuffix,
   parseRawSessionConversationRef,
   parseThreadSessionSuffix,
@@ -177,6 +179,8 @@ import {
 import { setSafeTimeout } from "../../utils/timer-delay.js";
 import { resolveGatewayAssistantAvatar } from "../assistant-avatar.js";
 import { resolveAssistantIdentity } from "../assistant-identity.js";
+import { resolveAuthorizedGatewayAgentAuthorizationSubject } from "../authorization/agent-session-bindings.js";
+import type { GatewayAuthorizationSubject } from "../authorization/contracts.js";
 import {
   type ChatAbortControllerEntry,
   registerChatAbortController,
@@ -787,6 +791,65 @@ function resolveGatewayAgentTaskTrackingMode(params: {
   return "cli";
 }
 
+async function resolveDirectGatewayAgentAuthorizationSubject(params: {
+  client: GatewayRequestHandlerOptions["client"];
+  runtimeAgentId: string;
+  sessionKey?: string;
+  spawnedBy?: string;
+  inputProvenance?: InputProvenance;
+  bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
+  modelRun: boolean;
+  internalSessionEffects: boolean;
+  hasInternalEvents: boolean;
+  restoredCronContinuation: boolean;
+  logGateway: Pick<GatewayRequestContext["logGateway"], "warn">;
+}): Promise<GatewayAuthorizationSubject | undefined> {
+  const sessionKey = params.sessionKey?.trim();
+  const clientMode = params.client?.connect?.client?.mode;
+  const internalClient = params.client?.internal;
+  if (
+    !params.client?.connect ||
+    !sessionKey ||
+    !params.runtimeAgentId.trim() ||
+    clientMode === GATEWAY_CLIENT_MODES.BACKEND ||
+    params.client.principal?.kind !== "human" ||
+    internalClient?.cronRunContinuation === true ||
+    internalClient?.agentRuntimeIdentity !== undefined ||
+    internalClient?.pluginRuntimeOwnerId !== undefined ||
+    internalClient?.agentRunTracking === "plugin_subagent" ||
+    params.restoredCronContinuation ||
+    params.modelRun ||
+    params.internalSessionEffects ||
+    params.hasInternalEvents ||
+    params.bootstrapContextRunKind === "cron" ||
+    params.bootstrapContextRunKind === "heartbeat" ||
+    params.inputProvenance?.kind === "inter_session" ||
+    params.inputProvenance?.kind === "internal_system" ||
+    Boolean(params.spawnedBy?.trim()) ||
+    isSubagentSessionKey(sessionKey) ||
+    isCronSessionKey(sessionKey) ||
+    isAcpSessionKey(sessionKey)
+  ) {
+    return undefined;
+  }
+  try {
+    return await resolveAuthorizedGatewayAgentAuthorizationSubject({
+      invokingPrincipal: params.client.principal,
+      runtimeAgentId: params.runtimeAgentId,
+      sessionKey,
+    });
+  } catch (error) {
+    // A stale or unavailable authorization binding must never make a normal
+    // agent run fail, and it must never fall back to a broader authority.
+    params.logGateway.warn(
+      `failed to resolve agent authorization subject for ${sessionKey}; continuing without Teams authority: ${formatForLog(
+        error,
+      )}`,
+    );
+    return undefined;
+  }
+}
+
 function isTrustedBackendAcpSpawnClient(client: GatewayRequestHandlerOptions["client"]): boolean {
   // The ACP spawn control plane reaches the gateway through the in-process
   // backend client (src/gateway/call.ts -> mode "backend", id "gateway-client").
@@ -939,6 +1002,7 @@ function deleteGatewayDedupeEntries(params: {
 
 function dispatchAgentRunFromGateway(params: {
   ingressOpts: Parameters<typeof agentCommandFromIngress>[0];
+  authorizationSubject?: GatewayAuthorizationSubject;
   runId: string;
   dedupeKeys: readonly string[];
   /**
@@ -1000,7 +1064,12 @@ function dispatchAgentRunFromGateway(params: {
       return false;
     }
   };
-  void agentCommandFromIngress(params.ingressOpts, defaultRuntime, params.context.deps)
+  void agentCommandFromIngress(
+    params.ingressOpts,
+    defaultRuntime,
+    params.context.deps,
+    params.authorizationSubject ? { authorizationSubject: params.authorizationSubject } : undefined,
+  )
     .then(async (result) => {
       const aborted = result?.meta?.aborted === true;
       const timeoutAttribution = readAgentRunTimeoutAttribution(result?.meta);
@@ -3843,8 +3912,22 @@ export const agentHandlers: GatewayRequestHandlers = {
           }
           const execApprovalFollowupElevatedDefaults =
             execApprovalFollowupRuntimeHandoff?.bashElevated;
+          const authorizationSubject = await resolveDirectGatewayAgentAuthorizationSubject({
+            client,
+            runtimeAgentId: activeSessionAgentId,
+            sessionKey: resolvedSessionKey,
+            spawnedBy: spawnedByValue,
+            inputProvenance,
+            bootstrapContextRunKind: effectiveBootstrapContextRunKind,
+            modelRun: isOneShotModelRun,
+            internalSessionEffects: suppressVisibleSessionEffects,
+            hasInternalEvents: Boolean(request.internalEvents?.length),
+            restoredCronContinuation: restoredCronContinuation !== undefined,
+            logGateway: context.logGateway,
+          });
 
           dispatchAgentRunFromGateway({
+            authorizationSubject,
             ingressOpts: {
               message,
               images,

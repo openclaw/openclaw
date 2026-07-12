@@ -1,3 +1,5 @@
+import type { OpenClawPluginToolContext } from "./tool-types.js";
+
 export type OpenClawPluginTeamsRequestContext = Readonly<{
   isolationDomainId: string;
   principal: Readonly<{
@@ -12,6 +14,10 @@ export type OpenClawPluginTeamsRequestContext = Readonly<{
   requestId: string;
 }>;
 
+export type OpenClawPluginTeamsToolCallContext = Readonly<{
+  callId: string;
+}>;
+
 export type OpenClawPluginTeamsResourceRef = Readonly<{
   namespace: string;
   type: string;
@@ -21,7 +27,19 @@ export type OpenClawPluginTeamsResourceRef = Readonly<{
 export type OpenClawPluginTeamsApi = {
   context: {
     /** Resolve only the current host-authorized request; no identity fields are accepted. */
-    require: () => OpenClawPluginTeamsRequestContext;
+    require: {
+      (): OpenClawPluginTeamsRequestContext;
+      (toolContext: OpenClawPluginToolContext): OpenClawPluginTeamsToolCallContext;
+    };
+  };
+  authorization: {
+    decide: (input: {
+      context: OpenClawPluginTeamsToolCallContext;
+      permission: string;
+      resources: readonly OpenClawPluginTeamsResourceRef[];
+    }) => Promise<
+      { allowed: true; context: OpenClawPluginTeamsRequestContext } | { allowed: false }
+    >;
   };
   resources: {
     prepareRegister: (input: {

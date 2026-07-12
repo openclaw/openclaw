@@ -8,6 +8,7 @@ import {
  * Normalizes workspace, delivery, browser, sandbox, and active-model inputs before plugin tool invocation.
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GatewayAuthorizationSubject } from "../gateway/authorization/contracts.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
@@ -43,6 +44,8 @@ export type OpenClawPluginToolOptions = {
   allowHostBrowserControl?: boolean;
   sandboxed?: boolean;
   allowGatewaySubagentBinding?: boolean;
+  /** Internal server-owned authorization subject; never projected onto plugin context fields. */
+  authorizationSubject?: GatewayAuthorizationSubject;
 };
 
 /** Resolves plugin-tool context inputs from runtime options and config state. */

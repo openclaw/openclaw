@@ -1,5 +1,10 @@
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import {
+  createAuthorizationAgentSessionBinding,
+  GATEWAY_AGENT_SESSION_INVOKE_PERMISSION,
+  revokeAuthorizationAgentSessionBinding,
+} from "../gateway/authorization/agent-session-bindings.js";
 import { bindGatewayClientAuthorizationDomain } from "../gateway/authorization/client-domain.js";
 import { createAuthorizationDelegation } from "../gateway/authorization/delegations.js";
 import { withGatewayAuthorizationContext } from "../gateway/authorization/request-context.js";
@@ -8,7 +13,9 @@ import {
   addIsolationDomainMember,
   bindAuthorizationResource,
   createIsolationDomain,
+  grantAuthorizationPermission,
   putAuthorizationPrincipal,
+  revokeAuthorizationPermission,
 } from "../gateway/authorization/state-store.js";
 import {
   createGatewayMethodRegistry,
@@ -25,6 +32,10 @@ import {
   writePlugin,
 } from "./loader.test-fixtures.js";
 import { createPluginTeamsApi } from "./teams-api.js";
+import {
+  bindPluginToolAuthorizationSubject,
+  withPluginToolAuthorizationInvocation,
+} from "./tool-authorization-context.js";
 
 const tempDirs: string[] = [];
 const owner = {
@@ -35,8 +46,18 @@ const agent = {
   id: "principal-agent",
   principal: { issuer: "core", subject: "agent:main", kind: "service" },
 } as const;
+const member = {
+  id: "principal-member",
+  principal: { issuer: "trusted-proxy", subject: "member@example.com", kind: "human" },
+} as const;
 const workspace = { namespace: "workspaces", type: "workspace", id: "workspace-1" } as const;
 const tab = { namespace: "workspaces", type: "tab", id: "tab-1" } as const;
+const agentSession = { namespace: "core", type: "agent-session", id: "assignment-1" } as const;
+
+const agentSessionProof = {
+  id: "binding-1",
+  invokingPrincipal: owner.principal,
+} as const;
 
 function asError(value: unknown): Error {
   return value instanceof Error ? value : new Error(String(value));
@@ -306,6 +327,22 @@ describe("host-bound plugin Teams API", () => {
       createdByPrincipalId: owner.id,
       database,
     });
+    bindAuthorizationResource({
+      domainId: "domain-1",
+      resource: agentSession,
+      ownerPrincipalId: owner.id,
+      database,
+    });
+    createAuthorizationAgentSessionBinding({
+      id: "binding-1",
+      domainId: "domain-1",
+      runtimeAgentId: "main",
+      sessionKey: "agent:main:main",
+      delegationId: "delegation-1",
+      assignmentId: "assignment-1",
+      createdByPrincipalId: owner.id,
+      database,
+    });
     const teams = createPluginTeamsApi({ pluginId: "workspaces", database });
     const baseAgentContext = Object.freeze({
       ...authorizationContext(),
@@ -358,6 +395,241 @@ describe("host-bound plugin Teams API", () => {
         principalId: owner.id,
       });
     });
+  });
+
+  it("authorizes the exact active delegated tool call and returns a fresh resource proof", async () => {
+    const database = createDatabase();
+    seed(database);
+    putAuthorizationPrincipal({ ...agent, database });
+    addIsolationDomainMember({
+      domainId: "domain-1",
+      principalId: agent.id,
+      addedByPrincipalId: owner.id,
+      database,
+    });
+    createAuthorizationDelegation({
+      id: "delegation-1",
+      assignmentId: "assignment-1",
+      domainId: "domain-1",
+      agentPrincipalId: agent.id,
+      sponsorPrincipalId: owner.id,
+      createdByPrincipalId: owner.id,
+      database,
+    });
+    bindAuthorizationResource({
+      domainId: "domain-1",
+      resource: agentSession,
+      ownerPrincipalId: owner.id,
+      database,
+    });
+    createAuthorizationAgentSessionBinding({
+      id: "binding-1",
+      domainId: "domain-1",
+      runtimeAgentId: "main",
+      sessionKey: "agent:main:main",
+      delegationId: "delegation-1",
+      assignmentId: "assignment-1",
+      createdByPrincipalId: owner.id,
+      database,
+    });
+    putAuthorizationPrincipal({ ...member, database });
+    addIsolationDomainMember({
+      domainId: "domain-1",
+      principalId: member.id,
+      addedByPrincipalId: owner.id,
+      database,
+    });
+    grantAuthorizationPermission({
+      domainId: "domain-1",
+      principalId: member.id,
+      resource: agentSession,
+      permission: GATEWAY_AGENT_SESSION_INVOKE_PERMISSION,
+      grantedByPrincipalId: owner.id,
+      database,
+    });
+    grantAuthorizationPermission({
+      domainId: "domain-1",
+      principalId: agent.id,
+      resource: workspace,
+      permission: "workspaces.workspace.read",
+      grantedByPrincipalId: owner.id,
+      database,
+    });
+    const teams = createPluginTeamsApi({ pluginId: "workspaces", database });
+    const toolContext = { agentId: "main", sessionKey: "agent:main:main" };
+    bindPluginToolAuthorizationSubject(toolContext, {
+      principal: agent.principal,
+      domain: { id: "domain-1" },
+      delegation: { id: "delegation-1", assignmentId: "assignment-1" },
+      agentSession: { id: "binding-1", invokingPrincipal: member.principal },
+    });
+    let retainedCall: ReturnType<typeof teams.context.require> | undefined;
+
+    await withPluginToolAuthorizationInvocation(
+      {
+        pluginId: "workspaces",
+        toolName: "workspace_get",
+        toolCallId: "tool-call-1",
+        context: toolContext,
+      },
+      async () => {
+        const call = teams.context.require(toolContext);
+        retainedCall = call;
+        expect(call).toEqual({ callId: "tool-call-1" });
+        expect(() => teams.context.require({ ...toolContext })).toThrow(
+          /active host-authorized plugin tool invocation/i,
+        );
+        const decision = await teams.authorization.decide({
+          context: call,
+          permission: "workspaces.workspace.read",
+          resources: [workspace],
+        });
+        expect(decision).toEqual({
+          allowed: true,
+          context: {
+            isolationDomainId: "domain-1",
+            principal: { id: agent.id, kind: "agent" },
+            delegatedSession: {
+              id: "delegation-1",
+              assignmentId: "assignment-1",
+              sponsorPrincipalId: owner.id,
+            },
+            requestId: "tool-call-1",
+          },
+        });
+        if (!decision.allowed) {
+          throw new Error("expected tool authorization to allow");
+        }
+        await expect(
+          teams.resources.owner({ context: decision.context, resource: workspace }),
+        ).resolves.toEqual({ principalId: owner.id });
+
+        revokeAuthorizationPermission({
+          domainId: "domain-1",
+          principalId: member.id,
+          resource: agentSession,
+          permission: GATEWAY_AGENT_SESSION_INVOKE_PERMISSION,
+          revokedByPrincipalId: owner.id,
+          database,
+        });
+        await expect(
+          teams.authorization.decide({
+            context: call,
+            permission: "workspaces.workspace.read",
+            resources: [workspace],
+          }),
+        ).resolves.toEqual({ allowed: false });
+
+        grantAuthorizationPermission({
+          domainId: "domain-1",
+          principalId: member.id,
+          resource: agentSession,
+          permission: GATEWAY_AGENT_SESSION_INVOKE_PERMISSION,
+          grantedByPrincipalId: owner.id,
+          database,
+        });
+        await expect(
+          teams.authorization.decide({
+            context: call,
+            permission: "workspaces.workspace.read",
+            resources: [workspace],
+          }),
+        ).resolves.toMatchObject({ allowed: true });
+        revokeAuthorizationAgentSessionBinding({
+          domainId: "domain-1",
+          id: "binding-1",
+          revokedByPrincipalId: owner.id,
+          database,
+        });
+        await expect(
+          teams.authorization.decide({
+            context: call,
+            permission: "workspaces.workspace.read",
+            resources: [workspace],
+          }),
+        ).resolves.toEqual({ allowed: false });
+      },
+    );
+
+    await expect(
+      teams.authorization.decide({
+        context: retainedCall as never,
+        permission: "workspaces.workspace.read",
+        resources: [workspace],
+      }),
+    ).rejects.toThrow(/no longer active/i);
+  });
+
+  it("fails closed for a delegated tool subject with the wrong assignment", async () => {
+    const database = createDatabase();
+    seed(database);
+    putAuthorizationPrincipal({ ...agent, database });
+    addIsolationDomainMember({
+      domainId: "domain-1",
+      principalId: agent.id,
+      addedByPrincipalId: owner.id,
+      database,
+    });
+    createAuthorizationDelegation({
+      id: "delegation-1",
+      assignmentId: "assignment-1",
+      domainId: "domain-1",
+      agentPrincipalId: agent.id,
+      sponsorPrincipalId: owner.id,
+      createdByPrincipalId: owner.id,
+      database,
+    });
+    bindAuthorizationResource({
+      domainId: "domain-1",
+      resource: agentSession,
+      ownerPrincipalId: owner.id,
+      database,
+    });
+    createAuthorizationAgentSessionBinding({
+      id: "binding-1",
+      domainId: "domain-1",
+      runtimeAgentId: "main",
+      sessionKey: "agent:main:main",
+      delegationId: "delegation-1",
+      assignmentId: "assignment-1",
+      createdByPrincipalId: owner.id,
+      database,
+    });
+    grantAuthorizationPermission({
+      domainId: "domain-1",
+      principalId: agent.id,
+      resource: workspace,
+      permission: "workspaces.workspace.read",
+      grantedByPrincipalId: owner.id,
+      database,
+    });
+    const teams = createPluginTeamsApi({ pluginId: "workspaces", database });
+    const toolContext = { agentId: "main", sessionKey: "agent:main:main" };
+    bindPluginToolAuthorizationSubject(toolContext, {
+      principal: agent.principal,
+      domain: { id: "domain-1" },
+      delegation: { id: "delegation-1", assignmentId: "wrong-assignment" },
+      agentSession: agentSessionProof,
+    });
+
+    await withPluginToolAuthorizationInvocation(
+      {
+        pluginId: "workspaces",
+        toolName: "workspace_get",
+        toolCallId: "tool-call-wrong",
+        context: toolContext,
+      },
+      async () => {
+        const call = teams.context.require(toolContext);
+        await expect(
+          teams.authorization.decide({
+            context: call,
+            permission: "workspaces.workspace.read",
+            resources: [workspace],
+          }),
+        ).resolves.toEqual({ allowed: false });
+      },
+    );
   });
 
   it("reaches api.teams through real plugin registration and isolated dispatch", async () => {

@@ -828,6 +828,159 @@ BEGIN
   SELECT RAISE(ABORT, 'authorization delegations cannot be deleted');
 END;
 
+CREATE TABLE IF NOT EXISTS authorization_agent_session_bindings (
+  domain_id TEXT NOT NULL,
+  binding_id TEXT NOT NULL,
+  runtime_agent_id TEXT NOT NULL CHECK (length(trim(runtime_agent_id)) > 0),
+  session_key TEXT NOT NULL CHECK (length(trim(session_key)) > 0),
+  delegation_id TEXT NOT NULL,
+  assignment_id TEXT NOT NULL,
+  agent_principal_id TEXT NOT NULL,
+  sponsor_principal_id TEXT NOT NULL,
+  created_by_principal_id TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('active', 'revoked')),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  revoked_at INTEGER,
+  PRIMARY KEY (domain_id, binding_id),
+  CHECK (created_by_principal_id = sponsor_principal_id),
+  CHECK (
+    (state = 'active' AND revoked_at IS NULL)
+    OR (state = 'revoked' AND revoked_at IS NOT NULL)
+  ),
+  FOREIGN KEY (domain_id) REFERENCES authorization_domains(domain_id),
+  FOREIGN KEY (agent_principal_id) REFERENCES authorization_principals(principal_id),
+  FOREIGN KEY (sponsor_principal_id) REFERENCES authorization_principals(principal_id),
+  FOREIGN KEY (created_by_principal_id) REFERENCES authorization_principals(principal_id),
+  FOREIGN KEY (
+    domain_id,
+    delegation_id,
+    assignment_id,
+    agent_principal_id,
+    sponsor_principal_id
+  ) REFERENCES authorization_delegations(
+    domain_id,
+    delegation_id,
+    assignment_id,
+    agent_principal_id,
+    sponsor_principal_id
+  )
+);
+
+CREATE INDEX IF NOT EXISTS idx_authorization_agent_session_bindings_runtime
+  ON authorization_agent_session_bindings(runtime_agent_id, session_key, state);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_authorization_agent_session_bindings_active_runtime
+  ON authorization_agent_session_bindings(runtime_agent_id, session_key)
+  WHERE state = 'active';
+
+CREATE TRIGGER IF NOT EXISTS authorization_agent_session_bindings_insert_guard
+BEFORE INSERT ON authorization_agent_session_bindings
+FOR EACH ROW
+WHEN
+  NEW.state <> 'active'
+  OR NEW.revoked_at IS NOT NULL
+  OR NOT EXISTS (
+    SELECT 1
+    FROM authorization_delegations AS delegation
+    INNER JOIN authorization_domain_memberships AS sponsor_membership
+      ON sponsor_membership.domain_id = delegation.domain_id
+     AND sponsor_membership.principal_id = delegation.sponsor_principal_id
+    WHERE delegation.domain_id = NEW.domain_id
+      AND delegation.delegation_id = NEW.delegation_id
+      AND delegation.assignment_id = NEW.assignment_id
+      AND delegation.agent_principal_id = NEW.agent_principal_id
+      AND delegation.sponsor_principal_id = NEW.sponsor_principal_id
+      AND delegation.state = 'active'
+      AND sponsor_membership.role = 'owner'
+  )
+  OR NOT EXISTS (
+    SELECT 1
+    FROM authorization_resources AS resource
+    WHERE resource.domain_id = NEW.domain_id
+      AND resource.namespace = 'core'
+      AND resource.resource_type = 'agent-session'
+      AND resource.resource_id = NEW.assignment_id
+      AND resource.owner_principal_id = NEW.sponsor_principal_id
+      AND resource.retired_at IS NULL
+  )
+BEGIN
+  SELECT RAISE(ABORT, 'authorization agent session binding requires an active canonical delegation and owned agent-session resource');
+END;
+
+CREATE TRIGGER IF NOT EXISTS authorization_agent_session_bindings_payload_immutable
+BEFORE UPDATE OF
+  domain_id,
+  binding_id,
+  runtime_agent_id,
+  session_key,
+  delegation_id,
+  assignment_id,
+  agent_principal_id,
+  sponsor_principal_id,
+  created_by_principal_id,
+  created_at
+ON authorization_agent_session_bindings
+FOR EACH ROW
+BEGIN
+  SELECT RAISE(ABORT, 'authorization agent session binding payload is immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS authorization_agent_session_bindings_state_monotonic
+BEFORE UPDATE OF state, revoked_at ON authorization_agent_session_bindings
+FOR EACH ROW
+WHEN NOT (
+  OLD.state = 'active'
+  AND OLD.revoked_at IS NULL
+  AND NEW.state = 'revoked'
+  AND NEW.revoked_at IS NOT NULL
+)
+BEGIN
+  SELECT RAISE(ABORT, 'authorization agent session binding revocation is monotonic');
+END;
+
+CREATE TRIGGER IF NOT EXISTS authorization_agent_session_bindings_delete_forbidden
+BEFORE DELETE ON authorization_agent_session_bindings
+FOR EACH ROW
+BEGIN
+  SELECT RAISE(ABORT, 'authorization agent session bindings cannot be deleted');
+END;
+
+CREATE TRIGGER IF NOT EXISTS authorization_agent_session_resource_owner_binding_guard
+BEFORE UPDATE OF owner_principal_id ON authorization_resources
+FOR EACH ROW
+WHEN
+  OLD.namespace = 'core'
+  AND OLD.resource_type = 'agent-session'
+  AND NEW.owner_principal_id <> OLD.owner_principal_id
+  AND EXISTS (
+    SELECT 1
+    FROM authorization_agent_session_bindings AS binding
+    WHERE binding.domain_id = OLD.domain_id
+      AND binding.assignment_id = OLD.resource_id
+      AND binding.state = 'active'
+  )
+BEGIN
+  SELECT RAISE(ABORT, 'an active agent-session binding keeps its canonical sponsor owner; share access with grants');
+END;
+
+CREATE TRIGGER IF NOT EXISTS authorization_delegation_revoke_session_bindings
+AFTER UPDATE OF state, revoked_at ON authorization_delegations
+FOR EACH ROW
+WHEN
+  OLD.state = 'active'
+  AND NEW.state = 'revoked'
+BEGIN
+  UPDATE authorization_agent_session_bindings
+  SET
+    state = 'revoked',
+    revoked_at = NEW.revoked_at,
+    updated_at = NEW.updated_at
+  WHERE domain_id = NEW.domain_id
+    AND delegation_id = NEW.delegation_id
+    AND state = 'active';
+END;
+
 CREATE TRIGGER IF NOT EXISTS authorization_membership_delete_revokes_delegations
 BEFORE DELETE ON authorization_domain_memberships
 FOR EACH ROW

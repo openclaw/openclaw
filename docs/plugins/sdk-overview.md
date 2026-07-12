@@ -260,6 +260,29 @@ principal while its server-attested canonical human sponsor is the resource
 custodian. The agent receives no resource-owner or domain-admin inheritance,
 and sponsorship alone grants no resource permission.
 
+Plugin tools authorize the resource selected by each tool call instead of
+reusing gateway-method proof. Pass the exact factory context object from the
+owning tool's `execute` callback:
+
+```typescript
+const call = api.teams.context.require(toolContext);
+const decision = await api.teams.authorization.decide({
+  context: call,
+  permission: "workspaces.tab.update",
+  resources: [{ namespace: "workspaces", type: "tab", id: tabId }],
+});
+if (!decision.allowed) {
+  throw new Error("workspace resource is unavailable");
+}
+```
+
+An allowed decision returns a fresh request proof for the resource APIs. Tool
+factory contexts, call proofs, and decision proofs are exact-object,
+execution-lifetime capabilities. Copies, retained callbacks, another plugin,
+or `prepareArguments` cannot use them. Agent IDs, session keys, sender fields,
+and tool arguments are never Teams identity. Runs without a server-bound
+delegated assignment fail closed.
+
 ### Host hooks for workflow plugins
 
 Host hooks are the SDK seams for plugins that need to participate in the host

@@ -13,6 +13,7 @@ import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import { selectApplicableRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GatewayAuthorizationSubject } from "../gateway/authorization/contracts.js";
 import { callGateway } from "../gateway/call.js";
 import { isEmbeddedMode } from "../infra/embedded-mode.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
@@ -137,6 +138,8 @@ export function createOpenClawTools(
     fsPolicy?: ToolFsPolicy;
     sandboxed?: boolean;
     config?: OpenClawConfig;
+    /** Server-owned Teams authorization subject for plugin tool decisions. */
+    authorizationSubject?: GatewayAuthorizationSubject;
     /** Capabilities declared by the gateway client that originated this run. */
     clientCaps?: string[];
     pluginToolAllowlist?: string[];
