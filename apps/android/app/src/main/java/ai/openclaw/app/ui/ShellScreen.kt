@@ -117,6 +117,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import java.util.Locale
 
 internal enum class Tab(
   val key: String,
@@ -822,17 +823,23 @@ private fun OverviewMetricTile(
     Column(modifier = Modifier.padding(ClawTheme.spacing.xs), verticalArrangement = Arrangement.spacedBy(6.dp)) {
       Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Icon(imageVector = card.icon, contentDescription = null, modifier = Modifier.size(17.dp), tint = card.tint)
-        Text(text = nativeString(card.title).uppercase(), style = ClawTheme.type.caption.copy(fontSize = 10.5.sp, lineHeight = 13.sp), color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        Text(text = localizedUppercase(card.title, currentAppLanguage().languageTag), style = ClawTheme.type.caption.copy(fontSize = 10.5.sp, lineHeight = 13.sp), color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
         Icon(imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = nativeString("Open \${card.title}", card.title), modifier = Modifier.size(15.dp), tint = ClawTheme.colors.textMuted)
       }
-      Text(text = nativeString(card.value), style = ClawTheme.type.title.copy(fontSize = 22.sp, lineHeight = 25.sp), color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-      Text(text = nativeString(card.subtitle), style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textSubtle, maxLines = 2, overflow = TextOverflow.Ellipsis)
+      Text(text = card.value, style = ClawTheme.type.title.copy(fontSize = 22.sp, lineHeight = 25.sp), color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+      Text(text = card.subtitle, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textSubtle, maxLines = 2, overflow = TextOverflow.Ellipsis)
       card.progressFraction?.let { progress ->
         OverviewProgressBar(progress = progress, tint = card.tint)
       }
     }
   }
 }
+
+internal fun localizedUppercase(
+  value: String,
+  languageTag: String?,
+  fallbackLocale: Locale = Locale.getDefault(),
+): String = value.uppercase(languageTag?.let(Locale::forLanguageTag) ?: fallbackLocale)
 
 @Composable
 private fun OverviewProgressBar(
@@ -1030,14 +1037,14 @@ internal fun overviewMetricCardSpecs(
       value =
         when {
           !isConnected -> nativeString("Offline")
-          hasAttention -> "Online"
-          else -> "Healthy"
+          hasAttention -> nativeString("Online")
+          else -> nativeString("Healthy")
         },
       subtitle =
         when {
-          !isConnected -> "Reconnect to continue"
-          hasAttention -> "Review highlighted items"
-          else -> "All systems nominal"
+          !isConnected -> nativeString("Reconnect to continue")
+          hasAttention -> nativeString("Review highlighted items")
+          else -> nativeString("All systems nominal")
         },
       icon = Icons.Default.Favorite,
       status =
@@ -1054,9 +1061,12 @@ internal fun overviewMetricCardSpecs(
       value = if (nodeCount == 0) nativeString("None") else nativeString("\$onlineNodes/\$nodeCount", onlineNodes, nodeCount),
       subtitle =
         if (nodesDevicesSummary.hasNodeCapabilityApprovalPending()) {
-          "Review node access"
+          nativeString("Review node access")
         } else if (nodeCount > 0) {
-          "${nodeOnlinePercent(onlineNodes = onlineNodes, nodeCount = nodeCount)}% online"
+          nativeString(
+            "\${nodeOnlinePercent(onlineNodes = onlineNodes, nodeCount = nodeCount)}% online",
+            nodeOnlinePercent(onlineNodes = onlineNodes, nodeCount = nodeCount),
+          )
         } else {
           nodesDevicesSummaryText(nodesDevicesSummary)
         },

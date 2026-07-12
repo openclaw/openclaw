@@ -70,14 +70,14 @@ internal fun CommandPalette(
   val providers by viewModel.modelAuthProviders.collectAsState()
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
   var query by rememberSaveable { mutableStateOf("") }
-  val normalizedQuery = query.trim().lowercase()
+  val normalizedQuery = query.trim()
   val quickActions =
     listOf(
-      CommandItem("Open Chat", "Start or continue a conversation", Icons.Outlined.ChatBubbleOutline, onOpenChat),
-      CommandItem("Start Voice", "Talk or dictate with OpenClaw", Icons.Outlined.MicNone, onOpenVoice),
-      CommandItem("Browse Sessions", "Find previous conversations", Icons.Outlined.AccessTime, onOpenSessions),
-      CommandItem("Providers & Models", providerCommandSubtitle(isConnected, providers, models), Icons.Outlined.Inventory2, onOpenProviders),
-      CommandItem("Settings", "Gateway, voice, notifications, privacy", Icons.Outlined.Settings, onOpenSettings),
+      CommandItem(CommandAction.Chat, nativeString("Open Chat"), nativeString("Start or continue a conversation"), Icons.Outlined.ChatBubbleOutline, onOpenChat),
+      CommandItem(CommandAction.Voice, nativeString("Start Voice"), nativeString("Talk or dictate with OpenClaw"), Icons.Outlined.MicNone, onOpenVoice),
+      CommandItem(CommandAction.Sessions, nativeString("Browse Sessions"), nativeString("Find previous conversations"), Icons.Outlined.AccessTime, onOpenSessions),
+      CommandItem(CommandAction.Providers, nativeString("Providers & Models"), providerCommandSubtitle(isConnected, providers, models), Icons.Outlined.Inventory2, onOpenProviders),
+      CommandItem(CommandAction.Settings, nativeString("Settings"), nativeString("Gateway, voice, notifications, privacy"), Icons.Outlined.Settings, onOpenSettings),
     )
   val actionRows = quickActions.filter { it.matches(normalizedQuery) }
   val sessionRows =
@@ -159,15 +159,39 @@ internal fun CommandPalette(
   }
 }
 
-private data class CommandItem(
+internal enum class CommandAction {
+  Chat,
+  Voice,
+  Sessions,
+  Providers,
+  Settings,
+}
+
+internal data class CommandItem(
+  val action: CommandAction,
   val title: String,
   val subtitle: String,
   val icon: ImageVector,
   val onClick: () -> Unit,
 ) {
   /** Matches palette queries against both action title and explanatory subtitle. */
-  fun matches(query: String): Boolean = query.isEmpty() || title.lowercase().contains(query) || subtitle.lowercase().contains(query)
+  fun matches(query: String): Boolean = query.isEmpty() || title.contains(query, ignoreCase = true) || subtitle.contains(query, ignoreCase = true)
 }
+
+internal fun commandActionAccessibilityDescription(
+  action: CommandAction,
+  title: String,
+  resolve: (String, String) -> String = { source, argument -> nativeString(source, argument) },
+): String =
+  when (action) {
+    CommandAction.Chat,
+    CommandAction.Voice,
+    CommandAction.Sessions,
+    -> title
+    CommandAction.Providers,
+    CommandAction.Settings,
+    -> resolve("Open \${row.title}", title)
+  }
 
 private data class CommandSessionRow(
   val key: String,
@@ -194,17 +218,17 @@ private fun CommandActionRow(row: CommandItem) {
           .fillMaxWidth()
           .heightIn(min = 52.dp)
           .clip(RoundedCornerShape(ClawTheme.radii.row))
-          .clickable(onClick = row.onClick)
+          .clickable(onClickLabel = commandActionAccessibilityDescription(row.action, row.title), onClick = row.onClick)
           .padding(horizontal = 2.dp, vertical = 6.dp),
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(9.dp),
     ) {
       CommandRowIcon(icon = row.icon)
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-        Text(text = nativeString(row.title), style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(text = nativeString(row.subtitle), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(text = row.title, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(text = row.subtitle, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
       }
-      CommandRowChevron(contentDescription = nativeString("Open \${row.title}", row.title))
+      CommandRowChevron(contentDescription = null)
     }
   }
 }
@@ -264,7 +288,7 @@ private fun CommandRowIcon(icon: ImageVector) {
 }
 
 @Composable
-private fun CommandRowChevron(contentDescription: String) {
+private fun CommandRowChevron(contentDescription: String?) {
   Box(modifier = Modifier.size(24.dp), contentAlignment = Alignment.Center) {
     Icon(
       imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,

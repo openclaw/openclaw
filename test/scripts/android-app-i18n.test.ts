@@ -139,6 +139,56 @@ describe("Android app i18n resources", () => {
     expect(findings).not.toContain("Internal code");
   });
 
+  it("inventories command and overview model display literals", () => {
+    const source = `
+      data class CommandItem(
+        val key: String,
+        val title: String,
+        val subtitle: String,
+      )
+      data class OverviewMetricCardSpec(
+        val title: String,
+        val value: String,
+        val subtitle: String,
+      )
+
+      CommandItem("chat", "Open Chat", "Start a conversation")
+      CommandItem(
+        key = "voice",
+        title = nativeString("Start Voice"),
+        subtitle = nativeString("Talk with OpenClaw"),
+      )
+      OverviewMetricCardSpec(
+        title = nativeString("Gateway"),
+        value = if (connected) "Online" else nativeString("Offline"),
+        subtitle = "All systems nominal",
+      )
+    `;
+    const findings = findUnlocalizedAndroidUiLiterals(
+      source,
+      "apps/android/app/src/main/java/ai/openclaw/app/ui/Example.kt",
+    ).map((finding) => finding.source);
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        "Open Chat",
+        "Start a conversation",
+        "Online",
+        "All systems nominal",
+      ]),
+    );
+    expect(findings).not.toEqual(
+      expect.arrayContaining([
+        "chat",
+        "voice",
+        "Start Voice",
+        "Talk with OpenClaw",
+        "Gateway",
+        "Offline",
+      ]),
+    );
+  });
+
   it("requires exact String fields and scans multiline helper expressions", () => {
     const source = `
       data class StringResource(val key: String)

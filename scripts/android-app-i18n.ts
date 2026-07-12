@@ -308,6 +308,8 @@ const UI_IF_BRANCH_LITERAL_RE = /(?:\bif\s*\([^)]*\)|\belse)\s*\{\s*"((?:\\.|[^"
 const UI_MODEL_STRING_NAME_RE =
   /^(?:contentDescription|errorText|helperText|onClickLabel|statusText)$/u;
 const UI_MODEL_CLASS_FIELDS = new Map<string, ReadonlySet<string>>([
+  ["CommandItem", new Set(["subtitle", "title"])],
+  ["OverviewMetricCardSpec", new Set(["subtitle", "title", "value"])],
   ["SettingsToggleRow", new Set(["subtitle", "title"])],
 ]);
 const KOTLIN_STRING_LITERAL_RE = /"((?:\\.|[^"\\])+)"/gu;

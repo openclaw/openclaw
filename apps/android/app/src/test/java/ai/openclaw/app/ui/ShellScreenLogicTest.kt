@@ -22,6 +22,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.Locale
 
 class ShellScreenLogicTest {
   @Test
@@ -29,6 +30,11 @@ class ShellScreenLogicTest {
     assertTrue(shellBottomNavVisible(keyboardVisible = false, commandOpen = false))
     assertFalse(shellBottomNavVisible(keyboardVisible = true, commandOpen = false))
     assertFalse(shellBottomNavVisible(keyboardVisible = false, commandOpen = true))
+  }
+
+  @Test
+  fun localizedUppercaseUsesTheSelectedAppLocale() {
+    assertEquals("İLETİŞİM", localizedUppercase("iletişim", languageTag = "tr", fallbackLocale = Locale.US))
   }
 
   @Test
