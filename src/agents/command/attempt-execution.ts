@@ -935,6 +935,7 @@ export function runAgentAttempt(params: {
     inputProvenance: params.opts.inputProvenance,
     sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,
     disableMessageTool: params.opts.disableMessageTool,
+    forceRestartSafeTools: params.opts.forceRestartSafeTools,
     streamParams: params.opts.streamParams,
     agentDir: params.agentDir,
     allowGatewaySubagentBinding: params.opts.allowGatewaySubagentBinding,
