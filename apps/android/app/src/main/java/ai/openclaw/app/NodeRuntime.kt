@@ -599,7 +599,6 @@ class NodeRuntime private constructor(
       prefs = prefs,
       cameraEnabled = { cameraEnabled.value },
       locationMode = { locationMode.value },
-      voiceWakeMode = { VoiceWakeMode.Off },
       motionActivityAvailable = { motionHandler.isActivityAvailable() },
       motionPedometerAvailable = { motionHandler.isPedometerAvailable() },
       sendSmsAvailable = { SensitiveFeatureConfig.smsEnabled && sms.canSendSms() },
@@ -607,7 +606,6 @@ class NodeRuntime private constructor(
       smsSearchPossible = { SensitiveFeatureConfig.smsEnabled && sms.hasTelephonyFeature() },
       callLogAvailable = { SensitiveFeatureConfig.callLogEnabled },
       photosAvailable = { SensitiveFeatureConfig.photosEnabled },
-      hasRecordAudioPermission = { hasRecordAudioPermission() },
       installedAppsSharingEnabled = { installedAppsSharingEnabled.value },
       manualTls = { endpoint ->
         prefs.gatewayRegistry.entries.value
@@ -2068,10 +2066,6 @@ class NodeRuntime private constructor(
 
   init {
     if (mode == NodeRuntimeMode.Live) {
-      if (prefs.voiceWakeMode.value != VoiceWakeMode.Off) {
-        prefs.setVoiceWakeMode(VoiceWakeMode.Off)
-      }
-
       if (initialForeground && prefs.voiceMicEnabled.value) {
         setVoiceCaptureMode(VoiceCaptureMode.ManualMic, persistManualMic = false)
       } else if (!initialForeground && prefs.voiceMicEnabled.value) {

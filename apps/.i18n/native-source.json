@@ -363,7 +363,7 @@
     },
     {
       "kind": "ui-state-text",
-      "line": 699,
+      "line": 697,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Offline",
       "surface": "android",
@@ -371,7 +371,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1598,
+      "line": 1596,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Cron job started.",
       "surface": "android",
@@ -379,7 +379,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1598,
+      "line": 1596,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Cron run queued.",
       "surface": "android",
@@ -387,7 +387,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1642,
+      "line": 1640,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Cron job disabled.",
       "surface": "android",
@@ -395,7 +395,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1642,
+      "line": 1640,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Cron job enabled.",
       "surface": "android",
@@ -403,7 +403,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3252,
+      "line": 3246,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: no secure gateway endpoint was detected. Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address with Unencrypted selected.",
       "surface": "android",
@@ -411,7 +411,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3254,
+      "line": 3248,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry.",
       "surface": "android",
@@ -419,7 +419,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3256,
+      "line": 3250,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: couldn't reach the secure gateway endpoint for this host.",
       "surface": "android",
@@ -5659,7 +5659,15 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 176,
+      "line": 198,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/WorkspaceFilesScreen.kt",
+      "source": "Refresh",
+      "surface": "android",
+      "id": "native.android.066337249b9d9d30"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 212,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/WorkspaceFilesScreen.kt",
       "source": "Files unavailable",
       "surface": "android",
@@ -5667,7 +5675,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 182,
+      "line": 218,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/WorkspaceFilesScreen.kt",
       "source": "Empty folder",
       "surface": "android",
@@ -5675,7 +5683,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 182,
+      "line": 218,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/WorkspaceFilesScreen.kt",
       "source": "This folder has no files yet.",
       "surface": "android",
@@ -5683,7 +5691,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 212,
+      "line": 249,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/WorkspaceFilesScreen.kt",
       "source": "Could not load this folder.",
       "surface": "android",
@@ -5691,7 +5699,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 221,
+      "line": 258,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/WorkspaceFilesScreen.kt",
       "source": "Load more",
       "surface": "android",
@@ -5699,7 +5707,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 223,
+      "line": 260,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/WorkspaceFilesScreen.kt",
       "source": "${entries.size} of $totalEntries",
       "surface": "android",
@@ -5707,7 +5715,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 316,
+      "line": 353,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/WorkspaceFilesScreen.kt",
       "source": "Back",
       "surface": "android",
@@ -5715,7 +5723,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 327,
+      "line": 364,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/WorkspaceFilesScreen.kt",
       "source": "Share file",
       "surface": "android",
@@ -5723,7 +5731,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 358,
+      "line": 395,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/WorkspaceFilesScreen.kt",
       "source": "No preview",
       "surface": "android",
@@ -5731,7 +5739,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 358,
+      "line": 395,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/WorkspaceFilesScreen.kt",
       "source": "This image could not be decoded.",
       "surface": "android",
@@ -6571,7 +6579,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1035,
+      "line": 989,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Off",
       "surface": "android",
@@ -6579,7 +6587,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1036,
+      "line": 990,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Talk failed: Realtime provider closed unexpectedly.",
       "surface": "android",
@@ -6587,7 +6595,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1037,
+      "line": 991,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Talk failed: Realtime provider closed: $reason",
       "surface": "android",
@@ -6595,7 +6603,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2099,
+      "line": 2053,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Aborted",
       "surface": "android",
@@ -6603,19 +6611,11 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2099,
+      "line": 2053,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Chat error",
       "surface": "android",
       "id": "native.android.42af8acef7e61a34"
-    },
-    {
-      "kind": "ui-state-text",
-      "line": 29,
-      "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/VoiceWakeManager.kt",
-      "source": "Off",
-      "surface": "android",
-      "id": "native.android.e368d73d1c767bed"
     },
     {
       "kind": "resource-item",

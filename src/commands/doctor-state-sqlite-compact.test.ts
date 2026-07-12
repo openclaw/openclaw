@@ -82,6 +82,34 @@ function readPragma(database: DatabaseSync, name: string): number {
   return Number(row[name] ?? Object.values(row)[0]);
 }
 
+function createUnsafeIndexDrift(sqlitePath: string): void {
+  const sqlite = requireNodeSqlite();
+  const database = new sqlite.DatabaseSync(sqlitePath);
+  try {
+    database.exec(`
+      CREATE TABLE unsafe_index_records (
+        id INTEGER PRIMARY KEY,
+        indexed_value TEXT NOT NULL,
+        alternate_value TEXT NOT NULL
+      );
+      CREATE INDEX unsafe_index_records_value ON unsafe_index_records(indexed_value);
+      INSERT INTO unsafe_index_records (indexed_value, alternate_value)
+      VALUES ('alpha', 'zeta'), ('beta', 'eta'), ('gamma', 'theta');
+    `);
+    database.enableDefensive?.(false);
+    database.exec("PRAGMA writable_schema = ON;");
+    database
+      .prepare(
+        "UPDATE sqlite_schema SET sql = 'CREATE INDEX unsafe_index_records_value ON unsafe_index_records(alternate_value)' WHERE name = 'unsafe_index_records_value'",
+      )
+      .run();
+    database.exec("PRAGMA writable_schema = OFF;");
+    database.exec(`PRAGMA schema_version = ${readPragma(database, "schema_version") + 1};`);
+  } finally {
+    database.close();
+  }
+}
+
 function expectCompletedReport(
   report: DoctorStateSqliteCompactReport,
 ): asserts report is CompletedStateSqliteCompactReport {
@@ -215,6 +243,45 @@ describe("runDoctorStateSqliteCompact", () => {
       reader.exec("ROLLBACK;");
       reader.close();
       writer.close();
+    }
+  });
+
+  it("rejects stale secondary indexes before mutating the database", () => {
+    const env = createStateEnv();
+    const sqlitePath = seedStateDatabase({ env, withBloat: true });
+    createUnsafeIndexDrift(sqlitePath);
+    const sqlite = requireNodeSqlite();
+    const before = new sqlite.DatabaseSync(sqlitePath, { readOnly: true });
+    try {
+      expect(before.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
+      expect(before.prepare("PRAGMA integrity_check").all()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            integrity_check: expect.stringMatching(/missing from index unsafe_index_records_value/),
+          }),
+        ]),
+      );
+    } finally {
+      before.close();
+    }
+
+    expect(() => runDoctorStateSqliteCompact({ env })).toThrow(
+      /integrity_check failed.*missing from index unsafe_index_records_value/iu,
+    );
+
+    const after = new sqlite.DatabaseSync(sqlitePath, { readOnly: true });
+    try {
+      expect(readPragma(after, "auto_vacuum")).toBe(0);
+      expect(readPragma(after, "freelist_count")).toBeGreaterThan(0);
+      expect(after.prepare("PRAGMA integrity_check").all()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            integrity_check: expect.stringMatching(/missing from index unsafe_index_records_value/),
+          }),
+        ]),
+      );
+    } finally {
+      after.close();
     }
   });
 });
