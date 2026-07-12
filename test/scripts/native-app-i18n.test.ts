@@ -207,6 +207,9 @@ describe("native app i18n inventory", () => {
           if (enabled) return "Return " + "enabled"
           return "Return " + "disabled"
         }
+
+        fun warningText(summary: Summary): String =
+          summary.warning ?: "Fallback warning"
       `,
     );
     const sources = [...swift, ...kotlin].map((entry) => entry.source);
@@ -227,6 +230,7 @@ describe("native app i18n inventory", () => {
         "When waiting",
         "Return enabled",
         "Return disabled",
+        "Fallback warning",
       ]),
     );
     expect(

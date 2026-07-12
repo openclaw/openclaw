@@ -994,6 +994,22 @@ export function extractNativeI18nCandidates(
           "conditional-branch",
           lineNumber(source, openingQuote),
         );
+        continue;
+      }
+      const elvisFallback = expression.match(/^\s*[^\n]*\?:\s*/u);
+      if (elvisFallback) {
+        const fallbackQuote = skipWhitespaceAndBrace(source, bodyStart + elvisFallback[0].length);
+        const fallback = readAdjacentStringLiterals(surface, source, fallbackQuote);
+        if (fallback) {
+          addCandidate(
+            entries,
+            surface,
+            repoPath,
+            fallback.value,
+            "conditional-branch",
+            lineNumber(source, fallbackQuote),
+          );
+        }
       }
     }
     for (const match of source.matchAll(ANDROID_NAMED_LITERALS)) {
