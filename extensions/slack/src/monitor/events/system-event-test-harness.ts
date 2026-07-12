@@ -18,6 +18,7 @@ export type SlackSystemEventTestOverrides = {
 
 export function createSlackSystemEventTestHarness(overrides?: SlackSystemEventTestOverrides) {
   const handlers: Record<string, SlackSystemEventHandler> = {};
+  const rememberedChannelTypes = new Map<string, "im" | "mpim" | "channel" | "group">();
   const channelType = overrides?.channelType ?? "im";
   const app = {
     event: (name: string, handler: SlackSystemEventHandler) => {
@@ -49,7 +50,16 @@ export function createSlackSystemEventTestHarness(overrides?: SlackSystemEventTe
     reactionAllowlist: overrides?.reactionAllowlist ?? [],
     shouldDropMismatchedSlackEvent: () => false,
     isChannelAllowed: () => true,
-    rememberSlackChannelType: () => {},
+    rememberSlackChannelType: (channelId: string | undefined, type: string | undefined) => {
+      if (
+        channelId &&
+        (type === "im" || type === "mpim" || type === "channel" || type === "group")
+      ) {
+        rememberedChannelTypes.set(channelId, type);
+      }
+    },
+    recallSlackChannelType: (channelId: string | undefined) =>
+      channelId ? rememberedChannelTypes.get(channelId) : undefined,
     resolveChannelName: async () => ({
       name: channelType === "im" ? "direct" : "general",
       type: channelType,
