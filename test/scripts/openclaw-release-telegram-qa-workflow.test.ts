@@ -557,6 +557,30 @@ describe("release Telegram QA workflow", () => {
     expect(finalizeStep?.env?.RUN_LANE_OUTCOME).toBe("${{ steps.run_lane.outcome }}");
     expect(finalizeStep?.run).toContain('--arg runLaneOutcome "$RUN_LANE_OUTCOME"');
     expect(finalizeStep?.run).toContain('if $runLaneOutcome == "success" then 2 else 1 end');
+
+    const captureStep = job?.steps?.find(
+      (step) => step.name === "Capture isolated Telegram runtime diagnostics",
+    );
+    expect(captureStep?.if).toContain("steps.terminate_sut.outputs.quiescent == 'true'");
+    expect(captureStep?.env?.OUTPUT_DIR).toBe("${{ steps.run_lane.outputs.output_dir }}");
+    expect(captureStep?.env?.RUNTIME_ROOT).toBe("${{ steps.create_sut.outputs.runtime_root }}");
+    expect(captureStep?.run).toContain("-name 'openclaw-*.log'");
+    expect(captureStep?.run).toContain('sudo tail -c 131072 "$log_path"');
+    expect(captureStep?.run).toContain("redactQaGatewayDebugText");
+    expect(captureStep?.run).toContain("agentDefaultModel: .agents.defaults.model");
+    expect(captureStep?.run).toContain("modelIds: [.value.models[]?.id]");
+    expect(
+      job?.steps?.findIndex(
+        (step) => step.name === "Capture isolated Telegram runtime diagnostics",
+      ),
+    ).toBeLessThan(
+      job?.steps?.findIndex(
+        (step) => step.name === "Finalize trusted Telegram process-boundary evidence",
+      ) ?? -1,
+    );
+
+    const recordStep = job?.steps?.find((step) => step.name === "Record Telegram execution status");
+    expect(recordStep?.env?.OUTCOMES).toContain("${{ steps.capture_diagnostics.outcome }}");
   });
 
   it("serializes stderr behind the workflow-command pause", () => {

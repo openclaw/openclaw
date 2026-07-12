@@ -2164,6 +2164,80 @@ jobs:
           echo "Isolated Telegram SUT UID still owns processes after terminal cleanup." >&2
           exit 1
 
+      - name: Capture isolated Telegram runtime diagnostics
+        id: capture_diagnostics
+        if: always() && steps.terminate_sut.outputs.quiescent == 'true' && steps.run_lane.outputs.output_dir != ''
+        env:
+          OUTPUT_DIR: ${{ steps.run_lane.outputs.output_dir }}
+          RUNTIME_ROOT: ${{ steps.create_sut.outputs.runtime_root }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          [[ "$RUNTIME_ROOT" == "/var/lib/openclaw-telegram-sut-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" ]]
+          diagnostics_dir="${OUTPUT_DIR}/trusted-runtime-diagnostics"
+          install -d -m 0700 "$diagnostics_dir"
+
+          mapfile -t gateway_logs < <(
+            sudo find "$RUNTIME_ROOT/tmp" -xdev -type f -name 'openclaw-*.log' -print | sort
+          )
+          ((${#gateway_logs[@]} > 0 && ${#gateway_logs[@]} <= 8))
+          raw_paths=()
+          cleanup_raw_paths() {
+            rm -f -- "${raw_paths[@]}"
+          }
+          trap cleanup_raw_paths EXIT
+          for index in "${!gateway_logs[@]}"; do
+            log_path="$(sudo realpath -e "${gateway_logs[$index]}")"
+            case "$log_path" in
+              "$RUNTIME_ROOT"/tmp/*) ;;
+              *) echo "Telegram gateway log escaped the isolated runtime root." >&2; exit 1 ;;
+            esac
+            [[ "$(sudo stat -c '%F' "$log_path")" == "regular file" ]]
+            raw_path="${diagnostics_dir}/.gateway-internal-$((index + 1)).raw"
+            output_path="${diagnostics_dir}/gateway-internal-tail-$((index + 1)).log"
+            raw_paths+=("$raw_path")
+            sudo tail -c 131072 "$log_path" >"$raw_path"
+            node --import tsx --input-type=module - "$raw_path" "$output_path" <<'NODE'
+          import fs from "node:fs";
+          import { redactQaGatewayDebugText } from "./extensions/qa-lab/src/gateway-log-redaction.ts";
+
+          const [inputPath, outputPath] = process.argv.slice(2);
+          const redacted = redactQaGatewayDebugText(fs.readFileSync(inputPath, "utf8"));
+          fs.writeFileSync(outputPath, redacted, { encoding: "utf8", mode: 0o600 });
+          NODE
+            rm -f -- "$raw_path"
+          done
+
+          mapfile -t gateway_configs < <(
+            sudo find "$RUNTIME_ROOT/tmp" -xdev -type f -name openclaw.json -print | sort
+          )
+          ((${#gateway_configs[@]} > 0 && ${#gateway_configs[@]} <= 8))
+          for index in "${!gateway_configs[@]}"; do
+            config_path="$(sudo realpath -e "${gateway_configs[$index]}")"
+            case "$config_path" in
+              "$RUNTIME_ROOT"/tmp/*) ;;
+              *) echo "Telegram gateway config escaped the isolated runtime root." >&2; exit 1 ;;
+            esac
+            proof_path="${diagnostics_dir}/gateway-model-config-$((index + 1)).json"
+            sudo jq -e '
+              {
+                agentDefaultModel: .agents.defaults.model,
+                agentModelRefs: ((.agents.defaults.models // {}) | keys),
+                providers: (
+                  (.models.providers // {}) |
+                  to_entries |
+                  map({
+                    id: .key,
+                    api: .value.api,
+                    modelIds: [.value.models[]?.id]
+                  })
+                )
+              }
+            ' "$config_path" >"$proof_path"
+            chmod 0600 "$proof_path"
+          done
+
       - name: Finalize trusted Telegram process-boundary evidence
         id: finalize_boundary
         if: always() && steps.terminate_sut.outputs.quiescent == 'true' && steps.run_lane.outputs.output_dir != ''
@@ -2360,6 +2434,7 @@ jobs:
             ${{ steps.validate_credentials.outcome }}
             ${{ steps.run_lane.outcome }}
             ${{ steps.terminate_sut.outcome }}
+            ${{ steps.capture_diagnostics.outcome }}
             ${{ steps.finalize_boundary.outcome }}
             ${{ steps.validate_evidence.outcome }}
             ${{ steps.remove_sut.outcome }}
