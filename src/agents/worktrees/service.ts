@@ -48,10 +48,11 @@ export const IDLE_GC_MS = 7 * 24 * 60 * 60 * 1000; // Idle worktrees remain rest
 export const SNAPSHOT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000; // Snapshot refs expire with their registry affordance.
 export const WORKTREE_GC_INTERVAL_MS = 60 * 60 * 1000;
 const SETUP_SCRIPT_TIMEOUT_MS = 120_000;
-// Lease contract: a provisioning holder bumps lastActiveAt on a wall-clock interval for the
-// whole provisioning phase, so no stall class (large include-file copy, slow setup, ...)
-// leaves a silence gap while the process lives. A lease silent for PROVISIONING_STALE_MS
-// has a dead holder and gc may reclaim the path and branch.
+// Provisioning heartbeat contract (distinct from run leases in run-lease.ts): a provisioning
+// holder bumps lastActiveAt on a wall-clock interval for the whole provisioning phase, so no
+// stall class (large include-file copy, slow setup, ...) leaves a silence gap while the
+// process lives. A claim silent for PROVISIONING_STALE_MS has a dead holder and gc may
+// reclaim the path and branch.
 export const PROVISIONING_HEARTBEAT_MS = 30_000; // 40x inside the stale threshold.
 export const PROVISIONING_STALE_MS = 10 * SETUP_SCRIPT_TIMEOUT_MS;
 
@@ -514,16 +515,35 @@ export class ManagedWorktreeService {
    */
   private async healMissingPathRecord(record: ManagedWorktreeRecord): Promise<boolean> {
     if (record.readiness === "provisioning") {
-      // resetFailedWorktreeAdd tolerates the partial states a dead holder leaves
-      // (unlisted dir, missing branch).
-      await resetFailedWorktreeAdd(record.repoRoot, record.path, record.branch);
-      deleteRegistryWorktree(this.env, record.id);
+      await this.reapProvisioningRecord(record);
       return true;
     }
     const removedAt = this.now();
     updateRegistryWorktree(this.env, record.id, { removedAt });
     record.removedAt = removedAt;
     return false;
+  }
+
+  /**
+   * Destroys a dead provisioning claim (worktree, branch, row). Every remover — this reap
+   * included — serializes through the removal claim: a provisioning row cannot hold a run
+   * lease by construction (sessions are only ever handed 'ready' records), but the uniform
+   * claim keeps one serialization point with remove()/removeIfLossless() and excludes
+   * competing removers; a live run lease rejects the claim and the caller skips the record.
+   */
+  private async reapProvisioningRecord(record: ManagedWorktreeRecord): Promise<void> {
+    const claimToken = randomUUID();
+    claimWorktreeRemoval(this.env, { worktreeId: record.id, token: claimToken, force: false });
+    try {
+      // resetFailedWorktreeAdd tolerates the partial states a dead holder leaves
+      // (unlisted dir, missing branch), unlike the happy-path cleanupFailedCreate.
+      await resetFailedWorktreeAdd(record.repoRoot, record.path, record.branch);
+      deleteRegistryWorktree(this.env, record.id);
+      finalizeWorktreeRemoval(this.env, record.id);
+    } catch (error) {
+      abortWorktreeRemoval(this.env, record.id, claimToken);
+      throw error;
+    }
   }
 
   findLiveByOwner(
@@ -821,18 +841,15 @@ export class ManagedWorktreeService {
             continue;
           }
         }
-        // A 'provisioning' lease silent past PROVISIONING_STALE_MS has a dead holder; reap
-        // worktree+branch+row so the next create() — including auto-named orphans no retry
-        // will ever reach — starts fresh. Recently heartbeating leases stay untouched.
+        // A provisioning claim whose heartbeat is silent past PROVISIONING_STALE_MS has a
+        // dead holder; reap worktree+branch+row so the next create() — including auto-named
+        // orphans no retry will ever reach — starts fresh. Heartbeating claims stay untouched.
         if (
           record.removedAt === undefined &&
           record.readiness === "provisioning" &&
           now - record.lastActiveAt > PROVISIONING_STALE_MS
         ) {
-          // resetFailedWorktreeAdd tolerates the partial states a dead holder leaves
-          // (unlisted dir, missing branch), unlike the happy-path cleanupFailedCreate.
-          await resetFailedWorktreeAdd(record.repoRoot, record.path, record.branch);
-          deleteRegistryWorktree(this.env, record.id);
+          await this.reapProvisioningRecord(record);
           continue;
         }
         // Manual worktrees remain until explicit removal; only run-owned worktrees expire.
@@ -935,10 +952,10 @@ export class ManagedWorktreeService {
     }
     // The row is visible as 'provisioning' (list()) while copy/setup run; that is what makes
     // in-flight creates unadoptable and observable. Failed creates still end with no row.
-    // Wall-clock lease heartbeat for the whole provisioning phase: any stall class (a single
-    // large include-file copy, a slow setup) keeps proving a live holder, so gc never reaps
-    // a lease whose process is still alive. Always cleared below; a leaked interval would
-    // keep bumping a dead lease forever.
+    // Wall-clock provisioning heartbeat for the whole phase: any stall class (a single large
+    // include-file copy, a slow setup) keeps proving a live holder, so gc never reaps a
+    // claim whose process is still alive. Always cleared below; a leaked interval would
+    // keep bumping a dead claim forever.
     const heartbeat = setInterval(() => {
       updateRegistryWorktree(this.env, record.id, { lastActiveAt: this.now() });
     }, PROVISIONING_HEARTBEAT_MS);
@@ -965,7 +982,7 @@ export class ManagedWorktreeService {
     const readyAt = this.now();
     updateRegistryWorktree(this.env, record.id, { readiness: "ready", lastActiveAt: readyAt });
     // Backstop for the pathological suspended holder: heartbeats can stall long enough for
-    // gc to reap the lease mid-create; the flip above then updated zero rows. Never hand
+    // gc to reap the claim mid-create; the flip above then updated zero rows. Never hand
     // back a record whose path was already reclaimed.
     const flipped = getRegistryWorktree(this.env, record.id);
     if (!flipped || flipped.removedAt !== undefined) {

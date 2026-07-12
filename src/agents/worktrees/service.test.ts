@@ -13,6 +13,7 @@ import {
   listRegistryWorktrees,
   updateRegistryWorktree,
 } from "./registry.js";
+import { acquireWorktreeRunLease } from "./run-lease.js";
 import {
   IDLE_GC_MS,
   ManagedWorktreeService,
@@ -1007,8 +1008,8 @@ describe("ManagedWorktreeService", () => {
     );
   });
 
-  it("the wall-clock lease heartbeat keeps any provisioning stall alive through gc", async () => {
-    // Fake only the interval APIs: the service's lease timer becomes deterministically
+  it("the wall-clock provisioning heartbeat keeps any provisioning stall alive through gc", async () => {
+    // Fake only the interval APIs: the service's heartbeat timer becomes deterministically
     // fireable while the test's own polling and the parked child process stay real.
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     try {
@@ -1033,7 +1034,7 @@ describe("ManagedWorktreeService", () => {
       }
 
       // Far past the stale threshold relative to the claim (and to any pre-stall bump), a
-      // single timer tick re-proves liveness; gc must preserve the lease.
+      // single timer tick re-proves liveness; gc must preserve the claim.
       now += PROVISIONING_STALE_MS + 1;
       vi.advanceTimersByTime(PROVISIONING_HEARTBEAT_MS);
       const parked = listRegistryWorktrees(env).find((entry) => entry.name === "stalled");
@@ -1071,7 +1072,7 @@ describe("ManagedWorktreeService", () => {
     expect(recreated.readiness).toBe("ready");
   });
 
-  it("gc reaps silent provisioning leases and preserves heartbeating ones", async () => {
+  it("gc reaps silent provisioning claims and preserves heartbeating ones", async () => {
     await fs.mkdir(path.join(repo, ".openclaw"));
     await fs.writeFile(
       path.join(repo, ".openclaw", "worktree-setup.sh"),
@@ -1086,7 +1087,7 @@ describe("ManagedWorktreeService", () => {
     updateRegistryWorktree(env, autoNamed.id, { readiness: "provisioning" });
 
     // Liveness, not claim age, decides: well past the original claim's age a recent
-    // heartbeat still proves a live holder, so gc must not touch the lease.
+    // heartbeat still proves a live holder, so gc must not touch the claim.
     now += PROVISIONING_STALE_MS + 1;
     updateRegistryWorktree(env, named.id, { lastActiveAt: now });
     updateRegistryWorktree(env, autoNamed.id, { lastActiveAt: now });
@@ -1094,7 +1095,7 @@ describe("ManagedWorktreeService", () => {
     expect(getRegistryWorktree(env, named.id)?.readiness).toBe("provisioning");
     expect(await fs.stat(named.path)).toBeTruthy();
 
-    // A lease silent past the threshold has a dead holder: row, worktree, and branch go away.
+    // A claim silent past the threshold has a dead holder: row, worktree, and branch go away.
     now += PROVISIONING_STALE_MS + 1;
     await service.gc();
     expect(getRegistryWorktree(env, named.id)).toBeUndefined();
@@ -1124,6 +1125,24 @@ describe("ManagedWorktreeService", () => {
     expect(await git(repo, "branch", "--list", created.branch)).toBe("");
     const recreated = await service.create({ repoRoot: repo, name: "gone-dir" });
     expect(recreated.readiness).toBe("ready");
+  });
+
+  it("gc reap defers to a live run lease via the shared removal claim", async () => {
+    const created = await service.create({ repoRoot: repo, name: "leased-claim" });
+    const lease = await acquireWorktreeRunLease(created.id, { env });
+    // Constructed dead-holder state under a still-live run lease: the removal claim
+    // rejects, so reap must skip rather than destroy a checkout a run is using.
+    updateRegistryWorktree(env, created.id, { readiness: "provisioning" });
+    now += PROVISIONING_STALE_MS + 1;
+
+    await service.gc();
+    expect(getRegistryWorktree(env, created.id)?.readiness).toBe("provisioning");
+    expect(await fs.stat(created.path)).toBeTruthy();
+
+    await lease.release();
+    await service.gc();
+    expect(getRegistryWorktree(env, created.id)).toBeUndefined();
+    await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("prunes expired snapshot refs and registry rows", async () => {
