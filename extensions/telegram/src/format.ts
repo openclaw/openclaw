@@ -619,7 +619,11 @@ function preserveSupportedTelegramHtmlTags(
       preDepth = isClosing ? Math.max(0, preDepth - 1) : preDepth + 1;
     }
 
-    result += html.slice(tagStart, tagEnd);
+    // Strip unsupported tags outside code/pre so Telegram API does not reject
+    // the message with a Bad Request parse error.
+    if (codeDepth > 0 || preDepth > 0 || isSupportedTelegramHtmlTag(match[0], support)) {
+      result += html.slice(tagStart, tagEnd);
+    }
     lastIndex = tagEnd;
   }
 
