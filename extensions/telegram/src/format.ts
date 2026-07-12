@@ -428,7 +428,12 @@ function preserveSupportedTelegramHtmlTags(
       preDepth = isClosing ? Math.max(0, preDepth - 1) : preDepth + 1;
     }
 
-    result += html.slice(tagStart, tagEnd);
+    result += preserveTelegramHtmlTag(
+      html.slice(tagStart, tagEnd),
+      openEscapedTags,
+      escapeHtml,
+      support,
+    );
     lastIndex = tagEnd;
   }
 

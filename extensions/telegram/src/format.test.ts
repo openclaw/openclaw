@@ -102,6 +102,21 @@ describe("markdownToTelegramHtml", () => {
     );
   });
 
+  it("escapes unsupported raw HTML headers to prevent Telegram API rejection", () => {
+    expect(markdownToTelegramHtml("<h1>Title</h1>")).toBe("&lt;h1&gt;Title&lt;/h1&gt;");
+    expect(markdownToTelegramHtml("<h2>Subtitle</h2>")).toBe("&lt;h2&gt;Subtitle&lt;/h2&gt;");
+    expect(markdownToTelegramHtml("<div>content</div>")).toBe("&lt;div&gt;content&lt;/div&gt;");
+  });
+
+  it("preserves legacy-supported Telegram HTML tags on the legacy path", () => {
+    expect(markdownToTelegramHtml("<b>bold</b>")).toBe("<b>bold</b>");
+    expect(markdownToTelegramHtml("<i>italic</i>")).toBe("<i>italic</i>");
+    expect(markdownToTelegramHtml("<code>code</code>")).toBe("<code>code</code>");
+    expect(markdownToTelegramHtml("<tg-spoiler>spoiler</tg-spoiler>")).toBe(
+      "<tg-spoiler>spoiler</tg-spoiler>",
+    );
+  });
+
   it("converts raw HTML tables to code fallbacks in legacy HTML mode", () => {
     const input = [
       "<table>",
