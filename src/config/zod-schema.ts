@@ -36,6 +36,16 @@ import {
   SessionSendPolicySchema,
 } from "./zod-schema.session.js";
 
+// zod@4 ships "sideEffects": false, so bundlers tree-shake the classic entry's
+// implicit config(en()) locale registration (zod/v4/classic/external.js) and a
+// built dist renders every issue as the bare "Invalid input" fallback. Register
+// the locale explicitly where the config schemas live; zod stores it on
+// globalThis, so one call covers every zod parse in the process.
+export function installZodDefaultLocale(): void {
+  z.config(z.locales.en());
+}
+installZodDefaultLocale();
+
 const BrowserSnapshotDefaultsSchema = z
   .object({
     mode: z.literal("efficient").optional(),
@@ -460,6 +470,30 @@ export const McpServerSchema = z
 const McpConfigSchema = z
   .object({
     servers: z.record(z.string(), McpServerSchema).optional(),
+    apps: z
+      .object({
+        enabled: z.boolean().optional(),
+        sandboxOrigin: z
+          .string()
+          .url()
+          .refine((value) => {
+            try {
+              const url = new URL(value);
+              return (
+                (url.protocol === "http:" || url.protocol === "https:") &&
+                url.origin === value.replace(/\/$/u, "") &&
+                !url.username &&
+                !url.password
+              );
+            } catch {
+              return false;
+            }
+          }, "sandboxOrigin must be an HTTP(S) origin without a path, query, or credentials")
+          .optional(),
+        sandboxPort: z.number().int().min(1).max(65535).optional(),
+      })
+      .strict()
+      .optional(),
     sessionIdleTtlMs: z.number().finite().min(0).optional(),
   })
   .strict()
@@ -1602,8 +1636,7 @@ export const OpenClawSchema = z
       if (!Array.isArray(ids)) {
         continue;
       }
-      for (let idx = 0; idx < ids.length; idx += 1) {
-        const agentId = ids[idx];
+      for (const [idx, agentId] of ids.entries()) {
         if (!agentIds.has(agentId)) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,

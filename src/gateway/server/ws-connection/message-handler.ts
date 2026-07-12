@@ -132,6 +132,7 @@ import {
 } from "../../net.js";
 import { filterLegacyNodeProtocolFeatures } from "../../node-command-policy.js";
 import { reconcileNodePairingOnConnect } from "../../node-connect-reconcile.js";
+import { scheduleNodeConnectionNotification } from "../../node-connection-notifications.js";
 import {
   resolveNodePairingClientIpSource,
   shouldAutoApproveNodePairingFromTrustedCidrs,
@@ -2234,7 +2235,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           connectParams.client.id === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT &&
           connectParams.client.mode === GATEWAY_CLIENT_MODES.BACKEND;
         let trustedAgentRuntimeIdentity:
-          | ReturnType<typeof verifyAgentRuntimeIdentityToken>
+          | Awaited<ReturnType<typeof verifyAgentRuntimeIdentityToken>>
           | undefined;
         if (typeof agentRuntimeIdentityToken === "string") {
           if (!canAcceptAgentRuntimeIdentity) {
@@ -2249,7 +2250,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             close(1008, truncateCloseReason(message));
             return;
           }
-          trustedAgentRuntimeIdentity = verifyAgentRuntimeIdentityToken(agentRuntimeIdentityToken);
+          trustedAgentRuntimeIdentity =
+            await verifyAgentRuntimeIdentityToken(agentRuntimeIdentityToken);
           if (!trustedAgentRuntimeIdentity) {
             const message = "invalid agent runtime identity token";
             markHandshakeFailure("agent-runtime-identity-invalid", {
@@ -2575,6 +2577,16 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           deviceId: device?.id,
         });
         advanceHandshakePhase("ready");
+        if (role === "node") {
+          const context = buildRequestContext();
+          const nodeId = connectParams.device?.id ?? connectParams.client.id;
+          const nodeSession = context.nodeRegistry.get(nodeId);
+          // Only a current session that received hello-ok counts as connected;
+          // failed or replaced handshakes must not alert or consume cooldown.
+          if (nodeSession?.connId === connId) {
+            scheduleNodeConnectionNotification(context.nodeRegistry, nodeSession);
+          }
+        }
         if (pendingNodePairingCleanup) {
           const context = buildRequestContext();
           const cleanupClaim = pendingNodePairingCleanup;

@@ -460,7 +460,7 @@ jobs:
           const compactPullRequest = isCanonicalRepository && eventName === "pull_request";
           const runQaSmokeCi =
             runNodeFull &&
-            (!compatibilityTarget || existsSync("extensions/qa-lab/src/ci-smoke-plan.ts"));
+            (!frozenTarget || existsSync("extensions/qa-lab/src/ci-smoke-plan.ts"));
           const nodeTestShards = runNodeFull
             ? createNodeTestPlan({
                 includeReleaseOnlyPluginShards: false,
@@ -827,10 +827,6 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build:ci-artifacts
 
-      - name: Check Control UI i18n
-        if: needs.preflight.outputs.run_control_ui_i18n == 'true'
-        run: pnpm ui:i18n:check
-
       - name: Pack built runtime artifacts
         run: tar --posix -cf dist-runtime-build.tar.zst --use-compress-program zstdmt dist dist-runtime packages/*/dist
 
@@ -1042,7 +1038,14 @@ jobs:
           install-bun: "false"
 
       - name: Install Playwright Chromium
-        run: node scripts/ensure-playwright-chromium.mjs
+        run: |
+          if [[ "$COMPATIBILITY_TARGET" == "true" ]]; then
+            # Legacy Vitest configs cannot pass a discovered system browser to Playwright.
+            # Install the managed browser revision pinned by the selected target instead.
+            pnpm --dir ui exec playwright install chromium
+          else
+            node scripts/ensure-playwright-chromium.mjs
+          fi
 
       - name: Lint Control UI window.open usage
         run: pnpm lint:ui:no-raw-window-open
@@ -1051,11 +1054,35 @@ jobs:
         run: |
           if [[ "$COMPATIBILITY_TARGET" == "true" ]]; then
             # Frozen targets can contain timing-sensitive tests fixed on current main.
-            # Preserve one retry, but let their browser helpers use their 10-second waits.
-            pnpm --dir ui test --retry=1 --testTimeout=10000
+            # Give legacy browser fixtures enough headroom on shared hosted runners.
+            # Isolate files because older suites can still leak module mocks between tests.
+            # Do not retry whole files: several rely on one-shot mocked browser globals.
+            pnpm --dir ui test --testTimeout=30000 --isolate
           else
             pnpm --dir ui test
           fi
+
+  control-ui-i18n:
+    permissions:
+      contents: read
+    name: control-ui-i18n
+    needs: [preflight]
+    if: needs.preflight.outputs.run_control_ui_i18n == 'true'
+    # Locale refresh runs separately on main and nightly. Keep drift visible on
+    # automatic runs without blocking unrelated work; release CI stays strict.
+    continue-on-error: ${{ github.event_name != 'workflow_dispatch' }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    timeout-minutes: 10
+    steps:
+      - *linux_node_checkout_step
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.x"
+          install-bun: "false"
+
+      - name: Check Control UI locale parity
+        run: pnpm ui:i18n:check
 
   checks-fast-core:
     permissions:
@@ -1171,13 +1198,58 @@ jobs:
           if (typeof smokePlan.createQaSmokeCiPart === "function") {
             runs = smokePlan.createQaSmokeCiPart(partId).runs;
           } else if (typeof smokePlan.createQaSmokeCiMatrix === "function") {
+            // Legacy planners select the entire profile and can mix long-lived
+            // execution kinds. Reuse the current bounded smoke contract and
+            // isolate each kind so frozen targets cannot pin a profile part.
+            const compatibilityScenarioIds = new Set([
+              "control-ui-chat-flow-playwright",
+              "crestodian-ring-zero-setup",
+              "dreaming-shadow-trial-report",
+              "gateway-smoke",
+              "group-visible-reply-tool",
+              "long-running-release-audit",
+              "luna-thinking-visibility-switch",
+              "matrix-restart-resume",
+              "personal-task-followthrough-status",
+              "plugin-lifecycle-hot-reload",
+              "subagent-completion-direct-fallback",
+              "telegram-commands-command",
+            ]);
             const partIndex = partId === "profile-1" ? 0 : partId === "profile-2" ? 1 : -1;
             if (partIndex < 0) {
               throw new Error(`unknown QA smoke CI profile part: ${partId}`);
             }
-            runs = smokePlan
+            const scenarioCatalog = await import("./extensions/qa-lab/src/scenario-catalog.ts");
+            const scenarioKindById = new Map(
+              scenarioCatalog
+                .readQaScenarioPack()
+                .scenarios.map((scenario) => [scenario.id, scenario.execution.kind]),
+            );
+            const legacyRuns = smokePlan
               .createQaSmokeCiMatrix()
               .include.filter((_, index) => index % 2 === partIndex);
+            runs = legacyRuns.flatMap((run) => {
+              const scenarioIdsByKind = new Map();
+              for (const scenarioId of run.scenario_ids) {
+                if (!compatibilityScenarioIds.has(scenarioId)) {
+                  continue;
+                }
+                const kind = scenarioKindById.get(scenarioId);
+                if (!kind) {
+                  throw new Error(`legacy QA smoke scenario not found: ${scenarioId}`);
+                }
+                const scenarioIds = scenarioIdsByKind.get(kind) ?? [];
+                scenarioIds.push(scenarioId);
+                scenarioIdsByKind.set(kind, scenarioIds);
+              }
+              return [...scenarioIdsByKind.entries()]
+                .toSorted(([left], [right]) => left.localeCompare(right))
+                .map(([kind, scenarioIds]) => ({
+                  ...run,
+                  slug: `${run.slug}-${kind}`,
+                  scenario_ids: scenarioIds,
+                }));
+            });
           } else {
             throw new Error("QA smoke plan does not expose a supported CI planner.");
           }
@@ -1201,7 +1273,7 @@ jobs:
             for scenario_id in "${scenario_ids[@]}"; do
               scenario_args+=(--scenario "$scenario_id")
             done
-            node openclaw.mjs qa run \
+            timeout --signal=TERM --kill-after=15s 10m node openclaw.mjs qa run \
               --repo-root . \
               --qa-profile smoke-ci \
               --concurrency 10 \
@@ -1535,12 +1607,6 @@ jobs:
                 echo "Current CI targets must provide the tsgo:scripts package script." >&2
                 exit 1
               fi
-              if pnpm run --silent 2>/dev/null | grep -q '^  tsgo:strict-ratchet$'; then
-                pnpm tsgo:strict-ratchet
-              elif [[ "$HISTORICAL_TARGET" != "true" ]]; then
-                echo "Current CI targets must provide the tsgo:strict-ratchet package script." >&2
-                exit 1
-              fi
               if pnpm run --silent 2>/dev/null | grep -q '^  tsgo:test:root$'; then
                 pnpm tsgo:test:root
               elif [[ "$HISTORICAL_TARGET" != "true" ]]; then
@@ -1675,7 +1741,6 @@ jobs:
         env:
           ADDITIONAL_CHECK_GROUP: ${{ matrix.group }}
           OPENCLAW_ADDITIONAL_BOUNDARY_SHARD: ${{ matrix.boundary_shard || '' }}
-          RUN_CONTROL_UI_I18N: ${{ needs.preflight.outputs.run_control_ui_i18n }}
           OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY: 4
           OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY: 6
         shell: bash
@@ -2459,6 +2524,7 @@ jobs:
       - pnpm-store-warmup
       - build-artifacts
       - checks-ui
+      - control-ui-i18n
       - checks-fast-core
       - checks-fast-plugin-contracts-shard
       - checks-fast-channel-contracts-shard

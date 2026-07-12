@@ -154,7 +154,6 @@ actor GatewayConnection {
         case chatHistory = "chat.history"
         case sessionsPreview = "sessions.preview"
         case chatSend = "chat.send"
-        case chatAbort = "chat.abort"
         case skillsStatus = "skills.status"
         case skillsInstall = "skills.install"
         case skillsUpdate = "skills.update"
@@ -1355,14 +1354,6 @@ extension GatewayConnection {
             idempotencyKey: idempotencyKey))
     }
 
-    func sendSystemEvent(_ params: [String: AnyCodable]) async {
-        do {
-            try await self.requestVoid(method: .systemEvent, params: params)
-        } catch {
-            // Best-effort only.
-        }
-    }
-
     // MARK: - Health
 
     func healthSnapshot(timeoutMs: Double? = nil) async throws -> HealthSnapshot {
@@ -1493,7 +1484,8 @@ extension GatewayConnection {
         thinking: String?,
         idempotencyKey: String,
         attachments: [OpenClawChatAttachmentPayload],
-        timeoutMs: Int = 30000,
+        runTimeoutMs: Int? = nil,
+        requestTimeoutMs: Int = 30000,
         ifCurrentRoute route: Route? = nil,
         distinguishPreDispatchRouteChange: Bool = false) async throws -> OpenClawChatSendResponse
     {
@@ -1502,8 +1494,10 @@ extension GatewayConnection {
             "sessionKey": AnyCodable(resolvedKey),
             "message": AnyCodable(message),
             "idempotencyKey": AnyCodable(idempotencyKey),
-            "timeoutMs": AnyCodable(timeoutMs),
         ]
+        if let runTimeoutMs {
+            params["timeoutMs"] = AnyCodable(runTimeoutMs)
+        }
         if let agentID = agentID?.trimmingCharacters(in: .whitespacesAndNewlines), !agentID.isEmpty {
             params["agentId"] = AnyCodable(agentID)
         }
@@ -1535,24 +1529,15 @@ extension GatewayConnection {
             let data = try await request(
                 method: Method.chatSend.rawValue,
                 params: params,
-                timeoutMs: Double(timeoutMs),
+                timeoutMs: Double(requestTimeoutMs),
                 ifCurrentRoute: route,
                 distinguishPreDispatchRouteChange: distinguishPreDispatchRouteChange)
             return try self.decoder.decode(OpenClawChatSendResponse.self, from: data)
         }
-        return try await self.requestDecoded(method: .chatSend, params: params, timeoutMs: Double(timeoutMs))
-    }
-
-    func chatAbort(sessionKey: String, runId: String) async throws -> Bool {
-        let resolvedKey = self.canonicalizeSessionKey(sessionKey)
-        struct AbortResponse: Decodable {
-            let ok: Bool?
-            let aborted: Bool?
-        }
-        let res: AbortResponse = try await requestDecoded(
-            method: .chatAbort,
-            params: ["sessionKey": AnyCodable(resolvedKey), "runId": AnyCodable(runId)])
-        return res.aborted ?? false
+        return try await self.requestDecoded(
+            method: .chatSend,
+            params: params,
+            timeoutMs: Double(requestTimeoutMs))
     }
 
     func talkMode(enabled: Bool, phase: String? = nil) async {

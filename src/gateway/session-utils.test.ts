@@ -12,11 +12,14 @@ import {
   appendTranscriptMessageSync,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import type { CronJob } from "../cron/types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withStateDirEnv as withRawStateDirEnv } from "../test-helpers/state-dir-env.js";
+import { registerSessionAutomationSource } from "./session-automation-index.js";
+import { buildGatewaySessionEventFields } from "./session-event-payload.js";
 import {
   canonicalizeSpawnedByForAgent,
   buildGatewaySessionRow,
@@ -50,6 +53,7 @@ const providerArtifactMocks = vi.hoisted(() => ({
 
 vi.mock("../plugins/provider-public-artifacts.js", () => ({
   resolveBundledProviderPolicySurface: providerArtifactMocks.resolveBundledProviderPolicySurface,
+  resolveProviderPolicySurface: providerArtifactMocks.resolveBundledProviderPolicySurface,
 }));
 
 function closeSessionSqliteDatabasesForTest(): void {
@@ -489,6 +493,39 @@ describe("gateway session utils", () => {
     expect(row.thinkingDefault).toBe("medium");
   });
 
+  test("session rows project automation bindings and event fields forward them", () => {
+    const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
+    registerSessionAutomationSource({
+      getJobs: () => [{ id: "job1", enabled: true, sessionTarget: "isolated" } as CronJob],
+      getDefaultAgentId: () => "main",
+    });
+    try {
+      const bound = buildGatewaySessionRow({
+        cfg,
+        storePath: "",
+        store: {},
+        key: "agent:main:cron:job1",
+        lightweightListRow: true,
+        skipTranscriptUsageFallback: true,
+      });
+      expect(bound.hasAutomation).toBe(true);
+      expect(buildGatewaySessionEventFields({ sessionRow: bound }).hasAutomation).toBe(true);
+
+      const plain = buildGatewaySessionRow({
+        cfg,
+        storePath: "",
+        store: {},
+        key: "agent:main:other",
+        lightweightListRow: true,
+        skipTranscriptUsageFallback: true,
+      });
+      expect(plain.hasAutomation).toBeUndefined();
+      expect(buildGatewaySessionEventFields({ sessionRow: plain }).hasAutomation).toBe(false);
+    } finally {
+      registerSessionAutomationSource(null);
+    }
+  });
+
   test("session rows ignore malformed compaction checkpoints", () => {
     const row = buildGatewaySessionRow({
       cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
@@ -693,6 +730,7 @@ describe("gateway session utils", () => {
     expect(row.thinkingLevels?.map((level) => level.id)).toContain("xhigh");
     expect(providerArtifactMocks.resolveBundledProviderPolicySurface).toHaveBeenCalledWith(
       "openai",
+      { manifestRegistry: undefined },
     );
   });
 
@@ -1051,6 +1089,7 @@ describe("gateway session utils", () => {
       spawnedCwd: "/state/worktrees/abc/wt-1234",
       worktree: { id: "wt-id", branch: "openclaw/wt-1234", repoRoot: "/repo" },
       execNode: "macbook",
+      execCwd: "/Users/peter/Projects/openclaw",
     } as SessionEntry;
     const row = buildGatewaySessionRow({
       cfg,
@@ -1061,6 +1100,7 @@ describe("gateway session utils", () => {
     });
     expect(row.worktree).toEqual({ id: "wt-id", branch: "openclaw/wt-1234", repoRoot: "/repo" });
     expect(row.execNode).toBe("macbook");
+    expect(row.execCwd).toBe("/Users/peter/Projects/openclaw");
   });
 
   test("buildGatewaySessionRow prefers entry.label over origin.label for direct sessions", () => {

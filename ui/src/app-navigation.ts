@@ -12,26 +12,38 @@ type NavigationItem = {
 // The sidebar shows a small user-customizable pinned set; every other nav route
 // lives in the collapsed "More" section. Chat is reachable through the session
 // list and Settings/Docs live in the sidebar footer, so neither is listed here.
+// Skills and Skill Workshop are tabs inside the Plugins hub, not sidebar items.
 export const SIDEBAR_NAV_ROUTES = [
-  "overview",
   "workboard",
   "sessions",
   "usage",
   "cron",
   "tasks",
   "agents",
-  "skills",
   "plugins",
-  "skill-workshop",
   "nodes",
 ] as const satisfies readonly NavigationRouteId[];
 
+// Routes presented as tabs of the Plugins hub. The sidebar highlights the
+// Plugins entry for all of them, mirroring how config covers settings routes.
+const PLUGINS_HUB_ROUTES: ReadonlySet<NavigationRouteId> = new Set([
+  "plugins",
+  "skills",
+  "skill-workshop",
+]);
+
+export function isPluginsHubRoute(routeId: NavigationRouteId): boolean {
+  return PLUGINS_HUB_ROUTES.has(routeId);
+}
+
 export type SidebarNavRoute = (typeof SIDEBAR_NAV_ROUTES)[number];
 
-// Sessions are the sidebar's core content; Overview is the only page pinned by
-// default. Users pin more via the customize menu.
+// Keep the highest-value operational destinations visible on first use. Users
+// can still replace this set through the customize menu.
 export const DEFAULT_SIDEBAR_PINNED_ROUTES = [
-  "overview",
+  "usage",
+  "cron",
+  "plugins",
 ] as const satisfies readonly SidebarNavRoute[];
 
 /**
@@ -69,7 +81,10 @@ type SettingsNavigationGroup = {
 // Grouping feeds the full-page settings sidebar (settings-sidebar.ts).
 export const SETTINGS_NAVIGATION_GROUPS = [
   { labelKey: null, routes: ["profile", "config", "appearance"] },
-  { labelKey: "nav.settingsGroupConnections", routes: ["channels", "communications"] },
+  {
+    labelKey: "nav.settingsGroupConnections",
+    routes: ["connection", "channels", "communications"],
+  },
   {
     labelKey: "nav.settingsGroupAgents",
     routes: ["ai-agents", "model-providers", "automation", "mcp"],
@@ -86,10 +101,10 @@ export const SETTINGS_NAVIGATION_ROUTES: readonly NavigationRouteId[] =
 const NAVIGATION_ICONS: NavigationItem = {
   agents: "bot",
   activity: "activity",
-  overview: "barChart",
   workboard: "kanban",
   worktrees: "folder",
   channels: "link",
+  connection: "radio",
   sessions: "fileText",
   usage: "coins",
   cron: "calendarClock",
@@ -174,10 +189,10 @@ export function cancelRoutePreload(
 const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey: string }> = {
   agents: { titleKey: "tabs.agents", subtitleKey: "subtitles.agents" },
   activity: { titleKey: "tabs.activity", subtitleKey: "subtitles.activity" },
-  overview: { titleKey: "tabs.overview", subtitleKey: "subtitles.overview" },
   workboard: { titleKey: "tabs.workboard", subtitleKey: "subtitles.workboard" },
   worktrees: { titleKey: "tabs.worktrees", subtitleKey: "subtitles.worktrees" },
   channels: { titleKey: "tabs.channels", subtitleKey: "subtitles.channels" },
+  connection: { titleKey: "tabs.connection", subtitleKey: "subtitles.connection" },
   sessions: { titleKey: "tabs.sessions", subtitleKey: "subtitles.sessions" },
   usage: { titleKey: "tabs.usage", subtitleKey: "subtitles.usage" },
   cron: { titleKey: "tabs.cron", subtitleKey: "subtitles.cron" },

@@ -100,6 +100,12 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "tools.catalog", scope: "operator.read" },
   { name: "tools.effective", scope: "operator.read", startup: true },
   { name: "tools.invoke", scope: "operator.write" },
+  { name: "mcp.app.view", scope: "operator.read" },
+  { name: "mcp.app.listTools", scope: "operator.read" },
+  { name: "mcp.app.listResources", scope: "operator.read" },
+  { name: "mcp.app.listResourceTemplates", scope: "operator.read" },
+  { name: "mcp.app.readResource", scope: "operator.read" },
+  { name: "mcp.app.callTool", scope: "operator.write" },
   { name: "audit.list", scope: "operator.read" },
   { name: "audit.activity.list", scope: "operator.read" },
   { name: "tasks.list", scope: "operator.read" },
@@ -131,6 +137,8 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "agents.files.set", scope: "operator.admin" },
   { name: "sessions.files.list", scope: "operator.read" },
   { name: "sessions.files.get", scope: "operator.read" },
+  // Workspace file writes require the same admin scope as agents.files.set.
+  { name: "sessions.files.set", scope: "operator.admin" },
   { name: "artifacts.list", scope: "operator.read" },
   { name: "artifacts.get", scope: "operator.read" },
   { name: "artifacts.download", scope: "operator.read" },
@@ -328,6 +336,13 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
     startup: true,
     controlPlaneWrite: true,
   },
+  { name: "sessions.catalog.list", scope: "operator.read" },
+  { name: "sessions.catalog.read", scope: "operator.read" },
+  { name: "sessions.catalog.continue", scope: "operator.write" },
+  { name: "sessions.catalog.archive", scope: "operator.write" },
+  { name: "approval.get", scope: "operator.approvals" },
+  { name: "approval.resolve", scope: "operator.approvals" },
+  { name: "sessions.search", scope: "operator.read" },
 ] as const;
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(

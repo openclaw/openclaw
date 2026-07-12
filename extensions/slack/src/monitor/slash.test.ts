@@ -306,7 +306,10 @@ vi.mock("./slash-commands.runtime.js", () => {
   };
 });
 
-type RegisterFn = (params: { ctx: unknown; account: unknown }) => Promise<void>;
+type RegisterFn = (params: {
+  ctx: unknown;
+  account: unknown;
+}) => Promise<{ mode: "single"; name: string } | { mode: "native" } | { mode: "disabled" }>;
 const { registerSlackMonitorSlashCommands } = (await import("./slash.js")) as {
   registerSlackMonitorSlashCommands: RegisterFn;
 };
@@ -324,7 +327,7 @@ afterEach(() => {
 });
 
 async function registerCommands(ctx: unknown, account: unknown, trackEvent?: () => void) {
-  await registerSlackMonitorSlashCommands({
+  return await registerSlackMonitorSlashCommands({
     ctx: ctx as never,
     account: account as never,
     trackEvent,
@@ -361,7 +364,7 @@ function createDeferred<T>() {
 function createArgMenusHarness(
   cfg: OpenClawConfig = { commands: { native: true, nativeSkills: false } },
 ) {
-  const commands = new Map<string, (args: unknown) => Promise<void>>();
+  const commands = new Map<string | RegExp, (args: unknown) => Promise<void>>();
   const actions = new Map<string | RegExp, (args: unknown) => Promise<void>>();
   const options = new Map<string, (args: unknown) => Promise<void>>();
   const optionsReceiverContexts: unknown[] = [];
@@ -369,7 +372,7 @@ function createArgMenusHarness(
   const postEphemeral = vi.fn().mockResolvedValue({ ok: true });
   const app = {
     client: { chat: { postEphemeral } },
-    command: (name: string, handler: (args: unknown) => Promise<void>) => {
+    command: (name: string | RegExp, handler: (args: unknown) => Promise<void>) => {
       commands.set(name, handler);
     },
     action: (id: string | RegExp, handler: (args: unknown) => Promise<void>) => {
@@ -397,7 +400,7 @@ function createArgMenusHarness(
     useAccessGroups: false,
     channelsConfig: undefined,
     slashCommand: {
-      enabled: true,
+      enabled: false,
       name: "openclaw",
       ephemeral: true,
       sessionPrefix: "slack:slash",
@@ -658,6 +661,23 @@ describe("Slack native command argument menus", () => {
     harness.postEphemeral.mockClear();
   });
 
+  it("prefers the configured slash command over native commands", async () => {
+    const configuredHarness = createArgMenusHarness();
+    (
+      configuredHarness.ctx as {
+        slashCommand: { enabled: boolean };
+      }
+    ).slashCommand.enabled = true;
+    await registerCommands(configuredHarness.ctx, configuredHarness.account);
+
+    expect(
+      [...configuredHarness.commands.keys()].some(
+        (command) => command instanceof RegExp && command.test("/openclaw"),
+      ),
+    ).toBe(true);
+    expect(configuredHarness.commands.has("/usage")).toBe(false);
+  });
+
   it("registers options handlers without losing app receiver binding", async () => {
     const testHarness = createArgMenusHarness();
     await registerCommands(testHarness.ctx, testHarness.account);
@@ -698,58 +718,16 @@ describe("Slack native command argument menus", () => {
   );
 
   it("falls back to static menus when app.options() throws during registration", async () => {
-    const commands = new Map<string, (args: unknown) => Promise<void>>();
-    const actions = new Map<string | RegExp, (args: unknown) => Promise<void>>();
-    const postEphemeral = vi.fn().mockResolvedValue({ ok: true });
+    const testHarness = createArgMenusHarness();
     const runtimeLog = vi.fn();
-    const app = {
-      client: { chat: { postEphemeral } },
-      command: (name: string, handler: (args: unknown) => Promise<void>) => {
-        commands.set(name, handler);
-      },
-      action: (id: string | RegExp, handler: (args: unknown) => Promise<void>) => {
-        actions.set(id, handler);
-      },
-      // Simulate Bolt throwing during options registration (e.g. receiver not initialized)
-      options: () => {
-        throw new Error("Cannot read properties of undefined (reading 'listeners')");
-      },
+    (testHarness.ctx as { runtime: { log: typeof runtimeLog } }).runtime = { log: runtimeLog };
+    testHarness.app.options = () => {
+      throw new Error("Cannot read properties of undefined (reading 'listeners')");
     };
-    const ctx = {
-      cfg: { commands: { native: true, nativeSkills: false } },
-      runtime: { log: runtimeLog },
-      botToken: "bot-token",
-      botUserId: "bot",
-      teamId: "T1",
-      allowFrom: ["*"],
-      dmEnabled: true,
-      dmPolicy: "open",
-      groupDmEnabled: false,
-      groupDmChannels: [],
-      defaultRequireMention: true,
-      groupPolicy: "open",
-      useAccessGroups: false,
-      channelsConfig: undefined,
-      slashCommand: {
-        enabled: true,
-        name: "openclaw",
-        ephemeral: true,
-        sessionPrefix: "slack:slash",
-      },
-      textLimit: 4000,
-      app,
-      isChannelAllowed: () => true,
-      resolveChannelName: async () => ({ name: "dm", type: "im" }),
-      resolveUserName: async () => ({ name: "Ada" }),
-    } as unknown;
-    const account = {
-      accountId: "acct",
-      config: { commands: { native: true, nativeSkills: false } },
-    } as unknown;
 
     // Registration should not throw despite app.options() throwing
-    await registerCommands(ctx, account);
-    expect(commands.size).toBeGreaterThan(0);
+    await registerCommands(testHarness.ctx, testHarness.account);
+    expect(testHarness.commands.size).toBeGreaterThan(0);
     expect(runtimeLog).toHaveBeenCalledTimes(1);
     expect(runtimeLog).toHaveBeenCalledWith(
       expect.stringContaining(
@@ -757,14 +735,14 @@ describe("Slack native command argument menus", () => {
       ),
     );
     expect(
-      Array.from(actions.keys()).some(
+      Array.from(testHarness.actions.keys()).some(
         (key) => key instanceof RegExp && String(key) === String(/^openclaw_cmdarg/),
       ),
     ).toBe(true);
 
     // The /reportexternal command (140 choices) should fall back to static_select
     // instead of external_select since options registration failed
-    const handler = requireHandler(commands, "/reportexternal", "/reportexternal");
+    const handler = requireHandler(testHarness.commands, "/reportexternal", "/reportexternal");
     const respond = vi.fn().mockResolvedValue(undefined);
     const ack = vi.fn().mockResolvedValue(undefined);
     await handler({
@@ -1190,6 +1168,8 @@ function createPolicyHarness(overrides?: {
   allowFrom?: string[];
   useAccessGroups?: boolean;
   slashEphemeral?: boolean;
+  slashCommandEnabled?: boolean;
+  slashCommandName?: string;
   shouldDropMismatchedSlackEvent?: (body: unknown) => boolean;
   resolveChannelName?: () => Promise<{ name?: string; type?: string }>;
 }) {
@@ -1221,8 +1201,8 @@ function createPolicyHarness(overrides?: {
     useAccessGroups: overrides?.useAccessGroups ?? true,
     channelsConfig: overrides?.channelsConfig,
     slashCommand: {
-      enabled: true,
-      name: "openclaw",
+      enabled: overrides?.slashCommandEnabled ?? true,
+      name: overrides?.slashCommandName ?? "openclaw",
       ephemeral: overrides?.slashEphemeral ?? true,
       sessionPrefix: "slack:slash",
     },
@@ -1317,6 +1297,36 @@ function expectUnauthorizedResponse(respond: ReturnType<typeof vi.fn>) {
     response_type: "ephemeral",
   });
 }
+
+describe("Slack App Home command presentation", () => {
+  it("returns the configured single command when it is registered", async () => {
+    const harness = createPolicyHarness({ slashCommandName: "acme" });
+
+    await expect(registerCommands(harness.ctx, harness.account)).resolves.toEqual({
+      mode: "single",
+      name: "acme",
+    });
+    expect(harness.commands.size).toBe(1);
+  });
+
+  it("omits the single command when slash commands are disabled", async () => {
+    const harness = createPolicyHarness({ slashCommandEnabled: false });
+
+    await expect(registerCommands(harness.ctx, harness.account)).resolves.toEqual({
+      mode: "disabled",
+    });
+    expect(harness.commands.size).toBe(0);
+  });
+
+  it("omits the single command when native commands take precedence", async () => {
+    const harness = createArgMenusHarness();
+
+    await expect(registerCommands(harness.ctx, harness.account)).resolves.toEqual({
+      mode: "native",
+    });
+    expect(harness.commands.size).toBeGreaterThan(0);
+  });
+});
 
 describe("slack slash commands channel policy", () => {
   it("drops mismatched slash payloads before dispatch", async () => {

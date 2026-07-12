@@ -283,12 +283,6 @@ jobs:
               "repos/${GITHUB_REPOSITORY}/compare/${candidate_sha}...main" \
               --jq '.status'
           )"
-          git -C .candidate fetch --force --no-tags origin \
-            '+refs/heads/release/*:refs/remotes/origin/release/*'
-          git -C .candidate fetch --force --no-tags origin \
-            '+refs/heads/extended-stable/*:refs/remotes/origin/extended-stable/*'
-          git -C .candidate fetch --force origin '+refs/tags/v*:refs/tags/v*'
-
           trusted_reason=""
           trusted_release_branch=""
           if [[ "$compare_status" == "ahead" || "$compare_status" == "identical" ]]; then
@@ -296,31 +290,43 @@ jobs:
           else
             normalized_ref="${TARGET_REF#refs/heads/}"
             if [[ "$normalized_ref" =~ ^(release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*|extended-stable/[0-9]{4}\.[1-9][0-9]*\.33)$ ]]; then
-              [[ "$(git -C .candidate rev-parse "refs/remotes/origin/${normalized_ref}")" == "$candidate_sha" ]]
+              branch_sha="$(
+                git -C .candidate ls-remote --exit-code --refs origin \
+                  "refs/heads/${normalized_ref}" |
+                  awk 'NR == 1 { print $1 } END { if (NR != 1) exit 1 }'
+              )"
+              [[ "$branch_sha" == "$candidate_sha" ]]
               trusted_reason="release-branch-head"
               trusted_release_branch="$normalized_ref"
             elif [[ "$TARGET_REF" =~ ^refs/tags/v ]] || [[ "$TARGET_REF" =~ ^v ]]; then
               normalized_tag="${TARGET_REF#refs/tags/}"
-              [[ "$(git -C .candidate rev-parse "refs/tags/${normalized_tag}^{commit}")" == "$candidate_sha" ]]
+              tag_refs="$(
+                git -C .candidate ls-remote --exit-code origin \
+                  "refs/tags/${normalized_tag}" "refs/tags/${normalized_tag}^{}"
+              )"
+              awk -v sha="$candidate_sha" '$1 == sha { found = 1 } END { exit(found ? 0 : 1) }' \
+                <<<"$tag_refs"
               trusted_reason="release-tag"
             elif [[ "$TARGET_REF" =~ ^[a-f0-9]{40}$ && "$TARGET_REF" == "$candidate_sha" ]]; then
               matching_release_branches="$(
-                git -C .candidate for-each-ref \
-                  --format='%(objectname) %(refname:strip=3)' \
-                  refs/remotes/origin/release \
-                  refs/remotes/origin/extended-stable |
-                  awk -v sha="$candidate_sha" '$1 == sha { print $2 }'
+                gh api --paginate \
+                  "repos/${GITHUB_REPOSITORY}/commits/${candidate_sha}/branches-where-head" \
+                  --jq '.[].name' |
+                  awk '$0 ~ /^release\/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$/ ||
+                       $0 ~ /^extended-stable\/[0-9]{4}\.[1-9][0-9]*\.33$/ { print }'
               )"
               if [[ "$(wc -l <<<"$matching_release_branches" | tr -d ' ')" == "1" && -n "$matching_release_branches" ]]; then
                 trusted_reason="release-branch-head"
                 trusted_release_branch="$matching_release_branches"
               else
-                while IFS= read -r tag_ref; do
-                  if [[ "$(git -C .candidate rev-parse "${tag_ref}^{commit}")" == "$candidate_sha" ]]; then
-                    trusted_reason="release-tag"
-                    break
-                  fi
-                done < <(git -C .candidate for-each-ref --format='%(refname)' refs/tags/v)
+                matching_release_tags="$(
+                  git -C .candidate ls-remote origin 'refs/tags/v*' |
+                    awk -v sha="$candidate_sha" '$1 == sha { sub(/\^\{\}$/, "", $2); print $2 }' |
+                    sort -u
+                )"
+                if [[ -n "$matching_release_tags" ]]; then
+                  trusted_reason="release-tag"
+                fi
               fi
             fi
           fi
@@ -339,18 +345,27 @@ jobs:
                 -f name="$repository_name" \
                 -f oid="$candidate_sha"
             )"
-            signer="$(
+            signature_status="$(
               jq -er \
                 --arg sha "$candidate_sha" \
                 '.data.repository.object |
-                 select(.oid == $sha and .signature.isValid == true and .signature.state == "VALID") |
-                 .signature.signer.login' \
+                 select(.oid == $sha) |
+                 if .signature == null then "missing"
+                 elif .signature.isValid == true and .signature.state == "VALID" and
+                   (.signature.signer.login // "") != "" then "valid"
+                 else "invalid"
+                 end' \
                 <<<"$signature_json"
             )"
+            if [[ "$signature_status" == "invalid" ]]; then
+              echo "Release candidate ${candidate_sha} has an invalid commit signature." >&2
+              exit 1
+            fi
+            signer="$(jq -r '.data.repository.object.signature.signer.login // ""' <<<"$signature_json")"
             permission_actor="$signer"
-            if [[ "$signer" == "web-flow" ]]; then
+            if [[ "$signature_status" == "missing" || "$signer" == "web-flow" ]]; then
               if [[ "$trusted_reason" != "release-branch-head" || -z "$trusted_release_branch" ]]; then
-                echo "GitHub web-flow candidates require an exact release branch head." >&2
+                echo "Unsigned or GitHub web-flow candidates require an exact release branch head." >&2
                 exit 1
               fi
               permission_actor="$(
@@ -965,12 +980,6 @@ jobs:
               "repos/${GITHUB_REPOSITORY}/compare/${candidate_sha}...main" \
               --jq '.status'
           )"
-          git fetch --force --no-tags origin \
-            '+refs/heads/release/*:refs/remotes/origin/release/*'
-          git fetch --force --no-tags origin \
-            '+refs/heads/extended-stable/*:refs/remotes/origin/extended-stable/*'
-          git fetch --force origin '+refs/tags/v*:refs/tags/v*'
-
           trusted_reason=""
           trusted_release_branch=""
           if [[ "$compare_status" == "ahead" || "$compare_status" == "identical" ]]; then
@@ -978,31 +987,42 @@ jobs:
           else
             normalized_ref="${TARGET_REF#refs/heads/}"
             if [[ "$normalized_ref" =~ ^(release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*|extended-stable/[0-9]{4}\.[1-9][0-9]*\.33)$ ]]; then
-              [[ "$(git rev-parse "refs/remotes/origin/${normalized_ref}")" == "$candidate_sha" ]]
+              branch_sha="$(
+                git ls-remote --exit-code --refs origin "refs/heads/${normalized_ref}" |
+                  awk 'NR == 1 { print $1 } END { if (NR != 1) exit 1 }'
+              )"
+              [[ "$branch_sha" == "$candidate_sha" ]]
               trusted_reason="release-branch-head"
               trusted_release_branch="$normalized_ref"
             elif [[ "$TARGET_REF" =~ ^refs/tags/v ]] || [[ "$TARGET_REF" =~ ^v ]]; then
               normalized_tag="${TARGET_REF#refs/tags/}"
-              [[ "$(git rev-parse "refs/tags/${normalized_tag}^{commit}")" == "$candidate_sha" ]]
+              tag_refs="$(
+                git ls-remote --exit-code origin \
+                  "refs/tags/${normalized_tag}" "refs/tags/${normalized_tag}^{}"
+              )"
+              awk -v sha="$candidate_sha" '$1 == sha { found = 1 } END { exit(found ? 0 : 1) }' \
+                <<<"$tag_refs"
               trusted_reason="release-tag"
             elif [[ "$TARGET_REF" =~ ^[a-f0-9]{40}$ && "$TARGET_REF" == "$candidate_sha" ]]; then
               matching_release_branches="$(
-                git for-each-ref \
-                  --format='%(objectname) %(refname:strip=3)' \
-                  refs/remotes/origin/release \
-                  refs/remotes/origin/extended-stable |
-                  awk -v sha="$candidate_sha" '$1 == sha { print $2 }'
+                gh api --paginate \
+                  "repos/${GITHUB_REPOSITORY}/commits/${candidate_sha}/branches-where-head" \
+                  --jq '.[].name' |
+                  awk '$0 ~ /^release\/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$/ ||
+                       $0 ~ /^extended-stable\/[0-9]{4}\.[1-9][0-9]*\.33$/ { print }'
               )"
               if [[ "$(wc -l <<<"$matching_release_branches" | tr -d ' ')" == "1" && -n "$matching_release_branches" ]]; then
                 trusted_reason="release-branch-head"
                 trusted_release_branch="$matching_release_branches"
               else
-                while IFS= read -r tag_ref; do
-                  if [[ "$(git rev-parse "${tag_ref}^{commit}")" == "$candidate_sha" ]]; then
-                    trusted_reason="release-tag"
-                    break
-                  fi
-                done < <(git for-each-ref --format='%(refname)' refs/tags/v)
+                matching_release_tags="$(
+                  git ls-remote origin 'refs/tags/v*' |
+                    awk -v sha="$candidate_sha" '$1 == sha { sub(/\^\{\}$/, "", $2); print $2 }' |
+                    sort -u
+                )"
+                if [[ -n "$matching_release_tags" ]]; then
+                  trusted_reason="release-tag"
+                fi
               fi
             fi
           fi
@@ -1018,18 +1038,27 @@ jobs:
                 -f name="$repository_name" \
                 -f oid="$candidate_sha"
             )"
-            signer="$(
+            signature_status="$(
               jq -er \
                 --arg sha "$candidate_sha" \
                 '.data.repository.object |
-                 select(.oid == $sha and .signature.isValid == true and .signature.state == "VALID") |
-                 .signature.signer.login' \
+                 select(.oid == $sha) |
+                 if .signature == null then "missing"
+                 elif .signature.isValid == true and .signature.state == "VALID" and
+                   (.signature.signer.login // "") != "" then "valid"
+                 else "invalid"
+                 end' \
                 <<<"$signature_json"
             )"
+            if [[ "$signature_status" == "invalid" ]]; then
+              echo "Release candidate ${candidate_sha} has an invalid commit signature." >&2
+              exit 1
+            fi
+            signer="$(jq -r '.data.repository.object.signature.signer.login // ""' <<<"$signature_json")"
             permission_actor="$signer"
-            if [[ "$signer" == "web-flow" ]]; then
+            if [[ "$signature_status" == "missing" || "$signer" == "web-flow" ]]; then
               if [[ "$trusted_reason" != "release-branch-head" || -z "$trusted_release_branch" ]]; then
-                echo "GitHub web-flow candidates require an exact release branch head." >&2
+                echo "Unsigned or GitHub web-flow candidates require an exact release branch head." >&2
                 exit 1
               fi
               permission_actor="$(

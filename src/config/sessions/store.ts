@@ -1,6 +1,7 @@
 // Session store facade coordinates reads, writes, maintenance, delivery metadata, and exports.
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalAgentRuntimeId } from "../../agents/agent-runtime-id.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
@@ -97,25 +98,6 @@ export type {
   SessionStoreSnapshotEntry,
 } from "./store-cache.js";
 export { normalizeStoreSessionKey, resolveSessionStoreEntry } from "./store-entry.js";
-
-export type SessionEntryPatchProjectionSnapshot = {
-  entries: ReadonlyArray<{ sessionKey: string; entry: SessionEntry }>;
-};
-
-export type SessionEntryPatchProjectionTarget = {
-  candidateKeys?: readonly string[];
-  primaryKey: string;
-};
-
-export type SessionEntryPatchProjectionContext = SessionEntryPatchProjectionSnapshot &
-  SessionEntryPatchProjectionTarget & {
-    existingEntry?: SessionEntry;
-  };
-
-export type SessionEntryPatchProjectionFailure = { ok: false };
-
-export type SessionEntryPatchProjectionResult<TFailure extends SessionEntryPatchProjectionFailure> =
-  { ok: true; entry: SessionEntry } | TFailure;
 
 const log = createSubsystemLogger("sessions/store");
 const writerStoreFileStats = new WeakMap<
@@ -343,7 +325,7 @@ export type DeletedAgentSessionEntryPurgeParams = {
 };
 
 function cloneSessionEntry(entry: SessionEntry): SessionEntry {
-  return cloneSessionStoreRecord({ entry }).entry;
+  return expectDefined(cloneSessionStoreRecord({ entry }).entry, "cloned session entry");
 }
 
 function cloneSessionEntries(store: Record<string, SessionEntry>): Record<string, SessionEntry> {
@@ -1198,113 +1180,6 @@ export async function updateSessionStore<T>(
   );
 }
 
-function cloneSessionEntryProjectionSnapshot(
-  store: Record<string, SessionEntry>,
-): SessionEntryPatchProjectionSnapshot {
-  return {
-    entries: Object.entries(store).map(([sessionKey, entry]) => ({
-      sessionKey,
-      entry: cloneSessionEntry(entry),
-    })),
-  };
-}
-
-function resolveFreshestProjectedEntry(params: {
-  store: Record<string, SessionEntry>;
-  candidateKeys: readonly string[];
-}): SessionEntry | undefined {
-  let freshest: SessionEntry | undefined;
-  const keys = new Set<string>();
-  for (const candidateKey of params.candidateKeys) {
-    const trimmed = normalizeOptionalString(candidateKey) ?? "";
-    if (!trimmed) {
-      continue;
-    }
-    keys.add(trimmed);
-  }
-  for (const key of keys) {
-    const entry = params.store[key];
-    if (!entry) {
-      continue;
-    }
-    if (!freshest || (entry.updatedAt ?? 0) > (freshest.updatedAt ?? 0)) {
-      freshest = entry;
-    }
-  }
-  return freshest;
-}
-
-function migrateSessionEntryProjectionTarget(params: {
-  store: Record<string, SessionEntry>;
-  target: SessionEntryPatchProjectionTarget;
-}): void {
-  const candidateKeys = params.target.candidateKeys ?? [params.target.primaryKey];
-  const freshest = resolveFreshestProjectedEntry({
-    store: params.store,
-    candidateKeys,
-  });
-  const currentPrimary = params.store[params.target.primaryKey];
-  if (
-    freshest &&
-    (!currentPrimary || (freshest.updatedAt ?? 0) > (currentPrimary.updatedAt ?? 0))
-  ) {
-    params.store[params.target.primaryKey] = freshest;
-  }
-
-  const keysToDelete = new Set<string>();
-  for (const candidateKey of candidateKeys) {
-    const trimmed = normalizeOptionalString(candidateKey) ?? "";
-    if (!trimmed) {
-      continue;
-    }
-    if (trimmed !== params.target.primaryKey) {
-      keysToDelete.add(trimmed);
-    }
-  }
-  for (const key of keysToDelete) {
-    delete params.store[key];
-  }
-}
-
-/**
- * Applies a storage-neutral entry projection inside the session-store writer.
- * The projection receives a cloned snapshot and returns the replacement entry;
- * it cannot mutate the backing whole store.
- */
-export async function applySessionEntryPatchProjection<
-  TFailure extends SessionEntryPatchProjectionFailure,
->(params: {
-  storePath: string;
-  resolveTarget: (
-    snapshot: SessionEntryPatchProjectionSnapshot,
-  ) => SessionEntryPatchProjectionTarget;
-  project: (
-    context: SessionEntryPatchProjectionContext,
-  ) =>
-    | Promise<SessionEntryPatchProjectionResult<TFailure>>
-    | SessionEntryPatchProjectionResult<TFailure>;
-}): Promise<SessionEntryPatchProjectionResult<TFailure>> {
-  return await runExclusiveSessionStoreWrite(params.storePath, async () => {
-    const store = loadMutableSessionStoreForWriter(params.storePath);
-    const target = params.resolveTarget(cloneSessionEntryProjectionSnapshot(store));
-    migrateSessionEntryProjectionTarget({ store, target });
-    const projected = await params.project({
-      ...target,
-      entries: cloneSessionEntryProjectionSnapshot(store).entries,
-      ...(store[target.primaryKey]
-        ? { existingEntry: cloneSessionEntry(store[target.primaryKey]) }
-        : {}),
-    });
-    if (projected.ok) {
-      store[target.primaryKey] = cloneSessionEntry(projected.entry);
-    }
-    await saveSessionStoreUnlocked(params.storePath, store, {
-      activeSessionKey: target.primaryKey,
-    });
-    return projected.ok ? { ...projected, entry: cloneSessionEntry(projected.entry) } : projected;
-  });
-}
-
 /** Resets one persisted session entry and rotates its file-backed transcript artifacts. */
 export async function resetSessionEntryLifecycle(params: {
   afterEntryMutation?: (mutation: ResetSessionEntryLifecycleMutation) => Promise<void> | void;
@@ -1508,6 +1383,32 @@ export async function rollbackAgentHarnessSessionEntryLifecycle(
     !isValidAgentHarnessSessionStoreEntry(params.target.canonicalKey, params.expectedEntry)
   ) {
     throw new Error(expectedEntryError ?? MODEL_SELECTION_LOCK_REMOVAL_MESSAGE);
+  }
+  return await deleteSessionEntryLifecycleInternal(params, true);
+}
+
+/** Rolls back the exact locked CLI row created by a failed plugin initializer. */
+export async function rollbackPluginOwnedSessionEntryLifecycle(
+  params: DeleteSessionEntryLifecycleParams & {
+    expectedEntry: SessionEntry;
+    expectedPluginOwnerId: string;
+  },
+): Promise<DeleteSessionEntryLifecycleResult> {
+  const hasExactTarget =
+    params.target.storeKeys.length === 1 &&
+    params.target.storeKeys[0] === params.target.canonicalKey;
+  const expectedEntry = params.expectedEntry;
+  const validPluginOwner = normalizeOptionalString(expectedEntry.pluginOwnerId);
+  const expectedPluginOwner = normalizeOptionalString(params.expectedPluginOwnerId);
+  if (
+    !hasExactTarget ||
+    isAgentHarnessSessionKey(params.target.canonicalKey) ||
+    expectedEntry.agentHarnessId !== undefined ||
+    expectedEntry.modelSelectionLocked !== true ||
+    !validPluginOwner ||
+    validPluginOwner !== expectedPluginOwner
+  ) {
+    throw new Error(MODEL_SELECTION_LOCK_REMOVAL_MESSAGE);
   }
   return await deleteSessionEntryLifecycleInternal(params, true);
 }

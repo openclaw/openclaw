@@ -25,6 +25,7 @@ import {
 } from "./components/chat-background-tasks.ts";
 import {
   handleChatAttachmentDrop,
+  isChatRunWorking,
   renderChatComposer,
   resetChatComposerState,
 } from "./components/chat-composer.ts";
@@ -73,6 +74,7 @@ export type ChatProps = {
   compactionStatus?: CompactionStatus | null;
   fallbackStatus?: FallbackStatus | null;
   messages: unknown[];
+  historyPagination?: { loading: boolean; onLoadOlder: () => void };
   sideChatTurns?: ChatSideResult[];
   sideChatPending?: ChatSideResultPending | null;
   sideChatHidden?: boolean;
@@ -231,6 +233,7 @@ export function renderChat(props: ChatProps) {
     showThinking: props.showThinking,
     showToolCalls: props.showToolCalls,
     runActive: Boolean(props.canAbort),
+    runWorking: isChatRunWorking(props),
     sessions: props.sessions,
     sessionHost: props.sessionHost,
     assistantName: props.assistantName,
@@ -322,7 +325,7 @@ export function renderChat(props: ChatProps) {
               class="chat-scroll-to-bottom"
               type="button"
               @click=${() => props.onScrollToBottom?.({ smooth: true })}
-              aria-label="Scroll to latest"
+              aria-label=${t("chat.actions.scrollToLatest")}
             >
               ${icons.arrowDown}
             </button>
@@ -375,12 +378,12 @@ export function renderChat(props: ChatProps) {
               <span class="callout__content">${props.error}</span>
               ${props.onDismissError
                 ? html`
-                    <openclaw-tooltip content="Dismiss error">
+                    <openclaw-tooltip .content=${t("chat.actions.dismissError")}>
                       <button
                         class="callout__dismiss"
                         type="button"
                         @click=${props.onDismissError}
-                        aria-label="Dismiss error"
+                        aria-label=${t("chat.actions.dismissError")}
                       >
                         ${icons.x}
                       </button>
@@ -392,12 +395,12 @@ export function renderChat(props: ChatProps) {
         : nothing}
       ${props.focusMode && props.onToggleFocusMode
         ? html`
-            <openclaw-tooltip content="Exit focus mode">
+            <openclaw-tooltip .content=${t("chat.actions.exitFocusMode")}>
               <button
                 class="chat-focus-exit"
                 type="button"
                 @click=${props.onToggleFocusMode}
-                aria-label="Exit focus mode"
+                aria-label=${t("chat.actions.exitFocusMode")}
               >
                 ${icons.x}
               </button>
@@ -415,6 +418,18 @@ export function renderChat(props: ChatProps) {
         },
         requestUpdate,
       )}
+      ${props.historyPagination
+        ? html`<div class="chat-history-pagination">
+            <button
+              class="btn btn--sm"
+              type="button"
+              ?disabled=${props.historyPagination.loading}
+              @click=${props.historyPagination.onLoadOlder}
+            >
+              ${props.historyPagination.loading ? t("common.loading") : t("chat.loadOlder")}
+            </button>
+          </div>`
+        : nothing}
 
       <div
         class="chat-workbench ${props.sessionWorkspace?.collapsed
