@@ -460,7 +460,7 @@ jobs:
           const compactPullRequest = isCanonicalRepository && eventName === "pull_request";
           const runQaSmokeCi =
             runNodeFull &&
-            (!compatibilityTarget || existsSync("extensions/qa-lab/src/ci-smoke-plan.ts"));
+            (!frozenTarget || existsSync("extensions/qa-lab/src/ci-smoke-plan.ts"));
           const nodeTestShards = runNodeFull
             ? createNodeTestPlan({
                 includeReleaseOnlyPluginShards: false,
