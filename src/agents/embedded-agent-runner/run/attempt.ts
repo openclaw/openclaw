@@ -2603,7 +2603,9 @@ export async function runEmbeddedAttempt(
         params.model.api === "openai-chatgpt-responses";
 
       await prewarmSessionFile(params.sessionFile);
-      const preparedUserTurnMessage = await params.userTurnTranscriptRecorder?.resolveMessage();
+      const preparedUserTurnMessage = params.skipPreparedUserTurnMessage
+        ? undefined
+        : await params.userTurnTranscriptRecorder?.resolveMessage();
       sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {
         agentId: sessionAgentId,
         sessionKey: params.sessionKey,
@@ -2988,6 +2990,10 @@ export async function runEmbeddedAttempt(
           sessionManager.resetLeaf();
         }
         replayTrailingEntriesForOrphanRepair(sessionManager, orphanRepair.trailingEntries);
+        // Suppression assumes the canonical user turn still exists. Orphan repair
+        // removed it, so the replacement prompt must become the one durable copy.
+        sessionManager.clearNextUserMessagePersistenceSuppression?.();
+        params.onUserMessagePersistenceInvalidated?.();
         activeSession.agent.state.messages = sessionManager.buildSessionContext().messages;
       }
       // Single source for the per-message timestamp prefix (issue #3658):

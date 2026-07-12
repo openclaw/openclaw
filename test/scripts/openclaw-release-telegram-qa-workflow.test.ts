@@ -530,6 +530,7 @@ describe("release Telegram QA workflow", () => {
     const runStep = job?.steps?.find((step) => step.name === "Run Telegram live lane");
     expect(runStep?.env?.OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS).toBe("60000");
     expect(runStep?.env?.OPENCLAW_QA_CREDENTIAL_LEASE_TTL_MS).toBe("7200000");
+    expect(runStep?.env?.OPENCLAW_LOG_LEVEL).toBe("trace");
     expect(runStep?.env?.OPENCLAW_QA_TELEGRAM_SUT_CLEANUP_TIMEOUT_MS).toBe("60000");
     expect(runStep?.run).toContain("trap terminate_sut_uid_on_exit EXIT");
     expect(runStep?.run).toContain('"$OPENCLAW_QA_TELEGRAM_SUT_OPENCLAW_COMMAND" --terminate-uid');
@@ -575,6 +576,11 @@ describe("release Telegram QA workflow", () => {
     expect(captureStep?.run).toContain("const redactedLine =");
     expect(captureStep?.run).toContain("const limitBytes = 131_072");
     expect(captureStep?.run).toContain("const maxInputRecordBytes = 1_048_576");
+    expect(captureStep?.run).toContain("safeVerboseMessagePrefixes");
+    expect(captureStep?.run).toContain("shouldRetainRecord");
+    expect(captureStep?.run).toContain('"[trace:embedded-run] prep stages:"');
+    expect(captureStep?.run).toContain('"[context-diag] pre-prompt:"');
+    expect(captureStep?.run).toContain('"model.call.started"');
     expect(captureStep?.run).toContain("[truncated oversized gateway log record]");
     expect(captureStep?.run).toContain("[omitted oversized gateway log record]");
     expect(captureStep?.run).toContain("chunk.indexOf(0x0a, offset)");
@@ -609,6 +615,65 @@ describe("release Telegram QA workflow", () => {
       /run_qa_attempt\(\) \(\n\s+set -euo pipefail\n\s+exec 2>&1\n\s+output_name=/u,
     );
     expect(runStep?.run).toContain("::stop-commands::%s");
+  });
+
+  it("retains only allowlisted verbose runtime diagnostics", () => {
+    const captureStep = workflowStep(
+      workflowJob("run_telegram"),
+      "Capture isolated Telegram runtime diagnostics",
+    );
+    const redactorSource = captureStep.run?.match(
+      /cat >"\$redactor_script" <<'NODE'\n([\s\S]*?)\nNODE/u,
+    )?.[1];
+    expect(redactorSource).toBeTruthy();
+
+    const workdir = tempDirs.make("openclaw-telegram-log-filter-");
+    const scriptPath = join(workdir, "redact-gateway-tail.mts");
+    const outputPath = join(workdir, "gateway.log");
+    writeFileSync(scriptPath, redactorSource ?? "");
+    const inputRecords = [
+      { 0: '{"subsystem":"gateway"}', 1: "ordinary info", _meta: { logLevelName: "INFO" } },
+      {
+        0: '{"subsystem":"agents/embedded"}',
+        1: "embedded run start: safe milestone",
+        _meta: { logLevelName: "DEBUG" },
+      },
+      {
+        0: '{"subsystem":"agents/embedded","details":"embedded run start: marker outside message"}',
+        1: { details: "[context-diag] pre-prompt: structured marker outside message" },
+        2: "verbose payload must drop",
+        _meta: { logLevelName: "DEBUG" },
+      },
+      {
+        0: '{"subsystem":"agents/embedded"}',
+        1: "[context-diag] pre-prompt: safe counts",
+        _meta: { logLevelName: "TRACE" },
+      },
+      {
+        0: '{"subsystem":"agents/embedded"}',
+        1: "trace payload must drop",
+        message: "embedded run prompt end: convenience field must not authorize",
+        _meta: { logLevelName: "TRACE" },
+      },
+    ]
+      .map((record) => JSON.stringify(record))
+      .join("\n");
+    const input = `${inputRecords}\n{"0":"truncated verbose payload must drop"`;
+    const result = spawnSync(process.execPath, ["--import", "tsx", scriptPath, outputPath], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      input,
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const output = readFileSync(outputPath, "utf8");
+    expect(output).toContain("ordinary info");
+    expect(output).toContain("embedded run start: safe milestone");
+    expect(output).toContain("[context-diag] pre-prompt: safe counts");
+    expect(output).not.toContain("verbose payload must drop");
+    expect(output).not.toContain("marker outside message");
+    expect(output).not.toContain("convenience field must not authorize");
+    expect(output).not.toContain("truncated verbose payload must drop");
+    expect(output).not.toContain("trace payload must drop");
   });
 
   it("derives SUT-writable paths from the verified runtime root after sudo", () => {
@@ -677,6 +742,7 @@ describe("release Telegram QA workflow", () => {
     expect(source).toContain('export HOME="${temp_root}/home"');
     expect(source).toContain('export XDG_CONFIG_HOME="${temp_root}/xdg-config"');
     expect(source).toContain('if [[ "${1:-}" == "--root-terminate-uid" ]]');
+    expect(source).toContain("OPENCLAW_LOG_LEVEL");
     expect(source).toContain("capture_live_model_config() {");
     expect(source).toContain('capture_live_model_config "$config_path"');
     expect(source).toContain('proof_tmp="${RUNTIME_ROOT}/gateway-model-config-${BASHPID}.json"');
