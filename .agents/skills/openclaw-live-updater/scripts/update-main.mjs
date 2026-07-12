@@ -69,47 +69,6 @@ function gitText(checkout, args) {
   return git(checkout, args).trim();
 }
 
-function snapshotGitArgs(args) {
-  return [
-    "-c",
-    "core.fsmonitor=",
-    "-c",
-    "core.hooksPath=/dev/null",
-    "-c",
-    "credential.helper=",
-    ...args,
-  ];
-}
-
-function snapshotGitEnv(env = process.env) {
-  return {
-    ...env,
-    GIT_CONFIG_GLOBAL: "/dev/null",
-    GIT_CONFIG_NOSYSTEM: "1",
-  };
-}
-
-function snapshotGitText(checkout, args) {
-  return execFileSync("git", snapshotGitArgs(["-C", checkout, ...args]), {
-    encoding: "utf8",
-    env: snapshotGitEnv(),
-    stdio: ["ignore", "pipe", "pipe"],
-  }).trim();
-}
-
-function snapshotSpawnSync(command, args, options = {}) {
-  if (command !== "git") {
-    throw new UpdateInvariantError(
-      "gateway_snapshot_inspection_failed",
-      `refusing to execute ${command} while inspecting a runtime snapshot`,
-    );
-  }
-  return spawnSync("git", snapshotGitArgs(args), {
-    ...options,
-    env: snapshotGitEnv(options.env),
-  });
-}
-
 function configValue(checkout, key, bool = false) {
   try {
     return gitText(checkout, ["config", ...(bool ? ["--bool"] : ["--get"]), key]);
@@ -164,6 +123,15 @@ function commitExists(checkout, sha) {
   }
 }
 
+function isAncestorCommit(checkout, ancestor, descendant = "HEAD") {
+  try {
+    git(checkout, ["merge-base", "--is-ancestor", ancestor, descendant]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function classifyActions(
   changedPaths,
   { buildProvenanceKnown, buildRequired, nodeModulesPresent },
@@ -209,14 +177,14 @@ function readStampHead(checkout, stampFile) {
   }
 }
 
-function canonicalBuildRequirements(checkout, spawnSyncImpl = spawnSync) {
+function canonicalBuildRequirements(checkout) {
   const distRoot = path.join(checkout, "dist");
   const fsImpl = { existsSync, readFileSync, readdirSync, statSync };
   const deps = {
     cwd: checkout,
     env: process.env,
     fs: fsImpl,
-    spawnSync: spawnSyncImpl,
+    spawnSync,
     distRoot,
     distEntry: path.join(distRoot, "entry.js"),
     buildStampPath: path.join(distRoot, BUILD_STAMP_FILE),
@@ -270,7 +238,7 @@ function missingControlUiAssets(checkout) {
   return [...new Set(missing)].toSorted();
 }
 
-export function inspectBuildState(checkout, expectedSha, spawnSyncImpl = spawnSync) {
+export function inspectBuildState(checkout, expectedSha) {
   const buildInfoPath = path.join(checkout, "dist/build-info.json");
   const uiPath = path.join(checkout, "dist/control-ui/index.html");
   let commit = null;
@@ -285,7 +253,7 @@ export function inspectBuildState(checkout, expectedSha, spawnSyncImpl = spawnSy
   }
   const buildStampHead = readStampHead(checkout, BUILD_STAMP_FILE);
   const runtimePostBuildStampHead = readStampHead(checkout, RUNTIME_POSTBUILD_STAMP_FILE);
-  const requirements = canonicalBuildRequirements(checkout, spawnSyncImpl);
+  const requirements = canonicalBuildRequirements(checkout);
   const missingUiAssets = missingControlUiAssets(checkout);
   const requiredFilesPresent =
     existsSync(buildInfoPath) && existsSync(uiPath) && missingUiAssets.length === 0;
@@ -571,6 +539,54 @@ function defaultRunCommand(command, args, checkout) {
   });
 }
 
+function readSnapshotMetadata(snapshotRoot) {
+  const gitDir = path.join(snapshotRoot, ".git");
+  const headPath = path.join(gitDir, "HEAD");
+  const configPath = path.join(gitDir, "config");
+  const gitDirStat = lstatSync(gitDir);
+  const headStat = lstatSync(headPath);
+  const configStat = lstatSync(configPath);
+  const owner = typeof process.getuid === "function" ? process.getuid() : null;
+  const isTrustedMetadataFile = (filePath, fileStat) =>
+    fileStat.isFile() &&
+    !fileStat.isSymbolicLink() &&
+    (owner === null || fileStat.uid === owner) &&
+    (fileStat.mode & 0o022) === 0 &&
+    realpathSync(filePath) === filePath;
+  if (
+    !gitDirStat.isDirectory() ||
+    gitDirStat.isSymbolicLink() ||
+    realpathSync(gitDir) !== gitDir ||
+    !isTrustedMetadataFile(headPath, headStat) ||
+    !isTrustedMetadataFile(configPath, configStat)
+  ) {
+    return null;
+  }
+
+  const head = readFileSync(headPath, "utf8").trim().toLowerCase();
+  if (!FULL_SHA_RE.test(head)) {
+    return null;
+  }
+  let inOrigin = false;
+  let originUrl = null;
+  for (const rawLine of readFileSync(configPath, "utf8").split("\n")) {
+    const line = rawLine.trim();
+    if (line.startsWith("[") && line.endsWith("]")) {
+      inOrigin = /^\[remote\s+"origin"\]$/u.test(line);
+      continue;
+    }
+    if (!inOrigin) {
+      continue;
+    }
+    const urlMatch = line.match(/^url\s*=\s*(.+)$/u);
+    if (urlMatch) {
+      originUrl = urlMatch[1].trim().replace(/^"(.*)"$/u, "$1");
+      break;
+    }
+  }
+  return originUrl ? { head, originUrl } : null;
+}
+
 export function isOwnedGatewayEntrypoint(checkout, home, entrypoint) {
   const sourceEntrypoint = path.join(checkout, "dist/index.js");
   if (entrypoint === sourceEntrypoint) {
@@ -590,30 +606,30 @@ export function isOwnedGatewayEntrypoint(checkout, home, entrypoint) {
   }
 
   try {
+    const metadata = readSnapshotMetadata(snapshotRoot);
+    const entrypointStat = lstatSync(entrypoint);
+    const owner = typeof process.getuid === "function" ? process.getuid() : null;
     if (
       realpathSync(snapshotRoot) !== snapshotRoot ||
       realpathSync(entrypoint) !== entrypoint ||
-      !originMatches(snapshotGitText(snapshotRoot, ["remote", "get-url", "origin"])) ||
-      snapshotGitText(snapshotRoot, ["status", "--porcelain"]) !== ""
+      !entrypointStat.isFile() ||
+      entrypointStat.isSymbolicLink() ||
+      (owner !== null && entrypointStat.uid !== owner) ||
+      (entrypointStat.mode & 0o022) !== 0 ||
+      !metadata ||
+      !originMatches(metadata.originUrl)
     ) {
       return false;
     }
-    try {
-      snapshotGitText(snapshotRoot, ["symbolic-ref", "-q", "HEAD"]);
-      return false;
-    } catch {
-      // Immutable runtime snapshots are detached from every mutable branch.
-    }
-    const snapshotHead = snapshotGitText(snapshotRoot, ["rev-parse", "HEAD"]);
+    const snapshotHead = metadata.head;
     if (
       !FULL_SHA_RE.test(snapshotHead) ||
       snapshotName !== `gateway-${snapshotHead.slice(0, 7)}` ||
       !commitExists(checkout, snapshotHead) ||
-      !inspectBuildState(snapshotRoot, snapshotHead, snapshotSpawnSync).current
+      !isAncestorCommit(checkout, snapshotHead)
     ) {
       return false;
     }
-    git(checkout, ["merge-base", "--is-ancestor", snapshotHead, "HEAD"]);
     return true;
   } catch {
     return false;
@@ -967,7 +983,24 @@ export function parseLaunchctlArguments(output) {
 }
 
 function runBuiltGatewayCli(checkout, args, deployment) {
-  const managedDeployment = deployment ?? readManagedGatewayLaunchAgent(checkout);
+  const observedDeployment = deployment ?? readManagedGatewayLaunchAgent(checkout);
+  const sourceEntrypoint = path.join(checkout, "dist/index.js");
+  let managedDeployment = observedDeployment;
+  if (observedDeployment.entrypoint !== sourceEntrypoint) {
+    const currentHead = gitText(checkout, ["rev-parse", "HEAD"]);
+    managedDeployment = resolveGatewayControlDeployment(
+      checkout,
+      observedDeployment,
+      inspectBuildState(checkout, currentHead),
+      currentHead,
+    );
+    if (!managedDeployment) {
+      throw new UpdateInvariantError(
+        "gateway_snapshot_control_unavailable",
+        "refusing to execute a managed Gateway runtime snapshot without a trusted source control build",
+      );
+    }
+  }
   const {
     configPath,
     entrypoint,

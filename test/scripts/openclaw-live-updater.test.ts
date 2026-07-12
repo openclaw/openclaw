@@ -384,14 +384,57 @@ describe("openclaw live updater", () => {
     git(snapshot, "switch", "-c", "mutable");
     expect(isOwnedGatewayEntrypoint(mirror, home, entrypoint)).toBe(false);
     git(snapshot, "checkout", "--detach", head);
+
+    const filterMarker = path.join(root, "filter-ran");
+    const filterHook = path.join(root, "filter.sh");
+    writeFileSync(filterHook, `#!/bin/sh\ntouch ${filterMarker}\ncat\n`);
+    chmodSync(filterHook, 0o755);
+    git(snapshot, "config", "filter.untrusted.clean", filterHook);
+    mkdirSync(path.join(snapshot, ".git/info"), { recursive: true });
+    writeFileSync(path.join(snapshot, ".git/info/attributes"), "README.md filter=untrusted\n");
     writeFileSync(path.join(snapshot, "README.md"), "dirty\n");
-    expect(isOwnedGatewayEntrypoint(mirror, home, entrypoint)).toBe(false);
+    rmSync(filterMarker, { force: true });
+    expect(isOwnedGatewayEntrypoint(mirror, home, entrypoint)).toBe(true);
+    expect(existsSync(filterMarker)).toBe(false);
     git(snapshot, "checkout", "--", "README.md");
     writeFileSync(
       path.join(snapshot, "dist", BUILD_STAMP_FILE),
       `${JSON.stringify({ head: "0".repeat(40) })}\n`,
     );
-    expect(isOwnedGatewayEntrypoint(mirror, home, entrypoint)).toBe(false);
+    const snapshotExecutionMarker = path.join(root, "snapshot-executed");
+    writeFileSync(
+      entrypoint,
+      `import fs from "node:fs"; fs.writeFileSync(${JSON.stringify(snapshotExecutionMarker)}, "ran");\n`,
+    );
+    expect(isOwnedGatewayEntrypoint(mirror, home, entrypoint)).toBe(true);
+
+    writeBuild(mirror);
+    const sourceExecutionMarker = path.join(root, "source-executed");
+    const sourceEntrypoint = path.join(mirror, "dist/index.js");
+    writeFileSync(
+      sourceEntrypoint,
+      `import fs from "node:fs"; fs.writeFileSync(${JSON.stringify(sourceExecutionMarker)}, "ran"); console.log("{}");\n`,
+    );
+    const configPath = path.join(root, "openclaw.json");
+    writeFileSync(configPath, "{}\n");
+    expect(
+      runBuiltGatewayCall(
+        mirror,
+        "gateway.suspend.prepare",
+        { requestId: "request-1" },
+        {
+          configPath,
+          entrypoint,
+          executable: process.execPath,
+          invocationPrefix: [entrypoint],
+          port: 19001,
+          serviceEnvironment: {},
+          wrapperPath: null,
+        },
+      ),
+    ).toContain("{}");
+    expect(existsSync(sourceExecutionMarker)).toBe(true);
+    expect(existsSync(snapshotExecutionMarker)).toBe(false);
   });
 
   test("accepts owned entrypoints only in supported LaunchAgent command layouts", () => {
@@ -1281,6 +1324,7 @@ describe("openclaw live updater", () => {
   });
 
   test("bootstraps an owned LaunchAgent left unloaded by a failed restart", () => {
+    const uid = process.getuid?.() ?? 501;
     const { root, mirror } = makeFixture();
     mkdirSync(path.join(mirror, "node_modules"));
     writeBuild(mirror);
@@ -1326,8 +1370,8 @@ describe("openclaw live updater", () => {
       gatewaySelfHeal: true,
     });
     expect(commands.calls).toEqual([
-      `/bin/launchctl enable gui/${currentUid}/ai.openclaw.gateway`,
-      `/bin/launchctl bootstrap gui/${currentUid} ${plistPath}`,
+      `/bin/launchctl enable gui/${uid}/ai.openclaw.gateway`,
+      `/bin/launchctl bootstrap gui/${uid} ${plistPath}`,
     ]);
   });
 
