@@ -69,13 +69,18 @@ function seedMigratedAccountStreaming(params: {
     return params.cfg;
   }
   const rootStreaming = asObjectRecord(entry.streaming);
+  // Account lookup treats keys case-insensitively (resolveAccountEntry), so
+  // `accounts.Default` is the default account too.
+  const defaultKey = Object.hasOwn(accounts, "default")
+    ? "default"
+    : Object.keys(accounts).find((key) => key.trim().toLowerCase() === "default");
 
   let accountsChanged = false;
   const nextAccounts = { ...accounts };
-  // Seed accounts.default first: its final object is the inheritance source
-  // for named accounts (default replaces root wholesale when set).
+  // Seed the default account first: its final object is the inheritance
+  // source for named accounts (default replaces root wholesale when set).
   const seedOrder = Object.keys(accounts).toSorted((left, right) =>
-    left === "default" ? -1 : right === "default" ? 1 : left.localeCompare(right),
+    left === defaultKey ? -1 : right === defaultKey ? 1 : left.localeCompare(right),
   );
   for (const accountId of seedOrder) {
     const account = asObjectRecord(nextAccounts[accountId]);
@@ -83,10 +88,11 @@ function seedMigratedAccountStreaming(params: {
     if (!account || !created || !params.accountsWithoutStreamingBefore.has(accountId)) {
       continue;
     }
+    const defaultStreaming = defaultKey
+      ? asObjectRecord(asObjectRecord(nextAccounts[defaultKey])?.streaming)
+      : null;
     const inheritedSource =
-      accountId === "default"
-        ? rootStreaming
-        : (asObjectRecord(asObjectRecord(nextAccounts.default)?.streaming) ?? rootStreaming);
+      accountId === defaultKey ? rootStreaming : (defaultStreaming ?? rootStreaming);
     if (!inheritedSource) {
       continue;
     }
@@ -97,7 +103,7 @@ function seedMigratedAccountStreaming(params: {
     nextAccounts[accountId] = { ...account, streaming: seeded.value };
     accountsChanged = true;
     const sourcePath =
-      accountId === "default"
+      accountId === defaultKey
         ? "channels.whatsapp.streaming"
         : "effective channels.whatsapp streaming defaults";
     params.changes.push(

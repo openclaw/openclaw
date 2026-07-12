@@ -72,6 +72,26 @@ describe("whatsapp normalizeCompatibilityConfig streaming aliases", () => {
     expect(second.changes).toEqual([]);
   });
 
+  it("resolves the default account case-insensitively when seeding named accounts", () => {
+    // resolveAccountEntry matches account keys case-insensitively, so
+    // `accounts.Default` is the runtime default account too.
+    const result = normalizeCompatibilityConfig({
+      cfg: whatsappConfig({
+        accounts: {
+          Default: { blockStreaming: true },
+          work: { chunkMode: "newline" },
+        },
+      }),
+    });
+
+    const whatsapp = result.config.channels?.whatsapp as unknown as Record<string, unknown>;
+    const accounts = whatsapp.accounts as Record<string, Record<string, unknown>>;
+    expect(accounts.work?.streaming).toEqual({
+      chunkMode: "newline",
+      block: { enabled: true },
+    });
+  });
+
   it("keeps the legacy ackReaction migration and stays idempotent", () => {
     const first = normalizeCompatibilityConfig({
       cfg: {
