@@ -254,6 +254,33 @@ describe("getToolResultTextLength", () => {
   it("returns zero for non-toolResult messages", () => {
     expect(getToolResultTextLength(makeAssistantMessage("hello"))).toBe(0);
   });
+
+  it("inflates dense CJK text to token-equivalent length (issue #103847)", () => {
+    const msg: ToolResultMessage = {
+      role: "toolResult",
+      toolCallId: "call_1",
+      toolName: "read",
+      isError: false,
+      content: [{ type: "text", text: "中".repeat(16000) }],
+      timestamp: nextTimestamp(),
+    };
+    const measured = getToolResultTextLength(msg);
+    // CJK ≈ 1 token/char, so the token-equivalent length must be ~4x raw length.
+    expect(measured).toBeGreaterThan(16000 * 3);
+    expect(measured).toBeLessThanOrEqual(16000 * 4 + 1);
+  });
+
+  it("keeps ASCII length 1:1 with UTF-16", () => {
+    const msg: ToolResultMessage = {
+      role: "toolResult",
+      toolCallId: "call_1",
+      toolName: "read",
+      isError: false,
+      content: [{ type: "text", text: "a".repeat(16000) }],
+      timestamp: nextTimestamp(),
+    };
+    expect(getToolResultTextLength(msg)).toBe(16000);
+  });
 });
 
 describe("truncateToolResultMessage", () => {
@@ -276,6 +303,31 @@ describe("truncateToolResultMessage", () => {
       throw new Error("expected toolResult");
     }
     expect(getFirstToolResultText(result)).toContain("[persist-truncated]");
+  });
+
+  it("truncates dense CJK output that fits raw cap but exceeds token budget (issue #103847)", () => {
+    const contextWindowTokens = 8_000;
+    const maxChars = calculateMaxToolResultChars(contextWindowTokens);
+    expect(maxChars).toBe(16_000); // DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS
+
+    // 16000 CJK chars is ~16000 tokens, far above the ~4000-token budget the
+    // 16000-char cap implies. Before the fix this slipped through uncut.
+    const msg: ToolResultMessage = {
+      role: "toolResult",
+      toolCallId: "call_1",
+      toolName: "read",
+      isError: false,
+      content: [{ type: "text", text: "中".repeat(16_000) }],
+      timestamp: nextTimestamp(),
+    };
+    expect(getToolResultTextLength(msg)).toBeGreaterThan(maxChars);
+
+    const result = truncateToolResultMessage(msg, maxChars);
+    expect(result.role).toBe("toolResult");
+    if (result.role !== "toolResult") {
+      throw new Error("expected toolResult");
+    }
+    expect(getToolResultTextLength(result)).toBeLessThanOrEqual(maxChars);
   });
 
   it("truncates Codex protocol toolResult content blocks and mirrored content", () => {

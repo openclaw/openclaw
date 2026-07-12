@@ -3,6 +3,7 @@
  */
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
+import { estimateStringChars } from "../../utils/cjk-chars.js";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
@@ -350,6 +351,12 @@ export function resolveLiveToolResultAggregateMaxChars(params: {
 
 /**
  * Get the total character count of text content blocks in a tool result message.
+ *
+ * Uses the CJK-aware {@link estimateStringChars} so the count reflects
+ * token-equivalent length (CJK ≈ 1 char/token, not the ~4 chars/token Latin
+ * heuristic). The live truncation cap is token-derived (`chars / 4`), so a raw
+ * UTF-16 length undercounts CJK content by up to 4x and lets oversized CJK
+ * tool results through. See issue #103847.
  */
 export function getToolResultTextLength(msg: AgentMessage): number {
   if (!msg || (msg as { role?: string }).role !== "toolResult") {
@@ -364,7 +371,7 @@ export function getToolResultTextLength(msg: AgentMessage): number {
     if (isToolResultTextBlock(block)) {
       const text = block.text;
       if (typeof text === "string") {
-        totalLength += text.length;
+        totalLength += estimateStringChars(text);
       }
     }
   }
@@ -397,8 +404,17 @@ export function truncateToolResultMessage(
     return msg;
   }
 
+  // Use token-equivalent lengths for proportional budget so CJK blocks (which
+  // are far longer in tokens than in UTF-16 units) are not starved of budget.
+  const blockLengths = content.map((block) =>
+    isToolResultTextBlock(block) && typeof block.text === "string"
+      ? estimateStringChars(block.text)
+      : 0,
+  );
+  const totalBlockLength = blockLengths.reduce((a, b) => a + b, 0) || 1;
+
   // Distribute the budget proportionally among text blocks
-  const newContent = content.map((block: unknown) => {
+  const newContent = content.map((block: unknown, index: number) => {
     if (!isToolResultTextBlock(block)) {
       return block; // Keep non-text blocks (images) as-is
     }
@@ -406,10 +422,11 @@ export function truncateToolResultMessage(
     if (typeof textBlock.text !== "string") {
       return block;
     }
+    const blockLength = blockLengths[index] || 0;
     // Proportional budget for this block
-    const blockShare = textBlock.text.length / totalTextChars;
+    const blockShare = blockLength / totalBlockLength;
     const defaultSuffix = suffixFactory(
-      Math.max(1, textBlock.text.length - Math.floor(maxChars * blockShare)),
+      Math.max(1, Math.floor(blockLength - maxChars * blockShare)),
     );
     const proportionalBudget = Math.floor(maxChars * blockShare);
     const blockBudget = Math.max(
