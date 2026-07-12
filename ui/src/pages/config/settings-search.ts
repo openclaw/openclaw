@@ -263,24 +263,18 @@ export function findSettingsSearchBlocks(params: {
     return matches;
   }
   const value = params.value ?? {};
-  const usePrefixMatching =
-    criteria.tags.length === 0 && criteria.text.length > 0 && criteria.text.length <= 2;
   for (const [key, sectionSchema] of Object.entries(schema.properties)) {
     const meta = SECTION_META[key];
-    const matchesSection = usePrefixMatching
-      ? [key, meta?.label, meta?.description, sectionSchema.title, sectionSchema.description].some(
-          (candidate) =>
-            typeof candidate === "string" && settingsSearchTextMatches(candidate, criteria.text),
-        )
-      : matchesConfigSectionSearch({
-          key,
-          schema: sectionSchema,
-          value: value[key],
-          hints: params.uiHints,
-          query: params.query,
-          label: meta?.label,
-          description: meta?.description,
-        });
+    const matchesSection = matchesConfigSectionSearch({
+      key,
+      schema: sectionSchema,
+      value: value[key],
+      hints: params.uiHints,
+      query: params.query,
+      label: meta?.label,
+      description: meta?.description,
+      textMatcher: settingsSearchTextMatches,
+    });
     if (!matchesSection) {
       continue;
     }

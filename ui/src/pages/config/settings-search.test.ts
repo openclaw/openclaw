@@ -95,6 +95,37 @@ describe("findSettingsSearchBlocks", () => {
     ]);
   });
 
+  it("preserves nested schema matches for short prefix queries", () => {
+    const matches = findSettingsSearchBlocks({
+      query: "sa",
+      schema: {
+        type: "object",
+        properties: {
+          tools: {
+            type: "object",
+            properties: {
+              profile: {
+                type: "string",
+                description: "Controls sandbox access",
+              },
+            },
+          },
+        },
+      },
+      value: {},
+      uiHints: {},
+    });
+
+    expect(matches).toEqual([
+      {
+        routeId: "ai-agents",
+        label: "Tools",
+        search: "?section=tools",
+        hash: "#config-section-tools",
+      },
+    ]);
+  });
+
   it("searches and displays static settings blocks in the active locale", async () => {
     await i18n.setLocale("es");
 

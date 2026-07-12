@@ -1,8 +1,5 @@
 import type { ConfigUiHints } from "../api/types.ts";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "../lib/string-coerce.ts";
+import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
 import { hintForPath, humanize, schemaType, type JsonSchema } from "./config-form.shared.ts";
 
 export type ConfigSearchCriteria = {
@@ -15,6 +12,8 @@ export type ConfigFieldMeta = {
   help?: string;
   tags: string[];
 };
+
+export type ConfigSearchTextMatcher = (value: string, query: string) => boolean;
 
 export function hasConfigSearchCriteria(criteria: ConfigSearchCriteria | undefined): boolean {
   return Boolean(criteria && (criteria.text.length > 0 || criteria.tags.length > 0));
@@ -79,13 +78,19 @@ export function resolveConfigFieldMeta(
   };
 }
 
-function matchesText(text: string, candidates: Array<string | undefined>): boolean {
+function defaultTextMatcher(value: string, query: string): boolean {
+  return normalizeLowercaseStringOrEmpty(value).includes(normalizeLowercaseStringOrEmpty(query));
+}
+
+function matchesText(
+  text: string,
+  candidates: Array<string | undefined>,
+  textMatcher: ConfigSearchTextMatcher,
+): boolean {
   if (!text) {
     return true;
   }
-  return candidates.some((candidate) =>
-    normalizeOptionalLowercaseString(candidate)?.includes(text),
-  );
+  return candidates.some((candidate) => candidate !== undefined && textMatcher(candidate, text));
 }
 
 function matchesTags(filterTags: string[], fieldTags: string[]): boolean {
@@ -101,8 +106,9 @@ export function matchesNodeSelf(params: {
   path: Array<string | number>;
   hints: ConfigUiHints;
   criteria: ConfigSearchCriteria;
+  textMatcher?: ConfigSearchTextMatcher;
 }): boolean {
-  const { schema, path, hints, criteria } = params;
+  const { schema, path, hints, criteria, textMatcher = defaultTextMatcher } = params;
   if (!hasConfigSearchCriteria(criteria)) {
     return true;
   }
@@ -118,14 +124,11 @@ export function matchesNodeSelf(params: {
     .filter((segment): segment is string => typeof segment === "string")
     .join(".");
   const enumText = schema.enum?.map((value) => String(value)).join(" ") ?? "";
-  return matchesText(criteria.text, [
-    label,
-    help,
-    schema.title,
-    schema.description,
-    pathLabel,
-    enumText,
-  ]);
+  return matchesText(
+    criteria.text,
+    [label, help, schema.title, schema.description, pathLabel, enumText],
+    textMatcher,
+  );
 }
 
 export function matchesNodeSearch(params: {
@@ -134,12 +137,13 @@ export function matchesNodeSearch(params: {
   path: Array<string | number>;
   hints: ConfigUiHints;
   criteria: ConfigSearchCriteria;
+  textMatcher?: ConfigSearchTextMatcher;
 }): boolean {
-  const { schema, value, path, hints, criteria } = params;
+  const { schema, value, path, hints, criteria, textMatcher = defaultTextMatcher } = params;
   if (!hasConfigSearchCriteria(criteria)) {
     return true;
   }
-  if (matchesNodeSelf({ schema, path, hints, criteria })) {
+  if (matchesNodeSelf({ schema, path, hints, criteria, textMatcher })) {
     return true;
   }
 
@@ -159,6 +163,7 @@ export function matchesNodeSearch(params: {
           path: [...path, propertyKey],
           hints,
           criteria,
+          textMatcher,
         })
       ) {
         return true;
@@ -167,15 +172,26 @@ export function matchesNodeSearch(params: {
     const additional = schema.additionalProperties;
     if (additional && typeof additional === "object") {
       const reserved = new Set(Object.keys(properties));
-      for (const [entryKey, entryValue] of Object.entries(obj)) {
+      const dynamicEntries = Object.entries(obj).filter(([entryKey]) => !reserved.has(entryKey));
+      if (dynamicEntries.length === 0) {
+        return matchesNodeSearch({
+          schema: additional,
+          value: undefined,
+          path: [...path, "*"],
+          hints,
+          criteria,
+          textMatcher,
+        });
+      }
+      for (const [entryKey, entryValue] of dynamicEntries) {
         if (
-          !reserved.has(entryKey) &&
           matchesNodeSearch({
             schema: additional,
             value: entryValue,
             path: [...path, entryKey],
             hints,
             criteria,
+            textMatcher,
           })
         ) {
           return true;
@@ -200,6 +216,7 @@ export function matchesNodeSearch(params: {
       path: [...path, 0],
       hints,
       criteria,
+      textMatcher,
     });
   }
   return values.some((entry, index) =>
@@ -209,6 +226,7 @@ export function matchesNodeSearch(params: {
       path: [...path, index],
       hints,
       criteria,
+      textMatcher,
     }),
   );
 }
@@ -221,6 +239,7 @@ export function matchesConfigSectionSearch(params: {
   query: string;
   label?: string;
   description?: string;
+  textMatcher?: ConfigSearchTextMatcher;
 }): boolean {
   if (!params.query) {
     return true;
@@ -230,7 +249,9 @@ export function matchesConfigSectionSearch(params: {
     criteria.tags.length === 0 &&
     criteria.text.length > 0 &&
     [params.key, params.label, params.description].some((candidate) =>
-      normalizeOptionalLowercaseString(candidate)?.includes(criteria.text),
+      candidate !== undefined
+        ? (params.textMatcher ?? defaultTextMatcher)(candidate, criteria.text)
+        : false,
     );
   return (
     metadataMatches ||
@@ -240,6 +261,7 @@ export function matchesConfigSectionSearch(params: {
       path: [params.key],
       hints: params.hints,
       criteria,
+      textMatcher: params.textMatcher,
     })
   );
 }
