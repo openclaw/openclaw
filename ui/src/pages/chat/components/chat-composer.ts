@@ -1388,10 +1388,10 @@ function renderAttachmentPreview(props: ChatAttachmentControlsProps) {
                         <button
                           class="chat-attachment-text-action"
                           type="button"
-                          aria-label=${t("workspace.restore")}
+                          aria-label=${t("worktrees.restore")}
                           @click=${() => showPastedTextInComposer(att, props)}
                         >
-                          ${t("workspace.restore")}
+                          ${t("worktrees.restore")}
                           <span aria-hidden="true">${icons.chevronRight}</span>
                         </button>
                       </span>
