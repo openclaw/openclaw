@@ -1,7 +1,7 @@
 import { parseRetryAfterHttpDateMs } from "@openclaw/ai/internal/retry-after";
 import { extractLeadingHttpStatus } from "../../shared/assistant-error-format.js";
 
-export type RateLimitWindow =
+type RateLimitWindow =
   | { kind: "short"; retryAfterSeconds?: number }
   | { kind: "long" }
   | { kind: "unknown" };
