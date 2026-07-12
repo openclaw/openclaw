@@ -755,6 +755,124 @@ describe("tool-loop-detection", () => {
       }
     });
 
+    // #93917 follow-up: broad catch-all failures (null exitCode + null
+    // exitSignal) with genuinely different reasons must not collapse into one
+    // no-progress streak just because they share a broad failureKind.
+    it("keeps distinct catch-all exec failure reasons below the global breaker", () => {
+      const state = createState();
+      const params = { command: "flaky-command" };
+      const reasons = ["connection refused", "permission denied", "host unreachable"];
+      let callIndex = 0;
+
+      for (const reason of reasons) {
+        for (let i = 0; i < Math.floor(GLOBAL_CIRCUIT_BREAKER_THRESHOLD / reasons.length); i += 1) {
+          recordSuccessfulCall(
+            state,
+            "exec",
+            params,
+            {
+              content: [{ type: "text", text: reason }],
+              details: {
+                status: "failed",
+                exitCode: null,
+                exitSignal: null,
+                failureKind: "node-run-failed",
+                durationMs: 100 + i,
+                aggregated: reason,
+              },
+            },
+            callIndex,
+          );
+          callIndex += 1;
+        }
+      }
+
+      const loopResult = detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig);
+      // Distinct normalized reasons → distinct hashes → no single streak reaches
+      // the critical/global threshold.
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("warning");
+      }
+    });
+
+    // #93917: repeats of the same catch-all failure whose reason only varies in
+    // a per-instance identifier (gateway approval id) must still collapse to one
+    // streak and trip the breaker — the unique id is masked before hashing.
+    it("trips the breaker on repeated catch-all failure with a volatile identifier", () => {
+      const state = createState();
+      const params = { command: "flaky-command" };
+
+      for (let i = 0; i < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; i += 1) {
+        const reason = `Exec denied (gateway id=req-${1000 + i}, timeout): flaky-command`;
+        recordSuccessfulCall(
+          state,
+          "exec",
+          params,
+          {
+            content: [{ type: "text", text: reason }],
+            details: {
+              status: "failed",
+              exitCode: null,
+              exitSignal: null,
+              failureKind: "approval-denied",
+              durationMs: 100 + i,
+              aggregated: reason,
+            },
+          },
+          i,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+        expect(loopResult.detector).toBe("global_circuit_breaker");
+      }
+    });
+
+    // #93917 follow-up: numeric status/error codes are stable identity, not
+    // noise, so failures that differ only by a code (500 vs 503) must stay
+    // distinct and not collapse into one no-progress streak.
+    it("keeps distinct stable numeric failure codes apart below the breaker", () => {
+      const state = createState();
+      const params = { command: "flaky-command" };
+      const codes = [500, 503];
+      let callIndex = 0;
+
+      for (const code of codes) {
+        for (let i = 0; i < Math.floor(GLOBAL_CIRCUIT_BREAKER_THRESHOLD / codes.length); i += 1) {
+          const reason = `upstream request failed with status ${code}`;
+          recordSuccessfulCall(
+            state,
+            "exec",
+            params,
+            {
+              content: [{ type: "text", text: reason }],
+              details: {
+                status: "failed",
+                exitCode: null,
+                exitSignal: null,
+                failureKind: "node-run-failed",
+                durationMs: 100 + i,
+                aggregated: reason,
+              },
+            },
+            callIndex,
+          );
+          callIndex += 1;
+        }
+      }
+
+      const loopResult = detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig);
+      // Distinct numeric codes → distinct hashes → neither streak reaches the breaker.
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("warning");
+      }
+    });
+
     it("does not block repeated unknown-tool failures before the unknown-tool threshold", () => {
       const state = createState();
       const toolName = "exec";

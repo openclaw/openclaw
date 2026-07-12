@@ -170,6 +170,31 @@ function normalizeExitSignal(value: unknown): string | null {
   return null;
 }
 
+// #93917 follow-up: broad catch-all exec failures (node-run-failed,
+// runtime-error, approval-denied) carry a null exitCode and null exitSignal, so
+// fingerprinting them by (status, failureKind) alone would collapse genuinely
+// different failures into one no-progress streak. Derive a summary that keeps
+// the stable failure text — including numeric status/error codes, which are
+// semantic, not noise — and strips only per-instance identifiers (gateway ids,
+// uuids, hex handles). Distinct failures stay distinct while repeats of the same
+// failure still accumulate. Only the first line is kept because trailing detail
+// is the noisiest part.
+function normalizeFailureReason(value: unknown): string {
+  const text = nonEmptyStringField(value);
+  if (!text) {
+    return "";
+  }
+  const summary = text.split("\n", 1)[0] ?? "";
+  return summary
+    .replace(/id=\S+/gi, "id=X") // gateway approval ids
+    .replace(/\b[0-9a-f]{8}-[0-9a-f-]{27,}\b/gi, "U") // uuids
+    .replace(/\b0x[0-9a-f]+\b/gi, "H") // hex addresses
+    .replace(/\b(?=[0-9a-f]*[a-f])[0-9a-f]{8,}\b/gi, "H") // hex handles (letters present; bare numeric codes kept)
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 200);
+}
+
 // #93917: Fingerprint an exec failure by stable discriminators only, excluding
 // output text. Error output often carries volatile noise (timestamps, PIDs,
 // connection-refused-at-${time}) that defeats no-progress detection. Keeping
@@ -177,12 +202,22 @@ function normalizeExitSignal(value: unknown): string | null {
 // modes so they do not merge into one no-progress streak, while `status` keeps a
 // nonzero "completed" exit distinct from a "failed" outcome with the same code.
 function hashStableExecFailure(status: string, details: Record<string, unknown>): string {
+  const exitCode = typeof details.exitCode === "number" ? details.exitCode : null;
+  const exitSignal = normalizeExitSignal(details.exitSignal);
+  // A failed outcome with no exit code and no signal (the broad catch-all kinds)
+  // has no structured identity to tell distinct failures apart, so fall back to
+  // the normalized reason. Completed nonzero exits keep the pure exit-fact
+  // fingerprint and never reach this branch with a null exit code.
+  const hasStructuredExitIdentity = exitCode !== null || exitSignal !== null;
   return digestStable({
     status,
-    exitCode: typeof details.exitCode === "number" ? details.exitCode : null,
+    exitCode,
     timedOut: details.timedOut === true,
-    exitSignal: normalizeExitSignal(details.exitSignal),
+    exitSignal,
     failureKind: stringField(details.failureKind),
+    ...(status === "failed" && !hasStructuredExitIdentity
+      ? { reason: normalizeFailureReason(details.aggregated) }
+      : {}),
   });
 }
 
