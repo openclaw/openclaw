@@ -1,8 +1,5 @@
 package ai.openclaw.app.gateway
 
-import kotlinx.coroutines.runBlocking
-import org.junit.Assert.assertEquals
-import org.junit.Test
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
@@ -12,6 +9,9 @@ import javax.net.ssl.SSLEngine
 import javax.net.ssl.SSLContext
 import javax.net.ssl.X509ExtendedTrustManager
 import kotlin.concurrent.thread
+import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertEquals
+import org.junit.Test
 
 class GatewayTlsTest {
   @Test
