@@ -90,18 +90,20 @@ vi.mock("../command-auth.js", async (importOriginal) => {
     resolveCommandAuthorization: vi.fn(
       (params: { ctx: { Provider?: string; SenderId?: string }; cfg: OpenClawConfig }) => {
         const target = params.ctx.Provider ?? "";
-        const sender = String(params.ctx.SenderId ?? "");
-        const channelAllow = (
-          (params.cfg.channels as Record<string, { allowFrom?: unknown[] }> | undefined)?.[target]
-            ?.allowFrom ?? []
-        ).map(String);
-        const globalOwners = (params.cfg.commands?.ownerAllowFrom ?? []).map((owner) =>
-          String(owner).includes(":") ? String(owner).split(":").pop() : String(owner),
+        const sender = params.ctx.SenderId ?? "";
+        const channelAllow = new Set(
+          (
+            (params.cfg.channels as Record<string, { allowFrom?: unknown[] }> | undefined)?.[target]
+              ?.allowFrom ?? []
+          ).map(String),
+        );
+        const globalOwners = new Set(
+          (params.cfg.commands?.ownerAllowFrom ?? []).map((owner) =>
+            String(owner).includes(":") ? String(owner).split(":").pop() : String(owner),
+          ),
         );
         const senderIsOwner =
-          channelAllow.includes("*") ||
-          channelAllow.includes(sender) ||
-          globalOwners.includes(sender);
+          channelAllow.has("*") || channelAllow.has(sender) || globalOwners.has(sender);
         return { senderIsOwner } as ReturnType<typeof actual.resolveCommandAuthorization>;
       },
     ),
