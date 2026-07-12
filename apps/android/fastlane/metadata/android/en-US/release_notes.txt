@@ -1,0 +1,9 @@
+Adds multi-gateway switching with isolated credentials, history, queues, and notification routing.
+
+Upgrades chat with offline recovery, session search and groups, model and agent pickers, voice notes, actions, link previews, code and math rendering.
+
+Adds workspace files, Cron details, terminal access, and Listen playback.
+
+Improves onboarding, reconnects, keyboards, notification filtering, location, canvas safety, and voice reliability.
+
+Thanks @IWhatsskill, @ioridev, and @narcissus0702.

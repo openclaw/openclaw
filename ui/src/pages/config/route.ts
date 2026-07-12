@@ -1,0 +1,38 @@
+import { definePage } from "@openclaw/uirouter";
+import { html } from "lit";
+import type { ApplicationContext } from "../../app/context.ts";
+import type { ConfigPageId } from "./config-page.ts";
+
+function loadConfigRoute(context: ApplicationContext) {
+  const primaryLoad = context.runtimeConfig.ensureLoaded();
+  void primaryLoad.then(
+    () => {
+      void context.runtimeConfig.ensureSchemaLoaded();
+    },
+    () => undefined,
+  );
+}
+
+function configPage(id: ConfigPageId, path: string, aliases: readonly string[]) {
+  return definePage({
+    id,
+    path,
+    aliases,
+    loader: (context: ApplicationContext) => loadConfigRoute(context),
+    component: () =>
+      import("./config-page.ts").then(() => ({
+        header: true,
+        render: () => html`<openclaw-config-page .pageId=${id}></openclaw-config-page>`,
+      })),
+  });
+}
+
+export const pages = [
+  configPage("config", "/settings/general", ["/config"]),
+  configPage("communications", "/settings/communications", ["/communications"]),
+  configPage("appearance", "/settings/appearance", ["/appearance"]),
+  configPage("automation", "/settings/automation", ["/automation"]),
+  configPage("mcp", "/settings/mcp", ["/mcp"]),
+  configPage("infrastructure", "/settings/infrastructure", ["/infrastructure"]),
+  configPage("ai-agents", "/settings/ai-agents", ["/ai-agents"]),
+] as const;

@@ -1,0 +1,1051 @@
+import Foundation
+import OpenClawKit
+import os
+
+enum GatewaySettingsStore {
+    private static let productionGatewayService = "ai.openclawfoundation.app.gateway"
+    private static var gatewayService: String {
+        #if DEBUG
+        // Hosted tests share the app's Keychain access group; keep fixtures away from installed-app state.
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
+            return "\(self.productionGatewayService).tests"
+        }
+        #endif
+        return self.productionGatewayService
+    }
+
+    #if DEBUG
+    static var _testGatewayService: String {
+        self.gatewayService
+    }
+    #endif
+    private static let nodeService = "ai.openclawfoundation.app.node"
+    private static let talkService = "ai.openclawfoundation.app.talk"
+
+    private static let instanceIdDefaultsKey = "node.instanceId"
+    private static let preferredGatewayStableIDDefaultsKey = "gateway.preferredStableID"
+    private static let lastDiscoveredGatewayStableIDDefaultsKey = "gateway.lastDiscoveredStableID"
+    private static let lastGatewayKindDefaultsKey = "gateway.last.kind"
+    private static let lastGatewayHostDefaultsKey = "gateway.last.host"
+    private static let lastGatewayPortDefaultsKey = "gateway.last.port"
+    private static let lastGatewayTlsDefaultsKey = "gateway.last.tls"
+    private static let lastGatewayStableIDDefaultsKey = "gateway.last.stableID"
+    private static let clientIdOverrideDefaultsPrefix = "gateway.clientIdOverride."
+    private static let selectedAgentDefaultsPrefix = "gateway.selectedAgentId."
+
+    private static let instanceIdAccount = "instanceId"
+    private static let preferredGatewayStableIDAccount = "preferredStableID"
+    private static let lastDiscoveredGatewayStableIDAccount = "lastDiscoveredStableID"
+    private static let gatewayRegistryAccount = "gateway-registry"
+    private static let lastGatewayConnectionAccount = "lastConnection"
+    private static let gatewayCustomHeadersService = "ai.openclawfoundation.app.gateway.custom-headers"
+    private static let talkProviderApiKeyAccountPrefix = "provider.apiKey." // pragma: allowlist secret
+
+    struct GatewayRegistryEntry: Codable, Equatable, Identifiable {
+        enum Kind: String, Codable {
+            case manual
+            case discovered
+        }
+
+        var stableID: String
+        var kind: Kind
+        var name: String
+        var host: String?
+        var port: Int?
+        var useTLS: Bool
+        var lastConnectedAtMs: Int?
+
+        var id: String {
+            self.stableID
+        }
+    }
+
+    struct GatewayRegistry: Codable, Equatable {
+        var version: Int = 1
+        var activeStableID: String?
+        var entries: [GatewayRegistryEntry] = []
+
+        static let empty = GatewayRegistry()
+    }
+
+    struct GatewayCredentialMetadata: Codable, Equatable {
+        let gatewayStableID: String
+        let suppressStoredDeviceAuth: Bool
+    }
+
+    /// Credential ownership and secrets must move together. Separate Keychain
+    /// entries can survive a partial update and bind one gateway's secret to another.
+    private struct GatewayCredentialBundle: Codable {
+        let gatewayStableID: String
+        let suppressStoredDeviceAuth: Bool
+        let token: String?
+        let bootstrapToken: String?
+        let password: String?
+    }
+
+    struct GatewayCredentials: Equatable {
+        let token: String?
+        let bootstrapToken: String?
+        let password: String?
+        let suppressStoredDeviceAuth: Bool
+
+        static let empty = GatewayCredentials(
+            token: nil,
+            bootstrapToken: nil,
+            password: nil,
+            suppressStoredDeviceAuth: false)
+
+        var hasCredentials: Bool {
+            self.token != nil || self.bootstrapToken != nil || self.password != nil
+        }
+    }
+
+    static func bootstrapPersistence() {
+        self.ensureStableInstanceID()
+        self.ensurePreferredGatewayStableID()
+        self.ensureLastDiscoveredGatewayStableID()
+        self.migrateGatewayRegistryIfNeeded()
+        if let instanceID = self.loadStableInstanceID() {
+            self.migrateGatewayCredentialBundleIfNeeded(instanceId: instanceID)
+        }
+    }
+
+    static func currentInstanceID(defaults: UserDefaults = .standard) -> String {
+        self.bootstrapPersistence()
+        if let value = defaults.string(forKey: self.instanceIdDefaultsKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !value.isEmpty
+        {
+            return value
+        }
+        return self.loadStableInstanceID() ?? ""
+    }
+
+    static func loadStableInstanceID() -> String? {
+        if let value = KeychainStore.loadString(service: self.nodeService, account: self.instanceIdAccount)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !value.isEmpty
+        {
+            return value
+        }
+
+        return nil
+    }
+
+    static func saveStableInstanceID(_ instanceId: String) {
+        _ = KeychainStore.saveString(instanceId, service: self.nodeService, account: self.instanceIdAccount)
+    }
+
+    static func loadPreferredGatewayStableID() -> String? {
+        if let value = KeychainStore.loadString(
+            service: self.gatewayService,
+            account: self.preferredGatewayStableIDAccount)?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !value.isEmpty
+        {
+            return value
+        }
+
+        return nil
+    }
+
+    static func savePreferredGatewayStableID(_ stableID: String) {
+        _ = KeychainStore.saveString(
+            stableID,
+            service: self.gatewayService,
+            account: self.preferredGatewayStableIDAccount)
+    }
+
+    static func clearPreferredGatewayStableID(defaults: UserDefaults = .standard) {
+        _ = KeychainStore.delete(
+            service: self.gatewayService,
+            account: self.preferredGatewayStableIDAccount)
+        defaults.removeObject(forKey: self.preferredGatewayStableIDDefaultsKey)
+    }
+
+    static func loadLastDiscoveredGatewayStableID() -> String? {
+        if let value = KeychainStore.loadString(
+            service: self.gatewayService,
+            account: self.lastDiscoveredGatewayStableIDAccount)?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !value.isEmpty
+        {
+            return value
+        }
+
+        return nil
+    }
+
+    static func saveLastDiscoveredGatewayStableID(_ stableID: String) {
+        _ = KeychainStore.saveString(
+            stableID,
+            service: self.gatewayService,
+            account: self.lastDiscoveredGatewayStableIDAccount)
+    }
+
+    static func clearLastDiscoveredGatewayStableID(defaults: UserDefaults = .standard) {
+        _ = KeychainStore.delete(
+            service: self.gatewayService,
+            account: self.lastDiscoveredGatewayStableIDAccount)
+        defaults.removeObject(forKey: self.lastDiscoveredGatewayStableIDDefaultsKey)
+    }
+
+    static func loadGatewayCredentialMetadata(
+        instanceId: String,
+        gatewayStableID: String) -> GatewayCredentialMetadata?
+    {
+        guard let bundle = self.loadGatewayCredentialBundle(
+            instanceId: instanceId,
+            gatewayStableID: gatewayStableID)
+        else { return nil }
+        return GatewayCredentialMetadata(
+            gatewayStableID: bundle.gatewayStableID,
+            suppressStoredDeviceAuth: bundle.suppressStoredDeviceAuth)
+    }
+
+    static func loadGatewayCredentials(instanceId: String, gatewayStableID: String) -> GatewayCredentials {
+        let stableID = self.authenticationOwnerID(routeStableID: gatewayStableID)
+        guard !stableID.isEmpty,
+              let bundle = self.loadGatewayCredentialBundle(
+                  instanceId: instanceId,
+                  gatewayStableID: stableID)
+        else { return .empty }
+        return GatewayCredentials(
+            token: bundle.token,
+            bootstrapToken: bundle.bootstrapToken,
+            password: bundle.password,
+            suppressStoredDeviceAuth: bundle.suppressStoredDeviceAuth)
+    }
+
+    @discardableResult
+    static func saveGatewayCredentials(
+        token: String?,
+        bootstrapToken: String?,
+        password: String?,
+        gatewayStableID: String,
+        suppressStoredDeviceAuth: Bool,
+        instanceId: String) -> Bool
+    {
+        let stableID = self.authenticationOwnerID(routeStableID: gatewayStableID)
+        let trimmedInstanceID = instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !stableID.isEmpty, !trimmedInstanceID.isEmpty else { return false }
+        let bundle = GatewayCredentialBundle(
+            gatewayStableID: stableID,
+            suppressStoredDeviceAuth: suppressStoredDeviceAuth,
+            token: self.normalizedCredential(token),
+            bootstrapToken: self.normalizedCredential(bootstrapToken),
+            password: self.normalizedCredential(password))
+        let account = self.gatewayCredentialBundleAccount(
+            instanceId: trimmedInstanceID,
+            stableID: stableID)
+        let hasCredentials = bundle.token != nil || bundle.bootstrapToken != nil || bundle.password != nil
+        guard hasCredentials || suppressStoredDeviceAuth else {
+            let deleted = KeychainStore.delete(service: self.gatewayService, account: account)
+            self.deleteLegacyGatewayCredentials(instanceId: trimmedInstanceID)
+            return deleted || KeychainStore.loadString(service: self.gatewayService, account: account) == nil
+        }
+        guard let data = try? JSONEncoder().encode(bundle),
+              let json = String(data: data, encoding: .utf8)
+        else {
+            _ = KeychainStore.delete(service: self.gatewayService, account: account)
+            return false
+        }
+        guard KeychainStore.saveString(
+            json,
+            service: self.gatewayService,
+            account: account)
+        else {
+            // The Keychain helper restores the prior item when replacement fails. Keep that
+            // known-good bundle; callers already treat this attempted update as uncommitted.
+            return false
+        }
+        self.deleteLegacyGatewayCredentials(instanceId: trimmedInstanceID)
+        return true
+    }
+
+    @discardableResult
+    static func updateGatewayCredentials(
+        token: String?,
+        password: String?,
+        gatewayStableID: String,
+        instanceId: String) -> Bool
+    {
+        let stableID = self.authenticationOwnerID(routeStableID: gatewayStableID)
+        let existing = self.loadGatewayCredentialBundle(
+            instanceId: instanceId,
+            gatewayStableID: stableID)
+        return self.saveGatewayCredentials(
+            token: token,
+            bootstrapToken: existing?.bootstrapToken,
+            password: password,
+            gatewayStableID: stableID,
+            suppressStoredDeviceAuth: existing?.suppressStoredDeviceAuth == true,
+            instanceId: instanceId)
+    }
+
+    @discardableResult
+    static func completeGatewayCredentialHandoff(instanceId: String, gatewayStableID: String) -> Bool {
+        let stableID = self.authenticationOwnerID(routeStableID: gatewayStableID)
+        guard let bundle = self.loadGatewayCredentialBundle(
+            instanceId: instanceId,
+            gatewayStableID: stableID),
+            bundle.suppressStoredDeviceAuth
+        else { return false }
+        // Device-token issuance and bootstrap consumption are one durable handoff. A relaunch
+        // must never observe a spent bootstrap token while stored device auth remains disabled.
+        return self.saveGatewayCredentials(
+            token: bundle.token,
+            bootstrapToken: nil,
+            password: bundle.password,
+            gatewayStableID: stableID,
+            suppressStoredDeviceAuth: false,
+            instanceId: instanceId)
+    }
+
+    static func discardUnscopedGatewayCredentials(instanceId: String) {
+        // The legacy UI saved fields before a successful connection, so the last route
+        // cannot prove who owns these secrets. Re-entry is safer than cross-gateway reuse.
+        self.deleteLegacyGatewayCredentials(instanceId: instanceId)
+    }
+
+    /// Certificate pins prove transport trust for one route; they are not gateway identities.
+    /// Wildcard certificates and reverse proxies may legitimately reuse a leaf certificate.
+    static func authenticationOwnerID(routeStableID: String) -> String {
+        routeStableID.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Custom proxy headers are per-gateway credentials (Cloudflare Access-style service
+    /// tokens). They live in the Keychain like the other gateway secrets and are read at
+    /// connect time; never log their values.
+    static func loadGatewayCustomHeaders(gatewayStableID: String) -> [String: String] {
+        self.loadGatewayCustomHeaders(gatewayStableID: gatewayStableID, service: self.gatewayCustomHeadersService)
+    }
+
+    static func loadGatewayCustomHeaders(
+        gatewayStableID: String,
+        service: String) -> [String: String]
+    {
+        let stableID = self.authenticationOwnerID(routeStableID: gatewayStableID)
+        guard !stableID.isEmpty,
+              let json = KeychainStore.loadString(
+                  service: service,
+                  account: self.customHeadersAccount(stableID: stableID)),
+              let data = json.data(using: .utf8),
+              let headers = try? JSONDecoder().decode([String: String].self, from: data)
+        else { return [:] }
+        return GatewayCustomHeaders.sanitized(headers)
+    }
+
+    @discardableResult
+    static func saveGatewayCustomHeaders(_ headers: [String: String], gatewayStableID: String) -> Bool {
+        self.saveGatewayCustomHeaders(
+            headers,
+            gatewayStableID: gatewayStableID,
+            service: self.gatewayCustomHeadersService)
+    }
+
+    @discardableResult
+    static func saveGatewayCustomHeaders(
+        _ headers: [String: String],
+        gatewayStableID: String,
+        service: String) -> Bool
+    {
+        let stableID = self.authenticationOwnerID(routeStableID: gatewayStableID)
+        guard !stableID.isEmpty else { return false }
+        let account = self.customHeadersAccount(stableID: stableID)
+        let sanitized = GatewayCustomHeaders.sanitized(headers)
+        guard !sanitized.isEmpty else {
+            let deleted = KeychainStore.delete(service: service, account: account)
+            return deleted || KeychainStore.loadString(service: service, account: account) == nil
+        }
+        guard let data = try? JSONEncoder().encode(sanitized),
+              let json = String(data: data, encoding: .utf8)
+        else { return false }
+        return KeychainStore.saveString(json, service: service, account: account)
+    }
+
+    /// Full onboarding reset is the explicit forget boundary for every gateway's proxy secrets.
+    @discardableResult
+    static func clearGatewayCustomHeaders() -> Bool {
+        self.clearGatewayCustomHeaders(service: self.gatewayCustomHeadersService)
+    }
+
+    @discardableResult
+    static func clearGatewayCustomHeaders(gatewayStableID: String) -> Bool {
+        self.clearGatewayCustomHeaders(
+            gatewayStableID: gatewayStableID,
+            service: self.gatewayCustomHeadersService)
+    }
+
+    @discardableResult
+    static func clearGatewayCustomHeaders(gatewayStableID: String, service: String) -> Bool {
+        let stableID = self.authenticationOwnerID(routeStableID: gatewayStableID)
+        guard !stableID.isEmpty else { return false }
+        let account = self.customHeadersAccount(stableID: stableID)
+        let deleted = KeychainStore.delete(service: service, account: account)
+        return deleted || KeychainStore.loadString(service: service, account: account) == nil
+    }
+
+    @discardableResult
+    static func clearGatewayCustomHeaders(service: String) -> Bool {
+        KeychainStore.deleteAll(service: service)
+    }
+
+    private static func customHeadersAccount(stableID: String) -> String {
+        "customHeaders.\(stableID)"
+    }
+
+    @discardableResult
+    static func migrateProvenRelayCredentials(
+        instanceId: String,
+        gatewayStableID: String,
+        token: String?,
+        password: String?) -> Bool
+    {
+        let trimmedInstanceID = instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let stableID = gatewayStableID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedInstanceID.isEmpty, !stableID.isEmpty else { return false }
+        let legacyAccounts = [
+            self.gatewayTokenAccount(instanceId: trimmedInstanceID),
+            self.gatewayBootstrapTokenAccount(instanceId: trimmedInstanceID),
+            self.gatewayPasswordAccount(instanceId: trimmedInstanceID),
+        ]
+        let hasLegacyCredentials = legacyAccounts.contains { account in
+            self.normalizedCredential(KeychainStore.loadString(
+                service: self.gatewayService,
+                account: account)) != nil
+        }
+        guard hasLegacyCredentials else { return true }
+
+        // A canonical bundle already owns the fields atomically. Never replace it with
+        // older relay data merely because legacy per-field entries still exist.
+        if self.loadGatewayCredentialBundle(
+            instanceId: trimmedInstanceID,
+            gatewayStableID: stableID) != nil
+        {
+            self.deleteLegacyGatewayCredentials(instanceId: trimmedInstanceID)
+            return true
+        }
+
+        let relayToken = self.normalizedCredential(token)
+        let relayPassword = self.normalizedCredential(password)
+        guard relayToken != nil || relayPassword != nil else {
+            self.deleteLegacyGatewayCredentials(instanceId: trimmedInstanceID)
+            return true
+        }
+        // Relay config is written only after a successful connection and therefore proves
+        // both the credential values and their gateway owner. Preserve it before cleanup.
+        return self.saveGatewayCredentials(
+            token: relayToken,
+            bootstrapToken: nil,
+            password: relayPassword,
+            gatewayStableID: stableID,
+            suppressStoredDeviceAuth: false,
+            instanceId: trimmedInstanceID)
+    }
+
+    static func saveLegacyGatewayTokenForMigrationTest(_ token: String, instanceId: String) {
+        _ = KeychainStore.saveString(
+            token,
+            service: self.gatewayService,
+            account: self.gatewayTokenAccount(instanceId: instanceId))
+    }
+
+    private struct LegacyLastGatewayConnectionData: Codable {
+        var kind: GatewayRegistryEntry.Kind
+        var stableID: String
+        var useTLS: Bool
+        var host: String?
+        var port: Int?
+    }
+
+    static func loadTalkProviderApiKey(provider: String) -> String? {
+        guard let providerId = self.normalizedTalkProviderID(provider) else { return nil }
+        let account = self.talkProviderApiKeyAccount(providerId: providerId)
+        let value = KeychainStore.loadString(
+            service: self.talkService,
+            account: account)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if value?.isEmpty == false { return value }
+        return nil
+    }
+
+    static func loadGatewayRegistry() -> GatewayRegistry {
+        guard let json = KeychainStore.loadString(
+            service: self.gatewayService,
+            account: self.gatewayRegistryAccount),
+            let data = json.data(using: .utf8),
+            let registry = try? JSONDecoder().decode(GatewayRegistry.self, from: data),
+            registry.version == 1
+        else { return .empty }
+        return self.normalizedGatewayRegistry(registry)
+    }
+
+    @discardableResult
+    static func upsertGatewayRegistryEntry(_ entry: GatewayRegistryEntry) -> Bool {
+        self.upsertGatewayRegistryEntry(entry, activate: false)
+    }
+
+    @discardableResult
+    static func upsertGatewayRegistryEntry(_ entry: GatewayRegistryEntry, activate: Bool) -> Bool {
+        guard let normalized = self.normalizedGatewayRegistryEntry(entry) else { return false }
+        var registry = self.loadGatewayRegistry()
+        if let index = registry.entries.firstIndex(where: { $0.stableID == normalized.stableID }) {
+            var replacement = normalized
+            if replacement.lastConnectedAtMs == nil {
+                replacement.lastConnectedAtMs = registry.entries[index].lastConnectedAtMs
+            }
+            registry.entries[index] = replacement
+        } else {
+            registry.entries.append(normalized)
+        }
+        if activate {
+            registry.activeStableID = normalized.stableID
+        }
+        return self.saveGatewayRegistry(registry)
+    }
+
+    @discardableResult
+    static func setActiveGateway(stableID: String) -> Bool {
+        let stableID = stableID.trimmingCharacters(in: .whitespacesAndNewlines)
+        var registry = self.loadGatewayRegistry()
+        guard registry.entries.contains(where: { $0.stableID == stableID }) else { return false }
+        registry.activeStableID = stableID
+        return self.saveGatewayRegistry(registry)
+    }
+
+    @discardableResult
+    static func markGatewayConnected(stableID: String, atMs: Int) -> Bool {
+        let stableID = stableID.trimmingCharacters(in: .whitespacesAndNewlines)
+        var registry = self.loadGatewayRegistry()
+        guard let index = registry.entries.firstIndex(where: { $0.stableID == stableID }) else { return false }
+        registry.entries[index].lastConnectedAtMs = atMs
+        return self.saveGatewayRegistry(registry)
+    }
+
+    @discardableResult
+    static func removeGatewayRegistryEntry(stableID: String) -> Bool {
+        let stableID = stableID.trimmingCharacters(in: .whitespacesAndNewlines)
+        var registry = self.loadGatewayRegistry()
+        registry.entries.removeAll { $0.stableID == stableID }
+        if registry.activeStableID == stableID {
+            registry.activeStableID = nil
+        }
+        return self.saveGatewayRegistry(registry)
+    }
+
+    static func activeGatewayEntry() -> GatewayRegistryEntry? {
+        let registry = self.loadGatewayRegistry()
+        guard let activeStableID = registry.activeStableID else { return nil }
+        return registry.entries.first { $0.stableID == activeStableID }
+    }
+
+    static func clearLegacyGatewaySelectors(stableID: String) {
+        let stableID = stableID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !stableID.isEmpty else { return }
+        let defaults = UserDefaults.standard
+        for (defaultsKey, account) in [
+            (self.preferredGatewayStableIDDefaultsKey, self.preferredGatewayStableIDAccount),
+            (self.lastDiscoveredGatewayStableIDDefaultsKey, self.lastDiscoveredGatewayStableIDAccount),
+        ] {
+            let defaultsValue = defaults.string(forKey: defaultsKey)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if defaultsValue == stableID {
+                defaults.removeObject(forKey: defaultsKey)
+            }
+            let keychainValue = KeychainStore.loadString(service: self.gatewayService, account: account)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if keychainValue == stableID {
+                _ = KeychainStore.delete(service: self.gatewayService, account: account)
+            }
+        }
+    }
+
+    static func clearGatewayRegistry(defaults: UserDefaults = .standard) {
+        _ = KeychainStore.delete(service: self.gatewayService, account: self.gatewayRegistryAccount)
+        _ = KeychainStore.delete(service: self.gatewayService, account: self.lastGatewayConnectionAccount)
+        self.removeLastGatewayDefaults(defaults)
+    }
+
+    private static func saveGatewayRegistry(_ registry: GatewayRegistry) -> Bool {
+        let normalized = self.normalizedGatewayRegistry(registry)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(normalized),
+              let json = String(data: data, encoding: .utf8)
+        else { return false }
+        return KeychainStore.saveString(
+            json,
+            service: self.gatewayService,
+            account: self.gatewayRegistryAccount)
+    }
+
+    private static func normalizedGatewayRegistry(_ registry: GatewayRegistry) -> GatewayRegistry {
+        var seen = Set<String>()
+        let entries = registry.entries
+            .compactMap(self.normalizedGatewayRegistryEntry)
+            .filter { seen.insert($0.stableID).inserted }
+            .sorted { lhs, rhs in
+                if lhs.name != rhs.name { return lhs.name < rhs.name }
+                return lhs.stableID < rhs.stableID
+            }
+        let activeStableID = registry.activeStableID.flatMap { activeID in
+            entries.contains(where: { $0.stableID == activeID }) ? activeID : nil
+        }
+        return GatewayRegistry(version: 1, activeStableID: activeStableID, entries: entries)
+    }
+
+    private static func normalizedGatewayRegistryEntry(
+        _ entry: GatewayRegistryEntry) -> GatewayRegistryEntry?
+    {
+        let stableID = entry.stableID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !stableID.isEmpty else { return nil }
+        let name = entry.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if entry.kind == .manual {
+            let host = entry.host?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !host.isEmpty, let port = entry.port, (1...65535).contains(port) else { return nil }
+            return GatewayRegistryEntry(
+                stableID: stableID,
+                kind: .manual,
+                name: name.isEmpty ? "\(host):\(port)" : name,
+                host: host,
+                port: port,
+                useTLS: entry.useTLS,
+                lastConnectedAtMs: entry.lastConnectedAtMs)
+        }
+        return GatewayRegistryEntry(
+            stableID: stableID,
+            kind: .discovered,
+            name: name.isEmpty ? stableID : name,
+            host: nil,
+            port: nil,
+            useTLS: entry.useTLS,
+            lastConnectedAtMs: entry.lastConnectedAtMs)
+    }
+
+    private static func migrateGatewayRegistryIfNeeded(defaults: UserDefaults = .standard) {
+        if KeychainStore.loadString(service: self.gatewayService, account: self.gatewayRegistryAccount) != nil {
+            _ = KeychainStore.delete(service: self.gatewayService, account: self.lastGatewayConnectionAccount)
+            self.removeLastGatewayDefaults(defaults)
+            return
+        }
+
+        let legacy = self.loadLegacyLastGatewayConnection(defaults: defaults)
+        guard let entry = legacy.flatMap(self.gatewayRegistryEntry(from:)) else { return }
+        let registry = GatewayRegistry(activeStableID: entry.stableID, entries: [entry])
+        guard self.saveGatewayRegistry(registry) else { return }
+        _ = KeychainStore.delete(service: self.gatewayService, account: self.lastGatewayConnectionAccount)
+        self.removeLastGatewayDefaults(defaults)
+    }
+
+    private static func loadLegacyLastGatewayConnection(
+        defaults: UserDefaults) -> LegacyLastGatewayConnectionData?
+    {
+        if let json = KeychainStore.loadString(
+            service: self.gatewayService,
+            account: self.lastGatewayConnectionAccount),
+            let data = json.data(using: .utf8),
+            let stored = try? JSONDecoder().decode(LegacyLastGatewayConnectionData.self, from: data)
+        {
+            return stored
+        }
+        let stableID = defaults.string(forKey: self.lastGatewayStableIDDefaultsKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !stableID.isEmpty else { return nil }
+        let kindRaw = defaults.string(forKey: self.lastGatewayKindDefaultsKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let kind = GatewayRegistryEntry.Kind(rawValue: kindRaw) ?? .manual
+        return LegacyLastGatewayConnectionData(
+            kind: kind,
+            stableID: stableID,
+            useTLS: defaults.bool(forKey: self.lastGatewayTlsDefaultsKey),
+            host: kind == .manual ? defaults.string(forKey: self.lastGatewayHostDefaultsKey) : nil,
+            port: kind == .manual ? defaults.object(forKey: self.lastGatewayPortDefaultsKey) as? Int : nil)
+    }
+
+    private static func gatewayRegistryEntry(
+        from legacy: LegacyLastGatewayConnectionData) -> GatewayRegistryEntry?
+    {
+        self.normalizedGatewayRegistryEntry(GatewayRegistryEntry(
+            stableID: legacy.stableID,
+            kind: legacy.kind,
+            name: legacy.kind == .manual
+                ? "\(legacy.host ?? ""):\(legacy.port ?? 0)"
+                : legacy.stableID,
+            host: legacy.host,
+            port: legacy.port,
+            useTLS: legacy.useTLS,
+            lastConnectedAtMs: nil))
+    }
+
+    private static func removeLastGatewayDefaults(_ defaults: UserDefaults) {
+        defaults.removeObject(forKey: self.lastGatewayKindDefaultsKey)
+        defaults.removeObject(forKey: self.lastGatewayHostDefaultsKey)
+        defaults.removeObject(forKey: self.lastGatewayPortDefaultsKey)
+        defaults.removeObject(forKey: self.lastGatewayTlsDefaultsKey)
+        defaults.removeObject(forKey: self.lastGatewayStableIDDefaultsKey)
+    }
+
+    static func deleteGatewayCredentials(instanceId: String, stableID: String) {
+        let trimmed = instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let stableID = stableID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !stableID.isEmpty else { return }
+        _ = KeychainStore.delete(
+            service: self.gatewayService,
+            account: self.gatewayCredentialBundleAccount(instanceId: trimmed, stableID: stableID))
+    }
+
+    static func deleteAllGatewayCredentials(instanceId: String) {
+        let trimmed = instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        _ = KeychainStore.deleteAccounts(
+            service: self.gatewayService,
+            accountPrefix: self.legacyGatewayCredentialBundleAccount(instanceId: trimmed) + ".")
+        _ = KeychainStore.delete(
+            service: self.gatewayService,
+            account: self.legacyGatewayCredentialBundleAccount(instanceId: trimmed))
+        self.deleteLegacyGatewayCredentials(instanceId: trimmed)
+    }
+
+    static func loadGatewayClientIdOverride(stableID: String) -> String? {
+        let trimmedID = stableID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedID.isEmpty else { return nil }
+        let key = self.clientIdOverrideDefaultsPrefix + trimmedID
+        let value = UserDefaults.standard.string(forKey: key)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if value?.isEmpty == false { return value }
+        return nil
+    }
+
+    static func saveGatewayClientIdOverride(stableID: String, clientId: String?) {
+        let trimmedID = stableID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedID.isEmpty else { return }
+        let key = self.clientIdOverrideDefaultsPrefix + trimmedID
+        let trimmedClientId = clientId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if trimmedClientId.isEmpty {
+            UserDefaults.standard.removeObject(forKey: key)
+        } else {
+            UserDefaults.standard.set(trimmedClientId, forKey: key)
+        }
+    }
+
+    static func loadGatewaySelectedAgentId(stableID: String) -> String? {
+        let trimmedID = stableID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedID.isEmpty else { return nil }
+        let key = self.selectedAgentDefaultsPrefix + trimmedID
+        let value = UserDefaults.standard.string(forKey: key)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if value?.isEmpty == false { return value }
+        return nil
+    }
+
+    static func saveGatewaySelectedAgentId(stableID: String, agentId: String?) {
+        let trimmedID = stableID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedID.isEmpty else { return }
+        let key = self.selectedAgentDefaultsPrefix + trimmedID
+        let trimmedAgentId = agentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if trimmedAgentId.isEmpty {
+            UserDefaults.standard.removeObject(forKey: key)
+        } else {
+            UserDefaults.standard.set(trimmedAgentId, forKey: key)
+        }
+    }
+
+    private static func gatewayTokenAccount(instanceId: String) -> String {
+        "gateway-token.\(instanceId)"
+    }
+
+    private static func gatewayBootstrapTokenAccount(instanceId: String) -> String {
+        "gateway-bootstrap-token.\(instanceId)"
+    }
+
+    private static func gatewayPasswordAccount(instanceId: String) -> String {
+        "gateway-password.\(instanceId)"
+    }
+
+    private static func legacyGatewayCredentialBundleAccount(instanceId: String) -> String {
+        "gateway-credentials.\(instanceId)"
+    }
+
+    private static func gatewayCredentialBundleAccount(instanceId: String, stableID: String) -> String {
+        "gateway-credentials.\(instanceId).\(stableID)"
+    }
+
+    private static func loadGatewayCredentialBundle(
+        instanceId: String,
+        gatewayStableID: String) -> GatewayCredentialBundle?
+    {
+        let stableID = gatewayStableID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !stableID.isEmpty else { return nil }
+        guard let json = KeychainStore.loadString(
+            service: self.gatewayService,
+            account: self.gatewayCredentialBundleAccount(instanceId: instanceId, stableID: stableID)),
+            let data = json.data(using: .utf8),
+            let decoded = try? JSONDecoder().decode(GatewayCredentialBundle.self, from: data)
+        else { return nil }
+        let decodedStableID = decoded.gatewayStableID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard decodedStableID == stableID else { return nil }
+        return GatewayCredentialBundle(
+            gatewayStableID: decodedStableID,
+            suppressStoredDeviceAuth: decoded.suppressStoredDeviceAuth,
+            token: self.normalizedCredential(decoded.token),
+            bootstrapToken: self.normalizedCredential(decoded.bootstrapToken),
+            password: self.normalizedCredential(decoded.password))
+    }
+
+    private static func migrateGatewayCredentialBundleIfNeeded(instanceId: String) {
+        let instanceID = instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !instanceID.isEmpty else { return }
+        let legacyAccount = self.legacyGatewayCredentialBundleAccount(instanceId: instanceID)
+        guard let json = KeychainStore.loadString(service: self.gatewayService, account: legacyAccount),
+              let data = json.data(using: .utf8),
+              let legacy = try? JSONDecoder().decode(GatewayCredentialBundle.self, from: data)
+        else { return }
+        let stableID = legacy.gatewayStableID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !stableID.isEmpty else { return }
+        let scopedAccount = self.gatewayCredentialBundleAccount(instanceId: instanceID, stableID: stableID)
+        let scopedExists = KeychainStore.loadString(service: self.gatewayService, account: scopedAccount) != nil
+        guard scopedExists || KeychainStore.saveString(
+            json,
+            service: self.gatewayService,
+            account: scopedAccount)
+        else { return }
+        _ = KeychainStore.delete(service: self.gatewayService, account: legacyAccount)
+        self.deleteLegacyGatewayCredentials(instanceId: instanceID)
+    }
+
+    private static func normalizedCredential(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func deleteLegacyGatewayCredentials(instanceId: String) {
+        _ = KeychainStore.delete(
+            service: self.gatewayService,
+            account: self.gatewayTokenAccount(instanceId: instanceId))
+        _ = KeychainStore.delete(
+            service: self.gatewayService,
+            account: self.gatewayBootstrapTokenAccount(instanceId: instanceId))
+        _ = KeychainStore.delete(
+            service: self.gatewayService,
+            account: self.gatewayPasswordAccount(instanceId: instanceId))
+        _ = KeychainStore.delete(
+            service: self.gatewayService,
+            account: "gateway-credential-metadata.\(instanceId)")
+    }
+
+    private static func talkProviderApiKeyAccount(providerId: String) -> String {
+        self.talkProviderApiKeyAccountPrefix + providerId
+    }
+
+    private static func normalizedTalkProviderID(_ provider: String) -> String? {
+        let trimmed = provider.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func ensureStableInstanceID() {
+        let defaults = UserDefaults.standard
+
+        if let existing = defaults.string(forKey: self.instanceIdDefaultsKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !existing.isEmpty
+        {
+            if self.loadStableInstanceID() == nil {
+                self.saveStableInstanceID(existing)
+            }
+            return
+        }
+
+        if let stored = self.loadStableInstanceID(), !stored.isEmpty {
+            defaults.set(stored, forKey: self.instanceIdDefaultsKey)
+            return
+        }
+
+        let fresh = UUID().uuidString
+        self.saveStableInstanceID(fresh)
+        defaults.set(fresh, forKey: self.instanceIdDefaultsKey)
+    }
+
+    private static func ensurePreferredGatewayStableID() {
+        let defaults = UserDefaults.standard
+
+        if let existing = defaults.string(forKey: self.preferredGatewayStableIDDefaultsKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !existing.isEmpty
+        {
+            if self.loadPreferredGatewayStableID() == nil {
+                self.savePreferredGatewayStableID(existing)
+            }
+            return
+        }
+
+        if let stored = self.loadPreferredGatewayStableID(), !stored.isEmpty {
+            defaults.set(stored, forKey: self.preferredGatewayStableIDDefaultsKey)
+        }
+    }
+
+    private static func ensureLastDiscoveredGatewayStableID() {
+        let defaults = UserDefaults.standard
+
+        if let existing = defaults.string(forKey: self.lastDiscoveredGatewayStableIDDefaultsKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !existing.isEmpty
+        {
+            if self.loadLastDiscoveredGatewayStableID() == nil {
+                self.saveLastDiscoveredGatewayStableID(existing)
+            }
+            return
+        }
+
+        if let stored = self.loadLastDiscoveredGatewayStableID(), !stored.isEmpty {
+            defaults.set(stored, forKey: self.lastDiscoveredGatewayStableIDDefaultsKey)
+        }
+    }
+}
+
+enum GatewayDiagnostics {
+    struct ScopedLogger {
+        private let prefix: String
+
+        fileprivate init(prefix: String) {
+            self.prefix = prefix
+        }
+
+        func stage(_ message: String) {
+            GatewayDiagnostics.log("\(self.prefix): \(GatewayDiagnostics.sanitizeScopedMessage(message))")
+        }
+
+        func skipped(_ reason: String) {
+            self.stage("registration skipped reason=\(reason)")
+        }
+
+        func failed(_ stage: String, error: Error) {
+            let nsError = error as NSError
+            let errorType = String(reflecting: type(of: error))
+            self
+                .stage(
+                    "\(stage) failed errorType=\(errorType) domain=\(nsError.domain) code=\(nsError.code)")
+        }
+    }
+
+    private static let logger = Logger(subsystem: "ai.openclawfoundation.app", category: "GatewayDiag")
+    private static let queue = DispatchQueue(label: "ai.openclawfoundation.app.gateway.diagnostics")
+    private static let maxLogBytes: Int64 = 512 * 1024
+    private static let keepLogBytes: Int64 = 256 * 1024
+    private static let logSizeCheckEveryWrites = 50
+    private static let logWritesSinceCheck = OSAllocatedUnfairLock(initialState: 0)
+    private static let maxScopedMessageCharacters = 320
+
+    /// Keep relay diagnostics stage-based. Push tokens, relay grants, proofs,
+    /// receipts, signed payloads, and handles must never enter this cache log.
+    static let pushRelay = ScopedLogger(prefix: "push relay")
+
+    private static func sanitizeScopedMessage(_ value: String) -> String {
+        let collapsed = value
+            .replacingOccurrences(of: "\r", with: " ")
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\t", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard collapsed.count > self.maxScopedMessageCharacters else {
+            return collapsed
+        }
+        let end = collapsed.index(collapsed.startIndex, offsetBy: self.maxScopedMessageCharacters)
+        return String(collapsed[..<end]) + "..."
+    }
+
+    private static func isoTimestamp() -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: Date())
+    }
+
+    private static var fileURL: URL? {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("openclaw-gateway.log")
+    }
+
+    private static func truncateLogIfNeeded(url: URL) {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let sizeNumber = attrs[.size] as? NSNumber
+        else { return }
+        let size = sizeNumber.int64Value
+        guard size > self.maxLogBytes else { return }
+
+        do {
+            let handle = try FileHandle(forReadingFrom: url)
+            defer { try? handle.close() }
+
+            let start = max(Int64(0), size - self.keepLogBytes)
+            try handle.seek(toOffset: UInt64(start))
+            var tail = try handle.readToEnd() ?? Data()
+
+            // If we truncated mid-line, drop the first partial line so logs remain readable.
+            if start > 0, let nl = tail.firstIndex(of: 10) {
+                let next = tail.index(after: nl)
+                if next < tail.endIndex {
+                    tail = tail.suffix(from: next)
+                } else {
+                    tail = Data()
+                }
+            }
+
+            try tail.write(to: url, options: .atomic)
+        } catch {
+            // Best-effort only.
+        }
+    }
+
+    private static func appendToLog(url: URL, data: Data) {
+        if FileManager.default.fileExists(atPath: url.path) {
+            if let handle = try? FileHandle(forWritingTo: url) {
+                defer { try? handle.close() }
+                _ = try? handle.seekToEnd()
+                try? handle.write(contentsOf: data)
+            }
+        } else {
+            try? data.write(to: url, options: .atomic)
+        }
+    }
+
+    private static func applyFileProtection(url: URL) {
+        try? FileManager.default.setAttributes(
+            [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+            ofItemAtPath: url.path)
+    }
+
+    static func bootstrap() {
+        guard let url = fileURL else { return }
+        self.queue.async {
+            self.truncateLogIfNeeded(url: url)
+            let timestamp = self.isoTimestamp()
+            let line = "[\(timestamp)] gateway diagnostics started\n"
+            if let data = line.data(using: .utf8) {
+                self.appendToLog(url: url, data: data)
+                self.applyFileProtection(url: url)
+            }
+        }
+    }
+
+    static func log(_ message: String) {
+        let timestamp = self.isoTimestamp()
+        let line = "[\(timestamp)] \(message)"
+        self.logger.info("\(line, privacy: .public)")
+
+        guard let url = fileURL else { return }
+        self.queue.async {
+            let shouldTruncate = self.logWritesSinceCheck.withLock { count in
+                count += 1
+                if count >= self.logSizeCheckEveryWrites {
+                    count = 0
+                    return true
+                }
+                return false
+            }
+            if shouldTruncate {
+                self.truncateLogIfNeeded(url: url)
+            }
+            let entry = line + "\n"
+            if let data = entry.data(using: .utf8) {
+                self.appendToLog(url: url, data: data)
+            }
+        }
+    }
+}

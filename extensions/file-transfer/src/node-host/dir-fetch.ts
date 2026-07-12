@@ -1,0 +1,425 @@
+// File Transfer plugin module implements dir fetch behavior.
+import { spawn } from "node:child_process";
+import crypto from "node:crypto";
+import path from "node:path";
+import { root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
+import { consumeChildOutput } from "../shared/child-output.js";
+import {
+  classifyFsSafeReadError,
+  readAbsolutePath,
+  resolveCanonicalReadPath,
+  statRequiredDirectory,
+} from "./path-errors.js";
+
+const DIR_FETCH_HARD_MAX_BYTES = 16 * 1024 * 1024;
+const DIR_FETCH_DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
+
+type DirFetchParams = {
+  path?: unknown;
+  maxBytes?: unknown;
+  includeDotfiles?: unknown;
+  followSymlinks?: unknown;
+  preflightOnly?: unknown;
+};
+
+type DirFetchOk = {
+  ok: true;
+  path: string;
+  tarBase64: string;
+  tarBytes: number;
+  sha256: string;
+  fileCount: number;
+  entries?: string[];
+  preflightOnly?: boolean;
+};
+
+type DirFetchErrCode =
+  | "INVALID_PATH"
+  | "NOT_FOUND"
+  | "IS_FILE"
+  | "TREE_TOO_LARGE"
+  | "SYMLINK_REDIRECT"
+  | "READ_ERROR";
+
+type DirFetchErr = {
+  ok: false;
+  code: DirFetchErrCode;
+  message: string;
+  canonicalPath?: string;
+};
+
+type DirFetchResult = DirFetchOk | DirFetchErr;
+
+function clampMaxBytes(input: unknown): number {
+  if (typeof input !== "number" || !Number.isFinite(input) || input <= 0) {
+    return DIR_FETCH_DEFAULT_MAX_BYTES;
+  }
+  return Math.min(Math.floor(input), DIR_FETCH_HARD_MAX_BYTES);
+}
+
+function classifyFsError(err: unknown): DirFetchErrCode {
+  const safeCode = classifyFsSafeReadError(err);
+  if (safeCode) {
+    return safeCode;
+  }
+  const code = (err as { code?: string } | null)?.code;
+  if (code === "ENOENT") {
+    return "NOT_FOUND";
+  }
+  return "READ_ERROR";
+}
+
+async function preflightDu(dirPath: string, maxBytes: number): Promise<boolean> {
+  // du -sk gives size in 1KB blocks (512-byte blocks on macOS with -k)
+  // We use maxBytes * 4 as the rough heuristic ceiling (generous, gzip compresses)
+  const heuristicKb = Math.ceil((maxBytes * 4) / 1024);
+  return new Promise((resolve) => {
+    const du = spawn("du", ["-sk", dirPath], { stdio: ["ignore", "pipe", "ignore"] });
+    let output = "";
+    let settled = false;
+    const finish = (withinBudget: boolean): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      resolve(withinBudget);
+    };
+    const stopChild = (): void => {
+      try {
+        du.kill("SIGKILL");
+      } catch {
+        /* gone */
+      }
+    };
+    consumeChildOutput(du.stdout, {
+      onData: (chunk) => {
+        output += chunk.toString();
+      },
+      onError: () => {
+        // `du` is an optional heuristic. Stop this broken read and let the
+        // capped tar stream remain authoritative rather than crashing host.
+        stopChild();
+        finish(true);
+      },
+    });
+    du.on("close", (code) => {
+      if (code !== 0) {
+        // du failed; be permissive and let tar catch the overflow
+        finish(true);
+        return;
+      }
+      const match = /^(\d+)/.exec(output.trim());
+      if (!match) {
+        finish(true);
+        return;
+      }
+      const sizeKb = Number.parseInt(match[1], 10);
+      finish(sizeKb <= heuristicKb);
+    });
+    du.on("error", () => {
+      // du not available; skip preflight
+      finish(true);
+    });
+  });
+}
+
+async function listTarEntries(tarBuffer: Buffer): Promise<string[] | null> {
+  // Async spawn so a slow `tar -tzf` doesn't park the node-host event
+  // loop for up to 10s. Other in-flight requests continue to be served.
+  return new Promise<string[] | null>((resolve) => {
+    const child = spawn("tar", ["-tzf", "-"], { stdio: ["pipe", "pipe", "ignore"] });
+    let stdoutBuf = "";
+    let settled = false;
+    const finish = (entries: string[] | null): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(watchdog);
+      resolve(entries);
+    };
+    const stopChild = (): void => {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        /* gone */
+      }
+    };
+    const watchdog = setTimeout(() => {
+      stopChild();
+      finish(null);
+    }, 10_000);
+    consumeChildOutput(child.stdout, {
+      onData: (chunk) => {
+        if (settled) {
+          return;
+        }
+        stdoutBuf += chunk.toString();
+        // Bound buffer growth — pathological archives shouldn't OOM us.
+        if (stdoutBuf.length > 32 * 1024 * 1024) {
+          stopChild();
+          finish(null);
+        }
+      },
+      onError: () => {
+        stopChild();
+        finish(null);
+      },
+    });
+    child.on("close", (code) => {
+      if (settled) {
+        return;
+      }
+      if (code !== 0) {
+        finish(null);
+        return;
+      }
+      const lines = stdoutBuf
+        .split("\n")
+        .map((line) => line.replace(/\\/gu, "/").replace(/^\.\//u, "").replace(/\/$/u, ""))
+        .filter((line) => line.length > 0);
+      finish(lines);
+    });
+    child.on("error", () => {
+      finish(null);
+    });
+    child.stdin.on("error", (error: NodeJS.ErrnoException) => {
+      if (settled && error.code === "EPIPE") {
+        return;
+      }
+      stopChild();
+      finish(null);
+    });
+    child.stdin.end(tarBuffer);
+  });
+}
+
+type TarArchiveResult = Buffer | "TOO_LARGE" | "TIMEOUT" | "ERROR";
+
+async function createTarArchive(
+  canonicalPath: string,
+  maxBytes: number,
+): Promise<TarArchiveResult> {
+  const tarBin = process.platform !== "win32" ? "/usr/bin/tar" : "tar";
+  const tarArgs = ["-czf", "-", "-C", canonicalPath, "."];
+  const timeoutMs = 60_000;
+
+  return await new Promise<TarArchiveResult>((resolve) => {
+    // stderr is not consumed or returned; ignoring it avoids an unnecessary
+    // pipe and follows Node's stdio guidance for discarded child output.
+    const child = spawn(tarBin, tarArgs, { stdio: ["ignore", "pipe", "ignore"] });
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
+    let settled = false;
+    const finish = (result: TarArchiveResult): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(watchdog);
+      resolve(result);
+    };
+    const stopChild = (signal: NodeJS.Signals): void => {
+      try {
+        child.kill(signal);
+      } catch {
+        /* gone */
+      }
+    };
+    const watchdog = setTimeout(() => {
+      stopChild("SIGKILL");
+      finish("TIMEOUT");
+    }, timeoutMs);
+
+    consumeChildOutput(child.stdout, {
+      onData: (chunk) => {
+        if (settled) {
+          return;
+        }
+        totalBytes += chunk.byteLength;
+        if (totalBytes > maxBytes) {
+          stopChild("SIGTERM");
+          finish("TOO_LARGE");
+          return;
+        }
+        chunks.push(chunk);
+      },
+      onError: () => {
+        stopChild("SIGKILL");
+        finish("ERROR");
+      },
+    });
+    child.on("close", (code) => {
+      if (settled) {
+        return;
+      }
+      finish(code === 0 ? Buffer.concat(chunks) : "ERROR");
+    });
+    child.on("error", () => {
+      finish("ERROR");
+    });
+  });
+}
+
+async function listTreeEntries(root: string, maxEntries: number): Promise<string[] | "TOO_MANY"> {
+  const results: string[] = [];
+  const rootHandle = await fsRoot(root);
+  async function visit(relativeDir: string): Promise<boolean> {
+    const entries = await rootHandle.list(relativeDir, { withFileTypes: true });
+    entries.sort((left, right) => left.name.localeCompare(right.name));
+    for (const entry of entries) {
+      const rel = path.posix.join(relativeDir === "." ? "" : relativeDir, entry.name);
+      results.push(rel);
+      if (results.length > maxEntries) {
+        return false;
+      }
+      if (entry.isDirectory) {
+        const ok = await visit(rel);
+        if (!ok) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+  return (await visit(".")) ? results : "TOO_MANY";
+}
+
+export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchResult> {
+  const requestedPath = readAbsolutePath(params.path);
+  if (typeof requestedPath !== "string") {
+    return requestedPath;
+  }
+
+  const maxBytes = clampMaxBytes(params.maxBytes);
+  const includeDotfiles = params.includeDotfiles === true;
+  const followSymlinks = params.followSymlinks === true;
+  const preflightOnly = params.preflightOnly === true;
+
+  const canonical = await resolveCanonicalReadPath({
+    requestedPath,
+    followSymlinks,
+    classifyError: classifyFsError,
+    notFoundMessage: "directory not found",
+  });
+  if (typeof canonical !== "string") {
+    return canonical;
+  }
+
+  const directory = await statRequiredDirectory(canonical, classifyFsError);
+  if (!directory.ok) {
+    return directory;
+  }
+
+  if (preflightOnly) {
+    try {
+      const entries = await listTreeEntries(canonical, 5000);
+      if (entries === "TOO_MANY") {
+        return {
+          ok: false,
+          code: "TREE_TOO_LARGE",
+          message: "directory tree exceeds 5000 entries during preflight",
+          canonicalPath: canonical,
+        };
+      }
+      return {
+        ok: true,
+        path: canonical,
+        tarBase64: "",
+        tarBytes: 0,
+        sha256: "",
+        fileCount: entries.length,
+        entries,
+        preflightOnly: true,
+      };
+    } catch (err) {
+      const code = classifyFsError(err);
+      return {
+        ok: false,
+        code,
+        message: `preflight readdir failed: ${String(err)}`,
+        canonicalPath: canonical,
+      };
+    }
+  }
+
+  // Preflight size check using du
+  const withinBudget = await preflightDu(canonical, maxBytes);
+  if (!withinBudget) {
+    return {
+      ok: false,
+      code: "TREE_TOO_LARGE",
+      message: `directory tree exceeds estimated size limit (${maxBytes} bytes raw)`,
+      canonicalPath: canonical,
+    };
+  }
+
+  // Build tar args. Shell out to /usr/bin/tar for portability.
+  // -cz: create + gzip
+  // -C <dir>: change to directory so paths in archive are relative
+  // .: include everything from that directory
+  // v1: includeDotfiles is accepted in the API but not enforced. BSD tar's
+  // --exclude pattern matching is unreliable for dotfiles (every plausible
+  // pattern except "*/.*" collapses the archive on macOS). Reliable filtering
+  // requires a `find ! -name '.*' | tar -T -` pipeline; deferred to v2.
+  // For now we always archive everything in the directory.
+  void includeDotfiles;
+  // Capture tar output with a hard byte cap and a wall-clock timeout.
+  // SIGTERM if the byte cap is exceeded; SIGKILL if the timeout fires
+  // (covers tar hanging on a slow filesystem or symlink loop).
+  const tarBuffer = await createTarArchive(canonical, maxBytes);
+
+  if (tarBuffer === "TOO_LARGE") {
+    return {
+      ok: false,
+      code: "TREE_TOO_LARGE",
+      message: `tarball exceeded ${maxBytes} byte limit mid-stream`,
+      canonicalPath: canonical,
+    };
+  }
+  if (tarBuffer === "TIMEOUT") {
+    return {
+      ok: false,
+      code: "READ_ERROR",
+      message: "tar command exceeded 60s wall-clock timeout (slow filesystem or symlink loop?)",
+      canonicalPath: canonical,
+    };
+  }
+  if (tarBuffer === "ERROR") {
+    return {
+      ok: false,
+      code: "READ_ERROR",
+      message: "tar command failed",
+      canonicalPath: canonical,
+    };
+  }
+
+  const sha256 = crypto.createHash("sha256").update(tarBuffer).digest("hex");
+  const tarBase64 = tarBuffer.toString("base64");
+  const tarBytes = tarBuffer.byteLength;
+  const entries = await listTarEntries(tarBuffer);
+  if (entries === null) {
+    return {
+      ok: false,
+      code: "READ_ERROR",
+      message: "tar entry listing failed",
+      canonicalPath: canonical,
+    };
+  }
+
+  return {
+    ok: true,
+    path: canonical,
+    tarBase64,
+    tarBytes,
+    sha256,
+    fileCount: entries.length,
+    entries,
+  };
+}
+
+export const testing = {
+  createTarArchive,
+  listTarEntries,
+  preflightDu,
+};

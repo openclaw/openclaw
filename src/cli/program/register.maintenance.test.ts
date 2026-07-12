@@ -1,0 +1,334 @@
+// Register maintenance tests cover maintenance command registration in the CLI program.
+import { Command } from "commander";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS_ENV } from "../../commands/doctor-invocation.js";
+import { registerMaintenanceCommands } from "./register.maintenance.js";
+
+const mocks = vi.hoisted(() => ({
+  doctorCommand: vi.fn(),
+  dashboardCommand: vi.fn(),
+  resetCommand: vi.fn(),
+  uninstallCommand: vi.fn(),
+  runtime: {
+    log: vi.fn(),
+    error: vi.fn(),
+    exit: vi.fn(),
+  },
+  runDoctorLintCli: vi.fn(),
+}));
+
+const {
+  doctorCommand,
+  dashboardCommand,
+  resetCommand,
+  uninstallCommand,
+  runtime,
+  runDoctorLintCli,
+} = mocks;
+
+vi.mock("../../commands/doctor.js", () => ({
+  doctorCommand: mocks.doctorCommand,
+}));
+
+vi.mock("../../commands/dashboard.js", () => ({
+  dashboardCommand: mocks.dashboardCommand,
+}));
+
+vi.mock("../../commands/reset.js", () => ({
+  resetCommand: mocks.resetCommand,
+}));
+
+vi.mock("../../commands/uninstall.js", () => ({
+  uninstallCommand: mocks.uninstallCommand,
+}));
+
+vi.mock("../../commands/doctor-lint.js", () => ({
+  runDoctorLintCli: mocks.runDoctorLintCli,
+}));
+
+vi.mock("../../runtime.js", () => ({
+  defaultRuntime: mocks.runtime,
+}));
+
+function commandCall(mock: ReturnType<typeof vi.fn>): [typeof runtime, Record<string, unknown>] {
+  const call = mock.mock.calls[0] as [typeof runtime, Record<string, unknown>] | undefined;
+  if (!call) {
+    throw new Error("expected command call");
+  }
+  return call;
+}
+
+describe("registerMaintenanceCommands doctor action", () => {
+  async function runMaintenanceCli(args: string[]) {
+    const program = new Command();
+    registerMaintenanceCommands(program);
+    await program.parseAsync(args, { from: "user" });
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("exits with code 0 after successful doctor run", async () => {
+    doctorCommand.mockResolvedValue(undefined);
+
+    await runMaintenanceCli(["doctor", "--non-interactive", "--yes", "--allow-exec"]);
+
+    expect(doctorCommand).toHaveBeenCalledTimes(1);
+    const [runtimeArg, options] = commandCall(doctorCommand);
+    expect(runtimeArg).toBe(runtime);
+    expect(options.nonInteractive).toBe(true);
+    expect(options.yes).toBe(true);
+    expect(options.allowExec).toBe(true);
+    expect(runtime.exit).toHaveBeenCalledWith(0);
+  });
+
+  it("exits with code 1 when doctor fails", async () => {
+    doctorCommand.mockRejectedValue(new Error("doctor failed"));
+
+    await runMaintenanceCli(["doctor"]);
+
+    expect(runtime.error).toHaveBeenCalledWith("Error: doctor failed");
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(runtime.exit).not.toHaveBeenCalledWith(0);
+  });
+
+  it("maps --fix to repair=true", async () => {
+    doctorCommand.mockResolvedValue(undefined);
+
+    await runMaintenanceCli(["doctor", "--fix"]);
+
+    expect(doctorCommand).toHaveBeenCalledTimes(1);
+    const [runtimeArg, options] = commandCall(doctorCommand);
+    expect(runtimeArg).toBe(runtime);
+    expect(options.repair).toBe(true);
+    expect(options.crossStateDirImports).toBe(true);
+  });
+
+  it("denies cross-state imports when an automation parent disables them", async () => {
+    doctorCommand.mockResolvedValue(undefined);
+    vi.stubEnv(DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS_ENV, "1");
+
+    await runMaintenanceCli(["doctor", "--fix", "--non-interactive"]);
+
+    const [, options] = commandCall(doctorCommand);
+    expect(options.repair).toBe(true);
+    expect(options.crossStateDirImports).toBe(false);
+  });
+
+  it("denies cross-state imports for older update parents", async () => {
+    doctorCommand.mockResolvedValue(undefined);
+    vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
+
+    await runMaintenanceCli(["doctor", "--fix", "--non-interactive"]);
+
+    const [, options] = commandCall(doctorCommand);
+    expect(options.crossStateDirImports).toBe(false);
+  });
+
+  it("passes session sqlite options to doctor command", async () => {
+    doctorCommand.mockResolvedValue(undefined);
+
+    await runMaintenanceCli([
+      "doctor",
+      "--session-sqlite",
+      "import",
+      "--session-sqlite-store",
+      "/tmp/openclaw/sessions.json",
+      "--json",
+    ]);
+
+    expect(doctorCommand).toHaveBeenCalledTimes(1);
+    const [runtimeArg, options] = commandCall(doctorCommand);
+    expect(runtimeArg).toBe(runtime);
+    expect(options.sessionSqlite).toBe("import");
+    expect(options.sessionSqliteStore).toBe("/tmp/openclaw/sessions.json");
+    expect(options.json).toBe(true);
+    expect(runtime.exit).toHaveBeenCalledWith(0);
+  });
+
+  it("passes session sqlite recover GitHub issue option to doctor command", async () => {
+    doctorCommand.mockResolvedValue(undefined);
+
+    await runMaintenanceCli(["doctor", "--session-sqlite", "recover", "--github-issue", "--yes"]);
+
+    expect(doctorCommand).toHaveBeenCalledTimes(1);
+    const [, options] = commandCall(doctorCommand);
+    expect(options.sessionSqlite).toBe("recover");
+    expect(options.sessionSqliteGithubIssue).toBe(true);
+    expect(options.yes).toBe(true);
+    expect(runtime.exit).toHaveBeenCalledWith(0);
+  });
+
+  it("passes session sqlite compact mode to doctor command", async () => {
+    doctorCommand.mockResolvedValue(undefined);
+
+    await runMaintenanceCli([
+      "doctor",
+      "--session-sqlite",
+      "compact",
+      "--session-sqlite-agent",
+      "main",
+    ]);
+
+    expect(doctorCommand).toHaveBeenCalledTimes(1);
+    const [, options] = commandCall(doctorCommand);
+    expect(options.sessionSqlite).toBe("compact");
+    expect(options.sessionSqliteAgent).toBe("main");
+    expect(runtime.exit).toHaveBeenCalledWith(0);
+  });
+
+  it("rejects session sqlite selectors without session sqlite mode", async () => {
+    await runMaintenanceCli(["doctor", "--session-sqlite-agent", "main"]);
+
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      "doctor session SQLite options require --session-sqlite. Use `openclaw doctor --session-sqlite dry-run ...`.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
+
+  it("runs doctor lint mode without invoking repair doctor", async () => {
+    runDoctorLintCli.mockResolvedValue(1);
+
+    await runMaintenanceCli([
+      "doctor",
+      "--lint",
+      "--json",
+      "--severity-min",
+      "error",
+      "--all",
+      "--skip",
+      "a",
+      "--only",
+      "b",
+      "--allow-exec",
+    ]);
+
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runDoctorLintCli).toHaveBeenCalledWith(runtime, {
+      json: true,
+      severityMin: "error",
+      includeAllChecks: true,
+      skipIds: ["a"],
+      onlyIds: ["b"],
+      allowExec: true,
+      deep: false,
+    });
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("rejects lint selectors outside doctor lint mode", async () => {
+    await runMaintenanceCli(["doctor", "--fix", "--only", "policy/channels-denied-provider"]);
+
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      "doctor lint options require --lint. Use `openclaw doctor --lint ...`.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
+
+  it("rejects --all outside doctor lint mode", async () => {
+    await runMaintenanceCli(["doctor", "--all"]);
+
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runDoctorLintCli).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      "doctor lint options require --lint. Use `openclaw doctor --lint ...`.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
+
+  it("exits with code 2 when doctor lint mode fails before findings are emitted", async () => {
+    runDoctorLintCli.mockRejectedValue(new Error("lint failed"));
+
+    await runMaintenanceCli(["doctor", "--lint"]);
+
+    expect(runtime.error).toHaveBeenCalledWith("Error: lint failed");
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
+
+  it("rejects lint-only selectors outside lint mode", async () => {
+    await runMaintenanceCli(["doctor", "--only", "core/example"]);
+
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runDoctorLintCli).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      "doctor lint options require --lint. Use `openclaw doctor --lint ...`.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
+
+  it("passes noOpen to dashboard command", async () => {
+    dashboardCommand.mockResolvedValue(undefined);
+
+    await runMaintenanceCli(["dashboard", "--no-open"]);
+
+    expect(dashboardCommand).toHaveBeenCalledTimes(1);
+    const [runtimeArg, options] = commandCall(dashboardCommand);
+    expect(runtimeArg).toBe(runtime);
+    expect(options.noOpen).toBe(true);
+  });
+
+  it("passes reset options to reset command", async () => {
+    resetCommand.mockResolvedValue(undefined);
+
+    await runMaintenanceCli([
+      "reset",
+      "--scope",
+      "full",
+      "--yes",
+      "--non-interactive",
+      "--dry-run",
+    ]);
+
+    expect(resetCommand).toHaveBeenCalledTimes(1);
+    const [runtimeArg, options] = commandCall(resetCommand);
+    expect(runtimeArg).toBe(runtime);
+    expect(options.scope).toBe("full");
+    expect(options.yes).toBe(true);
+    expect(options.nonInteractive).toBe(true);
+    expect(options.dryRun).toBe(true);
+  });
+
+  it("passes uninstall options to uninstall command", async () => {
+    uninstallCommand.mockResolvedValue(undefined);
+
+    await runMaintenanceCli([
+      "uninstall",
+      "--service",
+      "--state",
+      "--workspace",
+      "--app",
+      "--all",
+      "--yes",
+      "--non-interactive",
+      "--dry-run",
+    ]);
+
+    expect(uninstallCommand).toHaveBeenCalledTimes(1);
+    const [runtimeArg, options] = commandCall(uninstallCommand);
+    expect(runtimeArg).toBe(runtime);
+    expect(options.service).toBe(true);
+    expect(options.state).toBe(true);
+    expect(options.workspace).toBe(true);
+    expect(options.app).toBe(true);
+    expect(options.all).toBe(true);
+    expect(options.yes).toBe(true);
+    expect(options.nonInteractive).toBe(true);
+    expect(options.dryRun).toBe(true);
+  });
+
+  it("exits with code 1 when dashboard fails", async () => {
+    dashboardCommand.mockRejectedValue(new Error("dashboard failed"));
+
+    await runMaintenanceCli(["dashboard"]);
+
+    expect(runtime.error).toHaveBeenCalledWith("Error: dashboard failed");
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+});
