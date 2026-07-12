@@ -1,4 +1,4 @@
-// Control UI view renders overview hints screen content.
+// Connection-failure hint classification shared by the login gate.
 import {
   ConnectErrorDetailCodes,
   readConnectPairingRequiredMessage,
@@ -75,7 +75,7 @@ export function resolvePairingHint(
 }
 
 /**
- * Return the overview auth hint to show, if any.
+ * Return the connection auth hint to show, if any.
  *
  * Keep fallback string matching narrow so generic "connect failed" close reasons
  * do not get misclassified as token/password problems.

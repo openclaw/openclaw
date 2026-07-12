@@ -865,16 +865,3 @@ export type ModelAuthStatusProvider =
   import("../../../src/gateway/server-methods/models-auth-status.js").ModelAuthStatusProvider;
 export type ModelAuthStatusResult =
   import("../../../src/gateway/server-methods/models-auth-status.js").ModelAuthStatusResult;
-
-// ── Attention ───────────────────────────────────────
-
-type AttentionSeverity = "error" | "warning" | "info";
-
-export type AttentionItem = {
-  severity: AttentionSeverity;
-  icon: string;
-  title: string;
-  description: string;
-  href?: string;
-  external?: boolean;
-};

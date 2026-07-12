@@ -475,6 +475,7 @@ export const hi: TranslationMap = {
     noEvents: "अभी कोई इवेंट नहीं।",
   },
   quickSettings: {
+    language: "भाषा",
     appearance: {
       lobsterVisits: "लॉब्स्टर की विज़िट",
       lobsterVisitsOn: "कभी-कभी आ जाता है",
@@ -607,10 +608,10 @@ export const hi: TranslationMap = {
   tabs: {
     agents: "एजेंट",
     activity: "गतिविधि",
-    overview: "अवलोकन",
     workboard: "वर्कबोर्ड",
     worktrees: "Worktrees",
     channels: "चैनल",
+    connection: "कनेक्शन",
     sessions: "सत्र",
     usage: "उपयोग",
     cron: "Cron Jobs",
@@ -637,10 +638,10 @@ export const hi: TranslationMap = {
   subtitles: {
     agents: "वर्कस्पेस, टूल्स, पहचान।",
     activity: "ब्राउज़र-लोकल टूल गतिविधि सारांश।",
-    overview: "स्थिति, एंट्री पॉइंट्स, हेल्थ।",
     workboard: "एजेंट कार्य कतार और सेशन हैंडऑफ़।",
     worktrees: "पृथक agent task checkouts और recovery snapshots.",
     channels: "चैनल और सेटिंग्स।",
+    connection: "Gateway एंडपॉइंट, क्रेडेंशियल और हैंडशेक की स्थिति।",
     sessions: "सक्रिय सेशन और डिफ़ॉल्ट्स।",
     usage: "API उपयोग और लागतें।",
     cron: "वेकअप्स और आवर्ती रन।",
@@ -1278,7 +1279,11 @@ export const hi: TranslationMap = {
     eventUnarchived: "असंग्रहित",
     eventStale: "पुराना सत्र",
   },
-  overview: {
+  connection: {
+    lostTitle: "Gateway कनेक्शन खो गया",
+    reconnecting: "फिर से कनेक्ट हो रहा है…",
+    offlineHint: "कनेक्शन वापस आने तक लाइव अपडेट और कार्रवाइयाँ रोक दी गई हैं।",
+    retryNow: "अभी फिर से प्रयास करें",
     access: {
       title: "Gateway एक्सेस",
       subtitle: "डैशबोर्ड कहाँ कनेक्ट होता है और कैसे प्रमाणित करता है।",
@@ -1287,7 +1292,6 @@ export const hi: TranslationMap = {
       password: "पासवर्ड (संग्रहित नहीं)",
       passwordPlaceholder: "सिस्टम या साझा पासवर्ड",
       sessionKey: "डिफ़ॉल्ट सत्र कुंजी",
-      language: "भाषा",
       connectHint: "कनेक्शन बदलाव लागू करने के लिए Connect पर क्लिक करें।",
       trustedProxy: "विश्वसनीय प्रॉक्सी के माध्यम से प्रमाणित।",
       showToken: "टोकन दिखाएँ",
@@ -1304,128 +1308,49 @@ export const hi: TranslationMap = {
       uptime: "अपटाइम",
       tickInterval: "टिक अंतराल",
       lastChannelsRefresh: "अंतिम चैनल रिफ्रेश",
-      channelsHint:
-        "WhatsApp, Telegram, Discord, Signal, या iMessage को लिंक करने के लिए Channels का उपयोग करें.",
     },
-    stats: {
-      instances: "इंस्टेंस",
-      instancesHint: "पिछले 5 मिनटों में उपस्थिति बीकन.",
-      sessions: "सत्र",
-      sessionsHint: "गेटवे द्वारा ट्रैक की गई हाल की सत्र कुंजियाँ.",
-      cron: "Cron",
-      cronNext: "अगला वेक {time}",
-    },
-    notes: {
-      title: "नोट्स",
-      subtitle: "रिमोट कंट्रोल सेटअप के लिए त्वरित रिमाइंडर.",
-      tailscaleTitle: "Tailscale serve",
-      tailscaleText: "गेटवे को tailnet auth के साथ loopback पर रखने के लिए serve mode को प्राथमिकता दें।",
-      sessionTitle: "सेशन स्वच्छता",
-      sessionText: "संदर्भ रीसेट करने के लिए /new या sessions.patch का उपयोग करें।",
-      cronTitle: "Cron रिमाइंडर",
-      cronText: "दोहराए जाने वाले रन के लिए अलग-थलग सेशन का उपयोग करें।",
-    },
-    auth: {
-      required: "इस गेटवे को auth की आवश्यकता है। कोई token या password जोड़ें, फिर Connect पर क्लिक करें।",
-      failed:
-        "Auth विफल रहा। {command} के साथ tokenized URL फिर से कॉपी करें, या token अपडेट करें, फिर Connect पर क्लिक करें।",
-    },
-    pairing: {
-      hint: "इस डिवाइस को gateway host से pairing approval की आवश्यकता है।",
-      scopeUpgradeTitle: "Scope upgrade approval के लिए लंबित है।",
-      scopeUpgradeSummary:
-        "यह डिवाइस पहले से paired है, लेकिन अनुरोधित व्यापक scope approval की प्रतीक्षा कर रहा है।",
-      roleUpgradeTitle: "Role upgrade approval के लिए लंबित है।",
-      roleUpgradeSummary:
-        "यह डिवाइस पहले से paired है, लेकिन अनुरोधित role change approval की प्रतीक्षा कर रहा है।",
-      metadataUpgradeTitle: "Device metadata change approval के लिए लंबित है।",
-      metadataUpgradeSummary:
-        "यह डिवाइस पहले से paired है, लेकिन metadata change approval की प्रतीक्षा कर रहा है।",
-      mobileHint:
-        "Mobile पर हैं? अपने desktop पर openclaw dashboard --no-open से पूरा URL (including #token=...) कॉपी करें।",
-      docsTitle: "Device pairing docs (नए tab में खुलता है)",
-      docsLink: "Docs: Device pairing",
-    },
-    insecure: {
-      hint: "यह page HTTP है, इसलिए browser device identity को block करता है। HTTPS (Tailscale Serve) का उपयोग करें या gateway host पर {url} खोलें।",
-      stayHttp: "अगर आपको HTTP पर ही रहना है, तो {config} (token-only) सेट करें।",
-    },
-    connection: {
+    help: {
       title: "कैसे connect करें",
       step1: "अपनी होस्ट मशीन पर गेटवे शुरू करें:",
       step2: "टोकनयुक्त डैशबोर्ड URL प्राप्त करें:",
       step3: "ऊपर WebSocket URL और टोकन पेस्ट करें, या टोकनयुक्त URL सीधे खोलें।",
-      step4: "या एक पुन: उपयोग योग्य टोकन जनरेट करें:",
-      docsHint: "रिमोट एक्सेस के लिए, Tailscale Serve की सिफारिश की जाती है। ",
       docsLink: "डॉक्स पढ़ें →",
-      authDocsTitle: "Control UI auth डॉक्स (नए टैब में खुलता है)",
-      authDocsLink: "डॉक्स: Control UI auth",
-      tailscaleDocsTitle: "Tailscale Serve डॉक्स (नए टैब में खुलता है)",
-      tailscaleDocsLink: "डॉक्स: Tailscale Serve",
-      insecureHttpDocsTitle: "Insecure HTTP डॉक्स (नए टैब में खुलता है)",
-      insecureHttpDocsLink: "डॉक्स: Insecure HTTP",
       copyCommand: "कमांड कॉपी करें",
       copyCommandAria: "कमांड कॉपी करें: {command}",
     },
-    cards: {
-      cost: "लागत",
+  },
+  attention: {
+    cronFailed: "{count} cron जॉब विफल",
+    cronOverdue: "{count} cron जॉब की समय-सीमा बीत गई",
+    modelAuthExpired: "मॉडल प्रमाणीकरण की समय-सीमा समाप्त: {providers}",
+    modelAuthExpiring: "मॉडल प्रमाणीकरण की समय-सीमा जल्द समाप्त होगी: {providers}",
+  },
+  palette: {
+    placeholder: "चैट और कमांड खोजें…",
+    noResults: "कोई परिणाम नहीं",
+    categories: {
+      search: "खोजें",
+      navigation: "नेविगेशन",
       skills: "कौशल",
-      recentSessions: "हाल के सेशन",
-      modelAuth: "मॉडल प्रमाणीकरण",
-      modelAuthOk: "{count} ठीक",
-      modelAuthExpired: "{count} समाप्त",
-      modelAuthExpiring: "{count} समाप्त हो रहे हैं",
-      modelAuthProviders: "{count} प्रदाता",
-      modelAuthUsageLeft: "{pct}% शेष",
-      modelAuthExpiresIn: "{when} में समाप्त होगा",
-      modelAuthAttentionExpiredTitle: "मॉडल प्रमाणीकरण समाप्त हो गया",
-      modelAuthAttentionExpiringTitle: "मॉडल प्रमाणीकरण जल्द समाप्त होगा",
-      modelAuthAttentionExpiredDesc: "{providers} — openclaw models auth के साथ पुनः प्रमाणीकरण करें",
-      modelAuthAttentionExpiringEntry: "{provider} ({when})",
     },
-    attention: {
-      title: "ध्यान दें",
+    items: {
+      sessions: "सत्र",
+      scheduled: "शेड्यूल किए गए",
+      skills: "कौशल",
+      plugins: "प्लगइन",
+      settings: "सेटिंग्स",
+      agents: "एजेंट",
+      shellCommand: "शेल कमांड",
+      debugMode: "डीबग मोड",
     },
-    eventLog: {
-      title: "इवेंट लॉग",
+    descriptions: {
+      shellCommand: "शेल चलाएँ",
+      debugMode: "डीबग टॉगल करें",
     },
-    logTail: {
-      title: "गेटवे लॉग",
-    },
-    quickActions: {
-      newSession: "नया सत्र",
-      automation: "ऑटोमेशन",
-      refreshAll: "सभी रीफ़्रेश करें",
-      terminal: "टर्मिनल",
-    },
-    palette: {
-      placeholder: "कमांड टाइप करें…",
-      noResults: "कोई परिणाम नहीं",
-      categories: {
-        search: "खोज",
-        navigation: "नेविगेशन",
-        skills: "स्किल्स",
-      },
-      items: {
-        overview: "ओवरव्यू",
-        sessions: "सत्र",
-        scheduled: "शेड्यूल किए गए",
-        skills: "कौशल",
-        plugins: "Plugins",
-        settings: "सेटिंग्स",
-        agents: "एजेंट",
-        shellCommand: "शेल कमांड",
-        debugMode: "डीबग मोड",
-      },
-      descriptions: {
-        shellCommand: "शेल चलाएँ",
-        debugMode: "डीबग टॉगल करें",
-      },
-      footer: {
-        navigate: "नेविगेट करें",
-        select: "चुनें",
-        close: "बंद करें",
-      },
+    footer: {
+      navigate: "नेविगेट करें",
+      select: "चुनें",
+      close: "बंद करें",
     },
   },
   dreaming: {
@@ -1922,12 +1847,6 @@ export const hi: TranslationMap = {
           "मौजूदा URL और auth विवरण फिर से कॉपी करने के लिए openclaw dashboard --no-open के साथ dashboard फिर से खोलें।",
       },
     },
-  },
-  connection: {
-    lostTitle: "Gateway कनेक्शन खो गया",
-    reconnecting: "फिर से कनेक्ट हो रहा है…",
-    offlineHint: "कनेक्शन वापस आने तक लाइव अपडेट और कार्रवाइयाँ रोक दी गई हैं।",
-    retryNow: "अभी फिर से प्रयास करें",
   },
   chat: {
     disconnected: "Gateway से डिस्कनेक्ट हो गया।",

@@ -289,6 +289,10 @@
       "types": "./dist/plugin-sdk/approval-gateway-runtime.d.ts",
       "default": "./dist/plugin-sdk/approval-gateway-runtime.js"
     },
+    "./plugin-sdk/approval-reference-runtime": {
+      "types": "./dist/plugin-sdk/approval-reference-runtime.d.ts",
+      "default": "./dist/plugin-sdk/approval-reference-runtime.js"
+    },
     "./plugin-sdk/approval-handler-adapter-runtime": {
       "types": "./dist/plugin-sdk/approval-handler-adapter-runtime.d.ts",
       "default": "./dist/plugin-sdk/approval-handler-adapter-runtime.js"
