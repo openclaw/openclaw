@@ -7,6 +7,9 @@ export function diffConfigPaths(prev: unknown, next: unknown, prefix = ""): stri
   if (prev === next) {
     return [];
   }
+  if (isDeepStrictEqual(prev, next)) {
+    return [];
+  }
   if (isPlainObject(prev) && isPlainObject(next)) {
     const keys = new Set([...Object.keys(prev), ...Object.keys(next)]);
     const paths: string[] = [];

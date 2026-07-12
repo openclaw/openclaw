@@ -1744,7 +1744,9 @@ function validateConfigObjectWithPluginsBase(
         }
         continue;
       }
-      replaceChannelConfig(trimmed, result.value);
+      if (opts.applyDefaults) {
+        replaceChannelConfig(trimmed, result.value);
+      }
     }
   }
 
@@ -2075,7 +2077,7 @@ function validateConfigObjectWithPluginsBase(
       }
     }
 
-    const shouldReplacePluginConfig = entryHasConfig || (opts.applyDefaults && enabled);
+    const shouldReplacePluginConfig = opts.applyDefaults && (entryHasConfig || enabled);
     const shouldValidate = enabled || entryHasConfig;
     if (shouldValidate) {
       if (record.configSchema) {

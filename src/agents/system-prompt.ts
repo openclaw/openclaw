@@ -296,6 +296,7 @@ function buildSkillsSection(params: { skillsPrompt?: string; readToolName: strin
     "If several apply, choose the most specific. If none clearly apply, read none.",
     "One skill up front max. Never guess/fabricate skill paths.",
     "External API writes: batch when safe, avoid tight loops, respect 429/Retry-After.",
+    "Skills with env vars configured in skills.entries.<name>.env in openclaw.json: those env vars are automatically set in exec subprocesses. Do not check env manually; just run the skill's script directly.",
     trimmed,
     "",
   ];
