@@ -33,11 +33,11 @@ type TextContentBlock = Extract<ToolContentBlock, { type: "text" }>;
 // tool outputs do not break later turns or silent channel replies.
 const MAX_IMAGE_DIMENSION_PX = DEFAULT_IMAGE_MAX_DIMENSION_PX;
 const MAX_IMAGE_BYTES = DEFAULT_IMAGE_MAX_BYTES;
-// Hard cap on decoded input bytes before Buffer.from/resizer allocation. Keyed
-// to MAX_IMAGE_INPUT_PIXELS (25MP ~= 100MB at 4 bytes/pixel): the resizer can
-// still shrink any legitimate frame under the pixel budget, while pathological
-// multi-GB base64 payloads are rejected before the transient decode allocation.
-const MAX_IMAGE_INPUT_BYTES = 100 * 1024 * 1024;
+// Hard cap on decoded input bytes before Buffer.from/resizer allocation. A
+// conservative limit well below demonstrated OOM thresholds, leaving headroom
+// for canonicalization, decode, and image-processing allocations while still
+// permitting legitimate tool-output images.
+const MAX_IMAGE_INPUT_BYTES = 10 * 1024 * 1024;
 const log = createSubsystemLogger("agents/tool-images");
 
 function isImageTypeBlock(block: unknown): block is Record<string, unknown> & { type: "image" } {
