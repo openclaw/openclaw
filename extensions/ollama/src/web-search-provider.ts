@@ -134,7 +134,7 @@ function resolveOllamaWebSearchApiKey(config?: OpenClawConfig): string | undefin
     return configured.apiKey;
   }
   if (configured.status === "blocked") {
-    return undefined;
+    throw new Error(configured.message);
   }
   return resolveEnvOllamaWebSearchApiKey();
 }

@@ -452,7 +452,7 @@ describe("ollama web search provider", () => {
         url: "https://ollama.com/api/web_search",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `${"Bearer"} ${resolvedKey}`,
+          Authorization: `Bearer ${resolvedKey}`,
         },
         policy: {
           allowPrivateNetwork: true,
@@ -490,6 +490,23 @@ describe("ollama web search provider", () => {
         },
         "models.providers.ollama.apiKey SecretRef cannot be resolved by Ollama web search",
       );
+    });
+  });
+
+  it("does not hide blocked SecretRefs from the auth resolution helper", async () => {
+    const ambientEnvVar = ["OLLAMA_API", "KEY"].join("_");
+    await withEnvAsync({ [ambientEnvVar]: "ambient-cloud-value" }, async () => {
+      expect(() =>
+        testing.resolveOllamaWebSearchApiKey(
+          createOllamaConfig({
+            apiKey: {
+              source: "file",
+              provider: "vault",
+              id: "/providers/ollama/web-search",
+            },
+          }),
+        ),
+      ).toThrow("models.providers.ollama.apiKey SecretRef cannot be resolved by Ollama web search");
     });
   });
 
