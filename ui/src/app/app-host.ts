@@ -940,7 +940,7 @@ class OpenClawShell extends OpenClawLightDomElement {
         <button
           type="button"
           class="shell-nav-backdrop"
-          aria-label="Close navigation"
+          aria-label=${t("nav.close")}
           @click=${() => this.closeNavDrawer({ restoreFocus: true })}
         ></button>
         <openclaw-app-topbar
