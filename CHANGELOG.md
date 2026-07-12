@@ -23,6 +23,7 @@ Docs: https://docs.openclaw.ai
 - Gateway and process reliability: cap agent-run cache and JSONL socket buffers, release gateway lock file descriptors, keep WebSocket close reasons UTF-8 safe, survive transient heartbeat file reads, contain SSH-config and Google Meet node-host stream failures, and validate serialized tool payloads by UTF-8 bytes. (#77973, #99291, #98130, #100047, #100389, #101160, #102105, #102450) Thanks @fede-kamel, @chenyangjun-xy, @Pick-cat, @NarahariRaghava, @ogarciarevett, @wangmiao0668000666, and @qingminglong.
 - Sessions and subagents: route Gateway session consumers through the session-accessor seam, serialize reply-session initialization without dropping concurrent metadata, and deliver stale-run subagent completions directly when steering cannot drain. (#90463, #98835, #102160) Thanks @jalehman, @obviyus, and @moguangyu5-design.
 - Agent session locks: drain nested transcript writes before releasing the physical session lock so replies cannot stall after prompt completion.
+- Reply delivery: preserve unsent text-only finals when block streaming emitted only a partial payload, while de-duplicating streamed finals per assistant message. (#93629, #95432) Thanks @liuhao1024 and @yetval.
 - Release rehearsal safety: accept a full commit SHA only for validation-only extended-stable npm preflight, preflight all local npm package artifacts, and retain blocking performance and stable-soak manifest checks for any future publish reuse. (#99352, #101466, #101757) Thanks @kevinslin.
 
 ## 2026.6.8
