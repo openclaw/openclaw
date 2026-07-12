@@ -32,6 +32,15 @@ describe("Android app i18n resources", () => {
     ).toEqual(["unused"]);
   });
 
+  it("requires exact Android resource reference identifiers", () => {
+    expect(
+      findUnusedAndroidResourceKeys(
+        ["native_status", "native_status_detail", "native_unused"],
+        "R.string.native_status_detail",
+      ),
+    ).toEqual(["native_status", "native_unused"]);
+  });
+
   it("selects duplicate-source translations by frequency then stable text order", () => {
     expect(selectDeterministicTranslation("Source", ["Beta", "Alpha", "Beta"])).toBe("Beta");
     expect(selectDeterministicTranslation("Source", ["Beta", "Alpha"])).toBe("Alpha");
@@ -136,7 +145,7 @@ describe("Android app i18n resources", () => {
 
   it("maps typed model fields across generic types and named argument omissions", () => {
     const source = `
-      data class GenericState(
+      data class GenericState<T : Map<String, String>>(
         val metadata: Map<String, String>,
         val statusText: String,
       )
@@ -145,7 +154,7 @@ describe("Android app i18n resources", () => {
         val code: String,
       )
 
-      GenericState(emptyMap(), "Generic ready")
+      GenericState<Map<String, String>>(emptyMap(), "Generic ready")
       OptionalState(code = "Internal code")
     `;
     const findings = findUnlocalizedAndroidUiLiterals(
@@ -155,6 +164,20 @@ describe("Android app i18n resources", () => {
 
     expect(findings).toContain("Generic ready");
     expect(findings).not.toContain("Internal code");
+  });
+
+  it("scans helpers with generic and lambda parameters", () => {
+    const source = `
+      fun <T> statusText(value: T, transform: (T) -> String): String =
+        if (transform(value).isBlank()) "No status" else nativeString("Ready")
+    `;
+    const findings = findUnlocalizedAndroidUiLiterals(
+      source,
+      "apps/android/app/src/main/java/ai/openclaw/app/ui/Example.kt",
+    ).map((finding) => finding.source);
+
+    expect(findings).toContain("No status");
+    expect(findings).not.toContain("Ready");
   });
 
   it("inventories command, attention, and overview model display literals", () => {

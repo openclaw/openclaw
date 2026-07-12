@@ -295,10 +295,15 @@ export function findUnusedAndroidResourceKeys(
   keys: Iterable<string>,
   referenceSource: string,
 ): string[] {
-  return [...keys].filter(
-    (key) =>
-      !referenceSource.includes(`R.string.${key}`) && !referenceSource.includes(`@string/${key}`),
-  );
+  const references = new Set([
+    ...[...referenceSource.matchAll(/\bR\.string\.([A-Za-z0-9_]+)\b/gu)].flatMap((match) =>
+      match[1] ? [match[1]] : [],
+    ),
+    ...[...referenceSource.matchAll(/@string\/([A-Za-z0-9_]+)\b/gu)].flatMap((match) =>
+      match[1] ? [match[1]] : [],
+    ),
+  ]);
+  return [...keys].filter((key) => !references.has(key));
 }
 
 function lineNumber(source: string, offset: number): number {
@@ -368,8 +373,7 @@ const DIRECT_UI_LITERAL_PATTERNS = [
 ] as const;
 const UI_STRING_HELPER_NAME_RE =
   /(?:description|detail|error|label|message|nextRun|notice|status|subtitle|summary|text|title)$/iu;
-const UI_STRING_FUNCTION_RE =
-  /\bfun\s+([A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)\s*:\s*String\s*(=|\{)/gu;
+const UI_STRING_FUNCTION_RE = /\bfun\s+(?:<[^>{}]*>\s*)?([A-Za-z_][A-Za-z0-9_]*)\s*/gu;
 const UI_STRING_PROPERTY_RE =
   /\bval\s+(?:[A-Za-z_][A-Za-z0-9_]*\.)?([A-Za-z_][A-Za-z0-9_]*)\s*:\s*String\s*(?:\n\s*)?get\(\)\s*=\s*/gu;
 const UI_BRANCH_LITERAL_RE = /(?:->|return|\?:)\s*"((?:\\.|[^"\\])+)"/gu;
@@ -691,11 +695,26 @@ function collectHelperLiteralFindings(source: string, repoPath: string): Android
   };
   for (const match of source.matchAll(UI_STRING_FUNCTION_RE)) {
     const name = match[1];
-    const bodyKind = match[2];
-    if (!name || !bodyKind) {
+    if (!name) {
       continue;
     }
-    const bodyStart = (match.index ?? 0) + match[0].length;
+    let openingParen = (match.index ?? 0) + match[0].length;
+    while (/\s/u.test(source[openingParen] ?? "")) {
+      openingParen += 1;
+    }
+    if (source[openingParen] !== "(") {
+      continue;
+    }
+    const closingParen = findClosingDelimiter(source, openingParen, "(", ")");
+    if (closingParen === null) {
+      continue;
+    }
+    const returnType = source.slice(closingParen + 1).match(/^\s*:\s*String\s*(=|\{)/u);
+    const bodyKind = returnType?.[1];
+    if (!bodyKind || returnType?.index === undefined) {
+      continue;
+    }
+    const bodyStart = closingParen + 1 + returnType.index + returnType[0].length;
     if (bodyKind === "{") {
       const openingBrace = bodyStart - 1;
       const closingBrace = findClosingDelimiter(source, openingBrace, "{", "}");
@@ -722,13 +741,29 @@ function collectTypedModelLiteralFindings(
   repoPath: string,
 ): AndroidUiLiteralFinding[] {
   const findings: AndroidUiLiteralFinding[] = [];
-  const classPattern = /\b(?:data\s+class|class)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/gu;
+  const classPattern = /\b(?:data\s+class|class)\s+([A-Za-z_][A-Za-z0-9_]*)\s*/gu;
   for (const declaration of source.matchAll(classPattern)) {
     const className = declaration[1];
     if (!className) {
       continue;
     }
-    const openingParen = (declaration.index ?? 0) + declaration[0].lastIndexOf("(");
+    let openingParen = (declaration.index ?? 0) + declaration[0].length;
+    while (/\s/u.test(source[openingParen] ?? "")) {
+      openingParen += 1;
+    }
+    if (source[openingParen] === "<") {
+      const closingTypeArguments = findClosingDelimiter(source, openingParen, "<", ">");
+      if (closingTypeArguments === null) {
+        continue;
+      }
+      openingParen = closingTypeArguments + 1;
+      while (/\s/u.test(source[openingParen] ?? "")) {
+        openingParen += 1;
+      }
+    }
+    if (source[openingParen] !== "(") {
+      continue;
+    }
     const closingParen = findClosingDelimiter(source, openingParen, "(", ")");
     if (closingParen === null) {
       continue;
