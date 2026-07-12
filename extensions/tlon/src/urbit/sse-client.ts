@@ -237,31 +237,56 @@ export class UrbitSSEClient {
       body instanceof ReadableStream
         ? Readable.fromWeb(body as never)
         : (body as NodeJS.ReadableStream);
+    const decoder = new TextDecoder();
     let buffer = "";
     let bufferBytes = 0;
+
+    const appendPending = (text: string) => {
+      const nextBytes = bufferBytes + Buffer.byteLength(text, "utf8");
+      if (nextBytes > MAX_SSE_PAYLOAD_BYTES) {
+        throw new Error("Tlon Urbit SSE stream buffer exceeded 16 MiB limit");
+      }
+      buffer += text;
+      bufferBytes = nextBytes;
+    };
+    const consumeText = (text: string) => {
+      let offset = 0;
+      while (offset < text.length) {
+        // The blank-line delimiter can straddle chunks. Drain it before
+        // counting later events against the retained pending-event budget.
+        if (buffer.endsWith("\n") && text[offset] === "\n") {
+          this.processEvent(buffer.slice(0, -1));
+          buffer = "";
+          bufferBytes = 0;
+          offset += 1;
+          continue;
+        }
+        const eventEnd = text.indexOf("\n\n", offset);
+        if (eventEnd === -1) {
+          appendPending(text.slice(offset));
+          return;
+        }
+        appendPending(text.slice(offset, eventEnd));
+        this.processEvent(buffer);
+        buffer = "";
+        bufferBytes = 0;
+        offset = eventEnd + 2;
+      }
+    };
 
     try {
       for await (const chunk of stream) {
         if (this.aborted) {
           break;
         }
-        const chunkStr = chunk.toString();
-        const chunkBytes = Buffer.byteLength(chunkStr, "utf8");
-        // Reject before concatenating so an oversized chunk never lands in the
-        // pending buffer — the guard protects memory, not just the byte counter.
-        if (bufferBytes + chunkBytes > MAX_SSE_PAYLOAD_BYTES) {
-          throw new Error("Tlon Urbit SSE stream buffer exceeded 16 MiB limit");
-        }
-        buffer += chunkStr;
-        bufferBytes += chunkBytes;
-        let eventEnd;
-        while ((eventEnd = buffer.indexOf("\n\n")) !== -1) {
-          const eventData = buffer.slice(0, eventEnd);
-          buffer = buffer.slice(eventEnd + 2);
-          bufferBytes = Buffer.byteLength(buffer, "utf8");
-          this.processEvent(eventData);
+        if (typeof chunk === "string") {
+          consumeText(decoder.decode());
+          consumeText(chunk);
+        } else {
+          consumeText(decoder.decode(chunk as Uint8Array, { stream: true }));
         }
       }
+      consumeText(decoder.decode());
     } finally {
       if (this.streamRelease) {
         const release = this.streamRelease;

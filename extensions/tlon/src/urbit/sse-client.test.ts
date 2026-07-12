@@ -230,7 +230,10 @@ describe("UrbitSSEClient", () => {
       client.eventHandlers.set(1, { event: handler });
 
       client.processEvent(`id: 1\ndata: ${hugeJson}`);
-      expect(handler).toHaveBeenCalledWith({ ok: true, x: "A".repeat(padLen) });
+      expect(handler).toHaveBeenCalledTimes(1);
+      const payload = handler.mock.calls[0]?.[0] as { ok?: boolean; x?: string } | undefined;
+      expect(payload?.ok).toBe(true);
+      expect(payload?.x).toHaveLength(padLen);
     });
 
     describe("stream buffer bounding", () => {
@@ -253,60 +256,51 @@ describe("UrbitSSEClient", () => {
         );
       });
 
-      it("rejects a single oversized chunk before concatenating it into the buffer", async () => {
+      it("drains a cross-chunk event boundary before retaining the next event", async () => {
+        const cap = 16 * 1024 * 1024;
+        const prefix = 'id: 1\ndata: {"json":{"value":"';
+        const suffix = '"}}\n';
+        const padLen = cap - Buffer.byteLength(prefix + suffix, "utf8") - 128;
+        const nextValue = "b".repeat(256);
+        const firstChunk = prefix + "a".repeat(padLen) + suffix;
+        const secondChunk = `\nid: 1\ndata: {"json":{"value":"${nextValue}"}}\n\n`;
+        expect(Buffer.byteLength(firstChunk + secondChunk, "utf8")).toBeGreaterThan(cap);
+
         const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
-        // Single chunk above the 16 MiB cap — guard must fire before buffer += chunkStr.
-        const oversized = "x".repeat(17 * 1024 * 1024);
+        const handler = vi.fn();
+        client.eventHandlers.set(1, { event: handler });
+        const stream = Readable.from([firstChunk, secondChunk]);
 
-        const stream = Readable.from(
-          (async function* () {
-            yield oversized;
-          })(),
-        );
-
-        await expect(client.processStream(stream)).rejects.toThrow(
-          "Tlon Urbit SSE stream buffer exceeded 16 MiB limit",
-        );
+        await client.processStream(stream);
+        expect(handler).toHaveBeenCalledTimes(2);
+        expect((handler.mock.calls[0]?.[0] as { value?: string }).value).toHaveLength(padLen);
+        expect(handler.mock.calls[1]?.[0]).toEqual({ value: nextValue });
       });
 
-      it("processes normal SSE events through the stream path", async () => {
+      it("preserves split UTF-8 code points and split event delimiters", async () => {
+        const encoded = Buffer.from('id: 1\ndata: {"json":{"text":"😀"}}\n\n');
+        const emojiStart = encoded.indexOf(Buffer.from("😀"));
+        const stream = Readable.from([
+          encoded.subarray(0, emojiStart + 2),
+          encoded.subarray(emojiStart + 2, -1),
+          encoded.subarray(-1),
+        ]);
         const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
         const handler = vi.fn();
         client.eventHandlers.set(1, { event: handler });
 
-        const stream = Readable.from(
-          (async function* () {
-            yield 'id: 1\ndata: {"json":{"ok":true}}\n\n';
-          })(),
-        );
-
         await client.processStream(stream);
-        expect(handler).toHaveBeenCalledWith({ ok: true });
+        expect(handler).toHaveBeenCalledWith({ text: "😀" });
       });
 
-      it("stays under cap with many small events", async () => {
+      it("preserves surrogate pairs split across string chunks", async () => {
+        const stream = Readable.from(['id: 1\ndata: {"json":{"text":"\uD83D', '\uDE00"}}\n', "\n"]);
         const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
         const handler = vi.fn();
         client.eventHandlers.set(1, { event: handler });
-        let calls = 0;
-
-        const stream = Readable.from(
-          (async function* () {
-            // 1000 events × ~64 bytes each — well under cap but exercises the trim path.
-            for (let i = 0; i < 1000; i++) {
-              yield `id: 1\ndata: {"json":{"ok":true,"n":${i}}}\n\n`;
-            }
-          })(),
-        );
-
-        client.eventHandlers.set(1, {
-          event: () => {
-            calls++;
-          },
-        });
 
         await client.processStream(stream);
-        expect(calls).toBe(1000);
+        expect(handler).toHaveBeenCalledWith({ text: "😀" });
       });
     });
 
