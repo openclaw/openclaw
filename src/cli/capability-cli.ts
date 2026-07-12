@@ -1855,11 +1855,11 @@ function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
-export function ttsProviderConfigHasApiKey(value: unknown): boolean {
+function ttsProviderConfigHasApiKey(value: unknown): boolean {
   return isObjectRecord(value) && Object.hasOwn(value, "apiKey");
 }
 
-export function resolvedTtsConfigHasProviderApiKey(config: unknown, providerId: string): boolean {
+function resolvedTtsConfigHasProviderApiKey(config: unknown, providerId: string): boolean {
   if (!isObjectRecord(config) || !isObjectRecord(config.providerConfigs)) {
     return false;
   }

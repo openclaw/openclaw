@@ -3053,6 +3053,37 @@ describe("capability cli", () => {
     expectRuntimeErrorContains("--output is not supported for remote gateway TTS yet");
   });
 
+  // --- Own-property guards: proto-inherited provider entries ---
+  it("does not skip API-key hydration when providerConfigs entry is proto-inherited", async () => {
+    // resolvedTtsConfigHasProviderApiKey used to rely on `in`
+    // which sees proto-chain entries. Object.hasOwn rejects them.
+    const effectiveConfig: Record<string, unknown> = Object.create(null);
+    effectiveConfig.providerConfigs = Object.create({
+      openai: { apiKey: "injected-via-proto" },
+    });
+    mocks.resolveTtsConfig.mockReturnValue(effectiveConfig);
+    const rawConfig = { messages: { tts: { provider: "openai" } } };
+    mocks.loadConfig.mockReturnValue(rawConfig);
+    mocks.resolveApiKeyForProvider.mockResolvedValueOnce({
+      apiKey: "profile-openai-key",
+      source: "profile:openai:qa",
+      mode: "api-key",
+    });
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "tts", "convert", "--text", "hello", "--json"],
+    });
+
+    const cfg = firstTextToSpeechCall()?.cfg as {
+      messages?: { tts?: { providers?: Record<string, { apiKey?: string }> } };
+    };
+    // With `in` this would be undefined (hydration skipped due to proto entry).
+    // With Object.hasOwn the proto entry is ignored and hydration proceeds.
+    expect(cfg.messages?.tts?.providers?.openai?.apiKey).toBe("profile-openai-key");
+  });
+  // --- end own-property guards ---
+
   it("uses only embedding providers for embedding creation", async () => {
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,

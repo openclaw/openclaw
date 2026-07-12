@@ -210,4 +210,30 @@ describe("legacy web search config", () => {
       "tools.web.search.kimi.model",
     ]);
   });
+
+  // --- Own-property guards: Object.hasOwn vs `in` ---
+  it("rejects proto-inherited apiKey in listLegacyWebSearchConfigPaths", () => {
+    // Object.hasOwn rejects prototype-chain apiKey
+    const raw = { tools: { web: { search: Object.create({ apiKey: "injected" }) } } };
+    expect(listLegacyWebSearchConfigPaths(raw)).not.toContain("tools.web.search.apiKey");
+  });
+
+  it("rejects proto-inherited provider entry in listLegacyWebSearchConfigPaths", () => {
+    // search[providerId] brackets previously returned inherited entries
+    const raw = { tools: { web: { search: Object.create({ brave: { apiKey: "injected" } }) } } };
+    const paths = listLegacyWebSearchConfigPaths(raw);
+    expect(paths).not.toContain("tools.web.search.brave.apiKey");
+    expect(paths.length).toBe(0);
+  });
+
+  it("accepts own apiKey in listLegacyWebSearchConfigPaths", () => {
+    const raw = { tools: { web: { search: { apiKey: "real-key" } } } };
+    expect(listLegacyWebSearchConfigPaths(raw)).toContain("tools.web.search.apiKey");
+  });
+
+  it("accepts own provider entry in listLegacyWebSearchConfigPaths", () => {
+    const raw = { tools: { web: { search: { brave: { apiKey: "real" } } } } };
+    expect(listLegacyWebSearchConfigPaths(raw)).toContain("tools.web.search.brave.apiKey");
+  });
+  // --- end own-property guards ---
 });
