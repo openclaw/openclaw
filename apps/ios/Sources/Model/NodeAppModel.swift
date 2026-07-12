@@ -23,6 +23,7 @@ private struct GatewayRelayIdentityResponse: Decodable {
 private struct WatchChatPreview {
     var items: [OpenClawWatchChatItem]
     var status: OpenClawWatchAppStatus?
+    var statusText: String?
 }
 
 private struct WatchChatMetadataEnvelope: Decodable {
@@ -5848,7 +5849,8 @@ extension NodeAppModel {
                 guard self.isOperatorGatewayConnected else {
                     return WatchChatPreview(
                         items: [],
-                        status: OpenClawWatchAppStatus(code: .chatConnectIPhone))
+                        status: OpenClawWatchAppStatus(code: .chatConnectIPhone),
+                        statusText: "Connect iPhone chat to read messages")
                 }
                 payload = try await IOSGatewayChatTransport(gateway: self.operatorSession)
                     .requestHistory(sessionKey: self.chatSessionKey)
@@ -5859,12 +5861,14 @@ extension NodeAppModel {
                 items: items,
                 status: items.isEmpty
                     ? OpenClawWatchAppStatus(code: .chatNoMessages)
-                    : nil)
+                    : nil,
+                statusText: items.isEmpty ? "No chat messages yet" : nil)
         } catch {
             GatewayDiagnostics.log("watch app snapshot: chat preview failed error=\(error.localizedDescription)")
             return WatchChatPreview(
                 items: [],
-                status: OpenClawWatchAppStatus(code: .chatUnavailable))
+                status: OpenClawWatchAppStatus(code: .chatUnavailable),
+                statusText: "Chat unavailable")
         }
     }
 
@@ -6011,8 +6015,13 @@ extension NodeAppModel {
         self.pruneExpiredWatchExecApprovalPrompts()
         let watchGatewayConnected = self.isAppleReviewDemoModeEnabled
             || (self.gatewayConnected && self.operatorConnected)
+        let displayStatusText = self.gatewayDisplayStatusText
+        let watchGatewayStatusText = watchGatewayConnected || displayStatusText != "Connected"
+            ? displayStatusText
+            : self.operatorStatusText
         return OpenClawWatchAppSnapshotMessage(
             gatewayStatus: self.makeWatchGatewayStatus(connected: watchGatewayConnected),
+            gatewayStatusText: watchGatewayStatusText,
             gatewayConnected: watchGatewayConnected,
             agentName: self.chatAgentName,
             agentAvatarURL: self.chatAgentAvatarURL,
@@ -6020,12 +6029,14 @@ extension NodeAppModel {
             sessionKey: self.chatSessionKey,
             gatewayStableID: self.currentWatchChatGatewayStableID(),
             talkStatus: self.makeWatchTalkStatus(),
+            talkStatusText: self.talkMode.statusText,
             talkEnabled: self.talkMode.isEnabled,
             talkListening: self.talkMode.isListening,
             talkSpeaking: self.talkMode.isSpeaking,
             pendingApprovalCount: self.watchExecApprovalPromptsByID.count,
             chatItems: chatPreview?.items,
             chatStatus: chatPreview?.status,
+            chatStatusText: chatPreview?.statusText,
             sentAtMs: Int64(Date().timeIntervalSince1970 * 1000),
             snapshotId: UUID().uuidString)
     }

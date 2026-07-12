@@ -4732,6 +4732,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let status = try #require(watchService.lastSentAppSnapshot?.gatewayStatus)
         #expect(status.code == .legacy)
         #expect(status.verbatim == "Connecting…")
+        #expect(watchService.lastSentAppSnapshot?.gatewayStatusText == "Connecting…")
     }
 
     @Test @MainActor func `watch app snapshot preserves talk failures`() async throws {
@@ -4754,6 +4755,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let status = try #require(watchService.lastSentAppSnapshot?.talkStatus)
         #expect(status.code == .talkFailure)
         #expect(status.verbatim == "Speech error: denied")
+        #expect(watchService.lastSentAppSnapshot?.talkStatusText == "Speech error: denied")
     }
 
     @Test @MainActor func `watch app snapshot publishes online when operator reconnects`() async {
@@ -6800,16 +6802,19 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let appPayload = WatchMessagingPayloadCodec.encodeAppSnapshotPayload(
             OpenClawWatchAppSnapshotMessage(
                 gatewayStatus: OpenClawWatchAppStatus(code: .gatewayConnected),
+                gatewayStatusText: "Connected",
                 gatewayConnected: true,
                 agentName: "Main",
                 sessionKey: "main",
                 gatewayStableID: "gateway-a",
                 talkStatus: OpenClawWatchAppStatus(code: .talkOff),
+                talkStatusText: "Off",
                 talkEnabled: false,
                 talkListening: false,
                 talkSpeaking: false,
                 pendingApprovalCount: 1,
                 chatStatus: OpenClawWatchAppStatus(code: .chatConnectIPhone),
+                chatStatusText: "Connect iPhone chat to read messages",
                 snapshotId: "app-a"))
         let approvalPayload = WatchMessagingPayloadCodec.encodeExecApprovalSnapshotPayload(
             OpenClawWatchExecApprovalSnapshotMessage(

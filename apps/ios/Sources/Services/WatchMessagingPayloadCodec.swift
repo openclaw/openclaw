@@ -202,10 +202,12 @@ enum WatchMessagingPayloadCodec {
         var payload: [String: Any] = [
             "type": OpenClawWatchPayloadType.appSnapshot.rawValue,
             "gatewayStatus": self.encodeAppStatus(message.gatewayStatus),
+            "gatewayStatusText": message.gatewayStatusText,
             "gatewayConnected": message.gatewayConnected,
             "agentName": message.agentName,
             "sessionKey": message.sessionKey,
             "talkStatus": self.encodeAppStatus(message.talkStatus),
+            "talkStatusText": message.talkStatusText,
             "talkEnabled": message.talkEnabled,
             "talkListening": message.talkListening,
             "talkSpeaking": message.talkSpeaking,
@@ -238,6 +240,9 @@ enum WatchMessagingPayloadCodec {
         }
         if let chatStatus = message.chatStatus {
             payload["chatStatus"] = self.encodeAppStatus(chatStatus)
+        }
+        if let chatStatusText = nonEmpty(message.chatStatusText) {
+            payload["chatStatusText"] = chatStatusText
         }
         if let snapshotId = nonEmpty(message.snapshotId) {
             payload["snapshotId"] = snapshotId
