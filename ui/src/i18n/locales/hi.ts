@@ -925,149 +925,6 @@ export const hi: TranslationMap = {
     unavailableSubtitle:
       "The plugin that owns this tab is not active on the connected gateway, or it did not provide a panel.",
   },
-  codexSessions: {
-    eyebrow: "Codex फ़्लीट",
-    title: "आपके सभी कंप्यूटरों के सेशन",
-    interactiveSubtitle:
-      "एक Chat शाखा शुरू करें जिसका मॉडल चयन Codex App Server के नियंत्रण में रहे, पुष्टि के साथ पात्र स्थानीय सत्रों को आर्काइव करें, और paired-computer सत्र देखें।",
-    summaryLabel: "Codex सेशन सारांश",
-    summary: {
-      sessions: "सेशन",
-      onlineHosts: "ऑनलाइन",
-      hosts: "होस्ट",
-    },
-    searchLabel: "Codex सेशन खोजें",
-    searchPlaceholder: "सेशन के शीर्षक खोजें",
-    refresh: "रिफ्रेश करें",
-    disconnected: "Codex सेशन रीफ़्रेश करने के लिए Gateway से फिर से कनेक्ट करें।",
-    partial: "अनुपलब्ध होस्ट: {count}। अन्य होस्ट उपलब्ध हैं।",
-    loading: "Codex सेशन लोड हो रहे हैं…",
-    loadMore: "और लोड करें",
-    loadingMore: "लोड हो रहा है…",
-    untitled: "बिना शीर्षक वाला Codex सेशन",
-    threadId: "थ्रेड",
-    actions: {
-      continue: "जारी रखें",
-      continueAsBranch: "शाखा के रूप में जारी रखें",
-      openChat: "Chat खोलें",
-      continuing: "जारी है…",
-      archive: "आर्काइव करें",
-      readTranscript: "पढ़ा गया",
-      readTranscriptLabel: "{title} के लिए ट्रांसक्रिप्ट पढ़ें",
-      continueLabel: "{title} जारी रखें",
-      continueAsBranchLabel: "{title} को शाखा के रूप में जारी रखें",
-      openChatLabel: "{title} के लिए Chat खोलें",
-      continueAsBranchHint:
-        "सहेजे गए दृश्यमान इतिहास से एक Chat बनाएँ। आपके पहले संदेश पर, Codex App Server नए harness thread के लिए मॉडल और provider चुनता है। बाद का चयन Codex-नियंत्रित रहता है; OpenClaw कभी भी कोई अन्य runtime, model, या fallback प्रतिस्थापित नहीं करता। स्रोत अपरिवर्तित रहता है, और जारी काम अनुपस्थित हो सकता है।",
-      archiveLabel: "{title} आर्काइव करें",
-      archiveConfirmation:
-        "{title} और उससे बने सभी descendants को आर्काइव करें? पुष्टि करें कि कोई अन्य Codex client या OpenClaw runner उनका उपयोग नहीं कर रहा है। किसी अन्य runner के सक्रिय रहते हुए आर्काइव करने से उसका काम बाधित हो सकता है।",
-      active: "सक्रिय सत्र शाखा शुरू नहीं कर सकते या आर्काइव नहीं किए जा सकते।",
-      archiveActivityUnknownHint:
-        "गतिविधि अज्ञात है क्योंकि स्थिति process-local है। इस सत्र का उपयोग कोई अन्य Codex client या runner नहीं कर रहा है, इसकी पुष्टि करने के बाद ही आर्काइव करें।",
-      statusUnavailable: "इस Codex सत्र को इसकी वर्तमान स्थिति में प्रबंधित नहीं किया जा सकता।",
-      hostOffline: "इसके Codex सत्रों को प्रबंधित करने से पहले इस कंप्यूटर को फिर से कनेक्ट करें।",
-      gatewayOffline: "Codex सत्रों को प्रबंधित करने से पहले gateway से फिर से कनेक्ट करें।",
-      remoteReadOnly: "Paired-computer सत्र अभी के लिए केवल देखने योग्य हैं।",
-    },
-    status: {
-      active: "सक्रिय",
-      idle: "निष्क्रिय",
-      archived: "आर्काइव किया गया",
-      storedActivityUnknown: "संग्रहित / गतिविधि अज्ञात",
-      systemError: "सिस्टम त्रुटि",
-      unknown: "अज्ञात",
-    },
-    host: {
-      gateway: "Gateway",
-      node: "नोड",
-      connected: "कनेक्टेड",
-      offline: "ऑफ़लाइन",
-      unavailable: "सेशन कैटलॉग उपलब्ध नहीं है",
-      sessionCount: "{count} दिखाए गए",
-    },
-    empty: {
-      title: "कोई Codex होस्ट नहीं मिला",
-      supervisionSubtitle:
-        "gateway या जोड़े गए कंप्यूटर पर Codex supervision सक्षम करें, फिर इस दृश्य को रीफ़्रेश करें।",
-      search: "इस होस्ट पर कोई सेशन आपकी खोज से मेल नहीं खाता।",
-      nonArchived: "इस होस्ट पर कोई गैर-आर्काइव किए गए सेशन नहीं हैं।",
-    },
-    sidebar: {
-      title: "Codex सत्र",
-      unavailable: "Codex सत्र उपलब्ध नहीं हैं",
-      viewAll: "सभी Codex सत्र देखें",
-      truncated: "पूरी सूची में और सत्र उपलब्ध हैं।",
-    },
-    transcript: {
-      eyebrow: "Codex ट्रांसक्रिप्ट",
-      back: "सभी Codex सत्र",
-      you: "आप",
-      reasoning: "तर्क",
-      command: "Command",
-      fileChange: "फ़ाइल परिवर्तन",
-      item: "Codex आइटम",
-      details: "पूर्ण विवरण",
-      loading: "ट्रांसक्रिप्ट लोड हो रहा है…",
-      loadMore: "पुराने ट्रांसक्रिप्ट आइटम लोड करें",
-    },
-  },
-  claudeSessions: {
-    eyebrow: "Claude फ़्लीट",
-    title: "आपके कंप्यूटरों पर Claude सत्र",
-    subtitle:
-      "गैर-संग्रहीत Claude CLI और Claude Desktop सत्र ब्राउज़ करें और उनकी पृष्ठांकित स्थानीय ट्रांसक्रिप्ट पढ़ें।",
-    summaryLabel: "Claude सत्र सारांश",
-    summary: {
-      sessions: "सेशन",
-      onlineHosts: "ऑनलाइन",
-      hosts: "होस्ट",
-    },
-    searchLabel: "Claude सत्र खोजें",
-    searchPlaceholder: "सेशन के शीर्षक खोजें",
-    refresh: "रिफ्रेश करें",
-    disconnected: "Claude सत्रों को रीफ़्रेश करने के लिए gateway से फिर से कनेक्ट करें।",
-    partial: "अनुपलब्ध होस्ट: {count}। अन्य होस्ट उपलब्ध हैं।",
-    loading: "Claude सत्र लोड हो रहे हैं…",
-    loadMore: "और लोड करें",
-    loadingMore: "लोड हो रहा है…",
-    untitled: "शीर्षकहीन Claude सत्र",
-    sessionId: "सत्र",
-    stored: "संग्रहीत",
-    read: "पढ़ा गया",
-    readLabel: "{title} के लिए ट्रांसक्रिप्ट पढ़ें",
-    host: {
-      gateway: "Gateway",
-      node: "नोड",
-      connected: "कनेक्टेड",
-      offline: "ऑफ़लाइन",
-      unavailable: "सेशन कैटलॉग उपलब्ध नहीं है",
-      sessionCount: "{count} दिखाए गए",
-    },
-    empty: {
-      title: "कोई Claude सत्र नहीं मिला",
-      subtitle: "Claude CLI या Claude Desktop इंस्टॉल और उपयोग करें, फिर इस दृश्य को रीफ़्रेश करें।",
-      search: "इस होस्ट पर कोई सेशन आपकी खोज से मेल नहीं खाता।",
-      nonArchived: "इस होस्ट पर कोई गैर-संग्रहीत सत्र नहीं है।",
-    },
-    sidebar: {
-      title: "Claude सत्र",
-      viewAll: "सभी Claude सत्र देखें",
-      truncated: "पूरी सूची में और सत्र उपलब्ध हैं।",
-    },
-    transcript: {
-      eyebrow: "Claude ट्रांसक्रिप्ट",
-      back: "सभी Claude सत्र",
-      you: "आप",
-      reasoning: "तर्क",
-      toolCall: "टूल कॉल",
-      toolResult: "टूल परिणाम",
-      item: "Claude आइटम",
-      details: "पूर्ण विवरण",
-      loading: "ट्रांसक्रिप्ट लोड हो रहा है…",
-      loadMore: "पुराने ट्रांसक्रिप्ट आइटम लोड करें",
-    },
-  },
   logbook: {
     duration: {
       minutes: "{minutes}m",
@@ -2075,6 +1932,11 @@ export const hi: TranslationMap = {
   chat: {
     disconnected: "Gateway से डिस्कनेक्ट हो गया।",
     archivedSessionDisabled: "संदेश भेजने के लिए इस सत्र को बहाल करें।",
+    loadOlder: "पुराने लोड करें",
+    catalog: {
+      remoteViewOnly: "यह सत्र एक युग्मित नोड पर है और केवल देखने के लिए है।",
+      unsupportedViewOnly: "यह बाहरी सत्र स्रोत केवल देखने के लिए है।",
+    },
     taskSuggestions: {
       eyebrow: "सुझाया गया अगला कार्य",
       start: "वर्कट्री में शुरू करें",
@@ -2320,6 +2182,8 @@ export const hi: TranslationMap = {
       finished: "समाप्त ({count})",
       stopTask: "{title} रोकें",
       viewTranscript: "ट्रांसक्रिप्ट देखें",
+      toolUseOne: "1 टूल उपयोग",
+      toolUseMany: "{count} टूल उपयोग",
     },
     sessionDiff: {
       title: "परिवर्तन",
@@ -2460,6 +2324,50 @@ export const hi: TranslationMap = {
       howHeading: "यह कैसे काम करना चाहिए?",
       howHint: "चुनें कि परिणाम कैसे डिलीवर किए जाएँ।",
       title: "नया Cron Job",
+      createAndRun: "बनाएं और अभी चलाएं",
+    },
+    suggestions: {
+      title: "ऑटोमेशन के विचार",
+      hint: "शुरुआती ऑटोमेशन — एक चुनें और बनाने से पहले इसे अपने अनुसार बदलें।",
+      use: "विचार उपयोग करें →",
+      ideas: {
+        repoPulse: {
+          name: "Repo pulse",
+          tagline: "रात भर की issues, PRs और CI failures, तात्कालिकता के अनुसार क्रमबद्ध।",
+          prompt:
+            "मेरे repositories में रात भर की गतिविधि की समीक्षा करें: नई issues, pull requests और CI failures। तीन चीज़ें सारांशित करें जिन पर आज मुझे सबसे अधिक ध्यान देने की ज़रूरत है, प्रत्येक के साथ एक लिंक और एक पंक्ति का कारण।",
+        },
+        standupGhostwriter: {
+          name: "Standup ghostwriter",
+          tagline: "आपका standup अपडेट, कल के काम से तैयार।",
+          prompt:
+            "कल के commits, merged pull requests और open review threads से मेरा standup अपडेट तैयार करें। अधिकतम तीन बुलेट: किया, कर रहे हैं, अटका हुआ।",
+        },
+        hackerNewsScout: {
+          name: "Hacker News scout",
+          tagline: "आपकी कॉफी के साथ पढ़ने लायक तीन लिंक, hot takes के साथ।",
+          prompt:
+            "AI agents, developer tooling और TypeScript पर आज के Hacker News front page को स्कैन करें। मुझे तीन सबसे दिलचस्प लिंक भेजें, प्रत्येक के साथ एक पंक्ति का hot take।",
+        },
+        dependencyRadar: {
+          name: "Dependency radar",
+          tagline: "पुरानी या असुरक्षित dependencies, अपग्रेड नोट्स के साथ।",
+          prompt:
+            "मेरे मुख्य प्रोजेक्ट में पुरानी या असुरक्षित dependencies जांचें। उल्लेखनीय अपडेट की सूची बनाएं, प्रत्येक के साथ एक पंक्ति का जोखिम नोट, और अपग्रेड कमांड तैयार करें।",
+        },
+        watchdog: {
+          name: "Night watch",
+          tagline: "प्रति घंटे स्वास्थ्य जांच, एक पंक्ति में परिणाम।",
+          prompt:
+            "मेरी सेवाओं और Gateway की जांच करें: हाल के लॉग में नई त्रुटियाँ, पुनरारंभ, या असामान्य लोड खोजें। सब ठीक हो तो एक छोटी सी क्लियर लाइन दें; कुछ गड़बड़ लगे तो बताएं क्या विफल हुआ और कहाँ से जांच शुरू करें।",
+        },
+        polyglotMinute: {
+          name: "पॉलीग्लॉट मिनट",
+          tagline: "सुबह की कॉफी के साथ एक उपयोगी विदेशी वाक्यांश।",
+          prompt:
+            "मुझे जापानी में एक उपयोगी वाक्यांश सिखाएं: वाक्यांश, उसका उच्चारण, उसका शाब्दिक अर्थ, और इसे कब उपयोग करें। पांच पंक्तियों के अंदर रखें।",
+        },
+      },
     },
     summary: {
       enabled: "सक्षम",

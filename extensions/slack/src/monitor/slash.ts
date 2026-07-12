@@ -854,7 +854,20 @@ export async function registerSlackMonitorSlashCommands(params: {
     }
   }
 
-  if (nativeCommands.length > 0) {
+  if (slashCommand.enabled) {
+    ctx.app.command(
+      buildSlackSlashCommandMatcher(slashCommand.name),
+      async ({ command, ack, respond, body }: SlackCommandMiddlewareArgs) => {
+        await handleSlashCommand({
+          command,
+          ack,
+          respond,
+          body,
+          prompt: command.text?.trim() ?? "",
+        });
+      },
+    );
+  } else if (nativeCommands.length > 0) {
     if (!slashCommandsRuntime) {
       throw new Error("Missing commands runtime for native Slack commands.");
     }
@@ -889,19 +902,6 @@ export async function registerSlackMonitorSlashCommands(params: {
         },
       );
     }
-  } else if (slashCommand.enabled) {
-    ctx.app.command(
-      buildSlackSlashCommandMatcher(slashCommand.name),
-      async ({ command, ack, respond, body }: SlackCommandMiddlewareArgs) => {
-        await handleSlashCommand({
-          command,
-          ack,
-          respond,
-          body,
-          prompt: command.text?.trim() ?? "",
-        });
-      },
-    );
   } else {
     logVerbose("slack: slash commands disabled");
   }

@@ -935,149 +935,6 @@ export const id: TranslationMap = {
     unavailableSubtitle:
       "The plugin that owns this tab is not active on the connected gateway, or it did not provide a panel.",
   },
-  codexSessions: {
-    eyebrow: "Armada Codex",
-    title: "Sesi di semua komputer Anda",
-    interactiveSubtitle:
-      "Mulai cabang Chat yang pemilihan modelnya tetap di bawah kendali Codex App Server, arsipkan sesi lokal yang memenuhi syarat dengan konfirmasi, dan lihat sesi komputer yang dipasangkan.",
-    summaryLabel: "Ringkasan sesi Codex",
-    summary: {
-      sessions: "sesi",
-      onlineHosts: "online",
-      hosts: "host",
-    },
-    searchLabel: "Cari sesi Codex",
-    searchPlaceholder: "Cari judul sesi",
-    refresh: "Muat ulang",
-    disconnected: "Hubungkan kembali ke Gateway untuk memuat ulang sesi Codex.",
-    partial: "{count} host tidak tersedia. Host lainnya tetap tersedia.",
-    loading: "Memuat sesi Codex…",
-    loadMore: "Muat lebih banyak",
-    loadingMore: "Memuat…",
-    untitled: "Sesi Codex tanpa judul",
-    threadId: "Thread",
-    actions: {
-      continue: "Lanjutkan",
-      continueAsBranch: "Lanjutkan sebagai cabang",
-      openChat: "Buka Chat",
-      continuing: "Melanjutkan…",
-      archive: "Arsipkan",
-      readTranscript: "Dibaca",
-      readTranscriptLabel: "Baca transkrip untuk {title}",
-      continueLabel: "Lanjutkan {title}",
-      continueAsBranchLabel: "Lanjutkan {title} sebagai cabang",
-      openChatLabel: "Buka Chat untuk {title}",
-      continueAsBranchHint:
-        "Buat Chat dari riwayat terlihat yang tersimpan. Pada pesan pertama Anda, Codex App Server memilih model dan penyedia untuk thread harness baru. Pemilihan berikutnya tetap dikendalikan Codex; OpenClaw tidak pernah mengganti dengan runtime, model, atau fallback lain. Sumber tetap tidak berubah, dan pekerjaan yang sedang berjalan mungkin tidak ada.",
-      archiveLabel: "Arsipkan {title}",
-      archiveConfirmation:
-        "Arsipkan {title} dan semua turunan yang dihasilkan? Konfirmasikan bahwa tidak ada klien Codex atau runner OpenClaw lain yang menggunakannya. Mengarsipkan saat runner lain aktif dapat mengganggu pekerjaannya.",
-      active: "Sesi aktif tidak dapat memulai cabang atau diarsipkan.",
-      archiveActivityUnknownHint:
-        "Aktivitas tidak diketahui karena status bersifat lokal pada proses. Arsipkan hanya setelah mengonfirmasi bahwa tidak ada klien Codex atau runner lain yang menggunakan sesi ini.",
-      statusUnavailable: "Sesi Codex ini tidak dapat dikelola dalam statusnya saat ini.",
-      hostOffline: "Hubungkan kembali komputer ini sebelum mengelola sesi Codex-nya.",
-      gatewayOffline: "Hubungkan kembali ke gateway sebelum mengelola sesi Codex.",
-      remoteReadOnly: "Sesi komputer yang dipasangkan saat ini hanya dapat dilihat.",
-    },
-    status: {
-      active: "Aktif",
-      idle: "Siaga",
-      archived: "Diarsipkan",
-      storedActivityUnknown: "Tersimpan / aktivitas tidak diketahui",
-      systemError: "Kesalahan sistem",
-      unknown: "Tidak diketahui",
-    },
-    host: {
-      gateway: "Gateway",
-      node: "Node",
-      connected: "Terhubung",
-      offline: "Offline",
-      unavailable: "Katalog sesi tidak tersedia",
-      sessionCount: "{count} ditampilkan",
-    },
-    empty: {
-      title: "Tidak ditemukan host Codex",
-      supervisionSubtitle:
-        "Aktifkan supervisi Codex di gateway atau komputer yang dipasangkan, lalu segarkan tampilan ini.",
-      search: "Tidak ada sesi di host ini yang cocok dengan pencarian Anda.",
-      nonArchived: "Tidak ada sesi non-arsip di host ini.",
-    },
-    sidebar: {
-      title: "Sesi Codex",
-      unavailable: "Sesi Codex tidak tersedia",
-      viewAll: "Lihat semua sesi Codex",
-      truncated: "Sesi lainnya tersedia di katalog lengkap.",
-    },
-    transcript: {
-      eyebrow: "Transkrip Codex",
-      back: "Semua sesi Codex",
-      you: "Anda",
-      reasoning: "Penalaran",
-      command: "Perintah",
-      fileChange: "Perubahan file",
-      item: "Item Codex",
-      details: "Detail lengkap",
-      loading: "Memuat transkrip…",
-      loadMore: "Muat item transkrip yang lebih lama",
-    },
-  },
-  claudeSessions: {
-    eyebrow: "Armada Claude",
-    title: "Sesi Claude di seluruh komputer Anda",
-    subtitle:
-      "Jelajahi sesi Claude CLI dan Claude Desktop yang tidak diarsipkan serta baca transkrip lokalnya yang dipaginasi.",
-    summaryLabel: "Ringkasan sesi Claude",
-    summary: {
-      sessions: "sesi",
-      onlineHosts: "online",
-      hosts: "host",
-    },
-    searchLabel: "Cari sesi Claude",
-    searchPlaceholder: "Cari judul sesi",
-    refresh: "Muat ulang",
-    disconnected: "Hubungkan kembali ke gateway untuk memuat ulang sesi Claude.",
-    partial: "{count} host tidak tersedia. Host lainnya tetap tersedia.",
-    loading: "Memuat sesi Claude…",
-    loadMore: "Muat lebih banyak",
-    loadingMore: "Memuat…",
-    untitled: "Sesi Claude tanpa judul",
-    sessionId: "Sesi",
-    stored: "Tersimpan",
-    read: "Dibaca",
-    readLabel: "Baca transkrip untuk {title}",
-    host: {
-      gateway: "Gateway",
-      node: "Node",
-      connected: "Terhubung",
-      offline: "Offline",
-      unavailable: "Katalog sesi tidak tersedia",
-      sessionCount: "{count} ditampilkan",
-    },
-    empty: {
-      title: "Tidak ada sesi Claude ditemukan",
-      subtitle: "Instal dan gunakan Claude CLI atau Claude Desktop, lalu muat ulang tampilan ini.",
-      search: "Tidak ada sesi di host ini yang cocok dengan pencarian Anda.",
-      nonArchived: "Tidak ada sesi yang tidak diarsipkan di host ini.",
-    },
-    sidebar: {
-      title: "Sesi Claude",
-      viewAll: "Lihat semua sesi Claude",
-      truncated: "Sesi lainnya tersedia di katalog lengkap.",
-    },
-    transcript: {
-      eyebrow: "Transkrip Claude",
-      back: "Semua sesi Claude",
-      you: "Anda",
-      reasoning: "Penalaran",
-      toolCall: "Panggilan alat",
-      toolResult: "Hasil alat",
-      item: "Item Claude",
-      details: "Detail lengkap",
-      loading: "Memuat transkrip…",
-      loadMore: "Muat item transkrip yang lebih lama",
-    },
-  },
   logbook: {
     duration: {
       minutes: "{minutes}m",
@@ -2100,6 +1957,11 @@ export const id: TranslationMap = {
   chat: {
     disconnected: "Terputus dari gateway.",
     archivedSessionDisabled: "Pulihkan sesi ini untuk mengirim pesan.",
+    loadOlder: "Muat yang lebih lama",
+    catalog: {
+      remoteViewOnly: "Sesi ini berada di node yang dipasangkan dan hanya dapat dilihat.",
+      unsupportedViewOnly: "Sumber sesi eksternal ini hanya dapat dilihat.",
+    },
     taskSuggestions: {
       eyebrow: "Tindak lanjut yang disarankan",
       start: "Mulai di worktree",
@@ -2346,6 +2208,8 @@ export const id: TranslationMap = {
       finished: "Selesai ({count})",
       stopTask: "Hentikan {title}",
       viewTranscript: "Lihat transkrip",
+      toolUseOne: "1 penggunaan alat",
+      toolUseMany: "{count} penggunaan alat",
     },
     sessionDiff: {
       title: "Perubahan",
@@ -2486,6 +2350,50 @@ export const id: TranslationMap = {
       howHeading: "Bagaimana cara kerjanya?",
       howHint: "Pilih bagaimana hasil dikirim.",
       title: "Otomatisasi Baru",
+      createAndRun: "Buat & jalankan sekarang",
+    },
+    suggestions: {
+      title: "Ide otomasi",
+      hint: "Otomasi awal — pilih satu dan sesuaikan sebelum membuat.",
+      use: "Gunakan ide →",
+      ideas: {
+        repoPulse: {
+          name: "Repo pulse",
+          tagline: "Isu semalam, PR, dan kegagalan CI, diurutkan berdasarkan urgensi.",
+          prompt:
+            "Tinjau aktivitas semalam di repositori saya: isu baru, pull request, dan kegagalan CI. Rangkum tiga hal yang paling membutuhkan perhatian saya hari ini, masing-masing dengan tautan dan alasan satu baris.",
+        },
+        standupGhostwriter: {
+          name: "Ghostwriter standup",
+          tagline: "Update standup Anda, disusun dari pekerjaan kemarin.",
+          prompt:
+            "Buat update standup saya dari commit kemarin, pull request yang telah digabung, dan thread ulasan yang masih terbuka. Maksimal tiga poin: selesai, sedang dikerjakan, terblokir.",
+        },
+        hackerNewsScout: {
+          name: "Penjelajah Hacker News",
+          tagline: "Tiga tautan layak dibaca sambil ngopi, lengkap dengan opini singkat.",
+          prompt:
+            "Pindai halaman depan Hacker News hari ini untuk postingan tentang AI agents, developer tooling, dan TypeScript. Kirimkan tiga tautan paling menarik, masing-masing dengan opini singkat satu baris.",
+        },
+        dependencyRadar: {
+          name: "Radar dependensi",
+          tagline: "Dependensi usang atau rentan, dengan catatan peningkatan.",
+          prompt:
+            "Periksa proyek utama saya untuk dependensi yang usang atau rentan. Daftarkan pembaruan penting dengan catatan risiko satu baris masing-masing, dan buat perintah peningkatannya.",
+        },
+        watchdog: {
+          name: "Penjaga malam",
+          tagline: "Pemeriksaan kesehatan per jam dengan satu baris kesimpulan.",
+          prompt:
+            "Periksa apakah layanan dan gateway saya dalam kondisi baik: pindai log terkini untuk error baru, restart, atau beban tidak biasa. Balas dengan satu baris singkat yang menyatakan semua aman jika semuanya baik-baik saja; jika ada yang tampak bermasalah, laporkan apa yang gagal dan dari mana harus mulai memeriksa.",
+        },
+        polyglotMinute: {
+          name: "Menit poliglot",
+          tagline: "Satu frasa asing yang berguna menemani kopi pagi Anda.",
+          prompt:
+            "Ajarkan saya satu frasa berguna dalam bahasa Jepang: frasanya, cara pengucapannya, arti harfiahnya, dan kapan menggunakannya. Jaga agar tidak lebih dari lima baris.",
+        },
+      },
     },
     summary: {
       enabled: "Diaktifkan",

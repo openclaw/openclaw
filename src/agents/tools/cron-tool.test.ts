@@ -685,6 +685,20 @@ describe("cron tool", () => {
     );
   });
 
+  it("documents the event-trigger authoring contract", () => {
+    const tool = createTestCronTool();
+
+    expect(tool.description).toContain("Gate: cron.triggers.enabled");
+    expect(tool.description).toContain("quiet check uses no model");
+    expect(tool.description).toContain("trigger.state");
+    expect(tool.description).toContain("fire:false: save state; no payload/run history");
+    expect(tool.description).toContain("Fired state saves only after payload success");
+    expect(tool.description).toContain('Silent watcher: top-level delivery.mode="none"');
+    expect(tool.description).toContain("missing route may fail payload");
+    expect(tool.description).toContain("once:true: disable after first successful fired payload");
+    expect(tool.description).toContain('await tools.call("exec"');
+  });
+
   it("documents due-by-default cron run mode", () => {
     const tool = createTestCronTool();
     const parameters = tool.parameters as SchemaLike;

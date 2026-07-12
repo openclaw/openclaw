@@ -929,149 +929,6 @@ export const en: TranslationMap = {
     unavailableSubtitle:
       "The plugin that owns this tab is not active on the connected gateway, or it did not provide a panel.",
   },
-  codexSessions: {
-    eyebrow: "Codex fleet",
-    title: "Sessions across your computers",
-    interactiveSubtitle:
-      "Read paginated Codex transcripts from every connected computer, start a Codex-controlled Chat branch, or archive eligible local sessions.",
-    summaryLabel: "Codex session summary",
-    summary: {
-      sessions: "sessions",
-      onlineHosts: "online",
-      hosts: "hosts",
-    },
-    searchLabel: "Search Codex sessions",
-    searchPlaceholder: "Search session titles",
-    refresh: "Refresh",
-    disconnected: "Reconnect to the gateway to refresh Codex sessions.",
-    partial: "Unavailable hosts: {count}. Other hosts remain available.",
-    loading: "Loading Codex sessions…",
-    loadMore: "Load more",
-    loadingMore: "Loading…",
-    untitled: "Untitled Codex session",
-    threadId: "Thread",
-    actions: {
-      continue: "Continue",
-      continueAsBranch: "Continue as branch",
-      openChat: "Open Chat",
-      continuing: "Continuing…",
-      archive: "Archive",
-      readTranscript: "Read",
-      readTranscriptLabel: "Read transcript for {title}",
-      continueLabel: "Continue {title}",
-      continueAsBranchLabel: "Continue {title} as a branch",
-      openChatLabel: "Open Chat for {title}",
-      continueAsBranchHint:
-        "Create a Chat from persisted visible history. On your first message, Codex App Server selects the model and provider for the new harness thread. Later selection remains Codex-controlled; OpenClaw never substitutes another runtime, model, or fallback. The source remains untouched, and in-flight work may be absent.",
-      archiveLabel: "Archive {title}",
-      archiveConfirmation:
-        "Archive {title} and any spawned descendants? Confirm that no other Codex client or OpenClaw runner is using them. Archiving while another runner is active may interrupt its work.",
-      active: "Active sessions cannot start a branch or be archived.",
-      archiveActivityUnknownHint:
-        "Activity is unknown because status is process-local. Archive only after confirming that no other Codex client or runner is using this session.",
-      statusUnavailable: "This Codex session cannot be managed in its current state.",
-      hostOffline: "Reconnect this computer before managing its Codex sessions.",
-      gatewayOffline: "Reconnect to the gateway before managing Codex sessions.",
-      remoteReadOnly: "Transcript available; continue and archive stay on the owning computer.",
-    },
-    status: {
-      active: "Active",
-      idle: "Idle",
-      archived: "Archived",
-      storedActivityUnknown: "Stored / activity unknown",
-      systemError: "System error",
-      unknown: "Unknown",
-    },
-    host: {
-      gateway: "Gateway",
-      node: "Node",
-      connected: "Connected",
-      offline: "Offline",
-      unavailable: "Session catalog unavailable",
-      sessionCount: "{count} shown",
-    },
-    empty: {
-      title: "No Codex hosts found",
-      supervisionSubtitle:
-        "Enable Codex supervision on the gateway or a paired computer, then refresh this view.",
-      search: "No sessions on this host match your search.",
-      nonArchived: "No non-archived sessions on this host.",
-    },
-    sidebar: {
-      title: "Codex sessions",
-      unavailable: "Codex sessions unavailable",
-      viewAll: "View all Codex sessions",
-      truncated: "More sessions are available in the full catalog.",
-    },
-    transcript: {
-      eyebrow: "Codex transcript",
-      back: "All Codex sessions",
-      you: "You",
-      reasoning: "Reasoning",
-      command: "Command",
-      fileChange: "File change",
-      item: "Codex item",
-      details: "Full details",
-      loading: "Loading transcript…",
-      loadMore: "Load older transcript items",
-    },
-  },
-  claudeSessions: {
-    eyebrow: "Claude fleet",
-    title: "Claude sessions across your computers",
-    subtitle:
-      "Browse non-archived Claude CLI and Claude Desktop sessions and read their paginated local transcripts.",
-    summaryLabel: "Claude session summary",
-    summary: {
-      sessions: "sessions",
-      onlineHosts: "online",
-      hosts: "hosts",
-    },
-    searchLabel: "Search Claude sessions",
-    searchPlaceholder: "Search session titles",
-    refresh: "Refresh",
-    disconnected: "Reconnect to the gateway to refresh Claude sessions.",
-    partial: "Unavailable hosts: {count}. Other hosts remain available.",
-    loading: "Loading Claude sessions…",
-    loadMore: "Load more",
-    loadingMore: "Loading…",
-    untitled: "Untitled Claude session",
-    sessionId: "Session",
-    stored: "Stored",
-    read: "Read",
-    readLabel: "Read transcript for {title}",
-    host: {
-      gateway: "Gateway",
-      node: "Node",
-      connected: "Connected",
-      offline: "Offline",
-      unavailable: "Session catalog unavailable",
-      sessionCount: "{count} shown",
-    },
-    empty: {
-      title: "No Claude sessions found",
-      subtitle: "Install and use Claude CLI or Claude Desktop, then refresh this view.",
-      search: "No sessions on this host match your search.",
-      nonArchived: "No non-archived sessions on this host.",
-    },
-    sidebar: {
-      title: "Claude sessions",
-      viewAll: "View all Claude sessions",
-      truncated: "More sessions are available in the full catalog.",
-    },
-    transcript: {
-      eyebrow: "Claude transcript",
-      back: "All Claude sessions",
-      you: "You",
-      reasoning: "Reasoning",
-      toolCall: "Tool call",
-      toolResult: "Tool result",
-      item: "Claude item",
-      details: "Full details",
-      loading: "Loading transcript…",
-      loadMore: "Load older transcript items",
-    },
-  },
   logbook: {
     duration: {
       minutes: "{minutes}m",
@@ -2084,6 +1941,11 @@ export const en: TranslationMap = {
   chat: {
     disconnected: "Disconnected from gateway.",
     archivedSessionDisabled: "Restore this session to send messages.",
+    loadOlder: "Load older",
+    catalog: {
+      remoteViewOnly: "This session is on a paired node and is view-only.",
+      unsupportedViewOnly: "This external session source is view-only.",
+    },
     taskSuggestions: {
       eyebrow: "Suggested follow-up",
       start: "Start in worktree",
@@ -2330,6 +2192,8 @@ export const en: TranslationMap = {
       finished: "Finished ({count})",
       stopTask: "Stop {title}",
       viewTranscript: "View transcript",
+      toolUseOne: "1 tool use",
+      toolUseMany: "{count} tool uses",
     },
     sessionDiff: {
       title: "Changes",
@@ -2469,6 +2333,50 @@ export const en: TranslationMap = {
       howHeading: "How should it work?",
       howHint: "Choose how results are delivered.",
       title: "New Cron Job",
+      createAndRun: "Create & run now",
+    },
+    suggestions: {
+      title: "Automation ideas",
+      hint: "Starter automations — pick one and tweak it before creating.",
+      use: "Use idea →",
+      ideas: {
+        repoPulse: {
+          name: "Repo pulse",
+          tagline: "Overnight issues, PRs, and CI failures, ranked by urgency.",
+          prompt:
+            "Review overnight activity in my repositories: new issues, pull requests, and CI failures. Summarize the three things that most need my attention today, each with a link and a one-line reason.",
+        },
+        standupGhostwriter: {
+          name: "Standup ghostwriter",
+          tagline: "Your standup update, drafted from yesterday's work.",
+          prompt:
+            "Draft my standup update from yesterday's commits, merged pull requests, and open review threads. Three bullets max: done, doing, blocked.",
+        },
+        hackerNewsScout: {
+          name: "Hacker News scout",
+          tagline: "Three links worth your coffee, with hot takes.",
+          prompt:
+            "Scan today's Hacker News front page for posts about AI agents, developer tooling, and TypeScript. Send me the three most interesting links, each with a one-line hot take.",
+        },
+        dependencyRadar: {
+          name: "Dependency radar",
+          tagline: "Outdated or vulnerable dependencies, with upgrade notes.",
+          prompt:
+            "Check my main project for outdated or vulnerable dependencies. List the notable updates with a one-line risk note each, and draft the upgrade command.",
+        },
+        watchdog: {
+          name: "Night watch",
+          tagline: "Hourly health check with a one-line verdict.",
+          prompt:
+            "Check that my services and gateway are healthy: scan recent logs for new errors, restarts, or unusual load. Reply with a single short all-clear line when everything is fine; if something looks broken, report what failed and where to start looking.",
+        },
+        polyglotMinute: {
+          name: "Polyglot minute",
+          tagline: "One useful foreign phrase with your morning coffee.",
+          prompt:
+            "Teach me one useful phrase in Japanese: the phrase, how to pronounce it, its literal meaning, and when to use it. Keep it under five lines.",
+        },
+      },
     },
     summary: {
       enabled: "Enabled",

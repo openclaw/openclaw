@@ -921,147 +921,6 @@ export const zh_CN: TranslationMap = {
     unavailableSubtitle:
       "The plugin that owns this tab is not active on the connected gateway, or it did not provide a panel.",
   },
-  codexSessions: {
-    eyebrow: "Codex 设备群",
-    title: "所有电脑上的会话",
-    interactiveSubtitle:
-      "启动一个 Chat 分支，其模型选择由 Codex App Server 控制；在确认后归档符合条件的本地会话；并查看已配对计算机的会话。",
-    summaryLabel: "Codex 会话摘要",
-    summary: {
-      sessions: "会话",
-      onlineHosts: "在线",
-      hosts: "主机",
-    },
-    searchLabel: "搜索 Codex 会话",
-    searchPlaceholder: "搜索会话标题",
-    refresh: "刷新",
-    disconnected: "请重新连接 Gateway 以刷新 Codex 会话。",
-    partial: "有 {count} 台主机不可用。其他主机仍可用。",
-    loading: "正在加载 Codex 会话…",
-    loadMore: "加载更多",
-    loadingMore: "正在加载…",
-    untitled: "未命名的 Codex 会话",
-    threadId: "线程",
-    actions: {
-      continue: "继续",
-      continueAsBranch: "作为分支继续",
-      openChat: "打开 Chat",
-      continuing: "正在继续…",
-      archive: "归档",
-      readTranscript: "已读取",
-      readTranscriptLabel: "阅读 {title} 的转录",
-      continueLabel: "继续 {title}",
-      continueAsBranchLabel: "将 {title} 作为分支继续",
-      openChatLabel: "为 {title} 打开 Chat",
-      continueAsBranchHint:
-        "基于已持久化的可见历史创建一个 Chat。在你的第一条消息发送后，Codex App Server 会为新的 harness 线程选择模型和提供方。之后的选择仍由 Codex 控制；OpenClaw 绝不会替换为其他运行时、模型或备用方案。源会话保持不变，进行中的工作可能不会包含在内。",
-      archiveLabel: "归档 {title}",
-      archiveConfirmation:
-        "要归档 {title} 及其生成的所有后代吗？请确认没有其他 Codex 客户端或 OpenClaw runner 正在使用它们。在其他 runner 处于活动状态时归档可能会中断其工作。",
-      active: "活动会话无法启动分支或被归档。",
-      archiveActivityUnknownHint:
-        "由于状态仅限本进程本地可见，因此活动状态未知。请仅在确认没有其他 Codex 客户端或 runner 正在使用此会话后再归档。",
-      statusUnavailable: "此 Codex 会话在当前状态下无法管理。",
-      hostOffline: "请重新连接此计算机，然后再管理其 Codex 会话。",
-      gatewayOffline: "请重新连接到 gateway，然后再管理 Codex 会话。",
-      remoteReadOnly: "配对计算机的会话目前仅可查看。",
-    },
-    status: {
-      active: "活跃",
-      idle: "空闲",
-      archived: "已归档",
-      storedActivityUnknown: "已存储 / 活动状态未知",
-      systemError: "系统错误",
-      unknown: "未知",
-    },
-    host: {
-      gateway: "Gateway",
-      node: "节点",
-      connected: "已连接",
-      offline: "离线",
-      unavailable: "会话目录不可用",
-      sessionCount: "已显示 {count} 个",
-    },
-    empty: {
-      title: "未找到 Codex 主机",
-      supervisionSubtitle: "在 Gateway 或已配对的计算机上启用 Codex 监督，然后刷新此视图。",
-      search: "此主机上没有符合搜索条件的会话。",
-      nonArchived: "此主机上没有未归档的会话。",
-    },
-    sidebar: {
-      title: "Codex 会话",
-      unavailable: "Codex 会话不可用",
-      viewAll: "查看所有 Codex 会话",
-      truncated: "完整目录中还有更多会话可用。",
-    },
-    transcript: {
-      eyebrow: "Codex 转录",
-      back: "所有 Codex 会话",
-      you: "你",
-      reasoning: "推理",
-      command: "命令",
-      fileChange: "文件更改",
-      item: "Codex 项目",
-      details: "完整详情",
-      loading: "正在加载转录…",
-      loadMore: "加载更早的转录项目",
-    },
-  },
-  claudeSessions: {
-    eyebrow: "Claude 队列",
-    title: "你各台电脑上的 Claude 会话",
-    subtitle: "浏览未归档的 Claude CLI 和 Claude Desktop 会话，并阅读其分页的本地转录内容。",
-    summaryLabel: "Claude 会话摘要",
-    summary: {
-      sessions: "会话",
-      onlineHosts: "在线",
-      hosts: "主机",
-    },
-    searchLabel: "搜索 Claude 会话",
-    searchPlaceholder: "搜索会话标题",
-    refresh: "刷新",
-    disconnected: "重新连接到 Gateway 以刷新 Claude 会话。",
-    partial: "有 {count} 台主机不可用。其他主机仍可用。",
-    loading: "正在加载 Claude 会话…",
-    loadMore: "加载更多",
-    loadingMore: "正在加载…",
-    untitled: "未命名的 Claude 会话",
-    sessionId: "会话",
-    stored: "已存储",
-    read: "已读取",
-    readLabel: "阅读 {title} 的转录",
-    host: {
-      gateway: "Gateway",
-      node: "节点",
-      connected: "已连接",
-      offline: "离线",
-      unavailable: "会话目录不可用",
-      sessionCount: "已显示 {count} 个",
-    },
-    empty: {
-      title: "未找到 Claude 会话",
-      subtitle: "安装并使用 Claude CLI 或 Claude Desktop，然后刷新此视图。",
-      search: "此主机上没有符合搜索条件的会话。",
-      nonArchived: "此主机上没有未归档的会话。",
-    },
-    sidebar: {
-      title: "Claude 会话",
-      viewAll: "查看所有 Claude 会话",
-      truncated: "完整目录中还有更多会话可用。",
-    },
-    transcript: {
-      eyebrow: "Claude 转录",
-      back: "所有 Claude 会话",
-      you: "你",
-      reasoning: "推理",
-      toolCall: "工具调用",
-      toolResult: "工具结果",
-      item: "Claude 项目",
-      details: "完整详情",
-      loading: "正在加载转录…",
-      loadMore: "加载更早的转录项目",
-    },
-  },
   logbook: {
     duration: {
       minutes: "{minutes}m",
@@ -2049,6 +1908,11 @@ export const zh_CN: TranslationMap = {
   chat: {
     disconnected: "已断开与网关的连接。",
     archivedSessionDisabled: "恢复此会话以发送消息。",
+    loadOlder: "加载更早内容",
+    catalog: {
+      remoteViewOnly: "此会话位于已配对节点上，仅供查看。",
+      unsupportedViewOnly: "此外部会话来源仅供查看。",
+    },
     taskSuggestions: {
       eyebrow: "建议的后续任务",
       start: "在工作树中开始",
@@ -2291,6 +2155,8 @@ export const zh_CN: TranslationMap = {
       finished: "已完成 ({count})",
       stopTask: "停止 {title}",
       viewTranscript: "查看转录",
+      toolUseOne: "1 次工具调用",
+      toolUseMany: "{count} 次工具调用",
     },
     sessionDiff: {
       title: "更改",
@@ -2430,6 +2296,50 @@ export const zh_CN: TranslationMap = {
       howHeading: "它应该如何工作？",
       howHint: "选择结果的发送方式。",
       title: "新建自动化",
+      createAndRun: "创建并立即运行",
+    },
+    suggestions: {
+      title: "自动化灵感",
+      hint: "入门自动化示例 — 选择一个并在创建前进行调整。",
+      use: "使用此灵感 →",
+      ideas: {
+        repoPulse: {
+          name: "仓库动态",
+          tagline: "隔夜的 Issue、PR 和 CI 失败，按紧急程度排序。",
+          prompt:
+            "查看我的仓库中的隔夜动态：新 Issue、Pull Request 和 CI 失败。总结今天最需要我关注的三件事，每项附上链接和一句说明理由。",
+        },
+        standupGhostwriter: {
+          name: "站会代笔",
+          tagline: "根据昨天的工作自动起草站会更新。",
+          prompt:
+            "根据昨天的提交、已合并的 Pull Request 和待审查的讨论线程，起草我的站会更新。最多三条：已完成、进行中、受阻。",
+        },
+        hackerNewsScout: {
+          name: "Hacker News 精选",
+          tagline: "三条值得一读的链接，附上简短点评。",
+          prompt:
+            "扫描今天 Hacker News 首页中关于 AI 智能体、开发者工具和 TypeScript 的帖子。发给我三个最有趣的链接，每条附一句简短点评。",
+        },
+        dependencyRadar: {
+          name: "依赖雷达",
+          tagline: "过时或存在漏洞的依赖，附升级说明。",
+          prompt:
+            "检查我的主项目中过时或存在漏洞的依赖。列出值得关注的更新，每项附一句风险说明，并生成升级命令。",
+        },
+        watchdog: {
+          name: "夜间守望",
+          tagline: "每小时健康检查，一行给出结论。",
+          prompt:
+            "检查我的服务和 Gateway 是否正常：扫描近期日志，查找新错误、重启或异常负载。一切正常时，回复一行简短的全清说明；如有异常，报告故障内容及排查起点。",
+        },
+        polyglotMinute: {
+          name: "每日一句",
+          tagline: "配着早晨的咖啡，学一句实用的外语短句。",
+          prompt:
+            "教我一句实用的日语短句：短句内容、发音方式、字面含义以及使用场景。请控制在五行以内。",
+        },
+      },
     },
     summary: {
       enabled: "已启用",

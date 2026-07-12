@@ -933,149 +933,6 @@ export const ko: TranslationMap = {
     unavailableSubtitle:
       "The plugin that owns this tab is not active on the connected gateway, or it did not provide a panel.",
   },
-  codexSessions: {
-    eyebrow: "Codex 호스트",
-    title: "내 모든 컴퓨터의 세션",
-    interactiveSubtitle:
-      "모델 선택이 Codex App Server 제어하에 유지되는 Chat 브랜치를 시작하고, 확인 후 보관 대상 로컬 세션을 보관하며, 페어링된 컴퓨터 세션을 봅니다.",
-    summaryLabel: "Codex 세션 요약",
-    summary: {
-      sessions: "세션",
-      onlineHosts: "온라인",
-      hosts: "호스트",
-    },
-    searchLabel: "Codex 세션 검색",
-    searchPlaceholder: "세션 제목 검색",
-    refresh: "새로고침",
-    disconnected: "Codex 세션을 새로고침하려면 Gateway에 다시 연결하세요.",
-    partial: "사용할 수 없는 호스트: {count}개. 다른 호스트는 계속 사용할 수 있습니다.",
-    loading: "Codex 세션을 불러오는 중…",
-    loadMore: "더 보기",
-    loadingMore: "불러오는 중…",
-    untitled: "제목 없는 Codex 세션",
-    threadId: "스레드",
-    actions: {
-      continue: "계속",
-      continueAsBranch: "브랜치로 계속",
-      openChat: "Chat 열기",
-      continuing: "계속하는 중…",
-      archive: "보관",
-      readTranscript: "읽음",
-      readTranscriptLabel: "{title}의 전사 내용 읽기",
-      continueLabel: "{title} 계속",
-      continueAsBranchLabel: "{title}을(를) 브랜치로 계속",
-      openChatLabel: "{title}의 Chat 열기",
-      continueAsBranchHint:
-        "지속 저장된 표시 기록에서 Chat을 만듭니다. 첫 메시지에서 Codex App Server가 새 하네스 스레드의 모델과 공급자를 선택합니다. 이후 선택은 Codex 제어하에 유지되며, OpenClaw는 다른 런타임, 모델 또는 폴백으로 대체하지 않습니다. 소스는 그대로 유지되며, 진행 중인 작업은 없을 수 있습니다.",
-      archiveLabel: "{title} 보관",
-      archiveConfirmation:
-        "{title} 및 생성된 모든 하위 항목을 보관하시겠습니까? 다른 Codex 클라이언트 또는 OpenClaw 러너가 이를 사용하고 있지 않은지 확인하세요. 다른 러너가 활성 상태일 때 보관하면 해당 작업이 중단될 수 있습니다.",
-      active: "활성 세션은 브랜치를 시작하거나 보관할 수 없습니다.",
-      archiveActivityUnknownHint:
-        "상태가 프로세스 로컬이므로 활동 여부를 알 수 없습니다. 다른 Codex 클라이언트 또는 러너가 이 세션을 사용하고 있지 않은지 확인한 후에만 보관하세요.",
-      statusUnavailable: "현재 상태에서는 이 Codex 세션을 관리할 수 없습니다.",
-      hostOffline: "Codex 세션을 관리하기 전에 이 컴퓨터를 다시 연결하세요.",
-      gatewayOffline: "Codex 세션을 관리하기 전에 gateway에 다시 연결하세요.",
-      remoteReadOnly: "페어링된 컴퓨터 세션은 현재 보기 전용입니다.",
-    },
-    status: {
-      active: "활성",
-      idle: "유휴",
-      archived: "보관됨",
-      storedActivityUnknown: "저장됨 / 활동 상태 알 수 없음",
-      systemError: "시스템 오류",
-      unknown: "알 수 없음",
-    },
-    host: {
-      gateway: "Gateway",
-      node: "노드",
-      connected: "연결됨",
-      offline: "오프라인",
-      unavailable: "세션 목록을 불러올 수 없음",
-      sessionCount: "{count}개 표시됨",
-    },
-    empty: {
-      title: "Codex 호스트가 없습니다",
-      supervisionSubtitle:
-        "Gateway 또는 페어링된 컴퓨터에서 Codex supervision을 활성화한 다음 이 보기를 새로 고치세요.",
-      search: "이 호스트에 검색어와 일치하는 세션이 없습니다.",
-      nonArchived: "이 호스트에 보관 처리되지 않은 세션이 없습니다.",
-    },
-    sidebar: {
-      title: "Codex 세션",
-      unavailable: "Codex 세션을 사용할 수 없음",
-      viewAll: "모든 Codex 세션 보기",
-      truncated: "전체 카탈로그에서 더 많은 세션을 사용할 수 있습니다.",
-    },
-    transcript: {
-      eyebrow: "Codex 전사",
-      back: "모든 Codex 세션",
-      you: "나",
-      reasoning: "추론",
-      command: "명령",
-      fileChange: "파일 변경",
-      item: "Codex 항목",
-      details: "전체 세부 정보",
-      loading: "전사 내용을 불러오는 중…",
-      loadMore: "이전 전사 항목 불러오기",
-    },
-  },
-  claudeSessions: {
-    eyebrow: "Claude 플릿",
-    title: "컴퓨터 전반의 Claude 세션",
-    subtitle:
-      "보관되지 않은 Claude CLI 및 Claude Desktop 세션을 탐색하고 페이지로 나뉜 로컬 트랜스크립트를 읽어보세요.",
-    summaryLabel: "Claude 세션 요약",
-    summary: {
-      sessions: "세션",
-      onlineHosts: "온라인",
-      hosts: "호스트",
-    },
-    searchLabel: "Claude 세션 검색",
-    searchPlaceholder: "세션 제목 검색",
-    refresh: "새로고침",
-    disconnected: "Claude 세션을 새로 고치려면 gateway에 다시 연결하세요.",
-    partial: "사용할 수 없는 호스트: {count}개. 다른 호스트는 계속 사용할 수 있습니다.",
-    loading: "Claude 세션을 불러오는 중…",
-    loadMore: "더 보기",
-    loadingMore: "불러오는 중…",
-    untitled: "제목 없는 Claude 세션",
-    sessionId: "세션",
-    stored: "저장됨",
-    read: "읽음",
-    readLabel: "{title}의 전사 내용 읽기",
-    host: {
-      gateway: "Gateway",
-      node: "노드",
-      connected: "연결됨",
-      offline: "오프라인",
-      unavailable: "세션 목록을 불러올 수 없음",
-      sessionCount: "{count}개 표시됨",
-    },
-    empty: {
-      title: "Claude 세션을 찾을 수 없음",
-      subtitle: "Claude CLI 또는 Claude Desktop을 설치하고 사용한 다음 이 보기를 새로 고치세요.",
-      search: "이 호스트에 검색어와 일치하는 세션이 없습니다.",
-      nonArchived: "이 호스트에 보관되지 않은 세션이 없습니다.",
-    },
-    sidebar: {
-      title: "Claude 세션",
-      viewAll: "모든 Claude 세션 보기",
-      truncated: "전체 카탈로그에서 더 많은 세션을 사용할 수 있습니다.",
-    },
-    transcript: {
-      eyebrow: "Claude 트랜스크립트",
-      back: "모든 Claude 세션",
-      you: "나",
-      reasoning: "추론",
-      toolCall: "도구 호출",
-      toolResult: "도구 결과",
-      item: "Claude 항목",
-      details: "전체 세부 정보",
-      loading: "전사 내용을 불러오는 중…",
-      loadMore: "이전 전사 항목 불러오기",
-    },
-  },
   logbook: {
     duration: {
       minutes: "{minutes}m",
@@ -2089,6 +1946,11 @@ export const ko: TranslationMap = {
   chat: {
     disconnected: "Gateway와 연결이 끊어졌습니다.",
     archivedSessionDisabled: "메시지를 보내려면 이 세션을 복원하세요.",
+    loadOlder: "이전 항목 불러오기",
+    catalog: {
+      remoteViewOnly: "이 세션은 페어링된 노드에 있으며 보기 전용입니다.",
+      unsupportedViewOnly: "이 외부 세션 소스는 보기 전용입니다.",
+    },
     taskSuggestions: {
       eyebrow: "제안된 후속 작업",
       start: "워크트리에서 시작",
@@ -2337,6 +2199,8 @@ export const ko: TranslationMap = {
       finished: "완료됨({count})",
       stopTask: "{title} 중지",
       viewTranscript: "트랜스크립트 보기",
+      toolUseOne: "도구 사용 1회",
+      toolUseMany: "도구 사용 {count}회",
     },
     sessionDiff: {
       title: "변경 사항",
@@ -2476,6 +2340,50 @@ export const ko: TranslationMap = {
       howHeading: "어떻게 작동해야 하나요?",
       howHint: "결과 전달 방식을 선택하세요.",
       title: "새 자동화",
+      createAndRun: "만들고 지금 실행",
+    },
+    suggestions: {
+      title: "자동화 아이디어",
+      hint: "시작용 자동화 — 하나를 선택하고 만들기 전에 수정해 보세요.",
+      use: "아이디어 사용 →",
+      ideas: {
+        repoPulse: {
+          name: "저장소 현황",
+          tagline: "밤새 발생한 이슈, PR, CI 실패를 긴급도 순으로 정리.",
+          prompt:
+            "내 저장소의 밤새 활동을 검토하세요: 새 이슈, 풀 리퀘스트, CI 실패. 오늘 가장 주의가 필요한 세 가지를 링크와 한 줄 이유와 함께 요약해 주세요.",
+        },
+        standupGhostwriter: {
+          name: "스탠드업 대필",
+          tagline: "어제 작업을 바탕으로 스탠드업 업데이트를 자동 작성.",
+          prompt:
+            "어제의 커밋, 병합된 풀 리퀘스트, 열린 리뷰 스레드를 바탕으로 스탠드업 업데이트를 작성해 주세요. 최대 세 줄: 완료, 진행 중, 블로킹.",
+        },
+        hackerNewsScout: {
+          name: "Hacker News 스카우트",
+          tagline: "커피 한 잔과 함께 읽을 링크 세 개, 핫한 의견 포함.",
+          prompt:
+            "오늘 Hacker News 프론트 페이지에서 AI 에이전트, 개발자 도구, TypeScript 관련 게시물을 찾아 주세요. 가장 흥미로운 링크 세 개를 각각 한 줄 핫테이크와 함께 보내 주세요.",
+        },
+        dependencyRadar: {
+          name: "의존성 레이더",
+          tagline: "오래되었거나 취약한 의존성을 업그레이드 메모와 함께 정리.",
+          prompt:
+            "내 메인 프로젝트에서 오래되었거나 취약한 의존성을 확인해 주세요. 주목할 업데이트를 각각 한 줄 위험 메모와 함께 나열하고, 업그레이드 명령어를 작성해 주세요.",
+        },
+        watchdog: {
+          name: "야간 감시",
+          tagline: "한 줄 결과로 확인하는 시간별 상태 점검.",
+          prompt:
+            "서비스와 Gateway의 상태를 확인해 주세요: 최근 로그에서 새로운 오류, 재시작, 또는 비정상적인 부하를 스캔하세요. 모든 것이 정상이면 짧은 이상 없음 한 줄로 답하고, 문제가 있어 보이면 무엇이 실패했는지와 어디서부터 살펴봐야 할지 보고해 주세요.",
+        },
+        polyglotMinute: {
+          name: "폴리글랏 미닛",
+          tagline: "아침 커피와 함께하는 유용한 외국어 표현 하나.",
+          prompt:
+            "일본어에서 유용한 표현 하나를 알려주세요: 표현, 발음 방법, 직역 의미, 그리고 언제 사용하는지. 다섯 줄 이내로 간단하게 설명해 주세요.",
+        },
+      },
     },
     summary: {
       enabled: "사용",

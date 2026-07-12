@@ -931,150 +931,6 @@ export const fa: TranslationMap = {
     unavailableSubtitle:
       "The plugin that owns this tab is not active on the connected gateway, or it did not provide a panel.",
   },
-  codexSessions: {
-    eyebrow: "ناوگان Codex",
-    title: "نشست‌ها در همهٔ رایانه‌های شما",
-    interactiveSubtitle:
-      "یک شاخهٔ Chat را شروع کنید که انتخاب مدل آن تحت کنترل Codex App Server باقی می‌ماند، نشست‌های محلی واجد شرایط را با تأیید بایگانی کنید، و نشست‌های رایانهٔ جفت‌شده را مشاهده کنید.",
-    summaryLabel: "خلاصهٔ نشست‌های Codex",
-    summary: {
-      sessions: "نشست‌ها",
-      onlineHosts: "آنلاین",
-      hosts: "میزبان‌ها",
-    },
-    searchLabel: "جست‌وجوی نشست‌های Codex",
-    searchPlaceholder: "جست‌وجوی عنوان نشست‌ها",
-    refresh: "تازه‌سازی",
-    disconnected: "برای تازه‌سازی نشست‌های Codex دوباره به Gateway متصل شوید.",
-    partial: "میزبان‌های غیرقابل‌دسترسی: {count}. سایر میزبان‌ها همچنان در دسترس‌اند.",
-    loading: "در حال بارگیری نشست‌های Codex…",
-    loadMore: "بارگیری بیشتر",
-    loadingMore: "در حال بارگیری…",
-    untitled: "نشست بی‌عنوانِ Codex",
-    threadId: "رشته",
-    actions: {
-      continue: "ادامه",
-      continueAsBranch: "ادامه به‌عنوان شاخه",
-      openChat: "باز کردن Chat",
-      continuing: "در حال ادامه…",
-      archive: "بایگانی",
-      readTranscript: "خوانده‌شده",
-      readTranscriptLabel: "خواندن رونوشت برای {title}",
-      continueLabel: "ادامهٔ {title}",
-      continueAsBranchLabel: "ادامهٔ {title} به‌عنوان شاخه",
-      openChatLabel: "باز کردن Chat برای {title}",
-      continueAsBranchHint:
-        "از تاریخچهٔ قابل‌مشاهدهٔ ذخیره‌شده یک Chat ایجاد کنید. در نخستین پیام شما، Codex App Server مدل و ارائه‌دهنده را برای رشتهٔ harness جدید انتخاب می‌کند. انتخاب‌های بعدی همچنان تحت کنترل Codex باقی می‌ماند؛ OpenClaw هرگز runtime، مدل، یا fallback دیگری را جایگزین نمی‌کند. منبع بدون تغییر باقی می‌ماند، و ممکن است کارهای در حال انجام وجود نداشته باشند.",
-      archiveLabel: "بایگانی {title}",
-      archiveConfirmation:
-        "{title} و هر نوادهٔ ایجادشده از آن را بایگانی کنید؟ تأیید کنید که هیچ کلاینت Codex یا اجراکنندهٔ OpenClaw دیگری از آن‌ها استفاده نمی‌کند. بایگانی کردن در حالی که اجراکنندهٔ دیگری فعال است ممکن است کار آن را مختل کند.",
-      active: "نشست‌های فعال نمی‌توانند شاخه‌ای را شروع کنند یا بایگانی شوند.",
-      archiveActivityUnknownHint:
-        "وضعیت فعالیت نامشخص است، زیرا وضعیت محدود به فرایند محلی است. فقط پس از تأیید اینکه هیچ کلاینت Codex یا اجراکنندهٔ دیگری از این نشست استفاده نمی‌کند، آن را بایگانی کنید.",
-      statusUnavailable: "این نشست Codex در وضعیت فعلی خود قابل مدیریت نیست.",
-      hostOffline: "پیش از مدیریت نشست‌های Codex این رایانه، آن را دوباره متصل کنید.",
-      gatewayOffline: "پیش از مدیریت نشست‌های Codex، دوباره به gateway متصل شوید.",
-      remoteReadOnly: "نشست‌های رایانهٔ جفت‌شده فعلاً فقط قابل مشاهده هستند.",
-    },
-    status: {
-      active: "فعال",
-      idle: "بی‌کار",
-      archived: "بایگانی‌شده",
-      storedActivityUnknown: "ذخیره‌شده / فعالیت نامشخص",
-      systemError: "خطای سیستم",
-      unknown: "نامشخص",
-    },
-    host: {
-      gateway: "Gateway",
-      node: "گره",
-      connected: "متصل",
-      offline: "آفلاین",
-      unavailable: "فهرست نشست‌ها در دسترس نیست",
-      sessionCount: "{count} نمایش داده شده",
-    },
-    empty: {
-      title: "هیچ میزبان Codex پیدا نشد",
-      supervisionSubtitle:
-        "نظارت Codex را روی gateway یا یک رایانه جفت‌شده فعال کنید، سپس این نما را بازآوری کنید.",
-      search: "هیچ نشستی روی این میزبان با جست‌وجوی شما مطابقت ندارد.",
-      nonArchived: "هیچ نشست بایگانی‌نشده‌ای روی این میزبان وجود ندارد.",
-    },
-    sidebar: {
-      title: "جلسات Codex",
-      unavailable: "جلسات Codex در دسترس نیست",
-      viewAll: "مشاهده همه جلسات Codex",
-      truncated: "جلسات بیشتری در کاتالوگ کامل موجود است.",
-    },
-    transcript: {
-      eyebrow: "رونوشت Codex",
-      back: "همه جلسات Codex",
-      you: "شما",
-      reasoning: "استدلال",
-      command: "دستور",
-      fileChange: "تغییر فایل",
-      item: "مورد Codex",
-      details: "جزئیات کامل",
-      loading: "در حال بارگیری رونوشت…",
-      loadMore: "بارگیری موارد قدیمی‌تر رونوشت",
-    },
-  },
-  claudeSessions: {
-    eyebrow: "ناوگان Claude",
-    title: "جلسه‌های Claude در رایانه‌های شما",
-    subtitle:
-      "جلسه‌های بایگانی‌نشدهٔ Claude CLI و Claude Desktop را مرور کنید و رونوشت‌های محلی صفحه‌بندی‌شدهٔ آن‌ها را بخوانید.",
-    summaryLabel: "خلاصهٔ جلسهٔ Claude",
-    summary: {
-      sessions: "نشست‌ها",
-      onlineHosts: "آنلاین",
-      hosts: "میزبان‌ها",
-    },
-    searchLabel: "جستجوی جلسه‌های Claude",
-    searchPlaceholder: "جست‌وجوی عنوان نشست‌ها",
-    refresh: "تازه‌سازی",
-    disconnected: "برای به‌روزرسانی جلسه‌های Claude دوباره به Gateway متصل شوید.",
-    partial: "میزبان‌های غیرقابل‌دسترسی: {count}. سایر میزبان‌ها همچنان در دسترس‌اند.",
-    loading: "در حال بارگذاری جلسه‌های Claude…",
-    loadMore: "بارگیری بیشتر",
-    loadingMore: "در حال بارگیری…",
-    untitled: "جلسهٔ بدون عنوان Claude",
-    sessionId: "جلسه",
-    stored: "ذخیره‌شده",
-    read: "خوانده‌شده",
-    readLabel: "خواندن رونوشت برای {title}",
-    host: {
-      gateway: "Gateway",
-      node: "گره",
-      connected: "متصل",
-      offline: "آفلاین",
-      unavailable: "فهرست نشست‌ها در دسترس نیست",
-      sessionCount: "{count} نمایش داده شده",
-    },
-    empty: {
-      title: "هیچ جلسهٔ Claude یافت نشد",
-      subtitle:
-        "Claude CLI یا Claude Desktop را نصب و استفاده کنید، سپس این نما را به‌روزرسانی کنید.",
-      search: "هیچ نشستی روی این میزبان با جست‌وجوی شما مطابقت ندارد.",
-      nonArchived: "هیچ جلسهٔ بایگانی‌نشده‌ای روی این میزبان وجود ندارد.",
-    },
-    sidebar: {
-      title: "جلسه‌های Claude",
-      viewAll: "مشاهدهٔ همهٔ جلسه‌های Claude",
-      truncated: "جلسه‌های بیشتری در فهرست کامل موجود است.",
-    },
-    transcript: {
-      eyebrow: "رونوشت Claude",
-      back: "همهٔ جلسه‌های Claude",
-      you: "شما",
-      reasoning: "استدلال",
-      toolCall: "فراخوانی ابزار",
-      toolResult: "نتیجهٔ ابزار",
-      item: "مورد Claude",
-      details: "جزئیات کامل",
-      loading: "در حال بارگذاری رونوشت…",
-      loadMore: "بارگذاری موارد قدیمی‌تر رونوشت",
-    },
-  },
   logbook: {
     duration: {
       minutes: "{minutes}m",
@@ -2096,6 +1952,11 @@ export const fa: TranslationMap = {
   chat: {
     disconnected: "اتصال از Gateway قطع شد.",
     archivedSessionDisabled: "برای ارسال پیام، این نشست را بازیابی کنید.",
+    loadOlder: "بارگیری قدیمی‌ترها",
+    catalog: {
+      remoteViewOnly: "این نشست روی یک گره جفت‌شده قرار دارد و فقط قابل مشاهده است.",
+      unsupportedViewOnly: "این منبع نشست خارجی فقط قابل مشاهده است.",
+    },
     taskSuggestions: {
       eyebrow: "کار پیگیری پیشنهادی",
       start: "شروع در درخت کاری",
@@ -2342,6 +2203,8 @@ export const fa: TranslationMap = {
       finished: "پایان‌یافته ({count})",
       stopTask: "توقف {title}",
       viewTranscript: "مشاهدهٔ رونوشت",
+      toolUseOne: "۱ بار استفاده از ابزار",
+      toolUseMany: "{count} بار استفاده از ابزار",
     },
     sessionDiff: {
       title: "تغییرات",
@@ -2482,6 +2345,50 @@ export const fa: TranslationMap = {
       howHeading: "چگونه باید کار کند؟",
       howHint: "نحوهٔ تحویل نتایج را انتخاب کنید.",
       title: "اتوماسیون جدید",
+      createAndRun: "ایجاد و اجرای فوری",
+    },
+    suggestions: {
+      title: "ایده‌های خودکارسازی",
+      hint: "خودکارسازی‌های آماده — یکی را انتخاب کنید و پیش از ایجاد، آن را ویرایش کنید.",
+      use: "استفاده از ایده →",
+      ideas: {
+        repoPulse: {
+          name: "نبض مخزن",
+          tagline: "ایشوها، PR ها و خطاهای CI شبانه، رتبه‌بندی‌شده بر اساس اولویت.",
+          prompt:
+            "فعالیت شبانه مخازنم را بررسی کن: ایشوهای جدید، pull request ها و خطاهای CI. سه موردی که امروز بیشترین توجه را می‌طلبند خلاصه کن، هر کدام با یک لینک و یک دلیل یک‌خطی.",
+        },
+        standupGhostwriter: {
+          name: "نویسنده استندآپ",
+          tagline: "گزارش استندآپت، پیش‌نویس‌شده از کارهای دیروز.",
+          prompt:
+            "گزارش استندآپم را بر اساس commit های دیروز، pull request های ادغام‌شده و thread های بازبینی باز پیش‌نویس کن. حداکثر سه بولت: انجام‌شده، در حال انجام، مسدود.",
+        },
+        hackerNewsScout: {
+          name: "کاوشگر Hacker News",
+          tagline: "سه لینک ارزشمند برای وقت قهوه‌ات، با نظرات تند.",
+          prompt:
+            "صفحه اول Hacker News امروز را برای پست‌های مربوط به AI agents، ابزارهای توسعه‌دهنده و TypeScript بررسی کن. سه لینک جالب‌تر را با یک نظر یک‌خطی تند برایم بفرست.",
+        },
+        dependencyRadar: {
+          name: "رادار وابستگی‌ها",
+          tagline: "وابستگی‌های قدیمی یا آسیب‌پذیر، با یادداشت‌های ارتقا.",
+          prompt:
+            "پروژه اصلی‌ام را برای وابستگی‌های قدیمی یا آسیب‌پذیر بررسی کن. به‌روزرسانی‌های مهم را با یک یادداشت یک‌خطی درباره ریسک فهرست کن و دستور ارتقا را پیش‌نویس کن.",
+        },
+        watchdog: {
+          name: "نگهبان شب",
+          tagline: "بررسی سلامت ساعتی با یک خط نتیجه‌گیری.",
+          prompt:
+            "بررسی کن که سرویس‌ها و Gateway من سالم هستند: لاگ‌های اخیر را برای خطاهای جدید، راه‌اندازی مجدد یا بار غیرعادی اسکن کن. وقتی همه چیز خوب است، یک خط کوتاه تأیید بده؛ اگر چیزی خراب به نظر می‌رسد، گزارش بده چه چیزی خراب شده و از کجا باید شروع به بررسی کرد.",
+        },
+        polyglotMinute: {
+          name: "دقیقه چندزبانه",
+          tagline: "یک عبارت مفید به زبان خارجی با قهوه صبحگاهی‌ات.",
+          prompt:
+            "یک عبارت مفید به زبان ژاپنی به من یاد بده: خود عبارت، نحوه تلفظ آن، معنای تحت‌اللفظی‌اش، و زمان استفاده از آن. در کمتر از پنج خط نگه‌دار.",
+        },
+      },
     },
     summary: {
       enabled: "فعال",

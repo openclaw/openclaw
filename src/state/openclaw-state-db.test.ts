@@ -21,6 +21,7 @@ import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.gene
 import {
   closeOpenClawStateDatabaseForTest,
   detectOpenClawStateDatabaseSchemaMigrations,
+  OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   openOpenClawStateDatabase,
   OPENCLAW_STATE_SCHEMA_VERSION,
   repairOpenClawStateDatabaseSchema,
@@ -842,6 +843,41 @@ describe("openclaw state database", () => {
     expect(credentialTable?.name).toBe("worker_environment_credentials");
   });
 
+  it("adds worker transcript commit tables to existing state databases", () => {
+    const stateDir = createTempStateDir();
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const databasePath = database.path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacyDb = new DatabaseSync(databasePath);
+    legacyDb.exec(`
+      DROP TABLE worker_transcript_commits;
+      DROP TABLE worker_transcript_commit_heads;
+    `);
+    legacyDb.close();
+
+    const reopened = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const tables = reopened.db
+      .prepare(
+        `SELECT name FROM sqlite_master
+          WHERE type = 'table' AND name IN (
+            'worker_transcript_commit_heads',
+            'worker_transcript_commits'
+          )
+          ORDER BY name`,
+      )
+      .all() as Array<{ name?: string }>;
+    expect(tables.map((table) => table.name)).toEqual([
+      "worker_transcript_commit_heads",
+      "worker_transcript_commits",
+    ]);
+  });
+
   it("migrates requester and executor attribution for existing cross-agent tasks", () => {
     const stateDir = createTempStateDir();
     const database = openOpenClawStateDatabase({
@@ -1461,7 +1497,9 @@ describe("openclaw state database", () => {
       env: { OPENCLAW_STATE_DIR: stateDir },
     });
 
-    expect(readSqliteNumberPragma(database.db, "busy_timeout")).toBe(30_000);
+    expect(readSqliteNumberPragma(database.db, "busy_timeout")).toBe(
+      OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+    );
     expect(readSqliteNumberPragma(database.db, "foreign_keys")).toBe(1);
     expect(readSqliteNumberPragma(database.db, "synchronous")).toBe(1);
     expect(readSqliteNumberPragma(database.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
@@ -1515,7 +1553,9 @@ describe("openclaw state database", () => {
       openOpenClawStateDatabase({
         env: { OPENCLAW_STATE_DIR: stateDir },
       }),
-    ).toThrow(new RegExp(`newer schema version ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`));
+    ).toThrow(
+      `OpenClaw state database ${databasePath} uses newer schema version ${OPENCLAW_STATE_SCHEMA_VERSION + 1}; this OpenClaw build supports ${OPENCLAW_STATE_SCHEMA_VERSION}. Upgrade OpenClaw before opening this database. Do not downgrade OpenClaw or modify the database. To run this older build, use a separate state directory or restore a compatible backup.`,
+    );
   });
 
   it("does not chmod shared parent directories for explicit database paths", () => {

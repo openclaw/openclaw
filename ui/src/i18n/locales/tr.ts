@@ -943,152 +943,6 @@ export const tr: TranslationMap = {
     unavailableSubtitle:
       "The plugin that owns this tab is not active on the connected gateway, or it did not provide a panel.",
   },
-  codexSessions: {
-    eyebrow: "Codex filosu",
-    title: "Bilgisayarlarınızdaki oturumlar",
-    interactiveSubtitle:
-      "Model seçimi Codex App Server denetiminde kalan bir Chat dalı başlatın, uygun yerel oturumları onayla arşivleyin ve eşlenmiş bilgisayar oturumlarını görüntüleyin.",
-    summaryLabel: "Codex oturum özeti",
-    summary: {
-      sessions: "oturum",
-      onlineHosts: "çevrimiçi",
-      hosts: "ana makine",
-    },
-    searchLabel: "Codex oturumlarında ara",
-    searchPlaceholder: "Oturum başlıklarında ara",
-    refresh: "Yenile",
-    disconnected: "Codex oturumlarını yenilemek için Gateway'e yeniden bağlanın.",
-    partial:
-      "Kullanılamayan ana makine sayısı: {count}. Diğer ana makineler kullanılabilir durumda.",
-    loading: "Codex oturumları yükleniyor…",
-    loadMore: "Daha fazla yükle",
-    loadingMore: "Yükleniyor…",
-    untitled: "Başlıksız Codex oturumu",
-    threadId: "Konuşma",
-    actions: {
-      continue: "Devam et",
-      continueAsBranch: "Dal olarak devam et",
-      openChat: "Chat'i aç",
-      continuing: "Devam ediliyor…",
-      archive: "Arşivle",
-      readTranscript: "Okundu",
-      readTranscriptLabel: "{title} için dökümü oku",
-      continueLabel: "{title} ile devam et",
-      continueAsBranchLabel: "{title} ile dal olarak devam et",
-      openChatLabel: "{title} için Chat'i aç",
-      continueAsBranchHint:
-        "Kalıcı hale getirilmiş görünür geçmişten bir Chat oluşturun. İlk mesajınızda, Codex App Server yeni harness iş parçacığı için modeli ve sağlayıcıyı seçer. Sonraki seçimler Codex denetiminde kalır; OpenClaw hiçbir zaman başka bir çalışma zamanı, model veya yedek seçenekle değiştirme yapmaz. Kaynak dokunulmadan kalır ve devam eden çalışma eksik olabilir.",
-      archiveLabel: "{title} oturumunu arşivle",
-      archiveConfirmation:
-        "{title} ve ondan türetilen alt öğeler arşivlensin mi? Başka hiçbir Codex istemcisinin veya OpenClaw çalıştırıcısının bunları kullanmadığını onaylayın. Başka bir çalıştırıcı etkinken arşivleme yapmak çalışmasını kesintiye uğratabilir.",
-      active: "Etkin oturumlar dal başlatamaz veya arşivlenemez.",
-      archiveActivityUnknownHint:
-        "Durum sürece yerel olduğundan etkinlik bilinmiyor. Yalnızca başka hiçbir Codex istemcisinin veya çalıştırıcısının bu oturumu kullanmadığını onayladıktan sonra arşivleyin.",
-      statusUnavailable: "Bu Codex oturumu mevcut durumunda yönetilemez.",
-      hostOffline: "Codex oturumlarını yönetmeden önce bu bilgisayarı yeniden bağlayın.",
-      gatewayOffline: "Codex oturumlarını yönetmeden önce gateway'e yeniden bağlanın.",
-      remoteReadOnly: "Eşleştirilmiş bilgisayar oturumları şimdilik yalnızca görüntülenebilir.",
-    },
-    status: {
-      active: "Etkin",
-      idle: "Boşta",
-      archived: "Arşivlenmiş",
-      storedActivityUnknown: "Saklandı / etkinlik bilinmiyor",
-      systemError: "Sistem hatası",
-      unknown: "Bilinmiyor",
-    },
-    host: {
-      gateway: "Gateway",
-      node: "Düğüm",
-      connected: "Bağlı",
-      offline: "Çevrimdışı",
-      unavailable: "Oturum kataloğu kullanılamıyor",
-      sessionCount: "{count} gösteriliyor",
-    },
-    empty: {
-      title: "Codex ana makinesi bulunamadı",
-      supervisionSubtitle:
-        "Gateway’de veya eşleştirilmiş bir bilgisayarda Codex denetimini etkinleştirin, ardından bu görünümü yenileyin.",
-      search: "Bu ana makinedeki hiçbir oturum aramanızla eşleşmiyor.",
-      nonArchived: "Bu ana makinede arşivlenmemiş oturum yok.",
-    },
-    sidebar: {
-      title: "Codex oturumları",
-      unavailable: "Codex oturumları kullanılamıyor",
-      viewAll: "Tüm Codex oturumlarını görüntüle",
-      truncated: "Tam katalogda daha fazla oturum mevcut.",
-    },
-    transcript: {
-      eyebrow: "Codex dökümü",
-      back: "Tüm Codex oturumları",
-      you: "Siz",
-      reasoning: "Gerekçelendirme",
-      command: "Komut",
-      fileChange: "Dosya değişikliği",
-      item: "Codex öğesi",
-      details: "Tüm ayrıntılar",
-      loading: "Döküm yükleniyor…",
-      loadMore: "Daha eski döküm öğelerini yükle",
-    },
-  },
-  claudeSessions: {
-    eyebrow: "Claude filosu",
-    title: "Bilgisayarlarınızdaki Claude oturumları",
-    subtitle:
-      "Arşivlenmemiş Claude CLI ve Claude Desktop oturumlarına göz atın ve sayfalandırılmış yerel dökümlerini okuyun.",
-    summaryLabel: "Claude oturum özeti",
-    summary: {
-      sessions: "oturum",
-      onlineHosts: "çevrimiçi",
-      hosts: "ana makine",
-    },
-    searchLabel: "Claude oturumlarında ara",
-    searchPlaceholder: "Oturum başlıklarında ara",
-    refresh: "Yenile",
-    disconnected: "Claude oturumlarını yenilemek için Gateway'e yeniden bağlanın.",
-    partial:
-      "Kullanılamayan ana makine sayısı: {count}. Diğer ana makineler kullanılabilir durumda.",
-    loading: "Claude oturumları yükleniyor…",
-    loadMore: "Daha fazla yükle",
-    loadingMore: "Yükleniyor…",
-    untitled: "Başlıksız Claude oturumu",
-    sessionId: "Oturum",
-    stored: "Depolanmış",
-    read: "Okundu",
-    readLabel: "{title} için dökümü oku",
-    host: {
-      gateway: "Gateway",
-      node: "Düğüm",
-      connected: "Bağlı",
-      offline: "Çevrimdışı",
-      unavailable: "Oturum kataloğu kullanılamıyor",
-      sessionCount: "{count} gösteriliyor",
-    },
-    empty: {
-      title: "Claude oturumu bulunamadı",
-      subtitle:
-        "Claude CLI veya Claude Desktop'ı yükleyip kullanın, ardından bu görünümü yenileyin.",
-      search: "Bu ana makinedeki hiçbir oturum aramanızla eşleşmiyor.",
-      nonArchived: "Bu ana makinede arşivlenmemiş oturum yok.",
-    },
-    sidebar: {
-      title: "Claude oturumları",
-      viewAll: "Tüm Claude oturumlarını görüntüle",
-      truncated: "Tam katalogda daha fazla oturum mevcut.",
-    },
-    transcript: {
-      eyebrow: "Claude dökümü",
-      back: "Tüm Claude oturumları",
-      you: "Siz",
-      reasoning: "Akıl yürütme",
-      toolCall: "Araç çağrısı",
-      toolResult: "Araç sonucu",
-      item: "Claude öğesi",
-      details: "Tüm ayrıntılar",
-      loading: "Transkript yükleniyor…",
-      loadMore: "Daha eski transkript öğelerini yükle",
-    },
-  },
   logbook: {
     duration: {
       minutes: "{minutes}m",
@@ -2113,6 +1967,11 @@ export const tr: TranslationMap = {
   chat: {
     disconnected: "Gateway bağlantısı kesildi.",
     archivedSessionDisabled: "Mesaj göndermek için bu oturumu geri yükleyin.",
+    loadOlder: "Daha eskileri yükle",
+    catalog: {
+      remoteViewOnly: "Bu oturum eşleştirilmiş bir düğümdedir ve yalnızca görüntülenebilir.",
+      unsupportedViewOnly: "Bu harici oturum kaynağı yalnızca görüntülenebilir.",
+    },
     taskSuggestions: {
       eyebrow: "Önerilen takip görevi",
       start: "Çalışma ağacında başlat",
@@ -2360,6 +2219,8 @@ export const tr: TranslationMap = {
       finished: "Tamamlandı ({count})",
       stopTask: "{title} öğesini durdur",
       viewTranscript: "Transkripti görüntüle",
+      toolUseOne: "1 araç kullanımı",
+      toolUseMany: "{count} araç kullanımı",
     },
     sessionDiff: {
       title: "Değişiklikler",
@@ -2500,6 +2361,50 @@ export const tr: TranslationMap = {
       howHeading: "Nasıl çalışmalı?",
       howHint: "Sonuçların nasıl iletileceğini seçin.",
       title: "Yeni Otomasyon",
+      createAndRun: "Oluştur ve şimdi çalıştır",
+    },
+    suggestions: {
+      title: "Otomasyon fikirleri",
+      hint: "Başlangıç otomasyonları — birini seçin ve oluşturmadan önce düzenleyin.",
+      use: "Fikri kullan →",
+      ideas: {
+        repoPulse: {
+          name: "Repo nabzı",
+          tagline: "Gece açılan sorunlar, PR'lar ve CI hataları, aciliyete göre sıralanmış.",
+          prompt:
+            "Depolarımdaki gece aktivitesini incele: yeni sorunlar, pull request'ler ve CI hataları. Bugün en çok dikkat etmem gereken üç şeyi özetle; her biri için bir bağlantı ve tek satırlık bir neden ekle.",
+        },
+        standupGhostwriter: {
+          name: "Standup yazarı",
+          tagline: "Dünkü çalışmalarınızdan hazırlanmış standup güncellemesi.",
+          prompt:
+            "Dünkü commit'lerimden, birleştirilen pull request'lerden ve açık inceleme başlıklarından standup güncellememi taslak olarak hazırla. En fazla üç madde: yapıldı, yapılıyor, engellendi.",
+        },
+        hackerNewsScout: {
+          name: "Hacker News kaşifi",
+          tagline: "Kahvenize değer üç bağlantı, sıcak yorumlarıyla.",
+          prompt:
+            "Bugünkü Hacker News ana sayfasını AI ajanları, geliştirici araçları ve TypeScript hakkındaki gönderiler için tara. En ilginç üç bağlantıyı, her biri için tek satırlık sıcak bir yorumla bana gönder.",
+        },
+        dependencyRadar: {
+          name: "Bağımlılık radarı",
+          tagline: "Güncel olmayan veya güvenlik açığı olan bağımlılıklar, güncelleme notlarıyla.",
+          prompt:
+            "Ana projemi güncel olmayan veya güvenlik açığı bulunan bağımlılıklar açısından kontrol et. Önemli güncellemeleri tek satırlık risk notu ile listele ve güncelleme komutunu taslak olarak hazırla.",
+        },
+        watchdog: {
+          name: "Gece nöbeti",
+          tagline: "Tek satırlık kararla saatlik sağlık kontrolü.",
+          prompt:
+            "Hizmetlerimin ve Gateway'imin sağlıklı olduğunu kontrol et: son günlükleri yeni hatalar, yeniden başlatmalar veya olağandışı yük için tara. Her şey yolundaysa tek bir kısa 'sorun yok' satırıyla yanıt ver; bir şey bozuk görünüyorsa neyin başarısız olduğunu ve nereden bakmaya başlanacağını bildir.",
+        },
+        polyglotMinute: {
+          name: "Poliglot dakikası",
+          tagline: "Sabah kahvenizle birlikte işe yarar bir yabancı dil ifadesi.",
+          prompt:
+            "Bana Japonca'da işe yarar bir ifade öğret: ifadeyi, nasıl telaffuz edileceğini, gerçek anlamını ve ne zaman kullanılacağını. Beş satırı geçmesin.",
+        },
+      },
     },
     summary: {
       enabled: "Etkin",

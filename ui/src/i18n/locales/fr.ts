@@ -951,149 +951,6 @@ export const fr: TranslationMap = {
     unavailableSubtitle:
       "The plugin that owns this tab is not active on the connected gateway, or it did not provide a panel.",
   },
-  codexSessions: {
-    eyebrow: "Parc Codex",
-    title: "Sessions sur tous vos ordinateurs",
-    interactiveSubtitle:
-      "Démarrez une branche de Chat dont la sélection du modèle reste sous le contrôle de Codex App Server, archivez les sessions locales éligibles avec confirmation et consultez les sessions d’ordinateurs appairés.",
-    summaryLabel: "Résumé des sessions Codex",
-    summary: {
-      sessions: "sessions",
-      onlineHosts: "en ligne",
-      hosts: "hôtes",
-    },
-    searchLabel: "Rechercher des sessions Codex",
-    searchPlaceholder: "Rechercher dans les titres de session",
-    refresh: "Actualiser",
-    disconnected: "Reconnectez-vous au Gateway pour actualiser les sessions Codex.",
-    partial: "Hôtes indisponibles : {count}. Les autres hôtes restent disponibles.",
-    loading: "Chargement des sessions Codex…",
-    loadMore: "Charger davantage",
-    loadingMore: "Chargement…",
-    untitled: "Session Codex sans titre",
-    threadId: "Fil",
-    actions: {
-      continue: "Continuer",
-      continueAsBranch: "Continuer en tant que branche",
-      openChat: "Ouvrir Chat",
-      continuing: "Continuation…",
-      archive: "Archiver",
-      readTranscript: "Lu",
-      readTranscriptLabel: "Lire la transcription de {title}",
-      continueLabel: "Continuer {title}",
-      continueAsBranchLabel: "Continuer {title} en tant que branche",
-      openChatLabel: "Ouvrir Chat pour {title}",
-      continueAsBranchHint:
-        "Créez un Chat à partir de l’historique visible persistant. Lors de votre premier message, Codex App Server sélectionne le modèle et le fournisseur pour le nouveau fil de harness. La sélection ultérieure reste contrôlée par Codex ; OpenClaw ne substitue jamais un autre runtime, modèle ou fallback. La source reste inchangée, et le travail en cours peut être absent.",
-      archiveLabel: "Archiver {title}",
-      archiveConfirmation:
-        "Archiver {title} et tous les descendants générés ? Confirmez qu’aucun autre client Codex ni runner OpenClaw ne les utilise. L’archivage pendant qu’un autre runner est actif peut interrompre son travail.",
-      active: "Les sessions actives ne peuvent pas démarrer une branche ni être archivées.",
-      archiveActivityUnknownHint:
-        "L’activité est inconnue, car le statut est local au processus. Archivez uniquement après avoir confirmé qu’aucun autre client Codex ni runner n’utilise cette session.",
-      statusUnavailable: "Cette session Codex ne peut pas être gérée dans son état actuel.",
-      hostOffline: "Reconnectez cet ordinateur avant de gérer ses sessions Codex.",
-      gatewayOffline: "Reconnectez-vous au gateway avant de gérer les sessions Codex.",
-      remoteReadOnly: "Les sessions d’ordinateurs jumelés sont en lecture seule pour le moment.",
-    },
-    status: {
-      active: "Actives",
-      idle: "Inactive",
-      archived: "Archivée",
-      storedActivityUnknown: "Stockée / activité inconnue",
-      systemError: "Erreur système",
-      unknown: "Inconnu",
-    },
-    host: {
-      gateway: "Gateway",
-      node: "Nœud",
-      connected: "Connecté",
-      offline: "Hors ligne",
-      unavailable: "Catalogue de sessions indisponible",
-      sessionCount: "{count} affichés",
-    },
-    empty: {
-      title: "Aucun hôte Codex trouvé",
-      supervisionSubtitle:
-        "Activez la supervision Codex sur le gateway ou un ordinateur jumelé, puis actualisez cette vue.",
-      search: "Aucune session de cet hôte ne correspond à votre recherche.",
-      nonArchived: "Aucune session non archivée sur cet hôte.",
-    },
-    sidebar: {
-      title: "Sessions Codex",
-      unavailable: "Sessions Codex indisponibles",
-      viewAll: "Voir toutes les sessions Codex",
-      truncated: "D’autres sessions sont disponibles dans le catalogue complet.",
-    },
-    transcript: {
-      eyebrow: "Transcription Codex",
-      back: "Toutes les sessions Codex",
-      you: "Vous",
-      reasoning: "Raisonnement",
-      command: "Commande",
-      fileChange: "Modification de fichier",
-      item: "Élément Codex",
-      details: "Détails complets",
-      loading: "Chargement de la transcription…",
-      loadMore: "Charger les éléments de transcription plus anciens",
-    },
-  },
-  claudeSessions: {
-    eyebrow: "Flotte Claude",
-    title: "Sessions Claude sur vos ordinateurs",
-    subtitle:
-      "Parcourez les sessions Claude CLI et Claude Desktop non archivées et lisez leurs transcriptions locales paginées.",
-    summaryLabel: "Résumé de la session Claude",
-    summary: {
-      sessions: "sessions",
-      onlineHosts: "en ligne",
-      hosts: "hôtes",
-    },
-    searchLabel: "Rechercher des sessions Claude",
-    searchPlaceholder: "Rechercher dans les titres de session",
-    refresh: "Actualiser",
-    disconnected: "Reconnectez-vous au gateway pour actualiser les sessions Claude.",
-    partial: "Hôtes indisponibles : {count}. Les autres hôtes restent disponibles.",
-    loading: "Chargement des sessions Claude…",
-    loadMore: "Charger davantage",
-    loadingMore: "Chargement…",
-    untitled: "Session Claude sans titre",
-    sessionId: "Session",
-    stored: "Stockée",
-    read: "Lu",
-    readLabel: "Lire la transcription de {title}",
-    host: {
-      gateway: "Gateway",
-      node: "Nœud",
-      connected: "Connecté",
-      offline: "Hors ligne",
-      unavailable: "Catalogue de sessions indisponible",
-      sessionCount: "{count} affichés",
-    },
-    empty: {
-      title: "Aucune session Claude trouvée",
-      subtitle: "Installez et utilisez Claude CLI ou Claude Desktop, puis actualisez cette vue.",
-      search: "Aucune session de cet hôte ne correspond à votre recherche.",
-      nonArchived: "Aucune session non archivée sur cet hôte.",
-    },
-    sidebar: {
-      title: "Sessions Claude",
-      viewAll: "Afficher toutes les sessions Claude",
-      truncated: "D’autres sessions sont disponibles dans le catalogue complet.",
-    },
-    transcript: {
-      eyebrow: "Transcription Claude",
-      back: "Toutes les sessions Claude",
-      you: "Vous",
-      reasoning: "Raisonnement",
-      toolCall: "Appel d’outil",
-      toolResult: "Résultat de l’outil",
-      item: "Élément Claude",
-      details: "Détails complets",
-      loading: "Chargement de la transcription…",
-      loadMore: "Charger les éléments de transcription plus anciens",
-    },
-  },
   logbook: {
     duration: {
       minutes: "{minutes}m",
@@ -2129,6 +1986,11 @@ export const fr: TranslationMap = {
   chat: {
     disconnected: "Déconnecté du Gateway.",
     archivedSessionDisabled: "Restaurez cette session pour envoyer des messages.",
+    loadOlder: "Charger les plus anciens",
+    catalog: {
+      remoteViewOnly: "Cette session se trouve sur un nœud associé et est en lecture seule.",
+      unsupportedViewOnly: "Cette source de session externe est en lecture seule.",
+    },
     taskSuggestions: {
       eyebrow: "Suivi suggéré",
       start: "Démarrer dans un worktree",
@@ -2379,6 +2241,8 @@ export const fr: TranslationMap = {
       finished: "Terminées ({count})",
       stopTask: "Arrêter {title}",
       viewTranscript: "Afficher la transcription",
+      toolUseOne: "1 utilisation d’outil",
+      toolUseMany: "{count} utilisations d’outils",
     },
     sessionDiff: {
       title: "Modifications",
@@ -2521,6 +2385,50 @@ export const fr: TranslationMap = {
       howHeading: "Comment doit-elle fonctionner ?",
       howHint: "Choisissez le mode de remise des résultats.",
       title: "Nouvelle automatisation",
+      createAndRun: "Créer et exécuter maintenant",
+    },
+    suggestions: {
+      title: "Idées d'automatisation",
+      hint: "Automatisations de départ — choisissez-en une et ajustez-la avant de créer.",
+      use: "Utiliser l'idée →",
+      ideas: {
+        repoPulse: {
+          name: "Pouls du dépôt",
+          tagline: "Issues, PRs et échecs CI de la nuit, classés par urgence.",
+          prompt:
+            "Passe en revue l'activité nocturne de mes dépôts : nouvelles issues, pull requests et échecs CI. Résume les trois points qui nécessitent le plus mon attention aujourd'hui, chacun avec un lien et une raison en une ligne.",
+        },
+        standupGhostwriter: {
+          name: "Nègre de standup",
+          tagline: "Ton compte-rendu de standup, rédigé à partir du travail d'hier.",
+          prompt:
+            "Rédige mon compte-rendu de standup à partir des commits d'hier, des pull requests fusionnées et des fils de révision ouverts. Trois points maximum : fait, en cours, bloqué.",
+        },
+        hackerNewsScout: {
+          name: "Éclaireur Hacker News",
+          tagline: "Trois liens qui valent ton café, avec des avis tranchés.",
+          prompt:
+            "Parcours la page d'accueil Hacker News du jour pour les articles sur les agents IA, les outils développeur et TypeScript. Envoie-moi les trois liens les plus intéressants, chacun avec un avis tranché en une ligne.",
+        },
+        dependencyRadar: {
+          name: "Radar de dépendances",
+          tagline: "Dépendances obsolètes ou vulnérables, avec notes de mise à jour.",
+          prompt:
+            "Vérifie les dépendances obsolètes ou vulnérables de mon projet principal. Liste les mises à jour notables avec une note de risque en une ligne chacune, et rédige la commande de mise à jour.",
+        },
+        watchdog: {
+          name: "Veille nocturne",
+          tagline: "Vérification horaire avec un verdict en une ligne.",
+          prompt:
+            "Vérifie que mes services et mon Gateway sont en bonne santé : analyse les journaux récents pour détecter de nouvelles erreurs, des redémarrages ou une charge inhabituelle. Réponds par une courte ligne indiquant que tout va bien si c'est le cas ; si quelque chose semble défaillant, indique ce qui a échoué et par où commencer à chercher.",
+        },
+        polyglotMinute: {
+          name: "Minute polyglotte",
+          tagline: "Une expression étrangère utile avec votre café du matin.",
+          prompt:
+            "Apprends-moi une expression utile en japonais : l'expression, sa prononciation, sa signification littérale et quand l'utiliser. En moins de cinq lignes.",
+        },
+      },
     },
     summary: {
       enabled: "Activé",

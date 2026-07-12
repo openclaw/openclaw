@@ -927,148 +927,6 @@ export const ar: TranslationMap = {
     unavailableSubtitle:
       "The plugin that owns this tab is not active on the connected gateway, or it did not provide a panel.",
   },
-  codexSessions: {
-    eyebrow: "أسطول Codex",
-    title: "الجلسات على جميع أجهزتك",
-    interactiveSubtitle:
-      "ابدأ فرع Chat يبقى اختيار النموذج فيه تحت تحكم Codex App Server، وأرشف الجلسات المحلية المؤهلة بعد التأكيد، واعرض جلسات الكمبيوتر المقترنة.",
-    summaryLabel: "ملخص جلسات Codex",
-    summary: {
-      sessions: "الجلسات",
-      onlineHosts: "متصل",
-      hosts: "المضيفون",
-    },
-    searchLabel: "البحث في جلسات Codex",
-    searchPlaceholder: "البحث في عناوين الجلسات",
-    refresh: "تحديث",
-    disconnected: "أعد الاتصال بـ Gateway لتحديث جلسات Codex.",
-    partial: "عدد المضيفين غير المتاحين: {count}. لا يزال بقية المضيفين متاحين.",
-    loading: "جارٍ تحميل جلسات Codex…",
-    loadMore: "تحميل المزيد",
-    loadingMore: "جارٍ التحميل…",
-    untitled: "جلسة Codex بلا عنوان",
-    threadId: "السلسلة",
-    actions: {
-      continue: "متابعة",
-      continueAsBranch: "متابعة كفرع",
-      openChat: "فتح Chat",
-      continuing: "جارٍ المتابعة…",
-      archive: "أرشفة",
-      readTranscript: "تمت القراءة",
-      readTranscriptLabel: "قراءة النص الكامل لـ {title}",
-      continueLabel: "متابعة {title}",
-      continueAsBranchLabel: "متابعة {title} كفرع",
-      openChatLabel: "فتح Chat لـ {title}",
-      continueAsBranchHint:
-        "أنشئ Chat من السجل المرئي المحفوظ. عند رسالتك الأولى، يختار Codex App Server النموذج والمزوّد لسلسلة harness الجديدة. يظل الاختيار لاحقًا تحت تحكم Codex؛ ولا يستبدل OpenClaw أبدًا ببيئة تشغيل أو نموذج أو خيار احتياطي آخر. يظل المصدر دون تغيير، وقد لا يكون العمل الجاري موجودًا.",
-      archiveLabel: "أرشفة {title}",
-      archiveConfirmation:
-        "هل تريد أرشفة {title} وأي عناصر فرعية منشأة منه؟ أكّد أنه لا يوجد أي عميل Codex آخر أو مشغّل OpenClaw يستخدمها. قد تؤدي الأرشفة أثناء نشاط مشغّل آخر إلى مقاطعة عمله.",
-      active: "لا يمكن للجلسات النشطة بدء فرع أو أرشفتها.",
-      archiveActivityUnknownHint:
-        "النشاط غير معروف لأن الحالة محلية للعملية. لا تقم بالأرشفة إلا بعد التأكد من عدم وجود أي عميل Codex آخر أو مشغّل يستخدم هذه الجلسة.",
-      statusUnavailable: "لا يمكن إدارة جلسة Codex هذه في حالتها الحالية.",
-      hostOffline: "أعِد توصيل هذا الكمبيوتر قبل إدارة جلسات Codex الخاصة به.",
-      gatewayOffline: "أعِد الاتصال بـ gateway قبل إدارة جلسات Codex.",
-      remoteReadOnly: "جلسات الكمبيوتر المقترن للعرض فقط في الوقت الحالي.",
-    },
-    status: {
-      active: "نشط",
-      idle: "خامل",
-      archived: "مؤرشف",
-      storedActivityUnknown: "محفوظ / النشاط غير معروف",
-      systemError: "خطأ في النظام",
-      unknown: "غير معروف",
-    },
-    host: {
-      gateway: "Gateway",
-      node: "عقدة",
-      connected: "متصل",
-      offline: "غير متصل",
-      unavailable: "فهرس الجلسات غير متاح",
-      sessionCount: "{count} معروضة",
-    },
-    empty: {
-      title: "لم يتم العثور على أي مضيف لـ Codex",
-      supervisionSubtitle: "فعّل إشراف Codex على Gateway أو على كمبيوتر مقترن، ثم حدّث هذا العرض.",
-      search: "لا توجد جلسات على هذا المضيف تطابق بحثك.",
-      nonArchived: "لا توجد جلسات غير مؤرشفة على هذا المضيف.",
-    },
-    sidebar: {
-      title: "جلسات Codex",
-      unavailable: "جلسات Codex غير متاحة",
-      viewAll: "عرض كل جلسات Codex",
-      truncated: "تتوفر المزيد من الجلسات في الكتالوج الكامل.",
-    },
-    transcript: {
-      eyebrow: "نص Codex الكامل",
-      back: "كل جلسات Codex",
-      you: "أنت",
-      reasoning: "الاستدلال",
-      command: "الأمر",
-      fileChange: "تغيير في الملف",
-      item: "عنصر Codex",
-      details: "التفاصيل الكاملة",
-      loading: "جارٍ تحميل النص الكامل…",
-      loadMore: "تحميل عناصر أقدم من النص الكامل",
-    },
-  },
-  claudeSessions: {
-    eyebrow: "أسطول Claude",
-    title: "جلسات Claude عبر أجهزة الكمبيوتر لديك",
-    subtitle:
-      "تصفح جلسات Claude CLI وClaude Desktop غير المؤرشفة واقرأ نصوصها المحلية المقسّمة إلى صفحات.",
-    summaryLabel: "ملخص جلسة Claude",
-    summary: {
-      sessions: "الجلسات",
-      onlineHosts: "متصل",
-      hosts: "المضيفون",
-    },
-    searchLabel: "البحث في جلسات Claude",
-    searchPlaceholder: "البحث في عناوين الجلسات",
-    refresh: "تحديث",
-    disconnected: "أعد الاتصال بـ gateway لتحديث جلسات Claude.",
-    partial: "عدد المضيفين غير المتاحين: {count}. لا يزال بقية المضيفين متاحين.",
-    loading: "جارٍ تحميل جلسات Claude…",
-    loadMore: "تحميل المزيد",
-    loadingMore: "جارٍ التحميل…",
-    untitled: "جلسة Claude بلا عنوان",
-    sessionId: "الجلسة",
-    stored: "مخزّن",
-    read: "تمت القراءة",
-    readLabel: "قراءة نص الجلسة لـ {title}",
-    host: {
-      gateway: "Gateway",
-      node: "عقدة",
-      connected: "متصل",
-      offline: "غير متصل",
-      unavailable: "فهرس الجلسات غير متاح",
-      sessionCount: "{count} معروضة",
-    },
-    empty: {
-      title: "لم يتم العثور على جلسات Claude",
-      subtitle: "ثبّت Claude CLI أو Claude Desktop واستخدمه، ثم حدّث هذا العرض.",
-      search: "لا توجد جلسات على هذا المضيف تطابق بحثك.",
-      nonArchived: "لا توجد جلسات غير مؤرشفة على هذا المضيف.",
-    },
-    sidebar: {
-      title: "جلسات Claude",
-      viewAll: "عرض كل جلسات Claude",
-      truncated: "تتوفر جلسات إضافية في الفهرس الكامل.",
-    },
-    transcript: {
-      eyebrow: "نص جلسة Claude",
-      back: "كل جلسات Claude",
-      you: "أنت",
-      reasoning: "الاستدلال",
-      toolCall: "استدعاء الأداة",
-      toolResult: "نتيجة الأداة",
-      item: "عنصر Claude",
-      details: "التفاصيل الكاملة",
-      loading: "جارٍ تحميل النص…",
-      loadMore: "تحميل عناصر أقدم من النص",
-    },
-  },
   logbook: {
     duration: {
       minutes: "{minutes}m",
@@ -2074,6 +1932,11 @@ export const ar: TranslationMap = {
   chat: {
     disconnected: "تم قطع الاتصال بـ Gateway.",
     archivedSessionDisabled: "استعِد هذه الجلسة لإرسال الرسائل.",
+    loadOlder: "تحميل الأقدم",
+    catalog: {
+      remoteViewOnly: "هذه الجلسة موجودة على عقدة مقترنة وهي للعرض فقط.",
+      unsupportedViewOnly: "مصدر الجلسة الخارجية هذا للعرض فقط.",
+    },
     taskSuggestions: {
       eyebrow: "متابعة مقترحة",
       start: "البدء في شجرة عمل",
@@ -2320,6 +2183,8 @@ export const ar: TranslationMap = {
       finished: "مكتملة ({count})",
       stopTask: "إيقاف {title}",
       viewTranscript: "عرض النص",
+      toolUseOne: "استخدام واحد لأداة",
+      toolUseMany: "{count} استخدامات للأدوات",
     },
     sessionDiff: {
       title: "التغييرات",
@@ -2459,6 +2324,50 @@ export const ar: TranslationMap = {
       howHeading: "كيف يجب أن يعمل؟",
       howHint: "اختر طريقة تسليم النتائج.",
       title: "أتمتة جديدة",
+      createAndRun: "إنشاء وتشغيل الآن",
+    },
+    suggestions: {
+      title: "أفكار للأتمتة",
+      hint: "أتمتة جاهزة للبدء — اختر واحدة وعدّلها قبل الإنشاء.",
+      use: "استخدم الفكرة →",
+      ideas: {
+        repoPulse: {
+          name: "نبض المستودع",
+          tagline: "المشكلات وطلبات السحب وأعطال CI الليلية، مرتبة حسب الأولوية.",
+          prompt:
+            "راجع النشاط الليلي في مستودعاتي: المشكلات الجديدة، وطلبات السحب، وأعطال CI. لخّص الأمور الثلاثة الأكثر إلحاحاً اليوم، كل منها مع رابط وسبب في سطر واحد.",
+        },
+        standupGhostwriter: {
+          name: "كاتب Standup الخفي",
+          tagline: "تحديث Standup الخاص بك، مصاغ من عمل الأمس.",
+          prompt:
+            "صغ تحديث Standup الخاص بي من commits الأمس، وطلبات السحب المدمجة، وخيوط المراجعة المفتوحة. ثلاث نقاط كحد أقصى: تم، جارٍ، معلّق.",
+        },
+        hackerNewsScout: {
+          name: "كاشف Hacker News",
+          tagline: "ثلاثة روابط تستحق وقت قهوتك، مع آراء جريئة.",
+          prompt:
+            "تصفّح الصفحة الأمامية لـ Hacker News اليوم بحثاً عن منشورات حول وكلاء الذكاء الاصطناعي، وأدوات المطورين، وTypeScript. أرسل لي الروابط الثلاثة الأكثر إثارة، كل منها مع رأي جريء في سطر واحد.",
+        },
+        dependencyRadar: {
+          name: "رادار التبعيات",
+          tagline: "تبعيات قديمة أو ضعيفة، مع ملاحظات الترقية.",
+          prompt:
+            "تحقق من مشروعي الرئيسي بحثاً عن تبعيات قديمة أو ضعيفة. أدرج التحديثات الجديرة بالملاحظة مع ملاحظة مخاطر لكل منها في سطر واحد، وصغ أمر الترقية.",
+        },
+        watchdog: {
+          name: "حارس الليل",
+          tagline: "فحص صحي كل ساعة بحكم موجز في سطر واحد.",
+          prompt:
+            "تحقق من أن خدماتي و Gateway بصحة جيدة: افحص السجلات الأخيرة بحثاً عن أخطاء جديدة، أو إعادة تشغيل، أو حمل غير معتاد. أجب بسطر قصير واحد يفيد بأن كل شيء على ما يرام عندما يكون كذلك؛ وإذا بدا أن شيئاً معطلاً، أفد بما فشل وأين تبدأ البحث.",
+        },
+        polyglotMinute: {
+          name: "دقيقة متعددة اللغات",
+          tagline: "عبارة أجنبية مفيدة مع قهوة صباحك.",
+          prompt:
+            "علّمني عبارة مفيدة باللغة اليابانية: العبارة، وطريقة نطقها، ومعناها الحرفي، ومتى تُستخدم. اجعلها في أقل من خمسة أسطر.",
+        },
+      },
     },
     summary: {
       enabled: "مفعّل",

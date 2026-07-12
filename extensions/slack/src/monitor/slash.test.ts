@@ -361,7 +361,7 @@ function createDeferred<T>() {
 function createArgMenusHarness(
   cfg: OpenClawConfig = { commands: { native: true, nativeSkills: false } },
 ) {
-  const commands = new Map<string, (args: unknown) => Promise<void>>();
+  const commands = new Map<string | RegExp, (args: unknown) => Promise<void>>();
   const actions = new Map<string | RegExp, (args: unknown) => Promise<void>>();
   const options = new Map<string, (args: unknown) => Promise<void>>();
   const optionsReceiverContexts: unknown[] = [];
@@ -369,7 +369,7 @@ function createArgMenusHarness(
   const postEphemeral = vi.fn().mockResolvedValue({ ok: true });
   const app = {
     client: { chat: { postEphemeral } },
-    command: (name: string, handler: (args: unknown) => Promise<void>) => {
+    command: (name: string | RegExp, handler: (args: unknown) => Promise<void>) => {
       commands.set(name, handler);
     },
     action: (id: string | RegExp, handler: (args: unknown) => Promise<void>) => {
@@ -397,7 +397,7 @@ function createArgMenusHarness(
     useAccessGroups: false,
     channelsConfig: undefined,
     slashCommand: {
-      enabled: true,
+      enabled: false,
       name: "openclaw",
       ephemeral: true,
       sessionPrefix: "slack:slash",
@@ -656,6 +656,23 @@ describe("Slack native command argument menus", () => {
 
   beforeEach(() => {
     harness.postEphemeral.mockClear();
+  });
+
+  it("prefers the configured slash command over native commands", async () => {
+    const configuredHarness = createArgMenusHarness();
+    (
+      configuredHarness.ctx as {
+        slashCommand: { enabled: boolean };
+      }
+    ).slashCommand.enabled = true;
+    await registerCommands(configuredHarness.ctx, configuredHarness.account);
+
+    expect(
+      [...configuredHarness.commands.keys()].some(
+        (command) => command instanceof RegExp && command.test("/openclaw"),
+      ),
+    ).toBe(true);
+    expect(configuredHarness.commands.has("/usage")).toBe(false);
   });
 
   it("registers options handlers without losing app receiver binding", async () => {

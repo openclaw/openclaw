@@ -940,150 +940,6 @@ export const ja_JP: TranslationMap = {
     unavailableSubtitle:
       "The plugin that owns this tab is not active on the connected gateway, or it did not provide a panel.",
   },
-  codexSessions: {
-    eyebrow: "Codex フリート",
-    title: "すべてのコンピューター上のセッション",
-    interactiveSubtitle:
-      "モデル選択が Codex App Server の制御下にある Chat ブランチを開始し、対象となるローカルセッションを確認のうえアーカイブし、ペアリングされたコンピューターのセッションを表示します。",
-    summaryLabel: "Codex セッションの概要",
-    summary: {
-      sessions: "セッション",
-      onlineHosts: "オンライン",
-      hosts: "ホスト",
-    },
-    searchLabel: "Codex セッションを検索",
-    searchPlaceholder: "セッションタイトルを検索",
-    refresh: "更新",
-    disconnected: "Codex セッションを更新するには、Gateway に再接続してください。",
-    partial: "利用できないホストが {count} 台あります。他のホストは引き続き利用できます。",
-    loading: "Codex セッションを読み込み中…",
-    loadMore: "さらに読み込む",
-    loadingMore: "読み込み中…",
-    untitled: "無題の Codex セッション",
-    threadId: "スレッド",
-    actions: {
-      continue: "続行",
-      continueAsBranch: "ブランチとして続行",
-      openChat: "Chat を開く",
-      continuing: "続行中…",
-      archive: "アーカイブ",
-      readTranscript: "読み取り",
-      readTranscriptLabel: "{title} のトランスクリプトを読む",
-      continueLabel: "{title} を続行",
-      continueAsBranchLabel: "{title} をブランチとして続行",
-      openChatLabel: "{title} の Chat を開く",
-      continueAsBranchHint:
-        "永続化された表示中の履歴から Chat を作成します。最初のメッセージで、Codex App Server が新しいハーネススレッドのモデルとプロバイダーを選択します。その後の選択も Codex の制御下に留まり、OpenClaw が別のランタイム、モデル、またはフォールバックに置き換えることはありません。ソースは変更されず、進行中の作業は含まれない場合があります。",
-      archiveLabel: "{title} をアーカイブ",
-      archiveConfirmation:
-        "{title} と、そこから生成されたすべての子孫をアーカイブしますか？他の Codex クライアントまたは OpenClaw ランナーがそれらを使用していないことを確認してください。別のランナーがアクティブな状態でアーカイブすると、その作業が中断される場合があります。",
-      active: "アクティブなセッションでは、ブランチを開始したりアーカイブしたりできません。",
-      archiveActivityUnknownHint:
-        "ステータスはプロセスローカルであるため、アクティビティは不明です。他の Codex クライアントまたはランナーがこのセッションを使用していないことを確認してからアーカイブしてください。",
-      statusUnavailable: "この Codex セッションは現在の状態では管理できません。",
-      hostOffline: "Codex セッションを管理する前に、このコンピューターに再接続してください。",
-      gatewayOffline: "Codex セッションを管理する前に、gateway に再接続してください。",
-      remoteReadOnly: "ペアリング済みコンピューターのセッションは、現時点では表示専用です。",
-    },
-    status: {
-      active: "アクティブ",
-      idle: "アイドル",
-      archived: "アーカイブ済み",
-      storedActivityUnknown: "保存済み / アクティビティ不明",
-      systemError: "システムエラー",
-      unknown: "不明",
-    },
-    host: {
-      gateway: "Gateway",
-      node: "ノード",
-      connected: "接続済み",
-      offline: "オフライン",
-      unavailable: "セッションカタログを利用できません",
-      sessionCount: "{count} 件表示",
-    },
-    empty: {
-      title: "Codex ホストが見つかりません",
-      supervisionSubtitle:
-        "gateway またはペアリング済みのコンピューターで Codex supervision を有効にしてから、このビューを更新してください。",
-      search: "このホストに検索条件と一致するセッションはありません。",
-      nonArchived: "このホストにはアーカイブされていないセッションがありません。",
-    },
-    sidebar: {
-      title: "Codex セッション",
-      unavailable: "Codex セッションは利用できません",
-      viewAll: "すべての Codex セッションを表示",
-      truncated: "すべてのカタログには、さらに多くのセッションがあります。",
-    },
-    transcript: {
-      eyebrow: "Codex トランスクリプト",
-      back: "すべての Codex セッション",
-      you: "あなた",
-      reasoning: "推論",
-      command: "コマンド",
-      fileChange: "ファイルの変更",
-      item: "Codex 項目",
-      details: "詳細をすべて表示",
-      loading: "トランスクリプトを読み込み中…",
-      loadMore: "古いトランスクリプト項目を読み込む",
-    },
-  },
-  claudeSessions: {
-    eyebrow: "Claude フリート",
-    title: "コンピューター全体の Claude セッション",
-    subtitle:
-      "アーカイブされていない Claude CLI および Claude Desktop のセッションを参照し、ページ分割されたローカルトランスクリプトを閲覧できます。",
-    summaryLabel: "Claude セッションの概要",
-    summary: {
-      sessions: "セッション",
-      onlineHosts: "オンライン",
-      hosts: "ホスト",
-    },
-    searchLabel: "Claude セッションを検索",
-    searchPlaceholder: "セッションタイトルを検索",
-    refresh: "更新",
-    disconnected: "Claude セッションを更新するには、Gateway に再接続してください。",
-    partial: "利用できないホストが {count} 台あります。他のホストは引き続き利用できます。",
-    loading: "Claude セッションを読み込み中…",
-    loadMore: "さらに読み込む",
-    loadingMore: "読み込み中…",
-    untitled: "無題の Claude セッション",
-    sessionId: "セッション",
-    stored: "保存済み",
-    read: "読み取り",
-    readLabel: "{title} のトランスクリプトを読む",
-    host: {
-      gateway: "Gateway",
-      node: "ノード",
-      connected: "接続済み",
-      offline: "オフライン",
-      unavailable: "セッションカタログを利用できません",
-      sessionCount: "{count} 件表示",
-    },
-    empty: {
-      title: "Claude セッションが見つかりません",
-      subtitle:
-        "Claude CLI または Claude Desktop をインストールして使用し、このビューを更新してください。",
-      search: "このホストに検索条件と一致するセッションはありません。",
-      nonArchived: "このホストにはアーカイブされていないセッションがありません。",
-    },
-    sidebar: {
-      title: "Claude セッション",
-      viewAll: "すべての Claude セッションを表示",
-      truncated: "完全なカタログには、さらに多くのセッションがあります。",
-    },
-    transcript: {
-      eyebrow: "Claude トランスクリプト",
-      back: "すべての Claude セッション",
-      you: "あなた",
-      reasoning: "推論",
-      toolCall: "ツール呼び出し",
-      toolResult: "ツールの結果",
-      item: "Claude項目",
-      details: "詳細をすべて表示",
-      loading: "トランスクリプトを読み込み中…",
-      loadMore: "古いトランスクリプト項目を読み込む",
-    },
-  },
   logbook: {
     duration: {
       minutes: "{minutes}m",
@@ -2107,6 +1963,11 @@ export const ja_JP: TranslationMap = {
   chat: {
     disconnected: "Gateway から切断されました。",
     archivedSessionDisabled: "メッセージを送信するには、このセッションを復元してください。",
+    loadOlder: "以前の項目を読み込む",
+    catalog: {
+      remoteViewOnly: "このセッションはペアリング済みノード上にあり、表示専用です。",
+      unsupportedViewOnly: "この外部セッションソースは表示専用です。",
+    },
     taskSuggestions: {
       eyebrow: "提案されたフォローアップ",
       start: "ワークツリーで開始",
@@ -2353,6 +2214,8 @@ export const ja_JP: TranslationMap = {
       finished: "完了（{count}）",
       stopTask: "{title}を停止",
       viewTranscript: "トランスクリプトを表示",
+      toolUseOne: "ツール使用 1 回",
+      toolUseMany: "ツール使用 {count} 回",
     },
     sessionDiff: {
       title: "変更",
@@ -2494,6 +2357,50 @@ export const ja_JP: TranslationMap = {
       howHeading: "どのように動作しますか？",
       howHint: "結果の配信方法を選択してください。",
       title: "新しい自動化",
+      createAndRun: "作成して今すぐ実行",
+    },
+    suggestions: {
+      title: "自動化のアイデア",
+      hint: "スターター自動化 — 一つ選んで、作成前に調整してください。",
+      use: "このアイデアを使う →",
+      ideas: {
+        repoPulse: {
+          name: "リポジトリパルス",
+          tagline: "夜間のIssue、PR、CIの失敗を緊急度順にランク付け。",
+          prompt:
+            "リポジトリの夜間アクティビティを確認してください：新しいIssue、プルリクエスト、CIの失敗。今日最も注意が必要な3つのことを、それぞれリンクと一行の理由とともにまとめてください。",
+        },
+        standupGhostwriter: {
+          name: "スタンダップ代筆",
+          tagline: "昨日の作業からスタンダップ更新を下書き。",
+          prompt:
+            "昨日のコミット、マージされたプルリクエスト、オープンなレビュースレッドからスタンダップ更新を下書きしてください。最大3つの箇条書きで：完了、対応中、ブロック中。",
+        },
+        hackerNewsScout: {
+          name: "Hacker Newsスカウト",
+          tagline: "コーヒーを片手に読む価値のある3つのリンクと注目意見。",
+          prompt:
+            "今日のHacker Newsフロントページから、AIエージェント、開発者ツール、TypeScriptに関する投稿をスキャンしてください。最も興味深い3つのリンクを、それぞれ一行の注目意見とともに送ってください。",
+        },
+        dependencyRadar: {
+          name: "依存関係レーダー",
+          tagline: "古いまたは脆弱な依存関係をアップグレードメモ付きで表示。",
+          prompt:
+            "メインプロジェクトの古いまたは脆弱な依存関係を確認してください。注目すべきアップデートを一行のリスクメモとともにリストアップし、アップグレードコマンドを下書きしてください。",
+        },
+        watchdog: {
+          name: "夜間監視",
+          tagline: "1行の判定付き、毎時ヘルスチェック。",
+          prompt:
+            "サービスとGatewayが正常かどうかを確認してください：最近のログで新しいエラー、再起動、または異常な負荷をスキャンしてください。すべて問題ない場合は短い1行のオールクリアメッセージで返答してください。問題が見つかった場合は、何が失敗したか、どこから調査を始めるべきかを報告してください。",
+        },
+        polyglotMinute: {
+          name: "ポリグロットミニッツ",
+          tagline: "朝のコーヒーとともに、役立つ外国語フレーズを一つ。",
+          prompt:
+            "日本語で役立つフレーズを一つ教えてください：そのフレーズ、発音の仕方、直訳の意味、そして使う場面を教えてください。5行以内にまとめてください。",
+        },
+      },
     },
     summary: {
       enabled: "有効",

@@ -940,150 +940,6 @@ export const pl: TranslationMap = {
     unavailableSubtitle:
       "The plugin that owns this tab is not active on the connected gateway, or it did not provide a panel.",
   },
-  codexSessions: {
-    eyebrow: "Flota Codex",
-    title: "Sesje na Twoich komputerach",
-    interactiveSubtitle:
-      "Rozpocznij gałąź Chat, której wybór modelu pozostaje pod kontrolą Codex App Server, archiwizuj kwalifikujące się sesje lokalne po potwierdzeniu i wyświetlaj sesje ze sparowanymi komputerami.",
-    summaryLabel: "Podsumowanie sesji Codex",
-    summary: {
-      sessions: "sesje",
-      onlineHosts: "online",
-      hosts: "hosty",
-    },
-    searchLabel: "Wyszukaj sesje Codex",
-    searchPlaceholder: "Wyszukaj tytuły sesji",
-    refresh: "Odśwież",
-    disconnected: "Połącz się ponownie z Gateway, aby odświeżyć sesje Codex.",
-    partial: "Niedostępne hosty: {count}. Pozostałe hosty są nadal dostępne.",
-    loading: "Wczytywanie sesji Codex…",
-    loadMore: "Wczytaj więcej",
-    loadingMore: "Wczytywanie…",
-    untitled: "Sesja Codex bez tytułu",
-    threadId: "Wątek",
-    actions: {
-      continue: "Kontynuuj",
-      continueAsBranch: "Kontynuuj jako gałąź",
-      openChat: "Otwórz Chat",
-      continuing: "Kontynuowanie…",
-      archive: "Archiwizuj",
-      readTranscript: "Odczytane",
-      readTranscriptLabel: "Przeczytaj transkrypcję dla {title}",
-      continueLabel: "Kontynuuj {title}",
-      continueAsBranchLabel: "Kontynuuj {title} jako gałąź",
-      openChatLabel: "Otwórz Chat dla {title}",
-      continueAsBranchHint:
-        "Utwórz Chat na podstawie utrwalonej widocznej historii. Przy pierwszej wiadomości Codex App Server wybiera model i dostawcę dla nowego wątku harness. Późniejszy wybór pozostaje kontrolowany przez Codex; OpenClaw nigdy nie zastępuje go innym środowiskiem uruchomieniowym, modelem ani mechanizmem awaryjnym. Źródło pozostaje nienaruszone, a prace w toku mogą być nieobecne.",
-      archiveLabel: "Archiwizuj {title}",
-      archiveConfirmation:
-        "Zarchiwizować {title} i wszystkie utworzone z niego elementy podrzędne? Potwierdź, że żaden inny klient Codex ani runner OpenClaw ich nie używa. Archiwizacja, gdy aktywny jest inny runner, może przerwać jego pracę.",
-      active: "Aktywne sesje nie mogą rozpocząć gałęzi ani zostać zarchiwizowane.",
-      archiveActivityUnknownHint:
-        "Aktywność jest nieznana, ponieważ status jest lokalny dla procesu. Zarchiwizuj dopiero po potwierdzeniu, że żaden inny klient Codex ani runner nie używa tej sesji.",
-      statusUnavailable: "Tą sesją Codex nie można zarządzać w jej bieżącym stanie.",
-      hostOffline: "Połącz ponownie ten komputer, zanim zaczniesz zarządzać jego sesjami Codex.",
-      gatewayOffline: "Połącz ponownie z gateway, zanim zaczniesz zarządzać sesjami Codex.",
-      remoteReadOnly: "Sesje sparowanego komputera są na razie tylko do odczytu.",
-    },
-    status: {
-      active: "Aktywna",
-      idle: "Bezczynna",
-      archived: "Zarchiwizowana",
-      storedActivityUnknown: "Zapisana / aktywność nieznana",
-      systemError: "Błąd systemu",
-      unknown: "Nieznany",
-    },
-    host: {
-      gateway: "Gateway",
-      node: "Węzeł",
-      connected: "Połączono",
-      offline: "Offline",
-      unavailable: "Katalog sesji jest niedostępny",
-      sessionCount: "{count} wyświetlonych",
-    },
-    empty: {
-      title: "Nie znaleziono hostów Codex",
-      supervisionSubtitle:
-        "Włącz nadzór Codex w gateway lub na sparowanym komputerze, a następnie odśwież ten widok.",
-      search: "Żadna sesja na tym hoście nie pasuje do wyszukiwania.",
-      nonArchived: "Brak niezarchiwizowanych sesji na tym hoście.",
-    },
-    sidebar: {
-      title: "Sesje Codex",
-      unavailable: "Sesje Codex są niedostępne",
-      viewAll: "Wyświetl wszystkie sesje Codex",
-      truncated: "Więcej sesji jest dostępnych w pełnym katalogu.",
-    },
-    transcript: {
-      eyebrow: "Transkrypcja Codex",
-      back: "Wszystkie sesje Codex",
-      you: "Ty",
-      reasoning: "Rozumowanie",
-      command: "Polecenie",
-      fileChange: "Zmiana w pliku",
-      item: "Element Codex",
-      details: "Pełne szczegóły",
-      loading: "Ładowanie transkrypcji…",
-      loadMore: "Załaduj starsze elementy transkrypcji",
-    },
-  },
-  claudeSessions: {
-    eyebrow: "Flota Claude",
-    title: "Sesje Claude na Twoich komputerach",
-    subtitle:
-      "Przeglądaj niezarchiwizowane sesje Claude CLI i Claude Desktop oraz czytaj ich stronicowane lokalne transkrypcje.",
-    summaryLabel: "Podsumowanie sesji Claude",
-    summary: {
-      sessions: "sesje",
-      onlineHosts: "online",
-      hosts: "hosty",
-    },
-    searchLabel: "Szukaj sesji Claude",
-    searchPlaceholder: "Wyszukaj tytuły sesji",
-    refresh: "Odśwież",
-    disconnected: "Połącz ponownie z Gateway, aby odświeżyć sesje Claude.",
-    partial: "Niedostępne hosty: {count}. Pozostałe hosty są nadal dostępne.",
-    loading: "Ładowanie sesji Claude…",
-    loadMore: "Wczytaj więcej",
-    loadingMore: "Wczytywanie…",
-    untitled: "Sesja Claude bez tytułu",
-    sessionId: "Sesja",
-    stored: "Zapisana",
-    read: "Odczytane",
-    readLabel: "Przeczytaj transkrypcję dla {title}",
-    host: {
-      gateway: "Gateway",
-      node: "Węzeł",
-      connected: "Połączono",
-      offline: "Offline",
-      unavailable: "Katalog sesji jest niedostępny",
-      sessionCount: "{count} wyświetlonych",
-    },
-    empty: {
-      title: "Nie znaleziono sesji Claude",
-      subtitle:
-        "Zainstaluj Claude CLI lub Claude Desktop i użyj go, a następnie odśwież ten widok.",
-      search: "Żadna sesja na tym hoście nie pasuje do wyszukiwania.",
-      nonArchived: "Brak niezarchiwizowanych sesji na tym hoście.",
-    },
-    sidebar: {
-      title: "Sesje Claude",
-      viewAll: "Wyświetl wszystkie sesje Claude",
-      truncated: "Więcej sesji jest dostępnych w pełnym katalogu.",
-    },
-    transcript: {
-      eyebrow: "Transkrypcja Claude",
-      back: "Wszystkie sesje Claude",
-      you: "Ty",
-      reasoning: "Rozumowanie",
-      toolCall: "Wywołanie narzędzia",
-      toolResult: "Wynik narzędzia",
-      item: "Element Claude",
-      details: "Pełne szczegóły",
-      loading: "Ładowanie transkrypcji…",
-      loadMore: "Załaduj starsze elementy transkrypcji",
-    },
-  },
   logbook: {
     duration: {
       minutes: "{minutes}m",
@@ -2109,6 +1965,11 @@ export const pl: TranslationMap = {
   chat: {
     disconnected: "Rozłączono z Gateway.",
     archivedSessionDisabled: "Przywróć tę sesję, aby wysyłać wiadomości.",
+    loadOlder: "Załaduj starsze",
+    catalog: {
+      remoteViewOnly: "Ta sesja znajduje się na sparowanym węźle i jest tylko do odczytu.",
+      unsupportedViewOnly: "To zewnętrzne źródło sesji jest tylko do odczytu.",
+    },
     taskSuggestions: {
       eyebrow: "Sugerowane zadanie uzupełniające",
       start: "Uruchom w drzewie roboczym",
@@ -2357,6 +2218,8 @@ export const pl: TranslationMap = {
       finished: "Ukończone ({count})",
       stopTask: "Zatrzymaj {title}",
       viewTranscript: "Wyświetl transkrypcję",
+      toolUseOne: "1 użycie narzędzia",
+      toolUseMany: "{count} użyć narzędzia",
     },
     sessionDiff: {
       title: "Zmiany",
@@ -2498,6 +2361,50 @@ export const pl: TranslationMap = {
       howHeading: "Jak ma działać?",
       howHint: "Wybierz sposób dostarczania wyników.",
       title: "Nowa automatyzacja",
+      createAndRun: "Utwórz i uruchom teraz",
+    },
+    suggestions: {
+      title: "Pomysły na automatyzację",
+      hint: "Gotowe automatyzacje — wybierz jedną i dostosuj ją przed utworzeniem.",
+      use: "Użyj pomysłu →",
+      ideas: {
+        repoPulse: {
+          name: "Puls repozytorium",
+          tagline: "Nocne zgłoszenia, PR-y i błędy CI, posortowane według pilności.",
+          prompt:
+            "Przejrzyj nocną aktywność w moich repozytoriach: nowe zgłoszenia, pull requesty i błędy CI. Podsumuj trzy rzeczy, które najbardziej wymagają mojej uwagi dzisiaj, każda z linkiem i jednozdaniowym uzasadnieniem.",
+        },
+        standupGhostwriter: {
+          name: "Ghostwriter na standup",
+          tagline: "Twoja aktualizacja na standup, opracowana na podstawie wczorajszej pracy.",
+          prompt:
+            "Przygotuj moją aktualizację na standup na podstawie wczorajszych commitów, scalonych pull requestów i otwartych wątków recenzji. Maksymalnie trzy punkty: zrobione, w toku, zablokowane.",
+        },
+        hackerNewsScout: {
+          name: "Zwiadowca Hacker News",
+          tagline: "Trzy linki warte twojej kawy, z gorącymi komentarzami.",
+          prompt:
+            "Przeskanuj dzisiejszą stronę główną Hacker News w poszukiwaniu postów o agentach AI, narzędziach dla deweloperów i TypeScript. Wyślij mi trzy najciekawsze linki, każdy z jednozdaniowym gorącym komentarzem.",
+        },
+        dependencyRadar: {
+          name: "Radar zależności",
+          tagline: "Przestarzałe lub podatne zależności wraz z uwagami dotyczącymi aktualizacji.",
+          prompt:
+            "Sprawdź mój główny projekt pod kątem przestarzałych lub podatnych zależności. Wymień istotne aktualizacje z jednozdaniową oceną ryzyka każdej z nich i przygotuj polecenie aktualizacji.",
+        },
+        watchdog: {
+          name: "Nocna warta",
+          tagline: "Godzinny test stanu z jednowierszowym podsumowaniem.",
+          prompt:
+            "Sprawdź, czy moje usługi i Gateway działają poprawnie: przeskanuj ostatnie logi pod kątem nowych błędów, restartów lub nietypowego obciążenia. Odpowiedz jedną krótką linią potwierdzającą prawidłowe działanie, gdy wszystko jest w porządku; jeśli coś wygląda na uszkodzone, podaj co zawiodło i od czego zacząć sprawdzanie.",
+        },
+        polyglotMinute: {
+          name: "Minuta poligloty",
+          tagline: "Jedno przydatne obcojęzyczne wyrażenie do porannej kawy.",
+          prompt:
+            "Naucz mnie jednego przydatnego wyrażenia po japońsku: samo wyrażenie, jego wymowę, dosłowne znaczenie i kiedy go używać. Zmieść się w pięciu linijkach.",
+        },
+      },
     },
     summary: {
       enabled: "Włączone",

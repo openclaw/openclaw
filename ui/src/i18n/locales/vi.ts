@@ -933,149 +933,6 @@ export const vi: TranslationMap = {
     unavailableSubtitle:
       "The plugin that owns this tab is not active on the connected gateway, or it did not provide a panel.",
   },
-  codexSessions: {
-    eyebrow: "Nhóm thiết bị Codex",
-    title: "Phiên trên các máy tính của bạn",
-    interactiveSubtitle:
-      "Bắt đầu một nhánh Chat có lựa chọn mô hình luôn nằm dưới sự kiểm soát của Codex App Server, lưu trữ các phiên cục bộ đủ điều kiện sau khi xác nhận, và xem các phiên trên máy tính đã ghép đôi.",
-    summaryLabel: "Tóm tắt phiên Codex",
-    summary: {
-      sessions: "phiên",
-      onlineHosts: "trực tuyến",
-      hosts: "máy",
-    },
-    searchLabel: "Tìm kiếm phiên Codex",
-    searchPlaceholder: "Tìm theo tiêu đề phiên",
-    refresh: "Làm mới",
-    disconnected: "Kết nối lại với Gateway để làm mới các phiên Codex.",
-    partial: "{count} máy không khả dụng. Các máy khác vẫn khả dụng.",
-    loading: "Đang tải các phiên Codex…",
-    loadMore: "Tải thêm",
-    loadingMore: "Đang tải…",
-    untitled: "Phiên Codex chưa có tiêu đề",
-    threadId: "Mã luồng",
-    actions: {
-      continue: "Tiếp tục",
-      continueAsBranch: "Tiếp tục dưới dạng nhánh",
-      openChat: "Mở Chat",
-      continuing: "Đang tiếp tục…",
-      archive: "Lưu trữ",
-      readTranscript: "Đã đọc",
-      readTranscriptLabel: "Đọc bản ghi cho {title}",
-      continueLabel: "Tiếp tục {title}",
-      continueAsBranchLabel: "Tiếp tục {title} dưới dạng nhánh",
-      openChatLabel: "Mở Chat cho {title}",
-      continueAsBranchHint:
-        "Tạo một Chat từ lịch sử hiển thị đã được lưu giữ. Ở tin nhắn đầu tiên của bạn, Codex App Server sẽ chọn mô hình và nhà cung cấp cho luồng harness mới. Các lựa chọn về sau vẫn do Codex kiểm soát; OpenClaw không bao giờ thay thế bằng runtime, mô hình hoặc phương án dự phòng khác. Nguồn vẫn được giữ nguyên, và công việc đang thực hiện có thể không có.",
-      archiveLabel: "Lưu trữ {title}",
-      archiveConfirmation:
-        "Lưu trữ {title} và mọi phiên con được tạo ra? Hãy xác nhận rằng không có Codex client hoặc OpenClaw runner nào khác đang sử dụng chúng. Lưu trữ trong khi một runner khác đang hoạt động có thể làm gián đoạn công việc của runner đó.",
-      active: "Không thể bắt đầu một nhánh hoặc lưu trữ các phiên đang hoạt động.",
-      archiveActivityUnknownHint:
-        "Hoạt động không xác định vì trạng thái chỉ cục bộ theo tiến trình. Chỉ lưu trữ sau khi xác nhận rằng không có Codex client hoặc runner nào khác đang sử dụng phiên này.",
-      statusUnavailable: "Không thể quản lý phiên Codex này ở trạng thái hiện tại.",
-      hostOffline: "Kết nối lại máy tính này trước khi quản lý các phiên Codex của máy.",
-      gatewayOffline: "Kết nối lại với gateway trước khi quản lý các phiên Codex.",
-      remoteReadOnly: "Các phiên trên máy tính đã ghép nối hiện chỉ có thể xem.",
-    },
-    status: {
-      active: "Đang hoạt động",
-      idle: "Đang chờ",
-      archived: "Đã lưu trữ",
-      storedActivityUnknown: "Đã lưu trữ / không rõ hoạt động",
-      systemError: "Lỗi hệ thống",
-      unknown: "Không xác định",
-    },
-    host: {
-      gateway: "Gateway",
-      node: "Nút",
-      connected: "Đã kết nối",
-      offline: "Ngoại tuyến",
-      unavailable: "Danh mục phiên không khả dụng",
-      sessionCount: "{count} hiển thị",
-    },
-    empty: {
-      title: "Không tìm thấy máy nào chia sẻ phiên Codex",
-      supervisionSubtitle:
-        "Bật tính năng giám sát Codex trên gateway hoặc một máy tính đã ghép đôi, rồi làm mới chế độ xem này.",
-      search: "Không có phiên nào trên máy này khớp với từ khóa tìm kiếm.",
-      nonArchived: "Không có phiên chưa lưu trữ nào trên máy chủ này.",
-    },
-    sidebar: {
-      title: "Phiên Codex",
-      unavailable: "Phiên Codex không khả dụng",
-      viewAll: "Xem tất cả phiên Codex",
-      truncated: "Có thêm phiên trong danh mục đầy đủ.",
-    },
-    transcript: {
-      eyebrow: "Bản ghi Codex",
-      back: "Tất cả phiên Codex",
-      you: "Bạn",
-      reasoning: "Lập luận",
-      command: "Lệnh",
-      fileChange: "Thay đổi tệp",
-      item: "Mục Codex",
-      details: "Chi tiết đầy đủ",
-      loading: "Đang tải bản ghi…",
-      loadMore: "Tải các mục bản ghi cũ hơn",
-    },
-  },
-  claudeSessions: {
-    eyebrow: "Đội Claude",
-    title: "Phiên Claude trên các máy tính của bạn",
-    subtitle:
-      "Duyệt các phiên Claude CLI và Claude Desktop chưa lưu trữ, đồng thời đọc bản ghi cục bộ được phân trang của chúng.",
-    summaryLabel: "Tóm tắt phiên Claude",
-    summary: {
-      sessions: "phiên",
-      onlineHosts: "trực tuyến",
-      hosts: "máy",
-    },
-    searchLabel: "Tìm kiếm phiên Claude",
-    searchPlaceholder: "Tìm theo tiêu đề phiên",
-    refresh: "Làm mới",
-    disconnected: "Kết nối lại với gateway để làm mới các phiên Claude.",
-    partial: "{count} máy không khả dụng. Các máy khác vẫn khả dụng.",
-    loading: "Đang tải phiên Claude…",
-    loadMore: "Tải thêm",
-    loadingMore: "Đang tải…",
-    untitled: "Phiên Claude không có tiêu đề",
-    sessionId: "Phiên",
-    stored: "Đã lưu",
-    read: "Đã đọc",
-    readLabel: "Đọc bản ghi cho {title}",
-    host: {
-      gateway: "Gateway",
-      node: "Nút",
-      connected: "Đã kết nối",
-      offline: "Ngoại tuyến",
-      unavailable: "Danh mục phiên không khả dụng",
-      sessionCount: "{count} hiển thị",
-    },
-    empty: {
-      title: "Không tìm thấy phiên Claude nào",
-      subtitle: "Cài đặt và sử dụng Claude CLI hoặc Claude Desktop, sau đó làm mới chế độ xem này.",
-      search: "Không có phiên nào trên máy này khớp với từ khóa tìm kiếm.",
-      nonArchived: "Không có phiên chưa lưu trữ nào trên máy chủ này.",
-    },
-    sidebar: {
-      title: "Phiên Claude",
-      viewAll: "Xem tất cả phiên Claude",
-      truncated: "Có thêm phiên trong danh mục đầy đủ.",
-    },
-    transcript: {
-      eyebrow: "Bản ghi Claude",
-      back: "Tất cả phiên Claude",
-      you: "Bạn",
-      reasoning: "Lập luận",
-      toolCall: "Lệnh gọi công cụ",
-      toolResult: "Kết quả công cụ",
-      item: "Mục Claude",
-      details: "Chi tiết đầy đủ",
-      loading: "Đang tải bản ghi…",
-      loadMore: "Tải các mục bản ghi cũ hơn",
-    },
-  },
   logbook: {
     duration: {
       minutes: "{minutes}m",
@@ -2088,6 +1945,11 @@ export const vi: TranslationMap = {
   chat: {
     disconnected: "Đã ngắt kết nối khỏi gateway.",
     archivedSessionDisabled: "Khôi phục phiên này để gửi tin nhắn.",
+    loadOlder: "Tải mục cũ hơn",
+    catalog: {
+      remoteViewOnly: "Phiên này nằm trên một nút đã ghép nối và chỉ có thể xem.",
+      unsupportedViewOnly: "Nguồn phiên bên ngoài này chỉ có thể xem.",
+    },
     taskSuggestions: {
       eyebrow: "Tác vụ tiếp theo được đề xuất",
       start: "Bắt đầu trong worktree",
@@ -2334,6 +2196,8 @@ export const vi: TranslationMap = {
       finished: "Đã hoàn tất ({count})",
       stopTask: "Dừng {title}",
       viewTranscript: "Xem bản ghi",
+      toolUseOne: "1 lần sử dụng công cụ",
+      toolUseMany: "{count} lần sử dụng công cụ",
     },
     sessionDiff: {
       title: "Thay đổi",
@@ -2474,6 +2338,50 @@ export const vi: TranslationMap = {
       howHeading: "Nó nên hoạt động như thế nào?",
       howHint: "Chọn cách gửi kết quả.",
       title: "Tự động hóa mới",
+      createAndRun: "Tạo & chạy ngay",
+    },
+    suggestions: {
+      title: "Ý tưởng tự động hóa",
+      hint: "Các tự động hóa mẫu — chọn một cái và chỉnh sửa trước khi tạo.",
+      use: "Dùng ý tưởng →",
+      ideas: {
+        repoPulse: {
+          name: "Repo pulse",
+          tagline: "Các issue, PR và lỗi CI qua đêm, xếp hạng theo mức độ khẩn cấp.",
+          prompt:
+            "Xem lại hoạt động qua đêm trong các repository của tôi: issue mới, pull request và lỗi CI. Tóm tắt ba điều cần chú ý nhất hôm nay, mỗi điều kèm một liên kết và một câu lý do ngắn.",
+        },
+        standupGhostwriter: {
+          name: "Soạn thảo standup",
+          tagline: "Bản cập nhật standup của bạn, được soạn từ công việc hôm qua.",
+          prompt:
+            "Soạn bản cập nhật standup của tôi từ các commit hôm qua, pull request đã merge và các luồng review đang mở. Tối đa ba gạch đầu dòng: đã xong, đang làm, bị chặn.",
+        },
+        hackerNewsScout: {
+          name: "Hacker News scout",
+          tagline: "Ba liên kết đáng đọc trong lúc uống cà phê, kèm nhận xét nhanh.",
+          prompt:
+            "Quét trang đầu Hacker News hôm nay để tìm các bài về AI agents, công cụ lập trình và TypeScript. Gửi cho tôi ba liên kết thú vị nhất, mỗi cái kèm một nhận xét ngắn.",
+        },
+        dependencyRadar: {
+          name: "Dependency radar",
+          tagline: "Các dependency lỗi thời hoặc có lỗ hổng bảo mật, kèm ghi chú nâng cấp.",
+          prompt:
+            "Kiểm tra dự án chính của tôi để tìm các dependency lỗi thời hoặc có lỗ hổng bảo mật. Liệt kê các bản cập nhật đáng chú ý kèm một câu ghi chú rủi ro, và soạn lệnh nâng cấp.",
+        },
+        watchdog: {
+          name: "Canh đêm",
+          tagline: "Kiểm tra sức khỏe hàng giờ với một dòng kết luận.",
+          prompt:
+            "Kiểm tra xem các dịch vụ và gateway của tôi có hoạt động bình thường không: quét nhật ký gần đây để tìm lỗi mới, khởi động lại, hoặc tải bất thường. Trả lời bằng một dòng ngắn xác nhận tất cả ổn khi mọi thứ bình thường; nếu có gì đó trục trặc, hãy báo cáo những gì đã hỏng và nên bắt đầu kiểm tra ở đâu.",
+        },
+        polyglotMinute: {
+          name: "Phút đa ngôn ngữ",
+          tagline: "Một cụm từ ngoại ngữ hữu ích cùng tách cà phê buổi sáng.",
+          prompt:
+            "Dạy tôi một cụm từ hữu ích trong tiếng Nhật: cụm từ đó, cách phát âm, nghĩa đen và khi nào nên dùng. Giữ trong vòng năm dòng.",
+        },
+      },
     },
     summary: {
       enabled: "Đã bật",

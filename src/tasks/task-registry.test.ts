@@ -178,7 +178,7 @@ function configureTaskRegistryMaintenanceRuntimeForTest(params: {
     listSessionBindingsBySession: () => params.sessionBindings ?? [],
     closeAcpSession: params.closeAcpSession,
     unbindSessionBindings: params.unbindSessionBindings,
-    loadSessionStore: () => ({}),
+    listSessionEntries: () => [],
     resolveStorePath: () => "",
     parseAgentSessionKey: () => null as ParsedAgentSessionKey | null,
     isCronJobActive: () => false,
@@ -530,6 +530,51 @@ describe("task-registry", () => {
         runtime: "acp",
         status: "succeeded",
         endedAt: 250,
+      });
+    });
+  });
+
+  it("tracks tool activity from tool-start events", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest();
+
+      createTaskRecord({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:main:subagent:tools",
+        runId: "run-tools",
+        task: "Sweep the repo",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        startedAt: 100,
+      });
+
+      emitAgentEvent({
+        runId: "run-tools",
+        stream: "tool",
+        data: { phase: "start", name: "read", toolCallId: "call-1" },
+      });
+      emitAgentEvent({
+        runId: "run-tools",
+        stream: "tool",
+        data: { phase: "end", name: "read", toolCallId: "call-1" },
+      });
+      emitAgentEvent({
+        runId: "run-tools",
+        stream: "tool",
+        data: { phase: "start", name: "exec", toolCallId: "call-2" },
+      });
+      // Nameless starts refresh lastEventAt but must not count as activity.
+      emitAgentEvent({
+        runId: "run-tools",
+        stream: "tool",
+        data: { phase: "start", toolCallId: "call-3" },
+      });
+
+      expectRecordFields(requireTaskByRunId("run-tools"), {
+        toolUseCount: 2,
+        lastToolName: "exec",
       });
     });
   });
@@ -3332,7 +3377,7 @@ describe("task-registry", () => {
           entry: undefined,
           storeReadFailed: false,
         }),
-        loadSessionStore: () => ({}),
+        listSessionEntries: () => [],
         resolveStorePath: () => "",
         parseAgentSessionKey: () => null,
         isCronJobActive: () => false,

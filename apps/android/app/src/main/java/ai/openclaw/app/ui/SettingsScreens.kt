@@ -37,6 +37,7 @@ import ai.openclaw.app.node.DeviceNotificationListenerService
 import ai.openclaw.app.photoReadPermissionsForRequest
 import ai.openclaw.app.reconcileRestoredAction
 import ai.openclaw.app.setAppLanguage
+import ai.openclaw.app.ui.design.ClawAgentAvatar
 import ai.openclaw.app.ui.design.ClawDetailRow
 import ai.openclaw.app.ui.design.ClawIconBadge
 import ai.openclaw.app.ui.design.ClawListItem
@@ -56,6 +57,7 @@ import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.design.OpenClawMascot
 import ai.openclaw.app.ui.design.TalkWaveform
 import ai.openclaw.app.ui.design.TalkWaveformPhase
+import ai.openclaw.app.ui.design.agentAvatarSource
 import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -763,6 +765,7 @@ private fun NotificationSettingsScreen(
   onBack: () -> Unit,
 ) {
   val context = LocalContext.current
+  val lifecycleOwner = LocalLifecycleOwner.current
   val enabled by viewModel.notificationForwardingEnabled.collectAsState()
   val mode by viewModel.notificationForwardingMode.collectAsState()
   val packages by viewModel.notificationForwardingPackages.collectAsState()
@@ -785,6 +788,18 @@ private fun NotificationSettingsScreen(
       )
     }
   var listenerEnabled by remember { mutableStateOf(DeviceNotificationListenerService.isAccessEnabled(context)) }
+
+  DisposableEffect(lifecycleOwner, context) {
+    val observer =
+      LifecycleEventObserver { _, event ->
+        if (event == Lifecycle.Event.ON_RESUME) {
+          listenerEnabled = DeviceNotificationListenerService.isAccessEnabled(context)
+        }
+      }
+    lifecycleOwner.lifecycle.addObserver(observer)
+    onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+  }
+
   val notificationPermissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
       viewModel.setNotificationForwardingEnabled(granted)
@@ -827,7 +842,6 @@ private fun NotificationSettingsScreen(
         text = if (listenerEnabled) "Check Access" else "Open System Access",
         onClick = {
           openNotificationListenerSettings(context)
-          listenerEnabled = DeviceNotificationListenerService.isAccessEnabled(context)
         },
         modifier = Modifier.weight(1f),
       )
@@ -986,6 +1000,7 @@ private fun PhoneCapabilitiesScreen(
   var pendingAlwaysPreviousModeRaw by rememberSaveable { mutableStateOf<String?>(null) }
   var awaitingBackgroundSettings by rememberSaveable { mutableStateOf(false) }
   var showBackgroundLocationExplanation by rememberSaveable { mutableStateOf(false) }
+  var showInstalledAppsDisclosure by rememberSaveable { mutableStateOf(false) }
   var pendingPreciseLocation by rememberSaveable { mutableStateOf(false) }
   val backgroundPermissionLabel =
     remember(context) {
@@ -1156,6 +1171,14 @@ private fun PhoneCapabilitiesScreen(
     }
   }
 
+  fun setInstalledAppsSharing(checked: Boolean) {
+    if (checked) {
+      showInstalledAppsDisclosure = true
+    } else {
+      viewModel.revokeInstalledAppsDisclosureConsent()
+    }
+  }
+
   SettingsDetailFrame(title = "Phone Capabilities", subtitle = "Choose what this phone can share.", icon = Icons.AutoMirrored.Filled.ScreenShare, onBack = onBack) {
     SettingsTogglePanel(
       rows =
@@ -1178,7 +1201,7 @@ private fun PhoneCapabilitiesScreen(
             if (installedAppsSharingEnabled) "OpenClaw can list launcher-visible apps." else "App list stays on this phone.",
             Icons.Default.Storage,
             installedAppsSharingEnabled,
-            viewModel::setInstalledAppsSharingEnabled,
+            ::setInstalledAppsSharing,
           ),
           SettingsToggleRow("Keep Awake", "Keep the node available during active work.", Icons.Default.Bolt, preventSleep, viewModel::setPreventSleep),
           SettingsToggleRow("Canvas Status", "Show screen-sharing debug state.", Icons.AutoMirrored.Filled.ScreenShare, canvasDebugStatusEnabled, viewModel::setCanvasDebugStatusEnabled),
@@ -1201,6 +1224,16 @@ private fun PhoneCapabilitiesScreen(
         }
       }
     }
+  }
+
+  if (showInstalledAppsDisclosure) {
+    InstalledAppsDisclosureDialog(
+      onDismiss = { showInstalledAppsDisclosure = false },
+      onAgree = {
+        showInstalledAppsDisclosure = false
+        viewModel.grantInstalledAppsDisclosureConsent()
+      },
+    )
   }
 
   if (showBackgroundLocationExplanation) {
@@ -1244,6 +1277,37 @@ private fun PhoneCapabilitiesScreen(
       },
     )
   }
+}
+
+@Composable
+private fun InstalledAppsDisclosureDialog(
+  onDismiss: () -> Unit,
+  onAgree: () -> Unit,
+) {
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    title = { Text("Share installed app information?") },
+    text = {
+      Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(
+          "OpenClaw collects and sends the names, package IDs, and status of apps visible on this phone when your paired OpenClaw Gateway asks for them. This lets your assistant answer questions and take actions using installed apps.",
+        )
+        Text(
+          "Your phone sends this information to your Gateway, not to a server run by OpenClaw. Your Gateway may include it in requests to the AI provider you chose.",
+        )
+      }
+    },
+    confirmButton = {
+      TextButton(onClick = onAgree) {
+        Text("Agree and Enable")
+      }
+    },
+    dismissButton = {
+      TextButton(onClick = onDismiss) {
+        Text("Not Now")
+      }
+    },
+  )
 }
 
 @Composable
@@ -2191,7 +2255,11 @@ private fun AgentListRow(
   ClawDetailRow(
     title = agent.name?.takeIf { it.isNotBlank() } ?: agent.id,
     subtitle = if (isDefault) "Default assistant" else "Ready",
-    leading = { ClawTextBadge(text = agentBadge(agent)) },
+    leading = {
+      ClawAgentAvatar(source = agentAvatarSource(agent), size = 30.dp) {
+        ClawTextBadge(text = agentBadge(agent))
+      }
+    },
     trailing = { ClawStatusPill(text = if (isDefault) "Default" else "Ready", status = ClawStatus.Success) },
   )
 }

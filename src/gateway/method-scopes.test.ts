@@ -67,6 +67,10 @@ describe("method scope resolution", () => {
     ["sessions.groups.put", ["operator.write"]],
     ["sessions.groups.rename", ["operator.write"]],
     ["sessions.groups.delete", ["operator.write"]],
+    ["sessions.catalog.list", ["operator.read"]],
+    ["sessions.catalog.read", ["operator.read"]],
+    ["sessions.catalog.continue", ["operator.write"]],
+    ["sessions.catalog.archive", ["operator.write"]],
     ["environments.status", ["operator.read"]],
     ["diagnostics.stability", ["operator.read"]],
     ["skills.curator.status", ["operator.read"]],
@@ -476,18 +480,21 @@ describe("operator scope authorization", () => {
     });
   });
 
-  it.each(["exec.approval.get", "exec.approval.list", "exec.approval.resolve"])(
-    "requires approvals scope for %s",
-    (method) => {
-      expect(authorizeOperatorScopesForMethod(method, ["operator.write"])).toEqual({
-        allowed: false,
-        missingScope: "operator.approvals",
-      });
-      expect(authorizeOperatorScopesForMethod(method, ["operator.approvals"])).toEqual({
-        allowed: true,
-      });
-    },
-  );
+  it.each([
+    "approval.get",
+    "approval.resolve",
+    "exec.approval.get",
+    "exec.approval.list",
+    "exec.approval.resolve",
+  ])("requires approvals scope for %s", (method) => {
+    expect(authorizeOperatorScopesForMethod(method, ["operator.write"])).toEqual({
+      allowed: false,
+      missingScope: "operator.approvals",
+    });
+    expect(authorizeOperatorScopesForMethod(method, ["operator.approvals"])).toEqual({
+      allowed: true,
+    });
+  });
 
   it.each([
     "exec.approvals.get",

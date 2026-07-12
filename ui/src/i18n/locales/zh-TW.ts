@@ -922,147 +922,6 @@ export const zh_TW: TranslationMap = {
     unavailableSubtitle:
       "The plugin that owns this tab is not active on the connected gateway, or it did not provide a panel.",
   },
-  codexSessions: {
-    eyebrow: "Codex 裝置群",
-    title: "所有電腦上的工作階段",
-    interactiveSubtitle:
-      "啟動一個 Chat 分支，其模型選擇維持由 Codex App Server 控制；在確認後封存符合資格的本機工作階段，並檢視已配對電腦的工作階段。",
-    summaryLabel: "Codex 工作階段摘要",
-    summary: {
-      sessions: "工作階段",
-      onlineHosts: "在線",
-      hosts: "主機",
-    },
-    searchLabel: "搜尋 Codex 工作階段",
-    searchPlaceholder: "搜尋工作階段標題",
-    refresh: "重新整理",
-    disconnected: "請重新連線至 Gateway 以重新整理 Codex 工作階段。",
-    partial: "有 {count} 台主機無法使用。其他主機仍可使用。",
-    loading: "正在載入 Codex 工作階段…",
-    loadMore: "載入更多",
-    loadingMore: "正在載入…",
-    untitled: "未命名的 Codex 工作階段",
-    threadId: "執行緒",
-    actions: {
-      continue: "繼續",
-      continueAsBranch: "作為分支繼續",
-      openChat: "開啟 Chat",
-      continuing: "正在繼續…",
-      archive: "封存",
-      readTranscript: "已讀取",
-      readTranscriptLabel: "閱讀 {title} 的文字記錄",
-      continueLabel: "繼續 {title}",
-      continueAsBranchLabel: "將 {title} 作為分支繼續",
-      openChatLabel: "開啟 {title} 的 Chat",
-      continueAsBranchHint:
-        "從已持久保存的可見歷程建立 Chat。在你的第一則訊息中，Codex App Server 會為新的 harness 執行緒選擇模型和提供者。後續選擇仍由 Codex 控制；OpenClaw 絕不會替換為其他執行階段、模型或備援。來源保持不變，進行中的工作可能不存在。",
-      archiveLabel: "封存 {title}",
-      archiveConfirmation:
-        "要封存 {title} 及其產生的任何後代嗎？請確認沒有其他 Codex 用戶端或 OpenClaw runner 正在使用它們。在另一個 runner 仍在活動時封存，可能會中斷其工作。",
-      active: "作用中的工作階段無法啟動分支或封存。",
-      archiveActivityUnknownHint:
-        "由於狀態是程序本機的，因此活動狀態未知。請僅在確認沒有其他 Codex 用戶端或 runner 正在使用此工作階段後再封存。",
-      statusUnavailable: "此 Codex 工作階段目前狀態無法管理。",
-      hostOffline: "請重新連線此電腦後，再管理其 Codex 工作階段。",
-      gatewayOffline: "請重新連線至 gateway 後，再管理 Codex 工作階段。",
-      remoteReadOnly: "已配對電腦的工作階段目前僅供檢視。",
-    },
-    status: {
-      active: "進行中",
-      idle: "閒置",
-      archived: "已封存",
-      storedActivityUnknown: "已儲存 / 活動狀態不明",
-      systemError: "系統錯誤",
-      unknown: "未知",
-    },
-    host: {
-      gateway: "Gateway",
-      node: "節點",
-      connected: "已連線",
-      offline: "離線",
-      unavailable: "工作階段目錄無法使用",
-      sessionCount: "已顯示 {count} 個",
-    },
-    empty: {
-      title: "找不到 Codex 主機",
-      supervisionSubtitle: "在 Gateway 或已配對的電腦上啟用 Codex 監督，然後重新整理此檢視。",
-      search: "此主機上沒有符合搜尋條件的工作階段。",
-      nonArchived: "此主機上沒有未封存的工作階段。",
-    },
-    sidebar: {
-      title: "Codex 工作階段",
-      unavailable: "Codex 工作階段無法使用",
-      viewAll: "檢視所有 Codex 工作階段",
-      truncated: "完整目錄中有更多工作階段可用。",
-    },
-    transcript: {
-      eyebrow: "Codex 文字記錄",
-      back: "所有 Codex 工作階段",
-      you: "你",
-      reasoning: "推理",
-      command: "指令",
-      fileChange: "檔案變更",
-      item: "Codex 項目",
-      details: "完整詳細資料",
-      loading: "正在載入文字記錄…",
-      loadMore: "載入較舊的文字記錄項目",
-    },
-  },
-  claudeSessions: {
-    eyebrow: "Claude 機群",
-    title: "您電腦上的 Claude 工作階段",
-    subtitle: "瀏覽未封存的 Claude CLI 和 Claude Desktop 工作階段，並閱讀其分頁的本機轉錄內容。",
-    summaryLabel: "Claude 工作階段摘要",
-    summary: {
-      sessions: "工作階段",
-      onlineHosts: "在線",
-      hosts: "主機",
-    },
-    searchLabel: "搜尋 Claude 工作階段",
-    searchPlaceholder: "搜尋工作階段標題",
-    refresh: "重新整理",
-    disconnected: "重新連線至 Gateway 以重新整理 Claude 工作階段。",
-    partial: "有 {count} 台主機無法使用。其他主機仍可使用。",
-    loading: "正在載入 Claude 工作階段…",
-    loadMore: "載入更多",
-    loadingMore: "正在載入…",
-    untitled: "未命名的 Claude 工作階段",
-    sessionId: "工作階段",
-    stored: "已儲存",
-    read: "已讀取",
-    readLabel: "閱讀 {title} 的文字記錄",
-    host: {
-      gateway: "Gateway",
-      node: "節點",
-      connected: "已連線",
-      offline: "離線",
-      unavailable: "工作階段目錄無法使用",
-      sessionCount: "已顯示 {count} 個",
-    },
-    empty: {
-      title: "找不到 Claude 工作階段",
-      subtitle: "安裝並使用 Claude CLI 或 Claude Desktop，然後重新整理此檢視。",
-      search: "此主機上沒有符合搜尋條件的工作階段。",
-      nonArchived: "此主機上沒有未封存的工作階段。",
-    },
-    sidebar: {
-      title: "Claude 工作階段",
-      viewAll: "檢視所有 Claude 工作階段",
-      truncated: "完整目錄中有更多工作階段可用。",
-    },
-    transcript: {
-      eyebrow: "Claude 轉錄內容",
-      back: "所有 Claude 工作階段",
-      you: "你",
-      reasoning: "推理",
-      toolCall: "工具呼叫",
-      toolResult: "工具結果",
-      item: "Claude 項目",
-      details: "完整詳細資料",
-      loading: "正在載入文字記錄…",
-      loadMore: "載入較舊的文字記錄項目",
-    },
-  },
   logbook: {
     duration: {
       minutes: "{minutes}m",
@@ -2052,6 +1911,11 @@ export const zh_TW: TranslationMap = {
   chat: {
     disconnected: "已斷開與網關的連接。",
     archivedSessionDisabled: "還原此工作階段以傳送訊息。",
+    loadOlder: "載入較早內容",
+    catalog: {
+      remoteViewOnly: "此工作階段位於已配對節點上，僅供檢視。",
+      unsupportedViewOnly: "此外部工作階段來源僅供檢視。",
+    },
     taskSuggestions: {
       eyebrow: "建議的後續任務",
       start: "在工作樹中開始",
@@ -2294,6 +2158,8 @@ export const zh_TW: TranslationMap = {
       finished: "已完成 ({count})",
       stopTask: "停止 {title}",
       viewTranscript: "檢視文字記錄",
+      toolUseOne: "使用 1 次工具",
+      toolUseMany: "使用 {count} 次工具",
     },
     sessionDiff: {
       title: "變更",
@@ -2433,6 +2299,50 @@ export const zh_TW: TranslationMap = {
       howHeading: "它應該如何運作？",
       howHint: "選擇結果的傳送方式。",
       title: "新增自動化",
+      createAndRun: "建立並立即執行",
+    },
+    suggestions: {
+      title: "自動化靈感",
+      hint: "入門自動化範本 — 選一個並在建立前調整。",
+      use: "使用此靈感 →",
+      ideas: {
+        repoPulse: {
+          name: "儲存庫脈動",
+          tagline: "隔夜的 issues、PR 與 CI 失敗，依緊急程度排序。",
+          prompt:
+            "檢視我的儲存庫中的隔夜活動：新 issues、pull requests 與 CI 失敗。摘要出今天最需要我關注的三件事，每項附上連結與一行原因。",
+        },
+        standupGhostwriter: {
+          name: "站立會議代筆",
+          tagline: "根據昨天的工作自動草擬站立會議更新。",
+          prompt:
+            "根據昨天的 commits、已合併的 pull requests 與開放的 review 討論串，草擬我的站立會議更新。最多三條重點：已完成、進行中、受阻。",
+        },
+        hackerNewsScout: {
+          name: "Hacker News 探員",
+          tagline: "三個值得配咖啡閱讀的連結，附上犀利短評。",
+          prompt:
+            "掃描今日 Hacker News 首頁中關於 AI agents、開發者工具與 TypeScript 的文章。傳給我三個最有趣的連結，每個附上一行犀利短評。",
+        },
+        dependencyRadar: {
+          name: "依賴雷達",
+          tagline: "過時或有漏洞的依賴，附升級說明。",
+          prompt:
+            "檢查我的主要專案中過時或有漏洞的依賴。列出值得注意的更新，每項附上一行風險說明，並草擬升級指令。",
+        },
+        watchdog: {
+          name: "夜間守衛",
+          tagline: "每小時健康檢查，一行摘要結果。",
+          prompt:
+            "檢查我的服務與 Gateway 是否正常運作：掃描近期日誌，尋找新錯誤、重啟或異常負載。一切正常時回覆一行簡短的確認訊息；若發現異常，請說明出了什麼問題以及從何處開始排查。",
+        },
+        polyglotMinute: {
+          name: "多語言一分鐘",
+          tagline: "每天早晨喝咖啡時，學一句實用的外語短句。",
+          prompt:
+            "教我一句實用的日語短句：短句內容、發音方式、字面意思，以及使用時機。請控制在五行以內。",
+        },
+      },
     },
     summary: {
       enabled: "已啟用",
