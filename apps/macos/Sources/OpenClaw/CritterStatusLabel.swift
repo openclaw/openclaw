@@ -14,6 +14,7 @@ struct CritterStatusLabel: View {
 
     @State var blinkAmount: CGFloat = 0
     @State var celebrating = false
+    @State var celebrationGeneration = 0
     @State var nextBlink = Date().addingTimeInterval(Double.random(in: 3.5...8.5))
     @State var wiggleAngle: Double = 0
     @State var wiggleOffset: CGFloat = 0
