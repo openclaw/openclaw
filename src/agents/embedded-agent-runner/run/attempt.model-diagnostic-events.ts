@@ -44,6 +44,8 @@ type ModelCallDiagnosticContext = {
   model: string;
   api?: string;
   transport?: string;
+  providerPluginId?: string;
+  harnessId?: string;
   contextTokenBudget?: number;
   contextWindowSource?: PluginHookContextWindowSource;
   contextWindowReferenceTokens?: number;
@@ -281,11 +283,35 @@ function asyncIteratorFactory(value: unknown): (() => AsyncIterator<unknown>) | 
   }
 }
 
+function buildModelCallHandlerRef(params: {
+  provider: string;
+  api?: string;
+  transport?: string;
+  providerPluginId?: string;
+  harnessId?: string;
+}): string {
+  const surface = params.api?.trim() || params.transport?.trim() || "stream";
+  if (params.harnessId?.trim()) {
+    return `harness:${params.harnessId.trim()}/${surface}`;
+  }
+  if (params.providerPluginId?.trim()) {
+    return `provider-plugin:${params.providerPluginId.trim()}/${surface}`;
+  }
+  return `provider:${params.provider.trim() || "unknown"}/${surface}`;
+}
+
 function baseModelCallEvent(
   ctx: ModelCallDiagnosticContext,
   callId: string,
   trace: DiagnosticTraceContext,
 ): ModelCallEventBase {
+  const handlerRef = buildModelCallHandlerRef({
+    provider: ctx.provider,
+    api: ctx.api,
+    transport: ctx.transport,
+    providerPluginId: ctx.providerPluginId,
+    harnessId: ctx.harnessId,
+  });
   return {
     runId: ctx.runId,
     callId,
@@ -295,6 +321,9 @@ function baseModelCallEvent(
     model: ctx.model,
     ...(ctx.api && { api: ctx.api }),
     ...(ctx.transport && { transport: ctx.transport }),
+    ...(ctx.providerPluginId && { providerPluginId: ctx.providerPluginId }),
+    ...(ctx.harnessId && { harnessId: ctx.harnessId }),
+    handlerRef,
     ...(ctx.contextTokenBudget ? { contextTokenBudget: ctx.contextTokenBudget } : {}),
     ...(ctx.contextWindowSource ? { contextWindowSource: ctx.contextWindowSource } : {}),
     ...(ctx.contextWindowReferenceTokens

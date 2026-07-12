@@ -28,12 +28,13 @@ function createServiceContext(params: {
   workspaceDir?: string;
   service: PluginServiceRegistration;
 }): OpenClawPluginServiceContext {
-  const isDiagnosticsExporter =
+  const isInternalDiagnosticsConsumer =
     params.service?.pluginId === params.service?.service.id &&
     (params.service?.service.id === "diagnostics-otel" ||
-      params.service?.service.id === "diagnostics-prometheus");
+      params.service?.service.id === "diagnostics-prometheus" ||
+      params.service?.service.id === "performance-monitor");
   const grantsInternalDiagnostics =
-    isDiagnosticsExporter &&
+    isInternalDiagnosticsConsumer &&
     (params.service?.origin === "bundled" || params.service?.trustedOfficialInstall === true);
 
   return {

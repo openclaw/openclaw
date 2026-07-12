@@ -3143,6 +3143,9 @@ export async function runEmbeddedAttempt(
         );
       }
       let diagnosticModelCallSeq = 0;
+      const providerRuntimePlugin = getProviderRuntimeHandle().plugin;
+      const diagnosticProviderPluginId =
+        providerRuntimePlugin?.pluginId?.trim() || providerRuntimePlugin?.id?.trim();
       activeSession.agent.streamFn = wrapStreamFnWithDiagnosticModelCallEvents(
         activeSession.agent.streamFn,
         {
@@ -3153,6 +3156,10 @@ export async function runEmbeddedAttempt(
           model: params.modelId,
           api: params.model.api,
           transport: effectiveAgentTransport,
+          ...(diagnosticProviderPluginId ? { providerPluginId: diagnosticProviderPluginId } : {}),
+          ...(params.runtimePlan?.observability.harnessId
+            ? { harnessId: params.runtimePlan.observability.harnessId }
+            : {}),
           ...(params.contextWindowInfo?.tokens
             ? { contextTokenBudget: params.contextWindowInfo.tokens }
             : {}),

@@ -105,6 +105,24 @@
       }
     },
     {
+      "name": "@openclaw/performance-monitor",
+      "description": "OpenClaw performance monitor for hook, tool, and LLM timing",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "performance-monitor",
+          "label": "Performance Monitor"
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/performance-monitor",
+          "npmSpec": "@openclaw/performance-monitor",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.4.25"
+        }
+      }
+    },
+    {
       "name": "@openclaw/diffs",
       "description": "OpenClaw diff viewer plugin",
       "source": "official",

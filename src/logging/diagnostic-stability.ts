@@ -35,6 +35,7 @@ export type DiagnosticStabilityEventRecord = {
   transport?: string;
   brain?: string;
   toolName?: string;
+  handler?: string;
   activeWorkKind?: string;
   pairedToolName?: string;
   provider?: string;
@@ -381,6 +382,16 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.durationMs = event.durationMs;
       record.cpuCoreRatio = event.cpuCoreRatio;
       break;
+    case "hook.handler.completed":
+      record.pluginId = event.pluginId;
+      record.phase = event.hookName;
+      record.durationMs = event.durationMs;
+      record.outcome = event.outcome;
+      record.handler = event.handlerRef ?? event.handlerName;
+      if (event.handlerSource) {
+        record.source = event.handlerSource;
+      }
+      break;
     case "tool.loop":
       record.toolName = event.toolName;
       record.level = event.level;
@@ -393,17 +404,23 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.toolName = event.toolName;
       record.source = event.toolSource;
       record.pluginId = event.toolOwner;
+      record.handler = event.handlerRef ?? event.handlerName;
+      record.target = event.mcpServerName;
       break;
     case "tool.execution.completed":
       record.toolName = event.toolName;
       record.source = event.toolSource;
       record.pluginId = event.toolOwner;
+      record.handler = event.handlerRef ?? event.handlerName;
+      record.target = event.mcpServerName;
       record.durationMs = event.durationMs;
       break;
     case "tool.execution.error":
       record.toolName = event.toolName;
       record.source = event.toolSource;
       record.pluginId = event.toolOwner;
+      record.handler = event.handlerRef ?? event.handlerName;
+      record.target = event.mcpServerName;
       record.durationMs = event.durationMs;
       assignReasonCode(record, event.errorCategory);
       break;
@@ -411,6 +428,8 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.toolName = event.toolName;
       record.source = event.toolSource;
       record.pluginId = event.toolOwner;
+      record.handler = event.handlerRef ?? event.handlerName;
+      record.target = event.mcpServerName;
       record.outcome = "blocked";
       assignReasonCode(record, event.deniedReason);
       break;
@@ -475,10 +494,16 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
     case "model.call.started":
       record.provider = event.provider;
       record.model = event.model;
+      record.pluginId = event.providerPluginId;
+      record.source = event.harnessId;
+      record.handler = event.handlerRef;
       break;
     case "model.call.completed":
       record.provider = event.provider;
       record.model = event.model;
+      record.pluginId = event.providerPluginId;
+      record.source = event.harnessId;
+      record.handler = event.handlerRef;
       record.durationMs = event.durationMs;
       record.requestBytes = event.requestPayloadBytes;
       record.responseBytes = event.responseStreamBytes;
@@ -487,6 +512,9 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
     case "model.call.error":
       record.provider = event.provider;
       record.model = event.model;
+      record.pluginId = event.providerPluginId;
+      record.source = event.harnessId;
+      record.handler = event.handlerRef;
       record.durationMs = event.durationMs;
       record.requestBytes = event.requestPayloadBytes;
       record.responseBytes = event.responseStreamBytes;

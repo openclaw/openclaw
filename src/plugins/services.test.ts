@@ -369,6 +369,18 @@ describe("startPluginServices", () => {
     expect(prometheusContexts[0]?.internalDiagnostics?.onEvent).toBeTypeOf("function");
     expect(prometheusContexts[0]?.internalDiagnostics?.emit).toBeTypeOf("function");
 
+    const performanceMonitorContexts: OpenClawPluginServiceContext[] = [];
+    const performanceMonitorService = createTrackingService("performance-monitor", {
+      contexts: performanceMonitorContexts,
+    });
+    await startPluginServices({
+      registry: createRegistry([performanceMonitorService], "performance-monitor", "bundled"),
+      config: createServiceConfig(),
+    });
+
+    expect(performanceMonitorContexts[0]?.internalDiagnostics?.onEvent).toBeTypeOf("function");
+    expect(performanceMonitorContexts[0]?.internalDiagnostics?.emit).toBeTypeOf("function");
+
     const officialDiagnosticsOtelContexts: OpenClawPluginServiceContext[] = [];
     const officialDiagnosticsOtelService = createTrackingService("diagnostics-otel", {
       contexts: officialDiagnosticsOtelContexts,

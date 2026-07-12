@@ -191,6 +191,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     expect(startedEvent.model).toBe("gpt-5.4");
     expect(startedEvent.api).toBe("openai-responses");
     expect(startedEvent.transport).toBe("http");
+    expect(startedEvent.handlerRef).toBe("provider:openai/openai-responses");
     expect(events[0]?.trace?.parentSpanId).toBe("00f067aa0ba902b7");
     const completedEvent = getEvent(events, 1);
     expect(completedEvent.type).toBe("model.call.completed");
@@ -202,6 +203,40 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     expectNumberField(completedEvent, "responseStreamBytes");
     expectNumberField(completedEvent, "timeToFirstByteMs");
     expect(JSON.stringify(events)).not.toContain("sk-test-secret-value");
+  });
+
+  it("includes provider plugin and harness attribution on model-call events", async () => {
+    async function* stream() {
+      yield { type: "text", text: "ok" };
+    }
+    const originalStream = stream() as unknown as AsyncIterable<unknown> & {
+      result: () => Promise<string>;
+    };
+    originalStream.result = async () => "ok";
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents((() => originalStream) as StreamFn, {
+      runId: "run-harness",
+      provider: "openai",
+      model: "gpt-5.5",
+      api: "responses",
+      providerPluginId: "openai",
+      harnessId: "codex",
+      trace: createDiagnosticTraceContext(),
+      nextCallId: () => "call-harness",
+    });
+
+    const events = await collectModelCallEvents(async () => {
+      const returned = wrapped(
+        {} as never,
+        {} as never,
+        {} as never,
+      ) as unknown as typeof originalStream;
+      await returned.result();
+    });
+
+    const completedEvent = getEvent(events, 1);
+    expect(completedEvent.providerPluginId).toBe("openai");
+    expect(completedEvent.harnessId).toBe("codex");
+    expect(completedEvent.handlerRef).toBe("harness:codex/responses");
   });
 
   it("updates diagnostic run activity from throttled stream chunks", async () => {

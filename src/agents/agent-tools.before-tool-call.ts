@@ -432,20 +432,97 @@ function unwrapErrorCause(err: unknown): unknown {
 type ToolDiagnosticIdentity = {
   toolSource: DiagnosticToolSource;
   toolOwner?: string;
+  handlerName?: string;
+  handlerRef?: string;
+  mcpServerName?: string;
+  mcpToolName?: string;
 };
 
+function resolveExecuteFunctionName(execute: unknown): string | undefined {
+  if (typeof execute !== "function") {
+    return undefined;
+  }
+  const name = execute.name?.trim();
+  if (!name || name === "anonymous") {
+    return undefined;
+  }
+  if (name.startsWith("bound ")) {
+    const unbound = name.slice("bound ".length).trim();
+    return unbound || undefined;
+  }
+  return name;
+}
+
+function buildToolHandlerRef(params: {
+  toolSource: DiagnosticToolSource;
+  toolOwner?: string;
+  toolName: string;
+  mcpServerName?: string;
+  mcpToolName?: string;
+}): string {
+  const toolName = params.toolName.trim() || "tool";
+  if (params.toolSource === "mcp") {
+    const server = params.mcpServerName?.trim() || params.toolOwner?.trim() || "mcp";
+    const remoteTool = params.mcpToolName?.trim() || toolName;
+    return `mcp:${server}:${remoteTool}`;
+  }
+  if (params.toolSource === "plugin" || params.toolSource === "channel") {
+    const owner = params.toolOwner?.trim() || params.toolSource;
+    return `${params.toolSource}:${owner}:${toolName}`;
+  }
+  return `core:${toolName}`;
+}
+
 function resolveToolDiagnosticIdentity(tool: AnyAgentTool): ToolDiagnosticIdentity {
+  const registeredToolName = typeof tool.name === "string" ? tool.name.trim() : undefined;
+  const executeName = resolveExecuteFunctionName(tool.execute);
+  const handlerName = executeName && executeName !== registeredToolName ? executeName : undefined;
   const pluginMeta = getPluginToolMeta(tool);
   if (pluginMeta) {
-    return pluginMeta.pluginId === "bundle-mcp"
-      ? { toolSource: "mcp", toolOwner: pluginMeta.pluginId }
-      : { toolSource: "plugin", toolOwner: pluginMeta.pluginId };
+    const toolSource: DiagnosticToolSource =
+      pluginMeta.pluginId === "bundle-mcp" ? "mcp" : "plugin";
+    const mcpServerName = pluginMeta.mcp?.serverName;
+    const mcpToolName = pluginMeta.mcp?.toolName;
+    const toolOwner = pluginMeta.pluginId;
+    return {
+      toolSource,
+      toolOwner,
+      handlerName,
+      mcpServerName,
+      mcpToolName,
+      handlerRef: buildToolHandlerRef({
+        toolSource,
+        toolOwner,
+        toolName: registeredToolName ?? mcpToolName ?? "tool",
+        mcpServerName,
+        mcpToolName,
+      }),
+    };
   }
   const channelMeta = getChannelAgentToolMeta(tool as never);
   if (channelMeta) {
-    return { toolSource: "channel", toolOwner: channelMeta.channelId };
+    const toolSource = "channel";
+    const toolOwner = channelMeta.channelId;
+    return {
+      toolSource,
+      toolOwner,
+      handlerName,
+      handlerRef: buildToolHandlerRef({
+        toolSource,
+        toolOwner,
+        toolName: registeredToolName ?? "tool",
+      }),
+    };
   }
-  return { toolSource: "core" };
+  const toolSource = "core";
+  return {
+    toolSource,
+    handlerName,
+    handlerRef: buildToolHandlerRef({
+      toolSource,
+      toolName: registeredToolName ?? "tool",
+    }),
+  };
 }
 
 type SkillUsageMatch = {

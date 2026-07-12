@@ -436,6 +436,23 @@ export type DiagnosticToolLoopEvent = DiagnosticBaseEvent & {
   pairedToolName?: string;
 };
 
+export type DiagnosticHookHandlerCompletedEvent = DiagnosticBaseEvent & {
+  type: "hook.handler.completed";
+  hookName: string;
+  pluginId: string;
+  /** Registered handler function name when available. */
+  handlerName?: string;
+  /** Plugin registration source file basename when available. */
+  handlerSource?: string;
+  /** Canonical handler reference, e.g. hook:session-memory:before_prompt_build@buildPrompt. */
+  handlerRef?: string;
+  durationMs: number;
+  outcome: "completed" | "error";
+  runId?: string;
+  sessionKey?: string;
+  sessionId?: string;
+};
+
 export type DiagnosticToolParamsSummary =
   | { kind: "object" }
   | { kind: "array"; length: number }
@@ -451,6 +468,12 @@ type DiagnosticToolExecutionBaseEvent = DiagnosticBaseEvent & {
   toolName: string;
   toolSource?: DiagnosticToolSource;
   toolOwner?: string;
+  /** Registered agent tool name when it differs from the normalized toolName. */
+  handlerName?: string;
+  /** Canonical handler reference for grouping, e.g. core:read or plugin:browser:navigate. */
+  handlerRef?: string;
+  mcpServerName?: string;
+  mcpToolName?: string;
   toolCallId?: string;
   paramsSummary?: DiagnosticToolParamsSummary;
 };
@@ -587,6 +610,12 @@ type DiagnosticModelCallBaseEvent = DiagnosticBaseEvent & {
   model: string;
   api?: string;
   transport?: string;
+  /** Owning provider plugin id when resolved from the plugin registry. */
+  providerPluginId?: string;
+  /** Active agent harness id when the run uses a harness runtime. */
+  harnessId?: string;
+  /** Canonical handler reference for grouping, e.g. provider-plugin:openai/responses. */
+  handlerRef?: string;
   contextTokenBudget?: number;
   contextWindowSource?: "model" | "modelsConfig" | "agentContextTokens" | "default";
   contextWindowReferenceTokens?: number;
@@ -740,6 +769,7 @@ export type DiagnosticEventPayload =
   | DiagnosticHeartbeatEvent
   | DiagnosticLivenessWarningEvent
   | DiagnosticPhaseCompletedEvent
+  | DiagnosticHookHandlerCompletedEvent
   | DiagnosticToolLoopEvent
   | DiagnosticToolExecutionStartedEvent
   | DiagnosticToolExecutionCompletedEvent
@@ -848,6 +878,7 @@ const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "model.call.started",
   "model.call.completed",
   "model.call.error",
+  "hook.handler.completed",
   "run.progress",
   "harness.run.completed",
   "harness.run.error",

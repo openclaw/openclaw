@@ -15,6 +15,10 @@ import {
   type InputGateDecision,
   isHookDecision,
 } from "./hook-decision-types.js";
+import {
+  invokeHookHandlerWithDiagnostics,
+  invokeSyncHookHandlerWithDiagnostics,
+} from "./hook-handler-diagnostics.js";
 import type { GlobalHookRunnerRegistry, HookRunnerRegistry } from "./hook-registry.types.js";
 import type {
   PluginHookAfterCompactionEvent,
@@ -617,15 +621,29 @@ export function createHookRunner(
 
     const promises = hooks.map(async (hook) => {
       try {
-        const promise = Promise.resolve(
-          (hook.handler as (event: unknown, ctx: unknown) => Promise<void> | void)(event, ctx),
-        );
-        const timeoutMs = getVoidHookTimeoutMs(hookName, hook);
-        if (timeoutMs) {
-          await withHookTimeout(promise, timeoutMs, { unref: optionsValue.unrefTimeout ?? true });
-        } else {
-          await promise;
-        }
+        await invokeHookHandlerWithDiagnostics({
+          hook: {
+            pluginId: hook.pluginId,
+            hookName,
+            handler: hook.handler as (...args: unknown[]) => unknown,
+            source: hook.source,
+          },
+          event,
+          ctx,
+          invoke: async () => {
+            const promise = Promise.resolve(
+              (hook.handler as (event: unknown, ctx: unknown) => Promise<void> | void)(event, ctx),
+            );
+            const timeoutMs = getVoidHookTimeoutMs(hookName, hook);
+            if (timeoutMs) {
+              await withHookTimeout(promise, timeoutMs, {
+                unref: optionsValue.unrefTimeout ?? true,
+              });
+            } else {
+              await promise;
+            }
+          },
+        });
       } catch (err) {
         handleHookError({ hookName, pluginId: hook.pluginId, error: err });
       }
@@ -655,10 +673,22 @@ export function createHookRunner(
 
     for (const hook of hooks) {
       try {
-        const handler = hook.handler as (event: unknown, ctx: unknown) => Promise<TResult>;
-        const promise = Promise.resolve(handler(event, ctx));
-        const timeoutMs = getModifyingHookTimeoutMs(hookName, hook);
-        const handlerResult = timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
+        const handlerResult = await invokeHookHandlerWithDiagnostics({
+          hook: {
+            pluginId: hook.pluginId,
+            hookName,
+            handler: hook.handler as (...args: unknown[]) => unknown,
+            source: hook.source,
+          },
+          event,
+          ctx,
+          invoke: async () => {
+            const handler = hook.handler as (event: unknown, ctx: unknown) => Promise<TResult>;
+            const promise = Promise.resolve(handler(event, ctx));
+            const timeoutMs = getModifyingHookTimeoutMs(hookName, hook);
+            return timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
+          },
+        });
 
         const shouldMergeResult =
           handlerResult !== undefined && (handlerResult !== null || policy.mergeNullResults);
@@ -736,11 +766,26 @@ export function createHookRunner(
   ): Promise<TResult | undefined> {
     for (const hook of hooks) {
       try {
-        const promise = Promise.resolve(
-          (hook.handler as (event: unknown, ctx: unknown) => Promise<TResult | void>)(event, ctx),
-        );
-        const timeoutMs = getClaimingHookTimeoutMs(hookName, hook);
-        const handlerResult = timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
+        const handlerResult = await invokeHookHandlerWithDiagnostics({
+          hook: {
+            pluginId: hook.pluginId,
+            hookName,
+            handler: hook.handler as (...args: unknown[]) => unknown,
+            source: hook.source,
+          },
+          event,
+          ctx,
+          invoke: async () => {
+            const promise = Promise.resolve(
+              (hook.handler as (event: unknown, ctx: unknown) => Promise<TResult | void>)(
+                event,
+                ctx,
+              ),
+            );
+            const timeoutMs = getClaimingHookTimeoutMs(hookName, hook);
+            return timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
+          },
+        });
         if (handlerResult?.handled) {
           return handlerResult;
         }
@@ -787,11 +832,26 @@ export function createHookRunner(
     let firstError: string | null = null;
     for (const hook of hooks) {
       try {
-        const promise = Promise.resolve(
-          (hook.handler as (event: unknown, ctx: unknown) => Promise<TResult | void>)(event, ctx),
-        );
-        const timeoutMs = getClaimingHookTimeoutMs(hookName, hook);
-        const handlerResult = timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
+        const handlerResult = await invokeHookHandlerWithDiagnostics({
+          hook: {
+            pluginId: hook.pluginId,
+            hookName,
+            handler: hook.handler as (...args: unknown[]) => unknown,
+            source: hook.source,
+          },
+          event,
+          ctx,
+          invoke: async () => {
+            const promise = Promise.resolve(
+              (hook.handler as (event: unknown, ctx: unknown) => Promise<TResult | void>)(
+                event,
+                ctx,
+              ),
+            );
+            const timeoutMs = getClaimingHookTimeoutMs(hookName, hook);
+            return timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
+          },
+        });
         if (handlerResult?.handled) {
           return { status: "handled", result: handlerResult };
         }
@@ -1117,15 +1177,27 @@ export function createHookRunner(
 
     for (const hook of hooks) {
       try {
-        const handler = hook.handler as (
-          event: PluginHookReplyPayloadSendingEvent,
-          ctx: PluginHookReplyPayloadSendingContext,
-        ) => Promise<PluginHookReplyPayloadSendingResult | void>;
-        const promise = Promise.resolve(
-          handler({ ...event, payload: toPluginReplyPayload(currentPayload) }, ctx),
-        );
-        const timeoutMs = getModifyingHookTimeoutMs("reply_payload_sending", hook);
-        const handlerResult = timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
+        const handlerResult = await invokeHookHandlerWithDiagnostics({
+          hook: {
+            pluginId: hook.pluginId,
+            hookName: "reply_payload_sending",
+            handler: hook.handler as (...args: unknown[]) => unknown,
+            source: hook.source,
+          },
+          event,
+          ctx,
+          invoke: async () => {
+            const handler = hook.handler as (
+              event: PluginHookReplyPayloadSendingEvent,
+              ctx: PluginHookReplyPayloadSendingContext,
+            ) => Promise<PluginHookReplyPayloadSendingResult | void>;
+            const promise = Promise.resolve(
+              handler({ ...event, payload: toPluginReplyPayload(currentPayload) }, ctx),
+            );
+            const timeoutMs = getModifyingHookTimeoutMs("reply_payload_sending", hook);
+            return timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
+          },
+        });
 
         if (!handlerResult) {
           continue;
@@ -1326,7 +1398,17 @@ export function createHookRunner(
 
     for (const hook of hooks) {
       try {
-        const out = runSyncHookHandler(hook, { ...event, message: current }, ctx);
+        const out = invokeSyncHookHandlerWithDiagnostics({
+          hook: {
+            pluginId: hook.pluginId,
+            hookName: "tool_result_persist",
+            handler: hook.handler as (...args: unknown[]) => unknown,
+            source: hook.source,
+          },
+          event,
+          ctx,
+          invoke: () => runSyncHookHandler(hook, { ...event, message: current }, ctx),
+        });
 
         // Guard against accidental async handlers (this hook is sync-only).
         if (isPromiseLike(out)) {
@@ -1386,7 +1468,17 @@ export function createHookRunner(
 
     for (const hook of hooks) {
       try {
-        const out = runSyncHookHandler(hook, { ...event, message: current }, ctx);
+        const out = invokeSyncHookHandlerWithDiagnostics({
+          hook: {
+            pluginId: hook.pluginId,
+            hookName: "before_message_write",
+            handler: hook.handler as (...args: unknown[]) => unknown,
+            source: hook.source,
+          },
+          event,
+          ctx,
+          invoke: () => runSyncHookHandler(hook, { ...event, message: current }, ctx),
+        });
 
         // Guard against accidental async handlers (this hook is sync-only).
         if (isPromiseLike(out)) {

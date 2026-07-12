@@ -26,6 +26,7 @@ import { generateSecureToken } from "../../infra/secure-random.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-registry-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { resolveProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
 import { extractModelCompat } from "../../plugins/provider-model-compat.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
@@ -1339,6 +1340,16 @@ async function compactEmbeddedAgentSessionDirectOnce(
             senderUsername: params.senderUsername,
             senderE164: params.senderE164,
           });
+          const compactionProviderRuntimePlugin = resolveProviderRuntimePluginHandle({
+            provider,
+            modelId,
+            config: params.config,
+            workspaceDir: effectiveWorkspace,
+            env: process.env,
+          }).plugin;
+          const compactionProviderPluginId =
+            compactionProviderRuntimePlugin?.pluginId?.trim() ||
+            compactionProviderRuntimePlugin?.id?.trim();
           session.agent.streamFn = wrapStreamFnWithDiagnosticModelCallEvents(
             session.agent.streamFn,
             {
@@ -1349,6 +1360,12 @@ async function compactEmbeddedAgentSessionDirectOnce(
               model: modelId,
               api: effectiveModel.api,
               transport: session.agent.transport,
+              ...(compactionProviderPluginId
+                ? { providerPluginId: compactionProviderPluginId }
+                : {}),
+              ...(runtimePlan?.observability.harnessId
+                ? { harnessId: runtimePlan.observability.harnessId }
+                : {}),
               contextTokenBudget,
               trace: compactionModelCallTrace,
               contentCapture: resolveDiagnosticModelContentCapturePolicy(params.config),

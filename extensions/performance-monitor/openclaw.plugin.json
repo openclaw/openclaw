@@ -1,0 +1,28 @@
+{
+  "id": "performance-monitor",
+  "name": "Performance Monitor",
+  "description": "Tracks per-plugin hook handler, tool, and LLM call timing.",
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "maxRuns": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 1000,
+        "default": 100,
+        "description": "Maximum completed run traces kept in memory."
+      },
+      "maxEventsPerRun": {
+        "type": "integer",
+        "minimum": 10,
+        "maximum": 10000,
+        "default": 500,
+        "description": "Maximum timing events stored per run."
+      }
+    }
+  }
+}
