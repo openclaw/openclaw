@@ -564,7 +564,7 @@ describe("local SQLite snapshot repository", () => {
         return new Proxy(stat, {
           get(target, property, receiver) {
             if (property === "uid") {
-              return target.uid + 1;
+              return typeof target.uid === "bigint" ? target.uid + 1n : target.uid + 1;
             }
             const value = Reflect.get(target, property, receiver);
             return typeof value === "function" ? value.bind(target) : value;
