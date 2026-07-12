@@ -5,9 +5,9 @@ import path from "node:path";
 import type { MacosGuest } from "./guest-transports.ts";
 import { run, say, shellQuote, warn } from "./host-command.ts";
 
-export type DiscordSmokePhase = "fresh" | "upgrade";
+type DiscordSmokePhase = "fresh" | "upgrade";
 
-export interface MacosDiscordConfig {
+interface MacosDiscordConfig {
   channelId: string;
   guildId: string;
   token: string;

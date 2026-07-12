@@ -27,7 +27,7 @@ import type {
 import { stringEnum } from "../schema/typebox.js";
 import {
   asToolParamsRecord,
-  readNumberParam,
+  readPositiveIntegerParam,
   readStringParam,
   ToolInputError,
   type AnyAgentTool,
@@ -138,18 +138,21 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
     name: "skill_workshop",
     displaySummary: "Propose a reusable skill",
     description:
-      "Create, update, revise, list, inspect, apply, reject, or quarantine Skill Workshop proposals when reusable procedures should be captured, improved, or explicitly approved.",
+      "Create/update/revise/list/inspect/apply/reject/quarantine reusable-procedure proposals.",
     parameters: SkillWorkshopToolSchema,
     execute: async (_toolCallId, args) => {
       const params = asToolParamsRecord(args);
       const action = readStringParam(params, "action", { required: true });
 
       if (action === "list") {
+        const status = readProposalStatusParam(params);
+        const query = readStringParam(params, "query");
+        const limit = readListLimitParam(params);
         const proposals = listProposalEntries({
           proposals: (await listSkillProposals({ workspaceDir: options.workspaceDir })).proposals,
-          status: readProposalStatusParam(params),
-          query: readStringParam(params, "query"),
-          limit: readListLimitParam(params),
+          status,
+          query,
+          limit,
         });
         return {
           content: [{ type: "text", text: formatProposalList(proposals) }],
@@ -366,13 +369,7 @@ function readProposalStatusParam(params: Record<string, unknown>): SkillProposal
 }
 
 function readListLimitParam(params: Record<string, unknown>): number {
-  return (
-    readNumberParam(params, "limit", {
-      integer: true,
-      positiveInteger: true,
-      label: "limit",
-    }) ?? 20
-  );
+  return readPositiveIntegerParam(params, "limit") ?? 20;
 }
 
 function listProposalEntries(params: {

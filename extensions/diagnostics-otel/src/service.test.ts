@@ -2345,6 +2345,38 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
+  test("advertises explicit duration buckets on the openclaw run/harness/context histograms", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { metrics: true });
+    const priorSdkBoundaries = [
+      0, 5, 10, 25, 50, 75, 100, 250, 500, 750, 1000, 2500, 5000, 7500, 10000,
+    ];
+    try {
+      await service.start(ctx);
+
+      const runDurationOptions = histogramCreateOptions("openclaw.run.duration_ms");
+      expect(runDurationOptions?.unit).toBe("ms");
+      const runBoundaries = runDurationOptions?.advice?.explicitBucketBoundaries;
+      expect(runBoundaries).toEqual(expect.arrayContaining(priorSdkBoundaries));
+      for (const boundary of [60000, 3_600_000]) {
+        expect(runBoundaries).toContain(boundary);
+      }
+
+      const harnessDurationOptions = histogramCreateOptions("openclaw.harness.duration_ms");
+      const harnessBoundaries = harnessDurationOptions?.advice?.explicitBucketBoundaries;
+      expect(harnessBoundaries).toEqual(runBoundaries);
+
+      const contextOptions = histogramCreateOptions("openclaw.context.tokens");
+      const contextBoundaries = contextOptions?.advice?.explicitBucketBoundaries;
+      expect(contextBoundaries).toEqual(expect.arrayContaining(priorSdkBoundaries));
+      for (const boundary of [128000, 1_000_000]) {
+        expect(contextBoundaries).toContain(boundary);
+      }
+    } finally {
+      await service.stop?.(ctx);
+    }
+  });
+
   test("bounds agent identifiers on model usage metric attributes", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { metrics: true });
@@ -5289,6 +5321,9 @@ describe("diagnostics-otel service", () => {
     });
     await service.start(ctx);
 
+    // The 8,192-character candidate budget leaves an 8,178-character text prefix;
+    // place a surrogate pair across that boundary so serialized JSON must stay valid.
+    const surrogateBoundaryPrefix = "x".repeat(8177);
     emitTrustedModelCallCompletedWithContent(
       {
         runId: "run-1",
@@ -5301,7 +5336,9 @@ describe("diagnostics-otel service", () => {
         inputMessages: [
           {
             role: "user",
-            content: `single-message-${"x".repeat(MAX_TEST_OTEL_CONTENT_ATTRIBUTE_CHARS)}`,
+            content: `${surrogateBoundaryPrefix}🚀${"y".repeat(
+              MAX_TEST_OTEL_CONTENT_ATTRIBUTE_CHARS,
+            )}`,
           },
         ],
         toolDefinitions: [
@@ -5332,13 +5369,14 @@ describe("diagnostics-otel service", () => {
     const toolDefinitions = stringAttribute(attrs, "gen_ai.tool.definitions");
     expect(genAiInput.length).toBeLessThanOrEqual(MAX_TEST_OTEL_CONTENT_ATTRIBUTE_CHARS);
     expect(toolDefinitions.length).toBeLessThanOrEqual(MAX_TEST_OTEL_CONTENT_ATTRIBUTE_CHARS);
+    expect(genAiInput).not.toContain("\\ud83d");
     expect(JSON.parse(genAiInput)).toEqual([
       {
         role: "user",
         parts: [
           {
             type: "text",
-            content: expect.stringContaining("single-message-"),
+            content: `${surrogateBoundaryPrefix}...(truncated)`,
           },
         ],
       },

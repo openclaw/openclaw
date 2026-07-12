@@ -10,7 +10,7 @@ const TWILIO_API_HOSTNAME_BY_REGION = {
 
 const TWILIO_API_HOSTNAMES = new Set(Object.values(TWILIO_API_HOSTNAME_BY_REGION));
 
-export function resolveTwilioApiHostname(region?: TwilioRegion): string {
+function resolveTwilioApiHostname(region?: TwilioRegion): string {
   return TWILIO_API_HOSTNAME_BY_REGION[region ?? "us1"];
 }
 

@@ -21,7 +21,7 @@ export type DiscordVoiceIngressContext = {
   speakerLabel: string;
 };
 
-export type DiscordVoiceAgentTurnResult = {
+type DiscordVoiceAgentTurnResult = {
   context: DiscordVoiceIngressContext;
   text: string;
 };

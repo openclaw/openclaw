@@ -897,6 +897,44 @@ describe("openai image generation provider", () => {
     expect(result.images).toHaveLength(1);
   });
 
+  it("uses a model-specific QA image endpoint without changing the text provider route", async () => {
+    mockGeneratedPngResponse();
+    vi.stubEnv("OPENCLAW_QA_ALLOW_LOCAL_IMAGE_PROVIDER", "1");
+
+    const provider = buildOpenAIImageGenerationProvider();
+    await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-1",
+      prompt: "Draw a QA lighthouse",
+      cfg: {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [
+                {
+                  id: "gpt-image-1",
+                  name: "gpt-image-1",
+                  api: "openai-responses",
+                  baseUrl: "http://127.0.0.1:44080/v1",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128_000,
+                  maxTokens: 4096,
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
+
+    expect(httpConfigCall().baseUrl).toBe("http://127.0.0.1:44080/v1");
+    expect(jsonRequestCall().url).toBe("http://127.0.0.1:44080/v1/images/generations");
+    expect(jsonRequestCall().allowPrivateNetwork).toBe(true);
+  });
+
   it("forwards edit count, custom size, and multiple input images", async () => {
     mockGeneratedPngResponse();
 
@@ -1021,7 +1059,7 @@ describe("openai image generation provider", () => {
     const body = request.body as Record<string, unknown>;
     expect(request.url).toBe("https://chatgpt.com/backend-api/codex/responses");
     expect(request.timeoutMs).toBe(180_000);
-    expect(body.model).toBe("gpt-5.5");
+    expect(body.model).toBe("gpt-5.6-sol");
     expect(body.instructions).toBe("You are an image generation assistant.");
     expect(body.stream).toBe(true);
     expect(body.store).toBe(false);
@@ -1039,7 +1077,7 @@ describe("openai image generation provider", () => {
     expect(body.tool_choice).toEqual({ type: "image_generation" });
     expect(postMultipartRequestMock).not.toHaveBeenCalled();
     expect(logInfoMock).toHaveBeenCalledWith(
-      "image auth selected: provider=openai mode=oauth transport=codex-responses requestedModel=gpt-image-2 responsesModel=gpt-5.5 timeoutMs=180000",
+      "image auth selected: provider=openai mode=oauth transport=codex-responses requestedModel=gpt-image-2 responsesModel=gpt-5.6-sol timeoutMs=180000",
     );
     expect(result.images).toEqual([
       {
@@ -1356,7 +1394,7 @@ describe("openai image generation provider", () => {
     expect(authResolutionCall().store).toBe(authStore);
     expect(jsonRequestCall().url).toBe("https://chatgpt.com/backend-api/codex/responses");
     expect(logInfoMock).toHaveBeenCalledWith(
-      "image auth selected: provider=openai mode=oauth transport=codex-responses requestedModel=gpt-image-2 responsesModel=gpt-5.5 timeoutMs=180000",
+      "image auth selected: provider=openai mode=oauth transport=codex-responses requestedModel=gpt-image-2 responsesModel=gpt-5.6-sol timeoutMs=180000",
     );
     expect(result.images[0]?.buffer).toEqual(Buffer.from("codex-image"));
   });
@@ -1506,7 +1544,25 @@ describe("openai image generation provider", () => {
     });
 
     expect(logInfoMock).toHaveBeenCalledWith(
-      "image auth selected: provider=openai mode=oauth fakeignored transport=codex-responses requestedModel=gpt-image-2 forged=true next responsesModel=gpt-5.5 timeoutMs=180000",
+      "image auth selected: provider=openai mode=oauth fakeignored transport=codex-responses requestedModel=gpt-image-2 forged=true next responsesModel=gpt-5.6-sol timeoutMs=180000",
+    );
+  });
+
+  it("does not split a surrogate pair when truncating Codex OAuth image auth log values", async () => {
+    mockCodexAuthOnly();
+    mockCodexImageStream({ imageData: "codex-image" });
+
+    const provider = buildOpenAIImageGenerationProvider();
+    await provider.generateImage({
+      provider: "openai",
+      model: `${"a".repeat(255)}😀tail`,
+      prompt: "Draw using configured Codex auth",
+      cfg: {},
+      authStore: createCodexOAuthAuthStore(),
+    });
+
+    expect(logInfoMock).toHaveBeenCalledWith(
+      `image auth selected: provider=openai mode=oauth transport=codex-responses requestedModel=${"a".repeat(255)}... responsesModel=gpt-5.6-sol timeoutMs=180000`,
     );
   });
 

@@ -29,6 +29,8 @@ export type TelegramMessageContextOptions = {
   promptContextAmbientWatermark?: TelegramAmbientTranscriptWatermark;
   ambientTranscriptBody?: string;
   spooledReplay?: boolean;
+  /** Use an attempt-local participant so an outer retry loop owns final spool settlement. */
+  isolateSpooledReplaySettlement?: boolean;
 };
 
 export type TelegramPromptContextEntry = NonNullable<
@@ -46,7 +48,8 @@ export type TelegramLogger = {
 
 type ResolveTelegramGroupConfig = (
   chatId: string | number,
-  messageThreadId?: number,
+  messageThreadId: number | undefined,
+  cfg: OpenClawConfig,
 ) => {
   groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
   topicConfig?: TelegramTopicConfig;
@@ -57,17 +60,15 @@ type ResolveGroupActivation = (params: {
   agentId?: string;
   messageThreadId?: number;
   sessionKey?: string;
+  cfg: OpenClawConfig;
 }) => boolean | undefined;
 
-type ResolveGroupRequireMention = (chatId: string | number) => boolean;
+type ResolveGroupRequireMention = (chatId: string | number, cfg: OpenClawConfig) => boolean;
 
 type TelegramMessageContextRuntimeOverrides = Partial<
   Pick<
     typeof import("./bot-message-context.runtime.js"),
-    | "createStatusReactionController"
-    | "ensureConfiguredBindingRouteReady"
-    | "getRuntimeConfig"
-    | "recordChannelActivity"
+    "createStatusReactionController" | "ensureConfiguredBindingRouteReady" | "recordChannelActivity"
   >
 >;
 
@@ -106,7 +107,6 @@ export type BuildTelegramMessageContextParams = {
   resolveGroupActivation: ResolveGroupActivation;
   resolveGroupRequireMention: ResolveGroupRequireMention;
   resolveTelegramGroupConfig: ResolveTelegramGroupConfig;
-  loadFreshConfig?: () => OpenClawConfig;
   runtime?: TelegramMessageContextRuntimeOverrides;
   sessionRuntime?: TelegramMessageContextSessionRuntimeOverrides;
   upsertPairingRequest?: typeof import("openclaw/plugin-sdk/conversation-runtime").upsertChannelPairingRequest;

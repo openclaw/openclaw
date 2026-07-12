@@ -18,7 +18,7 @@ export type QmdSessionArtifactMapping = {
   sessionId: string;
 };
 
-export type QmdSessionArtifactLookup = {
+type QmdSessionArtifactLookup = {
   artifactPath?: string;
   collection?: string;
   docid?: string;
@@ -26,7 +26,7 @@ export type QmdSessionArtifactLookup = {
   searchPath: string;
 };
 
-export type QmdSessionArtifactIdentity = {
+type QmdSessionArtifactIdentity = {
   agentId: string;
   archived: boolean;
   memoryKey: string;

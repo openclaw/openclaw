@@ -53,7 +53,6 @@ type ChatControlsProps = {
     options?: { trigger?: HTMLElement | null; restoreFocus?: boolean },
   ) => void;
   onToggleCronSessions?: () => void;
-  onOpenSplitView?: () => void;
 };
 
 function chatAutoScrollLabel(mode: ChatAutoScrollMode) {
@@ -333,7 +332,7 @@ export function renderChatControls(props: ChatControlsProps) {
                 aria-label=${cronLabel}
               >
                 ${renderCronFilterIcon(hiddenCronCount)}
-                <span class="chat-settings-action__text">${t("cron.jobList.history")}</span>
+                <span class="chat-settings-action__text">${t("cron.actions.history")}</span>
               </button>
             </openclaw-tooltip>
           </div>
@@ -371,19 +370,5 @@ export function renderChatControls(props: ChatControlsProps) {
     >
       ${renderChatModelControls(props.model)}
     </div>
-    ${props.onOpenSplitView
-      ? html`
-          <openclaw-tooltip .content=${t("chat.splitView.open")}>
-            <button
-              class="btn btn--sm btn--icon chat-open-split-view"
-              type="button"
-              aria-label=${t("chat.splitView.open")}
-              @click=${props.onOpenSplitView}
-            >
-              ${icons.panelRightOpen}
-            </button>
-          </openclaw-tooltip>
-        `
-      : ""}
   `;
 }

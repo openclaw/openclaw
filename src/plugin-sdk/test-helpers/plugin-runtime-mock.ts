@@ -18,7 +18,7 @@ import {
 import type { PluginRuntime } from "../testing.js";
 
 const DEFAULT_PROVIDER = "openai";
-const DEFAULT_MODEL = "gpt-5.5";
+const DEFAULT_MODEL = "gpt-5.6-sol";
 
 type DeepPartial<T> = {
   [K in keyof T]?: T[K] extends (...args: never[]) => unknown
@@ -367,6 +367,10 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
   };
   const base: PluginRuntime = {
     version: "1.0.0-test",
+    gateway: {
+      isAvailable: vi.fn(async () => false),
+      request: vi.fn(),
+    },
     config: {
       current: vi.fn(() => ({})) as unknown as PluginRuntime["config"]["current"],
       mutateConfigFile: vi.fn(async () => ({
@@ -436,9 +440,50 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         resolveStorePath: vi.fn(
           () => "/tmp/agent-sessions.json",
         ) as unknown as PluginRuntime["agent"]["session"]["resolveStorePath"],
-        loadSessionStore: vi.fn(
-          () => ({}),
-        ) as unknown as PluginRuntime["agent"]["session"]["loadSessionStore"],
+        createSessionEntry: vi.fn(
+          async (
+            params: Parameters<PluginRuntime["agent"]["session"]["createSessionEntry"]>[0],
+          ) => {
+            const sessionId = "plugin-runtime-mock-session";
+            const key = params.key;
+            const initialEntry = {
+              sessionId,
+              updatedAt: Date.now(),
+              ...(params.label !== undefined ? { label: params.label } : {}),
+              ...(params.spawnedCwd !== undefined ? { spawnedCwd: params.spawnedCwd } : {}),
+              ...structuredClone(params.initialEntry),
+              ...(params.afterCreate ? { initializationPending: true as const } : {}),
+            };
+            const initialized = {
+              key,
+              agentId: params.agentId ?? "main",
+              sessionId,
+              entry: initialEntry,
+            };
+            const finalPatch = await params.afterCreate?.(structuredClone(initialized));
+            if (finalPatch !== undefined) {
+              const patchKeys = Object.keys(finalPatch);
+              if (patchKeys.length !== 1 || patchKeys[0] !== "pluginExtensions") {
+                throw new Error("session creation final patch may only contain pluginExtensions");
+              }
+            }
+            return {
+              ...initialized,
+              entry:
+                params.afterCreate === undefined
+                  ? initialEntry
+                  : {
+                      ...initialEntry,
+                      ...(finalPatch === undefined
+                        ? {}
+                        : {
+                            pluginExtensions: structuredClone(finalPatch.pluginExtensions),
+                          }),
+                      initializationPending: undefined,
+                    },
+            };
+          },
+        ) as PluginRuntime["agent"]["session"]["createSessionEntry"],
         getSessionEntry: vi.fn(
           () => undefined,
         ) as unknown as PluginRuntime["agent"]["session"]["getSessionEntry"],
@@ -458,24 +503,11 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         runWithWorkAdmission: vi.fn(
           async (_params, run) => await run(new AbortController().signal),
         ) as PluginRuntime["agent"]["session"]["runWithWorkAdmission"],
-        saveSessionStore: vi
-          .fn()
-          .mockResolvedValue(
-            undefined,
-          ) as unknown as PluginRuntime["agent"]["session"]["saveSessionStore"],
-        updateSessionStore: vi
-          .fn()
-          .mockResolvedValue(
-            undefined,
-          ) as unknown as PluginRuntime["agent"]["session"]["updateSessionStore"],
         updateSessionStoreEntry: vi
           .fn()
           .mockResolvedValue(
             null,
           ) as unknown as PluginRuntime["agent"]["session"]["updateSessionStoreEntry"],
-        resolveSessionFilePath: vi.fn(
-          (sessionId: string) => `/tmp/${sessionId}.json`,
-        ) as unknown as PluginRuntime["agent"]["session"]["resolveSessionFilePath"],
       },
     },
     system: {
@@ -813,6 +845,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       removeIfLossless: vi.fn(),
     },
     llm: {
+      acquireLocalService: vi.fn(),
       complete: vi.fn(),
     },
     nodes: {

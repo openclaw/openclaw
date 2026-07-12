@@ -85,10 +85,10 @@ Recommended for most interactive installs on macOS/Linux/WSL.
 
   </Step>
   <Step title="Post-install tasks">
-    - Refreshes a loaded gateway service best-effort (`openclaw gateway install --force`, then restart)
-    - Runs `openclaw doctor --non-interactive` on upgrades and git installs (best effort)
-    - Attempts onboarding when appropriate (TTY available, onboarding not disabled, and bootstrap/config checks pass)
-    - Runs a post-install smoke verify when `--verify` is set
+    - Resolves the just-installed `openclaw` binary for follow-up commands
+    - For an unconfigured install, starts onboarding before doctor or gateway probes. With `--no-onboard` or no TTY, it prints the command to finish setup later.
+    - For a configured install, refreshes and restarts a loaded gateway service best-effort and runs doctor. Upgrades update plugins when possible, or print the manual command in a headless prompt-enabled run.
+    - When `--verify` runs, it checks the installed version and checks gateway health only after configuration exists.
 
   </Step>
 </Steps>
@@ -197,7 +197,7 @@ by default, plus git-checkout installs under the same prefix flow.
 
 <Steps>
   <Step title="Install local Node runtime">
-    Downloads a pinned supported Node LTS tarball (the version is embedded in the script and updated independently, default `22.22.0`) to `<prefix>/tools/node-v<version>` and verifies SHA-256.
+    Downloads a pinned supported Node LTS tarball (the version is embedded in the script and updated independently, default `22.22.2`) to `<prefix>/tools/node-v<version>` and verifies SHA-256.
     On Alpine/musl Linux, where Node does not publish compatible tarballs for the pinned runtime, installs `nodejs` and `npm` with `apk` and links that runtime into the prefix wrapper path. The Alpine repositories must provide a supported Node version (22.19+, 23.11+, or 24+); use Alpine 3.21 or newer if older repositories only provide Node 20 or 21.
   </Step>
   <Step title="Ensure Git">
@@ -256,7 +256,7 @@ by default, plus git-checkout installs under the same prefix flow.
 | `--git \| --github`                     | Shortcut for git method                                                         |
 | `--git-dir \| --dir <path>`             | Git checkout directory (default: `~/openclaw`)                                  |
 | `--version <ver>`                       | OpenClaw version or dist-tag (default: `latest`)                                |
-| `--node-version <ver>`                  | Node version (default: `22.22.0`)                                               |
+| `--node-version <ver>`                  | Node version (default: `22.22.2`)                                               |
 | `--json`                                | Emit NDJSON events                                                              |
 | `--onboard`                             | Run `openclaw onboard` after install                                            |
 | `--no-onboard`                          | Skip onboarding (default)                                                       |

@@ -8,7 +8,7 @@ import {
   resolveRepoRootPath,
   sharedVitestConfig,
 } from "./vitest.shared.config.ts";
-import { getUnitFastTestFiles } from "./vitest.unit-fast-paths.mjs";
+import { getUnitFastTestFilesForIncludePatterns } from "./vitest.unit-fast-paths.mjs";
 
 function normalizePathPattern(value: string): string {
   return value.replaceAll("\\", "/");
@@ -58,10 +58,7 @@ function directoryPatternCoversInclude(excludePattern: string, includePattern: s
   return candidate === excludeRoot || candidate.startsWith(`${excludeRoot}/`);
 }
 
-export function includePatternIsFullyExcluded(
-  includePattern: string,
-  excludePattern: string,
-): boolean {
+function includePatternIsFullyExcluded(includePattern: string, excludePattern: string): boolean {
   const include = normalizePathPattern(includePattern);
   const exclude = normalizePathPattern(excludePattern);
   return (
@@ -215,6 +212,7 @@ export function createScopedVitestConfig(
 ) {
   const base = sharedVitestConfig as Record<string, unknown>;
   const baseTest = sharedVitestConfig.test ?? {};
+  const baseSequence = (baseTest as { sequence?: { groupOrder?: number } }).sequence;
   const scopedDir = options?.dir;
   const resolvedScopedDir = scopedDir ? path.join(repoRoot, scopedDir) : undefined;
   const env = options?.env;
@@ -222,8 +220,12 @@ export function createScopedVitestConfig(
   const cliInclude = narrowIncludePatternsForCli(include, options?.argv, {
     scopedDir,
   });
+  const effectiveInclude = includeFromEnv ?? cliInclude ?? include;
+  const scopedInclude = relativizeScopedPatterns(effectiveInclude, scopedDir);
   const unitFastExcludePatterns =
-    options?.excludeUnitFastTests === false ? [] : getUnitFastTestFiles();
+    options?.excludeUnitFastTests === false
+      ? []
+      : getUnitFastTestFilesForIncludePatterns(effectiveInclude, { dir: scopedDir });
   const exclude = relativizeScopedPatterns(
     [...(baseTest.exclude ?? []), ...unitFastExcludePatterns, ...(options?.exclude ?? [])],
     scopedDir,
@@ -252,7 +254,7 @@ export function createScopedVitestConfig(
       ...(runner ? { runner } : { runner: undefined }),
       setupFiles,
       ...(resolvedScopedDir ? { dir: resolvedScopedDir } : {}),
-      include: relativizeScopedPatterns(includeFromEnv ?? cliInclude ?? include, scopedDir),
+      include: scopedInclude,
       exclude,
       ...(options?.pool ? { pool: options.pool } : {}),
       ...(options?.fileParallelism === undefined
@@ -262,7 +264,7 @@ export function createScopedVitestConfig(
         ? {}
         : {
             sequence: {
-              ...baseTest.sequence,
+              ...baseSequence,
               groupOrder: scopedGroupOrder,
             },
           }),

@@ -8,6 +8,7 @@ import {
   CodexAppServerClient,
   MIN_CODEX_APP_SERVER_VERSION,
   isCodexAppServerApprovalRequest,
+  isCodexAppServerIndeterminateTransportError,
   readCodexVersionFromUserAgent,
 } from "./client.js";
 import { resetSharedCodexAppServerClientForTests } from "./shared-client.js";
@@ -112,6 +113,12 @@ describe("CodexAppServerClient", () => {
         "fatal OPENAI_API_KEY=sk-live ANTHROPIC_API_KEY='anthropic-secret' OTHER=value",
       ),
     ).toBe("fatal OPENAI_API_KEY=<redacted> ANTHROPIC_API_KEY='<redacted>' OTHER=value");
+  });
+
+  it("keeps malformed-message previews UTF-16 safe at the log boundary", () => {
+    const prefix = "x".repeat(499);
+
+    expect(testing.redactCodexAppServerLinePreview(`${prefix}😀`)).toBe(`${prefix}...`);
   });
 
   it("recovers app-server messages split by raw newlines inside JSON strings", async () => {
@@ -224,7 +231,7 @@ describe("CodexAppServerClient", () => {
     const { harness, initializing, outbound } = startInitialize();
     harness.send({
       id: outbound.id,
-      result: { userAgent: "openclaw/0.142.0 (macOS; test)" },
+      result: { userAgent: "openclaw/0.143.0 (macOS; test)" },
     });
 
     await expect(initializing).resolves.toBeUndefined();
@@ -263,11 +270,11 @@ describe("CodexAppServerClient", () => {
     const { harness, initializing, outbound } = startInitialize();
     harness.send({
       id: outbound.id,
-      result: { userAgent: "openclaw/0.142.0-alpha.2 (macOS; test)" },
+      result: { userAgent: "openclaw/0.143.0-alpha.2 (macOS; test)" },
     });
 
     await expect(initializing).rejects.toThrow(
-      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but detected 0.142.0-alpha.2`,
+      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but detected 0.143.0-alpha.2`,
     );
     expect(harness.writes).toHaveLength(1);
   });
@@ -276,11 +283,11 @@ describe("CodexAppServerClient", () => {
     const { harness, initializing, outbound } = startInitialize();
     harness.send({
       id: outbound.id,
-      result: { userAgent: "openclaw/0.142.0+alpha.2 (macOS; test)" },
+      result: { userAgent: "openclaw/0.143.0+alpha.2 (macOS; test)" },
     });
 
     await expect(initializing).rejects.toThrow(
-      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but detected 0.142.0+alpha.2`,
+      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but detected 0.143.0+alpha.2`,
     );
     expect(harness.writes).toHaveLength(1);
   });
@@ -289,7 +296,7 @@ describe("CodexAppServerClient", () => {
     const { harness, initializing, outbound } = startInitialize();
     harness.send({
       id: outbound.id,
-      result: { userAgent: "openclaw/0.143.0-alpha.1 (macOS; test)" },
+      result: { userAgent: "openclaw/0.144.0-alpha.1 (macOS; test)" },
     });
 
     await expect(initializing).resolves.toBeUndefined();
@@ -300,7 +307,7 @@ describe("CodexAppServerClient", () => {
     const { harness, initializing, outbound } = startInitialize();
     harness.send({
       id: outbound.id,
-      result: { userAgent: "openclaw/0.143.0+custom (macOS; test)" },
+      result: { userAgent: "openclaw/0.144.0+custom (macOS; test)" },
     });
 
     await expect(initializing).resolves.toBeUndefined();
@@ -416,7 +423,10 @@ describe("CodexAppServerClient", () => {
 
     // The pending request must be rejected with the pipe error rather than
     // an unhandled exception tearing down the gateway.
-    await expect(pending).rejects.toThrow("write EPIPE");
+    const pendingError = await pending.catch((error: unknown) => error);
+    expect(pendingError).toBeInstanceOf(Error);
+    expect((pendingError as Error).message).toContain("write EPIPE");
+    expect(isCodexAppServerIndeterminateTransportError(pendingError)).toBe(true);
 
     // Subsequent requests keep the original close reason so startup logs stay actionable.
     await expect(harness.client.request("another/method")).rejects.toThrow("write EPIPE");
@@ -431,7 +441,10 @@ describe("CodexAppServerClient", () => {
 
     expect(() => harness.process.stdout.emit("error", readError)).not.toThrow();
 
-    await expect(pending).rejects.toThrow("stdout pipe broke");
+    const pendingError = await pending.catch((error: unknown) => error);
+    expect(pendingError).toBeInstanceOf(Error);
+    expect((pendingError as Error).message).toContain("stdout pipe broke");
+    expect(isCodexAppServerIndeterminateTransportError(pendingError)).toBe(true);
     await expect(harness.client.request("another/method")).rejects.toThrow("stdout pipe broke");
   });
 
@@ -488,7 +501,7 @@ describe("CodexAppServerClient", () => {
 
   it("reads the Codex version from the app-server user agent", () => {
     expect(readCodexVersionFromUserAgent("Codex Desktop/0.125.0")).toBe("0.125.0");
-    expect(readCodexVersionFromUserAgent("openclaw/0.142.0 (macOS; test)")).toBe("0.142.0");
+    expect(readCodexVersionFromUserAgent("openclaw/0.143.0 (macOS; test)")).toBe("0.143.0");
     expect(readCodexVersionFromUserAgent("codex_cli_rs/0.125.0-dev (linux; test)")).toBe(
       "0.125.0-dev",
     );

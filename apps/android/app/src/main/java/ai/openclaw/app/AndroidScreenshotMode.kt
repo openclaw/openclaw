@@ -7,16 +7,16 @@ const val extraAndroidScreenshotScene = "openclaw.screenshotScene"
 
 enum class AndroidScreenshotScene(
   val rawValue: String,
+  val homeDestination: HomeDestination,
 ) {
-  Connect("connect"),
-  Chat("chat"),
-  Voice("voice"),
-  Screen("screen"),
-  Settings("settings"),
+  Home("home", HomeDestination.Connect),
+  Chat("chat", HomeDestination.Chat),
+  Voice("voice", HomeDestination.Voice),
+  Settings("settings", HomeDestination.Settings),
   ;
 
   companion object {
-    fun fromRawValue(raw: String?): AndroidScreenshotScene = entries.firstOrNull { it.rawValue == raw?.trim()?.lowercase() } ?: Connect
+    fun fromRawValue(raw: String?): AndroidScreenshotScene = entries.firstOrNull { it.rawValue == raw?.trim()?.lowercase() } ?: Home
   }
 }
 

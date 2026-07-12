@@ -41,7 +41,7 @@ function toCandidate(
 /**
  * Finds legacy env marker strings on registered secret targets without mutating config.
  */
-export function collectLegacySecretRefEnvMarkerCandidates(
+function collectLegacySecretRefEnvMarkerCandidates(
   config: OpenClawConfig,
 ): LegacySecretRefEnvMarkerCandidate[] {
   const defaults = config.secrets?.defaults;

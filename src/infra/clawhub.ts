@@ -9,6 +9,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { retryClawHubRead } from "./clawhub-retry.js";
 import { sha256Base64, sha256Hex as digestSha256Hex } from "./crypto-digest.js";
 import { readResponseTextSnippet, readResponseWithLimit } from "./http-body.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
@@ -177,6 +178,12 @@ export type ClawHubPackageListItem = {
   capabilityTags?: string[];
   executesCode?: boolean;
   verificationTier?: string | null;
+  stats?: {
+    downloads?: number;
+    installs?: number;
+    stars?: number;
+    versions?: number;
+  } | null;
   clawpackAvailable?: boolean;
   hostTargetKeys?: string[];
   environmentFlags?: string[];
@@ -404,10 +411,6 @@ export type ClawHubDownloadResult = {
   cleanup: () => Promise<void>;
 };
 
-export type ClawHubInstallTelemetrySkill = {
-  version?: string | null;
-};
-
 type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
 type ClawHubRequestParams = {
@@ -421,6 +424,7 @@ type ClawHubRequestParams = {
   search?: Record<string, string | undefined>;
   fetchImpl?: FetchLike;
   skipAuth?: boolean;
+  retryTransientReads?: boolean;
   headers?: Record<string, string>;
 };
 
@@ -695,12 +699,12 @@ async function clawhubRequest(
     ? undefined
     : normalizeOptionalString(params.token) || (await resolveClawHubAuthToken());
   const timeoutMs = resolveClawHubRequestTimeoutMs(params.timeoutMs);
-  const controller = new AbortController();
-  const timeout = setTimeout(
-    () => controller.abort(new Error(`ClawHub request timed out after ${timeoutMs}ms`)),
-    timeoutMs,
-  );
-  try {
+  const request = async () => {
+    const controller = new AbortController();
+    const timeout = setTimeout(
+      () => controller.abort(new Error(`ClawHub request timed out after ${timeoutMs}ms`)),
+      timeoutMs,
+    );
     const headers = {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(params.json === undefined ? {} : { "Content-Type": "application/json" }),
@@ -716,11 +720,24 @@ async function clawhubRequest(
     if (params.json !== undefined) {
       init.body = JSON.stringify(params.json);
     }
-    const response = await (params.fetchImpl ?? fetch)(url, init);
-    return { response, url, hasToken: Boolean(token) };
-  } finally {
-    clearTimeout(timeout);
+    try {
+      const response = await (params.fetchImpl ?? fetch)(url, init);
+      return { response, url, hasToken: Boolean(token) };
+    } finally {
+      clearTimeout(timeout);
+    }
+  };
+
+  // A write may have committed before its response failed, so only replay
+  // idempotent reads across transient ClawHub transport failures.
+  if ((params.method ?? "GET") !== "GET" || params.retryTransientReads === false) {
+    return await request();
   }
+  return await retryClawHubRead(request, {
+    disposeRetry: async ({ response }) => {
+      await response.body?.cancel().catch(() => undefined);
+    },
+  });
 }
 
 async function readErrorBody(response: Response, timeoutMs?: number): Promise<string> {
@@ -1619,8 +1636,9 @@ export async function downloadClawHubGitHubSkillArchive(params: {
 export async function reportClawHubSkillInstallTelemetry(params: {
   baseUrl?: string;
   token?: string;
-  root: string;
-  skills: Record<string, ClawHubInstallTelemetrySkill>;
+  slug: string;
+  ownerHandle?: string;
+  version?: string | null;
   timeoutMs?: number;
   fetchImpl?: FetchLike;
 }): Promise<void> {
@@ -1628,12 +1646,10 @@ export async function reportClawHubSkillInstallTelemetry(params: {
   if (!token || isClawHubTelemetryDisabled()) {
     return;
   }
-  const skills = Object.entries(params.skills)
-    .map(([slug, entry]) => ({
-      slug,
-      version: entry.version ?? null,
-    }))
-    .filter((entry) => entry.slug.length > 0);
+  const slug = params.slug.trim();
+  if (!slug) {
+    return;
+  }
 
   const { response, url, hasToken } = await clawhubRequest({
     baseUrl: params.baseUrl,
@@ -1643,13 +1659,10 @@ export async function reportClawHubSkillInstallTelemetry(params: {
     timeoutMs: params.timeoutMs,
     fetchImpl: params.fetchImpl,
     json: {
-      roots: [
-        {
-          rootId: digestSha256Hex(path.resolve(params.root)),
-          label: formatTelemetryRootLabel(params.root),
-          skills,
-        },
-      ],
+      event: "install",
+      slug,
+      ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
+      version: params.version ?? undefined,
     },
   });
   if (!response.ok) {
@@ -1663,20 +1676,6 @@ function isClawHubTelemetryDisabled(): boolean {
     return false;
   }
   return ["1", "true", "yes", "on"].includes(raw.trim().toLowerCase());
-}
-
-function formatTelemetryRootLabel(root: string): string {
-  const home = os.homedir();
-  const absolute = path.resolve(root);
-  if (absolute === home) {
-    return "~";
-  }
-  const normalized = absolute.replaceAll("\\", "/");
-  const normalizedHome = home.replaceAll("\\", "/");
-  const withinHome = normalized.startsWith(`${normalizedHome}/`);
-  const stripped = withinHome ? normalized.slice(normalizedHome.length + 1) : normalized;
-  const tail = stripped.split("/").filter(Boolean).slice(-2).join("/");
-  return withinHome ? `~/${tail}` : tail || absolute;
 }
 
 /** Resolves the preferred latest package version from detail metadata. */
@@ -1969,6 +1968,9 @@ export async function fetchClawHubPromotionsFeed(
     path: "/api/v1/feeds/promotions",
     timeoutMs: params.timeoutMs,
     fetchImpl: params.fetchImpl,
+    // This passive refresh runs inline from interactive commands. Its cache
+    // cadence owns retries; shared backoff would turn the 2.5s cap into ~24s.
+    retryTransientReads: false,
     // Public CDN-served snapshot; an Authorization header would only
     // fragment edge caches.
     skipAuth: true,
