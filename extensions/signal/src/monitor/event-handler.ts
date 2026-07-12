@@ -513,6 +513,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       replyToId: ctxPayload.ReplyToId,
       author: entry.senderRecipient,
       body: entry.nativeReplyBody ?? entry.bodyText,
+      allowImplicitCurrentMessage: replyThreading?.implicitCurrentMessage !== "deny",
       state: { hasReplied: false },
     };
     const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
