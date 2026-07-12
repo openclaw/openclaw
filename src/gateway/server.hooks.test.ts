@@ -435,6 +435,18 @@ describe("gateway server hooks", () => {
         to: "123456",
       });
       drainSystemEvents(resolveMainKey());
+
+      mockIsolatedRunOkOnce();
+      const bareRecipientOnly = await postHook(port, "/hooks/agent", {
+        message: "Do it",
+        name: "Bare recipient only",
+        to: "123456",
+      });
+      expect(bareRecipientOnly.status).toBe(200);
+      await waitForSystemEvent();
+      const bareRecipientOnlyCall = cronRunCall();
+      expect(bareRecipientOnlyCall?.job?.delivery).toEqual({ mode: "none" });
+      drainSystemEvents(resolveMainKey());
     });
   });
 
