@@ -661,7 +661,7 @@ describe("TUI PTY real backends", () => {
             read: () => {
               const output = fixture.run.output().slice(commandOffset);
               const matchedOutcome = output.match(
-                /new session: agent:main:tui-|abort the current run before \/new/,
+                /new session: agent:main:tui-|abort the current run before \/new|Parent session[\s\S]*?is still active; try[\s\S]*?again in a moment\./,
               )?.[0];
               if (!matchedOutcome) {
                 return null;
