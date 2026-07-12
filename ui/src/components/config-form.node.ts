@@ -22,8 +22,6 @@ import {
   type JsonSchema,
 } from "./config-form.shared.ts";
 
-export { matchesNodeSearch, parseConfigSearchQuery } from "./config-form.search.ts";
-
 const META_KEYS = new Set(["title", "description", "default", "nullable", "tags", "x-tags"]);
 
 function isAnySchema(schema: JsonSchema): boolean {
