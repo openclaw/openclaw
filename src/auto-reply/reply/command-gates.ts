@@ -29,13 +29,11 @@ export function rejectUnauthorizedCommand(
   return { shouldContinue: false };
 }
 
-export function rejectNonOwnerCommand(
+/** Builds the non-owner denial without re-checking any owner flag. */
+export function buildNonOwnerCommandDenial(
   params: HandleCommandsParams,
   commandLabel: string,
-): CommandHandlerResult | null {
-  if (params.command.senderIsOwner) {
-    return null;
-  }
+): CommandHandlerResult {
   logVerbose(
     `Ignoring ${commandLabel} from non-owner sender: ${redactIdentifier(params.command.senderId)}`,
   );
@@ -43,6 +41,16 @@ export function rejectNonOwnerCommand(
     return buildNativeCommandGateReply("You are not authorized to use this command.");
   }
   return { shouldContinue: false };
+}
+
+export function rejectNonOwnerCommand(
+  params: HandleCommandsParams,
+  commandLabel: string,
+): CommandHandlerResult | null {
+  if (params.command.senderIsOwner) {
+    return null;
+  }
+  return buildNonOwnerCommandDenial(params, commandLabel);
 }
 
 export function requireGatewayClientScope(

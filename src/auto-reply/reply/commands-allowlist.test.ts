@@ -79,6 +79,35 @@ vi.mock("../../pairing/pairing-store.js", () => ({
   removeChannelAllowFromStoreEntry: removeChannelAllowFromStoreEntryMock,
 }));
 
+// The cross-channel owner guard reuses resolveCommandAuthorization to re-derive
+// owner status for the target channel. Its own correctness is covered by
+// command-auth tests; here we substitute a minimal cfg-driven owner check so the
+// guard's enforcement (block/allow) is exercised deterministically.
+vi.mock("../command-auth.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../command-auth.js")>();
+  return {
+    ...actual,
+    resolveCommandAuthorization: vi.fn(
+      (params: { ctx: { Provider?: string; SenderId?: string }; cfg: OpenClawConfig }) => {
+        const target = params.ctx.Provider ?? "";
+        const sender = String(params.ctx.SenderId ?? "");
+        const channelAllow = (
+          (params.cfg.channels as Record<string, { allowFrom?: unknown[] }> | undefined)?.[target]
+            ?.allowFrom ?? []
+        ).map(String);
+        const globalOwners = (params.cfg.commands?.ownerAllowFrom ?? []).map((owner) =>
+          String(owner).includes(":") ? String(owner).split(":").pop() : String(owner),
+        );
+        const senderIsOwner =
+          channelAllow.includes("*") ||
+          channelAllow.includes(sender) ||
+          globalOwners.includes(sender);
+        return { senderIsOwner } as ReturnType<typeof actual.resolveCommandAuthorization>;
+      },
+    ),
+  };
+});
+
 type TelegramTestSectionConfig = {
   allowFrom?: string[];
   groupAllowFrom?: string[];
@@ -567,6 +596,72 @@ describe("handleAllowlistCommand", () => {
     expect(addChannelAllowFromStoreEntryMock).not.toHaveBeenCalled();
   });
 
+  it("blocks a cross-channel write from an origin-only owner (#104984)", async () => {
+    // No commands.ownerAllowFrom, so owner authority falls back to each
+    // channel's allowFrom. The Telegram sender is an owner ON TELEGRAM only and
+    // must not be able to rewrite WhatsApp's allowlist via --channel.
+    const cfg = {
+      commands: { text: true, config: true },
+      channels: {
+        telegram: { allowFrom: ["123456789"], configWrites: true },
+        whatsapp: { allowFrom: ["+15550000000"], configWrites: true },
+      },
+    } as OpenClawConfig;
+    // Full write-path mocks so that, absent the guard, the WhatsApp write would
+    // succeed — the guard is the only thing that blocks it (a true discriminator).
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      valid: true,
+      parsed: structuredClone(cfg),
+    });
+    const params = buildAllowlistParams("/allowlist add dm --channel whatsapp +15551234567", cfg, {
+      Provider: "telegram",
+      Surface: "telegram",
+      SenderId: "123456789",
+      From: "123456789",
+    });
+    // Origin (Telegram) owner authority — the pre-fix state that let this through.
+    params.command.senderIsOwner = true;
+
+    const result = await handleAllowlistCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    // The WhatsApp allowlist must not be mutated by a Telegram-only owner.
+    expect(replaceConfigFileMock).not.toHaveBeenCalled();
+    expect(addChannelAllowFromStoreEntryMock).not.toHaveBeenCalled();
+  });
+
+  it("allows a cross-channel write from a global commands owner (#104984)", async () => {
+    // A global commands.ownerAllowFrom identity is an owner everywhere, so a
+    // legitimate operator can still edit another channel cross-surface.
+    const cfg = {
+      commands: {
+        text: true,
+        config: true,
+        ownerAllowFrom: ["telegram:123456789"],
+      },
+      channels: {
+        telegram: { allowFrom: ["123456789"], configWrites: true },
+        whatsapp: { allowFrom: ["+15550000000"], configWrites: true },
+      },
+    } as OpenClawConfig;
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      valid: true,
+      parsed: structuredClone(cfg),
+    });
+    const params = buildAllowlistParams("/allowlist add dm --channel whatsapp +15551234567", cfg, {
+      Provider: "telegram",
+      Surface: "telegram",
+      SenderId: "123456789",
+      From: "123456789",
+    });
+    params.command.senderIsOwner = true;
+
+    const result = await handleAllowlistCommand(params, true);
+
+    // Global owner passes the cross-channel gate and reaches the write path.
+    expect(result?.reply?.text ?? "").not.toContain("not authorized");
+  });
+
   it("blocks non-owner allowlist writes before resolving target channel", async () => {
     const cfg = {
       commands: { text: true, config: true },
@@ -602,9 +697,13 @@ describe("handleAllowlistCommand", () => {
       valid: true,
       parsed: structuredClone(cfg),
     });
+    // The sender is a genuine discord owner (id 456) so the cross-channel owner
+    // gate passes and the test isolates the origin configWrites denial.
     const params = buildAllowlistParams("/allowlist add dm --channel discord --config 789", cfg, {
       Provider: "telegram",
       Surface: "telegram",
+      SenderId: "456",
+      From: "456",
     });
     params.command.senderIsOwner = true;
     const result = await handleAllowlistCommand(params, true);
@@ -665,9 +764,12 @@ describe("handleAllowlistCommand", () => {
         discord: { allowFrom: ["456"], configWrites: true },
       },
     } as OpenClawConfig;
+    // Sender is a genuine discord owner (id 456), isolating the configWrites gate.
     const params = buildAllowlistParams("/allowlist add dm --channel discord --store 789", cfg, {
       Provider: "telegram",
       Surface: "telegram",
+      SenderId: "456",
+      From: "456",
     });
     params.command.senderIsOwner = true;
     const result = await handleAllowlistCommand(params, true);

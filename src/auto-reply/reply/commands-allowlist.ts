@@ -5,7 +5,10 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { resolveExplicitConfigWriteTarget } from "../../channels/plugins/config-writes.js";
+import {
+  canBypassConfigWritePolicy,
+  resolveExplicitConfigWriteTarget,
+} from "../../channels/plugins/config-writes.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { normalizeChannelId } from "../../channels/registry.js";
@@ -17,8 +20,10 @@ import {
   removeChannelAllowFromStoreEntry,
 } from "../../pairing/pairing-store.js";
 import { DEFAULT_ACCOUNT_ID, normalizeOptionalAccountId } from "../../routing/session-key.js";
+import { resolveCommandAuthorization } from "../command-auth.js";
 import { resolveChannelAccountId, resolveCommandSurfaceChannel } from "./channel-context.js";
 import {
+  buildNonOwnerCommandDenial,
   rejectNonOwnerCommand,
   rejectUnauthorizedCommand,
   requireCommandFlagEnabled,
@@ -320,6 +325,35 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     command: params.command,
   });
   const plugin = getChannelPlugin(channelId);
+
+  // Owner authorization upstream (`rejectNonOwnerCommand`) is scoped to the
+  // command's origin channel, but `/allowlist ... --channel <other>` mutates a
+  // different channel's config. Being an owner on the origin channel must not
+  // grant owner authority over an unrelated target (#104984). Re-resolve owner
+  // status against the target scope for cross-channel writes; global owners
+  // (`commands.ownerAllowFrom`) and gateway-admin bypass still pass.
+  if (parsed.action !== "list" && originChannelId && channelId !== originChannelId) {
+    const bypass = canBypassConfigWritePolicy({
+      channel: params.command.channel,
+      gatewayClientScopes: params.ctx.GatewayClientScopes,
+    });
+    if (!bypass) {
+      const targetAuthorization = resolveCommandAuthorization({
+        ctx: {
+          ...params.ctx,
+          Provider: channelId,
+          Surface: channelId,
+          OriginatingChannel: channelId,
+          AccountId: accountId,
+        },
+        cfg: params.cfg,
+        commandAuthorized: true,
+      });
+      if (!targetAuthorization.senderIsOwner) {
+        return buildNonOwnerCommandDenial(params, "/allowlist");
+      }
+    }
+  }
 
   if (parsed.action === "list") {
     const supportsStore = Boolean(plugin?.pairing);
