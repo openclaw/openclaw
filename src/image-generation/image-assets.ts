@@ -203,6 +203,7 @@ export function generatedImageAssetFromOpenAiCompatibleEntry(
     defaultMimeType?: string;
     fileNamePrefix?: string;
     sniffMimeType?: boolean;
+    maxBytes?: number;
   } = {},
 ): GeneratedImageAsset | undefined {
   return generatedImageAssetFromBase64({
@@ -213,6 +214,7 @@ export function generatedImageAssetFromOpenAiCompatibleEntry(
     defaultMimeType: options.defaultMimeType,
     fileNamePrefix: options.fileNamePrefix,
     sniffMimeType: options.sniffMimeType,
+    maxBytes: options.maxBytes,
   });
 }
 
@@ -223,6 +225,7 @@ export function parseOpenAiCompatibleImageResponse(
     fileNamePrefix?: string;
     malformedResponseError?: string;
     sniffMimeType?: boolean;
+    maxBytes?: number;
   } = {},
 ): GeneratedImageAsset[] {
   if (!isRecord(payload)) {

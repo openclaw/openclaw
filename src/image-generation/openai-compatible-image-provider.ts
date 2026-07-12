@@ -290,8 +290,10 @@ export function createOpenAiCompatibleImageGenerationProvider(
             resolveGeneratedMediaMaxBytes(req.cfg, "image"),
           ),
         });
+        const maxImageBytes = resolveGeneratedMediaMaxBytes(req.cfg, "image");
         const images = parseOpenAiCompatibleImageResponse(payload, {
           ...options.response,
+          maxBytes: maxImageBytes,
           malformedResponseError:
             mode === "edit"
               ? `${options.label} image edit response malformed`

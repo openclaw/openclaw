@@ -1048,8 +1048,10 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
           ),
         });
         const output = resolveOutputMime(req.outputFormat);
+        const maxImageBytes = resolveGeneratedImageMaxBytes(req.cfg);
         const images = parseOpenAiCompatibleImageResponse(data, {
           defaultMimeType: output.mimeType,
+          maxBytes: maxImageBytes,
           malformedResponseError: isEdit
             ? "OpenAI image edit response malformed"
             : "OpenAI image generation response malformed",

@@ -69,6 +69,7 @@ function extractImagesFromPart(
   images: GeneratedImageAsset[],
   part: unknown,
   malformedResponseError?: string,
+  maxBytes?: number,
 ): void {
   if (!isRecord(part)) {
     throwMalformedOpenRouterImageResponse(malformedResponseError);
@@ -94,7 +95,11 @@ function extractImagesFromPart(
 
   const rawBase64 = normalizeOptionalString(part.b64_json);
   if (rawBase64) {
-    const image = generatedImageAssetFromBase64({ base64: rawBase64, index: images.length });
+    const image = generatedImageAssetFromBase64({
+      base64: rawBase64,
+      index: images.length,
+      maxBytes,
+    });
     if (image) {
       images.push(image);
       return;
@@ -128,6 +133,7 @@ function extractImagesFromPart(
     base64: data,
     index: images.length,
     mimeType,
+    maxBytes,
   });
   if (image) {
     images.push(image);
@@ -138,7 +144,7 @@ function extractImagesFromPart(
 
 function extractOpenRouterImagesFromResponse(
   body: unknown,
-  options: { malformedResponseError?: string } = {},
+  options: { malformedResponseError?: string; maxBytes?: number } = {},
 ): GeneratedImageAsset[] {
   if (!isRecord(body)) {
     throwMalformedOpenRouterImageResponse(options.malformedResponseError);
@@ -201,7 +207,7 @@ function extractOpenRouterImagesFromResponse(
       }
     } else if (Array.isArray(content)) {
       for (const part of content) {
-        extractImagesFromPart(images, part, options.malformedResponseError);
+        extractImagesFromPart(images, part, options.malformedResponseError, options.maxBytes);
       }
     } else if (content !== undefined && content !== null) {
       throwMalformedOpenRouterImageResponse(options.malformedResponseError);
@@ -349,6 +355,7 @@ export function buildOpenRouterImageGenerationProvider(): ImageGenerationProvide
         });
         const images = extractOpenRouterImagesFromResponse(payload, {
           malformedResponseError: OPENROUTER_IMAGE_MALFORMED_RESPONSE,
+          maxBytes: resolveGeneratedImageMaxBytes(req),
         });
         if (images.length === 0) {
           throw new Error("OpenRouter image generation response missing image data");
