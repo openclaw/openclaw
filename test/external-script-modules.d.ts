@@ -119,6 +119,9 @@ declare module "*openclaw-changelog-update/scripts/verify-release-notes.mjs" {
 }
 
 declare module "*openclaw-live-updater/scripts/update-main.mjs" {
+  type GatewayDeployment = Record<string, unknown> & {
+    entrypoint: string;
+  };
   type UpdateResult = Record<string, unknown> & {
     actions: Record<string, unknown>;
     buildBefore: Record<string, unknown>;
@@ -127,6 +130,29 @@ declare module "*openclaw-live-updater/scripts/update-main.mjs" {
     release?: () => void;
   };
   export function originMatches(remoteUrl: string): boolean;
+  export function isOwnedGatewayEntrypoint(
+    checkout: string,
+    home: string,
+    entrypoint: string,
+  ): boolean;
+  export function parseLaunchctlArguments(output: string): string[];
+  export function resolveManagedGatewayEntrypoint(
+    programArguments: string[],
+    home: string,
+    stateDir?: string,
+  ): string | null;
+  export function repointManagedGatewayDeployment(
+    checkout: string,
+    deployment: GatewayDeployment,
+    replaceEntrypoint: (deployment: GatewayDeployment, replacement: string) => void,
+    inspectDeployment?: (checkout: string) => GatewayDeployment | null,
+  ): GatewayDeployment & { changed: boolean; previousEntrypoint?: string };
+  export function runBuiltGatewayCall(
+    checkout: string,
+    method: string,
+    params: Record<string, unknown>,
+    deployment?: GatewayDeployment | null,
+  ): string;
   export function classifyActions(
     changedPaths: string[],
     options: Record<string, unknown>,
@@ -143,7 +169,13 @@ declare module "*openclaw-live-updater/scripts/update-main.mjs" {
   export function parseGatewayLogAudit(output: string, sinceMs: number): Record<string, unknown>;
   export function prepareGatewaySuspension(
     checkout: string,
-    callGateway?: (checkout: string, method: string, params: { requestId: string }) => string,
+    callGateway?: (
+      checkout: string,
+      method: string,
+      params: { requestId: string },
+      deployment: GatewayDeployment | null,
+    ) => string,
+    deployment?: GatewayDeployment | null,
   ):
     | { status: "ready"; suspensionId: string }
     | {
