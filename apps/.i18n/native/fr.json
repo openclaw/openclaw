@@ -14324,6 +14324,11 @@
       "translated": "OpenClaw connecte cette Apple Watch directement à votre Gateway sur les réseaux locaux de confiance."
     },
     {
+      "id": "native.apple.130180e0065c80fc",
+      "source": "Refreshing iPhone state",
+      "translated": "Actualisation de l’état de l’iPhone"
+    },
+    {
       "id": "native.apple.2f705211a3ec0c43",
       "source": "Gateway HTTP error (%@)",
       "translated": "Erreur HTTP du Gateway (%@)"

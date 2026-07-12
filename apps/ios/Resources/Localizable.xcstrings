@@ -116553,6 +116553,142 @@
         }
       }
     },
+    "Refreshing iPhone state": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Refreshing iPhone state"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "new",
+            "value": "正在刷新 iPhone 状态"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "new",
+            "value": "正在重新整理 iPhone 狀態"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Atualizando o estado do iPhone"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "iPhone-Status wird aktualisiert"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Actualizando el estado del iPhone"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "new",
+            "value": "iPhoneの状態を更新中"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "iPhone 상태 새로 고치는 중"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Actualisation de l’état de l’iPhone"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "iPhone की स्थिति रीफ़्रेश की जा रही है"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "جارٍ تحديث حالة iPhone"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Aggiornamento dello stato di iPhone"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "iPhone durumu yenileniyor"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Оновлення стану iPhone"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Memperbarui status iPhone"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Odświeżanie stanu iPhone’a"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "กำลังรีเฟรชสถานะ iPhone"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Đang làm mới trạng thái iPhone"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "iPhone-status vernieuwen"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "new",
+            "value": "در حال به‌روزرسانی وضعیت iPhone"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Обновление состояния iPhone"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Uppdaterar iPhone-status"
+          }
+        }
+      }
+    },
     "Reject": {
       "localizations": {
         "en": {
