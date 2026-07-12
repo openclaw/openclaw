@@ -711,7 +711,6 @@ async function runManagedOwnershipScenario(params: {
   const activateRuntimeSecrets = vi.fn(async (config: OpenClawConfig) => {
     if (params.queueRevert && !queuedB) {
       queuedB = true;
-      activateSecretsRuntimeSnapshot(snapshot(configB));
       writeListenerRef.current?.({
         configPath: "/tmp/openclaw.json",
         sourceConfig: configB,
@@ -725,7 +724,7 @@ async function runManagedOwnershipScenario(params: {
     }
     return snapshot(config);
   });
-  activateSecretsRuntimeSnapshot(snapshot(configA));
+  activateSecretsRuntimeSnapshot(snapshot(initialConfig));
   const reloader = startManagedGatewayConfigReloader({
     minimalTestGateway: false,
     initialConfig,
