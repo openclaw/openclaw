@@ -3184,7 +3184,7 @@ async function runRecallSubagent(params: {
   const subagentScope = parentSessionKey ?? params.sessionId ?? crypto.randomUUID();
   const subagentSuffix = `active-memory:${crypto
     .createHash("sha1")
-    .update(`${subagentScope}:${params.query}`)
+    .update(`${subagentScope}:${params.query}:${subagentSessionId}`)
     .digest("hex")
     .slice(0, 12)}`;
   const subagentSessionKey = parentSessionKey

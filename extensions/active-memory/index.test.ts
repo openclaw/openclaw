@@ -653,6 +653,30 @@ describe("active-memory plugin", () => {
     expectPrependContextContains(result, "lemon pepper wings");
   });
 
+  it("uses a unique SQLite session key for repeated identical recalls", async () => {
+    const hookParams = {
+      agentId: "main",
+      trigger: "user",
+      sessionKey: "agent:main:main",
+      messageProvider: "webchat",
+    };
+    const event = { prompt: "what wings should i order?", messages: [] };
+
+    await hooks.before_prompt_build(event, hookParams);
+    const firstSessionKey = requireNonEmptyString(
+      lastRuntimeEmbeddedRunParams().sessionKey,
+      "expected first runtime session key",
+    );
+    testing.resetActiveRecallCacheForTests();
+    await hooks.before_prompt_build(event, hookParams);
+    const secondSessionKey = requireNonEmptyString(
+      lastRuntimeEmbeddedRunParams().sessionKey,
+      "expected second runtime session key",
+    );
+
+    expect(secondSessionKey).not.toBe(firstSessionKey);
+  });
+
   it("registers a session-scoped active-memory toggle command", async () => {
     const command = registeredCommands["active-memory"];
     const sessionKey = "agent:main:active-memory-toggle";
