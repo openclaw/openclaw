@@ -26,6 +26,7 @@ import {
   satisfiesGatewayMinimum,
   satisfiesPluginApiRange,
   searchClawHubSkills,
+  searchClawHubPackages,
 } from "./clawhub.js";
 
 async function expectPathMissing(targetPath: string): Promise<void> {
