@@ -55,13 +55,18 @@ type LocalShellDeps = {
 };
 
 export function createLocalShellRunner(deps: LocalShellDeps) {
-  // Consent is per session key, and sharing is opt-in: without the share
-  // answer `!`/`!!` stay purely local (the shipped pre-persistence behavior).
-  // Approval granted while one session is active must never silently carry
-  // into another session, so each key gets its own prompt and answer.
+  // Consent is per agent+session identity, and sharing is opt-in: without the
+  // share answer `!`/`!!` stay purely local (the shipped pre-persistence
+  // behavior). Approval granted while one session is active must never
+  // silently carry into another, and the session key alone is not enough:
+  // shared keys like "global" keep the same sessionKey across an agent
+  // switch, so the key must include the agent or approval leaks across the
+  // agent boundary.
   const consentBySession = new Map<string, LocalShellConsent>();
+  const consentKeyFor = (scope: LocalShellSessionScope | undefined): string =>
+    scope ? `${scope.agentId ?? ""}\u0000${scope.sessionKey}` : "";
   const consentFor = (scope: LocalShellSessionScope | undefined): LocalShellConsent => {
-    const key = scope?.sessionKey ?? "";
+    const key = consentKeyFor(scope);
     const existing = consentBySession.get(key);
     if (existing) {
       return existing;
@@ -172,9 +177,17 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
     deps.chatLog.addSystem(`[local] $ ${cmd}`);
     deps.tui.requestRender();
 
+    // Streamed chunks are capped as they arrive, so the retained strings can
+    // never exceed maxChars: a length check at close time misses a single
+    // overflowing stream entirely. Record the loss here, where it happens.
+    let overflowed = false;
     const appendWithCap = (text: string, chunk: string) => {
       const combined = text + chunk;
-      return combined.length > maxChars ? sliceUtf16Safe(combined, -maxChars) : combined;
+      if (combined.length <= maxChars) {
+        return combined;
+      }
+      overflowed = true;
+      return sliceUtf16Safe(combined, -maxChars);
     };
 
     const persistResult = async (
@@ -247,7 +260,7 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
           output: combined,
           exitCode: code ?? undefined,
           cancelled: signal != null,
-          truncated: uncapped.length > maxChars,
+          truncated: overflowed || uncapped.length > maxChars,
         });
         resolve();
       };

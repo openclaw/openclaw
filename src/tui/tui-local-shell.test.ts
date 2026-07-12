@@ -375,6 +375,70 @@ describe("createLocalShellRunner", () => {
     expect(injectBashExecution).toHaveBeenCalledTimes(2);
   });
 
+  it("re-prompts when a different agent uses the same session key", async () => {
+    // Shared keys like "global" keep the same sessionKey across an agent
+    // switch; consent keyed on sessionKey alone would silently hand one
+    // agent's share approval to the next agent.
+    let currentAgent = "agent-a";
+    const injectBashExecution = vi.fn(async () => ({ ok: true }));
+    const harness = createShellHarness({
+      spawnCommand: makeCompletingSpawn(
+        "hi",
+        0,
+      ) as unknown as typeof import("node:child_process").spawn,
+      getSessionScope: () => ({ sessionKey: "global", agentId: currentAgent }),
+      injectBashExecution,
+    });
+
+    const first = harness.runLocalShellLine("!echo one");
+    harness
+      .getLastSelector()
+      ?.onSelect?.({ value: "yes-share", label: "Yes, and share with the agent" });
+    await first;
+    expect(injectBashExecution).toHaveBeenCalledTimes(1);
+
+    currentAgent = "agent-b";
+    const second = harness.runLocalShellLine("!echo two");
+    expect(harness.createSelectorSpy).toHaveBeenCalledTimes(2);
+    harness.getLastSelector()?.onSelect?.({ value: "yes", label: "Yes, local only" });
+    await second;
+    expect(injectBashExecution).toHaveBeenCalledTimes(1);
+
+    // agent-a's stored answer still applies without a third prompt.
+    currentAgent = "agent-a";
+    await harness.runLocalShellLine("!echo three");
+    expect(harness.createSelectorSpy).toHaveBeenCalledTimes(2);
+    expect(injectBashExecution).toHaveBeenCalledTimes(2);
+  });
+
+  it("marks the persisted row truncated when a single stream overflows the cap", async () => {
+    // Streams are capped as chunks arrive, so at close time the retained
+    // length equals the cap exactly — a close-time length check reports
+    // complete output for a stream that actually lost data.
+    const injectBashExecution = vi.fn(async () => ({ ok: true }));
+    const harness = createShellHarness({
+      spawnCommand: makeCompletingSpawn(
+        "x".repeat(30),
+        0,
+      ) as unknown as typeof import("node:child_process").spawn,
+      maxOutputChars: 20,
+      getSessionScope: () => ({ sessionKey: "main" }),
+      injectBashExecution,
+    });
+
+    const run = harness.runLocalShellLine("!noisy");
+    harness
+      .getLastSelector()
+      ?.onSelect?.({ value: "yes-share", label: "Yes, and share with the agent" });
+    await run;
+
+    expect(injectBashExecution).toHaveBeenCalledTimes(1);
+    expect(injectBashExecution).toHaveBeenCalledWith(
+      expect.objectContaining({ output: "x".repeat(20), truncated: true }),
+      { sessionKey: "main" },
+    );
+  });
+
   it("persists to the session captured at command start, not the one current at completion", async () => {
     const injectBashExecution = vi.fn(async () => ({ ok: true }));
     // Scope flips to session-b immediately after the initial capture, modeling a
