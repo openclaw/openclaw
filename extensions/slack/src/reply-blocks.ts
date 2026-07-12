@@ -392,7 +392,7 @@ function readGeneratedSlackControlRowKey(block: SlackBlock): string | undefined 
         ? actionIds.find((candidate) => actionId.startsWith(`${candidate}:`))
         : undefined;
     return actionFamily && content.type === expectedElementType
-      ? { ...content, action_id: actionFamily }
+      ? [actionFamily, content]
       : undefined;
   });
   return elements.some((element) => element === undefined) ? undefined : JSON.stringify(elements);
