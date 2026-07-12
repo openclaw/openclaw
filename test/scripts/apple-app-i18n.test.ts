@@ -8,6 +8,7 @@ import {
   checkAppleAppI18n,
   compileMacosLocalizations,
   findAmbiguousRuntimeInterpolations,
+  infoPlistTranslationCandidates,
   selectInfoPlistTranslation,
 } from "../../scripts/apple-app-i18n.ts";
 import { NATIVE_I18N_LOCALES } from "../../scripts/native-app-i18n.ts";
@@ -176,6 +177,49 @@ describe("Apple app i18n catalogs", () => {
       state: "translated",
       value: "Se connecter",
     });
+  });
+
+  it("uses code-unit ordering for canonically equivalent translations", () => {
+    const source = "Resume";
+    const decomposed = "Re\u0301sume\u0301";
+    const composed = "Résumé";
+    const build = buildIosCatalog(
+      { sourceLanguage: "en", strings: {} },
+      {
+        version: 1,
+        entries: [
+          {
+            id: "native.apple.resume-a",
+            kind: "ui-call",
+            line: 1,
+            path: "apps/ios/Sources/Example.swift",
+            source,
+            surface: "apple",
+          },
+          {
+            id: "native.apple.resume-b",
+            kind: "ui-call",
+            line: 2,
+            path: "apps/ios/Sources/Other.swift",
+            source,
+            surface: "apple",
+          },
+        ],
+      },
+      [
+        {
+          version: 1,
+          locale: "fr",
+          entries: [
+            { id: "native.apple.resume-a", source, translated: composed },
+            { id: "native.apple.resume-b", source, translated: decomposed },
+          ],
+        },
+      ],
+    );
+
+    expect(build.catalog.strings?.[source]?.localizations?.fr?.stringUnit?.value).toBe(decomposed);
+    expect(build.contradictions[0]?.translations).toEqual([decomposed, composed]);
   });
 
   it("converts inflected Swift count resources into typed catalog placeholders", () => {
@@ -379,6 +423,30 @@ describe("Apple app i18n catalogs", () => {
         value: "Utilisez l’appareil photo pour scanner les codes de configuration.",
       }),
     ).toBe("Use the camera for video calls.");
+  });
+
+  it("selects InfoPlist candidates by stable ID instead of shared source text", () => {
+    const source = "Use the camera to scan setup codes.";
+    const artifact = {
+      version: 1,
+      locale: "fr",
+      entries: [
+        {
+          id: "native.apple.camera",
+          source,
+          translated: "Utilisez l’appareil photo pour scanner les codes de configuration.",
+        },
+        {
+          id: "native.apple.unrelated",
+          source,
+          translated: "Traduction pour un autre contexte.",
+        },
+      ],
+    };
+
+    expect(infoPlistTranslationCandidates(artifact, "native.apple.camera", source)).toEqual([
+      "Utilisez l’appareil photo pour scanner les codes de configuration.",
+    ]);
   });
 
   it("compiles macOS catalogs into app-bundle localization directories", async () => {

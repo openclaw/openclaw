@@ -429,6 +429,10 @@ function stringsLiteral(value: string): string {
   return JSON.stringify(value);
 }
 
+function compareCodeUnits(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
 function serializeCatalog(catalog: Catalog): string {
   return `${JSON.stringify(catalog, null, 2)}\n`;
 }
@@ -489,6 +493,18 @@ export function selectInfoPlistTranslation(
   return existing?.source === source && existing.value.trim() ? existing.value : source;
 }
 
+export function infoPlistTranslationCandidates(
+  artifact: NativeTranslationArtifact | undefined,
+  sourceId: string,
+  source: string,
+): string[] {
+  return (
+    artifact?.entries
+      .filter((entry) => entry.id === sourceId && entry.source === source)
+      .map((entry) => entry.translated) ?? []
+  );
+}
+
 async function readOptionalFile(filePath: string): Promise<string | null> {
   try {
     return await readFile(filePath, "utf8");
@@ -547,7 +563,7 @@ function chooseTranslation(source: string, translations: readonly string[]): str
   return (
     [...counts].toSorted(([leftValue, leftCount], [rightValue, rightCount]) => {
       const sourcePenalty = Number(leftValue === source) - Number(rightValue === source);
-      return sourcePenalty || rightCount - leftCount || leftValue.localeCompare(rightValue, "en");
+      return sourcePenalty || rightCount - leftCount || compareCodeUnits(leftValue, rightValue);
     })[0]?.[0] ?? source
   );
 }
@@ -561,8 +577,8 @@ export function buildIosCatalog(
   const catalogEntries = iosEntries.map(
     (entry) => [entry, appleCatalogValue(entry.source)] as const,
   );
-  const sources = [...new Set(catalogEntries.map(([, source]) => source))].toSorted((left, right) =>
-    left.localeCompare(right, "en"),
+  const sources = [...new Set(catalogEntries.map(([, source]) => source))].toSorted(
+    compareCodeUnits,
   );
   const appleIdsBySource = new Map<string, Set<string>>();
   for (const [entry, source] of catalogEntries) {
@@ -598,9 +614,7 @@ export function buildIosCatalog(
     const localizations: NonNullable<CatalogEntry["localizations"]> = {};
     for (const locale of REQUIRED_LOCALES) {
       const candidates = translationsByLocale.get(locale)?.get(source) ?? [];
-      const distinct = [...new Set(candidates)].toSorted((left, right) =>
-        left.localeCompare(right, "en"),
-      );
+      const distinct = [...new Set(candidates)].toSorted(compareCodeUnits);
       if (distinct.length > 1) {
         contradictions.push({ locale, source, translations: distinct });
       }
@@ -637,8 +651,7 @@ export function buildIosCatalog(
     },
     contradictions: contradictions.toSorted(
       (left, right) =>
-        left.source.localeCompare(right.source, "en") ||
-        left.locale.localeCompare(right.locale, "en"),
+        compareCodeUnits(left.source, right.source) || compareCodeUnits(left.locale, right.locale),
     ),
   };
 }
@@ -754,6 +767,14 @@ function validateCatalog(pathName: string, catalog: Catalog): number {
 
 async function syncIosInfoPlist(write: boolean): Promise<number> {
   const translations = await readNativeTranslations();
+  const nativeSource = JSON.parse(
+    await readFile(path.join(ROOT, NATIVE_SOURCE_PATH), "utf8"),
+  ) as NativeSourceArtifact;
+  const sourceIds = new Map(
+    nativeSource.entries
+      .filter((entry) => entry.kind === "plist-string")
+      .map((entry) => [[entry.path, entry.source].join("\u0000"), entry.id]),
+  );
   let checked = 0;
   for (const target of IOS_INFO_PLIST_TARGETS) {
     const sourceEntries = parseInfoPlistStrings(
@@ -774,10 +795,11 @@ async function syncIosInfoPlist(write: boolean): Promise<number> {
         if (key === "CFBundleDisplayName") {
           return `${stringsLiteral(key)} = ${stringsLiteral(source)};`;
         }
-        const candidates =
-          artifact?.entries
-            .filter((entry) => entry.source === source)
-            .map((entry) => entry.translated) ?? [];
+        const sourceId = sourceIds.get([target.sourcePath, source].join("\u0000"));
+        if (!sourceId) {
+          throw new Error(`missing native InfoPlist source id for ${target.sourcePath}:${key}`);
+        }
+        const candidates = infoPlistTranslationCandidates(artifact, sourceId, source);
         const value = selectInfoPlistTranslation(source, candidates, existing.get(key));
         return [
           `/* OpenClaw source: ${stringsLiteral(source)} */`,
@@ -905,7 +927,7 @@ export async function compileMacosLocalizations(outputDir: string) {
     const localeDir = APPLE_LOCALE_DIRECTORIES[locale] ?? locale;
     const lprojDir = path.join(outputDir, `${localeDir}.lproj`);
     const lines = Object.entries(catalog.strings)
-      .toSorted(([left], [right]) => left.localeCompare(right))
+      .toSorted(([left], [right]) => compareCodeUnits(left, right))
       .map(([key, entry]) => {
         const value = entry.localizations?.[locale]?.stringUnit?.value;
         if (!value) {
