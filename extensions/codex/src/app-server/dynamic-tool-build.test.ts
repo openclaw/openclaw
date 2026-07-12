@@ -1671,6 +1671,42 @@ describe("Codex app-server dynamic tool build", () => {
     expect(shouldForceMessageTool(params)).toBe(false);
   });
 
+  it("exposes the final delivery control only on Codex message-tool-only schemas", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    const messageTool = {
+      ...createRuntimeDynamicTool("message"),
+      parameters: {
+        type: "object",
+        properties: { message: { type: "string" } },
+        additionalProperties: false,
+      },
+    };
+    setOpenClawCodingToolsFactoryForTests(() => [messageTool]);
+
+    params.sourceReplyDeliveryMode = "message_tool_only";
+    const sourceReplyTools = await buildDynamicToolsForTest(params, workspaceDir);
+    const sourceReplySchema = sourceReplyTools[0]?.parameters as {
+      properties?: Record<string, unknown>;
+      additionalProperties?: unknown;
+    };
+
+    expect(sourceReplySchema.properties).toMatchObject({
+      final: { type: "boolean" },
+    });
+    expect(sourceReplySchema.additionalProperties).toBe(false);
+
+    params.sourceReplyDeliveryMode = "automatic";
+    const automaticTools = await buildDynamicToolsForTest(params, workspaceDir);
+    const automaticSchema = automaticTools[0]?.parameters as {
+      properties?: Record<string, unknown>;
+    };
+
+    expect(automaticSchema.properties).not.toHaveProperty("final");
+  });
+
   it("retains forced message policy for the registered schema override", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);

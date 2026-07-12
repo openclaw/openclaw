@@ -220,6 +220,7 @@ export function queueAgentHarnessMessage(
 }
 export { disposeRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 export {
+  cloneAgentRuntimeToolWithParameters,
   logAgentRuntimeToolDiagnostics,
   normalizeAgentRuntimeTools,
 } from "../agents/runtime-plan/tools.js";

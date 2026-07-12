@@ -629,15 +629,6 @@ export function createCodexDynamicToolBridge(params: {
           !rawIsError && messagingTarget
             ? extractMessagingToolSendResult(messagingTarget, telemetryRawResult)
             : messagingTarget;
-        collectToolTelemetry({
-          toolName,
-          args: executedArgs,
-          result,
-          mediaTrustResult: telemetryRawResult,
-          telemetry,
-          isError: resultIsError,
-          messagingTarget: confirmedMessagingTarget,
-        });
         const terminalType =
           resultFailureKind === "blocked" ? "blocked" : resultIsError ? "error" : "completed";
         const contentItems = convertToolContents(result.content, toolResultMaxChars);
@@ -698,17 +689,41 @@ export function createCodexDynamicToolBridge(params: {
           toolName === "message" &&
           !resultIsError &&
           (rawResult.terminate === true || result.terminate === true);
+        const explicitFinalSourceReply =
+          params.hookContext?.sourceReplyDeliveryMode === "message_tool_only" &&
+          toolName === "message" &&
+          executedArgs.final === true;
+        const hasExplicitFinalControl = typeof executedArgs.final === "boolean";
+        const sourceReplyFinal =
+          params.hookContext?.sourceReplyDeliveryMode === "message_tool_only" &&
+          toolName === "message" &&
+          (toolConfirmedSourceReply || deliveredSourceReply || receiptConfirmedSourceReply)
+            ? explicitFinalSourceReply || (toolConfirmedSourceReply && !hasExplicitFinalControl)
+            : undefined;
+        collectToolTelemetry({
+          toolName,
+          args: executedArgs,
+          result,
+          mediaTrustResult: telemetryRawResult,
+          telemetry,
+          isError: resultIsError,
+          messagingTarget: confirmedMessagingTarget,
+          sourceReplyFinal,
+        });
         if (deliveredSourceReply || receiptConfirmedSourceReply || toolConfirmedSourceReply) {
           telemetry.didDeliverSourceReplyViaMessageTool = true;
         }
         withDynamicToolTermination(
           response,
-          rawResult.terminate === true ||
-            result.terminate === true ||
+          ((rawResult.terminate === true || result.terminate === true) &&
+            !(
+              params.hookContext?.sourceReplyDeliveryMode === "message_tool_only" &&
+              toolName === "message" &&
+              executedArgs.final === false
+            )) ||
             isToolResultYield(rawResult) ||
             isToolResultYield(result) ||
-            deliveredSourceReply ||
-            receiptConfirmedSourceReply,
+            (explicitFinalSourceReply && (deliveredSourceReply || receiptConfirmedSourceReply)),
         );
         const asyncStarted =
           isAsyncStartedToolResult(rawResult) || isAsyncStartedToolResult(result);
@@ -1153,6 +1168,7 @@ function collectToolTelemetry(params: {
   telemetry: CodexDynamicToolBridge["telemetry"];
   isError: boolean;
   messagingTarget?: MessagingToolSend;
+  sourceReplyFinal?: boolean;
 }): void {
   if (params.isError) {
     return;
@@ -1208,7 +1224,12 @@ function collectToolTelemetry(params: {
   params.telemetry.didSendViaMessagingTool = true;
   const sourceReplyPayload = extractInternalSourceReplyPayload(params.result?.details);
   if (sourceReplyPayload) {
-    params.telemetry.messagingToolSourceReplyPayloads.push(sourceReplyPayload);
+    params.telemetry.messagingToolSourceReplyPayloads.push({
+      ...sourceReplyPayload,
+      ...(params.sourceReplyFinal !== undefined
+        ? { sourceReplyFinal: params.sourceReplyFinal }
+        : {}),
+    });
     return;
   }
   const text = readFirstString(params.args, ["text", "message", "body", "content"]);
@@ -1227,6 +1248,7 @@ function collectToolTelemetry(params: {
     }),
     ...(text ? { text } : {}),
     ...(mediaUrls.length > 0 ? { mediaUrls } : {}),
+    ...(params.sourceReplyFinal !== undefined ? { sourceReplyFinal: params.sourceReplyFinal } : {}),
   });
 }
 
