@@ -718,8 +718,8 @@ describe("native app i18n inventory", () => {
             entries: [
               {
                 id: "native.apple.fallback.previous",
-                source: fallbackEntries[0].source,
-                translated: fallbackEntries[0].source,
+                source: fallbackEntries[0]!.source,
+                translated: fallbackEntries[0]!.source,
               },
             ],
           },

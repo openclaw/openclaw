@@ -127,7 +127,7 @@ describe("Apple app i18n catalogs", () => {
       "Se connecter",
     );
     expect(build.catalog.strings?.["Connect now"]?.localizations?.fr?.stringUnit?.state).toBe(
-      "new",
+      "translated",
     );
     expect(build.catalog.strings?.["Connect now"]?.localizations?.es?.stringUnit).toEqual({
       state: "new",
@@ -173,8 +173,8 @@ describe("Apple app i18n catalogs", () => {
       "Jetzt verbinden",
     );
     expect(refreshed.catalog.strings?.["Connect now"]?.localizations?.fr?.stringUnit).toEqual({
-      state: "new",
-      value: "Connectez-vous",
+      state: "translated",
+      value: "Se connecter",
     });
   });
 

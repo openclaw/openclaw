@@ -46,13 +46,11 @@ const IOS_SOURCE_PREFIXES = [
 const IOS_CATALOG_KINDS = new Set([
   "conditional-branch",
   "ui-call",
-  "ui-call-concatenated",
   "ui-call-multiline",
   "ui-localized-call",
   "ui-localized-call-multiline",
   "ui-modifier",
   "ui-named-argument",
-  "ui-named-argument-concatenated",
   "ui-named-argument-multiline",
 ]);
 const IOS_CATALOG_EXCLUSIONS = new Set([
@@ -613,7 +611,7 @@ export function buildIosCatalog(
       const value = chooseTranslation(source, candidates);
       localizations[locale] = {
         stringUnit: {
-          state: "new",
+          state: value === source ? "new" : "translated",
           value,
         },
       };
