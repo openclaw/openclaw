@@ -190,7 +190,11 @@ declare module "*openclaw-live-updater/scripts/update-main.mjs" {
     owner: { pid: number; checkout?: string; startedAt?: string };
     release?: () => void;
   };
-  export function parseGatewayLogAudit(output: string, sinceMs: number): Record<string, unknown>;
+  export function parseGatewayLogAudit(
+    output: string,
+    sinceMs: number,
+    sourceRoot?: string | null,
+  ): Record<string, unknown>;
   export function prepareGatewaySuspension(
     checkout: string,
     callGateway?: (
