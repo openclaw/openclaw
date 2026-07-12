@@ -443,7 +443,7 @@ private fun OverviewScreen(
     )
   val secondaryAttentionRows =
     if (nodesDevicesSummary.hasNodeCapabilityApprovalPending()) {
-      attentionRows.filterNot { it.title == "Nodes & Devices" }
+      attentionRows.filterNot { it.settingsRoute == SettingsRoute.NodesDevices }
     } else {
       attentionRows
     }

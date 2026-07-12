@@ -275,7 +275,13 @@ fun ChatScreen(
   }
 
   var input by rememberSaveable { mutableStateOf("") }
-  var shareImportNotice by remember { mutableStateOf<NativeText?>(null) }
+  var shareImportNoticeVisible by rememberSaveable { mutableStateOf(false) }
+  val shareImportNotice =
+    if (shareImportNoticeVisible) {
+      nativeText("Some shared images were omitted or could not be added.")
+    } else {
+      null
+    }
 
   LaunchedEffect(chatDraft) {
     input = mergeChatDraft(chatDraft, input) ?: return@LaunchedEffect
@@ -312,12 +318,7 @@ fun ChatScreen(
       input = merged.input
       attachments.clear()
       attachments.addAll(merged.attachments)
-      shareImportNotice =
-        if (merged.failedImageCount + merged.droppedImageCount > 0) {
-          nativeText("Some shared images were omitted or could not be added.")
-        } else {
-          null
-        }
+      shareImportNoticeVisible = merged.failedImageCount + merged.droppedImageCount > 0
       viewModel.acknowledgeChatShareDraft(share.id)
     }
   }
@@ -431,7 +432,7 @@ fun ChatScreen(
       pendingRunCount = pendingRunCount,
       shareStaging = chatShareDraft != null,
       shareImportNotice = shareImportNotice,
-      onDismissShareImportNotice = { shareImportNotice = null },
+      onDismissShareImportNotice = { shareImportNoticeVisible = false },
       commands = chatCommands,
       onThinkingLevelChange = viewModel::setChatThinkingLevel,
       onOpenModelPicker = { showModelPicker = true },
@@ -460,7 +461,7 @@ fun ChatScreen(
         if (viewModel.chatShareDraft.value != null) return@ChatComposer
         val message = input.trim()
         if (message.isEmpty() && attachments.isEmpty()) return@ChatComposer
-        shareImportNotice = null
+        shareImportNoticeVisible = false
         val outgoing = attachments.map(PendingAttachment::toOutgoingAttachment)
         val pendingAttachments = attachments.toList()
         input = ""
