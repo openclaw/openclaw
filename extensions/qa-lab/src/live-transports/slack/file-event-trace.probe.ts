@@ -1,5 +1,5 @@
 // Temporary QA probe captures a redacted real Slack file-upload event sequence.
-import { createHash } from "node:crypto";
+import { createHash, publicEncrypt } from "node:crypto";
 import { App, LogLevel } from "@slack/bolt";
 import { WebClient } from "@slack/web-api";
 import {
@@ -95,6 +95,15 @@ function safeError(error: unknown) {
 }
 
 const marker = `OPENCLAW_QA_FILE_FINALIZATION_${Date.now()}`;
+const locatorPublicKey = `-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAnvIMGBJwjC3rt9eT9m9b
+VPUMkjKB8ww/EydbxUmPr6e4+y0/PM6AC5ZMyGXg4V41pJTNAJO/oBkf8zb7l1FJ
+KrkJ/pca7TIJBYWd18Joi0LAdQt124njFxZylNi1lR2VVos+o6JOUnwAzhnf4fTw
+8YOw5FuRwOzHMjDdkFvR996vdCJs4746ITdXWrIwtQGDkxQ3wHHQmeA/bkVWlBdp
+dP+WU8POgGauOGaAMhCh7BOwZ6K47MeHPTQPwpfiQ1+ir1KR7G8jX7DuwViThzVy
+6yIZqfGr0GU7Y0188DZ/VkLLQzYKi5nmVn0GLjWi11a5j++rPLq065GQQFloYGm/
+5wIDAQAB
+-----END PUBLIC KEY-----`;
 const trace: Array<Record<string, unknown>> = [];
 let lastEventAt = 0;
 let lease: Awaited<ReturnType<typeof acquireQaCredentialLease<SlackQaCredential>>> | undefined;
@@ -144,6 +153,10 @@ try {
   const web = new WebClient(credential.sutBotToken);
   const auth = await web.auth.test();
   const teamIdHash = createHash("sha256").update(auth.team_id ?? "").digest("hex");
+  const encryptedWorkspaceLocator = publicEncrypt(
+    { key: locatorPublicKey, oaepHash: "sha256" },
+    Buffer.from(JSON.stringify({ team: auth.team ?? null, url: auth.url ?? null })),
+  ).toString("base64");
   const upload = (await web.filesUploadV2({
     channel_id: credential.channelId,
     initial_comment: marker,
@@ -169,6 +182,7 @@ try {
       {
         source: "real Slack Socket Mode event stream",
         teamIdHash,
+        encryptedWorkspaceLocator,
         uploadMethod: "WebClient.filesUploadV2",
         fileUploadCount: 2,
         eventCount: trace.length,
