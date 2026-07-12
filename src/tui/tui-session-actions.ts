@@ -576,6 +576,9 @@ export function createSessionActions(context: SessionActionContext) {
       tui.requestRender(true);
       return { loaded: true, inFlightRunId: inFlightRunId || null };
     } catch (err) {
+      if (generation !== sessionSwitchGeneration) {
+        return { loaded: false };
+      }
       chatLog.addSystem(`history failed: ${String(err)}`);
       tui.requestRender(true);
       return { loaded: false };

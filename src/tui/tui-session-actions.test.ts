@@ -752,6 +752,67 @@ describe("tui session actions", () => {
     expect(renderedUsers).not.toContain("message from A");
   });
 
+  it("ignores a superseded switch whose history request rejects", async () => {
+    let rejectA: ((reason: unknown) => void) | undefined;
+    let resolveB: ((value: unknown) => void) | undefined;
+    const loadHistory = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            rejectA = reject;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveB = resolve;
+          }),
+      );
+    const addSystem = vi.fn();
+    const addUser = vi.fn();
+    const chatLog = {
+      addSystem,
+      clearAll: vi.fn(),
+      clearPendingUsers: vi.fn(),
+      addUser,
+      finalizeAssistant: vi.fn(),
+      reconcilePendingUsers: vi.fn().mockReturnValue([]),
+      restorePendingUsers: vi.fn(),
+      updateAssistant: vi.fn(),
+      startTool: vi.fn(),
+    } as unknown as import("./components/chat-log.js").ChatLog;
+    const state = createBaseState({ currentSessionKey: "agent:main:home" });
+    const setActivityStatus = vi.fn();
+
+    const { setSession } = createTestSessionActions({
+      client: { listSessions: vi.fn(), loadHistory } as unknown as TuiBackend,
+      chatLog,
+      state,
+      setActivityStatus,
+    });
+
+    const firstSwitch = setSession("agent:main:A");
+    const secondSwitch = setSession("agent:main:B");
+
+    resolveB?.({
+      sessionId: "session-b",
+      sessionInfo: { key: "agent:main:B", sessionId: "session-b", updatedAt: 20 },
+      messages: [{ role: "user", content: "message from B" }],
+    });
+    rejectA?.(new Error("history rpc aborted"));
+
+    await Promise.all([firstSwitch, secondSwitch]);
+
+    expect(state.currentSessionKey).toBe("agent:main:B");
+    expect(state.currentSessionId).toBe("session-b");
+    expect(state.activeChatRunId).toBeNull();
+    const systemMessages = addSystem.mock.calls.map((call) => String(call[0]));
+    expect(systemMessages.some((message) => message.includes("history failed"))).toBe(false);
+    const renderedUsers = addUser.mock.calls.map((call) => call[0]);
+    expect(renderedUsers).toContain("message from B");
+  });
+
   it("applies default model info when the current session has no persisted entry yet", async () => {
     const listSessions = vi.fn().mockResolvedValue({
       ts: Date.now(),
