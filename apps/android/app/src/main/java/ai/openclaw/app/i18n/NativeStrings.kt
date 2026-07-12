@@ -135,11 +135,7 @@ internal object NativeStringResources {
   fun install(context: Context) {
     val appContext = context.applicationContext
     applicationContext = appContext
-    val requestedLocales =
-      LocaleManagerCompat
-        .getApplicationLocales(appContext)
-        .takeUnless { it.isEmpty }
-        ?: appContext.readStoredAppLocales()
+    val requestedLocales = appContext.requestedApplicationLocales()
     applicationLocaleMode =
       if (requestedLocales.isEmpty) {
         ApplicationLocaleMode.System(ConfigurationCompat.getLocales(appContext.resources.configuration))
@@ -166,9 +162,15 @@ internal object NativeStringResources {
 
   @Synchronized
   fun setConfigurationLocales(configuration: Configuration) {
-    if (applicationLocaleMode is ApplicationLocaleMode.Pinned) return
+    val requestedLocales =
+      applicationContext?.requestedApplicationLocales()
+        ?: LocaleListCompat.getEmptyLocaleList()
     applicationLocaleMode =
-      ApplicationLocaleMode.System(ConfigurationCompat.getLocales(configuration))
+      if (requestedLocales.isEmpty) {
+        ApplicationLocaleMode.System(ConfigurationCompat.getLocales(configuration))
+      } else {
+        ApplicationLocaleMode.Pinned(requestedLocales)
+      }
     localizedContext = null
   }
 
@@ -208,6 +210,12 @@ private fun Context.localizedContext(locales: LocaleListCompat): Context =
     ConfigurationCompat.setLocales(configuration, locales)
     createConfigurationContext(configuration)
   }
+
+private fun Context.requestedApplicationLocales(): LocaleListCompat =
+  LocaleManagerCompat
+    .getApplicationLocales(this)
+    .takeUnless { it.isEmpty }
+    ?: readStoredAppLocales()
 
 private fun Context.readStoredAppLocales(): LocaleListCompat {
   if (Build.VERSION.SDK_INT >= 33) return LocaleListCompat.getEmptyLocaleList()

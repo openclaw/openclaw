@@ -54,14 +54,39 @@ class NativeStringsTest {
   @Test
   fun configurationLocaleDoesNotReplacePinnedAppLocale() {
     val app = RuntimeEnvironment.getApplication()
-    NativeStringResources.install(app)
-    NativeStringResources.setApplicationLocales(LocaleListCompat.forLanguageTags("en"))
+    persistAppLocales(app, "en")
+    try {
+      NativeStringResources.install(app)
 
-    val configuration = Configuration(app.resources.configuration)
-    ConfigurationCompat.setLocales(configuration, LocaleListCompat.forLanguageTags("fr"))
-    NativeStringResources.setConfigurationLocales(configuration)
+      val configuration = Configuration(app.resources.configuration)
+      ConfigurationCompat.setLocales(configuration, LocaleListCompat.forLanguageTags("fr"))
+      NativeStringResources.setConfigurationLocales(configuration)
 
-    assertEquals("Mic off", nativeString("Mic off"))
+      assertEquals("Mic off", nativeString("Mic off"))
+    } finally {
+      app.deleteFile(APP_LOCALES_FILE)
+      NativeStringResources.setApplicationLocales(LocaleListCompat.getEmptyLocaleList())
+    }
+  }
+
+  @Test
+  fun configurationLocaleRefreshesPersistedAppLocale() {
+    val app = RuntimeEnvironment.getApplication()
+    persistAppLocales(app, "fr")
+    try {
+      NativeStringResources.install(app)
+      assertEquals("Micro désactivé", nativeString("Mic off"))
+
+      persistAppLocales(app, "de")
+      val configuration = Configuration(app.resources.configuration)
+      ConfigurationCompat.setLocales(configuration, LocaleListCompat.forLanguageTags("en"))
+      NativeStringResources.setConfigurationLocales(configuration)
+
+      assertEquals("Mikrofon aus", nativeString("Mic off"))
+    } finally {
+      app.deleteFile(APP_LOCALES_FILE)
+      NativeStringResources.setApplicationLocales(LocaleListCompat.getEmptyLocaleList())
+    }
   }
 
   @Test
@@ -78,6 +103,7 @@ class NativeStringsTest {
       assertEquals("Micro désactivé", nativeString("Mic off"))
     } finally {
       app.deleteFile(APP_LOCALES_FILE)
+      NativeStringResources.setApplicationLocales(LocaleListCompat.getEmptyLocaleList())
     }
   }
 
