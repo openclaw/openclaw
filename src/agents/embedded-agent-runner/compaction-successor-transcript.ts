@@ -4,6 +4,7 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { resolveTimestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CompactionEntry, SessionEntry, SessionHeader } from "../sessions/index.js";
@@ -42,6 +43,13 @@ export async function rotateTranscriptAfterCompaction(params: {
   const sessionFile = params.sessionFile.trim();
   if (!sessionFile) {
     return { rotated: false, reason: "missing session file" };
+  }
+  // Successor files are resolved by taking the dirname of `sessionFile` as a
+  // filesystem path. A `sqlite:` marker is not a path, so rotating one would
+  // write a stray `.jsonl` file at a nonsensical location. Gate centrally so
+  // every caller is protected, not just the ones that remember to check.
+  if (parseSqliteSessionFileMarker(sessionFile)) {
+    return { rotated: false, reason: "sqlite-backed session" };
   }
 
   const branch = params.sessionManager.getBranch();

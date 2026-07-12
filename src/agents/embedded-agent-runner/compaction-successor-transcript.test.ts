@@ -399,6 +399,21 @@ describe("rotateTranscriptAfterCompaction", () => {
     expect(result.reason).toBe("no compaction entry");
   });
 
+  it("skips rotation for a sqlite-backed session file marker", async () => {
+    const dir = await createTmpDir();
+    const { manager } = createCompactedSession(dir);
+
+    // `sqlite:<agentId>:<sessionId>:<storePath>` is not a filesystem path;
+    // rotating it would resolve a bogus successor path via path.dirname.
+    const result = await rotateTranscriptAfterCompaction({
+      sessionManager: manager,
+      sessionFile: `sqlite:test-agent:test-session:${path.join(dir, "openclaw-agent.sqlite")}`,
+    });
+
+    expect(result.rotated).toBe(false);
+    expect(result.reason).toBe("sqlite-backed session");
+  });
+
   it("uses a refreshed manager after manual boundary hardening", async () => {
     const dir = await createTmpDir();
     const manager = SessionManager.create(dir, dir);
