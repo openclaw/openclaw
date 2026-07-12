@@ -56,7 +56,7 @@ The returned view is intentionally bounded and safety-filtered:
 
 Both tools accept either a **session key** (like `"main"`) or a **session ID** from a previous list call.
 
-If you need the exact byte-for-byte transcript, inspect the transcript file on disk instead of treating `sessions_history` as a raw dump.
+If you need the exact raw transcript, inspect the scoped SQLite transcript rows instead of treating `sessions_history` as an unfiltered dump.
 
 ## Sending cross-session messages
 
@@ -83,7 +83,7 @@ When route metadata is available, `session_status` also includes a visible `Rout
 
 ## Session state changes
 
-OpenClaw keeps a best-effort signal log for selected session state changes: direct human messages to child sessions, child-run completion or failure, child creation, goal changes, and compaction. The log contains metadata and one-line summaries, never message content. Its `stateVersion` is the session's signal-log head, not a transactional change-data-capture version; the session-store mutation and signal append use separate storage, so a failed append is logged without failing the originating turn.
+OpenClaw keeps a best-effort signal log for selected session state changes: direct human messages to child sessions, child-run completion or failure, child creation, goal changes, and compaction. Cancelled and timed-out child runs are recorded as failures, with the specific outcome (`cancelled`, `timeout`, or `error`) preserved in the event payload. The log contains metadata and one-line summaries, never message content. Its `stateVersion` is the session's signal-log head, not a transactional change-data-capture version; the session-store mutation and signal append use separate storage, so a failed append is logged without failing the originating turn.
 
 `sessions_list` includes `stateVersion` on rows with logged changes. `session_status` always returns `stateVersion` in structured details. Pass `changesSince: <previousStateVersion>` to retrieve up to 200 retained events after that version; this read does not acknowledge or advance parent notification cursors. A `historyGap: true` result means the requested version predates retained history, so refresh the whole session state instead of treating the response as an exact delta.
 

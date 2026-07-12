@@ -144,6 +144,7 @@ import type {
   ProviderThinkingPolicyContext,
 } from "./provider-thinking.types.js";
 import type { PluginRuntime } from "./runtime/types.js";
+import type { SessionCatalogProvider } from "./session-catalog.js";
 import type {
   OpenClawPluginHookOptions,
   OpenClawPluginToolFactory,
@@ -2038,7 +2039,15 @@ export type PluginCommandDiagnosticsSession = {
   sessionKey?: string;
   /** Ephemeral OpenClaw session id when available. */
   sessionId?: string;
-  /** Transcript file for this OpenClaw session when available. */
+  /**
+   * Deprecated transcript locator for this OpenClaw session when available.
+   *
+   * SQLite-backed sessions use a `sqlite:<agentId>:<sessionId>:<storePath>`
+   * marker, not a filesystem path. Use session id/key plus transcript-runtime
+   * helpers for active transcript reads.
+   *
+   * @deprecated Use session identity fields with `plugin-sdk/session-transcript-runtime`.
+   */
   sessionFile?: string;
   /** Embedded agent harness selected for this session. */
   agentHarnessId?: string;
@@ -2076,7 +2085,15 @@ export type PluginCommandContext = {
   sessionKey?: string;
   /** Ephemeral host session id for the active conversation when available. */
   sessionId?: string;
-  /** Transcript file for the active OpenClaw session when available. */
+  /**
+   * Deprecated transcript locator for the active OpenClaw session when available.
+   *
+   * SQLite-backed sessions use a `sqlite:<agentId>:<sessionId>:<storePath>`
+   * marker, not a filesystem path. Use session id/key plus transcript-runtime
+   * helpers for active transcript reads.
+   *
+   * @deprecated Use session identity fields with `plugin-sdk/session-transcript-runtime`.
+   */
   sessionFile?: string;
   /** Raw command arguments after the command name */
   args?: string;
@@ -2783,6 +2800,8 @@ export type OpenClawPluginApi = {
     handler: GatewayRequestHandler,
     opts?: { scope?: OperatorScope },
   ) => void;
+  /** Register a read-only external-session catalog with optional native adoption actions. */
+  registerSessionCatalog: (provider: SessionCatalogProvider) => void;
   registerCli: (
     registrar: OpenClawPluginCliRegistrar,
     opts?: {

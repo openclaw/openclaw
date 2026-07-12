@@ -7,6 +7,7 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { hashWorkerCredential } from "./credential.js";
 import {
   createWorkerEnvironmentStore,
   type WorkerEnvironmentBootstrapReceipt,
@@ -32,6 +33,7 @@ const BOOTSTRAP_RECEIPT: WorkerEnvironmentBootstrapReceipt = {
   openclawVersion: "2026.7.1",
   protocolFeatures: ["workspace-sync-v1", "model-proxy-v1"],
 };
+const CREDENTIAL = ["worker", "credential", "fixture"].join("-");
 
 describe("worker environment store", () => {
   let root: string;
@@ -76,6 +78,30 @@ describe("worker environment store", () => {
       to: "bootstrapping",
       patch: { leaseId, sshEndpoint: SSH_ENDPOINT },
     });
+  }
+
+  function readyPatch(receipt = BOOTSTRAP_RECEIPT) {
+    return {
+      bootstrapReceipt: receipt,
+      credential: {
+        credentialHash: hashWorkerCredential(CREDENTIAL),
+        sessionId: null,
+        rpcSetVersion: 1,
+        expiresAtMs: nowMs + 10_000,
+      },
+    };
+  }
+
+  function attachedPatch(sessionId: string, suffix: string) {
+    return {
+      attachedSessionIds: [sessionId],
+      credential: {
+        credentialHash: hashWorkerCredential([CREDENTIAL, suffix].join("-")),
+        sessionId,
+        rpcSetVersion: 1,
+        expiresAtMs: nowMs + 10_000,
+      },
+    };
   }
 
   it("persists immutable intent before provisioning and survives reopen", () => {
@@ -146,7 +172,7 @@ describe("worker environment store", () => {
       environmentId: "worker-1",
       from: "bootstrapping",
       to: "ready",
-      patch: { bootstrapReceipt: BOOTSTRAP_RECEIPT },
+      patch: readyPatch(),
     });
     closeOpenClawStateDatabaseForTest();
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
@@ -164,11 +190,11 @@ describe("worker environment store", () => {
         environmentId: "worker-1",
         from: "ready",
         to: "attached",
-        patch: { attachedSessionIds: ["session-b", " session-a ", "session-b"] },
+        patch: { ...attachedPatch("session-a", "session-a"), attachedSessionIds: [" session-a "] },
       }),
     ).toMatchObject({
       state: "attached",
-      attachedSessionIds: ["session-a", "session-b"],
+      attachedSessionIds: ["session-a"],
       leaseId: "lease-1",
       sshEndpoint: SSH_ENDPOINT,
     });
@@ -181,7 +207,7 @@ describe("worker environment store", () => {
       environmentId: "worker-1",
       from: "idle",
       to: "attached",
-      patch: { attachedSessionIds: ["session-c"] },
+      patch: attachedPatch("session-c", "session-c"),
     });
     nowMs = 1_060;
     expect(
@@ -201,6 +227,103 @@ describe("worker environment store", () => {
       attachedSessionIds: [],
     });
     expect(store.listForReconcile()).toEqual([]);
+  });
+
+  it("keeps renewal on one owner epoch and fences session replacement", () => {
+    const bootstrapping = seedBootstrapping("worker-owner", "lease-owner");
+    store.transition({
+      environmentId: bootstrapping.environmentId,
+      from: bootstrapping.state,
+      to: "ready",
+      patch: readyPatch(),
+    });
+    expect(store.get("worker-owner")?.ownerEpoch).toBe(1);
+    expect(store.getCredential("worker-owner")).toMatchObject({ ownerEpoch: 1, sessionId: null });
+
+    closeOpenClawStateDatabaseForTest();
+    database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+    store = createWorkerEnvironmentStore({ database, now: () => nowMs });
+    const renewal = [CREDENTIAL, "renewal"].join("-");
+    expect(
+      store.renewCredential({
+        environmentId: "worker-owner",
+        expectedOwnerEpoch: 1,
+        credentialHash: hashWorkerCredential(renewal),
+        sessionId: null,
+        rpcSetVersion: 1,
+        expiresAtMs: nowMs + 20_000,
+      }),
+    ).toMatchObject({ ownerEpoch: 1, credentialHash: hashWorkerCredential(renewal) });
+    expect(store.get("worker-owner")?.ownerEpoch).toBe(1);
+
+    const attached = store.transition({
+      environmentId: "worker-owner",
+      from: "ready",
+      to: "attached",
+      expectedOwnerEpoch: 1,
+      patch: attachedPatch("session-1", "session"),
+    });
+    expect(attached.ownerEpoch).toBe(2);
+    expect(store.getCredential("worker-owner")).toMatchObject({
+      ownerEpoch: 2,
+      sessionId: "session-1",
+      deliveredAtMs: null,
+    });
+    expect(() =>
+      store.renewCredential({
+        environmentId: "worker-owner",
+        expectedOwnerEpoch: 1,
+        credentialHash: hashWorkerCredential([renewal, "stale"].join("-")),
+        sessionId: "session-1",
+        rpcSetVersion: 1,
+        expiresAtMs: nowMs + 20_000,
+      }),
+    ).toThrow("owner epoch changed");
+  });
+
+  it("allocates globally distinct owner epochs when a session moves environments", () => {
+    const makeReady = (environmentId: string, leaseId: string) => {
+      const bootstrapping = seedBootstrapping(environmentId, leaseId);
+      return store.transition({
+        environmentId,
+        from: bootstrapping.state,
+        to: "ready",
+        patch: readyPatch(),
+      });
+    };
+
+    const firstReady = makeReady("worker-owner-a", "lease-owner-a");
+    const first = store.transition({
+      environmentId: firstReady.environmentId,
+      from: firstReady.state,
+      to: "attached",
+      patch: attachedPatch("shared-session", firstReady.environmentId),
+    });
+    store.transition({
+      environmentId: first.environmentId,
+      from: first.state,
+      to: "idle",
+    });
+    database.db
+      .prepare(
+        `INSERT INTO worker_transcript_commit_heads (
+          session_id, run_epoch, environment_id, next_seq, updated_at_ms
+        ) VALUES (?, ?, ?, 1, ?)`,
+      )
+      .run("shared-session", first.ownerEpoch, first.environmentId, nowMs);
+    database.db
+      .prepare("DELETE FROM worker_environments WHERE environment_id = ?")
+      .run(first.environmentId);
+    const secondReady = makeReady("worker-owner-b", "lease-owner-b");
+    const second = store.transition({
+      environmentId: secondReady.environmentId,
+      from: secondReady.state,
+      to: "attached",
+      patch: attachedPatch("shared-session", secondReady.environmentId),
+    });
+
+    expect(first.ownerEpoch).toBe(2);
+    expect(second.ownerEpoch).toBeGreaterThan(first.ownerEpoch);
   });
 
   it("rejects illegal, stale, and lease-incomplete transitions", () => {
@@ -256,13 +379,54 @@ describe("worker environment store", () => {
     ).toThrow("lease id is immutable");
   });
 
+  it("enforces one credential-bound session and teardown fencing", () => {
+    const bootstrapping = seedBootstrapping("worker-multi-session", "lease-multi-session");
+    const ready = readyPatch();
+    expect(() =>
+      store.transition({
+        environmentId: bootstrapping.environmentId,
+        from: "bootstrapping",
+        to: "ready",
+        patch: { ...ready, credential: { ...ready.credential, sessionId: "session-1" } },
+      }),
+    ).toThrow("session does not match");
+    store.transition({
+      environmentId: bootstrapping.environmentId,
+      from: bootstrapping.state,
+      to: "ready",
+      patch: ready,
+    });
+
+    expect(() =>
+      store.transition({
+        environmentId: bootstrapping.environmentId,
+        from: "ready",
+        to: "attached",
+        patch: {
+          ...attachedPatch("session-a", "multi"),
+          attachedSessionIds: ["session-a", "session-b"],
+        },
+      }),
+    ).toThrow("exactly one session id");
+
+    store.requestDestroy({ environmentId: bootstrapping.environmentId, state: "ready" });
+    expect(() =>
+      store.transition({
+        environmentId: bootstrapping.environmentId,
+        from: "ready",
+        to: "attached",
+        patch: attachedPatch("session-a", "destroying"),
+      }),
+    ).toThrow("after destroy is requested");
+  });
+
   it("invalidates stale receipts for rebootstrap and replaces them on readiness", () => {
     seedBootstrapping("worker-rebootstrap", "lease-rebootstrap");
     store.transition({
       environmentId: "worker-rebootstrap",
       from: "bootstrapping",
       to: "ready",
-      patch: { bootstrapReceipt: BOOTSTRAP_RECEIPT },
+      patch: readyPatch(),
     });
     // Existing ready rows may predate bootstrap receipt persistence.
     database.db.exec(`
@@ -276,6 +440,21 @@ describe("worker environment store", () => {
     expect(store.get("worker-rebootstrap")).toMatchObject({
       state: "ready",
       bootstrapReceipt: null,
+    });
+    const beforeAttach = store.get("worker-rebootstrap");
+    expect(() =>
+      store.transition({
+        environmentId: "worker-rebootstrap",
+        from: "ready",
+        to: "attached",
+        expectedOwnerEpoch: beforeAttach?.ownerEpoch,
+        patch: attachedPatch("session-1", "legacy"),
+      }),
+    ).toThrow("requires bootstrap proof");
+    expect(store.get("worker-rebootstrap")).toMatchObject({
+      state: "ready",
+      ownerEpoch: beforeAttach?.ownerEpoch,
+      attachedSessionIds: [],
     });
     const idle = store.transition({
       environmentId: "worker-rebootstrap",
@@ -300,7 +479,7 @@ describe("worker environment store", () => {
         environmentId: "worker-rebootstrap",
         from: "bootstrapping",
         to: "ready",
-        patch: { bootstrapReceipt: nextReceipt },
+        patch: readyPatch(nextReceipt),
       }),
     ).toMatchObject({
       state: "ready",
