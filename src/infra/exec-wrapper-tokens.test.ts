@@ -30,6 +30,12 @@ describe("normalizeExecutableToken", () => {
   it("preserves non-executable extension", () => {
     expect(normalizeExecutableToken("config.json")).toBe("config.json");
   });
+  it("strips .bat suffix", () => {
+    expect(normalizeExecutableToken("script.bat")).toBe("script");
+  });
+  it("strips .com suffix", () => {
+    expect(normalizeExecutableToken("command.com")).toBe("command");
+  });
   it("handles full Windows path", () => {
     expect(normalizeExecutableToken("C:\\Program Files\\node.exe")).toBe("node");
   });
