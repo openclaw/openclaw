@@ -14,10 +14,12 @@ import type {
   GatewayRbacDecision,
   GatewayResourceRef,
 } from "./contracts.js";
+import { GATEWAY_AGENT_SESSION_INVOKE_PERMISSION } from "./contracts.js";
 
 type AuthorizationProviderDatabase = Pick<
   OpenClawStateKyselyDatabase,
   | "authorization_domain_memberships"
+  | "authorization_agent_session_bindings"
   | "authorization_delegations"
   | "authorization_grants"
   | "authorization_principals"
@@ -84,7 +86,49 @@ function authorizeFromState(
       assignmentId: request.delegation.assignmentId,
       sponsorPrincipalId: delegation.sponsor_principal_id,
     };
+    if (request.agentSession) {
+      if (request.agentSession.invokingPrincipal.kind !== "human") {
+        return { allowed: false, reason: "forbidden" };
+      }
+      const binding = executeSqliteQueryTakeFirstSync(
+        db,
+        kysely
+          .selectFrom("authorization_agent_session_bindings")
+          .select("binding_id")
+          .where("domain_id", "=", request.domain.id)
+          .where("binding_id", "=", request.agentSession.id)
+          .where("delegation_id", "=", request.delegation.id)
+          .where("assignment_id", "=", request.delegation.assignmentId)
+          .where("agent_principal_id", "=", principal.principal_id)
+          .where("sponsor_principal_id", "=", delegation.sponsor_principal_id)
+          .where("state", "=", "active"),
+      );
+      if (!binding) {
+        return { allowed: false, reason: "forbidden" };
+      }
+      const invocationDecision = authorizeFromState(
+        {
+          principal: request.agentSession.invokingPrincipal,
+          domain: request.domain,
+          method: "agent",
+          permission: GATEWAY_AGENT_SESSION_INVOKE_PERMISSION,
+          resources: [
+            {
+              namespace: "core",
+              type: "agent-session",
+              id: request.delegation.assignmentId,
+            },
+          ],
+        },
+        database,
+      );
+      if (!invocationDecision.allowed) {
+        return { allowed: false, reason: "forbidden" };
+      }
+    }
   } else if (request.delegation) {
+    return { allowed: false, reason: "forbidden" };
+  } else if (request.agentSession) {
     return { allowed: false, reason: "forbidden" };
   }
 

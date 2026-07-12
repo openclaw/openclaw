@@ -15,6 +15,7 @@ import type { GatewayResourceRef } from "./contracts.js";
 
 type AuthorizationDatabase = Pick<
   OpenClawStateKyselyDatabase,
+  | "authorization_agent_session_bindings"
   | "authorization_domain_memberships"
   | "authorization_domains"
   | "authorization_grants"
@@ -561,6 +562,22 @@ export function transferAuthorizationResourceOwner(
     );
     if (!existing || existing.retired_at !== null) {
       throw new Error("authorization resource must be active for owner transfer");
+    }
+    if (resource.namespace === "core" && resource.type === "agent-session") {
+      const activeBinding = executeSqliteQueryTakeFirstSync(
+        db,
+        kysely
+          .selectFrom("authorization_agent_session_bindings")
+          .select("binding_id")
+          .where("domain_id", "=", domainId)
+          .where("assignment_id", "=", resource.id)
+          .where("state", "=", "active"),
+      );
+      if (activeBinding) {
+        throw new Error(
+          "an active agent-session binding keeps its canonical sponsor owner; share access with grants",
+        );
+      }
     }
     executeSqliteQuerySync(
       db,

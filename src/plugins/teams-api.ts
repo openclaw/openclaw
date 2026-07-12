@@ -11,7 +11,14 @@ import type {
   OpenClawPluginTeamsApi,
   OpenClawPluginTeamsRequestContext,
   OpenClawPluginTeamsResourceRef,
+  OpenClawPluginTeamsToolCallContext,
 } from "./teams-types.js";
+import {
+  requireCurrentPluginToolAuthorizationInvocation,
+  requirePluginToolAuthorizationInvocation,
+  type PluginToolAuthorizationInvocation,
+} from "./tool-authorization-context.js";
+import type { OpenClawPluginToolContext } from "./tool-types.js";
 
 function requiredIdentifier(value: string, label: string): string {
   const normalized = value.trim();
@@ -47,20 +54,38 @@ export function createPluginTeamsApi(input: {
 }): OpenClawPluginTeamsApi {
   const pluginId = requiredIdentifier(input.pluginId, "plugin id");
   const operationScope = `plugin:${pluginId}`;
-  const trustedContexts = new WeakMap<object, GatewayAuthorizationContext>();
+  const trustedContexts = new WeakMap<
+    object,
+    | { kind: "gateway"; authorization: GatewayAuthorizationContext }
+    | {
+        kind: "tool";
+        authorization: GatewayAuthorizationContext;
+        invocation: PluginToolAuthorizationInvocation;
+      }
+  >();
+  const trustedToolCalls = new WeakMap<
+    OpenClawPluginTeamsToolCallContext,
+    PluginToolAuthorizationInvocation
+  >();
 
   const requireTrustedContext = (
     context: OpenClawPluginTeamsRequestContext,
   ): GatewayAuthorizationContext => {
-    const trusted = trustedContexts.get(context);
+    const binding = trustedContexts.get(context);
+    if (!binding) {
+      throw new Error("an active trusted Teams request context is required");
+    }
+    if (binding.kind === "tool") {
+      requireCurrentPluginToolAuthorizationInvocation(binding.invocation);
+      return binding.authorization;
+    }
     if (
-      !trusted ||
-      getGatewayAuthorizationContext() !== trusted ||
-      !isGatewayAuthorizationContextActive(trusted)
+      getGatewayAuthorizationContext() !== binding.authorization ||
+      !isGatewayAuthorizationContextActive(binding.authorization)
     ) {
       throw new Error("an active trusted Teams request context is required");
     }
-    return trusted;
+    return binding.authorization;
   };
 
   const requireAuthorizedAction = (
@@ -77,51 +102,122 @@ export function createPluginTeamsApi(input: {
     }
   };
 
-  const contextApi: OpenClawPluginTeamsApi["context"] = {
-    require: () => {
-      const trusted = getGatewayAuthorizationContext();
-      if (!trusted || !trusted.requestId || !isGatewayAuthorizationContextActive(trusted)) {
-        throw new Error("an active trusted gateway authorization context is required");
-      }
-      if (trusted.pluginId !== pluginId) {
-        throw new Error("the trusted Teams request belongs to a different plugin");
-      }
-      if (
-        trusted.resources.length === 0 ||
-        trusted.resources.some((resource) => resource.namespace !== pluginId)
-      ) {
-        throw new Error("Teams authorization must use the loader-bound plugin namespace");
-      }
-      if (trusted.principalKind !== "human" && trusted.principalKind !== "service") {
-        throw new Error("Teams requests require a human or delegated agent principal");
-      }
-      if (trusted.principalKind === "service" && !trusted.delegation) {
-        throw new Error("Teams agent requests require a server-attested delegation");
-      }
-      const context: OpenClawPluginTeamsRequestContext = Object.freeze({
-        isolationDomainId: trusted.domain.id,
-        principal: Object.freeze({
-          id: trusted.principalId,
-          kind: trusted.principalKind === "human" ? "human" : "agent",
-        }),
-        ...(trusted.delegation
-          ? {
-              delegatedSession: Object.freeze({
-                id: trusted.delegation.id,
-                assignmentId: trusted.delegation.assignmentId,
-                sponsorPrincipalId: trusted.delegation.sponsorPrincipalId,
-              }),
-            }
-          : {}),
-        requestId: trusted.requestId,
+  const projectRequestContext = (
+    trusted: GatewayAuthorizationContext,
+  ): OpenClawPluginTeamsRequestContext =>
+    Object.freeze({
+      isolationDomainId: trusted.domain.id,
+      principal: Object.freeze({
+        id: trusted.principalId,
+        kind: trusted.principalKind === "human" ? "human" : "agent",
+      }),
+      ...(trusted.delegation
+        ? {
+            delegatedSession: Object.freeze({
+              id: trusted.delegation.id,
+              assignmentId: trusted.delegation.assignmentId,
+              sponsorPrincipalId: trusted.delegation.sponsorPrincipalId,
+            }),
+          }
+        : {}),
+      requestId: trusted.requestId!,
+    });
+
+  const requireContext = ((toolContext?: OpenClawPluginToolContext) => {
+    if (toolContext) {
+      const invocation = requirePluginToolAuthorizationInvocation({
+        pluginId,
+        context: toolContext,
       });
-      trustedContexts.set(context, trusted);
+      const context: OpenClawPluginTeamsToolCallContext = Object.freeze({
+        callId: invocation.toolCallId,
+      });
+      trustedToolCalls.set(context, invocation);
       return context;
-    },
+    }
+    const trusted = getGatewayAuthorizationContext();
+    if (!trusted || !trusted.requestId || !isGatewayAuthorizationContextActive(trusted)) {
+      throw new Error("an active trusted gateway authorization context is required");
+    }
+    if (trusted.pluginId !== pluginId) {
+      throw new Error("the trusted Teams request belongs to a different plugin");
+    }
+    if (
+      trusted.resources.length === 0 ||
+      trusted.resources.some((resource) => resource.namespace !== pluginId)
+    ) {
+      throw new Error("Teams authorization must use the loader-bound plugin namespace");
+    }
+    if (trusted.principalKind !== "human" && trusted.principalKind !== "service") {
+      throw new Error("Teams requests require a human or delegated agent principal");
+    }
+    if (trusted.principalKind === "service" && !trusted.delegation) {
+      throw new Error("Teams agent requests require a server-attested delegation");
+    }
+    const context = projectRequestContext(trusted);
+    trustedContexts.set(context, { kind: "gateway", authorization: trusted });
+    return context;
+  }) as OpenClawPluginTeamsApi["context"]["require"];
+
+  const contextApi: OpenClawPluginTeamsApi["context"] = {
+    require: requireContext,
   };
 
   return {
     context: contextApi,
+    authorization: {
+      decide: async ({ context, permission: rawPermission, resources: rawResources }) => {
+        const invocation = trustedToolCalls.get(context);
+        if (!invocation || invocation.toolCallId !== context.callId || !invocation.subject) {
+          throw new Error("an active trusted Teams tool call context is required");
+        }
+        requireCurrentPluginToolAuthorizationInvocation(invocation);
+        const permission = requiredIdentifier(rawPermission, "Teams permission");
+        if (!Array.isArray(rawResources) || rawResources.length === 0) {
+          throw new Error("Teams authorization requires at least one resource");
+        }
+        const resources = Object.freeze(
+          rawResources.map((rawResource) => {
+            const resource = normalizeResource(rawResource);
+            requirePluginResourceNamespace(resource, pluginId);
+            return resource;
+          }),
+        );
+        const [{ authorizeGatewayAccess }, { createStateGatewayAuthorizationRuntime }] =
+          await Promise.all([
+            import("../gateway/authorization/kernel.js"),
+            import("../gateway/authorization/state-provider.js"),
+          ]);
+        requireCurrentPluginToolAuthorizationInvocation(invocation);
+        const outcome = await authorizeGatewayAccess({
+          runtime: createStateGatewayAuthorizationRuntime({ database: input.database }),
+          policy: { kind: "resource", permission, resolveResources: () => resources },
+          principal: invocation.subject.principal,
+          domain: invocation.subject.domain,
+          delegation: invocation.subject.delegation,
+          agentSession: invocation.subject.agentSession,
+          method: `plugin-tool:${pluginId}:${invocation.toolName}`,
+          params: undefined,
+          getConfig: () => ({}),
+        });
+        requireCurrentPluginToolAuthorizationInvocation(invocation);
+        if (!outcome.allowed || !outcome.security) {
+          return { allowed: false };
+        }
+        const trusted = Object.freeze({
+          ...outcome.security,
+          pluginId,
+          requestId: invocation.toolCallId,
+        });
+        const requestContext = projectRequestContext(trusted);
+        trustedContexts.set(requestContext, {
+          kind: "tool",
+          authorization: trusted,
+          invocation,
+        });
+        return { allowed: true, context: requestContext };
+      },
+    },
     resources: {
       prepareRegister: async ({
         context,

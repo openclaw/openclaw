@@ -179,6 +179,7 @@ export type {
   OpenClawPluginTeamsApi,
   OpenClawPluginTeamsRequestContext,
   OpenClawPluginTeamsResourceRef,
+  OpenClawPluginTeamsToolCallContext,
 } from "./teams-types.js";
 export type { AgentHarness } from "../agents/harness/types.js";
 export type {

@@ -135,6 +135,22 @@ export interface AuthProfileStores {
   updated_at: number;
 }
 
+export interface AuthorizationAgentSessionBindings {
+  agent_principal_id: string;
+  assignment_id: string;
+  binding_id: string;
+  created_at: number;
+  created_by_principal_id: string;
+  delegation_id: string;
+  domain_id: string;
+  revoked_at: number | null;
+  runtime_agent_id: string;
+  session_key: string;
+  sponsor_principal_id: string;
+  state: string;
+  updated_at: number;
+}
+
 export interface AuthorizationAgentSponsors {
   agent_principal_id: string;
   created_at: number;
@@ -1296,6 +1312,7 @@ export interface DB {
   audit_identity_keys: AuditIdentityKeys;
   auth_profile_state: AuthProfileState;
   auth_profile_stores: AuthProfileStores;
+  authorization_agent_session_bindings: AuthorizationAgentSessionBindings;
   authorization_agent_sponsors: AuthorizationAgentSponsors;
   authorization_delegations: AuthorizationDelegations;
   authorization_domain_memberships: AuthorizationDomainMemberships;

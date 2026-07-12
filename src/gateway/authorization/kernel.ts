@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   GatewayAuthorizationRuntime,
   GatewayAuthorizationContext,
+  GatewayAgentSessionAuthorizationRef,
   GatewayMethodAccessPolicy,
   GatewayRbacDenialReason,
   IsolationDomainRef,
@@ -46,6 +47,7 @@ export async function authorizeGatewayAccess(_input: {
   principal?: GatewayPrincipal;
   domain?: IsolationDomainRef;
   delegation?: { id: string; assignmentId: string };
+  agentSession?: GatewayAgentSessionAuthorizationRef;
   method: string;
   params: unknown;
   getConfig: () => OpenClawConfig;
@@ -108,6 +110,25 @@ export async function authorizeGatewayAccess(_input: {
   ) {
     return { allowed: false, reason: "indeterminate" };
   }
+  const agentSession = _input.agentSession
+    ? Object.freeze({
+        id: _input.agentSession.id,
+        invokingPrincipal: Object.freeze({
+          issuer: _input.agentSession.invokingPrincipal.issuer,
+          subject: _input.agentSession.invokingPrincipal.subject,
+          kind: _input.agentSession.invokingPrincipal.kind,
+        }),
+      })
+    : undefined;
+  if (
+    agentSession &&
+    (!isNonEmptyString(agentSession.id) ||
+      !isNonEmptyString(agentSession.invokingPrincipal.issuer) ||
+      !isNonEmptyString(agentSession.invokingPrincipal.subject) ||
+      agentSession.invokingPrincipal.kind !== "human")
+  ) {
+    return { allowed: false, reason: "indeterminate" };
+  }
   const authorizedResources = Object.freeze(
     resources.map((resource) =>
       Object.freeze({
@@ -123,6 +144,7 @@ export async function authorizeGatewayAccess(_input: {
       principal: _input.principal,
       domain: _input.domain,
       ...(delegation ? { delegation } : {}),
+      ...(agentSession ? { agentSession } : {}),
       method: _input.method,
       permission,
       resources: authorizedResources,
