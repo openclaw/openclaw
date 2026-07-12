@@ -1584,6 +1584,33 @@ describe("createVideoGenerateTool", () => {
     expect(call.inputImages?.[1]?.role).toBe("last_frame");
   });
 
+  it("rejects inline reference images over the configured media cap", async () => {
+    mockVideoPluginProvider({
+      imageToVideo: { enabled: true, maxInputImages: 1 },
+    });
+    const generateSpy = vi.spyOn(videoGenerationRuntime, "generateVideo");
+    const tool = expectVideoGenerateTool(
+      createVideoGenerateTool({
+        config: asConfig({
+          agents: {
+            defaults: {
+              mediaMaxMb: 1 / (1024 * 1024),
+              videoGenerationModel: { primary: "video-plugin/vid-v1" },
+            },
+          },
+        }),
+      }),
+    );
+
+    await expect(
+      tool.execute("call-1", {
+        prompt: "lobster",
+        image: "data:image/png;base64,AAAA",
+      }),
+    ).rejects.toThrow("Invalid data URL: payload exceeds size limit.");
+    expect(generateSpy).not.toHaveBeenCalled();
+  });
+
   it("passes direct remote reference URLs to the provider without local media loading", async () => {
     mockVideoPluginProvider({
       imageToVideo: { enabled: true, maxInputImages: 1 },
@@ -1622,6 +1649,7 @@ describe("createVideoGenerateTool", () => {
       config: asConfig({
         agents: {
           defaults: {
+            mediaMaxMb: 7,
             videoGenerationModel: { primary: "video-plugin/vid-v1" },
           },
         },
@@ -1639,7 +1667,8 @@ describe("createVideoGenerateTool", () => {
 
     const loadCall = firstMockCall(vi.mocked(webMedia.loadWebMedia));
     expect(loadCall?.[0]).toBe("/tmp/reference.png");
-    const loadOptions = loadCall?.[1] as { ssrfPolicy?: unknown } | undefined;
+    const loadOptions = loadCall?.[1] as { maxBytes?: number; ssrfPolicy?: unknown } | undefined;
+    expect(loadOptions?.maxBytes).toBe(7 * 1024 * 1024);
     expect(loadOptions?.ssrfPolicy).toEqual({ allowRfc2544BenchmarkRange: true });
   });
 

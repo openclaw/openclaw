@@ -1125,6 +1125,7 @@ describe("createMusicGenerateTool", () => {
       config: asConfig({
         agents: {
           defaults: {
+            mediaMaxMb: 7,
             musicGenerationModel: { primary: "minimax/music-2.6", timeoutMs: 180_000 },
           },
         },
@@ -1147,9 +1148,11 @@ describe("createMusicGenerateTool", () => {
     }
     expect(loadCall[0]).toBe("http://198.18.0.153/reference.png");
     const loadOptions = loadCall[1] as {
+      maxBytes?: number;
       requestInit?: { signal?: unknown };
       ssrfPolicy?: unknown;
     };
+    expect(loadOptions.maxBytes).toBe(7 * 1024 * 1024);
     expect(loadOptions.requestInit?.signal).toBeInstanceOf(AbortSignal);
     expect(loadOptions.ssrfPolicy).toEqual({ allowRfc2544BenchmarkRange: true });
     expect(generateMusicOptions().timeoutMs).toBe(180_000);
@@ -1159,6 +1162,42 @@ describe("createMusicGenerateTool", () => {
       timeoutMs: 30_000,
       url: "http://198.18.0.153/reference.png",
     });
+  });
+
+  it("rejects inline reference images over the configured media cap", async () => {
+    vi.spyOn(musicGenerationRuntime, "listRuntimeMusicGenerationProviders").mockReturnValue([
+      {
+        id: "minimax",
+        defaultModel: "music-2.6",
+        models: ["music-2.6"],
+        capabilities: {
+          edit: { enabled: true, maxInputImages: 1 },
+        },
+        generateMusic: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+      },
+    ]);
+    const tool = expectMusicGenerateTool(
+      createMusicGenerateTool({
+        config: asConfig({
+          agents: {
+            defaults: {
+              mediaMaxMb: 1 / (1024 * 1024),
+              musicGenerationModel: { primary: "minimax/music-2.6" },
+            },
+          },
+        }),
+      }),
+    );
+
+    await expect(
+      tool.execute("call-1", {
+        prompt: "night-drive synthwave",
+        image: "data:image/png;base64,AAAA",
+      }),
+    ).rejects.toThrow("Invalid data URL: payload exceeds size limit.");
+    expect(musicGenerationRuntime.generateMusic).not.toHaveBeenCalled();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

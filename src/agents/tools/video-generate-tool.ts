@@ -8,7 +8,10 @@ import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
+import {
+  resolveConfiguredMediaMaxBytes,
+  resolveGeneratedMediaMaxBytes,
+} from "../../media/configured-max-bytes.js";
 import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
@@ -629,7 +632,7 @@ async function loadReferenceAssets(params: {
     );
     const media = isDataUrl
       ? params.expectedKind === "image"
-        ? decodeDataUrl(resolvedInput)
+        ? decodeDataUrl(resolvedInput, { maxBytes: params.maxBytes })
         : (() => {
             throw new ToolInputError(
               `${params.expectedKind} data: URLs are not supported for video_generate.`,
@@ -1129,9 +1132,11 @@ export function createVideoGenerateTool(options?: {
       if (duplicateGuardResult) {
         return duplicateGuardResult;
       }
+      const configuredMediaMaxBytes = resolveConfiguredMediaMaxBytes(effectiveCfg);
       const loadedReferenceImages = await loadReferenceAssets({
         inputs: imageInputs,
         expectedKind: "image",
+        maxBytes: configuredMediaMaxBytes,
         workspaceDir: options?.workspaceDir,
         sandboxConfig,
         ssrfPolicy: remoteMediaSsrfPolicy,
@@ -1147,6 +1152,7 @@ export function createVideoGenerateTool(options?: {
       const loadedReferenceVideos = await loadReferenceAssets({
         inputs: videoInputs,
         expectedKind: "video",
+        maxBytes: configuredMediaMaxBytes,
         workspaceDir: options?.workspaceDir,
         sandboxConfig,
         ssrfPolicy: remoteMediaSsrfPolicy,
@@ -1161,6 +1167,7 @@ export function createVideoGenerateTool(options?: {
       const loadedReferenceAudios = await loadReferenceAssets({
         inputs: audioInputs,
         expectedKind: "audio",
+        maxBytes: configuredMediaMaxBytes,
         workspaceDir: options?.workspaceDir,
         sandboxConfig,
         ssrfPolicy: remoteMediaSsrfPolicy,

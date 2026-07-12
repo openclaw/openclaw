@@ -9,7 +9,10 @@ import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
+import {
+  resolveConfiguredMediaMaxBytes,
+  resolveGeneratedMediaMaxBytes,
+} from "../../media/configured-max-bytes.js";
 import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
@@ -294,6 +297,7 @@ const defaultScheduleMusicGenerateBackgroundWork = createDefaultMediaGenerateBac
 
 async function loadReferenceImages(params: {
   inputs: string[];
+  maxBytes?: number;
   workspaceDir?: string;
   sandboxConfig: { root: string; bridge: SandboxFsBridge; workspaceOnly: boolean } | null;
   ssrfPolicy?: SsrFPolicy;
@@ -357,9 +361,10 @@ async function loadReferenceImages(params: {
       resolvedPath ? [resolvedPath] : undefined,
     );
     const media = isDataUrl
-      ? decodeDataUrl(resolvedInput)
+      ? decodeDataUrl(resolvedInput, { maxBytes: params.maxBytes })
       : params.sandboxConfig
         ? await loadWebMedia(resolvedPath ?? resolvedInput, {
+            maxBytes: params.maxBytes,
             sandboxValidated: true,
             readFile: createSandboxBridgeReadFile({ sandbox: params.sandboxConfig }),
           })
@@ -373,6 +378,7 @@ async function loadReferenceImages(params: {
             });
             try {
               return await loadWebMedia(resolvedPath ?? resolvedInput, {
+                maxBytes: params.maxBytes,
                 localRoots,
                 requestInit: signal ? { signal } : undefined,
                 ssrfPolicy: params.ssrfPolicy,
@@ -710,8 +716,10 @@ export function createMusicGenerateTool(options?: {
         return duplicateGuardResult;
       }
       const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
+      const configuredMediaMaxBytes = resolveConfiguredMediaMaxBytes(effectiveCfg);
       const loadedReferenceImages = await loadReferenceImages({
         inputs: imageInputs,
+        maxBytes: configuredMediaMaxBytes,
         workspaceDir: options?.workspaceDir,
         sandboxConfig,
         ssrfPolicy: remoteMediaSsrfPolicy,
