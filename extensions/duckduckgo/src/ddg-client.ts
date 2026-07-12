@@ -97,8 +97,7 @@ function stripHtml(html: string): string {
 
 function decodeDuckDuckGoUrl(rawUrl: string): string {
   try {
-    const normalized = rawUrl.startsWith("//") ? `https:${rawUrl}` : rawUrl;
-    const parsed = new URL(normalized);
+    const parsed = new URL(rawUrl, "https://duckduckgo.com");
     const uddg = parsed.searchParams.get("uddg");
     if (uddg) {
       return uddg;

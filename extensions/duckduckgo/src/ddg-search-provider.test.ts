@@ -199,6 +199,9 @@ describe("duckduckgo web search provider", () => {
         "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fsearch%3Fq%3Dclaw",
       ),
     ).toBe("https://example.com/search?q=claw");
+    expect(
+      ddgClientTesting.decodeDuckDuckGoUrl("/l/?kh=-1&uddg=https%3A%2F%2Fexample.net%2Frelative"),
+    ).toBe("https://example.net/relative");
     expect(ddgClientTesting.decodeDuckDuckGoUrl("https://example.com")).toBe("https://example.com");
     expect(ddgClientTesting.decodeHtmlEntities("Fish &amp; Chips&nbsp;&hellip; &#39;ok&#39;")).toBe(
       "Fish & Chips ... 'ok'",
@@ -236,6 +239,10 @@ describe("duckduckgo web search provider", () => {
         Example &amp; Co
       </a>
       <a class="result__snippet">Fast&nbsp;search &hellip; with details</a>
+      <a class="result__a" href="/l/?uddg=https%3A%2F%2Fexample.net%2Frelative">
+        Relative redirect
+      </a>
+      <a class="result__snippet">Relative snippet</a>
       <a class="result__a" href="https://example.org/direct">Direct result</a>
       <a class="result__snippet">Second snippet</a>
     `;
@@ -245,6 +252,11 @@ describe("duckduckgo web search provider", () => {
         title: "Example & Co",
         url: "https://example.com",
         snippet: "Fast search ... with details",
+      },
+      {
+        title: "Relative redirect",
+        url: "https://example.net/relative",
+        snippet: "Relative snippet",
       },
       {
         title: "Direct result",
