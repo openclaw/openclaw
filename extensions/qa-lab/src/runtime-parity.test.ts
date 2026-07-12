@@ -241,6 +241,7 @@ describe("runtime parity", () => {
       ],
       transcriptToolCalls: [],
       scenarioEvidence: "MEDIA:/tmp/qa-image.png",
+      scenarioPassed: true,
     });
     const codexResult = __testing.resolveRuntimeParityToolCalls({
       mockToolCalls: [
@@ -255,6 +256,33 @@ describe("runtime parity", () => {
 
     expect(resolved).toEqual(codexResult);
     expect(resolved[0]?.errorClass).toBeUndefined();
+  });
+
+  it("preserves ambiguous missing image results despite MEDIA evidence", () => {
+    const resolved = __testing.resolveRuntimeParityToolCalls({
+      mockToolCalls: [
+        {
+          tool: "image_generate",
+          argsHash: "first-args",
+          resultHash: "first-missing",
+          errorClass: "tool-result-missing",
+        },
+        {
+          tool: "image_generate",
+          argsHash: "second-args",
+          resultHash: "second-missing",
+          errorClass: "tool-result-missing",
+        },
+      ],
+      transcriptToolCalls: [],
+      scenarioEvidence: "MEDIA:/tmp/one-image.png",
+      scenarioPassed: true,
+    });
+
+    expect(resolved.map((toolCall) => toolCall.errorClass)).toEqual([
+      "tool-result-missing",
+      "tool-result-missing",
+    ]);
   });
 
   it("scopes process-global mock requests to the parent session prompt", () => {

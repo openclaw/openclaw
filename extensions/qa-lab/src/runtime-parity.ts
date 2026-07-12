@@ -784,6 +784,7 @@ function resolveRuntimeParityToolCalls(params: {
   mockToolCalls: RuntimeParityToolCall[] | null;
   transcriptToolCalls: RuntimeParityToolCall[];
   scenarioEvidence?: string;
+  scenarioPassed?: boolean;
 }): RuntimeParityToolCall[] {
   let selected: RuntimeParityToolCall[];
   if (!params.mockToolCalls) {
@@ -797,16 +798,28 @@ function resolveRuntimeParityToolCalls(params: {
   } else {
     selected = params.mockToolCalls;
   }
-  if (/\bMEDIA:\S+/iu.test(params.scenarioEvidence ?? "")) {
-    selected = selected.map((toolCall) =>
-      toolCall.tool === "image_generate" && toolCall.errorClass === TOOL_RESULT_MISSING_ERROR_CLASS
-        ? {
-            ...toolCall,
-            resultHash: SUCCESSFUL_MEDIA_RESULT_HASH,
-            errorClass: undefined,
-          }
-        : toolCall,
-    );
+  const mediaEvidence = params.scenarioEvidence?.match(/\bMEDIA:\S+/giu) ?? [];
+  const missingImageCalls = selected.filter(
+    (toolCall) =>
+      toolCall.tool === "image_generate" && toolCall.errorClass === TOOL_RESULT_MISSING_ERROR_CLASS,
+  );
+  if (params.scenarioPassed && mediaEvidence.length === 1 && missingImageCalls.length === 1) {
+    let resolvedMissingImage = false;
+    selected = selected.map((toolCall) => {
+      if (
+        resolvedMissingImage ||
+        toolCall.tool !== "image_generate" ||
+        toolCall.errorClass !== TOOL_RESULT_MISSING_ERROR_CLASS
+      ) {
+        return toolCall;
+      }
+      resolvedMissingImage = true;
+      return {
+        ...toolCall,
+        resultHash: SUCCESSFUL_MEDIA_RESULT_HASH,
+        errorClass: undefined,
+      };
+    });
   }
   return normalizeSuccessfulMediaToolResults(selected);
 }
@@ -1115,6 +1128,7 @@ export async function captureRuntimeParityCell(
       mockToolCalls,
       transcriptToolCalls,
       scenarioEvidence,
+      scenarioPassed: params.scenarioResult.status === "pass",
     }),
     finalText: extractFinalAssistantText(transcriptRecords),
     usage: aggregateUsage(transcriptRecords),
