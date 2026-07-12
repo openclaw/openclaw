@@ -1138,7 +1138,7 @@ function sourceCommits(base, target, mainRef) {
   );
   const provenanceOverrides = collectReleaseProvenanceOverrides(activeCommits);
   const mainCommits = canonicalMainCommits(base, mainRef);
-  const mainCommit = gitCommit(mainRef, true);
+  const mainCommit = provenanceOverrides.size > 0 ? gitCommit(mainRef, true) : undefined;
   const mainCommitsByHash = new Map(mainCommits.map((commit) => [commit.hash, commit]));
   const mainCommitsBySubject = new Map();
   for (const commit of mainCommits) {
