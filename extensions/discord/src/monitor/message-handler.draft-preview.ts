@@ -379,6 +379,12 @@ export function createDiscordDraftPreviewController(params: {
         if (!finalizedViaPreviewMessage && draftStream?.messageId()) {
           await draftStream.clear();
         }
+        // Bounded retry: when the fresh final was delivered but the preview
+        // was never finalized and the stored id still exists (the first clear
+        // after delivery failed), try one more time during teardown.
+        if (finalReplyDelivered && !finalizedViaPreviewMessage && draftStream?.messageId()) {
+          await draftStream.clear();
+        }
       } catch (err) {
         params.log(`discord: draft cleanup failed: ${String(err)}`);
       }
