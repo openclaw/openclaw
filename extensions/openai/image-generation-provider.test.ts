@@ -728,6 +728,32 @@ describe("openai image generation provider", () => {
     expect(result.metadata).toBeUndefined();
   });
 
+  it("uses the provider baseUrl when its optional model catalog is omitted", async () => {
+    mockGeneratedPngResponse();
+
+    const provider = buildOpenAIImageGenerationProvider();
+    const result = await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-1",
+      prompt: "Draw a QA lighthouse",
+      cfg: {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://openai-compatible.example.com/v1",
+            },
+          },
+        },
+      },
+    });
+
+    expect(httpConfigCall().baseUrl).toBe("https://openai-compatible.example.com/v1");
+    expect(jsonRequestCall().url).toBe(
+      "https://openai-compatible.example.com/v1/images/generations",
+    );
+    expect(result.images).toHaveLength(1);
+  });
+
   it("forwards output and OpenAI-only options on direct generations", async () => {
     mockGeneratedPngResponse();
 
