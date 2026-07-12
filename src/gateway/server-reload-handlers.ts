@@ -230,7 +230,7 @@ type ManagedGatewayConfigReloaderParams = Omit<
   sharedGatewaySessionGenerationState: SharedGatewaySessionGenerationState;
   clients: Iterable<SharedGatewayAuthClient>;
   reconcileTerminalSessions: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void;
-  commitTerminalConfig: () => void;
+  commitTerminalConfig: (nextConfig: OpenClawConfig) => void;
 };
 
 export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) {
@@ -511,6 +511,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
 
     if (plan.restartHealthMonitor) {
       state.channelHealthMonitor?.stop();
+      await state.channelHealthMonitor?.waitForIdle();
       nextState.channelHealthMonitor = params.createHealthMonitor(nextConfig);
     }
 
@@ -814,7 +815,7 @@ export function startManagedGatewayConfigReloader(
     promoteSnapshot: async (snapshot, _reason) => await params.promoteSnapshot(snapshot),
     subscribeToWrites: params.subscribeToWrites,
     onConfigChange: (plan, nextConfig) => params.reconcileTerminalSessions(plan, nextConfig),
-    onConfigApplied: () => params.commitTerminalConfig(),
+    onConfigApplied: (_plan, nextConfig) => params.commitTerminalConfig(nextConfig),
     onNoopConfigCommit: async (_plan, nextConfig) => {
       await params.activateRuntimeSecrets(nextConfig, {
         reason: "reload",

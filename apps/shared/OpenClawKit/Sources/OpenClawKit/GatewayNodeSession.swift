@@ -807,7 +807,9 @@ extension GatewayNodeSession {
         // The underlying channel can auto-reconnect; resetting state here ensures we surface a fresh
         // onConnected callback once a new snapshot arrives after reconnect.
         self.resetConnectionState()
-        let lifecycleCallback = self.enqueueLifecycleCallback(
+        // Transport reconnect must not wait on owner callbacks that can suspend
+        // indefinitely. The lifecycle barrier still gates readiness and invokes.
+        _ = self.enqueueLifecycleCallback(
             immediate: {
                 // Release held input before waiting for a connected callback that
                 // may already be suspended in owner code.
@@ -817,11 +819,8 @@ extension GatewayNodeSession {
                 // This cleanup runs after all older lifecycle callbacks, so they
                 // cannot resume later and restore a disconnected route.
                 await onDisconnected?(reason)
+                await self.awaitActiveInvokes(activeInvokes)
             })
-        if !self.isExecutingLifecycleCallback() {
-            await lifecycleCallback.task.value
-        }
-        await self.awaitActiveInvokes(activeInvokes)
     }
 
     private func markSnapshotReceived() {
@@ -966,10 +965,25 @@ extension GatewayNodeSession {
         channel: GatewayChannelActor,
         socketGeneration: UInt64) async
     {
-        guard await self.awaitLifecycleCallbacks(ifCurrentRoute: route) else { return }
         guard self.isCurrentRoute(route),
               self.channel === channel
         else { return }
+        // Lifecycle cleanup gates owner readiness. Reject while it is suspended instead of
+        // holding the Gateway request until timeout; the replacement route stays fail-closed.
+        if self.lifecycleCallbackBarrier != nil {
+            self.logger.info("node invoke rejected during lifecycle transition id=\(request.id, privacy: .public)")
+            await self.sendInvokeResult(
+                request: request,
+                response: BridgeInvokeResponse(
+                    id: request.id,
+                    ok: false,
+                    error: OpenClawNodeError(
+                        code: .unavailable,
+                        message: "UNAVAILABLE: node lifecycle transition in progress")),
+                channel: channel,
+                socketGeneration: socketGeneration)
+            return
+        }
         self.logger.info("node invoke executing id=\(request.id, privacy: .public)")
         let bridgeRequest = BridgeInvokeRequest(
             id: request.id,
@@ -1003,14 +1017,6 @@ extension GatewayNodeSession {
             response: response,
             channel: channel,
             socketGeneration: socketGeneration)
-    }
-
-    private func awaitLifecycleCallbacks(ifCurrentRoute route: GatewayNodeSessionRoute) async -> Bool {
-        while let lifecycleCallback = self.lifecycleCallbackBarrier {
-            await lifecycleCallback.task.value
-            guard self.isCurrentRoute(route), self.channel != nil else { return false }
-        }
-        return self.isCurrentRoute(route) && self.channel != nil
     }
 
     func invokeIfCurrentRoute(
