@@ -5,6 +5,7 @@ import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import type { FeishuMessageEvent } from "./bot.js";
 import { clearGroupNameCache, handleFeishuMessage } from "./bot.js";
 import { setFeishuRuntime } from "./runtime.js";
+import { recallFeishuSourceMessage } from "./source-message-recall.js";
 
 const { mockCreateFeishuReplyDispatcher, mockCreateFeishuClient, mockResolveAgentRoute } =
   vi.hoisted(() => ({
@@ -43,6 +44,21 @@ function createRuntimeEnv() {
     exit: vi.fn((code: number): never => {
       throw new Error(`exit ${code}`);
     }),
+  };
+}
+
+function createRuntimeContexts(): PluginRuntime["channel"]["runtimeContexts"] {
+  const contexts = new Map<string, unknown>();
+  const keyFor = (params: { channelId: string; accountId?: string | null; capability: string }) =>
+    `${params.channelId.trim()}\0${params.accountId?.trim() ?? ""}\0${params.capability.trim()}`;
+  return {
+    register: (params) => {
+      const key = keyFor(params);
+      contexts.set(key, params.context);
+      return { dispose: () => contexts.delete(key) };
+    },
+    get: (params) => contexts.get(keyFor(params)) as never,
+    watch: () => () => {},
   };
 }
 
@@ -152,6 +168,7 @@ describe("broadcast dispatch", () => {
           };
         }),
       },
+      runtimeContexts: createRuntimeContexts(),
       pairing: {
         readAllowFromStore: vi.fn().mockResolvedValue([]),
         upsertPairingRequest: vi.fn().mockResolvedValue({ code: "ABCDEFGH", created: false }),
@@ -343,6 +360,50 @@ describe("broadcast dispatch", () => {
       | { agentId?: string }
       | undefined;
     expect(dispatcherParams?.agentId).toBe("main");
+  });
+
+  it("aborts every in-flight broadcast agent when the source message is recalled", async () => {
+    const abortSignals: AbortSignal[] = [];
+    let recallResult: ReturnType<typeof recallFeishuSourceMessage> | undefined;
+    let releaseDispatches: () => void = () => {};
+    const bothDispatchesStarted = new Promise<void>((resolve) => {
+      releaseDispatches = resolve;
+    });
+    const waitForRecall = async (params: { replyOptions?: { abortSignal?: AbortSignal } }) => {
+      const abortSignal = params.replyOptions?.abortSignal;
+      if (!abortSignal) {
+        throw new Error("expected recall-aware broadcast abort signal");
+      }
+      abortSignals.push(abortSignal);
+      if (abortSignals.length === 2) {
+        recallResult = recallFeishuSourceMessage({
+          channelRuntime: runtimeStub.channel,
+          accountId: "default",
+          messageId: "msg-broadcast-recalled",
+        });
+        releaseDispatches();
+      }
+      await bothDispatchesStarted;
+      return { queuedFinal: false, counts: { final: 0 } };
+    };
+    mockDispatchReplyFromConfig
+      .mockImplementationOnce(waitForRecall)
+      .mockImplementationOnce(waitForRecall);
+
+    await handleFeishuMessage({
+      cfg: createBroadcastConfig(),
+      event: createBroadcastEvent({
+        messageId: "msg-broadcast-recalled",
+        text: "cancel this @bot",
+        botMentioned: true,
+      }),
+      botOpenId: "bot-open-id",
+      runtime: createRuntimeEnv(),
+    });
+
+    expect(recallResult).toMatchObject({ abortedRuns: 2, recorded: true });
+    expect(abortSignals).toHaveLength(2);
+    expect(abortSignals.every((signal) => signal.aborted)).toBe(true);
   });
 
   it("sends no-visible-reply fallback for active broadcast zero-final dispatch", async () => {
