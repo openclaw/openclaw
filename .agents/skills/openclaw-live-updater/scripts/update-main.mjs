@@ -1569,7 +1569,7 @@ export function maintainMain(options, dependencies = {}) {
       verifiedBefore.checkout,
       verifiedBefore.headSha,
     );
-    const gatewayControlDeployment = resolveGatewayControlDeployment(
+    let gatewayControlDeployment = resolveGatewayControlDeployment(
       verifiedBefore.checkout,
       gatewayDeploymentBefore,
       sourceBuildBeforeUpdate,
@@ -1620,6 +1620,8 @@ export function maintainMain(options, dependencies = {}) {
 
     if (actions.gatewayBuild || actions.dependencyInstall || gatewayRuntimeRepointRequired) {
       actions.gatewayRestart = true;
+      let controlBuildPrepared = false;
+      let controlDependenciesInstalled = false;
       let gatewaySuspension;
       const controlUnavailable =
         gatewayDeploymentBefore !== null && gatewayControlDeployment === null;
@@ -1630,16 +1632,55 @@ export function maintainMain(options, dependencies = {}) {
             proof: proveGatewayStopped(update.checkout),
           };
         } catch (proofError) {
-          throw new AggregateError(
-            [
-              new UpdateInvariantError(
+          try {
+            if (!gatewayRuntimeRepointRequired) {
+              throw new UpdateInvariantError(
+                "gateway_live_source_build_forbidden",
+                "refusing to rebuild the source entrypoint while its managed Gateway is still running",
+              );
+            }
+            // The running Gateway is isolated in its immutable snapshot, so a
+            // clean source build cannot mutate its code. Build only to obtain
+            // an exact trusted client for the suspension RPC.
+            if (actions.dependencyInstall) {
+              runCommand("pnpm", ["install", "--frozen-lockfile"], update.checkout);
+              controlDependenciesInstalled = true;
+            }
+            if (!actions.gatewayBuild) {
+              throw new UpdateInvariantError(
                 "gateway_snapshot_control_unavailable",
-                "managed Gateway uses a snapshot but the source checkout has no exact trusted control build",
-              ),
-              proofError,
-            ],
-            "Gateway control is unavailable and the managed Gateway could not be proven stopped",
-          );
+                "managed Gateway snapshot has no exact trusted source control build",
+              );
+            }
+            runBuildWithPreservedMacApp(runCommand, update.checkout, sleep);
+            assertExactBuild(update.checkout, update.afterSha);
+            controlBuildPrepared = true;
+            gatewayControlDeployment = resolveGatewayControlDeployment(
+              update.checkout,
+              gatewayDeploymentBefore,
+              inspectBuildState(update.checkout, update.afterSha),
+              update.afterSha,
+            );
+            if (!gatewayControlDeployment) {
+              throw new UpdateInvariantError(
+                "gateway_snapshot_control_unavailable",
+                "source build did not produce an exact trusted Gateway control client",
+              );
+            }
+            gatewaySuspension = prepareSuspension(update.checkout, gatewayControlDeployment);
+          } catch (controlError) {
+            throw new AggregateError(
+              [
+                new UpdateInvariantError(
+                  "gateway_snapshot_control_unavailable",
+                  "managed Gateway uses a snapshot but the source checkout has no exact trusted control build",
+                ),
+                proofError,
+                controlError,
+              ],
+              "Gateway control is unavailable and the managed Gateway could not be proven stopped",
+            );
+          }
         }
       } else {
         try {
@@ -1695,10 +1736,10 @@ export function maintainMain(options, dependencies = {}) {
           throw error;
         }
       }
-      if (actions.dependencyInstall) {
+      if (actions.dependencyInstall && !controlDependenciesInstalled) {
         runCommand("pnpm", ["install", "--frozen-lockfile"], update.checkout);
       }
-      if (actions.gatewayBuild) {
+      if (actions.gatewayBuild && !controlBuildPrepared) {
         runBuildWithPreservedMacApp(runCommand, update.checkout, sleep);
       }
       assertExactBuild(update.checkout, update.afterSha);
