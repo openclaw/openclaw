@@ -139,12 +139,18 @@ type ExternalCliSyncResult = {
   cacheable: boolean;
 };
 
+let runtimeSnapshotPublisherForTest: ((publish: () => void) => void) | undefined;
+
 function publishRuntimeSnapshotsAfterCommit(publish: (() => void) | undefined): boolean {
   if (!publish) {
     return true;
   }
   try {
-    publish();
+    if (runtimeSnapshotPublisherForTest) {
+      runtimeSnapshotPublisherForTest(publish);
+    } else {
+      publish();
+    }
     return true;
   } catch (err) {
     clearRuntimeAuthProfileStoreSnapshotsImpl();
@@ -153,7 +159,15 @@ function publishRuntimeSnapshotsAfterCommit(publish: (() => void) | undefined): 
   }
 }
 
-export const testing = { publishRuntimeSnapshotsAfterCommit };
+export const testing = {
+  publishRuntimeSnapshotsAfterCommit,
+  resetRuntimeSnapshotPublisherForTest(): void {
+    runtimeSnapshotPublisherForTest = undefined;
+  },
+  setRuntimeSnapshotPublisherForTest(publisher: (publish: () => void) => void): void {
+    runtimeSnapshotPublisherForTest = publisher;
+  },
+};
 
 function resolvePersistedLoadOptions(
   options: Pick<LoadAuthProfileStoreOptions, "allowKeychainPrompt" | "database"> | undefined,
@@ -1112,6 +1126,13 @@ export function saveAuthProfileStore(
     payload: buildPersistedAuthProfileSecretsStore(localStore),
     existingRaw,
   });
+  const existingProfiles =
+    isRecord(existingRaw) && isRecord(existingRaw.profiles) ? existingRaw.profiles : {};
+  const changedProfileIds = [
+    ...new Set([...Object.keys(existingProfiles), ...Object.keys(payload.profiles)]),
+  ].filter(
+    (profileId) => !isDeepStrictEqual(existingProfiles[profileId], payload.profiles[profileId]),
+  );
   const credentialsChanged = !isDeepStrictEqual(existingRaw, payload);
   if (credentialsChanged) {
     writePersistedAuthProfileStoreRaw(payload, agentDir, database);
@@ -1127,7 +1148,9 @@ export function saveAuthProfileStore(
   }
   const publishRuntimeSnapshots = () => {
     if (credentialsChanged) {
-      noteRuntimeAuthProfileStoreCredentialsChanged(agentDir);
+      noteRuntimeAuthProfileStoreCredentialsChanged(agentDir, {
+        profileIds: changedProfileIds,
+      });
     }
     if (hasRuntimeAuthProfileStoreSnapshot(agentDir)) {
       const existingRuntimeStore = getRuntimeAuthProfileStoreSnapshot(agentDir);
@@ -1163,6 +1186,6 @@ export function saveAuthProfileStore(
   if (database) {
     return publishRuntimeSnapshots;
   }
-  publishRuntimeSnapshots();
+  publishRuntimeSnapshotsAfterCommit(publishRuntimeSnapshots);
   return undefined;
 }

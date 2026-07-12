@@ -314,6 +314,39 @@ describe("promoteAuthProfileInOrder", () => {
     expect(getRuntimeAuthProfileStoreSnapshot()).toBeUndefined();
   });
 
+  it("keeps a direct save committed when postcommit publication throws", async () => {
+    await withAuthProfileTestState("openclaw-auth-direct-publication-", async ({ agentDir }) => {
+      const store = (key: string): AuthProfileStore => ({
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          "openai:default": { type: "api_key", provider: "openai", key },
+        },
+      });
+      saveAuthProfileStore(store("sk-old"), agentDir);
+      replaceRuntimeAuthProfileStoreSnapshots([
+        { agentDir, store: loadAuthProfileStoreForRuntime(agentDir) },
+      ]);
+      storeTesting.setRuntimeSnapshotPublisherForTest((publish) => {
+        publish();
+        throw new Error("postcommit publication failed");
+      });
+      let result: ReturnType<typeof saveAuthProfileStore> = undefined;
+      try {
+        expect(() => {
+          result = saveAuthProfileStore(store("sk-new"), agentDir);
+        }).not.toThrow();
+      } finally {
+        storeTesting.resetRuntimeSnapshotPublisherForTest();
+      }
+
+      expect(result).toBeUndefined();
+      expect(loadPersistedAuthProfileStore(agentDir)?.profiles["openai:default"]).toMatchObject({
+        key: "sk-new",
+      });
+      expect(getRuntimeAuthProfileStoreSnapshot(agentDir)).toBeUndefined();
+    });
+  });
+
   it("marks newly saved runtime snapshot profiles as persisted", async () => {
     await withAuthProfileTestState(
       "openclaw-auth-profile-runtime-persisted-",

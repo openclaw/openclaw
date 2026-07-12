@@ -10,6 +10,8 @@ import type { AuthProfileStore } from "./types.js";
 
 const runtimeAuthStoreSnapshots = new Map<string, AuthProfileStore>();
 let runtimeAuthStoreCredentialsRevision = 0;
+const persistedStoreMutationRevision = new Map<string, number>();
+const persistedProfileMutationRevision = new Map<string, Map<string, number>>();
 
 function credentialState(
   entries: Iterable<[string, AuthProfileStore]>,
@@ -113,9 +115,21 @@ export function setRuntimeAuthProfileStoreSnapshot(
  * Main-store credentials are inherited by custom-agent snapshots, so those
  * derived snapshots must be dropped even when no exact main snapshot exists.
  */
-export function noteRuntimeAuthProfileStoreCredentialsChanged(agentDir?: string): void {
+export function noteRuntimeAuthProfileStoreCredentialsChanged(
+  agentDir: string | undefined,
+  mutation: { profileIds: Iterable<string> },
+): void {
   runtimeAuthStoreCredentialsRevision += 1;
   const ownerKey = resolveRuntimeStoreKey(agentDir);
+  persistedStoreMutationRevision.set(ownerKey, runtimeAuthStoreCredentialsRevision);
+  let profileRevisions = persistedProfileMutationRevision.get(ownerKey);
+  for (const profileId of mutation.profileIds) {
+    profileRevisions ??= new Map<string, number>();
+    profileRevisions.set(profileId, runtimeAuthStoreCredentialsRevision);
+  }
+  if (profileRevisions) {
+    persistedProfileMutationRevision.set(ownerKey, profileRevisions);
+  }
   const mainKey = resolveRuntimeStoreKey(undefined);
   if (ownerKey !== mainKey) {
     return;
@@ -125,6 +139,23 @@ export function noteRuntimeAuthProfileStoreCredentialsChanged(agentDir?: string)
       runtimeAuthStoreSnapshots.delete(key);
     }
   }
+}
+
+/** Persisted mutation token for one store or profile credential. */
+export function getRuntimeAuthProfileStoreCredentialMutationRevision(
+  agentDir?: string,
+  profileId?: string,
+): number {
+  const requestedKey = resolveRuntimeStoreKey(agentDir);
+  if (!profileId) {
+    return persistedStoreMutationRevision.get(requestedKey) ?? 0;
+  }
+  const mainKey = resolveRuntimeStoreKey(undefined);
+  const keys = requestedKey === mainKey ? [mainKey] : [requestedKey, mainKey];
+  return Math.max(
+    0,
+    ...keys.map((key) => persistedProfileMutationRevision.get(key)?.get(profileId) ?? 0),
+  );
 }
 
 /** Stable token for credential ownership without coupling to usage bookkeeping. */

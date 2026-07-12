@@ -4,6 +4,7 @@ import {
   clearRuntimeAuthProfileStoreSnapshots,
   getRuntimeAuthProfileStoreCredentialsRevision,
   getRuntimeAuthProfileStoreSnapshot,
+  noteRuntimeAuthProfileStoreCredentialsChanged,
   setRuntimeAuthProfileStoreSnapshot,
 } from "../agents/auth-profiles/runtime-snapshots.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
@@ -361,73 +362,206 @@ describe("secrets runtime state", () => {
     ).toBeUndefined();
   });
 
-  it("rolls back candidate profile A while preserving post-activation profile B", () => {
-    const agentDir = "/tmp/openclaw-auth-post-activation-split";
-    const profile = (provider: string, key: string) => ({
-      type: "api_key" as const,
-      provider,
-      key,
-    });
-    const snapshot = (
-      aKey: string,
-      bKey: string,
-      port: number,
-    ): PreparedSecretsRuntimeSnapshot => ({
-      sourceConfig: {},
-      config: { gateway: { port } },
-      authStores: [
-        {
-          agentDir,
-          store: {
-            version: 1,
-            profiles: {
-              "provider-a:default": profile("provider-a", aKey),
-              "provider-b:default": profile("provider-b", bKey),
+  it.each([
+    {
+      label: "candidate change",
+      baselineAKey: "a-old",
+      candidateAKey: "a-candidate",
+      currentAKey: "a-candidate",
+      expectedAKey: "a-old",
+    },
+    {
+      label: "candidate deletion",
+      baselineAKey: "a-old",
+      candidateAKey: null,
+      currentAKey: null,
+      expectedAKey: "a-old",
+    },
+    {
+      label: "triple rotation",
+      baselineAKey: "a-old",
+      candidateAKey: "a-candidate",
+      currentAKey: "a-external",
+      expectedAKey: "a-external",
+    },
+    {
+      label: "external logout",
+      baselineAKey: "a-old",
+      candidateAKey: "a-candidate",
+      currentAKey: null,
+      expectedAKey: null,
+    },
+    {
+      label: "candidate-only overwrite",
+      baselineAKey: null,
+      candidateAKey: "a-candidate",
+      currentAKey: "a-external",
+      expectedAKey: "a-external",
+    },
+  ])(
+    "resolves per-profile ownership for $label while preserving post-activation profile B",
+    ({ label, baselineAKey, candidateAKey, currentAKey, expectedAKey }) => {
+      const agentDir = `/tmp/openclaw-auth-post-activation-${label}`;
+      const profile = (provider: string, key: string) => ({
+        type: "api_key" as const,
+        provider,
+        key,
+      });
+      const snapshot = (
+        aKey: string | null,
+        bKey: string,
+        port: number,
+      ): PreparedSecretsRuntimeSnapshot => ({
+        sourceConfig: {},
+        config: { gateway: { port } },
+        authStores: [
+          {
+            agentDir,
+            store: {
+              version: 1,
+              profiles: {
+                ...(aKey === null ? {} : { "provider-a:default": profile("provider-a", aKey) }),
+                "provider-b:default": profile("provider-b", bKey),
+              },
             },
           },
+        ],
+        authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
+        warnings: [],
+        webTools: {
+          search: { providerSource: "none", diagnostics: [] },
+          fetch: { providerSource: "none", diagnostics: [] },
+          diagnostics: [],
         },
-      ],
-      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-      warnings: [],
-      webTools: {
-        search: { providerSource: "none", diagnostics: [] },
-        fetch: { providerSource: "none", diagnostics: [] },
-        diagnostics: [],
-      },
-    });
-    activateSecretsRuntimeSnapshotState({
-      snapshot: snapshot("a-old", "b-old", 19_001),
-      refreshContext: null,
-      refreshHandler: null,
-    });
-    const previous = getActiveSecretsRuntimeSnapshot()!;
-    const candidate = snapshot("a-candidate", "b-old", 19_002);
-    expect(
-      activateSecretsRuntimeSnapshotStateIfCurrent({
-        snapshot: candidate,
-        expectedRevision: getActiveSecretsRuntimeSnapshotRevision(),
+      });
+      activateSecretsRuntimeSnapshotState({
+        snapshot: snapshot(baselineAKey, "b-old", 19_001),
         refreshContext: null,
         refreshHandler: null,
-      }),
-    ).toBe(true);
-    setRuntimeAuthProfileStoreSnapshot(
-      snapshot("a-candidate", "b-external", 19_002).authStores[0]!.store,
-      agentDir,
-    );
+      });
+      const previous = getActiveSecretsRuntimeSnapshot()!;
+      const candidate = snapshot(candidateAKey, "b-old", 19_002);
+      expect(
+        activateSecretsRuntimeSnapshotStateIfCurrent({
+          snapshot: candidate,
+          expectedRevision: getActiveSecretsRuntimeSnapshotRevision(),
+          refreshContext: null,
+          refreshHandler: null,
+        }),
+      ).toBe(true);
+      setRuntimeAuthProfileStoreSnapshot(
+        snapshot(currentAKey, "b-external", 19_002).authStores[0]!.store,
+        agentDir,
+      );
+      noteRuntimeAuthProfileStoreCredentialsChanged(agentDir, {
+        profileIds: ["provider-b:default"],
+      });
 
-    expect(
-      restoreSecretsRuntimeSnapshotStateIfCurrent({
-        snapshot: previous,
-        expectedRevision: getActiveSecretsRuntimeSnapshotRevision(),
-        ownedSnapshot: candidate,
+      expect(
+        restoreSecretsRuntimeSnapshotStateIfCurrent({
+          snapshot: previous,
+          expectedRevision: getActiveSecretsRuntimeSnapshotRevision(),
+          ownedSnapshot: candidate,
+          refreshContext: null,
+          refreshHandler: null,
+        }),
+      ).toBe(true);
+      const restored = getRuntimeAuthProfileStoreSnapshot(agentDir)?.profiles;
+      if (expectedAKey === null) {
+        expect(restored?.["provider-a:default"]).toBeUndefined();
+      } else {
+        expect(restored?.["provider-a:default"]).toMatchObject({ key: expectedAKey });
+      }
+      expect(restored?.["provider-b:default"]).toMatchObject({ key: "b-external" });
+    },
+  );
+
+  it.each([
+    { label: "candidate-owned omission", mutationOwner: "none", profileId: "" },
+    {
+      label: "persisted external removal",
+      mutationOwner: "custom",
+      profileId: "openai:default",
+    },
+    { label: "unrelated main-store write", mutationOwner: "main", profileId: "anthropic:main" },
+    { label: "related main-store write", mutationOwner: "main", profileId: "openai:default" },
+  ] as const)(
+    "handles whole-store $label after candidate omission",
+    ({ label, mutationOwner, profileId }) => {
+      const agentDir = `/tmp/openclaw-auth-store-removal-${label}`;
+      const snapshot = (includeStore: boolean, port: number): PreparedSecretsRuntimeSnapshot => ({
+        sourceConfig: {},
+        config: { gateway: { port } },
+        authStores: includeStore
+          ? [
+              {
+                agentDir,
+                store: {
+                  version: 1,
+                  profiles: {
+                    "openai:default": {
+                      type: "api_key",
+                      provider: "openai",
+                      key: "sk-old",
+                    },
+                  },
+                },
+              },
+            ]
+          : [],
+        authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
+        warnings: [],
+        webTools: {
+          search: { providerSource: "none", diagnostics: [] },
+          fetch: { providerSource: "none", diagnostics: [] },
+          diagnostics: [],
+        },
+      });
+      activateSecretsRuntimeSnapshotState({
+        snapshot: snapshot(true, 19_001),
         refreshContext: null,
         refreshHandler: null,
-      }),
-    ).toBe(true);
-    const restored = getRuntimeAuthProfileStoreSnapshot(agentDir)?.profiles;
-    expect(restored?.["provider-a:default"]).toMatchObject({ key: "a-old" });
-    expect(restored?.["provider-b:default"]).toMatchObject({ key: "b-external" });
-  });
+      });
+      const previous = getActiveSecretsRuntimeSnapshot()!;
+      const candidate = snapshot(false, 19_002);
+      expect(
+        activateSecretsRuntimeSnapshotStateIfCurrent({
+          snapshot: candidate,
+          expectedRevision: getActiveSecretsRuntimeSnapshotRevision(),
+          refreshContext: null,
+          refreshHandler: null,
+        }),
+      ).toBe(true);
+      if (mutationOwner !== "none") {
+        noteRuntimeAuthProfileStoreCredentialsChanged(
+          mutationOwner === "custom" ? agentDir : undefined,
+          {
+            profileIds: [profileId],
+          },
+        );
+      }
+
+      expect(
+        restoreSecretsRuntimeSnapshotStateIfCurrent({
+          snapshot: previous,
+          expectedRevision: getActiveSecretsRuntimeSnapshotRevision(),
+          ownedSnapshot: candidate,
+          refreshContext: null,
+          refreshHandler: null,
+        }),
+      ).toBe(true);
+      if (
+        mutationOwner === "custom" ||
+        (mutationOwner === "main" && profileId === "openai:default")
+      ) {
+        expect(getRuntimeAuthProfileStoreSnapshot(agentDir)).toBeUndefined();
+      } else {
+        expect(
+          getRuntimeAuthProfileStoreSnapshot(agentDir)?.profiles["openai:default"],
+        ).toMatchObject({ key: "sk-old" });
+      }
+    },
+  );
 
   it("does not resurrect an auth store cleared after candidate activation", () => {
     const agentDir = "/tmp/openclaw-auth-post-activation-clear";
