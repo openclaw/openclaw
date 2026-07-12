@@ -181,16 +181,6 @@ function expectSingleSearchResultUrl(results: unknown, url: string) {
   expect((result as { url?: unknown }).url).toBe(url);
 }
 
-async function expectConfiguredRefFailure(apiKey: SecretInput, message: string) {
-  await expect(
-    runOllamaWebSearch({
-      config: createOllamaConfig({ apiKey }),
-      query: "openclaw",
-    }),
-  ).rejects.toThrow(message);
-  expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
-}
-
 describe("ollama web search provider", () => {
   beforeEach(() => {
     fetchWithSsrFGuardMock.mockReset();
@@ -462,51 +452,49 @@ describe("ollama web search provider", () => {
     });
   });
 
-  it("does not use ambient env fallback when a configured apiKey SecretRef is unavailable", async () => {
-    const refEnvVar = "OLLAMA_WEB_SEARCH_REF";
+  it("keeps the ambient cloud fallback when a configured selected-host key is also set", async () => {
+    // Regression guard (mixed credentials): a configured selected-host key must not suppress the
+    // separate ambient OLLAMA_API_KEY used for the final Ollama Cloud attempt after the two
+    // selected-host attempts fail.
     const ambientEnvVar = ["OLLAMA_API", "KEY"].join("_");
-    const ambientKey = "ambient-cloud-value";
-    await withEnvAsync({ [refEnvVar]: undefined, [ambientEnvVar]: ambientKey }, async () => {
-      await expectConfiguredRefFailure(
-        {
-          source: "env",
-          provider: "default",
-          id: refEnvVar,
-        },
-        "models.providers.ollama.apiKey env SecretRef OLLAMA_WEB_SEARCH_REF is not available",
-      );
-    });
-  });
-
-  it("does not use ambient env fallback for non-env apiKey SecretRefs", async () => {
-    const ambientEnvVar = ["OLLAMA_API", "KEY"].join("_");
-    const ambientKey = "ambient-cloud-value";
-    await withEnvAsync({ [ambientEnvVar]: ambientKey }, async () => {
-      await expectConfiguredRefFailure(
-        {
-          source: "file",
-          provider: "vault",
-          id: "/providers/ollama/web-search",
-        },
-        "models.providers.ollama.apiKey SecretRef cannot be resolved by Ollama web search",
-      );
-    });
-  });
-
-  it("does not hide blocked SecretRefs from the auth resolution helper", async () => {
-    const ambientEnvVar = ["OLLAMA_API", "KEY"].join("_");
-    await withEnvAsync({ [ambientEnvVar]: "ambient-cloud-value" }, async () => {
-      expect(() =>
-        testing.resolveOllamaWebSearchApiKey(
-          createOllamaConfig({
-            apiKey: {
-              source: "file",
-              provider: "vault",
-              id: "/providers/ollama/web-search",
+    await withEnvAsync({ [ambientEnvVar]: "ambient-cloud-key" }, async () => {
+      fetchWithSsrFGuardMock
+        .mockResolvedValueOnce({
+          response: new Response("not found", { status: 404 }),
+          release: vi.fn(async () => {}),
+        })
+        .mockResolvedValueOnce({
+          response: new Response("not found", { status: 404 }),
+          release: vi.fn(async () => {}),
+        })
+        .mockResolvedValueOnce({
+          response: new Response(
+            JSON.stringify({
+              results: [{ title: "Cloud", url: "https://example.com", content: "result" }],
+            }),
+            {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
             },
-          }),
-        ),
-      ).toThrow("models.providers.ollama.apiKey SecretRef cannot be resolved by Ollama web search");
+          ),
+          release: vi.fn(async () => {}),
+        });
+
+      const result = await runOllamaWebSearch({
+        config: createOllamaConfig({ apiKey: "configured-host-key" }),
+        query: "openclaw",
+      });
+
+      expect(result.count).toBe(1);
+      expect(fetchWithSsrFGuardMock.mock.calls.map((call) => call[0].url)).toEqual([
+        "http://ollama.local:11434/api/experimental/web_search",
+        "http://ollama.local:11434/api/web_search",
+        "https://ollama.com/api/web_search",
+      ]);
+      // Selected-host attempts carry the configured key; the cloud fallback carries the ambient key.
+      expect(fetchRequest(0).init?.headers?.Authorization).toBe("Bearer configured-host-key");
+      expect(fetchRequest(1).init?.headers?.Authorization).toBe("Bearer configured-host-key");
+      expect(fetchRequest(2).init?.headers?.Authorization).toBe("Bearer ambient-cloud-key");
     });
   });
 

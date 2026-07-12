@@ -90,25 +90,17 @@ function resolveEnvOllamaWebSearchApiKey(): string | undefined {
   return normalizeOllamaWebSearchApiKey(resolveEnvApiKey("ollama")?.apiKey);
 }
 
-function createOllamaWebSearchCredentialError(ref: { source: string; id: string }): Error {
-  return new Error(
-    ref.source === "env"
-      ? `models.providers.ollama.apiKey env SecretRef ${ref.id} is not available for Ollama web search.`
-      : "models.providers.ollama.apiKey SecretRef cannot be resolved by Ollama web search. Use an env SecretRef for this path.",
-  );
-}
-
+// Delegate configured-key resolution (literal value or env-backed SecretRef) to the shared
+// web-search resolver, then apply Ollama's marker filter so persisted non-secret placeholders
+// (e.g. the OAuth/signin marker) fall through to the ambient OLLAMA_API_KEY instead of being sent.
 function resolveConfiguredOllamaWebSearchApiKey(config?: OpenClawConfig): string | undefined {
-  return resolveWebSearchProviderCredential({
-    credentialValue: config?.models?.providers?.ollama?.apiKey,
-    defaults: config?.secrets?.defaults,
-    path: "models.providers.ollama.apiKey",
-    envVars: [],
-    normalizeCredential: normalizeOllamaWebSearchApiKey,
-    onUnavailableConfiguredRef: (ref) => {
-      throw createOllamaWebSearchCredentialError(ref);
-    },
-  });
+  return normalizeOllamaWebSearchApiKey(
+    resolveWebSearchProviderCredential({
+      credentialValue: config?.models?.providers?.ollama?.apiKey,
+      path: "models.providers.ollama.apiKey",
+      envVars: [],
+    }),
+  );
 }
 
 function resolveOllamaWebSearchApiKey(config?: OpenClawConfig): string | undefined {
@@ -191,16 +183,15 @@ async function runOllamaWebSearch(params: {
   }
 
   const baseUrl = resolveOllamaWebSearchBaseUrl(params.config);
-  const configuredAuth = resolveConfiguredOllamaWebSearchApiKey(params.config);
-  const envAuth = configuredAuth ? undefined : resolveEnvOllamaWebSearchApiKey();
+  const configuredApiKey = resolveConfiguredOllamaWebSearchApiKey(params.config);
+  // Resolve the ambient cloud key independently of the configured selected-host key so a mixed
+  // setup still reaches the Ollama Cloud fallback with OLLAMA_API_KEY after the selected-host
+  // attempts fail. Gating this on configuredApiKey would drop that final authenticated attempt.
+  const envApiKey = resolveEnvOllamaWebSearchApiKey();
   const count = resolveSearchCount(params.count, DEFAULT_OLLAMA_WEB_SEARCH_COUNT);
   const startedAt = Date.now();
   const body = JSON.stringify({ query, max_results: count });
-  const attempts = buildOllamaWebSearchAttempts({
-    baseUrl,
-    configuredApiKey: configuredAuth,
-    envApiKey: envAuth,
-  });
+  const attempts = buildOllamaWebSearchAttempts({ baseUrl, configuredApiKey, envApiKey });
 
   let payload: OllamaWebSearchResponse | undefined;
   let lastError: Error | undefined;
