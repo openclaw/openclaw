@@ -328,6 +328,25 @@ Camera commands (foreground only; permission-gated): `camera.snap` (jpg), `camer
 
 The Home overview includes a **Files** card that browses the active agent's workspace through the read-only `agents.workspace.list` / `agents.workspace.get` gateway RPCs: directory drill-down, text and image previews, and export through the Android share sheet. There are no write operations, and previews are size-capped by the gateway.
 
+## Review command approvals
+
+An operator connection with `operator.admin`, or a paired
+`operator.approvals` connection explicitly targeted by the Gateway, can review
+pending exec requests under **Settings -> Approvals**. The app loads the
+Gateway's sanitized approval record before enabling its buttons, shows any
+security warning and the exact decisions offered by that request, and submits
+the approval ID and owner kind back to the Gateway.
+
+Approval state is shared with the Control UI and supported chat surfaces. The
+first committed answer wins; Android displays that canonical result even when
+another surface answered first. If a resolve response is lost or the Gateway
+disconnects, the app keeps the action locked and reads the approval again
+before offering another decision.
+
+Gateways that predate the unified approval methods fall back to the shipped
+exec-specific methods. Pending review still works, but retained terminal state
+and the richer cross-surface result require an updated Gateway.
+
 ## Assistant entrypoints
 
 Android supports launching OpenClaw from the system assistant trigger (Google Assistant). Holding the home button (or another `ACTION_ASSIST` trigger) opens the app; saying "Hey Google, ask OpenClaw `<prompt>`" matches the app's declared App Actions query pattern and hands the prompt into the chat composer without auto-sending it.
