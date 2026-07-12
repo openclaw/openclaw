@@ -957,7 +957,7 @@ export async function syncAndroidAppI18n(options: { check?: boolean } = {}) {
         `android-app-i18n: contradictions=${catalog.contradictions.length}`,
         ...visible.map(
           (finding) =>
-            `${finding.locale}: ${JSON.stringify(finding.source)} -> ${JSON.stringify(finding.selected)} (${finding.translations.map(JSON.stringify).join(", ")})`,
+            `${finding.locale}: ${JSON.stringify(finding.source)} -> ${JSON.stringify(finding.selected)} (${finding.translations.map((translation) => JSON.stringify(translation)).join(", ")})`,
         ),
         ...(remaining > 0 ? [`android-app-i18n: ${remaining} more contradictions omitted`] : []),
         "",
