@@ -119,6 +119,9 @@ Skills own workflows; root owns hard policy and routing.
 - Tests in a Codex worktree or linked/sparse checkout: avoid direct local `pnpm test*`; use `node scripts/run-vitest.mjs <path-or-filter>` for tiny explicit-file proof, or Crabbox/Testbox for anything broader.
 - Checks in a normal source checkout: `pnpm check:changed` delegates to Crabbox/Testbox; lanes: `pnpm changed:lanes --json`; staged: `pnpm check:changed --staged`; full: `pnpm check`.
 - Checks in a Codex worktree or linked/sparse checkout: avoid direct local `pnpm check*`; use `node scripts/crabbox-wrapper.mjs run ... -- env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 corepack pnpm check:changed` so pnpm runs inside Testbox, not locally.
+- Direct Testbox runs: pass `--provider blacksmith-testbox`; `OPENCLAW_TESTBOX=1` only selects `scripts/pr` prepare behavior.
+- Release-branch Testbox warmup: wrapper subcommand is `warmup`; pass a remote branch/tag to `--blacksmith-ref`; raw SHAs are rejected, and default `main` can create mixed-base dependency state.
+- Crabbox wrapper stop: `node scripts/crabbox-wrapper.mjs stop --provider <provider> --id <lease>`; no positional id or `--timing-json`.
 - Extension tests: `pnpm test:extensions`, `pnpm test extensions`, `pnpm test extensions/<id>`.
 - Typecheck: `tsgo` lanes only (`pnpm tsgo*`, `pnpm check:test-types`); never add `tsc --noEmit`, `typecheck`, `check:types`.
 - Formatting: `oxfmt`, not Prettier. Use repo wrappers (`pnpm format:*`, `pnpm lint:*`, `scripts/run-oxlint.mjs`).
@@ -131,6 +134,7 @@ Skills own workflows; root owns hard policy and routing.
 - Visual proof: use Crabbox, set up like a user, then screenshot-verify. No harness/bypass/shortcut unless explicitly asked.
 - Small/narrow tests, lints, format checks, and type probes are fine locally only in a healthy normal checkout.
 - In Codex worktrees, direct local `pnpm test*`, `pnpm check*`, `pnpm crabbox:run`, and `scripts/committer` can trigger pnpm dependency reconciliation or install prompts. Prefer `node` wrappers locally and Crabbox/Testbox for pnpm-gated proof.
+- Codex-worktree commit after equivalent remote hook proof: `git commit --no-verify --no-gpg-sign`; do not invoke `scripts/committer`.
 - Full suites, broad changed gates, Docker/package/E2E/live/cross-OS proof, or anything that bogs down the Mac: Crabbox/Testbox.
 - One/few files local. If a local command fans out, stop and move broad proof to Crabbox/Testbox.
 - Before handoff/push: prove touched surface. Before landing to `main`: issue proof plus appropriate full/broad proof unless scope is clearly narrow.
