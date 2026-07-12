@@ -3,6 +3,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { expectDefined } from "@openclaw/normalization-core";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { formatErrorMessage } from "../infra/errors.js";
 import { withFileLock } from "../infra/file-lock.js";
@@ -509,6 +510,7 @@ async function writeRootBoundJsonFile(params: {
   expectedRaw: string | null;
   rootSnapshot: ConfigFileSnapshot;
   assertConfigPathForWrite: () => void;
+  preCommitRuntimePreflight?: () => Promise<unknown>;
 }): Promise<void> {
   params.assertConfigPathForWrite();
   const targetBeforeBackup = await resolveExpectedRootBoundIncludeFile({
@@ -538,8 +540,11 @@ async function writeRootBoundJsonFile(params: {
       currentHash,
     });
   }
-  params.assertConfigPathForWrite();
   const content = formatJsonFileValue(params.value);
+  // The include fast path bypasses writeConfigFile(); keep its authority guard
+  // on the final conflict-checked target with no later await before the write.
+  await params.preCommitRuntimePreflight?.();
+  params.assertConfigPathForWrite();
   await targetAtCommit.root.write(targetAtCommit.relativePath, content, {
     mkdir: true,
     mode: 0o600,
@@ -573,7 +578,7 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
     return null;
   }
 
-  const key = changedKeys[0];
+  const key = expectDefined(changedKeys[0], "changed keys entry at 0");
   const includePath = getSingleTopLevelIncludeTarget({ snapshot: params.snapshot, key });
   if (!includePath || !isRecord(nextConfig) || !(key in nextConfig)) {
     return null;
@@ -696,6 +701,7 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
   });
   const committedIncludeRaw = formatJsonFileValue(includedValueToWrite);
   const committedIncludeHash = hashConfigIncludeRaw(committedIncludeRaw);
+  const callerPreCommit = params.writeOptions?.preCommitRuntimePreflight;
   assertConfigPathForWrite();
   await assertRootConfigStillMatchesSnapshot(params.snapshot);
   const includeRawAtCommit = await readRootBoundFileRawIfExists(includeTarget);
@@ -713,6 +719,9 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
     expectedRaw: includeRawAtCommit,
     rootSnapshot: params.snapshot,
     assertConfigPathForWrite,
+    preCommitRuntimePreflight: callerPreCommit
+      ? () => callerPreCommit(runtimeConfigToWrite)
+      : undefined,
   });
   const envBeforePostWriteRead = { ...writeEnv };
   let envAfterPostWriteRead = envBeforePostWriteRead;
@@ -892,7 +901,6 @@ async function replaceConfigFileUnlocked(params: {
       : undefined;
     if (params.io) {
       fallbackWriteOptions.preCommitRuntimePreflight = async (sourceConfig) => {
-        await ioPreCommitRuntimePreflight?.(sourceConfig);
         await preflightRuntimeSnapshotWrite({
           nextSourceConfig: sourceConfig,
           refreshOptions: fallbackWriteOptions.runtimeRefresh,
@@ -903,6 +911,7 @@ async function replaceConfigFileUnlocked(params: {
               { cause },
             ),
         });
+        await ioPreCommitRuntimePreflight?.(sourceConfig);
       };
     }
     writeResult = resolveConfigWriteResult(

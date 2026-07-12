@@ -21,6 +21,7 @@ import {
   createUserTurnTranscriptRecorder,
   type PersistedUserTurnMessage,
 } from "../../sessions/user-turn-transcript.js";
+import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -484,7 +485,7 @@ function createFollowupRun(): FollowupRun {
 function createTestUserTurnRecorder(message: PersistedUserTurnMessage) {
   return createUserTurnTranscriptRecorder({
     message,
-    target: { transcriptPath: "/tmp/session.jsonl" },
+    target: createTestUserTurnTranscriptTarget(),
     updateMode: "none",
   });
 }
@@ -519,7 +520,10 @@ function createMockReplyOperation(): {
       hasOwnedSessionId: vi.fn((sessionId: string) => sessionId === "session"),
       recordActivity: vi.fn(),
       setPhase: vi.fn(),
+      markWaitingForDeferredMaintenance: vi.fn(),
+      markDeferredMaintenanceWaitEnded: vi.fn(),
       updateSessionId: updateSessionIdMock,
+      updateSessionKey: vi.fn(),
       attachBackend: vi.fn(),
       detachBackend: vi.fn(),
       freezeAbort: freezeAbortMock,
@@ -1398,6 +1402,8 @@ describe("runAgentTurnWithFallback", () => {
   });
 
   afterEach(() => {
+    // Fake-timer tests in this describe must not leak into --isolate=false peers.
+    vi.useRealTimers();
     vi.clearAllMocks();
   });
 
@@ -7853,6 +7859,77 @@ describe("runAgentTurnWithFallback", () => {
     expect(state.updateSessionStoreMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      reason: "server_error" as const,
+      message: "upstream provider failed briefly",
+    },
+    {
+      reason: "timeout" as const,
+      message: "provider request timed out without status token",
+    },
+  ])(
+    "retries once for structured FailoverError $reason without leading HTTP status text",
+    async ({ reason, message }) => {
+      vi.useFakeTimers();
+      state.runEmbeddedAgentMock
+        .mockRejectedValueOnce(
+          new FailoverError(message, {
+            reason,
+            provider: "openai",
+            model: "gpt-5.5",
+          }),
+        )
+        .mockResolvedValueOnce({
+          payloads: [{ text: "recovered after transient failover" }],
+          meta: {},
+        });
+
+      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+      const resultPromise = runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+      await vi.advanceTimersByTimeAsync(2_500);
+      const result = await resultPromise;
+
+      expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
+      expect(result.kind).toBe("success");
+      if (result.kind === "success") {
+        expect(result.runResult.payloads?.[0]?.text).toBe("recovered after transient failover");
+      }
+    },
+  );
+
+  it("uses structured FailoverError context_overflow over non-overflow message text", async () => {
+    state.isLikelyContextOverflowErrorMock.mockReturnValue(false);
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new FailoverError("provider rejected the request payload", {
+        reason: "context_overflow",
+        provider: "anthropic",
+        model: "claude",
+      }),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        sessionCtx: {
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "direct",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+      }),
+    );
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(
+        "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model.",
+      );
+      expect(result.payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
+      expect(result.payload.text).not.toContain("provider rejected the request payload");
+    }
+  });
+
   it("uses the throwing fallback candidate model for compaction failure hints", async () => {
     state.isCompactionFailureErrorMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
@@ -8150,7 +8227,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "⚠️ Missing API key for OpenAI on the gateway. Use `openai/gpt-5.5` with the OpenAI OAuth profile, or set `OPENAI_API_KEY` for direct OpenAI API-key runs.",
+        "⚠️ Missing API key for OpenAI on the gateway. Use `openai/gpt-5.6-sol` with the OpenAI OAuth profile, or set `OPENAI_API_KEY` for direct OpenAI API-key runs.",
       );
     }
   });

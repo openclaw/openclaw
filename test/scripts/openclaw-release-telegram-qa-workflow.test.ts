@@ -207,6 +207,44 @@ function runAdvisoryStatus(overrides: Record<string, string> = {}) {
 }
 
 describe("release Telegram QA workflow", () => {
+  it("attributes GitHub web-flow and unsigned release merges to their exact maintainer merger", () => {
+    const source = readFileSync(WORKFLOW_PATH, "utf8");
+
+    expect(source.match(/associatedPullRequests\(first:10\)/gu)).toHaveLength(2);
+    expect(source.match(/if \.signature == null then "missing"/gu)).toHaveLength(2);
+    expect(source.match(/\$signature_status" == "invalid"/gu)).toHaveLength(2);
+    expect(
+      source.match(/\$signature_status" == "missing" \|\| "\$signer" == "web-flow"/gu),
+    ).toHaveLength(2);
+    expect(source.match(/\.mergeCommit\.oid == \$sha/gu)).toHaveLength(2);
+    expect(source.match(/\.baseRefName == \$base/gu)).toHaveLength(2);
+    expect(source.match(/\.baseRepository\.nameWithOwner == \$repo/gu)).toHaveLength(2);
+    expect(source.match(/\.mergedBy\.login\] \| unique \| select\(length == 1\)/gu)).toHaveLength(
+      2,
+    );
+    expect(source.match(/collaborators\/\$\{permission_actor\}\/permission/gu)).toHaveLength(2);
+    expect((source.match(/extended-stable\/\[0-9\]/gu) ?? []).length).toBeGreaterThanOrEqual(2);
+    expect(source).not.toContain("collaborators/${signer}/permission");
+  });
+
+  it("resolves only candidate-specific provenance refs without fetching histories", () => {
+    const source = readFileSync(WORKFLOW_PATH, "utf8");
+
+    expect(source.match(/branches-where-head/gu)).toHaveLength(2);
+    expect(source.match(/gh api --paginate/gu)).toHaveLength(2);
+    expect(
+      source.match(/git(?: -C \.candidate)? ls-remote --exit-code --refs origin/gu),
+    ).toHaveLength(2);
+    expect(
+      source.match(/git(?: -C \.candidate)? ls-remote origin 'refs\/tags\/v\*'/gu),
+    ).toHaveLength(2);
+    expect(source).not.toContain("'+refs/heads/release/*:refs/remotes/origin/release/*'");
+    expect(source).not.toContain(
+      "'+refs/heads/extended-stable/*:refs/remotes/origin/extended-stable/*'",
+    );
+    expect(source).not.toContain("'+refs/tags/v*:refs/tags/v*'");
+  });
+
   it("dispatches one accepted trusted-main child from release checks", () => {
     const releaseSource = readFileSync(RELEASE_CHECKS_PATH, "utf8");
     const reusableSource = readFileSync(WORKFLOW_PATH, "utf8");
@@ -522,12 +560,41 @@ describe("release Telegram QA workflow", () => {
     expect(source).toContain("Telegram SUT launcher failed: stage=%s line=%s status=%s");
     expect(source).toContain("launcher_stage=root-run-setup");
     expect(source).toContain("launcher_stage=enter-mount-namespace");
-    expect(source).toContain("launcher_stage=mask-host-paths");
-    expect(source).toContain("launcher_stage=mount-proc");
-    expect(source).toContain("launcher_stage=write-identity");
+    expect(source).toContain("set_launcher_stage mask-host-paths");
+    expect(source).toContain('launcher_stage_file="${RUNTIME_ROOT}/launcher-stage-${BASHPID}"');
+    expect(source).toContain('set_launcher_stage "mask-host-path:${masked_path}"');
+    expect(source).toContain("set_launcher_stage mount-proc");
+    expect(source).toContain("set_launcher_stage write-identity");
+    expect(source).toContain("set_launcher_stage launch-runtime");
+    expect(source).toMatch(/set_launcher_stage launch-runtime\n\s+unset launcher_stage_file/u);
+    expect(source).toContain("Telegram SUT runtime preflight failed: stage=%s line=%s status=%s");
+    expect(source).toContain("runtime_stage=verify-runtime-identity");
+    expect(source).toContain("runtime_stage=verify-runtime-privileges");
+    expect(source).toContain("runtime_stage=verify-parent-proc-hidden");
+    expect(source).toContain("runtime_stage=verify-proc-visibility");
+    expect(source).toContain("for _ in {1..100}; do");
+    expect(source).toMatch(
+      /if tr "\\0" "\\n" <"\/proc\/\$\{control_pid\}\/environ" 2>\/dev\/null \|\n\s+grep -Fxq "OPENCLAW_QA_PROC_CONTROL=visible"; then/u,
+    );
+    expect(source).toContain("proc_marker_visible=true\n                        break");
+    expect(source).toContain("sleep 0.05");
+    expect(source).toContain('[[ "$proc_marker_visible" == "true" ]]');
+    expect(source).toMatch(
+      /kill "\$control_pid" >\/dev\/null 2>&1 \|\| true\n\s+wait "\$control_pid" \|\| true/u,
+    );
+    expect(source).toContain("runtime_stage=verify-secret-env-hidden");
+    expect(source).toContain("runtime_stage=verify-runner-fds-hidden");
+    expect(source).toContain("runtime_stage=verify-runtime-files");
+    expect(source).toContain("runtime_stage=verify-host-paths-hidden");
+    expect(source).toContain("runtime_stage=sanitize-runtime-env");
+    expect(source).toContain("runtime_stage=verify-runtime-env");
+    expect(source).toContain("runtime_stage=write-sandbox-proof");
+    expect(source).toContain("runtime_stage=exec-runtime");
     expect(source).toContain('TMPDIR="${SUT_RUNTIME_ROOT}/tmp"');
     expect(source).toContain('"$RUNTIME_ROOT"/tmp/openclaw-qa-suite-*');
-    expect(source).toMatch(/launcher_stage=enter-mount-namespace\n\s+\/usr\/bin\/unshare/u);
+    expect(source.indexOf("launcher_stage=enter-mount-namespace")).toBeLessThan(
+      source.indexOf("/usr/bin/unshare"),
+    );
     expect(source).not.toContain("exec /usr/bin/unshare");
     expect(source).not.toContain("set -x");
     expect(source).toContain('source_node_bin="$(realpath -e "$(command -v node)")"');
@@ -554,6 +621,23 @@ describe("release Telegram QA workflow", () => {
     expect(source).toContain('export HOME="${temp_root}/home"');
     expect(source).toContain('export XDG_CONFIG_HOME="${temp_root}/xdg-config"');
     expect(source).toContain('if [[ "${1:-}" == "--root-terminate-uid" ]]');
+  });
+
+  it("keeps the generated SUT launcher valid bash", () => {
+    const createSutStep = workflowStep(
+      workflowJob("run_telegram"),
+      "Create isolated Telegram SUT identity and launcher",
+    );
+    const launcherSource = createSutStep.run?.match(
+      /<<'LAUNCHER'\n([\s\S]*?)\nLAUNCHER(?:\n|$)/u,
+    )?.[1];
+    expect(launcherSource).toBeTruthy();
+
+    const result = spawnSync("bash", ["-n"], {
+      encoding: "utf8",
+      input: launcherSource,
+    });
+    expect(result.status, result.stderr).toBe(0);
   });
 
   it("arms the boundary preload only in the gateway main thread", () => {
@@ -608,6 +692,46 @@ describe("release Telegram QA workflow", () => {
     expect(result.status).toBe(23);
     expect(result.stderr).toMatch(
       /Telegram SUT launcher failed: stage=enter-mount-namespace line=[0-9]+ status=23/u,
+    );
+  });
+
+  it("reports the persisted inner launcher stage when namespace supervision fails", () => {
+    const source = readFileSync(WORKFLOW_PATH, "utf8");
+    const trapLine = source.match(/^\s+(trap 'exit_status=.*' ERR)$/mu)?.[1];
+    expect(trapLine).toBeTruthy();
+
+    const workdir = tempDirs.make("openclaw-telegram-launcher-stage-");
+    const stagePath = join(workdir, "stage");
+    writeFileSync(stagePath, "mount-proc\n");
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        `set -Eeuo pipefail\nlauncher_stage=enter-mount-namespace\nlauncher_stage_file=${JSON.stringify(stagePath)}\n${trapLine}\nbash -c 'exit 23'`,
+      ],
+      { encoding: "utf8" },
+    );
+
+    expect(result.status).toBe(23);
+    expect(result.stderr).toMatch(
+      /Telegram SUT launcher failed: stage=mount-proc line=[0-9]+ status=23/u,
+    );
+  });
+
+  it("reports the exact failing runtime preflight line", () => {
+    const source = readFileSync(WORKFLOW_PATH, "utf8");
+    const diagnosticSource = source.match(
+      /^\s+(fail_runtime_stage\(\) \{[\s\S]*?^\s+\}\n\s+trap "fail_runtime_stage \\?\$\? \\?\$LINENO" ERR)$/mu,
+    )?.[1];
+    expect(diagnosticSource).toBeTruthy();
+
+    const script = `set -Eeuo pipefail\nruntime_stage=runtime-test\n${diagnosticSource}\nfalse`;
+    const failureLine = script.split("\n").findIndex((line) => line === "false") + 1;
+    const result = spawnSync("bash", ["-c", script], { encoding: "utf8" });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      `Telegram SUT runtime preflight failed: stage=runtime-test line=${failureLine} status=1`,
     );
   });
 });

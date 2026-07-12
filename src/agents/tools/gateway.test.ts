@@ -497,7 +497,7 @@ describe("gateway tool defaults", () => {
           sessionId: "session-1",
         });
         expect(token).toEqual(expect.any(String));
-        expect(verifyAgentRuntimeIdentityToken(token)).toMatchObject({
+        await expect(verifyAgentRuntimeIdentityToken(token)).resolves.toMatchObject({
           messageActionContext: {
             sessionId: "session-1",
             requesterAccountId: "default",
@@ -661,6 +661,173 @@ describe("gateway tool defaults", () => {
     expect(call.scopes).toEqual(["operator.approvals"]);
     expect(call.approvalRuntimeToken).toEqual(expect.any(String));
     expect(call.deviceIdentity).toEqual(mocks.deviceIdentity);
+  });
+
+  it("attaches trusted turn-source metadata to node invokes", async () => {
+    mocks.callGateway.mockResolvedValueOnce({ ok: true });
+
+    await withGatewayToolCallerIdentity(
+      {
+        agentId: "ops",
+        sessionKey: "agent:ops:telegram:direct:alice",
+        turnSourceChannel: "telegram",
+        turnSourceTo: "chat:123",
+        turnSourceAccountId: "work",
+        turnSourceThreadId: 42,
+      },
+      async () => {
+        await callGatewayTool(
+          "node.invoke",
+          {},
+          {
+            nodeId: "node-1",
+            command: "file.fetch",
+            params: { path: "/tmp/a" },
+            idempotencyKey: "invoke-1",
+            turnSourceChannel: "attacker-channel",
+            turnSourceTo: "attacker-target",
+            turnSourceAccountId: "attacker-account",
+            turnSourceThreadId: "attacker-thread",
+          },
+        );
+      },
+    );
+
+    const call = capturedGatewayCall();
+    expect(call.params).toEqual({
+      nodeId: "node-1",
+      command: "file.fetch",
+      params: { path: "/tmp/a" },
+      idempotencyKey: "invoke-1",
+      turnSourceChannel: "telegram",
+      turnSourceTo: "chat:123",
+      turnSourceAccountId: "work",
+      turnSourceThreadId: 42,
+    });
+    await expect(
+      verifyAgentRuntimeIdentityToken(call.agentRuntimeIdentityToken ?? ""),
+    ).resolves.toMatchObject({
+      agentId: "ops",
+      sessionKey: "agent:ops:telegram:direct:alice",
+    });
+  });
+
+  it("retries node invokes without optional identity against an older gateway", async () => {
+    mocks.callGateway
+      .mockRejectedValueOnce(
+        new Error(
+          "invalid connect params: at /auth: unexpected property 'agentRuntimeIdentityToken'",
+        ),
+      )
+      .mockResolvedValueOnce({ ok: true });
+
+    await withGatewayToolCallerIdentity(
+      {
+        agentId: "ops",
+        sessionKey: "agent:ops:main",
+        turnSourceChannel: "telegram",
+        turnSourceTo: "chat:123",
+      },
+      async () => {
+        await callGatewayTool(
+          "node.invoke",
+          {},
+          {
+            nodeId: "node-1",
+            command: "device.info",
+            idempotencyKey: "invoke-legacy",
+          },
+        );
+      },
+    );
+
+    expect(mocks.callGateway).toHaveBeenCalledTimes(2);
+    expect(mocks.callGateway.mock.calls[0]?.[0]).toHaveProperty(
+      "agentRuntimeIdentityToken",
+      expect.any(String),
+    );
+    expect(mocks.callGateway.mock.calls[1]?.[0].agentRuntimeIdentityToken).toBeUndefined();
+    expect(mocks.callGateway.mock.calls[1]?.[0].params).toEqual({
+      nodeId: "node-1",
+      command: "device.info",
+      idempotencyKey: "invoke-legacy",
+    });
+  });
+
+  it("strips turn-source fields for gateways with the preceding node schema", async () => {
+    const schemaError = Object.assign(
+      new Error("invalid node.invoke params: at root: unexpected property 'turnSourceChannel'"),
+      {
+        name: "GatewayClientRequestError",
+        gatewayCode: "INVALID_REQUEST",
+      },
+    );
+    mocks.callGateway.mockRejectedValueOnce(schemaError).mockResolvedValueOnce({ ok: true });
+
+    await withGatewayToolCallerIdentity(
+      {
+        agentId: "ops",
+        sessionKey: "agent:ops:main",
+        turnSourceChannel: "telegram",
+        turnSourceTo: "chat:123",
+      },
+      async () => {
+        await callGatewayTool(
+          "node.invoke",
+          {},
+          {
+            nodeId: "node-1",
+            command: "device.info",
+            idempotencyKey: "invoke-preceding-schema",
+          },
+        );
+      },
+    );
+
+    expect(mocks.callGateway).toHaveBeenCalledTimes(2);
+    expect(mocks.callGateway.mock.calls[1]?.[0].params).toEqual({
+      nodeId: "node-1",
+      command: "device.info",
+      idempotencyKey: "invoke-preceding-schema",
+    });
+    expect(mocks.callGateway.mock.calls[1]?.[0]).toHaveProperty(
+      "agentRuntimeIdentityToken",
+      expect.any(String),
+    );
+  });
+
+  it("does not retry a dispatched node invoke whose error resembles schema rejection", async () => {
+    const dispatchedError = Object.assign(
+      new Error("invalid node.invoke params: at root: unexpected property 'turnSourceChannel'"),
+      {
+        name: "GatewayClientRequestError",
+        gatewayCode: "INVALID_REQUEST",
+        details: { nodeCommandDispatched: true },
+      },
+    );
+    mocks.callGateway.mockRejectedValueOnce(dispatchedError);
+
+    await expect(
+      withGatewayToolCallerIdentity(
+        {
+          agentId: "ops",
+          sessionKey: "agent:ops:main",
+          turnSourceChannel: "telegram",
+          turnSourceTo: "chat:123",
+        },
+        async () =>
+          await callGatewayTool(
+            "node.invoke",
+            {},
+            {
+              nodeId: "node-1",
+              command: "device.info",
+              idempotencyKey: "invoke-dispatched",
+            },
+          ),
+      ),
+    ).rejects.toBe(dispatchedError);
+    expect(mocks.callGateway).toHaveBeenCalledTimes(1);
   });
 
   it("marks local plugin approval request calls with runtime and device identity", async () => {

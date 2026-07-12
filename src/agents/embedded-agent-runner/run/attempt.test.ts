@@ -3359,12 +3359,28 @@ describe("buildAfterTurnRuntimeContext", () => {
       expect(activeProcessSessions?.some((session) => session.sessionId === "sess-other")).toBe(
         false,
       );
+      expect(legacy.transcriptStorage).toEqual({ kind: "sqlite" });
     } finally {
       resetProcessRegistryForTests();
     }
   });
 
   it("uses primary model when compaction.model is not set", () => {
+    const runtimeAuthPlan = {
+      providerForAuth: "openai",
+      authProfileProviderForAuth: "openai",
+      harnessAuthProvider: "openai",
+      forwardedAuthProfileId: "openai:p1",
+      forwardedAuthProfileSource: "user" as const,
+      modelRoute: {
+        provider: "openai",
+        modelId: "gpt-5.4",
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authRequirement: "subscription" as const,
+        requestTransportOverrides: "none" as const,
+      },
+    };
     const legacy = buildAfterTurnRuntimeContext({
       attempt: {
         sessionKey: "agent:main:session:abc",
@@ -3372,6 +3388,8 @@ describe("buildAfterTurnRuntimeContext", () => {
         messageProvider: "slack",
         agentAccountId: "acct-1",
         authProfileId: "openai:p1",
+        authProfileIdSource: "user",
+        runtimePlan: { auth: runtimeAuthPlan } as never,
         config: {} as OpenClawConfig,
         skillsSnapshot: undefined,
         provider: "openai",
@@ -3388,6 +3406,8 @@ describe("buildAfterTurnRuntimeContext", () => {
 
     expect(legacy.provider).toBe("openai");
     expect(legacy.model).toBe("gpt-5.4");
+    expect(legacy.authProfileIdSource).toBe("user");
+    expect(legacy.runtimeAuthPlan).toBe(runtimeAuthPlan);
   });
 
   it("keeps the primary model for a locked after-turn runtime context", () => {
@@ -3413,6 +3433,35 @@ describe("buildAfterTurnRuntimeContext", () => {
     expect(runtimeContext.model).toBe("gpt-5.5");
   });
 
+  it("publishes the storage-neutral session target in runtime context", () => {
+    const sessionTarget = {
+      agentId: "main",
+      sessionId: "session-abc",
+      sessionKey: "agent:main:session:abc",
+      storePath: "/tmp/state/agents/main/sessions/sessions.json",
+      threadId: 42,
+    };
+
+    const runtimeContext = buildAfterTurnRuntimeContext({
+      attempt: {
+        sessionId: "ignored-session-id",
+        sessionKey: "agent:main:fallback",
+        sessionTarget,
+        config: {} as OpenClawConfig,
+        skillsSnapshot: undefined,
+        provider: "openai",
+        modelId: "gpt-5.4",
+        thinkLevel: "off",
+        reasoningLevel: "on",
+      },
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      activeAgentId: "main",
+    });
+
+    expect(runtimeContext.transcriptStorage).toEqual({ kind: "sqlite" });
+    expect(runtimeContext.sessionTarget).toEqual(sessionTarget);
+  });
   it("resolves compaction.model override in runtime context so all context engines use the correct model", () => {
     const legacy = buildAfterTurnRuntimeContext({
       attempt: {

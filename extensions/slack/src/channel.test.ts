@@ -796,6 +796,10 @@ describe("slackPlugin outbound", () => {
     ).toBe(false);
   });
 
+  it("prefers final assistant text for text-only cron announce delivery", () => {
+    expect(slackPlugin.outbound?.preferFinalAssistantVisibleText).toBe(true);
+  });
+
   it("advertises the 8000-character Slack default chunk limit", () => {
     expect(slackOutbound.textChunkLimit).toBe(8000);
     expect(slackPlugin.outbound?.textChunkLimit).toBe(8000);
@@ -1269,6 +1273,7 @@ describe("slackPlugin outbound", () => {
         text: {
           type: "mrkdwn",
           text: "hello",
+          verbatim: true,
         },
       },
       {
@@ -1321,7 +1326,9 @@ describe("slackPlugin outbound", () => {
     });
 
     expect(requireMockCallArgValue(sendSlack, 0, 0)).toBe("user:U123");
-    expect(requireMockCallArgValue(sendSlack, 0, 1)).toBe("Slack interactive smoke.");
+    expect(requireMockCallArgValue(sendSlack, 0, 1)).toBe(
+      "Slack interactive smoke.\n\nApprove\nReject\n\nChoose a target",
+    );
     const blocks = requireArray(requireMockCallArg(sendSlack, 0, 2).blocks, "Slack blocks");
     expectRecordFields(blocks[0], "text block", { type: "section" });
     expectRecordFields(blocks[1], "button actions block", { type: "actions" });

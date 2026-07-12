@@ -701,7 +701,7 @@ export type QaSuiteSummaryJsonParams = {
 };
 
 /**
- * Strongly-typed shape of `qa-suite-summary.json`. The GPT-5.5 parity gate
+ * Strongly-typed shape of `qa-suite-summary.json`. The GPT-5.6 Luna parity gate
  * (agentic-parity-report.ts, #64441) and any future parity wrapper can
  * import this type instead of re-declaring the shape, so changes to the
  * summary schema propagate through to every consumer at type-check time.
@@ -718,7 +718,7 @@ type QaSuiteGatewayHeapSnapshot = NonNullable<
 >[number];
 
 /**
- * Pure-ish JSON builder for qa-suite-summary.json. Exported so the GPT-5.5
+ * Pure-ish JSON builder for qa-suite-summary.json. Exported so the GPT-5.6 Luna
  * parity gate (agentic-parity-report.ts, #64441) and any future parity
  * runner can assert-and-trust the provider/model that produced a given
  * summary instead of blindly accepting the caller's candidateLabel /
@@ -791,6 +791,7 @@ async function runQaRuntimeParitySuite(params: {
   progressEnabled: boolean;
   scenarioIds?: readonly string[];
   runtimePair: [RuntimeId, RuntimeId];
+  writeEvidenceFile?: boolean;
 }) {
   const ownsLab = !params.lab;
   const startLab = requireQaSuiteStartLab(params.startLab);
@@ -891,6 +892,7 @@ async function runQaRuntimeParitySuite(params: {
               controlUiEnabled: scenarioRequiresControlUi(scenario),
               forcedRuntime: runtime,
               captureRuntimeParityCell: true,
+              writeEvidenceFile: params.writeEvidenceFile,
             });
             const scenarioResult =
               cellResult.scenarios[0] ??
@@ -981,6 +983,7 @@ async function runQaRuntimeParitySuite(params: {
             ? params.selectedScenarios.map((scenario) => scenario.id)
             : undefined,
         runtimePair: params.runtimePair,
+        writeEvidenceFile: params.writeEvidenceFile,
       },
     );
     lab.setLatestReport({
@@ -1368,6 +1371,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
       progressEnabled,
       scenarioIds: params.scenarioIds,
       runtimePair: params.runtimePair,
+      writeEvidenceFile: params.writeEvidenceFile,
     });
   }
 
@@ -1415,7 +1419,9 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
         (scenario): scenario is QaSuiteScenarioResult => scenario !== undefined,
       );
       const completedScenarioDefinitions = completedScenarioResults.flatMap((scenario, index) =>
-        scenario === undefined ? [] : [selectedScenarios[index]],
+        scenario === undefined || selectedScenarios[index] === undefined
+          ? []
+          : [selectedScenarios[index]],
       );
       if (partialScenarios.length === 0) {
         return;
@@ -1700,6 +1706,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
       alternateModel,
       fastMode,
       thinkingDefault: params?.thinkingDefault,
+      forcedRuntime: params?.forcedRuntime,
       claudeCliAuthMode: params?.claudeCliAuthMode,
       controlUiEnabled: params?.controlUiEnabled ?? true,
       enabledPluginIds,
@@ -1847,15 +1854,16 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
       });
     }
 
+    const runtimeParityScenario = scenarios[0];
     const runtimeParityCell =
       params?.captureRuntimeParityCell &&
       params.forcedRuntime &&
       selectedScenarios.length === 1 &&
-      scenarios.length > 0
+      runtimeParityScenario
         ? await captureRuntimeParityCell({
             runtime: params.forcedRuntime,
             gateway: activeGateway,
-            scenarioResult: scenarios[0],
+            scenarioResult: runtimeParityScenario,
             wallClockMs: Math.max(1, Date.now() - startedAt.getTime()),
             mockBaseUrl: activeMock?.baseUrl,
           })

@@ -47,9 +47,16 @@ const rawSqliteAllowPathGroups = {
   ],
   "backup snapshot maintenance": ["src/commands/backup-verify.ts", "src/infra/backup-create.ts"],
   "agent auth profile read-only bootstrap": ["src/agents/auth-profiles/sqlite.ts"],
-  "read-only SQLite status probes": ["src/commands/status.scan.shared.ts"],
-  "doctor legacy state migration": [
+  "read-only SQLite status probes": [
+    "src/commands/doctor-db-bloat.ts",
+    "src/commands/status.scan.shared.ts",
+  ],
+  "doctor SQLite maintenance and legacy state migration": [
     "src/commands/doctor/cron/migration-ledger.ts",
+    "src/commands/doctor-sqlite-compact.ts",
+    "src/commands/doctor-session-sqlite.ts",
+    "src/commands/doctor-session-sqlite-readers.ts",
+    "src/commands/doctor-state-sqlite-compact.ts",
     "src/infra/state-migrations.ts",
     "src/infra/state-migrations.debug-proxy.ts",
   ],

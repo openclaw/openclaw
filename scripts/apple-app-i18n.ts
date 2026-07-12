@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { NATIVE_I18N_LOCALES } from "./native-app-i18n.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -24,7 +25,12 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, string[]> = {
   ],
 };
 
-const CATALOGS = [
+type AppleCatalogSpec = {
+  path: string;
+  coverage: Record<string, readonly string[]>;
+};
+
+const CATALOGS: readonly AppleCatalogSpec[] = [
   {
     path: "apps/ios/Resources/Localizable.xcstrings",
     coverage: {
@@ -41,6 +47,7 @@ const CATALOGS = [
         "Message is empty.",
         "OpenClaw is not connected to a gateway yet.",
         "Send failed: %@",
+        "The shared image could not be prepared.",
       ],
       "apps/ios/Sources/Design/SettingsChannelsDestination.swift": ["Logout"],
       "apps/ios/Sources/Design/ChatProTab.swift": [
@@ -72,7 +79,7 @@ const CATALOGS = [
       "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift": ["Go to Chat"],
       "apps/ios/Sources/RootTabs.swift": ["Agent", "Chat", "Control", "Settings", "Talk"],
       "apps/ios/WatchApp/Sources/WatchInboxView.swift": [
-        "Approve",
+        "Allow Once",
         "Chat",
         "Continue on iPhone",
         "Deny",
@@ -99,7 +106,7 @@ const CATALOGS = [
       "apps/macos/Sources/OpenClaw/CronSettings+Rows.swift": ["Run now"],
     },
   },
-] as const;
+];
 
 type Catalog = {
   sourceLanguage?: string;
@@ -190,7 +197,7 @@ export async function checkAppleAppI18n() {
 
 export async function compileMacosLocalizations(outputDir: string) {
   await checkAppleAppI18n();
-  const spec = CATALOGS[1];
+  const spec = expectDefined(CATALOGS[1], "macOS localization catalog specification");
   const catalog = JSON.parse(await readFile(path.join(ROOT, spec.path), "utf8")) as Catalog;
   if (!catalog.strings) {
     throw new Error(`invalid Apple string catalog: ${spec.path}`);

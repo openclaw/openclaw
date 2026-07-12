@@ -12,6 +12,9 @@ export {
   type BrowserConsoleMessage,
   closePageByTargetIdViaPlaywright,
   closePlaywrightBrowserConnection,
+  type PlaywrightConnectionRetirement,
+  retirePlaywrightBrowserConnection,
+  retirePlaywrightBrowserConnectionExact,
   createPageViaPlaywright,
   ensurePageState,
   forceDisconnectPlaywrightForTarget,
@@ -76,6 +79,7 @@ export {
   traceStartViaPlaywright,
   traceStopViaPlaywright,
   typeViaPlaywright,
+  uploadViaPlaywright,
   waitForDownloadViaPlaywright,
   waitForViaPlaywright,
 } from "./pw-tools-core.js";

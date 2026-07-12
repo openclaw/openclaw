@@ -27,7 +27,7 @@ import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 /** Session-scoped exec fields that may be carried across an isolated runtime boundary. */
 export type ExecSessionDefaults = Pick<
   SessionEntry,
-  "execHost" | "execSecurity" | "execAsk" | "execNode"
+  "execHost" | "execSecurity" | "execAsk" | "execNode" | "execCwd"
 >;
 
 // Resolved exec config layers come from global config, agent config, legacy
@@ -65,8 +65,8 @@ function applySessionLegacyExecPolicyLayer(
   return base;
 }
 
-// Gather the shared config state once so canExecRequestNode and
-// resolveExecDefaults stay aligned on agent/global/session precedence.
+// Gather the shared config state once so exec resolution applies one
+// agent/global/session precedence order.
 function resolveExecConfigState(params: {
   cfg?: OpenClawConfig;
   sessionEntry?: ExecSessionDefaults;
@@ -106,41 +106,23 @@ function resolveExecConfigState(params: {
   };
 }
 
-function resolveExecSandboxAvailability(params: {
-  cfg: OpenClawConfig;
-  sessionKey?: string;
-  sandboxAvailable?: boolean;
-}) {
-  return (
-    params.sandboxAvailable ??
-    (params.sessionKey
-      ? resolveSandboxRuntimeStatus({
-          cfg: params.cfg,
-          sessionKey: params.sessionKey,
-        }).sandboxed
-      : false)
-  );
-}
-
-/** Returns whether the current exec policy allows requesting host node execution. */
-export function canExecRequestNode(params: {
+/** Resolves whether node exec is usable and any effective node binding. */
+export function resolveNodeExecEligibility(params: {
   cfg?: OpenClawConfig;
   sessionEntry?: ExecSessionDefaults;
   execOverrides?: ExecPolicyOverrides;
   agentId?: string;
   sessionKey?: string;
   sandboxAvailable?: boolean;
-}): boolean {
-  const { cfg, host } = resolveExecConfigState(params);
-  return isRequestedExecTargetAllowed({
-    configuredTarget: host,
-    requestedTarget: "node",
-    sandboxAvailable: resolveExecSandboxAvailability({
-      cfg,
-      sessionKey: params.sessionKey,
-      sandboxAvailable: params.sandboxAvailable,
-    }),
-  });
+}): { canExec: boolean; node?: string } {
+  const defaults = resolveExecDefaults(params);
+  const systemRunDenied = params.cfg?.gateway?.nodes?.denyCommands?.some(
+    (command) => command.trim() === "system.run",
+  );
+  return {
+    canExec: defaults.canRequestNode && defaults.security !== "deny" && !systemRunDenied,
+    ...(defaults.node ? { node: defaults.node } : {}),
+  };
 }
 
 /** Resolves effective exec host, mode, approval policy, and node availability. */
@@ -168,11 +150,14 @@ export function resolveExecDefaults(params: {
     agentExec,
     globalExec,
   } = resolveExecConfigState(params);
-  const sandboxAvailable = resolveExecSandboxAvailability({
-    cfg,
-    sessionKey: params.sessionKey,
-    sandboxAvailable: params.sandboxAvailable,
-  });
+  const sandboxAvailable =
+    params.sandboxAvailable ??
+    (params.sessionKey
+      ? resolveSandboxRuntimeStatus({
+          cfg,
+          sessionKey: params.sessionKey,
+        }).sandboxed
+      : false);
   const resolved = resolveExecTarget({
     configuredTarget: host,
     elevatedRequested: params.elevatedRequested === true,
