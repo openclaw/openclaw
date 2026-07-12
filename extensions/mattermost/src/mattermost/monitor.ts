@@ -235,6 +235,10 @@ export async function backfillMattermostThreadHistoryForMonitor(params: {
   // in-flight promise so those turns can wait for the recovered window; clear it
   // in `finally` so the marker alone governs no-retry afterwards.
   setMarker(baseSessionKey);
+  // Capture the marker this recovery owns so a stale older-session response
+  // that resolves last does not overwrite a newer session's recovered window.
+  // If the marker rotated while the fetch was in flight, skip the write.
+  const ownedMarker = baseSessionKey;
   const recovery = (async () => {
     const abort = new AbortController();
     const timeoutId = setTimeout(() => abort.abort(), timeoutMs);
@@ -262,7 +266,7 @@ export async function backfillMattermostThreadHistoryForMonitor(params: {
           messageId: p.id ?? undefined,
         });
       }
-      if (entries.length > 0) {
+      if (entries.length > 0 && threadBackfillMarkers.get(historyKey) === ownedMarker) {
         channelHistories.set(historyKey, entries);
       }
     } finally {

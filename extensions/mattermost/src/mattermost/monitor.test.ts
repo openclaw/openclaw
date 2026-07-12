@@ -1411,6 +1411,86 @@ describe("backfillMattermostThreadHistoryForMonitor", () => {
     expect(harness.threadBackfillInFlight.has(historyKey)).toBe(false);
     expect(harness.threadBackfillMarkers.get(historyKey)).toBe(sessionBackfillKey);
   });
+
+  it("ignores a stale session backfill completion when the marker has rotated", async () => {
+    const harness = createBackfillHarness();
+    const oldSessionKey = "session-before-rotation";
+    const newSessionKey = "session-after-rotation";
+    const currentPost = createPost({ id: "current", message: "@bot continue" });
+
+    // Gate the old session's fetch so it stays pending while the new session
+    // starts and completes its own recovery first.
+    let resolveOldFetch!: (posts: MattermostPost[]) => void;
+    const oldFetchStarted = new Promise<void>((resolveStarted) => {
+      harness.fetchThreadPosts.mockImplementationOnce(() => {
+        resolveStarted();
+        return new Promise<MattermostPost[]>((resolve) => {
+          resolveOldFetch = resolve;
+        });
+      });
+    });
+    // New session fetch resolves immediately with fresh data.
+    harness.fetchThreadPosts.mockResolvedValueOnce([
+      createPost({
+        id: "fresh-1",
+        create_at: 2,
+        message: "fresh context after rotation",
+        user_id: "user-1",
+      }),
+    ]);
+
+    // Start the old-session backfill without awaiting so it stays in-flight.
+    const oldTurn = backfillMattermostThreadHistoryForMonitor({
+      client: harness.client,
+      post: currentPost,
+      threadRootId: "root-1",
+      historyKey,
+      baseSessionKey: oldSessionKey,
+      historyLimit: 5,
+      channelHistories: harness.channelHistories,
+      threadBackfillMarkers: harness.threadBackfillMarkers,
+      threadBackfillInFlight: harness.threadBackfillInFlight,
+      fetchThreadPosts: harness.fetchThreadPosts,
+    });
+    await oldFetchStarted;
+
+    // New-session backfill: the marker rotates to the new session key and the
+    // resolve-last fetch completes before the old fetch is ungated.
+    await backfillMattermostThreadHistoryForMonitor({
+      client: harness.client,
+      post: currentPost,
+      threadRootId: "root-1",
+      historyKey,
+      baseSessionKey: newSessionKey,
+      historyLimit: 5,
+      channelHistories: harness.channelHistories,
+      threadBackfillMarkers: harness.threadBackfillMarkers,
+      threadBackfillInFlight: harness.threadBackfillInFlight,
+      fetchThreadPosts: harness.fetchThreadPosts,
+    });
+
+    // Now ungating the old fetch resolves it with stale data. The guard must
+    // detect that the marker no longer matches and skip the write.
+    resolveOldFetch([
+      createPost({
+        id: "stale-1",
+        create_at: 1,
+        message: "stale context from old session",
+        user_id: "user-1",
+      }),
+    ]);
+    await oldTurn;
+
+    // The window must contain the new session's data, not the stale data.
+    const windowPosts = harness.channelHistories.get(historyKey);
+    expect(windowPosts).toBeDefined();
+    expect(windowPosts!.map((e) => e.body)).toStrictEqual(["fresh context after rotation"]);
+    expect(windowPosts!.map((e) => e.body)).not.toContain("stale context from old session");
+
+    // Marker reflects the newer session that completed last.
+    expect(harness.threadBackfillMarkers.get(historyKey)).toBe(newSessionKey);
+    expect(harness.fetchThreadPosts).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("buildMattermostModelPickerSelectMessageSid", () => {
