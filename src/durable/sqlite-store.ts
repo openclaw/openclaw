@@ -1,8 +1,14 @@
 // SQLite-backed durable runtime store for the native control-plane prototype.
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import type { DatabaseSync, SQLInputValue } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   OPENCLAW_STATE_SCHEMA_VERSION,
   closeOpenClawStateDatabaseForPath,
@@ -165,6 +171,17 @@ type DurableRuntimeSignalRow = {
 };
 
 type CountRow = { count: number | bigint };
+type DurableRuntimeDatabase = Pick<
+  OpenClawStateKyselyDatabase,
+  | "durable_runtime_events"
+  | "durable_runtime_links"
+  | "durable_runtime_refs"
+  | "durable_runtime_runs"
+  | "durable_runtime_signals"
+  | "durable_runtime_steps"
+  | "durable_runtime_timers"
+>;
+type SyncQuery<Row> = Parameters<typeof executeSqliteQuerySync<Row>>[1];
 
 function optionalText(value: string | undefined): string | null {
   return value && value.trim() ? value : null;
@@ -321,8 +338,21 @@ function rowToSignal(row: DurableRuntimeSignalRow): DurableRuntimeSignal {
   };
 }
 
-function count(db: DatabaseSync, sql: string, values: SQLInputValue[] = []): number {
-  const row = db.prepare(sql).get(...values) as CountRow | undefined;
+function queryRows<Row>(db: DatabaseSync, query: SyncQuery<Row>): Row[] {
+  return executeSqliteQuerySync(db, query).rows as Row[];
+}
+
+function queryFirst<Row>(db: DatabaseSync, query: SyncQuery<Row>): Row | undefined {
+  return executeSqliteQueryTakeFirstSync(db, query) as Row | undefined;
+}
+
+function executeQuery(db: DatabaseSync, query: SyncQuery<unknown>): number {
+  const result = executeSqliteQuerySync(db, query);
+  return Number(result.numAffectedRows ?? 0);
+}
+
+function count(db: DatabaseSync, query: SyncQuery<CountRow>): number {
+  const row = queryFirst<CountRow>(db, query);
   return Number(row?.count ?? 0);
 }
 
@@ -362,7 +392,7 @@ function isTerminalStepRow(row: DurableRuntimeStepRow): boolean {
   );
 }
 
-function isSameSqlValue(left: SQLInputValue | null, right: SQLInputValue | null): boolean {
+function isSameSqlValue(left: string | number | null, right: string | number | null): boolean {
   return left === right;
 }
 
@@ -374,6 +404,7 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
   const pathname = path.resolve(storeOptions?.path ?? resolveDurableRuntimeSqlitePath(env));
   const stateDatabase = openOpenClawStateDatabase({ env, path: pathname });
   const db = stateDatabase.db;
+  const durableDb = getNodeSqliteKysely<DurableRuntimeDatabase>(db);
   let closed = false;
 
   return {
@@ -386,14 +417,14 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
       return runSqliteImmediateTransactionSync(db, () => {
         const existing =
           input.idempotencyKey &&
-          (db
-            .prepare(
-              `SELECT *
-                 FROM durable_runtime_runs
-                WHERE operation_kind = ?
-                  AND idempotency_key = ?`,
-            )
-            .get(input.operationKind, input.idempotencyKey) as DurableRuntimeRunRow | undefined);
+          queryFirst<DurableRuntimeRunRow>(
+            db,
+            durableDb
+              .selectFrom("durable_runtime_runs")
+              .selectAll()
+              .where("operation_kind", "=", input.operationKind)
+              .where("idempotency_key", "=", input.idempotencyKey),
+          );
         if (existing) {
           if (
             input.requestHash &&
@@ -406,60 +437,67 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
           }
           return rowToRun(existing);
         }
-        db.prepare(
-          `INSERT INTO durable_runtime_runs (
-             runtime_run_id, operation_kind, operation_version, idempotency_key, request_hash,
-             status, source_type, source_ref, input_ref, created_at, updated_at, completed_at,
-             recovery_state, checkpoint_ref, parent_runtime_run_id, parent_step_id, message_id,
-             turn_id, work_unit_id, report_route_id, claimed_by, claim_expires_at, heartbeat_at,
-             metadata_json
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ).run(
-          runtimeRunId,
-          input.operationKind,
-          operationVersion,
-          optionalText(input.idempotencyKey),
-          optionalText(input.requestHash),
-          status,
-          optionalText(input.sourceType),
-          optionalText(input.sourceRef),
-          optionalText(input.inputRef),
-          now,
-          now,
-          input.completedAt ?? null,
-          recoveryState,
-          optionalText(input.checkpointRef),
-          optionalText(input.parentRuntimeRunId),
-          optionalText(input.parentStepId),
-          optionalText(input.messageId),
-          optionalText(input.turnId),
-          optionalText(input.workUnitId),
-          optionalText(input.reportRouteId),
-          null,
-          null,
-          null,
-          serializeJson(input.metadata),
+        executeQuery(
+          db,
+          durableDb.insertInto("durable_runtime_runs").values({
+            runtime_run_id: runtimeRunId,
+            operation_kind: input.operationKind,
+            operation_version: operationVersion,
+            idempotency_key: optionalText(input.idempotencyKey),
+            request_hash: optionalText(input.requestHash),
+            status,
+            source_type: optionalText(input.sourceType),
+            source_ref: optionalText(input.sourceRef),
+            input_ref: optionalText(input.inputRef),
+            created_at: now,
+            updated_at: now,
+            completed_at: input.completedAt ?? null,
+            recovery_state: recoveryState,
+            checkpoint_ref: optionalText(input.checkpointRef),
+            parent_runtime_run_id: optionalText(input.parentRuntimeRunId),
+            parent_step_id: optionalText(input.parentStepId),
+            message_id: optionalText(input.messageId),
+            turn_id: optionalText(input.turnId),
+            work_unit_id: optionalText(input.workUnitId),
+            report_route_id: optionalText(input.reportRouteId),
+            claimed_by: null,
+            claim_expires_at: null,
+            heartbeat_at: null,
+            metadata_json: serializeJson(input.metadata),
+          }),
         );
-        const row = db
-          .prepare("SELECT * FROM durable_runtime_runs WHERE runtime_run_id = ?")
-          .get(runtimeRunId) as DurableRuntimeRunRow;
-        return rowToRun(row);
+        const row = queryFirst<DurableRuntimeRunRow>(
+          db,
+          durableDb
+            .selectFrom("durable_runtime_runs")
+            .selectAll()
+            .where("runtime_run_id", "=", runtimeRunId),
+        );
+        return rowToRun(row!);
       });
     },
 
     getRun(runtimeRunId: string): DurableRuntimeRun | undefined {
-      const row = db
-        .prepare("SELECT * FROM durable_runtime_runs WHERE runtime_run_id = ?")
-        .get(runtimeRunId) as DurableRuntimeRunRow | undefined;
+      const row = queryFirst<DurableRuntimeRunRow>(
+        db,
+        durableDb
+          .selectFrom("durable_runtime_runs")
+          .selectAll()
+          .where("runtime_run_id", "=", runtimeRunId),
+      );
       return row ? rowToRun(row) : undefined;
     },
 
     updateRun(input: UpdateDurableRuntimeRunInput): DurableRuntimeRun | undefined {
       const now = input.now ?? Date.now();
       return runSqliteImmediateTransactionSync(db, () => {
-        const current = db
-          .prepare("SELECT * FROM durable_runtime_runs WHERE runtime_run_id = ?")
-          .get(input.runtimeRunId) as DurableRuntimeRunRow | undefined;
+        const current = queryFirst<DurableRuntimeRunRow>(
+          db,
+          durableDb
+            .selectFrom("durable_runtime_runs")
+            .selectAll()
+            .where("runtime_run_id", "=", input.runtimeRunId),
+        );
         if (!current) {
           return undefined;
         }
@@ -507,38 +545,33 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
             isSameSqlValue(nextMetadataJson, current.metadata_json);
           return isNoOp ? rowToRun(current) : undefined;
         }
-        db.prepare(
-          `UPDATE durable_runtime_runs
-              SET status = ?,
-                  recovery_state = ?,
-                  updated_at = ?,
-                  completed_at = ?,
-                  checkpoint_ref = ?,
-                  work_unit_id = ?,
-                  report_route_id = ?,
-                  claimed_by = ?,
-                  claim_expires_at = ?,
-                  heartbeat_at = ?,
-                  metadata_json = ?
-            WHERE runtime_run_id = ?`,
-        ).run(
-          nextStatus,
-          nextRecoveryState,
-          now,
-          completedAt,
-          nextCheckpointRef,
-          nextWorkUnitId,
-          nextReportRouteId,
-          nextClaimedBy,
-          nextClaimExpiresAt,
-          nextHeartbeatAt,
-          nextMetadataJson,
-          input.runtimeRunId,
+        executeQuery(
+          db,
+          durableDb
+            .updateTable("durable_runtime_runs")
+            .set({
+              status: nextStatus,
+              recovery_state: nextRecoveryState,
+              updated_at: now,
+              completed_at: completedAt,
+              checkpoint_ref: nextCheckpointRef,
+              work_unit_id: nextWorkUnitId,
+              report_route_id: nextReportRouteId,
+              claimed_by: nextClaimedBy,
+              claim_expires_at: nextClaimExpiresAt,
+              heartbeat_at: nextHeartbeatAt,
+              metadata_json: nextMetadataJson,
+            })
+            .where("runtime_run_id", "=", input.runtimeRunId),
         );
-        const row = db
-          .prepare("SELECT * FROM durable_runtime_runs WHERE runtime_run_id = ?")
-          .get(input.runtimeRunId) as DurableRuntimeRunRow;
-        return rowToRun(row);
+        const row = queryFirst<DurableRuntimeRunRow>(
+          db,
+          durableDb
+            .selectFrom("durable_runtime_runs")
+            .selectAll()
+            .where("runtime_run_id", "=", input.runtimeRunId),
+        );
+        return rowToRun(row!);
       });
     },
 
@@ -547,88 +580,81 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
       const recordedAt = Date.now();
       const eventId = input.eventId ?? `evt_${randomUUID()}`;
       return runSqliteImmediateTransactionSync(db, () => {
-        const nextSeq = count(
+        const latestEvent = queryFirst<Pick<DurableRuntimeEventRow, "event_seq">>(
           db,
-          "SELECT COALESCE(MAX(event_seq), 0) + 1 AS count FROM durable_runtime_events WHERE runtime_run_id = ?",
-          [input.runtimeRunId],
+          durableDb
+            .selectFrom("durable_runtime_events")
+            .select("event_seq")
+            .where("runtime_run_id", "=", input.runtimeRunId)
+            .orderBy("event_seq", "desc")
+            .limit(1),
         );
-        db.prepare(
-          `INSERT INTO durable_runtime_events (
-             event_id, runtime_run_id, event_seq, event_type, event_time, step_id,
-             agent_invocation_id, tool_invocation_id, idempotency_key, payload_json,
-             payload_hash, checkpoint_ref, causation_event_id, correlation_id, recorded_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ).run(
-          eventId,
-          input.runtimeRunId,
-          nextSeq,
-          input.eventType,
-          now,
-          optionalText(input.stepId),
-          optionalText(input.agentInvocationId),
-          optionalText(input.toolInvocationId),
-          optionalText(input.idempotencyKey),
-          serializeJson(input.payload),
-          optionalText(input.payloadHash),
-          optionalText(input.checkpointRef),
-          optionalText(input.causationEventId),
-          optionalText(input.correlationId),
-          recordedAt,
+        const nextSeq = (latestEvent?.event_seq ?? 0) + 1;
+        executeQuery(
+          db,
+          durableDb.insertInto("durable_runtime_events").values({
+            event_id: eventId,
+            runtime_run_id: input.runtimeRunId,
+            event_seq: nextSeq,
+            event_type: input.eventType,
+            event_time: now,
+            step_id: optionalText(input.stepId),
+            agent_invocation_id: optionalText(input.agentInvocationId),
+            tool_invocation_id: optionalText(input.toolInvocationId),
+            idempotency_key: optionalText(input.idempotencyKey),
+            payload_json: serializeJson(input.payload),
+            payload_hash: optionalText(input.payloadHash),
+            checkpoint_ref: optionalText(input.checkpointRef),
+            causation_event_id: optionalText(input.causationEventId),
+            correlation_id: optionalText(input.correlationId),
+            recorded_at: recordedAt,
+          }),
         );
-        db.prepare(
-          `UPDATE durable_runtime_runs
-              SET updated_at = ?
-            WHERE runtime_run_id = ?`,
-        ).run(recordedAt, input.runtimeRunId);
-        const row = db
-          .prepare(
-            `SELECT *
-               FROM durable_runtime_events
-              WHERE runtime_run_id = ?
-                AND event_seq = ?`,
-          )
-          .get(input.runtimeRunId, nextSeq) as DurableRuntimeEventRow;
-        return rowToEvent(row);
+        executeQuery(
+          db,
+          durableDb
+            .updateTable("durable_runtime_runs")
+            .set({ updated_at: recordedAt })
+            .where("runtime_run_id", "=", input.runtimeRunId),
+        );
+        const row = queryFirst<DurableRuntimeEventRow>(
+          db,
+          durableDb
+            .selectFrom("durable_runtime_events")
+            .selectAll()
+            .where("runtime_run_id", "=", input.runtimeRunId)
+            .where("event_seq", "=", nextSeq),
+        );
+        return rowToEvent(row!);
       });
     },
 
     listRuns(options?: { limit?: number }): DurableRuntimeRun[] {
       const limit = Math.max(1, Math.min(500, Math.trunc(options?.limit ?? 50)));
-      const rows = db
-        .prepare(
-          `SELECT *
-             FROM durable_runtime_runs
-            ORDER BY updated_at DESC, runtime_run_id DESC
-            LIMIT ?`,
-        )
-        .all(limit) as DurableRuntimeRunRow[];
+      const rows = queryRows<DurableRuntimeRunRow>(
+        db,
+        durableDb
+          .selectFrom("durable_runtime_runs")
+          .selectAll()
+          .orderBy("updated_at", "desc")
+          .orderBy("runtime_run_id", "desc")
+          .limit(limit),
+      );
       return rows.map(rowToRun);
     },
 
     listOpenRuns(options?: { operationKind?: string; limit?: number }): DurableRuntimeRun[] {
       const limit = Math.max(1, Math.min(5000, Math.trunc(options?.limit ?? 500)));
       const operationKind = optionalText(options?.operationKind);
-      const rows = operationKind
-        ? (db
-            .prepare(
-              `SELECT *
-                 FROM durable_runtime_runs
-                WHERE operation_kind = ?
-                  AND status NOT IN ('succeeded', 'failed', 'cancelled', 'lost')
-                ORDER BY updated_at ASC, runtime_run_id ASC
-                LIMIT ?`,
-            )
-            .all(operationKind, limit) as DurableRuntimeRunRow[])
-        : (db
-            .prepare(
-              `SELECT *
-                 FROM durable_runtime_runs
-                WHERE status NOT IN ('succeeded', 'failed', 'cancelled', 'lost')
-                ORDER BY updated_at ASC, runtime_run_id ASC
-                LIMIT ?`,
-            )
-            .all(limit) as DurableRuntimeRunRow[]);
-      return rows.map(rowToRun);
+      const query = durableDb
+        .selectFrom("durable_runtime_runs")
+        .selectAll()
+        .where("status", "not in", ["succeeded", "failed", "cancelled", "lost"])
+        .$if(Boolean(operationKind), (qb) => qb.where("operation_kind", "=", operationKind!))
+        .orderBy("updated_at", "asc")
+        .orderBy("runtime_run_id", "asc")
+        .limit(limit);
+      return queryRows<DurableRuntimeRunRow>(db, query).map(rowToRun);
     },
 
     claimNextRunnableRun(input: ClaimDurableRuntimeRunInput): DurableRuntimeRun | undefined {
@@ -636,47 +662,50 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
       const claimExpiresAt = now + input.claimTtlMs;
       return runSqliteImmediateTransactionSync(db, () => {
         const operationKind = optionalText(input.operationKind);
-        const row = operationKind
-          ? (db
-              .prepare(
-                `SELECT *
-                  FROM durable_runtime_runs
-                 WHERE operation_kind = ?
-                   AND status IN ('received', 'queued')
-                    AND recovery_state IN ('runnable', 'claimed')
-                    AND (claimed_by IS NULL OR claim_expires_at IS NULL OR claim_expires_at <= ?)
-                  ORDER BY updated_at ASC, runtime_run_id ASC
-                  LIMIT 1`,
-              )
-              .get(operationKind, now) as DurableRuntimeRunRow | undefined)
-          : (db
-              .prepare(
-                `SELECT *
-                  FROM durable_runtime_runs
-                  WHERE status IN ('received', 'queued')
-                    AND recovery_state IN ('runnable', 'claimed')
-                    AND (claimed_by IS NULL OR claim_expires_at IS NULL OR claim_expires_at <= ?)
-                  ORDER BY updated_at ASC, runtime_run_id ASC
-                  LIMIT 1`,
-              )
-              .get(now) as DurableRuntimeRunRow | undefined);
+        const row = queryFirst<DurableRuntimeRunRow>(
+          db,
+          durableDb
+            .selectFrom("durable_runtime_runs")
+            .selectAll()
+            .$if(Boolean(operationKind), (qb) => qb.where("operation_kind", "=", operationKind!))
+            .where("status", "in", ["received", "queued"])
+            .where("recovery_state", "in", ["runnable", "claimed"])
+            .where((eb) =>
+              eb.or([
+                eb("claimed_by", "is", null),
+                eb("claim_expires_at", "is", null),
+                eb("claim_expires_at", "<=", now),
+              ]),
+            )
+            .orderBy("updated_at", "asc")
+            .orderBy("runtime_run_id", "asc")
+            .limit(1),
+        );
         if (!row) {
           return undefined;
         }
-        db.prepare(
-          `UPDATE durable_runtime_runs
-              SET status = 'queued',
-                  recovery_state = 'claimed',
-                  claimed_by = ?,
-                  claim_expires_at = ?,
-                  heartbeat_at = ?,
-                  updated_at = ?
-            WHERE runtime_run_id = ?`,
-        ).run(input.workerId, claimExpiresAt, now, now, row.runtime_run_id);
-        const claimed = db
-          .prepare("SELECT * FROM durable_runtime_runs WHERE runtime_run_id = ?")
-          .get(row.runtime_run_id) as DurableRuntimeRunRow;
-        return rowToRun(claimed);
+        executeQuery(
+          db,
+          durableDb
+            .updateTable("durable_runtime_runs")
+            .set({
+              status: "queued",
+              recovery_state: "claimed",
+              claimed_by: input.workerId,
+              claim_expires_at: claimExpiresAt,
+              heartbeat_at: now,
+              updated_at: now,
+            })
+            .where("runtime_run_id", "=", row.runtime_run_id),
+        );
+        const claimed = queryFirst<DurableRuntimeRunRow>(
+          db,
+          durableDb
+            .selectFrom("durable_runtime_runs")
+            .selectAll()
+            .where("runtime_run_id", "=", row.runtime_run_id),
+        );
+        return rowToRun(claimed!);
       });
     },
 
@@ -687,26 +716,40 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
     }): DurableRuntimeRun | undefined {
       const now = input.now ?? Date.now();
       return runSqliteImmediateTransactionSync(db, () => {
-        const updateResult = db.prepare(
-          `UPDATE durable_runtime_runs
-              SET recovery_state = 'runnable',
-                  claimed_by = NULL,
-                  claim_expires_at = NULL,
-                  heartbeat_at = NULL,
-                  updated_at = ?
-            WHERE runtime_run_id = ?
-              AND claimed_by = ?
-              AND status NOT IN ('succeeded', 'failed', 'cancelled', 'lost')
-              AND recovery_state != 'terminal'
-              AND completed_at IS NULL`,
+        const current = queryFirst<DurableRuntimeRunRow>(
+          db,
+          durableDb
+            .selectFrom("durable_runtime_runs")
+            .selectAll()
+            .where("runtime_run_id", "=", input.runtimeRunId)
+            .where("claimed_by", "=", input.workerId)
+            .where("status", "not in", ["succeeded", "failed", "cancelled", "lost"])
+            .where("recovery_state", "!=", "terminal")
+            .where("completed_at", "is", null),
         );
-        const update = updateResult.run(now, input.runtimeRunId, input.workerId);
-        if (Number(update.changes ?? 0) === 0) {
+        if (!current) {
           return undefined;
         }
-        const row = db
-          .prepare("SELECT * FROM durable_runtime_runs WHERE runtime_run_id = ?")
-          .get(input.runtimeRunId) as DurableRuntimeRunRow | undefined;
+        executeQuery(
+          db,
+          durableDb
+            .updateTable("durable_runtime_runs")
+            .set({
+              recovery_state: "runnable",
+              claimed_by: null,
+              claim_expires_at: null,
+              heartbeat_at: null,
+              updated_at: now,
+            })
+            .where("runtime_run_id", "=", input.runtimeRunId),
+        );
+        const row = queryFirst<DurableRuntimeRunRow>(
+          db,
+          durableDb
+            .selectFrom("durable_runtime_runs")
+            .selectAll()
+            .where("runtime_run_id", "=", input.runtimeRunId),
+        );
         return row ? rowToRun(row) : undefined;
       });
     },
@@ -720,60 +763,66 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
       return runSqliteImmediateTransactionSync(db, () => {
         const existing =
           input.idempotencyKey &&
-          (db
-            .prepare(
-              `SELECT *
-                 FROM durable_runtime_steps
-                WHERE runtime_run_id = ?
-                  AND idempotency_key = ?`,
-            )
-            .get(input.runtimeRunId, input.idempotencyKey) as DurableRuntimeStepRow | undefined);
+          queryFirst<DurableRuntimeStepRow>(
+            db,
+            durableDb
+              .selectFrom("durable_runtime_steps")
+              .selectAll()
+              .where("runtime_run_id", "=", input.runtimeRunId)
+              .where("idempotency_key", "=", input.idempotencyKey),
+          );
         if (existing) {
           return rowToStep(existing);
         }
-        db.prepare(
-          `INSERT INTO durable_runtime_steps (
-             runtime_run_id, step_id, parent_step_id, step_type, status, recovery_state,
-             attempt, max_attempts, idempotency_key, input_ref, output_ref, error_ref,
-             checkpoint_ref, claimed_by, claim_expires_at, heartbeat_at, created_at,
-             started_at, updated_at, completed_at, metadata_json
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ).run(
-          input.runtimeRunId,
-          stepId,
-          optionalText(input.parentStepId),
-          input.stepType,
-          status,
-          recoveryState,
-          attempt,
-          input.maxAttempts ?? null,
-          optionalText(input.idempotencyKey),
-          optionalText(input.inputRef),
-          optionalText(input.outputRef),
-          optionalText(input.errorRef),
-          optionalText(input.checkpointRef),
-          null,
-          null,
-          null,
-          now,
-          status === "running" ? now : null,
-          now,
-          null,
-          serializeJson(input.metadata),
+        executeQuery(
+          db,
+          durableDb.insertInto("durable_runtime_steps").values({
+            runtime_run_id: input.runtimeRunId,
+            step_id: stepId,
+            parent_step_id: optionalText(input.parentStepId),
+            step_type: input.stepType,
+            status,
+            recovery_state: recoveryState,
+            attempt,
+            max_attempts: input.maxAttempts ?? null,
+            idempotency_key: optionalText(input.idempotencyKey),
+            input_ref: optionalText(input.inputRef),
+            output_ref: optionalText(input.outputRef),
+            error_ref: optionalText(input.errorRef),
+            checkpoint_ref: optionalText(input.checkpointRef),
+            claimed_by: null,
+            claim_expires_at: null,
+            heartbeat_at: null,
+            created_at: now,
+            started_at: status === "running" ? now : null,
+            updated_at: now,
+            completed_at: null,
+            metadata_json: serializeJson(input.metadata),
+          }),
         );
-        const row = db
-          .prepare("SELECT * FROM durable_runtime_steps WHERE runtime_run_id = ? AND step_id = ?")
-          .get(input.runtimeRunId, stepId) as DurableRuntimeStepRow;
-        return rowToStep(row);
+        const row = queryFirst<DurableRuntimeStepRow>(
+          db,
+          durableDb
+            .selectFrom("durable_runtime_steps")
+            .selectAll()
+            .where("runtime_run_id", "=", input.runtimeRunId)
+            .where("step_id", "=", stepId),
+        );
+        return rowToStep(row!);
       });
     },
 
     updateStep(input: UpdateDurableRuntimeStepInput): DurableRuntimeStep | undefined {
       const now = input.now ?? Date.now();
       return runSqliteImmediateTransactionSync(db, () => {
-        const current = db
-          .prepare("SELECT * FROM durable_runtime_steps WHERE runtime_run_id = ? AND step_id = ?")
-          .get(input.runtimeRunId, input.stepId) as DurableRuntimeStepRow | undefined;
+        const current = queryFirst<DurableRuntimeStepRow>(
+          db,
+          durableDb
+            .selectFrom("durable_runtime_steps")
+            .selectAll()
+            .where("runtime_run_id", "=", input.runtimeRunId)
+            .where("step_id", "=", input.stepId),
+        );
         if (!current) {
           return undefined;
         }
@@ -842,57 +891,42 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
             isSameSqlValue(nextMetadataJson, current.metadata_json);
           return isNoOp ? rowToStep(current) : undefined;
         }
-        const updateValues: SQLInputValue[] = [
-          nextStatus,
-          nextRecoveryState,
-          nextAttempt,
-          nextMaxAttempts,
-          nextInputRef,
-          nextOutputRef,
-          nextErrorRef,
-          nextCheckpointRef,
-          nextClaimedBy,
-          nextClaimExpiresAt,
-          nextHeartbeatAt,
-          nextStartedAt,
-          nextCompletedAt,
-          now,
-          nextMetadataJson,
-          input.runtimeRunId,
-          input.stepId,
-        ];
-        if (expectedClaimedBy) {
-          updateValues.push(expectedClaimedBy);
-        }
-        const updateResult = db.prepare(
-          `UPDATE durable_runtime_steps
-              SET status = ?,
-                  recovery_state = ?,
-                  attempt = ?,
-                  max_attempts = ?,
-                  input_ref = ?,
-                  output_ref = ?,
-                  error_ref = ?,
-                  checkpoint_ref = ?,
-                  claimed_by = ?,
-                  claim_expires_at = ?,
-                  heartbeat_at = ?,
-                  started_at = ?,
-                  completed_at = ?,
-                  updated_at = ?,
-                  metadata_json = ?
-            WHERE runtime_run_id = ?
-              AND step_id = ?
-              ${expectedClaimedBy ? "AND claimed_by = ?" : ""}`,
-        );
-        const update = updateResult.run(...updateValues);
-        if (expectedClaimedBy && Number(update.changes ?? 0) === 0) {
+        if (expectedClaimedBy && current.claimed_by !== expectedClaimedBy) {
           return undefined;
         }
-        const row = db
-          .prepare("SELECT * FROM durable_runtime_steps WHERE runtime_run_id = ? AND step_id = ?")
-          .get(input.runtimeRunId, input.stepId) as DurableRuntimeStepRow;
-        return rowToStep(row);
+        executeQuery(
+          db,
+          durableDb
+            .updateTable("durable_runtime_steps")
+            .set({
+              status: nextStatus,
+              recovery_state: nextRecoveryState,
+              attempt: nextAttempt,
+              max_attempts: nextMaxAttempts,
+              input_ref: nextInputRef,
+              output_ref: nextOutputRef,
+              error_ref: nextErrorRef,
+              checkpoint_ref: nextCheckpointRef,
+              claimed_by: nextClaimedBy,
+              claim_expires_at: nextClaimExpiresAt,
+              heartbeat_at: nextHeartbeatAt,
+              started_at: nextStartedAt,
+              completed_at: nextCompletedAt,
+              updated_at: now,
+              metadata_json: nextMetadataJson,
+            })
+            .where("runtime_run_id", "=", input.runtimeRunId)
+            .where("step_id", "=", input.stepId),
+        );
+        const row = queryFirst<DurableRuntimeStepRow>(
+          db,
+          durableDb
+            .selectFrom("durable_runtime_steps")
+            .selectAll()
+            .where("runtime_run_id", "=", input.runtimeRunId)
+            .where("step_id", "=", input.stepId),
+        );
+        return rowToStep(row!);
       });
     },
 
@@ -900,51 +934,57 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
       const now = input.now ?? Date.now();
       const claimExpiresAt = now + input.claimTtlMs;
       return runSqliteImmediateTransactionSync(db, () => {
-        const filters: string[] = [
-          "s.status IN ('pending', 'queued')",
-          "s.recovery_state IN ('runnable', 'claimed')",
-          "(s.claimed_by IS NULL OR s.claim_expires_at IS NULL OR s.claim_expires_at <= ?)",
-          "r.status NOT IN ('succeeded', 'failed', 'cancelled', 'lost')",
-        ];
-        const values: SQLInputValue[] = [now];
         const operationKind = optionalText(input.operationKind);
-        if (operationKind) {
-          filters.push("r.operation_kind = ?");
-          values.push(operationKind);
-        }
-        if (input.stepType) {
-          filters.push("s.step_type = ?");
-          values.push(input.stepType);
-        }
-        const row = db
-          .prepare(
-            `SELECT s.*
-               FROM durable_runtime_steps s
-               JOIN durable_runtime_runs r
-                 ON r.runtime_run_id = s.runtime_run_id
-              WHERE ${filters.join(" AND ")}
-              ORDER BY s.updated_at ASC, s.runtime_run_id ASC, s.step_id ASC
-              LIMIT 1`,
-          )
-          .get(...values) as DurableRuntimeStepRow | undefined;
+        const row = queryFirst<DurableRuntimeStepRow>(
+          db,
+          durableDb
+            .selectFrom("durable_runtime_steps as s")
+            .innerJoin("durable_runtime_runs as r", "r.runtime_run_id", "s.runtime_run_id")
+            .selectAll("s")
+            .where("s.status", "in", ["pending", "queued"])
+            .where("s.recovery_state", "in", ["runnable", "claimed"])
+            .where((eb) =>
+              eb.or([
+                eb("s.claimed_by", "is", null),
+                eb("s.claim_expires_at", "is", null),
+                eb("s.claim_expires_at", "<=", now),
+              ]),
+            )
+            .where("r.status", "not in", ["succeeded", "failed", "cancelled", "lost"])
+            .$if(Boolean(operationKind), (qb) => qb.where("r.operation_kind", "=", operationKind!))
+            .$if(Boolean(input.stepType), (qb) => qb.where("s.step_type", "=", input.stepType!))
+            .orderBy("s.updated_at", "asc")
+            .orderBy("s.runtime_run_id", "asc")
+            .orderBy("s.step_id", "asc")
+            .limit(1),
+        );
         if (!row) {
           return undefined;
         }
-        db.prepare(
-          `UPDATE durable_runtime_steps
-              SET status = 'queued',
-                  recovery_state = 'claimed',
-                  claimed_by = ?,
-                  claim_expires_at = ?,
-                  heartbeat_at = ?,
-                  updated_at = ?
-            WHERE runtime_run_id = ?
-              AND step_id = ?`,
-        ).run(input.workerId, claimExpiresAt, now, now, row.runtime_run_id, row.step_id);
-        const claimed = db
-          .prepare("SELECT * FROM durable_runtime_steps WHERE runtime_run_id = ? AND step_id = ?")
-          .get(row.runtime_run_id, row.step_id) as DurableRuntimeStepRow;
-        return rowToStep(claimed);
+        executeQuery(
+          db,
+          durableDb
+            .updateTable("durable_runtime_steps")
+            .set({
+              status: "queued",
+              recovery_state: "claimed",
+              claimed_by: input.workerId,
+              claim_expires_at: claimExpiresAt,
+              heartbeat_at: now,
+              updated_at: now,
+            })
+            .where("runtime_run_id", "=", row.runtime_run_id)
+            .where("step_id", "=", row.step_id),
+        );
+        const claimed = queryFirst<DurableRuntimeStepRow>(
+          db,
+          durableDb
+            .selectFrom("durable_runtime_steps")
+            .selectAll()
+            .where("runtime_run_id", "=", row.runtime_run_id)
+            .where("step_id", "=", row.step_id),
+        );
+        return rowToStep(claimed!);
       });
     },
 
@@ -956,290 +996,301 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
     }): DurableRuntimeStep | undefined {
       const now = input.now ?? Date.now();
       return runSqliteImmediateTransactionSync(db, () => {
-        const updateResult = db.prepare(
-          `UPDATE durable_runtime_steps
-              SET status = CASE WHEN status = 'running' THEN 'queued' ELSE status END,
-                  recovery_state = 'runnable',
-                  claimed_by = NULL,
-                  claim_expires_at = NULL,
-                  heartbeat_at = NULL,
-                  updated_at = ?
-            WHERE runtime_run_id = ?
-              AND step_id = ?
-              AND claimed_by = ?
-              AND status NOT IN ('succeeded', 'failed', 'cancelled', 'lost', 'skipped')
-              AND recovery_state != 'terminal'
-              AND completed_at IS NULL`,
+        const current = queryFirst<DurableRuntimeStepRow>(
+          db,
+          durableDb
+            .selectFrom("durable_runtime_steps")
+            .selectAll()
+            .where("runtime_run_id", "=", input.runtimeRunId)
+            .where("step_id", "=", input.stepId)
+            .where("claimed_by", "=", input.workerId)
+            .where("status", "not in", ["succeeded", "failed", "cancelled", "lost", "skipped"])
+            .where("recovery_state", "!=", "terminal")
+            .where("completed_at", "is", null),
         );
-        const update = updateResult.run(now, input.runtimeRunId, input.stepId, input.workerId);
-        if (Number(update.changes ?? 0) === 0) {
+        if (!current) {
           return undefined;
         }
-        const row = db
-          .prepare("SELECT * FROM durable_runtime_steps WHERE runtime_run_id = ? AND step_id = ?")
-          .get(input.runtimeRunId, input.stepId) as DurableRuntimeStepRow | undefined;
+        executeQuery(
+          db,
+          durableDb
+            .updateTable("durable_runtime_steps")
+            .set({
+              status: current.status === "running" ? "queued" : current.status,
+              recovery_state: "runnable",
+              claimed_by: null,
+              claim_expires_at: null,
+              heartbeat_at: null,
+              updated_at: now,
+            })
+            .where("runtime_run_id", "=", input.runtimeRunId)
+            .where("step_id", "=", input.stepId),
+        );
+        const row = queryFirst<DurableRuntimeStepRow>(
+          db,
+          durableDb
+            .selectFrom("durable_runtime_steps")
+            .selectAll()
+            .where("runtime_run_id", "=", input.runtimeRunId)
+            .where("step_id", "=", input.stepId),
+        );
         return row ? rowToStep(row) : undefined;
       });
     },
 
     listSteps(runtimeRunId: string): DurableRuntimeStep[] {
-      const rows = db
-        .prepare(
-          `SELECT *
-             FROM durable_runtime_steps
-            WHERE runtime_run_id = ?
-            ORDER BY created_at ASC, step_id ASC`,
-        )
-        .all(runtimeRunId) as DurableRuntimeStepRow[];
+      const rows = queryRows<DurableRuntimeStepRow>(
+        db,
+        durableDb
+          .selectFrom("durable_runtime_steps")
+          .selectAll()
+          .where("runtime_run_id", "=", runtimeRunId)
+          .orderBy("created_at", "asc")
+          .orderBy("step_id", "asc"),
+      );
       return rows.map(rowToStep);
     },
 
     createRef(input: CreateDurableRuntimeRefInput): DurableRuntimeRef {
       const now = input.now ?? Date.now();
       const refId = input.refId ?? `ref_${randomUUID()}`;
-      db.prepare(
-        `INSERT INTO durable_runtime_refs (
-           ref_id, runtime_run_id, step_id, ref_kind, media_type, hash, storage_kind,
-           storage_uri, created_at, metadata_json
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(
-        refId,
-        input.runtimeRunId,
-        optionalText(input.stepId),
-        input.refKind,
-        optionalText(input.mediaType),
-        optionalText(input.hash),
-        input.storageKind ?? "external",
-        optionalText(input.storageUri),
-        now,
-        serializeJson(input.metadata),
+      executeQuery(
+        db,
+        durableDb.insertInto("durable_runtime_refs").values({
+          ref_id: refId,
+          runtime_run_id: input.runtimeRunId,
+          step_id: optionalText(input.stepId),
+          ref_kind: input.refKind,
+          media_type: optionalText(input.mediaType),
+          hash: optionalText(input.hash),
+          storage_kind: input.storageKind ?? "external",
+          storage_uri: optionalText(input.storageUri),
+          created_at: now,
+          metadata_json: serializeJson(input.metadata),
+        }),
       );
-      const row = db
-        .prepare("SELECT * FROM durable_runtime_refs WHERE ref_id = ?")
-        .get(refId) as DurableRuntimeRefRow;
-      return rowToRef(row);
+      const row = queryFirst<DurableRuntimeRefRow>(
+        db,
+        durableDb.selectFrom("durable_runtime_refs").selectAll().where("ref_id", "=", refId),
+      );
+      return rowToRef(row!);
     },
 
     getRef(refId: string): DurableRuntimeRef | undefined {
-      const row = db.prepare("SELECT * FROM durable_runtime_refs WHERE ref_id = ?").get(refId) as
-        | DurableRuntimeRefRow
-        | undefined;
+      const row = queryFirst<DurableRuntimeRefRow>(
+        db,
+        durableDb.selectFrom("durable_runtime_refs").selectAll().where("ref_id", "=", refId),
+      );
       return row ? rowToRef(row) : undefined;
     },
 
     listRefs(runtimeRunId: string): DurableRuntimeRef[] {
-      const rows = db
-        .prepare(
-          `SELECT *
-             FROM durable_runtime_refs
-            WHERE runtime_run_id = ?
-            ORDER BY created_at ASC, ref_id ASC`,
-        )
-        .all(runtimeRunId) as DurableRuntimeRefRow[];
+      const rows = queryRows<DurableRuntimeRefRow>(
+        db,
+        durableDb
+          .selectFrom("durable_runtime_refs")
+          .selectAll()
+          .where("runtime_run_id", "=", runtimeRunId)
+          .orderBy("created_at", "asc")
+          .orderBy("ref_id", "asc"),
+      );
       return rows.map(rowToRef);
     },
 
     createLink(input: CreateDurableRuntimeLinkInput): DurableRuntimeLink {
       const now = input.now ?? Date.now();
-      db.prepare(
-        `INSERT INTO durable_runtime_links (
-           parent_runtime_run_id, parent_step_id, child_runtime_run_id, link_type,
-           status, created_at, updated_at, metadata_json
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(
-        input.parentRuntimeRunId,
-        input.parentStepId,
-        input.childRuntimeRunId,
-        input.linkType,
-        input.status ?? "pending",
-        now,
-        now,
-        serializeJson(input.metadata),
+      executeQuery(
+        db,
+        durableDb.insertInto("durable_runtime_links").values({
+          parent_runtime_run_id: input.parentRuntimeRunId,
+          parent_step_id: input.parentStepId,
+          child_runtime_run_id: input.childRuntimeRunId,
+          link_type: input.linkType,
+          status: input.status ?? "pending",
+          created_at: now,
+          updated_at: now,
+          metadata_json: serializeJson(input.metadata),
+        }),
       );
-      const row = db
-        .prepare(
-          `SELECT *
-             FROM durable_runtime_links
-            WHERE parent_runtime_run_id = ?
-              AND parent_step_id = ?
-              AND child_runtime_run_id = ?`,
-        )
-        .get(
-          input.parentRuntimeRunId,
-          input.parentStepId,
-          input.childRuntimeRunId,
-        ) as DurableRuntimeLinkRow;
-      return rowToLink(row);
+      const row = queryFirst<DurableRuntimeLinkRow>(
+        db,
+        durableDb
+          .selectFrom("durable_runtime_links")
+          .selectAll()
+          .where("parent_runtime_run_id", "=", input.parentRuntimeRunId)
+          .where("parent_step_id", "=", input.parentStepId)
+          .where("child_runtime_run_id", "=", input.childRuntimeRunId),
+      );
+      return rowToLink(row!);
     },
 
     updateLink(input: UpdateDurableRuntimeLinkInput): DurableRuntimeLink | undefined {
       const now = input.now ?? Date.now();
       return runSqliteImmediateTransactionSync(db, () => {
-        const current = db
-          .prepare(
-            `SELECT *
-               FROM durable_runtime_links
-              WHERE parent_runtime_run_id = ?
-                AND parent_step_id = ?
-                AND child_runtime_run_id = ?`,
-          )
-          .get(input.parentRuntimeRunId, input.parentStepId, input.childRuntimeRunId) as
-          | DurableRuntimeLinkRow
-          | undefined;
+        const current = queryFirst<DurableRuntimeLinkRow>(
+          db,
+          durableDb
+            .selectFrom("durable_runtime_links")
+            .selectAll()
+            .where("parent_runtime_run_id", "=", input.parentRuntimeRunId)
+            .where("parent_step_id", "=", input.parentStepId)
+            .where("child_runtime_run_id", "=", input.childRuntimeRunId),
+        );
         if (!current) {
           return undefined;
         }
-        db.prepare(
-          `UPDATE durable_runtime_links
-              SET status = ?,
-                  updated_at = ?,
-                  metadata_json = ?
-            WHERE parent_runtime_run_id = ?
-              AND parent_step_id = ?
-              AND child_runtime_run_id = ?`,
-        ).run(
-          input.status ?? current.status,
-          now,
-          input.metadata === undefined ? current.metadata_json : serializeJson(input.metadata),
-          input.parentRuntimeRunId,
-          input.parentStepId,
-          input.childRuntimeRunId,
+        executeQuery(
+          db,
+          durableDb
+            .updateTable("durable_runtime_links")
+            .set({
+              status: input.status ?? current.status,
+              updated_at: now,
+              metadata_json:
+                input.metadata === undefined
+                  ? current.metadata_json
+                  : serializeJson(input.metadata),
+            })
+            .where("parent_runtime_run_id", "=", input.parentRuntimeRunId)
+            .where("parent_step_id", "=", input.parentStepId)
+            .where("child_runtime_run_id", "=", input.childRuntimeRunId),
         );
-        const row = db
-          .prepare(
-            `SELECT *
-               FROM durable_runtime_links
-              WHERE parent_runtime_run_id = ?
-                AND parent_step_id = ?
-                AND child_runtime_run_id = ?`,
-          )
-          .get(
-            input.parentRuntimeRunId,
-            input.parentStepId,
-            input.childRuntimeRunId,
-          ) as DurableRuntimeLinkRow;
-        return rowToLink(row);
+        const row = queryFirst<DurableRuntimeLinkRow>(
+          db,
+          durableDb
+            .selectFrom("durable_runtime_links")
+            .selectAll()
+            .where("parent_runtime_run_id", "=", input.parentRuntimeRunId)
+            .where("parent_step_id", "=", input.parentStepId)
+            .where("child_runtime_run_id", "=", input.childRuntimeRunId),
+        );
+        return rowToLink(row!);
       });
     },
 
     listChildLinks(parentRuntimeRunId: string): DurableRuntimeLink[] {
-      const rows = db
-        .prepare(
-          `SELECT *
-             FROM durable_runtime_links
-            WHERE parent_runtime_run_id = ?
-            ORDER BY created_at ASC, child_runtime_run_id ASC`,
-        )
-        .all(parentRuntimeRunId) as DurableRuntimeLinkRow[];
+      const rows = queryRows<DurableRuntimeLinkRow>(
+        db,
+        durableDb
+          .selectFrom("durable_runtime_links")
+          .selectAll()
+          .where("parent_runtime_run_id", "=", parentRuntimeRunId)
+          .orderBy("created_at", "asc")
+          .orderBy("child_runtime_run_id", "asc"),
+      );
       return rows.map(rowToLink);
     },
 
     listParentLinks(childRuntimeRunId: string): DurableRuntimeLink[] {
-      const rows = db
-        .prepare(
-          `SELECT *
-             FROM durable_runtime_links
-            WHERE child_runtime_run_id = ?
-            ORDER BY created_at ASC, parent_runtime_run_id ASC, parent_step_id ASC`,
-        )
-        .all(childRuntimeRunId) as DurableRuntimeLinkRow[];
+      const rows = queryRows<DurableRuntimeLinkRow>(
+        db,
+        durableDb
+          .selectFrom("durable_runtime_links")
+          .selectAll()
+          .where("child_runtime_run_id", "=", childRuntimeRunId)
+          .orderBy("created_at", "asc")
+          .orderBy("parent_runtime_run_id", "asc")
+          .orderBy("parent_step_id", "asc"),
+      );
       return rows.map(rowToLink);
     },
 
     createTimer(input: CreateDurableRuntimeTimerInput): DurableRuntimeTimer {
       const now = input.now ?? Date.now();
       const timerId = input.timerId ?? `timer_${randomUUID()}`;
-      db.prepare(
-        `INSERT INTO durable_runtime_timers (
-           timer_id, runtime_run_id, step_id, timer_type, due_at, status, created_at,
-           fired_at, cancelled_at, metadata_json
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(
-        timerId,
-        input.runtimeRunId,
-        optionalText(input.stepId),
-        input.timerType,
-        input.dueAt,
-        "pending",
-        now,
-        null,
-        null,
-        serializeJson(input.metadata),
+      executeQuery(
+        db,
+        durableDb.insertInto("durable_runtime_timers").values({
+          timer_id: timerId,
+          runtime_run_id: input.runtimeRunId,
+          step_id: optionalText(input.stepId),
+          timer_type: input.timerType,
+          due_at: input.dueAt,
+          status: "pending",
+          created_at: now,
+          fired_at: null,
+          cancelled_at: null,
+          metadata_json: serializeJson(input.metadata),
+        }),
       );
-      const row = db
-        .prepare("SELECT * FROM durable_runtime_timers WHERE timer_id = ?")
-        .get(timerId) as DurableRuntimeTimerRow;
-      return rowToTimer(row);
+      const row = queryFirst<DurableRuntimeTimerRow>(
+        db,
+        durableDb.selectFrom("durable_runtime_timers").selectAll().where("timer_id", "=", timerId),
+      );
+      return rowToTimer(row!);
     },
 
     updateTimer(input: UpdateDurableRuntimeTimerInput): DurableRuntimeTimer | undefined {
       const now = input.now ?? Date.now();
       return runSqliteImmediateTransactionSync(db, () => {
-        const current = db
-          .prepare("SELECT * FROM durable_runtime_timers WHERE timer_id = ?")
-          .get(input.timerId) as DurableRuntimeTimerRow | undefined;
+        const current = queryFirst<DurableRuntimeTimerRow>(
+          db,
+          durableDb
+            .selectFrom("durable_runtime_timers")
+            .selectAll()
+            .where("timer_id", "=", input.timerId),
+        );
         if (!current) {
           return undefined;
         }
-        db.prepare(
-          `UPDATE durable_runtime_timers
-              SET status = ?,
-                  fired_at = ?,
-                  cancelled_at = ?
-            WHERE timer_id = ?`,
-        ).run(
-          input.status,
-          input.firedAt === undefined
-            ? input.status === "fired"
-              ? now
-              : current.fired_at
-            : input.firedAt,
-          input.cancelledAt === undefined
-            ? input.status === "cancelled"
-              ? now
-              : current.cancelled_at
-            : input.cancelledAt,
-          input.timerId,
+        executeQuery(
+          db,
+          durableDb
+            .updateTable("durable_runtime_timers")
+            .set({
+              status: input.status,
+              fired_at:
+                input.firedAt === undefined
+                  ? input.status === "fired"
+                    ? now
+                    : current.fired_at
+                  : input.firedAt,
+              cancelled_at:
+                input.cancelledAt === undefined
+                  ? input.status === "cancelled"
+                    ? now
+                    : current.cancelled_at
+                  : input.cancelledAt,
+            })
+            .where("timer_id", "=", input.timerId),
         );
-        const row = db
-          .prepare("SELECT * FROM durable_runtime_timers WHERE timer_id = ?")
-          .get(input.timerId) as DurableRuntimeTimerRow;
-        return rowToTimer(row);
+        const row = queryFirst<DurableRuntimeTimerRow>(
+          db,
+          durableDb
+            .selectFrom("durable_runtime_timers")
+            .selectAll()
+            .where("timer_id", "=", input.timerId),
+        );
+        return rowToTimer(row!);
       });
     },
 
     listTimers(runtimeRunId?: string): DurableRuntimeTimer[] {
-      const rows = runtimeRunId
-        ? (db
-            .prepare(
-              `SELECT *
-                 FROM durable_runtime_timers
-                WHERE runtime_run_id = ?
-                ORDER BY due_at ASC, timer_id ASC`,
-            )
-            .all(runtimeRunId) as DurableRuntimeTimerRow[])
-        : (db
-            .prepare(
-              `SELECT *
-                 FROM durable_runtime_timers
-                ORDER BY due_at ASC, timer_id ASC`,
-            )
-            .all() as DurableRuntimeTimerRow[]);
+      const rows = queryRows<DurableRuntimeTimerRow>(
+        db,
+        durableDb
+          .selectFrom("durable_runtime_timers")
+          .selectAll()
+          .$if(Boolean(runtimeRunId), (qb) => qb.where("runtime_run_id", "=", runtimeRunId!))
+          .orderBy("due_at", "asc")
+          .orderBy("timer_id", "asc"),
+      );
       return rows.map(rowToTimer);
     },
 
     listDueTimers(now: number, options?: { limit?: number }): DurableRuntimeTimer[] {
       const limit = Math.max(1, Math.min(5000, Math.trunc(options?.limit ?? 500)));
-      const rows = db
-        .prepare(
-          `SELECT *
-             FROM durable_runtime_timers
-            WHERE status = 'pending'
-              AND due_at <= ?
-            ORDER BY due_at ASC, timer_id ASC
-            LIMIT ?`,
-        )
-        .all(now, limit) as DurableRuntimeTimerRow[];
+      const rows = queryRows<DurableRuntimeTimerRow>(
+        db,
+        durableDb
+          .selectFrom("durable_runtime_timers")
+          .selectAll()
+          .where("status", "=", "pending")
+          .where("due_at", "<=", now)
+          .orderBy("due_at", "asc")
+          .orderBy("timer_id", "asc")
+          .limit(limit),
+      );
       return rows.map(rowToTimer);
     },
 
@@ -1248,80 +1299,100 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
       return runSqliteImmediateTransactionSync(db, () => {
         const existing =
           input.idempotencyKey &&
-          (db
-            .prepare(
-              `SELECT *
-                 FROM durable_runtime_signals
-                WHERE runtime_run_id = ?
-                  AND idempotency_key = ?`,
-            )
-            .get(input.runtimeRunId, input.idempotencyKey) as DurableRuntimeSignalRow | undefined);
+          queryFirst<DurableRuntimeSignalRow>(
+            db,
+            durableDb
+              .selectFrom("durable_runtime_signals")
+              .selectAll()
+              .where("runtime_run_id", "=", input.runtimeRunId)
+              .where("idempotency_key", "=", input.idempotencyKey),
+          );
         if (existing) {
           return rowToSignal(existing);
         }
         const signalId = input.signalId ?? `sig_${randomUUID()}`;
-        db.prepare(
-          `INSERT INTO durable_runtime_signals (
-             signal_id, runtime_run_id, step_id, signal_type, idempotency_key, payload_ref,
-             correlation_id, received_at, consumed_at, metadata_json
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ).run(
-          signalId,
-          input.runtimeRunId,
-          optionalText(input.stepId),
-          input.signalType,
-          optionalText(input.idempotencyKey),
-          optionalText(input.payloadRef),
-          optionalText(input.correlationId),
-          now,
-          null,
-          serializeJson(input.metadata),
+        executeQuery(
+          db,
+          durableDb.insertInto("durable_runtime_signals").values({
+            signal_id: signalId,
+            runtime_run_id: input.runtimeRunId,
+            step_id: optionalText(input.stepId),
+            signal_type: input.signalType,
+            idempotency_key: optionalText(input.idempotencyKey),
+            payload_ref: optionalText(input.payloadRef),
+            correlation_id: optionalText(input.correlationId),
+            received_at: now,
+            consumed_at: null,
+            metadata_json: serializeJson(input.metadata),
+          }),
         );
-        const row = db
-          .prepare("SELECT * FROM durable_runtime_signals WHERE signal_id = ?")
-          .get(signalId) as DurableRuntimeSignalRow;
-        return rowToSignal(row);
+        const row = queryFirst<DurableRuntimeSignalRow>(
+          db,
+          durableDb
+            .selectFrom("durable_runtime_signals")
+            .selectAll()
+            .where("signal_id", "=", signalId),
+        );
+        return rowToSignal(row!);
       });
     },
 
     consumeSignal(input: { signalId: string; now?: number }): DurableRuntimeSignal | undefined {
       const now = input.now ?? Date.now();
       return runSqliteImmediateTransactionSync(db, () => {
-        db.prepare(
-          `UPDATE durable_runtime_signals
-              SET consumed_at = COALESCE(consumed_at, ?)
-            WHERE signal_id = ?`,
-        ).run(now, input.signalId);
-        const row = db
-          .prepare("SELECT * FROM durable_runtime_signals WHERE signal_id = ?")
-          .get(input.signalId) as DurableRuntimeSignalRow | undefined;
+        const current = queryFirst<DurableRuntimeSignalRow>(
+          db,
+          durableDb
+            .selectFrom("durable_runtime_signals")
+            .selectAll()
+            .where("signal_id", "=", input.signalId),
+        );
+        if (!current) {
+          return undefined;
+        }
+        executeQuery(
+          db,
+          durableDb
+            .updateTable("durable_runtime_signals")
+            .set({ consumed_at: current.consumed_at ?? now })
+            .where("signal_id", "=", input.signalId),
+        );
+        const row = queryFirst<DurableRuntimeSignalRow>(
+          db,
+          durableDb
+            .selectFrom("durable_runtime_signals")
+            .selectAll()
+            .where("signal_id", "=", input.signalId),
+        );
         return row ? rowToSignal(row) : undefined;
       });
     },
 
     listPendingSignals(options?: { limit?: number }): DurableRuntimeSignal[] {
       const limit = Math.max(1, Math.min(5000, Math.trunc(options?.limit ?? 500)));
-      const rows = db
-        .prepare(
-          `SELECT *
-             FROM durable_runtime_signals
-            WHERE consumed_at IS NULL
-            ORDER BY received_at ASC, signal_id ASC
-            LIMIT ?`,
-        )
-        .all(limit) as DurableRuntimeSignalRow[];
+      const rows = queryRows<DurableRuntimeSignalRow>(
+        db,
+        durableDb
+          .selectFrom("durable_runtime_signals")
+          .selectAll()
+          .where("consumed_at", "is", null)
+          .orderBy("received_at", "asc")
+          .orderBy("signal_id", "asc")
+          .limit(limit),
+      );
       return rows.map(rowToSignal);
     },
 
     listSignals(runtimeRunId: string): DurableRuntimeSignal[] {
-      const rows = db
-        .prepare(
-          `SELECT *
-             FROM durable_runtime_signals
-            WHERE runtime_run_id = ?
-            ORDER BY received_at ASC, signal_id ASC`,
-        )
-        .all(runtimeRunId) as DurableRuntimeSignalRow[];
+      const rows = queryRows<DurableRuntimeSignalRow>(
+        db,
+        durableDb
+          .selectFrom("durable_runtime_signals")
+          .selectAll()
+          .where("runtime_run_id", "=", runtimeRunId)
+          .orderBy("received_at", "asc")
+          .orderBy("signal_id", "asc"),
+      );
       return rows.map(rowToSignal);
     },
 
@@ -1330,30 +1401,17 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
       timelineOptions?: DurableRuntimeTimelineOptions,
     ): DurableRuntimeEvent[] {
       const afterEventSeq = Math.max(0, Math.trunc(timelineOptions?.afterEventSeq ?? 0));
-      const rows =
-        timelineOptions?.limit === undefined && afterEventSeq === 0
-          ? (db
-              .prepare(
-                `SELECT *
-                   FROM durable_runtime_events
-                  WHERE runtime_run_id = ?
-                  ORDER BY event_seq ASC`,
-              )
-              .all(runtimeRunId) as DurableRuntimeEventRow[])
-          : (db
-              .prepare(
-                `SELECT *
-                   FROM durable_runtime_events
-                  WHERE runtime_run_id = ?
-                    AND event_seq > ?
-                  ORDER BY event_seq ASC
-                  LIMIT ?`,
-              )
-              .all(
-                runtimeRunId,
-                afterEventSeq,
-                normalizeQueryLimit(timelineOptions?.limit, 500),
-              ) as DurableRuntimeEventRow[]);
+      const shouldLimit = timelineOptions?.limit !== undefined || afterEventSeq !== 0;
+      const rows = queryRows<DurableRuntimeEventRow>(
+        db,
+        durableDb
+          .selectFrom("durable_runtime_events")
+          .selectAll()
+          .where("runtime_run_id", "=", runtimeRunId)
+          .$if(afterEventSeq !== 0, (qb) => qb.where("event_seq", ">", afterEventSeq))
+          .orderBy("event_seq", "asc")
+          .$if(shouldLimit, (qb) => qb.limit(normalizeQueryLimit(timelineOptions?.limit, 500))),
+      );
       return rows.map(rowToEvent);
     },
 
@@ -1361,9 +1419,13 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
       const keepLastEvents = normalizeQueryLimit(input.keepLastEvents, 200);
       const now = input.now ?? Date.now();
       return runSqliteImmediateTransactionSync(db, () => {
-        const run = db
-          .prepare("SELECT * FROM durable_runtime_runs WHERE runtime_run_id = ?")
-          .get(input.runtimeRunId) as DurableRuntimeRunRow | undefined;
+        const run = queryFirst<DurableRuntimeRunRow>(
+          db,
+          durableDb
+            .selectFrom("durable_runtime_runs")
+            .selectAll()
+            .where("runtime_run_id", "=", input.runtimeRunId),
+        );
         if (!run || !isTerminalRunStatus(run.status)) {
           return {
             runtimeRunId: input.runtimeRunId,
@@ -1373,8 +1435,10 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
         }
         const totalEvents = count(
           db,
-          "SELECT COUNT(*) AS count FROM durable_runtime_events WHERE runtime_run_id = ?",
-          [input.runtimeRunId],
+          durableDb
+            .selectFrom("durable_runtime_events")
+            .select((eb) => eb.fn.countAll<number>().as("count"))
+            .where("runtime_run_id", "=", input.runtimeRunId),
         );
         if (totalEvents <= keepLastEvents) {
           return {
@@ -1383,17 +1447,16 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
             removedEvents: 0,
           };
         }
-        const cutoff = db
-          .prepare(
-            `SELECT event_seq
-               FROM durable_runtime_events
-              WHERE runtime_run_id = ?
-              ORDER BY event_seq DESC
-              LIMIT 1 OFFSET ?`,
-          )
-          .get(input.runtimeRunId, keepLastEvents - 1) as
-          | { event_seq: number | bigint }
-          | undefined;
+        const cutoff = queryFirst<{ event_seq: number | bigint }>(
+          db,
+          durableDb
+            .selectFrom("durable_runtime_events")
+            .select("event_seq")
+            .where("runtime_run_id", "=", input.runtimeRunId)
+            .orderBy("event_seq", "desc")
+            .limit(1)
+            .offset(keepLastEvents - 1),
+        );
         const cutoffSeq = Number(cutoff?.event_seq ?? 0);
         if (cutoffSeq <= 1) {
           return {
@@ -1402,14 +1465,13 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
             removedEvents: 0,
           };
         }
-        const deleteResult = db
-          .prepare(
-            `DELETE FROM durable_runtime_events
-              WHERE runtime_run_id = ?
-                AND event_seq < ?`,
-          )
-          .run(input.runtimeRunId, cutoffSeq);
-        const removedEvents = Number(deleteResult.changes ?? 0);
+        const removedEvents = executeQuery(
+          db,
+          durableDb
+            .deleteFrom("durable_runtime_events")
+            .where("runtime_run_id", "=", input.runtimeRunId)
+            .where("event_seq", "<", cutoffSeq),
+        );
         if (removedEvents <= 0) {
           return {
             runtimeRunId: input.runtimeRunId,
@@ -1418,37 +1480,38 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
           };
         }
         const nextSeq =
-          count(
+          (queryFirst<Pick<DurableRuntimeEventRow, "event_seq">>(
             db,
-            "SELECT COALESCE(MAX(event_seq), 0) AS count FROM durable_runtime_events WHERE runtime_run_id = ?",
-            [input.runtimeRunId],
-          ) + 1;
-        db.prepare(
-          `INSERT INTO durable_runtime_events (
-             event_id, runtime_run_id, event_seq, event_type, event_time, step_id,
-             agent_invocation_id, tool_invocation_id, idempotency_key, payload_json,
-             payload_hash, checkpoint_ref, causation_event_id, correlation_id, recorded_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ).run(
-          `evt_${randomUUID()}`,
-          input.runtimeRunId,
-          nextSeq,
-          "runtime.history.compacted",
-          now,
-          null,
-          null,
-          null,
-          null,
-          serializeJson({
-            removedEvents,
-            keptLastEvents: keepLastEvents,
-            compactedBeforeEventSeq: cutoffSeq,
+            durableDb
+              .selectFrom("durable_runtime_events")
+              .select("event_seq")
+              .where("runtime_run_id", "=", input.runtimeRunId)
+              .orderBy("event_seq", "desc")
+              .limit(1),
+          )?.event_seq ?? 0) + 1;
+        executeQuery(
+          db,
+          durableDb.insertInto("durable_runtime_events").values({
+            event_id: `evt_${randomUUID()}`,
+            runtime_run_id: input.runtimeRunId,
+            event_seq: nextSeq,
+            event_type: "runtime.history.compacted",
+            event_time: now,
+            step_id: null,
+            agent_invocation_id: null,
+            tool_invocation_id: null,
+            idempotency_key: null,
+            payload_json: serializeJson({
+              removedEvents,
+              keptLastEvents: keepLastEvents,
+              compactedBeforeEventSeq: cutoffSeq,
+            }),
+            payload_hash: null,
+            checkpoint_ref: null,
+            causation_event_id: null,
+            correlation_id: null,
+            recorded_at: now,
           }),
-          null,
-          null,
-          null,
-          null,
-          now,
         );
         return {
           runtimeRunId: input.runtimeRunId,
@@ -1462,12 +1525,30 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
       return {
         path: pathname,
         schemaVersion: OPENCLAW_STATE_SCHEMA_VERSION,
-        runs: count(db, "SELECT COUNT(*) AS count FROM durable_runtime_runs"),
-        events: count(db, "SELECT COUNT(*) AS count FROM durable_runtime_events"),
-        steps: count(db, "SELECT COUNT(*) AS count FROM durable_runtime_steps"),
+        runs: count(
+          db,
+          durableDb
+            .selectFrom("durable_runtime_runs")
+            .select((eb) => eb.fn.countAll<number>().as("count")),
+        ),
+        events: count(
+          db,
+          durableDb
+            .selectFrom("durable_runtime_events")
+            .select((eb) => eb.fn.countAll<number>().as("count")),
+        ),
+        steps: count(
+          db,
+          durableDb
+            .selectFrom("durable_runtime_steps")
+            .select((eb) => eb.fn.countAll<number>().as("count")),
+        ),
         openRuns: count(
           db,
-          "SELECT COUNT(*) AS count FROM durable_runtime_runs WHERE status NOT IN ('succeeded', 'failed', 'cancelled', 'lost')",
+          durableDb
+            .selectFrom("durable_runtime_runs")
+            .select((eb) => eb.fn.countAll<number>().as("count"))
+            .where("status", "not in", ["succeeded", "failed", "cancelled", "lost"]),
         ),
       };
     },
