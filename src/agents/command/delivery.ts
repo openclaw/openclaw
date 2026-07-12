@@ -617,9 +617,10 @@ export async function deliverAgentCommandResult(
       opts.deliveryTargetMode ??
       effectiveDeliveryPlan.deliveryTargetMode ??
       (opts.to ? "explicit" : "implicit");
-    const defaultAccountId = deliveryPlugin
-      ? resolveChannelDefaultAccountId({ plugin: deliveryPlugin, cfg })
-      : undefined;
+    const defaultAccountId =
+      !effectiveDeliveryPlan.resolvedAccountId && deliveryPlugin?.config?.listAccountIds
+        ? resolveChannelDefaultAccountId({ plugin: deliveryPlugin, cfg })
+        : undefined;
     const resolvedAccountId = effectiveDeliveryPlan.resolvedAccountId ?? defaultAccountId;
     const resolvedDeliveryPlan =
       resolvedAccountId === effectiveDeliveryPlan.resolvedAccountId
