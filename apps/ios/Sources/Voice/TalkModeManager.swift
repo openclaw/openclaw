@@ -138,6 +138,9 @@ final class TalkModeManager: NSObject {
     var isSpeaking: Bool = false
     var isUserSpeechDetected: Bool = false
     var isPushToTalkActive: Bool = false
+    var hasActivePushToTalkSession: Bool {
+        self.isPushToTalkActive || self.activePushToTalk != nil || self.finishingPushToTalk != nil
+    }
     private(set) var phase: TalkPhase = .idle
     private(set) var watchPresentation: TalkWatchPresentation = .phase
     var statusText: String = "Off" {
@@ -1014,11 +1017,13 @@ final class TalkModeManager: NSObject {
                 let speechOk = await Self.requestSpeechPermission()
                 try self.ensurePushToTalkStartCurrent(captureId: captureId, canStartCapture: canStartCapture)
                 guard speechOk else {
+                    let status = Self.permissionMessage(
+                        kind: String(localized: "Speech recognition"),
+                        status: SFSpeechRecognizer.authorizationStatus())
                     self.setStatus(
-                        Self.permissionMessage(
-                            kind: String(localized: "Speech recognition"),
-                            status: SFSpeechRecognizer.authorizationStatus()),
-                        phase: .idle)
+                        status,
+                        phase: .idle,
+                        watchPresentation: .verbatim(status))
                     throw NSError(domain: "TalkMode", code: 5, userInfo: [
                         NSLocalizedDescriptionKey: "Speech recognition permission denied",
                     ])

@@ -6091,14 +6091,17 @@ extension NodeAppModel {
     }
 
     private func makeWatchTalkStatus() -> OpenClawWatchAppStatus {
-        if !self.talkMode.isEnabled {
-            return OpenClawWatchAppStatus(code: .talkOff)
-        }
         if self.talkMode.isSpeaking {
             return OpenClawWatchAppStatus(code: .talkSpeaking)
         }
         if self.talkMode.isListening {
             return OpenClawWatchAppStatus(code: .talkListening)
+        }
+        if self.talkMode.hasActivePushToTalkSession {
+            return self.makeWatchTalkPresentationStatus()
+        }
+        if !self.talkMode.isEnabled {
+            return OpenClawWatchAppStatus(code: .talkOff)
         }
         if !self.talkMode.isGatewayConnected {
             return OpenClawWatchAppStatus(code: .talkOffline)
@@ -6117,6 +6120,10 @@ extension NodeAppModel {
         case .apiKeyMissing:
             return OpenClawWatchAppStatus(code: .talkAPIKeyMissing)
         }
+        return self.makeWatchTalkPresentationStatus()
+    }
+
+    private func makeWatchTalkPresentationStatus() -> OpenClawWatchAppStatus {
         switch self.talkMode.watchPresentation {
         case let .localized(key):
             return OpenClawWatchAppStatus(code: .talkFailure, localizationKey: key)

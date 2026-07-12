@@ -4758,6 +4758,28 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(watchService.lastSentAppSnapshot?.talkStatusText == "Speech error: denied")
     }
 
+    @Test @MainActor func `watch app snapshot preserves one shot push to talk phase`() async throws {
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(watchMessagingService: watchService)
+        appModel.talkMode.isEnabled = false
+        appModel.talkMode.isPushToTalkActive = true
+        appModel.talkMode._test_handleRealtimeRelayStatus("Thinking")
+
+        watchService.emitAppSnapshotRequest(
+            WatchAppSnapshotRequestEvent(
+                requestId: "app-snapshot-push-to-talk",
+                sentAtMs: 123,
+                transport: "sendMessage"))
+        for _ in 0..<20 {
+            if watchService.lastSentAppSnapshot != nil {
+                break
+            }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        #expect(watchService.lastSentAppSnapshot?.talkStatus.code == .talkThinking)
+    }
+
     @Test @MainActor func `watch app snapshot publishes online when operator reconnects`() async {
         let watchService = MockWatchMessagingService()
         let appModel = NodeAppModel(watchMessagingService: watchService)
