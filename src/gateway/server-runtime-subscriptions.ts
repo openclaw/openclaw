@@ -251,7 +251,9 @@ export function startGatewayEventSubscriptions(params: {
         ? evt.data.phase
         : undefined;
     if (lifecyclePhase === "end" || lifecyclePhase === "error") {
-      const chatLink = params.chatRunState.registry.peek(evt.runId);
+      const chatLink = evt.contextClaimId
+        ? undefined
+        : params.chatRunState.registry.peek(evt.runId);
       const clientRunId = chatLink?.clientRunId ?? evt.runId;
       const candidateRunIds = evt.runId === clientRunId ? [evt.runId] : [evt.runId, clientRunId];
       for (const candidateRunId of candidateRunIds) {
@@ -271,7 +273,9 @@ export function startGatewayEventSubscriptions(params: {
         }
       }
     } else if (lifecyclePhase === "start") {
-      const chatLink = params.chatRunState.registry.peek(evt.runId);
+      const chatLink = evt.contextClaimId
+        ? undefined
+        : params.chatRunState.registry.peek(evt.runId);
       const clientRunId = chatLink?.clientRunId ?? evt.runId;
       const candidateRunIds = evt.runId === clientRunId ? [evt.runId] : [evt.runId, clientRunId];
       const eventLifecycleGeneration = evt.lifecycleGeneration?.trim();
