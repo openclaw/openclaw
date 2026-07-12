@@ -262,6 +262,9 @@ async function listWikiMarkdownFiles(rootDir: string): Promise<string[]> {
   return files.toSorted((left, right) => left.localeCompare(right));
 }
 
+/** Match compile-time page reads so exhaustive wiki search keeps throughput. */
+const READ_QUERYABLE_WIKI_PAGES_CONCURRENCY = 16;
+
 export async function readQueryableWikiPages(
   rootDir: string,
   signal?: AbortSignal,
@@ -278,21 +281,40 @@ async function readQueryableWikiPagesByPaths(
   files: string[],
   signal?: AbortSignal,
 ): Promise<QueryableWikiPage[]> {
-  // Sequential reads so an abort can stop further I/O mid-batch (Promise.all
-  // would keep launching reads after the deadline fires).
-  const pages: QueryableWikiPage[] = [];
-  for (const relativePath of files) {
-    if (signal?.aborted) {
-      break;
-    }
-    const absolutePath = path.join(rootDir, relativePath);
-    const raw = await fs.readFile(absolutePath, "utf8");
-    const summary = toWikiPageSummary({ absolutePath, relativePath, raw });
-    if (summary) {
-      pages.push({ ...summary, raw });
-    }
+  if (signal?.aborted || files.length === 0) {
+    return [];
   }
-  return pages;
+
+  // Bounded workers preserve direct-search throughput; abort is checked before
+  // claiming the next path so deadlines stop new I/O (in-flight reads settle).
+  const results: Array<QueryableWikiPage | undefined> = Array.from({ length: files.length });
+  let next = 0;
+  const limit = Math.max(1, Math.min(READ_QUERYABLE_WIKI_PAGES_CONCURRENCY, files.length));
+  const workers = Array.from({ length: limit }, async () => {
+    while (true) {
+      if (signal?.aborted) {
+        return;
+      }
+      const index = next;
+      next += 1;
+      if (index >= files.length) {
+        return;
+      }
+      const relativePath = files[index];
+      if (!relativePath) {
+        return;
+      }
+      const absolutePath = path.join(rootDir, relativePath);
+      const raw = await fs.readFile(absolutePath, "utf8");
+      const summary = toWikiPageSummary({ absolutePath, relativePath, raw });
+      if (summary) {
+        results[index] = { ...summary, raw };
+      }
+    }
+  });
+
+  await Promise.all(workers);
+  return results.flatMap((page) => (page ? [page] : []));
 }
 
 function parseClaimsDigest(raw: string): QueryDigestClaim[] {
