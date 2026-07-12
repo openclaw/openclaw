@@ -374,9 +374,14 @@ async function checkGitUpdateStatus(params: {
     if (parts.length < 2) {
       return null;
     }
-    const ahead = Number.parseInt(parts[0] ?? "", 10);
-    const behind = Number.parseInt(parts[1] ?? "", 10);
-    if (!Number.isFinite(ahead) || !Number.isFinite(behind)) {
+    const aRaw = parts[0] ?? "";
+    const bRaw = parts[1] ?? "";
+    if (!/^\d+$/.test(aRaw) || !/^\d+$/.test(bRaw)) {
+      return null;
+    }
+    const ahead = Number.parseInt(aRaw, 10);
+    const behind = Number.parseInt(bRaw, 10);
+    if (!Number.isSafeInteger(ahead) || !Number.isSafeInteger(behind)) {
       return null;
     }
     return { ahead, behind };
