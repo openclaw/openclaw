@@ -2,13 +2,8 @@ import type { RouteLocation } from "@openclaw/uirouter";
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
 import type { ApplicationContext } from "../../app/context.ts";
-import type { ConfigPageId, ConfigRouteData } from "./config-page.ts";
-
-function configRouteData(location: RouteLocation): ConfigRouteData {
-  const section = new URLSearchParams(location.search).get("section")?.trim() || null;
-  const targetBlockId = location.hash ? decodeURIComponent(location.hash.slice(1)) : null;
-  return { section, targetBlockId };
-}
+import type { ConfigPageId } from "./config-sections.ts";
+import { configRouteData, type ConfigRouteData } from "./route-data.ts";
 
 function loadConfigRoute(context: ApplicationContext, location: RouteLocation) {
   const primaryLoad = context.runtimeConfig.ensureLoaded();

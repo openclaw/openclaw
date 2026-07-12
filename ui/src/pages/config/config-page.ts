@@ -40,6 +40,7 @@ import {
   type QuickSettingsChannel,
   type QuickSettingsSecurity,
 } from "./quick.ts";
+import { configTargetIdFromHash, type ConfigRouteData } from "./route-data.ts";
 import {
   createConfigViewState,
   renderConfig,
@@ -48,10 +49,6 @@ import {
 } from "./view.ts";
 
 export type { ConfigPageId } from "./config-sections.ts";
-export type ConfigRouteData = {
-  section: string | null;
-  targetBlockId: string | null;
-};
 
 type ConfigFormMode = "form" | "raw";
 type ConfigSelection = { activeSection: string | null; activeSubsection: string | null };
@@ -358,7 +355,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     this.selections = { ...this.selections, [this.pageId]: selection };
     const targetBlockId =
       this.routeData?.targetBlockId ??
-      (globalThis.location?.hash ? decodeURIComponent(globalThis.location.hash.slice(1)) : null);
+      configTargetIdFromHash(globalThis.location?.hash ?? "");
     this.pendingRouteTargetId = targetBlockId;
     if (this.pageId !== "config") {
       return;
