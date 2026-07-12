@@ -14109,6 +14109,21 @@
       "translated": "Обработка…"
     },
     {
+      "id": "native.apple.5b40cb9cf4ee4d4f",
+      "source": "Asking OpenClaw",
+      "translated": "Запрос к OpenClaw"
+    },
+    {
+      "id": "native.apple.34531893ae6091b1",
+      "source": "Still asking OpenClaw",
+      "translated": "Всё ещё выполняется запрос к OpenClaw"
+    },
+    {
+      "id": "native.apple.027ab0bbb4553124",
+      "source": "Updating OpenClaw",
+      "translated": "Обновление OpenClaw"
+    },
+    {
       "id": "native.apple.471dc394d6b9e443",
       "source": "Speaking",
       "translated": "Воспроизведение речи"
@@ -14117,6 +14132,11 @@
       "id": "native.apple.d875398b44f6de27",
       "source": "Speaking…",
       "translated": "Говорит…"
+    },
+    {
+      "id": "native.apple.5745471bd8e60077",
+      "source": "Connecting",
+      "translated": "Подключение"
     },
     {
       "id": "native.apple.278dad1d617e7a63",

@@ -17210,8 +17210,8 @@
       "id": "native.apple.0cb64be43c0b3d97"
     },
     {
-      "kind": "ui-call-concatenated",
-      "line": 366,
+      "kind": "ui-localized-call",
+      "line": 369,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "This removes saved credentials, device access, TLS trust, and cached chats for this gateway.",
       "surface": "apple",
@@ -17219,7 +17219,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 422,
+      "line": 423,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Enable OpenClaw Hosted Push Relay?",
       "surface": "apple",
@@ -17227,7 +17227,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 436,
+      "line": 437,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Continue",
       "surface": "apple",
@@ -17235,7 +17235,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 444,
+      "line": 445,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Not Now",
       "surface": "apple",
@@ -21850,8 +21850,8 @@
       "id": "native.apple.acc5936e406af08c"
     },
     {
-      "kind": "ui-call-concatenated",
-      "line": 37,
+      "kind": "ui-localized-call",
+      "line": 40,
       "path": "apps/ios/Sources/Settings/GatewayCustomHeadersSettingsView.swift",
       "source": "Sent with foreground app connections to this gateway. Changes apply on the next reconnect; Share extension delivery is not yet supported.",
       "surface": "apple",
@@ -21859,7 +21859,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 45,
+      "line": 47,
       "path": "apps/ios/Sources/Settings/GatewayCustomHeadersSettingsView.swift",
       "source": "Header name",
       "surface": "apple",
@@ -21867,7 +21867,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 51,
+      "line": 53,
       "path": "apps/ios/Sources/Settings/GatewayCustomHeadersSettingsView.swift",
       "source": "Header value",
       "surface": "apple",
@@ -21875,7 +21875,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 64,
+      "line": 66,
       "path": "apps/ios/Sources/Settings/GatewayCustomHeadersSettingsView.swift",
       "source": "Add Header",
       "surface": "apple",
@@ -21883,7 +21883,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 71,
+      "line": 73,
       "path": "apps/ios/Sources/Settings/GatewayCustomHeadersSettingsView.swift",
       "source": "Custom Headers",
       "surface": "apple",
@@ -22106,8 +22106,8 @@
       "id": "native.apple.c1314556e24659d1"
     },
     {
-      "kind": "ui-call-concatenated",
-      "line": 44,
+      "kind": "ui-localized-call",
+      "line": 47,
       "path": "apps/ios/Sources/Settings/VoiceWakeWordsSettingsView.swift",
       "source": "OpenClaw reacts when any trigger appears in a transcription. Keep them short to avoid false positives.",
       "surface": "apple",
@@ -22523,7 +22523,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3725,
+      "line": 3726,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Realtime failed before connecting",
       "surface": "apple",
@@ -22531,7 +22531,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3727,
+      "line": 3728,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Realtime disconnected",
       "surface": "apple",
@@ -22539,7 +22539,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3729,
+      "line": 3730,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "OpenClaw unavailable",
       "surface": "apple",
@@ -22547,7 +22547,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3740,
+      "line": 3741,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Listening (Realtime)",
       "surface": "apple",
@@ -22555,7 +22555,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3742,
+      "line": 3743,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Thinking",
       "surface": "apple",
@@ -22563,7 +22563,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3744,
+      "line": 3745,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Thinking…",
       "surface": "apple",
@@ -22571,7 +22571,31 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3746,
+      "line": 3747,
+      "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
+      "source": "Asking OpenClaw",
+      "surface": "apple",
+      "id": "native.apple.5b40cb9cf4ee4d4f"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 3749,
+      "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
+      "source": "Still asking OpenClaw",
+      "surface": "apple",
+      "id": "native.apple.34531893ae6091b1"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 3751,
+      "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
+      "source": "Updating OpenClaw",
+      "surface": "apple",
+      "id": "native.apple.027ab0bbb4553124"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 3753,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Speaking",
       "surface": "apple",
@@ -22579,7 +22603,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3748,
+      "line": 3755,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Speaking…",
       "surface": "apple",
@@ -22587,7 +22611,15 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3750,
+      "line": 3757,
+      "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
+      "source": "Connecting",
+      "surface": "apple",
+      "id": "native.apple.5745471bd8e60077"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 3759,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Connecting realtime…",
       "surface": "apple",
@@ -22595,7 +22627,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3752,
+      "line": 3761,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Waiting for realtime…",
       "surface": "apple",
@@ -22603,7 +22635,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3754,
+      "line": 3763,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Ready",
       "surface": "apple",
@@ -22611,7 +22643,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3796,
+      "line": 3805,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Listening",
       "surface": "apple",
@@ -22619,7 +22651,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4062,
+      "line": 4071,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Gateway Relay",
       "surface": "apple",
@@ -22627,7 +22659,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4064,
+      "line": 4073,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Native WebRTC",
       "surface": "apple",
@@ -22635,7 +22667,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4065,
+      "line": 4074,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Native",
       "surface": "apple",
@@ -22643,7 +22675,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4126,
+      "line": 4135,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Gateway permission required",
       "surface": "apple",
@@ -22651,7 +22683,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4149,
+      "line": 4158,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Not loaded",
       "surface": "apple",
@@ -22659,7 +22691,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4167,
+      "line": 4176,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Approval requested",
       "surface": "apple",
@@ -22667,7 +22699,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4615,
+      "line": 4624,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Listening (PTT)",
       "surface": "apple",

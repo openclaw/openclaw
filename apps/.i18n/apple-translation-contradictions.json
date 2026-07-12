@@ -591,6 +591,54 @@
       ]
     },
     {
+      "locale": "fr",
+      "source": "Asking OpenClaw",
+      "translations": [
+        "Demande à OpenClaw",
+        "Interrogation d’OpenClaw"
+      ]
+    },
+    {
+      "locale": "id",
+      "source": "Asking OpenClaw",
+      "translations": [
+        "Bertanya kepada OpenClaw",
+        "Meminta OpenClaw"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "Asking OpenClaw",
+      "translations": [
+        "OpenClaw に問い合わせ中",
+        "OpenClawに問い合わせ中"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "Asking OpenClaw",
+      "translations": [
+        "OpenClaw에 문의 중",
+        "OpenClaw에 요청 중"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Asking OpenClaw",
+      "translations": [
+        "Pytanie do OpenClaw",
+        "Pytanie OpenClaw"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Asking OpenClaw",
+      "translations": [
+        "OpenClaw'a soruluyor",
+        "OpenClaw’a soruluyor"
+      ]
+    },
+    {
       "locale": "ar",
       "source": "Attention",
       "translations": [
@@ -1210,6 +1258,14 @@
       "translations": [
         "Connexion",
         "Connexion en cours"
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "Connecting",
+      "translations": [
+        "कनेक्ट किया जा रहा है",
+        "कनेक्ट हो रहा है"
       ]
     },
     {
@@ -6883,6 +6939,22 @@
       "translations": [
         "Sabitlemeyi kaldır",
         "Sabitlemeyi Kaldır"
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "Updating OpenClaw",
+      "translations": [
+        "OpenClaw अपडेट किया जा रहा है",
+        "OpenClaw को अपडेट किया जा रहा है"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "Updating OpenClaw",
+      "translations": [
+        "OpenClaw を更新中",
+        "OpenClawを更新中"
       ]
     },
     {
