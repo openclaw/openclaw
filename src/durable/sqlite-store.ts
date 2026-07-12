@@ -2599,7 +2599,7 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
         ...expiredStepClaimRows,
         ...resultMailboxRows,
       ]
-        .sort((left, right) => {
+        .toSorted((left, right) => {
           const updated = Number(right.updated_at) - Number(left.updated_at);
           return updated === 0 ? right.obligation_id.localeCompare(left.obligation_id) : updated;
         })

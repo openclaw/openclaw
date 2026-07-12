@@ -254,7 +254,7 @@ describe("durable wake delivery replay", () => {
   });
 
   it("replays existing persisted pending obligations after reopening the store", async () => {
-    const { dbPath, store, cleanup } = tempStore();
+    const { dbPath, store } = tempStore();
     try {
       const wake = createPendingWake(store, "restart", 100);
       store.close();

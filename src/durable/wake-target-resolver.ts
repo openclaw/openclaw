@@ -143,6 +143,8 @@ function delegationCandidates(delegation: DurableWakeDelegationFact): DurableWak
         delegation.reportRoute,
         delegation.supervisor,
       ]);
+    default:
+      return [];
   }
 }
 
