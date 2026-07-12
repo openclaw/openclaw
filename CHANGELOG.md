@@ -30,7 +30,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Agent turn startup:** carry prepared provider route models into auth initialization so repeated Gateway turns avoid duplicate model discovery while preserving independent profile and fallback routes. (#105207)
 - **Gradium TTS credential egress:** reject non-HTTPS, foreign-host, and hostname-lookalike base URLs before dispatching API keys, and pin guarded transport to Gradium's documented API hostname. (#101280) Thanks @zhangguiping-xydt.
 - **Gateway command SecretRefs:** preserve authoritative active-snapshot values when another command secret remains unresolved, falling back locally only for missing paths instead of emitting a per-turn `secrets.resolve` failure. (#96661) Thanks @SunnyShu0925.
 - **Installed plugin loading:** make native-module fallback use jiti's transform path instead of retrying the same synchronous ESM load, preventing Node 24 startup races when official plugins import SDK contract modules.
