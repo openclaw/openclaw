@@ -184,7 +184,7 @@ async function resetArchiveHeaderMatchesSessionId(
   // Compressed archives must be probed through the materialized JSONL cache:
   // a raw prefix read of zstd bytes never matches a session header, which
   // would silently drop every compressed archive from fallback history.
-  let probePath = archivePath;
+  let probePath: string;
   try {
     probePath = materializeSessionArchiveForRead(archivePath);
   } catch {
