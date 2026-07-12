@@ -35,7 +35,8 @@ export type ExecDenylistSegment = {
 
 function basename(token: string): string {
   const parts = token.split(/[\\/]/);
-  return parts[parts.length - 1] || token;
+  const last = parts.at(-1);
+  return last && last.length > 0 ? last : token;
 }
 
 /** Normalizes a single raw denylist entry, dropping malformed input. */
@@ -141,8 +142,11 @@ function segmentTargets(segment: ExecDenylistSegment): string[] {
     targets.add(segment.argv.join(" "));
     // basename variant so `/usr/bin/git push --force` still matches
     // `git push*--force*` written against the bare executable name.
-    const [exe, ...rest] = segment.argv;
-    targets.add([basename(exe), ...rest].join(" "));
+    const exe = segment.argv[0];
+    const rest = segment.argv.slice(1);
+    if (exe) {
+      targets.add([basename(exe), ...rest].join(" "));
+    }
   }
   const raw = segment.raw?.trim();
   if (raw) {

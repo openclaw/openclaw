@@ -113,14 +113,15 @@ describe("evaluateExecDenylist", () => {
   });
 
   it("exact-command deny via full pattern", () => {
-    const exact = [{ pattern: "launchctl unload -w /Library/LaunchDaemons/x.plist" }];
+    const exactPattern = "launchctl unload -w /Library/LaunchDaemons/x.plist";
+    const exact = [{ pattern: exactPattern }];
     const result = evaluateExecDenylist({
       command: "launchctl unload -w /Library/LaunchDaemons/x.plist",
       segments: [seg(["launchctl", "unload", "-w", "/Library/LaunchDaemons/x.plist"])],
       denylist: exact,
       analysisOk: true,
     });
-    expect(result.match).toEqual({ pattern: exact[0].pattern });
+    expect(result.match).toEqual({ pattern: exactPattern });
   });
 
   it("pattern (glob) deny against segment argv text", () => {
