@@ -382,7 +382,10 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
           new Promise<string>((_, reject) => {
             offerSignal?.addEventListener(
               "abort",
-              () => reject(offerSignal?.reason ?? new Error("offer request aborted")),
+              () => {
+                const reason = offerSignal?.reason;
+                reject(reason instanceof Error ? reason : new Error("offer request aborted"));
+              },
               { once: true },
             );
           }),
