@@ -87,6 +87,15 @@ function summarizeMessage(value: unknown) {
   };
 }
 
+function isFileEvent(event?: Record<string, unknown>, nested?: Record<string, unknown>) {
+  return (
+    event?.subtype === "file_share" ||
+    nested?.subtype === "file_share" ||
+    Array.isArray(event?.files) ||
+    Array.isArray(nested?.files)
+  );
+}
+
 function safeError(error: unknown) {
   const record = asRecord(error);
   const data = asRecord(record?.data);
@@ -94,7 +103,11 @@ function safeError(error: unknown) {
   return typeof code === "string" ? code : error instanceof Error ? error.name : "unknown";
 }
 
-const marker = `OPENCLAW_QA_FILE_FINALIZATION_${Date.now()}`;
+const traceMode = process.env.OPENCLAW_QA_FILE_TRACE_MODE === "browser" ? "browser" : "api";
+const marker =
+  traceMode === "browser"
+    ? `OPENCLAW_QA_BROWSER_FILE_FINALIZATION_${process.env.GITHUB_RUN_ID ?? Date.now()}`
+    : `OPENCLAW_QA_FILE_FINALIZATION_${Date.now()}`;
 const locatorPublicKey = `-----BEGIN PUBLIC KEY-----
 MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAnvIMGBJwjC3rt9eT9m9b
 VPUMkjKB8ww/EydbxUmPr6e4+y0/PM6AC5ZMyGXg4V41pJTNAJO/oBkf8zb7l1FJ
@@ -110,6 +123,8 @@ let lease: Awaited<ReturnType<typeof acquireQaCredentialLease<SlackQaCredential>
 let heartbeat: ReturnType<typeof startQaCredentialLeaseHeartbeat> | undefined;
 let app: App | undefined;
 let uploadedFileIds: string[] = [];
+let locatorMessageTs: string | undefined;
+let targetChannelId: string | undefined;
 
 try {
   lease = await acquireQaCredentialLease({
@@ -121,6 +136,7 @@ try {
   });
   heartbeat = startQaCredentialLeaseHeartbeat(lease);
   const credential = lease.payload;
+  targetChannelId = credential.channelId;
   app = new App({
     token: credential.sutBotToken,
     appToken: credential.sutAppToken,
@@ -133,7 +149,12 @@ try {
     const nested = asRecord(event?.message);
     const eventText = typeof event?.text === "string" ? event.text : "";
     const nestedText = typeof nested?.text === "string" ? nested.text : "";
-    if (event?.type === "message" && (eventText.includes(marker) || nestedText.includes(marker))) {
+    const matchesApiUpload = eventText.includes(marker) || nestedText.includes(marker);
+    const matchesBrowserUpload = event?.channel === targetChannelId && isFileEvent(event, nested);
+    if (
+      event?.type === "message" &&
+      (traceMode === "browser" ? matchesBrowserUpload : matchesApiUpload)
+    ) {
       trace.push({
         sequence: trace.length + 1,
         outer: summarizeMessage(event),
@@ -152,24 +173,38 @@ try {
 
   const web = new WebClient(credential.sutBotToken);
   const auth = await web.auth.test();
-  const teamIdHash = createHash("sha256").update(auth.team_id ?? "").digest("hex");
+  const teamIdHash = createHash("sha256")
+    .update(auth.team_id ?? "")
+    .digest("hex");
   const encryptedWorkspaceLocator = publicEncrypt(
     { key: locatorPublicKey, oaepHash: "sha256" },
     Buffer.from(JSON.stringify({ team: auth.team ?? null, url: auth.url ?? null })),
   ).toString("base64");
-  const upload = (await web.filesUploadV2({
-    channel_id: credential.channelId,
-    initial_comment: marker,
-    file_uploads: [
-      { content: "alpha\n", filename: "qa-finalization-a.txt" },
-      { content: "beta\n", filename: "qa-finalization-b.txt" },
-    ],
-  })) as { files?: Array<{ id?: string }> };
-  uploadedFileIds = (upload.files ?? []).flatMap((file) => (file.id ? [file.id] : []));
+  if (traceMode === "browser") {
+    const locator = await web.apiCall("chat.postMessage", {
+      channel: credential.channelId,
+      text: marker,
+    });
+    const locatorRecord = asRecord(locator);
+    locatorMessageTs = typeof locatorRecord?.ts === "string" ? locatorRecord.ts : undefined;
+    process.stderr.write(`Slack browser trace ready: ${marker}\n`);
+  } else {
+    const upload = (await web.filesUploadV2({
+      channel_id: credential.channelId,
+      initial_comment: marker,
+      file_uploads: [
+        { content: "alpha\n", filename: "qa-finalization-a.txt" },
+        { content: "beta\n", filename: "qa-finalization-b.txt" },
+      ],
+    })) as { files?: Array<{ id?: string }> };
+    uploadedFileIds = (upload.files ?? []).flatMap((file) => (file.id ? [file.id] : []));
+  }
 
   const waitStartedAt = Date.now();
-  while (Date.now() - waitStartedAt < 20_000) {
-    if (trace.length > 0 && Date.now() - lastEventAt >= 4_000) {
+  const waitTimeoutMs = traceMode === "browser" ? 8 * 60_000 : 20_000;
+  const quietPeriodMs = traceMode === "browser" ? 8_000 : 4_000;
+  while (Date.now() - waitStartedAt < waitTimeoutMs) {
+    if (trace.length > 0 && Date.now() - lastEventAt >= quietPeriodMs) {
       break;
     }
     await new Promise<void>((resolve) => {
@@ -183,8 +218,8 @@ try {
         source: "real Slack Socket Mode event stream",
         teamIdHash,
         encryptedWorkspaceLocator,
-        uploadMethod: "WebClient.filesUploadV2",
-        fileUploadCount: 2,
+        uploadMethod: traceMode === "browser" ? "Slack web client" : "WebClient.filesUploadV2",
+        fileUploadCount: traceMode === "browser" ? null : 2,
         eventCount: trace.length,
         trace,
       },
@@ -198,7 +233,12 @@ try {
 } finally {
   if (lease) {
     const web = new WebClient(lease.payload.sutBotToken);
-    await Promise.allSettled(uploadedFileIds.map(async (file) => await web.files.delete({ file })));
+    await Promise.allSettled([
+      ...uploadedFileIds.map(async (file) => await web.files.delete({ file })),
+      ...(locatorMessageTs
+        ? [web.chat.delete({ channel: lease.payload.channelId, ts: locatorMessageTs })]
+        : []),
+    ]);
   }
   await app?.stop().catch(() => {});
   await heartbeat?.stop().catch(() => {});
