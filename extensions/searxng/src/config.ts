@@ -32,6 +32,7 @@ function resolveConfiguredBaseUrl(
   path: string,
   config: OpenClawConfig | undefined,
   env: NodeJS.ProcessEnv,
+  valueConfigured: boolean,
 ): ConfiguredBaseUrlResolution {
   const resolved = resolveSecretInputString({
     value,
@@ -41,10 +42,14 @@ function resolveConfiguredBaseUrl(
   });
   if (resolved.status === "available") {
     const normalized = normalizeBaseUrl(normalizeSecretInput(resolved.value));
-    return normalized ? { status: "available", value: normalized } : { status: "missing" };
+    return normalized
+      ? { status: "available", value: normalized }
+      : valueConfigured
+        ? { status: "blocked" }
+        : { status: "missing" };
   }
   if (resolved.status === "missing") {
-    return { status: "missing" };
+    return valueConfigured ? { status: "blocked" } : { status: "missing" };
   }
   if (resolved.ref.source !== "env") {
     return { status: "blocked" };
@@ -69,17 +74,25 @@ export function resolveSearxngBaseUrl(
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
   const webSearch = resolveSearxngWebSearchConfig(config);
+  const hasConfiguredBaseUrl = webSearch
+    ? Object.hasOwn(webSearch, "baseUrl") && webSearch.baseUrl !== undefined
+    : false;
   const configured = resolveConfiguredBaseUrl(
     webSearch?.baseUrl,
     "plugins.entries.searxng.config.webSearch.baseUrl",
     config,
     env,
+    hasConfiguredBaseUrl,
   );
   if (configured.status === "available") {
     return configured.value;
   }
   if (configured.status === "blocked") {
-    return undefined;
+    // Explicit invalid/unavailable config is authoritative, so search execution must not route
+    // through an unrelated ambient endpoint. Provider detection uses contract metadata instead.
+    throw new Error(
+      "Configured SearXNG base URL is unavailable or invalid. Fix plugins.entries.searxng.config.webSearch.baseUrl or remove it to use SEARXNG_BASE_URL.",
+    );
   }
   return normalizeBaseUrl(normalizeSecretInput(env.SEARXNG_BASE_URL));
 }

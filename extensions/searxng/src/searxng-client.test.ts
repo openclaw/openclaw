@@ -78,6 +78,38 @@ describe("searxng client", () => {
     ).toEqual([{ title: "One", url: "https://example.com/1", content: "A" }]);
   });
 
+  it("rejects malformed configured baseUrl before ambient env endpoint fallback", async () => {
+    const originalBaseUrl = process.env.SEARXNG_BASE_URL;
+    process.env.SEARXNG_BASE_URL = "https://ambient.search";
+    try {
+      await expect(
+        runSearxngSearch({
+          config: {
+            plugins: {
+              entries: {
+                searxng: {
+                  config: {
+                    webSearch: {
+                      baseUrl: { source: "env", provider: "default", id: "" },
+                    },
+                  },
+                },
+              },
+            },
+          } as never,
+          query: "openclaw",
+        }),
+      ).rejects.toThrow("Configured SearXNG base URL is unavailable or invalid.");
+      expect(endpointMockState.calls).toHaveLength(0);
+    } finally {
+      if (originalBaseUrl === undefined) {
+        delete process.env.SEARXNG_BASE_URL;
+      } else {
+        process.env.SEARXNG_BASE_URL = originalBaseUrl;
+      }
+    }
+  });
+
   it("retries an empty category search with general results", async () => {
     endpointMockState.responses.push(
       new Response(JSON.stringify({ results: [] }), { status: 200 }),
