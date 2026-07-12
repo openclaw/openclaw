@@ -74,9 +74,50 @@ describe("release-note verification", () => {
       hash: "c".repeat(40),
       subject: "fix(channel): preserve durable replies",
     };
+    const pullRequestBackport = {
+      authorEmail: mainCommit.authorEmail,
+      authorName: mainCommit.authorName,
+      body: "Backport of #123 to release/2026.7.1.",
+      changedPaths: new Set(["src/channel.ts"]),
+      hash: "d".repeat(40),
+      subject: "fix(channel): keep replies after renewal",
+    };
 
     expect(canonicalMainCommitMatches(explicitBackport, [mainCommit])).toEqual([mainCommit.hash]);
     expect(canonicalMainCommitMatches(integratedBackport, [mainCommit])).toEqual([mainCommit.hash]);
+    expect(canonicalMainCommitMatches(pullRequestBackport, [mainCommit])).toEqual([
+      mainCommit.hash,
+    ]);
+    expect(
+      canonicalMainCommitMatches(pullRequestBackport, [
+        {
+          ...mainCommit,
+          body: "Original main PR #123.",
+          subject: "fix(channel): preserve durable replies",
+        },
+      ]),
+    ).toEqual([mainCommit.hash]);
+    expect(
+      canonicalMainCommitMatches(
+        { ...pullRequestBackport, authorEmail: "other@example.com", authorName: "Other" },
+        [mainCommit],
+      ),
+    ).toEqual([]);
+    expect(
+      canonicalMainCommitMatches(
+        { ...pullRequestBackport, changedPaths: new Set(["src/other.ts"]) },
+        [mainCommit],
+      ),
+    ).toEqual([]);
+    expect(
+      canonicalMainCommitMatches({ ...pullRequestBackport, body: "Related #123." }, [mainCommit]),
+    ).toEqual([]);
+    expect(
+      canonicalMainCommitMatches(pullRequestBackport, [
+        mainCommit,
+        { ...mainCommit, hash: "e".repeat(40) },
+      ]),
+    ).toEqual([]);
     expect(canonicalPullRequests([456], [123])).toEqual([123]);
   });
 

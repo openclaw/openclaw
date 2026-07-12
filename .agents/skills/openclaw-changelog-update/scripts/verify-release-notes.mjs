@@ -793,6 +793,12 @@ function cherryPickOrigins(message) {
   );
 }
 
+function backportPullRequestOrigins(message) {
+  return [
+    ...message.matchAll(/^Backport of #(\d+) to release\/[A-Za-z0-9._/-]+(?:\.)?\s*$/gim),
+  ].map((match) => Number(match[1]));
+}
+
 function changedPathsForCommit(hash) {
   return new Set(
     git(["diff-tree", "--root", "--no-commit-id", "--name-only", "-r", hash, "--"])
@@ -836,6 +842,22 @@ export function canonicalMainCommitMatches(commit, candidates) {
     return [...new Set(explicit)];
   }
 
+  const pullRequestOrigins = new Set(backportPullRequestOrigins(commit.body));
+  const pullRequestMatches = candidates.filter(
+    (candidate) =>
+      referencesIn(`${candidate.subject}\n${candidate.body ?? ""}`).some((number) =>
+        pullRequestOrigins.has(number),
+      ) &&
+      authorsMatch(commit, candidate) &&
+      pathsOverlap(commit.changedPaths, candidate.changedPaths),
+  );
+  if (pullRequestMatches.length === 1) {
+    return [pullRequestMatches[0].hash];
+  }
+  if (pullRequestMatches.length > 1) {
+    return [];
+  }
+
   const subject = normalizedCommitSubject(commit.subject);
   const matches = candidates.filter(
     (candidate) =>
@@ -864,7 +886,7 @@ function canonicalMainCommits(base, mainRef) {
   const output = git([
     "log",
     "--reverse",
-    "--format=%H%x1f%s%x1f%an%x1f%ae%x1e",
+    "--format=%H%x1f%s%x1f%an%x1f%ae%x1f%B%x1e",
     `${mainBase}..${mainCommit}`,
   ]);
   const commits = [];
@@ -872,11 +894,12 @@ function canonicalMainCommits(base, mainRef) {
     if (!record) {
       continue;
     }
-    const [rawHash, subject, authorName, authorEmail] = record.split("\x1f");
+    const [rawHash, subject, authorName, authorEmail, ...bodyParts] = record.split("\x1f");
     const hash = rawHash.trim();
     commits.push({
       authorEmail,
       authorName,
+      body: bodyParts.join("\x1f"),
       hash,
       subject,
     });
@@ -1059,11 +1082,17 @@ function sourceCommits(base, target, mainRef) {
   const mainCommits = canonicalMainCommits(base, mainRef);
   const mainCommitsByHash = new Map(mainCommits.map((commit) => [commit.hash, commit]));
   const mainCommitsBySubject = new Map();
+  const mainCommitsByPullRequest = new Map();
   for (const commit of mainCommits) {
     const subject = normalizedCommitSubject(commit.subject);
     const matches = mainCommitsBySubject.get(subject) ?? [];
     matches.push(commit);
     mainCommitsBySubject.set(subject, matches);
+    for (const number of referencesIn(`${commit.subject}\n${commit.body}`)) {
+      const pullRequestMatches = mainCommitsByPullRequest.get(number) ?? [];
+      pullRequestMatches.push(commit);
+      mainCommitsByPullRequest.set(number, pullRequestMatches);
+    }
   }
   const canonicalMainCommitsByReleaseCommit = new Map();
   const canonicalMainHashes = new Set();
@@ -1083,14 +1112,20 @@ function sourceCommits(base, target, mainRef) {
     const explicit = cherryPickOrigins(commit.body)
       .map((origin) => mainCommitsByHash.get(origin))
       .filter(Boolean);
+    const candidates = new Map(
+      [
+        ...(mainCommitsBySubject.get(normalizedCommitSubject(commit.subject)) ?? []),
+        ...backportPullRequestOrigins(commit.body).flatMap(
+          (number) => mainCommitsByPullRequest.get(number) ?? [],
+        ),
+      ].map((candidate) => [candidate.hash, candidate]),
+    );
     const matches =
       explicit.length > 0
         ? [...new Set(explicit.map((candidate) => candidate.hash))]
         : canonicalMainCommitMatches(
             withChangedPaths(commit),
-            (mainCommitsBySubject.get(normalizedCommitSubject(commit.subject)) ?? []).map(
-              withChangedPaths,
-            ),
+            [...candidates.values()].map(withChangedPaths),
           );
     canonicalMainCommitsByReleaseCommit.set(commit.hash, matches);
     for (const hash of matches) {
