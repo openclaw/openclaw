@@ -27,7 +27,14 @@ describe("Android app i18n resources", () => {
     expect(
       findUnusedAndroidResourceKeys(
         ["kotlin_only", "manifest_only", "values_only", "unused"],
-        'R.string.kotlin_only android:label="@string/manifest_only" <string name="alias">@string/values_only</string>',
+        [
+          { path: "Example.kt", source: "R.string.kotlin_only" },
+          {
+            path: "AndroidManifest.xml",
+            source:
+              'android:label="@string/manifest_only" <string name="alias">@string/values_only</string>',
+          },
+        ],
       ),
     ).toEqual(["unused"]);
   });
@@ -36,7 +43,7 @@ describe("Android app i18n resources", () => {
     expect(
       findUnusedAndroidResourceKeys(
         ["native_status", "native_status_detail", "native_unused"],
-        "R.string.native_status_detail",
+        [{ path: "Example.kt", source: "R.string.native_status_detail" }],
       ),
     ).toEqual(["native_status", "native_unused"]);
   });
@@ -45,16 +52,42 @@ describe("Android app i18n resources", () => {
     expect(
       findUnusedAndroidResourceKeys(
         ["kotlin_comment", "block_comment", "xml_comment", "live"],
-        `
-          // R.string.kotlin_comment
-          /* R.string.block_comment */
-          <!-- @string/xml_comment -->
-          val endpoint = "https://example.test"
-          val marker = "/* not a comment */"
-          R.string.live
-        `,
+        [
+          {
+            path: "Example.kt",
+            source: `
+              // R.string.kotlin_comment
+              /* R.string.block_comment */
+              val endpoint = "https://example.test"
+              val marker = "/* not a comment */"
+              R.string.live
+            `,
+          },
+          {
+            path: "AndroidManifest.xml",
+            source: "<!-- @string/xml_comment -->",
+          },
+        ],
       ),
     ).toEqual(["kotlin_comment", "block_comment", "xml_comment"]);
+  });
+
+  it("ignores Android resource references inside Kotlin strings", () => {
+    expect(
+      findUnusedAndroidResourceKeys(
+        ["regular_string", "raw_string", "live"],
+        [
+          {
+            path: "Example.kt",
+            source: `
+              val regular = "R.string.regular_string"
+              val raw = """R.string.raw_string"""
+              R.string.live
+            `,
+          },
+        ],
+      ),
+    ).toEqual(["regular_string", "raw_string"]);
   });
 
   it("selects duplicate-source translations by frequency then stable text order", () => {
@@ -194,6 +227,25 @@ describe("Android app i18n resources", () => {
 
     expect(findings).toContain("No status");
     expect(findings).not.toContain("Ready");
+  });
+
+  it("finds raw strings in direct UI and presentation helpers", () => {
+    const source = `
+      Text("""Direct raw copy""")
+
+      fun diagnosticsReport(): String =
+        """
+          Raw helper copy
+        """.trimIndent()
+    `;
+    const findings = findUnlocalizedAndroidUiLiterals(
+      source,
+      "apps/android/app/src/main/java/ai/openclaw/app/ui/Example.kt",
+    ).map((finding) => finding.source);
+
+    expect(findings).toEqual(
+      expect.arrayContaining(["Direct raw copy", expect.stringContaining("Raw helper copy")]),
+    );
   });
 
   it("inventories command, attention, and overview model display literals", () => {
