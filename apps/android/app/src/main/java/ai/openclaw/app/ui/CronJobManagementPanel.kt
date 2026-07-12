@@ -119,9 +119,9 @@ internal fun CronJobManagementPanel(
       Text(
         text =
           if (editorDraft.hasIncomingConflict) {
-            "This job changed while you were editing. Revert to the latest gateway version before saving."
+            nativeString("This job changed while you were editing. Revert to the latest gateway version before saving.")
           } else {
-            "Save or revert your edits before running, enabling, disabling, deleting, or refreshing this job."
+            nativeString("Save or revert your edits before running, enabling, disabling, deleting, or refreshing this job.")
           },
         style = ClawTheme.type.body,
         color = ClawTheme.colors.warning,
@@ -176,9 +176,9 @@ private fun CronAdminAccessPanel() {
       }
       Text(
         text =
-          nativeString("Cron changes require operator.admin. Setup codes intentionally do not grant it. ") +
-            "Reconnect with the gateway's shared token or password to request admin access. " +
-            "If this device still lacks it, approve the pending scope upgrade from an existing admin client.",
+          nativeString(
+            "Cron changes require operator.admin. Setup codes intentionally do not grant it. Reconnect with the gateway's shared token or password to request admin access. If this device still lacks it, approve the pending scope upgrade from an existing admin client.",
+          ),
         style = ClawTheme.type.body,
         color = ClawTheme.colors.textMuted,
       )
@@ -206,8 +206,8 @@ private fun CronActionPanel(
           text =
             when {
               busy -> nativeString("Working")
-              runPending -> "Run Pending"
-              else -> "Run Now"
+              runPending -> nativeString("Run Pending")
+              else -> nativeString("Run Now")
             },
           onClick = onRun,
           modifier = Modifier.weight(1f),
@@ -525,9 +525,9 @@ private fun CronPayloadEditor(
         placeholder = nativeString("Optional path"),
         label =
           if (commandCwdCanBeCleared) {
-            "Command working directory"
+            nativeString("Command working directory")
           } else {
-            "Command working directory · cannot clear"
+            nativeString("Command working directory · cannot clear")
           },
         enabled = enabled,
       )
@@ -624,14 +624,14 @@ private fun cronRunSubtitle(run: GatewayCronRunSummary): String =
     run.deliveryStatus,
     run.model,
     run.error ?: run.summary,
-  ).joinToString(" · ").ifBlank { "No details" }
+  ).joinToString(" · ").ifBlank { nativeString("No details") }
 
 private fun cronRunStatusText(status: String?): String =
   when (status?.lowercase()) {
     "ok" -> "OK"
-    "error" -> "Issue"
-    "skipped" -> "Skipped"
-    else -> "Unknown"
+    "error" -> nativeString("Issue")
+    "skipped" -> nativeString("Skipped")
+    else -> nativeString("Unknown")
   }
 
 private fun cronRunStatus(status: String?): ClawStatus =

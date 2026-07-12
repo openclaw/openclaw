@@ -902,4 +902,4 @@ private fun relativeSessionTime(updatedAtMs: Long): String {
 private fun displaySessionTitle(session: ChatSessionEntry): String =
   session.label?.takeIf { it.isNotBlank() }
     ?: session.displayName?.takeIf { it.isNotBlank() }
-    ?: "Main session"
+    ?: nativeString("Main session")

@@ -499,7 +499,7 @@ private fun SkillWorkshopProposalDetail(
           ),
       )
       Text(
-        text = proposal.content ?: "Inspect this proposal to load its markdown.",
+        text = proposal.content ?: nativeString("Inspect this proposal to load its markdown."),
         style = ClawTheme.type.body,
         color = if (proposal.content == null) ClawTheme.colors.textSubtle else ClawTheme.colors.text,
       )
@@ -687,4 +687,4 @@ private fun skillWorkshopStatusPill(status: String): ClawStatus =
     else -> ClawStatus.Neutral
   }
 
-private fun skillWorkshopDateLabel(value: String): String = value.trim().takeIf { it.isNotEmpty() }?.take(10) ?: "unknown"
+private fun skillWorkshopDateLabel(value: String): String = value.trim().takeIf { it.isNotEmpty() }?.take(10) ?: nativeString("Unknown")

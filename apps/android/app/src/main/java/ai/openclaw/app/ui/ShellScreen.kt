@@ -656,7 +656,7 @@ private fun OverviewPrimaryPanel(
         OverviewAgentBadge(text = agentBadge, active = isConnected, avatarSource = agentAvatarSource)
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
           Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-            Text(text = if (pendingRunCount > 0) "$agentName is working" else agentName, style = ClawTheme.type.title.copy(fontSize = 19.sp, lineHeight = 23.sp), color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+            Text(text = if (pendingRunCount > 0) nativeString("\$agentName is working", agentName) else agentName, style = ClawTheme.type.title.copy(fontSize = 19.sp, lineHeight = 23.sp), color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
           }
           Text(text = overviewAgentActivityText(isConnected = isConnected, pendingRunCount = pendingRunCount, sessionCount = sessionCount, cronJobCount = cronJobCount, statusText = statusText), style = ClawTheme.type.caption.copy(fontSize = 13.5.sp, lineHeight = 17.sp), color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
@@ -1147,10 +1147,18 @@ internal fun overviewAgentActivityText(
   statusText: String,
 ): String {
   if (!isConnected) return statusText
-  if (pendingRunCount > 0) return "Working · $pendingRunCount active ${pluralize("run", pendingRunCount)}"
+  if (pendingRunCount > 0) {
+    return if (pendingRunCount == 1) {
+      nativeString("Working · 1 active run")
+    } else {
+      nativeString("Working · \$pendingRunCount active runs", pendingRunCount)
+    }
+  }
   return when {
-    sessionCount > 0 -> "Monitoring · $sessionCount ${pluralize("session", sessionCount)}"
-    cronJobCount > 0 -> "Monitoring · ${cronJobsSummary(cronJobCount)}"
+    sessionCount == 1 -> nativeString("Monitoring · 1 session")
+    sessionCount > 1 -> nativeString("Monitoring · \$sessionCount sessions", sessionCount)
+    cronJobCount == 1 -> nativeString("Monitoring · 1 scheduled job")
+    cronJobCount > 1 -> nativeString("Monitoring · \$cronJobCount scheduled jobs", cronJobCount)
     else -> statusText
   }
 }
@@ -1164,11 +1172,6 @@ internal fun nodeOnlinePercent(
   } else {
     ((onlineNodes.coerceAtLeast(0) * 100) + (nodeCount / 2)) / nodeCount
   }
-
-private fun pluralize(
-  noun: String,
-  count: Int,
-): String = if (count == 1) noun else "${noun}s"
 
 private fun agentInitials(name: String): String =
   name
@@ -1587,13 +1590,13 @@ private fun SettingsShellScreen(
           ),
           SettingsRow("Nodes & Devices", nodesDevicesSummaryText(nodesDevicesSummary), Icons.Default.Cloud, status = nodesDevicesStatus(nodesDevicesSummary), route = SettingsRoute.NodesDevices),
           SettingsRow("Channels", channelsSummaryText(channelsSummary), Icons.Default.Notifications, status = channelsStatus(channelsSummary), route = SettingsRoute.Channels),
-          SettingsRow("Agents", if (agents.isEmpty()) "Load from gateway" else "${agents.size} available", Icons.Default.Person, status = agents.isNotEmpty(), route = SettingsRoute.Agents),
+          SettingsRow("Agents", if (agents.isEmpty()) nativeString("Load from gateway") else nativeString("\${agents.size} available", agents.size), Icons.Default.Person, status = agents.isNotEmpty(), route = SettingsRoute.Agents),
           SettingsRow(
             "Providers & Models",
             when {
-              readyProviderCount > 0 -> "$readyProviderCount ready"
-              unknownProviderCount > 0 -> "Availability unknown"
-              else -> "Review readiness"
+              readyProviderCount > 0 -> nativeString("\$readyProviderCount ready", readyProviderCount)
+              unknownProviderCount > 0 -> nativeString("Availability unknown")
+              else -> nativeString("Review readiness")
             },
             Icons.Outlined.Inventory2,
             status =
@@ -1617,9 +1620,9 @@ private fun SettingsShellScreen(
             route = SettingsRoute.SkillWorkshop,
           ),
           SettingsRow("Dreaming", dreamingSummaryText(dreamingSummary), Icons.Default.Storage, status = dreamingStatus(dreamingSummary), route = SettingsRoute.Dreaming),
-          SettingsRow("Terminal", "Shell in the agent workspace", Icons.Outlined.Terminal, status = isConnected, route = SettingsRoute.Terminal),
+          SettingsRow("Terminal", nativeString("Shell in the agent workspace"), Icons.Outlined.Terminal, status = isConnected, route = SettingsRoute.Terminal),
           SettingsRow("Voice", if (speakerEnabled) nativeString("Speaker on") else nativeString("Speaker muted"), Icons.Default.Mic, route = SettingsRoute.Voice),
-          SettingsRow("Canvas", "Screen surface", Icons.AutoMirrored.Filled.ScreenShare, status = isConnected, route = SettingsRoute.Canvas),
+          SettingsRow("Canvas", nativeString("Screen surface"), Icons.AutoMirrored.Filled.ScreenShare, status = isConnected, route = SettingsRoute.Canvas),
           SettingsRow("Notifications", if (notificationForwardingEnabled) nativeString("Smart delivery") else nativeString("Off"), Icons.Default.Notifications, route = SettingsRoute.Notifications),
           SettingsRow("Phone Capabilities", if (cameraEnabled) nativeString("Camera enabled") else nativeString("Locked"), Icons.Default.Lock, status = !cameraEnabled, route = SettingsRoute.PhoneCapabilities),
           SettingsRow(
@@ -1628,8 +1631,8 @@ private fun SettingsShellScreen(
             Icons.Default.Palette,
             route = SettingsRoute.Appearance,
           ),
-          SettingsRow("About", "Version and update", Icons.Default.Storage, route = SettingsRoute.About),
-          SettingsRow("Health", "Diagnostics", Icons.Default.Settings, status = isConnected, route = SettingsRoute.Health),
+          SettingsRow("About", nativeString("Version and update"), Icons.Default.Storage, route = SettingsRoute.About),
+          SettingsRow("Health", nativeString("Diagnostics"), Icons.Default.Settings, status = isConnected, route = SettingsRoute.Health),
         )
 
       settingsSections(settingsRows).forEach { section ->
@@ -1646,7 +1649,7 @@ private fun SettingsShellScreen(
       }
       item {
         SettingsGroup(
-          rows = listOf(SettingsRow("Sign Out", "Return to setup", Icons.AutoMirrored.Filled.ExitToApp)),
+          rows = listOf(SettingsRow("Sign Out", nativeString("Return to setup"), Icons.AutoMirrored.Filled.ExitToApp)),
           onOpen = { },
           onAction = { viewModel.pairNewGateway() },
         )
@@ -1685,9 +1688,9 @@ private fun SettingsShellScreen(
 
 private fun approvalsSummary(count: Int): String =
   when (count) {
-    0 -> "No pending approvals"
+    0 -> nativeString("No pending approvals")
     1 -> nativeString("1 pending")
-    else -> "$count pending"
+    else -> nativeString("\$count pending", count)
   }
 
 private fun approvalsStatus(count: Int): Boolean? = if (count > 0) true else null
@@ -1695,9 +1698,9 @@ private fun approvalsStatus(count: Int): Boolean? = if (count > 0) true else nul
 /** Summarizes scheduled gateway jobs for overview and settings rows. */
 private fun cronJobsSummary(count: Int): String =
   when (count) {
-    0 -> "No scheduled jobs"
-    1 -> "1 scheduled"
-    else -> "$count scheduled"
+    0 -> nativeString("No scheduled jobs")
+    1 -> nativeString("1 scheduled")
+    else -> nativeString("\$count scheduled", count)
   }
 
 /** Summarizes provider usage buckets without exposing detailed billing data. */
@@ -1733,10 +1736,10 @@ internal fun skillWorkshopSummaryText(summary: GatewaySkillWorkshopSummary): Str
   val held = summary.proposals.count { it.status == "quarantined" || it.status == "stale" }
   val applied = summary.proposals.count { it.status == "applied" }
   return when {
-    summary.proposals.isEmpty() -> "No proposals"
+    summary.proposals.isEmpty() -> nativeString("No proposals")
     held > 0 -> if (held == 1) nativeString("1 held") else nativeString("\$held held", held)
     applied > 0 -> if (applied == 1) nativeString("1 applied") else nativeString("\$applied applied", applied)
-    else -> "${summary.proposals.size} proposals"
+    else -> nativeString("\${summary.proposals.size} proposals", summary.proposals.size)
   }
 }
 
@@ -1753,11 +1756,11 @@ private fun nodesDevicesSummaryText(summary: GatewayNodesDevicesSummary): String
   val online = summary.nodes.count { it.connected }
   val devices = summary.pairedDevices.size
   return when {
-    summary.pendingDevices.isNotEmpty() -> "${summary.pendingDevices.size} pending"
-    summary.hasNodeCapabilityApprovalPending() -> "Node approval pending"
-    summary.nodes.isNotEmpty() -> "$online/${summary.nodes.size} online"
-    devices > 0 -> "$devices paired"
-    else -> "No devices"
+    summary.pendingDevices.isNotEmpty() -> nativeString("\${summary.pendingDevices.size} pending", summary.pendingDevices.size)
+    summary.hasNodeCapabilityApprovalPending() -> nativeString("Node approval pending")
+    summary.nodes.isNotEmpty() -> nativeString("\$online/\${summary.nodes.size} online", online, summary.nodes.size)
+    devices > 0 -> nativeString("\$devices paired", devices)
+    else -> nativeString("No devices")
   }
 }
 
@@ -1779,12 +1782,14 @@ private fun GatewayNodesDevicesSummary.hasNodeCapabilityApprovalPending(): Boole
   }
 
 /** Summarizes channel connection state, surfacing errors before connected counts. */
-private fun channelsSummaryText(summary: GatewayChannelsSummary): String {
+internal fun channelsSummaryText(summary: GatewayChannelsSummary): String {
   val connected = summary.channels.count { it.connected }
+  val issueCount = summary.channels.count { it.error != null }
   return when {
-    summary.channels.any { it.error != null } -> "${summary.channels.count { it.error != null }} issue"
-    summary.channels.isNotEmpty() -> "$connected/${summary.channels.size} connected"
-    else -> "No channels"
+    issueCount == 1 -> nativeString("1 issue")
+    issueCount > 1 -> nativeString("\$issueCount issues", issueCount)
+    summary.channels.isNotEmpty() -> nativeString("\$connected/\${summary.channels.size} connected", connected, summary.channels.size)
+    else -> nativeString("No channels")
   }
 }
 
@@ -1801,7 +1806,7 @@ private fun channelsStatus(summary: GatewayChannelsSummary): Boolean? =
 private fun dreamingSummaryText(summary: GatewayDreamingSummary): String =
   when {
     !summary.storeHealthy || !summary.phaseSignalHealthy -> nativeString("Needs attention")
-    summary.enabled -> "${summary.shortTermCount} waiting"
+    summary.enabled -> nativeString("\${summary.shortTermCount} waiting", summary.shortTermCount)
     else -> nativeString("Off")
   }
 
@@ -1978,7 +1983,7 @@ private fun SettingsListRow(
     Text(text = nativeString(row.title), style = ClawTheme.type.body, color = ClawTheme.colors.text, modifier = Modifier.weight(1f), maxLines = 1)
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
       if (row.value.isNotBlank()) {
-        Text(text = nativeString(row.value), style = ClawTheme.type.caption.copy(fontSize = 13.sp, lineHeight = 17.sp), color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(text = row.value, style = ClawTheme.type.caption.copy(fontSize = 13.sp, lineHeight = 17.sp), color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
       }
       row.status?.let { active ->
         Box(modifier = Modifier.size(4.5.dp).clip(CircleShape).background(if (active) ClawTheme.colors.success else ClawTheme.colors.textSubtle))

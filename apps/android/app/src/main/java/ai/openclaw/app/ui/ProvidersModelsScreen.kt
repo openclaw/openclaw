@@ -364,8 +364,8 @@ private fun ProviderAvailability.color(): Color =
 private val ProviderAvailability.modelLabel: String
   get() =
     when (this) {
-      ProviderAvailability.Available -> "Available"
-      ProviderAvailability.Unavailable -> "Unavailable"
+      ProviderAvailability.Available -> nativeString("Available")
+      ProviderAvailability.Unavailable -> nativeString("Unavailable")
       ProviderAvailability.Unknown -> nativeString("Unknown")
     }
 

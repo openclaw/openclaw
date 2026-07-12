@@ -428,7 +428,7 @@ private fun CronJobDetailSettingsScreen(
     if (deleted) leaveDetail()
   }
   SettingsDetailFrame(
-    title = current?.name ?: jobName ?: "Cron Job",
+    title = current?.name ?: jobName ?: nativeString("Cron Job"),
     subtitle = nativeString("Inspect scheduled gateway work."),
     icon = Icons.Default.Bolt,
     onBack = ::leaveDetail,
@@ -1274,8 +1274,10 @@ private fun PhoneCapabilitiesScreen(
       title = { Text(nativeString("Allow background location?")) },
       text = {
         Text(
-          nativeString("OpenClaw only checks location when your paired Gateway requests it. ") +
-            "On the next Android screen, choose $backgroundPermissionLabel to allow checks while the app is in the background.",
+          nativeString(
+            "OpenClaw only checks location when your paired Gateway requests it. On the next Android screen, choose \$backgroundPermissionLabel to allow checks while the app is in the background.",
+            backgroundPermissionLabel,
+          ),
         )
       },
       confirmButton = {
@@ -1895,8 +1897,9 @@ internal fun androidDistributionChannel(flavor: String = BuildConfig.FLAVOR): St
   }
 
 internal fun gatewaySettingsSetupResetConfirmationText(): String =
-  "Replacing the setup code clears this phone's saved setup credentials and device tokens before reconnecting. " +
-    "This phone may need node capability approval again; continue only when you mean to pair with a fresh gateway setup code."
+  nativeString(
+    "Replacing the setup code clears this phone's saved setup credentials and device tokens before reconnecting. This phone may need node capability approval again; continue only when you mean to pair with a fresh gateway setup code.",
+  )
 
 @Composable
 private fun AboutStatusRow(
@@ -1920,9 +1923,9 @@ private fun AboutStatusRow(
 /** Chooses about-screen copy based on whether the gateway advertises an update. */
 private fun aboutUpdateText(latestVersion: String?): String =
   if (latestVersion == null) {
-    "OpenClaw turns this phone into a clean mobile command surface for sessions, voice, providers, and Gateway."
+    nativeString("OpenClaw turns this phone into a clean mobile command surface for sessions, voice, providers, and Gateway.")
   } else {
-    "A Gateway update is available. Run the update from the Web UI or CLI when you are ready."
+    nativeString("A Gateway update is available. Run the update from the Web UI or CLI when you are ready.")
   }
 
 /**
@@ -2172,7 +2175,7 @@ private fun CronJobListRow(
   ClawDetailRow(
     title = job.name,
     subtitle = cronJobSubtitle(job),
-    modifier = Modifier.clickable(onClickLabel = "Open cron job detail", onClick = onClick),
+    modifier = Modifier.clickable(onClickLabel = nativeString("Open cron job detail"), onClick = onClick),
     leading = { ClawIconBadge(icon = Icons.Default.Bolt) },
     trailing = {
       Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -2264,7 +2267,7 @@ private fun CronJobFieldsPanel(rows: List<SettingsMetric>) {
           Modifier
             .fillMaxWidth()
             .heightIn(min = 46.dp)
-            .clickable(onClickLabel = "Copy ${row.title}") { copyCronDetailValue(context, row.title, row.value) }
+            .clickable(onClickLabel = nativeString("Copy \${row.title}", row.title)) { copyCronDetailValue(context, row.title, row.value) }
             .padding(vertical = 6.dp)
         } else {
           Modifier
@@ -2475,7 +2478,7 @@ private fun cronJobStatusText(job: GatewayCronJobSummary): String {
   return when (job.lastRunStatus?.lowercase()) {
     "error" -> nativeString("Issue")
     "ok" -> "OK"
-    "skipped" -> "Skipped"
+    "skipped" -> nativeString("Skipped")
     else -> nativeString("Ready")
   }
 }
@@ -2485,7 +2488,7 @@ private fun cronJobStatusText(job: GatewayCronJobDetail): String {
   return when (job.lastRunStatus?.lowercase()) {
     "error" -> nativeString("Issue")
     "ok" -> "OK"
-    "skipped" -> "Skipped"
+    "skipped" -> nativeString("Skipped")
     else -> nativeString("Ready")
   }
 }
@@ -2535,15 +2538,19 @@ private fun notificationPackageSelectionSummary(
   when (mode) {
     NotificationPackageFilterMode.Allowlist ->
       if (selectedCount == 0) {
-        "No apps selected. Nothing forwards until you add apps."
+        nativeString("No apps selected. Nothing forwards until you add apps.")
+      } else if (selectedCount == 1) {
+        nativeString("\$selectedCount app allowed to forward.", selectedCount)
       } else {
-        "$selectedCount ${if (selectedCount == 1) "app" else "apps"} allowed to forward."
+        nativeString("\$selectedCount apps allowed to forward.", selectedCount)
       }
     NotificationPackageFilterMode.Blocklist ->
       if (selectedCount == 0) {
-        "No apps blocked. Apps can forward unless you add blocks."
+        nativeString("No apps blocked. Apps can forward unless you add blocks.")
+      } else if (selectedCount == 1) {
+        nativeString("\$selectedCount app blocked from forwarding.", selectedCount)
       } else {
-        "$selectedCount ${if (selectedCount == 1) "app" else "apps"} blocked from forwarding."
+        nativeString("\$selectedCount apps blocked from forwarding.", selectedCount)
       }
   }
 

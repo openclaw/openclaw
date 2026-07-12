@@ -661,6 +661,38 @@ class ShellScreenLogicTest {
   }
 
   @Test
+  fun channelsSummaryTextUsesDistinctIssuePluralization() {
+    fun channel(
+      id: String,
+      error: String?,
+    ) =
+      GatewayChannelSummary(
+        id = id,
+        label = id,
+        accountCount = 1,
+        enabled = true,
+        configured = true,
+        linked = true,
+        running = error == null,
+        connected = error == null,
+        error = error,
+      )
+
+    assertEquals(
+      "1 issue",
+      channelsSummaryText(GatewayChannelsSummary(channels = listOf(channel("one", "offline")))),
+    )
+    assertEquals(
+      "2 issues",
+      channelsSummaryText(
+        GatewayChannelsSummary(
+          channels = listOf(channel("one", "offline"), channel("two", "unauthorized")),
+        ),
+      ),
+    )
+  }
+
+  @Test
   fun sessionSourceLabelDerivesCompactSourceFromRealSessionKey() {
     assertEquals("Telegram", sessionSourceLabel("telegram:8227096397"))
     assertEquals("Discord", sessionSourceLabel("discord:1465779285020381361#daily-inf"))

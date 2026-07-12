@@ -202,7 +202,7 @@ private fun SkillListRow(
   ClawDetailRow(
     title = skill.name,
     subtitle = skillSubtitle(skill),
-    modifier = Modifier.clickable(onClickLabel = "Open skill detail", onClick = onClick),
+    modifier = Modifier.clickable(onClickLabel = nativeString("Open skill detail"), onClick = onClick),
     leading = { ClawTextBadge(text = skillBadge(skill)) },
     trailing = {
       Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {

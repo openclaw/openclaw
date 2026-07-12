@@ -230,7 +230,7 @@ private fun DeviceListRow(
 private fun GatewayNodesDevicesSummary.isEmpty(): Boolean = nodes.isEmpty() && pendingDevices.isEmpty() && pairedDevices.isEmpty()
 
 private fun nodeSubtitle(node: GatewayNodeSummary): String {
-  val kind = node.deviceFamily ?: "Node host"
+  val kind = node.deviceFamily ?: nativeString("Node host")
   val version = node.version?.let { "OpenClaw $it" }
   val status = if (node.paired) nativeString("Paired") else nativeString("Unpaired")
   val approval = nodeApprovalSubtitle(node.approvalState)

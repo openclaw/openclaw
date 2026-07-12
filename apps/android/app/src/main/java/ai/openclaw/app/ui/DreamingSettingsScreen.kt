@@ -106,7 +106,7 @@ private fun DreamingPanel(summary: GatewayDreamingSummary) {
         HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
         ClawStatusRow(
           title = nativeString("Promoted"),
-          value = "${summary.promotedToday} today · ${summary.promotedTotal} total",
+          value = nativeString("\${summary.promotedToday} today · \${summary.promotedTotal} total", summary.promotedToday, summary.promotedTotal),
           healthy = true,
         )
       }
@@ -173,13 +173,13 @@ private fun DreamDiaryRow(entry: GatewayDreamDiaryEntry) {
 
 /** Formats the next dreaming cycle as a compact relative label. */
 private fun formatDreamingNextRun(nextRunAtMs: Long?): String {
-  val next = nextRunAtMs ?: return "Not scheduled"
+  val next = nextRunAtMs ?: return nativeString("Not scheduled")
   val deltaMinutes = ((next - System.currentTimeMillis()) / 60_000L).coerceAtLeast(0L)
   val hours = deltaMinutes / 60L
   return when {
-    hours >= 24L -> "In ${hours / 24L}d"
-    hours >= 1L -> "In ${hours}h"
-    deltaMinutes >= 1L -> "In ${deltaMinutes}m"
-    else -> "Soon"
+    hours >= 24L -> nativeString("In \${hours / 24L}d", hours / 24L)
+    hours >= 1L -> nativeString("In \${hours}h", hours)
+    deltaMinutes >= 1L -> nativeString("In \${deltaMinutes}m", deltaMinutes)
+    else -> nativeString("Soon")
   }
 }

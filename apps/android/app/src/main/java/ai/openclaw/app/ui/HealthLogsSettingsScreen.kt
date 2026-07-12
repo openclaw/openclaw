@@ -83,7 +83,7 @@ internal fun HealthLogsSettingsScreen(
         ),
     )
     HealthStatusPanel(
-      gateway = nativeString(gatewayConnectionDisplay.statusText),
+      gateway = gatewayStatusForDisplay(gatewayConnectionDisplay.statusText),
       node = if (isNodeConnected) nativeString("Online") else nativeString("Waiting"),
       chat = if (chatHealthOk) nativeString("Ready") else nativeString("Needs connection"),
       models = nativeString("\${modelCount.size} available", modelCount.size),
@@ -232,7 +232,7 @@ private fun GatewayLogRow(
     modifier =
       Modifier
         .fillMaxWidth()
-        .clickable(onClickLabel = "Open log entry", onClick = onClick)
+        .clickable(onClickLabel = nativeString("Open log entry"), onClick = onClick)
         .padding(horizontal = 10.dp, vertical = 7.dp),
     verticalAlignment = Alignment.Top,
     horizontalArrangement = Arrangement.spacedBy(9.dp),
