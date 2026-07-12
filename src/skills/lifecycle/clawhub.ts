@@ -979,7 +979,6 @@ async function writeClawHubSkillOrigin(
   await writeJson(targetPath, origin, { trailingNewline: true });
 }
 
-const DEFAULT_SKILL_SEARCH_LIMIT = 20;
 const MAX_SKILL_SEARCH_LIMIT = 100;
 
 function resolveSkillSearchLimit(limit: number | undefined): number | undefined {
