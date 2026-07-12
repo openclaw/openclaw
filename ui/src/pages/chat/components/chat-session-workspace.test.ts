@@ -211,4 +211,38 @@ describe("openSessionWorkspaceFile", () => {
     expect(handleOpenSidebar.mock.calls[0]?.[0]?.content).toContain("application/x-sqlite3");
     expect(handleOpenSidebar.mock.calls[0]?.[0]?.content).toContain("bytes");
   });
+
+  it("escapes unsupported filenames before rendering metadata as Markdown", async () => {
+    const handleOpenSidebar = vi.fn();
+    const hostilePath = " build/`\n\n![remote](https://example.com/x) report~~old~~&amp;.db ";
+    const state = {
+      client: {},
+      connected: true,
+      handleOpenSidebar,
+      hello: gatewayHello([]),
+      sessionKey: "agent:main:current",
+      sessions: {
+        getFile: vi.fn().mockResolvedValue({
+          sessionKey: "agent:main:current",
+          file: {
+            path: hostilePath,
+            name: "cache.db",
+            kind: "read",
+            missing: false,
+            mimeType: "application/octet-stream",
+            previewKind: "unsupported",
+          },
+        }),
+      },
+    } as unknown as SessionWorkspaceHost;
+
+    openSessionWorkspaceFile(state, { path: hostilePath });
+
+    await vi.waitFor(() => expect(handleOpenSidebar).toHaveBeenCalledOnce());
+    const content = handleOpenSidebar.mock.calls[0]?.[0]?.content ?? "";
+    expect(content).toContain(
+      "``  build/`\\n\\n![remote](https://example.com/x) report~~old~~&amp;.db  ``",
+    );
+    expect(content).not.toContain("\n\n![remote]");
+  });
 });

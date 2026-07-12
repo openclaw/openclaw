@@ -189,6 +189,25 @@ function basenameForPath(filePath: string): string {
   return filePath.split(/[\\/]/).findLast((part) => part) ?? filePath;
 }
 
+function formatMarkdownCodeSpan(value: string): string {
+  // Markdown finds block boundaries before inline spans, so filenames must stay on one logical line.
+  const singleLineValue = value.replace(/\r/g, "\\r").replace(/\n/g, "\\n");
+  const longestBacktickRun = Math.max(
+    0,
+    ...(singleLineValue.match(/`+/g)?.map((run) => run.length) ?? []),
+  );
+  const delimiter = "`".repeat(longestBacktickRun + 1);
+  const hasBoundarySpaces = singleLineValue.startsWith(" ") && singleLineValue.endsWith(" ");
+  const isOnlySpaces = /^ +$/.test(singleLineValue);
+  const padding =
+    singleLineValue.startsWith("`") ||
+    singleLineValue.endsWith("`") ||
+    (hasBoundarySpaces && !isOnlySpaces)
+      ? " "
+      : "";
+  return `${delimiter}${padding}${singleLineValue}${padding}${delimiter}`;
+}
+
 function unsupportedFileSidebarContent(
   file: SessionWorkspaceGetResult["file"],
   fallbackPath: string,
@@ -197,7 +216,7 @@ function unsupportedFileSidebarContent(
   const lines = [
     "This file is not previewable inline.",
     "",
-    `- Path: \`${filePath}\``,
+    `- Path: ${formatMarkdownCodeSpan(filePath)}`,
     file.mimeType ? `- Type: \`${file.mimeType}\`` : null,
     typeof file.size === "number" ? `- Size: ${file.size.toLocaleString()} bytes` : null,
     typeof file.updatedAtMs === "number"

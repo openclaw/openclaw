@@ -222,7 +222,7 @@ describeControlUiE2e("Control UI chat file links", () => {
         await fileRow.locator(".chat-workspace-rail__file-open").click();
       };
       const closePreview = async () => {
-        await page.getByRole("button", { name: "Close detail panel" }).click();
+        await page.locator(".sidebar-panel .sidebar-header button").click();
         await page.locator(".sidebar-panel").waitFor({ state: "hidden" });
       };
 
