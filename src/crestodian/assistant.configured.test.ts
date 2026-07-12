@@ -327,6 +327,7 @@ describe("Crestodian configured-model planner", () => {
       }),
     );
     expect(runEmbeddedAgent.mock.calls[0]?.[0]?.sessionKey).toBeUndefined();
+    expect(runEmbeddedAgent.mock.calls[0]?.[0]?.disableTrajectory).toBe(true);
   });
 
   it("carries the verified child runtime artifact into planning", async () => {

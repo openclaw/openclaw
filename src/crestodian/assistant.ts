@@ -109,6 +109,7 @@ export async function planCrestodianCommandWithConfiguredModel(params: {
       messageChannel: "crestodian",
       messageProvider: "crestodian",
       disableTools: true,
+      disableTrajectory: true,
       ...(route.authProfileId ? { authProfileId: route.authProfileId } : {}),
     };
     const result =
