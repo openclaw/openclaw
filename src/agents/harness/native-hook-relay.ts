@@ -485,7 +485,6 @@ export function registerNativeHookRelay(
     shouldRelayEvent: (event) => nativeHookRelayEventHasLocalWork(registration, event),
     commandForEvent: (event, options) => {
       const hasLocalWork = nativeHookRelayEventHasLocalWork(registration, event);
-      recordNativeHookRelayCommandRequest(registration, event, hasLocalWork);
       return buildNativeHookRelayCommand({
         provider: params.provider,
         relayId,
@@ -834,6 +833,8 @@ export async function invokeNativeHookRelay(
   if (!registration.allowedEvents.includes(event)) {
     throw new Error("native hook relay event not allowed");
   }
+  const hasLocalWork = nativeHookRelayEventHasLocalWork(registration, event);
+  recordNativeHookRelayCommandRequest(registration, event, hasLocalWork);
   if (!isJsonValue(params.rawPayload)) {
     throw new Error("native hook relay payload must be JSON-compatible");
   }
