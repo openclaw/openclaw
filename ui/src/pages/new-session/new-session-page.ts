@@ -492,13 +492,11 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.browserPathDraft = "";
   }
 
-  /** The listed directory, or a typed absolute path when listing is
-      unavailable (fs.listDir missing/failing must not block manual entry). */
+  /** "Use this folder" applies exactly what the head input shows. The draft
+      syncs to every listed directory, covers hosts that cannot list
+      (fs.listDir missing/failing), and an edited path always wins over a
+      stale listing. */
   private usableBrowserPath(): string | null {
-    const listed = this.browserListing?.path;
-    if (listed) {
-      return listed;
-    }
     const draft = this.browserPathDraft.trim();
     return isAbsolutePath(draft) ? draft : null;
   }
