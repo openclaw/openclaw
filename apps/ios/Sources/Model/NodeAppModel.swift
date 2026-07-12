@@ -367,6 +367,7 @@ final class NodeAppModel {
             self.watchGatewayConnectionStatus = nil
         }
     }
+
     var nodeStatusText: String = "Offline"
     var operatorStatusText: String = "Offline"
     private(set) var isAppleReviewDemoModeEnabled: Bool = false

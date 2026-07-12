@@ -363,11 +363,14 @@ struct SettingsProTab: View {
                         .font(OpenClawType.subheadSemiBold)
                 }
                 } message: {
+                    // Keep the extraction key contiguous for the native localization inventory.
+                    // swiftlint:disable line_length
                     Text(
                         String(
                             localized:
                             "This removes saved credentials, device access, TLS trust, and cached chats for this gateway."))
                         .font(OpenClawType.subhead)
+                    // swiftlint:enable line_length
                 }
     }
 

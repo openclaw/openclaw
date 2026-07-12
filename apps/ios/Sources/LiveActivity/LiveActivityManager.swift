@@ -167,8 +167,8 @@ final class LiveActivityManager {
         let verbatimDetail: String?
     }
 
-    // Existing callers still pass rendered app copy. Collapse known values here so
-    // ActivityKit persists semantics; only unknown external detail remains verbatim.
+    /// Existing callers still pass rendered app copy. Collapse known values here so
+    /// ActivityKit persists semantics; only unknown external detail remains verbatim.
     private static func connectingPresentation(statusText: String) -> StatusPresentation {
         if statusText == String(localized: "Connecting...") || statusText == "Connecting..." {
             return StatusPresentation(status: .connecting, verbatimDetail: nil)

@@ -41,11 +41,14 @@ struct VoiceWakeWordsSettingsView: View {
                 Text("Wake Words")
                     .font(OpenClawType.captionSemiBold)
             } footer: {
+                // Keep the extraction key contiguous for the native localization inventory.
+                // swiftlint:disable line_length
                 Text(
                     String(
                         localized:
                         "OpenClaw reacts when any trigger appears in a transcription. Keep them short to avoid false positives."))
                     .font(OpenClawType.caption)
+                // swiftlint:enable line_length
             }
         }
         .navigationTitle("Wake Words")

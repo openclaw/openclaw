@@ -43,7 +43,7 @@ import WatchKit
             self.outcome = try container.decodeIfPresent(
                 WatchExecApprovalOutcome.self,
                 forKey: .outcome) ?? Self.decodeLegacyOutcome(
-                try container.decodeIfPresent(String.self, forKey: .outcomeText))
+                container.decodeIfPresent(String.self, forKey: .outcomeText))
             self.outcomeIsAuthoritative = try container.decodeIfPresent(
                 Bool.self,
                 forKey: .outcomeIsAuthoritative)

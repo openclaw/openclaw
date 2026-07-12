@@ -119,7 +119,7 @@ struct PrivacyAccessSectionView: View {
                 } icon: {
                     Image(systemName: icon)
                 }
-                    .font(OpenClawType.subheadSemiBold)
+                .font(OpenClawType.subheadSemiBold)
                 Spacer()
                 OpenClawStatusBadge(
                     label: .verbatim(String(localized: status.resource)),

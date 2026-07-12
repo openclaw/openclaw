@@ -223,7 +223,7 @@ struct WatchAppCommandStatus: Codable, Equatable {
     var command: WatchAppCommand
     var code: WatchDeliveryStatusCode
     var detail: String?
-    var legacyVerbatim: String? = nil
+    var legacyVerbatim: String?
 
     func localizedText(
         localize: (WatchStatusLocalizationKey) -> String = { $0.localized }) -> String
@@ -260,7 +260,7 @@ struct WatchReplyStatus: Codable, Equatable {
     var code: WatchDeliveryStatusCode
     var actionLabel: String
     var detail: String?
-    var legacyVerbatim: String? = nil
+    var legacyVerbatim: String?
 
     func localizedText(
         localize: (WatchStatusLocalizationKey) -> String = { $0.localized }) -> String
@@ -306,7 +306,7 @@ enum WatchExecApprovalStatusCode: String, Codable, Equatable {
 struct WatchExecApprovalStatus: Codable, Equatable {
     var code: WatchExecApprovalStatusCode
     var decision: WatchExecApprovalDecision?
-    var legacyVerbatim: String? = nil
+    var legacyVerbatim: String?
 
     func localizedText(
         localize: (WatchStatusLocalizationKey) -> String = { $0.localized }) -> String
@@ -353,7 +353,7 @@ enum WatchExecApprovalOutcomeCode: String, Codable, Equatable {
 
 struct WatchExecApprovalOutcome: Codable, Equatable {
     var code: WatchExecApprovalOutcomeCode
-    var verbatim: String? = nil
+    var verbatim: String?
 
     func localizedText(
         localize: (WatchStatusLocalizationKey) -> String = { $0.localized }) -> String
@@ -446,8 +446,8 @@ struct WatchExecApprovalOutcome: Codable, Equatable {
     }
 }
 
-private extension WatchAppCommand {
-    func localizedLabel(
+extension WatchAppCommand {
+    fileprivate func localizedLabel(
         localize: (WatchStatusLocalizationKey) -> String) -> String
     {
         switch self {
@@ -465,8 +465,8 @@ private extension WatchAppCommand {
     }
 }
 
-private extension WatchExecApprovalDecision {
-    func localizedLabel(
+extension WatchExecApprovalDecision {
+    fileprivate func localizedLabel(
         localize: (WatchStatusLocalizationKey) -> String) -> String
     {
         switch self {
@@ -496,7 +496,7 @@ struct WatchAppSnapshotMessage: Codable, Equatable {
     var sentAtMs: Int64?
     var snapshotId: String?
 
-    private init(
+    init(
         gatewayStatus: OpenClawWatchAppStatus,
         gatewayConnected: Bool,
         agentName: String,
@@ -944,16 +944,50 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
 extension OpenClawWatchAppStatus {
     func localizedText(
         localize: (WatchStatusLocalizationKey) -> String = { $0.localized },
-        localizePresentation: (String, [String]) -> String = {
-            key,
-            arguments in
+        localizePresentation: (String, [String]) -> String = { key, arguments in
             String(
                 format: String(localized: String.LocalizationValue(key)),
                 locale: .current,
                 arguments: arguments.map { $0 as CVarArg })
         }) -> String
     {
-        return switch self.code {
+        switch self.code {
+        case .gatewayConnected,
+             .gatewayConnecting,
+             .gatewayReconnecting,
+             .gatewayOffline,
+             .gatewayProblem,
+             .gatewayProblemWithRequestID:
+            self.localizedGatewayText(
+                localize: localize,
+                localizePresentation: localizePresentation)
+        case .talkOff,
+             .talkReady,
+             .talkConnecting,
+             .talkListening,
+             .talkThinking,
+             .talkSpeaking,
+             .talkOffline,
+             .talkPermissionRequired,
+             .talkRequestingApproval,
+             .talkApprovalRequested,
+             .talkAPIKeyMissing,
+             .talkFailure:
+            self.localizedTalkText(
+                localize: localize,
+                localizePresentation: localizePresentation)
+        case .chatConnectIPhone, .chatNoMessages, .chatUnavailable:
+            self.localizedChatText(localize: localize)
+        case .legacy:
+            self.verbatim ?? localize(.unavailable)
+        }
+    }
+
+    private func localizedGatewayText(
+        localize: (WatchStatusLocalizationKey) -> String,
+        localizePresentation: (String, [String]) -> String) -> String
+    {
+        switch self.code {
         case .gatewayConnected:
             localize(.connected)
         case .gatewayConnecting:
@@ -968,6 +1002,16 @@ extension OpenClawWatchAppStatus {
             self.localizedGatewayProblemWithRequestID(
                 localize: localize,
                 localizePresentation: localizePresentation)
+        default:
+            localize(.unavailable)
+        }
+    }
+
+    private func localizedTalkText(
+        localize: (WatchStatusLocalizationKey) -> String,
+        localizePresentation: (String, [String]) -> String) -> String
+    {
+        switch self.code {
         case .talkOff:
             localize(.off)
         case .talkReady:
@@ -983,11 +1027,8 @@ extension OpenClawWatchAppStatus {
         case .talkOffline:
             localize(.offline)
         case .talkPermissionRequired:
-            if let scope = self.arguments.first {
-                String(format: localize(.missingFormat), scope)
-            } else {
-                localize(.unavailable)
-            }
+            self.arguments.first.map { String(format: localize(.missingFormat), $0) }
+                ?? localize(.unavailable)
         case .talkRequestingApproval:
             localize(.requestingApproval)
         case .talkApprovalRequested:
@@ -996,14 +1037,23 @@ extension OpenClawWatchAppStatus {
             localize(.apiKeyMissing)
         case .talkFailure:
             self.localizedPresentation(localize: localizePresentation)
+        default:
+            localize(.unavailable)
+        }
+    }
+
+    private func localizedChatText(
+        localize: (WatchStatusLocalizationKey) -> String) -> String
+    {
+        switch self.code {
         case .chatConnectIPhone:
             localize(.connectIPhoneChat)
         case .chatNoMessages:
             localize(.noChatMessages)
         case .chatUnavailable:
             localize(.chatUnavailable)
-        case .legacy:
-            self.verbatim ?? localize(.unavailable)
+        default:
+            localize(.unavailable)
         }
     }
 

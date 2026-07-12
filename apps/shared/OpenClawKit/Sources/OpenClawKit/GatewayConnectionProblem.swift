@@ -666,7 +666,9 @@ public enum GatewayConnectionProblemMapper {
             preconditionFailure("Unexpected device identity auth detail")
         }
     }
+}
 
+extension GatewayConnectionProblemMapper {
     private static func map(_ responseError: GatewayResponseError) -> GatewayConnectionProblem? {
         let code = responseError.code.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         if code == "NOT_PAIRED" || responseError.detailsReason == "not-paired" {
@@ -699,6 +701,8 @@ public enum GatewayConnectionProblemMapper {
                 : " This device could not verify the new certificate."
             let message = "The saved TLS certificate pin for \(failure.host) "
                 + "no longer matches the gateway certificate.\(trustedSuffix)"
+            // Keep the extraction keys contiguous for the native localization inventory.
+            // swiftlint:disable line_length
             let messagePresentation: GatewayConnectionProblem.PresentationText = failure.systemTrustOk
                 ? .localizedFormat(
                     "The saved TLS certificate pin for %@ no longer matches the gateway certificate. The new certificate is trusted by this device; this is commonly caused by certificate rotation.",
@@ -706,6 +710,7 @@ public enum GatewayConnectionProblemMapper {
                 : .localizedFormat(
                     "The saved TLS certificate pin for %@ no longer matches the gateway certificate. This device could not verify the new certificate.",
                     [failure.host])
+            // swiftlint:enable line_length
             return GatewayConnectionProblem(
                 kind: .tlsPinMismatch,
                 owner: failure.systemTrustOk ? .network : .unknown,

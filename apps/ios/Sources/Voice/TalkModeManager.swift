@@ -77,8 +77,7 @@ private final class TranscriptStreamingOwner {
     var terminalStatus: (
         text: String,
         phase: TalkPhase,
-        watchPresentation: TalkWatchPresentation
-    )?
+        watchPresentation: TalkWatchPresentation)?
     /// Subscribed before chat.send so a fast terminal cannot outrun its owner.
     var completionEvents: AsyncStream<EventFrame>?
 }
@@ -141,6 +140,7 @@ final class TalkModeManager: NSObject {
     var hasActivePushToTalkSession: Bool {
         self.isPushToTalkActive || self.activePushToTalk != nil || self.finishingPushToTalk != nil
     }
+
     private(set) var phase: TalkPhase = .idle
     private(set) var watchPresentation: TalkWatchPresentation = .phase
     var statusText: String = "Off" {
@@ -148,6 +148,7 @@ final class TalkModeManager: NSObject {
             self.statusRevision &+= 1
         }
     }
+
     /// 0..1-ish (not calibrated). Intended for UI feedback only.
     var micLevel: Double = 0
     /// Live agent playback envelope in 0...1 while speaking. nil means the active

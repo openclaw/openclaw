@@ -354,9 +354,9 @@ private struct WatchControlSurfaceView: View {
 
             WatchDetailText(
                 text: .verbatim(String(localized: """
-                    Direct mode supports device info, status, and notifications. \
-                    Chat, Talk, and approvals still use the iPhone.
-                    """)))
+                Direct mode supports device info, status, and notifications. \
+                Chat, Talk, and approvals still use the iPhone.
+                """)))
 
             if self.directNode.isConfigured {
                 Toggle(isOn: Binding(
@@ -1639,24 +1639,5 @@ private struct WatchExecApprovalDetailView: View {
         let minutes = deltaSeconds / 60
         return String(
             AttributedString(localized: "^[\(minutes) minute](inflect: true)").characters)
-    }
-}
-
-private struct WatchDetailScroll<Content: View>: View {
-    let title: LocalizedStringKey
-    @ViewBuilder var content: Content
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 9) {
-                self.content
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 9)
-            .padding(.bottom, 18)
-            .frame(maxWidth: .infinity, alignment: .topLeading)
-        }
-        .background(WatchClawStyle.background.ignoresSafeArea())
-        .navigationTitle(self.title)
     }
 }

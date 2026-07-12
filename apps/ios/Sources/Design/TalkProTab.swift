@@ -141,10 +141,10 @@ struct TalkProTab: View {
                     } icon: {
                         Image(systemName: self.state.primaryButtonIcon)
                     }
-                        .font(OpenClawType.subheadSemiBold)
-                        // Match the icon to the label; otherwise the symbol picks up the tint color.
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity)
+                    .font(OpenClawType.subheadSemiBold)
+                    // Match the icon to the label; otherwise the symbol picks up the tint color.
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)

@@ -621,11 +621,46 @@ public struct OpenClawWatchAppSnapshotMessage: Codable, Sendable, Equatable {
             return localizationKey
         }
         return switch status.code {
+        case .gatewayConnected,
+             .gatewayConnecting,
+             .gatewayReconnecting,
+             .gatewayOffline,
+             .gatewayProblem,
+             .gatewayProblemWithRequestID:
+            self.legacyGatewayText(for: status.code)
+        case .talkOff,
+             .talkReady,
+             .talkConnecting,
+             .talkListening,
+             .talkThinking,
+             .talkSpeaking,
+             .talkOffline,
+             .talkPermissionRequired,
+             .talkRequestingApproval,
+             .talkApprovalRequested,
+             .talkAPIKeyMissing,
+             .talkFailure:
+            self.legacyTalkText(for: status.code)
+        case .chatConnectIPhone, .chatNoMessages, .chatUnavailable:
+            self.legacyChatText(for: status.code)
+        case .legacy:
+            "Unavailable"
+        }
+    }
+
+    private static func legacyGatewayText(for code: OpenClawWatchAppStatusCode) -> String {
+        switch code {
         case .gatewayConnected: "Connected"
         case .gatewayConnecting: "Connecting…"
         case .gatewayReconnecting: "Reconnecting…"
         case .gatewayOffline: "Offline"
         case .gatewayProblem, .gatewayProblemWithRequestID: "Gateway unavailable"
+        default: "Gateway unavailable"
+        }
+    }
+
+    private static func legacyTalkText(for code: OpenClawWatchAppStatusCode) -> String {
+        switch code {
         case .talkOff: "Off"
         case .talkReady: "Ready"
         case .talkConnecting: "Connecting"
@@ -638,10 +673,16 @@ public struct OpenClawWatchAppSnapshotMessage: Codable, Sendable, Equatable {
         case .talkApprovalRequested: "Approval requested"
         case .talkAPIKeyMissing: "API key missing"
         case .talkFailure: "Talk unavailable"
+        default: "Talk unavailable"
+        }
+    }
+
+    private static func legacyChatText(for code: OpenClawWatchAppStatusCode) -> String {
+        switch code {
         case .chatConnectIPhone: "Connect iPhone chat to read messages"
         case .chatNoMessages: "No chat messages yet"
         case .chatUnavailable: "Chat unavailable"
-        case .legacy: "Unavailable"
+        default: "Chat unavailable"
         }
     }
 }

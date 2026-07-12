@@ -54,11 +54,11 @@ struct OpenClawActivityAttributes: ActivityAttributes {
             // schema once, then all new writes use the semantic status shape.
             let legacy = try decoder.container(keyedBy: LegacyCodingKeys.self)
             let statusText = try legacy.decodeIfPresent(String.self, forKey: .statusText)
-            let presentation = Self.legacyPresentation(
+            let presentation = try Self.legacyPresentation(
                 statusText: statusText,
-                isIdle: try legacy.decodeIfPresent(Bool.self, forKey: .isIdle) ?? false,
-                isDisconnected: try legacy.decodeIfPresent(Bool.self, forKey: .isDisconnected) ?? false,
-                isConnecting: try legacy.decodeIfPresent(Bool.self, forKey: .isConnecting) ?? false)
+                isIdle: legacy.decodeIfPresent(Bool.self, forKey: .isIdle) ?? false,
+                isDisconnected: legacy.decodeIfPresent(Bool.self, forKey: .isDisconnected) ?? false,
+                isConnecting: legacy.decodeIfPresent(Bool.self, forKey: .isConnecting) ?? false)
             self.status = presentation.status
             self.verbatimDetail = presentation.verbatimDetail
         }
