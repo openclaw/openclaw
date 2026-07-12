@@ -10140,7 +10140,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Content security policy
   - H2: Avatar route auth
   - H2: Assistant media route auth
-  - H2: Building the UI
+  - H2: Approval links
   - H2: Blank Control UI page
   - H2: Debugging/testing: dev server + remote Gateway
   - H2: Related

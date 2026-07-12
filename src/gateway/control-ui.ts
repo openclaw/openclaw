@@ -64,7 +64,7 @@ import {
   serveControlUiMcpAppResource,
   serveControlUiMcpAppSandboxProxy,
 } from "./control-ui-mcp-app-sandbox.js";
-import { classifyControlUiRequest } from "./control-ui-routing.js";
+import { classifyControlUiRequest, isControlUiApprovalDocumentPath } from "./control-ui-routing.js";
 import {
   buildControlUiAvatarUrl,
   CONTROL_UI_AVATAR_PREFIX,
@@ -1105,6 +1105,7 @@ export async function handleControlUiHttpRequest(
 
   const uiPath =
     basePath && pathname.startsWith(`${basePath}/`) ? pathname.slice(basePath.length) : pathname;
+  const approvalDocument = isControlUiApprovalDocumentPath({ basePath, pathname });
   const rel = (() => {
     if (uiPath === ROOT_PREFIX) {
       return "";
@@ -1121,7 +1122,11 @@ export async function handleControlUiHttpRequest(
     }
     return uiPath.slice(1);
   })();
-  const requested = rel && !rel.endsWith("/") ? rel : `${rel}index.html`;
+  const requested = approvalDocument
+    ? "index.html"
+    : rel && !rel.endsWith("/")
+      ? rel
+      : `${rel}index.html`;
   const fileRel = requested || "index.html";
   if (!isSafeRelativePath(fileRel)) {
     respondControlUiNotFound(res);
