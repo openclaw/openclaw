@@ -58,6 +58,8 @@ describe("delivery-queue policy", () => {
       "chat_id is empty",
       "Outbound not configured for channel: demo-channel",
       "MatrixError: [403] User @bot:matrix.example.com not in room !mixedCase:matrix.example.com",
+      "Local media path is not under an allowed directory: ./some-local-file.png",
+      "Bad Request: message is too long",
     ])("returns true for permanent error: %s", (msg) => {
       expect(isPermanentDeliveryError(msg)).toBe(true);
     });
@@ -68,6 +70,7 @@ describe("delivery-queue policy", () => {
       "socket hang up",
       "rate limited",
       "500 Internal Server Error",
+      "message is too long",
     ])("returns false for transient error: %s", (msg) => {
       expect(isPermanentDeliveryError(msg)).toBe(false);
     });
