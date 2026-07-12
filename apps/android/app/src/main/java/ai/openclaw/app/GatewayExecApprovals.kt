@@ -17,6 +17,7 @@ import java.util.concurrent.atomic.AtomicLong
 data class GatewayExecApprovalSummary(
   val id: String,
   val commandText: String,
+  val commandTextSource: String? = null,
   val commandPreview: String?,
   val warningText: String?,
   val allowedDecisions: List<String>,
@@ -114,28 +115,28 @@ private fun gatewayExecApprovalAllowedMessage(
   saved: Boolean,
 ): String {
   if (attribution == GatewayExecApprovalResolutionAttribution.AppliedHere) {
-    if (saved) return nativeString("Approval allowed and saved.")
-    return nativeString("Approval allowed once.")
+    if (saved) return "Approval allowed and saved."
+    return "Approval allowed once."
   }
   if (attribution == GatewayExecApprovalResolutionAttribution.PriorResponse) {
-    if (saved) return nativeString("A prior response already allowed this command and saved the choice.")
-    return nativeString("A prior response already allowed this command once.")
+    if (saved) return "A prior response already allowed this command and saved the choice."
+    return "A prior response already allowed this command once."
   }
-  if (saved) return nativeString("Gateway recorded approval and saved the choice.")
-  return nativeString("Gateway recorded approval once.")
+  if (saved) return "Gateway recorded approval and saved the choice."
+  return "Gateway recorded approval once."
 }
 
 private fun gatewayExecApprovalDeniedMessage(attribution: GatewayExecApprovalResolutionAttribution): String =
   when (attribution) {
-    GatewayExecApprovalResolutionAttribution.AppliedHere -> nativeString("Approval denied.")
-    GatewayExecApprovalResolutionAttribution.PriorResponse -> nativeString("A prior response already denied this approval.")
-    GatewayExecApprovalResolutionAttribution.Unknown -> nativeString("Gateway recorded a denial.")
+    GatewayExecApprovalResolutionAttribution.AppliedHere -> "Approval denied."
+    GatewayExecApprovalResolutionAttribution.PriorResponse -> "A prior response already denied this approval."
+    GatewayExecApprovalResolutionAttribution.Unknown -> "Gateway recorded a denial."
   }
 
 private fun gatewayExecApprovalTerminalMessage(status: GatewayApprovalTerminalStatus): String =
   when (status) {
-    GatewayApprovalTerminalStatus.Expired -> nativeString("This approval expired before it could be resolved.")
-    GatewayApprovalTerminalStatus.Cancelled -> nativeString("This approval was cancelled before it could be resolved.")
+    GatewayApprovalTerminalStatus.Expired -> "This approval expired before it could be resolved."
+    GatewayApprovalTerminalStatus.Cancelled -> "This approval was cancelled before it could be resolved."
     else -> error("approval is not expired or cancelled")
   }
 
@@ -153,7 +154,7 @@ internal fun gatewayExecApprovalPriorResolutionNotice(id: String): GatewayExecAp
     warning = true,
   )
 
-private fun gatewayExecApprovalPriorResolutionMessage(): String = nativeString("A prior response already resolved this approval.")
+private fun gatewayExecApprovalPriorResolutionMessage(): String = "A prior response already resolved this approval."
 
 internal fun normalizeGatewayExecApprovalDecision(value: String): String? =
   when (value) {
@@ -238,6 +239,7 @@ internal fun parseGatewayExecApprovalListEntry(item: JsonElement): GatewayExecAp
   return GatewayExecApprovalSummary(
     id = id,
     commandText = gatewayExecApprovalCommandRequestText(),
+    commandTextSource = "Command request",
     commandPreview = null,
     warningText = null,
     allowedDecisions = emptyList(),
@@ -249,7 +251,41 @@ internal fun parseGatewayExecApprovalListEntry(item: JsonElement): GatewayExecAp
   )
 }
 
-private fun gatewayExecApprovalCommandRequestText(): String = nativeString("Command request")
+private fun gatewayExecApprovalCommandRequestText(): String = "Command request"
+
+internal fun gatewayExecApprovalTextForDisplay(text: String): String =
+  when (text) {
+    "Approval allowed and saved." -> nativeString("Approval allowed and saved.")
+    "Approval allowed once." -> nativeString("Approval allowed once.")
+    "A prior response already allowed this command and saved the choice." ->
+      nativeString("A prior response already allowed this command and saved the choice.")
+    "A prior response already allowed this command once." ->
+      nativeString("A prior response already allowed this command once.")
+    "Gateway recorded approval and saved the choice." ->
+      nativeString("Gateway recorded approval and saved the choice.")
+    "Gateway recorded approval once." -> nativeString("Gateway recorded approval once.")
+    "Approval denied." -> nativeString("Approval denied.")
+    "A prior response already denied this approval." ->
+      nativeString("A prior response already denied this approval.")
+    "Gateway recorded a denial." -> nativeString("Gateway recorded a denial.")
+    "This approval expired before it could be resolved." ->
+      nativeString("This approval expired before it could be resolved.")
+    "This approval was cancelled before it could be resolved." ->
+      nativeString("This approval was cancelled before it could be resolved.")
+    "A prior response already resolved this approval." ->
+      nativeString("A prior response already resolved this approval.")
+    "Command request" -> nativeString("Command request")
+    "Resolution outcome unknown. Actions stay disabled until the Gateway record is verified." ->
+      nativeString("Resolution outcome unknown. Actions stay disabled until the Gateway record is verified.")
+    "The Gateway still shows this approval as pending. Review it before trying again." ->
+      nativeString("The Gateway still shows this approval as pending. Review it before trying again.")
+    "Could not load approval details. Refresh and try again." ->
+      nativeString("Could not load approval details. Refresh and try again.")
+    "Could not load approvals." -> nativeString("Could not load approvals.")
+    "Could not resolve approval. Refresh and try again." ->
+      nativeString("Could not resolve approval. Refresh and try again.")
+    else -> text
+  }
 
 internal fun parseGatewayExecApprovalGetPayload(
   payloadJson: String,

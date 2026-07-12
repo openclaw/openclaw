@@ -165,7 +165,13 @@ private fun DreamDiaryRow(entry: GatewayDreamDiaryEntry) {
       }
     }
     Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-      Text(text = entry.date, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+      Text(
+        text = if (entry.date == "Dream") nativeString("Dream") else entry.date,
+        style = ClawTheme.type.body,
+        color = ClawTheme.colors.text,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+      )
       Text(text = entry.text, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
     }
   }

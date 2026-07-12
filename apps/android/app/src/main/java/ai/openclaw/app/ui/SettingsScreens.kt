@@ -28,10 +28,12 @@ import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.currentAppLanguage
 import ai.openclaw.app.currentSystemLanguageTag
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
+import ai.openclaw.app.gatewayExecApprovalTextForDisplay
 import ai.openclaw.app.gatewayTalkSetupDescription
 import ai.openclaw.app.gatewayTalkSetupStatusText
 import ai.openclaw.app.hasPhotoReadPermission
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.i18n.resolveNativeText
 import ai.openclaw.app.isReady
 import ai.openclaw.app.loadAndroidLicenseNotices
 import ai.openclaw.app.locationModeAfterBackgroundSettings
@@ -569,7 +571,7 @@ private fun ApprovalsSettingsScreen(
     )
     if (execApprovalsErrorText != null) {
       ClawPanel {
-        Text(text = execApprovalsErrorText ?: "", style = ClawTheme.type.body, color = ClawTheme.colors.warning)
+        Text(text = gatewayExecApprovalTextForDisplay(execApprovalsErrorText ?: ""), style = ClawTheme.type.body, color = ClawTheme.colors.warning)
       }
     }
     // Terminal outcomes always retire their card first, so the notice renders as a
@@ -2028,13 +2030,13 @@ private fun ExecApprovalCard(
         }
         ClawStatusPill(text = if (resolving) nativeString("Sending") else nativeString("Review"), status = if (resolving) ClawStatus.Warning else ClawStatus.Success)
       }
-      ExecApprovalCommandReview(approval.commandText)
+      ExecApprovalCommandReview(approval.commandTextSource?.let(::gatewayExecApprovalTextForDisplay) ?: approval.commandText)
       approval.warningText?.let { warningText ->
         Text(text = warningText, style = ClawTheme.type.body, color = ClawTheme.colors.warning)
       }
       Text(text = execApprovalMetadata(approval), style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle, maxLines = 2, overflow = TextOverflow.Ellipsis)
       approval.errorText?.let { errorText ->
-        Text(text = errorText, style = ClawTheme.type.caption, color = ClawTheme.colors.warning)
+        Text(text = gatewayExecApprovalTextForDisplay(errorText), style = ClawTheme.type.caption, color = ClawTheme.colors.warning)
       }
       Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         execApprovalActions(approval.allowedDecisions).forEach { action ->
@@ -2102,7 +2104,7 @@ private fun ExecApprovalNotice(
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
         Text(
-          text = notice.message,
+          text = gatewayExecApprovalTextForDisplay(notice.message),
           style = ClawTheme.type.body,
           color = if (notice.warning) ClawTheme.colors.warning else ClawTheme.colors.success,
         )
@@ -2441,9 +2443,9 @@ private fun formatApprovalDuration(deltaMs: Long): String {
 private fun cronJobSubtitle(job: GatewayCronJobSummary): String =
   nativeString(
     "\${job.scheduleLabel} · \${formatCronWake(job.nextRunAtMs)} · \${job.promptPreview}",
-    job.scheduleLabel,
+    job.scheduleLabel.resolveNativeText(),
     formatCronWake(job.nextRunAtMs),
-    job.promptPreview,
+    job.promptPreview.resolveNativeText(),
   )
 
 /** Summarizes a provider plan and most-used quota window for usage rows. */

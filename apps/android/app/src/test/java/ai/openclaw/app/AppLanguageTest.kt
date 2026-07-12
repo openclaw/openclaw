@@ -1,11 +1,17 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.i18n.NativeStringResources
+import ai.openclaw.app.i18n.nativeText
+import ai.openclaw.app.i18n.resolveNativeText
+import androidx.appcompat.app.AppCompatActivity
 import androidx.core.os.LocaleListCompat
+import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
@@ -108,7 +114,32 @@ class AppLanguageTest {
     assertEquals("OpenClaw translations · ja", appLanguageRowSubtitle(AppLanguage.Japanese, "en-US"))
   }
 
+  @Test
+  fun retainedNativeTextResolvesAgainstTheCurrentLocale() {
+    val activity = Robolectric.buildActivity(LocaleTestActivity::class.java).setup()
+    NativeStringResources.install(activity.get())
+    val retained = MutableStateFlow(nativeText("Mic off")).resolveNativeText()
+    val previous = currentAppLanguage()
+    try {
+      setAppLanguage(AppLanguage.English)
+      assertEquals("Mic off", retained.value)
+
+      setAppLanguage(AppLanguage.French)
+      assertEquals("Micro désactivé", retained.value)
+      assertEquals("Connexion…", gatewayConnectionStatusForDisplay("Connecting…"))
+      assertEquals(
+        "Impossible de charger les approbations.",
+        gatewayExecApprovalTextForDisplay("Could not load approvals."),
+      )
+    } finally {
+      setAppLanguage(previous)
+      activity.destroy()
+    }
+  }
+
   private companion object {
     const val androidNamespace = "http://schemas.android.com/apk/res/android"
   }
 }
+
+private class LocaleTestActivity : AppCompatActivity()

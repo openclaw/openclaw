@@ -10,6 +10,7 @@ import ai.openclaw.app.GatewayCronRunHistoryState
 import ai.openclaw.app.GatewayCronRunSummary
 import ai.openclaw.app.GatewayCronScheduleEdit
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.i18n.resolveNativeText
 import ai.openclaw.app.ui.design.ClawDetailRow
 import ai.openclaw.app.ui.design.ClawIconBadge
 import ai.openclaw.app.ui.design.ClawListPanel
@@ -101,7 +102,7 @@ internal fun CronJobManagementPanel(
   notice?.let { value ->
     ClawPanel {
       Text(
-        text = value.message,
+        text = value.message.resolveNativeText(),
         style = ClawTheme.type.body,
         color =
           when (value.kind) {
