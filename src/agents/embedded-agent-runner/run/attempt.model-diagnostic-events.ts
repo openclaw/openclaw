@@ -35,6 +35,7 @@ import type {
   PluginHookModelCallEndedEvent,
   PluginHookModelCallStartedEvent,
 } from "../../../plugins/hook-types.js";
+import { truncateUtf16Safe } from "../../../utils.js";
 import type { StreamFn } from "../../runtime/index.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../../usage.js";
 
@@ -421,7 +422,7 @@ function modelCallUsageField(state: ModelCallObservationState) {
 
 function boundedTimelineAttribute(value: string | undefined): string | undefined {
   const normalized = value?.trim();
-  return normalized ? normalized.slice(0, TIMELINE_ATTRIBUTE_MAX_LENGTH) : undefined;
+  return normalized ? truncateUtf16Safe(normalized, TIMELINE_ATTRIBUTE_MAX_LENGTH) : undefined;
 }
 
 function emitProviderRequestTimelineEvent(
