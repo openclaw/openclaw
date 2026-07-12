@@ -1,6 +1,7 @@
 package ai.openclaw.app
 
 import android.app.Notification
+import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -170,6 +171,28 @@ class NodeForegroundServiceTest {
       assertNull(app.peekRuntime())
     } finally {
       controller.destroy()
+    }
+  }
+
+  @Test
+  @Config(sdk = [31, 32])
+  fun coldServiceStartupUsesThePersistedAppLocaleWithoutAnActivity() {
+    val app = RuntimeEnvironment.getApplication()
+    val localesFile = "androidx.appcompat.app.AppCompatDelegate.application_locales_record_file"
+    app.openFileOutput(localesFile, Context.MODE_PRIVATE).bufferedWriter().use { writer ->
+      writer.write("""<?xml version='1.0' encoding='UTF-8' standalone='yes' ?><locales application_locales="fr" />""")
+    }
+    val controller = Robolectric.buildService(NodeForegroundService::class.java)
+
+    try {
+      controller.create()
+
+      val manager = app.getSystemService(NotificationManager::class.java)
+      val notification = Shadows.shadowOf(manager).getNotification(1)
+      assertEquals("Démarrage…", notification.extras.getCharSequence(Notification.EXTRA_TEXT))
+    } finally {
+      controller.destroy()
+      app.deleteFile(localesFile)
     }
   }
 

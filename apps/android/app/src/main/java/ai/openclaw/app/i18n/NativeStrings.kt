@@ -2,11 +2,9 @@ package ai.openclaw.app.i18n
 
 import android.annotation.SuppressLint
 import android.content.Context
-import android.content.res.Configuration
-import android.os.LocaleList
-import androidx.appcompat.app.AppCompatDelegate
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.res.stringResource
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.ExperimentalForInheritanceCoroutinesApi
 import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -103,24 +101,13 @@ internal fun StateFlow<NativeText>.resolveNativeText(): StateFlow<String> = Loca
 
 internal fun StateFlow<NativeText?>.resolveOptionalNativeText(): StateFlow<String?> = LocaleResolvingStateFlow(this) { text -> text?.resolveNativeText() }
 
-// Both cached contexts are process-owned: install stores applicationContext,
-// and localizedContext is derived from it solely for the selected app locale.
 @SuppressLint("StaticFieldLeak")
 internal object NativeStringResources {
   @Volatile
   private var applicationContext: Context? = null
 
-  @Volatile
-  private var localizedContext: Context? = null
-
-  @Volatile
-  private var localizedTags: String? = null
-
-  @Synchronized
   fun install(context: Context) {
     applicationContext = context.applicationContext
-    localizedContext = null
-    localizedTags = null
   }
 
   fun resolve(
@@ -128,30 +115,9 @@ internal object NativeStringResources {
     vararg formatArgs: Any,
   ): String {
     val context = applicationContext ?: return formatNativeSource(source, formatArgs)
-    val appLocales = AppCompatDelegate.getApplicationLocales()
-    val tags = appLocales.toLanguageTags()
-    val cached = localizedContext
-    val localized =
-      if (cached != null && localizedTags == tags) {
-        cached
-      } else {
-        synchronized(this) {
-          if (localizedContext == null || localizedTags != tags) {
-            localizedContext = context.localizedContext(appLocales)
-            localizedTags = tags
-          }
-          localizedContext ?: context
-        }
-      }
+    val localized = ContextCompat.getContextForLanguage(context)
     return localized.nativeString(source, *formatArgs)
   }
-}
-
-private fun Context.localizedContext(appLocales: androidx.core.os.LocaleListCompat): Context {
-  if (appLocales.isEmpty) return this
-  val locales = Array(appLocales.size()) { index -> checkNotNull(appLocales[index]) }
-  val configuration = Configuration(resources.configuration).apply { setLocales(LocaleList(*locales)) }
-  return createConfigurationContext(configuration)
 }
 
 internal fun nativeString(
@@ -176,15 +142,67 @@ internal fun Context.nativeString(
   return if (formatArgs.isEmpty()) getString(resourceId) else getString(resourceId, *formatArgs)
 }
 
-private val nativeInterpolationPattern = Regex("""\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[^{}]+})""")
-
 private fun formatNativeSource(
   source: String,
   formatArgs: Array<out Any>,
 ): String {
   if (formatArgs.isEmpty()) return source
-  var index = 0
-  return nativeInterpolationPattern.replace(source) { match ->
-    formatArgs.getOrNull(index++)?.toString() ?: match.value
+  val rendered = StringBuilder(source.length)
+  var argumentIndex = 0
+  var cursor = 0
+  while (cursor < source.length) {
+    val start = source.indexOf('$', startIndex = cursor)
+    if (start < 0) {
+      rendered.append(source, cursor, source.length)
+      break
+    }
+    rendered.append(source, cursor, start)
+    val end = source.kotlinInterpolationEnd(start)
+    if (end == null) {
+      rendered.append('$')
+      cursor = start + 1
+      continue
+    }
+    val argument = formatArgs.getOrNull(argumentIndex++)
+    if (argument == null) {
+      rendered.append(source, start, end)
+    } else {
+      rendered.append(argument)
+    }
+    cursor = end
   }
+  return rendered.toString()
+}
+
+private fun String.kotlinInterpolationEnd(start: Int): Int? {
+  val next = getOrNull(start + 1) ?: return null
+  if (next != '{') {
+    if (next != '_' && !next.isLetter()) return null
+    var end = start + 2
+    while (getOrNull(end)?.let { it == '_' || it.isLetterOrDigit() } == true) {
+      end += 1
+    }
+    return end
+  }
+
+  var depth = 1
+  var quote: Char? = null
+  var escaped = false
+  var end = start + 2
+  while (end < length) {
+    val character = this[end]
+    when {
+      escaped -> escaped = false
+      quote != null && character == '\\' -> escaped = true
+      character == quote -> quote = null
+      quote == null && (character == '"' || character == '\'') -> quote = character
+      quote == null && character == '{' -> depth += 1
+      quote == null && character == '}' -> {
+        depth -= 1
+        if (depth == 0) return end + 1
+      }
+    }
+    end += 1
+  }
+  return null
 }
