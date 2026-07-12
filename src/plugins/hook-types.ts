@@ -282,6 +282,8 @@ export type PluginHookAgentContext = {
   senderId?: string;
   trigger?: string;
   channelId?: string;
+  /** Path to the active session JSONL file (for plugins that write custom events). */
+  sessionFile?: string;
   /** Resolved effective context-token budget after model/config/agent caps. */
   contextTokenBudget?: number;
   /** Source that supplied the resolved context-token budget. */
@@ -312,6 +314,9 @@ export type PluginHookBeforeAgentReplyResult = {
   reply?: ReplyPayload;
   reason?: string;
 };
+
+// llm_input hook result — allows modifying hooks to abort the LLM call
+export type PluginHookLlmInputResult = { abort?: boolean; reason?: string };
 
 export type PluginHookLlmInputEvent = {
   runId: string;
@@ -1150,7 +1155,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookModelCallEndedEvent,
     ctx: PluginHookAgentContext,
   ) => Promise<void> | void;
-  llm_input: (event: PluginHookLlmInputEvent, ctx: PluginHookAgentContext) => Promise<void> | void;
+  llm_input: (
+    event: PluginHookLlmInputEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<PluginHookLlmInputResult | void> | PluginHookLlmInputResult | void;
   llm_output: (
     event: PluginHookLlmOutputEvent,
     ctx: PluginHookAgentContext,

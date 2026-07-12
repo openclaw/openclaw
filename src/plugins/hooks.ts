@@ -49,6 +49,7 @@ import type {
   PluginHookInboundClaimEvent,
   PluginHookInboundClaimResult,
   PluginHookLlmInputEvent,
+  PluginHookLlmInputResult,
   PluginHookLlmOutputEvent,
   PluginHookBeforeResetEvent,
   PluginHookBeforeToolCallEvent,
@@ -121,6 +122,7 @@ export type {
   PluginHookModelCallEndedEvent,
   PluginHookModelCallStartedEvent,
   PluginHookLlmInputEvent,
+  PluginHookLlmInputResult,
   PluginHookLlmOutputEvent,
   PluginHookBeforeAgentFinalizeEvent,
   PluginHookBeforeAgentFinalizeResult,
@@ -957,11 +959,22 @@ export function createHookRunner(
 
   /**
    * Run llm_input hook.
-   * Allows plugins to observe the exact input payload sent to the LLM.
-   * Runs in parallel (fire-and-forget).
+   * Allows plugins to observe/modify the LLM input — and optionally abort the call.
+   * Runs sequentially so that an abort from any handler stops processing.
    */
-  async function runLlmInput(event: PluginHookLlmInputEvent, ctx: PluginHookAgentContext) {
-    return runVoidHook("llm_input", event, ctx);
+  async function runLlmInput(
+    event: PluginHookLlmInputEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<PluginHookLlmInputResult | undefined> {
+    return runModifyingHook<"llm_input", PluginHookLlmInputResult>("llm_input", event, ctx, {
+      mergeResults: (acc, next, _registration) => {
+        // First abort wins — short-circuit subsequent handlers
+        if (acc?.abort) {
+          return acc;
+        }
+        return next;
+      },
+    });
   }
 
   /**

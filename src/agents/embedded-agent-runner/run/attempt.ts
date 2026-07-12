@@ -5194,9 +5194,10 @@ export async function runEmbeddedAttempt(
               : {}),
           });
 
+          // llm_input hook — now awaited so plugins can abort the LLM call
           if (!skipPromptSubmission && !isRawModelRun && hookRunner?.hasHooks("llm_input")) {
-            hookRunner
-              .runLlmInput(
+            try {
+              const llmInputResult = await hookRunner.runLlmInput(
                 {
                   runId: params.runId,
                   sessionId: params.sessionId,
@@ -5216,6 +5217,7 @@ export async function runEmbeddedAttempt(
                   sessionId: params.sessionId,
                   workspaceDir: params.workspaceDir,
                   trigger: params.trigger,
+                  sessionFile: params.sessionFile,
                   ...buildAgentHookContextChannelFields(params),
                   ...buildAgentHookContextIdentityFields({
                     trigger: params.trigger,
@@ -5224,10 +5226,16 @@ export async function runEmbeddedAttempt(
                     channelContext: params.channelContext,
                   }),
                 },
-              )
-              .catch((err: unknown) => {
-                log.warn(`llm_input hook failed: ${String(err)}`);
-              });
+              );
+              if (llmInputResult?.abort) {
+                const reason = llmInputResult.reason ?? "llm_input hook requested abort";
+                log.info(`llm_input hook aborted LLM call: ${reason} runId=${params.runId}`);
+                skipPromptSubmission = true;
+              }
+            } catch (err) {
+              log.warn(`llm_input hook failed (fail-closed): ${String(err)}`);
+              skipPromptSubmission = true;
+            }
           }
 
           const llmBoundaryOptionsForPrecheck =
@@ -6130,6 +6138,7 @@ export async function runEmbeddedAttempt(
               sessionId: params.sessionId,
               workspaceDir: params.workspaceDir,
               trigger: params.trigger,
+              sessionFile: params.sessionFile,
               ...(params.contextWindowInfo?.tokens
                 ? { contextTokenBudget: params.contextWindowInfo.tokens }
                 : {}),
