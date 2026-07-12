@@ -44,6 +44,7 @@ import {
   protectPreparedProviderRuntimeAuth,
   unwrapSecretSentinelsForProviderEgress,
 } from "./provider-secret-egress.js";
+import { resolveSimpleCompletionModelResolverWorkspace } from "./simple-completion-scope.js";
 import { prepareModelForSimpleCompletion } from "./simple-completion-transport.js";
 import { resolveUtilityModelRefForAgent } from "./utility-model.js";
 
@@ -255,6 +256,7 @@ export async function prepareSimpleCompletionModel(params: {
   bindAuthOwner?: boolean;
   modelResolver?: typeof resolveModelAsync;
 }): Promise<PreparedSimpleCompletionModel> {
+  const workspaceDir = resolveSimpleCompletionModelResolverWorkspace(params.modelResolver);
   const resolved =
     params.useAsyncModelResolution || params.skipAgentDiscovery
       ? await (params.modelResolver ?? resolveModelAsync)(
@@ -267,11 +269,13 @@ export async function prepareSimpleCompletionModel(params: {
               ? { allowBundledStaticCatalogFallback: params.allowBundledStaticCatalogFallback }
               : {}),
             ...(params.skipAgentDiscovery ? { skipAgentDiscovery: true } : {}),
+            workspaceDir,
             authProfileId: params.profileId,
             preferredProfile: params.preferredProfile,
           },
         )
       : resolveModel(params.provider, params.modelId, params.agentDir, params.cfg, {
+          workspaceDir,
           authProfileId: params.profileId,
           preferredProfile: params.preferredProfile,
         });
@@ -294,6 +298,7 @@ export async function prepareSimpleCompletionModel(params: {
       model: resolved.model,
       cfg: params.cfg,
       agentDir: params.agentDir,
+      workspaceDir,
       profileId: params.profileId,
       preferredProfile: params.preferredProfile,
       ...(authStore ? { store: authStore } : {}),
@@ -328,7 +333,7 @@ export async function prepareSimpleCompletionModel(params: {
       apiKey: rawApiKey,
       authMode: auth.mode,
       cfg: params.cfg,
-      workspaceDir: params.agentDir,
+      workspaceDir: workspaceDir ?? params.agentDir,
       profileId: auth.profileId,
     });
     authValue = runtimeCredential.apiKey;
