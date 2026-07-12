@@ -622,7 +622,7 @@ describe("processGatewayAllowlist", () => {
       "./bash-tools.exec-host-shared.js",
     );
     shouldResolveExecApprovalUnavailableInlineMock.mockImplementation(
-      actualShared.shouldResolveExecApprovalUnavailableInline,
+      actualShared.shouldResolveExecApprovalUnavailableInline as () => boolean,
     );
     createAndRegisterDefaultExecApprovalRequestMock.mockResolvedValue({
       approvalId: "approval-cli-no-route",
@@ -651,7 +651,7 @@ describe("processGatewayAllowlist", () => {
           command: "echo askfallback-proof",
           agentId: "agent-1",
           ask: "on-miss",
-          askFallback: "deny",
+          // askFallback=deny comes from resolveExecHostApprovalContextMock's default.
           // trigger intentionally omitted — a plain CLI `openclaw agent` run.
         }),
       ).rejects.toThrow("denied");
