@@ -1,7 +1,8 @@
 ---
-summary: "CLI reference for `openclaw backup` (create local backup archives)"
+summary: "CLI reference for `openclaw backup` (archives and SQLite snapshots)"
 read_when:
   - You want a first-class backup archive for local OpenClaw state
+  - You need a compact, verified snapshot of one OpenClaw SQLite database
   - You want to preview which paths would be included before reset or uninstall
 title: "Backup"
 ---
@@ -18,6 +19,11 @@ openclaw backup create --verify
 openclaw backup create --no-include-workspace
 openclaw backup create --only-config
 openclaw backup verify ./2026-03-09T08-00-00.000+08-00-openclaw-backup.tar.gz
+openclaw backup sqlite create --global --repository ~/Backups/openclaw-sqlite
+openclaw backup sqlite create --agent main --repository ~/Backups/openclaw-sqlite
+openclaw backup sqlite list --repository ~/Backups/openclaw-sqlite
+openclaw backup sqlite verify ~/Backups/openclaw-sqlite/<snapshot-id>
+openclaw backup sqlite restore ~/Backups/openclaw-sqlite/<snapshot-id> --target ./restored/openclaw.sqlite
 ```
 
 ## Notes
@@ -27,6 +33,41 @@ openclaw backup verify ./2026-03-09T08-00-00.000+08-00-openclaw-backup.tar.gz
 - Existing archive files are never overwritten. Output paths inside the source state/workspace trees are rejected to avoid self-inclusion.
 - `openclaw backup verify <archive>` checks that the archive contains exactly one root manifest, rejects traversal-style archive paths and SQLite sidecars, confirms every manifest-declared payload exists, validates every SQLite snapshot's file shape, and runs full integrity and role checks on canonical OpenClaw databases. Dedicated plugin schemas remain opaque because they may require owner-defined SQLite capabilities. `openclaw backup create --verify` runs that validation immediately after writing the archive.
 - `openclaw backup create --only-config` backs up just the active JSON config file.
+
+## SQLite snapshots
+
+Use `openclaw backup sqlite` when you need a portable artifact for one OpenClaw-owned SQLite database instead of a broad state archive.
+
+Snapshot creation accepts exactly one named source:
+
+| Command                                                         | Database               |
+| --------------------------------------------------------------- | ---------------------- |
+| `openclaw backup sqlite create --global --repository <dir>`     | Shared OpenClaw state  |
+| `openclaw backup sqlite create --agent <id> --repository <dir>` | One per-agent database |
+
+The repository contains one directory per committed snapshot. Each snapshot directory contains exactly:
+
+- `manifest.json`
+- `database.sqlite`
+
+Snapshot creation verifies the live database before reading it, uses SQLite `VACUUM INTO` to capture committed WAL state into a compact database, verifies the generated database again, and publishes the completed directory without overwriting existing paths. Global snapshots remove transient delivery queue rows and compact again so deleted queue payloads are not retained in free pages.
+
+Do not copy live `.sqlite`, `-wal`, `-shm`, or `-journal` files as a portability artifact. Copy only completed snapshot directories.
+
+SQLite snapshots can contain auth profiles, session state, plugin state, and other sensitive records. Protect repositories with the same permissions, encryption, retention policy, and destination restrictions as the live OpenClaw state directory.
+
+### Verify and restore
+
+```bash
+openclaw backup sqlite verify <snapshot-directory>
+openclaw backup sqlite restore <snapshot-directory> --target <new-database-path>
+```
+
+Verification checks the strict manifest shape, artifact size and SHA-256, SQLite integrity, foreign keys, schema version, database role and owner, and OpenClaw-owned index definitions.
+
+Restore repeats verification and writes only to a fresh target. It refuses an existing target, `-wal`, `-shm`, or `-journal` sidecar and never performs an in-place replacement of a live OpenClaw database. Activating a restored database remains an explicit offline operator step.
+
+Snapshot repositories are local directories. Scheduling, upload, retention, incremental WAL bundles, failover, and restore-on-boot behavior are intentionally outside this command.
 
 ## What gets backed up
 
