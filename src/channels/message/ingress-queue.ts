@@ -560,21 +560,33 @@ export function createChannelIngressQueue<
     const kysely = getChannelIngressKysely(db);
     const limit = normalizeLimit(listOptions?.limit);
     const records: Array<ChannelIngressQueueRecord<TPayload, TMetadata>> = [];
-    let offset = 0;
+    let lastRow: ChannelIngressRow | undefined;
     while (records.length < limit) {
-      const baseQuery = kysely
+      let pageQuery = kysely
         .selectFrom("channel_ingress_events")
         .selectAll()
         .where("queue_name", "=", queueName)
         .where("status", "=", "pending");
+      if (lastRow) {
+        const cursor = lastRow;
+        pageQuery =
+          listOptions?.orderBy === "id"
+            ? pageQuery.where("event_id", ">", cursor.event_id)
+            : pageQuery.where((eb) =>
+                eb.or([
+                  eb("received_at", ">", cursor.received_at),
+                  eb.and([
+                    eb("received_at", "=", cursor.received_at),
+                    eb("event_id", ">", cursor.event_id),
+                  ]),
+                ]),
+              );
+      }
       const orderedQuery =
         listOptions?.orderBy === "id"
-          ? baseQuery.orderBy("event_id", "asc")
-          : baseQuery.orderBy("received_at", "asc").orderBy("event_id", "asc");
-      const rows = executeSqliteQuerySync(
-        db,
-        orderedQuery.limit(LIST_PENDING_BATCH_SIZE).offset(offset),
-      ).rows;
+          ? pageQuery.orderBy("event_id", "asc")
+          : pageQuery.orderBy("received_at", "asc").orderBy("event_id", "asc");
+      const rows = executeSqliteQuerySync(db, orderedQuery.limit(LIST_PENDING_BATCH_SIZE)).rows;
       for (const row of rows) {
         const record = baseRecord<TPayload, TMetadata>(row);
         if (record) {
@@ -587,7 +599,7 @@ export function createChannelIngressQueue<
       if (rows.length < LIST_PENDING_BATCH_SIZE) {
         break;
       }
-      offset += rows.length;
+      lastRow = rows.at(-1);
     }
     return records;
   };

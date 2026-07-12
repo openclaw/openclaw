@@ -639,9 +639,14 @@ describe("channel ingress queue", () => {
           accountId: "account",
           stateDir,
         });
-        insertCorruptRow(stateDir, '["test","account"]', "bad-first", {
-          payload_json: "{corrupt",
-        });
+        for (let index = 0; index < 100; index += 1) {
+          insertCorruptRow(
+            stateDir,
+            '["test","account"]',
+            `bad-${index.toString().padStart(3, "0")}`,
+            { payload_json: "{corrupt" },
+          );
+        }
         await queue.enqueue("good-second", { text: "visible" }, { receivedAt: 300 });
 
         const pending = await queue.listPending({ limit: 1 });
