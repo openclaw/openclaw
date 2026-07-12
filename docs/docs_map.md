@@ -1506,11 +1506,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Tenant IDs
   - H2: fleet create
   - H3: Create options
+  - H3: Disk limits
+  - H3: Egress policy
   - H2: fleet list
   - H2: fleet status
   - H2: fleet logs
   - H2: fleet start, fleet stop, and fleet restart
   - H2: fleet upgrade
+  - H2: fleet backup and fleet restore
+  - H2: fleet doctor
   - H2: fleet rm
   - H2: Storage and container layout
   - H2: Security profile
@@ -8307,12 +8311,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Control UI
   - H2: Authorization and privacy
   - H2: Audience projection
+  - H2: Delivered-surface convergence
   - H2: Restart, timeout, and route semantics
   - H2: Compatibility plan
   - H2: Rollout
   - H3: PR 1: durable lifecycle
-  - H3: PR 2: deep link and typed actions
-  - H3: PR 3: propagation and fail-closed behavior
+  - H3: PR 2: typed actions and channel callbacks
+  - H3: PR 3: Control UI deep link
+  - H3: PR 4: native clients
+  - H3: PR 5: propagation and fail-closed behavior
   - H2: Tests
   - H2: Observability
   - H2: Open decisions
