@@ -1,22 +1,32 @@
 #!/usr/bin/env node
 // Dispatches full release validation against a temporary SHA-pinned branch.
 import { execFileSync, spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const WORKFLOW = "full-release-validation.yml";
+const RELEASE_BRANCH_PATTERN =
+  /^(?:release\/[0-9]{4}\.[0-9]+\.[0-9]+|extended-stable\/[0-9]{4}\.[0-9]+\.33)$/u;
+const RELEASE_TAG_PATTERN = /^v[0-9]{4}\.[0-9]+\.[0-9]+(?:-(?:alpha|beta)\.[0-9]+)?$/u;
 const DEFAULT_INPUTS = {
   provider: "openai",
   mode: "both",
   release_profile: "full",
   rerun_group: "all",
+  reuse_evidence: "true",
 };
 
 function usage() {
-  console.error(`Usage: node scripts/full-release-validation-at-sha.mjs [--sha <sha>] [--branch <name>] [--keep-branch] [--dry-run] [-- -f key=value ...]
+  console.error(`Usage: node scripts/full-release-validation-at-sha.mjs [--sha <target-sha>] [--target-ref <canonical-release-branch-or-tag>] [--workflow-sha <trusted-main-ref>] [--keep-branch] [--dry-run] [-- -f key=value ...]
 
-Creates a temporary remote branch pinned to the target commit, dispatches Full
-Release Validation from that branch, watches the parent run, verifies all child
-workflow head SHAs match, then deletes the temporary branch by default.`);
+Creates a temporary remote branch pinned to trusted main release tooling,
+dispatches Full Release Validation with the target commit as its ref input,
+watches the parent run, verifies all child workflow head SHAs match the trusted
+workflow lineage through the release evidence manifest, then deletes the
+temporary branch by default. Exact-target evidence reuse stays enabled; pass
+-f reuse_evidence=false to force a fresh run.`);
 }
 
 function run(command, args, options = {}) {
@@ -53,7 +63,8 @@ function readOptionValue(argv, index, optionName) {
 export function parseArgs(argv) {
   const args = {
     sha: "",
-    branch: "",
+    targetRef: "",
+    workflowSha: "",
     keepBranch: false,
     dryRun: false,
     inputs: { ...DEFAULT_INPUTS },
@@ -70,8 +81,13 @@ export function parseArgs(argv) {
       i += 1;
       continue;
     }
-    if (arg === "--branch") {
-      args.branch = readOptionValue(argv, i, arg);
+    if (arg === "--workflow-sha") {
+      args.workflowSha = readOptionValue(argv, i, arg);
+      i += 1;
+      continue;
+    }
+    if (arg === "--target-ref") {
+      args.targetRef = readOptionValue(argv, i, arg);
       i += 1;
       continue;
     }
@@ -116,20 +132,70 @@ export function parseArgs(argv) {
     throw new Error(`Unknown argument: ${arg}`);
   }
 
+  if (!["true", "false"].includes(args.inputs.reuse_evidence)) {
+    throw new Error("reuse_evidence must be true or false");
+  }
+  if (Object.hasOwn(args.inputs, "ref")) {
+    throw new Error("SHA-pinned release validation reserves the ref input for --sha");
+  }
+  if (
+    args.targetRef &&
+    !RELEASE_BRANCH_PATTERN.test(args.targetRef) &&
+    !RELEASE_TAG_PATTERN.test(args.targetRef)
+  ) {
+    throw new Error("--target-ref must be a canonical OpenClaw release branch or tag");
+  }
   return args;
 }
 
-function sanitizeBranchPart(value) {
-  return value
-    .replace(/[^A-Za-z0-9._/-]+/g, "-")
-    .replace(/\/+/g, "/")
-    .replace(/^[/.-]+|[/.-]+$/g, "")
-    .slice(0, 80);
+export function resolveRemoteTargetRefSha(targetRef, executeGit = (args) => run("git", args)) {
+  if (RELEASE_BRANCH_PATTERN.test(targetRef)) {
+    return executeGit(["ls-remote", "--heads", "origin", `refs/heads/${targetRef}`]).split(
+      /\s+/u,
+    )[0];
+  }
+
+  const tagRef = `refs/tags/${targetRef}`;
+  const peeledSha = executeGit(["ls-remote", "--tags", "origin", `${tagRef}^{}`]).split(/\s+/u)[0];
+  if (peeledSha) {
+    return peeledSha;
+  }
+  return executeGit(["ls-remote", "--tags", "origin", tagRef]).split(/\s+/u)[0];
+}
+
+function verifyTargetRef(targetRef, targetSha) {
+  if (!targetRef) {
+    return targetSha;
+  }
+  const remoteSha = resolveRemoteTargetRefSha(targetRef);
+  if (remoteSha !== targetSha) {
+    throw new Error(`Target ref ${targetRef} does not resolve to ${targetSha}`);
+  }
+  return targetRef;
 }
 
 function resolveSha(requestedSha) {
   const rev = requestedSha || "HEAD";
   return run("git", ["rev-parse", "--verify", `${rev}^{commit}`], { dryRun: false });
+}
+
+function resolveTrustedWorkflowSha(requestedSha) {
+  run("git", ["fetch", "--no-tags", "origin", "refs/heads/main:refs/remotes/origin/main"], {
+    stdio: "inherit",
+  });
+  const workflowSha = resolveSha(requestedSha || "origin/main");
+  const ancestry = runStatus("git", [
+    "merge-base",
+    "--is-ancestor",
+    workflowSha,
+    "refs/remotes/origin/main",
+  ]);
+  if (ancestry.status !== 0) {
+    throw new Error(
+      `Workflow SHA ${workflowSha} is not reachable from current origin/main; refusing an untrusted release harness.`,
+    );
+  }
+  return workflowSha;
 }
 
 function collectRunId(dispatchOutput) {
@@ -157,60 +223,75 @@ function findLatestRunId(branch, sha) {
   return match?.databaseId ? String(match.databaseId) : "";
 }
 
-function childRunIds(parentRunId) {
-  const jobsJson = run("gh", ["run", "view", parentRunId, "--json", "jobs"]);
-  const jobs = JSON.parse(jobsJson).jobs ?? [];
-  const summaryJob = jobs.find((job) => job.name === "Verify full validation");
-  if (!summaryJob?.databaseId) {
-    return [];
+export function releaseEvidenceVerificationArgs(parentRunId) {
+  if (!/^[1-9][0-9]*$/u.test(String(parentRunId))) {
+    throw new Error("parent run ID must be a positive decimal");
   }
-  const log = run("gh", [
-    "run",
-    "view",
-    parentRunId,
-    "--job",
-    String(summaryJob.databaseId),
-    "--log",
-  ]);
-  return [...new Set([...log.matchAll(/actions\/runs\/(\d+)/g)].map((match) => match[1]))];
+  return ["--validate-run", String(parentRunId), "--trusted-workflow-ref", "main", "--json"];
 }
 
-function verifyChildHeads(parentRunId, sha) {
-  const ids = childRunIds(parentRunId);
-  if (ids.length === 0) {
-    throw new Error(
-      `Could not find child workflow run ids in parent verifier logs for ${parentRunId}.`,
-    );
+export function releaseEvidenceVerifierPath(worktreeRoot) {
+  const candidates = [
+    join(worktreeRoot, "scripts", "release-ci-summary.mjs"),
+    join(
+      worktreeRoot,
+      ".agents",
+      "skills",
+      "release-openclaw-ci",
+      "scripts",
+      "release-ci-summary.mjs",
+    ),
+  ];
+  const verifier = candidates.find((candidate) => existsSync(candidate));
+  if (!verifier) {
+    throw new Error("trusted workflow checkout does not contain a release evidence verifier");
   }
+  return verifier;
+}
 
-  let failed = false;
-  for (const id of ids) {
-    const json = run("gh", ["run", "view", id, "--json", "name,status,conclusion,headSha,url"]);
-    const child = JSON.parse(json);
-    const ok =
-      child.headSha === sha && child.status === "completed" && child.conclusion === "success";
-    console.log(
-      `${ok ? "ok" : "bad"} ${child.name} ${child.status}/${child.conclusion} ${child.headSha} ${child.url}`,
+function verifyReleaseEvidence(parentRunId, workflowSha) {
+  const verifierWorktree = mkdtempSync(join(tmpdir(), "openclaw-release-verifier-"));
+  try {
+    run("git", ["worktree", "add", "--detach", verifierWorktree, workflowSha], {
+      stdio: ["ignore", "ignore", "inherit"],
+    });
+    const verifier = releaseEvidenceVerifierPath(verifierWorktree);
+    const evidence = JSON.parse(
+      run(process.execPath, [verifier, ...releaseEvidenceVerificationArgs(parentRunId)]),
     );
-    failed ||= !ok;
-  }
-  if (failed) {
-    throw new Error(`One or more child workflows failed or did not run at ${sha}.`);
+    if (evidence.valid !== true) {
+      throw new Error(`Full Release Validation evidence is invalid for run ${parentRunId}.`);
+    }
+    console.log(
+      `ok release evidence current=${evidence.current.runId} root=${evidence.root.runId} reused=${Boolean(evidence.evidenceReuse)}`,
+    );
+  } finally {
+    runStatus("git", ["worktree", "remove", "--force", verifierWorktree], {
+      stdio: ["ignore", "ignore", "ignore"],
+    });
+    rmSync(verifierWorktree, { force: true, recursive: true });
   }
 }
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
-  const sha = resolveSha(args.sha);
-  const shortSha = sha.slice(0, 12);
-  const branch = sanitizeBranchPart(args.branch || `release-ci/${shortSha}-${Date.now()}`);
+  const targetSha = resolveSha(args.sha);
+  const targetContextRef = verifyTargetRef(args.targetRef, targetSha);
+  const workflowSha = resolveTrustedWorkflowSha(args.workflowSha);
+  const shortSha = workflowSha.slice(0, 12);
+  const branch = `release-ci/${shortSha}-${Date.now()}`;
   const remoteBranchRef = `refs/heads/${branch}`;
-  const dispatchInputs = { ref: sha, ...args.inputs };
+  const dispatchInputs = {
+    ref: targetSha,
+    ...(targetContextRef !== targetSha ? { target_context_ref: targetContextRef } : {}),
+    ...args.inputs,
+  };
 
-  console.log(`Target SHA: ${sha}`);
+  console.log(`Target SHA: ${targetSha}`);
+  console.log(`Trusted workflow SHA: ${workflowSha}`);
   console.log(`Temporary workflow ref: ${branch}`);
 
-  run("git", ["push", "origin", `${sha}:${remoteBranchRef}`], {
+  run("git", ["push", "origin", `${workflowSha}:${remoteBranchRef}`], {
     dryRun: args.dryRun,
     stdio: "inherit",
   });
@@ -229,7 +310,7 @@ function main() {
     parentRunId = collectRunId(dispatchOutput);
     if (!parentRunId && !args.dryRun) {
       for (let attempt = 0; attempt < 60; attempt += 1) {
-        parentRunId = findLatestRunId(branch, sha);
+        parentRunId = findLatestRunId(branch, workflowSha);
         if (parentRunId) {
           break;
         }
@@ -256,7 +337,7 @@ function main() {
         `Full Release Validation failed: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`,
       );
     }
-    verifyChildHeads(parentRunId, sha);
+    verifyReleaseEvidence(parentRunId, workflowSha);
   } finally {
     if (!args.keepBranch) {
       run("git", ["push", "origin", `:${remoteBranchRef}`], {

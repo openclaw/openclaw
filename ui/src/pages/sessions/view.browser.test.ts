@@ -36,7 +36,7 @@ function readUiCss(): string {
 }
 
 function sessionsTableHtml() {
-  const headers = ["", "Key", "Kind", "Status", "Runtime", "Updated", "Tokens", "Actions"];
+  const headers = ["", "Key", "Kind", "Status", "Updated", "Tokens", "Actions"];
   const overviewTiles = [
     ["3", "Sessions"],
     ["1", "Live"],
@@ -75,12 +75,12 @@ function sessionsTableHtml() {
                             ? "data-table-key-col"
                             : index === 3
                               ? "session-status-col"
-                              : index === 4
-                                ? "session-runtime-col"
-                                : index === 7
-                                  ? "session-actions-col"
-                                  : ""
-                      }">${header}</th>`,
+                              : index === 6
+                                ? "session-actions-col"
+                                : ""
+                      }">${
+                        index === 6 ? `<span class="sessions-sr-only">${header}</span>` : header
+                      }</th>`,
                   )
                   .join("")}
               </tr>
@@ -111,7 +111,6 @@ function sessionsTableHtml() {
                     <span class="session-status-badge__label">Live</span>
                   </span>
                 </td>
-                <td class="session-runtime-cell"><span class="mono">claude-cli (fallback none)</span></td>
                 <td>now</td>
                 <td class="session-token-cell">
                   <div class="session-tokens">
@@ -127,12 +126,14 @@ function sessionsTableHtml() {
                       <span class="session-compaction-count">1</span>
                       <svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg>
                     </button>
-                    <button class="icon-btn" aria-label="Add to Workboard"></button>
+                    <button class="icon-btn" aria-label="Open session menu" aria-haspopup="menu">
+                      <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1" /></svg>
+                    </button>
                   </div>
                 </td>
               </tr>
               <tr class="session-details-row">
-                <td colspan="8">
+                <td colspan="7">
                   <div class="session-details-panel">
                     <div class="session-details-panel__hero">
                       <div>
@@ -244,7 +245,6 @@ describeBrowserLayout("sessions responsive browser layout", () => {
         const trigger = document.querySelector(".session-details-toggle");
         const status = document.querySelector(".session-status-badge");
         const statusLabel = document.querySelector(".session-status-badge__label");
-        const runtime = document.querySelector(".session-runtime-cell .mono");
         const kind = document.querySelector(".data-table-badge");
         const key = document.querySelector(".session-key-cell .session-link");
         const details = document.querySelector(".session-details-panel");
@@ -254,7 +254,6 @@ describeBrowserLayout("sessions responsive browser layout", () => {
           !(trigger instanceof HTMLElement) ||
           !(status instanceof HTMLElement) ||
           !(statusLabel instanceof HTMLElement) ||
-          !(runtime instanceof HTMLElement) ||
           !(kind instanceof HTMLElement) ||
           !(key instanceof HTMLElement)
         ) {
@@ -263,15 +262,16 @@ describeBrowserLayout("sessions responsive browser layout", () => {
         const containerRect = container.getBoundingClientRect();
         const actionsRect = actions.getBoundingClientRect();
         const statusRect = status.getBoundingClientRect();
+        const statusStyle = getComputedStyle(status);
         return {
           bodyOverflow: document.documentElement.scrollWidth - window.innerWidth,
           checkpointCount: trigger.querySelector(".session-compaction-count")?.textContent?.trim(),
           statusText: status.textContent?.trim(),
-          runtimeText: runtime.textContent?.trim(),
           keyWhiteSpace: getComputedStyle(key).whiteSpace,
           kindWhiteSpace: getComputedStyle(kind).whiteSpace,
-          statusWhiteSpace: getComputedStyle(status).whiteSpace,
-          runtimeWhiteSpace: getComputedStyle(runtime).whiteSpace,
+          statusWhiteSpace: statusStyle.whiteSpace,
+          statusBorderStyle: statusStyle.borderTopStyle,
+          statusBackgroundColor: statusStyle.backgroundColor,
           hasDetails: details !== null,
           actionsVisible:
             actionsRect.left >= containerRect.left && actionsRect.right <= containerRect.right,
@@ -283,11 +283,12 @@ describeBrowserLayout("sessions responsive browser layout", () => {
       expect(metrics.bodyOverflow).toBeLessThanOrEqual(1);
       expect(metrics.checkpointCount).toBe("1");
       expect(metrics.statusText).toBe("Live");
-      expect(metrics.runtimeText).toBe("claude-cli (fallback none)");
       expect(metrics.keyWhiteSpace).toBe("nowrap");
       expect(metrics.kindWhiteSpace).toBe("nowrap");
       expect(metrics.statusWhiteSpace).toBe("nowrap");
-      expect(metrics.runtimeWhiteSpace).toBe("nowrap");
+      // Status is a plain dot + label; pill chrome must not come back.
+      expect(metrics.statusBorderStyle).toBe("none");
+      expect(metrics.statusBackgroundColor).toBe("rgba(0, 0, 0, 0)");
       expect(metrics.hasDetails).toBe(true);
       expect(metrics.actionsVisible).toBe(true);
       expect(metrics.statusVisible).toBe(true);

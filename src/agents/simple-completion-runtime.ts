@@ -16,13 +16,14 @@ import type {
   ThinkingLevel as SimpleCompletionThinkingLevel,
 } from "../llm/types.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.runtime.js";
-import {
-  resolveAgentConfig,
-  resolveAgentDir,
-  resolveAgentEffectiveModelPrimary,
-} from "./agent-scope.js";
+import { resolveAgentDir, resolveAgentEffectiveModelPrimary } from "./agent-scope.js";
+import { ensureAuthProfileStore } from "./auth-profiles/store.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
 import { resolveModel, resolveModelAsync } from "./embedded-agent-runner/model.js";
+import {
+  fingerprintAuthProfileCredential,
+  fingerprintResolvedProviderAuth,
+} from "./execution-auth-binding.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import {
   applySecretRefHeaderSentinels,
@@ -44,6 +45,7 @@ import {
   unwrapSecretSentinelsForProviderEgress,
 } from "./provider-secret-egress.js";
 import { prepareModelForSimpleCompletion } from "./simple-completion-transport.js";
+import { resolveUtilityModelRefForAgent } from "./utility-model.js";
 
 type SimpleCompletionAuthStorage = {
   setRuntimeApiKey: (provider: string, apiKey: string) => void;
@@ -67,6 +69,8 @@ export type PreparedSimpleCompletionModel =
   | {
       model: Model;
       auth: ResolvedProviderAuth;
+      /** Non-reversible owner proof captured from the same auth snapshot. */
+      sourceAuthFingerprint?: string;
     }
   | {
       error: string;
@@ -87,6 +91,7 @@ export type PreparedSimpleCompletionModelForAgent =
       selection: AgentSimpleCompletionSelection;
       model: Model;
       auth: ResolvedProviderAuth;
+      sourceAuthFingerprint?: string;
     }
   | {
       error: string;
@@ -105,11 +110,16 @@ export function resolveSimpleCompletionSelectionForAgent(params: {
     cfg: params.cfg,
     agentId: params.agentId,
   });
+  // Utility routing derives a provider-declared small model when unset and
+  // treats an explicit empty utilityModel as "use the primary" (disabled).
   const modelRef =
     params.modelRef?.trim() ||
     (params.useUtilityModel
-      ? resolveAgentConfig(params.cfg, params.agentId)?.utilityModel?.trim() ||
-        params.cfg.agents?.defaults?.utilityModel?.trim()
+      ? resolveUtilityModelRefForAgent({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          primaryProvider: fallbackRef.provider,
+        })
       : undefined) ||
     resolveAgentEffectiveModelPrimary(params.cfg, params.agentId);
   const split = modelRef ? splitTrailingAuthProfile(modelRef) : null;
@@ -180,7 +190,6 @@ async function setRuntimeApiKeyForCompletion(params: {
       config: params.cfg,
     });
     const protectedAuth = protectPreparedProviderRuntimeAuth({
-      sourceApiKey: params.apiKey,
       provider: params.model.provider,
       preparedAuth: {
         apiKey: copilotToken.token,
@@ -195,7 +204,6 @@ async function setRuntimeApiKeyForCompletion(params: {
     };
   }
   const preparedAuth = protectPreparedProviderRuntimeAuth({
-    sourceApiKey: params.apiKey,
     provider: params.model.provider,
     preparedAuth: await prepareProviderRuntimeAuth({
       provider: params.model.provider,
@@ -244,6 +252,7 @@ export async function prepareSimpleCompletionModel(params: {
   allowBundledStaticCatalogFallback?: boolean;
   useAsyncModelResolution?: boolean;
   skipAgentDiscovery?: boolean;
+  bindAuthOwner?: boolean;
   modelResolver?: typeof resolveModelAsync;
 }): Promise<PreparedSimpleCompletionModel> {
   const resolved =
@@ -273,6 +282,13 @@ export async function prepareSimpleCompletionModel(params: {
   }
 
   let auth: ResolvedProviderAuth;
+  const authStore = params.bindAuthOwner
+    ? ensureAuthProfileStore(params.agentDir, {
+        readOnly: true,
+        allowKeychainPrompt: false,
+        config: params.cfg,
+      })
+    : undefined;
   try {
     auth = await getApiKeyForModel({
       model: resolved.model,
@@ -280,6 +296,8 @@ export async function prepareSimpleCompletionModel(params: {
       agentDir: params.agentDir,
       profileId: params.profileId,
       preferredProfile: params.preferredProfile,
+      ...(authStore ? { store: authStore } : {}),
+      ...(params.bindAuthOwner && params.profileId ? { lockedProfile: true } : {}),
       secretSentinels: true,
     });
   } catch (err) {
@@ -321,6 +339,15 @@ export async function prepareSimpleCompletionModel(params: {
     ...auth,
     apiKey: resolvedApiKey,
   };
+  const profileCredential = params.profileId ? authStore?.profiles[params.profileId] : undefined;
+  const sourceAuthFingerprint = params.bindAuthOwner
+    ? profileCredential?.type === "oauth" && params.profileId
+      ? fingerprintAuthProfileCredential({
+          profileId: params.profileId,
+          credential: profileCredential,
+        })
+      : fingerprintResolvedProviderAuth(auth)
+    : undefined;
 
   return {
     model: applySecretRefHeaderSentinels(
@@ -328,6 +355,7 @@ export async function prepareSimpleCompletionModel(params: {
       params.cfg,
     ),
     auth: resolvedAuth,
+    ...(sourceAuthFingerprint ? { sourceAuthFingerprint } : {}),
   };
 }
 
@@ -342,6 +370,7 @@ export async function prepareSimpleCompletionModelForAgent(params: {
   allowBundledStaticCatalogFallback?: boolean;
   useAsyncModelResolution?: boolean;
   skipAgentDiscovery?: boolean;
+  bindAuthOwner?: boolean;
   modelResolver?: typeof resolveModelAsync;
 }): Promise<PreparedSimpleCompletionModelForAgent> {
   const selection = resolveSimpleCompletionSelectionForAgent({
@@ -369,6 +398,7 @@ export async function prepareSimpleCompletionModelForAgent(params: {
       : {}),
     useAsyncModelResolution: params.useAsyncModelResolution,
     skipAgentDiscovery: params.skipAgentDiscovery,
+    bindAuthOwner: params.bindAuthOwner,
     modelResolver: params.modelResolver,
   });
   if ("error" in prepared) {
@@ -381,6 +411,9 @@ export async function prepareSimpleCompletionModelForAgent(params: {
     selection,
     model: prepared.model,
     auth: prepared.auth,
+    ...(prepared.sourceAuthFingerprint
+      ? { sourceAuthFingerprint: prepared.sourceAuthFingerprint }
+      : {}),
   };
 }
 
@@ -412,6 +445,7 @@ function normalizeSimpleCompletionReasoning(
       return resolveClaudeSonnet5ModelIdentity(model) ? "off" : undefined;
     case "adaptive":
       return "medium";
+    case "ultra":
     case "max":
       return isOpenAIProvider(model.provider) && supportsOpenAIReasoningEffort(model, "max")
         ? "max"

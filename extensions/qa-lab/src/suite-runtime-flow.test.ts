@@ -18,6 +18,7 @@ const waitForQaChannelReady = vi.hoisted(() => vi.fn());
 const patchConfig = vi.hoisted(() => vi.fn());
 const applyConfig = vi.hoisted(() => vi.fn());
 const readConfigSnapshot = vi.hoisted(() => vi.fn());
+const restartGatewayWithConfigPatch = vi.hoisted(() => vi.fn());
 const waitForConfigRestartSettle = vi.hoisted(() => vi.fn());
 const createSession = vi.hoisted(() => vi.fn());
 const readEffectiveTools = vi.hoisted(() => vi.fn());
@@ -86,6 +87,7 @@ vi.mock("./suite-runtime-gateway.js", () => ({
   patchConfig,
   applyConfig,
   readConfigSnapshot,
+  restartGatewayWithConfigPatch,
 }));
 
 vi.mock("./suite-runtime-agent.js", () => ({
@@ -198,8 +200,8 @@ describe("qa suite runtime flow", () => {
       },
       repoRoot: "/repo",
       providerMode: "mock-openai",
-      primaryModel: "openai/gpt-5.5",
-      alternateModel: "openai/gpt-5.5-mini",
+      primaryModel: "openai/gpt-5.6-luna",
+      alternateModel: "openai/gpt-5.6-luna-mini",
       mock: null,
       cfg: {} as QaSuiteRuntimeEnv["cfg"],
     } satisfies Parameters<typeof createQaSuiteScenarioFlowApi>[0]["env"];
