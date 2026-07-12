@@ -21,6 +21,7 @@ struct RuntimeLocalizationSourceGuardTests {
             (LegacyContentState(statusText: "Disconnected", isDisconnected: true), .disconnected, nil),
             (LegacyContentState(statusText: "Idle", isIdle: true), .idle, nil),
             (LegacyContentState(statusText: "Reconnecting...", isConnecting: true), .reconnecting, nil),
+            (LegacyContentState(statusText: "Ansluter igen...", isConnecting: true), .reconnecting, nil),
             (LegacyContentState(statusText: "Approval needed"), .approvalNeeded, nil),
             (LegacyContentState(statusText: "Backend supplied attention"), .attention, "Backend supplied attention"),
             (
@@ -43,6 +44,7 @@ struct RuntimeLocalizationSourceGuardTests {
         let attributes = try Self.source("Sources/LiveActivity/OpenClawActivityAttributes.swift")
         let manager = try Self.source("Sources/LiveActivity/LiveActivityManager.swift")
         let widget = try Self.source("ActivityWidget/OpenClawLiveActivity.swift")
+        let project = try Self.source("project.yml")
         let dreaming = try Self.source("Sources/Design/AgentProDreamingDestination.swift")
         let chat = try Self.sharedSource("OpenClawChatUI/ChatMessageViews.swift")
 
@@ -54,6 +56,13 @@ struct RuntimeLocalizationSourceGuardTests {
         #expect(!manager.contains("statusText: String(localized: \"Disconnected\")"))
         #expect(widget.contains("Text(verbatim: detail)"))
         #expect(widget.contains("case .reconnecting: Text(\"Reconnecting...\")"))
+        #expect(project.contains("""
+          OpenClawActivityWidget:
+        """))
+        #expect(project.contains("""
+              - path: Resources/Localizable.xcstrings
+                buildPhase: resources
+        """))
         #expect(dreaming.contains("AttributedString(localized: \"^[\\(recallCount) recall](inflect: true)\""))
         #expect(dreaming.contains("format: String(localized: \"%@ grounded\")"))
         #expect(dreaming.contains("parts.formatted(.list(type: .and, width: .short))"))

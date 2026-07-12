@@ -86,21 +86,35 @@ struct OpenClawActivityAttributes: ActivityAttributes {
             let trimmed = statusText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let detail = trimmed.isEmpty ? nil : trimmed
             if isConnecting {
-                if detail == String(localized: "Reconnecting...") || detail == "Reconnecting..." {
+                if let detail, Self.matchesShippedTranslation(detail, key: "Reconnecting...") {
                     return (.reconnecting, nil)
                 }
-                if detail == String(localized: "Connecting...") || detail == "Connecting..." {
+                if let detail, Self.matchesShippedTranslation(detail, key: "Connecting...") {
                     return (.connecting, nil)
                 }
                 return (.connecting, detail)
             }
-            if detail == String(localized: "Approval needed") || detail == "Approval needed" {
+            if let detail, Self.matchesShippedTranslation(detail, key: "Approval needed") {
                 return (.approvalNeeded, nil)
             }
-            if detail == String(localized: "Action required") || detail == "Action required" {
+            if let detail, Self.matchesShippedTranslation(detail, key: "Action required") {
                 return (.actionRequired, nil)
             }
             return (.attention, detail)
+        }
+
+        private static func matchesShippedTranslation(_ value: String, key: String) -> Bool {
+            if value == key {
+                return true
+            }
+            return Bundle.main.localizations.contains { localization in
+                guard let path = Bundle.main.path(forResource: localization, ofType: "lproj"),
+                      let bundle = Bundle(path: path)
+                else {
+                    return false
+                }
+                return bundle.localizedString(forKey: key, value: key, table: nil) == value
+            }
         }
     }
 }
