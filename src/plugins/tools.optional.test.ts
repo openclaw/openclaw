@@ -3508,6 +3508,53 @@ describe("resolvePluginTools optional tools", () => {
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
+  it("cold-loads defaults when a request registry contains only unrelated plugins", () => {
+    const config = createContext().config;
+    installToolManifestSnapshot({
+      config,
+      plugin: {
+        id: "default-plugin",
+        origin: "bundled",
+        enabledByDefault: true,
+        channels: [],
+        providers: [],
+        contracts: { tools: ["default_tool"] },
+      },
+    });
+    const defaultFactory = vi.fn(() => makeTool("default_tool"));
+    const unrelatedFactory = vi.fn(() => makeTool("unrelated_tool"));
+    const runtimeRegistry = createToolRegistry([
+      {
+        pluginId: "unrelated-plugin",
+        optional: false,
+        source: "/tmp/unrelated-plugin.js",
+        names: ["unrelated_tool"],
+        factory: unrelatedFactory,
+      },
+    ]);
+    loadOpenClawPluginsMock.mockReturnValue(
+      createToolRegistry([
+        {
+          pluginId: "default-plugin",
+          optional: false,
+          source: "/tmp/default-plugin.js",
+          names: ["default_tool"],
+          factory: defaultFactory,
+        },
+      ]),
+    );
+
+    const tools = resolvePluginTools({
+      ...createResolveToolsParams({ toolAllowlist: ["group:plugins"] }),
+      runtimeRegistry: runtimeRegistry as never,
+    });
+
+    expectResolvedToolNames(tools, ["default_tool"]);
+    expect(defaultFactory).toHaveBeenCalledTimes(1);
+    expect(unrelatedFactory).not.toHaveBeenCalled();
+    expectLoaderSelectedOnlyPluginIds(["default-plugin"]);
+  });
+
   it("cold-loads config-origin tools with the complete eligible plugin set", () => {
     const baseContext = createContext();
     const config = {
