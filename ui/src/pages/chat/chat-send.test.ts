@@ -19,6 +19,7 @@ import type { ChatPageHost } from "./chat-state.ts";
 
 type ExecuteSlashCommand = typeof executeSlashCommand;
 type TestChatHost = Omit<ChatHost, "settings"> & {
+  applySettings: (next: UiSettings) => void;
   basePath: string;
   chatAvatarUrl: string | null;
   chatAvatarSource?: string | null;
