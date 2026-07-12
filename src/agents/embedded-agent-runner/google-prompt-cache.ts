@@ -14,6 +14,12 @@ import { normalizeGoogleApiBaseUrl } from "../../infra/google-api-base-url.js";
 import { readResponseWithLimit } from "../../infra/http-body.js";
 import { streamWithPayloadPatch } from "../../llm/providers/stream-wrappers/stream-payload-utils.js";
 import type { Model } from "../../llm/types.js";
+import { isSecretValueRegisteredForRedaction } from "../../logging/secret-redaction-registry.js";
+import {
+  looksLikeSecretSentinel,
+  mintSecretSentinel,
+  resolveSecretSentinel,
+} from "../../secrets/sentinel.js";
 import { resolveProviderRequestHeaders } from "../provider-request-config.js";
 import { buildGuardedModelFetch } from "../provider-transport-fetch.js";
 import type { StreamFn } from "../runtime/index.js";
@@ -296,13 +302,54 @@ async function readGooglePromptCacheJson<T>(response: Response): Promise<T> {
   return JSON.parse(buffer.toString("utf8")) as T;
 }
 
+function resolveGooglePromptCacheAuthHeaders(params: {
+  apiKey: string;
+  provider: string;
+}): Record<string, string> {
+  if (!looksLikeSecretSentinel(params.apiKey)) {
+    const headers = parseGeminiAuth(params.apiKey).headers;
+    if (!isSecretValueRegisteredForRedaction(params.apiKey)) {
+      return headers;
+    }
+    return Object.fromEntries(
+      Object.entries(headers).map(([name, value]) => [
+        name,
+        name.toLowerCase() === "authorization" || name.toLowerCase() === "x-goog-api-key"
+          ? mintSecretSentinel(value, { label: `model-auth:${params.provider}` })
+          : value,
+      ]),
+    );
+  }
+  const resolved = resolveSecretSentinel(params.apiKey);
+  if (resolved === undefined) {
+    throw new Error(
+      `Secret sentinel ${params.apiKey} is not registered in this process; refusing Google prompt-cache auth`,
+    );
+  }
+  return Object.fromEntries(
+    Object.entries(parseGeminiAuth(resolved).headers).map(([name, value]) => {
+      const isCredentialHeader =
+        name.toLowerCase() === "authorization" || name.toLowerCase() === "x-goog-api-key";
+      return [
+        name,
+        isCredentialHeader
+          ? mintSecretSentinel(value, { label: `model-auth:${params.provider}` })
+          : value,
+      ];
+    }),
+  );
+}
+
 function buildGooglePromptCacheHeaders(params: {
   apiKey: string;
   baseUrl: string;
   headers?: Record<string, string>;
   model: GooglePromptCacheModel;
 }): Record<string, string> | undefined {
-  const authHeaders = parseGeminiAuth(params.apiKey).headers;
+  const authHeaders = resolveGooglePromptCacheAuthHeaders({
+    apiKey: params.apiKey,
+    provider: params.model.provider,
+  });
   return (
     resolveProviderRequestHeaders({
       provider: params.model.provider,

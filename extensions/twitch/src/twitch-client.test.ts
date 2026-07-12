@@ -9,6 +9,7 @@
  * - Error handling and edge cases
  */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveTwitchToken } from "./token.js";
 import { TwitchClientManager } from "./twitch-client.js";
@@ -564,6 +565,18 @@ describe("TwitchClientManager", () => {
       expect(mockSay).toHaveBeenCalledWith("testchannel", "Hello, world!");
     });
 
+    it("should keep surrogate pairs intact when pre-chunking long messages", async () => {
+      const prefix = "a".repeat(499);
+
+      const result = await manager.sendMessage(testAccount, "testchannel", `${prefix}😀b`);
+
+      expect(result.ok).toBe(true);
+      expect(mockSay.mock.calls).toEqual([
+        ["testchannel", prefix],
+        ["testchannel", "😀b"],
+      ]);
+    });
+
     it("should generate unique message ID for each message", async () => {
       const result1 = await manager.sendMessage(testAccount, "testchannel", "First message");
       const result2 = await manager.sendMessage(testAccount, "testchannel", "Second message");
@@ -632,7 +645,7 @@ describe("TwitchClientManager", () => {
       await manager.getClient(testAccount);
 
       // Get the onMessage callback
-      const onMessageCallback = messageHandlers[0];
+      const onMessageCallback = expectDefined(messageHandlers[0], "Twitch message handler");
       if (!onMessageCallback) {
         throw new Error("onMessageCallback not found");
       }
@@ -662,7 +675,7 @@ describe("TwitchClientManager", () => {
     it("should normalize channel names without # prefix", async () => {
       await manager.getClient(testAccount);
 
-      const onMessageCallback = messageHandlers[0];
+      const onMessageCallback = expectDefined(messageHandlers[0], "Twitch message handler");
 
       onMessageCallback("testchannel", "testuser", "Test", {
         userInfo: {
@@ -683,7 +696,7 @@ describe("TwitchClientManager", () => {
     it("should include user role flags in message", async () => {
       await manager.getClient(testAccount);
 
-      const onMessageCallback = messageHandlers[0];
+      const onMessageCallback = expectDefined(messageHandlers[0], "Twitch message handler");
 
       onMessageCallback("#testchannel", "moduser", "Test", {
         userInfo: {
@@ -707,7 +720,7 @@ describe("TwitchClientManager", () => {
     it("should handle broadcaster messages", async () => {
       await manager.getClient(testAccount);
 
-      const onMessageCallback = messageHandlers[0];
+      const onMessageCallback = expectDefined(messageHandlers[0], "Twitch message handler");
 
       onMessageCallback("#testchannel", "broadcaster", "Test", {
         userInfo: {

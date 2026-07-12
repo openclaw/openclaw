@@ -8,6 +8,11 @@ title: "Updating"
 
 Keep OpenClaw up to date.
 
+For Docker, Podman, and Kubernetes image replacements, see
+[Upgrading container images](/install/docker#upgrading-container-images). The
+gateway runs startup-safe upgrade work before readiness and exits if mounted
+state needs manual repair.
+
 ## Recommended: `openclaw update`
 
 Detects your install type (npm or git), fetches the latest version, runs `openclaw doctor`, and restarts the gateway.
@@ -235,6 +240,10 @@ Gateway version and reachability, and recover an installed-but-unloaded macOS
 LaunchAgent when possible. If the Gateway cannot make that handoff safely,
 `update.run` reports a safe shell command instead of running the package
 manager in-process.
+
+The Control UI sidebar update card starts this same `update.run` flow. In the
+signed macOS app, the card updates the app through Sparkle first; after relaunch,
+the app brings its managed local Gateway to the matching version.
 
 ## After updating
 

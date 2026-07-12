@@ -2,6 +2,8 @@
  * Regression coverage for user-facing text sanitization.
  * Includes reasoning/tool-call cleanup and internal event prompt formatting.
  */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
@@ -166,6 +168,14 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText("Error: 429 Rate limit exceeded", { errorContext: true })).toBe(
       "⚠️ API rate limit reached. Please try again later.",
     );
+  });
+
+  it("preserves rate limit reset details that use resets wording", () => {
+    expect(
+      sanitizeUserFacingText("Error: Rate limit reached, resets 6pm (UTC)", {
+        errorContext: true,
+      }),
+    ).toBe("⚠️ Rate limit reached, resets 6pm (UTC)");
   });
 
   it("returns a model-switch hint for OpenAI model capacity errors", () => {
@@ -681,8 +691,8 @@ describe("stripThoughtSignatures", () => {
       thinking: "test",
       thought_signature: "AQID",
     });
-    expect("thought_signature" in result[0]).toBe(false);
-    expect("thought_signature" in result[1]).toBe(true);
+    expect("thought_signature" in expectDefined(result[0], "result[0] test invariant")).toBe(false);
+    expect("thought_signature" in expectDefined(result[1], "result[1] test invariant")).toBe(true);
   });
   it("preserves blocks without thought_signature", () => {
     const input = [

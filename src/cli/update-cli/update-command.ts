@@ -16,6 +16,7 @@ import {
   checkShellCompletionStatus,
   ensureCompletionCacheExists,
 } from "../../commands/doctor-completion.js";
+import { DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS_ENV } from "../../commands/doctor-invocation.js";
 import { doctorCommand } from "../../commands/doctor.js";
 import {
   UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV,
@@ -120,6 +121,7 @@ import {
 } from "../../infra/update-runner.js";
 import { getWindowsSystem32ExePath } from "../../infra/windows-install-roots.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../../plugins/config-state.js";
+import { commitPluginInstallRecordsWithConfig } from "../../plugins/install-record-commit.js";
 import {
   loadInstalledPluginIndexInstallRecords,
   writePersistedInstalledPluginIndexInstallRecords,
@@ -130,6 +132,7 @@ import {
   resolveTrustedSourceLinkedOfficialClawHubSpec,
   resolveTrustedSourceLinkedOfficialNpmSpec,
 } from "../../plugins/official-external-install-records.js";
+import { refreshPluginRegistryAfterConfigMutation } from "../../plugins/registry-refresh.js";
 import {
   isClawHubTrustSkippedOutcome,
   syncPluginsForUpdateChannel,
@@ -152,9 +155,7 @@ import {
   waitForGatewayHealthyRestart,
   type GatewayRestartSnapshot,
 } from "../daemon-cli/restart-health.js";
-import { commitPluginInstallRecordsWithConfig } from "../plugins-install-record-commit.js";
 import { listPersistedBundledPluginLocationBridges } from "../plugins-location-bridges.js";
-import { refreshPluginRegistryAfterConfigMutation } from "../plugins-registry-refresh.js";
 import {
   registerSignalExitBarrier,
   registerSignalExitGate,
@@ -262,6 +263,18 @@ type MissingPluginInstallPayload = {
 };
 
 type PostUpdatePluginWarning = NonNullable<PostCorePluginUpdateResult["warnings"]>[number];
+
+export function resolvePostSyncPluginUpdateSkipIds(params: {
+  switchedToClawHub: readonly string[];
+  switchedToNpm: readonly string[];
+  repairedMissingPayloadIds: ReadonlySet<string>;
+}): Set<string> {
+  return new Set([
+    ...params.switchedToClawHub,
+    ...params.switchedToNpm,
+    ...params.repairedMissingPayloadIds,
+  ]);
+}
 
 function isClawHubTrustNotice(message: string): boolean {
   const trimmed = stripAnsi(message).trimStart();
@@ -1494,7 +1507,10 @@ export function resolvePostInstallDoctorEnv(params?: {
   serviceEnv?: NodeJS.ProcessEnv;
   invocationCwd?: string;
 }): NodeJS.ProcessEnv {
-  const resolvedEnv = disableUpdatedPackageCompileCacheEnv(params?.baseEnv ?? process.env);
+  const resolvedEnv: NodeJS.ProcessEnv = {
+    ...disableUpdatedPackageCompileCacheEnv(params?.baseEnv ?? process.env),
+    [DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS_ENV]: "1",
+  };
   if (!params?.serviceEnv) {
     return resolvedEnv;
   }
@@ -2320,7 +2336,11 @@ export async function updatePluginsAfterCoreUpdate(params: {
     timeoutMs: params.timeoutMs,
     updateChannel: pluginUpdateChannel,
     coreVersion: coreVersion ?? undefined,
-    skipIds: new Set([...syncResult.summary.switchedToNpm, ...missingPayloadIdSet]),
+    skipIds: resolvePostSyncPluginUpdateSkipIds({
+      switchedToClawHub: syncResult.summary.switchedToClawHub,
+      switchedToNpm: syncResult.summary.switchedToNpm,
+      repairedMissingPayloadIds: missingPayloadIdSet,
+    }),
     skipDisabledPlugins: true,
     syncOfficialPluginInstalls: true,
     disableOnFailure: true,
@@ -2802,6 +2822,7 @@ async function maybeRestartService(params: {
             process.stdin.isTTY && !params.opts.json && params.opts.yes !== true;
           await doctorCommand(defaultRuntime, {
             nonInteractive: !interactiveDoctor,
+            crossStateDirImports: false,
           });
         } catch (err) {
           defaultRuntime.log(theme.warn(`Doctor failed: ${String(err)}`));
@@ -2988,6 +3009,7 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
       nonInteractive: true,
       repair: true,
       yes: opts.yes === true,
+      crossStateDirImports: false,
     });
     configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
     if (requestedChannel) {
@@ -3478,6 +3500,7 @@ async function continuePostCoreUpdateInFreshProcess(params: {
       env: {
         ...stripGatewayServiceMarkerEnv(disableUpdatedPackageCompileCacheEnv(process.env)),
         OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        [DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS_ENV]: "1",
         [POST_CORE_UPDATE_ENV]: "1",
         [POST_CORE_UPDATE_CHANNEL_ENV]: params.channel,
         ...(params.requestedChannel

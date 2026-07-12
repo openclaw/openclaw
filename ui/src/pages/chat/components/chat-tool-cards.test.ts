@@ -7,18 +7,21 @@ vi.mock("../markdown.ts", async (importOriginal) => await importOriginal());
 vi.mock("../tool-display.ts", () => ({
   formatToolDetail: (display: { detail?: string }) => display.detail,
   resolveToolDisplay: ({ name, args }: { name: string; args?: unknown }) => {
+    const argRecord =
+      args && typeof args === "object" && !Array.isArray(args)
+        ? (args as Record<string, unknown>)
+        : undefined;
     const labels: Record<string, string> = {
       sessions_spawn: "Sub-agent",
       skill_workshop: "Skill Workshop",
       web_search: "Web Search",
     };
     const detail =
-      name === "skill_workshop" &&
-      args &&
-      typeof args === "object" &&
-      typeof (args as { action?: unknown }).action === "string"
-        ? (args as { action: string }).action
-        : undefined;
+      name === "skill_workshop" && typeof argRecord?.action === "string"
+        ? argRecord.action
+        : name === "read" && typeof argRecord?.path === "string"
+          ? argRecord.path
+          : undefined;
     return {
       name,
       label: labels[name] ?? name,
@@ -29,12 +32,17 @@ vi.mock("../tool-display.ts", () => ({
 }));
 
 import {
+  buildMcpAppHostCapabilities,
+  resolveMcpAppSandboxUrl,
+} from "../../../components/mcp-app-view.ts";
+import { t } from "../../../i18n/index.ts";
+import {
   formatDistinctCollapsedToolSummaryText,
   formatCollapsedToolPreviewText,
   formatCollapsedToolSummaryText,
   isToolErrorOutput,
 } from "../../../lib/chat/tool-cards.ts";
-import { renderToolCard } from "./chat-tool-cards.ts";
+import { renderToolCard, renderToolPreview } from "./chat-tool-cards.ts";
 
 function requireFirstMockArg(
   mock: ReturnType<typeof vi.fn>,
@@ -64,6 +72,111 @@ function pointerClick(element: Element) {
 }
 
 describe("tool-cards", () => {
+  it("advertises the CSP actually applied to MCP Apps", () => {
+    expect(
+      buildMcpAppHostCapabilities({ connectDomains: ["https://api.example.com"] }),
+    ).toMatchObject({
+      sandbox: { csp: { connectDomains: ["https://api.example.com"] } },
+    });
+    expect(buildMcpAppHostCapabilities()).toMatchObject({ sandbox: { csp: {} } });
+  });
+
+  it("accepts only the dedicated-origin MCP App sandbox endpoint", () => {
+    expect(
+      resolveMcpAppSandboxUrl(
+        "/mcp-app-sandbox?csp=abc",
+        8444,
+        undefined,
+        "wss://gateway.example:8443/openclaw",
+        "https://gateway.example:8443",
+      ),
+    ).toBe("https://gateway.example:8444/mcp-app-sandbox?csp=abc");
+    expect(
+      resolveMcpAppSandboxUrl(
+        "/mcp-app-sandbox",
+        18790,
+        "https://apps.example.com",
+        "wss://gateway.example",
+        "https://gateway.example",
+      ),
+    ).toBe("https://apps.example.com/mcp-app-sandbox");
+    expect(() =>
+      resolveMcpAppSandboxUrl(
+        "https://attacker.example/mcp-app-sandbox",
+        8444,
+        undefined,
+        "wss://gateway.example:8443/openclaw",
+        "https://gateway.example:8443",
+      ),
+    ).toThrow("MCP App sandbox URL is invalid");
+    expect(() =>
+      resolveMcpAppSandboxUrl(
+        "data:text/html;base64,cHJveHk=",
+        8444,
+        undefined,
+        "wss://gateway.example:8443/openclaw",
+        "https://gateway.example:8443",
+      ),
+    ).toThrow("MCP App sandbox URL is invalid");
+    expect(() =>
+      resolveMcpAppSandboxUrl(
+        "/mcp-app-sandbox",
+        8443,
+        undefined,
+        "wss://gateway.example:8443/openclaw",
+        "https://gateway.example:8443",
+      ),
+    ).toThrow("MCP App sandbox URL is invalid");
+    expect(() =>
+      resolveMcpAppSandboxUrl(
+        "/mcp-app-sandbox",
+        8444,
+        "https://gateway.example:8443",
+        "wss://gateway.example:8443/openclaw",
+        "https://control.example",
+      ),
+    ).toThrow("MCP App sandbox URL is invalid");
+  });
+
+  it("routes MCP App previews through the dedicated double-iframe host", async () => {
+    const container = document.createElement("div");
+    render(
+      renderToolPreview(
+        {
+          kind: "canvas",
+          surface: "assistant_message",
+          render: "url",
+          viewId: "cv_app",
+          mcpApp: { viewId: "cv_app" },
+        },
+        "chat_message",
+        { sessionKey: "agent:main:main" },
+      ),
+      container,
+    );
+
+    const view = container.querySelector("mcp-app-view");
+    expect(view).not.toBeNull();
+    expect(view?.getAttribute("src")).toBeNull();
+    expect((view as { viewId?: string }).viewId).toBe("cv_app");
+
+    const toolContainer = document.createElement("div");
+    render(
+      renderToolPreview(
+        {
+          kind: "canvas",
+          surface: "assistant_message",
+          render: "url",
+          mcpApp: { viewId: "cv_app" },
+        },
+        "chat_tool",
+        { sessionKey: "agent:main:main" },
+      ),
+      toolContainer,
+    );
+    expect(toolContainer.querySelector("mcp-app-view")).toBeNull();
+  });
+
   it("keeps selected summary text from toggling the disclosure", () => {
     const container = document.createElement("div");
     document.body.append(container);
@@ -94,7 +207,7 @@ describe("tool-cards", () => {
     container.remove();
   });
 
-  it("renders expanded cards with inline input and output sections", () => {
+  it("renders expanded cards with key-value args and an output section", () => {
     const container = document.createElement("div");
     const toggle = vi.fn();
     render(
@@ -111,13 +224,239 @@ describe("tool-cards", () => {
       container,
     );
 
+    // Simple object args render as key-value rows instead of a raw JSON block.
+    const kvRows = Array.from(container.querySelectorAll(".chat-tool-kv__row"));
+    expect(kvRows).toHaveLength(1);
+    expect(kvRows[0]?.querySelector(".chat-tool-kv__key")?.textContent).toBe("url:");
+    expect(kvRows[0]?.querySelector(".chat-tool-kv__value")?.textContent).toBe(
+      "https://example.com",
+    );
     const blocks = Array.from(container.querySelectorAll(".chat-tool-card__block"));
     expect(
       blocks.map((block) => block.querySelector(".chat-tool-card__block-label")?.textContent),
-    ).toEqual(["Tool input", "Tool output"]);
-    expect(blocks.map((block) => block.querySelector("code")?.textContent)).toEqual([
-      '{\n  "url": "https://example.com"\n}',
-      "Opened page",
+    ).toEqual(["Tool output"]);
+    expect(blocks[0]?.querySelector("code")?.textContent).toBe("Opened page");
+  });
+
+  it("renders multi-file patch headers, changed rows, and raw output together", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolCard(
+        {
+          id: "msg:patch:multi",
+          name: "apply_patch",
+          args: {
+            changes: [
+              {
+                path: "src/a.ts",
+                kind: { type: "update" },
+                diff: [
+                  "--- a/src/a.ts",
+                  "+++ b/src/a.ts",
+                  "@@ -1 +1 @@",
+                  "-old a",
+                  "+new a",
+                  "",
+                ].join("\n"),
+              },
+              {
+                path: "src/b.ts",
+                kind: { type: "add" },
+                diff: "new b\n",
+              },
+            ],
+          },
+          outputText: "Applied patch",
+        },
+        { expanded: true, onToggleExpanded: vi.fn() },
+      ),
+      container,
+    );
+
+    const diff = container.querySelector(".chat-diff");
+    expect(diff?.getAttribute("aria-label")).toBe("File changes");
+    const fileRows = Array.from(diff?.querySelectorAll(".chat-diff__row--file") ?? []);
+    expect(fileRows.map((row) => row.querySelector(".chat-diff__text")?.textContent)).toEqual([
+      "Update src/a.ts",
+      "Add src/b.ts",
+    ]);
+    expect(fileRows.every((row) => row.querySelector(".chat-diff__gutter") !== null)).toBe(true);
+    expect(diff?.querySelector(".chat-diff__row--del .chat-diff__text")?.textContent).toBe("old a");
+    expect(
+      Array.from(diff?.querySelectorAll(".chat-diff__row--add .chat-diff__text") ?? []).map(
+        (row) => row.textContent,
+      ),
+    ).toEqual(["new a", "new b"]);
+
+    const rawToggle = container.querySelector<HTMLButtonElement>(".chat-tool-card__raw-toggle");
+    expect(rawToggle?.textContent?.trim()).toBe("Raw details");
+    rawToggle?.click();
+    expect(container.querySelector(".chat-tool-card__raw-body code")?.textContent).toBe(
+      "Applied patch",
+    );
+  });
+
+  it("renders edit and write rows from their result outcome", () => {
+    const mutations = [
+      {
+        name: "edit",
+        args: { path: "/repo/src/a.ts", oldText: "old", newText: "new" },
+        verbs: { running: "Editing", succeeded: "Edited", neutral: "Edit" },
+      },
+      {
+        name: "write",
+        args: { path: "/repo/src/b.ts", content: "new file\n" },
+        verbs: { running: "Writing", succeeded: "Wrote", neutral: "Write" },
+      },
+    ] as const;
+    const states = [
+      {
+        name: "running",
+        card: { live: true },
+        runActive: true,
+        verb: "running",
+        label: "Attempted changes",
+        hasStat: false,
+        failed: false,
+      },
+      {
+        name: "succeeded",
+        card: { completed: true },
+        runActive: false,
+        verb: "succeeded",
+        label: "File changes",
+        hasStat: true,
+        failed: false,
+      },
+      {
+        name: "failed after recovery",
+        card: { completed: true, isError: true },
+        runActive: false,
+        verb: "neutral",
+        label: "Attempted changes",
+        hasStat: false,
+        failed: true,
+      },
+      {
+        name: "call only",
+        card: {},
+        runActive: false,
+        verb: "neutral",
+        label: "Attempted changes",
+        hasStat: false,
+        failed: false,
+      },
+      {
+        name: "empty successful result",
+        card: { completed: true, outputText: "" },
+        runActive: false,
+        verb: "succeeded",
+        label: "File changes",
+        hasStat: true,
+        failed: false,
+      },
+    ] as const;
+
+    for (const mutation of mutations) {
+      for (const state of states) {
+        const container = document.createElement("div");
+        render(
+          renderToolCard(
+            {
+              id: `${mutation.name}:${state.name}`,
+              name: mutation.name,
+              args: mutation.args,
+              ...state.card,
+            },
+            {
+              expanded: true,
+              onToggleExpanded: vi.fn(),
+              runActive: state.runActive,
+            },
+          ),
+          container,
+        );
+
+        expect(container.querySelector(".chat-tool-row__verb")?.textContent).toBe(
+          mutation.verbs[state.verb],
+        );
+        expect(container.querySelector(".chat-diff")?.getAttribute("aria-label")).toBe(state.label);
+        expect(container.querySelector(".chat-diffstat") !== null).toBe(state.hasStat);
+        expect(container.querySelector(".chat-tool-row__badge")?.textContent === "failed").toBe(
+          state.failed,
+        );
+        expect(container.querySelector(".chat-tool-msg-summary--error") !== null).toBe(
+          state.failed,
+        );
+      }
+    }
+  });
+
+  it.each([
+    { name: "read", args: { path: "packages/app/src/read.ts" }, path: "packages/app/src/read.ts" },
+    {
+      name: "edit",
+      args: { file_path: "packages/app/src/edit.ts", oldText: "old", newText: "new" },
+      path: "packages/app/src/edit.ts",
+    },
+    {
+      name: "write",
+      args: { path: "packages/app/src/write.ts", content: "new" },
+      path: "packages/app/src/write.ts",
+    },
+  ])("opens the raw file path from an expanded $name card", ({ name, args, path }) => {
+    const container = document.createElement("div");
+    const onOpenWorkspaceFile = vi.fn();
+    render(
+      renderToolCard(
+        {
+          id: `msg:${name}:open`,
+          name,
+          args,
+          completed: true,
+        },
+        {
+          expanded: true,
+          onOpenWorkspaceFile,
+          onToggleExpanded: vi.fn(),
+        },
+      ),
+      container,
+    );
+
+    const pathButton = container.querySelector<HTMLButtonElement>(
+      '.chat-tool-card__detail-link[title="Open file"]',
+    );
+    expect(pathButton).toBeInstanceOf(HTMLButtonElement);
+    pathButton!.click();
+    expect(onOpenWorkspaceFile).toHaveBeenCalledWith({ path });
+  });
+
+  it("keeps read offsets and limits visible in expanded args", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolCard(
+        {
+          id: "msg:read:range",
+          name: "read",
+          args: { path: "/repo/src/a.ts", offset: 40, limit: 20 },
+          inputText: JSON.stringify({ path: "/repo/src/a.ts", offset: 40, limit: 20 }),
+        },
+        { expanded: true, onToggleExpanded: vi.fn() },
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-tool-row__verb")?.textContent).toBe("Read");
+    const rows = Array.from(container.querySelectorAll(".chat-tool-kv__row"));
+    expect(
+      rows.map((row) => [
+        row.querySelector(".chat-tool-kv__key")?.textContent,
+        row.querySelector(".chat-tool-kv__value")?.textContent,
+      ]),
+    ).toEqual([
+      ["offset:", "40"],
+      ["limit:", "20"],
     ]);
   });
 
@@ -142,9 +481,11 @@ describe("tool-cards", () => {
     );
 
     expect(container.textContent?.match(/Skill Workshop/g)).toHaveLength(1);
-    const bodyText = container.querySelector(".chat-tool-msg-body")?.textContent ?? "";
-    expect(bodyText).not.toContain("Skill Workshop");
-    expect(bodyText).toContain('"action": "create"');
+    const body = container.querySelector(".chat-tool-msg-body");
+    expect(body?.textContent).not.toContain("Skill Workshop");
+    const kvRow = body?.querySelector(".chat-tool-kv__row");
+    expect(kvRow?.querySelector(".chat-tool-kv__key")?.textContent).toBe("action:");
+    expect(kvRow?.querySelector(".chat-tool-kv__value")?.textContent).toBe("create");
     expect(container.querySelector(".chat-tool-card__action-btn")).toBeInstanceOf(
       HTMLButtonElement,
     );
@@ -165,13 +506,18 @@ describe("tool-cards", () => {
       container,
     );
 
-    const blocks = Array.from(container.querySelectorAll(".chat-tool-card__block"));
+    // No raw blocks: simple args render as key-value rows and there is no output.
+    expect(container.querySelector(".chat-tool-card__block")).toBeNull();
+    const kvRows = Array.from(container.querySelectorAll(".chat-tool-kv__row"));
     expect(
-      blocks.map((block) => block.querySelector(".chat-tool-card__block-label")?.textContent),
-    ).toEqual(["Tool input"]);
-    expect(blocks[0]?.querySelector("code")?.textContent).toBe(
-      '{\n  "mode": "session",\n  "thread": true\n}',
-    );
+      kvRows.map((row) => [
+        row.querySelector(".chat-tool-kv__key")?.textContent,
+        row.querySelector(".chat-tool-kv__value")?.textContent,
+      ]),
+    ).toEqual([
+      ["mode:", "session"],
+      ["thread:", "true"],
+    ]);
   });
 
   it("labels collapsed tool calls with the display summary", () => {
@@ -444,6 +790,9 @@ describe("tool-cards", () => {
     const sidebarButton = container.querySelector<HTMLButtonElement>(".chat-tool-card__action-btn");
     expect(sidebarButton).toBeInstanceOf(HTMLButtonElement);
     expect([...sidebarButton!.classList]).toEqual(["chat-tool-card__action-btn"]);
+    const tooltip = sidebarButton!.parentElement as HTMLElement & { content?: string };
+    expect(tooltip.content).toBe(t("chat.toolCards.openDetails"));
+    expect(sidebarButton!.getAttribute("aria-label")).toBe(t("chat.toolCards.openDetails"));
     sidebarButton!.click();
 
     const sidebar = requireFirstMockArg(onOpenSidebar, "sidebar open");

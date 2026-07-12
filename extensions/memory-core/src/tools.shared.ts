@@ -11,6 +11,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
+import type { MemoryCoreAcquireLocalService } from "./memory/embedding-local-service.js";
 type MemorySearchManagerResult = Awaited<
   ReturnType<(typeof import("./memory/index.js"))["getMemorySearchManager"]>
 >;
@@ -19,7 +20,9 @@ type MemoryToolOptions = {
   getConfig?: () => OpenClawConfig | undefined;
   agentId?: string;
   agentSessionKey?: string;
+  sandboxed?: boolean;
   oneShotCliRun?: boolean;
+  acquireLocalService?: MemoryCoreAcquireLocalService;
 };
 
 export const loadMemoryToolRuntime = createLazyRuntimeModule(() => import("./tools.runtime.js"));
@@ -58,6 +61,7 @@ export async function getMemoryManagerContextWithPurpose(params: {
   cfg: OpenClawConfig;
   agentId: string;
   purpose?: "default" | "status" | "cli";
+  acquireLocalService?: MemoryCoreAcquireLocalService;
 }): Promise<
   | {
       manager: NonNullable<MemorySearchManagerResult["manager"]>;
@@ -73,6 +77,7 @@ export async function getMemoryManagerContextWithPurpose(params: {
     cfg: params.cfg,
     agentId: params.agentId,
     purpose: params.purpose,
+    ...(params.acquireLocalService ? { acquireLocalService: params.acquireLocalService } : {}),
   });
   return manager
     ? {
@@ -154,7 +159,9 @@ export function buildMemorySearchUnavailableResult(
 export async function searchMemoryCorpusSupplements(params: {
   query: string;
   maxResults?: number;
+  agentId?: string;
   agentSessionKey?: string;
+  sandboxed?: boolean;
   corpus?: "memory" | "wiki" | "all" | "sessions";
 }): Promise<MemoryCorpusSearchResult[]> {
   if (params.corpus === "memory" || params.corpus === "sessions") {
@@ -183,7 +190,9 @@ export async function getMemoryCorpusSupplementResult(params: {
   lookup: string;
   fromLine?: number;
   lineCount?: number;
+  agentId?: string;
   agentSessionKey?: string;
+  sandboxed?: boolean;
   corpus?: "memory" | "wiki" | "all" | "sessions";
 }) {
   if (params.corpus === "memory" || params.corpus === "sessions") {

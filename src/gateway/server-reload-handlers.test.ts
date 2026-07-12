@@ -2,13 +2,30 @@
  * Gateway config reload handler tests.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  addSession,
+  markBackgrounded,
+  markExited,
+  resetProcessRegistryForTests,
+} from "../agents/bash-process-registry.js";
+import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
 import type { ConfigWriteNotification } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { consumeGatewaySigusr1RestartIntent } from "../infra/restart.js";
+import {
+  consumeGatewaySigusr1RestartIntent,
+  markGatewaySigusr1RestartHandled,
+  testing as restartTesting,
+} from "../infra/restart.js";
 import {
   pinActivePluginChannelRegistry,
   releasePinnedPluginChannelRegistry,
 } from "../plugins/runtime.js";
+import {
+  isGatewayWorkAdmissionClosed,
+  resetGatewayWorkAdmission,
+  tryBeginGatewayIndependentRootWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { createEmptyRuntimeWebToolsMetadata } from "../secrets/runtime-fast-path.js";
 import { activateSecretsRuntimeSnapshot, clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -21,9 +38,34 @@ import {
 import type { GatewayPluginReloadResult } from "./server-reload-handlers.js";
 import {
   abortPendingChannelReloads,
-  createGatewayReloadHandlers,
-  startManagedGatewayConfigReloader,
+  createGatewayReloadHandlers as createGatewayReloadHandlersImpl,
+  startManagedGatewayConfigReloader as startManagedGatewayConfigReloaderImpl,
 } from "./server-reload-handlers.js";
+
+type ReloadHandlerParams = Parameters<typeof createGatewayReloadHandlersImpl>[0];
+type ManagedReloaderParams = Parameters<typeof startManagedGatewayConfigReloaderImpl>[0];
+
+function createGatewayReloadHandlers(
+  params: Omit<ReloadHandlerParams, "cronReconciliation"> & {
+    cronReconciliation?: ReloadHandlerParams["cronReconciliation"];
+  },
+) {
+  return createGatewayReloadHandlersImpl({
+    ...params,
+    cronReconciliation: params.cronReconciliation ?? createTestCronReconciliation(),
+  });
+}
+
+function startManagedGatewayConfigReloader(
+  params: Omit<ManagedReloaderParams, "cronReconciliation"> & {
+    cronReconciliation?: ManagedReloaderParams["cronReconciliation"];
+  },
+) {
+  return startManagedGatewayConfigReloaderImpl({
+    ...params,
+    cronReconciliation: params.cronReconciliation ?? createTestCronReconciliation(),
+  });
+}
 
 type GmailWatcherRestartParams = {
   cfg: OpenClawConfig;
@@ -172,6 +214,33 @@ vi.mock("./server-cron.js", async () => {
   };
 });
 
+function createTestCronReconciliation() {
+  const complete = vi.fn<() => Promise<void>>(async () => {});
+  return {
+    arm: vi.fn<() => { complete: () => Promise<void> }>(() => ({ complete })),
+    complete,
+    invalidate: vi.fn(),
+  };
+}
+
+function createCronRestartPlan(): GatewayReloadPlan {
+  return {
+    changedPaths: ["cron"],
+    restartGateway: false,
+    restartReasons: [],
+    hotReasons: ["cron"],
+    reloadHooks: false,
+    restartGmailWatcher: false,
+    restartCron: true,
+    restartHeartbeat: false,
+    restartHealthMonitor: false,
+    reloadPlugins: false,
+    restartChannels: new Set(),
+    disposeMcpRuntimes: false,
+    noopPaths: [],
+  };
+}
+
 function createReloadHandlersForTest(
   logReload = { info: vi.fn(), warn: vi.fn() },
   channels?: {
@@ -186,6 +255,7 @@ function createReloadHandlersForTest(
     updateConfig: vi.fn(),
   };
   const setState = vi.fn();
+  const cronReconciliation = createTestCronReconciliation();
   const handlers = createGatewayReloadHandlers({
     deps: {} as never,
     broadcast: vi.fn(),
@@ -215,9 +285,17 @@ function createReloadHandlersForTest(
     logChannels: { info: vi.fn(), error: vi.fn() },
     logCron: { error: vi.fn() },
     logReload,
+    cronReconciliation,
     createHealthMonitor: () => null,
   });
-  return { ...handlers, cron, heartbeatRunner, setState, stopExitWatchers };
+  return {
+    ...handlers,
+    cron,
+    cronReconciliation,
+    heartbeatRunner,
+    setState,
+    stopExitWatchers,
+  };
 }
 
 // Other gateway test helpers (test-helpers.mocks.ts, test-helpers.server.ts)
@@ -225,12 +303,14 @@ function createReloadHandlersForTest(
 // shared vitest worker imports those helpers before this file runs, the leaked
 // env routes reloads into the skip branch and channel restarts never fire.
 beforeEach(() => {
+  resetProcessRegistryForTests();
   delete process.env.OPENCLAW_SKIP_CHANNELS;
   delete process.env.OPENCLAW_SKIP_PROVIDERS;
 });
 
 afterEach(() => {
   vi.useRealTimers();
+  resetProcessRegistryForTests();
   hoisted.startGmailWatcherWithLogs.mockClear();
   hoisted.stopGmailWatcher.mockClear();
   hoisted.activeTaskCount.value = 0;
@@ -254,8 +334,16 @@ afterEach(() => {
 
 describe("gateway hot reload model state", () => {
   it("stops old cron exit watchers and reconciles rebuilt ones after cron restart", async () => {
-    const newCron = { start: vi.fn(async () => {}), stop: vi.fn() };
-    const newReconcileExitWatchers = vi.fn(async () => {});
+    const order: string[] = [];
+    const newCron = {
+      start: vi.fn(async () => {
+        order.push("start-new");
+      }),
+      stop: vi.fn(),
+    };
+    const newReconcileExitWatchers = vi.fn(async () => {
+      order.push("reconcile-watchers");
+    });
     const rebuiltCronState = {
       cron: newCron,
       storePath: "/tmp/rebuilt-cron.json",
@@ -263,37 +351,76 @@ describe("gateway hot reload model state", () => {
       reconcileExitWatchers: newReconcileExitWatchers,
       stopExitWatchers: vi.fn(),
     };
-    hoisted.buildGatewayCronService.mockReturnValueOnce(rebuiltCronState);
-    const { applyHotReload, cron, setState, stopExitWatchers } = createReloadHandlersForTest();
-
-    await applyHotReload(
-      {
-        changedPaths: ["cron"],
-        restartGateway: false,
-        restartReasons: [],
-        hotReasons: ["cron"],
-        reloadHooks: false,
-        restartGmailWatcher: false,
-        restartCron: true,
-        restartHeartbeat: false,
-        restartHealthMonitor: false,
-        reloadPlugins: false,
-        restartChannels: new Set(),
-        disposeMcpRuntimes: false,
-        noopPaths: [],
+    hoisted.buildGatewayCronService.mockImplementationOnce(() => {
+      order.push("build-new");
+      return rebuiltCronState;
+    });
+    const { applyHotReload, cron, cronReconciliation, setState, stopExitWatchers } =
+      createReloadHandlersForTest();
+    cron.stop.mockImplementation(() => {
+      order.push("stop-old");
+    });
+    stopExitWatchers.mockImplementation(() => {
+      order.push("stop-old-watchers");
+    });
+    cronReconciliation.invalidate.mockImplementation(() => {
+      order.push("invalidate-old");
+    });
+    cronReconciliation.arm.mockImplementation(() => ({
+      complete: async () => {
+        order.push("hook");
       },
-      {} as OpenClawConfig,
-    );
+    }));
+    const nextConfig = { cron: { enabled: true } } as OpenClawConfig;
+
+    await applyHotReload(createCronRestartPlan(), nextConfig);
 
     expect(cron.stop).toHaveBeenCalledTimes(1);
     expect(stopExitWatchers).toHaveBeenCalledTimes(1);
     expect(newCron.start).toHaveBeenCalledTimes(1);
     await vi.waitFor(() => expect(newReconcileExitWatchers).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(order.at(-1)).toBe("hook"));
+    expect(order).toEqual([
+      "invalidate-old",
+      "stop-old",
+      "stop-old-watchers",
+      "build-new",
+      "start-new",
+      "reconcile-watchers",
+      "hook",
+    ]);
+    expect(cronReconciliation.arm).toHaveBeenCalledWith({
+      reason: "reload",
+      config: nextConfig,
+      cronState: rebuiltCronState,
+    });
     expect(setState).toHaveBeenCalledWith(
       expect.objectContaining({
         cronState: rebuiltCronState,
       }),
     );
+  });
+
+  it("completes reload reconciliation when the replacement scheduler is disabled", async () => {
+    const rebuiltCronState = {
+      cron: { start: vi.fn(async () => {}), stop: vi.fn() },
+      storePath: "/tmp/rebuilt-cron.json",
+      cronEnabled: false,
+      reconcileExitWatchers: vi.fn(async () => {}),
+      stopExitWatchers: vi.fn(),
+    };
+    hoisted.buildGatewayCronService.mockReturnValueOnce(rebuiltCronState);
+    const { applyHotReload, cronReconciliation } = createReloadHandlersForTest();
+    const nextConfig = { cron: { enabled: false } } as OpenClawConfig;
+
+    await applyHotReload(createCronRestartPlan(), nextConfig);
+
+    await vi.waitFor(() => expect(cronReconciliation.complete).toHaveBeenCalledTimes(1));
+    expect(cronReconciliation.arm).toHaveBeenCalledWith({
+      reason: "reload",
+      config: nextConfig,
+      cronState: rebuiltCronState,
+    });
   });
 
   it("resets prepared model runtime state for every hot reload and rewarms after plugin reload", async () => {
@@ -449,6 +576,153 @@ describe("gateway hot reload model state", () => {
 });
 
 describe("gateway restart deferral preflight", () => {
+  it("holds root admission across an immediate config-reload restart signal", () => {
+    restartTesting.resetSigusr1State();
+    resetGatewayWorkAdmission();
+    const signalSpy = vi.fn();
+    process.once("SIGUSR1", signalSpy);
+    const { requestGatewayRestart } = createReloadHandlersForTest();
+
+    try {
+      expect(
+        requestGatewayRestart(
+          {
+            changedPaths: ["gateway.port"],
+            restartGateway: true,
+            restartReasons: ["gateway.port"],
+            hotReasons: [],
+            reloadHooks: false,
+            restartGmailWatcher: false,
+            restartCron: false,
+            restartHeartbeat: false,
+            restartHealthMonitor: false,
+            reloadPlugins: false,
+            restartChannels: new Set(),
+            disposeMcpRuntimes: false,
+            noopPaths: [],
+          },
+          {},
+        ),
+      ).toBe(true);
+
+      expect(signalSpy).toHaveBeenCalledOnce();
+      expect(isGatewayWorkAdmissionClosed()).toBe(true);
+      expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
+
+      markGatewaySigusr1RestartHandled();
+      expect(isGatewayWorkAdmissionClosed()).toBe(false);
+    } finally {
+      process.removeListener("SIGUSR1", signalSpy);
+      restartTesting.resetSigusr1State();
+      resetGatewayWorkAdmission();
+    }
+  });
+
+  it("defers config restart until a background exec actually exits", async () => {
+    restartTesting.resetSigusr1State();
+    resetGatewayWorkAdmission();
+    const logReload = { info: vi.fn(), warn: vi.fn() };
+    const { requestGatewayRestart } = createReloadHandlersForTest(logReload);
+    const session = createProcessSessionFixture({
+      id: "background-restart-blocker",
+      command: "private command",
+      pid: 12345,
+    });
+    addSession(session);
+    markBackgrounded(session);
+    const signalSpy = vi.fn();
+    process.once("SIGUSR1", signalSpy);
+    vi.useFakeTimers();
+
+    try {
+      expect(
+        requestGatewayRestart(
+          {
+            changedPaths: ["gateway.port"],
+            restartGateway: true,
+            restartReasons: ["gateway.port"],
+            hotReasons: [],
+            reloadHooks: false,
+            restartGmailWatcher: false,
+            restartCron: false,
+            restartHeartbeat: false,
+            restartHealthMonitor: false,
+            reloadPlugins: false,
+            restartChannels: new Set(),
+            disposeMcpRuntimes: false,
+            noopPaths: [],
+          },
+          {},
+        ),
+      ).toBe(true);
+
+      expect(signalSpy).not.toHaveBeenCalled();
+      expect(logReload.warn).toHaveBeenCalledWith(
+        "config change requires gateway restart (gateway.port) — deferring until 1 background exec session(s) complete",
+      );
+
+      markExited(session, 0, null, "completed");
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(signalSpy).toHaveBeenCalledOnce();
+      expect(logReload.info).toHaveBeenCalledWith(
+        "all operations and replies completed; restarting gateway now",
+      );
+    } finally {
+      process.removeListener("SIGUSR1", signalSpy);
+      restartTesting.resetSigusr1State();
+      resetGatewayWorkAdmission();
+    }
+  });
+
+  it("defers config restart across an admitted process handoff", async () => {
+    restartTesting.resetSigusr1State();
+    resetGatewayWorkAdmission();
+    const logReload = { info: vi.fn(), warn: vi.fn() };
+    const { requestGatewayRestart } = createReloadHandlersForTest(logReload);
+    const handoff = tryBeginGatewayIndependentRootWorkAdmission();
+    const signalSpy = vi.fn();
+    process.once("SIGUSR1", signalSpy);
+    vi.useFakeTimers();
+
+    try {
+      expect(
+        requestGatewayRestart(
+          {
+            changedPaths: ["gateway.port"],
+            restartGateway: true,
+            restartReasons: ["gateway.port"],
+            hotReasons: [],
+            reloadHooks: false,
+            restartGmailWatcher: false,
+            restartCron: false,
+            restartHeartbeat: false,
+            restartHealthMonitor: false,
+            reloadPlugins: false,
+            restartChannels: new Set(),
+            disposeMcpRuntimes: false,
+            noopPaths: [],
+          },
+          {},
+        ),
+      ).toBe(true);
+      expect(signalSpy).not.toHaveBeenCalled();
+      expect(logReload.warn).toHaveBeenCalledWith(
+        "config change requires gateway restart (gateway.port) — deferring until 1 gateway request(s) complete",
+      );
+
+      handoff?.release();
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(signalSpy).toHaveBeenCalledOnce();
+    } finally {
+      handoff?.release();
+      process.removeListener("SIGUSR1", signalSpy);
+      restartTesting.resetSigusr1State();
+      resetGatewayWorkAdmission();
+    }
+  });
+
   it("defers channel hot reload until active embedded work drains", async () => {
     const previousSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
     const previousSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
@@ -815,7 +1089,6 @@ describe("gateway restart deferral preflight", () => {
   });
 
   it("logs active task run ids before waiting and when forcing after timeout", async () => {
-    const restartTesting = (await import("../infra/restart.js")).testing;
     restartTesting.resetSigusr1State();
     const logReload = { info: vi.fn(), warn: vi.fn() };
     const { requestGatewayRestart } = createReloadHandlersForTest(logReload);
@@ -902,7 +1175,6 @@ describe("gateway restart deferral preflight", () => {
   });
 
   it("uses the default restart deferral timeout when config omits deferralTimeoutMs", async () => {
-    const restartTesting = (await import("../infra/restart.js")).testing;
     restartTesting.resetSigusr1State();
     const { requestGatewayRestart } = createReloadHandlersForTest();
     hoisted.activeTaskCount.value = 1;
@@ -1348,6 +1620,7 @@ describe("gateway Gmail hot reload handlers", () => {
       webTools: {},
     }));
     const heartbeatRunner = { stop: vi.fn(), updateConfig: vi.fn() };
+    const commitTerminalConfig = vi.fn();
     const reloader = startManagedGatewayConfigReloader({
       minimalTestGateway: false,
       initialConfig,
@@ -1410,7 +1683,7 @@ describe("gateway Gmail hot reload handlers", () => {
       sharedGatewaySessionGenerationState: { current: undefined, required: null },
       clients: [],
       reconcileTerminalSessions: vi.fn(),
-      commitTerminalConfig: vi.fn(),
+      commitTerminalConfig,
     });
     const registeredWriteListener = writeListenerRef.current;
     if (!registeredWriteListener) {
@@ -1435,6 +1708,7 @@ describe("gateway Gmail hot reload handlers", () => {
       activate: true,
     });
     expect(heartbeatRunner.updateConfig).not.toHaveBeenCalled();
+    expect(commitTerminalConfig).toHaveBeenCalledWith(nextConfig);
     await reloader.stop();
   });
 

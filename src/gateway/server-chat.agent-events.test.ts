@@ -1,12 +1,21 @@
 // Server chat agent-event tests protect event fanout, heartbeat visibility,
 // session lifecycle persistence, and subscriber registry behavior.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "../agents/internal-runtime-context.js";
 import { formatChannelProgressDraftLine } from "../channels/streaming.js";
-import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
+import {
+  claimAgentRunContext,
+  emitAgentEventForOwner,
+  onAgentRuntimeEvent,
+  registerAgentRunContext,
+  releaseAgentRunContext,
+  resetAgentRunContextForTest,
+} from "../infra/agent-events.js";
 
 const persistGatewaySessionLifecycleEventMock = vi.fn();
 const logErrorMock = vi.fn();
@@ -57,6 +66,7 @@ import {
   createChatAbortMarker,
   createSessionMessageSubscriberRegistry,
   createToolEventRecipientRegistry,
+  resolveChatErrorKindFromError,
   type AgentEventHandlerOptions,
 } from "./server-chat.js";
 import { loadGatewaySessionRow } from "./server-chat.load-gateway-session-row.runtime.js";
@@ -648,7 +658,13 @@ describe("agent event handler", () => {
     expect(sessionAgentCalls(nodeSendToSession)).toHaveLength(1);
     expect(chatBroadcastCalls(broadcast)).toHaveLength(1);
     expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
-    expect((agentCalls[0][1] as { data?: { text?: string } }).data?.text).toBe("x");
+    expect(
+      (
+        expectDefined(agentCalls[0], "agentCalls[0] test invariant")[1] as {
+          data?: { text?: string };
+        }
+      ).data?.text,
+    ).toBe("x");
     nowSpy.mockRestore();
   });
 
@@ -694,14 +710,45 @@ describe("agent event handler", () => {
 
     const agentCalls = agentBroadcastCalls(broadcast);
     expect(agentCalls).toHaveLength(3);
-    expect((agentCalls[0][1] as { data?: { text?: string } }).data?.text).toBe("Hello");
-    expect((agentCalls[1][1] as { data?: { delta?: string } }).data?.delta).toBe(" world!");
-    expect((agentCalls[1][1] as { data?: { text?: string } }).data?.text).toBe("Hello world!");
-    expect((agentCalls[1][1] as { seq?: number }).seq).toBe(3);
-    expect((agentCalls[2][1] as { stream?: string; data?: { phase?: string } }).stream).toBe(
-      "lifecycle",
-    );
-    expect((agentCalls[2][1] as { data?: { phase?: string } }).data?.phase).toBe("end");
+    expect(
+      (
+        expectDefined(agentCalls[0], "agentCalls[0] test invariant")[1] as {
+          data?: { text?: string };
+        }
+      ).data?.text,
+    ).toBe("Hello");
+    expect(
+      (
+        expectDefined(agentCalls[1], "agentCalls[1] test invariant")[1] as {
+          data?: { delta?: string };
+        }
+      ).data?.delta,
+    ).toBe(" world!");
+    expect(
+      (
+        expectDefined(agentCalls[1], "agentCalls[1] test invariant")[1] as {
+          data?: { text?: string };
+        }
+      ).data?.text,
+    ).toBe("Hello world!");
+    expect(
+      (expectDefined(agentCalls[1], "agentCalls[1] test invariant")[1] as { seq?: number }).seq,
+    ).toBe(3);
+    expect(
+      (
+        expectDefined(agentCalls[2], "agentCalls[2] test invariant")[1] as {
+          stream?: string;
+          data?: { phase?: string };
+        }
+      ).stream,
+    ).toBe("lifecycle");
+    expect(
+      (
+        expectDefined(agentCalls[2], "agentCalls[2] test invariant")[1] as {
+          data?: { phase?: string };
+        }
+      ).data?.phase,
+    ).toBe("end");
     expect(sessionAgentCalls(nodeSendToSession)).toHaveLength(3);
     nowSpy.mockRestore();
   });
@@ -741,11 +788,33 @@ describe("agent event handler", () => {
 
     const agentCalls = agentBroadcastCalls(broadcast);
     expect(agentCalls).toHaveLength(3);
-    expect((agentCalls[0][1] as { data?: { delta?: string } }).data?.delta).toBe("Hel");
-    expect((agentCalls[1][1] as { data?: { delta?: string } }).data?.delta).toBe("lo");
-    expect((agentCalls[1][1] as { seq?: number }).seq).toBe(2);
-    expect((agentCalls[2][1] as { data?: { delta?: string } }).data?.delta).toBe("!");
-    expect((agentCalls[2][1] as { seq?: number }).seq).toBe(3);
+    expect(
+      (
+        expectDefined(agentCalls[0], "agentCalls[0] test invariant")[1] as {
+          data?: { delta?: string };
+        }
+      ).data?.delta,
+    ).toBe("Hel");
+    expect(
+      (
+        expectDefined(agentCalls[1], "agentCalls[1] test invariant")[1] as {
+          data?: { delta?: string };
+        }
+      ).data?.delta,
+    ).toBe("lo");
+    expect(
+      (expectDefined(agentCalls[1], "agentCalls[1] test invariant")[1] as { seq?: number }).seq,
+    ).toBe(2);
+    expect(
+      (
+        expectDefined(agentCalls[2], "agentCalls[2] test invariant")[1] as {
+          data?: { delta?: string };
+        }
+      ).data?.delta,
+    ).toBe("!");
+    expect(
+      (expectDefined(agentCalls[2], "agentCalls[2] test invariant")[1] as { seq?: number }).seq,
+    ).toBe(3);
     expect(sessionAgentCalls(nodeSendToSession)).toHaveLength(3);
     nowSpy.mockRestore();
   });
@@ -790,7 +859,13 @@ describe("agent event handler", () => {
       "thinking",
       "assistant",
     ]);
-    expect((agentCalls[1][1] as { data?: { delta?: string } }).data?.delta).toBe("ing");
+    expect(
+      (
+        expectDefined(agentCalls[1], "agentCalls[1] test invariant")[1] as {
+          data?: { delta?: string };
+        }
+      ).data?.delta,
+    ).toBe("ing");
     expect(sessionAgentCalls(nodeSendToSession)).toHaveLength(3);
     nowSpy.mockRestore();
   });
@@ -822,8 +897,17 @@ describe("agent event handler", () => {
 
     const agentCalls = agentBroadcastCalls(broadcast);
     expect(agentCalls).toHaveLength(2);
-    expect((agentCalls[0][1] as { stream?: string }).stream).toBe("lifecycle");
-    expect((agentCalls[1][1] as { data?: { text?: string } }).data?.text).toBe("Hello");
+    expect(
+      (expectDefined(agentCalls[0], "agentCalls[0] test invariant")[1] as { stream?: string })
+        .stream,
+    ).toBe("lifecycle");
+    expect(
+      (
+        expectDefined(agentCalls[1], "agentCalls[1] test invariant")[1] as {
+          data?: { text?: string };
+        }
+      ).data?.text,
+    ).toBe("Hello");
     expect(sessionAgentCalls(nodeSendToSession)).toHaveLength(2);
     nowSpy.mockRestore();
   });
@@ -851,8 +935,17 @@ describe("agent event handler", () => {
     const agentCalls = agentBroadcastCalls(broadcast);
     expect(agentCalls).toHaveLength(1);
     expect(sessionAgentCalls(nodeSendToSession)).toHaveLength(1);
-    expect((agentCalls[0][1] as { stream?: string }).stream).toBe("thinking");
-    expect((agentCalls[0][1] as { data?: { text?: string } }).data?.text).toBe("t");
+    expect(
+      (expectDefined(agentCalls[0], "agentCalls[0] test invariant")[1] as { stream?: string })
+        .stream,
+    ).toBe("thinking");
+    expect(
+      (
+        expectDefined(agentCalls[0], "agentCalls[0] test invariant")[1] as {
+          data?: { text?: string };
+        }
+      ).data?.text,
+    ).toBe("t");
     nowSpy.mockRestore();
   });
 
@@ -906,13 +999,27 @@ describe("agent event handler", () => {
 
     const agentCalls = agentBroadcastCalls(broadcast);
     expect(agentCalls).toHaveLength(5);
-    expect((agentCalls[1][1] as { data?: { mediaUrls?: string[] } }).data?.mediaUrls).toEqual([
-      "https://example.test/image.png",
-    ]);
-    expect((agentCalls[2][1] as { data?: { replace?: boolean } }).data?.replace).toBe(true);
-    expect((agentCalls[3][1] as { data?: { text?: string } }).data?.text).toBe(
-      "Look elsewhere now",
-    );
+    expect(
+      (
+        expectDefined(agentCalls[1], "agentCalls[1] test invariant")[1] as {
+          data?: { mediaUrls?: string[] };
+        }
+      ).data?.mediaUrls,
+    ).toEqual(["https://example.test/image.png"]);
+    expect(
+      (
+        expectDefined(agentCalls[2], "agentCalls[2] test invariant")[1] as {
+          data?: { replace?: boolean };
+        }
+      ).data?.replace,
+    ).toBe(true);
+    expect(
+      (
+        expectDefined(agentCalls[3], "agentCalls[3] test invariant")[1] as {
+          data?: { text?: string };
+        }
+      ).data?.text,
+    ).toBe("Look elsewhere now");
     expect(sessionAgentCalls(nodeSendToSession)).toHaveLength(5);
     nowSpy.mockRestore();
   });
@@ -1413,7 +1520,9 @@ describe("agent event handler", () => {
     expect(replacementPayload.deltaText).toBe("Hi");
     expect(replacementPayload.replace).toBe(true);
     expect(replacementPayload.message?.content?.[0]?.text).toBe("Hi");
-    expect((chatCalls[2][1] as { state?: string }).state).toBe("final");
+    expect(
+      (expectDefined(chatCalls[2], "chatCalls[2] test invariant")[1] as { state?: string }).state,
+    ).toBe("final");
     expect(sessionChatCalls(nodeSendToSession)).toHaveLength(3);
     nowSpy.mockRestore();
   });
@@ -2951,7 +3060,7 @@ describe("agent event handler", () => {
 
     const chatCalls = chatBroadcastCalls(broadcast);
     expect(chatCalls).toHaveLength(1);
-    expect(chatCalls[0][1]).toMatchObject({
+    expect(expectDefined(chatCalls[0], "chatCalls[0] test invariant")[1]).toMatchObject({
       runId: "client-validation-loop",
       sessionKey: "session-validation-loop",
       seq: 2,
@@ -2981,7 +3090,12 @@ describe("agent event handler", () => {
       data: { phase: "end", aborted: true, stopReason },
     });
 
-    expect(chatBroadcastCalls(broadcast)[0][1]).toMatchObject({
+    expect(
+      expectDefined(
+        chatBroadcastCalls(broadcast)[0],
+        "chatBroadcastCalls(broadcast)[0] test invariant",
+      )[1],
+    ).toMatchObject({
       runId: `client-${stopReason}`,
       state: expectedState,
       stopReason,
@@ -3008,7 +3122,10 @@ describe("agent event handler", () => {
       },
     });
 
-    const payload = chatBroadcastCalls(broadcast)[0][1] as Record<string, unknown>;
+    const payload = expectDefined(
+      chatBroadcastCalls(broadcast)[0],
+      "chatBroadcastCalls(broadcast)[0] test invariant",
+    )[1] as Record<string, unknown>;
     expect(payload.state).toBe("aborted");
     expect(payload).not.toHaveProperty("errorMessage");
   });
@@ -3035,7 +3152,12 @@ describe("agent event handler", () => {
       },
     });
 
-    expect(chatBroadcastCalls(broadcast)[0][1]).toMatchObject({
+    expect(
+      expectDefined(
+        chatBroadcastCalls(broadcast)[0],
+        "chatBroadcastCalls(broadcast)[0] test invariant",
+      )[1],
+    ).toMatchObject({
       runId: "client-timeout",
       state: "error",
       stopReason: "timeout",
@@ -3079,8 +3201,8 @@ describe("agent event handler", () => {
 
       const chatCalls = chatBroadcastCalls(broadcast);
       expect(chatCalls).toHaveLength(2);
-      const deltaPayload = chatCalls[0][1];
-      const finalPayload = chatCalls[1][1];
+      const deltaPayload = expectDefined(chatCalls[0], "chatCalls[0] test invariant")[1];
+      const finalPayload = expectDefined(chatCalls[1], "chatCalls[1] test invariant")[1];
       expect(deltaPayload.state).toBe("delta");
       expect(finalPayload.state).toBe("final");
       expect(sessionChatCalls(nodeSendToSession)).toHaveLength(2);
@@ -3826,7 +3948,82 @@ describe("agent event handler", () => {
     ).toHaveLength(0);
   });
 
-  it("adds detected errorKind to chat lifecycle error payloads", () => {
+  it.each([
+    {
+      name: "groq tpm 413",
+      error: new Error("Request too large: too many tokens per minute (TPM)"),
+      expected: "rate_limit",
+    },
+    {
+      name: "quota exceeded",
+      error: new Error("quota exceeded"),
+      expected: "rate_limit",
+    },
+    {
+      name: "resource_exhausted",
+      error: new Error("resource_exhausted"),
+      expected: "rate_limit",
+    },
+    {
+      name: "http 429",
+      error: Object.assign(new Error("Too many requests"), { code: 429 }),
+      expected: "rate_limit",
+    },
+    {
+      name: "fetch failed",
+      error: new Error("fetch failed"),
+      expected: "timeout",
+    },
+    {
+      name: "socket hang up",
+      error: new Error("socket hang up"),
+      expected: "timeout",
+    },
+    {
+      name: "etimedout",
+      error: Object.assign(new Error("request timed out"), { code: "ETIMEDOUT" }),
+      expected: "timeout",
+    },
+    {
+      name: "context overflow",
+      error: new Error("context length exceeded"),
+      expected: "context_length",
+    },
+    {
+      name: "refusal_policy",
+      error: new Error("Unhandled stop reason: refusal_policy"),
+      expected: "refusal",
+    },
+    {
+      name: "content_filter",
+      error: new Error("content_filter blocked the response"),
+      expected: "refusal",
+    },
+    {
+      name: "plain error",
+      error: new Error("plain provider failure"),
+      expected: undefined,
+    },
+    {
+      name: "http 500 is not a timeout",
+      error: Object.assign(new Error("Internal server error"), { status: 500 }),
+      expected: undefined,
+    },
+    {
+      name: "rate limit beats timeout text",
+      error: new Error("Rate limit exceeded, timeout: 30s"),
+      expected: "rate_limit",
+    },
+    {
+      name: "undefined error",
+      error: undefined,
+      expected: undefined,
+    },
+  ] as const)("classifies chat errorKind for $name", ({ error, expected }) => {
+    expect(resolveChatErrorKindFromError(error)).toBe(expected);
+  });
+
+  it("adds classified errorKind to chat lifecycle error payloads", () => {
     const { broadcast, nodeSendToSession, handler } = createHarness({
       resolveSessionKeyForRun: () => "session-detected-error",
       lifecycleErrorRetryGraceMs: 0,
@@ -3970,9 +4167,11 @@ describe("agent event handler", () => {
   });
 
   it("sends non-control-UI-visible live chat only to exact session message subscribers", () => {
+    vi.useFakeTimers();
     const { broadcast, broadcastToConnIds, nodeSendToSession, sessionMessageSubscribers, handler } =
       createHarness({
         resolveSessionKeyForRun: () => "session-hidden",
+        lifecycleErrorRetryGraceMs: 1,
       });
     sessionMessageSubscribers.subscribe("conn-selected", "session-hidden");
     sessionMessageSubscribers.subscribe("conn-other", "session-other");
@@ -3993,20 +4192,61 @@ describe("agent event handler", () => {
 
     expect(chatBroadcastCalls(broadcast)).toHaveLength(0);
     expect(nodeSendToSession).not.toHaveBeenCalled();
-    expect(requireMockArg(broadcastToConnIds, 0, 0, "hidden chat delta event")).toBe("chat");
-    expect(requireMockArg(broadcastToConnIds, 0, 2, "hidden chat delta recipients")).toEqual(
-      new Set(["conn-selected"]),
-    );
-    expect(requireMockArg(broadcastToConnIds, 1, 0, "hidden chat final event")).toBe("chat");
-    const finalPayload = requireMockPayload(broadcastToConnIds, 1, 1, "hidden chat final payload");
+    const chatCalls = broadcastToConnIds.mock.calls.filter(([event]) => event === "chat");
+    expect(chatCalls).toHaveLength(2);
+    expect(chatCalls[0]?.[2]).toEqual(new Set(["conn-selected"]));
+    expectPayloadFields(chatCalls[0]?.[1], {
+      runId: "run-hidden",
+      sessionKey: "session-hidden",
+      state: "delta",
+    });
+    const finalPayload = requireRecord(chatCalls[1]?.[1], "hidden chat final payload");
     expectPayloadFields(finalPayload, {
       runId: "run-hidden",
       sessionKey: "session-hidden",
       state: "final",
     });
-    expect(requireMockArg(broadcastToConnIds, 1, 2, "hidden chat final recipients")).toEqual(
-      new Set(["conn-selected"]),
+    expect(chatCalls[1]?.[2]).toEqual(new Set(["conn-selected"]));
+
+    const streams = ["tool", "thinking", "approval"] as const;
+    const streamCallStart = broadcastToConnIds.mock.calls.length;
+    for (const [index, stream] of streams.entries()) {
+      handler({
+        runId: "run-hidden",
+        seq: index + 3,
+        stream,
+        ts: Date.now(),
+        data: { phase: "start", delta: "Inspecting", name: "read" },
+      });
+    }
+    expect(
+      broadcastToConnIds.mock.calls
+        .slice(streamCallStart)
+        .map(([event, payload, recipients]) => [
+          event,
+          requireRecord(payload, "event").stream,
+          recipients,
+        ]),
+    ).toEqual(streams.map((stream) => ["agent", stream, new Set(["conn-selected"])]));
+
+    broadcastToConnIds.mockClear();
+    const claimId = claimAgentRunContext(
+      "revoked",
+      { isControlUiVisible: false, sessionKey: "session-hidden" },
+      { exclusive: true, trackOwner: true },
+    )!;
+    const stop = onAgentRuntimeEvent(handler);
+    emitAgentEventForOwner(
+      { runId: "revoked", stream: "lifecycle", data: { phase: "error", error: "retry" } },
+      claimId,
     );
+    stop();
+    expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
+    const persisted = persistGatewaySessionLifecycleEventMock.mock.calls.length;
+    releaseAgentRunContext("revoked", claimId);
+    vi.advanceTimersByTime(1);
+    expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
+    expect(persistGatewaySessionLifecycleEventMock).toHaveBeenCalledTimes(persisted);
   });
 
   it("mirrors commentary-phase assistant events only to exact session message subscribers", () => {
@@ -4357,7 +4597,7 @@ describe("agent event handler", () => {
 
       const chatCalls = chatBroadcastCalls(broadcast);
       expect(chatCalls.length).toBeGreaterThanOrEqual(1);
-      const [, payload] = chatCalls[0];
+      const [, payload] = expectDefined(chatCalls[0], "chatCalls[0] test invariant");
       expectPayloadFields(payload, {
         sessionKey: "agent:coder:subagent:abc",
         spawnedBy: "agent:conductor:task:parent-1",
@@ -4442,7 +4682,9 @@ describe("agent event handler", () => {
 
       const chatCalls = chatBroadcastCalls(broadcast);
       expect(chatCalls.length).toBeGreaterThanOrEqual(1);
-      expect(chatCalls[0][1]).not.toHaveProperty("spawnedBy");
+      expect(expectDefined(chatCalls[0], "chatCalls[0] test invariant")[1]).not.toHaveProperty(
+        "spawnedBy",
+      );
     });
 
     it("skips session row load entirely for session keys that cannot carry lineage", () => {
@@ -4473,7 +4715,9 @@ describe("agent event handler", () => {
 
       const chatCalls = chatBroadcastCalls(broadcast);
       expect(chatCalls.length).toBeGreaterThanOrEqual(1);
-      expect(chatCalls[0][1]).not.toHaveProperty("spawnedBy");
+      expect(expectDefined(chatCalls[0], "chatCalls[0] test invariant")[1]).not.toHaveProperty(
+        "spawnedBy",
+      );
     });
 
     it("includes spawnedBy in non-tool agent event broadcasts for subagent sessions", () => {

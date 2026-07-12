@@ -6,6 +6,7 @@ import {
   ResourceScope,
   ThinkingLevel as VertexThinkingLevel,
 } from "@google/genai";
+import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
 import type { Context, Model, SimpleStreamOptions, StreamFunction } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import type { GoogleThinkingLevel } from "./google-shared.js";
@@ -97,9 +98,11 @@ function createClientWithApiKey(
   apiKey: string,
   optionsHeaders?: Record<string, string>,
 ): GoogleGenAI {
+  // @google/genai exposes RequestInit options but no custom fetch; unwrap at construction.
+  const resolvedApiKey = getAiTransportHost().resolveSecretSentinel(apiKey);
   return new GoogleGenAI({
     vertexai: true,
-    apiKey,
+    apiKey: resolvedApiKey,
     apiVersion: API_VERSION,
     httpOptions: buildHttpOptions(model, optionsHeaders),
   });
@@ -120,7 +123,10 @@ function buildHttpOptions(
   }
 
   if (model.headers || optionsHeaders) {
-    httpOptions.headers = { ...model.headers, ...optionsHeaders };
+    httpOptions.headers = resolveAiTransportHeaderSentinels({
+      ...model.headers,
+      ...optionsHeaders,
+    });
   }
 
   return Object.keys(httpOptions).length > 0 ? httpOptions : undefined;

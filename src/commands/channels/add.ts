@@ -13,10 +13,10 @@ import {
   formatUnknownChannelMessage,
   formatUnsupportedChannelActionMessage,
 } from "../../cli/error-format.js";
-import { commitConfigWithPendingPluginInstalls } from "../../cli/plugins-install-record-commit.js";
-import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { parseStrictNonNegativeInteger } from "../../infra/parse-finite-number.js";
+import { commitConfigWithPendingPluginInstalls } from "../../plugins/install-record-commit.js";
+import { refreshPluginRegistryAfterConfigMutation } from "../../plugins/registry-refresh.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -81,6 +81,32 @@ async function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | nul
   });
 }
 
+async function resolveInitialWizardChannel(
+  raw: string,
+  cfg: OpenClawConfig,
+): Promise<ChannelChoice | undefined> {
+  const normalized = normalizeOptionalLowercaseString(raw);
+  if (!normalized) {
+    return undefined;
+  }
+  const [{ listActiveChannelSetupPlugins }, { resolveChannelSetupEntries }] = await Promise.all([
+    import("../../channels/plugins/setup-registry.js"),
+    import("../channel-setup/discovery.js"),
+  ]);
+  const resolved = resolveChannelSetupEntries({
+    cfg,
+    installedPlugins: listActiveChannelSetupPlugins(),
+    workspaceDir: resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)),
+  });
+  return resolved.entries.find(
+    (entry) =>
+      normalizeOptionalLowercaseString(entry.id) === normalized ||
+      (entry.meta.aliases ?? []).some(
+        (alias) => normalizeOptionalLowercaseString(alias) === normalized,
+      ),
+  )?.id;
+}
+
 function parseOptionalInt(value: unknown, flag: string): number | undefined {
   if (value === undefined || value === null || value === "") {
     return undefined;
@@ -129,7 +155,7 @@ function buildChannelSetupInput(opts: ChannelsAddOptions): ChannelSetupInput {
 export async function channelsAddCommand(
   opts: ChannelsAddOptions,
   runtime: RuntimeEnv = defaultRuntime,
-  params?: { hasFlags?: boolean },
+  params?: { hasFlags?: boolean; beforePersistentEffect?: () => Promise<void> },
 ) {
   try {
     return await channelsAddCommandImpl(opts, runtime, params);
@@ -145,7 +171,7 @@ export async function channelsAddCommand(
 async function channelsAddCommandImpl(
   opts: ChannelsAddOptions,
   runtime: RuntimeEnv,
-  params?: { hasFlags?: boolean },
+  params?: { hasFlags?: boolean; beforePersistentEffect?: () => Promise<void> },
 ) {
   const configSnapshot = await requireValidConfigFileSnapshot(runtime);
   if (!configSnapshot) {
@@ -167,11 +193,16 @@ async function channelsAddCommandImpl(
     let selection: ChannelChoice[] = [];
     const accountIds: Partial<Record<ChannelChoice, string>> = {};
     const resolvedPlugins = new Map<ChannelChoice, ChannelSetupPlugin>();
+    const initialChannel = await resolveInitialWizardChannel(opts.channel ?? "", cfg);
     await prompter.intro("Channel setup");
     let nextConfigLocal = await onboardChannels.setupChannels(cfg, runtime, prompter, {
+      ...(initialChannel ? { initialSelection: [initialChannel] } : {}),
       allowDisable: false,
       allowIMessageInstall: true,
       allowSignalInstall: true,
+      ...(params?.beforePersistentEffect
+        ? { beforePersistentEffect: params.beforePersistentEffect }
+        : {}),
       onPostWriteHook: (hook) => {
         postWriteHooks.collect(hook);
       },
@@ -284,6 +315,7 @@ async function channelsAddCommandImpl(
       }
     }
 
+    await params?.beforePersistentEffect?.();
     const committed = await commitConfigWithPendingPluginInstalls({
       nextConfig: nextConfigLocal,
       ...(baseHash !== undefined ? { baseHash } : {}),
@@ -301,6 +333,9 @@ async function channelsAddCommandImpl(
       hooks: postWriteHooks.drain(),
       cfg: writtenConfig,
       runtime,
+      ...(params?.beforePersistentEffect
+        ? { beforePersistentEffect: params.beforePersistentEffect }
+        : {}),
     });
     await prompter.outro("Channels updated.");
     return;
@@ -361,6 +396,9 @@ async function channelsAddCommandImpl(
         runtime,
         workspaceDir,
         promptInstall: false,
+        ...(params?.beforePersistentEffect
+          ? { beforePersistentEffect: params.beforePersistentEffect }
+          : {}),
       });
       nextConfig = result.cfg;
       if (!result.installed) {
@@ -430,13 +468,17 @@ async function channelsAddCommandImpl(
     input,
     plugin,
   });
-  await plugin.lifecycle?.onAccountConfigChanged?.({
-    prevCfg: prevConfig,
-    nextCfg: nextConfig,
-    accountId,
-    runtime,
-  });
+  if (plugin.lifecycle?.onAccountConfigChanged) {
+    await params?.beforePersistentEffect?.();
+    await plugin.lifecycle.onAccountConfigChanged({
+      prevCfg: prevConfig,
+      nextCfg: nextConfig,
+      accountId,
+      runtime,
+    });
+  }
 
+  await params?.beforePersistentEffect?.();
   const committed = await commitConfigWithPendingPluginInstalls({
     nextConfig,
     ...(baseHash !== undefined ? { baseHash } : {}),
@@ -471,6 +513,9 @@ async function channelsAddCommandImpl(
       ],
       cfg: writtenConfig,
       runtime,
+      ...(params?.beforePersistentEffect
+        ? { beforePersistentEffect: params.beforePersistentEffect }
+        : {}),
     });
   }
 }

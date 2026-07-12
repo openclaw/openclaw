@@ -1,20 +1,5 @@
 /** Config IO adapter used by secrets apply/configure flows. */
 import { createConfigIO } from "../config/config.js";
-import type {
-  ConfigWriteOptions,
-  ConfigWriteResult,
-  ReadConfigFileSnapshotForWriteResult,
-} from "../config/io.js";
-import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
-
-export type SecretsConfigIO = {
-  readConfigFileSnapshot: () => Promise<ConfigFileSnapshot>;
-  readConfigFileSnapshotForWrite: () => Promise<ReadConfigFileSnapshotForWriteResult>;
-  writeConfigFile: (
-    cfg: OpenClawConfig,
-    options?: ConfigWriteOptions,
-  ) => Promise<ConfigWriteResult | void>;
-};
 
 const silentConfigIoLogger = {
   error: () => {},
@@ -24,7 +9,9 @@ const silentConfigIoLogger = {
 /**
  * Creates config I/O for secrets commands with config-loader logging suppressed.
  */
-export function createSecretsConfigIO(params: { env: NodeJS.ProcessEnv }): SecretsConfigIO {
+export function createSecretsConfigIO(params: {
+  env: NodeJS.ProcessEnv;
+}): ReturnType<typeof createConfigIO> {
   // Secrets command output is owned by the CLI command so --json stays machine-parseable.
   return createConfigIO({
     env: params.env,

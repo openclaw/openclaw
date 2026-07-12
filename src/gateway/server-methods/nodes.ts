@@ -20,8 +20,8 @@ import {
   validateNodePairListParams,
   validateNodePairRejectParams,
   validateNodePairRemoveParams,
-  validateNodePairRequestParams,
-  validateNodePairVerifyParams,
+  validateNodePluginToolsUpdateParams,
+  validateNodeSkillsUpdateParams,
   validateNodeRenameParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../../config/io.js";
@@ -33,14 +33,12 @@ import {
   removePairedDeviceRole,
 } from "../../infra/device-pairing.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { NODE_FS_LIST_DIR_COMMAND } from "../../infra/node-commands.js";
 import {
   approveNodePairing,
   listNodePairing,
   rejectNodePairing,
-  removePairedNode,
   renamePairedNode,
-  requestNodePairing,
-  verifyNodeToken,
 } from "../../infra/node-pairing.js";
 import {
   clearApnsRegistrationIfCurrent,
@@ -52,6 +50,7 @@ import {
   resolveApnsRelayConfigFromEnv,
 } from "../../infra/push-apns.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
+import { replaceRemoteNodeSkills } from "../../skills/runtime/remote-skills.js";
 import {
   recordRemoteNodeInfo,
   refreshRemoteNodeBins,
@@ -64,6 +63,7 @@ import {
   isNodeCommandAllowed,
   normalizeDeclaredNodeCommands,
   resolveNodeCommandAllowlist,
+  resolveNodePairingCommandAllowlist,
 } from "../node-command-policy.js";
 import { applyPluginNodeInvokePolicy } from "../node-invoke-plugin-policy.js";
 import { sanitizeNodeInvokeParamsForForwarding } from "../node-invoke-sanitize.js";
@@ -112,7 +112,7 @@ const TALK_PTT_COMMANDS = new Set([
   "talk.ptt.cancel",
   "talk.ptt.once",
 ]);
-const BROWSER_PROXY_REQUIRED_SCOPE = "operator.admin";
+const ADMIN_ONLY_NODE_INVOKE_COMMANDS = new Set(["browser.proxy", NODE_FS_LIST_DIR_COMMAND]);
 const talkPttEventSeqBySessionId = new Map<string, number>();
 
 type NodeWakeNudgeAttempt = {
@@ -225,7 +225,7 @@ function isForbiddenBrowserProxyMutation(params: unknown): boolean {
 
 function clientHasOperatorAdminScope(client: GatewayClient | null): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
-  return scopes.includes(BROWSER_PROXY_REQUIRED_SCOPE);
+  return scopes.includes(ADMIN_SCOPE);
 }
 
 function normalizePluginSurfaceRefreshParams(params: unknown): { surface: string } | undefined {
@@ -527,6 +527,7 @@ function refreshConnectedNodeSurfaceCaches(params: {
   const { nodeSession } = params;
   recordRemoteNodeInfo({
     nodeId: nodeSession.nodeId,
+    connId: nodeSession.connId,
     displayName: nodeSession.displayName,
     platform: nodeSession.platform,
     deviceFamily: nodeSession.deviceFamily,
@@ -895,53 +896,6 @@ export async function waitForNodeReconnect(params: {
 }
 
 export const nodeHandlers: GatewayRequestHandlers = {
-  "node.pair.request": async ({ params, respond, context }) => {
-    if (!validateNodePairRequestParams(params)) {
-      respondInvalidParams({
-        respond,
-        method: "node.pair.request",
-        validator: validateNodePairRequestParams,
-      });
-      return;
-    }
-    const p = params as Parameters<typeof requestNodePairing>[0];
-    await respondUnavailableOnThrow(respond, async () => {
-      const result = await requestNodePairing({
-        nodeId: p.nodeId,
-        displayName: p.displayName,
-        platform: p.platform,
-        version: p.version,
-        coreVersion: p.coreVersion,
-        uiVersion: p.uiVersion,
-        deviceFamily: p.deviceFamily,
-        modelIdentifier: p.modelIdentifier,
-        caps: p.caps,
-        commands: p.commands,
-        permissions: p.permissions,
-        remoteIp: p.remoteIp,
-        silent: p.silent,
-      });
-      const resolvedAt = Date.now();
-      for (const superseded of result.superseded ?? []) {
-        context.broadcast(
-          "node.pair.resolved",
-          {
-            requestId: superseded.requestId,
-            nodeId: superseded.nodeId,
-            decision: "rejected",
-            ts: resolvedAt,
-          },
-          { dropIfSlow: true },
-        );
-      }
-      if (result.status === "pending" && result.created) {
-        context.broadcast("node.pair.requested", result.request, {
-          dropIfSlow: true,
-        });
-      }
-      respond(true, result, undefined);
-    });
-  },
   "node.pair.list": async ({ params, respond }) => {
     if (!validateNodePairListParams(params)) {
       respondInvalidParams({
@@ -988,7 +942,10 @@ export const nodeHandlers: GatewayRequestHandlers = {
       }
       const approvedNode = approved.node;
       const cfg = context.getRuntimeConfig();
-      const currentAllowlist = resolveNodeCommandAllowlist(cfg, {
+      // Pairing allowlist, matching connect-time reconciliation: approved
+      // dangerous surfaces (e.g. computer.act) stay on the live session so a
+      // later arming works without a reconnect; invoke policy still gates use.
+      const currentAllowlist = resolveNodePairingCommandAllowlist(cfg, {
         platform: approvedNode.platform,
         deviceFamily: approvedNode.deviceFamily,
         caps: approvedNode.caps,
@@ -1049,14 +1006,14 @@ export const nodeHandlers: GatewayRequestHandlers = {
       respond(true, rejected, undefined);
     });
   },
-  // Remove a node pairing (CLI: `openclaw nodes remove`). For a device-backed
-  // node this revokes the device's `node` role in devices/paired.json and
-  // disconnects its node-role sessions: a mixed-role device keeps its row and
-  // only loses the `node` role, a node-only device row is deleted. Any matching
-  // legacy gateway-owned node pairing entry is also cleared. Authz mirrors
-  // device.pair.remove: operator.pairing may remove non-operator node rows; a
-  // device-token caller revoking its own node role on a mixed-role device
-  // additionally needs operator.admin (see removePairedDeviceBackedNode).
+  // Remove a node pairing (CLI: `openclaw nodes remove`). This revokes the
+  // device's `node` role in devices/paired.json, which drops the approved node
+  // surface with it, and disconnects the device's node-role sessions: a
+  // mixed-role device keeps its row and only loses the `node` role, a
+  // node-only device row is deleted. Authz mirrors device.pair.remove:
+  // operator.pairing may remove non-operator node rows; a device-token caller
+  // revoking its own node role on a mixed-role device additionally needs
+  // operator.admin (see removePairedDeviceBackedNode).
   "node.pair.remove": async ({ params, respond, context, client }) => {
     if (!validateNodePairRemoveParams(params)) {
       respondInvalidParams({
@@ -1068,62 +1025,28 @@ export const nodeHandlers: GatewayRequestHandlers = {
     }
     const { nodeId } = params as { nodeId: string };
     await respondUnavailableOnThrow(respond, async () => {
-      const requestedNodeId = nodeId.trim();
       const deviceBacked = await removePairedDeviceBackedNode({ nodeId, client, context });
       if (deviceBacked.status === "denied") {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, deviceBacked.message));
         return;
       }
-      const removedDeviceNodeId =
-        deviceBacked.status === "removed" ? deviceBacked.nodeId : undefined;
-      try {
-        // Device pairing removal is already durable. Clear the live node surface
-        // before touching the independent legacy store so a cleanup failure
-        // cannot leave the revoked session invokable.
-        if (removedDeviceNodeId) {
-          clearRemovedNodeRuntimeState({ nodeId: removedDeviceNodeId, context });
-        }
-        const legacyNodeId = removedDeviceNodeId ?? requestedNodeId;
-        const removed = await removePairedNode(legacyNodeId);
-        const removedNodeId = removed?.nodeId ?? removedDeviceNodeId;
-        if (!removedNodeId) {
-          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
-          return;
-        }
-        if (!removedDeviceNodeId) {
-          clearRemovedNodeRuntimeState({ nodeId: removedNodeId, context });
-        }
-        broadcastRemovedNodePairing({ nodeId: removedNodeId, context });
-        respond(true, { nodeId: removedNodeId }, undefined);
-      } finally {
-        if (deviceBacked.status === "removed") {
-          // Preserve response-first shutdown on success, while guaranteeing the
-          // hard close when legacy-store cleanup or later bookkeeping throws.
-          queueMicrotask(() => {
-            context.disconnectClientsForDevice?.(deviceBacked.disconnectDeviceId, {
-              role: "node",
-            });
-          });
-        }
+      if (deviceBacked.status !== "removed") {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
+        return;
       }
-    });
-  },
-  "node.pair.verify": async ({ params, respond }) => {
-    if (!validateNodePairVerifyParams(params)) {
-      respondInvalidParams({
-        respond,
-        method: "node.pair.verify",
-        validator: validateNodePairVerifyParams,
-      });
-      return;
-    }
-    const { nodeId, token } = params as {
-      nodeId: string;
-      token: string;
-    };
-    await respondUnavailableOnThrow(respond, async () => {
-      const result = await verifyNodeToken(nodeId, token);
-      respond(true, result, undefined);
+      try {
+        clearRemovedNodeRuntimeState({ nodeId: deviceBacked.nodeId, context });
+        broadcastRemovedNodePairing({ nodeId: deviceBacked.nodeId, context });
+        respond(true, { nodeId: deviceBacked.nodeId }, undefined);
+      } finally {
+        // Preserve response-first shutdown on success, while guaranteeing the
+        // hard close when runtime cleanup or later bookkeeping throws.
+        queueMicrotask(() => {
+          context.disconnectClientsForDevice?.(deviceBacked.disconnectDeviceId, {
+            role: "node",
+          });
+        });
+      }
     });
   },
   "node.rename": async ({ params, respond }) => {
@@ -1174,7 +1097,11 @@ export const nodeHandlers: GatewayRequestHandlers = {
         pendingNodes: nodePairing.pending,
         connectedNodes: context.nodeRegistry.listConnected(),
       });
-      respond(true, { ts: Date.now(), nodes }, undefined);
+      const activeNodeId = context.nodeRegistry.getActiveNode()?.nodeId;
+      const nodesWithPresence = activeNodeId
+        ? nodes.map((node) => (node.nodeId === activeNodeId ? { ...node, active: true } : node))
+        : nodes;
+      respond(true, { ts: Date.now(), activeNodeId, nodes: nodesWithPresence }, undefined);
     });
   },
   "node.describe": async ({ params, respond, client, context }) => {
@@ -1214,7 +1141,15 @@ export const nodeHandlers: GatewayRequestHandlers = {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
         return;
       }
-      respond(true, { ts: Date.now(), ...node }, undefined);
+      respond(
+        true,
+        {
+          ts: Date.now(),
+          ...node,
+          ...(context.nodeRegistry.getActiveNode()?.nodeId === id ? { active: true } : {}),
+        },
+        undefined,
+      );
     });
   },
   "node.pluginSurface.refresh": async ({ params, respond, client }) => {
@@ -1228,6 +1163,61 @@ export const nodeHandlers: GatewayRequestHandlers = {
       client,
       respond,
     });
+  },
+  "node.pluginTools.update": async ({ params, respond, client, context }) => {
+    if (!validateNodePluginToolsUpdateParams(params)) {
+      respondInvalidParams({
+        respond,
+        method: "node.pluginTools.update",
+        validator: validateNodePluginToolsUpdateParams,
+      });
+      return;
+    }
+    const nodeId = normalizeOptionalString(
+      client?.connect?.device?.id ?? client?.connect?.client?.id,
+    );
+    if (!nodeId) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
+      return;
+    }
+    const updated = context.nodeRegistry.updateNodePluginTools(
+      nodeId,
+      client?.connId,
+      params.tools,
+    );
+    if (!updated) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
+      return;
+    }
+    respond(true, { nodeId, tools: updated.nodePluginTools }, undefined);
+  },
+  "node.skills.update": async ({ params, respond, client, context }) => {
+    if (!validateNodeSkillsUpdateParams(params)) {
+      respondInvalidParams({
+        respond,
+        method: "node.skills.update",
+        validator: validateNodeSkillsUpdateParams,
+      });
+      return;
+    }
+    const nodeId = normalizeOptionalString(
+      client?.connect?.device?.id ?? client?.connect?.client?.id,
+    );
+    if (!nodeId) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
+      return;
+    }
+    const updated = context.nodeRegistry.updateNodeSkills(nodeId, client?.connId, params.skills);
+    if (!updated) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
+      return;
+    }
+    replaceRemoteNodeSkills({
+      nodeId,
+      displayName: updated.displayName,
+      skills: updated.nodeSkills,
+    });
+    respond(true, { nodeId, skills: updated.nodeSkills }, undefined);
   },
   "node.pending.pull": async ({ params, respond, client, context }) => {
     if (!validateNodeListParams(params)) {
@@ -1306,6 +1296,10 @@ export const nodeHandlers: GatewayRequestHandlers = {
       params?: unknown;
       timeoutMs?: number;
       idempotencyKey: string;
+      turnSourceChannel?: string;
+      turnSourceTo?: string;
+      turnSourceAccountId?: string;
+      turnSourceThreadId?: string | number;
     };
     const nodeId = normalizeOptionalString(p.nodeId) ?? "";
     const command = normalizeOptionalString(p.command) ?? "";
@@ -1341,11 +1335,11 @@ export const nodeHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    if (command === "browser.proxy" && !clientHasOperatorAdminScope(client)) {
+    if (ADMIN_ONLY_NODE_INVOKE_COMMANDS.has(command) && !clientHasOperatorAdminScope(client)) {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${BROWSER_PROXY_REQUIRED_SCOPE}`),
+        errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${ADMIN_SCOPE}`),
       );
       return;
     }
@@ -1432,25 +1426,34 @@ export const nodeHandlers: GatewayRequestHandlers = {
           `node wake done node=${nodeId} req=${wakeReqId} connected=true totalMs=${totalDurationMs}`,
         );
       }
-      const allowlist = resolveNodeCommandAllowlist(cfg, {
-        ...nodeSession,
-        approvedCommands: nodeSession.commands,
-      });
-      const allowed = isNodeCommandAllowed({
-        command,
-        declaredCommands: nodeSession.commands,
-        allowlist,
-      });
-      if (!allowed.ok) {
-        const hint = buildNodeCommandRejectionHint(allowed.reason, command, nodeSession, cfg);
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, hint, {
-            details: { reason: allowed.reason, command },
-          }),
-        );
-        return;
+      // A reload may revoke authority for an in-flight request, but it must not
+      // retroactively grant one that was denied when admitted before node wake.
+      for (const authorizationCfg of [cfg, context.getRuntimeConfig()]) {
+        const allowlist = resolveNodeCommandAllowlist(authorizationCfg, {
+          ...nodeSession,
+          approvedCommands: nodeSession.commands,
+        });
+        const allowed = isNodeCommandAllowed({
+          command,
+          declaredCommands: nodeSession.commands,
+          allowlist,
+        });
+        if (!allowed.ok) {
+          const hint = buildNodeCommandRejectionHint(
+            allowed.reason,
+            command,
+            nodeSession,
+            authorizationCfg,
+          );
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.INVALID_REQUEST, hint, {
+              details: { reason: allowed.reason, command },
+            }),
+          );
+          return;
+        }
       }
 
       const forwardedParams = sanitizeNodeInvokeParamsForForwarding({
@@ -1476,6 +1479,12 @@ export const nodeHandlers: GatewayRequestHandlers = {
         nodeSession,
         command,
         params: forwardedParams.params,
+        turnSource: {
+          channel: p.turnSourceChannel,
+          to: p.turnSourceTo,
+          accountId: p.turnSourceAccountId,
+          threadId: p.turnSourceThreadId,
+        },
         timeoutMs: p.timeoutMs,
         idempotencyKey: p.idempotencyKey,
       });
@@ -1520,8 +1529,48 @@ export const nodeHandlers: GatewayRequestHandlers = {
         );
         return;
       }
+      const dispatchSession = context.nodeRegistry.get(nodeId);
+      if (!dispatchSession || dispatchSession.connId !== nodeSession.connId) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, "node connection changed before dispatch", {
+            retryable: true,
+            details: { code: "ROUTE_CHANGED" },
+          }),
+        );
+        return;
+      }
+      const dispatchCfg = context.getRuntimeConfig();
+      const dispatchAllowlist = resolveNodeCommandAllowlist(dispatchCfg, {
+        ...dispatchSession,
+        approvedCommands: dispatchSession.commands,
+      });
+      const dispatchAllowed = isNodeCommandAllowed({
+        command,
+        declaredCommands: dispatchSession.commands,
+        allowlist: dispatchAllowlist,
+      });
+      if (!dispatchAllowed.ok) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            buildNodeCommandRejectionHint(
+              dispatchAllowed.reason,
+              command,
+              dispatchSession,
+              dispatchCfg,
+            ),
+            { details: { reason: dispatchAllowed.reason, command } },
+          ),
+        );
+        return;
+      }
       const res = await context.nodeRegistry.invoke({
         nodeId,
+        expectedConnId: nodeSession.connId,
         command,
         params: forwardedParams.params,
         timeoutMs: p.timeoutMs,
@@ -1621,6 +1670,11 @@ export const nodeHandlers: GatewayRequestHandlers = {
     await respondUnavailableOnThrow(respond, async () => {
       const { handleNodeEvent } = await import("../server-node-events.js");
       const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id ?? "node";
+      const nodeSession = context.nodeRegistry.get(nodeId);
+      const presenceAllowed =
+        nodeSession !== undefined &&
+        nodeSession.connId === client?.connId &&
+        nodeSession.permissions?.accessibility === true;
       const nodeContext: NodeEventContext = {
         deps: context.deps,
         broadcast: context.broadcast,
@@ -1647,6 +1701,15 @@ export const nodeHandlers: GatewayRequestHandlers = {
             sessionKey: eventParams.sessionKey,
             terminal: eventParams.terminal,
           }),
+        updateNodePresenceActivity: (activity) => {
+          const updated = context.nodeRegistry.updatePresenceActivity(activity);
+          return updated?.lastActiveAtMs !== undefined && updated.presenceUpdatedAtMs !== undefined
+            ? {
+                lastActiveAtMs: updated.lastActiveAtMs,
+                presenceUpdatedAtMs: updated.presenceUpdatedAtMs,
+              }
+            : null;
+        },
         logGateway: { warn: context.logGateway.warn },
       };
       const result = await handleNodeEvent(
@@ -1656,7 +1719,11 @@ export const nodeHandlers: GatewayRequestHandlers = {
           event: p.event,
           payloadJSON,
         },
-        { connId: client?.connId, deviceId: client?.connect?.device?.id },
+        {
+          connId: client?.connId,
+          deviceId: client?.connect?.device?.id,
+          presenceAllowed,
+        },
       );
       respond(true, result ?? { ok: true }, undefined);
     });

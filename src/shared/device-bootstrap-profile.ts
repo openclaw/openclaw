@@ -1,16 +1,21 @@
 // Device bootstrap profile helpers build profile claims for device onboarding.
 import { normalizeDeviceAuthRole, normalizeDeviceAuthScopes } from "./device-auth.js";
 
+/** Closed purpose codes carried by specialized bootstrap tokens. */
+export type DeviceBootstrapPurpose = "control-ui";
+
 /** Normalized roles/scopes carried by a bootstrap token during device handoff. */
 export type DeviceBootstrapProfile = {
   roles: string[];
   scopes: string[];
+  purpose?: DeviceBootstrapPurpose;
 };
 
 /** Caller-provided bootstrap profile before role/scope normalization and bounding. */
 export type DeviceBootstrapProfileInput = {
   roles?: readonly string[];
   scopes?: readonly string[];
+  purpose?: DeviceBootstrapPurpose;
 };
 
 /** Operator scopes allowed to cross the short-lived bootstrap handoff boundary. */
@@ -32,21 +37,37 @@ export const PAIRING_SETUP_BOOTSTRAP_PROFILE: DeviceBootstrapProfile = {
   scopes: [...BOOTSTRAP_HANDOFF_OPERATOR_SCOPES],
 };
 
+/** Node-only setup profile for companions that never act as operators. */
+export const NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE: DeviceBootstrapProfile = {
+  roles: ["node"],
+  scopes: [],
+};
+
+function matchesBootstrapProfile(
+  input: DeviceBootstrapProfileInput | undefined,
+  expected: DeviceBootstrapProfile,
+): boolean {
+  const profile = normalizeDeviceBootstrapProfile(input);
+  return (
+    profile.roles.length === expected.roles.length &&
+    profile.scopes.length === expected.scopes.length &&
+    profile.roles.every((role, index) => role === expected.roles[index]) &&
+    profile.scopes.every((scope, index) => scope === expected.scopes[index])
+  );
+}
+
 /** Return whether an input exactly matches the current setup-code bootstrap profile. */
 export function isPairingSetupBootstrapProfile(
   input: DeviceBootstrapProfileInput | undefined,
 ): boolean {
-  const profile = normalizeDeviceBootstrapProfile(input);
-  if (profile.roles.length !== PAIRING_SETUP_BOOTSTRAP_PROFILE.roles.length) {
-    return false;
-  }
-  if (profile.scopes.length !== PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes.length) {
-    return false;
-  }
-  return (
-    profile.roles.every((role, index) => role === PAIRING_SETUP_BOOTSTRAP_PROFILE.roles[index]) &&
-    profile.scopes.every((scope, index) => scope === PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes[index])
-  );
+  return matchesBootstrapProfile(input, PAIRING_SETUP_BOOTSTRAP_PROFILE);
+}
+
+/** Return whether an input exactly matches the node-only companion setup profile. */
+export function isNodePairingSetupBootstrapProfile(
+  input: DeviceBootstrapProfileInput | undefined,
+): boolean {
+  return matchesBootstrapProfile(input, NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE);
 }
 
 /** Resolve the subset of requested scopes a bootstrap profile may carry for one role. */
@@ -81,6 +102,7 @@ export function normalizeDeviceBootstrapHandoffProfile(
   return {
     roles: profile.roles,
     scopes: resolveBootstrapProfileScopesForRoles(profile.roles, profile.scopes),
+    ...(profile.purpose ? { purpose: profile.purpose } : {}),
   };
 }
 
@@ -102,8 +124,10 @@ function normalizeBootstrapRoles(roles: readonly string[] | undefined): string[]
 export function normalizeDeviceBootstrapProfile(
   input: DeviceBootstrapProfileInput | undefined,
 ): DeviceBootstrapProfile {
+  const purpose = input?.purpose === "control-ui" ? input.purpose : undefined;
   return {
     roles: normalizeBootstrapRoles(input?.roles),
     scopes: normalizeDeviceAuthScopes(input?.scopes ? [...input.scopes] : []),
+    ...(purpose ? { purpose } : {}),
   };
 }

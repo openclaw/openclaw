@@ -2,7 +2,9 @@
 import {
   isToolCallContentType,
   isToolResultContentType,
+  resolveToolUseId,
 } from "../../../../src/chat/tool-content.js";
+import { t } from "../../i18n/index.ts";
 import type {
   ChatItem,
   MessageGroup,
@@ -31,13 +33,19 @@ import {
   stripMessageDisplayMetadataText,
 } from "../../lib/chat/message-normalizer.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
-import { extractToolCardsCached, extractToolPreview } from "../../lib/chat/tool-cards.ts";
+import {
+  extractToolCardsCached,
+  extractToolPreview,
+  isToolCardError,
+} from "../../lib/chat/tool-cards.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import { getOrCreateSessionCacheValue } from "./session-cache.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
 export type BuildChatItemsProps = {
   sessionKey: string;
+  /** Invalidates cached display copy when the active UI language changes. */
+  locale?: string;
   messages: unknown[];
   toolMessages: unknown[];
   streamSegments: ChatStreamSegment[];
@@ -45,9 +53,14 @@ export type BuildChatItemsProps = {
   streamStartedAt: number | null;
   queue?: ChatQueueItem[];
   showToolCalls: boolean;
+  /** True while the agent is visibly working (isChatRunWorking). */
+  runWorking?: boolean;
+  /** True while chat history is loading (initial load or background reload). */
+  loading?: boolean;
   searchOpen?: boolean;
   searchQuery?: string;
   historyRenderLimit?: number;
+  allowExpandedHistoryRenderLimit?: boolean;
 };
 
 type CachedChatItems = {
@@ -314,13 +327,13 @@ function mergeToolCallResultPair(callItem: ChatItem, resultItem: ChatItem): Chat
     resultItem.message,
     `${resultItem.key}:activity-result`,
   );
-  if (callCards.length !== 1 || resultCards.length !== 1) {
+  if (callCards.length === 0 || resultCards.length === 0) {
     return null;
   }
-  const [callCard] = callCards;
-  const [resultCard] = resultCards;
-  const resultName = resultCard.name === "tool" ? callCard.name : resultCard.name;
   const rawResultContent = Array.isArray(resultMessage.content) ? resultMessage.content : [];
+  if (rawResultContent.some((block) => isToolCallContentType(asRecord(block)?.type))) {
+    return null;
+  }
   const resultOnlyContent = rawResultContent.filter(
     (block) => !isToolCallContentType(asRecord(block)?.type),
   );
@@ -328,52 +341,288 @@ function mergeToolCallResultPair(callItem: ChatItem, resultItem: ChatItem): Chat
     isToolResultContentType(asRecord(block)?.type),
   );
   const hasToolResult =
-    hasToolResultBlock || resultCard.outputText !== undefined || resultCard.isError !== undefined;
-  if (
-    !callCard.callId ||
-    callCard.callId !== resultCard.callId ||
-    !hasToolResult ||
-    normalizeLowercaseStringOrEmpty(callCard.name) !== normalizeLowercaseStringOrEmpty(resultName)
-  ) {
+    hasToolResultBlock ||
+    resultCards.some((card) => card.outputText !== undefined || card.isError !== undefined);
+  if (!hasToolResult) {
     return null;
+  }
+
+  const unresolvedCallIds = unresolvedToolCallIds(callItem);
+  const matchedResults = new Map<string, { resultCard: ToolCard; resultName: string }>();
+  for (const resultCard of resultCards) {
+    const callId = resultCard.callId;
+    if (!callId || !unresolvedCallIds.has(callId) || matchedResults.has(callId)) {
+      return null;
+    }
+    const callCard = callCards.find((card) => card.callId === callId);
+    if (!callCard) {
+      return null;
+    }
+    const resultName = resultCard.name === "tool" ? callCard.name : resultCard.name;
+    if (
+      normalizeLowercaseStringOrEmpty(callCard.name) !== normalizeLowercaseStringOrEmpty(resultName)
+    ) {
+      return null;
+    }
+    matchedResults.set(callId, { resultCard, resultName });
   }
 
   const preservedResultContent = resultOnlyContent.filter(
     (block) => asRecord(block)?.type !== "text",
   );
+  // Raw transcript result blocks usually carry the call id and tool name on the
+  // message, not the block. Stamp both onto the merged blocks (plus message-level
+  // details) so card extraction pairs them with the call instead of rendering a
+  // second bare "Tool" card.
   const resultContent = hasToolResultBlock
-    ? resultOnlyContent
-    : [
-        {
-          type: "tool_result",
-          id: resultCard.callId,
-          name: resultName,
-          text: resultCard.outputText ?? "",
-          ...(resultCard.isError !== undefined ? { isError: resultCard.isError } : {}),
-        },
-        ...preservedResultContent,
-      ];
-  const resultError = resultMessage.isError ?? resultMessage.is_error;
+    ? resultOnlyContent.map((block) => {
+        const record = asRecord(block);
+        if (!record || !isToolResultContentType(record.type)) {
+          return block;
+        }
+        const callId = resolveToolBlockId(record, resultMessage);
+        const matched = callId ? matchedResults.get(callId) : undefined;
+        if (!matched) {
+          return block;
+        }
+        const stamped: Record<string, unknown> = Object.assign({}, record);
+        stamped.id = callId;
+        stamped.name =
+          typeof record.name === "string" && record.name.trim() ? record.name : matched.resultName;
+        if (record.details === undefined && resultMessage.details !== undefined) {
+          stamped.details = resultMessage.details;
+        }
+        if (
+          record.isError === undefined &&
+          record.is_error === undefined &&
+          matched.resultCard.isError !== undefined
+        ) {
+          stamped.isError = matched.resultCard.isError;
+        }
+        return stamped;
+      })
+    : (() => {
+        const [matched] = matchedResults.values();
+        if (!matched) {
+          return preservedResultContent;
+        }
+        return [
+          {
+            type: "tool_result",
+            id: matched.resultCard.callId,
+            name: matched.resultName,
+            text: matched.resultCard.outputText ?? "",
+            ...(matched.resultCard.details !== undefined
+              ? { details: matched.resultCard.details }
+              : {}),
+            ...(matched.resultCard.isError !== undefined
+              ? { isError: matched.resultCard.isError }
+              : {}),
+          },
+          ...preservedResultContent,
+        ];
+      })();
   return {
     ...callItem,
     message: {
       ...callMessage,
       content: [...callMessage.content, ...resultContent],
-      ...(typeof resultError === "boolean" ? { isError: resultError } : {}),
     },
   };
 }
 
+function resolveMessageToolUseId(message: Record<string, unknown>): string | undefined {
+  for (const field of ["tool_call_id", "toolCallId", "tool_use_id", "toolUseId"] as const) {
+    const value = message[field];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
+
+function resolveToolBlockId(
+  block: Record<string, unknown>,
+  message: Record<string, unknown>,
+): string | undefined {
+  return resolveToolUseId(block) ?? resolveMessageToolUseId(message);
+}
+
+function unresolvedToolCallIds(item: ChatItem): Set<string> {
+  const unresolved = new Set<string>();
+  if (item.kind !== "message") {
+    return unresolved;
+  }
+  const message = asRecord(item.message);
+  if (
+    !message ||
+    typeof message.role !== "string" ||
+    message.role.toLowerCase() !== "assistant" ||
+    !Array.isArray(message.content)
+  ) {
+    return unresolved;
+  }
+  for (const block of message.content) {
+    const record = asRecord(block);
+    if (!record) {
+      continue;
+    }
+    const callId = resolveToolBlockId(record, message);
+    if (!callId) {
+      continue;
+    }
+    if (isToolCallContentType(record.type)) {
+      unresolved.add(callId);
+    } else if (isToolResultContentType(record.type)) {
+      unresolved.delete(callId);
+    }
+  }
+  return unresolved;
+}
+
+function isToolTimelineItem(item: ChatItem): boolean {
+  if (item.kind !== "message") {
+    return false;
+  }
+  const normalized = safeNormalizeMessage(item.message);
+  return normalized ? normalizeRoleForGrouping(normalized.role) === "tool" : false;
+}
+
+function splitBundledToolResultItems(item: ChatItem): ChatItem[] {
+  if (item.kind !== "message") {
+    return [item];
+  }
+  const message = asRecord(item.message);
+  if (!message || !Array.isArray(message.content) || message.content.length < 2) {
+    return [item];
+  }
+  const blocksByCallId = new Map<string, unknown[]>();
+  for (const block of message.content) {
+    const record = asRecord(block);
+    if (!record || !isToolResultContentType(record.type)) {
+      return [item];
+    }
+    const callId = resolveToolBlockId(record, message);
+    if (!callId) {
+      return [item];
+    }
+    const blocks = blocksByCallId.get(callId) ?? [];
+    blocks.push(block);
+    blocksByCallId.set(callId, blocks);
+  }
+  if (blocksByCallId.size < 2) {
+    return [item];
+  }
+  return Array.from(blocksByCallId.values(), (content, index) => ({
+    ...item,
+    key: `${item.key}:result:${index}`,
+    message: { ...message, content },
+  }));
+}
+
+function resolveToolResultCallId(item: ChatItem): string | undefined {
+  if (item.kind !== "message") {
+    return undefined;
+  }
+  const message = asRecord(item.message);
+  if (!message) {
+    return undefined;
+  }
+  const content = Array.isArray(message.content) ? message.content : [];
+  if (content.some((block) => isToolCallContentType(asRecord(block)?.type))) {
+    return undefined;
+  }
+  const resultIds = new Set<string>();
+  for (const block of content) {
+    const record = asRecord(block);
+    if (record && isToolResultContentType(record.type)) {
+      const callId = resolveToolBlockId(record, message);
+      if (callId) {
+        resultIds.add(callId);
+      }
+    }
+  }
+  if (resultIds.size > 1) {
+    return undefined;
+  }
+  return resultIds.values().next().value ?? resolveMessageToolUseId(message);
+}
+
+function refreshOpenCallIds(
+  openCallIndexes: Map<string, number>,
+  coalesced: ChatItem[],
+  callIndex: number,
+) {
+  for (const [callId, index] of openCallIndexes) {
+    if (index === callIndex) {
+      openCallIndexes.delete(callId);
+    }
+  }
+  const item = coalesced[callIndex];
+  if (!item) {
+    return;
+  }
+  for (const callId of unresolvedToolCallIds(item)) {
+    openCallIndexes.set(callId, callIndex);
+  }
+}
+
 function coalesceToolActivityMessages(items: ChatItem[]): ChatItem[] {
   const coalesced: ChatItem[] = [];
+  // Parallel calls can outnumber any fixed lookback window, so each unresolved
+  // call id owns its current transcript item until a non-tool boundary.
+  const openCallIndexes = new Map<string, number>();
   for (const item of items) {
-    const previous = coalesced[coalesced.length - 1];
-    const merged = previous ? mergeToolCallResultPair(previous, item) : null;
-    if (merged) {
-      coalesced[coalesced.length - 1] = merged;
-    } else {
-      coalesced.push(item);
+    const resultItems = splitBundledToolResultItems(item);
+    const unmatchedResultItems: ChatItem[] = [];
+    let mergedResult = false;
+    for (const resultItem of resultItems) {
+      const callId = resolveToolResultCallId(resultItem);
+      const callIndex = callId ? openCallIndexes.get(callId) : undefined;
+      const callItem = callIndex === undefined ? undefined : coalesced[callIndex];
+      const merged =
+        callIndex === undefined || !callItem ? null : mergeToolCallResultPair(callItem, resultItem);
+      if (!merged || callIndex === undefined) {
+        unmatchedResultItems.push(resultItem);
+        continue;
+      }
+      coalesced[callIndex] = merged;
+      refreshOpenCallIds(openCallIndexes, coalesced, callIndex);
+      mergedResult = true;
     }
+    if (mergedResult) {
+      for (const unmatched of unmatchedResultItems) {
+        coalesced.push(unmatched);
+      }
+      continue;
+    }
+
+    const unresolvedCallIds = unresolvedToolCallIds(item);
+    if (unresolvedCallIds.size === 1) {
+      const callId = unresolvedCallIds.values().next().value;
+      const previousIndex = callId ? openCallIndexes.get(callId) : undefined;
+      const previous = previousIndex === undefined ? undefined : coalesced[previousIndex];
+      if (previousIndex !== undefined && previous && unresolvedToolCallIds(previous).size === 1) {
+        coalesced[previousIndex] = item;
+        refreshOpenCallIds(openCallIndexes, coalesced, previousIndex);
+        continue;
+      }
+    }
+
+    coalesced.push(item);
+    if (unresolvedCallIds.size > 0) {
+      const callIndex = coalesced.length - 1;
+      for (const callId of unresolvedCallIds) {
+        openCallIndexes.set(callId, callIndex);
+      }
+      continue;
+    }
+    if (isToolTimelineItem(item)) {
+      // Orphan results keep the window open for later siblings.
+      continue;
+    }
+    // Any other content (user text, assistant reply, dividers) closes the run.
+    openCallIndexes.clear();
   }
   return coalesced;
 }
@@ -395,7 +644,7 @@ function annotateToolTurnOutcome(
   let sawAssistantReply = false;
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index];
-    if (item.kind !== "group") {
+    if (!item || item.kind !== "group") {
       continue;
     }
     const role = item.role.toLowerCase();
@@ -823,11 +1072,12 @@ function countVisibleHistoryMessages(messages: unknown[], showToolCalls: boolean
   return count;
 }
 
-function resolveHistoryRenderLimit(limit: number | undefined): number {
+function resolveHistoryRenderLimit(limit: number | undefined, allowExpanded = false): number {
   if (typeof limit !== "number" || !Number.isFinite(limit)) {
     return CHAT_HISTORY_RENDER_LIMIT;
   }
-  return Math.max(1, Math.min(CHAT_HISTORY_RENDER_LIMIT, Math.floor(limit)));
+  const normalized = Math.max(1, Math.floor(limit));
+  return allowExpanded ? normalized : Math.min(CHAT_HISTORY_RENDER_LIMIT, normalized);
 }
 
 function resolveHistoryStartIndex(
@@ -860,7 +1110,10 @@ function resolveHistoryStartIndex(
 
 export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGroup> {
   let items: ChatItem[] = [];
-  const historyRenderLimit = resolveHistoryRenderLimit(props.historyRenderLimit);
+  const historyRenderLimit = resolveHistoryRenderLimit(
+    props.historyRenderLimit,
+    props.allowExpandedHistoryRenderLimit,
+  );
   const history = (Array.isArray(props.messages) ? props.messages : []).filter(
     (message) => !isAssistantHeartbeatAckForDisplay(message),
   );
@@ -907,12 +1160,11 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
           typeof marker.id === "string"
             ? `divider:compaction:${marker.id}`
             : `divider:compaction:${normalized.timestamp}:${i}`,
-        label: "Compacted history",
-        description:
-          "The compacted transcript is preserved as a checkpoint. Open session checkpoints to branch or restore from that compacted view.",
+        label: t("chat.compaction.label"),
+        description: t("chat.compaction.description"),
         action: {
           kind: "session-checkpoints",
-          label: "Open checkpoints",
+          label: t("chat.compaction.openCheckpoints"),
         },
         timestamp: normalized.timestamp ?? Date.now(),
       });
@@ -1001,6 +1253,9 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   for (let i = 0; i < maxLen; i++) {
     if (i < indexedSegments.length) {
       const segment = indexedSegments[i];
+      if (!segment) {
+        continue;
+      }
       const text = sanitizeStreamText(segment.text);
       const usesAccumulatedText = streamSegmentUsesAccumulatedText(segment);
       const visibleText = usesAccumulatedText
@@ -1065,11 +1320,30 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     }
   }
 
+  // Working spark contract: whenever the agent works with nothing visibly
+  // streaming (pre-first-token, or a queued send in flight), the thread shows
+  // the reading indicator where the reply will materialize. Streaming text
+  // and running tool rows take over as the signal once content flows.
+  // A visible running tool row already signals active work, so the spark is
+  // suppressed rather than stacked under it; hidden tool calls keep the spark.
+  const hasVisibleRunningTool =
+    props.showToolCalls &&
+    tools.some((message) => {
+      const record = asRecord(message);
+      return (
+        record?.["__openclawToolStreamLive"] === true &&
+        record["__openclawToolStreamResultReceived"] !== true
+      );
+    });
+  // The initial-load skeleton owns the empty thread; a background reload with
+  // content still visible keeps the spark (it is the only working signal).
+  const initialHistoryLoad = props.loading === true && items.length === 0;
   const hasPendingResponse =
     props.stream === null &&
-    queuedSends.some(
-      (item) => item.sendState === "sending" && shouldRenderQueuedSendInThread(item),
-    );
+    ((props.runWorking === true && !hasVisibleRunningTool && !initialHistoryLoad) ||
+      queuedSends.some(
+        (item) => item.sendState === "sending" && shouldRenderQueuedSendInThread(item),
+      ));
   if (hasPendingResponse) {
     items.push({
       kind: "reading-indicator",
@@ -1107,6 +1381,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
 function sameChatItemsInput(previous: BuildChatItemsProps, next: BuildChatItemsProps): boolean {
   return (
     previous.sessionKey === next.sessionKey &&
+    previous.locale === next.locale &&
     previous.messages === next.messages &&
     previous.toolMessages === next.toolMessages &&
     previous.streamSegments === next.streamSegments &&
@@ -1114,9 +1389,12 @@ function sameChatItemsInput(previous: BuildChatItemsProps, next: BuildChatItemsP
     previous.streamStartedAt === next.streamStartedAt &&
     previous.queue === next.queue &&
     previous.showToolCalls === next.showToolCalls &&
+    previous.runWorking === next.runWorking &&
+    previous.loading === next.loading &&
     previous.searchOpen === next.searchOpen &&
     previous.searchQuery === next.searchQuery &&
-    previous.historyRenderLimit === next.historyRenderLimit
+    previous.historyRenderLimit === next.historyRenderLimit &&
+    previous.allowExpandedHistoryRenderLimit === next.allowExpandedHistoryRenderLimit
   );
 }
 
@@ -1159,6 +1437,180 @@ export function coalesceStreamRuns(
     result.push(item);
   }
   flush();
+  return result;
+}
+
+/** Collapsed rollup of a completed turn's intermediate work (tools, commentary). */
+export type WorkGroupRenderItem = {
+  kind: "work-group";
+  key: string;
+  groups: MessageGroup[];
+  durationMs: number | null;
+  hasError: boolean;
+};
+
+type TurnRenderItem = RenderChatItem | StreamRunRenderItem;
+
+function isTurnBoundaryGroup(item: TurnRenderItem): boolean {
+  if (item.kind !== "group") {
+    return false;
+  }
+  const role = item.role.toLowerCase();
+  // sessions_send projections start a new autonomous turn, same contract as
+  // annotateToolTurnOutcome; they are inputs, not work produced by this turn.
+  return role === "user" || (role === "assistant" && assistantGroupIsForwardedBoundary(item));
+}
+
+function isCollapsibleWorkGroup(item: TurnRenderItem): item is MessageGroup {
+  if (item.kind !== "group" || item.isStreaming) {
+    return false;
+  }
+  const role = item.role.toLowerCase();
+  return role === "tool" || (role === "assistant" && !assistantGroupIsForwardedBoundary(item));
+}
+
+// Attachment/canvas/media-only replies carry no text but are still the turn's
+// visible outcome; they must never fold into the work rollup. Normalized
+// content passes unknown block types through (e.g. raw image blocks), so
+// anything that is not a tool block counts as visible reply content.
+function assistantGroupHasVisibleReplyContent(group: MessageGroup): boolean {
+  return group.messages.some(({ message }) => {
+    if (extractTextCached(message)?.trim()) {
+      return true;
+    }
+    const content = safeNormalizeMessage(message)?.content ?? [];
+    return content.some((block) => {
+      if (block.type === "text") {
+        return Boolean(block.text?.trim());
+      }
+      return !isToolCallContentType(block.type) && !isToolResultContentType(block.type);
+    });
+  });
+}
+
+// History carries no final-vs-commentary marker (commentary exists only as
+// live stream segments), so the last assistant group with visible content
+// stands in for the final reply. Turns whose last content is commentary
+// merely collapse less; the visible reply is never folded away.
+function isFinalReplyGroup(item: TurnRenderItem): boolean {
+  return (
+    isCollapsibleWorkGroup(item) &&
+    item.role.toLowerCase() === "assistant" &&
+    assistantGroupHasVisibleReplyContent(item)
+  );
+}
+
+function groupLastTimestamp(group: MessageGroup): number {
+  for (let index = group.messages.length - 1; index >= 0; index -= 1) {
+    const timestamp = rawMessageTimestamp(group.messages[index]?.message);
+    if (timestamp != null) {
+      return timestamp;
+    }
+  }
+  return group.timestamp;
+}
+
+function workGroupHasError(groups: MessageGroup[]): boolean {
+  return groups.some(
+    (group) =>
+      group.role.toLowerCase() === "tool" &&
+      group.turnSucceeded !== true &&
+      group.messages.some((entry) =>
+        extractToolCardsCached(entry.message, entry.key).some(isToolCardError),
+      ),
+  );
+}
+
+/**
+ * Once a turn is done, its intermediate work (tool groups and assistant
+ * commentary before the final reply) collapses behind one "Worked for X"
+ * disclosure so the thread reads final-output-first. Live turns stay fully
+ * expanded; the collapse itself is the done signal.
+ */
+export function collapseCompletedTurnWork(
+  items: TurnRenderItem[],
+  opts: { runWorking: boolean; searchActive?: boolean },
+): Array<TurnRenderItem | WorkGroupRenderItem> {
+  // Chat search filters the thread to matching messages; folding a match into
+  // a collapsed rollup would hide the very row the query found.
+  if (opts.searchActive) {
+    return items;
+  }
+  const turns: TurnRenderItem[][] = [];
+  let currentTurn: TurnRenderItem[] = [];
+  for (const item of items) {
+    if (isTurnBoundaryGroup(item) && currentTurn.length > 0) {
+      turns.push(currentTurn);
+      currentTurn = [];
+    }
+    currentTurn.push(item);
+  }
+  if (currentTurn.length > 0) {
+    turns.push(currentTurn);
+  }
+
+  const result: Array<TurnRenderItem | WorkGroupRenderItem> = [];
+  for (const [turnIndex, turn] of turns.entries()) {
+    // In-flight content (stream runs, streaming groups) marks the turn live.
+    // While the run works, the trailing turn also stays expanded so activity
+    // is watchable until the terminal rebuild collapses it.
+    const isLive =
+      (opts.runWorking && turnIndex === turns.length - 1) ||
+      turn.some(
+        (item) => item.kind === "stream-run" || (item.kind === "group" && item.isStreaming),
+      );
+    if (isLive) {
+      result.push(...turn);
+      continue;
+    }
+    let finalReplyIndex = -1;
+    for (let index = turn.length - 1; index >= 0; index -= 1) {
+      const candidate = turn[index];
+      if (candidate && isFinalReplyGroup(candidate)) {
+        finalReplyIndex = index;
+        break;
+      }
+    }
+    // A reply-less turn only collapses once the session is idle: mid-run it
+    // may still be the executing turn (e.g. behind a queued send).
+    if (finalReplyIndex === -1 && opts.runWorking) {
+      result.push(...turn);
+      continue;
+    }
+    const segmentEnd = finalReplyIndex === -1 ? turn.length - 1 : finalReplyIndex - 1;
+    let segmentStart = segmentEnd + 1;
+    for (let index = segmentEnd; index >= 0; index -= 1) {
+      const candidate = turn[index];
+      if (!candidate || !isCollapsibleWorkGroup(candidate)) {
+        break;
+      }
+      segmentStart = index;
+    }
+    const groups = turn.slice(segmentStart, segmentEnd + 1) as MessageGroup[];
+    const firstGroup = groups[0];
+    const lastGroup = groups[groups.length - 1];
+    if (!firstGroup || !lastGroup) {
+      result.push(...turn);
+      continue;
+    }
+    const boundary = turn[0];
+    const startTimestamp =
+      boundary && boundary.kind === "group" && isTurnBoundaryGroup(boundary)
+        ? boundary.timestamp
+        : firstGroup.timestamp;
+    const finalReply = finalReplyIndex >= 0 ? (turn[finalReplyIndex] as MessageGroup) : null;
+    const endTimestamp = finalReply ? finalReply.timestamp : groupLastTimestamp(lastGroup);
+    const durationMs = endTimestamp > startTimestamp ? endTimestamp - startTimestamp : null;
+    result.push(...turn.slice(0, segmentStart));
+    result.push({
+      kind: "work-group",
+      key: `work:${firstGroup.key}`,
+      groups,
+      durationMs,
+      hasError: workGroupHasError(groups),
+    });
+    result.push(...turn.slice(segmentEnd + 1));
+  }
   return result;
 }
 

@@ -1,7 +1,6 @@
 /**
  * Canvas host server and static-file/live-reload handler implementation.
  */
-import * as fsSync from "node:fs";
 import fs from "node:fs/promises";
 import http, { type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { createRequire } from "node:module";
@@ -25,7 +24,7 @@ import { type WebSocket, WebSocketServer } from "ws";
 import {
   CANVAS_HOST_PATH,
   CANVAS_WS_PATH,
-  injectCanvasLiveReload,
+  injectCanvasRuntime,
   isA2uiPath,
 } from "./a2ui-shared.js";
 import { normalizeUrlPath, resolveFileWithinRoot } from "./file-resolver.js";
@@ -102,7 +101,7 @@ function defaultIndexHTML() {
   <div class="card">
     <div class="title">
       <h1>OpenClaw Canvas</h1>
-      <div class="sub">Interactive test page (auto-reload enabled)</div>
+      <div class="sub">Interactive test page</div>
     </div>
 
     <div class="row">
@@ -223,16 +222,30 @@ async function prepareCanvasRoot(rootDir: string) {
   return rootReal;
 }
 
+/** Reads the owning document manifest to decide whether HTML gets a CSP sandbox header. */
+async function resolveDocumentCspSandbox(
+  rootReal: string,
+  realPath: string,
+): Promise<"scripts" | undefined> {
+  const relative = path.relative(rootReal, realPath);
+  const segments = relative.split(path.sep);
+  if (segments[0] !== "documents" || segments.length < 3) {
+    return undefined;
+  }
+  try {
+    const manifestRaw = await fs.readFile(
+      path.join(rootReal, segments[0], segments[1] ?? "", "manifest.json"),
+      "utf8",
+    );
+    const manifest = JSON.parse(manifestRaw) as { cspSandbox?: unknown };
+    return manifest.cspSandbox === "scripts" ? "scripts" : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function resolveDefaultCanvasRoot(): string {
-  const candidates = [path.join(resolveStateDir(), "canvas")];
-  const existing = candidates.find((dir) => {
-    try {
-      return fsSync.statSync(dir).isDirectory();
-    } catch {
-      return false;
-    }
-  });
-  return existing ?? candidates[0];
+  return path.join(resolveStateDir(), "canvas");
 }
 
 function resolveDefaultWatchFactory(): ChokidarWatch {
@@ -252,6 +265,18 @@ function resolveDefaultWatchFactory(): ChokidarWatch {
     return runtime.default.watch.bind(runtime.default);
   }
   throw new Error("chokidar.watch unavailable");
+}
+
+function shouldIgnoreCanvasWatchPath(rootReal: string, candidatePath: string): boolean {
+  const relative = path.relative(rootReal, candidatePath);
+  if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`)) {
+    return false;
+  }
+  // Chokidar evaluates ignored matchers against absolute paths. Scope the
+  // policy below the root so the default ~/.openclaw parent is still watched.
+  return relative
+    .split(/[\\/]/u)
+    .some((segment) => segment.startsWith(".") || segment === "node_modules");
 }
 
 /** Creates a Canvas static-file handler with optional live reload. */
@@ -334,10 +359,7 @@ export async function createCanvasHostHandler(
           pollInterval: writePollIntervalMs,
         },
         usePolling: testMode,
-        ignored: [
-          /(^|[\\/])\../, // dotfiles
-          /(^|[\\/])node_modules([\\/]|$)/,
-        ],
+        ignored: (candidatePath) => shouldIgnoreCanvasWatchPath(rootReal, candidatePath),
       })
     : null;
   watcher?.on("all", () => scheduleReload());
@@ -430,7 +452,17 @@ export async function createCanvasHostHandler(
       if (mime === "text/html") {
         const html = data.toString("utf8");
         res.setHeader("Content-Type", "text/html; charset=utf-8");
-        res.end(liveReload ? injectCanvasLiveReload(html) : html);
+        // Sandbox-marked documents (agent-authored widgets) must get an opaque
+        // origin even when navigated to directly; the iframe sandbox attribute
+        // only protects embedded views. Skips live reload: its bridge script is
+        // useless without same-origin access.
+        const cspSandbox = await resolveDocumentCspSandbox(rootReal, realPath);
+        if (cspSandbox) {
+          res.setHeader("Content-Security-Policy", "sandbox allow-scripts");
+          res.end(html);
+          return true;
+        }
+        res.end(injectCanvasRuntime(html, { liveReload }));
         return true;
       }
 

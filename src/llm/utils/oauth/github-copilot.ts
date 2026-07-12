@@ -2,10 +2,11 @@
  * GitHub Copilot OAuth flow
  */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import {
+  assertOkOrThrowProviderError,
   readProviderJsonResponse,
-  readProviderTextResponse,
 } from "../../../agents/provider-http-errors.js";
 import {
   nonNegativeSecondsToSafeMilliseconds,
@@ -20,8 +21,7 @@ type CopilotCredentials = OAuthCredentials & {
   enterpriseUrl?: string;
 };
 
-const decode = (s: string) => atob(s);
-const CLIENT_ID = decode("SXYxLmI1MDdhMDhjODdlY2ZlOTg=");
+const CLIENT_ID = "Iv1.b507a08c87ecfe98";
 
 const COPILOT_HEADERS = {
   "User-Agent": "GitHubCopilotChat/0.35.0",
@@ -110,7 +110,7 @@ function getBaseUrlFromToken(token: string): string | null {
   if (!match) {
     return null;
   }
-  const proxyHost = match[1];
+  const proxyHost = expectDefined(match[1], "github copilot regex capture 1");
   // Convert proxy.xxx to api.xxx
   const apiHost = proxyHost.replace(/^proxy\./, "api.");
   return `https://${apiHost}`;
@@ -189,10 +189,7 @@ async function fetchJson(
 ): Promise<unknown> {
   const response = await fetchResponse(url, init, operation, options);
   const label = `GitHub Copilot ${operation}`;
-  if (!response.ok) {
-    const text = await readProviderTextResponse(response, label);
-    throw new Error(`${response.status} ${response.statusText}: ${text}`);
-  }
+  await assertOkOrThrowProviderError(response, label);
   return readProviderJsonResponse(response, label);
 }
 
@@ -594,5 +591,6 @@ export const githubCopilotOAuthProvider: OAuthProviderInterface = {
 export const testing = {
   enableGitHubCopilotModel,
   listGitHubCopilotModelIds,
+  pollForGitHubAccessToken,
   startDeviceFlow,
 };

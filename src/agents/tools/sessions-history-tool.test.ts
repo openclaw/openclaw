@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { callGateway as gatewayCall } from "../../gateway/call.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
@@ -118,12 +119,20 @@ describe("sessions_history redaction", () => {
     );
   });
 
-  it.each([-1, 1.5])("rejects invalid offset value %s", async (offset) => {
-    const tool = createHistoryToolWithMessage("hello");
+  it.each([-1, 1.5, "1abc"])("rejects invalid offset value %s", async (offset) => {
+    const requests: CallGatewayRequest[] = [];
+    const tool = createSessionsHistoryTool({
+      config: {},
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
+        requests.push(request);
+        return { messages: [] } as T;
+      },
+    });
 
     await expect(tool.execute("call-1", { sessionKey: "main", offset })).rejects.toThrow(
       "offset must be a non-negative integer",
     );
+    expect(requests).toEqual([]);
   });
 
   it("preserves the bounded default history request", async () => {
@@ -142,7 +151,10 @@ describe("sessions_history redaction", () => {
       method: "chat.history",
       params: { sessionKey: "main", limit: 2 },
     });
-    expect((requests[0].params as Record<string, unknown>).offset).toBeUndefined();
+    expect(
+      (expectDefined(requests[0], "requests[0] test invariant").params as Record<string, unknown>)
+        .offset,
+    ).toBeUndefined();
     expect((result.details as Record<string, unknown>).offset).toBeUndefined();
   });
 

@@ -1,4 +1,5 @@
 // Github Copilot tests cover models plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { createProviderUsageFetch, makeResponse } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { deriveCopilotApiBaseUrlFromToken, resolveCopilotApiToken } from "./token.js";
@@ -126,6 +127,7 @@ describe("resolveCopilotForwardCompatModel", () => {
       input: ["text", "image"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 400_000,
+      contextTokens: 272_000,
       maxTokens: 128_000,
     });
   });
@@ -200,6 +202,30 @@ describe("resolveCopilotForwardCompatModel", () => {
 });
 
 describe("fetchCopilotUsage", () => {
+  it("targets the public github.com usage endpoint by default", async () => {
+    let calledUrl: string | undefined;
+    const mockFetch = createProviderUsageFetch(async (url) => {
+      calledUrl = url;
+      return makeResponse(200, { copilot_plan: "pro" });
+    });
+
+    await fetchCopilotUsage("token", 5000, mockFetch);
+
+    expect(calledUrl).toBe("https://api.github.com/copilot_internal/user");
+  });
+
+  it("routes usage through the tenant host for *.ghe.com domains", async () => {
+    let calledUrl: string | undefined;
+    const mockFetch = createProviderUsageFetch(async (url) => {
+      calledUrl = url;
+      return makeResponse(200, { copilot_plan: "business" });
+    });
+
+    await fetchCopilotUsage("token", 5000, mockFetch, "acme.ghe.com");
+
+    expect(calledUrl).toBe("https://api.acme.ghe.com/copilot_internal/user");
+  });
+
   it("returns HTTP errors for failed requests", async () => {
     const mockFetch = createProviderUsageFetch(async () => makeResponse(500, "boom"));
     const result = await fetchCopilotUsage("token", 5000, mockFetch);
@@ -334,6 +360,7 @@ describe("github-copilot token", () => {
       expiresAt: now + 60 * 60 * 1000,
       updatedAt: now,
       integrationId: "vscode-chat",
+      domain: "github.com",
     });
 
     const fetchImpl = vi.fn();
@@ -545,6 +572,7 @@ describe("fetchCopilotModelCatalog", () => {
       input: ["text", "image"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 400000,
+      contextTokens: 272000,
       maxTokens: 128000,
       compat: { supportedReasoningEfforts: ["low", "medium", "high"] },
     });
@@ -553,6 +581,7 @@ describe("fetchCopilotModelCatalog", () => {
     expect(codex?.input).toEqual(["text"]);
     expect(codex?.reasoning).toBe(true);
     expect(codex?.contextWindow).toBe(400000);
+    expect(codex?.contextTokens).toBeUndefined();
 
     const gemini = out.find((m) => m.id === "gemini-3.1-pro-preview");
     expect(gemini?.api).toBe("openai-completions");
@@ -624,7 +653,7 @@ describe("fetchCopilotModelCatalog", () => {
     });
 
     expect(out).toHaveLength(1);
-    expect(out[0].name).toBe("GPT-5.5");
+    expect(expectDefined(out[0], "GitHub Copilot model").name).toBe("GPT-5.5");
   });
 
   it("falls back from malformed live token limits", async () => {
@@ -639,6 +668,7 @@ describe("fetchCopilotModelCatalog", () => {
               type: "chat",
               limits: {
                 max_context_window_tokens: -1,
+                max_prompt_tokens: -1,
                 max_output_tokens: 128000.5,
               },
             },
@@ -651,6 +681,7 @@ describe("fetchCopilotModelCatalog", () => {
               type: "chat",
               limits: {
                 max_context_window_tokens: Number.POSITIVE_INFINITY,
+                max_prompt_tokens: Number.POSITIVE_INFINITY,
                 max_output_tokens: 0,
               },
             },
@@ -671,11 +702,13 @@ describe("fetchCopilotModelCatalog", () => {
       contextWindow: 128000,
       maxTokens: 8192,
     });
+    expect(out[0]).not.toHaveProperty("contextTokens");
     expect(out[1]).toMatchObject({
       id: "gpt-bad-output",
       contextWindow: 128000,
       maxTokens: 8192,
     });
+    expect(out[1]).not.toHaveProperty("contextTokens");
   });
 
   it("throws on non-2xx HTTP responses so the caller can fall back to the static catalog", async () => {

@@ -95,6 +95,9 @@ function createDeps(overrides: Partial<CoreHealthCheckDeps> = {}): CoreHealthChe
     async collectProviderCatalogProjectionFindings() {
       return [];
     },
+    async collectLocalAudioAccelerationFindings() {
+      return [];
+    },
     async collectGatewayHealthFindings() {
       return [];
     },
@@ -168,6 +171,27 @@ describe("CORE_HEALTH_CHECKS", () => {
         check.description.endsWith("represented in the health registry."),
       ),
     ).toBe(false);
+  });
+
+  it("reports local STT auto-selection diagnostics", async () => {
+    const finding: HealthFinding = {
+      checkId: "core/doctor/local-audio-acceleration",
+      severity: "info",
+      message:
+        "Local STT auto-selection: whisper-cli (capable=metal, observed=unknown); build capability is not runtime observation.",
+    };
+    const check = getCheck(
+      createCoreHealthChecks(
+        createDeps({
+          async collectLocalAudioAccelerationFindings() {
+            return [finding];
+          },
+        }),
+      ),
+      "core/doctor/local-audio-acceleration",
+    );
+
+    await expect(check.detect({ mode: "lint", runtime, cfg: {} })).resolves.toEqual([finding]);
   });
 
   it("warns when autonomous Skill Workshop capture is enabled but policy hides its tool", async () => {
@@ -357,6 +381,7 @@ describe("CORE_HEALTH_CHECKS", () => {
       "core/doctor/skills-readiness",
     );
 
+    expect(check).toMatchObject({ defaultEnabled: false });
     expect(check["repair"]).toBeTypeOf("function");
 
     const findings = await check.detect({

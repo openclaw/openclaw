@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
@@ -126,7 +127,11 @@ function appendBlockedUserMessage(
       },
     },
   } as Parameters<typeof sessionManager.appendMessage>[0]);
-  (sessionManager as unknown as { rewriteFile?: () => void }).rewriteFile?.();
+  (
+    sessionManager as unknown as {
+      replacePersistedTranscript?: () => void;
+    }
+  ).replacePersistedTranscript?.();
   return messageId;
 }
 
@@ -1276,7 +1281,7 @@ describe("readSessionMessages", () => {
     ]);
   });
 
-  test("keeps async active branch rows when imported parent links are incomplete", async () => {
+  test("keeps async rows when imported parent links are incomplete without leaf control", async () => {
     const sessionId = "test-session-tree-async-incomplete-parent";
     writeTranscript(tmpDir, sessionId, [
       { type: "session", version: 3, id: sessionId },
@@ -1306,9 +1311,13 @@ describe("readSessionMessages", () => {
     });
 
     expect(messages.map((message) => (message as { content?: unknown }).content)).toEqual([
+      "legacy prompt",
+      "tree reply",
       "reachable orphan tail",
     ]);
-    expectMessageFields(messages[0], { openclaw: { id: "orphan-tail", seq: 1 } });
+    expectMessageFields(messages[0], { openclaw: { id: "legacy-user", seq: 1 } });
+    expectMessageFields(messages[1], { openclaw: { id: "tree-assistant", seq: 2 } });
+    expectMessageFields(messages[2], { openclaw: { id: "orphan-tail", seq: 3 } });
   });
 
   test("keeps legacy async parents when tree transcripts reference pre-v3 rows", async () => {
@@ -2008,6 +2017,20 @@ describe("readSessionPreviewItemsFromTranscript", () => {
     expect(result[0]?.text.endsWith("...")).toBe(true);
   });
 
+  test("keeps preview text valid when the limit bisects an emoji", () => {
+    const sessionId = "preview-truncate-utf16";
+    const lines = [
+      JSON.stringify({
+        message: { role: "assistant", content: `${"t".repeat(196)}🚀xyz` },
+      }),
+    ];
+    writeTranscriptLines(sessionId, lines);
+
+    expect(readPreview(sessionId, 1, 200)).toEqual([
+      { role: "assistant", text: `${"t".repeat(196)}...` },
+    ]);
+  });
+
   test("strips inline directives from preview items", () => {
     const sessionId = "preview-strip-inline-directives";
     const lines = [
@@ -2522,7 +2545,7 @@ describe("archiveSessionTranscripts", () => {
         expect(archived).toHaveLength(1);
         expect(archived[0]).toContain(".reset.");
         expect(fs.existsSync(transcriptPath)).toBe(false);
-        expect(fs.existsSync(archived[0])).toBe(true);
+        expect(fs.existsSync(expectDefined(archived[0], "archived[0] test invariant"))).toBe(true);
       });
     },
   );

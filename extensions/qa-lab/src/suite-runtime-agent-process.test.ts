@@ -101,8 +101,8 @@ describe("qa suite runtime agent process helpers", () => {
           tempRoot: "/tmp/runtime",
           runtimeEnv: { PATH: "/usr/bin" },
         },
-        primaryModel: "openai/gpt-5.5",
-        alternateModel: "openai/gpt-5.5-mini",
+        primaryModel: "openai/gpt-5.6-luna",
+        alternateModel: "openai/gpt-5.6-luna-mini",
         providerMode: "mock-openai",
       } as never,
       ["qa", "suite"],
@@ -135,8 +135,8 @@ describe("qa suite runtime agent process helpers", () => {
             tempRoot: "/tmp/runtime",
             runtimeEnv: { PATH: "/usr/bin" },
           },
-          primaryModel: "openai/gpt-5.5",
-          alternateModel: "openai/gpt-5.5-mini",
+          primaryModel: "openai/gpt-5.6-luna",
+          alternateModel: "openai/gpt-5.6-luna-mini",
           providerMode: "mock-openai",
         } as never,
         ["qa", "suite"],
@@ -166,8 +166,8 @@ describe("qa suite runtime agent process helpers", () => {
             tempRoot: "/tmp/runtime",
             runtimeEnv: { PATH: "/usr/bin" },
           },
-          primaryModel: "openai/gpt-5.5",
-          alternateModel: "openai/gpt-5.5-mini",
+          primaryModel: "openai/gpt-5.6-luna",
+          alternateModel: "openai/gpt-5.6-luna-mini",
           providerMode: "mock-openai",
         } as never,
         ["qa", "suite"],
@@ -205,8 +205,8 @@ describe("qa suite runtime agent process helpers", () => {
             tempRoot: "/tmp/runtime",
             runtimeEnv: { PATH: "/usr/bin" },
           },
-          primaryModel: "openai/gpt-5.5",
-          alternateModel: "openai/gpt-5.5-mini",
+          primaryModel: "openai/gpt-5.6-luna",
+          alternateModel: "openai/gpt-5.6-luna-mini",
           providerMode: "mock-openai",
         } as never,
         ["qa", "suite"],
@@ -255,8 +255,8 @@ describe("qa suite runtime agent process helpers", () => {
           tempRoot: "/tmp/runtime",
           runtimeEnv: { PATH: "/usr/bin", OPENCLAW_STATE_DIR: "/tmp/default-state" },
         },
-        primaryModel: "openai/gpt-5.5",
-        alternateModel: "openai/gpt-5.5-mini",
+        primaryModel: "openai/gpt-5.6-luna",
+        alternateModel: "openai/gpt-5.6-luna-mini",
         providerMode: "mock-openai",
       } as never,
       ["crestodian", "-m", "overview"],
@@ -298,8 +298,8 @@ describe("qa suite runtime agent process helpers", () => {
           tempRoot: "/tmp/runtime",
           runtimeEnv: {},
         },
-        primaryModel: "openai/gpt-5.5",
-        alternateModel: "openai/gpt-5.5-mini",
+        primaryModel: "openai/gpt-5.6-luna",
+        alternateModel: "openai/gpt-5.6-luna-mini",
         providerMode: "mock-openai",
       } as never,
       ["memory", "search"],
@@ -324,8 +324,8 @@ describe("qa suite runtime agent process helpers", () => {
           tempRoot: "/tmp/runtime",
           runtimeEnv: {},
         },
-        primaryModel: "openai/gpt-5.5",
-        alternateModel: "openai/gpt-5.5-mini",
+        primaryModel: "openai/gpt-5.6-luna",
+        alternateModel: "openai/gpt-5.6-luna-mini",
         providerMode: "mock-openai",
       } as never,
       ["memory", "search", "--json"],
@@ -355,8 +355,8 @@ describe("qa suite runtime agent process helpers", () => {
           tempRoot: "/tmp/runtime",
           runtimeEnv: {},
         },
-        primaryModel: "openai/gpt-5.5",
-        alternateModel: "openai/gpt-5.5-mini",
+        primaryModel: "openai/gpt-5.6-luna",
+        alternateModel: "openai/gpt-5.6-luna-mini",
         providerMode: "mock-openai",
       } as never,
       ["memory", "search", "--json"],
@@ -386,8 +386,8 @@ describe("qa suite runtime agent process helpers", () => {
           tempRoot: "/tmp/runtime",
           runtimeEnv: {},
         },
-        primaryModel: "openai/gpt-5.5",
-        alternateModel: "openai/gpt-5.5-mini",
+        primaryModel: "openai/gpt-5.6-luna",
+        alternateModel: "openai/gpt-5.6-luna-mini",
         providerMode: "mock-openai",
       } as never,
       ["memory", "search", "--json"],
@@ -413,8 +413,8 @@ describe("qa suite runtime agent process helpers", () => {
           tempRoot: "/tmp/runtime",
           runtimeEnv: {},
         },
-        primaryModel: "openai/gpt-5.5",
-        alternateModel: "openai/gpt-5.5-mini",
+        primaryModel: "openai/gpt-5.6-luna",
+        alternateModel: "openai/gpt-5.6-luna-mini",
         providerMode: "mock-openai",
       } as never,
       ["memory", "search", "--json"],
@@ -444,8 +444,8 @@ describe("qa suite runtime agent process helpers", () => {
           tempRoot: "/tmp/runtime",
           runtimeEnv: {},
         },
-        primaryModel: "openai/gpt-5.5",
-        alternateModel: "openai/gpt-5.5-mini",
+        primaryModel: "openai/gpt-5.6-luna",
+        alternateModel: "openai/gpt-5.6-luna-mini",
         providerMode: "mock-openai",
       } as never,
       ["memory", "search", "--json"],
@@ -475,8 +475,8 @@ describe("qa suite runtime agent process helpers", () => {
           tempRoot: "/tmp/runtime",
           runtimeEnv: {},
         },
-        primaryModel: "openai/gpt-5.5",
-        alternateModel: "openai/gpt-5.5-mini",
+        primaryModel: "openai/gpt-5.6-luna",
+        alternateModel: "openai/gpt-5.6-luna-mini",
         providerMode: "mock-openai",
       } as never,
       ["memory", "search", "--json"],
@@ -506,8 +506,8 @@ describe("qa suite runtime agent process helpers", () => {
           tempRoot: "/tmp/runtime",
           runtimeEnv: {},
         },
-        primaryModel: "openai/gpt-5.5",
-        alternateModel: "openai/gpt-5.5-mini",
+        primaryModel: "openai/gpt-5.6-luna",
+        alternateModel: "openai/gpt-5.6-luna-mini",
         providerMode: "mock-openai",
       } as never,
       ["memory", "search", "--json"],
@@ -537,8 +537,8 @@ describe("qa suite runtime agent process helpers", () => {
           tempRoot: "/tmp/runtime",
           runtimeEnv: {},
         },
-        primaryModel: "openai/gpt-5.5",
-        alternateModel: "openai/gpt-5.5-mini",
+        primaryModel: "openai/gpt-5.6-luna",
+        alternateModel: "openai/gpt-5.6-luna-mini",
         providerMode: "mock-openai",
       } as never,
       ["memory", "search", "--json"],
@@ -565,8 +565,8 @@ describe("qa suite runtime agent process helpers", () => {
           tempRoot: "/tmp/runtime",
           runtimeEnv: {},
         },
-        primaryModel: "openai/gpt-5.5",
-        alternateModel: "openai/gpt-5.5-mini",
+        primaryModel: "openai/gpt-5.6-luna",
+        alternateModel: "openai/gpt-5.6-luna-mini",
         providerMode: "mock-openai",
       } as never,
       ["memory", "search", "--json"],
@@ -628,6 +628,42 @@ describe("qa suite runtime agent process helpers", () => {
     expect(agentPayload?.replyChannel).toBe("reply-channel");
     expect(agentPayload?.replyTo).toBe("reply-target");
     expect(gatewayArgs?.[2]).toBeTypeOf("object");
+  });
+
+  it("starts an interactive run without CLI task tracking", async () => {
+    const gatewayCall = vi.fn(async () => ({ runId: "run-chat", status: "started" }));
+    const buildAgentDelivery = vi.fn(() => ({
+      channel: "qa-channel",
+      replyChannel: "qa-channel",
+      replyTo: "dm:qa-operator",
+    }));
+    const env = {
+      gateway: { call: gatewayCall },
+      transport: {
+        buildAgentDelivery,
+      },
+    } as never;
+
+    await expect(
+      startAgentRun(env, {
+        sessionKey: "agent:qa:main",
+        message: "hello",
+        taskTracking: false,
+      }),
+    ).resolves.toEqual({ runId: "run-chat", status: "started" });
+    expect(gatewayCall).toHaveBeenCalledWith(
+      "chat.send",
+      {
+        idempotencyKey: expect.any(String),
+        sessionKey: "agent:qa:main",
+        message: "hello",
+        deliver: true,
+        originatingChannel: "qa-channel",
+        originatingTo: "dm:qa-operator",
+      },
+      { timeoutMs: 30_000 },
+    );
+    expect(buildAgentDelivery).toHaveBeenCalledWith({ target: "dm:qa-operator" });
   });
 
   it("finds managed dreaming cron jobs across legacy and current payload contracts", () => {
@@ -778,6 +814,18 @@ describe("qa suite runtime agent process helpers", () => {
       { timeoutMs: 35_000 },
     );
   });
+
+  it.each(["restart", "aborted"])(
+    "preserves the %s stop reason from agent.wait",
+    async (stopReason) => {
+      const result = { status: "error", stopReason };
+      const gatewayCall = vi.fn(async () => result);
+
+      await expect(
+        waitForAgentRun({ gateway: { call: gatewayCall } } as never, "run-interrupted"),
+      ).resolves.toEqual(result);
+    },
+  );
 
   it("caps the gateway client timeout when waiting for oversized agent runs", async () => {
     const gatewayCall = vi.fn(async () => ({ status: "ok" }));
