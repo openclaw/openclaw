@@ -14,7 +14,6 @@ function getMigration() {
 function getRule(id: string) {
   const rules = getMigration().legacyRules;
   if (!rules) throw new Error("legacyRules missing");
-  const r = rules.find((candidate) => candidate.path.join(".") === "session.maintenance");
   // Two rules share the same path; distinguish by matching the message prefix.
   const found = rules.find((candidate) => candidate.message.includes(id));
   if (!found) throw new Error(`rule not found: ${id}`);
