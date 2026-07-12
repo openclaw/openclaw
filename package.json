@@ -173,6 +173,7 @@
     "src/agents/templates/",
     "scripts/crabbox-wrapper-providers.mjs",
     "scripts/crabbox-wrapper.mjs",
+    "scripts/testbox-lease-freshness.mjs",
     "patches/",
     "skills/",
     "scripts/npm-runner.mjs",
@@ -288,6 +289,10 @@
     "./plugin-sdk/approval-gateway-runtime": {
       "types": "./dist/plugin-sdk/approval-gateway-runtime.d.ts",
       "default": "./dist/plugin-sdk/approval-gateway-runtime.js"
+    },
+    "./plugin-sdk/approval-reference-runtime": {
+      "types": "./dist/plugin-sdk/approval-reference-runtime.d.ts",
+      "default": "./dist/plugin-sdk/approval-reference-runtime.js"
     },
     "./plugin-sdk/approval-handler-adapter-runtime": {
       "types": "./dist/plugin-sdk/approval-handler-adapter-runtime.d.ts",
@@ -988,6 +993,10 @@
     "./plugin-sdk/session-binding-runtime": {
       "types": "./dist/plugin-sdk/session-binding-runtime.d.ts",
       "default": "./dist/plugin-sdk/session-binding-runtime.js"
+    },
+    "./plugin-sdk/session-catalog": {
+      "types": "./dist/plugin-sdk/session-catalog.d.ts",
+      "default": "./dist/plugin-sdk/session-catalog.js"
     },
     "./plugin-sdk/session-key-runtime": {
       "types": "./dist/plugin-sdk/session-key-runtime.d.ts",
