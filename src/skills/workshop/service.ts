@@ -268,6 +268,13 @@ export async function proposeCreateSkill(
   const id = createSkillProposalId(name);
   const goal = normalizeOptionalString(input.goal);
   const evidence = normalizeOptionalString(input.evidence);
+  const scan = scanProposalBundle(proposalContent, supportFiles, [
+    { file: "skill-name", content: name },
+    { file: "description", content: description },
+    { file: "goal", content: goal },
+    { file: "evidence", content: evidence },
+  ]);
+  assertProposalContainsNoLiteralSecrets(scan);
   const origin = normalizeProposalOrigin(input.origin);
   const record: SkillProposalRecord = {
     schema: SKILL_WORKSHOP_SCHEMA,
@@ -290,7 +297,7 @@ export async function proposeCreateSkill(
       skillFile: target.skillFile,
       source: "openclaw-workspace",
     },
-    scan: scanProposalBundle(proposalContent, supportFiles),
+    scan,
     ...(supportFiles.length > 0
       ? { supportFiles: await buildSupportFileMetadata(supportFiles) }
       : {}),
@@ -375,6 +382,12 @@ export async function proposeUpdateSkill(
   const id = createSkillProposalId(targetSkill.skillKey || targetSkill.name);
   const goal = normalizeOptionalString(input.goal);
   const evidence = normalizeOptionalString(input.evidence);
+  const scan = scanProposalBundle(proposalContent, supportFiles, [
+    { file: "description", content: description },
+    { file: "goal", content: goal },
+    { file: "evidence", content: evidence },
+  ]);
+  assertProposalContainsNoLiteralSecrets(scan);
   const origin = normalizeProposalOrigin(input.origin);
   const record: SkillProposalRecord = {
     schema: SKILL_WORKSHOP_SCHEMA,
@@ -398,7 +411,7 @@ export async function proposeUpdateSkill(
       source: targetSkill.source,
       currentContentHash: hashSkillProposalContent(currentContent),
     },
-    scan: scanProposalBundle(proposalContent, supportFiles),
+    scan,
     ...(supportFiles.length > 0
       ? { supportFiles: await buildSupportFileMetadata(supportFiles, targetSkill.baseDir) }
       : {}),
@@ -479,13 +492,19 @@ export async function reviseSkillProposal(
         ? normalizeOptionalString(record.evidence)
         : normalizeOptionalString(input.evidence);
     const previousSupportFiles = record.supportFiles;
+    const scan = scanProposalBundle(proposalContent, supportFiles, [
+      { file: "description", content: description },
+      { file: "goal", content: goal },
+      { file: "evidence", content: evidence },
+    ]);
+    assertProposalContainsNoLiteralSecrets(scan);
     const revised: SkillProposalRecord = {
       ...record,
       description,
       updatedAt: now,
       proposedVersion: nextVersion,
       draftHash: hashSkillProposalContent(proposalContent),
-      scan: scanProposalBundle(proposalContent, supportFiles),
+      scan,
     };
     if (supportFiles.length > 0) {
       revised.supportFiles = supportFileMetadata;
@@ -696,15 +715,26 @@ async function readApplyTargetState(
 function scanProposalBundle(
   content: string,
   supportFiles: readonly PreparedSkillProposalSupportFile[] = [],
+  metadata: readonly { file: string; content: string | undefined }[] = [],
 ): SkillProposalScan {
   const scannedAt = new Date().toISOString();
   const findings = [
     ...scanSkillContent(content, "PROPOSAL.md"),
     ...scanSource(content, "PROPOSAL.md"),
     ...supportFiles.flatMap((file) => [
+      ...scanSkillContent(file.path, "support-file-path").filter(
+        (finding) => finding.ruleId === "literal-secret",
+      ),
       ...scanSkillContent(file.content, file.path),
       ...scanSource(file.content, file.path),
     ]),
+    ...metadata.flatMap((entry) =>
+      entry.content
+        ? scanSkillContent(entry.content, entry.file).filter(
+            (finding) => finding.ruleId === "literal-secret",
+          )
+        : [],
+    ),
   ];
   const critical = findings.filter((finding) => finding.severity === "critical").length;
   const warn = findings.filter((finding) => finding.severity === "warn").length;
@@ -717,6 +747,16 @@ function scanProposalBundle(
     info,
     findings,
   };
+}
+
+function assertProposalContainsNoLiteralSecrets(scan: SkillProposalScan): void {
+  const finding = scan.findings.find((entry) => entry.ruleId === "literal-secret");
+  if (!finding) {
+    return;
+  }
+  throw new Error(
+    `Skill proposal contains a recognized literal credential in ${finding.file}; replace it with a SecretRef or placeholder.`,
+  );
 }
 
 async function assertCanCreatePendingProposal(

@@ -930,6 +930,82 @@ describe("skill workshop proposals", () => {
     ).rejects.toThrow();
   });
 
+  it.each([
+    "skill name",
+    "description",
+    "content",
+    "support file",
+    "support path",
+    "goal",
+    "evidence",
+  ])(
+    "rejects a recognized literal credential in %s before writing proposal state",
+    async (surface) => {
+      const workspaceDir = await makeWorkspace();
+      const sample = `sk-proj-${"a".repeat(32)}`;
+      const input = {
+        workspaceDir,
+        name: surface === "skill name" ? sample : "Credential Safety",
+        description: surface === "description" ? sample : "Keep credentials out of skill proposals",
+        content: surface === "content" ? `# Unsafe\n\n${sample}\n` : "# Safe content\n",
+        ...(surface === "support file"
+          ? { supportFiles: [{ path: "references/example.md", content: sample }] }
+          : {}),
+        ...(surface === "support path"
+          ? { supportFiles: [{ path: `references/${sample}.md`, content: "Safe support.\n" }] }
+          : {}),
+        ...(surface === "goal" ? { goal: sample } : {}),
+        ...(surface === "evidence" ? { evidence: sample } : {}),
+      };
+
+      await expect(proposeCreateSkill(input)).rejects.toThrow(
+        "contains a recognized literal credential",
+      );
+      expect((await listSkillProposals()).proposals).toHaveLength(0);
+    },
+  );
+
+  it("rejects literal credentials before update or revision writes", async () => {
+    const workspaceDir = await makeWorkspace();
+    const sample = `github_pat_${"a".repeat(32)}`;
+    const skillDir = path.join(workspaceDir, "skills", "safe-skill");
+    await writeSkill({
+      dir: skillDir,
+      name: "safe-skill",
+      description: "A writable workspace skill",
+      body: "# Safe Skill\n\nOriginal body.\n",
+    });
+
+    await expect(
+      proposeUpdateSkill({
+        workspaceDir,
+        skillName: "safe-skill",
+        description: sample,
+        content: "# Safe Update\n\nNo credentials.\n",
+      }),
+    ).rejects.toThrow("contains a recognized literal credential");
+    expect((await listSkillProposals()).proposals).toHaveLength(0);
+
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "Safe Revision",
+      description: "A safe pending proposal",
+      content: "# Safe Revision\n\nOriginal proposal.\n",
+    });
+    await expect(
+      reviseSkillProposal({
+        workspaceDir,
+        proposalId: proposal.record.id,
+        description: sample,
+        content: "# Safe Revision\n\nNo credentials.\n",
+      }),
+    ).rejects.toThrow("contains a recognized literal credential");
+    const unchanged = await inspectSkillProposal(proposal.record.id, { workspaceDir });
+    expect(unchanged?.record.proposedVersion).toBe("v1");
+    expect(unchanged?.content).toContain("Original proposal.");
+    expect(unchanged?.content).not.toContain(sample);
+  });
+
   it("rejects unsafe support paths before creating proposal state", async () => {
     const workspaceDir = await makeWorkspace();
 

@@ -5,6 +5,7 @@
  */
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveSkillWorkshopConfig } from "../../skills/workshop/config.js";
 import {
   applySkillProposal,
   inspectSkillProposal,
@@ -131,14 +132,29 @@ type SkillWorkshopToolOptions = {
   origin?: SkillProposalOrigin;
 };
 
+function buildSkillWorkshopToolDescription(config?: OpenClawConfig): string {
+  const lifecycle =
+    "Create/update/revise/list/inspect/apply/reject/quarantine reusable-procedure proposals.";
+  if (!resolveSkillWorkshopConfig(config).autonomous.enabled) {
+    return lifecycle;
+  }
+  return [
+    lifecycle,
+    "Experience capture is enabled: after successful nontrivial work, review the full trajectory for a reusable technique or correction before the final reply.",
+    "If `skill-creator` is listed in available skills, read it before authoring proposal content.",
+    "Prefer revising your pending proposal or updating a relevant writable workspace skill; otherwise create a broad new skill.",
+    "Skip routine completion, one-off requests, user-specific facts, secrets, transient failures, and unsupported negative claims.",
+    "Create only a pending proposal; never apply it without an explicit user request.",
+  ].join(" ");
+}
+
 /** Create the Skill Workshop tool for proposal discovery and lifecycle actions. */
 export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyAgentTool {
   return {
     label: "Skill Workshop",
     name: "skill_workshop",
     displaySummary: "Propose a reusable skill",
-    description:
-      "Create/update/revise/list/inspect/apply/reject/quarantine reusable-procedure proposals.",
+    description: buildSkillWorkshopToolDescription(options.config),
     parameters: SkillWorkshopToolSchema,
     execute: async (_toolCallId, args) => {
       const params = asToolParamsRecord(args);

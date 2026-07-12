@@ -236,6 +236,16 @@ the most recent detected workflow through `skill_workshop`; the user decides whe
 proposal. This built-in suggestion does not create or change a skill by itself. Enable
 `skills.workshop.autonomous.enabled` to create pending proposals directly instead.
 
+With autonomous capture enabled, the agent also reviews successful nontrivial work before its final
+reply. It can distill a reusable technique even when the user did not phrase it as a correction.
+The review uses the completed turn's full trajectory, prefers revising or updating an existing
+writable workspace skill, and otherwise creates a broad new skill. It skips routine completion,
+one-off requests, user-specific facts, secrets, transient failures, and unsupported negative
+claims. The result is still only a pending proposal; autonomous capture never applies a skill. If
+`skill-creator` is available, the agent loads its authoring guidance before it drafts proposal
+content. Workshop rejects recognized literal credentials in proposal content, support files, goals,
+and evidence before writing proposal state.
+
 ## Approval and autonomy
 
 ```json5
@@ -254,18 +264,24 @@ proposal. This built-in suggestion does not create or change a skill by itself. 
 }
 ```
 
-| Setting                    | Default     | Effect                                                                                                                                                                 |
-| -------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `autonomous.enabled`       | `false`     | Creates pending proposals directly instead of offering the most recent detected workflow on the next turn.                                                             |
-| `allowSymlinkTargetWrites` | `false`     | Lets apply write through workspace skill symlinks whose real target is listed in `skills.load.allowSymlinkTargets`.                                                    |
-| `approvalPolicy`           | `"pending"` | `"pending"` requires an approval prompt before agent-initiated `apply`, `reject`, or `quarantine`. `"auto"` skips the prompt (the agent still has to call the action). |
-| `maxPending`               | `50`        | Caps pending and quarantined proposals per workspace (1-200).                                                                                                          |
-| `maxSkillBytes`            | `40000`     | Caps proposal body size in bytes (1024-200000).                                                                                                                        |
+| Setting                    | Default     | Effect                                                                                                                                                                     |
+| -------------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `autonomous.enabled`       | `false`     | Creates pending proposals from explicit corrections and reusable techniques found after successful nontrivial work instead of only offering a suggestion on the next turn. |
+| `allowSymlinkTargetWrites` | `false`     | Lets apply write through workspace skill symlinks whose real target is listed in `skills.load.allowSymlinkTargets`.                                                        |
+| `approvalPolicy`           | `"pending"` | `"pending"` requires an approval prompt before agent-initiated `apply`, `reject`, or `quarantine`. `"auto"` skips the prompt (the agent still has to call the action).     |
+| `maxPending`               | `50`        | Caps pending and quarantined proposals per workspace (1-200).                                                                                                              |
+| `maxSkillBytes`            | `40000`     | Caps proposal body size in bytes (1024-200000).                                                                                                                            |
 
 Autonomous capture recognizes prospective rules (for example, “from now on”) and reactive
 corrections (for example, “that’s not what I asked”). It groups new instructions by topic into up
 to three proposals per turn, routes vocabulary matches to existing writable workspace skills, and
 revises its own pending proposal when another correction targets the same skill.
+
+For successful nontrivial work without an explicit correction, the active model decides whether
+the trajectory contains a durable procedure worth proposing. This reuses the model's current
+context rather than starting a second review run. Selectivity guidance lives in the
+`skill_workshop` tool description, so restrictive tool policy or sandboxing also disables this
+capture path.
 
 Proposal descriptions are always capped at 160 bytes, independent of
 `maxSkillBytes`.

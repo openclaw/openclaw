@@ -71,6 +71,27 @@ describe("skill_workshop tool", () => {
     expect(tools.some((tool) => tool.name === "skill_workshop")).toBe(true);
   });
 
+  it("asks the model to capture reusable experience only when autonomy is enabled", () => {
+    const disabled = createSkillWorkshopTool({
+      workspaceDir: "/tmp/openclaw",
+      config: { skills: { workshop: { autonomous: { enabled: false } } } },
+    });
+    const enabled = createSkillWorkshopTool({
+      workspaceDir: "/tmp/openclaw",
+      config: { skills: { workshop: { autonomous: { enabled: true } } } },
+    });
+
+    expect(disabled.description).not.toContain("Experience capture is enabled");
+    expect(enabled.description).toContain("after successful nontrivial work");
+    expect(enabled.description).toContain("review the full trajectory");
+    expect(enabled.description).toContain("`skill-creator` is listed in available skills");
+    expect(enabled.description).toContain("updating a relevant writable workspace skill");
+    expect(enabled.description).toContain("otherwise create a broad new skill");
+    expect(enabled.description).toContain("Skip routine completion");
+    expect(enabled.description).toContain("secrets");
+    expect(enabled.description).toContain("never apply it without an explicit user request");
+  });
+
   it("is not exposed from sandboxed OpenClaw tool sets", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-");
     const tools = createOpenClawTools({
