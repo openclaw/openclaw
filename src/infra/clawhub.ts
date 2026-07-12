@@ -424,6 +424,7 @@ type ClawHubRequestParams = {
   search?: Record<string, string | undefined>;
   fetchImpl?: FetchLike;
   skipAuth?: boolean;
+  retry?: boolean;
   headers?: Record<string, string>;
 };
 
@@ -729,7 +730,7 @@ async function clawhubRequest(
 
   // A write may have committed before its response failed, so only replay
   // idempotent reads across transient ClawHub transport failures.
-  if ((params.method ?? "GET") !== "GET") {
+  if ((params.method ?? "GET") !== "GET" || params.retry === false) {
     return await request();
   }
   return await retryClawHubRead(request, {
@@ -1970,6 +1971,8 @@ export async function fetchClawHubPromotionsFeed(
     // Public CDN-served snapshot; an Authorization header would only
     // fragment edge caches.
     skipAuth: true,
+    // Passive checks run inline; caller cadence owns retries so commands never inherit package-read backoff.
+    retry: false,
     ...(params.etag ? { headers: { "If-None-Match": params.etag } } : {}),
   });
   if (response.status === 304) {

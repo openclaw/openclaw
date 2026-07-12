@@ -190,4 +190,13 @@ describe("fetchClawHubPromotionsFeed", () => {
     const init = fetchImpl.mock.calls[0]?.[1] as RequestInit;
     expect(new Headers(init?.headers).get("if-none-match")).toBe('"seq-3"');
   });
+
+  it("leaves transport retry cadence to the passive feed cache", async () => {
+    const fetchImpl = vi.fn(async (..._args: unknown[]) => {
+      throw new Error("offline");
+    });
+
+    await expect(fetchClawHubPromotionsFeed({ fetchImpl })).rejects.toThrow("offline");
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
 });
