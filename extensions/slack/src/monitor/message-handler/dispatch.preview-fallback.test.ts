@@ -40,6 +40,8 @@ class TestSlackStreamNotDeliveredError extends Error {
   }
 }
 let mockedNativeStreaming = false;
+let useProductionProgressGate = false;
+const mockedRuntimeError = vi.fn();
 let mockedBlockStreamingEnabled: boolean | undefined = false;
 let mockedSlackStreamingMode: "off" | "partial" | "block" | "progress" = "partial";
 let mockedSlackDraftMode: "replace" | "status_final" | "append" = "append";
@@ -188,6 +190,7 @@ let mockedReplyOptionEvents: Array<
       exitCode?: number | null;
     }
   | { kind: "concurrent_items"; progressTexts: string[] }
+  | { kind: "overlapping_items"; progressTexts: [string, string] }
   | { kind: "partial"; text: string }
   | { kind: "assistant_start" }
   | { kind: "reasoning"; text?: string; isReasoningSnapshot?: boolean }
@@ -359,6 +362,7 @@ function createPreparedSlackMessage(params?: {
     teamId: string;
     client: Record<string, unknown>;
   };
+  runtime?: { error?: (message: string) => void };
 }) {
   const routeSessionKey = params?.route?.sessionKey ?? "agent:agent-1:slack:C123";
   const mainSessionKey = params?.route?.mainSessionKey ?? "main";
@@ -375,7 +379,7 @@ function createPreparedSlackMessage(params?: {
   return {
     ctx: {
       cfg: params?.cfg ?? {},
-      runtime: {},
+      runtime: params?.runtime ?? { error: mockedRuntimeError },
       botToken: "xoxb-test",
       app: { client: { chat: { postMessage: postMessageMock, update: chatUpdateMock } } },
       teamId: "T1",
@@ -437,10 +441,13 @@ async function dispatchNativeProgressScenario(params: {
     teamId: string;
     client: Record<string, unknown>;
   };
+  runtime?: { error?: (message: string) => void };
+  useProductionProgressGate?: boolean;
 }) {
   mockedNativeStreaming = true;
   mockedSlackStreamingMode = "progress";
   mockedSlackDraftMode = "status_final";
+  useProductionProgressGate = params.useProductionProgressGate ?? false;
   mockedDispatchSequence =
     params.finalPayload === undefined ? [] : [{ kind: "final", payload: params.finalPayload }];
   mockedReplyOptionEvents = params.events;
@@ -449,6 +456,7 @@ async function dispatchNativeProgressScenario(params: {
     createPreparedSlackMessage({
       replyToMode: params.replyToMode,
       eventScope: params.eventScope,
+      runtime: params.runtime,
       accountConfig: {
         streaming: {
           mode: "progress",
@@ -643,6 +651,12 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
         : undefined;
     },
     createChannelProgressDraftGate: (params: { onStart: () => void | Promise<void> }) => {
+      if (useProductionProgressGate) {
+        return actual.createChannelProgressDraftGate({
+          onStart: params.onStart,
+          initialDelayMs: 0,
+        });
+      }
       let started = false;
       let workEvents = 0;
       return {
@@ -828,8 +842,8 @@ vi.mock("openclaw/plugin-sdk/reply-payload", () => ({
 
 vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   danger: (message: string) => message,
-  logVerbose: logVerboseMock,
-  shouldLogVerbose: () => false,
+  logVerbose: (...args: unknown[]) => logVerboseMock(...args),
+  shouldLogVerbose: () => true,
 }));
 
 vi.mock("openclaw/plugin-sdk/security-runtime", () => ({
@@ -1079,6 +1093,12 @@ vi.mock("../reply.runtime.js", () => ({
               Promise.resolve(params.replyOptions?.onItemEvent?.({ progressText })),
             ),
           );
+        } else if (entry.kind === "overlapping_items") {
+          const handler = params.replyOptions?.onItemEvent;
+          const first = handler?.({ progressText: entry.progressTexts[0] });
+          await Promise.resolve();
+          const second = handler?.({ progressText: entry.progressTexts[1] });
+          await Promise.all([first, second]);
         } else if (entry.kind === "assistant_start") {
           await params.replyOptions?.onAssistantMessageStart?.();
         } else if (entry.kind === "reasoning") {
@@ -1213,6 +1233,12 @@ vi.mock("../reply.runtime.js", () => ({
               Promise.resolve(params.replyOptions?.onItemEvent?.({ progressText })),
             ),
           );
+        } else if (entry.kind === "overlapping_items") {
+          const handler = params.replyOptions?.onItemEvent;
+          const first = handler?.({ progressText: entry.progressTexts[0] });
+          await Promise.resolve();
+          const second = handler?.({ progressText: entry.progressTexts[1] });
+          await Promise.all([first, second]);
         } else if (entry.kind === "partial") {
           await params.replyOptions?.onPartialReply?.({ text: entry.text });
         } else if (entry.kind === "assistant_start") {
@@ -1288,6 +1314,9 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     mockedDispatcherCapturesDeliveryErrors = false;
     mockedProgressEvents = [];
     mockedReplyOptionEvents = [];
+    useProductionProgressGate = false;
+    mockedRuntimeError.mockClear();
+    logVerboseMock.mockClear();
 
     createSlackDraftStreamMock.mockReturnValue(createDraftStreamStub());
     finalizeSlackPreviewEditMock.mockRejectedValue(new Error("socket closed"));
@@ -3026,6 +3055,43 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(startSlackStreamMock).toHaveBeenCalledTimes(1);
     expect(appendSlackStreamMock).not.toHaveBeenCalled();
     expect(stopSlackStreamMock).not.toHaveBeenCalled();
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
+    expect(mockedRuntimeError).toHaveBeenCalledTimes(1);
+    expect(String(mockedRuntimeError.mock.calls[0]?.[0])).toContain(
+      "slack-stream: native progress stream start failed: start stream failed, falling back",
+    );
+  });
+
+  it("reports one start failure when overlapping native progress callbacks await the same rejected start", async () => {
+    let releaseStart!: () => void;
+    const startGate = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
+    startSlackStreamMock.mockImplementationOnce(async () => {
+      await startGate;
+      throw new Error("method_not_supported_for_channel_type");
+    });
+
+    const scenarioPromise = dispatchNativeProgressScenario({
+      useProductionProgressGate: true,
+      finalPayload: { text: FINAL_REPLY_TEXT },
+      events: [{ kind: "overlapping_items", progressTexts: ["tool one", "tool two"] }],
+    });
+    await Promise.resolve();
+    releaseStart();
+    await scenarioPromise;
+
+    expect(startSlackStreamMock).toHaveBeenCalled();
+    expect(mockedRuntimeError).toHaveBeenCalledTimes(1);
+    expect(String(mockedRuntimeError.mock.calls[0]?.[0])).toMatch(
+      /slack-stream: native progress stream (start|update) failed: method_not_supported_for_channel_type, falling back/,
+    );
+    expect(
+      logVerboseMock.mock.calls.some((call) =>
+        String(call[0]).includes("native progress stream start failed"),
+      ),
+    ).toBe(false);
     expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
     expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
   });

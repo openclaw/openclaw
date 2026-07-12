@@ -1686,9 +1686,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       }
       await appendNativeProgressStream(chunks, chunkKey);
     } catch (err) {
+      const streamPhase = streamSession ? "update" : "start";
       runtime.error?.(
         danger(
-          `slack-stream: native progress stream failed: ${formatSlackError(err)}, falling back`,
+          `slack-stream: native progress stream ${streamPhase} failed: ${formatSlackError(err)}, falling back`,
         ),
       );
       streamFailed = true;
