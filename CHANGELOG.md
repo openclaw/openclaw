@@ -31,6 +31,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Cross-platform media paths:** parse local media extensions from the final filename segment for both POSIX and Windows path styles, preventing dotted Windows directories from being mistaken for file extensions. (#105439, #105614) Thanks @xiaobao-k8s.
 - **Provider network retries:** align provider read/poll/download and agent-wait recovery for transient connection errors, retry bounded provider `ENOTFOUND` failures while leaving gateway `ENOTFOUND` and non-idempotent create operations fail-fast. (#101496) Thanks @xialonglee.
 - **Session retry classification:** stop permanent provider errors whose identifiers or payload details merely contain 429/5xx digit sequences from re-sending full context, and share bounded rate-limit-window parsing across retry paths. (#105258) Thanks @destire-mio.
 - **LINE directive templates:** suppress confirms and buttons with blank required fields or unlabeled actions while preserving valid titleless buttons and surrounding reply text. (#105520) Thanks @edenfunf.
