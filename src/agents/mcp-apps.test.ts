@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   isAppOnlyMcpTool,
   MCP_APP_MAX_HTML_BYTES,
@@ -109,6 +109,42 @@ describe("parseMcpAppResource", () => {
       ],
     });
     expect(resource?.html).toBe("<html>blob app</html>");
+  });
+
+  it("rejects malformed base64 blob content", () => {
+    expect(
+      parseMcpAppResource({
+        contents: [
+          {
+            uri: "ui://server/app.html",
+            mimeType: "text/html;profile=mcp-app",
+            blob: "not base64!",
+          },
+        ],
+      }),
+    ).toBe(undefined);
+  });
+
+  it("rejects oversized base64 blobs before decoding", () => {
+    const oversizedBlob = "A".repeat(Math.ceil(MCP_APP_MAX_HTML_BYTES / 3) * 4 + 1);
+    const bufferFromSpy = vi.spyOn(Buffer, "from");
+
+    try {
+      expect(
+        parseMcpAppResource({
+          contents: [
+            {
+              uri: "ui://server/app.html",
+              mimeType: "text/html;profile=mcp-app",
+              blob: oversizedBlob,
+            },
+          ],
+        }),
+      ).toBe(undefined);
+      expect(bufferFromSpy).not.toHaveBeenCalledWith(oversizedBlob, "base64");
+    } finally {
+      bufferFromSpy.mockRestore();
+    }
   });
 
   it("skips non-app MIME types", () => {

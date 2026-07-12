@@ -5,6 +5,7 @@
  * results so UI surfaces can render it. Everything parsed here is untrusted
  * MCP server output.
  */
+import { canonicalizeBase64, estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { isRecord } from "../utils.js";
 
 /** MCP Apps extension key declared in client capabilities. */
@@ -16,6 +17,7 @@ export const MCP_APP_MIME_TYPE = "text/html;profile=mcp-app";
  * beyond this are dropped (the tool still returns its normal content).
  */
 export const MCP_APP_MAX_HTML_BYTES = 5 * 1024 * 1024;
+const MCP_APP_MAX_BASE64_CHARS = Math.ceil(MCP_APP_MAX_HTML_BYTES / 3) * 4;
 
 export type McpToolUiVisibility = "model" | "app";
 
@@ -135,8 +137,15 @@ function decodeResourceHtml(entry: Record<string, unknown>): string | undefined 
     return entry.text;
   }
   if (typeof entry.blob === "string" && entry.blob) {
+    if (entry.blob.length > MCP_APP_MAX_BASE64_CHARS) {
+      return undefined;
+    }
+    const canonicalBlob = canonicalizeBase64(entry.blob);
+    if (!canonicalBlob || estimateBase64DecodedBytes(canonicalBlob) > MCP_APP_MAX_HTML_BYTES) {
+      return undefined;
+    }
     try {
-      return Buffer.from(entry.blob, "base64").toString("utf8");
+      return Buffer.from(canonicalBlob, "base64").toString("utf8");
     } catch {
       return undefined;
     }
