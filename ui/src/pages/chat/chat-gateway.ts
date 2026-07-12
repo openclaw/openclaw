@@ -24,8 +24,8 @@ import {
 
 export type { ChatEventPayload, ChatState } from "./chat-history.ts";
 
-const CHAT_EVENT_DEDUPE_LIMIT = 200;
-const acceptedChatEventKeys = new WeakMap<object, Map<string, number>>();
+const CHAT_EVENT_DEDUPE_RUN_LIMIT = 200;
+const acceptedChatEventSeqByRun = new WeakMap<object, Map<string, number>>();
 
 type AssistantMessageNormalizationOptions = {
   roleRequirement: "required" | "optional";
@@ -155,7 +155,7 @@ function appendCachedChatMessage(
   appendChatMessageToCache(state.chatMessagesBySession, state, { sessionKey, agentId }, message);
 }
 
-function chatEventDedupeKey(payload: ChatEventPayload): string | null {
+function chatEventDedupeRunKey(payload: ChatEventPayload): string | null {
   if (typeof payload.runId !== "string" || !payload.runId.trim()) {
     return null;
   }
@@ -168,8 +168,6 @@ function chatEventDedupeKey(payload: ChatEventPayload): string | null {
     payload.sessionKey,
     typeof payload.agentId === "string" ? payload.agentId : "",
     payload.runId,
-    payload.seq,
-    payload.state,
   ].join("\0");
 }
 
@@ -192,24 +190,26 @@ function shouldConsumeChatEventFrame(state: ChatState, payload: ChatEventPayload
 }
 
 function acceptChatEventFrame(state: ChatState, payload: ChatEventPayload): boolean {
-  const key = chatEventDedupeKey(payload);
-  if (!key) {
+  const runKey = chatEventDedupeRunKey(payload);
+  if (!runKey || typeof payload.seq !== "number") {
     return true;
   }
   const stateKey = state as object;
-  let accepted = acceptedChatEventKeys.get(stateKey);
+  let accepted = acceptedChatEventSeqByRun.get(stateKey);
   if (!accepted) {
     accepted = new Map();
-    acceptedChatEventKeys.set(stateKey, accepted);
+    acceptedChatEventSeqByRun.set(stateKey, accepted);
   }
-  if (accepted.has(key)) {
+  const lastAcceptedSeq = accepted.get(runKey);
+  if (lastAcceptedSeq !== undefined && payload.seq <= lastAcceptedSeq) {
     return false;
   }
-  accepted.set(key, Date.now());
-  if (accepted.size > CHAT_EVENT_DEDUPE_LIMIT) {
+  accepted.delete(runKey);
+  accepted.set(runKey, payload.seq);
+  if (accepted.size > CHAT_EVENT_DEDUPE_RUN_LIMIT) {
     for (const staleKey of accepted.keys()) {
       accepted.delete(staleKey);
-      if (accepted.size <= CHAT_EVENT_DEDUPE_LIMIT) {
+      if (accepted.size <= CHAT_EVENT_DEDUPE_RUN_LIMIT) {
         break;
       }
     }

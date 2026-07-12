@@ -691,6 +691,25 @@ describe("handleChatEvent", () => {
     expect(state.chatStream).toBe("Live reply");
   });
 
+  it("keeps early frame sequences deduped after more than 200 frames", () => {
+    const state = createState({ sessionKey: "main" });
+    const payload: ChatEventPayload = {
+      runId: "run-long",
+      seq: 1,
+      sessionKey: "main",
+      state: "delta",
+      deltaText: "x",
+    };
+
+    for (let seq = 1; seq <= 201; seq += 1) {
+      expect(handleChatEvent(state, { ...payload, seq })).toBe("delta");
+    }
+    expect(state.chatStream).toHaveLength(201);
+
+    expect(handleChatEvent(state, payload)).toBe(null);
+    expect(state.chatStream).toHaveLength(201);
+  });
+
   it("does not let ignored off-session frames suppress the selected session replay", () => {
     const state = createState({ sessionKey: "main" });
     const payload: ChatEventPayload = {
