@@ -1,24 +1,11 @@
 {
-  "fallbackKeys": [
-    "sessionsView.transcriptSearchDescription",
-    "sessionsView.transcriptSearchEmpty",
-    "sessionsView.transcriptSearchError",
-    "sessionsView.transcriptSearchIndexing",
-    "sessionsView.transcriptSearchInputLabel",
-    "sessionsView.transcriptSearchMatches",
-    "sessionsView.transcriptSearchPlaceholder",
-    "sessionsView.transcriptSearchRetry",
-    "sessionsView.transcriptSearchSearching",
-    "sessionsView.transcriptSearchTitle",
-    "sessionsView.transcriptSearchTruncated",
-    "sessionsView.transcriptSearchUnavailable"
-  ],
-  "generatedAt": "2026-07-12T19:16:46.628Z",
+  "fallbackKeys": [],
+  "generatedAt": "2026-07-12T19:27:31.426Z",
   "locale": "th",
   "model": "gpt-5.6-sol",
   "provider": "openai",
   "sourceHash": "6ed0ba0c82f54253a752f81ebccadd055099c5145b7052444e66d40e0b8ee0f3",
   "totalKeys": 3084,
-  "translatedKeys": 3072,
+  "translatedKeys": 3084,
   "workflow": 1
 }
