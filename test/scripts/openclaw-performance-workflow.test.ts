@@ -40,7 +40,7 @@ function findStep(name: string): WorkflowStep {
 describe("OpenClaw performance workflow", () => {
   it("pins the Kova evaluator that reads truncated agent payloads", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
-    const kovaRef = "a2dd84e7d65507e614afaff850d3932d18c859b6";
+    const kovaRef = "0a6d104f44753edef94462375c8b614e03fa378f";
 
     expect(workflow).toContain(`default: ${kovaRef}`);
     expect(workflow).toContain(`inputs.kova_ref || '${kovaRef}'`);

@@ -48,7 +48,7 @@ on:
       kova_ref:
         description: openclaw/Kova Git ref to install
         required: false
-        default: a2dd84e7d65507e614afaff850d3932d18c859b6
+        default: 0a6d104f44753edef94462375c8b614e03fa378f
         type: string
 
 permissions:
@@ -96,7 +96,7 @@ jobs:
             live: "true"
             include_filters: "scenario:agent-cold-warm-message"
     env:
-      KOVA_REF: ${{ inputs.kova_ref || 'a2dd84e7d65507e614afaff850d3932d18c859b6' }}
+      KOVA_REF: ${{ inputs.kova_ref || '0a6d104f44753edef94462375c8b614e03fa378f' }}
       KOVA_HOME: ${{ github.workspace }}/.artifacts/kova/home/${{ matrix.lane }}
       PERFORMANCE_HELPER_DIR: ${{ github.workspace }}/.artifacts/performance-workflow
       REPORT_DIR: ${{ github.workspace }}/.artifacts/kova/reports/${{ matrix.lane }}
