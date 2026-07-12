@@ -40,6 +40,7 @@ jobs:
                 repoPathPrefix: "apps/ios/",
                 scanJobName: "Scan iOS dead code",
                 scopeJobName: "Detect iOS scan scope",
+                scopeLabel: "iOS",
               },
               "macOS Periphery Dead Code": {
                 artifactPrefix: "macos-periphery-dead-code",
@@ -48,6 +49,7 @@ jobs:
                 repoPathPrefix: "apps/macos/",
                 scanJobName: "Scan macOS dead code",
                 scopeJobName: "Detect macOS scan scope",
+                scopeLabel: "macOS",
               },
             }[run.name];
             if (!workflowConfig) {
@@ -61,6 +63,7 @@ jobs:
               repoPathPrefix,
               scanJobName,
               scopeJobName,
+              scopeLabel,
             } = workflowConfig;
             const pr = run.pull_requests?.[0];
             if (!pr) {
@@ -388,7 +391,7 @@ jobs:
               body += [
                 heading,
                 "",
-                "Periphery scan skipped because the pull request is a draft or no longer touches this native scan scope.",
+                `Periphery scan skipped because the pull request is a draft or no longer touches ${scopeLabel} scan scope.`,
               ].join("\n");
             } else if (findings === null) {
               body += [
