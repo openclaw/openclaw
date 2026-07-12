@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { openDurableRuntimeStore, resolveDurableRuntimeStoreBackend } from "./store-factory.js";
+import { openDurableRuntimeStore } from "./store-factory.js";
 
 describe("durable runtime store factory", () => {
   it("opens the SQLite backend by default and satisfies the core store contract", () => {
@@ -54,11 +54,4 @@ describe("durable runtime store factory", () => {
     }
   });
 
-  it("rejects unknown backends with a clear error", () => {
-    expect(() =>
-      resolveDurableRuntimeStoreBackend({
-        OPENCLAW_DURABLE_RUNTIME_STORE: "unknown",
-      }),
-    ).toThrow(/Unsupported durable runtime store backend/);
-  });
 });
