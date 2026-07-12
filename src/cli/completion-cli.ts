@@ -266,7 +266,7 @@ function generateZshCompletion(program: Command): string {
 _${rootCmd}_root_completion() {
   local -a commands
   local -a options
-  
+
   _arguments -C \\
     ${generateZshArgs(program)} \\
     ${generateZshSubcmdList(program)} \\
@@ -361,7 +361,7 @@ function generateZshSubcommands(program: Command, prefix: string): string {
 ${funcName}() {
   local -a commands
   local -a options
-  
+
   _arguments -C \\
     ${generateZshArgs(cmd)} \\
     ${generateZshSubcmdList(cmd)} \\
@@ -541,10 +541,10 @@ function generatePowerShellCompletion(program: Command): string {
   return `
 Register-ArgumentCompleter -Native -CommandName ${rootCmd} -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
-    
+
     $commandElements = $commandAst.CommandElements
     $commandPath = ""
-    
+
     # Reconstruct command path (simple approximation)
     # Skip the executable name
     for ($i = 1; $i -lt $commandElements.Count; $i++) {
@@ -554,7 +554,7 @@ Register-ArgumentCompleter -Native -CommandName ${rootCmd} -ScriptBlock {
         $commandPath += "$element "
     }
     $commandPath = $commandPath.Trim()
-    
+
     # Root command
     if ($commandPath -eq "") {
          $completions = ${formatPowerShellArray([
@@ -565,7 +565,7 @@ Register-ArgumentCompleter -Native -CommandName ${rootCmd} -ScriptBlock {
             [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterName', $_)
          }
     }
-    
+
     ${rootBody}
 }
 `;
