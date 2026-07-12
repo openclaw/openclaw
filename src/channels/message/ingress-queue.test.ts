@@ -788,7 +788,6 @@ describe("channel ingress queue", () => {
         });
         await queue.enqueue("good-second", { text: "claimable" }, { receivedAt: 300 });
 
-        await expect(queue.claimNext({ scanLimit: 1 })).resolves.toBeNull();
         await expect(queue.claimNext({ scanLimit: 1 })).resolves.toMatchObject({
           id: "good-second",
           payload: { text: "claimable" },
@@ -984,11 +983,29 @@ describe("channel ingress queue", () => {
           claimed_at: 10,
         });
         const shouldRecover = vi.fn(() => true);
+        const shouldRecoverCorrupt = vi.fn(() => false);
 
         await expect(
-          queue.recoverStaleClaims({ staleMs: 10, now: 20, shouldRecover }),
+          queue.recoverStaleClaims({
+            staleMs: 10,
+            now: 20,
+            shouldRecover,
+            shouldRecoverCorrupt,
+          }),
         ).resolves.toBe(0);
         expect(shouldRecover).not.toHaveBeenCalled();
+        expect(shouldRecoverCorrupt).toHaveBeenCalledWith({
+          id: "stale-policy-bad",
+          channelId: "test",
+          accountId: "account",
+          queueName: '["test","account"]',
+          reason: "corrupt_payload",
+          claim: {
+            token: "test-token-placeholder",
+            ownerId: "active-worker",
+            claimedAt: 10,
+          },
+        });
 
         const { db } = openOpenClawStateDatabase({
           env: createStateDirEnv(stateDir),
@@ -1008,6 +1025,24 @@ describe("channel ingress queue", () => {
           claim_owner: "active-worker",
           claimed_at: 10,
         });
+
+        await expect(
+          queue.recoverStaleClaims({
+            staleMs: 10,
+            now: 20,
+            shouldRecover,
+            shouldRecoverCorrupt: () => true,
+          }),
+        ).resolves.toBe(1);
+        const failed = executeSqliteQueryTakeFirstSync(
+          db,
+          getNodeSqliteKysely<ChannelIngressTestDatabase>(db)
+            .selectFrom("channel_ingress_events")
+            .select(["status", "failed_reason"])
+            .where("queue_name", "=", '["test","account"]')
+            .where("event_id", "=", "stale-policy-bad"),
+        );
+        expect(failed).toEqual({ status: "failed", failed_reason: "corrupt_payload" });
       });
     });
   });

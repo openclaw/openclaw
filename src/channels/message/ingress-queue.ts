@@ -56,6 +56,21 @@ export type ChannelIngressQueueClaimRef = {
   };
 };
 
+/** Claim identity available when a stale row's payload cannot be decoded. */
+export type ChannelIngressQueueCorruptClaim = {
+  id: string;
+  channelId: string;
+  accountId: string;
+  queueName: string;
+  laneKey?: string;
+  reason: "corrupt_payload";
+  claim: {
+    token: string;
+    ownerId: string;
+    claimedAt: number;
+  };
+};
+
 /** Completed ingress event tombstone retained for duplicate detection. */
 export type ChannelIngressQueueCompletedRecord<TCompletedMetadata = unknown> = {
   id: string;
@@ -174,6 +189,7 @@ export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadat
     shouldRecover?: (
       claim: ChannelIngressQueueClaim<TPayload, TMetadata>,
     ) => boolean | Promise<boolean>;
+    shouldRecoverCorrupt?: (claim: ChannelIngressQueueCorruptClaim) => boolean | Promise<boolean>;
   }): Promise<number>;
   prune(options?: ChannelIngressQueuePruneOptions): Promise<number>;
 };
@@ -261,6 +277,22 @@ function claimedRecord<TPayload, TMetadata>(
   }
   return {
     ...base,
+    claim: {
+      token: row.claim_token ?? "",
+      ownerId: row.claim_owner ?? "",
+      claimedAt: row.claimed_at ?? 0,
+    },
+  };
+}
+
+function corruptClaimRecord(row: ChannelIngressRow): ChannelIngressQueueCorruptClaim {
+  return {
+    id: row.event_id,
+    channelId: row.channel_id,
+    accountId: row.account_id,
+    queueName: row.queue_name,
+    ...(row.lane_key === null ? {} : { laneKey: row.lane_key }),
+    reason: "corrupt_payload",
     claim: {
       token: row.claim_token ?? "",
       ownerId: row.claim_owner ?? "",
@@ -626,27 +658,34 @@ export function createChannelIngressQueue<
             ? select.orderBy("event_id", "asc")
             : select.orderBy("received_at", "asc").orderBy("event_id", "asc");
         orderedSelect = orderedSelect.limit(normalizeScanLimit(claimOptions?.scanLimit));
-        const rows = executeSqliteQuerySync(tx.db, orderedSelect).rows;
         const transitionAt = now();
         let selected:
           | { row: ChannelIngressRow; record: ChannelIngressQueueRecord<TPayload, TMetadata> }
           | undefined;
-        for (const row of rows) {
-          const rec = baseRecord<TPayload, TMetadata>(row);
-          if (rec === null) {
-            tombstoneCorruptPayloadRow({
-              db: tx.db,
-              row,
-              expectedStatus: "pending",
-              failedAt: transitionAt,
-            });
-            continue;
+        while (!selected) {
+          const rows = executeSqliteQuerySync(tx.db, orderedSelect).rows;
+          let tombstonedCorruptRow = false;
+          for (const row of rows) {
+            const rec = baseRecord<TPayload, TMetadata>(row);
+            if (rec === null) {
+              tombstonedCorruptRow =
+                tombstoneCorruptPayloadRow({
+                  db: tx.db,
+                  row,
+                  expectedStatus: "pending",
+                  failedAt: transitionAt,
+                }) || tombstonedCorruptRow;
+              continue;
+            }
+            const laneKey =
+              row.lane_key ??
+              (claimOptions?.deriveLaneKey ? claimOptions.deriveLaneKey(rec) : undefined);
+            if (!laneKey || !effectiveBlocked.has(laneKey)) {
+              selected = { row, record: rec };
+              break;
+            }
           }
-          const laneKey =
-            row.lane_key ??
-            (claimOptions?.deriveLaneKey ? claimOptions.deriveLaneKey(rec) : undefined);
-          if (!laneKey || !effectiveBlocked.has(laneKey)) {
-            selected = { row, record: rec };
+          if (selected || !tombstonedCorruptRow) {
             break;
           }
         }
@@ -821,10 +860,15 @@ export function createChannelIngressQueue<
     for (const row of claimedRows) {
       const claimRec = claimedRecord<TPayload, TMetadata>(row);
       if (claimRec === null) {
-        // The recovery predicate owns liveness decisions, but a corrupt payload
-        // cannot be materialized into its callback contract. Preserve the claim
-        // instead of bypassing caller policy and racing an active worker.
-        if (recoverOptions?.shouldRecover) {
+        const shouldRecoverCorrupt = recoverOptions?.shouldRecoverCorrupt;
+        if (shouldRecoverCorrupt) {
+          if (!(await shouldRecoverCorrupt(corruptClaimRecord(row)))) {
+            continue;
+          }
+        } else if (recoverOptions?.shouldRecover) {
+          // Existing payload-aware policies cannot safely decide on corrupt
+          // data. Preserve ownership unless the caller opts into the raw claim
+          // identity contract above.
           continue;
         }
         const tombstoned = runOpenClawStateWriteTransaction(
