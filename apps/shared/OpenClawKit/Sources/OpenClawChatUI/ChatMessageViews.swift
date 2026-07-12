@@ -34,7 +34,11 @@ struct ChatAgentAvatar: View {
                 Circle()
                     .strokeBorder(Color.white.opacity(0.18), lineWidth: 1))
             .shadow(color: (self.tint ?? OpenClawChatTheme.accent).opacity(0.18), radius: 8, y: 4)
-            .accessibilityLabel(self.name.map { "\($0) avatar" } ?? "Agent avatar")
+            .accessibilityLabel(self.name.map {
+                String(
+                    format: String(localized: "%@ avatar"),
+                    $0)
+            } ?? String(localized: "Agent avatar"))
     }
 
     private var displayText: String {
@@ -856,7 +860,7 @@ struct ChatPendingToolsBubble: View {
                 let display = ToolDisplayRegistry.resolve(name: call.name, args: call.args)
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text("\(display.emoji) \(display.label)")
+                        Text(verbatim: "\(display.emoji) \(display.label)")
                             .font(OpenClawChatTypography.mono(size: 13, relativeTo: .footnote))
                             .lineLimit(1)
                         Spacer(minLength: 0)

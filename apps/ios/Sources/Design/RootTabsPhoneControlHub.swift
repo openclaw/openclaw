@@ -303,10 +303,17 @@ struct RootTabsPhoneControlHub: View {
 
     private var gatewayAccessibilityLabel: Text {
         if let gatewayDisplayLabel {
-            Text("Gateway \(self.gatewayStateText), \(gatewayDisplayLabel), \(self.sidebarActiveAgentTitle)")
+            Text(verbatim: String(
+                format: String(localized: "Gateway %1$@, %2$@, %3$@"),
+                self.gatewayStateText,
+                gatewayDisplayLabel,
+                self.sidebarActiveAgentTitle))
                 .font(OpenClawType.captionMedium)
         } else {
-            Text("Gateway \(self.gatewayStateText), \(self.sidebarActiveAgentTitle)")
+            Text(verbatim: String(
+                format: String(localized: "Gateway %1$@, %2$@"),
+                self.gatewayStateText,
+                self.sidebarActiveAgentTitle))
                 .font(OpenClawType.captionMedium)
         }
     }

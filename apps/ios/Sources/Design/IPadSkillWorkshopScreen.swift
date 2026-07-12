@@ -157,7 +157,11 @@ struct IPadSkillWorkshopScreen: View {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("\(self.filteredProposals.count) proposals")
+                        Text(verbatim: self.filteredProposals.count == 1
+                            ? String(localized: "1 proposal")
+                            : String(
+                                format: String(localized: "%@ proposals"),
+                                self.filteredProposals.count.formatted()))
                             .font(OpenClawType.headline)
                         Text(self.statusFilterLabel)
                             .font(OpenClawType.caption)
@@ -601,7 +605,7 @@ struct IPadSkillWorkshopScreen: View {
         let defaultID = Self.normalizedScopeID(self.appModel.gatewayDefaultAgentId)
         if let match = appModel.gatewayAgents.first(where: { Self.normalizedScopeID($0.id) == defaultID }) {
             let name = Self.normalizedScopeID(match.name)
-            return name.isEmpty ? "Default agent" : name
+            return name.isEmpty ? String(localized: "Default agent") : name
         }
         let activeName = Self.normalizedScopeID(self.appModel.activeAgentName)
         return activeName.isEmpty ? "Default agent" : activeName
@@ -647,18 +651,18 @@ struct IPadSkillWorkshopScreen: View {
 
     static func proposalStatusFilterLabel(_ filter: String) -> String {
         switch filter {
-        case "pending": "Pending"
-        case "held": "Held"
-        case "applied": "Applied"
-        case "rejected": "Rejected"
-        default: "All"
+        case "pending": String(localized: "Pending")
+        case "held": String(localized: "Held")
+        case "applied": String(localized: "Applied")
+        case "rejected": String(localized: "Rejected")
+        default: String(localized: "All")
         }
     }
 
     static func proposalLaneLabel(_ status: String) -> String {
         switch status {
-        case "quarantined": "Quarantined"
-        case "stale": "Stale"
+        case "quarantined": String(localized: "Quarantined")
+        case "stale": String(localized: "Stale")
         case "pending", "applied", "rejected":
             self.proposalStatusFilterLabel(status)
         default:
@@ -879,7 +883,9 @@ struct IPadSkillWorkshopScreen: View {
                     agentId: self.selectedAgentParam,
                     proposalId: proposal.id),
                 timeoutSeconds: 30)
-            self.noticeText = action == .apply ? "Proposal applied." : "Proposal rejected."
+            self.noticeText = action == .apply
+                ? String(localized: "Proposal applied.")
+                : String(localized: "Proposal rejected.")
             await self.loadProposals(force: true)
         } catch {
             self.errorText = Self.message(for: error)
@@ -928,15 +934,19 @@ struct IPadSkillProposalKanbanColumn: View {
         ProCard(padding: 0, radius: OpenClawProMetric.cardRadius) {
             VStack(spacing: 0) {
                 ProPanelHeader(
-                    title: IPadSkillWorkshopScreen.proposalLaneLabel(self.status),
+                    title: .localized(IPadSkillWorkshopScreen.proposalLaneLabel(self.status)),
                     value: "\(self.proposals.count)",
                     actionTitle: nil,
                     action: nil)
 
                 if self.proposals.isEmpty {
+                    let lane = IPadSkillWorkshopScreen.proposalLaneLabel(self.status)
                     ProStatusRow(
                         icon: "hammer",
-                        title: "No \(IPadSkillWorkshopScreen.proposalLaneLabel(self.status).lowercased()) proposals",
+                        title: .verbatim(
+                            String(
+                                format: String(localized: "No proposals in %@"),
+                                lane)),
                         detail: "Matching proposals appear here after gateway refresh.",
                         value: "empty",
                         color: .secondary,
@@ -1213,11 +1223,15 @@ struct IPadSkillProposal: Identifiable {
     var ageLabel: String {
         let diff = max(0, Date().timeIntervalSince1970 * 1000 - self.updatedAtMs)
         let minutes = Int(diff / 60000)
-        if minutes < 1 { return "now" }
-        if minutes < 60 { return "\(minutes)m" }
+        if minutes < 1 { return String(localized: "now") }
+        if minutes < 60 {
+            return String(format: String(localized: "%@m"), minutes.formatted())
+        }
         let hours = minutes / 60
-        if hours < 24 { return "\(hours)h" }
-        return "\(hours / 24)d"
+        if hours < 24 {
+            return String(format: String(localized: "%@h"), hours.formatted())
+        }
+        return String(format: String(localized: "%@d"), (hours / 24).formatted())
     }
 
     var statusColor: Color {

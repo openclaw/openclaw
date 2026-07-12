@@ -119,24 +119,34 @@ struct ChatMessageUsagePresentation: Equatable {
 
         if let input {
             visualParts.append("↑\(self.tokens(input))")
-            accessibilityParts.append(String(localized: "Input tokens: \(input)"))
+            accessibilityParts.append(String(
+                format: String(localized: "Input tokens: %@"),
+                input.formatted()))
         }
         if let output {
             visualParts.append("↓\(self.tokens(output))")
-            accessibilityParts.append(String(localized: "Output tokens: \(output)"))
+            accessibilityParts.append(String(
+                format: String(localized: "Output tokens: %@"),
+                output.formatted()))
         }
         if let cacheRead {
             visualParts.append("R\(self.tokens(cacheRead))")
-            accessibilityParts.append(String(localized: "Cache read tokens: \(cacheRead)"))
+            accessibilityParts.append(String(
+                format: String(localized: "Cache read tokens: %@"),
+                cacheRead.formatted()))
         }
         if let cacheWrite {
             visualParts.append("W\(self.tokens(cacheWrite))")
-            accessibilityParts.append(String(localized: "Cache write tokens: \(cacheWrite)"))
+            accessibilityParts.append(String(
+                format: String(localized: "Cache write tokens: %@"),
+                cacheWrite.formatted()))
         }
         if let cost = usage.cost?.total, cost > 0 {
             let formattedCost = String(format: "$%.4f", locale: Locale(identifier: "en_US_POSIX"), cost)
             visualParts.append(formattedCost)
-            accessibilityParts.append(String(localized: "Cost: \(formattedCost)"))
+            accessibilityParts.append(String(
+                format: String(localized: "Cost: %@"),
+                formattedCost))
         }
 
         // Context pressure mirrors the Control UI prompt size. Output is response data;
@@ -155,11 +165,17 @@ struct ChatMessageUsagePresentation: Equatable {
             visualParts.append("\(warningPrefix)\(contextPercent)% \(String(localized: "ctx"))")
             switch pressure {
             case .normal:
-                accessibilityParts.append(String(localized: "\(contextPercent) percent of context used"))
+                accessibilityParts.append(String(
+                    format: String(localized: "%@ percent of context used"),
+                    contextPercent.formatted()))
             case .warning:
-                accessibilityParts.append(String(localized: "Warning: \(contextPercent) percent of context used"))
+                accessibilityParts.append(String(
+                    format: String(localized: "Warning: %@ percent of context used"),
+                    contextPercent.formatted()))
             case .danger:
-                accessibilityParts.append(String(localized: "Critical: \(contextPercent) percent of context used"))
+                accessibilityParts.append(String(
+                    format: String(localized: "Critical: %@ percent of context used"),
+                    contextPercent.formatted()))
             }
         }
 
@@ -221,7 +237,7 @@ struct ChatContextUsageIndicator: View {
             .frame(width: 13, height: 13)
 
             if let percent = self.usage.percentUsed {
-                Text("\(percent)%")
+                Text(verbatim: "\(percent.formatted())%")
                     .font(OpenClawChatTypography.captionSemiBold)
                     .monospacedDigit()
                     .foregroundStyle(.secondary)

@@ -65,7 +65,7 @@ struct AgentProDreamingDestination: View {
         if let headerLeadingAction {
             OpenClawAdaptiveHeaderRow(
                 title: "Dreaming",
-                subtitle: self.dreamingDetail,
+                subtitle: .localized(self.dreamingDetail),
                 titleFont: OpenClawType.title3SemiBold,
                 subtitleFont: OpenClawType.subheadMedium)
             {
@@ -253,7 +253,10 @@ struct AgentProDreamingDestination: View {
                             icon: "book.closed",
                             title: diary.found ? "Dream diary is empty" : "No dream diary yet",
                             detail: diary.found
-                                ? "\(diary.path) exists but has no readable content."
+                                ? .verbatim(String(
+                                    format: String(
+                                        localized: "%@ exists but has no readable content."),
+                                    diary.path))
                                 : "The gateway did not find DREAMS.md or dreams.md in the active agent workspace.")
                             .padding(14)
                     }
@@ -308,7 +311,11 @@ struct AgentProDreamingDestination: View {
                     .font(OpenClawType.subheadSemiBold)
                     .lineLimit(1)
                 Spacer(minLength: 8)
-                Text("\(day.entryCount) \(day.entryCount == 1 ? "entry" : "entries")")
+                Text(verbatim: day.entryCount == 1
+                    ? String(localized: "1 entry")
+                    : String(
+                        format: String(localized: "%@ entries"),
+                        day.entryCount.formatted()))
                     .font(OpenClawType.caption2SemiBold)
                     .foregroundStyle(OpenClawBrand.accent)
             }
@@ -341,7 +348,7 @@ struct AgentProDreamingDestination: View {
         emptyDetail: String) -> some View
     {
         VStack(alignment: .leading, spacing: 8) {
-            ProSectionHeader(title: title)
+            ProSectionHeader(title: .localized(title))
             ProCard(padding: 0) {
                 if entries.isEmpty {
                     self.emptyDetailRow(
@@ -382,7 +389,7 @@ struct AgentProDreamingDestination: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
-            Text("\(entry.totalSignalCount)")
+            Text(verbatim: entry.totalSignalCount.formatted())
                 .font(OpenClawType.caption2SemiBold)
                 .foregroundStyle(OpenClawBrand.accent)
                 .lineLimit(1)
