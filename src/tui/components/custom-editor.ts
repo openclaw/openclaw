@@ -31,7 +31,7 @@ function decodeAltGrPrintable(data: string): string | undefined {
   if (typeof baseLayoutKey !== "number" || baseLayoutKey === codepoint) {
     return undefined;
   }
-  if (!Number.isFinite(codepoint) || codepoint < 32) {
+  if (!Number.isFinite(codepoint) || codepoint < 32 || codepoint > 0x10ffff) {
     return undefined;
   }
 
