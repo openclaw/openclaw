@@ -269,7 +269,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: centralized remember-across-conversations effective-default resolver.
       // +4: gateway-backed harness question runner, claim/cancel helpers, and caller type.
       // Harvest: internal question runtime exports -2.
-      8157,
+      // +2: onModelDiagnosticEvent (diagnostic-runtime + compat mirror).
+      8159,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -309,7 +310,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: centralized remember-across-conversations effective-default resolver.
       // +3: gateway-backed harness question runner and claim/cancel helpers.
       // Harvest: internal question runtime callable -1.
-      4539,
+      // +2: onModelDiagnosticEvent (diagnostic-runtime + compat mirror).
+      4541,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
