@@ -57,6 +57,14 @@ export function filterMessagingToolMediaDuplicates(params: {
 
   let nextPayloads: ReplyPayload[] | undefined;
   for (const [index, payload] of payloads.entries()) {
+    // Delivery operations apply to the message created by this payload. Keep
+    // its content intact so dedupe cannot silently skip the operation.
+    if (hasEnabledDeliveryOperation(payload)) {
+      if (nextPayloads) {
+        nextPayloads.push(payload);
+      }
+      continue;
+    }
     const mediaUrl = payload.mediaUrl;
     const mediaUrls = payload.mediaUrls;
     const stripSingle = mediaUrl && sentSet.has(normalizeMediaForDedupe(mediaUrl));
@@ -85,10 +93,15 @@ export function filterMessagingToolMediaDuplicates(params: {
       continue;
     }
 
+    const nextMediaUrl = stripSingle ? undefined : mediaUrl;
+    const nextMediaUrls = filteredUrls?.length ? filteredUrls : undefined;
     const nextPayload = copyReplyPayloadMetadata(payload, {
       ...payload,
-      mediaUrl: stripSingle ? undefined : mediaUrl,
-      mediaUrls: filteredUrls?.length ? filteredUrls : undefined,
+      mediaUrl: nextMediaUrl,
+      mediaUrls: nextMediaUrls,
+      ...(payload.audioAsVoice === true && !nextMediaUrl && !nextMediaUrls
+        ? { audioAsVoice: undefined }
+        : {}),
     });
     if (!nextPayloads) {
       nextPayloads = payloads.slice(0, index);
@@ -97,6 +110,11 @@ export function filterMessagingToolMediaDuplicates(params: {
   }
 
   return nextPayloads ?? payloads;
+}
+
+function hasEnabledDeliveryOperation(payload: ReplyPayload): boolean {
+  const pin = payload.delivery?.pin;
+  return pin === true || (typeof pin === "object" && pin.enabled === true);
 }
 
 function normalizeMediaForDedupe(value: string): string {

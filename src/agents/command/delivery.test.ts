@@ -855,6 +855,76 @@ describe("normalizeAgentCommandReplyPayloads", () => {
     expect(deliverOutboundPayloadsMock).not.toHaveBeenCalled();
   });
 
+  it("preserves duplicate media needed for a delivery operation", async () => {
+    deliverOutboundPayloadsMock.mockResolvedValue([{ channel: "slack", messageId: "msg-1" }]);
+    const delivery = { pin: { enabled: true, required: true } };
+
+    const delivered = await deliverAgentCommandResult({
+      cfg: {} as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      opts: {
+        message: "completion handoff",
+        deliver: true,
+        replyChannel: "slack",
+        replyTo: "channel:C123",
+      } as AgentCommandOpts,
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      payloads: [{ mediaUrls: ["/tmp/generated-image.png"], delivery }] as never,
+      result: {
+        ...createResult(),
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            to: "channel:C123",
+            mediaUrls: ["/tmp/generated-image.png"],
+          },
+        ],
+      } as RunResult,
+    });
+
+    expect(delivered.deliverySucceeded).toBe(true);
+    expect(latestOutboundDeliveryArgs().payloads).toEqual([
+      expect.objectContaining({
+        mediaUrls: ["/tmp/generated-image.png"],
+        delivery,
+      }),
+    ]);
+  });
+
+  it("drops audioAsVoice when its media was already delivered", async () => {
+    const delivered = await deliverAgentCommandResult({
+      cfg: {} as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      opts: {
+        message: "completion handoff",
+        deliver: true,
+        replyChannel: "slack",
+        replyTo: "channel:C123",
+      } as AgentCommandOpts,
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      payloads: [{ mediaUrls: ["/tmp/voice.ogg"], audioAsVoice: true }],
+      result: {
+        ...createResult(),
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            to: "channel:C123",
+            mediaUrls: ["/tmp/voice.ogg"],
+          },
+        ],
+      } as RunResult,
+    });
+
+    expect(delivered.payloads).toEqual([]);
+    expect(deliverOutboundPayloadsMock).not.toHaveBeenCalled();
+  });
+
   it("dedupes delivered file media before normalization can add a failure warning", async () => {
     createReplyMediaPathNormalizerMock.mockImplementationOnce(
       (..._args: unknown[]) =>
