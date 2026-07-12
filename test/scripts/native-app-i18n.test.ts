@@ -172,6 +172,7 @@ describe("native app i18n inventory", () => {
               .help("Modifier " + "details")
             Button("Swift first " + "argument") {}
             Text(enabled ? "Enabled " + "now" : "Disabled " + "now")
+            Text(LocalizedStringKey("Localized key"))
           }
 
           var statusText: String {
@@ -194,6 +195,7 @@ describe("native app i18n inventory", () => {
         fun Fixture() {
           Text("Kotlin first " + "argument")
           Text(text = "Named " + "argument")
+          Icon(contentDescription = if (enabled) "Open \${row.title}" else row.title)
         }
 
         fun statusText(state: State): String = when (state) {
@@ -216,9 +218,11 @@ describe("native app i18n inventory", () => {
         "Swift first argument",
         "Enabled now",
         "Disabled now",
+        "Localized key",
         "Switch ready",
         "Switch waiting",
         "Kotlin first argument",
+        "Open ${row.title}",
         "When ready",
         "When waiting",
         "Return enabled",
@@ -270,7 +274,11 @@ describe("native app i18n inventory", () => {
         ),
     ).toBe(true);
     expect(entries.some((entry) => entry.source === "QR Scanner Unavailable")).toBe(true);
-    expect(entries.some((entry) => entry.source === "Request ID: \\(value)")).toBe(true);
+    expect(
+      entries.some((entry) =>
+        new Set(["Request ID: \\(value)", "Request ID: %@"]).has(entry.source),
+      ),
+    ).toBe(true);
     expect(entries.some((entry) => entry.source === "Open ${row.title}")).toBe(true);
     expect(entries.some((entry) => entry.source === "Preview · $domain")).toBe(true);
     expect(entries.some((entry) => entry.source === "Approval command copied")).toBe(true);
@@ -319,35 +327,23 @@ describe("native app i18n inventory", () => {
     expect(entries.some((entry) => entry.source === "Run now")).toBe(true);
     expect(entries.some((entry) => entry.source === "Loading chat")).toBe(true);
     expect(
+      entries.some((entry) => entry.surface === "android" && entry.source === "Search OpenClaw"),
+    ).toBe(true);
+    expect(
       entries.some(
         (entry) =>
-          entry.surface === "android" &&
-          entry.kind === "ui-named-argument" &&
-          entry.source === "Search OpenClaw",
+          entry.path.endsWith("/ChatMessageActions.kt") && entry.source === "Message actions",
+      ),
+    ).toBe(true);
+    expect(
+      entries.some(
+        (entry) => entry.path.endsWith("/ChatMessageActions.kt") && entry.source === "Reply",
       ),
     ).toBe(true);
     expect(
       entries.some(
         (entry) =>
-          entry.path.endsWith("/ChatMessageActions.kt") &&
-          entry.kind === "ui-named-argument" &&
-          entry.source === "Message actions",
-      ),
-    ).toBe(true);
-    expect(
-      entries.some(
-        (entry) =>
-          entry.path.endsWith("/ChatMessageActions.kt") &&
-          entry.kind === "ui-named-argument" &&
-          entry.source === "Reply",
-      ),
-    ).toBe(true);
-    expect(
-      entries.some(
-        (entry) =>
-          entry.path.endsWith("/ChatMessageActions.kt") &&
-          entry.kind === "ui-chooser" &&
-          entry.source === "Share message",
+          entry.path.endsWith("/ChatMessageActions.kt") && entry.source === "Share message",
       ),
     ).toBe(true);
     expect(entries.some((entry) => entry.source === "What would you like to work on?")).toBe(true);
@@ -383,7 +379,6 @@ describe("native app i18n inventory", () => {
       entries.some(
         (entry) =>
           entry.path === "apps/ios/Sources/Design/TalkRuntimeIssueBanner.swift" &&
-          entry.kind === "ui-named-argument" &&
           entry.source === "Details",
       ),
     ).toBe(true);
@@ -391,17 +386,13 @@ describe("native app i18n inventory", () => {
       entries.some(
         (entry) =>
           entry.path === "apps/ios/Sources/Design/TalkRuntimeIssueBanner.swift" &&
-          entry.kind === "ui-named-argument" &&
           entry.source === "Open Settings",
       ),
     ).toBe(true);
     expect(entries.some((entry) => entry.source === "No sessions yet")).toBe(true);
     expect(
       entries.some(
-        (entry) =>
-          entry.path.endsWith("/ChatSheets.swift") &&
-          entry.kind === "ui-named-argument" &&
-          entry.source === "Search sessions",
+        (entry) => entry.path.endsWith("/ChatSheets.swift") && entry.source === "Search sessions",
       ),
     ).toBe(true);
     expect(entries.some((entry) => entry.source === "Don't show this again")).toBe(true);

@@ -91,9 +91,9 @@ const NATIVE_SOURCE_READ_CONCURRENCY = 32;
 const APPLE_UI_MULTILINE_CALLS =
   /(?:Text|Label|Button|TextField|SecureField|Picker|Section|LabeledContent|Toggle|Menu|ShareLink|Link|TextEditor|ProgressView|Gauge|DisclosureGroup|ControlGroup|DatePicker|Stepper)\s*\(\s*"""([\s\S]*?)"""/gu;
 const APPLE_LOCALIZED_STRING_CALLS =
-  /\b(?:String\s*\(\s*localized:|LocalizedStringResource\s*\()\s*"((?:\\.|[^"\\])*)"/gu;
+  /\b(?:String\s*\(\s*localized:|LocalizedString(?:Key|Resource)\s*\()\s*"((?:\\.|[^"\\])*)"/gu;
 const APPLE_LOCALIZED_STRING_MULTILINE_CALLS =
-  /\b(?:String\s*\(\s*localized:|LocalizedStringResource\s*\()\s*"""([\s\S]*?)"""/gu;
+  /\b(?:String\s*\(\s*localized:|LocalizedString(?:Key|Resource)\s*\()\s*"""([\s\S]*?)"""/gu;
 const APPLE_CALL_START = /\b([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*/gu;
 const APPLE_MODIFIER_CALLS =
   /\.(?:navigationTitle|accessibilityLabel|accessibilityHint|help|alert|confirmationDialog)\s*\(\s*"((?:\\.|[^"\\])*)"/gu;
@@ -126,6 +126,8 @@ const ANDROID_BUILTIN_UI_CALLS = new Set([
   "Label",
   "LazyColumn",
   "LazyRow",
+  "nativeString",
+  "nativeStringResource",
   "OutlinedButton",
   "OutlinedTextField",
   "RadioButton",
@@ -775,13 +777,11 @@ function addConditionalBranchPair(
   }
   const secondStart = skipWhitespaceAndBrace(source, first.end + separatorMatch[0].length);
   const second = readAdjacentStringLiterals(surface, source, secondStart);
-  if (!second) {
-    return;
+  const branches = [{ offset: firstStart, value: first.value }];
+  if (second) {
+    branches.push({ offset: secondStart, value: second.value });
   }
-  for (const branch of [
-    { offset: firstStart, value: first.value },
-    { offset: secondStart, value: second.value },
-  ]) {
+  for (const branch of branches) {
     addCandidate(
       entries,
       surface,
