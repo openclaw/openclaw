@@ -259,6 +259,14 @@ describe("parseLineDirectives", () => {
           .templateMessage,
       ).toMatchObject({ type: "buttons" });
     });
+
+    it("keeps the rest of the reply when a blank directive is skipped", () => {
+      // The invalid template would 400 and drop the whole message, including any text
+      // sent alongside it; skipping the template must leave that text intact.
+      const result = parseLineDirectives({ text: "Please decide: [[confirm:  | Yes | No]]" });
+      expect(getLineData(result).templateMessage).toBeUndefined();
+      expect(result.text).toBe("Please decide:");
+    });
   });
 
   describe("media_player", () => {
