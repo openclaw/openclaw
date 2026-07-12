@@ -1,9 +1,6 @@
 // Searxng helper module supports config behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  normalizeResolvedSecretInputString,
-  normalizeSecretInput,
-} from "openclaw/plugin-sdk/secret-input";
+import { normalizeSecretInput, resolveSecretInputString } from "openclaw/plugin-sdk/secret-input";
 
 type SearxngPluginConfig = {
   webSearch?: {
@@ -12,30 +9,6 @@ type SearxngPluginConfig = {
     language?: string;
   };
 };
-
-function normalizeConfiguredString(value: unknown, path: string): string | undefined {
-  try {
-    return normalizeSecretInput(
-      normalizeResolvedSecretInputString({
-        value,
-        path,
-      }),
-    );
-  } catch {
-    return undefined;
-  }
-}
-
-function readInlineEnvSecretRefValue(value: unknown, env: NodeJS.ProcessEnv): string | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const record = value as { source?: unknown; id?: unknown };
-  if (record.source !== "env" || typeof record.id !== "string") {
-    return undefined;
-  }
-  return normalizeSecretInput(env[record.id]);
-}
 
 function normalizeTrimmedString(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -47,6 +20,37 @@ function normalizeTrimmedString(value: unknown): string | undefined {
 
 function normalizeBaseUrl(value: string | undefined): string | undefined {
   return value?.replace(/\/+$/u, "") || undefined;
+}
+
+type ConfiguredBaseUrlResolution =
+  | { status: "available"; value: string }
+  | { status: "missing" }
+  | { status: "blocked" };
+
+function resolveConfiguredBaseUrl(
+  value: unknown,
+  path: string,
+  config: OpenClawConfig | undefined,
+  env: NodeJS.ProcessEnv,
+): ConfiguredBaseUrlResolution {
+  const resolved = resolveSecretInputString({
+    value,
+    path,
+    defaults: config?.secrets?.defaults,
+    mode: "inspect",
+  });
+  if (resolved.status === "available") {
+    const normalized = normalizeBaseUrl(normalizeSecretInput(resolved.value));
+    return normalized ? { status: "available", value: normalized } : { status: "missing" };
+  }
+  if (resolved.status === "missing") {
+    return { status: "missing" };
+  }
+  if (resolved.ref.source !== "env") {
+    return { status: "blocked" };
+  }
+  const normalized = normalizeBaseUrl(normalizeSecretInput(env[resolved.ref.id]));
+  return normalized ? { status: "available", value: normalized } : { status: "blocked" };
 }
 
 function resolveSearxngWebSearchConfig(
@@ -65,16 +69,19 @@ export function resolveSearxngBaseUrl(
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
   const webSearch = resolveSearxngWebSearchConfig(config);
-  return (
-    normalizeBaseUrl(
-      normalizeConfiguredString(
-        webSearch?.baseUrl,
-        "plugins.entries.searxng.config.webSearch.baseUrl",
-      ),
-    ) ??
-    normalizeBaseUrl(readInlineEnvSecretRefValue(webSearch?.baseUrl, env)) ??
-    normalizeBaseUrl(normalizeSecretInput(env.SEARXNG_BASE_URL))
+  const configured = resolveConfiguredBaseUrl(
+    webSearch?.baseUrl,
+    "plugins.entries.searxng.config.webSearch.baseUrl",
+    config,
+    env,
   );
+  if (configured.status === "available") {
+    return configured.value;
+  }
+  if (configured.status === "blocked") {
+    return undefined;
+  }
+  return normalizeBaseUrl(normalizeSecretInput(env.SEARXNG_BASE_URL));
 }
 
 export function resolveSearxngCategories(config?: OpenClawConfig): string | undefined {
