@@ -25,6 +25,11 @@ import {
   type LobsterLogoVisitDetail,
 } from "./lobster-pet.ts";
 
+// Keep the attention widget inert: it fires its own health RPCs (cron.list,
+// models.authStatus) on connect, which would interleave with the nth-call
+// assertions on the shared mocked client below. It has its own test file.
+vi.mock("./sidebar-attention.ts", () => ({}));
+
 const PROVIDER_ELEMENT_NAME = "test-app-sidebar-context-provider";
 
 class AppSidebarContextProvider extends LitElement {
