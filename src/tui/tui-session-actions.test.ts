@@ -688,6 +688,70 @@ describe("tui session actions", () => {
     expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
   });
 
+  it("keeps the newer session when an earlier switch's history resolves last", async () => {
+    let resolveA: ((value: unknown) => void) | undefined;
+    let resolveB: ((value: unknown) => void) | undefined;
+    const loadHistory = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveA = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveB = resolve;
+          }),
+      );
+    const addUser = vi.fn();
+    const chatLog = {
+      addSystem: vi.fn(),
+      clearAll: vi.fn(),
+      clearPendingUsers: vi.fn(),
+      addUser,
+      finalizeAssistant: vi.fn(),
+      reconcilePendingUsers: vi.fn().mockReturnValue([]),
+      restorePendingUsers: vi.fn(),
+      updateAssistant: vi.fn(),
+      startTool: vi.fn(),
+    } as unknown as import("./components/chat-log.js").ChatLog;
+    const state = createBaseState({ currentSessionKey: "agent:main:home" });
+    const setActivityStatus = vi.fn();
+
+    const { setSession } = createTestSessionActions({
+      client: { listSessions: vi.fn(), loadHistory } as unknown as TuiBackend,
+      chatLog,
+      state,
+      setActivityStatus,
+    });
+
+    const firstSwitch = setSession("agent:main:A");
+    const secondSwitch = setSession("agent:main:B");
+
+    resolveB?.({
+      sessionId: "session-b",
+      sessionInfo: { key: "agent:main:B", sessionId: "session-b", updatedAt: 20 },
+      messages: [{ role: "user", content: "message from B" }],
+    });
+    resolveA?.({
+      sessionId: "session-a",
+      sessionInfo: { key: "agent:main:A", sessionId: "session-a", updatedAt: 10 },
+      messages: [{ role: "user", content: "message from A" }],
+      inFlightRun: { runId: "run-a", text: "stale A run" },
+    });
+
+    await Promise.all([firstSwitch, secondSwitch]);
+
+    expect(state.currentSessionKey).toBe("agent:main:B");
+    expect(state.currentSessionId).toBe("session-b");
+    expect(state.activeChatRunId).toBeNull();
+    const renderedUsers = addUser.mock.calls.map((call) => call[0]);
+    expect(renderedUsers).toContain("message from B");
+    expect(renderedUsers).not.toContain("message from A");
+  });
+
   it("applies default model info when the current session has no persisted entry yet", async () => {
     const listSessions = vi.fn().mockResolvedValue({
       ts: Date.now(),

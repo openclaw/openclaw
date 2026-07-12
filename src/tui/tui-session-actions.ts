@@ -132,6 +132,7 @@ export function createSessionActions(context: SessionActionContext) {
   } = context;
   let refreshSessionInfoInFlight: Promise<void> | null = null;
   let refreshSessionInfoQueued = false;
+  let sessionSwitchGeneration = 0;
   let lastSessionDefaults: SessionInfoDefaults | null = null;
 
   const applyAgentsResult = (result: TuiAgentsList) => {
@@ -435,12 +436,16 @@ export function createSessionActions(context: SessionActionContext) {
   };
 
   const loadHistory = async (): Promise<TuiHistoryLoadResult> => {
+    const generation = sessionSwitchGeneration;
     try {
       const history = await client.loadHistory({
         sessionKey: state.currentSessionKey,
         ...(state.currentSessionKey === "global" ? { agentId: state.currentAgentId } : {}),
         limit: opts.historyLimit ?? 200,
       });
+      if (generation !== sessionSwitchGeneration) {
+        return { loaded: false };
+      }
       const record = history as {
         messages?: unknown[];
         sessionId?: string;
@@ -578,6 +583,7 @@ export function createSessionActions(context: SessionActionContext) {
   };
 
   const setSession = async (rawKey: string) => {
+    sessionSwitchGeneration += 1;
     const nextKey = resolveSessionKey(rawKey);
     updateAgentFromSessionKey(nextKey);
     state.currentSessionKey = nextKey;
