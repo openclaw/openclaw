@@ -18,8 +18,7 @@ import { isJsonObject } from "./protocol.js";
 import { createIsolatedCodexAppServerClient } from "./shared-client.js";
 
 const LIVE =
-  process.env.OPENCLAW_LIVE_TEST === "1" &&
-  process.env.OPENCLAW_LIVE_CODEX_NATIVE_SUBAGENT === "1";
+  process.env.OPENCLAW_LIVE_TEST === "1" && process.env.OPENCLAW_LIVE_CODEX_NATIVE_SUBAGENT === "1";
 const describeLive = LIVE ? describe : describe.skip;
 
 type RecordedDelivery = {
@@ -54,11 +53,7 @@ function createDeliveryRecorder(taskRecords: AgentHarnessTaskRecord[] = []) {
   };
 }
 
-async function waitFor<T>(
-  probe: () => T | undefined,
-  timeoutMs: number,
-  what: string,
-): Promise<T> {
+async function waitFor<T>(probe: () => T | undefined, timeoutMs: number, what: string): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const value = probe();
