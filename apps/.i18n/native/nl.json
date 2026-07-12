@@ -9104,9 +9104,9 @@
       "translated": "De gateway heeft totalen geretourneerd zonder kostenrijen voor dagelijkse sessies."
     },
     {
-      "id": "native.apple.cd9798a4a790bfd3",
-      "source": "^[\\(count) token](inflect: true)",
-      "translated": "^[\\(count) token](inflect: true)"
+      "id": "native.apple.40801447cf1a7747",
+      "source": "%@ tokens",
+      "translated": "%@ tokens"
     },
     {
       "id": "native.apple.fb60c35df83a0768",
@@ -13699,6 +13699,36 @@
       "translated": "Aangepaste headers"
     },
     {
+      "id": "native.apple.e5a601c8fe47e9ed",
+      "source": "Add-Only",
+      "translated": "Alleen toevoegen"
+    },
+    {
+      "id": "native.apple.32aabe66f916a809",
+      "source": "Allowed",
+      "translated": "Toegestaan"
+    },
+    {
+      "id": "native.apple.94208c3068dae5b9",
+      "source": "Limited",
+      "translated": "Beperkt"
+    },
+    {
+      "id": "native.apple.92223852c90e286d",
+      "source": "Not Allowed",
+      "translated": "Niet toegestaan"
+    },
+    {
+      "id": "native.apple.aa6ff8becab99fdc",
+      "source": "Not Set",
+      "translated": "Niet ingesteld"
+    },
+    {
+      "id": "native.apple.03e2f7265119d263",
+      "source": "Unknown",
+      "translated": "Onbekend"
+    },
+    {
       "id": "native.apple.4dac301c7e0c921c",
       "source": "Contacts",
       "translated": "Contacten"
@@ -13749,11 +13779,6 @@
       "translated": "Privacy en toegang"
     },
     {
-      "id": "native.apple.651cc89381dd69c0",
-      "source": "Limited",
-      "translated": "Beperkt"
-    },
-    {
       "id": "native.apple.ab998419291361da",
       "source": "Read photos you select for the assistant.",
       "translated": "Lees foto’s die je voor de assistent selecteert."
@@ -13764,29 +13789,29 @@
       "translated": "Lees recente foto’s voor de assistent."
     },
     {
-      "id": "native.apple.22b335bddf72e453",
-      "source": "Allowed",
-      "translated": "Toegestaan"
+      "id": "native.apple.ac3ff8e4c6df7a2a",
+      "source": "Manage Access",
+      "translated": "Toegang beheren"
     },
     {
-      "id": "native.apple.d2f5de202e0426f8",
-      "source": "Add-Only",
-      "translated": "Alleen toevoegen"
+      "id": "native.apple.c557c95fa2789089",
+      "source": "Request Full Access",
+      "translated": "Volledige toegang aanvragen"
     },
     {
-      "id": "native.apple.62f71c671e344fef",
-      "source": "Not Set",
-      "translated": "Niet ingesteld"
+      "id": "native.apple.4e50e2ab4c869464",
+      "source": "Request Access",
+      "translated": "Toegang aanvragen"
     },
     {
-      "id": "native.apple.1f17d59d38e1fe83",
-      "source": "Not Allowed",
-      "translated": "Niet toegestaan"
+      "id": "native.apple.a9f30d4e86060dca",
+      "source": "Upgrade to Full Access",
+      "translated": "Upgraden naar volledige toegang"
     },
     {
-      "id": "native.apple.6b95517f513d9b7c",
-      "source": "Unknown",
-      "translated": "Onbekend"
+      "id": "native.apple.3cb9ed2ae352f95c",
+      "source": "Open Settings",
+      "translated": "Instellingen openen"
     },
     {
       "id": "native.apple.d9f9a74e25431256",
@@ -14014,11 +14039,6 @@
       "translated": "Gateway niet verbonden"
     },
     {
-      "id": "native.apple.0d8f68af6ec45f08",
-      "source": "Talk failed: %@",
-      "translated": "Talk mislukt: %@"
-    },
-    {
       "id": "native.apple.96c7457cafa7dd47",
       "source": "Aborted",
       "translated": "Afgebroken"
@@ -14027,6 +14047,11 @@
       "id": "native.apple.7c027ae095940485",
       "source": "Chat error",
       "translated": "Chatfout"
+    },
+    {
+      "id": "native.apple.0d8f68af6ec45f08",
+      "source": "Talk failed: %@",
+      "translated": "Talk mislukt: %@"
     },
     {
       "id": "native.apple.542431f49a492a0b",

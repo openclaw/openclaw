@@ -9104,9 +9104,9 @@
       "translated": "Gateway가 일일 세션 비용 행 없이 합계를 반환했습니다."
     },
     {
-      "id": "native.apple.cd9798a4a790bfd3",
-      "source": "^[\\(count) token](inflect: true)",
-      "translated": "^[\\(count)개 토큰](inflect: true)"
+      "id": "native.apple.40801447cf1a7747",
+      "source": "%@ tokens",
+      "translated": "%@개 토큰"
     },
     {
       "id": "native.apple.fb60c35df83a0768",
@@ -13699,6 +13699,36 @@
       "translated": "사용자 지정 헤더"
     },
     {
+      "id": "native.apple.e5a601c8fe47e9ed",
+      "source": "Add-Only",
+      "translated": "추가 전용"
+    },
+    {
+      "id": "native.apple.32aabe66f916a809",
+      "source": "Allowed",
+      "translated": "허용됨"
+    },
+    {
+      "id": "native.apple.94208c3068dae5b9",
+      "source": "Limited",
+      "translated": "제한됨"
+    },
+    {
+      "id": "native.apple.92223852c90e286d",
+      "source": "Not Allowed",
+      "translated": "허용되지 않음"
+    },
+    {
+      "id": "native.apple.aa6ff8becab99fdc",
+      "source": "Not Set",
+      "translated": "설정되지 않음"
+    },
+    {
+      "id": "native.apple.03e2f7265119d263",
+      "source": "Unknown",
+      "translated": "알 수 없음"
+    },
+    {
       "id": "native.apple.4dac301c7e0c921c",
       "source": "Contacts",
       "translated": "연락처"
@@ -13749,11 +13779,6 @@
       "translated": "개인정보 및 접근"
     },
     {
-      "id": "native.apple.651cc89381dd69c0",
-      "source": "Limited",
-      "translated": "제한됨"
-    },
-    {
       "id": "native.apple.ab998419291361da",
       "source": "Read photos you select for the assistant.",
       "translated": "어시스턴트가 선택한 사진을 읽도록 합니다."
@@ -13764,29 +13789,29 @@
       "translated": "어시스턴트가 최근 사진을 읽도록 합니다."
     },
     {
-      "id": "native.apple.22b335bddf72e453",
-      "source": "Allowed",
-      "translated": "허용됨"
+      "id": "native.apple.ac3ff8e4c6df7a2a",
+      "source": "Manage Access",
+      "translated": "접근 권한 관리"
     },
     {
-      "id": "native.apple.d2f5de202e0426f8",
-      "source": "Add-Only",
-      "translated": "추가 전용"
+      "id": "native.apple.c557c95fa2789089",
+      "source": "Request Full Access",
+      "translated": "전체 접근 권한 요청"
     },
     {
-      "id": "native.apple.62f71c671e344fef",
-      "source": "Not Set",
-      "translated": "설정되지 않음"
+      "id": "native.apple.4e50e2ab4c869464",
+      "source": "Request Access",
+      "translated": "접근 권한 요청"
     },
     {
-      "id": "native.apple.1f17d59d38e1fe83",
-      "source": "Not Allowed",
-      "translated": "허용되지 않음"
+      "id": "native.apple.a9f30d4e86060dca",
+      "source": "Upgrade to Full Access",
+      "translated": "전체 접근 권한으로 업그레이드"
     },
     {
-      "id": "native.apple.6b95517f513d9b7c",
-      "source": "Unknown",
-      "translated": "알 수 없음"
+      "id": "native.apple.3cb9ed2ae352f95c",
+      "source": "Open Settings",
+      "translated": "설정 열기"
     },
     {
       "id": "native.apple.d9f9a74e25431256",
@@ -14014,11 +14039,6 @@
       "translated": "Gateway가 연결되지 않음"
     },
     {
-      "id": "native.apple.0d8f68af6ec45f08",
-      "source": "Talk failed: %@",
-      "translated": "Talk 실패: %@"
-    },
-    {
       "id": "native.apple.96c7457cafa7dd47",
       "source": "Aborted",
       "translated": "중단됨"
@@ -14027,6 +14047,11 @@
       "id": "native.apple.7c027ae095940485",
       "source": "Chat error",
       "translated": "채팅 오류"
+    },
+    {
+      "id": "native.apple.0d8f68af6ec45f08",
+      "source": "Talk failed: %@",
+      "translated": "Talk 실패: %@"
     },
     {
       "id": "native.apple.542431f49a492a0b",

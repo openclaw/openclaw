@@ -14563,11 +14563,11 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 85,
+      "line": 86,
       "path": "apps/ios/Sources/Design/AgentProTab+Usage.swift",
-      "source": "^[\\(count) token](inflect: true)",
+      "source": "%@ tokens",
       "surface": "apple",
-      "id": "native.apple.cd9798a4a790bfd3"
+      "id": "native.apple.40801447cf1a7747"
     },
     {
       "kind": "ui-localized-call",
@@ -20715,7 +20715,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 8301,
+      "line": 8315,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Approval",
       "surface": "apple",
@@ -20723,7 +20723,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 8301,
+      "line": 8315,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "This approval was already",
       "surface": "apple",
@@ -20731,7 +20731,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 8307,
+      "line": 8321,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "This approval was already set to Always Allow.",
       "surface": "apple",
@@ -20739,7 +20739,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 8308,
+      "line": 8322,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Approval set to Always Allow.",
       "surface": "apple",
@@ -20747,7 +20747,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 9612,
+      "line": 9626,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "\\(urlText.prefix(500))…",
       "surface": "apple",
@@ -21914,8 +21914,56 @@
       "id": "native.apple.19fba912c31023b5"
     },
     {
-      "kind": "ui-named-argument",
+      "kind": "ui-localized-call",
+      "line": 17,
+      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
+      "source": "Add-Only",
+      "surface": "apple",
+      "id": "native.apple.e5a601c8fe47e9ed"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 18,
+      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
+      "source": "Allowed",
+      "surface": "apple",
+      "id": "native.apple.32aabe66f916a809"
+    },
+    {
+      "kind": "ui-localized-call",
       "line": 19,
+      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
+      "source": "Limited",
+      "surface": "apple",
+      "id": "native.apple.94208c3068dae5b9"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 20,
+      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
+      "source": "Not Allowed",
+      "surface": "apple",
+      "id": "native.apple.92223852c90e286d"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 21,
+      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
+      "source": "Not Set",
+      "surface": "apple",
+      "id": "native.apple.aa6ff8becab99fdc"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 22,
+      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
+      "source": "Unknown",
+      "surface": "apple",
+      "id": "native.apple.03e2f7265119d263"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 51,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Contacts",
       "surface": "apple",
@@ -21923,7 +21971,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 22,
+      "line": 54,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Search and add contacts from the assistant.",
       "surface": "apple",
@@ -21931,7 +21979,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 27,
+      "line": 60,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Photos",
       "surface": "apple",
@@ -21939,7 +21987,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 35,
+      "line": 69,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Calendar (Add Events)",
       "surface": "apple",
@@ -21947,7 +21995,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 38,
+      "line": 72,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Add events with least privilege.",
       "surface": "apple",
@@ -21955,7 +22003,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 43,
+      "line": 78,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Calendar (View Events)",
       "surface": "apple",
@@ -21963,7 +22011,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 46,
+      "line": 81,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "List and read calendar events.",
       "surface": "apple",
@@ -21971,7 +22019,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 51,
+      "line": 87,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Reminders",
       "surface": "apple",
@@ -21979,7 +22027,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 54,
+      "line": 90,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "List, add, and complete reminders.",
       "surface": "apple",
@@ -21987,75 +22035,67 @@
     },
     {
       "kind": "ui-call",
-      "line": 58,
+      "line": 94,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Privacy & Access",
       "surface": "apple",
       "id": "native.apple.bb572eab08269809"
     },
     {
-      "kind": "conditional-branch",
-      "line": 143,
-      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
-      "source": "Limited",
-      "surface": "apple",
-      "id": "native.apple.651cc89381dd69c0"
-    },
-    {
-      "kind": "conditional-branch",
-      "line": 155,
+      "kind": "ui-localized-call",
+      "line": 185,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Read photos you select for the assistant.",
       "surface": "apple",
       "id": "native.apple.ab998419291361da"
     },
     {
-      "kind": "conditional-branch",
-      "line": 156,
+      "kind": "ui-localized-call",
+      "line": 186,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Read recent photos for the assistant.",
       "surface": "apple",
       "id": "native.apple.e8c07f7c48d086f9"
     },
     {
-      "kind": "conditional-branch",
-      "line": 303,
+      "kind": "ui-localized-call",
+      "line": 194,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
-      "source": "Allowed",
+      "source": "Manage Access",
       "surface": "apple",
-      "id": "native.apple.22b335bddf72e453"
+      "id": "native.apple.ac3ff8e4c6df7a2a"
     },
     {
-      "kind": "conditional-branch",
-      "line": 305,
+      "kind": "ui-localized-call",
+      "line": 301,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
-      "source": "Add-Only",
+      "source": "Request Full Access",
       "surface": "apple",
-      "id": "native.apple.d2f5de202e0426f8"
+      "id": "native.apple.c557c95fa2789089"
     },
     {
-      "kind": "conditional-branch",
-      "line": 307,
+      "kind": "ui-localized-call",
+      "line": 348,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
-      "source": "Not Set",
+      "source": "Request Access",
       "surface": "apple",
-      "id": "native.apple.62f71c671e344fef"
+      "id": "native.apple.4e50e2ab4c869464"
     },
     {
-      "kind": "conditional-branch",
-      "line": 309,
+      "kind": "ui-localized-call",
+      "line": 350,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
-      "source": "Not Allowed",
+      "source": "Upgrade to Full Access",
       "surface": "apple",
-      "id": "native.apple.1f17d59d38e1fe83"
+      "id": "native.apple.a9f30d4e86060dca"
     },
     {
-      "kind": "conditional-branch",
-      "line": 311,
+      "kind": "ui-localized-call",
+      "line": 352,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
-      "source": "Unknown",
+      "source": "Open Settings",
       "surface": "apple",
-      "id": "native.apple.6b95517f513d9b7c"
+      "id": "native.apple.3cb9ed2ae352f95c"
     },
     {
       "kind": "ui-call",
@@ -22323,7 +22363,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 451,
+      "line": 467,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Reconnecting",
       "surface": "apple",
@@ -22331,7 +22371,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 560,
+      "line": 576,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Gateway relay ready",
       "surface": "apple",
@@ -22339,7 +22379,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 562,
+      "line": 578,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Realtime Voice, Gateway relay ready",
       "surface": "apple",
@@ -22347,7 +22387,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 564,
+      "line": 580,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Listening starts from this phone",
       "surface": "apple",
@@ -22355,7 +22395,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 795,
+      "line": 817,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Off",
       "surface": "apple",
@@ -22363,7 +22403,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 972,
+      "line": 997,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Requesting permissions…",
       "surface": "apple",
@@ -22371,7 +22411,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 977,
+      "line": 1005,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Microphone permission denied",
       "surface": "apple",
@@ -22379,7 +22419,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 987,
+      "line": 1015,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Speech recognition",
       "surface": "apple",
@@ -22387,7 +22427,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1021,
+      "line": 1048,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Start failed: %@",
       "surface": "apple",
@@ -22395,7 +22435,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1333,
+      "line": 1363,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Offline",
       "surface": "apple",
@@ -22403,7 +22443,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1531,
+      "line": 1562,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Speech error: %@",
       "surface": "apple",
@@ -22411,31 +22451,23 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1836,
+      "line": 1871,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Gateway not connected",
       "surface": "apple",
       "id": "native.apple.83bf170cb7e21d39"
     },
     {
-      "kind": "ui-localized-call",
-      "line": 1908,
-      "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
-      "source": "Talk failed: %@",
-      "surface": "apple",
-      "id": "native.apple.0d8f68af6ec45f08"
-    },
-    {
-      "kind": "ui-localized-call",
-      "line": 1967,
+      "kind": "conditional-branch",
+      "line": 1915,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Aborted",
       "surface": "apple",
       "id": "native.apple.96c7457cafa7dd47"
     },
     {
-      "kind": "ui-localized-call",
-      "line": 1975,
+      "kind": "conditional-branch",
+      "line": 1915,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Chat error",
       "surface": "apple",
@@ -22443,7 +22475,15 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 2003,
+      "line": 1943,
+      "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
+      "source": "Talk failed: %@",
+      "surface": "apple",
+      "id": "native.apple.0d8f68af6ec45f08"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 2047,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "No reply",
       "surface": "apple",
@@ -22451,7 +22491,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 2092,
+      "line": 2139,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Paused",
       "surface": "apple",
@@ -22459,7 +22499,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 2510,
+      "line": 2557,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Generating voice…",
       "surface": "apple",
@@ -22467,7 +22507,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 2647,
+      "line": 2695,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Speak failed: %@",
       "surface": "apple",
@@ -22475,7 +22515,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 2743,
+      "line": 2794,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Speaking (System)…",
       "surface": "apple",
@@ -22483,7 +22523,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3616,
+      "line": 3667,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "iOS System Voice",
       "surface": "apple",
@@ -22491,7 +22531,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3618,
+      "line": 3669,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Realtime Voice",
       "surface": "apple",
@@ -22499,7 +22539,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3622,
+      "line": 3673,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Gateway Default",
       "surface": "apple",
@@ -22507,7 +22547,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3664,
+      "line": 3715,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Listening (Realtime)",
       "surface": "apple",
@@ -22515,7 +22555,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3666,
+      "line": 3717,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Thinking",
       "surface": "apple",
@@ -22523,7 +22563,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3668,
+      "line": 3719,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Thinking…",
       "surface": "apple",
@@ -22531,7 +22571,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3670,
+      "line": 3721,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Speaking",
       "surface": "apple",
@@ -22539,7 +22579,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3672,
+      "line": 3723,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Speaking…",
       "surface": "apple",
@@ -22547,7 +22587,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3674,
+      "line": 3725,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Connecting realtime…",
       "surface": "apple",
@@ -22555,7 +22595,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3676,
+      "line": 3727,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Waiting for realtime…",
       "surface": "apple",
@@ -22563,7 +22603,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3678,
+      "line": 3729,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Ready",
       "surface": "apple",
@@ -22571,7 +22611,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3717,
+      "line": 3768,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Listening",
       "surface": "apple",
@@ -22579,7 +22619,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3983,
+      "line": 4034,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Gateway Relay",
       "surface": "apple",
@@ -22587,7 +22627,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3985,
+      "line": 4036,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Native WebRTC",
       "surface": "apple",
@@ -22595,7 +22635,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3986,
+      "line": 4037,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Native",
       "surface": "apple",
@@ -22603,7 +22643,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4047,
+      "line": 4098,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Gateway permission required",
       "surface": "apple",
@@ -22611,7 +22651,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4070,
+      "line": 4121,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Not loaded",
       "surface": "apple",
@@ -22619,7 +22659,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4088,
+      "line": 4139,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Approval requested",
       "surface": "apple",
@@ -22627,7 +22667,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4533,
+      "line": 4584,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Listening (PTT)",
       "surface": "apple",

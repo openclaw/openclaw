@@ -4377,6 +4377,38 @@
       ]
     },
     {
+      "locale": "es",
+      "source": "Open Settings",
+      "translations": [
+        "Abrir Ajustes",
+        "Abrir configuración"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "Open Settings",
+      "translations": [
+        "Apri impostazioni",
+        "Apri Impostazioni"
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "Open Settings",
+      "translations": [
+        "Abrir Ajustes",
+        "Abrir configurações"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Open Settings",
+      "translations": [
+        "Mở cài đặt",
+        "Mở Cài đặt"
+      ]
+    },
+    {
       "locale": "ar",
       "source": "OpenClaw cannot determine the current iOS location permission.",
       "translations": [
@@ -6627,14 +6659,6 @@
       "translations": [
         "ناشناخته",
         "نامشخص"
-      ]
-    },
-    {
-      "locale": "id",
-      "source": "Unknown",
-      "translations": [
-        "Tidak diketahui",
-        "Tidak Diketahui"
       ]
     },
     {

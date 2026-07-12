@@ -3945,6 +3945,142 @@
         }
       }
     },
+    "%@ tokens": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ tokens"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ 个令牌"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ 個權杖"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ tokens"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ Token"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ tokens"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ トークン"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@개 토큰"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ jetons"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ टोकन"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ من الرموز"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ token"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ jeton"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ токенів"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ token"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ tokenów"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ โทเค็น"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ token"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ tokens"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ توکن"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ токенов"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ tokens"
+          }
+        }
+      }
+    },
     "%@ tokens in %@d": {
       "localizations": {
         "en": {
@@ -7341,142 +7477,6 @@
           "stringUnit": {
             "state": "new",
             "value": "^[%lld session](inflect: true)"
-          }
-        }
-      }
-    },
-    "^[%lld token](inflect: true)": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "^[%lld token](inflect: true)"
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "new",
-            "value": "^[%lld 个令牌](inflect: true)"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "new",
-            "value": "^[%lld 個詞元](inflect: true)"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "new",
-            "value": "^[%lld token](inflect: true)"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "new",
-            "value": "^[%lld Token](inflect: true)"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "new",
-            "value": "^[%lld token](inflect: true)"
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "new",
-            "value": "^[%lldトークン](inflect: true)"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "new",
-            "value": "^[%lld개 토큰](inflect: true)"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "new",
-            "value": "^[%lld jeton](inflect: true)"
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "new",
-            "value": "^[%lld टोकन](inflect: true)"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "new",
-            "value": "^[%lld رمزًا](inflect: true)"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "new",
-            "value": "^[%lld token](inflect: true)"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "new",
-            "value": "^[%lld belirteç](inflect: true)"
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "new",
-            "value": "^[%lld токен](inflect: true)"
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "new",
-            "value": "^[%lld token](inflect: true)"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "new",
-            "value": "^[%lld token](inflect: true)"
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "new",
-            "value": "^[%lld โทเค็น](inflect: true)"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "new",
-            "value": "^[%lld token](inflect: true)"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "new",
-            "value": "^[%lld token](inflect: true)"
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "new",
-            "value": "^[%lld توکن](inflect: true)"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "new",
-            "value": "^[%lld токен](inflect: true)"
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "new",
-            "value": "^[%lld token](inflect: true)"
           }
         }
       }
@@ -80241,6 +80241,142 @@
         }
       }
     },
+    "Manage Access": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Manage Access"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "new",
+            "value": "管理访问权限"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "new",
+            "value": "管理存取權"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gerenciar acesso"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Zugriff verwalten"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gestionar acceso"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "new",
+            "value": "アクセスを管理"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "접근 권한 관리"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gérer l’accès"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "ऐक्सेस प्रबंधित करें"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "إدارة الوصول"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gestisci accesso"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Erişimi Yönet"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Керувати доступом"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Kelola Akses"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Zarządzaj dostępem"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "จัดการสิทธิ์การเข้าถึง"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Quản lý quyền truy cập"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Toegang beheren"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "new",
+            "value": "مدیریت دسترسی"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Управление доступом"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Hantera åtkomst"
+          }
+        }
+      }
+    },
     "Managed cron is installed.": {
       "localizations": {
         "en": {
@@ -99576,7 +99712,7 @@
         "pt-BR": {
           "stringUnit": {
             "state": "new",
-            "value": "Abrir configurações"
+            "value": "Abrir Ajustes"
           }
         },
         "de": {
@@ -99588,7 +99724,7 @@
         "es": {
           "stringUnit": {
             "state": "new",
-            "value": "Abrir configuración"
+            "value": "Abrir Ajustes"
           }
         },
         "ja-JP": {
@@ -117913,6 +118049,142 @@
         }
       }
     },
+    "Request Access": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Request Access"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "new",
+            "value": "请求访问权限"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "new",
+            "value": "要求存取權"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Solicitar acesso"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Zugriff anfordern"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Solicitar acceso"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "new",
+            "value": "アクセスをリクエスト"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "접근 권한 요청"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Demander l’accès"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "ऐक्सेस का अनुरोध करें"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "طلب الوصول"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Richiedi accesso"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Erişim İste"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Запросити доступ"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Minta Akses"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Poproś o dostęp"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "ขอสิทธิ์การเข้าถึง"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Yêu cầu quyền truy cập"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Toegang aanvragen"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "new",
+            "value": "درخواست دسترسی"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Запросить доступ"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Begär åtkomst"
+          }
+        }
+      }
+    },
     "Request Again": {
       "localizations": {
         "en": {
@@ -118181,6 +118453,142 @@
           "stringUnit": {
             "state": "new",
             "value": "Begäran misslyckades"
+          }
+        }
+      }
+    },
+    "Request Full Access": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Request Full Access"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "new",
+            "value": "请求完全访问权限"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "new",
+            "value": "要求完整存取權"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Solicitar acesso total"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Vollzugriff anfordern"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Solicitar acceso completo"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "new",
+            "value": "フルアクセスをリクエスト"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "전체 접근 권한 요청"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Demander l’accès complet"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "पूर्ण ऐक्सेस का अनुरोध करें"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "طلب الوصول الكامل"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Richiedi accesso completo"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Tam Erişim İste"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Запросити повний доступ"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Minta Akses Penuh"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Poproś o pełny dostęp"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "ขอสิทธิ์การเข้าถึงแบบเต็ม"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Yêu cầu quyền truy cập đầy đủ"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Volledige toegang aanvragen"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "new",
+            "value": "درخواست دسترسی کامل"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Запросить полный доступ"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Begär fullständig åtkomst"
           }
         }
       }
@@ -151760,7 +152168,7 @@
         "fa": {
           "stringUnit": {
             "state": "new",
-            "value": "نامشخص"
+            "value": "ناشناخته"
           }
         },
         "ru": {
@@ -151772,7 +152180,7 @@
         "sv": {
           "stringUnit": {
             "state": "new",
-            "value": "Okänt"
+            "value": "Okänd"
           }
         }
       }
@@ -152725,6 +153133,142 @@
           "stringUnit": {
             "state": "new",
             "value": "Uppdaterar OpenClaw"
+          }
+        }
+      }
+    },
+    "Upgrade to Full Access": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Upgrade to Full Access"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "new",
+            "value": "升级为完全访问权限"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "new",
+            "value": "升級至完整存取權"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Fazer upgrade para acesso total"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Auf Vollzugriff upgraden"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Actualizar a acceso completo"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "new",
+            "value": "フルアクセスにアップグレード"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "전체 접근 권한으로 업그레이드"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Passer à l’accès complet"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "पूर्ण ऐक्सेस में अपग्रेड करें"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "الترقية إلى الوصول الكامل"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Passa all'accesso completo"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Tam Erişime Yükselt"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Перейти на повний доступ"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Tingkatkan ke Akses Penuh"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Przejdź na pełny dostęp"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "อัปเกรดเป็นสิทธิ์การเข้าถึงแบบเต็ม"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Nâng cấp lên quyền truy cập đầy đủ"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Upgraden naar volledige toegang"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "new",
+            "value": "ارتقا به دسترسی کامل"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Перейти на полный доступ"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Uppgradera till fullständig åtkomst"
           }
         }
       }
