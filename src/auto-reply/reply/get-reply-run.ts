@@ -619,6 +619,9 @@ export async function runPreparedReply(
     sessionKey: runtimePolicySessionKey,
     sessionEntry,
   });
+  const includeExplicitFinalMessageDelivery =
+    sourceReplyDeliveryMode === "message_tool_only" && thinkingRuntime === "codex";
+
   const fullAccessState = resolveEmbeddedFullAccessState({
     execElevated: {
       enabled: elevatedEnabled,
@@ -979,6 +982,7 @@ export async function runPreparedReply(
       isHeartbeat,
       inboundEventKind,
       sourceReplyDeliveryMode,
+      includeExplicitFinalMessageDelivery,
       threadContextNote,
       systemEventBlocks: drainedSystemEventBlocks,
     });

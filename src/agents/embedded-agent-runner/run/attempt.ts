@@ -1465,6 +1465,9 @@ export async function runEmbeddedAttempt(
     const corePluginToolStages = createEmbeddedRunStageTracker();
     const forceDirectMessageTool =
       params.forceMessageTool === true || params.sourceReplyDeliveryMode === "message_tool_only";
+    const includeExplicitFinalMessageDelivery =
+      params.sourceReplyDeliveryMode === "message_tool_only" &&
+      params.runtimePlan?.observability.harnessId === "codex";
     const toolsAllowWithForcedRuntimeTools = mergeForcedEmbeddedAttemptToolsAllow(
       params.toolsAllow,
       {
@@ -1696,9 +1699,7 @@ export async function runEmbeddedAttempt(
             requireExplicitMessageTarget:
               params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
             sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-            includeExplicitFinalMessageDelivery:
-              params.sourceReplyDeliveryMode === "message_tool_only" &&
-              params.runtimePlan?.observability.harnessId === "codex",
+            includeExplicitFinalMessageDelivery,
             taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
             inboundEventKind: params.currentInboundEventKind,
             disableMessageTool: params.disableMessageTool,
@@ -2433,6 +2434,7 @@ export async function runEmbeddedAttempt(
         reactionGuidance,
         promptMode: effectivePromptMode,
         sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+        includeExplicitFinalMessageDelivery,
         silentReplyPromptMode: params.silentReplyPromptMode,
         proactiveSubagentOrchestration,
         acpEnabled: isAcpRuntimeSpawnAvailable({

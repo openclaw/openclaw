@@ -413,6 +413,7 @@ function buildTimeSection(params: { userTimezone?: string }) {
 function buildAssistantOutputDirectivesSection(params: {
   isMinimal: boolean;
   sourceMessageToolOnly: boolean;
+  includeExplicitFinalMessageDelivery: boolean;
 }) {
   if (params.isMinimal) {
     return [];
@@ -420,7 +421,9 @@ function buildAssistantOutputDirectivesSection(params: {
   if (params.sourceMessageToolOnly) {
     return [
       "## Assistant Output Directives",
-      "- Visible source output: `message(action=send)`. Completed final: `final=true`; progress: omit or `final=false`.",
+      params.includeExplicitFinalMessageDelivery
+        ? "- Visible source output: `message(action=send)`. Completed final: `final=true`; progress: omit or `final=false`."
+        : "- Visible source output: `message(action=send)`.",
       "- Media paths = attachments, not prose. One: `media`; many: `attachments: [{media: ...}]`.",
       "- No legacy `MEDIA:` here. Voice note: `asVoice`. Explicit native reply: `replyTo`.",
       "",
@@ -505,6 +508,7 @@ function buildMessagingSection(params: {
   messageChannelOptions?: string;
   messageToolHints?: string[];
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  includeExplicitFinalMessageDelivery: boolean;
   requireExplicitMessageTarget?: boolean;
   silentReplyPromptMode?: SilentReplyPromptMode;
 }) {
@@ -512,6 +516,7 @@ function buildMessagingSection(params: {
     return [];
   }
   const messageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
+  const explicitFinalMessageDelivery = params.includeExplicitFinalMessageDelivery;
   const showGenericInlineButtonHint = params.runtimeChannel !== "slack";
   const groupMessageToolOnly =
     messageToolOnly && (params.runtimeChatType === "group" || params.runtimeChatType === "channel");
@@ -534,7 +539,9 @@ function buildMessagingSection(params: {
   return [
     "## Messaging",
     messageToolOnly
-      ? "- Current source completed final MUST use `message(action=send, final=true)`; final text is private. Skip tool = user gets nothing. Progress: commentary, or current-chat `message(action=send, final=false)`. Brief tool-call progress is visible; no hidden instructions/private data/reasoning."
+      ? explicitFinalMessageDelivery
+        ? "- Current source completed final MUST use `message(action=send, final=true)`; final text is private. Skip tool = user gets nothing. Progress: commentary, or current-chat `message(action=send, final=false)`. Brief tool-call progress is visible; no hidden instructions/private data/reasoning."
+        : "- Current source visible reply MUST use `message(action=send)`; final text is private. Skip tool = user gets nothing. Brief tool-call progress is visible; no hidden instructions/private data/reasoning."
       : "- Current-session final text normally routes to source. If turn says final private, visible output uses `message(action=send)`.",
     telegramRuntime
       ? telegramRichTextEnabled
@@ -554,9 +561,13 @@ function buildMessagingSection(params: {
             ? "- Group/channel: stale/joke/light ack/low-value chatter => reaction or silence. Needed reply => `message(action=send)`; final text private."
             : "",
           messageToolOnly
-            ? params.requireExplicitMessageTarget
-              ? "- `send`: `target` + `message`; target required this turn. Completed final needs `final=true`."
-              : "- `send`: `message`; current source is default target. Set `target` only elsewhere. Completed final needs `final=true`."
+            ? explicitFinalMessageDelivery
+              ? params.requireExplicitMessageTarget
+                ? "- `send`: `target` + `message`; target required this turn. Completed final needs `final=true`."
+                : "- `send`: `message`; current source is default target. Set `target` only elsewhere. Completed final needs `final=true`."
+              : params.requireExplicitMessageTarget
+                ? "- `send`: `target` + `message`; target required this turn."
+                : "- `send`: `message`; current source is default target. Set `target` only elsewhere."
             : "- `send`: `target` + `message`.",
           params.messageChannelOptions
             ? `- No source default: proactive send needs \`channel\`; ids: ${params.messageChannelOptions}.`
@@ -721,6 +732,8 @@ export function buildAgentSystemPrompt(params: {
   /** Controls the generic silent-reply section. Channel-aware prompts can set "none". */
   silentReplyPromptMode?: SilentReplyPromptMode;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /** Whether this runtime exposes explicit final-delivery intent in the message schema. */
+  includeExplicitFinalMessageDelivery?: boolean;
   requireExplicitMessageTarget?: boolean;
   /** Prompt-only strength for delegating non-trivial work through sub-agents. Defaults to "suggest". */
   subagentDelegationMode?: SubagentDelegationMode;
@@ -943,6 +956,8 @@ export function buildAgentSystemPrompt(params: {
   const subagentDelegationMode = normalizeSubagentDelegationMode(params.subagentDelegationMode);
   const proactiveSubagentOrchestration = params.proactiveSubagentOrchestration === true;
   const sourceMessageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
+  const includeExplicitFinalMessageDelivery =
+    sourceMessageToolOnly && params.includeExplicitFinalMessageDelivery === true;
   const messageChannelOptions = availableTools.has("message")
     ? buildMessageChannelOptions(runtimeChannel)
     : undefined;
@@ -1027,6 +1042,7 @@ export function buildAgentSystemPrompt(params: {
     renderOpenClawToolWorkflowHints,
     hasGateway,
     readToolName,
+    includeExplicitFinalMessageDelivery,
     execToolName,
     processToolName,
     nativeCommandGuidanceLines,
@@ -1254,7 +1270,11 @@ export function buildAgentSystemPrompt(params: {
       "## Workspace Files (injected)",
       "User-editable; OpenClaw loads below as Project Context.",
       "",
-      ...buildAssistantOutputDirectivesSection({ isMinimal, sourceMessageToolOnly }),
+      ...buildAssistantOutputDirectivesSection({
+        isMinimal,
+        sourceMessageToolOnly,
+        includeExplicitFinalMessageDelivery,
+      }),
     ];
 
     if (reasoningHint) {
@@ -1323,6 +1343,7 @@ export function buildAgentSystemPrompt(params: {
       messageToolHints: params.messageToolHints,
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
       requireExplicitMessageTarget: params.requireExplicitMessageTarget,
+      includeExplicitFinalMessageDelivery,
       silentReplyPromptMode,
     }),
     ...buildVoiceSection({ isMinimal, ttsHint: params.ttsHint }),

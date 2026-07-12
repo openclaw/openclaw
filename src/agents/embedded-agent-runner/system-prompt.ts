@@ -45,6 +45,8 @@ export function buildEmbeddedSystemPrompt(params: {
   /** Controls the generic silent-reply section. Channel-aware prompts can set "none". */
   silentReplyPromptMode?: SilentReplyPromptMode;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /** Whether this runtime exposes explicit final-delivery intent in the message schema. */
+  includeExplicitFinalMessageDelivery?: boolean;
   /** Prompt-only strength for delegating non-trivial work through sub-agents. */
   subagentDelegationMode?: SubagentDelegationMode;
   /** Run-scoped Ultra behavior; independent from configured delegation preference. */
@@ -113,6 +115,7 @@ export function buildEmbeddedSystemPrompt(params: {
     promptMode: params.promptMode,
     silentReplyPromptMode: params.silentReplyPromptMode,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    includeExplicitFinalMessageDelivery: params.includeExplicitFinalMessageDelivery,
     subagentDelegationMode: params.subagentDelegationMode,
     proactiveSubagentOrchestration: params.proactiveSubagentOrchestration,
     acpEnabled: params.acpEnabled,

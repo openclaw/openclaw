@@ -1141,6 +1141,9 @@ async function compactEmbeddedAgentSessionDirectOnce(
       ? preparedRuntimePlan
       : { ...preparedRuntimePlan, auth: resolvedRuntimeAuthPlan };
 
+    const includeExplicitFinalMessageDelivery =
+      params.sourceReplyDeliveryMode === "message_tool_only" &&
+      runtimePlan.observability.harnessId === "codex";
     const runAbortController = new AbortController();
     const spawnWorkspaceDir =
       effectiveCwd !== effectiveWorkspace
@@ -1218,6 +1221,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
           config: params.config,
           abortSignal: runAbortController.signal,
           sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+          includeExplicitFinalMessageDelivery,
           modelProvider: effectiveModel.provider,
           modelId,
           modelHasVision: effectiveModel.input?.includes("image") ?? false,
@@ -1448,6 +1452,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
         promptMode,
         promptSurface,
         sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+        includeExplicitFinalMessageDelivery,
         acpEnabled: isAcpRuntimeSpawnAvailable({
           config: params.config,
           sandboxed: sandboxInfo?.enabled === true,

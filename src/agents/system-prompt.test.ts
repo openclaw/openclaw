@@ -1115,6 +1115,7 @@ describe("buildAgentSystemPrompt", () => {
         workspaceDir: "/tmp/openclaw",
         toolNames: ["message"],
         sourceReplyDeliveryMode: "message_tool_only",
+        includeExplicitFinalMessageDelivery: true,
         runtimeInfo: {
           channel: "discord",
           chatType,
@@ -1143,11 +1144,29 @@ describe("buildAgentSystemPrompt", () => {
     },
   );
 
+  it("keeps explicit-final guidance out of non-Codex message-tool-only prompts", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["message"],
+      sourceReplyDeliveryMode: "message_tool_only",
+      runtimeInfo: {
+        channel: "discord",
+        chatType: "direct",
+      },
+    });
+
+    expect(prompt).toContain("Current source visible reply MUST use `message(action=send)`");
+    expect(prompt).toContain("Visible source output: `message(action=send)`.");
+    expect(prompt).not.toContain("final=true");
+    expect(prompt).not.toContain("final=false");
+  });
+
   it("requires an explicit target for message-tool-only turns when requested", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["message"],
       sourceReplyDeliveryMode: "message_tool_only",
+      includeExplicitFinalMessageDelivery: true,
       requireExplicitMessageTarget: true,
       runtimeInfo: {
         channel: "telegram",
@@ -1195,6 +1214,7 @@ describe("buildAgentSystemPrompt", () => {
       workspaceDir: "/tmp/openclaw",
       toolNames: ["message"],
       sourceReplyDeliveryMode: "message_tool_only",
+      includeExplicitFinalMessageDelivery: true,
       runtimeInfo: {
         channel: "discord",
         chatType: "direct",

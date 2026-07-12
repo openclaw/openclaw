@@ -1317,6 +1317,7 @@ function buildMessageToolDescription(options?: {
   agentId?: string;
   requireExplicitTarget?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  includeExplicitFinalMessageDelivery?: boolean;
   requesterSenderId?: string;
   senderIsOwner?: boolean;
 }): string {
@@ -1347,6 +1348,7 @@ function buildMessageToolDescription(options?: {
           `${baseDescription} Supports actions: ${sortedActions.join(", ")}.`,
           resolvedOptions.sourceReplyDeliveryMode,
           resolvedOptions.requireExplicitTarget,
+          resolvedOptions.includeExplicitFinalMessageDelivery,
         ),
         sortedActions,
       );
@@ -1357,6 +1359,7 @@ function buildMessageToolDescription(options?: {
     `${baseDescription} Supports actions: send, delete, react, poll, pin, threads, and more.`,
     resolvedOptions.sourceReplyDeliveryMode,
     resolvedOptions.requireExplicitTarget,
+    resolvedOptions.includeExplicitFinalMessageDelivery,
   );
 }
 
@@ -1364,6 +1367,7 @@ function appendMessageToolVisibleReplyHint(
   description: string,
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode,
   requireExplicitTarget?: boolean,
+  includeExplicitFinalMessageDelivery?: boolean,
 ): string {
   if (sourceReplyDeliveryMode !== "message_tool_only") {
     return description;
@@ -1371,7 +1375,10 @@ function appendMessageToolVisibleReplyHint(
   const targetGuidance = requireExplicitTarget
     ? "send needs target."
     : "target defaults current source; set only elsewhere.";
-  return `${description} This turn visible reply: action="send" + message; completed final sets final=true; progress omits final or sets final=false; ${targetGuidance} Final answer private.`;
+  const deliveryGuidance = includeExplicitFinalMessageDelivery
+    ? "completed final sets final=true; progress omits final or sets final=false; "
+    : "";
+  return `${description} This turn visible reply: action="send" + message; ${deliveryGuidance}${targetGuidance} Final answer private.`;
 }
 
 function appendMessageToolReadHint(
@@ -1454,6 +1461,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
     agentId: resolvedAgentId,
     requireExplicitTarget: options?.requireExplicitTarget,
     sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
+    includeExplicitFinalMessageDelivery: options?.includeExplicitFinalMessageDelivery,
     requesterSenderId: options?.requesterSenderId,
     senderIsOwner: options?.senderIsOwner,
   });

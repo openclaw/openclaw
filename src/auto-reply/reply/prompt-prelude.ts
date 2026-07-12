@@ -2,7 +2,10 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { CurrentInboundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
-import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
+import {
+  EXPLICIT_FINAL_MESSAGE_TOOL_ONLY_DELIVERY_HINT,
+  MESSAGE_TOOL_ONLY_DELIVERY_HINT,
+} from "../../plugin-sdk/message-tool-delivery-hints.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../heartbeat.js";
@@ -115,6 +118,7 @@ type ReplyPromptEnvelopeBaseParams = {
   isHeartbeat?: boolean;
   inboundEventKind?: InboundEventKind;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  includeExplicitFinalMessageDelivery?: boolean;
 };
 
 function formatRoomEventLine(ctx: TemplateContext, body: string): string {
@@ -152,6 +156,7 @@ function resolveRoomEventTranscriptBody(params: ReplyPromptEnvelopeBaseParams): 
 function resolvePerTurnDeliveryDirective(params: {
   inboundEventKind?: InboundEventKind;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  includeExplicitFinalMessageDelivery?: boolean;
 }): string | undefined {
   if (params.inboundEventKind === "room_event") {
     return params.sourceReplyDeliveryMode === "message_tool_only"
@@ -162,7 +167,9 @@ function resolvePerTurnDeliveryDirective(params: {
     params.inboundEventKind === "user_request" &&
     params.sourceReplyDeliveryMode === "message_tool_only"
   ) {
-    return MESSAGE_TOOL_ONLY_DELIVERY_HINT;
+    return params.includeExplicitFinalMessageDelivery
+      ? EXPLICIT_FINAL_MESSAGE_TOOL_ONLY_DELIVERY_HINT
+      : MESSAGE_TOOL_ONLY_DELIVERY_HINT;
   }
   return undefined;
 }
@@ -206,6 +213,7 @@ export function buildReplyPromptEnvelopeBase(
   const userRequestDeliveryDirective = resolvePerTurnDeliveryDirective({
     inboundEventKind: params.inboundEventKind,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    includeExplicitFinalMessageDelivery: params.includeExplicitFinalMessageDelivery,
   });
   const currentInboundContextText = isRoomEvent
     ? roomEventContext

@@ -2384,9 +2384,8 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         expect(second.promptToolNamesHash).toBe(first.promptToolNamesHash);
         if (expectedStrongPrompt) {
           expect(first.systemPrompt).toContain("Visible source output: `message(action=send)`");
-          expect(first.systemPrompt).toContain(
-            "Completed final: `final=true`; progress: omit or `final=false`",
-          );
+          expect(first.systemPrompt).not.toContain("final=true");
+          expect(first.systemPrompt).not.toContain("final=false");
         } else {
           expect(first.systemPrompt).toContain(
             "Current-session final text normally routes to source",

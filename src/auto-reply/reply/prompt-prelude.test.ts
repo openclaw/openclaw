@@ -1,6 +1,9 @@
 // Tests prompt prelude construction for sender, routing, and context metadata.
 import { describe, expect, it } from "vitest";
-import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
+import {
+  EXPLICIT_FINAL_MESSAGE_TOOL_ONLY_DELIVERY_HINT,
+  MESSAGE_TOOL_ONLY_DELIVERY_HINT,
+} from "../../plugin-sdk/message-tool-delivery-hints.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import { buildReplyPromptEnvelope } from "./prompt-prelude.js";
 
@@ -84,6 +87,19 @@ describe("buildReplyPromptEnvelope", () => {
       inboundEventKind: "user_request",
       sourceReplyDeliveryMode: "message_tool_only",
     });
+    const explicitEnvelope = buildReplyPromptEnvelope({
+      ctx: sessionCtx,
+      sessionCtx,
+      baseBody: "what changed?",
+      prefixedBody: "what changed?",
+      hasUserBody: true,
+      inboundUserContext: "Current message:\nchat_id=-100123",
+      isBareSessionReset: false,
+      startupAction: "new",
+      inboundEventKind: "user_request",
+      sourceReplyDeliveryMode: "message_tool_only",
+      includeExplicitFinalMessageDelivery: true,
+    });
 
     expect(
       countOccurrences(envelope.currentInboundContext?.text, MESSAGE_TOOL_ONLY_DELIVERY_HINT),
@@ -91,6 +107,13 @@ describe("buildReplyPromptEnvelope", () => {
     expect(envelope.prefixedCommandBody).toBe("what changed?");
     expect(envelope.transcriptCommandBody).toBe("what changed?");
     expect(envelope.transcriptCommandBody).not.toContain(MESSAGE_TOOL_ONLY_DELIVERY_HINT);
+    expect(envelope.currentInboundContext?.text).not.toContain("final=true");
+    expect(
+      countOccurrences(
+        explicitEnvelope.currentInboundContext?.text,
+        EXPLICIT_FINAL_MESSAGE_TOOL_ONLY_DELIVERY_HINT,
+      ),
+    ).toBe(1);
   });
 
   it.each([undefined, "automatic"] as const)(
