@@ -122,4 +122,53 @@ describe("resolveEffectiveAgentDir via findDuplicateAgentDirs", () => {
       expect(dupes[0]?.agentIds).toEqual(["target", "alias"]);
     });
   });
+
+  it("rejects a dangling symlink that aliases a missing agent dir", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    await withTempDir({ prefix: "openclaw-agent-dirs-dangling-" }, async (root) => {
+      const target = path.join(root, "future-target");
+      const alias = path.join(root, "future-alias");
+      await fs.symlink(target, alias);
+      const dupes = findDuplicateAgentDirs({
+        agents: {
+          list: [
+            { id: "target", agentDir: target },
+            { id: "alias", agentDir: alias },
+          ],
+        },
+      });
+      expect(dupes).toHaveLength(1);
+      await expect(fs.stat(target)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
+
+  it("uses the parent volume when agent dir basenames have no ASCII case", async () => {
+    await withTempDir({ prefix: "openclaw-agent-dirs-numeric-" }, async (root) => {
+      const upper = path.join(root, "Upper", "123");
+      const lower = path.join(root, "upper", "123");
+      await fs.mkdir(upper, { recursive: true });
+      try {
+        await fs.mkdir(lower, { recursive: true });
+      } catch {
+        return;
+      }
+      const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+      try {
+        expect(
+          findDuplicateAgentDirs({
+            agents: {
+              list: [
+                { id: "upper", agentDir: upper },
+                { id: "lower", agentDir: lower },
+              ],
+            },
+          }),
+        ).toHaveLength(0);
+      } finally {
+        platformSpy.mockRestore();
+      }
+    });
+  });
 });

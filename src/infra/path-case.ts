@@ -54,7 +54,7 @@ function probeDirectoryContents(dir: string): boolean | undefined {
   return undefined;
 }
 
-function probeEmptyDirectory(dir: string): boolean | undefined {
+function probeDirectoryWithTemporaryEntry(dir: string): boolean | undefined {
   const name = `.openclaw-case-probe-${randomUUID()}`;
   const probePath = path.join(dir, name);
   let created = false;
@@ -88,8 +88,13 @@ export function isPathCaseInsensitive(value: string): boolean {
   const resolved = path.resolve(value);
   try {
     fs.lstatSync(resolved);
-    const direct = probeDirectoryEntry(path.dirname(resolved), path.basename(resolved));
-    return direct ?? defaultPathCaseInsensitive();
+    const parent = path.dirname(resolved);
+    return (
+      probeDirectoryEntry(parent, path.basename(resolved)) ??
+      probeDirectoryContents(parent) ??
+      probeDirectoryWithTemporaryEntry(parent) ??
+      defaultPathCaseInsensitive()
+    );
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code !== "ENOENT" && code !== "ENOTDIR") {
@@ -106,7 +111,7 @@ export function isPathCaseInsensitive(value: string): boolean {
         // lookup within it rather than the mount point's name in its parent.
         return (
           probeDirectoryContents(candidate) ??
-          probeEmptyDirectory(candidate) ??
+          probeDirectoryWithTemporaryEntry(candidate) ??
           defaultPathCaseInsensitive()
         );
       }

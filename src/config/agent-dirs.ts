@@ -26,8 +26,12 @@ export class DuplicateAgentDirError extends Error {
   }
 }
 
-function realpathAgentDir(agentDir: string): string {
+function realpathAgentDir(agentDir: string, seen = new Set<string>()): string {
   const resolved = path.resolve(agentDir);
+  if (seen.has(resolved)) {
+    return resolved;
+  }
+  seen.add(resolved);
   const missingSegments: string[] = [];
   let cursor = resolved;
   for (;;) {
@@ -37,6 +41,14 @@ function realpathAgentDir(agentDir: string): string {
       const code = (error as NodeJS.ErrnoException).code;
       if (code !== "ENOENT" && code !== "ENOTDIR") {
         return resolved;
+      }
+      try {
+        if (fs.lstatSync(cursor).isSymbolicLink()) {
+          const target = path.resolve(path.dirname(cursor), fs.readlinkSync(cursor));
+          return realpathAgentDir(path.join(target, ...missingSegments.toReversed()), seen);
+        }
+      } catch {
+        // This component is genuinely missing; continue with its parent.
       }
       const parent = path.dirname(cursor);
       if (parent === cursor) {
