@@ -85,6 +85,7 @@ class NewSessionPage extends OpenClawLightDomElement {
   private openedFor: string | null = null;
   private agentsHydrated = false;
   private branchesRequestToken = 0;
+  private baseRefEditGeneration = 0;
   private browserRequestToken = 0;
 
   // Re-render when agents/sessions hydrate so the hero identity and the
@@ -321,6 +322,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     // Branch data belongs to one repository selection. Clear it before any
     // exit or request so a previous repo's ref can never reach sessions.create.
     const requestId = ++this.branchesRequestToken;
+    const baseRefEditGeneration = this.baseRefEditGeneration;
     this.branches = null;
     this.branchesLoading = false;
     this.baseRef = "";
@@ -346,7 +348,11 @@ class NewSessionPage extends OpenClawLightDomElement {
           return;
         }
         this.branches = result ? { ...result, repoRoot } : null;
-        this.baseRef = result?.defaultBranch ?? result?.headBranch ?? "";
+        // Discovery supplies a default only while the field is untouched;
+        // a user edit made during the request remains authoritative.
+        if (baseRefEditGeneration === this.baseRefEditGeneration) {
+          this.baseRef = result?.defaultBranch ?? result?.headBranch ?? "";
+        }
       })
       .catch(() => {
         if (requestId === this.branchesRequestToken) {
@@ -902,6 +908,7 @@ class NewSessionPage extends OpenClawLightDomElement {
                             : (branches?.defaultBranch ?? t("newSession.baseBranch"))}
                           .value=${this.baseRef}
                           @input=${(event: Event) => {
+                            this.baseRefEditGeneration += 1;
                             this.baseRef = (event.target as HTMLInputElement).value.trim();
                           }}
                         />
