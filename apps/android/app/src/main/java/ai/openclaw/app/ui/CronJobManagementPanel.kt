@@ -298,16 +298,26 @@ private fun CronEditorPanel(
       ClawTextField(
         value = edit.sessionTarget,
         onValueChange = { onDraftChange(draft.withEdit(edit.copy(sessionTarget = it))) },
-        placeholder = "main, isolated, current, or session:<id>",
+        placeholder = nativeString("main, isolated, current, or session:<id>"),
         label = nativeString("Session target"),
         enabled = enabled,
       )
+      val wakeModeOptions = cronWakeModeOptions()
       ClawSegmentedControl(
-        options = listOf("next-heartbeat", "now"),
-        selected = edit.wakeMode,
-        onSelect = { onDraftChange(draft.withEdit(edit.copy(wakeMode = it))) },
+        options = wakeModeOptions.map(CronWakeModeOption::label),
+        selected = cronWakeModeLabel(edit.wakeMode),
+        onSelect = { selectedLabel ->
+          wakeModeOptions
+            .firstOrNull { it.label == selectedLabel }
+            ?.let { onDraftChange(draft.withEdit(edit.copy(wakeMode = it.code))) }
+        },
         modifier = Modifier.fillMaxWidth(),
-        enabledOptions = if (enabled) setOf("next-heartbeat", "now") else emptySet(),
+        enabledOptions =
+          if (enabled) {
+            wakeModeOptions.mapTo(mutableSetOf(), CronWakeModeOption::label)
+          } else {
+            emptySet()
+          },
       )
       CronPayloadEditor(
         payload = edit.payload,
@@ -390,7 +400,7 @@ private fun CronScheduleEditor(
       ClawTextField(
         value = schedule.at,
         onValueChange = { onChange(schedule.copy(at = it)) },
-        placeholder = "ISO time, e.g. 2026-07-09T09:30:00Z",
+        placeholder = nativeString("ISO time, e.g. 2026-07-09T09:30:00Z"),
         label = nativeString("Run at"),
         enabled = enabled,
       )
@@ -414,7 +424,7 @@ private fun CronScheduleEditor(
       ClawTextField(
         value = schedule.expression,
         onValueChange = { onChange(schedule.copy(expression = it)) },
-        placeholder = "Cron expression, e.g. 0 9 * * *",
+        placeholder = nativeString("Cron expression, e.g. 0 9 * * *"),
         label = nativeString("Expression"),
         enabled = enabled,
       )
@@ -422,7 +432,7 @@ private fun CronScheduleEditor(
         ClawTextField(
           value = schedule.timezone,
           onValueChange = { onChange(schedule.copy(timezone = it)) },
-          placeholder = "e.g. America/New_York",
+          placeholder = nativeString("e.g. America/New_York"),
           label = nativeString("Timezone"),
           enabled = enabled,
           modifier = Modifier.weight(1f),
@@ -430,7 +440,7 @@ private fun CronScheduleEditor(
         ClawTextField(
           value = schedule.staggerMs,
           onValueChange = { onChange(schedule.copy(staggerMs = it.filter(Char::isDigit))) },
-          placeholder = "0 = exact",
+          placeholder = nativeString("0 = exact"),
           label = nativeString("Stagger ms"),
           enabled = enabled,
           modifier = Modifier.weight(1f),
@@ -618,6 +628,19 @@ private fun cronPayloadKindLabel(payload: GatewayCronPayloadEdit): String =
     is GatewayCronPayloadEdit.AgentTurn -> nativeString("Agent turn")
     is GatewayCronPayloadEdit.Command -> nativeString("Command")
   }
+
+internal data class CronWakeModeOption(
+  val code: String,
+  val label: String,
+)
+
+internal fun cronWakeModeOptions(): List<CronWakeModeOption> =
+  listOf(
+    CronWakeModeOption(code = "next-heartbeat", label = nativeString("Next heartbeat")),
+    CronWakeModeOption(code = "now", label = nativeString("Now")),
+  )
+
+internal fun cronWakeModeLabel(code: String): String = cronWakeModeOptions().firstOrNull { it.code == code }?.label ?: code
 
 private fun cronRunSubtitle(run: GatewayCronRunSummary): String =
   listOfNotNull(
