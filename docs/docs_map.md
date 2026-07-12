@@ -1507,6 +1507,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Tenant IDs
   - H2: fleet create
   - H3: Create options
+  - H3: Pinning by digest
   - H3: Disk limits
   - H3: Egress policy
   - H2: fleet list
