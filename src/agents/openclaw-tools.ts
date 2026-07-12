@@ -184,11 +184,15 @@ export function createOpenClawTools(
     requireExplicitMessageTarget?: boolean;
     /** Visible source replies must be sent through the message tool when set to message_tool_only. */
     sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+    /** Session-stable delivery mode used only to shape the model-visible tool inventory. */
+    promptSourceReplyDeliveryMode?: SourceReplyDeliveryMode;
     /** Action sink available for model-proposed follow-up tasks. */
     taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
     inboundEventKind?: InboundEventKind;
     /** If true, omit the message tool from the tool list. */
     disableMessageTool?: boolean;
+    /** Keep the message tool in the stable model-visible catalogue. */
+    forceMessageTool?: boolean;
     /** If true, include the heartbeat response tool for structured heartbeat outcomes. */
     enableHeartbeatTool?: boolean;
     /** If true, skip plugin tool resolution and return only shipped core tools. */
@@ -450,9 +454,12 @@ export function createOpenClawTools(
     allowlist: explicitFactoryAllowlist,
     denylist: explicitFactoryDenylist,
   });
+  const promptSourceReplyDeliveryMode =
+    options?.promptSourceReplyDeliveryMode ?? options?.sourceReplyDeliveryMode;
   const includeMessageTool =
     !embedded ||
-    options?.sourceReplyDeliveryMode === "message_tool_only" ||
+    options?.forceMessageTool === true ||
+    promptSourceReplyDeliveryMode === "message_tool_only" ||
     messageExplicitlyAllowed;
   const includeSubagentSpawnTool = !embedded || options?.allowGatewaySubagentBinding === true;
   const effectiveCallGateway = embedded

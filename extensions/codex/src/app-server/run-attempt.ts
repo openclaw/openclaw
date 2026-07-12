@@ -248,7 +248,7 @@ import { rotateOversizedCodexAppServerStartupBinding } from "./startup-binding.j
 import {
   buildDeveloperInstructions,
   buildContextEngineBinding,
-  buildTurnCollaborationMode,
+  buildTurnScopedCollaborationInstructions,
   buildTurnStartParams,
   codexDynamicToolsFingerprint,
   codexLegacyDynamicToolsFingerprint,
@@ -1422,13 +1422,15 @@ export async function runCodexAppServerAttempt(
   };
   let codexTurnPromptText = decorateCodexTurnPromptText(promptBuild);
   const buildCodexTurnCollaborationDeveloperInstructions = () =>
-    buildTurnCollaborationMode(params, {
+    buildTurnScopedCollaborationInstructions(params, {
       turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
       skillsCollaborationInstructions,
       memoryCollaborationInstructions: workspaceBootstrapContext.memoryCollaborationInstructions,
       heartbeatCollaborationInstructions:
         workspaceBootstrapContext.heartbeatCollaborationInstructions,
-    }).settings.developer_instructions ?? undefined;
+      dynamicTools: toolBridge.availableSpecs,
+      includeDefaultModeContract: !usesSupervisionConnection,
+    }) ?? undefined;
   const buildRenderedCodexDeveloperInstructions = () =>
     joinPresentSections(
       promptBuild.developerInstructions,
@@ -2927,6 +2929,7 @@ export async function runCodexAppServerAttempt(
   });
 
   let turn: CodexTurnStartResponse | undefined;
+  let supervisedDeveloperInstructionsPersistedForThreadId: string | undefined;
   const throwIfTurnStartAcceptedAfterAbort = () => {
     if (!runAbortController.signal.aborted) {
       return;
@@ -2962,9 +2965,9 @@ export async function runCodexAppServerAttempt(
       memoryCollaborationInstructions: workspaceBootstrapContext.memoryCollaborationInstructions,
       heartbeatCollaborationInstructions:
         workspaceBootstrapContext.heartbeatCollaborationInstructions,
+      dynamicTools: toolBridge.availableSpecs,
       preserveNativeTurnSettings: usesSupervisionConnection,
     });
-    codexModelCallDiagnostics.setRequestPayloadBytes(utf8JsonByteLength(turnStartParams));
     // Keep turn/start diagnostics scoped to this attempt: resumed native work
     // can emit unrelated errors, and only a primary rate-limit update observed
     // after this point may be trusted for the attempt's auth profile.
@@ -2983,6 +2986,31 @@ export async function runCodexAppServerAttempt(
     });
     let acceptedTurnId: string | undefined;
     try {
+      if (
+        usesSupervisionConnection &&
+        supervisedDeveloperInstructionsPersistedForThreadId !== thread.threadId
+      ) {
+        const supervisedDeveloperInstructions = buildCodexTurnCollaborationDeveloperInstructions();
+        if (supervisedDeveloperInstructions) {
+          await client.request(
+            "thread/inject_items",
+            {
+              threadId: thread.threadId,
+              items: [
+                {
+                  type: "message",
+                  role: "developer",
+                  content: [{ type: "input_text", text: supervisedDeveloperInstructions }],
+                },
+              ],
+            },
+            { timeoutMs: params.timeoutMs, signal: runAbortController.signal },
+          );
+        }
+        supervisedDeveloperInstructionsPersistedForThreadId = thread.threadId;
+        params.onToolAccessPolicyPromptPersisted?.(params.sessionId);
+      }
+      codexModelCallDiagnostics.setRequestPayloadBytes(utf8JsonByteLength(turnStartParams));
       const startedTurn = assertCodexTurnStartResponse(
         await client.request("turn/start", turnStartParams, {
           timeoutMs: params.timeoutMs,
@@ -2990,6 +3018,9 @@ export async function runCodexAppServerAttempt(
         }),
       );
       acceptedTurnId = startedTurn.turn.id;
+      if (!usesSupervisionConnection) {
+        params.onToolAccessPolicyPromptPersisted?.(params.sessionId);
+      }
       throwIfTurnStartAcceptedAfterAbort();
       return startedTurn;
     } catch (error) {

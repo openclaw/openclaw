@@ -229,6 +229,8 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   const messagePolicyParams = input.ignoreDisableMessageTool
     ? { ...params, disableMessageTool: false }
     : params;
+  const promptSourceReplyDeliveryMode =
+    params.promptSourceReplyDeliveryMode ?? params.sourceReplyDeliveryMode;
   if (params.disableTools) {
     input.onWebSearchPolicyResolved?.(false);
     return [];
@@ -281,6 +283,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
     senderIsOwner: params.senderIsOwner,
+    toolAccessPolicy: params.toolAccessPolicy,
     allowGatewaySubagentBinding:
       params.allowGatewaySubagentBinding || isForcedPrivateQaCodexRuntime(),
     ...sessionKeys,
@@ -330,6 +333,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     requireExplicitMessageTarget:
       params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    promptSourceReplyDeliveryMode,
     disableMessageTool: input.ignoreDisableMessageTool ? false : params.disableMessageTool,
     forceMessageTool: shouldForceMessageTool(messagePolicyParams),
     enableHeartbeatTool: params.trigger === "heartbeat" || input.forceHeartbeatTool === true,
@@ -995,6 +999,7 @@ export function hasWildcardCodexToolsAllow(toolsAllow: string[]): boolean {
 /** Forces message delivery through the message tool when the source channel requires it. */
 export function shouldForceMessageTool(params: EmbeddedRunAttemptParams): boolean {
   return (
-    params.disableMessageTool !== true && params.sourceReplyDeliveryMode === "message_tool_only"
+    params.disableMessageTool !== true &&
+    (params.forceMessageTool === true || params.sourceReplyDeliveryMode === "message_tool_only")
   );
 }

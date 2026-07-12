@@ -7,6 +7,7 @@ import {
   type ServerResponse,
 } from "node:http";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveToolAccessPolicy } from "../agents/tool-access-policy.js";
 import { resolveToolLoopDetectionConfig } from "../agents/tool-loop-detection-config.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveSessionEntryAccessTarget } from "../config/sessions/session-accessor.js";
@@ -237,6 +238,12 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
         markMcpLoopbackRequestClassified(cliRequestCaptureHandle);
         const cfg = getRuntimeConfig();
         const requestContext = resolveMcpRequestContext(req, cfg, auth);
+        const toolAccessPolicy =
+          requestContext.toolAccessPolicy ??
+          resolveToolAccessPolicy({
+            senderIsOwner: requestContext.senderIsOwner,
+            inboundEventKind: requestContext.inboundEventKind,
+          });
         const { boundGrantToken, boundCaptureKey } = auth;
         const authorizeToolCall =
           boundGrantToken && boundCaptureKey
@@ -334,6 +341,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
               message,
               tools: scopedTools.tools,
               toolSchema: scopedTools.toolSchema,
+              toolAccessPolicy,
               hookContext: {
                 agentId: scopedTools.agentId,
                 config: cfg,
@@ -448,7 +456,11 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
   }
   // Register tokens only after the TCP listener is live so clients never learn
   // a bearer token for a server that failed to bind.
-  setActiveMcpLoopbackRuntime({ port: address.port, ownerToken, nonOwnerToken });
+  setActiveMcpLoopbackRuntime({
+    port: address.port,
+    ownerToken,
+    nonOwnerToken,
+  });
   logDebug(`mcp loopback listening on 127.0.0.1:${address.port}`);
 
   const server: McpLoopbackServer = {

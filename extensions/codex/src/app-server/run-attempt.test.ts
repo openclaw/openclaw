@@ -1240,25 +1240,61 @@ describe("runCodexAppServerAttempt", () => {
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     params.sourceReplyDeliveryMode = "message_tool_only";
 
-    expect(
-      testing.buildDeveloperInstructions(params, {
-        dynamicTools: [createMessageDynamicTool("Message test tool")],
-      }),
-    ).toContain("Visible source replies are not automatically delivered for this run.");
-
-    const withoutMessageToolInstructions = testing.buildDeveloperInstructions(params, {
-      dynamicTools: [],
+    const threadInstructions = testing.buildDeveloperInstructions(params, {
+      dynamicTools: [createMessageDynamicTool("Message test tool")],
     });
-    expect(withoutMessageToolInstructions).toContain(
-      "reply normally in your final assistant message",
+    expect(threadInstructions).toContain("Source-reply delivery is turn-scoped");
+    expect(threadInstructions).not.toContain(
+      "Visible source replies are not automatically delivered",
     );
-    expect(withoutMessageToolInstructions).not.toContain("message(action=send)");
-    expect(withoutMessageToolInstructions).not.toContain("Use `message`");
+
+    const messageToolTurn = buildTurnStartParams(params, {
+      threadId: "thread-1",
+      cwd: workspaceDir,
+      appServer: resolveCodexAppServerRuntimeOptions({}),
+      dynamicTools: [createMessageDynamicTool("Message test tool")],
+    });
+    const messageToolTurnInstructions =
+      messageToolTurn.collaborationMode?.settings?.developer_instructions ?? "";
+    expect(messageToolTurnInstructions).toContain(
+      "Visible source replies are not automatically delivered for this run.",
+    );
+    expect(messageToolTurnInstructions).toContain("message(action=send)");
 
     params.sourceReplyDeliveryMode = "automatic";
-    const automaticInstructions = testing.buildDeveloperInstructions(params);
-    expect(automaticInstructions).toContain("reply normally in your final assistant message");
-    expect(automaticInstructions).not.toContain("message(action=send)");
+    const automaticTurn = buildTurnStartParams(params, {
+      threadId: "thread-1",
+      cwd: workspaceDir,
+      appServer: resolveCodexAppServerRuntimeOptions({}),
+      dynamicTools: [createMessageDynamicTool("Message test tool")],
+    });
+    expect(automaticTurn.collaborationMode?.settings?.developer_instructions).toBeNull();
+  });
+
+  it("keeps thread instructions stable and scopes effective delivery to the current turn", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.sourceReplyDeliveryMode = "message_tool_only";
+    params.promptSourceReplyDeliveryMode = "automatic";
+
+    const threadInstructions = testing.buildDeveloperInstructions(params, {
+      dynamicTools: [createMessageDynamicTool("Message test tool")],
+    });
+    const turn = buildTurnStartParams(params, {
+      threadId: "thread-1",
+      cwd: workspaceDir,
+      appServer: resolveCodexAppServerRuntimeOptions({}),
+      dynamicTools: [createMessageDynamicTool("Message test tool")],
+    });
+    const turnInstructions = turn.collaborationMode?.settings?.developer_instructions ?? "";
+
+    expect(threadInstructions).toContain("Source-reply delivery is turn-scoped");
+    expect(threadInstructions).toContain("current turn instructs you");
+    expect(threadInstructions).not.toContain(
+      "Visible source replies are not automatically delivered",
+    );
+    expect(turnInstructions).toContain("Visible source replies are not automatically delivered");
+    expect(turnInstructions).toContain("message(action=send)");
   });
 
   it("includes Codex app-server scoped plugin command guidance in developer instructions", () => {
@@ -1361,6 +1397,24 @@ describe("runCodexAppServerAttempt", () => {
     expect(result.systemPromptReport?.skills.entries).toEqual([
       { name: "demo", blockChars: "<skill><name>demo</name></skill>".length },
     ]);
+  });
+
+  it("acknowledges a policy snapshot after turn/start is accepted", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+    const onToolAccessPolicyPromptPersisted = vi.fn();
+    const params = createParams(sessionFile, workspaceDir);
+    params.toolAccessPolicyPrompt = "[OpenClaw runtime tool policy]";
+    params.onToolAccessPolicyPromptPersisted = onToolAccessPolicyPromptPersisted;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await vi.waitFor(() =>
+      expect(onToolAccessPolicyPromptPersisted).toHaveBeenCalledWith("session-1"),
+    );
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
   });
 
   it("reuses one computer execution when Codex redelivers an in-flight request", async () => {
@@ -4468,6 +4522,15 @@ describe("runCodexAppServerAttempt", () => {
     expect(bridgeCall.requestParams?.serverName).toBe("desktop-control");
     expect(bridgeCall.computerUseMcpServerName).toBe("desktop-control");
     const requestCalls = request.mock.calls as unknown as Array<[string, unknown, unknown?]>;
+    const threadStart = requestCalls.find(
+      ([method, requestParams]) =>
+        method === "thread/start" &&
+        (requestParams as { serviceName?: string }).serviceName === "OpenClaw",
+    );
+    const threadStartParams = threadStart?.[1] as
+      | { approvalPolicy?: { granular?: { mcp_elicitations?: boolean } } }
+      | undefined;
+    expect(threadStartParams?.approvalPolicy?.granular?.mcp_elicitations).toBe(true);
     const turnStart = requestCalls.find(([method]) => method === "turn/start");
     const turnStartParams = turnStart?.[1] as
       | { approvalPolicy?: { granular?: { mcp_elicitations?: boolean } } }
@@ -4670,7 +4733,11 @@ describe("runCodexAppServerAttempt", () => {
     expect(calendarPolicy?.pluginName).toBe("google-calendar");
     expect(calendarPolicy?.mcpServerNames).toEqual(["google-calendar"]);
     const requestCalls = request.mock.calls as unknown as Array<[string, unknown, unknown?]>;
-    const threadStart = requestCalls.find(([method]) => method === "thread/start");
+    const threadStart = requestCalls.find(
+      ([method, requestParams]) =>
+        method === "thread/start" &&
+        (requestParams as { serviceName?: string }).serviceName === "OpenClaw",
+    );
     const threadStartParams = threadStart?.[1] as
       | { approvalPolicy?: { granular?: { mcp_elicitations?: boolean } } }
       | undefined;
@@ -6101,12 +6168,15 @@ describe("runCodexAppServerAttempt", () => {
       return {};
     });
     const clientFactory = vi.fn(async () => harness.client);
+    const onToolAccessPolicyPromptPersisted = vi.fn();
     const params = {
       ...createParams(sessionFile, workspaceDir),
       provider: "anthropic",
       modelId: "claude-opus-4-6",
       model: createCodexTestModel("anthropic"),
       config: { tools: { exec: { mode: "auto" } } },
+      toolAccessPolicyPrompt: "[OpenClaw runtime tool policy]",
+      onToolAccessPolicyPromptPersisted,
     } as EmbeddedRunAttemptParams;
 
     const run = runCodexAppServerAttempt(params, {
@@ -6135,7 +6205,36 @@ describe("runCodexAppServerAttempt", () => {
     const turnParams = turnRequest?.params as Record<string, unknown> | undefined;
     expect(turnParams).not.toHaveProperty("model");
     expect(turnParams).not.toHaveProperty("modelProvider");
+    expect(turnParams).not.toHaveProperty("collaborationMode");
     expect(turnParams?.approvalsReviewer).toBe("auto_review");
+    const injectRequest = harness.requests.find(
+      (request) => request.method === "thread/inject_items",
+    );
+    expect(injectRequest?.params).toMatchObject({
+      threadId: "thread-existing",
+      items: [
+        {
+          type: "message",
+          role: "developer",
+          content: [
+            {
+              type: "input_text",
+              text: expect.stringContaining("[OpenClaw runtime tool policy]"),
+            },
+          ],
+        },
+      ],
+    });
+    const injectedText = (
+      injectRequest?.params as {
+        items?: Array<{ content?: Array<{ text?: string }> }>;
+      }
+    )?.items?.[0]?.content?.[0]?.text;
+    expect(injectedText).not.toContain("# Collaboration Mode: Default");
+    expect(onToolAccessPolicyPromptPersisted).toHaveBeenCalledWith("session-1");
+    expect(
+      harness.requests.findIndex((request) => request.method === "thread/inject_items"),
+    ).toBeLessThan(harness.requests.findIndex((request) => request.method === "turn/start"));
   });
 
   it("fails before client startup when a successor generation hides a private supervision binding", async () => {

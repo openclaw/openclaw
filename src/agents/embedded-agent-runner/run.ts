@@ -176,6 +176,7 @@ import {
 } from "../session-suspension.js";
 import { resolveCandidateThinkingLevel } from "../thinking-runtime.js";
 import { DEFAULT_AGENT_TIMEOUT_MS } from "../timeout.js";
+import { buildToolAccessPolicySnapshot, resolveToolAccessPolicy } from "../tool-access-policy.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { deriveContextPromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
@@ -286,6 +287,12 @@ import {
 } from "./run/terminal-outcome.js";
 import { mergeAttemptToolMediaPayloads } from "./run/tool-media-payloads.js";
 import type { EmbeddedRunFastModeParam } from "./run/types.js";
+import {
+  getEmbeddedSessionPromptState,
+  markToolAccessPolicySnapshotSent,
+  reserveToolAccessPolicySnapshot,
+  shouldEmitToolAccessPolicySnapshot,
+} from "./session-prompt-state.js";
 import {
   resolveLiveToolResultMaxChars,
   sessionLikelyHasOversizedToolResults,
@@ -2587,6 +2594,34 @@ async function runEmbeddedAgentInternal(
               fastMode: attemptFastMode,
             },
           });
+          const attemptFallbackActive =
+            modelId !== requestedModelId || Boolean(resolveRuntimeFallbackReason());
+          const toolAccessPolicy = resolveToolAccessPolicy({
+            senderIsOwner: params.senderIsOwner,
+            hasSenderIdentity: Boolean(params.senderId?.trim()),
+            inboundEventKind: params.currentInboundEventKind,
+            trigger: params.trigger,
+          });
+          const toolAccessPolicyRouteKey = JSON.stringify([agentHarness.id, provider, modelId]);
+          const toolAccessPolicyPromptState =
+            getEmbeddedSessionPromptState(activeSessionId).toolAccessPolicy;
+          const toolAccessPolicyPrompt = shouldEmitToolAccessPolicySnapshot(
+            toolAccessPolicyPromptState,
+            {
+              policyVersion: toolAccessPolicy.version,
+              routeKey: toolAccessPolicyRouteKey,
+              forceSnapshot:
+                params.forceToolAccessPolicySnapshot === true ||
+                params.trigger === "memory" ||
+                attemptFallbackActive ||
+                codexAppServerRecoveryRetries > 0,
+            },
+          )
+            ? buildToolAccessPolicySnapshot(toolAccessPolicy)
+            : undefined;
+          const toolAccessPolicySnapshotGeneration = toolAccessPolicyPrompt
+            ? reserveToolAccessPolicySnapshot(toolAccessPolicyPromptState)
+            : undefined;
           const trajectoryAttribution = resolveAttemptTrajectoryAttribution({
             model: effectiveModel,
             modelId,
@@ -2742,7 +2777,7 @@ async function runEmbeddedAgentInternal(
             provider,
             modelId,
             requestedModelId,
-            fallbackActive: modelId !== requestedModelId || Boolean(resolveRuntimeFallbackReason()),
+            fallbackActive: attemptFallbackActive,
             fallbackReason: resolveRuntimeFallbackReason(),
             isFinalFallbackAttempt: params.isFinalFallbackAttempt,
             // Use the harness selected before model/auth setup for the actual
@@ -2765,6 +2800,21 @@ async function runEmbeddedAgentInternal(
                 }
               : {}),
             runtimePlan,
+            toolAccessPolicy,
+            toolAccessPolicyPrompt,
+            onToolAccessPolicyPromptPersisted:
+              toolAccessPolicyPrompt && toolAccessPolicySnapshotGeneration !== undefined
+                ? (sessionId) => {
+                    markToolAccessPolicySnapshotSent(
+                      getEmbeddedSessionPromptState(sessionId).toolAccessPolicy,
+                      {
+                        policyVersion: toolAccessPolicy.version,
+                        routeKey: toolAccessPolicyRouteKey,
+                        snapshotGeneration: toolAccessPolicySnapshotGeneration,
+                      },
+                    );
+                  }
+                : undefined,
             model: applyAuthHeaderOverride(
               applyLocalNoAuthHeaderOverride(effectiveModel, apiKeyInfo),
               // When runtime auth exchange produced a different credential
@@ -2848,6 +2898,7 @@ async function runEmbeddedAgentInternal(
             extraSystemPrompt: params.extraSystemPrompt,
             sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
             taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
+            promptSourceReplyDeliveryMode: params.promptSourceReplyDeliveryMode,
             inputProvenance: params.inputProvenance,
             streamParams: params.streamParams,
             modelRun: params.modelRun,
@@ -3181,6 +3232,7 @@ async function runEmbeddedAgentInternal(
                     currentChannelId: params.currentChannelId,
                     currentThreadTs: params.currentThreadTs,
                     currentMessageId: params.currentMessageId,
+                    currentInboundEventKind: params.currentInboundEventKind,
                     authProfileId: lastProfileId,
                     authProfileIdSource: lockedProfileId ? "user" : "auto",
                     runtimeAuthPlan: runtimePlan.auth,
@@ -3189,6 +3241,7 @@ async function runEmbeddedAgentInternal(
                     config: params.config,
                     skillsSnapshot: params.skillsSnapshot,
                     senderId: params.senderId,
+                    senderIsOwner: params.senderIsOwner,
                     provider,
                     modelId,
                     harnessRuntime: agentHarness.id,
@@ -3199,6 +3252,7 @@ async function runEmbeddedAgentInternal(
                     bashElevated: params.bashElevated,
                     extraSystemPrompt: params.extraSystemPrompt,
                     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+                    promptSourceReplyDeliveryMode: params.promptSourceReplyDeliveryMode,
                     ownerNumbers: params.ownerNumbers,
                     activeProcessSessions: listActiveProcessSessionReferences({
                       scopeKey: resolveProcessToolScopeKey({
@@ -3408,6 +3462,7 @@ async function runEmbeddedAgentInternal(
                     currentChannelId: params.currentChannelId,
                     currentThreadTs: params.currentThreadTs,
                     currentMessageId: params.currentMessageId,
+                    currentInboundEventKind: params.currentInboundEventKind,
                     authProfileId: lastProfileId,
                     authProfileIdSource: lockedProfileId ? "user" : "auto",
                     runtimeAuthPlan: runtimePlan.auth,
@@ -3416,6 +3471,7 @@ async function runEmbeddedAgentInternal(
                     config: params.config,
                     skillsSnapshot: params.skillsSnapshot,
                     senderId: params.senderId,
+                    senderIsOwner: params.senderIsOwner,
                     provider,
                     modelId,
                     harnessRuntime: agentHarness.id,
@@ -3426,6 +3482,7 @@ async function runEmbeddedAgentInternal(
                     bashElevated: params.bashElevated,
                     extraSystemPrompt: params.extraSystemPrompt,
                     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+                    promptSourceReplyDeliveryMode: params.promptSourceReplyDeliveryMode,
                     ownerNumbers: params.ownerNumbers,
                     activeProcessSessions: listActiveProcessSessionReferences({
                       scopeKey: resolveProcessToolScopeKey({

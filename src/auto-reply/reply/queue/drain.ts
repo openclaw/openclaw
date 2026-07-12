@@ -80,6 +80,18 @@ function assertSingleAdmissionOwner(items: readonly FollowupRun[]): void {
   }
 }
 
+function forceToolAccessPolicySnapshot(run: FollowupRun): FollowupRun {
+  // Queue dispatch is a fresh prompt projection boundary. Clone both layers so
+  // runtime refreshes cannot rewrite the shared enqueue-time source object.
+  return {
+    ...run,
+    run: {
+      ...run.run,
+      forceToolAccessPolicySnapshot: true,
+    },
+  };
+}
+
 export function rememberFollowupDrainCallback(
   key: string,
   runFollowup: (run: FollowupRun) => Promise<void>,
@@ -201,6 +213,7 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
     execution.extraSystemPromptStatic ?? "",
     execution.sourceReplyDeliveryMode ?? "",
     execution.taskSuggestionDeliveryMode ?? "",
+    execution.promptSourceReplyDeliveryMode ?? "",
     execution.silentReplyPromptMode ?? "",
     execution.enforceFinalTag === true,
     execution.skipProviderRuntimeHints === true,
@@ -868,7 +881,7 @@ async function drainProtectedPriorityFollowup(
 }
 
 export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupRun {
-  return {
+  return forceToolAccessPolicySnapshot({
     prompt: source.prompt,
     queueAbortSignal: source.queueAbortSignal,
     transcriptPrompt: source.transcriptPrompt,
@@ -890,7 +903,7 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
       ? { currentInboundEventKind: "room_event" }
       : {}),
     run: source.run,
-  };
+  });
 }
 
 function resolveOverflowSummaryInboundEventKind(sources: FollowupRun[]): "room_event" | undefined {
@@ -1121,6 +1134,9 @@ export function scheduleFollowupDrain(
       FOLLOWUP_QUEUES.get(key) === queue && !queue.abortController.signal.aborted,
     onDiscard: (item: FollowupRun) => completeFollowupRunLifecycle(item),
   };
+  const runQueuedFollowup = async (run: FollowupRun) => {
+    await effectiveRunFollowup(forceToolAccessPolicySnapshot(run));
+  };
   // Cache callback only when a drain actually starts. Avoid keeping stale
   // callbacks around from finalize calls where no queue work is pending.
   rememberFollowupDrainCallback(key, effectiveRunFollowup);
@@ -1131,23 +1147,23 @@ export function scheduleFollowupDrain(
     try {
       const collectState = { forceIndividualCollect: false };
       while (queue.items.length > 0 || queue.droppedCount > 0) {
-        await dropAbortedFollowups(queue.items, effectiveRunFollowup);
+        await dropAbortedFollowups(queue.items, runQueuedFollowup);
         if (queue.items.length === 0 && queue.droppedCount === 0) {
           break;
         }
         await waitForQueueDebounce(queue, queue.abortController.signal);
-        await dropAbortedFollowups(queue.items, effectiveRunFollowup);
+        await dropAbortedFollowups(queue.items, runQueuedFollowup);
         if (queue.items.length === 0 && queue.droppedCount === 0) {
           break;
         }
-        if (await drainProtectedPriorityFollowup(queue.items, effectiveRunFollowup)) {
+        if (await drainProtectedPriorityFollowup(queue.items, runQueuedFollowup)) {
           continue;
         }
         if (
           queue.droppedCount > 0 &&
           (await drainOverflowSummaryGroup({
             queue,
-            runFollowup: effectiveRunFollowup,
+            runFollowup: runQueuedFollowup,
           }))
         ) {
           continue;
@@ -1170,7 +1186,7 @@ export function scheduleFollowupDrain(
             collectState,
             isCrossChannel,
             items: queue.items,
-            run: effectiveRunFollowup,
+            run: runQueuedFollowup,
             reserveOptions,
           });
           if (collectDrainResult === "empty") {
@@ -1252,7 +1268,7 @@ export function scheduleFollowupDrain(
               }
             };
             const drainGroup = async () => {
-              await effectiveRunFollowup({
+              await runQueuedFollowup({
                 prompt,
                 transcriptPrompt,
                 ...(userTurnTranscriptRecorder ? { userTurnTranscriptRecorder } : {}),
@@ -1333,7 +1349,7 @@ export function scheduleFollowupDrain(
           continue;
         }
 
-        if (!(await drainNextQueueItem(queue.items, effectiveRunFollowup, reserveOptions))) {
+        if (!(await drainNextQueueItem(queue.items, runQueuedFollowup, reserveOptions))) {
           break;
         }
       }

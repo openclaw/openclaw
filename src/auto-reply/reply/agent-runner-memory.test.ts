@@ -135,6 +135,7 @@ type CompactEmbeddedAgentSessionParams = {
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
   contextTokenBudget?: number;
+  currentInboundEventKind?: string;
   sessionKey?: string;
   sandboxSessionKey?: string;
   currentTokenCount?: number;
@@ -147,6 +148,8 @@ type CompactEmbeddedAgentSessionParams = {
   sessionFile?: string;
   sessionId?: string;
   trigger?: string;
+  sourceReplyDeliveryMode?: string;
+  promptSourceReplyDeliveryMode?: string;
 };
 
 function requireRefreshQueuedFollowupSessionCall(index = 0) {
@@ -1227,6 +1230,9 @@ describe("runMemoryFlushIfNeeded", () => {
         sessionId: "session",
         sessionFile,
         sessionKey: "agent:main:main",
+        sourceReplyDeliveryMode: "message_tool_only",
+        promptSourceReplyDeliveryMode: "automatic",
+        senderIsOwner: true,
       }),
       defaultModel: "anthropic/claude-opus-4-6",
       agentCfgContextTokens: 100,
@@ -1249,6 +1255,9 @@ describe("runMemoryFlushIfNeeded", () => {
       preflightCompactionTrigger: "tokens",
       deferOwningContextEngineCompaction: false,
       contextTokenBudget: 100,
+      sourceReplyDeliveryMode: "message_tool_only",
+      promptSourceReplyDeliveryMode: "automatic",
+      senderIsOwner: true,
       agentHarnessId: "openclaw",
       modelSelectionLocked: true,
     });
@@ -1335,13 +1344,16 @@ describe("runMemoryFlushIfNeeded", () => {
 
     await runPreflightCompactionIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
-      followupRun: createTestFollowupRun({
-        sessionId: "session",
-        sessionFile,
-        sessionKey: "agent:main:main",
-        cwd: "/tmp/task-repo",
-        runtimePolicySessionKey: "agent:main:telegram:default:direct:12345",
-      }),
+      followupRun: {
+        ...createTestFollowupRun({
+          sessionId: "session",
+          sessionFile,
+          sessionKey: "agent:main:main",
+          cwd: "/tmp/task-repo",
+          runtimePolicySessionKey: "agent:main:telegram:default:direct:12345",
+        }),
+        currentInboundEventKind: "room_event",
+      },
       defaultModel: "anthropic/claude-opus-4-6",
       agentCfgContextTokens: 100,
       sessionEntry,
@@ -1358,6 +1370,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactCall.sessionKey).toBe("agent:main:main");
     expect(compactCall.cwd).toBe("/tmp/task-repo");
     expect(compactCall.sandboxSessionKey).toBe("agent:main:telegram:default:direct:12345");
+    expect(compactCall.currentInboundEventKind).toBe("room_event");
   });
 
   it.each([

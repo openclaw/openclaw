@@ -2492,7 +2492,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     }
   });
 
-  it("invalidates CLI session bindings when owner policy changes prompt tool scope", async () => {
+  it("reuses CLI sessions without promoting trusted internal turns to owner", async () => {
     const { dir, sessionFile } = createSessionFile();
     try {
       const getActiveMcpLoopbackRuntime = vi.fn(() => ({
@@ -2500,6 +2500,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         ownerToken: "loopback-owner-token",
         nonOwnerToken: "loopback-non-owner-token",
       }));
+      const mintMcpLoopbackClientGrant = vi.fn(createTestMcpLoopbackClientGrant);
       const resolveMcpLoopbackScopedTools = vi.fn((scope: { senderIsOwner?: boolean }) => ({
         agentId: "main",
         tools: [
@@ -2525,6 +2526,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       }));
       setCliRunnerPrepareTestDeps({
         getActiveMcpLoopbackRuntime,
+        mintMcpLoopbackClientGrant,
         resolveMcpLoopbackScopedTools,
       });
       cliBackendsTesting.setDepsForTest({
@@ -2592,12 +2594,26 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         },
         config: createCliBackendConfig({ bundleMcp: true }),
       });
+      await prepareCliRunContext({
+        sessionId: "session-test-heartbeat",
+        sessionKey: "agent:main:main:heartbeat",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "heartbeat ask",
+        provider: "native-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-owner-tool-scope-heartbeat",
+        trigger: "heartbeat",
+        senderIsOwner: false,
+        config: createCliBackendConfig({ bundleMcp: true }),
+      });
 
-      expect(resolveMcpLoopbackScopedTools).toHaveBeenCalledTimes(2);
+      expect(resolveMcpLoopbackScopedTools).toHaveBeenCalledTimes(3);
       expect(resolveMcpLoopbackScopedTools).toHaveBeenNthCalledWith(
         1,
         expect.objectContaining({
-          senderIsOwner: true,
+          senderIsOwner: undefined,
           currentMessageId: undefined,
           sourceReplyDeliveryMode: "message_tool_only",
         }),
@@ -2605,17 +2621,62 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       expect(resolveMcpLoopbackScopedTools).toHaveBeenNthCalledWith(
         2,
         expect.objectContaining({
-          senderIsOwner: false,
+          senderIsOwner: undefined,
           currentMessageId: undefined,
           sourceReplyDeliveryMode: "message_tool_only",
         }),
       );
-      expect(second.promptToolNamesHash).not.toBe(first.promptToolNamesHash);
-      expect(second.reusableCliSession).toEqual({
-        mode: "reuse-with-drift",
-        sessionId: "cli-session",
-        drift: { reasons: ["prompt-tools"] },
-      });
+      expect(resolveMcpLoopbackScopedTools).toHaveBeenNthCalledWith(
+        3,
+        expect.objectContaining({
+          senderIsOwner: undefined,
+          currentMessageId: undefined,
+        }),
+      );
+      expect(second.promptToolNamesHash).toBe(first.promptToolNamesHash);
+      expect(second.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
+      expect(mintMcpLoopbackClientGrant).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          runtimeOwnerToken: "loopback-owner-token",
+          context: expect.objectContaining({
+            senderIsOwner: true,
+            toolAccessPolicy: expect.objectContaining({
+              senderClass: "owner",
+              reason: "authorized_owner",
+              deniedToolNames: [],
+            }),
+          }),
+        }),
+      );
+      expect(mintMcpLoopbackClientGrant).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          runtimeOwnerToken: "loopback-owner-token",
+          context: expect.objectContaining({
+            senderIsOwner: false,
+            toolAccessPolicy: expect.objectContaining({
+              senderClass: "non_owner",
+              reason: "non_owner_sender",
+              deniedToolNames: ["computer", "cron", "gateway", "nodes"],
+            }),
+          }),
+        }),
+      );
+      expect(mintMcpLoopbackClientGrant).toHaveBeenNthCalledWith(
+        3,
+        expect.objectContaining({
+          runtimeOwnerToken: "loopback-owner-token",
+          context: expect.objectContaining({
+            senderIsOwner: false,
+            toolAccessPolicy: expect.objectContaining({
+              senderClass: "trusted_internal",
+              reason: "authorized_internal",
+              deniedToolNames: [],
+            }),
+          }),
+        }),
+      );
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -2908,7 +2969,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         sourceReplyDeliveryMode: undefined,
         taskSuggestionDeliveryMode: undefined,
         requireExplicitMessageTarget: false,
-        senderIsOwner: false,
+        senderIsOwner: undefined,
         nodeExecAllowed: true,
         modelProvider: "native-cli",
         modelId: "test-model",
@@ -3157,6 +3218,12 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
           taskSuggestionDeliveryMode: "gateway",
           requireExplicitMessageTarget: true,
           senderIsOwner: false,
+          toolAccessPolicy: expect.objectContaining({
+            eventKind: "room_event",
+            senderClass: "unknown",
+            reason: "ambient_room_event",
+            deniedToolNames: ["computer", "cron", "gateway", "nodes"],
+          }),
           nodeExecAllowed: true,
           execSession: {
             execHost: "node",
@@ -3211,7 +3278,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
           clientCaps: ["tool-events", "inline-widgets"],
           taskSuggestionDeliveryMode: "gateway",
           requireExplicitMessageTarget: true,
-          senderIsOwner: false,
+          senderIsOwner: undefined,
           runtimePolicySessionKey: "agent:worker:discord:default:direct:canonical-sender",
           agentId: "worker",
           modelProvider: "anthropic",

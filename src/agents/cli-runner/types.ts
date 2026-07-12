@@ -37,6 +37,7 @@ import type {
 import type { ExecPolicyOverrides } from "../exec-defaults.js";
 import type { FastModeAutoProgressState } from "../fast-mode.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
+import type { ToolAccessPolicy } from "../tool-access-policy.js";
 
 /** Input contract for one CLI-backed agent run. */
 export type RunCliAgentParams = {
@@ -177,6 +178,8 @@ export type RunCliAgentParams = {
   execOverrides?: ExecPolicyOverrides;
   /** Effective elevated-exec defaults resolved before entering the CLI runtime. */
   bashElevated?: ExecElevatedDefaults;
+  /** Authoritative current-turn policy used by the loopback MCP capability token. */
+  toolAccessPolicy?: ToolAccessPolicy;
   /** Device-scoped operator session allowed to review approvals initiated by this run. */
   approvalReviewerDeviceId?: string;
   /** Runtime tool allow-list. CLI harnesses fail closed when this is set. */

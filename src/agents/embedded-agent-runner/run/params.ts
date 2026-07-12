@@ -165,6 +165,8 @@ export type RunEmbeddedAgentParams = {
   /** User-visible prompt body to submit and persist; runtime context travels separately. */
   transcriptPrompt?: string;
   currentInboundEventKind?: InboundEventKind;
+  /** Force a complete trusted tool-access policy snapshot for this reconstructed run. */
+  forceToolAccessPolicySnapshot?: boolean;
   currentInboundContext?: CurrentInboundPromptContext;
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
@@ -283,6 +285,7 @@ export type RunEmbeddedAgentParams = {
   extraSystemPrompt?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
+  promptSourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   silentReplyPromptMode?: SilentReplyPromptMode;
   internalEvents?: AgentInternalEvent[];
   inputProvenance?: InputProvenance;

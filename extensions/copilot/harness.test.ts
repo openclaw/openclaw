@@ -307,6 +307,28 @@ describe("createCopilotAgentHarness", () => {
     expect(mocks.runCopilotAttempt).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps tool policy in the current-turn prompt instead of reusable instructions", async () => {
+    const pool = makePoolMock();
+    mocks.createCopilotClientPool.mockReturnValue(pool);
+    const harness = createCopilotAgentHarness();
+    const params = {
+      ...ATTEMPT_PARAMS,
+      prompt: "current user message",
+      extraSystemPrompt: "stable conversation context",
+      toolAccessPolicyPrompt: "[OpenClaw runtime tool policy]\nPolicy version: tap-room",
+    };
+
+    await harness.runAttempt(params);
+
+    expect(mocks.runCopilotAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: "[OpenClaw runtime tool policy]\nPolicy version: tap-room\n\ncurrent user message",
+        extraSystemPrompt: "stable conversation context",
+      }),
+      { pool },
+    );
+  });
+
   it("keeps invalid BYOK provider configuration on the structured attempt path", async () => {
     const pool = makePoolMock();
     mocks.createCopilotClientPool.mockReturnValue(pool);

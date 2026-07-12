@@ -219,6 +219,7 @@ import {
   resolveSandboxSkillRuntimeInputs,
 } from "./sandbox-skills.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "./session-manager-cache.js";
+import { markEmbeddedSessionToolAccessPolicySnapshotRequired } from "./session-prompt-state.js";
 import {
   resolveEmbeddedAgentBaseStreamFn,
   resolveEmbeddedAgentStreamFn,
@@ -665,6 +666,8 @@ async function compactEmbeddedAgentSessionDirectOnce(
   const attempt = params.attempt ?? 1;
   const maxAttempts = params.maxAttempts ?? 1;
   const runId = params.runId ?? params.sessionId;
+  const promptSourceReplyDeliveryMode =
+    params.promptSourceReplyDeliveryMode ?? params.sourceReplyDeliveryMode;
   // Parent compaction model-call spans to the active run/harness trace when one
   // exists, otherwise start a fresh root. Compaction emits no intermediate span
   // of its own (unlike the run lifecycle, which backs its run trace with a
@@ -1217,7 +1220,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
           spawnWorkspaceDir,
           config: params.config,
           abortSignal: runAbortController.signal,
-          sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+          sourceReplyDeliveryMode: promptSourceReplyDeliveryMode,
           modelProvider: effectiveModel.provider,
           modelId,
           modelHasVision: effectiveModel.input?.includes("image") ?? false,
@@ -1447,7 +1450,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
         sourcePath: openClawReferences.sourcePath ?? undefined,
         promptMode,
         promptSurface,
-        sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+        sourceReplyDeliveryMode: promptSourceReplyDeliveryMode,
         acpEnabled: isAcpRuntimeSpawnAvailable({
           config: params.config,
           sandboxed: sandboxInfo?.enabled === true,
@@ -1852,6 +1855,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
           const activeSessionId = transcriptRotation.sessionId ?? params.sessionId;
           const activeSessionFile = transcriptRotation.sessionFile ?? params.sessionFile;
           const activePostLeafId = transcriptRotation.leafId ?? postCompactionLeafId;
+          markEmbeddedSessionToolAccessPolicySnapshotRequired([params.sessionId, activeSessionId]);
           if (transcriptRotation.rotated) {
             log.info(
               `[compaction] rotated active transcript after compaction ` +

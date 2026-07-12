@@ -9,9 +9,17 @@ export type ToolResultPromptProjectionState = {
   sourceTextByKey: Map<string, string[]>;
 };
 
+export type ToolAccessPolicyPromptState = {
+  lastPolicyVersion?: string;
+  lastRouteKey?: string;
+  forceSnapshot: boolean;
+  snapshotGeneration: number;
+};
+
 export type EmbeddedSessionPromptState = {
   toolResults: ToolResultPromptProjectionState;
   sentUserTurnIds: Set<string>;
+  toolAccessPolicy: ToolAccessPolicyPromptState;
 };
 
 const MAX_SESSION_PROMPT_STATES = 64;
@@ -30,6 +38,7 @@ function createSessionPromptState(): EmbeddedSessionPromptState {
       sourceTextByKey: new Map<string, string[]>(),
     },
     sentUserTurnIds: new Set<string>(),
+    toolAccessPolicy: { forceSnapshot: true, snapshotGeneration: 0 },
   };
 }
 
@@ -69,6 +78,54 @@ export function clearEmbeddedSessionPromptStates(sessionIds: Iterable<string | u
     if (normalized) {
       sessionPromptStates.delete(normalized);
     }
+  }
+}
+
+export function shouldEmitToolAccessPolicySnapshot(
+  state: ToolAccessPolicyPromptState,
+  params: {
+    policyVersion: string;
+    routeKey: string;
+    forceSnapshot?: boolean;
+  },
+): boolean {
+  return (
+    params.forceSnapshot === true ||
+    state.forceSnapshot ||
+    state.lastPolicyVersion !== params.policyVersion ||
+    state.lastRouteKey !== params.routeKey
+  );
+}
+
+export function markToolAccessPolicySnapshotSent(
+  state: ToolAccessPolicyPromptState,
+  params: { policyVersion: string; routeKey: string; snapshotGeneration: number },
+): boolean {
+  if (state.snapshotGeneration !== params.snapshotGeneration) {
+    return false;
+  }
+  state.lastPolicyVersion = params.policyVersion;
+  state.lastRouteKey = params.routeKey;
+  state.forceSnapshot = false;
+  return true;
+}
+
+export function reserveToolAccessPolicySnapshot(state: ToolAccessPolicyPromptState): number {
+  state.snapshotGeneration += 1;
+  return state.snapshotGeneration;
+}
+
+export function markEmbeddedSessionToolAccessPolicySnapshotRequired(
+  sessionIds: Iterable<string | undefined>,
+): void {
+  for (const sessionId of sessionIds) {
+    const normalized = sessionId?.trim();
+    if (!normalized) {
+      continue;
+    }
+    const state = getEmbeddedSessionPromptState(normalized).toolAccessPolicy;
+    state.snapshotGeneration += 1;
+    state.forceSnapshot = true;
   }
 }
 

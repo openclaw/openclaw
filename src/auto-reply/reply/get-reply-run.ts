@@ -1646,6 +1646,9 @@ export async function runPreparedReply(
       extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
       sourceReplyDeliveryMode,
       taskSuggestionDeliveryMode: opts?.taskSuggestionDeliveryMode,
+      promptSourceReplyDeliveryMode: sessionPromptSourceReplyDeliveryMode,
+      forceMessageTool:
+        opts?.sessionMessageToolAvailable ?? sourceReplyDeliveryMode === "message_tool_only",
       silentReplyPromptMode,
       extraSystemPromptStatic,
       cliSessionBindingFacts,

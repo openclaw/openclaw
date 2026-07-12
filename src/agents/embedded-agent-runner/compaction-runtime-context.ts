@@ -4,6 +4,7 @@
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import type { ChatType } from "../../channels/chat-type.js";
+import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
@@ -32,6 +33,7 @@ type EmbeddedCompactionRuntimeContext = {
   currentChannelId?: string;
   currentThreadTs?: string;
   currentMessageId?: string | number;
+  currentInboundEventKind?: InboundEventKind;
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
   runtimeAuthPlan?: AgentRuntimeAuthPlan;
@@ -53,6 +55,7 @@ type EmbeddedCompactionRuntimeContext = {
   bashElevated?: ExecElevatedDefaults;
   extraSystemPrompt?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  promptSourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   ownerNumbers?: string[];
   activeProcessSessions?: ActiveProcessSessionReference[];
 };
@@ -275,6 +278,7 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
   currentChannelId?: string | null;
   currentThreadTs?: string | null;
   currentMessageId?: string | number | null;
+  currentInboundEventKind?: InboundEventKind;
   authProfileId?: string | null;
   authProfileIdSource?: "auto" | "user";
   runtimeAuthPlan?: AgentRuntimeAuthPlan;
@@ -295,6 +299,7 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
   bashElevated?: ExecElevatedDefaults;
   extraSystemPrompt?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  promptSourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   ownerNumbers?: string[];
   activeProcessSessions?: ActiveProcessSessionReference[];
 }): EmbeddedCompactionRuntimeContext {
@@ -333,6 +338,7 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
     currentChannelId: params.currentChannelId ?? undefined,
     currentThreadTs: params.currentThreadTs ?? undefined,
     currentMessageId: params.currentMessageId ?? undefined,
+    currentInboundEventKind: params.currentInboundEventKind,
     authProfileId: resolved.authProfileId,
     authProfileIdSource: params.authProfileIdSource,
     runtimeAuthPlan,
@@ -354,6 +360,7 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
     bashElevated: params.bashElevated,
     extraSystemPrompt: params.extraSystemPrompt,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    promptSourceReplyDeliveryMode: params.promptSourceReplyDeliveryMode,
     ownerNumbers: params.ownerNumbers,
     ...(activeProcessSessions.length > 0 ? { activeProcessSessions } : {}),
   };

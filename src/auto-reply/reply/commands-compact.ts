@@ -254,6 +254,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     groupSpace: targetSessionEntry.space,
     spawnedBy: targetSessionEntry.spawnedBy,
     senderId: params.command.senderId,
+    senderIsOwner: params.command.senderIsOwner,
     senderName: params.ctx.SenderName,
     senderUsername: params.ctx.SenderUsername,
     senderE164: params.ctx.SenderE164,
@@ -280,6 +281,10 @@ export const handleCompactCommand: CommandHandler = async (params) => {
           : "user"
         : undefined),
     contextTokenBudget,
+    sourceReplyDeliveryMode: params.opts?.sourceReplyDeliveryMode,
+    promptSourceReplyDeliveryMode:
+      params.promptSourceReplyDeliveryMode ?? params.opts?.sourceReplyDeliveryMode,
+    currentInboundEventKind: "user_request",
     agentHarnessId:
       targetSessionEntry.modelSelectionLocked === true
         ? resolvePersistedSessionRuntimeId(targetSessionEntry)

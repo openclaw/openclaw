@@ -1430,7 +1430,10 @@ export function createFollowupRunner(params: {
                 silentReplyPromptMode: run.silentReplyPromptMode,
                 sourceReplyDeliveryMode: run.sourceReplyDeliveryMode,
                 taskSuggestionDeliveryMode: run.taskSuggestionDeliveryMode,
-                forceMessageTool: run.sourceReplyDeliveryMode === "message_tool_only",
+                promptSourceReplyDeliveryMode: run.promptSourceReplyDeliveryMode,
+                forceToolAccessPolicySnapshot: run.forceToolAccessPolicySnapshot,
+                forceMessageTool:
+                  run.forceMessageTool ?? run.sourceReplyDeliveryMode === "message_tool_only",
                 suppressNextUserMessagePersistence: suppressQueuedUserPersistenceForCandidate,
                 onUserMessagePersisted: notifyUserMessagePersisted,
                 suppressTranscriptOnlyAssistantPersistence:

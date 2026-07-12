@@ -23,7 +23,6 @@ import { applyExecPolicyLayer } from "../infra/exec-policy.js";
 import { logWarn } from "../logger.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
-import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../security/dangerous-tools.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import type { SkillSnapshot, SkillUsagePath } from "../skills/types.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
@@ -80,6 +79,11 @@ import type { SandboxContext } from "./sandbox.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./sandbox/constants.js";
 import { resolveReadOnlyWorkspaceSkillMounts } from "./sandbox/workspace-mounts.js";
 import { createCodingTools, createReadTool } from "./sessions/index.js";
+import {
+  resolveToolAccessPolicy,
+  type ToolAccessPolicy,
+  wrapToolWithToolAccessPolicy,
+} from "./tool-access-policy.js";
 import { PROCESS_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import { createToolFsPolicy, resolveToolFsConfig } from "./tool-fs-policy.js";
 import { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
@@ -438,6 +442,8 @@ type OpenClawCodingToolsOptions = {
   requireExplicitMessageTarget?: boolean;
   /** Visible source replies must be sent through the message tool when set to message_tool_only. */
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /** Session-stable delivery mode used only to shape the model-visible tool inventory. */
+  promptSourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   /** Action sink available for model-proposed follow-up tasks. */
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   inboundEventKind?: InboundEventKind;
@@ -463,6 +469,8 @@ type OpenClawCodingToolsOptions = {
   crestodianTool?: import("./tools/crestodian-tool.js").CrestodianToolOptions;
   /** Trusted sender identity bit for command/channel-action auth and owner-gated plugin tools. */
   senderIsOwner?: boolean;
+  /** Authoritative protected-tool policy resolved once for the current turn. */
+  toolAccessPolicy?: ToolAccessPolicy;
   /** Auth profiles already loaded for this run; used for prompt-time tool availability. */
   authProfileStore?: AuthProfileStore;
   /** Callback invoked when sessions_yield tool is called. */
@@ -593,13 +601,15 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     const normalized = normalizeToolName(toolName);
     return normalized === "*" || normalized === "message";
   });
+  const promptSourceReplyDeliveryMode =
+    options?.promptSourceReplyDeliveryMode ?? options?.sourceReplyDeliveryMode;
   const localModelLeanPreserveToolNames = resolveLocalModelLeanPreserveToolNames({
     toolNames: capabilityProfile.policy.explicitToolOverrideAllowlist,
     forceMessageTool: options?.forceMessageTool,
-    sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
+    sourceReplyDeliveryMode: promptSourceReplyDeliveryMode,
   });
   const runtimeProfileAlsoAllow = [
-    ...(options?.forceMessageTool || options?.sourceReplyDeliveryMode === "message_tool_only"
+    ...(options?.forceMessageTool || promptSourceReplyDeliveryMode === "message_tool_only"
       ? ["message"]
       : []),
     ...(runtimeToolAllowlistIncludesMessage ? ["message"] : []),
@@ -841,15 +851,16 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
           workspaceOnly: applyPatchWorkspaceOnly,
         });
   options?.recordToolPrepStage?.("shell-tools");
-  const ownerOnlyCoreToolDenylist =
-    options?.senderIsOwner === false ? [...GATEWAY_OWNER_ONLY_CORE_TOOLS] : [];
-  const ownerOnlyCoreToolPolicy =
-    ownerOnlyCoreToolDenylist.length > 0 ? { deny: ownerOnlyCoreToolDenylist } : undefined;
+  const toolAccessPolicy =
+    options?.toolAccessPolicy ??
+    resolveToolAccessPolicy({
+      senderIsOwner: options?.senderIsOwner,
+      hasSenderIdentity: Boolean(options?.senderId?.trim()),
+      inboundEventKind: options?.inboundEventKind,
+      trigger: options?.trigger,
+    });
   const pluginToolAllowlist = capabilityProfile.policy.explicitToolAllowlist;
-  const pluginToolDenylist = [
-    ...capabilityProfile.policy.explicitToolDenylist,
-    ...ownerOnlyCoreToolDenylist,
-  ];
+  const pluginToolDenylist = [...capabilityProfile.policy.explicitToolDenylist];
   const inheritedToolDenylist = [...pluginToolDenylist];
   // Passed by reference to sessions_spawn and populated after the final policy
   // pass so child sessions inherit the actual parent tool surface.
@@ -1023,9 +1034,11 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             computerContextEpoch: options?.computerContextEpoch,
             requireExplicitMessageTarget: options?.requireExplicitMessageTarget,
             sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
+            promptSourceReplyDeliveryMode,
             taskSuggestionDeliveryMode: options?.taskSuggestionDeliveryMode,
             inboundEventKind: options?.inboundEventKind,
             disableMessageTool: options?.disableMessageTool,
+            forceMessageTool: options?.forceMessageTool,
             enableHeartbeatTool,
             disablePluginTools: !includePluginTools,
             wrapBeforeToolCallHook: false,
@@ -1093,8 +1106,8 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     localModelLeanPreserveToolNames,
   });
   options?.recordToolPrepStage?.("model-provider-policy");
-  // Sender identity is primarily command/action auth, with one Gateway parity exception:
-  // explicit non-owner callers never receive owner-only control-plane core tools.
+  // Sender/event authorization is enforced at execution time so the model-visible
+  // tool catalogue remains stable across turn-policy changes.
   const subagentFiltered = applyToolPolicyPipeline({
     tools: toolsForModelProvider,
     toolMeta: (tool) => getPluginToolMeta(tool),
@@ -1119,11 +1132,6 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       {
         policy: sandboxToolPolicyWithToolSearchControls,
         label: "sandbox tools.allow",
-        unavailableCoreToolReason,
-      },
-      {
-        policy: ownerOnlyCoreToolPolicy,
-        label: "gateway sender owner-only tools",
         unavailableCoreToolReason,
       },
       {
@@ -1198,9 +1206,13 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       : wrapToolWithBeforeToolCallHook(tool, hookContext, hookOptions),
   );
   options?.recordToolPrepStage?.("tool-hooks");
+  const withToolAccessPolicy = withHooks.map((tool) =>
+    wrapToolWithToolAccessPolicy(tool, toolAccessPolicy),
+  );
+  options?.recordToolPrepStage?.("tool-access-policy");
   const withAbort = options?.abortSignal
-    ? withHooks.map((tool) => wrapToolWithAbortSignal(tool, options.abortSignal))
-    : withHooks;
+    ? withToolAccessPolicy.map((tool) => wrapToolWithAbortSignal(tool, options.abortSignal))
+    : withToolAccessPolicy;
   options?.recordToolPrepStage?.("abort-wrappers");
   const withDeferredFollowupDescriptions = applyDeferredFollowupToolDescriptions(withAbort, {
     agentId,

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { streamSimple } from "../../llm/stream.js";
 import { mintSecretSentinel } from "../../secrets/sentinel.js";
 import * as providerTransportStream from "../provider-transport-stream.js";
+import { markDefaultSessionStreamFn } from "../sessions/default-stream.js";
 import {
   testing,
   describeEmbeddedAgentStreamStrategy,
@@ -92,6 +93,22 @@ describe("describeEmbeddedAgentStreamStrategy", () => {
           provider: "openai",
           id: "codex-mini-latest",
         } as never,
+      }),
+    ).toBe("openclaw-native-codex-responses");
+  });
+
+  it("describes the built-in session auth wrapper as OpenClaw native", () => {
+    const currentStreamFn = markDefaultSessionStreamFn(vi.fn() as never);
+
+    expect(
+      describeEmbeddedAgentStreamStrategy({
+        currentStreamFn,
+        model: {
+          api: "openai-chatgpt-responses",
+          provider: "openai",
+          id: "gpt-5.6-sol",
+        } as never,
+        resolvedApiKey: "oauth-bearer-token",
       }),
     ).toBe("openclaw-native-codex-responses");
   });
@@ -215,6 +232,53 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     expect(requireRecord(result.context, "codex native context").systemPrompt).toBe("intro\ntail");
     expect(requireRecord(result.options, "codex native options").apiKey).toBe("oauth-bearer-token");
     expect(nativeStreamFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("routes the built-in session auth wrapper through OpenClaw native Codex Responses", async () => {
+    const currentStreamFn = markDefaultSessionStreamFn(
+      vi.fn(async (_model, _context, options) => options) as never,
+    );
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn,
+      sessionId: "session-1",
+      model: {
+        api: "openai-chatgpt-responses",
+        provider: "openai",
+        id: "gpt-5.6-sol",
+      } as never,
+      resolvedApiKey: "oauth-bearer-token",
+    });
+
+    const result = await expectStreamResultRecord(
+      streamFn({ provider: "openai", id: "gpt-5.6-sol" } as never, {} as never, {}),
+      "built-in session stream result",
+    );
+    expect(result.sessionId).toBe("session-1");
+    expect(currentStreamFn).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { id: "gpt-5.5", name: "GPT-5.5" },
+    { id: "gpt-5.6-sol", name: "GPT-5.6 Sol" },
+  ])("preserves an unmarked custom $name Responses stream", async ({ id }) => {
+    const currentStreamFn = vi.fn(async (_model, _context, options) => options);
+    const innerStreamFn = vi.fn(async (_model, _context, options) => options);
+    overrideBoundaryAwareStreamFnOnce(innerStreamFn as never);
+
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: currentStreamFn as never,
+      sessionId: "session-1",
+      model: {
+        api: "openai-chatgpt-responses",
+        provider: "openai",
+        id,
+      } as never,
+      resolvedApiKey: "oauth-bearer-token",
+    });
+
+    await streamFn({ provider: "openai", id } as never, {} as never, {});
+    expect(currentStreamFn).not.toHaveBeenCalled();
+    expect(innerStreamFn).toHaveBeenCalledTimes(1);
   });
 
   it("routes GitHub Copilot fallbacks through boundary-aware transports", () => {

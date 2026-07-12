@@ -898,6 +898,17 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(new Set(runIds).size).toBe(2);
   });
 
+  it("builds side-question tools with explicit user-request policy context", async () => {
+    await runCodexAppServerSideQuestion(sideParams({ senderIsOwner: false }));
+
+    expect(createOpenClawCodingToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inboundEventKind: "user_request",
+        senderIsOwner: false,
+      }),
+    );
+  });
+
   it("uses the default supervision runtime, native auth, and exact bound model pair", async () => {
     const client = createFakeClient();
     getSharedCodexAppServerClientMock.mockResolvedValue(client);

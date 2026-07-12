@@ -24,6 +24,7 @@ import type { AgentRunTimeoutPhase } from "../../run-timeout-attribution.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { AuthStorage, ModelRegistry } from "../../sessions/index.js";
+import type { ToolAccessPolicy } from "../../tool-access-policy.js";
 import type { ToolErrorSummary } from "../../tool-error-summary.js";
 import type { NormalizedUsage } from "../../usage.js";
 import type { EmbeddedRunReplayMetadata, EmbeddedRunReplayState } from "../replay-state.js";
@@ -92,6 +93,12 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   expectedRuntimeArtifact?: AgentHarnessRuntimeArtifactBinding;
   /** OpenClaw-owned runtime policy prepared by the orchestrator for this attempt. */
   runtimePlan?: AgentRuntimePlan;
+  /** Authoritative protected-tool policy for this turn. */
+  toolAccessPolicy: ToolAccessPolicy;
+  /** Complete trusted snapshot to inject when policy/model context changed. */
+  toolAccessPolicyPrompt?: string;
+  /** Records the exact session where the trusted policy snapshot entered history. */
+  onToolAccessPolicyPromptPersisted?: (sessionId: string) => void;
   /** Host-issued scope for harnesses that mirror native child runs into task state. */
   agentHarnessTaskRuntimeScope?: AgentHarnessTaskRuntimeScope;
   /** Storage-neutral trajectory target for harness-owned runtime trace artifacts. */

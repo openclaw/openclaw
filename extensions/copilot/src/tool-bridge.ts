@@ -207,7 +207,8 @@ export async function createCopilotToolBridge(
     runtimeToolAllowlist: effectiveToolPlan.runtimeToolAllowlist,
     sessionId: input.sessionId,
     sessionKey: attemptParams.sandboxSessionKey ?? attemptParams.sessionKey ?? input.sessionKey,
-    sourceReplyDeliveryMode: attemptParams.sourceReplyDeliveryMode,
+    sourceReplyDeliveryMode:
+      attemptParams.promptSourceReplyDeliveryMode ?? attemptParams.sourceReplyDeliveryMode,
     toolsAllow: attemptParams.toolsAllow,
   });
   const toolOptions = buildOpenClawCodingToolsOptions(
@@ -377,6 +378,8 @@ function buildOpenClawCodingToolsOptions(
     senderUsername: a.senderUsername,
     senderE164: a.senderE164,
     senderIsOwner: a.senderIsOwner,
+    inboundEventKind: a.currentInboundEventKind,
+    toolAccessPolicy: a.toolAccessPolicy,
     allowGatewaySubagentBinding: a.allowGatewaySubagentBinding,
     sessionKey: sandboxSessionKey,
     runSessionKey,
@@ -417,6 +420,7 @@ function buildOpenClawCodingToolsOptions(
     requireExplicitMessageTarget:
       a.requireExplicitMessageTarget ?? isSubagentSessionKey(liveSessionKey),
     sourceReplyDeliveryMode: a.sourceReplyDeliveryMode,
+    promptSourceReplyDeliveryMode: a.promptSourceReplyDeliveryMode,
     disableMessageTool: a.disableMessageTool,
     forceMessageTool: a.forceMessageTool,
     enableHeartbeatTool: a.enableHeartbeatTool,
@@ -792,7 +796,7 @@ function isCopilotRawModelRun(params: CopilotToolAttemptParams): boolean {
 
 /**
  * Mirrors PI's `shouldForceMessageTool` semantics: a message tool is
- * forced when the caller asked for it explicitly or when the source
+ * forced when the caller asked for it explicitly or when the prompt-facing
  * reply delivery mode is `message_tool_only`, but never when
  * `disableMessageTool` is set (the suppress flag always wins). Compare
  * `src/agents/pi-embedded-runner/run/attempt.ts:1361-1366` and the
@@ -803,7 +807,9 @@ function shouldForceCopilotMessageTool(params: CopilotToolAttemptParams): boolea
   if (params.disableMessageTool === true) {
     return false;
   }
-  return params.forceMessageTool === true || params.sourceReplyDeliveryMode === "message_tool_only";
+  const promptSourceReplyDeliveryMode =
+    params.promptSourceReplyDeliveryMode ?? params.sourceReplyDeliveryMode;
+  return params.forceMessageTool === true || promptSourceReplyDeliveryMode === "message_tool_only";
 }
 
 /**

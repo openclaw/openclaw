@@ -853,6 +853,29 @@ describe("createFollowupRunner reply-lane admission", () => {
     });
   });
 
+  it("forwards forced policy snapshots on reconstructed queued runs", async () => {
+    runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey: "main",
+      defaultModel: "anthropic/claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          provider: "anthropic",
+          model: "claude",
+          forceToolAccessPolicySnapshot: true,
+        },
+      }),
+    );
+
+    const call = requireLastMockCallArg(runEmbeddedAgentMock, "run embedded agent");
+    expect(call.forceToolAccessPolicySnapshot).toBe(true);
+  });
+
   it("awaits queued-owner admission before model execution", async () => {
     const events: string[] = [];
     let releaseAdmission!: () => void;
@@ -5912,12 +5935,15 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
         run: {
           ...queued.run,
           sourceReplyDeliveryMode: "message_tool_only",
+          promptSourceReplyDeliveryMode: "automatic",
+          forceMessageTool: true,
         },
       } as FollowupRun,
     });
 
     const runArg = requireMockCallArg(runEmbeddedAgentMock, 0);
     expect(runArg.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(runArg.promptSourceReplyDeliveryMode).toBe("automatic");
     expect(runArg.forceMessageTool).toBe(true);
     expect(routeReplyMock).not.toHaveBeenCalled();
     expect(onBlockReply).not.toHaveBeenCalled();

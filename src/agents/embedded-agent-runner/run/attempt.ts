@@ -247,6 +247,7 @@ import {
   buildModelIdentityPromptLine,
 } from "../../system-prompt.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
+import { buildToolAccessPolicyCustomMessage } from "../../tool-access-policy.js";
 import {
   buildEmptyExplicitToolAllowlistError,
   collectExplicitToolAllowlistSources,
@@ -1463,8 +1464,10 @@ export async function runEmbeddedAttempt(
       );
     };
     const corePluginToolStages = createEmbeddedRunStageTracker();
+    const promptSourceReplyDeliveryMode =
+      params.promptSourceReplyDeliveryMode ?? params.sourceReplyDeliveryMode;
     const forceDirectMessageTool =
-      params.forceMessageTool === true || params.sourceReplyDeliveryMode === "message_tool_only";
+      params.forceMessageTool === true || promptSourceReplyDeliveryMode === "message_tool_only";
     const toolsAllowWithForcedRuntimeTools = mergeForcedEmbeddedAttemptToolsAllow(
       params.toolsAllow,
       {
@@ -1638,6 +1641,7 @@ export async function runEmbeddedAttempt(
             senderUsername: params.senderUsername,
             senderE164: params.senderE164,
             senderIsOwner: params.senderIsOwner,
+            toolAccessPolicy: params.toolAccessPolicy,
             allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
             sessionKey: sandboxSessionKey,
             // When sandboxSessionKey differs from the real run session key (e.g. Telegram
@@ -1696,10 +1700,12 @@ export async function runEmbeddedAttempt(
             requireExplicitMessageTarget:
               params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
             sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+            promptSourceReplyDeliveryMode:
+              params.promptSourceReplyDeliveryMode ?? params.sourceReplyDeliveryMode,
             taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
             inboundEventKind: params.currentInboundEventKind,
             disableMessageTool: params.disableMessageTool,
-            forceMessageTool: params.forceMessageTool,
+            forceMessageTool: forceDirectMessageTool,
             enableHeartbeatTool: params.enableHeartbeatTool,
             forceHeartbeatTool: params.forceHeartbeatTool,
             runtimeToolAllowlist: effectiveToolsAllow,
@@ -2429,7 +2435,8 @@ export async function runEmbeddedAttempt(
         workspaceNotes: workspaceNotes?.length ? workspaceNotes : undefined,
         reactionGuidance,
         promptMode: effectivePromptMode,
-        sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+        sourceReplyDeliveryMode:
+          params.promptSourceReplyDeliveryMode ?? params.sourceReplyDeliveryMode,
         silentReplyPromptMode: params.silentReplyPromptMode,
         proactiveSubagentOrchestration,
         acpEnabled: isAcpRuntimeSpawnAvailable({
@@ -4749,6 +4756,11 @@ export async function runEmbeddedAttempt(
           );
           if (filteredMessages.length < activeSession.messages.length) {
             activeSession.agent.state.messages = filteredMessages;
+          }
+          if (params.toolAccessPolicyPrompt) {
+            const policyMessage = buildToolAccessPolicyCustomMessage(params.toolAccessPolicy);
+            await activeSession.sendCustomMessage(policyMessage, { triggerTurn: false });
+            params.onToolAccessPolicyPromptPersisted?.(activeSession.sessionId);
           }
           prePromptMessageCount = activeSession.messages.length;
           const contextTokenBudget = params.contextTokenBudget ?? DEFAULT_CONTEXT_TOKENS;

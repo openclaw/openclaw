@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type { ExecElevatedDefaults } from "../agents/bash-tools.exec-types.js";
 import type { ExecPolicyOverrides, ExecSessionDefaults } from "../agents/exec-defaults.js";
+import type { ToolAccessPolicy } from "../agents/tool-access-policy.js";
 import type {
   SourceReplyDeliveryMode,
   TaskSuggestionDeliveryMode,
@@ -28,6 +29,7 @@ export type McpLoopbackRequestContext = {
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   requireExplicitMessageTarget?: boolean;
   senderIsOwner: boolean;
+  toolAccessPolicy?: ToolAccessPolicy;
   /** Capability minted only for Gateway-launched CLI backends. */
   nodeExecAllowed?: boolean;
   execSession?: ExecSessionDefaults;

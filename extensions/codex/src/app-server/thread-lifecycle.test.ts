@@ -18,7 +18,7 @@ import {
   resetCodexTestBindingStore,
   testCodexAppServerBindingStore,
 } from "./session-binding.test-helpers.js";
-import { createCodexTestModel } from "./test-support.js";
+import { CODEX_TEST_TOOL_ACCESS_POLICY, createCodexTestModel } from "./test-support.js";
 import {
   buildCodexRingZeroThreadConfigPatch,
   buildDeveloperInstructions,
@@ -167,6 +167,16 @@ function createAttemptParams(params: {
     provider: params.provider,
     modelId: params.modelId ?? "gpt-5.4",
     prompt: "test prompt",
+    sessionId: "session-1",
+    sessionFile: "/tmp/openclaw-codex-thread-lifecycle/session.jsonl",
+    workspaceDir: "/tmp/openclaw-codex-thread-lifecycle",
+    timeoutMs: 5_000,
+    runId: "run-1",
+    model: createCodexTestModel(params.provider),
+    authStorage: {} as never,
+    modelRegistry: {} as never,
+    thinkLevel: "medium",
+    toolAccessPolicy: CODEX_TEST_TOOL_ACCESS_POLICY,
     authProfileId: params.authProfileId,
     ...(params.bootstrapContextMode ? { bootstrapContextMode: params.bootstrapContextMode } : {}),
     ...(params.bootstrapContextRunKind
@@ -255,6 +265,7 @@ function createThreadLifecycleParams(
     provider: "codex",
     modelId: "gpt-5.4-codex",
     model: createCodexTestModel("codex"),
+    toolAccessPolicy: CODEX_TEST_TOOL_ACCESS_POLICY,
     thinkLevel: "medium",
     disableTools: true,
     timeoutMs: 5_000,
@@ -1141,6 +1152,37 @@ describe("Codex app-server turn input image sanitizing", () => {
     );
     expect(request.collaborationMode?.settings.developer_instructions).toContain(
       "SOUL.md turn-only context",
+    );
+  });
+
+  it("keeps the tool access policy snapshot in current-turn instructions", () => {
+    const params = createAttemptParams({ provider: "openai" });
+    const toolAccessPolicyPrompt = [
+      "[OpenClaw runtime tool policy]",
+      "Policy version: test-policy",
+      "Denied tools: gateway",
+    ].join("\n");
+    params.toolAccessPolicyPrompt = toolAccessPolicyPrompt;
+
+    const threadStart = buildThreadStartParams(params, {
+      cwd: "/repo",
+      dynamicTools: [],
+      appServer: createAppServerOptions() as never,
+    });
+    const threadResume = buildThreadResumeParams(params, {
+      threadId: "thread-1",
+      appServer: createAppServerOptions() as never,
+    });
+    const turnStart = buildTurnStartParams(params, {
+      threadId: "thread-1",
+      cwd: "/repo",
+      appServer: createAppServerOptions() as never,
+    });
+
+    expect(threadStart.developerInstructions).not.toContain(toolAccessPolicyPrompt);
+    expect(threadResume.developerInstructions).not.toContain(toolAccessPolicyPrompt);
+    expect(turnStart.collaborationMode?.settings.developer_instructions).toContain(
+      toolAccessPolicyPrompt,
     );
   });
 

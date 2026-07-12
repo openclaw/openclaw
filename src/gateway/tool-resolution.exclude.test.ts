@@ -123,7 +123,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     expect(args.inheritedToolDenylist).toEqual([]);
   });
 
-  it("keeps owner-only core tools visible only for owner loopback callers", () => {
+  it("keeps owner-only core tool schemas stable for loopback callers", () => {
     const ownerResult = resolveGatewayScopedTools({
       cfg: {
         gateway: { tools: { allow: ["gateway"] } },
@@ -148,10 +148,12 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       "gateway",
       "nodes",
     ]);
-    expect(nonOwnerResult.tools.map((tool) => tool.name)).toEqual(["read", "sessions_spawn"]);
+    expect(nonOwnerResult.tools.map((tool) => tool.name)).toEqual(
+      ownerResult.tools.map((tool) => tool.name),
+    );
     const args = readCreateToolsArgs(1);
-    expect(args.pluginToolDenylist).toEqual(["cron", "gateway", "nodes", "computer"]);
-    expect(args.inheritedToolDenylist).toEqual(["cron", "gateway", "nodes", "computer"]);
+    expect(args.pluginToolDenylist).toEqual([]);
+    expect(args.inheritedToolDenylist).toEqual([]);
   });
 
   it("keeps real gateway deny policy inheritable while excluding native dedup tools", () => {

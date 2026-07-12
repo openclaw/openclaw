@@ -27,6 +27,7 @@ import type {
   MessagingToolSourceReplyPayload,
 } from "../../embedded-agent-messaging.types.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { resolveToolAccessPolicy } from "../../tool-access-policy.js";
 import type { WorkspaceBootstrapFile } from "../../workspace.js";
 
 type SubscribeEmbeddedAgentSessionFn =
@@ -1374,6 +1375,10 @@ export async function createContextEngineAttemptRunner(params: {
       authStorage: testAuthStorage as never,
       authProfileStore: { version: 1, profiles: {} },
       modelRegistry: {} as never,
+      toolAccessPolicy: resolveToolAccessPolicy({
+        senderIsOwner: true,
+        inboundEventKind: "user_request",
+      }),
       thinkLevel: "off",
       disableTools: true,
       disableMessageTool: true,

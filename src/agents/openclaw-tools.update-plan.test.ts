@@ -135,6 +135,37 @@ describe("openclaw-tools update_plan gating", () => {
     expect(toolNames(tools)).toContain("message");
   });
 
+  it("keeps actual source-reply delivery when prompt tool shape uses the stable mode", async () => {
+    setEmbeddedMode(true);
+    const messageTool = expectToolNamed(
+      createOpenClawTools({
+        config: {} as OpenClawConfig,
+        disablePluginTools: true,
+        wrapBeforeToolCallHook: false,
+        agentChannel: "webchat",
+        agentSessionKey: "agent:main:webchat:dm:dashboard",
+        runId: "room-event-run",
+        sourceReplyDeliveryMode: "message_tool_only",
+        promptSourceReplyDeliveryMode: "automatic",
+        forceMessageTool: true,
+      }),
+      "message",
+    );
+
+    const result = await messageTool.execute("message-call", {
+      action: "send",
+      message: "Visible room-event reply.",
+    });
+
+    expect(result.details).toMatchObject({
+      channel: "webchat",
+      target: "current-run",
+      sourceReplyDeliveryMode: "message_tool_only",
+      sourceReplySink: "internal-ui",
+      sourceReply: { text: "Visible room-event reply." },
+    });
+  });
+
   it("requires explicit transcripts enablement before registering the transcripts tool", () => {
     const defaultTools = createFastToolNames({
       config: {} as OpenClawConfig,

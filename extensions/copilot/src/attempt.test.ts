@@ -311,6 +311,50 @@ describe("runCopilotAttempt", () => {
     expect(getSdkSessionId(result)).toBe("sess-1");
   });
 
+  it("acknowledges a policy snapshot once the SDK persists the user message", async () => {
+    const onToolAccessPolicyPromptPersisted = vi.fn();
+    const sdk = makeFakeSdk({
+      onCreateSession: (session) => {
+        session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("user.message", { content: "unrelated queued message" });
+          session.emit("user.message", { content: "hello" });
+          throw new Error("failed after send");
+        });
+      },
+    });
+
+    const result = await runCopilotAttempt(
+      makeParams({
+        toolAccessPolicyPrompt: "[OpenClaw runtime tool policy]",
+        onToolAccessPolicyPromptPersisted,
+      }),
+      { pool: makeFakePool(sdk) },
+    );
+
+    expect(result.promptError).toEqual(expect.objectContaining({ message: "failed after send" }));
+    expect(onToolAccessPolicyPromptPersisted).toHaveBeenCalledWith("session-1");
+  });
+
+  it("does not acknowledge a policy snapshot when the SDK rejects before persistence", async () => {
+    const onToolAccessPolicyPromptPersisted = vi.fn();
+    const sdk = makeFakeSdk({
+      onCreateSession: (session) => {
+        session.sendAndWait.mockRejectedValueOnce(new Error("send rejected"));
+      },
+    });
+
+    const result = await runCopilotAttempt(
+      makeParams({
+        toolAccessPolicyPrompt: "[OpenClaw runtime tool policy]",
+        onToolAccessPolicyPromptPersisted,
+      }),
+      { pool: makeFakePool(sdk) },
+    );
+
+    expect(result.promptError).toEqual(expect.objectContaining({ message: "send rejected" }));
+    expect(onToolAccessPolicyPromptPersisted).not.toHaveBeenCalled();
+  });
+
   it("runs generic prompt and lifecycle hooks through the standard harness helpers", async () => {
     const beforePromptBuild = vi.fn(() => ({
       prependContext: "Use the current repository state.",

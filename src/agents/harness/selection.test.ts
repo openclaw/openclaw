@@ -12,6 +12,7 @@ import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
 } from "../embedded-agent-runner/run/types.js";
+import { resolveToolAccessPolicy } from "../tool-access-policy.js";
 import type { CrestodianToolOptions } from "../tools/crestodian-tool.js";
 import { maybeCompactAgentHarnessSession } from "./compaction.js";
 import { clearAgentHarnesses, registerAgentHarness } from "./registry.js";
@@ -155,6 +156,7 @@ function createAttemptParams(config?: OpenClawConfig): EmbeddedRunAttemptParams 
     authProfileStore: { version: 1, profiles: {} },
     modelRegistry: {} as never,
     thinkLevel: "low",
+    toolAccessPolicy: resolveToolAccessPolicy({ inboundEventKind: "user_request" }),
     config,
   } as EmbeddedRunAttemptParams;
 }

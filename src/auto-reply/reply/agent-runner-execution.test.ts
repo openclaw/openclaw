@@ -1794,6 +1794,7 @@ describe("runAgentTurnWithFallback", () => {
     const followupRun = createFollowupRun();
     followupRun.run.provider = "claude-cli";
     followupRun.run.model = "sonnet-4.6";
+    followupRun.run.senderIsOwner = false;
     const params = createMinimalRunAgentTurnParams({
       followupRun,
       opts: {
@@ -1811,6 +1812,14 @@ describe("runAgentTurnWithFallback", () => {
       trigger: "heartbeat",
       bootstrapContextMode: "lightweight",
       bootstrapContextRunKind: "commitment-only",
+      toolAccessPolicy: expect.objectContaining({
+        senderClass: "trusted_internal",
+        reason: "authorized_internal",
+        deniedToolNames: [],
+      }),
+      prompt: expect.stringMatching(
+        /^\[OpenClaw runtime tool policy\][\s\S]*Sender class: trusted_internal/,
+      ),
     });
   });
 

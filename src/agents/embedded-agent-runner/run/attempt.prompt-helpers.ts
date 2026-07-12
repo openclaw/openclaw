@@ -589,9 +589,13 @@ type AfterTurnRuntimeContextAttempt = Pick<
   | "currentChannelId"
   | "currentThreadTs"
   | "currentMessageId"
+  | "currentInboundEventKind"
+  | "sourceReplyDeliveryMode"
+  | "promptSourceReplyDeliveryMode"
   | "config"
   | "skillsSnapshot"
   | "senderId"
+  | "senderIsOwner"
   | "provider"
   | "modelId"
   | "agentHarnessId"
@@ -659,6 +663,9 @@ export function buildAfterTurnRuntimeContext(params: {
       currentChannelId: params.attempt.currentChannelId,
       currentThreadTs: params.attempt.currentThreadTs,
       currentMessageId: params.attempt.currentMessageId,
+      currentInboundEventKind: params.attempt.currentInboundEventKind,
+      sourceReplyDeliveryMode: params.attempt.sourceReplyDeliveryMode,
+      promptSourceReplyDeliveryMode: params.attempt.promptSourceReplyDeliveryMode,
       authProfileId: params.attempt.authProfileId,
       authProfileIdSource: params.attempt.authProfileIdSource,
       runtimeAuthPlan: params.attempt.runtimePlan?.auth,
@@ -668,6 +675,7 @@ export function buildAfterTurnRuntimeContext(params: {
       config: params.attempt.config,
       skillsSnapshot: params.attempt.skillsSnapshot,
       senderId: params.attempt.senderId,
+      senderIsOwner: params.attempt.senderIsOwner,
       provider: params.attempt.provider,
       modelId: params.attempt.modelId,
       harnessRuntime: params.attempt.agentHarnessId,

@@ -56,6 +56,7 @@ type CompactRuntimeContext = {
   currentThreadTs?: string;
   currentMessageId?: string;
   senderId?: string;
+  senderIsOwner?: boolean;
   authProfileId?: string;
   provider?: string;
   model?: string;
@@ -327,6 +328,7 @@ describe("timeout-triggered compaction", () => {
       currentThreadTs: "thread-1",
       currentMessageId: "message-1",
       senderId: "sender-1",
+      senderIsOwner: true,
       agentHarnessId: "openclaw",
       modelSelectionLocked: true,
       config: {
@@ -343,6 +345,7 @@ describe("timeout-triggered compaction", () => {
     expect(compactParams.runtimeContext?.currentThreadTs).toBe("thread-1");
     expect(compactParams.runtimeContext?.currentMessageId).toBe("message-1");
     expect(compactParams.runtimeContext?.senderId).toBe("sender-1");
+    expect(compactParams.runtimeContext?.senderIsOwner).toBe(true);
     expect(compactParams.runtimeContext?.modelSelectionLocked).toBe(true);
     expect(compactParams.runtimeContext?.provider).toBe("openai");
     expect(compactParams.runtimeContext?.model).toBe("gpt-5.5");

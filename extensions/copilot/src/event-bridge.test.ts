@@ -10,6 +10,7 @@ const MODEL_REF = {
 } as const;
 const REGISTERED_EVENT_TYPES = [
   "assistant.message_delta",
+  "user.message",
   "assistant.reasoning_delta",
   "assistant.message",
   "assistant.usage",
@@ -131,6 +132,36 @@ afterEach(() => {
 });
 
 describe("attachEventBridge", () => {
+  it("acknowledges only the first accepted persisted root user message", () => {
+    const session = createFakeSession();
+    const onUserMessagePersisted = vi.fn();
+    attachEventBridge(session, {
+      getSdkSessionId: () => "sdk-session-id",
+      isAborted: () => false,
+      onUserMessagePersisted: (event) => {
+        onUserMessagePersisted(event);
+        return event.data.content === "persisted";
+      },
+    });
+
+    session.emit("user.message", {
+      ...makeEvent("user.message", { content: "ephemeral" }),
+      ephemeral: true,
+    } as SessionEvent);
+    session.emit("user.message", {
+      ...makeEvent("user.message", { content: "child" }),
+      agentId: "child-1",
+    } as SessionEvent);
+    session.emit("user.message", makeEvent("user.message", { content: "unrelated" }));
+    session.emit("user.message", makeEvent("user.message", { content: "persisted" }));
+    session.emit("user.message", makeEvent("user.message", { content: "later" }));
+
+    expect(onUserMessagePersisted).toHaveBeenCalledTimes(2);
+    expect(onUserMessagePersisted).toHaveBeenLastCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ content: "persisted" }) }),
+    );
+  });
+
   it("assistant.message_delta accumulates text per messageId in arrival order", () => {
     const session = createFakeSession();
     const bridge = attachEventBridge(session, {

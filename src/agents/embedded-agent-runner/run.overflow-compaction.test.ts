@@ -1017,6 +1017,39 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     expect(attemptParams?.agentHarnessRuntimeOverride).toBe("openclaw");
   });
 
+  it("records a policy snapshot as soon as the attempt persists it", async () => {
+    const sessionId = "policy-snapshot-before-prompt-error";
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
+      const params = attemptParams as EmbeddedRunAttemptParams;
+      expect(params.toolAccessPolicyPrompt).toBeDefined();
+      params.onToolAccessPolicyPromptPersisted?.(sessionId);
+      return makeAttemptResult({
+        promptError: new Error("blocked after policy persistence"),
+        promptErrorSource: "hook:before_agent_run",
+        sessionIdUsed: sessionId,
+      });
+    });
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      sessionId,
+      runId: "policy-snapshot-first-attempt",
+      forceToolAccessPolicySnapshot: true,
+    });
+
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({ promptError: null, sessionIdUsed: sessionId }),
+    );
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      sessionId,
+      runId: "policy-snapshot-next-attempt",
+    });
+
+    const nextAttempt = mockCallArg(mockedRunEmbeddedAttempt, 1) as EmbeddedRunAttemptParams;
+    expect(nextAttempt.toolAccessPolicyPrompt).toBeUndefined();
+  });
+
   it("routes non-empty request stream params through OpenClaw before auth preparation", async () => {
     useOpenAIPlatformAuthFixture();
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
@@ -3192,7 +3225,11 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       compactDirect: mockedCompactDirect,
     });
 
-    await runEmbeddedAgent(overflowBaseRunParams);
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      senderId: "owner-1",
+      senderIsOwner: true,
+    });
 
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
     const compactParams = expectMockCallFields(mockedCompactDirect, {
@@ -3205,6 +3242,8 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     expectRecordFields(compactParams.runtimeContext, {
       trigger: "overflow",
       authProfileId: "test-profile",
+      senderId: "owner-1",
+      senderIsOwner: true,
     });
   });
 

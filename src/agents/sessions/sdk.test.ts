@@ -25,6 +25,7 @@ vi.mock("../../llm/stream.js", () => ({
   streamSimple: streamMocks.streamSimple,
 }));
 import { AuthStorage } from "./auth-storage.js";
+import { isDefaultSessionStreamFn } from "./default-stream.js";
 import { createExtensionRuntime } from "./extensions/loader.js";
 import type { LoadExtensionsResult, ToolDefinition } from "./extensions/types.js";
 import { ModelRegistry } from "./model-registry.js";
@@ -155,6 +156,20 @@ async function createSessionWithPersistedAssistantContent(content: unknown) {
   appendPersistedAssistantMessage({ sessionManager, content });
   return await createSessionFromManager(sessionManager);
 }
+
+describe("AgentSession default stream", () => {
+  it("marks the built-in auth wrapper as a default session stream", async () => {
+    const { session } = await createAgentSession({
+      model: testModel,
+      resourceLoader: createEmptyResourceLoader(),
+      sessionManager: SessionManager.inMemory(),
+      settingsManager: SettingsManager.inMemory(),
+      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
+    });
+
+    expect(isDefaultSessionStreamFn(session.agent.streamFn)).toBe(true);
+  });
+});
 
 describe("AgentSession getLastAssistantText", () => {
   it.each([

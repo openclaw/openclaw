@@ -92,6 +92,7 @@ import {
   resolveActiveEmbeddedRunHandleSessionIdBySessionFile,
   setActiveEmbeddedRun,
 } from "./runs.js";
+import { markEmbeddedSessionToolAccessPolicySnapshotRequired } from "./session-prompt-state.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
 import { normalizeContextTokenBudget } from "./utils.js";
 
@@ -101,6 +102,17 @@ function shouldFallbackAfterHarnessCompaction(
   result: EmbeddedAgentCompactResult | undefined,
 ): boolean {
   return isRecoverableNativeHarnessBindingFailure(result);
+}
+
+function markSuccessfulHarnessCompactionSnapshots(
+  sessionId: string,
+  result: EmbeddedAgentCompactResult | undefined,
+): void {
+  if (!result?.ok || !result.compacted) {
+    return;
+  }
+  const successor = resolveCompactionSuccessorTranscript(result);
+  markEmbeddedSessionToolAccessPolicySnapshotRequired([sessionId, successor.sessionId]);
 }
 
 function lockedCompactionRuntimeFailure(runtime?: string): EmbeddedAgentCompactResult {
@@ -653,10 +665,12 @@ async function compactResolvedContextEngine(
         })
       : undefined;
   if (lockedNativeHarness) {
+    markSuccessfulHarnessCompactionSnapshots(params.sessionId, harnessResult);
     return harnessResult ?? lockedCompactionRuntimeFailure(selectedHarnessRuntime);
   }
   if (harnessResult) {
     if (!shouldFallbackAfterHarnessCompaction(harnessResult)) {
+      markSuccessfulHarnessCompactionSnapshots(params.sessionId, harnessResult);
       return harnessResult;
     }
     log.warn(
@@ -843,6 +857,10 @@ async function compactResolvedContextEngine(
               });
             }
           }
+          markEmbeddedSessionToolAccessPolicySnapshotRequired([
+            params.sessionId,
+            postCompactionSessionId,
+          ]);
           if (params.config && params.sessionKey && checkpointSnapshot) {
             try {
               const transcriptState =
@@ -952,6 +970,10 @@ async function compactResolvedContextEngine(
               },
               { nativeCompactionRequest: "after_context_engine" },
             );
+            markSuccessfulHarnessCompactionSnapshots(
+              postCompactionSessionId,
+              secondaryNativeHarnessCompaction,
+            );
             if (secondaryNativeHarnessCompaction && !secondaryNativeHarnessCompaction.ok) {
               log.warn(
                 "secondary native harness compaction failed after context-engine compaction",
@@ -1044,6 +1066,7 @@ function buildCompactionContextEngineRuntimeContext(params: {
       currentChannelId: params.params.currentChannelId,
       currentThreadTs: params.params.currentThreadTs,
       currentMessageId: params.params.currentMessageId,
+      currentInboundEventKind: params.params.currentInboundEventKind,
       authProfileId: params.params.authProfileId,
       authProfileIdSource: params.params.authProfileIdSource,
       runtimeAuthPlan: params.params.runtimeAuthPlan,
@@ -1064,6 +1087,7 @@ function buildCompactionContextEngineRuntimeContext(params: {
       bashElevated: params.params.bashElevated,
       extraSystemPrompt: params.params.extraSystemPrompt,
       sourceReplyDeliveryMode: params.params.sourceReplyDeliveryMode,
+      promptSourceReplyDeliveryMode: params.params.promptSourceReplyDeliveryMode,
       ownerNumbers: params.params.ownerNumbers,
     }),
     ...resolveContextEngineCapabilities({

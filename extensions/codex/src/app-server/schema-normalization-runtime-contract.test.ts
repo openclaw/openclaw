@@ -11,7 +11,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexThreadStartParams } from "./protocol.js";
 import { testCodexAppServerBindingStore } from "./session-binding.test-helpers.js";
-import { createCodexTestModel } from "./test-support.js";
+import { CODEX_TEST_TOOL_ACCESS_POLICY, createCodexTestModel } from "./test-support.js";
 import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle.js";
 
 function startOrResumeThread(
@@ -33,6 +33,7 @@ function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAtt
     provider: "codex",
     modelId: "gpt-5.4",
     model: createCodexTestModel("codex"),
+    toolAccessPolicy: CODEX_TEST_TOOL_ACCESS_POLICY,
     thinkLevel: "medium",
     disableTools: true,
     timeoutMs: 5_000,

@@ -50,7 +50,7 @@ describe("followup queue in-flight ownership", () => {
       const runFollowup = async (run: FollowupRun) => {
         calls.push(run);
         await run.queuedLifecycle?.onAdmitted?.();
-        if (run === active) {
+        if (run.prompt === active.prompt) {
           entered.resolve();
           await release.promise;
         }
@@ -113,7 +113,7 @@ describe("followup queue in-flight ownership", () => {
     const active = createRun({ prompt: "active" });
     const runFollowup = async (run: FollowupRun) => {
       await run.queuedLifecycle?.onAdmitted?.();
-      if (run === active) {
+      if (run.prompt === active.prompt) {
         entered.resolve();
         await release.promise;
       }

@@ -5,6 +5,7 @@ import type { Model } from "openclaw/plugin-sdk/llm";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import type { ChatType } from "../../channels/chat-type.js";
+import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import type { CommandQueueEnqueueFn } from "../../process/command-queue.types.js";
@@ -32,6 +33,7 @@ export type CompactEmbeddedAgentSessionParams = {
   currentChannelId?: string;
   currentThreadTs?: string;
   currentMessageId?: string | number;
+  currentInboundEventKind?: InboundEventKind;
   /** Trusted sender id from inbound context for scoped message-tool discovery. */
   senderId?: string;
   senderName?: string;
@@ -105,6 +107,8 @@ export type CompactEmbeddedAgentSessionParams = {
   enqueue?: CommandQueueEnqueueFn;
   extraSystemPrompt?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /** Session-stable delivery mode used to rebuild prompt and tool surfaces. */
+  promptSourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   ownerNumbers?: string[];
   abortSignal?: AbortSignal;
   onCompactionHookMessages?: (payload: {
