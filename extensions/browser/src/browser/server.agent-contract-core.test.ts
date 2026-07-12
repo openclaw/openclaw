@@ -19,6 +19,7 @@ import {
   makeResponse,
   resetBrowserControlServerTestContext,
   setBrowserControlServerEvaluateEnabled,
+  setBrowserControlServerExtraArgs,
   setBrowserControlServerProfiles,
   setBrowserControlServerReachable,
   setBrowserControlServerSsrFPolicy,
@@ -138,6 +139,28 @@ describe("browser control server", () => {
     slowTimeoutMs,
   );
 
+  it.each([
+    {
+      body: { kind: "clickCoords", x: "0x10", y: "20" },
+      message: "x must be a finite number",
+    },
+    {
+      body: { kind: "clickCoords", x: "20", y: "0x10" },
+      message: "y must be a finite number",
+    },
+  ])(
+    "returns ACT_INVALID_REQUEST for non-decimal coordinate clicks",
+    async ({ body, message }) => {
+      const base = await startServerAndBase();
+      const response = await postActAndReadError(base, body);
+
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe("ACT_INVALID_REQUEST");
+      expect(response.body.error).toContain(message);
+    },
+    slowTimeoutMs,
+  );
+
   it(
     "returns ACT_EXISTING_SESSION_UNSUPPORTED for unsupported existing-session actions",
     async () => {
@@ -192,6 +215,26 @@ describe("browser control server", () => {
       expect(response.status).toBe(403);
       expect(response.body.code).toBe("ACT_TARGET_ID_MISMATCH");
       expect(response.body.error).toContain("action targetId must match request targetId");
+    },
+    slowTimeoutMs,
+  );
+
+  it(
+    "forwards the resolved browser proxy mode to Playwright actions",
+    async () => {
+      setBrowserControlServerExtraArgs(["--proxy-server=http://proxy.example:8080"]);
+      const base = await startServerAndBase();
+
+      const response = await postJson<{ ok: boolean }>(`${base}/act`, {
+        kind: "hover",
+        ref: "1",
+      });
+
+      expect(response.ok).toBe(true);
+      const execArgs = mockFirstArg(pwMocks.executeActViaPlaywright, 0, "executeAct");
+      expect(execArgs.browserProxyMode).toBe("explicit-browser-proxy");
+      const hoverArgs = mockFirstArg(pwMocks.hoverViaPlaywright, 0, "hover");
+      expect(hoverArgs.browserProxyMode).toBe("explicit-browser-proxy");
     },
     slowTimeoutMs,
   );
@@ -667,6 +710,9 @@ describe("browser control server", () => {
       cdpUrl: state.cdpBaseUrl,
       targetId: "abcd1234",
       ref: "2",
+      ssrfPolicy: {
+        dangerouslyAllowPrivateNetwork: true,
+      },
     });
     expect((hoverArgs as { timeoutMs?: number }).timeoutMs).toBeUndefined();
 
@@ -680,6 +726,9 @@ describe("browser control server", () => {
       cdpUrl: state.cdpBaseUrl,
       targetId: "abcd1234",
       ref: "2",
+      ssrfPolicy: {
+        dangerouslyAllowPrivateNetwork: true,
+      },
     });
     expect((scrollArgs as { timeoutMs?: number }).timeoutMs).toBeUndefined();
 
@@ -695,6 +744,9 @@ describe("browser control server", () => {
       targetId: "abcd1234",
       startRef: "3",
       endRef: "4",
+      ssrfPolicy: {
+        dangerouslyAllowPrivateNetwork: true,
+      },
     });
     expect((dragArgs as { timeoutMs?: number }).timeoutMs).toBeUndefined();
   });

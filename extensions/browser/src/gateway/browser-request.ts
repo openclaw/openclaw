@@ -19,6 +19,7 @@ import {
   createBrowserRouteDispatcher,
   errorShape,
   getRuntimeConfig,
+  isBrowserHostLocalRoute,
   isNodeCommandAllowed,
   isPersistentBrowserProfileMutation,
   persistBrowserProxyFiles,
@@ -127,31 +128,36 @@ export async function handleBrowserGatewayRequest({
     );
     return;
   }
-  if (isPersistentBrowserProfileMutation(methodRaw, path)) {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "browser.request cannot mutate persistent browser profiles",
-      ),
-    );
-    return;
-  }
-
   const cfg = getRuntimeConfig();
-  let nodeTarget: NodeSession | null;
-  try {
-    nodeTarget = resolveBrowserNodeTarget({
-      cfg,
-      nodes: context.nodeRegistry.listConnected(),
-    });
-  } catch (err) {
-    respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
-    return;
+  // System-profile listing and import can only run where the local Keychain and
+  // Chrome profiles live, so they must never route to a browser node. Force
+  // host-local dispatch even when gateway.nodes.browser auto-selects a node.
+  const forceHostLocal = isBrowserHostLocalRoute(methodRaw, path);
+  let nodeTarget: NodeSession | null = null;
+  if (!forceHostLocal) {
+    try {
+      nodeTarget = resolveBrowserNodeTarget({
+        cfg,
+        nodes: context.nodeRegistry.listConnected(),
+      });
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
+      return;
+    }
   }
 
   if (nodeTarget) {
+    if (isPersistentBrowserProfileMutation(methodRaw, path)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "browser.request cannot mutate persistent browser profiles over a node proxy",
+        ),
+      );
+      return;
+    }
     const allowlist = resolveNodeCommandAllowlist(cfg, nodeTarget);
     const allowed = isNodeCommandAllowed({
       command: "browser.proxy",
@@ -210,6 +216,9 @@ export async function handleBrowserGatewayRequest({
     return;
   }
 
+  // `browser.request` already requires operator.admin. The owning host may run
+  // profile administration; the node-proxy branch above stays denied because
+  // `browser.proxy` is a separate remote-host authority.
   const ready = await startBrowserControlServiceFromConfig();
   if (!ready) {
     respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "browser control is disabled"));

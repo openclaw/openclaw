@@ -4,18 +4,31 @@ import { html, nothing, type TemplateResult } from "lit";
 import { guard } from "lit/directives/guard.js";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
+import { classifySessionKind } from "../../../../../src/sessions/classify-session-kind.js";
 import type { SessionsListResult } from "../../../api/types.ts";
+import { beginNativeWindowDragFromTopInset } from "../../../app/native-window-drag.ts";
 import { resolveLocalUserName } from "../../../app/user-identity.ts";
 import { icons } from "../../../components/icons.ts";
+import "../../../components/tooltip.ts";
 import {
   handleMarkdownCodeBlockCopy,
   markdownFileLinkFromEvent,
 } from "../../../components/markdown.ts";
-import "../../../components/tooltip.ts";
 import { CHAT_HISTORY_RENDER_LIMIT } from "../../../lib/chat/chat-types.ts";
 import type { ChatQueueItem, ChatStreamSegment } from "../../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
+import {
+  buildMoreDetailsSideCommand,
+  combineSideChatComposerDraft,
+} from "../../../lib/chat/side-question.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
+import {
+  areUiSessionKeysEquivalent,
+  isUiGlobalScopeConfigured,
+  parseAgentSessionKey,
+  resolveUiGlobalAliasAgentId,
+  type UiSessionDefaultsHost,
+} from "../../../lib/sessions/session-key.ts";
 import {
   buildCachedChatItems,
   coalesceStreamRuns,
@@ -29,12 +42,14 @@ import { DeletedMessages } from "../deleted-messages.ts";
 import { PinnedMessages } from "../pinned-messages.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
 import { getOrCreateSessionCacheValue } from "../session-cache.ts";
+import { getToolTitlesVersion } from "../tool-titles.ts";
 import {
   getAssistantAttachmentAvailabilityRenderVersion,
   renderMessageGroup,
   renderStreamGroup,
 } from "./chat-message.ts";
 import { renderRealtimeTalkConversation } from "./chat-realtime-controls.ts";
+import { handleChatSelectionPointerUp, removeChatSelectionPopup } from "./chat-selection-popup.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 import { renderWelcomeState, resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 
@@ -65,6 +80,9 @@ type ChatThreadState = {
     scrollTop: number;
   } | null;
   historyRenderAnchorFrame: number | null;
+  relativeTimeTimer: ReturnType<typeof setInterval> | null;
+  relativeTimeRequestUpdate: (() => void) | null;
+  relativeTimeVersion: number;
 };
 
 type ChatThreadProps = {
@@ -81,7 +99,12 @@ type ChatThreadProps = {
   showToolCalls: boolean;
   /** True while the session has an abortable live run (marks running tool rows). */
   runActive?: boolean;
+  /** True while the agent is visibly working (isChatRunWorking); shows the working spark. */
+  runWorking?: boolean;
   sessions: SessionsListResult | null;
+  /** Host context resolving global-alias session keys (scope=global fleets). */
+  /** Includes assistantAgentId so bare-global welcome recents scope to the selected agent. */
+  sessionHost?: UiSessionDefaultsHost | null;
   assistantName: string;
   assistantAvatar: string | null;
   assistantAvatarUrl?: string | null;
@@ -104,9 +127,14 @@ type ChatThreadProps = {
   onScrollToBottom?: () => void;
   onChatScroll?: (event: Event) => void;
   onDraftChange: (next: string) => void;
+  /** Current composer draft; the selection popup preserves it when prefilling. */
+  getDraft?: () => string;
   onSend: () => void;
   onSetReply?: (target: ReplyTarget) => void;
   onFocusComposer?: () => void;
+  /** Sends a detached /btw side question built from the selection popup. */
+  onSideQuestion?: (command: string) => void;
+  onOpenSession?: (sessionKey: string) => void;
 };
 
 type ChatPinnedMessagesProps = Pick<
@@ -127,7 +155,24 @@ function createChatThreadState(): ChatThreadState {
     historyRenderExpansionFrame: null,
     historyRenderAnchorAdjustment: null,
     historyRenderAnchorFrame: null,
+    relativeTimeTimer: null,
+    relativeTimeRequestUpdate: null,
+    relativeTimeVersion: 0,
   };
+}
+
+const RELATIVE_TIME_REFRESH_MS = 60_000;
+
+// Footer timestamps render relative labels ("5m ago") that go stale on idle
+// panes; one per-pane minute tick keeps them fresh without per-message timers.
+// The version bump must accompany requestUpdate: the message subtree is
+// memoized by guard(), so a tick only re-renders it via this dependency.
+function ensureRelativeTimeRefresh(state: ChatThreadState, requestUpdate: () => void) {
+  state.relativeTimeRequestUpdate = requestUpdate;
+  state.relativeTimeTimer ??= setInterval(() => {
+    state.relativeTimeVersion = (state.relativeTimeVersion + 1) % Number.MAX_SAFE_INTEGER;
+    state.relativeTimeRequestUpdate?.();
+  }, RELATIVE_TIME_REFRESH_MS);
 }
 
 const threadStates = new Map<string, ChatThreadState>();
@@ -164,6 +209,9 @@ function getPinnedMessageSummary(message: unknown): string {
 
 export function resetChatThreadPresentationState(paneId?: string) {
   removeReplyContextMenu(paneId);
+  // The selection popup is body-portaled; pane teardown/route changes must
+  // drop it so it cannot outlive the render that owns its callbacks.
+  removeChatSelectionPopup();
   const states = paneId
     ? ([threadStates.get(paneId)].filter(Boolean) as ChatThreadState[])
     : [...threadStates.values()];
@@ -173,6 +221,11 @@ export function resetChatThreadPresentationState(paneId?: string) {
     }
     if (state.historyRenderAnchorFrame != null) {
       cancelAnimationFrame(state.historyRenderAnchorFrame);
+    }
+    if (state.relativeTimeTimer != null) {
+      clearInterval(state.relativeTimeTimer);
+      state.relativeTimeTimer = null;
+      state.relativeTimeRequestUpdate = null;
     }
   }
   if (paneId) {
@@ -522,6 +575,28 @@ function createReplyContextMenuButton(onClick: () => void): HTMLButtonElement {
   return button;
 }
 
+function handleChatThreadSelectionPointerUp(event: PointerEvent, props: ChatThreadProps) {
+  if (typeof props.onSideQuestion !== "function") {
+    return;
+  }
+  handleChatSelectionPointerUp(event, {
+    onMoreDetails: (selection) => {
+      const command = buildMoreDetailsSideCommand(selection);
+      if (command) {
+        props.onSideQuestion?.(command);
+      }
+    },
+    onAskSideChat: (selection) => {
+      const draft = combineSideChatComposerDraft(selection, props.getDraft?.());
+      if (draft) {
+        props.onDraftChange(draft);
+        props.onRequestUpdate?.();
+        props.onFocusComposer?.();
+      }
+    },
+  });
+}
+
 function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   const bubble = (event.target as HTMLElement).closest(".chat-bubble");
   if (!bubble || typeof props.onSetReply !== "function") {
@@ -649,8 +724,23 @@ function renderLoadingSkeleton() {
 export function renderChatThread(props: ChatThreadProps) {
   const state = getChatThreadState(props.paneId);
   const requestUpdate = props.onRequestUpdate ?? (() => {});
+  ensureRelativeTimeRefresh(state, requestUpdate);
   const displayStream = props.stream ?? null;
-  const activeSession = props.sessions?.sessions?.find((row) => row.key === props.sessionKey);
+  const sessionHost = props.sessionHost ?? null;
+  // Equivalence, not exact match: the default session travels under alias
+  // keys ("main" vs "agent:main:main") depending on the caller.
+  const activeSession = props.sessions?.sessions?.find((row) =>
+    areUiSessionKeysEquivalent(row.key, props.sessionKey),
+  );
+  // Global-alias detection needs no session row: under configured global
+  // scope, agent:<id>:global and configured-main aliases route to the global
+  // stream even when the capped sessions list omits the canonical row (or it
+  // does not exist yet). The scope gate keeps per-sender main threads direct.
+  const isGlobalAliasKey =
+    parseAgentSessionKey(props.sessionKey)?.rest === "global" ||
+    (sessionHost !== null &&
+      isUiGlobalScopeConfigured(sessionHost) &&
+      resolveUiGlobalAliasAgentId(sessionHost, props.sessionKey) !== null);
   const reasoningLevel = activeSession?.reasoningLevel ?? "off";
   const showReasoning = props.showThinking && reasoningLevel !== "off";
   const assistantIdentity = {
@@ -668,6 +758,8 @@ export function renderChatThread(props: ChatThreadProps) {
     streamStartedAt: props.streamStartedAt,
     queue: props.queue,
     showToolCalls: props.showToolCalls,
+    runWorking: Boolean(props.runWorking),
+    loading: props.loading,
     searchOpen: state.searchOpen,
     searchQuery: state.searchQuery,
     historyRenderLimit,
@@ -680,6 +772,24 @@ export function renderChatThread(props: ChatThreadProps) {
   };
   const hasRealtimeTalkConversation = (props.realtimeTalkConversation?.length ?? 0) > 0;
   const isEmpty = chatItems.length === 0 && !props.loading && !hasRealtimeTalkConversation;
+  // 1:1 sessions drop the avatar gutter entirely; group threads keep avatars
+  // as the always-visible identity marker. The canonical session kind decides;
+  // the sessions list is capped, so absent/unknown rows classify by key:
+  // global aliases first, then the same core key-shape helper the gateway
+  // uses. Message senderLabels are not a signal here: gateway sanitization
+  // labels 1:1 channel DM rows too.
+  const rowKind = activeSession?.kind;
+  const sessionKind =
+    rowKind && rowKind !== "unknown"
+      ? rowKind
+      : isGlobalAliasKey
+        ? "global"
+        : classifySessionKind(props.sessionKey);
+  // Only agent-solo kinds qualify: "global" aggregates every inbound context
+  // under session.scope="global" (including group/channel senders), so it
+  // keeps avatars like "group" and "unknown" do.
+  const isDirectThread =
+    sessionKind === "direct" || sessionKind === "cron" || sessionKind === "spawn-child";
   const showLoadingSkeleton = props.loading && chatItems.length === 0;
   const threadContextWindow =
     activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null;
@@ -690,7 +800,7 @@ export function renderChatThread(props: ChatThreadProps) {
 
   return html`
     <div
-      class="chat-thread"
+      class="chat-thread ${isDirectThread ? "chat-thread--direct" : ""}"
       role="log"
       aria-live="polite"
       ${ref((element) => {
@@ -703,6 +813,7 @@ export function renderChatThread(props: ChatThreadProps) {
         );
       })}
       @scroll=${handleChatThreadScroll}
+      @mousedown=${beginNativeWindowDragFromTopInset}
       @click=${(event: Event) => {
         handleMarkdownCodeBlockCopy(event);
         const target = markdownFileLinkFromEvent(event);
@@ -711,6 +822,7 @@ export function renderChatThread(props: ChatThreadProps) {
         }
       }}
       @contextmenu=${(event: MouseEvent) => handleChatContextMenu(event, props)}
+      @pointerup=${(event: PointerEvent) => handleChatThreadSelectionPointerUp(event, props)}
     >
       <div class="chat-thread-inner">
         ${showLoadingSkeleton ? renderLoadingSkeleton() : nothing}
@@ -724,6 +836,8 @@ export function renderChatThread(props: ChatThreadProps) {
             deletedChatItemsSignature(deleted, chatItems),
             stableBooleanMapSignature(expandedToolCards),
             getAssistantAttachmentAvailabilityRenderVersion(),
+            state.relativeTimeVersion,
+            getToolTitlesVersion(),
             props.sessionKey,
             props.fullMessageAgentId,
             showReasoning,
@@ -795,6 +909,7 @@ export function renderChatThread(props: ChatThreadProps) {
                   }
                   return renderMessageGroup(item, {
                     onOpenSidebar: props.onOpenSidebar,
+                    onOpenWorkspaceFile: props.onOpenWorkspaceFile,
                     sessionKey: props.sessionKey,
                     agentId: props.fullMessageAgentId,
                     showReasoning,

@@ -190,6 +190,24 @@ describe("monitorQaGatewayChildFailure", () => {
   });
 });
 
+describe("formatQaGatewayProcessBoundaryStartupFailure", () => {
+  it("includes only a bounded, redacted launcher log tail", () => {
+    const prefix = "x".repeat(9_000);
+    const longSecret = "s".repeat(9_000);
+    const message = testing.formatQaGatewayProcessBoundaryStartupFailure(
+      new Error("launcher exited before identity"),
+      `${prefix}\nAuthorization: Bearer ${longSecret}\nlauncher stage=mount-proc`,
+    );
+
+    expect(message).toContain("launcher exited before identity");
+    expect(message).toContain("Gateway logs:");
+    expect(message).toContain("Authorization: Bearer <redacted>");
+    expect(message).toContain("launcher stage=mount-proc");
+    expect(message).not.toContain("s".repeat(100));
+    expect(message).not.toContain(prefix);
+  });
+});
+
 describe("Gateway child fixture helpers", () => {
   it("creates an empty transport config seam", () => {
     expect(testing.createQaGatewayEmptyTransport()).toEqual({
@@ -244,18 +262,25 @@ describe("buildQaRuntimeEnv", () => {
   });
 
   it("reports command spawn errors instead of leaking unhandled child errors", async () => {
-    const tempParent = await mkdtemp(path.join(os.tmpdir(), "qa-gateway-spawn-fail-"));
+    const preferredTempParent = await mkdtemp(
+      path.join(os.tmpdir(), "qa-gateway-default-spawn-fail-"),
+    );
+    const commandTempParent = await mkdtemp(
+      path.join(os.tmpdir(), "qa-gateway-command-spawn-fail-"),
+    );
     cleanups.push(async () => {
-      await rm(tempParent, { recursive: true, force: true });
+      await rm(preferredTempParent, { recursive: true, force: true });
+      await rm(commandTempParent, { recursive: true, force: true });
     });
-    qaTempPathState.preferredTmpDir = tempParent;
-    const missingExecutable = path.join(tempParent, "missing-openclaw-node");
+    qaTempPathState.preferredTmpDir = preferredTempParent;
+    const missingExecutable = path.join(commandTempParent, "missing-openclaw-node");
 
     await expect(
       startQaGatewayChild({
         repoRoot: process.cwd(),
         command: {
           executablePath: missingExecutable,
+          tempParentDir: commandTempParent,
           usePackagedPlugins: true,
         },
         transport: {
@@ -266,7 +291,8 @@ describe("buildQaRuntimeEnv", () => {
       }),
     ).rejects.toThrow(/gateway failed to spawn: .*ENOENT/u);
 
-    await expect(readdir(tempParent)).resolves.toStrictEqual([]);
+    await expect(readdir(preferredTempParent)).resolves.toStrictEqual([]);
+    await expect(readdir(commandTempParent)).resolves.toStrictEqual([]);
   });
 
   it("keeps the slow-reply QA opt-out enabled under fast mode", () => {

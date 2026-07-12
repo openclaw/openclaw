@@ -136,6 +136,88 @@ Naming options:
 - `--display-name` on `openclaw node run` / `openclaw node install` (persists in `~/.openclaw/node.json` on the node, alongside the client instance ID and Gateway connection metadata).
 - `openclaw nodes rename --node <id|name|ip> --name "Build Node"` (gateway override).
 
+### Node-hosted MCP servers
+
+Configure MCP servers in `openclaw.json` on the node machine, not on the
+Gateway:
+
+```json5
+{
+  nodeHost: {
+    mcp: {
+      servers: {
+        localDocs: {
+          command: "npx",
+          args: ["-y", "@modelcontextprotocol/server-filesystem", "/srv/docs"],
+          toolFilter: {
+            include: ["read_*", "search"],
+          },
+        },
+        internalApi: {
+          url: "https://mcp.internal.example/mcp",
+          transport: "streamable-http",
+          headers: {
+            Authorization: "Bearer ${INTERNAL_MCP_TOKEN}",
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+The headless node host starts these servers, lists their tools, and publishes
+the descriptors after connecting. Tool calls return to that node through
+`mcp.tools.call.v1`; the Gateway does not need matching MCP config or a JS
+plugin. OAuth MCP servers are not supported by this node-hosted v1 path.
+
+Current node hosts declare the built-in `mcp.tools.call.v1` command family during
+their initial pairing even when no MCP server is configured. A node paired on an
+older OpenClaw version may request a one-time command-surface upgrade after the
+node host is updated. Adding, removing, or filtering servers after that does not
+require re-pairing because the approved command family is unchanged. Restart
+`openclaw node run` or `openclaw node restart` to apply node MCP config changes;
+the node host does not watch this config.
+
+Gateway operators can ignore all agent-visible tools published by paired nodes,
+including node-hosted MCP tools, with
+`gateway.nodes.pluginTools.enabled: false`. Exact command denies such as
+`gateway.nodes.denyCommands: ["mcp.tools.call.v1"]` also block execution.
+
+### Node-hosted skills
+
+Install skills under the node machine's active OpenClaw skills directory,
+`~/.openclaw/skills` by default. `OPENCLAW_HOME`, `OPENCLAW_STATE_DIR`, and
+`OPENCLAW_CONFIG_PATH` move that active profile. `OPENCLAW_STATE_DIR` takes
+precedence for skills; otherwise, `skills/` is beside the path printed by
+`openclaw config file`. The headless node host publishes valid `SKILL.md` files
+after it connects, and the Gateway adds them to agent skill snapshots only while
+that node remains connected. Each skill directory name must match the `name`
+frontmatter field so the abstract node locator maps to one entry without adding
+another protocol field.
+
+The initial node-role pairing approves skill publication. Adding, removing, or
+changing skills does not require another pairing or Gateway configuration
+change. Restart `openclaw node run` or `openclaw node restart` after changing
+node skill files; the node host does not watch the skills directory.
+
+Node-hosted skill entries identify their node and carry their execution
+location. Skill files, referenced relative paths, and binaries remain on that
+node. The agent reads the advertised `node://.../SKILL.md` location with the
+normal `read` tool. `file_fetch` accepts operator-approved absolute node paths,
+not node skill locators; runtimes without the normal read tool can instead run
+`cat SKILL.md` through `exec host=node node=<node-id>` with the advertised
+`node://.../skills/<name>` directory as `workdir`. Referenced files and binaries
+use the same exec target and workdir. The node host resolves that locator against
+its active OpenClaw state directory, so relative paths resolve on the node rather
+than the Gateway machine. The publishing node must have approved `system.run`,
+and the agent's exec policy must allow `host=node`; otherwise the skill stays
+out of that agent's snapshot.
+
+Set `nodeHost.skills.enabled: false` on the node to stop publication. Gateway
+operators can ignore skills from every paired node with
+`gateway.nodes.skills.enabled: false`.
+
 ### Headless identity state
 
 The headless node keeps three separate state files:
@@ -191,20 +273,63 @@ Related:
 
 A desktop or server node can expose chat-capable models from an Ollama server running on that node. Agents use the Ollama plugin's `node_inference` tool to discover installed models and run a bounded prompt remotely; the Gateway does not need direct network access to Ollama. See [Ollama node-local inference](/providers/ollama#node-local-inference) for setup, model filtering, and direct verification commands.
 
-### Codex session catalog
+### Codex sessions and transcripts
 
-The opt-in `codex-supervisor` plugin lets a headless node host or the native
-macOS node expose metadata for its local interactive Codex sessions. Enable the
-plugin independently in the node's local config and on the Gateway. The node
-setting is local consent; enabling only the Gateway cannot read another
-computer's Codex state.
+The official `codex` plugin can expose non-archived Codex sessions on a
+headless node host or native macOS node. Catalog registration no longer depends
+on `supervision.enabled`; that option gates the agent-facing supervision tools.
+The plugin must still be active on both computers, and the node setting remains
+local consent: enabling only the Gateway cannot read another computer's Codex
+state.
 
 The node advertises the versioned read-only
-`codex.appServer.threads.list.v1` command. Approve the node pairing upgrade when
-that command first appears. The Gateway invokes it through the normal plugin
-node policy and isolates failures by host. See the [Codex Supervisor plugin
-reference](/plugins/reference/codex-supervisor) for configuration, CLI and
-Control UI use, pagination, and the metadata security boundary.
+`codex.appServer.threads.list.v1` and
+`codex.appServer.thread.turns.list.v1` commands. Approve the node pairing
+upgrade when those commands first appear. The Gateway invokes them through the
+normal plugin node policy and isolates failures by host.
+
+Paired-node rows appear as a **Codex** group in the normal sessions sidebar.
+Selecting a row opens the normal Chat pane and reads its persisted transcript
+through bounded, cursor-paginated
+`thread/turns/list` calls with full item projection. The node invoke transport is request/response only and cannot
+carry the streaming turns, live events, or approvals required to continue a
+native thread through the Codex harness. **Continue** and **Archive** are
+therefore unavailable for remote rows. On the Gateway computer, stored and idle
+rows can start a distinct model-locked Chat branch. Either can be archived only
+after the operator confirms that no other Codex client is using it; a stored
+row's live activity remains unknown. Active rows cannot branch or archive.
+
+See [Supervise Codex sessions](/plugins/codex-supervision) for setup,
+pagination, local continuation, and the metadata security boundary.
+
+### Claude sessions and transcripts
+
+The bundled `anthropic` plugin discovers non-archived Claude CLI and Claude
+Desktop sessions on the Gateway and paired nodes. Unlike Codex supervision,
+this needs no separate opt-in: a remote macOS app node advertises
+`anthropic.claude.sessions.list.v1` and `anthropic.claude.sessions.read.v1`
+when the Anthropic plugin is enabled and `~/.claude/projects/` exists. Approve
+the node pairing upgrade when those commands first appear.
+
+The catalog combines valid Claude CLI project-index records with a bounded
+metadata prefix from current `sdk-cli` JSONL files. Claude Desktop's local
+metadata supplies Desktop titles and archive state. Desktop metadata wins when
+both sources refer to the same Claude Code session ID; CLI-only transcripts
+remain visible because the CLI has no archive flag. Transcript reads use opaque
+byte-offset cursors and bounded backward file reads, so selecting a large
+session or loading an older page does not read the whole JSONL history into one
+Gateway response.
+
+Both node commands are read-only. They expose catalog metadata and transcript
+content only through the generic `sessions.catalog.list` and
+`sessions.catalog.read` methods to an authenticated operator connection with
+`operator.write`. Paired-node rows stay view-only. A Gateway-local Claude CLI
+row can be adopted from the normal Chat composer: OpenClaw imports bounded
+visible history, resumes with `--fork-session` on the first turn, and leaves the
+source transcript untouched. Claude Desktop rows remain view-only.
+
+See [Anthropic: Claude sessions across computers](/providers/anthropic#claude-sessions-across-computers)
+for the Control UI behavior and storage sources.
 
 ## Invoking commands
 
@@ -240,7 +365,7 @@ These rows describe the Gateway policy ceiling, not the commands implemented by 
 
 `talk.ptt.start`, `talk.ptt.stop`, `talk.ptt.cancel`, and `talk.ptt.once` are allowed by default for any node that advertises the `talk` capability or declares `talk.*` commands, independent of platform label.
 
-Desktop host commands (`system.run`, `system.run.prepare`, `system.which`, `browser.proxy`, `screen.snapshot` on macOS/Windows) are not part of the static platform-default table above. They become available once the operator approves a pairing request that declares them, after which the node's approved command set carries them forward on reconnect.
+Desktop host commands (`system.run`, `system.run.prepare`, `system.which`, `browser.proxy`, `mcp.tools.call.v1`, and `screen.snapshot` on macOS/Windows) are not part of the static platform-default table above. They become available once the operator approves a pairing request that declares them, after which the node's approved command set carries them forward on reconnect.
 
 Dangerous or privacy-heavy commands still require explicit opt-in with `gateway.nodes.allowCommands`, even if a node declares them: `camera.snap`, `camera.clip`, `screen.record`, `computer.act`, `contacts.add`, `calendar.add`, `reminders.add`, `sms.send`, `sms.search`. `gateway.nodes.denyCommands` always wins over defaults and extra allowlist entries. See [Computer use](/nodes/computer-use) for the additional macOS, tool-policy, and arming gates around desktop input.
 
@@ -261,6 +386,13 @@ Node-related settings live under `gateway.nodes` and `tools.exec`:
       // with no requested scopes; does not auto-approve upgrades.
       pairing: {
         autoApproveCidrs: ["192.168.1.0/24"],
+        // SSH-verified auto-approval (default: enabled). Approves first-time
+        // node pairing on an exact device-key match read back over SSH.
+        sshVerify: true,
+      },
+      // Trust agent-visible plugin tools published by paired nodes (default: true).
+      pluginTools: {
+        enabled: true,
       },
       // Opt into dangerous/privacy-heavy node commands (camera.snap, etc.).
       allowCommands: ["camera.snap", "screen.record"],
@@ -281,7 +413,7 @@ Node-related settings live under `gateway.nodes` and `tools.exec`:
 }
 ```
 
-Use exact node command names. `denyCommands` removes a command even when a platform default or `allowCommands` entry would otherwise allow it. See [Gateway configuration reference](/gateway/configuration-reference#gateway) for gateway node pairing and command-policy field details.
+Use exact node command names. `denyCommands` removes a command even when a platform default or `allowCommands` entry would otherwise allow it. Paired nodes may publish agent-visible plugin tool descriptors by default, but each descriptor's command must still be in the node's approved command surface. Set `gateway.nodes.pluginTools.enabled: false` to ignore all such descriptors. See [Gateway configuration reference](/gateway/configuration-reference#gateway) for gateway node pairing and command-policy field details.
 
 Per-agent exec node override:
 

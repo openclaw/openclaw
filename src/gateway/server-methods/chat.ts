@@ -30,6 +30,7 @@ import {
   validateChatInjectParams,
   validateChatMetadataParams,
   validateChatMessageGetParams,
+  validateChatToolTitlesParams,
   validateChatSendParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../../packages/gateway-protocol/src/schema.js";
@@ -39,13 +40,11 @@ import {
   resolveAgentWorkspaceDir,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
-import { rewriteTranscriptEntriesInRuntimeTranscript } from "../../agents/embedded-agent-runner/transcript-rewrite.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { modelCatalogBrowseRequiresFullDiscovery } from "../../agents/model-catalog-browse.js";
-import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
-import type { AgentMessage } from "../../agents/runtime/index.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
@@ -70,8 +69,9 @@ import {
 } from "../../config/sessions/main-session.js";
 import {
   findTranscriptEvent,
-  loadTranscriptEvents,
   patchSessionEntry,
+  publishTranscriptUpdate,
+  withTranscriptWriteLock,
   type SessionTranscriptWriteScope,
   type TranscriptEvent,
 } from "../../config/sessions/session-accessor.js";
@@ -109,6 +109,7 @@ import {
   runWithGatewayIndependentRootWorkContinuation,
 } from "../../process/gateway-work-admission.js";
 import { normalizeAgentId, scopeLegacySessionKeyToAgent } from "../../routing/session-key.js";
+import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-harness-session-key.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
@@ -132,6 +133,7 @@ import {
   isWebchatClient,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
+import { listGatewayAgentsBasic } from "../agent-list.js";
 import {
   abortChatRunById,
   boundInFlightRunSnapshotForChatHistory,
@@ -216,7 +218,7 @@ import {
   resolveSessionStoreKey,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
-import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
+import { setGatewayDedupeEntry } from "./agent-job.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { normalizeWebchatReplyMediaPathsForDisplay } from "./chat-reply-media.js";
 import {
@@ -229,7 +231,8 @@ import {
 } from "./chat-webchat-media.js";
 import {
   loadOptionalServerMethodModelCatalog,
-  startOptionalServerMethodModelCatalogLoad,
+  loadOptionalServerMethodModelCatalogSnapshot,
+  startOptionalServerMethodModelCatalogSnapshotLoad,
 } from "./optional-model-catalog.js";
 import {
   hasTrackedActiveSessionRun,
@@ -449,7 +452,6 @@ async function buildChatMetadataResult(params: {
   cfg: OpenClawConfig;
   context: GatewayRequestContext;
   agentId: string;
-  preloadedModelCatalog?: ModelCatalogEntry[];
 }): Promise<ChatMetadataResult> {
   const [{ buildModelsListResult }, { buildCommandsListResult }] = await Promise.all([
     import("./models-list-result.js"),
@@ -460,7 +462,6 @@ async function buildChatMetadataResult(params: {
       context: params.context,
       agentId: params.agentId,
       params: { view: "configured" },
-      preloadedCatalog: params.preloadedModelCatalog,
     }),
     Promise.resolve(
       buildCommandsListResult({
@@ -478,7 +479,10 @@ async function buildChatStartupMetadataResult(params: {
   cfg: OpenClawConfig;
   context: GatewayRequestContext;
   agentId: string;
-  modelCatalog: ModelCatalogEntry[] | undefined;
+  modelCatalog: ModelCatalogSnapshot | undefined;
+  catalogProjector?: ReturnType<
+    (typeof import("./models-list-result.js"))["createGatewayAgentModelCatalogProjector"]
+  >;
 }): Promise<ChatMetadataResult | undefined> {
   if (!params.modelCatalog) {
     return undefined;
@@ -493,6 +497,7 @@ async function buildChatStartupMetadataResult(params: {
       agentId: params.agentId,
       params: { view: "configured" },
       preloadedCatalog: params.modelCatalog,
+      ...(params.catalogProjector ? { catalogProjector: params.catalogProjector } : {}),
     });
   } catch (err) {
     params.context.logGateway.debug(
@@ -500,6 +505,70 @@ async function buildChatStartupMetadataResult(params: {
     );
     return undefined;
   }
+}
+
+async function buildChatStartupModelCatalogProjection(params: {
+  cfg: OpenClawConfig;
+  snapshot: ModelCatalogSnapshot;
+  sessionAgentId: string;
+  sessionEntry: ReturnType<typeof loadSessionEntry>["entry"];
+  defaultAgentId: string;
+  includeAgentsList: boolean;
+}) {
+  const { createGatewayAgentModelCatalogProjector } = await import("./models-list-result.js");
+  const projectorByKey = new Map<
+    string,
+    ReturnType<typeof createGatewayAgentModelCatalogProjector>
+  >();
+  const modelCatalogByAgentId = new Map<string, ModelCatalogEntry[]>();
+  const getProjector = (
+    agentId: string,
+    profiles: { preferredProfileId?: string; lockedProfileId?: string } = {},
+  ) => {
+    const id = normalizeAgentId(agentId);
+    const key = `${id}\0${profiles.preferredProfileId ?? ""}\0${profiles.lockedProfileId ?? ""}`;
+    let projector = projectorByKey.get(key);
+    if (!projector) {
+      projector = createGatewayAgentModelCatalogProjector({
+        cfg: params.cfg,
+        agentId: id,
+        snapshot: params.snapshot,
+        ...(profiles.preferredProfileId ? { preferredProfileId: profiles.preferredProfileId } : {}),
+        ...(profiles.lockedProfileId ? { lockedProfileId: profiles.lockedProfileId } : {}),
+      });
+      projectorByKey.set(key, projector);
+    }
+    return projector;
+  };
+  const agentIds = new Set([params.sessionAgentId, params.defaultAgentId].map(normalizeAgentId));
+  if (params.includeAgentsList) {
+    for (const agent of listGatewayAgentsBasic(params.cfg).agents) {
+      agentIds.add(agent.id);
+    }
+  }
+  await Promise.all(
+    [...agentIds].map(async (agentId) => {
+      modelCatalogByAgentId.set(agentId, await getProjector(agentId).projectCatalog());
+    }),
+  );
+  const sessionProfileId = params.sessionEntry?.authProfileOverride?.trim();
+  const sessionProfileSource = params.sessionEntry?.authProfileOverrideSource;
+  // Legacy rows omitted the source; a compaction count is the durable marker
+  // that the profile was adopted automatically and may fall through.
+  const legacyUserProfile =
+    sessionProfileSource === undefined &&
+    params.sessionEntry?.authProfileOverrideCompactionCount === undefined;
+  const sessionProfiles = sessionProfileId
+    ? {
+        preferredProfileId: sessionProfileId,
+        ...(sessionProfileSource === "user" || legacyUserProfile
+          ? { lockedProfileId: sessionProfileId }
+          : {}),
+      }
+    : undefined;
+  const sessionCatalogProjector = getProjector(params.sessionAgentId, sessionProfiles);
+  const sessionModelCatalog = await sessionCatalogProjector.projectCatalog();
+  return { getProjector, modelCatalogByAgentId, sessionCatalogProjector, sessionModelCatalog };
 }
 
 function normalizeUnknownText(value: unknown): string | undefined {
@@ -1953,10 +2022,9 @@ async function rewriteSourceReplyTranscriptMirrors(params: {
     state: SourceReplyContentState;
   }[];
   scope: SessionTranscriptWriteScope;
-  config?: OpenClawConfig;
 }): Promise<
   Array<{
-    messageId?: string;
+    messageId: string;
     request: {
       idempotencyKey: string;
       metadata: SourceReplyTranscriptMirrorMetadata;
@@ -1964,112 +2032,92 @@ async function rewriteSourceReplyTranscriptMirrors(params: {
     };
   }>
 > {
-  const { sessionId, sessionKey } = params.scope;
-  if (!sessionId || !sessionKey || params.requests.length === 0 || params.candidates.length === 0) {
+  if (params.requests.length === 0 || params.candidates.length === 0) {
     return [];
   }
 
-  const events = await loadTranscriptEvents({ ...params.scope, sessionId });
-  const allowedSourceReplyMirrorIds = new Set<string>();
-  for (const candidate of params.candidates) {
-    const target = findSourceReplyTranscriptMirrorByMetadataInEvents({
-      events,
-      idempotencyKey: candidate.idempotencyKey,
-      metadata: candidate.metadata,
-    });
-    if (target) {
-      allowedSourceReplyMirrorIds.add(target.messageId);
+  return await withTranscriptWriteLock(params.scope, async (transcript) => {
+    const events = await transcript.readEvents();
+    const allowedSourceReplyMirrorIds = new Set<string>();
+    for (const candidate of params.candidates) {
+      const target = findSourceReplyTranscriptMirrorByMetadataInEvents({
+        events,
+        idempotencyKey: candidate.idempotencyKey,
+        metadata: candidate.metadata,
+      });
+      if (target) {
+        allowedSourceReplyMirrorIds.add(target.messageId);
+      }
     }
-  }
 
-  const rewriteTargets: Array<{
-    request: (typeof params.requests)[number];
-    messageId: string;
-    message: Record<string, unknown>;
-  }> = [];
-  for (const request of params.requests) {
-    const target = findSourceReplyTranscriptMirrorByMetadataInEvents({
-      events,
-      idempotencyKey: request.idempotencyKey,
-      metadata: request.metadata,
-    });
-    if (target) {
-      rewriteTargets.push({ request, ...target });
+    const rewriteTargets: Array<{
+      request: (typeof params.requests)[number];
+      messageId: string;
+      message: Record<string, unknown>;
+    }> = [];
+    for (const request of params.requests) {
+      const target = findSourceReplyTranscriptMirrorByMetadataInEvents({
+        events,
+        idempotencyKey: request.idempotencyKey,
+        metadata: request.metadata,
+      });
+      if (target) {
+        rewriteTargets.push({ request, ...target });
+      }
     }
-  }
-  if (rewriteTargets.length === 0) {
-    return [];
-  }
+    if (rewriteTargets.length === 0) {
+      return [];
+    }
 
-  const rewriteTargetIds = new Set(rewriteTargets.map((target) => target.messageId));
-  // Guard over visible records (messages/compaction) only: hidden tree records
-  // such as leaf controls may trail the mirrors and must not veto the rewrite.
-  const visibleEvents = events.filter((event) => {
-    const record = transcriptEventRecord(event);
-    return Boolean(record?.message) || record?.type === "compaction";
-  });
-  const firstRewriteEntryIndex = visibleEvents.findIndex((event) => {
-    const id = transcriptEventId(event);
-    return id ? rewriteTargetIds.has(id) : false;
-  });
-  const canRewriteSourceReplyMirrors =
-    firstRewriteEntryIndex >= 0 &&
-    visibleEvents.slice(firstRewriteEntryIndex).every((event) => {
+    const rewriteTargetIds = new Set(rewriteTargets.map((target) => target.messageId));
+    const firstRewriteEntryIndex = events.findIndex((event) => {
       const id = transcriptEventId(event);
-      return !id || allowedSourceReplyMirrorIds.has(id);
+      return id ? rewriteTargetIds.has(id) : false;
     });
-  if (!canRewriteSourceReplyMirrors) {
-    return [];
-  }
+    const canRewriteSourceReplyMirrors =
+      firstRewriteEntryIndex >= 0 &&
+      events.slice(firstRewriteEntryIndex).every((event) => {
+        const id = transcriptEventId(event);
+        return !id || allowedSourceReplyMirrorIds.has(id);
+      });
+    if (!canRewriteSourceReplyMirrors) {
+      return [];
+    }
 
-  const result = await rewriteTranscriptEntriesInRuntimeTranscript({
-    scope: {
-      sessionId,
-      sessionKey,
-      ...(params.scope.agentId ? { agentId: params.scope.agentId } : {}),
-      ...(params.scope.storePath ? { storePath: params.scope.storePath } : {}),
-    },
-    request: {
-      allowedRewriteSuffixEntryIds: [...allowedSourceReplyMirrorIds],
-      replacements: rewriteTargets.map((target) => ({
-        entryId: target.messageId,
+    const replacementsById = new Map(rewriteTargets.map((target) => [target.messageId, target]));
+    const rewrittenEvents = events.map((event) => {
+      const id = transcriptEventId(event);
+      const replacement = id ? replacementsById.get(id) : undefined;
+      if (!replacement) {
+        return event;
+      }
+      return Object.assign({}, event as Record<string, unknown>, {
         message: {
-          ...(target.message as unknown as AgentMessage),
-          idempotencyKey: target.request.idempotencyKey,
-          content: target.request.state.persistedContent,
-        } as unknown as AgentMessage,
-      })),
-    },
-    ...(params.config ? { config: params.config } : {}),
-  });
-  if (!result.changed) {
-    return [];
-  }
-
-  // The file-backed rewrite appends replacement entries under fresh ids, so
-  // re-read the transcript to hand callers the persisted mirror ids.
-  const rewrittenEvents = await loadTranscriptEvents({ ...params.scope, sessionId });
-  return rewriteTargets.map((target) => {
-    const rewritten = findSourceReplyTranscriptMirrorByIdempotencyKeyInEvents(
-      rewrittenEvents,
-      target.request.idempotencyKey,
-    );
-    return rewritten?.messageId
-      ? { messageId: rewritten.messageId, request: target.request }
-      : { request: target.request };
+          ...replacement.message,
+          idempotencyKey: replacement.request.idempotencyKey,
+          content: replacement.request.state.persistedContent,
+        },
+      });
+    });
+    await transcript.replaceEvents(rewrittenEvents);
+    return rewriteTargets.map((target) => ({
+      messageId: target.messageId,
+      request: target.request,
+    }));
   });
 }
 
 async function publishAssistantTranscriptRewrite(params: {
   scope: SessionTranscriptWriteScope;
-  rewritten: readonly { messageId?: string }[];
+  rewritten: readonly { messageId: string }[];
 }): Promise<void> {
   if (params.rewritten.length === 0) {
     return;
   }
-  // The file-backed rewrite emits its own transcript update; only the session
-  // marker touch remains so history readers observe the fresh updatedAt.
   await touchAssistantTranscriptSessionEntry(params.scope);
+  await publishTranscriptUpdate(params.scope, {
+    messageId: params.rewritten.at(-1)?.messageId,
+  });
 }
 
 function collectSessionAbortPartials(params: {
@@ -3174,17 +3222,21 @@ async function handleChatHistoryRequest({
     return;
   }
   const startupModelCatalogLoad =
-    method === "chat.startup" ? startOptionalServerMethodModelCatalogLoad(context) : undefined;
+    method === "chat.startup"
+      ? startOptionalServerMethodModelCatalogSnapshotLoad(context)
+      : undefined;
   const modelCatalogPromise = measureDiagnosticsTimelineSpan(
     `gateway.${method}.model_catalog`,
     () =>
       startupModelCatalogLoad
-        ? loadOptionalServerMethodModelCatalog(context, method, {
+        ? loadOptionalServerMethodModelCatalogSnapshot(context, method, {
             logOnceKey: "chat.startup",
             startedLoad: startupModelCatalogLoad,
             timeoutMs: CHAT_STARTUP_OPTIONAL_MODEL_CATALOG_TIMEOUT_MS,
           })
-        : loadOptionalServerMethodModelCatalog(context, method),
+        : loadOptionalServerMethodModelCatalog(context, method).then((entries) =>
+            entries ? { entries, routeVariants: entries } : undefined,
+          ),
     {
       config: cfg,
       phase: method,
@@ -3251,14 +3303,33 @@ async function handleChatHistoryRequest({
     maxHistoryBytes,
     logDebug: (message) => context.logGateway.debug(message),
   });
-  const modelCatalog = await modelCatalogPromise;
+  const modelCatalogSnapshot = await modelCatalogPromise;
+  const modelCatalog = modelCatalogSnapshot?.entries;
   const defaultAgentId = resolveDefaultAgentId(cfg);
+  const startupCatalogProjection =
+    method === "chat.startup" && modelCatalogSnapshot
+      ? await buildChatStartupModelCatalogProjection({
+          cfg,
+          snapshot: modelCatalogSnapshot,
+          sessionAgentId,
+          sessionEntry: entry,
+          defaultAgentId,
+          includeAgentsList: includeAgentsList === true,
+        })
+      : undefined;
+  const sessionModelCatalog = startupCatalogProjection?.sessionModelCatalog ?? modelCatalog;
+  const defaultModelCatalog =
+    startupCatalogProjection?.modelCatalogByAgentId.get(normalizeAgentId(defaultAgentId)) ??
+    modelCatalog;
   const startupMetadata = includeMetadata
     ? await buildChatStartupMetadataResult({
         cfg,
         context,
         agentId: sessionAgentId,
-        modelCatalog,
+        modelCatalog: modelCatalogSnapshot,
+        ...(startupCatalogProjection
+          ? { catalogProjector: startupCatalogProjection.sessionCatalogProjector }
+          : {}),
       })
     : undefined;
   const sessionInfo = buildGatewaySessionInfo({
@@ -3268,7 +3339,7 @@ async function handleChatHistoryRequest({
     key: canonicalKey,
     entry,
     agentId: selectedAgent.agentId,
-    modelCatalog,
+    modelCatalog: sessionModelCatalog,
   });
   const activeRunAgentId =
     canonicalKey === "global" ? (selectedAgent.agentId ?? defaultAgentId) : selectedAgent.agentId;
@@ -3282,7 +3353,9 @@ async function handleChatHistoryRequest({
   });
   sessionInfo.hasActiveRun = activeRunState.active;
   sessionInfo.activeRunIds = activeRunState.runIds;
-  const defaults = getSessionDefaults(cfg, modelCatalog, { allowPluginNormalization: false });
+  const defaults = getSessionDefaults(cfg, defaultModelCatalog, {
+    allowPluginNormalization: false,
+  });
   const thinkingLevel = sessionInfo.thinkingLevel ?? sessionInfo.thinkingDefault;
   const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
   sessionInfo.verboseLevel = verboseLevel;
@@ -3318,7 +3391,17 @@ async function handleChatHistoryRequest({
     fastMode: entry?.fastMode,
     verboseLevel,
     ...(boundedInFlightRun ? { inFlightRun: boundedInFlightRun } : {}),
-    ...(includeAgentsList ? { agentsList: listAgentsForGateway(cfg, modelCatalog) } : {}),
+    ...(includeAgentsList
+      ? {
+          agentsList: listAgentsForGateway(
+            cfg,
+            modelCatalog,
+            startupCatalogProjection
+              ? { modelCatalogByAgentId: startupCatalogProjection.modelCatalogByAgentId }
+              : undefined,
+          ),
+        }
+      : {}),
     ...(startupMetadata ? { metadata: startupMetadata } : {}),
   };
   respond(true, payload);
@@ -3337,6 +3420,70 @@ export const chatHandlers: GatewayRequestHandlers = {
     });
   },
   "chat.metadata": handleChatMetadataRequest,
+  "chat.toolTitles": async ({ params, respond, context }) => {
+    if (!validateChatToolTitlesParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid chat.toolTitles params: ${formatValidationErrors(validateChatToolTitlesParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const cfg = context.getRuntimeConfig();
+    // Opt-in gate: tool titles spend utility-model tokens, so the gateway
+    // stays fully deterministic unless the operator enables them explicitly.
+    // `disabled: true` lets clients stop asking for the rest of the session.
+    if (cfg.gateway?.controlUi?.toolTitles !== true) {
+      respond(true, { titles: {}, disabled: true });
+      return;
+    }
+    const agentIdOverride = normalizeOptionalText(params.agentId);
+    const requestedAgentId = resolveRequestedChatAgentId({
+      cfg,
+      requestedSessionKey: params.sessionKey,
+      agentId: agentIdOverride,
+    });
+    const selectedAgent = validateChatSelectedAgent({
+      cfg,
+      requestedSessionKey: params.sessionKey,
+      agentId: requestedAgentId,
+    });
+    if (!selectedAgent.ok) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, selectedAgent.error));
+      return;
+    }
+    try {
+      const sessionAgentId = resolveSessionAgentId({
+        sessionKey: params.sessionKey,
+        config: cfg,
+        agentId: selectedAgent.agentId,
+      });
+      // Session entry carries per-session model overrides; utility routing must
+      // derive its small-model default from the provider this session actually
+      // uses, not the agent's configured default.
+      const { cfg: sessionCfg, entry } = loadSessionEntry(
+        params.sessionKey,
+        selectedAgent.agentId ? { agentId: selectedAgent.agentId } : undefined,
+      );
+      const sessionModel = resolveSessionModelRef(sessionCfg, entry, sessionAgentId);
+      // Title generation pulls in the simple-completion runtime; load it lazily
+      // so gateways that never enable the opt-in skip that cost.
+      const { generateToolCallTitles } = await import("../chat-tool-titles.js");
+      const titles = await generateToolCallTitles({
+        cfg: sessionCfg,
+        agentId: sessionAgentId,
+        sessionPrimaryProvider: sessionModel.provider,
+        sessionAuthProfile: entry?.authProfileOverride?.trim() || undefined,
+        items: params.items,
+      });
+      respond(true, { titles });
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
+    }
+  },
   "chat.message.get": async ({ params, respond, context }) => {
     if (!validateChatMessageGetParams(params)) {
       respond(
@@ -3830,6 +3977,11 @@ export const chatHandlers: GatewayRequestHandlers = {
     );
     const sessionLoadMs = roundedChatSendTimingMs(performance.now() - sessionLoadStartedAtMs);
     const { cfg, storePath, entry, canonicalKey: sessionKey, legacyKey } = sessionLoadResult;
+    const missingHarnessSessionError = resolveMissingAgentHarnessSessionError(sessionKey, entry);
+    if (missingHarnessSessionError) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, missingHarnessSessionError));
+      return;
+    }
     const expectedSessionRoutingContract = normalizeOptionalText(p.expectedSessionRoutingContract);
     const sessionRoutingChanged = (candidateConfig: OpenClawConfig) =>
       expectedSessionRoutingContract !== undefined &&
@@ -4071,97 +4223,110 @@ export const chatHandlers: GatewayRequestHandlers = {
     let admittedRunAbort: ReturnType<typeof registerChatAbortController> | undefined;
     let reservationSuperseded = false;
     let supersedingResult: DedupeEntry | undefined;
+    const assertChatWorkAdmissionAllowed = (commitOutcome: boolean) => {
+      if (context.chatAbortedRuns.has(clientRunId)) {
+        return;
+      }
+      const pendingReservation = readPreRegisteredRun({
+        key: pendingChatSendKey,
+        entry: context.dedupe.get(pendingChatSendKey),
+        keyPrefix: PENDING_CHAT_SEND_DEDUPE_PREFIX,
+      });
+      if (
+        pendingReservation &&
+        normalizeUnknownText(pendingReservation.payload.attemptId) !== pendingAttemptId
+      ) {
+        if (commitOutcome) {
+          reservationSuperseded = true;
+        }
+        return;
+      }
+      if (!pendingReservation) {
+        const terminalResult = context.dedupe.get(`chat:${clientRunId}`);
+        if (terminalResult || context.chatAbortControllers.has(clientRunId)) {
+          if (commitOutcome) {
+            reservationSuperseded = true;
+            supersedingResult = terminalResult;
+          }
+          return;
+        }
+      }
+      if (lifecycleGeneration !== getAgentEventLifecycleGeneration()) {
+        if (commitOutcome) {
+          writePreRegisteredChatAbort({
+            context,
+            runId: clientRunId,
+            stopReason: "restart",
+            attemptId: pendingAttemptId,
+          });
+        }
+        return;
+      }
+      if (
+        !pendingReservation ||
+        !isFutureDateTimestampMs(pendingReservation.payload.expiresAtMs, {
+          nowMs: Date.now(),
+        })
+      ) {
+        if (commitOutcome) {
+          writePreRegisteredChatAbort({
+            context,
+            runId: clientRunId,
+            stopReason: "timeout",
+            attemptId: pendingAttemptId,
+          });
+        }
+        return;
+      }
+      const latestSession = loadSessionEntry(rawSessionKey, sessionLoadOptions);
+      if (sessionRoutingChanged(latestSession.cfg)) {
+        throw new Error(SESSION_ROUTING_CHANGED_ERROR_REASON);
+      }
+      const latestEntry = latestSession.entry;
+      if (entry && !latestEntry) {
+        throw new Error(`Session "${sessionKey}" was deleted while starting work. Retry.`);
+      }
+      // Admission can queue behind reset. Never route a request captured
+      // against the old session into the replacement transcript.
+      if (
+        backingSessionId &&
+        latestEntry?.sessionId &&
+        latestEntry.sessionId !== backingSessionId
+      ) {
+        throw new Error(`Session "${sessionKey}" changed while starting work. Retry.`);
+      }
+      const archivedError = resolveSessionWorkStartError(sessionKey, latestEntry);
+      if (archivedError) {
+        throw new Error(archivedError);
+      }
+      if (!commitOutcome) {
+        return;
+      }
+      admittedSessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
+      admittedRunAbort = registerChatAbortController({
+        chatAbortControllers: context.chatAbortControllers,
+        runId: clientRunId,
+        sessionId: admittedSessionId,
+        sessionKey,
+        agentId: selectedAgent.agentId,
+        timeoutMs,
+        now,
+        ownerConnId: normalizeOptionalText(client?.connId),
+        ownerDeviceId: normalizeOptionalText(client?.connect?.device?.id),
+        providerId: resolvedSessionModel.provider,
+        authProviderId: resolvedSessionAuthProvider,
+        isAbortable: (active) => isReplyRunAbortableForSignal(active.controller.signal),
+        kind: "chat-send",
+        turnKind,
+        lifecycleGeneration,
+      });
+    };
     try {
       gatewayWorkAdmission = await beginSessionWorkAdmission({
         scope: storePath,
         identities: [sessionKey, backingSessionId],
-        assertAllowed: () => {
-          if (context.chatAbortedRuns.has(clientRunId)) {
-            return;
-          }
-          const pendingReservation = readPreRegisteredRun({
-            key: pendingChatSendKey,
-            entry: context.dedupe.get(pendingChatSendKey),
-            keyPrefix: PENDING_CHAT_SEND_DEDUPE_PREFIX,
-          });
-          if (
-            pendingReservation &&
-            normalizeUnknownText(pendingReservation.payload.attemptId) !== pendingAttemptId
-          ) {
-            reservationSuperseded = true;
-            return;
-          }
-          if (!pendingReservation) {
-            const terminalResult = context.dedupe.get(`chat:${clientRunId}`);
-            if (terminalResult || context.chatAbortControllers.has(clientRunId)) {
-              reservationSuperseded = true;
-              supersedingResult = terminalResult;
-              return;
-            }
-          }
-          if (lifecycleGeneration !== getAgentEventLifecycleGeneration()) {
-            writePreRegisteredChatAbort({
-              context,
-              runId: clientRunId,
-              stopReason: "restart",
-              attemptId: pendingAttemptId,
-            });
-            return;
-          }
-          if (
-            !pendingReservation ||
-            !isFutureDateTimestampMs(pendingReservation.payload.expiresAtMs, {
-              nowMs: Date.now(),
-            })
-          ) {
-            writePreRegisteredChatAbort({
-              context,
-              runId: clientRunId,
-              stopReason: "timeout",
-              attemptId: pendingAttemptId,
-            });
-            return;
-          }
-          const latestSession = loadSessionEntry(rawSessionKey, sessionLoadOptions);
-          if (sessionRoutingChanged(latestSession.cfg)) {
-            throw new Error(SESSION_ROUTING_CHANGED_ERROR_REASON);
-          }
-          const latestEntry = latestSession.entry;
-          if (entry && !latestEntry) {
-            throw new Error(`Session "${sessionKey}" was deleted while starting work. Retry.`);
-          }
-          // Admission can queue behind reset. Never route a request captured
-          // against the old session into the replacement transcript.
-          if (
-            backingSessionId &&
-            latestEntry?.sessionId &&
-            latestEntry.sessionId !== backingSessionId
-          ) {
-            throw new Error(`Session "${sessionKey}" changed while starting work. Retry.`);
-          }
-          const archivedError = resolveSessionWorkStartError(sessionKey, latestEntry);
-          if (archivedError) {
-            throw new Error(archivedError);
-          }
-          admittedSessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
-          admittedRunAbort = registerChatAbortController({
-            chatAbortControllers: context.chatAbortControllers,
-            runId: clientRunId,
-            sessionId: admittedSessionId,
-            sessionKey,
-            agentId: selectedAgent.agentId,
-            timeoutMs,
-            now,
-            ownerConnId: normalizeOptionalText(client?.connId),
-            ownerDeviceId: normalizeOptionalText(client?.connect?.device?.id),
-            providerId: resolvedSessionModel.provider,
-            authProviderId: resolvedSessionAuthProvider,
-            isAbortable: (active) => isReplyRunAbortableForSignal(active.controller.signal),
-            kind: "chat-send",
-            turnKind,
-            lifecycleGeneration,
-          });
-        },
+        assertAllowed: () => assertChatWorkAdmissionAllowed(false),
+        revalidateAllowed: () => assertChatWorkAdmissionAllowed(true),
         onInterrupt: () => {
           if (admittedRunAbort?.entry) {
             admittedRunAbort.entry.abortStopReason = "restart";
@@ -4596,6 +4761,8 @@ export const chatHandlers: GatewayRequestHandlers = {
             startedAt: number;
           }
         | undefined;
+      let persistDispatchErrorUserTurn: (() => Promise<void>) | undefined;
+      let acceptedUserTurnSessionId = entry?.sessionId;
       const userTurnRecorder: UserTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
         input: baseUserTurnInput,
         resolveInput: () => userTurnInputPromise,
@@ -4605,14 +4772,14 @@ export const chatHandlers: GatewayRequestHandlers = {
             store: latestStore,
             entry: latestEntry,
           } = loadSessionEntry(sessionKey, sessionLoadOptions);
-          const resolvedSessionId = latestEntry?.sessionId ?? backingSessionId;
-          if (!resolvedSessionId) {
+          if (!latestEntry?.sessionId || latestEntry.sessionId !== acceptedUserTurnSessionId) {
             return undefined;
           }
           return {
-            sessionId: resolvedSessionId,
+            sessionId: latestEntry.sessionId,
+            expectedSessionId: latestEntry.sessionId,
             sessionKey,
-            sessionEntry: latestEntry ?? entry,
+            sessionEntry: latestEntry,
             sessionStore: latestStore,
             storePath: latestStorePath,
             agentId,
@@ -4831,7 +4998,17 @@ export const chatHandlers: GatewayRequestHandlers = {
                     ? { taskSuggestionDeliveryMode: "gateway" as const }
                     : {}),
                   requestedSessionId,
+                  ...(entry?.sessionId
+                    ? {
+                        expectedExistingSessionId: entry.sessionId,
+                      }
+                    : {}),
                   resumeRequestedSession: controlUiReconnectResume.resumeRequested,
+                  onSessionPrepared: (binding) => {
+                    if (binding.sessionKey === sessionKey) {
+                      acceptedUserTurnSessionId = binding.sessionId;
+                    }
+                  },
                   abortSignal: activeRunAbort.controller.signal,
                   // Keep a Gateway-owned cancel identity after this chat.send
                   // terminalizes while the prompt waits in followup/collect queue.
@@ -5656,7 +5833,6 @@ export const chatHandlers: GatewayRequestHandlers = {
                         candidates: sourceReplyMirrorCandidates,
                         requests: sourceReplyPersistenceRequests,
                         scope: sourceReplyScope,
-                        config: cfg,
                       });
                       if (rewritten.length > 0) {
                         await publishAssistantTranscriptRewrite({
@@ -5804,17 +5980,11 @@ export const chatHandlers: GatewayRequestHandlers = {
             }
             return;
           }
-          const emitAfterError =
+          persistDispatchErrorUserTurn =
             userTurnRecorder.hasPersisted() || userTurnRecorder.isBlocked()
-              ? Promise.resolve()
-              : persistGatewayUserTurnTranscript();
-          await emitAfterError.catch((transcriptErr: unknown) => {
-            context.logGateway.warn(
-              `webchat user transcript update failed after error: ${formatForLog(transcriptErr)}`,
-            );
-          });
+              ? undefined
+              : persistGatewayUserTurnTranscript;
           if (
-            !agentRunStarted &&
             !activeRunAbort.controller.signal.aborted &&
             !context.chatAbortedRuns.has(clientRunId)
           ) {
@@ -5900,7 +6070,14 @@ export const chatHandlers: GatewayRequestHandlers = {
               );
             }
           };
-          void persistDispatchLifecycleError()
+          void (async () => {
+            await persistDispatchLifecycleError();
+            await persistDispatchErrorUserTurn?.().catch((transcriptErr: unknown) => {
+              context.logGateway.warn(
+                `webchat user transcript update failed after error: ${formatForLog(transcriptErr)}`,
+              );
+            });
+          })()
             .catch((continuationErr: unknown) => {
               context.logGateway.warn(
                 `webchat session lifecycle continuation failed: ${formatForLog(continuationErr)}`,

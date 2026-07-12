@@ -20,7 +20,11 @@ import {
   stripHeartbeatTokenForDisplay,
 } from "../../lib/chat/heartbeat-display.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
-import type { ChatSideResult } from "../../lib/chat/side-result.ts";
+import {
+  retirePendingChatSideQuestion,
+  type ChatSideResult,
+  type ChatSideResultPending,
+} from "../../lib/chat/side-result.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
@@ -446,8 +450,12 @@ export type ChatState = {
   chatStreamStartedAt: number | null;
   lastError: string | null;
   chatError?: string | null;
-  chatSideResult?: ChatSideResult | null;
+  /** Completed side-chat turns (oldest first); follow-ups accumulate here. */
+  chatSideChatTurns?: ChatSideResult[];
+  chatSideResultPending?: ChatSideResultPending | null;
   chatSideResultTerminalRuns?: Set<string>;
+  /** Panel closed via X/Escape; conversation kept until cleared or reset. */
+  chatSideChatHidden?: boolean;
   chatReplyTarget?: unknown;
   agentsError?: string | null;
   onAgentsList?: (agentsList: AgentsListResult, client: GatewayBrowserClient) => void;
@@ -836,7 +844,8 @@ export async function clearChatHistory(
     return "completed";
   }
   state.chatMessages = [];
-  state.chatSideResult = null;
+  state.chatSideChatTurns = [];
+  state.chatSideChatHidden = false;
   state.chatReplyTarget = null;
   reconcileChatRunLifecycle(state, {
     outcome: hadActiveRun ? "interrupted" : undefined,
@@ -849,6 +858,10 @@ export async function clearChatHistory(
     clearSideResultTerminalRuns: true,
     clearRunStatus: !hadActiveRun,
   });
+  // After the suppression-set wipe above: retire (not just drop) a pending
+  // BTW run so its late resultless terminal event cannot re-enter the freshly
+  // cleared transcript.
+  retirePendingChatSideQuestion(state);
   await loadChatHistory(state);
   scheduleChatScroll(state);
   return "completed";

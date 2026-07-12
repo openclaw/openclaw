@@ -92,6 +92,27 @@ import {
   AgentsWorkspaceListResultSchema,
 } from "./agents-workspace.js";
 import {
+  AllowedApprovalSnapshotSchema,
+  ApprovalAllowDecisionSchema,
+  ApprovalDecisionSchema,
+  ApprovalGetParamsSchema,
+  ApprovalGetResultSchema,
+  ApprovalKindSchema,
+  ApprovalPresentationSchema,
+  ApprovalResolveParamsSchema,
+  ApprovalResolveResultSchema,
+  ApprovalSnapshotSchema,
+  ApprovalTerminalReasonSchema,
+  CancelledApprovalSnapshotSchema,
+  DeniedApprovalSnapshotSchema,
+  ExecApprovalPresentationSchema,
+  ExpiredApprovalSnapshotSchema,
+  PendingApprovalSnapshotSchema,
+  PluginApprovalPresentationSchema,
+  PluginApprovalSeveritySchema,
+  TerminalApprovalSnapshotSchema,
+} from "./approvals.js";
+import {
   ArtifactSummarySchema,
   ArtifactsDownloadParamsSchema,
   ArtifactsDownloadResultSchema,
@@ -100,6 +121,15 @@ import {
   ArtifactsListParamsSchema,
   ArtifactsListResultSchema,
 } from "./artifacts.js";
+import {
+  AuditActivityAgentRunV1Schema,
+  AuditActivityEventV1Schema,
+  AuditActivityInboundMessageV1Schema,
+  AuditActivityListParamsSchema,
+  AuditActivityListResultSchema,
+  AuditActivityOutboundMessageV1Schema,
+  AuditActivityToolActionV1Schema,
+} from "./audit-activity.js";
 import { AuditEventSchema, AuditListParamsSchema, AuditListResultSchema } from "./audit.js";
 import {
   ChannelsStartParamsSchema,
@@ -161,8 +191,12 @@ import {
   CrestodianChatResultSchema,
   CrestodianSetupActivateParamsSchema,
   CrestodianSetupActivateResultSchema,
+  CrestodianSetupAuthStartParamsSchema,
+  CrestodianSetupAuthStartResultSchema,
   CrestodianSetupDetectParamsSchema,
   CrestodianSetupDetectResultSchema,
+  CrestodianSetupVerifyParamsSchema,
+  CrestodianSetupVerifyResultSchema,
 } from "./crestodian.js";
 import {
   CronAddParamsSchema,
@@ -193,11 +227,18 @@ import {
 } from "./devices.js";
 import {
   EnvironmentSummarySchema,
+  EnvironmentsCreateParamsSchema,
+  EnvironmentsCreateResultSchema,
+  EnvironmentsDestroyParamsSchema,
+  EnvironmentsDestroyResultSchema,
   EnvironmentsListParamsSchema,
   EnvironmentsListResultSchema,
   EnvironmentsStatusParamsSchema,
   EnvironmentsStatusResultSchema,
   EnvironmentStatusSchema,
+  WorkerEnvironmentMetadataSchema,
+  WorkerEnvironmentStateSchema,
+  WorkerTunnelStatusSchema,
 } from "./environments.js";
 import {
   ExecApprovalsGetParamsSchema,
@@ -221,6 +262,7 @@ import {
   ShutdownEventSchema,
   TickEventSchema,
 } from "./frames.js";
+import { FsDirEntrySchema, FsListDirParamsSchema, FsListDirResultSchema } from "./fs.js";
 import {
   GatewaySuspendBlockerSchema,
   GatewaySuspendPrepareBusyResultSchema,
@@ -248,6 +290,8 @@ import {
   ChatMessageGetResultSchema,
   ChatInjectParamsSchema,
   ChatSendParamsSchema,
+  ChatToolTitlesParamsSchema,
+  ChatToolTitlesResultSchema,
   LogsTailParamsSchema,
   LogsTailResultSchema,
 } from "./logs-chat.js";
@@ -270,6 +314,10 @@ import {
   NodePairListParamsSchema,
   NodePairRemoveParamsSchema,
   NodePairRejectParamsSchema,
+  NodePluginToolDescriptorSchema,
+  NodePluginToolsUpdateParamsSchema,
+  NodeSkillDescriptorSchema,
+  NodeSkillsUpdateParamsSchema,
   NodeRenameParamsSchema,
 } from "./nodes.js";
 import {
@@ -309,6 +357,22 @@ import {
   SecretsResolveResultSchema,
 } from "./secrets.js";
 import {
+  SessionCatalogCapabilitiesSchema,
+  SessionCatalogDescriptorSchema,
+  SessionCatalogHostSchema,
+  SessionCatalogSchema,
+  SessionCatalogSessionSchema,
+  SessionCatalogTranscriptItemSchema,
+  SessionsCatalogArchiveParamsSchema,
+  SessionsCatalogArchiveResultSchema,
+  SessionsCatalogContinueParamsSchema,
+  SessionsCatalogContinueResultSchema,
+  SessionsCatalogListParamsSchema,
+  SessionsCatalogListResultSchema,
+  SessionsCatalogReadParamsSchema,
+  SessionsCatalogReadResultSchema,
+} from "./sessions-catalog.js";
+import {
   SessionsAbortParamsSchema,
   SessionsCompactParamsSchema,
   SessionsCompactionBranchParamsSchema,
@@ -339,10 +403,16 @@ import {
   SessionsGroupsMutationResultSchema,
   SessionsGroupsPutParamsSchema,
   SessionsGroupsRenameParamsSchema,
+  SessionDiffFileSchema,
+  SessionDiffFileStatusSchema,
+  SessionsDiffParamsSchema,
+  SessionsDiffResultSchema,
   SessionsFilesGetParamsSchema,
   SessionsFilesGetResultSchema,
   SessionsFilesListParamsSchema,
   SessionsFilesListResultSchema,
+  SessionsFilesSetParamsSchema,
+  SessionsFilesSetResultSchema,
   SessionsListParamsSchema,
   SessionsMessagesSubscribeParamsSchema,
   SessionsMessagesUnsubscribeParamsSchema,
@@ -406,6 +476,7 @@ import {
   WizardStatusResultSchema,
   WizardStepSchema,
 } from "./wizard.js";
+import { WorkerAdmissionHandshakeSchema } from "./worker-admission.js";
 import {
   WorktreeRecordSchema,
   WorktreesCreateParamsSchema,
@@ -425,6 +496,7 @@ import {
 export const ProtocolSchemas = {
   // Handshake, transport frames, state snapshots, and shared error envelopes.
   ConnectParams: ConnectParamsSchema,
+  WorkerAdmissionHandshake: WorkerAdmissionHandshakeSchema,
   HelloOk: HelloOkSchema,
   RequestFrame: RequestFrameSchema,
   ResponseFrame: ResponseFrameSchema,
@@ -449,7 +521,14 @@ export const ProtocolSchemas = {
 
   // Environment and agent-facing control RPC payloads.
   EnvironmentStatus: EnvironmentStatusSchema,
+  WorkerEnvironmentState: WorkerEnvironmentStateSchema,
+  WorkerTunnelStatus: WorkerTunnelStatusSchema,
+  WorkerEnvironmentMetadata: WorkerEnvironmentMetadataSchema,
   EnvironmentSummary: EnvironmentSummarySchema,
+  EnvironmentsCreateParams: EnvironmentsCreateParamsSchema,
+  EnvironmentsCreateResult: EnvironmentsCreateResultSchema,
+  EnvironmentsDestroyParams: EnvironmentsDestroyParamsSchema,
+  EnvironmentsDestroyResult: EnvironmentsDestroyResultSchema,
   EnvironmentsListParams: EnvironmentsListParamsSchema,
   EnvironmentsListResult: EnvironmentsListResultSchema,
   EnvironmentsStatusParams: EnvironmentsStatusParamsSchema,
@@ -477,6 +556,9 @@ export const ProtocolSchemas = {
   WorktreeBranch: WorktreeBranchSchema,
   WorktreesBranchesParams: WorktreesBranchesParamsSchema,
   WorktreesBranchesResult: WorktreesBranchesResultSchema,
+  FsDirEntry: FsDirEntrySchema,
+  FsListDirParams: FsListDirParamsSchema,
+  FsListDirResult: FsListDirResultSchema,
 
   // Node pairing, invocation, presence, and pending-queue payloads.
   NodePairListParams: NodePairListParamsSchema,
@@ -485,6 +567,10 @@ export const ProtocolSchemas = {
   NodePairRemoveParams: NodePairRemoveParamsSchema,
   NodeRenameParams: NodeRenameParamsSchema,
   NodeListParams: NodeListParamsSchema,
+  NodePluginToolDescriptor: NodePluginToolDescriptorSchema,
+  NodePluginToolsUpdateParams: NodePluginToolsUpdateParamsSchema,
+  NodeSkillDescriptor: NodeSkillDescriptorSchema,
+  NodeSkillsUpdateParams: NodeSkillsUpdateParamsSchema,
   NodePendingAckParams: NodePendingAckParamsSchema,
   NodeDescribeParams: NodeDescribeParamsSchema,
   NodeInvokeParams: NodeInvokeParamsSchema,
@@ -509,6 +595,20 @@ export const ProtocolSchemas = {
 
   // Session lifecycle, message routing, compaction, and usage accounting.
   SessionsListParams: SessionsListParamsSchema,
+  SessionCatalogCapabilities: SessionCatalogCapabilitiesSchema,
+  SessionCatalogDescriptor: SessionCatalogDescriptorSchema,
+  SessionCatalogSession: SessionCatalogSessionSchema,
+  SessionCatalogHost: SessionCatalogHostSchema,
+  SessionCatalog: SessionCatalogSchema,
+  SessionCatalogTranscriptItem: SessionCatalogTranscriptItemSchema,
+  SessionsCatalogListParams: SessionsCatalogListParamsSchema,
+  SessionsCatalogListResult: SessionsCatalogListResultSchema,
+  SessionsCatalogReadParams: SessionsCatalogReadParamsSchema,
+  SessionsCatalogReadResult: SessionsCatalogReadResultSchema,
+  SessionsCatalogContinueParams: SessionsCatalogContinueParamsSchema,
+  SessionsCatalogContinueResult: SessionsCatalogContinueResultSchema,
+  SessionsCatalogArchiveParams: SessionsCatalogArchiveParamsSchema,
+  SessionsCatalogArchiveResult: SessionsCatalogArchiveResultSchema,
   SessionsCleanupParams: SessionsCleanupParamsSchema,
   SessionsPreviewParams: SessionsPreviewParamsSchema,
   SessionsDescribeParams: SessionsDescribeParamsSchema,
@@ -532,6 +632,12 @@ export const ProtocolSchemas = {
   SessionsFilesListResult: SessionsFilesListResultSchema,
   SessionsFilesGetParams: SessionsFilesGetParamsSchema,
   SessionsFilesGetResult: SessionsFilesGetResultSchema,
+  SessionsFilesSetParams: SessionsFilesSetParamsSchema,
+  SessionsFilesSetResult: SessionsFilesSetResultSchema,
+  SessionDiffFileStatus: SessionDiffFileStatusSchema,
+  SessionDiffFile: SessionDiffFileSchema,
+  SessionsDiffParams: SessionsDiffParamsSchema,
+  SessionsDiffResult: SessionsDiffResultSchema,
   SessionWorktreeInfo: SessionWorktreeInfoSchema,
   SessionsCreateParams: SessionsCreateParamsSchema,
   SessionsCreateResult: SessionsCreateResultSchema,
@@ -555,6 +661,13 @@ export const ProtocolSchemas = {
   SessionsUsageParams: SessionsUsageParamsSchema,
 
   // Audit/task ledgers and config/wizard setup payloads.
+  AuditActivityAgentRunV1: AuditActivityAgentRunV1Schema,
+  AuditActivityToolActionV1: AuditActivityToolActionV1Schema,
+  AuditActivityInboundMessageV1: AuditActivityInboundMessageV1Schema,
+  AuditActivityOutboundMessageV1: AuditActivityOutboundMessageV1Schema,
+  AuditActivityEventV1: AuditActivityEventV1Schema,
+  AuditActivityListParams: AuditActivityListParamsSchema,
+  AuditActivityListResult: AuditActivityListResultSchema,
   AuditEvent: AuditEventSchema,
   AuditListParams: AuditListParamsSchema,
   AuditListResult: AuditListResultSchema,
@@ -588,8 +701,12 @@ export const ProtocolSchemas = {
   CrestodianChatResult: CrestodianChatResultSchema,
   CrestodianSetupDetectParams: CrestodianSetupDetectParamsSchema,
   CrestodianSetupDetectResult: CrestodianSetupDetectResultSchema,
+  CrestodianSetupVerifyParams: CrestodianSetupVerifyParamsSchema,
+  CrestodianSetupVerifyResult: CrestodianSetupVerifyResultSchema,
   CrestodianSetupActivateParams: CrestodianSetupActivateParamsSchema,
   CrestodianSetupActivateResult: CrestodianSetupActivateResultSchema,
+  CrestodianSetupAuthStartParams: CrestodianSetupAuthStartParamsSchema,
+  CrestodianSetupAuthStartResult: CrestodianSetupAuthStartResultSchema,
   WizardStartParams: WizardStartParamsSchema,
   WizardNextParams: WizardNextParamsSchema,
   WizardCancelParams: WizardCancelParamsSchema,
@@ -749,6 +866,25 @@ export const ProtocolSchemas = {
   TerminalDataEvent: TerminalDataEventSchema,
   TerminalExitEvent: TerminalExitEventSchema,
   TerminalEvent: TerminalEventSchema,
+  ApprovalKind: ApprovalKindSchema,
+  ApprovalDecision: ApprovalDecisionSchema,
+  ApprovalAllowDecision: ApprovalAllowDecisionSchema,
+  PluginApprovalSeverity: PluginApprovalSeveritySchema,
+  ExecApprovalPresentation: ExecApprovalPresentationSchema,
+  PluginApprovalPresentation: PluginApprovalPresentationSchema,
+  ApprovalPresentation: ApprovalPresentationSchema,
+  PendingApprovalSnapshot: PendingApprovalSnapshotSchema,
+  AllowedApprovalSnapshot: AllowedApprovalSnapshotSchema,
+  DeniedApprovalSnapshot: DeniedApprovalSnapshotSchema,
+  ExpiredApprovalSnapshot: ExpiredApprovalSnapshotSchema,
+  CancelledApprovalSnapshot: CancelledApprovalSnapshotSchema,
+  ApprovalSnapshot: ApprovalSnapshotSchema,
+  ApprovalTerminalReason: ApprovalTerminalReasonSchema,
+  TerminalApprovalSnapshot: TerminalApprovalSnapshotSchema,
+  ApprovalGetParams: ApprovalGetParamsSchema,
+  ApprovalGetResult: ApprovalGetResultSchema,
+  ApprovalResolveParams: ApprovalResolveParamsSchema,
+  ApprovalResolveResult: ApprovalResolveResultSchema,
   ExecApprovalsGetParams: ExecApprovalsGetParamsSchema,
   ExecApprovalsSetParams: ExecApprovalsSetParamsSchema,
   ExecApprovalsNodeGetParams: ExecApprovalsNodeGetParamsSchema,
@@ -798,6 +934,8 @@ export const ProtocolSchemas = {
   ChatMetadataParams: ChatMetadataParamsSchema,
   ChatMessageGetParams: ChatMessageGetParamsSchema,
   ChatMessageGetResult: ChatMessageGetResultSchema,
+  ChatToolTitlesParams: ChatToolTitlesParamsSchema,
+  ChatToolTitlesResult: ChatToolTitlesResultSchema,
   ChatSendParams: ChatSendParamsSchema,
   ChatAbortParams: ChatAbortParamsSchema,
   ChatInjectParams: ChatInjectParamsSchema,

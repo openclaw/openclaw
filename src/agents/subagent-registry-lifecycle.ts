@@ -6,6 +6,7 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import type { callGateway as defaultCallGateway } from "../gateway/call.js";
 import { formatErrorMessage, readErrorName } from "../infra/errors.js";
 import {
@@ -14,6 +15,7 @@ import {
 } from "../process/gateway-work-admission.js";
 import { defaultRuntime } from "../runtime.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
+import { recordSubagentTerminalState } from "../sessions/session-state-events.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import type { DetachedTaskFindResult } from "../tasks/detached-task-runtime-contract.js";
@@ -30,7 +32,7 @@ import {
   buildAnnounceIdFromChildRun,
   buildAnnounceIdempotencyKey,
 } from "./announce-idempotency.js";
-import { removeInternalSessionEffectsTranscript } from "./internal-session-effects.js";
+import { removeInternalSessionEffectsSession } from "./internal-session-effects.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 import { type SubagentRunOutcome, withSubagentOutcomeTiming } from "./subagent-announce-output.js";
 import {
@@ -565,7 +567,13 @@ export function createSubagentRegistryLifecycleController(params: {
       const captured = await params.captureSubagentCompletionReply(entry.childSessionKey, {
         waitForReply: entry.expectsCompletionMessage === true,
         outcome,
-        sessionFile: entry.execution?.transcriptFile,
+        sessionFile: entry.execution?.transcriptTarget?.storePath
+          ? formatSqliteSessionFileMarker({
+              agentId: entry.execution.transcriptTarget.agentId ?? "",
+              sessionId: entry.execution.transcriptTarget.sessionId ?? "",
+              storePath: entry.execution.transcriptTarget.storePath,
+            })
+          : undefined,
       });
       resultText = captured?.trim() ? capFrozenResultText(captured) : null;
     } catch {
@@ -971,8 +979,8 @@ export function createSubagentRegistryLifecycleController(params: {
       });
     };
     if (!cleanupParams.preserveTranscript) {
-      runCleanupTail("transcript cleanup", async () => {
-        await removeInternalSessionEffectsTranscript(cleanupParams.entry.execution?.transcriptFile);
+      runCleanupTail("session cleanup", async () => {
+        await removeInternalSessionEffectsSession(cleanupParams.entry.execution?.transcriptTarget);
       });
     }
     if (cleanupParams.entry.spawnMode !== "session") {
@@ -1897,6 +1905,17 @@ export function createSubagentRegistryLifecycleController(params: {
       return;
     }
     const isProvisionalKill = entry.killReconciliation !== undefined;
+    // Record only the current, non-superseded callback with a committed outcome; the
+    // run-terminal dedupe key is first-write-wins, so a provisional/stale status here
+    // would permanently mislabel the signal-log terminal kind.
+    if (!isProvisionalKill && entry.outcome?.status && entry.outcome.status !== "unknown") {
+      recordSubagentTerminalState({
+        childSessionKey: entry.childSessionKey,
+        runId: entry.runId,
+        requesterSessionKey: entry.requesterSessionKey,
+        outcomeStatus: entry.outcome.status,
+      });
+    }
 
     if (!completeParams.suppressSessionEffects) {
       try {

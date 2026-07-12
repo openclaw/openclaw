@@ -52,6 +52,8 @@ export type CliSessionReseedReceipt = {
 
 export type CliSessionBinding = {
   sessionId: string;
+  /** Resume with the backend's fork argument once, then clear before process start. */
+  forkNextResume?: true;
   /** Trust an explicitly attached CLI session even when auth, prompt, or MCP fingerprints drift. */
   forceReuse?: boolean;
   authProfileId?: string;
@@ -246,6 +248,8 @@ export type SessionEntry = {
   heartbeatTaskState?: Record<string, number>;
   /** Plugin-owned session state, grouped by plugin id then extension namespace. */
   pluginExtensions?: Record<string, Record<string, SessionPluginJsonValue>>;
+  /** Trusted session initialization is incomplete; all work admission stays blocked. */
+  initializationPending?: true;
   /** Top-level SessionEntry mirror slots owned by plugin session extensions. */
   pluginExtensionSlotKeys?: Record<string, Record<string, string>>;
   /** Durable one-shot prompt additions drained before the next agent turn. */
@@ -295,7 +299,7 @@ export type SessionEntry = {
   inheritedToolDeny?: string[];
   /** Session-scoped tool allow entries inherited from the caller that created this session. */
   inheritedToolAllow?: string[];
-  /** Plugin id that created this session through api.runtime.subagent. */
+  /** Plugin id that owns this session through a trusted runtime creation seam. */
   pluginOwnerId?: string;
   systemSent?: boolean;
   abortedLastRun?: boolean;
@@ -435,6 +439,11 @@ export type SessionEntry = {
   cacheWrite?: number;
   modelProvider?: string;
   model?: string;
+  /**
+   * Prevents OpenClaw model changes and automatic maintenance eviction until
+   * the owning harness explicitly retires the session.
+   */
+  modelSelectionLocked?: boolean;
   /**
    * Embedded agent harness selected for this session id.
    * Prevents config/env changes from moving an existing transcript between
@@ -726,6 +735,8 @@ export type SessionSkillSnapshot = {
   skills: Array<{ name: string; primaryEnv?: string; requiredEnv?: string[] }>;
   /** Normalized agent-level filter used to build this snapshot; undefined means unrestricted. */
   skillFilter?: string[];
+  /** Effective node-exec eligibility used to select connected node-hosted skills. */
+  nodeSkillsEligibility?: { canExec: boolean; node?: string };
   /**
    * Runtime-only, never persisted. Carries the full parsed Skill[] (including
    * each SKILL.md body) so the embedded runner can skip a workspace skill

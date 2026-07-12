@@ -61,7 +61,7 @@ type StreamEvent =
  * - Everything else (including empty strings) → `"unknown"`
  *
  * The `/v1/messages` route always feeds `body.model` straight through,
- * so an Anthropic request with an `openai/gpt-5.5` model string is still
+ * so an Anthropic request with an `openai/gpt-5.6-luna` model string is still
  * classified as `"openai"`. That matches the parity program's convention
  * where the provider label is the source of truth, not the HTTP route.
  */
@@ -86,7 +86,7 @@ export function resolveProviderVariant(model: string | undefined): MockOpenAiPro
     return "anthropic";
   }
   // Fall back to model-name prefix matching for bare model strings like
-  // `gpt-5.5` or `claude-opus-4-8`.
+  // `gpt-5.6-luna` or `claude-opus-4-8`.
   if (/^(?:gpt-|o1-|openai-)/.test(trimmed)) {
     return "openai";
   }
@@ -223,6 +223,9 @@ function isStrandedFinalRetryFailureRequest(allInputText: string): boolean {
   );
 }
 const QA_SUBAGENT_DIRECT_FALLBACK_MARKER = "QA-SUBAGENT-DIRECT-FALLBACK-OK";
+const QA_NATIVE_STOP_DELAY_PROMPT_RE =
+  /subagent recovery worker native command target proof\.\s*wait until stopped\./i;
+const QA_NATIVE_STOP_DELAY_MS = 180_000;
 const QA_IMAGE_GENERATION_PROMPT_RE =
   /image generation check|capability flip image check|\/tool\s+image_generate/i;
 const QA_REASONING_ONLY_RETRY_NEEDLE =
@@ -3223,11 +3226,8 @@ async function buildResponsesPayload(
   if (isGroupChat && isBaselineUnmentionedChannelChatter && !toolOutput) {
     return buildAssistantEvents("NO_REPLY");
   }
-  if (
-    /subagent recovery worker/i.test(prompt) &&
-    !/interrupted by a gateway reload/i.test(prompt)
-  ) {
-    await sleep(60_000);
+  if (QA_NATIVE_STOP_DELAY_PROMPT_RE.test(prompt)) {
+    await sleep(QA_NATIVE_STOP_DELAY_MS);
   }
   return buildAssistantEvents(buildAssistantText(input, body, scenarioState));
 }
@@ -3237,7 +3237,7 @@ async function buildResponsesPayload(
 // ---------------------------------------------------------------------------
 //
 // The QA parity gate needs two comparable scenario runs: one against the
-// "candidate" (openai/gpt-5.5) and one against the "baseline"
+// "candidate" (openai/gpt-5.6-luna) and one against the "baseline"
 // (anthropic/claude-opus-4-8). The OpenAI mock above already dispatches all
 // the scenario prompt branches we care about. Rather than duplicating that
 // machinery, the /v1/messages route below translates Anthropic request
@@ -3756,8 +3756,8 @@ export async function startQaMockOpenAiServer(params?: {
       if (req.method === "GET" && url.pathname === "/v1/models") {
         writeJson(res, 200, {
           data: [
-            { id: "gpt-5.5", object: "model" },
-            { id: "gpt-5.5-alt", object: "model" },
+            { id: "gpt-5.6-luna", object: "model" },
+            { id: "gpt-5.6-luna-alt", object: "model" },
             { id: "gpt-image-1", object: "model" },
             { id: "gpt-4o-transcribe", object: "model" },
             { id: "text-embedding-3-small", object: "model" },
