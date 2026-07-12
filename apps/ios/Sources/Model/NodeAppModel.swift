@@ -5684,6 +5684,8 @@ extension NodeAppModel {
         approvalId: String,
         gatewayStableID: String,
         decision: OpenClawWatchExecApprovalDecision?,
+        outcome: OpenClawWatchExecApprovalOutcome,
+        outcomeText: String,
         resolvedAtMs: Int64? = nil,
         source: String,
         syncSnapshots: Bool = true) async
@@ -5698,8 +5700,10 @@ extension NodeAppModel {
             approvalId: approvalID,
             gatewayStableID: gatewayStableID,
             decision: decision,
+            outcome: outcome,
             resolvedAtMs: resolvedAtMs ?? Int64(Date().timeIntervalSince1970 * 1000),
-            source: source)
+            source: source,
+            outcomeText: outcomeText)
         do {
             _ = try await self.watchMessagingService.sendExecApprovalResolved(message)
         } catch {
@@ -5721,15 +5725,23 @@ extension NodeAppModel {
         source: String,
         syncSnapshots: Bool = true) async
     {
-        switch terminal.verdict {
-        case .allowOnce, .allowAlways, .deny:
+        if let outcome = Self.watchExecApprovalOutcome(for: terminal.verdict) {
             await self.publishWatchExecApprovalResolved(
                 approvalId: terminal.id,
                 gatewayStableID: gatewayStableID,
                 decision: terminal.decision.flatMap(OpenClawWatchExecApprovalDecision.init(rawValue:)),
+                outcome: outcome,
+                outcomeText: Self.execApprovalTerminalText(
+                    terminal,
+                    alreadyResolved: source == "another-reviewer"),
                 resolvedAtMs: terminal.resolvedAtMs,
                 source: source,
                 syncSnapshots: syncSnapshots)
+            return
+        }
+        switch terminal.verdict {
+        case .allowOnce, .allowAlways, .deny:
+            preconditionFailure("terminal decision outcome must be mapped")
         case .expired:
             await self.publishWatchExecApprovalExpired(
                 approvalId: terminal.id,
@@ -5748,6 +5760,21 @@ extension NodeAppModel {
                 gatewayStableID: gatewayStableID,
                 reason: .resolved,
                 syncSnapshots: syncSnapshots)
+        }
+    }
+
+    private static func watchExecApprovalOutcome(
+        for verdict: ExecApprovalTerminalVerdict) -> OpenClawWatchExecApprovalOutcome?
+    {
+        switch verdict {
+        case .allowOnce:
+            .allowedOnce
+        case .allowAlways:
+            .allowedAlways
+        case .deny:
+            .denied
+        case .expired, .cancelled, .resolvedUnknown:
+            nil
         }
     }
 

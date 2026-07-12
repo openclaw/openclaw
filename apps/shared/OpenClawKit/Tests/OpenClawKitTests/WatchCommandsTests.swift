@@ -102,4 +102,19 @@ struct WatchCommandsTests {
             code: .legacy,
             verbatim: "Future chat state"))
     }
+
+    @Test func `approval resolution dual writes semantic and legacy outcomes`() throws {
+        let message = OpenClawWatchExecApprovalResolvedMessage(
+            approvalId: "approval-a",
+            outcome: .allowedAlways,
+            source: "another-reviewer",
+            outcomeText: "This approval was already set to Always Allow.")
+
+        let encoded = try JSONEncoder().encode(message)
+        let object = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+
+        #expect(object["outcome"] as? String == "allowedAlways")
+        #expect(object["outcomeText"] as? String ==
+            "This approval was already set to Always Allow.")
+    }
 }

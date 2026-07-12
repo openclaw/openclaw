@@ -128,6 +128,28 @@ struct WatchChatStatusLocalizationTests {
         #expect(custom.verbatim == "Gateway custom outcome")
     }
 
+    @Test func `semantic approval outcomes win before legacy decision fallbacks`() {
+        let allowedAlways = WatchExecApprovalOutcome.resolved(
+            outcome: .allowedAlways,
+            legacyText: "Approval denied.",
+            decision: .deny,
+            source: "another-reviewer")
+        let deniedElsewhere = WatchExecApprovalOutcome.resolved(
+            outcome: nil,
+            legacyText: nil,
+            decision: .deny,
+            source: "another-reviewer")
+        let unknownElsewhere = WatchExecApprovalOutcome.resolved(
+            outcome: nil,
+            legacyText: nil,
+            decision: nil,
+            source: "another-reviewer")
+
+        #expect(allowedAlways.code == .allowedAlways)
+        #expect(deniedElsewhere.code == .denied)
+        #expect(unknownElsewhere.code == .resolvedElsewhere)
+    }
+
     @Test func `gateway presentation localizes key and keeps backend override verbatim`() {
         let localized = OpenClawWatchAppStatus(
             code: .gatewayProblem,

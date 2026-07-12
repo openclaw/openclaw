@@ -739,24 +739,11 @@ import WatchKit
 extension WatchInboxStore {
     func consume(execApprovalResolved message: WatchExecApprovalResolvedMessage) {
         guard self.routeGatewayPayload(.execApprovalResolved(message: message)) else { return }
-        let normalizedOutcomeText = message.outcomeText?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .prefix(160)
-        let outcome = if let normalizedOutcomeText, !normalizedOutcomeText.isEmpty {
-            WatchExecApprovalOutcome.decodeLegacyLocalizedText(String(normalizedOutcomeText))
-                ?? WatchExecApprovalOutcome(code: .unavailable)
-        } else if message.source == "another-reviewer" {
-            WatchExecApprovalOutcome(code: .resolvedElsewhere)
-        } else {
-            switch message.decision {
-            case .allowOnce:
-                WatchExecApprovalOutcome(code: .allowedOnce)
-            case .deny:
-                WatchExecApprovalOutcome(code: .denied)
-            case nil:
-                WatchExecApprovalOutcome(code: .resolved)
-            }
-        }
+        let outcome = WatchExecApprovalOutcome.resolved(
+            outcome: message.outcome,
+            legacyText: message.outcomeText,
+            decision: message.decision,
+            source: message.source)
         let terminalOutcome = self.recordExecApprovalTerminal(
             approvalId: message.approvalId,
             gatewayStableID: message.gatewayStableID,

@@ -134,11 +134,18 @@ public struct OpenClawWatchExecApprovalResolveMessage: Codable, Sendable, Equata
     }
 }
 
+public enum OpenClawWatchExecApprovalOutcome: String, Codable, Sendable, Equatable {
+    case allowedOnce
+    case allowedAlways
+    case denied
+}
+
 public struct OpenClawWatchExecApprovalResolvedMessage: Codable, Sendable, Equatable {
     public var type: OpenClawWatchPayloadType
     public var approvalId: String
     public var gatewayStableID: String?
     public var decision: OpenClawWatchExecApprovalDecision?
+    public var outcome: OpenClawWatchExecApprovalOutcome?
     public var resolvedAtMs: Int64?
     public var source: String?
     public var outcomeText: String?
@@ -147,6 +154,7 @@ public struct OpenClawWatchExecApprovalResolvedMessage: Codable, Sendable, Equat
         approvalId: String,
         gatewayStableID: String? = nil,
         decision: OpenClawWatchExecApprovalDecision? = nil,
+        outcome: OpenClawWatchExecApprovalOutcome? = nil,
         resolvedAtMs: Int64? = nil,
         source: String? = nil,
         outcomeText: String? = nil)
@@ -155,6 +163,7 @@ public struct OpenClawWatchExecApprovalResolvedMessage: Codable, Sendable, Equat
         self.approvalId = approvalId
         self.gatewayStableID = gatewayStableID
         self.decision = decision
+        self.outcome = outcome
         self.resolvedAtMs = resolvedAtMs
         self.source = source
         self.outcomeText = outcomeText

@@ -1111,6 +1111,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             "This approval was already set to Always Allow.")
         #expect(appModel._test_pendingExecApprovalState().resolving == false)
         #expect(watchService.lastSentExecApprovalResolved?.source == "another-reviewer")
+        #expect(watchService.lastSentExecApprovalResolved?.outcome == .allowedAlways)
         #expect(watchService.lastSentExecApprovalResolved?.outcomeText ==
             "This approval was already set to Always Allow.")
 
@@ -1184,6 +1185,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(appModel._test_pendingExecApprovalPrompt()?.id == "approval-legacy-ack")
         #expect(appModel._test_pendingExecApprovalState().resolved == "Approval denied.")
         #expect(watchService.lastSentExecApprovalResolved?.source == "gateway")
+        #expect(watchService.lastSentExecApprovalResolved?.outcome == .denied)
         #expect(watchService.lastSentExecApprovalResolved?.outcomeText == "Approval denied.")
     }
 
@@ -6662,6 +6664,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             OpenClawWatchExecApprovalResolvedMessage(
                 approvalId: "approval-a",
                 gatewayStableID: "gateway-a",
+                outcome: .allowedAlways,
                 outcomeText: "This approval was already set to Always Allow."))
         let expired = WatchMessagingPayloadCodec.encodeExecApprovalExpiredPayload(
             OpenClawWatchExecApprovalExpiredMessage(
@@ -6669,6 +6672,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 gatewayStableID: "gateway-a",
                 reason: .notFound))
         #expect(resolved["gatewayStableID"] as? String == "gateway-a")
+        #expect(resolved["outcome"] as? String == "allowedAlways")
         #expect(resolved["outcomeText"] as? String == "This approval was already set to Always Allow.")
         #expect(expired["gatewayStableID"] as? String == "gateway-a")
 

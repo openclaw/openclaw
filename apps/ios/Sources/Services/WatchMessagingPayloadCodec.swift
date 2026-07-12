@@ -142,6 +142,9 @@ enum WatchMessagingPayloadCodec {
         if let decision = message.decision {
             payload["decision"] = decision.rawValue
         }
+        if let outcome = message.outcome {
+            payload["outcome"] = outcome.rawValue
+        }
         if let resolvedAtMs = message.resolvedAtMs {
             payload["resolvedAtMs"] = resolvedAtMs
         }

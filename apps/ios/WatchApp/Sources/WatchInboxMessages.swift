@@ -6,6 +6,7 @@ import OpenClawKit
 typealias WatchPayloadType = OpenClawWatchPayloadType
 typealias WatchRiskLevel = OpenClawWatchRisk
 typealias WatchExecApprovalDecision = OpenClawWatchExecApprovalDecision
+typealias WatchExecApprovalTransportOutcome = OpenClawWatchExecApprovalOutcome
 typealias WatchExecApprovalCloseReason = OpenClawWatchExecApprovalCloseReason
 typealias WatchOpaqueUTF8Key = ExactOpaqueIdentifierKey
 typealias WatchApprovalID = ExecApprovalIdentifier
@@ -28,6 +29,7 @@ struct WatchExecApprovalResolvedMessage: Codable, Equatable {
     var approvalId: String
     var gatewayStableID: String?
     var decision: WatchExecApprovalDecision?
+    var outcome: WatchExecApprovalTransportOutcome?
     var resolvedAtMs: Int64?
     var source: String?
     var outcomeText: String?
@@ -402,6 +404,40 @@ struct WatchExecApprovalOutcome: Codable, Equatable {
         default:
             Self(code: .verbatim, verbatim: text)
         }
+    }
+
+    static func resolved(
+        outcome: WatchExecApprovalTransportOutcome?,
+        legacyText: String?,
+        decision: WatchExecApprovalDecision?,
+        source: String?) -> Self
+    {
+        if let outcome {
+            return switch outcome {
+            case .allowedOnce:
+                Self(code: .allowedOnce)
+            case .allowedAlways:
+                Self(code: .allowedAlways)
+            case .denied:
+                Self(code: .denied)
+            }
+        }
+        let normalizedLegacyText = legacyText?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .prefix(160)
+        if let normalizedLegacyText, !normalizedLegacyText.isEmpty {
+            return Self.decodeLegacyLocalizedText(String(normalizedLegacyText))
+                ?? Self(code: .unavailable)
+        }
+        if let decision {
+            return switch decision {
+            case .allowOnce:
+                Self(code: .allowedOnce)
+            case .deny:
+                Self(code: .denied)
+            }
+        }
+        return Self(code: source == "another-reviewer" ? .resolvedElsewhere : .resolved)
     }
 }
 
