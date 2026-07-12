@@ -877,6 +877,12 @@ describe("Claude session catalog", () => {
     await expect(
       readLocalClaudeTranscriptPage({ threadId: "archived-session", limit: 1 }, home),
     ).rejects.toThrow("Claude session is unavailable");
+    await expect(listLocalClaudeSessionPage({ cursor: "x".repeat(257) }, home)).rejects.toThrow(
+      "catalog cursor is invalid",
+    );
+    await expect(listLocalClaudeSessionPage({ cursor: null }, home)).rejects.toThrow(
+      "catalog cursor is invalid",
+    );
   });
 
   it("rejects sidechain, unindexed, and symlink-escaped transcript ids", async () => {
@@ -1103,6 +1109,12 @@ describe("Claude session catalog", () => {
     );
     expect(older.items.map((item) => item.text)).toEqual(["old assistant", oldUser]);
     expect(older.nextCursor).toBeUndefined();
+    await expect(
+      readLocalClaudeTranscriptPage({ threadId: sessionId, cursor: " ", limit: 1 }, home),
+    ).rejects.toThrow("transcript cursor is invalid");
+    await expect(
+      readLocalClaudeTranscriptPage({ threadId: sessionId, cursor: null, limit: 1 }, home),
+    ).rejects.toThrow("transcript cursor is invalid");
   });
 
   it("advertises terminal resume only when the store and Claude binary exist", async () => {

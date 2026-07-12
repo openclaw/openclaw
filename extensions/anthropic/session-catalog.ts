@@ -636,6 +636,17 @@ function readLimit(value: unknown, fallback: number, max: number): number {
   return value as number;
 }
 
+function readOptionalCursor(value: unknown, label: string): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const cursor = optionalString(value, MAX_CURSOR_LENGTH);
+  if (!cursor) {
+    throw new ClaudeCatalogParamsError(`${label} cursor is invalid`);
+  }
+  return cursor;
+}
+
 function readListParams(value: unknown): {
   cursor?: string;
   limit: number;
@@ -652,7 +663,7 @@ function readListParams(value: unknown): {
   if (unknown) {
     throw new ClaudeCatalogParamsError(`unknown Claude session catalog parameter: ${unknown}`);
   }
-  const cursor = optionalString(value.cursor, MAX_CURSOR_LENGTH);
+  const cursor = readOptionalCursor(value.cursor, "catalog");
   const searchTerm = optionalString(value.searchTerm, MAX_SEARCH_LENGTH);
   return {
     limit: readLimit(value.limit, DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT),
@@ -707,7 +718,7 @@ function readTranscriptParams(
   if (!threadId || !/^[A-Za-z0-9._:-]+$/.test(threadId)) {
     throw new ClaudeCatalogParamsError("threadId is invalid");
   }
-  const cursor = optionalString(value.cursor, MAX_CURSOR_LENGTH);
+  const cursor = readOptionalCursor(value.cursor, "transcript");
   return {
     threadId,
     limit: readLimit(value.limit, DEFAULT_TRANSCRIPT_LIMIT, MAX_TRANSCRIPT_LIMIT),
