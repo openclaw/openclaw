@@ -432,6 +432,43 @@ async function resolveNewerExactPinnedNpmDefaultLine(params: {
     : undefined;
 }
 
+function resolveOfficialCoreVersionDriftMessage(params: {
+  pluginId: string;
+  currentVersion: string | undefined;
+  coreVersion: string | undefined;
+  record: PluginInstallRecord;
+  officialPackageName: string | undefined;
+  specOverride: string | undefined;
+  syncOfficialPluginInstalls: boolean | undefined;
+}): string | undefined {
+  if (
+    params.record.source !== "npm" ||
+    params.specOverride ||
+    params.syncOfficialPluginInstalls ||
+    !params.officialPackageName
+  ) {
+    return undefined;
+  }
+  const pinnedVersion = resolveExactNpmSpecVersion(params.record.spec);
+  const currentVersion = normalizeExactNpmVersion(params.currentVersion);
+  const coreVersion = normalizeExactNpmVersion(params.coreVersion);
+  if (!pinnedVersion || !currentVersion || !coreVersion || currentVersion === coreVersion) {
+    return undefined;
+  }
+  if (resolveNpmSpecPackageName(params.record.spec) !== params.officialPackageName) {
+    return undefined;
+  }
+  const exactTarget = `${params.officialPackageName}@${coreVersion}`;
+  if (parseRegistryNpmSpec(exactTarget)?.selectorKind !== "exact-version") {
+    return undefined;
+  }
+  return (
+    `${params.pluginId} is pinned to ${params.record.spec} (installed ${params.currentVersion}), ` +
+    `which differs from OpenClaw ${coreVersion}. ` +
+    `Pass \`openclaw plugins update ${exactTarget}\` to match this OpenClaw version.`
+  );
+}
+
 async function loadNpmPackageVersionsForUpdate(params: {
   packageName: string;
   timeoutMs?: number;
@@ -1660,6 +1697,15 @@ export async function updateNpmInstalledPlugins(params: {
       );
       continue;
     }
+    const officialCoreVersionDriftMessage = resolveOfficialCoreVersionDriftMessage({
+      pluginId,
+      currentVersion,
+      coreVersion: params.coreVersion,
+      record,
+      officialPackageName: officialNpmPackageName,
+      specOverride: params.specOverrides?.[pluginId],
+      syncOfficialPluginInstalls: params.syncOfficialPluginInstalls,
+    });
     const extensionsDir = resolveRecordedExtensionsDir({
       pluginId,
       installPath,
@@ -1749,7 +1795,8 @@ export async function updateNpmInstalledPlugins(params: {
             status: "unchanged",
             currentVersion,
             nextVersion: metadataResult.metadata.version,
-            message: `${pluginId} is up to date (${currentVersion}).`,
+            message:
+              officialCoreVersionDriftMessage ?? `${pluginId} is up to date (${currentVersion}).`,
           });
           continue;
         }
@@ -2033,6 +2080,7 @@ export async function updateNpmInstalledPlugins(params: {
             );
       const newerExactPinnedDefaultLine =
         unchanged &&
+        !officialCoreVersionDriftMessage &&
         record.source === "npm" &&
         !params.specOverrides?.[pluginId] &&
         !officialNpmSpec
@@ -2044,8 +2092,9 @@ export async function updateNpmInstalledPlugins(params: {
             })
           : undefined;
       if (unchanged) {
-        const message =
-          newerExactPinnedDefaultLine && effectiveSpec
+        const message = officialCoreVersionDriftMessage
+          ? officialCoreVersionDriftMessage + channelFallbackSuffix
+          : newerExactPinnedDefaultLine && effectiveSpec
             ? `${pluginId} is pinned to ${effectiveSpec} (installed ${currentLabel}); ` +
               `registry default resolves to ${newerExactPinnedDefaultLine.version}. ` +
               `Pass \`openclaw plugins update ${newerExactPinnedDefaultLine.packageName}@latest\` to follow the registry default line.` +

@@ -1594,6 +1594,49 @@ describe("updateNpmInstalledPlugins", () => {
     ]);
   });
 
+  it("reports official core-version drift when an exact npm pin is unchanged", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@openclaw/codex",
+      version: "2026.6.11",
+      peerDependencies: { openclaw: ">=2026.6.11" },
+    });
+    fs.mkdirSync(path.join(installPath, "node_modules", "openclaw"), { recursive: true });
+    mockNpmViewMetadata({
+      name: "@openclaw/codex",
+      version: "2026.6.11",
+      integrity: "sha512-same",
+      shasum: "same",
+    });
+    installPluginFromNpmSpecMock.mockRejectedValue(new Error("installer should not run"));
+
+    const result = await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: "codex",
+        spec: "@openclaw/codex@2026.6.11",
+        installPath,
+        resolvedName: "@openclaw/codex",
+        resolvedVersion: "2026.6.11",
+        resolvedSpec: "@openclaw/codex@2026.6.11",
+        integrity: "sha512-same",
+        shasum: "same",
+      }),
+      pluginIds: ["codex"],
+      coreVersion: "2026.7.1-beta.5",
+    });
+
+    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "codex",
+        status: "unchanged",
+        currentVersion: "2026.6.11",
+        nextVersion: "2026.6.11",
+        message:
+          "codex is pinned to @openclaw/codex@2026.6.11 (installed 2026.6.11), which differs from OpenClaw 2026.7.1-beta.5. Pass `openclaw plugins update @openclaw/codex@2026.7.1-beta.5` to match this OpenClaw version.",
+      },
+    ]);
+  });
+
   it("repairs openclaw peer links after batch npm updates prune earlier plugin links", async () => {
     const plugins = [
       { pluginId: "brave", packageName: "@openclaw/brave-plugin" },
@@ -2304,6 +2347,49 @@ describe("updateNpmInstalledPlugins", () => {
       status: "unchanged",
       currentVersion: "2026.5.28",
       nextVersion: "2026.5.28",
+    });
+  });
+
+  it("reports official core-version drift for exact pinned npm dry-runs", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@openclaw/codex",
+      version: "2026.6.11",
+    });
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "codex",
+        targetDir: installPath,
+        version: "2026.6.11",
+        npmResolution: {
+          name: "@openclaw/codex",
+          version: "2026.6.11",
+          resolvedSpec: "@openclaw/codex@2026.6.11",
+        },
+      }),
+    );
+
+    const result = await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: "codex",
+        spec: "@openclaw/codex@2026.6.11",
+        installPath,
+        resolvedName: "@openclaw/codex",
+        resolvedSpec: "@openclaw/codex@2026.6.11",
+        resolvedVersion: "2026.6.11",
+      }),
+      pluginIds: ["codex"],
+      dryRun: true,
+      coreVersion: "2026.7.1-beta.5",
+    });
+
+    expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+    expectRecordFields(result.outcomes[0], {
+      pluginId: "codex",
+      status: "unchanged",
+      currentVersion: "2026.6.11",
+      nextVersion: "2026.6.11",
+      message:
+        "codex is pinned to @openclaw/codex@2026.6.11 (installed 2026.6.11), which differs from OpenClaw 2026.7.1-beta.5. Pass `openclaw plugins update @openclaw/codex@2026.7.1-beta.5` to match this OpenClaw version.",
     });
   });
 
