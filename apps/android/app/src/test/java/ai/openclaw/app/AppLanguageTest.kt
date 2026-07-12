@@ -165,6 +165,9 @@ class AppLanguageTest {
         "Impossible de charger les approbations.",
         gatewayExecApprovalTextForDisplay("Could not load approvals."),
       )
+      assertEquals("1 min", formatApprovalDuration(60_000))
+      assertEquals("2 min", formatUsageUpdated(updatedAtMs = 0, nowMs = 120_000))
+      assertEquals("3 h", formatCronWake(timeMs = 10_800_000, nowMs = 0))
     } finally {
       setAppLanguage(previous)
       activity.destroy()

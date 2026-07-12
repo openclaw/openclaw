@@ -110,32 +110,65 @@ internal fun StateFlow<NativeText?>.resolveOptionalNativeText(): StateFlow<Strin
 
 @SuppressLint("StaticFieldLeak")
 internal object NativeStringResources {
+  private sealed interface ApplicationLocaleMode {
+    val locales: LocaleListCompat
+
+    data class Pinned(
+      override val locales: LocaleListCompat,
+    ) : ApplicationLocaleMode
+
+    data class System(
+      override val locales: LocaleListCompat,
+    ) : ApplicationLocaleMode
+  }
+
   @Volatile
   private var applicationContext: Context? = null
 
   @Volatile
-  private var applicationLocales: LocaleListCompat? = null
+  private var applicationLocaleMode: ApplicationLocaleMode? = null
 
   @Volatile
   private var localizedContext: Context? = null
 
   @Synchronized
   fun install(context: Context) {
-    applicationContext = context.applicationContext
-    applicationLocales = null
+    val appContext = context.applicationContext
+    applicationContext = appContext
+    val requestedLocales =
+      LocaleManagerCompat
+        .getApplicationLocales(appContext)
+        .takeUnless { it.isEmpty }
+        ?: appContext.readStoredAppLocales()
+    applicationLocaleMode =
+      if (requestedLocales.isEmpty) {
+        ApplicationLocaleMode.System(ConfigurationCompat.getLocales(appContext.resources.configuration))
+      } else {
+        ApplicationLocaleMode.Pinned(requestedLocales)
+      }
     localizedContext = null
   }
 
   @Synchronized
   fun setApplicationLocales(locales: LocaleListCompat) {
-    applicationLocales = locales
+    applicationLocaleMode =
+      if (locales.isEmpty) {
+        val context = applicationContext
+        ApplicationLocaleMode.System(
+          context?.let { ConfigurationCompat.getLocales(it.resources.configuration) }
+            ?: LocaleListCompat.getEmptyLocaleList(),
+        )
+      } else {
+        ApplicationLocaleMode.Pinned(locales)
+      }
     localizedContext = null
   }
 
   @Synchronized
   fun setConfigurationLocales(configuration: Configuration) {
-    if (applicationLocales?.isEmpty == false) return
-    applicationLocales = ConfigurationCompat.getLocales(configuration)
+    if (applicationLocaleMode is ApplicationLocaleMode.Pinned) return
+    applicationLocaleMode =
+      ApplicationLocaleMode.System(ConfigurationCompat.getLocales(configuration))
     localizedContext = null
   }
 
@@ -155,7 +188,8 @@ internal object NativeStringResources {
           localizedContext
             ?: context
               .localizedContext(
-                applicationLocales
+                applicationLocaleMode
+                  ?.locales
                   ?: LocaleManagerCompat
                     .getApplicationLocales(context)
                     .takeUnless { it.isEmpty }

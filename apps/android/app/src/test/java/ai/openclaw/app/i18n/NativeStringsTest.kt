@@ -44,6 +44,11 @@ class NativeStringsTest {
     NativeStringResources.setConfigurationLocales(configuration)
 
     assertEquals("Micro désactivé", nativeString("Mic off"))
+
+    ConfigurationCompat.setLocales(configuration, LocaleListCompat.forLanguageTags("de"))
+    NativeStringResources.setConfigurationLocales(configuration)
+
+    assertEquals("Mikrofon aus", nativeString("Mic off"))
   }
 
   @Test
@@ -57,6 +62,23 @@ class NativeStringsTest {
     NativeStringResources.setConfigurationLocales(configuration)
 
     assertEquals("Mic off", nativeString("Mic off"))
+  }
+
+  @Test
+  fun configurationLocaleDoesNotReplacePersistedAppLocale() {
+    val app = RuntimeEnvironment.getApplication()
+    persistAppLocales(app, "fr")
+    try {
+      NativeStringResources.install(app)
+
+      val configuration = Configuration(app.resources.configuration)
+      ConfigurationCompat.setLocales(configuration, LocaleListCompat.forLanguageTags("en"))
+      NativeStringResources.setConfigurationLocales(configuration)
+
+      assertEquals("Micro désactivé", nativeString("Mic off"))
+    } finally {
+      app.deleteFile(APP_LOCALES_FILE)
+    }
   }
 
   @Test

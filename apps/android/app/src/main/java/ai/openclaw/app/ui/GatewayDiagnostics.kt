@@ -138,26 +138,31 @@ internal fun buildGatewayDiagnosticsReport(
       .ifEmpty { Build.VERSION.SDK_INT.toString() }
   val endpoint = gatewayAddress.trim().ifEmpty { "unknown" }
   val status = statusText.trim().ifEmpty { "Offline" }
-  return """
-    Help diagnose this OpenClaw Android gateway connection failure.
-
-    Please:
-    - pick one route only: same machine, same LAN, Tailscale, or public URL
-    - classify this as pairing/auth, TLS trust, wrong advertised route, wrong address/port, or gateway down
-    - remember: public routes require wss:// or Tailscale Serve; ws:// is allowed for localhost, .local hosts, the Android emulator, and private LAN IPs
-    - quote the exact app status/error below
-    - tell me whether `openclaw devices list` should show a pending pairing request
-    - if more signal is needed, ask for `openclaw qr --json`, `openclaw devices list`, and `openclaw nodes status`
-    - give the next exact command or tap
-
-    Debug info:
-    - screen: $screen
-    - app version: ${openClawAndroidVersionLabel()}
-    - device: $device
-    - android: $androidVersion (SDK ${Build.VERSION.SDK_INT})
-    - gateway address: $endpoint
-    - status/error: $status
-    """.trimIndent()
+  return nativeString(
+    "Help diagnose this OpenClaw Android gateway connection failure.\n\n" +
+      "Please:\n" +
+      "- pick one route only: same machine, same LAN, Tailscale, or public URL\n" +
+      "- classify this as pairing/auth, TLS trust, wrong advertised route, wrong address/port, or gateway down\n" +
+      "- remember: public routes require wss:// or Tailscale Serve; ws:// is allowed for localhost, .local hosts, the Android emulator, and private LAN IPs\n" +
+      "- quote the exact app status/error below\n" +
+      "- tell me whether `openclaw devices list` should show a pending pairing request\n" +
+      "- if more signal is needed, ask for `openclaw qr --json`, `openclaw devices list`, and `openclaw nodes status`\n" +
+      "- give the next exact command or tap\n\n" +
+      "Debug info:\n" +
+      "- screen: \$screen\n" +
+      "- app version: \$appVersion\n" +
+      "- device: \$device\n" +
+      "- android: \$androidVersion (SDK \$sdkVersion)\n" +
+      "- gateway address: \$endpoint\n" +
+      "- status/error: \$status",
+    screen,
+    openClawAndroidVersionLabel(),
+    device,
+    androidVersion,
+    Build.VERSION.SDK_INT,
+    endpoint,
+    status,
+  )
 }
 
 /** Copies the diagnostics report to Android clipboard and shows a short confirmation toast. */

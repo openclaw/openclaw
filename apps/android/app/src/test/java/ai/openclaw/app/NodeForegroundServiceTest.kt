@@ -1,6 +1,7 @@
 package ai.openclaw.app
 
 import ai.openclaw.app.i18n.NativeStringResources
+import ai.openclaw.app.i18n.nativeString
 import android.app.Notification
 import android.app.NotificationManager
 import android.app.Service
@@ -184,12 +185,17 @@ class NodeForegroundServiceTest {
       writer.write("""<?xml version='1.0' encoding='UTF-8' standalone='yes' ?><locales application_locales="fr" />""")
     }
     NativeStringResources.install(app)
+    assertEquals("Démarrage…", nativeString("Starting…"))
+    val manager = app.getSystemService(NotificationManager::class.java)
+    manager.cancelAll()
     val controller = Robolectric.buildService(NodeForegroundService::class.java)
 
     try {
       controller.create()
 
-      val manager = app.getSystemService(NotificationManager::class.java)
+      assertSame(app, controller.get().application)
+      assertTrue(app.getFileStreamPath(localesFile).exists())
+      assertEquals("Démarrage…", nativeString("Starting…"))
       val notification = Shadows.shadowOf(manager).getNotification(1)
       assertEquals("Démarrage…", notification.extras.getCharSequence(Notification.EXTRA_TEXT))
     } finally {

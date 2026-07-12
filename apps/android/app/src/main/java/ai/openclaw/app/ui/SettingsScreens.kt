@@ -2241,7 +2241,7 @@ private fun CronJobDetailPanel(
         SettingsMetric("ID", job.id, copyable = true),
         SettingsMetric(nativeString("Description"), job.description.ifBlank { nativeString("None") }),
         SettingsMetric(nativeString("Schedule Detail"), job.scheduleDetail.resolveNativeTextResource()),
-        SettingsMetric(nativeString("Session Target"), job.sessionTarget),
+        SettingsMetric(nativeString("Session Target"), cronSessionTargetLabel(job.sessionTarget)),
         SettingsMetric(nativeString("Wake Mode"), cronWakeModeLabel(job.wakeMode)),
         SettingsMetric(nativeString("Delete After Run"), if (job.deleteAfterRun) nativeString("Yes") else nativeString("No")),
         SettingsMetric(nativeString("Payload"), job.payloadLabel.resolveNativeTextResource()),
@@ -2436,6 +2436,8 @@ internal fun execApprovalMetadata(
         val nodeId = approval.nodeId.take(8)
         nativeString("Node \${nodeId}", nodeId)
       }
+      approval.host == "node" -> nativeString("Node")
+      approval.host == "gateway" -> nativeString("Gateway")
       approval.host != null -> approval.host
       else -> nativeString("Gateway")
     }
@@ -2463,10 +2465,18 @@ internal fun formatApprovalDuration(deltaMs: Long): String {
   val hours = minutes / 60L
   return when {
     minutes < 1 -> nativeString("soon")
-    hours < 1 -> "${minutes}m"
-    else -> "${hours}h"
+    hours < 1 -> nativeString("\${minutes}m", minutes)
+    else -> nativeString("\${hours}h", hours)
   }
 }
+
+internal fun cronSessionTargetLabel(target: String): String =
+  when (target) {
+    "main" -> nativeString("Main")
+    "isolated" -> nativeString("Isolated")
+    "current" -> nativeString("Current")
+    else -> target
+  }
 
 /** Builds the dense cron-job subtitle from schedule, next wake, and prompt preview. */
 private fun cronJobSubtitle(job: GatewayCronJobSummary): String =
@@ -2504,9 +2514,12 @@ internal fun formatUsageUpdated(
   val hours = minutes / 60L
   return when {
     minutes < 1 -> nativeString("Now")
-    hours < 1 -> "${minutes}m"
-    hours < 24 -> "${hours}h"
-    else -> "${hours / 24L}d"
+    hours < 1 -> nativeString("\${minutes}m", minutes)
+    hours < 24 -> nativeString("\${hours}h", hours)
+    else -> {
+      val days = hours / 24L
+      nativeString("\${days}d", days)
+    }
   }
 }
 
@@ -2619,9 +2632,9 @@ internal fun formatCronWake(
   val hours = minutes / 60L
   val days = hours / 24L
   return when {
-    days > 0 -> "${days}d"
-    hours > 0 -> "${hours}h"
-    minutes > 0 -> "${minutes}m"
+    days > 0 -> nativeString("\${days}d", days)
+    hours > 0 -> nativeString("\${hours}h", hours)
+    minutes > 0 -> nativeString("\${minutes}m", minutes)
     else -> nativeString("Soon")
   }
 }

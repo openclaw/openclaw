@@ -644,7 +644,7 @@ internal fun cronWakeModeLabel(code: String): String = cronWakeModeOptions().fir
 
 internal fun cronRunSubtitle(run: GatewayCronRunSummary): String =
   listOfNotNull(
-    run.durationMs?.let { "${it}ms" },
+    run.durationMs?.let { durationMs -> nativeString("\${durationMs}ms", durationMs) },
     run.deliveryStatus?.let(::cronDeliveryStatusLabel),
     run.model,
     run.error ?: run.summary,

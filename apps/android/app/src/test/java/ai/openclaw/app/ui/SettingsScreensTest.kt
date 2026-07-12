@@ -237,8 +237,30 @@ class SettingsScreensTest {
         nowMs = 0,
       ),
     )
+    assertEquals(
+      "Node",
+      execApprovalMetadata(
+        approval.copy(host = "node", nodeId = null, agentId = null, createdAtMs = null, expiresAtMs = null),
+        nowMs = 0,
+      ),
+    )
+    assertEquals(
+      "Gateway",
+      execApprovalMetadata(
+        approval.copy(host = "gateway", nodeId = null, agentId = null, createdAtMs = null, expiresAtMs = null),
+        nowMs = 0,
+      ),
+    )
     assertEquals("soon", formatApprovalDuration(0))
     assertEquals("Action Request", approvalActionName(""))
+  }
+
+  @Test
+  fun cronSessionTargetsLocalizeClosedCodesAndPreserveCustomTargets() {
+    assertEquals("Main", cronSessionTargetLabel("main"))
+    assertEquals("Isolated", cronSessionTargetLabel("isolated"))
+    assertEquals("Current", cronSessionTargetLabel("current"))
+    assertEquals("session:custom", cronSessionTargetLabel("session:custom"))
   }
 
   @Test
