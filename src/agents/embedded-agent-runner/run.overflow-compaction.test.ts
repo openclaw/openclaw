@@ -110,7 +110,6 @@ function makeForwardedRuntimePlan(overrides: RuntimePlanOverrides = {}): AgentRu
     preserveNativeAnthropicToolUseIds: false,
     repairToolUseResultPairing: true,
     preserveSignatures: false,
-
     dropThinkingBlocks: false,
     applyGoogleTurnOrdering: false,
     validateGeminiTurns: false,

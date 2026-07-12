@@ -113,7 +113,6 @@ export function installEmbeddedRunnerFastRunE2eMocks(
             preserveNativeAnthropicToolUseIds: false,
             repairToolUseResultPairing: true,
             preserveSignatures: false,
-
             dropThinkingBlocks: false,
             applyGoogleTurnOrdering: false,
             validateGeminiTurns: false,

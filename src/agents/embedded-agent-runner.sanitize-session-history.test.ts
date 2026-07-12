@@ -946,7 +946,6 @@ describe("sanitizeSessionHistory", () => {
           preserveNativeAnthropicToolUseIds: false,
           repairToolUseResultPairing: false,
           preserveSignatures: false,
-
           dropThinkingBlocks: false,
           dropReasoningFromHistory: false,
           applyGoogleTurnOrdering: false,
@@ -1405,7 +1404,6 @@ describe("sanitizeSessionHistory", () => {
       preserveNativeAnthropicToolUseIds: true,
       repairToolUseResultPairing: true,
       preserveSignatures: true,
-
       dropThinkingBlocks: false,
       dropReasoningFromHistory: false,
       applyGoogleTurnOrdering: false,
@@ -2070,7 +2068,6 @@ describe("sanitizeSessionHistory", () => {
         repairToolUseResultPairing: true,
         preserveSignatures: true,
         sanitizeThoughtSignatures: undefined,
-
         dropThinkingBlocks: false,
         applyGoogleTurnOrdering: false,
         validateGeminiTurns: false,
@@ -2206,7 +2203,6 @@ describe("sanitizeSessionHistory", () => {
           preserveNativeAnthropicToolUseIds: false,
           repairToolUseResultPairing: true,
           preserveSignatures: false,
-
           dropThinkingBlocks: false,
           applyGoogleTurnOrdering: false,
           validateGeminiTurns: false,
@@ -2421,7 +2417,6 @@ describe("sanitizeSessionHistory", () => {
       repairToolUseResultPairing: true,
       preserveSignatures: true,
       sanitizeThoughtSignatures: undefined,
-
       dropThinkingBlocks: true,
       applyGoogleTurnOrdering: false,
       validateGeminiTurns: false,
@@ -2542,7 +2537,6 @@ describe("sanitizeSessionHistory", () => {
         preserveNativeAnthropicToolUseIds: false,
         repairToolUseResultPairing: true,
         preserveSignatures: false,
-
         dropThinkingBlocks: false,
         applyGoogleTurnOrdering: false,
         validateGeminiTurns: false,
@@ -2592,7 +2586,6 @@ describe("sanitizeSessionHistory", () => {
         preserveNativeAnthropicToolUseIds: false,
         repairToolUseResultPairing: true,
         preserveSignatures: false,
-
         dropThinkingBlocks: false,
         dropReasoningFromHistory: false,
         applyGoogleTurnOrdering: false,
@@ -2635,7 +2628,6 @@ describe("sanitizeSessionHistory", () => {
         preserveNativeAnthropicToolUseIds: false,
         repairToolUseResultPairing: true,
         preserveSignatures: false,
-
         dropThinkingBlocks: false,
         dropReasoningFromHistory: false,
         applyGoogleTurnOrdering: false,
@@ -2677,7 +2669,6 @@ describe("sanitizeSessionHistory", () => {
         preserveNativeAnthropicToolUseIds: false,
         repairToolUseResultPairing: true,
         preserveSignatures: false,
-
         dropThinkingBlocks: false,
         applyGoogleTurnOrdering: false,
         validateGeminiTurns: false,
