@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   normalizeOptionalString,
   readStringValue,
@@ -69,6 +70,7 @@ import {
   trimSessionTranscriptForManualCompact,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { disableCronJobsBoundToSession } from "../../cron/job-session-bindings.js";
 import {
   measureDiagnosticsTimelineSpan,
   measureDiagnosticsTimelineSpanSync,
@@ -412,7 +414,10 @@ async function createAgentMainSessionForSend(params: {
   let createResult:
     | { ok: boolean; payload?: { key?: string }; error?: ReturnType<typeof errorShape> }
     | undefined;
-  await sessionsHandlers["sessions.create"]({
+  await expectDefined(
+    sessionsHandlers["sessions.create"],
+    "sessions.create handler",
+  )({
     req: params.req,
     params: {
       key: params.canonicalKey,
@@ -592,7 +597,10 @@ async function interruptSessionRunIfActive(params: {
       canonicalKey: params.canonicalKey,
     });
 
-    await chatHandlers["chat.abort"]({
+    await expectDefined(
+      chatHandlers["chat.abort"],
+      "chat.abort handler",
+    )({
       req: params.req,
       params: {
         sessionKey: abortSessionKey,
@@ -695,7 +703,10 @@ async function handleSessionSend(params: {
       : undefined;
   const idempotencyKey = explicitIdempotencyKey ?? randomUUID();
   const dispatchChatSend = async (respond: RespondFn) => {
-    await chatHandlers["chat.send"]({
+    await expectDefined(
+      chatHandlers["chat.send"],
+      "chat.send handler",
+    )({
       req: params.req,
       params: {
         sessionKey: canonicalKey,
@@ -1466,7 +1477,10 @@ export const sessionsHandlers: GatewayRequestHandlers = {
                 sessionKey: key,
                 storePath,
               })) + 1;
-            await chatHandlers["chat.send"]({
+            await expectDefined(
+              chatHandlers["chat.send"],
+              "chat.send handler",
+            )({
               req,
               params: {
                 sessionKey: key,
@@ -2084,7 +2098,10 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       }
     }
     let abortedRunId: string | null = null;
-    await chatHandlers["chat.abort"]({
+    await expectDefined(
+      chatHandlers["chat.abort"],
+      "chat.abort handler",
+    )({
       req,
       params: {
         sessionKey: abortSessionKey,
@@ -2295,6 +2312,35 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       sessionKey: target.canonicalKey ?? key,
       patch: p,
     });
+
+    // Cron mutations are operator.admin surface while archive is write-scoped;
+    // only cascade for internal callers (client == null) or admin operators so
+    // write-scoped archiving cannot flip admin-managed schedules.
+    const callerScopes = client?.connect ? (client.connect.scopes ?? []) : null;
+    const callerCanManageCron = callerScopes === null || callerScopes.includes(ADMIN_SCOPE);
+    if (p.archived === true && callerCanManageCron) {
+      // Archived sessions reject new work, so schedules bound to them would
+      // only accumulate failing runs; disable them with the archive.
+      try {
+        const disabledJobIds = await disableCronJobsBoundToSession({
+          cron: context.cron,
+          cfg,
+          sessionKey: target.canonicalKey ?? key,
+        });
+        if (disabledJobIds.length > 0) {
+          log.info(
+            `sessions.patch: disabled cron jobs bound to archived session ${target.canonicalKey ?? key}: ${disabledJobIds.join(", ")}`,
+          );
+        }
+      } catch (error) {
+        // Best-effort by design: archive is the primary action and must not
+        // fail or roll back on cron-store errors. Any job left enabled fails
+        // closed at run start because archived sessions reject new work.
+        log.warn(
+          `sessions.patch: failed to disable cron jobs for archived session ${target.canonicalKey ?? key}: ${formatErrorMessage(error)}`,
+        );
+      }
+    }
 
     // Absorb ad-hoc categories into the gateway group catalog so ordering
     // covers every group an operator UI can observe.
@@ -2590,7 +2636,11 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         }
       | undefined;
     const abortSessionKey = target.canonicalKey ?? key;
-    await chatHandlers["chat.abort"]({
+    const chatAbort = chatHandlers["chat.abort"];
+    if (!chatAbort) {
+      throw new Error("chat.abort handler is not registered");
+    }
+    await chatAbort({
       req,
       params: {
         sessionKey: abortSessionKey,
