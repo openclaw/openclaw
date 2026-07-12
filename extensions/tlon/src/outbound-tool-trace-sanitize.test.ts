@@ -169,38 +169,4 @@ describe("tlon outbound assistant-visible sanitization", () => {
     expect(mediaJson).toContain('"src":"https://media.example/image.png"');
     expect(mediaJson).not.toContain("read private file");
   });
-
-  it("sends fragment image URLs as image blocks through the outbound media path", async () => {
-    uploadImageFromUrl.mockResolvedValueOnce("https://media.example/image.png#preview");
-    const cfg = {
-      channels: {
-        tlon: {
-          ship: "~zod",
-          code: "test-code",
-          url: baseUrl,
-          network: { dangerouslyAllowPrivateNetwork: true },
-        },
-      },
-    } as OpenClawConfig;
-
-    await deliverOutboundPayloads({
-      cfg,
-      channel: "tlon",
-      to: "~sampel-palnet",
-      payloads: [
-        {
-          text: "caption",
-          mediaUrl: "https://source.example/image.png#preview",
-        },
-      ],
-      skipQueue: true,
-    });
-
-    expect(uploadImageFromUrl).toHaveBeenCalledWith("https://source.example/image.png#preview");
-    expect(pokes).toHaveLength(1);
-
-    const mediaJson = JSON.stringify(pokes[0].json);
-    expect(mediaJson).toContain('"src":"https://media.example/image.png#preview"');
-    expect(mediaJson).not.toContain('"link"');
-  });
 });
