@@ -385,11 +385,12 @@ describe("loadControlUiSessionPullRequests", () => {
         status: 403,
         headers: { "Content-Type": "application/json", "x-ratelimit-remaining": "0" },
       });
-    const fetchImpl = routedFetch([
+    const routes = [
       { match: "/pulls?head=", response: () => githubJson([pullListItem()]) },
       { match: "/pulls/103469", response: rateLimitedResponse },
       { match: "/check-runs", response: rateLimitedResponse },
-    ]);
+    ];
+    const fetchImpl = routedFetch(routes);
 
     const result = await loadControlUiSessionPullRequests(
       { sessionKey: "agent:main:main" },
@@ -408,6 +409,18 @@ describe("loadControlUiSessionPullRequests", () => {
         state: "open",
       },
     ]);
+
+    // Outage outlives the rate-limit cache window and now even the list
+    // fetch 429s: the proven chips must survive as the last-known fallback.
+    routes.length = 0;
+    routes.push({ match: "/pulls?head=", response: rateLimitedResponse });
+    vi.advanceTimersByTime(5 * 60_000 + 1_000);
+    const stillLimited = await loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main" },
+      { fetchImpl, resolveGitContext },
+    );
+    expect(stillLimited.rateLimited).toBe(true);
+    expect(stillLimited.pullRequests.map((item) => item.number)).toEqual([103469]);
   });
 
   it("escapes create-PR URL segments while keeping branch slashes", async () => {

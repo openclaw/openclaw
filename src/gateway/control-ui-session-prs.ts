@@ -568,12 +568,13 @@ async function refreshBranchPullRequests(
 ): Promise<ControlUiSessionPullRequests> {
   try {
     const result = await fetchBranchPullRequests(context, fetchImpl, githubApiToken());
+    // Degraded state-only chips still become lastGood: a later refresh that
+    // rate-limits at the list fetch must serve the proven PRs, not an empty
+    // list that would resurrect the Create PR row mid-outage. The shortened
+    // expiry makes the next window retry full detail.
+    entry.lastGood = result.pullRequests;
     if (result.rateLimited) {
-      // Degraded chips are not lastGood: the next refresh after the quota
-      // window should replace them with full detail, not serve them as fresh.
       entry.expiresAt = Date.now() + RATE_LIMIT_CACHE_MS;
-    } else {
-      entry.lastGood = result.pullRequests;
     }
     return result;
   } catch (error) {
