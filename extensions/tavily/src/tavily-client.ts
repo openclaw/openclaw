@@ -40,6 +40,7 @@ export type TavilySearchParams = {
   includeDomains?: string[];
   excludeDomains?: string[];
   timeoutSeconds?: number;
+  signal?: AbortSignal;
 };
 
 export type TavilyExtractParams = {
@@ -76,6 +77,7 @@ async function postTavilyJson(params: {
   body: Record<string, unknown>;
   errorLabel: string;
   responseMaxBytes?: number;
+  signal?: AbortSignal;
 }): Promise<Record<string, unknown>> {
   return postTrustedWebToolsJson(
     {
@@ -85,6 +87,7 @@ async function postTavilyJson(params: {
       body: params.body,
       errorLabel: params.errorLabel,
       extraHeaders: { "X-Client-Source": "openclaw" },
+      signal: params.signal,
     },
     async (response) =>
       readTavilyJsonResponse(response, params.errorLabel, {
@@ -167,6 +170,7 @@ export async function runTavilySearch(
     apiKey,
     body,
     errorLabel: "Tavily Search",
+    signal: params.signal,
   });
 
   const rawResults = Array.isArray(payload.results) ? payload.results : [];

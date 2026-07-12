@@ -113,6 +113,26 @@ describe("tavily tools", () => {
     });
   });
 
+  it("forwards the execution abort signal to the Tavily client", async () => {
+    const provider = createTavilyWebSearchProvider();
+    const tool = provider.createTool({
+      config: { test: true },
+    } as never);
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+    const controller = new AbortController();
+
+    await tool.execute({ query: "weather sf" }, { signal: controller.signal });
+
+    expect(runTavilySearch).toHaveBeenCalledWith({
+      cfg: { test: true },
+      query: "weather sf",
+      maxResults: undefined,
+      signal: controller.signal,
+    });
+  });
+
   it("keeps the contract web search provider executable", async () => {
     const provider = createTavilyContractWebSearchProvider();
     const tool = provider.createTool({

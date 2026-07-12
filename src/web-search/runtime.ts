@@ -472,6 +472,7 @@ export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSe
   let sawUnavailableProvider = false;
 
   for (const candidate of candidates) {
+    params.signal?.throwIfAborted();
     try {
       const definition = candidate.createTool({
         config,
@@ -499,7 +500,7 @@ export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSe
       };
     } catch (error) {
       lastError = error;
-      if (!allowFallback) {
+      if (params.signal?.aborted || !allowFallback) {
         throw error;
       }
     }
