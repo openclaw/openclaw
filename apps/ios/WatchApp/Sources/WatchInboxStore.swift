@@ -743,7 +743,8 @@ extension WatchInboxStore {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .prefix(160)
         let outcome = if let normalizedOutcomeText, !normalizedOutcomeText.isEmpty {
-            WatchExecApprovalOutcome(code: .verbatim, verbatim: String(normalizedOutcomeText))
+            WatchExecApprovalOutcome.decodeLegacyLocalizedText(String(normalizedOutcomeText))
+                ?? WatchExecApprovalOutcome(code: .unavailable)
         } else if message.source == "another-reviewer" {
             WatchExecApprovalOutcome(code: .resolvedElsewhere)
         } else {

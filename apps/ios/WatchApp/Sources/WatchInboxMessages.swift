@@ -377,7 +377,28 @@ struct WatchExecApprovalOutcome: Codable, Equatable {
 
     static func decodeLegacyLocalizedText(_ text: String) -> Self? {
         guard !text.isEmpty else { return nil }
-        return Self(code: .verbatim, verbatim: text)
+        return switch text {
+        case "Allowed once", "Approval allowed once.", "This approval was already allowed once.":
+            Self(code: .allowedOnce)
+        case "Approval set to Always Allow.", "This approval was already set to Always Allow.":
+            Self(code: .allowedAlways)
+        case "Denied", "Approval denied.", "This approval was already denied.":
+            Self(code: .denied)
+        case "Approval resolved":
+            Self(code: .resolved)
+        case "Approval expired":
+            Self(code: .expired)
+        case "Approval no longer available":
+            Self(code: .notFound)
+        case "Approval resolved elsewhere", "This approval was already resolved elsewhere.":
+            Self(code: .resolvedElsewhere)
+        case "Approval replaced":
+            Self(code: .replaced)
+        case "Approval unavailable":
+            Self(code: .unavailable)
+        default:
+            Self(code: .verbatim, verbatim: text)
+        }
     }
 }
 

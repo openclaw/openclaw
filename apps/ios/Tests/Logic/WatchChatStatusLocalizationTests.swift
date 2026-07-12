@@ -71,6 +71,18 @@ struct WatchChatStatusLocalizationTests {
         #expect(status.command == .sendChat)
     }
 
+    @Test func `legacy approval outcomes recover semantic localization`() throws {
+        let allowed = try #require(
+            WatchExecApprovalOutcome.decodeLegacyLocalizedText("Approval allowed once."))
+        let custom = try #require(
+            WatchExecApprovalOutcome.decodeLegacyLocalizedText("Gateway custom outcome"))
+
+        #expect(allowed.code == .allowedOnce)
+        #expect(allowed.verbatim == nil)
+        #expect(custom.code == .verbatim)
+        #expect(custom.verbatim == "Gateway custom outcome")
+    }
+
     @Test func `gateway presentation localizes key and keeps backend override verbatim`() {
         let localized = OpenClawWatchAppStatus(
             code: .gatewayProblem,
