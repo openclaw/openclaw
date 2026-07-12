@@ -4,7 +4,7 @@ import { constants as fsConstants, createWriteStream, type Stats } from "node:fs
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
+import { backup as backupSqliteDatabase, type DatabaseSync } from "node:sqlite";
 import { pipeline } from "node:stream/promises";
 import { resolveDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
@@ -754,11 +754,20 @@ async function createStateSqliteBackupPlan(params: {
     const sourcePath = path.join(params.tempDir, `openclaw-state-db-${snapshots.length}.sqlite`);
     try {
       source.exec("PRAGMA busy_timeout = 30000;");
-      // VACUUM INTO removes deleted-page remnants before the snapshot enters
-      // the archive. Load sqlite-vec best-effort so memory indexes using vec0
-      // can still be compacted without weakening that privacy property.
-      await loadSqliteVecExtension({ db: source });
-      source.prepare("VACUUM INTO ?").run(sourcePath);
+      const isCanonicalOpenClawDatabase =
+        path.resolve(archiveSourcePath) === globalStateSqlitePath ||
+        isCanonicalAgentSqlitePathOrAncestor(archiveSourcePath, params.stateDir);
+      if (isCanonicalOpenClawDatabase) {
+        // Canonical schemas have a known extension contract, so VACUUM INTO
+        // can compact them and remove deleted-page remnants from the archive.
+        await loadSqliteVecExtension({ db: source });
+        source.prepare("VACUUM INTO ?").run(sourcePath);
+      } else {
+        // Dedicated plugin databases may depend on owner-defined functions,
+        // collations, or virtual tables. The online backup API copies a
+        // transactionally consistent snapshot without interpreting the schema.
+        await backupSqliteDatabase(source, sourcePath);
+      }
     } finally {
       source.close();
     }

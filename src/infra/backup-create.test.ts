@@ -785,6 +785,7 @@ describe("createBackupArchive", () => {
         await fs.mkdir(extractDir, { recursive: true });
         const sqlite = requireNodeSqlite();
         const db = new sqlite.DatabaseSync(dbPath);
+        db.function("plugin_double", { deterministic: true }, (value) => Number(value) * 2);
         db.exec(`
           PRAGMA journal_mode = WAL;
           PRAGMA wal_autocheckpoint = 0;
@@ -799,6 +800,8 @@ describe("createBackupArchive", () => {
           CREATE TABLE delivery_queue_entries (
             id TEXT PRIMARY KEY
           );
+          CREATE INDEX backup_markers_double
+            ON backup_markers(plugin_double(transaction_id));
           INSERT INTO backup_meta (id, last_seq) VALUES (1, 0);
           INSERT INTO delivery_queue_entries (id) VALUES ('must-stay');
           PRAGMA wal_checkpoint(TRUNCATE);
@@ -836,6 +839,11 @@ describe("createBackupArchive", () => {
             readOnly: true,
           });
           try {
+            archivedDb.function(
+              "plugin_double",
+              { deterministic: true },
+              (value) => Number(value) * 2,
+            );
             expect(archivedDb.prepare("PRAGMA integrity_check").get()).toEqual({
               integrity_check: "ok",
             });

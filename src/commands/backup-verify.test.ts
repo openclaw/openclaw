@@ -279,11 +279,11 @@ describe("backupVerifyCommand", () => {
     const stateAssetArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw`;
     const sqliteArchivePath = `${stateAssetArchivePath}/plugins/dedicated/custom.sqlite`;
     const sqlitePayload = await createSqlitePayload((database) => {
+      database.function("plugin_double", { deterministic: true }, (value) => Number(value) * 2);
       database.exec(`
-        CREATE TABLE records (value TEXT NOT NULL);
-        CREATE INDEX records_like ON records(value) WHERE value LIKE 'A%';
-        PRAGMA case_sensitive_like = ON;
-        INSERT INTO records (value) VALUES ('alpha'), ('Apple');
+        CREATE TABLE records (value INTEGER NOT NULL);
+        INSERT INTO records (value) VALUES (1), (2);
+        CREATE INDEX records_double ON records(plugin_double(value));
       `);
     });
 
