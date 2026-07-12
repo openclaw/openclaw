@@ -256,9 +256,17 @@ describeControlUiE2e("Control UI chat file links", () => {
       expect(
         (await gateway.getRequests("sessions.files.get")).map((request) => request.params),
       ).toEqual([
-        { path: "/workspace/notes.txt", sessionKey: "main" },
-        { path: "/workspace/openclaw-5920-bytes.png", sessionKey: "main" },
-        { path: "/workspace/unsupported-binary.bmp", sessionKey: "main" },
+        { agentId: "main", path: "/workspace/notes.txt", sessionKey: "main" },
+        {
+          agentId: "main",
+          path: "/workspace/openclaw-5920-bytes.png",
+          sessionKey: "main",
+        },
+        {
+          agentId: "main",
+          path: "/workspace/unsupported-binary.bmp",
+          sessionKey: "main",
+        },
       ]);
     } finally {
       await context.close();
