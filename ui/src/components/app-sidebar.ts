@@ -1419,9 +1419,11 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       normalized === normalizeAgentId(this.sessionsAgentId ?? "")
         ? (this.sessionsResult?.sessions ?? [])
         : (this.sessionRowsByAgent[normalized] ?? []);
+    // Both sources were fetched for this agent, so unprefixed keys in them are
+    // this agent's too; the route's selected agent must not adopt them here.
     const visible = filterVisibleSessionRows(rows, {
       agentId: normalized,
-      defaultAgentId: this.getSessionNavigationState().selectedAgentId,
+      defaultAgentId: normalized,
       filterByAgent: true,
     });
     return visible.toSorted(compareSessionRowsByUpdatedAt)[0] ?? null;
