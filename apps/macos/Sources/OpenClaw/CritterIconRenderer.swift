@@ -68,9 +68,12 @@ enum CritterIconRenderer {
 
             func antenna(side: CGFloat) -> Antenna {
                 let start = CGPoint(x: cx + side * bodyW * 0.16, y: bodyTop - antennaLineWidth * 0.9)
+                // Idle tips sit below the canvas clamp so the voice-wake reach has
+                // real headroom; boosted antennae go taller AND steeper (x pulls
+                // inward) or the perk would be invisible at 18pt.
                 let upTip = CGPoint(
-                    x: cx + side * bodyW * (0.40 - 0.10 * (reach - 1)) + side * wiggleShift,
-                    y: min(bodyTop + h * 0.085 * reach + earWiggle * 0.2 * side, h - antennaLineWidth * 0.6))
+                    x: cx + side * bodyW * (0.40 - 0.20 * (reach - 1)) + side * wiggleShift,
+                    y: min(bodyTop + h * 0.06 * reach + earWiggle * 0.2 * side, h - antennaLineWidth * 0.55))
                 let upControl = CGPoint(
                     x: cx + side * bodyW * 0.22,
                     y: bodyTop + h * 0.075 * reach)
