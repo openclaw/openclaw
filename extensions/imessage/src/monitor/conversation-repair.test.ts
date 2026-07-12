@@ -153,4 +153,112 @@ describe("repairIMessageConversationAnchor", () => {
     ).resolves.toBeNull();
     expect(runtime.error.mock.calls.at(-1)?.[0]).toContain("no usable conversation anchor");
   });
+
+  // #104136: the exact-GUID history row is authoritative for routing/direction
+  // fields — the raw notification may carry incorrect sender or direction.
+  it("overlays sender and destination from the history entry", async () => {
+    // Notification has local identity as sender; history has the remote peer.
+    const message = anchorlessMessage({
+      sender: "+15550000001",
+      destination_caller_id: "+15550000001",
+    });
+    const client = mockClient([
+      {
+        id: 42,
+        messages: [
+          {
+            guid: "ANCHORLESS-GUID-1",
+            chat_id: 42,
+            chat_guid: "iMessage;-;+15550000002",
+            chat_identifier: "+15550000002",
+            sender: "+15550000002",
+            destination_caller_id: "+15550000001",
+            is_from_me: false,
+            service: "iMessage",
+            is_group: false,
+          },
+        ],
+      },
+    ]);
+
+    const repaired = await repairIMessageConversationAnchor({
+      client: client as never,
+      message,
+    });
+
+    expect(repaired).not.toBeNull();
+    expect(repaired!.sender).toBe("+15550000002");
+    expect(repaired!.destination_caller_id).toBe("+15550000001");
+  });
+
+  it("overlays is_from_me and service from the history entry", async () => {
+    const message = anchorlessMessage({
+      sender: "+15550000001",
+      destination_caller_id: "+15550000002",
+      is_from_me: false,
+      service: "SMS",
+    });
+    const client = mockClient([
+      {
+        id: 42,
+        messages: [
+          {
+            guid: "ANCHORLESS-GUID-1",
+            chat_id: 42,
+            chat_guid: "iMessage;-;+15550000002",
+            chat_identifier: "+15550000002",
+            sender: "+15550000002",
+            destination_caller_id: "+15550000001",
+            is_from_me: false,
+            service: "iMessage",
+            is_group: false,
+          },
+        ],
+      },
+    ]);
+
+    const repaired = await repairIMessageConversationAnchor({
+      client: client as never,
+      message,
+    });
+
+    expect(repaired).not.toBeNull();
+    expect(repaired!.service).toBe("iMessage");
+    expect(repaired!.is_from_me).toBe(false);
+  });
+
+  it("drops fail-closed when recovered history row has is_from_me=true", async () => {
+    const runtime = { error: vi.fn() };
+    const message = anchorlessMessage({
+      sender: "+15550000001",
+      is_from_me: false,
+    });
+    const client = mockClient([
+      {
+        id: 42,
+        messages: [
+          {
+            guid: "ANCHORLESS-GUID-1",
+            chat_id: 42,
+            chat_guid: "iMessage;-;+15550000002",
+            chat_identifier: "+15550000002",
+            sender: "+15550000001",
+            destination_caller_id: "+15550000002",
+            is_from_me: true,
+            service: "iMessage",
+            is_group: false,
+          },
+        ],
+      },
+    ]);
+
+    await expect(
+      repairIMessageConversationAnchor({
+        client: client as never,
+        message,
+        runtime,
+      }),
+    ).resolves.toBeNull();
+    expect(runtime.error.mock.calls.at(-1)?.[0]).toContain("is_from_me=true");
+  });
 });

@@ -66,6 +66,7 @@ export type IMessagePayload = {
   chat_name?: string | null;
   participants?: string[] | null;
   is_group?: boolean | null;
+  service?: string | null;
 };
 
 export type MonitorIMessageOpts = {
