@@ -112,6 +112,27 @@ describe("buildQaGatewayConfig", () => {
     expect(cfg.messages?.groupChat?.visibleReplies).toBe("automatic");
   });
 
+  it("adds selected target-era models to the mock provider catalog", () => {
+    const cfg = buildQaGatewayConfig({
+      bind: "loopback",
+      gatewayPort: 18789,
+      gatewayToken: "token",
+      providerBaseUrl: "http://127.0.0.1:44080/v1",
+      workspaceDir: "/tmp/qa-workspace",
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.5",
+      alternateModel: "mock-openai/gpt-5.5-alt",
+    });
+
+    expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("mock-openai/gpt-5.5");
+    expect(cfg.models?.providers?.["mock-openai"]?.models.map((model) => model.id)).toEqual([
+      "gpt-5.5",
+      "gpt-5.5-alt",
+      "gpt-image-1",
+    ]);
+    expect(cfg.models?.providers?.openai?.models.map((model) => model.id)).toContain("gpt-5.5");
+  });
+
   it("maps provider-qualified openai and anthropic refs through the mock provider lane", () => {
     const cfg = buildQaGatewayConfig({
       bind: "loopback",
