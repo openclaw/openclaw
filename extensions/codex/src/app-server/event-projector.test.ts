@@ -895,16 +895,17 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.currentAttemptAssistant).toBeUndefined();
   });
 
-  it("marks the result as aborted when the turn was interrupted", async () => {
+  it("does not promote synthesized missing-tool-result error for interrupted turns", async () => {
     const projector = await createProjector();
 
     await projector.handleNotification(turnWithStatus("interrupted"));
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    // An interrupted turn was stopped before natural completion; the result
-    // carries the abort flag so the run outcome reflects the real terminal reason.
-    expect(result.aborted).toBe(true);
+    // An interrupted turn is not an OpenClaw abort by itself — the abort flag
+    // is set through a separate cancellation path. The synthesized
+    // missing-tool-result error must not become the run-level promptError.
+    expect(result.aborted).toBe(false);
     expect(result.externalAbort).toBe(false);
     expect(result.timedOut).toBe(false);
     expect(result.promptError).toBeNull();
@@ -936,10 +937,7 @@ describe("CodexAppServerEventProjector", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    // An interrupted turn that produced completed tool output is still
-    // aborted — the turn didn't finish naturally — but preserves the tool
-    // meta for downstream consumers (e.g. the no-visible-answer guard).
-    expect(result.aborted).toBe(true);
+    expect(result.aborted).toBe(false);
     expect(result.assistantTexts).toEqual([]);
     expect(result.toolMetas).toEqual([
       expect.objectContaining({ toolName: "bash", meta: expect.stringContaining("workspace") }),
@@ -1021,8 +1019,12 @@ describe("CodexAppServerEventProjector", () => {
       }),
     );
 
+    // Simulate a user-initiated cancellation (steer / interrupt signal).
+    // markAborted() is called through the run-attempt cancellation path
+    // before the Codex turn completes with interrupted status.
+    projector.markAborted();
+
     // Turn ends interrupted while the command is still running.
-    // The item snapshot includes the still-in-progress command.
     await projector.handleNotification(
       turnWithStatus("interrupted", [
         {
@@ -1041,7 +1043,7 @@ describe("CodexAppServerEventProjector", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    // The turn was interrupted — the run is aborted, not errored.
+    // The turn was interrupted by the user — the run is aborted.
     expect(result.aborted).toBe(true);
     // promptError must not carry the synthesized missing-tool-result string.
     // The abort flag already carries the authoritative terminal reason.

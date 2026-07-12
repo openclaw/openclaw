@@ -794,13 +794,18 @@ export class CodexAppServerEventProjector {
       messagesSnapshot.push(attachCodexMirrorIdentity(lastAssistant, `${turnId}:assistant`));
     }
     const turnFailed = this.completedTurn?.status === "failed";
-    // Synthesized missing-tool-result records are kept for transcript integrity,
-    // but when the turn was aborted (interrupted / timed-out / external-abort),
-    // do not promote them to the run-level promptError — the abort flag already
-    // carries the authoritative terminal reason.
+    // An interrupted turn ended before natural completion. When there are
+    // missing tool results, keep the synthesized records for transcript
+    // integrity but do not promote them to the run-level promptError — the
+    // turn status is already authoritative about why the turn ended.
+    // OpenClaw-observed cancellation (steer, interrupt signal) sets
+    // this.aborted through a separate path; non-cancellation Codex
+    // interruption reasons (Replaced, ReviewEnded, BudgetLimited) must not
+    // be classified as generic "missing tool result" errors either.
+    const turnInterrupted = this.completedTurn?.status === "interrupted";
     const promptError =
       this.promptError ??
-      (this.aborted ? null : this.synthesizedMissingToolResultError) ??
+      (turnInterrupted ? null : this.synthesizedMissingToolResultError) ??
       (turnFailed ? (this.completedTurn?.error?.message ?? "codex app-server turn failed") : null);
     const agentHarnessResultClassification = classifyAgentHarnessTerminalOutcome({
       assistantTexts,
@@ -1297,13 +1302,6 @@ export class CodexAppServerEventProjector {
         turn.error?.message ??
         "codex app-server turn failed";
       this.promptErrorSource = "prompt";
-    }
-    // An interrupted turn was stopped before natural completion (steer,
-    // interrupt signal, client teardown). Record the abort so the run outcome
-    // reflects the real terminal reason and synthesized missing-tool-result
-    // records are kept as detail instead of promoted to the run-level error.
-    if (turn.status === "interrupted") {
-      this.aborted = true;
     }
     const turnItems = turn.items ?? [];
     // The final snapshot is authoritative when item notifications were omitted.
