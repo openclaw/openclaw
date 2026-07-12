@@ -60,6 +60,7 @@ export type BuildChatItemsProps = {
   searchOpen?: boolean;
   searchQuery?: string;
   historyRenderLimit?: number;
+  allowExpandedHistoryRenderLimit?: boolean;
 };
 
 type CachedChatItems = {
@@ -1071,11 +1072,12 @@ function countVisibleHistoryMessages(messages: unknown[], showToolCalls: boolean
   return count;
 }
 
-function resolveHistoryRenderLimit(limit: number | undefined): number {
+function resolveHistoryRenderLimit(limit: number | undefined, allowExpanded = false): number {
   if (typeof limit !== "number" || !Number.isFinite(limit)) {
     return CHAT_HISTORY_RENDER_LIMIT;
   }
-  return Math.max(1, Math.min(CHAT_HISTORY_RENDER_LIMIT, Math.floor(limit)));
+  const normalized = Math.max(1, Math.floor(limit));
+  return allowExpanded ? normalized : Math.min(CHAT_HISTORY_RENDER_LIMIT, normalized);
 }
 
 function resolveHistoryStartIndex(
@@ -1108,7 +1110,10 @@ function resolveHistoryStartIndex(
 
 export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGroup> {
   let items: ChatItem[] = [];
-  const historyRenderLimit = resolveHistoryRenderLimit(props.historyRenderLimit);
+  const historyRenderLimit = resolveHistoryRenderLimit(
+    props.historyRenderLimit,
+    props.allowExpandedHistoryRenderLimit,
+  );
   const history = (Array.isArray(props.messages) ? props.messages : []).filter(
     (message) => !isAssistantHeartbeatAckForDisplay(message),
   );
@@ -1388,7 +1393,8 @@ function sameChatItemsInput(previous: BuildChatItemsProps, next: BuildChatItemsP
     previous.loading === next.loading &&
     previous.searchOpen === next.searchOpen &&
     previous.searchQuery === next.searchQuery &&
-    previous.historyRenderLimit === next.historyRenderLimit
+    previous.historyRenderLimit === next.historyRenderLimit &&
+    previous.allowExpandedHistoryRenderLimit === next.allowExpandedHistoryRenderLimit
   );
 }
 
