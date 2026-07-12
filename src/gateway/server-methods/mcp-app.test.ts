@@ -150,6 +150,7 @@ describe("MCP App gateway bridge", () => {
     const listed = await invoke("mcp.app.listTools", params);
     expect(listed.mock.calls[0]?.[1].tools.map((tool: { name: string }) => tool.name)).toEqual([
       "shared",
+      "app-only",
     ]);
 
     const denied = await invoke("mcp.app.callTool", { ...params, toolName: "model-only" });
@@ -169,7 +170,7 @@ describe("MCP App gateway bridge", () => {
     expect(denied.mock.calls[0]?.[0]).toBe(false);
   });
 
-  it("never creates a runtime for an expired view", async () => {
+  it("rejects views that are not backed by the transcript", async () => {
     mocks.getMcpAppViewLease.mockReturnValue(undefined);
     const respond = await invoke("mcp.app.view", {
       sessionKey: "agent:main:main",
