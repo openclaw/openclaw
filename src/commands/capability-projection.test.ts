@@ -1038,6 +1038,22 @@ describe("collector and publication safety", () => {
     expect(schemaText).not.toContain('"fields":{}');
   });
 
+  it("rejects reserved and duplicate external evidence IDs", () => {
+    const base = evidenceFromFacts([fact("memory", "memory_get")])[0];
+    expect(() =>
+      buildCapabilityProjectionReport({
+        ...input({ facts: [] }),
+        evidence: [{ ...base, id: "context-compiled" }],
+      }),
+    ).toThrow("Reserved evidence ID");
+    expect(() =>
+      buildCapabilityProjectionReport({
+        ...input({ facts: [] }),
+        evidence: [base, { ...base }],
+      }),
+    ).toThrow("Evidence IDs must be unique");
+  });
+
   it("requires explicit bounds for latest-in-window through its closed selection type", async () => {
     const dir = await makeTempDir();
     const trajectory = path.join(dir, "fixture.jsonl");

@@ -236,6 +236,9 @@ function sanitizeEvidenceRecord(input: EvidenceRecord): EvidenceRecord {
   if (input.kind === "context_compiled" || input.kind === "existing_tool_result") {
     throw new Error("Reserved evidence kind cannot be supplied externally");
   }
+  if (input.id === "context-compiled" || input.id.startsWith("existing-tool-result-")) {
+    throw new Error("Reserved evidence ID cannot be supplied externally");
+  }
   const parsed = CapabilityProjectionEvidenceSchema.parse({ ...input, redactionApplied: true });
   validateEvidenceStrings(parsed);
   return parsed as EvidenceRecord;
@@ -326,6 +329,10 @@ export function buildCapabilityProjectionReport(
       };
   validateEvidenceStrings(contextEvidence);
   const sanitizedInputEvidence = input.evidence.map(sanitizeEvidenceRecord);
+  const inputEvidenceIds = new Set(sanitizedInputEvidence.map((record) => record.id));
+  if (inputEvidenceIds.size !== sanitizedInputEvidence.length) {
+    throw new Error("Evidence IDs must be unique");
+  }
   const facts = collectToolFactsFromSanitizedEvidence({
     evidence: sanitizedInputEvidence,
     compiled,
