@@ -162,6 +162,23 @@ function claimAttemptForDelivery(params: {
   });
 }
 
+function startClaimRenewal(params: {
+  store: DurableRuntimeStore;
+  attempt: DurableWakeDeliveryAttempt;
+  replayPassId: string;
+  claimTtlMs: number;
+}): () => void {
+  const intervalMs = Math.max(1, Math.floor(params.claimTtlMs / 2));
+  const interval = setInterval(() => {
+    params.store.renewWakeDeliveryAttemptClaim({
+      deliveryAttemptId: params.attempt.deliveryAttemptId,
+      replayPassId: params.replayPassId,
+      claimTtlMs: params.claimTtlMs,
+    });
+  }, intervalMs);
+  return () => clearInterval(interval);
+}
+
 async function applyDeliveryHook(params: {
   store: DurableRuntimeStore;
   wake: DurableWake;
@@ -182,6 +199,12 @@ async function applyDeliveryHook(params: {
   if (!claimed) {
     return params.store.getWakeDeliveryAttempt(params.attempt.deliveryAttemptId) ?? params.attempt;
   }
+  const stopClaimRenewal = startClaimRenewal({
+    store: params.store,
+    attempt: claimed,
+    replayPassId: params.replayPassId,
+    claimTtlMs: params.claimTtlMs,
+  });
   try {
     const hookResult = await params.deliveryHook({
       wake: params.wake,
@@ -192,6 +215,7 @@ async function applyDeliveryHook(params: {
       params.store.updateWakeDeliveryAttempt({
         deliveryAttemptId: claimed.deliveryAttemptId,
         status: hookResult.status,
+        expectedClaimedBy: params.replayPassId,
         ...(hookResult.evidence ? { evidence: hookResult.evidence } : {}),
         ...(hookResult.error ? { error: hookResult.error } : {}),
         ...timestampForStatus(hookResult.status, outcomeAt),
@@ -200,14 +224,16 @@ async function applyDeliveryHook(params: {
           replayPassId: params.replayPassId,
         },
         now: outcomeAt,
-      }) ?? claimed;
-    updateWakeOutcome({
-      store: params.store,
-      wake: params.wake,
-      status: hookResult.status,
-      ...(hookResult.error ? { error: hookResult.error } : {}),
-      now: outcomeAt,
-    });
+      }) ?? params.store.getWakeDeliveryAttempt(claimed.deliveryAttemptId) ?? claimed;
+    if (attempt.status === hookResult.status && attempt.replayPassId === params.replayPassId) {
+      updateWakeOutcome({
+        store: params.store,
+        wake: params.wake,
+        status: hookResult.status,
+        ...(hookResult.error ? { error: hookResult.error } : {}),
+        now: outcomeAt,
+      });
+    }
     return attempt;
   } catch (err) {
     const failedAt = params.now ?? Date.now();
@@ -216,6 +242,7 @@ async function applyDeliveryHook(params: {
       params.store.updateWakeDeliveryAttempt({
         deliveryAttemptId: claimed.deliveryAttemptId,
         status: "failed",
+        expectedClaimedBy: params.replayPassId,
         evidence: {
           kind: "wake_delivery_hook_error",
         },
@@ -227,15 +254,19 @@ async function applyDeliveryHook(params: {
           replayPassId: params.replayPassId,
         },
         now: failedAt,
-      }) ?? claimed;
-    updateWakeOutcome({
-      store: params.store,
-      wake: params.wake,
-      status: "failed",
-      error,
-      now: failedAt,
-    });
+      }) ?? params.store.getWakeDeliveryAttempt(claimed.deliveryAttemptId) ?? claimed;
+    if (attempt.status === "failed" && attempt.replayPassId === params.replayPassId) {
+      updateWakeOutcome({
+        store: params.store,
+        wake: params.wake,
+        status: "failed",
+        error,
+        now: failedAt,
+      });
+    }
     return attempt;
+  } finally {
+    stopClaimRenewal();
   }
 }
 
