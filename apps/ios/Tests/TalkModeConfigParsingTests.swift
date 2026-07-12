@@ -584,17 +584,18 @@ struct TalkModeManagerTests {
         #expect(TalkModeManager._test_realtimeRestartDelayNanoseconds(attempt: 3) == nil)
     }
 
-    @Test func `speech restart clears only the error status it owns`() {
-        let errorStatus = String(
-            format: String(localized: "Speech error: %@"),
-            "Network unavailable")
+    @Test @MainActor func `speech restart clears only the presentation revision it owns`() {
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+        manager._test_markSpeechErrorStatusPendingRestart("Spracherkennungsfehler")
+        manager._test_restoreListeningStatusAfterSpeechErrorRestart()
+        #expect(manager.statusText == String(localized: "Listening"))
+        #expect(manager.phase == .listening)
 
-        #expect(TalkModeManager._test_listeningStatusAfterSpeechErrorRestart(
-            currentStatus: errorStatus,
-            pendingErrorStatus: errorStatus) == String(localized: "Listening"))
-        #expect(TalkModeManager._test_listeningStatusAfterSpeechErrorRestart(
-            currentStatus: String(localized: "Speaking…"),
-            pendingErrorStatus: errorStatus) == nil)
+        manager._test_markSpeechErrorStatusPendingRestart("Spracherkennungsfehler")
+        manager.statusText = "Neue Statusmeldung"
+        manager._test_restoreListeningStatusAfterSpeechErrorRestart()
+        #expect(manager.statusText == "Neue Statusmeldung")
+        #expect(manager.phase == .idle)
     }
 
     @Test func `keeps provider web socket realtime transport on gateway relay`() {

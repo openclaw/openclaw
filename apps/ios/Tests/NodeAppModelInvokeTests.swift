@@ -2802,6 +2802,29 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         _ = talkMode.cancelPushToTalk(captureId: replacement.captureId)
     }
 
+    @Test @MainActor func `PTT finalizer cleanup ignores localized presentation text`() async throws {
+        let talkMode = TalkModeManager(allowSimulatorCapture: true)
+        talkMode.updateGatewayConnected(true)
+        talkMode._test_setPTTFinalizerHandler {
+            talkMode.statusText = "Generando voz…"
+        }
+        defer {
+            talkMode._test_setPTTFinalizerHandler(nil)
+            talkMode.stop()
+        }
+
+        let start = try await talkMode.beginPushToTalk()
+        await talkMode._test_handlePushToTalkTranscript(
+            "localized cleanup",
+            isFinal: false,
+            captureId: start.captureId)
+        #expect(talkMode.endPushToTalk(captureId: start.captureId).status == "queued")
+        await waitForTalkCondition { talkMode._test_finishingPushToTalkCaptureId() == nil }
+
+        #expect(talkMode.statusText == "Ready")
+        #expect(talkMode.phase == .idle)
+    }
+
     @Test @MainActor func `enabling Talk during PTT finalization resumes after ownership clears`() async throws {
         var audioDeactivationCount = 0
         let talkMode = TalkModeManager(

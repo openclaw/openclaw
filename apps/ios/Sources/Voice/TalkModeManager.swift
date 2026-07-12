@@ -29,6 +29,18 @@ enum TalkPushToTalkOnceStart {
     case started(captureId: String)
 }
 
+enum TalkPhase: Equatable {
+    case idle
+    case connecting
+    case listening
+    case thinking
+    case speaking
+
+    fileprivate var isFinalizerTransient: Bool {
+        self == .thinking || self == .speaking
+    }
+}
+
 private struct FinishingPushToTalk {
     let captureId: String
     let generation: UInt64
@@ -56,7 +68,7 @@ private struct ChatCompletionResult {
 private final class TranscriptStreamingOwner {
     var task: Task<Void, Never>?
     var speechGeneration: Int?
-    var terminalStatus: String?
+    var terminalStatus: (text: String, phase: TalkPhase)?
     /// Subscribed before chat.send so a fast terminal cannot outrun its owner.
     var completionEvents: AsyncStream<EventFrame>?
 }
@@ -116,7 +128,12 @@ final class TalkModeManager: NSObject {
     var isSpeaking: Bool = false
     var isUserSpeechDetected: Bool = false
     var isPushToTalkActive: Bool = false
-    var statusText: String = "Off"
+    private(set) var phase: TalkPhase = .idle
+    var statusText: String = "Off" {
+        didSet {
+            self.statusRevision &+= 1
+        }
+    }
     /// 0..1-ish (not calibrated). Intended for UI feedback only.
     var micLevel: Double = 0
     /// Live agent playback envelope in 0...1 while speaking. nil means the active
@@ -222,7 +239,10 @@ final class TalkModeManager: NSObject {
     private var loggedPartialThisCycle: Bool = false
     private var lastSpokenText: String?
     private var lastInterruptedAtSeconds: Double?
-    private var speechErrorStatusPendingRestart: String?
+    // Presentation copy can change independently; the revision lets restart cleanup
+    // replace only the status it published without interpreting localized text.
+    @ObservationIgnored private var speechErrorStatusRevisionPendingRestart: UInt64?
+    @ObservationIgnored private var statusRevision: UInt64 = 0
 
     private var defaultVoiceId: String?
     private var currentVoiceId: String?
@@ -305,6 +325,13 @@ final class TalkModeManager: NSObject {
 
     private static func elapsedMs(since start: TimeInterval) -> Int {
         max(0, Int((self.nowSeconds() - start) * 1000))
+    }
+
+    @discardableResult
+    private func setStatus(_ text: String, phase: TalkPhase) -> UInt64 {
+        self.phase = phase
+        self.statusText = text
+        return self.statusRevision
     }
 
     private static func shouldRestartRealtimeSession(
@@ -396,9 +423,11 @@ final class TalkModeManager: NSObject {
         self.gatewayTalkActiveModeSubtitle = nil
         guard shouldRestart else {
             if self.isEnabled {
-                self.statusText = self.gatewayConnected
-                    ? String(localized: "Ready")
-                    : String(localized: "Offline")
+                self.setStatus(
+                    self.gatewayConnected
+                        ? String(localized: "Ready")
+                        : String(localized: "Offline"),
+                    phase: .idle)
             }
             return
         }
@@ -419,7 +448,7 @@ final class TalkModeManager: NSObject {
             self.scheduleRealtimeRestart(after: nil, generation: restartGeneration)
             return
         }
-        self.statusText = String(localized: "Reconnecting")
+        self.setStatus(String(localized: "Reconnecting"), phase: .connecting)
         self.scheduleRealtimeRestart(after: delay, generation: restartGeneration)
     }
 
@@ -466,7 +495,7 @@ final class TalkModeManager: NSObject {
             self.gatewayTalkActiveModeTitle = "Not active"
             self.gatewayTalkActiveModeSubtitle = nil
             if self.isEnabled, !self.isSpeaking {
-                self.statusText = String(localized: "Offline")
+                self.setStatus(String(localized: "Offline"), phase: .idle)
             }
             self.realtimePrefetchGeneration &+= 1
             self.realtimePrefetchTask?.cancel()
@@ -515,7 +544,7 @@ final class TalkModeManager: NSObject {
         self.isListening = false
         self.isSpeaking = false
         self.isUserSpeechDetected = false
-        self.statusText = String(localized: "Ready")
+        self.setStatus(String(localized: "Ready"), phase: .idle)
         self.gatewayTalkConfigLoaded = true
         self.gatewayTalkApiKeyConfigured = true
         self.gatewayTalkDefaultModelId = "gpt-realtime-2"
@@ -598,7 +627,7 @@ final class TalkModeManager: NSObject {
         }
         #endif
         self.logger.info("start")
-        self.statusText = String(localized: "Requesting permissions…")
+        self.setStatus(String(localized: "Requesting permissions…"), phase: .connecting)
         let permissionStartedAt = Self.nowSeconds()
         let micOk = if self.allowSimulatorCapture {
             true
@@ -610,14 +639,14 @@ final class TalkModeManager: NSObject {
                 + "elapsedMs=\(Self.elapsedMs(since: permissionStartedAt))")
         guard micOk else {
             self.logger.warning("start blocked: microphone permission denied")
-            self.statusText = String(localized: "Microphone permission denied")
+            self.setStatus(String(localized: "Microphone permission denied"), phase: .idle)
             return
         }
         guard self.isCurrentStartAttempt(attemptID) else { return }
         await self.ensureTalkConfigLoadedForStart()
         guard self.isCurrentStartAttempt(attemptID) else { return }
         if self.gatewayTalkPermissionState.requiresTalkPermissionAction {
-            self.statusText = String(localized: "Gateway permission required")
+            self.setStatus(String(localized: "Gateway permission required"), phase: .idle)
             GatewayDiagnostics.log("talk.timeline manager start blocked gateway permission")
             return
         }
@@ -645,9 +674,11 @@ final class TalkModeManager: NSObject {
             self.logger.warning("start blocked: speech permission denied")
             self.stopNativeCaptureAndDiscardTranscript()
             self.deactivateAudioSession()
-            self.statusText = Self.permissionMessage(
-                kind: String(localized: "Speech recognition"),
-                status: SFSpeechRecognizer.authorizationStatus())
+            self.setStatus(
+                Self.permissionMessage(
+                    kind: String(localized: "Speech recognition"),
+                    status: SFSpeechRecognizer.authorizationStatus()),
+                phase: .idle)
             return
         }
         guard self.isCurrentStartAttempt(attemptID) else { return }
@@ -669,9 +700,11 @@ final class TalkModeManager: NSObject {
         } catch {
             self.stopNativeCaptureAndDiscardTranscript()
             self.deactivateAudioSession()
-            self.statusText = String(
-                format: String(localized: "Start failed: %@"),
-                error.localizedDescription)
+            self.setStatus(
+                String(
+                    format: String(localized: "Start failed: %@"),
+                    error.localizedDescription),
+                phase: .idle)
             self.logger.error("start failed: \(error.localizedDescription, privacy: .public)")
         }
     }
@@ -681,7 +714,7 @@ final class TalkModeManager: NSObject {
         guard self.captureMode != .pushToTalk else { return false }
         guard self.finishingPushToTalk == nil else { return false }
         guard self.foregroundAudioCaptureAllowed else {
-            self.statusText = String(localized: "Paused")
+            self.setStatus(String(localized: "Paused"), phase: .idle)
             GatewayDiagnostics.log("talk start ignored: app backgrounded")
             return false
         }
@@ -694,7 +727,7 @@ final class TalkModeManager: NSObject {
             return false
         }
         guard self.gatewayConnected else {
-            self.statusText = String(localized: "Offline")
+            self.setStatus(String(localized: "Offline"), phase: .idle)
             GatewayDiagnostics.log("talk.timeline manager start blocked gateway offline")
             return false
         }
@@ -759,7 +792,7 @@ final class TalkModeManager: NSObject {
         self.isUserSpeechDetected = false
         self.isPushToTalkActive = false
         self.captureMode = .idle
-        self.statusText = String(localized: "Off")
+        self.setStatus(String(localized: "Off"), phase: .idle)
         self.pendingRealtimeIssue = nil
         self.gatewayTalkCurrentFallbackIssue = nil
         self.gatewayTalkActiveModeTitle = "Not active"
@@ -800,7 +833,9 @@ final class TalkModeManager: NSObject {
         self.foregroundPushToTalkAllowed = false
         guard self.isEnabled || self.activePTTCaptureId != nil || self.finishingPushToTalk != nil else { return }
         if keepContinuousActive {
-            self.statusText = self.isListening ? String(localized: "Listening") : self.statusText
+            if self.isListening {
+                self.setStatus(String(localized: "Listening"), phase: .listening)
+            }
             return
         }
         self.cancelFinishingPushToTalk()
@@ -809,7 +844,7 @@ final class TalkModeManager: NSObject {
         self.isListening = false
         self.isPushToTalkActive = false
         self.captureMode = .idle
-        self.statusText = String(localized: "Paused")
+        self.setStatus(String(localized: "Paused"), phase: .idle)
         self.gatewayTalkActiveModeTitle = "Paused"
         self.gatewayTalkActiveModeSubtitle = nil
         self.lastTranscript = ""
@@ -934,12 +969,12 @@ final class TalkModeManager: NSObject {
                 try self.ensurePushToTalkStartCurrent(captureId: captureId, canStartCapture: canStartCapture)
             }
             #endif
-            self.statusText = String(localized: "Requesting permissions…")
+            self.setStatus(String(localized: "Requesting permissions…"), phase: .connecting)
             if !self.allowSimulatorCapture {
                 let micOk = await Self.requestMicrophonePermission()
                 try self.ensurePushToTalkStartCurrent(captureId: captureId, canStartCapture: canStartCapture)
                 guard micOk else {
-                    self.statusText = String(localized: "Microphone permission denied")
+                    self.setStatus(String(localized: "Microphone permission denied"), phase: .idle)
                     throw NSError(domain: "TalkMode", code: 4, userInfo: [
                         NSLocalizedDescriptionKey: "Microphone permission denied",
                     ])
@@ -947,9 +982,11 @@ final class TalkModeManager: NSObject {
                 let speechOk = await Self.requestSpeechPermission()
                 try self.ensurePushToTalkStartCurrent(captureId: captureId, canStartCapture: canStartCapture)
                 guard speechOk else {
-                    self.statusText = Self.permissionMessage(
-                        kind: String(localized: "Speech recognition"),
-                        status: SFSpeechRecognizer.authorizationStatus())
+                    self.setStatus(
+                        Self.permissionMessage(
+                            kind: String(localized: "Speech recognition"),
+                            status: SFSpeechRecognizer.authorizationStatus()),
+                        phase: .idle)
                     throw NSError(domain: "TalkMode", code: 5, userInfo: [
                         NSLocalizedDescriptionKey: "Speech recognition permission denied",
                     ])
@@ -964,7 +1001,7 @@ final class TalkModeManager: NSObject {
             try self.ensurePushToTalkStartCurrent(captureId: captureId, canStartCapture: canStartCapture)
             self.isListening = true
             self.isPushToTalkActive = true
-            self.statusText = String(localized: "Listening (PTT)")
+            self.setStatus(String(localized: "Listening (PTT)"), phase: .listening)
         } catch {
             if self.activePTTCaptureId == captureId {
                 self.stopRecognition()
@@ -977,11 +1014,13 @@ final class TalkModeManager: NSObject {
                 let isPermissionError = nsError.domain == "TalkMode" && (nsError.code == 4 || nsError.code == 5)
                 let isCancelled = error is CancellationError || (nsError.domain == "TalkMode" && nsError.code == 9)
                 if isCancelled {
-                    self.statusText = String(localized: "Ready")
+                    self.setStatus(String(localized: "Ready"), phase: .idle)
                 } else if !isPermissionError {
-                    self.statusText = String(
-                        format: String(localized: "Start failed: %@"),
-                        error.localizedDescription)
+                    self.setStatus(
+                        String(
+                            format: String(localized: "Start failed: %@"),
+                            error.localizedDescription),
+                        phase: .idle)
                 }
             }
             let shouldResume = self.isEnabled
@@ -1012,7 +1051,7 @@ final class TalkModeManager: NSObject {
             self.pttTimeoutTask?.cancel()
             self.pttTimeoutTask = nil
             self.pttAutoStopEnabled = false
-            self.statusText = String(localized: "Ready")
+            self.setStatus(String(localized: "Ready"), phase: .idle)
             self.finishActivePushToTalk(captureId)
             let payload = OpenClawTalkPTTStopPayload(
                 captureId: captureId,
@@ -1037,7 +1076,7 @@ final class TalkModeManager: NSObject {
         self.lastHeard = nil
 
         guard !transcript.isEmpty else {
-            self.statusText = String(localized: "Ready")
+            self.setStatus(String(localized: "Ready"), phase: .idle)
             let shouldResume = self.isEnabled
             self.finishActivePushToTalk(captureId)
             let payload = OpenClawTalkPTTStopPayload(
@@ -1050,7 +1089,7 @@ final class TalkModeManager: NSObject {
         }
 
         guard self.gatewayConnected else {
-            self.statusText = String(localized: "Gateway not connected")
+            self.setStatus(String(localized: "Gateway not connected"), phase: .idle)
             let shouldResume = self.isEnabled
             self.finishActivePushToTalk(captureId)
             let payload = OpenClawTalkPTTStopPayload(
@@ -1156,7 +1195,7 @@ final class TalkModeManager: NSObject {
         self.pttTimeoutTask?.cancel()
         self.pttTimeoutTask = nil
         self.finishActivePushToTalk(captureId)
-        self.statusText = String(localized: "Ready")
+        self.setStatus(String(localized: "Ready"), phase: .idle)
 
         let payload = OpenClawTalkPTTStopPayload(
             captureId: captureId,
@@ -1191,7 +1230,7 @@ final class TalkModeManager: NSObject {
     }
 
     private func pushToTalkOfflineError() -> NSError {
-        self.statusText = String(localized: "Offline")
+        self.setStatus(String(localized: "Offline"), phase: .idle)
         return NSError(domain: "TalkMode", code: 7, userInfo: [
             NSLocalizedDescriptionKey: "Gateway not connected",
         ])
@@ -1224,7 +1263,7 @@ final class TalkModeManager: NSObject {
     {
         precondition(self.finishingPushToTalk == nil)
         let generation = self.beginTranscriptProcessing()
-        self.statusText = String(localized: "Thinking…")
+        self.setStatus(String(localized: "Thinking…"), phase: .thinking)
 
         let task = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -1264,9 +1303,11 @@ final class TalkModeManager: NSObject {
         self.invalidateTranscriptProcessing()
         self.stopSpeaking(storeInterruption: false)
         if hadFinishingPushToTalk {
-            self.statusText = self.gatewayConnected
-                ? String(localized: "Ready")
-                : String(localized: "Offline")
+            self.setStatus(
+                self.gatewayConnected
+                    ? String(localized: "Ready")
+                    : String(localized: "Offline"),
+                phase: .idle)
         }
     }
 
@@ -1285,16 +1326,12 @@ final class TalkModeManager: NSObject {
         self.finishingPushToTalk = nil
         self.deactivateStandaloneAudioSessionIfIdle()
         self.pttAudioOwnershipEndHandler?(captureId)
-        let transientStatuses = [
-            String(localized: "Thinking…"),
-            String(localized: "Generating voice…"),
-            String(localized: "Speaking…"),
-            String(localized: "Speaking (System)…"),
-        ]
-        if transientStatuses.contains(self.statusText) {
-            self.statusText = self.gatewayConnected
-                ? String(localized: "Ready")
-                : String(localized: "Offline")
+        if self.phase.isFinalizerTransient {
+            self.setStatus(
+                self.gatewayConnected
+                    ? String(localized: "Ready")
+                    : String(localized: "Offline"),
+                phase: .idle)
         }
         self.scheduleContinuousResume(self.isEnabled)
     }
@@ -1468,32 +1505,34 @@ final class TalkModeManager: NSObject {
         if isCancellation {
             GatewayDiagnostics.log("talk speech: cancelled")
             if self.captureMode == .continuous, self.isEnabled, !self.isSpeaking {
-                self.statusText = String(localized: "Listening")
+                self.setStatus(String(localized: "Listening"), phase: .listening)
             }
             self.logger.debug("speech recognition cancelled")
             return false
         }
 
         GatewayDiagnostics.log("talk speech: error=\(msg)")
-        self.speechErrorStatusPendingRestart = nil
+        self.speechErrorStatusRevisionPendingRestart = nil
         if !self.isSpeaking {
             if msg.localizedCaseInsensitiveContains("no speech detected") {
                 // Treat as transient silence. Don't scare users with an error banner.
                 if self.isEnabled {
-                    self.statusText = String(localized: "Listening")
+                    self.setStatus(String(localized: "Listening"), phase: .listening)
                 } else {
                     let errorStatus = String(
                         format: String(localized: "Speech error: %@"),
                         msg)
-                    self.statusText = errorStatus
-                    self.speechErrorStatusPendingRestart = errorStatus
+                    self.speechErrorStatusRevisionPendingRestart = self.setStatus(
+                        errorStatus,
+                        phase: .idle)
                 }
             } else {
                 let errorStatus = String(
                     format: String(localized: "Speech error: %@"),
                     msg)
-                self.statusText = errorStatus
-                self.speechErrorStatusPendingRestart = errorStatus
+                self.speechErrorStatusRevisionPendingRestart = self.setStatus(
+                    errorStatus,
+                    phase: .idle)
             }
         }
         self.logger.debug("speech recognition error: \(msg, privacy: .public)")
@@ -1519,13 +1558,7 @@ final class TalkModeManager: NSObject {
             try self.configureOwnedAudioSession()
             try self.startRecognition()
             self.isListening = true
-            if let restartStatus = Self.listeningStatusAfterSpeechErrorRestart(
-                currentStatus: self.statusText,
-                pendingErrorStatus: self.speechErrorStatusPendingRestart)
-            {
-                self.statusText = restartStatus
-            }
-            self.speechErrorStatusPendingRestart = nil
+            self.restoreListeningStatusAfterSpeechErrorRestart()
             GatewayDiagnostics.log("talk speech: recognition restarted")
         } catch {
             self.stopNativeCaptureAndDiscardTranscript()
@@ -1545,12 +1578,11 @@ final class TalkModeManager: NSObject {
             self.realtimeRelayStartGeneration == nil
     }
 
-    private static func listeningStatusAfterSpeechErrorRestart(
-        currentStatus: String,
-        pendingErrorStatus: String?) -> String?
-    {
-        guard let pendingErrorStatus, currentStatus == pendingErrorStatus else { return nil }
-        return String(localized: "Listening")
+    private func restoreListeningStatusAfterSpeechErrorRestart() {
+        if self.speechErrorStatusRevisionPendingRestart == self.statusRevision {
+            self.setStatus(String(localized: "Listening"), phase: .listening)
+        }
+        self.speechErrorStatusRevisionPendingRestart = nil
     }
 
     private func stopRecognition() {
@@ -1721,7 +1753,7 @@ final class TalkModeManager: NSObject {
             }
         }
         guard let gateway = self.gateway else {
-            self.statusText = String(localized: "Gateway not connected")
+            self.setStatus(String(localized: "Gateway not connected"), phase: .idle)
             self.scheduleContinuousResume(restartAfter)
             return
         }
@@ -1765,7 +1797,7 @@ final class TalkModeManager: NSObject {
         if self.isCurrentTranscriptProcessing(generation),
            let terminalStatus = streamingOwner.terminalStatus
         {
-            self.statusText = terminalStatus
+            self.setStatus(terminalStatus.text, phase: terminalStatus.phase)
         }
         let shouldResume = restartAfter &&
             self.isEnabled &&
@@ -1789,7 +1821,7 @@ final class TalkModeManager: NSObject {
         self.isListening = false
         self.isUserSpeechDetected = false
         self.captureMode = .idle
-        self.statusText = String(localized: "Thinking…")
+        self.setStatus(String(localized: "Thinking…"), phase: .thinking)
         self.lastTranscript = ""
         self.lastHeard = nil
         self.stopRecognition()
@@ -1801,7 +1833,7 @@ final class TalkModeManager: NSObject {
             shouldApply: { self.isCurrentTranscriptProcessing(generation) })
         guard self.isCurrentTranscriptProcessing(generation) else { return }
         guard await gateway.currentRoute() == gatewayRoute else {
-            self.statusText = String(localized: "Gateway not connected")
+            self.setStatus(String(localized: "Gateway not connected"), phase: .idle)
             return
         }
         guard self.isCurrentTranscriptProcessing(generation) else { return }
@@ -1840,9 +1872,11 @@ final class TalkModeManager: NSObject {
                 "chat.send ok runId=\(runId, privacy: .public) status=\(normalizedStatus, privacy: .public)")
             GatewayDiagnostics.log("talk: chat.send ok runId=\(runId) status=\(normalizedStatus)")
             if Self.isTerminalChatSendFailure(acknowledgement.status) {
-                streamingOwner.terminalStatus = normalizedStatus == "error"
-                    ? String(localized: "Chat error")
-                    : String(localized: "Aborted")
+                streamingOwner.terminalStatus = (
+                    normalizedStatus == "error"
+                        ? String(localized: "Chat error")
+                        : String(localized: "Aborted"),
+                    .idle)
                 self.logger.warning(
                     """
                     chat.send terminal ack runId=\(runId, privacy: .public) \
@@ -1863,15 +1897,17 @@ final class TalkModeManager: NSObject {
             else { return }
             guard self.isCurrentTranscriptProcessing(generation) else { return }
             if completedSuccessfully, !self.isEnabled {
-                streamingOwner.terminalStatus = String(localized: "Ready")
+                streamingOwner.terminalStatus = (String(localized: "Ready"), .idle)
             }
         } catch is CancellationError {
             return
         } catch {
             guard self.isCurrentTranscriptProcessing(generation) else { return }
-            streamingOwner.terminalStatus = String(
-                format: String(localized: "Talk failed: %@"),
-                error.localizedDescription)
+            streamingOwner.terminalStatus = (
+                String(
+                    format: String(localized: "Talk failed: %@"),
+                    error.localizedDescription),
+                .idle)
             self.logger.error("finalize failed: \(error.localizedDescription, privacy: .public)")
             GatewayDiagnostics.log("talk: failed error=\(error.localizedDescription)")
         }
@@ -1928,7 +1964,7 @@ final class TalkModeManager: NSObject {
                 streamingOwner.task?.cancel()
                 await self.finishIncrementalSpeech()
                 guard self.isCurrentTranscriptProcessing(generation) else { return nil }
-                streamingOwner.terminalStatus = String(localized: "Aborted")
+                streamingOwner.terminalStatus = (String(localized: "Aborted"), .idle)
                 return nil
             } else if completion.state == .error {
                 self.logger.warning("chat completion error runId=\(runId, privacy: .public)")
@@ -1936,7 +1972,7 @@ final class TalkModeManager: NSObject {
                 streamingOwner.task?.cancel()
                 await self.finishIncrementalSpeech()
                 guard self.isCurrentTranscriptProcessing(generation) else { return nil }
-                streamingOwner.terminalStatus = String(localized: "Chat error")
+                streamingOwner.terminalStatus = (String(localized: "Chat error"), .idle)
                 return nil
             }
         }
@@ -1964,7 +2000,7 @@ final class TalkModeManager: NSObject {
             streamingOwner.task?.cancel()
             await self.finishIncrementalSpeech()
             guard self.isCurrentTranscriptProcessing(generation) else { return nil }
-            streamingOwner.terminalStatus = String(localized: "No reply")
+            streamingOwner.terminalStatus = (String(localized: "No reply"), .idle)
             return nil
         }
         self.logger.info("assistant text ok chars=\(assistantText.count, privacy: .public)")
@@ -2053,7 +2089,7 @@ final class TalkModeManager: NSObject {
             return .unavailable(realtimeIssue(message: "Gateway not connected", phase: "start"))
         }
         guard self.foregroundAudioCaptureAllowed else {
-            self.statusText = String(localized: "Paused")
+            self.setStatus(String(localized: "Paused"), phase: .idle)
             GatewayDiagnostics.log("talk realtime ignored: app backgrounded")
             return .ignored
         }
@@ -2103,6 +2139,7 @@ final class TalkModeManager: NSObject {
                 self.isSpeaking = speaking
                 if speaking {
                     self.isListening = false
+                    self.phase = .speaking
                 }
             },
             onInputLevel: { [weak self] level in
@@ -2470,7 +2507,7 @@ final class TalkModeManager: NSObject {
         self.speechGeneration += 1
         let speechGeneration = self.speechGeneration
 
-        self.statusText = String(localized: "Generating voice…")
+        self.setStatus(String(localized: "Generating voice…"), phase: .speaking)
         self.isSpeaking = true
         self.lastSpokenText = cleaned
         defer {
@@ -2502,9 +2539,11 @@ final class TalkModeManager: NSObject {
                     try await self.playSystemVoice(text: cleaned, language: language)
                 } catch {
                     guard !Task.isCancelled, self.speechGeneration == speechGeneration else { return }
-                    self.statusText = String(
-                        format: String(localized: "Speak failed: %@"),
-                        error.localizedDescription)
+                    self.setStatus(
+                        String(
+                            format: String(localized: "Speak failed: %@"),
+                            error.localizedDescription),
+                        phase: .idle)
                     self.logger.error("system voice failed: \(error.localizedDescription, privacy: .public)")
                 }
             }
@@ -2567,7 +2606,7 @@ final class TalkModeManager: NSObject {
 
                 self.startSpeechInterruptionRecognitionIfNeeded()
 
-                self.statusText = String(localized: "Speaking…")
+                self.setStatus(String(localized: "Speaking…"), phase: .speaking)
                 let result = await self.playElevenLabsStream(
                     rawStream,
                     sampleRate: TalkTTSValidation.pcmSampleRate(from: outputFormat))
@@ -2603,9 +2642,11 @@ final class TalkModeManager: NSObject {
                 try await self.playSystemVoice(text: cleaned, language: language)
             } catch {
                 guard !Task.isCancelled, self.speechGeneration == speechGeneration else { return }
-                self.statusText = String(
-                    format: String(localized: "Speak failed: %@"),
-                    error.localizedDescription)
+                self.setStatus(
+                    String(
+                        format: String(localized: "Speak failed: %@"),
+                        error.localizedDescription),
+                    phase: .idle)
                 self.logger.error("system voice failed: \(error.localizedDescription, privacy: .public)")
             }
         }
@@ -2656,7 +2697,7 @@ final class TalkModeManager: NSObject {
             transport: "native",
             isRealtime: false))
         self.startSpeechInterruptionRecognitionIfNeeded()
-        self.statusText = String(localized: "Speaking…")
+        self.setStatus(String(localized: "Speaking…"), phase: .speaking)
         let result: StreamingPlaybackResult
         switch audio.playbackMode {
         case let .pcm(sampleRate):
@@ -2699,7 +2740,7 @@ final class TalkModeManager: NSObject {
             transport: "native",
             isRealtime: false))
         self.startSpeechInterruptionRecognitionIfNeeded()
-        self.statusText = String(localized: "Speaking (System)…")
+        self.setStatus(String(localized: "Speaking (System)…"), phase: .speaking)
         try await TalkSystemSpeechSynthesizer.shared.speak(text: text, language: language)
     }
 
@@ -2894,7 +2935,7 @@ final class TalkModeManager: NSObject {
             while !Task.isCancelled {
                 guard !self.incrementalSpeechQueue.isEmpty else { break }
                 let segment = self.incrementalSpeechQueue.removeFirst()
-                self.statusText = String(localized: "Speaking…")
+                self.setStatus(String(localized: "Speaking…"), phase: .speaking)
                 self.isSpeaking = true
                 self.lastSpokenText = segment
                 guard await self.updateIncrementalContextIfNeeded(speechGeneration: speechGeneration) else { return }
@@ -3597,24 +3638,65 @@ extension TalkModeManager {
         self.gatewayTalkLastIssueText = nil
         self.gatewayTalkActiveModeTitle = self.configuredVoiceModeDescriptor.title
         self.gatewayTalkActiveModeSubtitle = self.configuredVoiceModeDescriptor.subtitle
-        self.statusText = String(localized: "Listening (Realtime)")
+        self.setStatus(String(localized: "Listening (Realtime)"), phase: .listening)
+    }
+
+    private static func phase(forRealtimeStatus status: String) -> TalkPhase {
+        switch status {
+        case "Listening", "Listening (Realtime)":
+            .listening
+        case "Thinking", "Thinking…":
+            .thinking
+        case "Speaking", "Speaking…":
+            .speaking
+        case "Connecting realtime…", "Waiting for realtime…":
+            .connecting
+        default:
+            .idle
+        }
+    }
+
+    private static func presentationText(forRealtimeStatus status: String) -> String {
+        switch status {
+        case "Listening":
+            String(localized: "Listening")
+        case "Listening (Realtime)":
+            String(localized: "Listening (Realtime)")
+        case "Thinking":
+            String(localized: "Thinking")
+        case "Thinking…":
+            String(localized: "Thinking…")
+        case "Speaking":
+            String(localized: "Speaking")
+        case "Speaking…":
+            String(localized: "Speaking…")
+        case "Connecting realtime…":
+            String(localized: "Connecting realtime…")
+        case "Waiting for realtime…":
+            String(localized: "Waiting for realtime…")
+        case "Ready":
+            String(localized: "Ready")
+        default:
+            status
+        }
     }
 
     private func handleRealtimeRelayStatus(_ status: String) {
         guard self.captureMode != .pushToTalk else { return }
+        let phase = Self.phase(forRealtimeStatus: status)
         if status == "Listening (Realtime)" {
             // Ready can be followed by a buffered close before start() resumes. Commit continuous
             // state here so the close still enters bounded recovery.
             self.markRealtimeSessionReady()
         } else {
-            self.statusText = status
+            self.setStatus(Self.presentationText(forRealtimeStatus: status), phase: phase)
             if status == "Ready" {
                 self.realtimeRelaySession = nil
                 self.handleRealtimeSessionFinish()
             }
         }
-        self.isListening = status.localizedCaseInsensitiveContains("listening")
-        if status.localizedCaseInsensitiveContains("thinking") {
+        self.isListening = phase == .listening
+        if phase == .thinking || phase == .connecting {
             self.isListening = false
             self.isSpeaking = false
             self.isUserSpeechDetected = false
@@ -3632,7 +3714,7 @@ extension TalkModeManager {
         self.gatewayTalkCurrentFallbackIssue = nil
         self.gatewayTalkActiveModeTitle = "iOS Speech + TTS"
         self.gatewayTalkActiveModeSubtitle = nil
-        self.statusText = String(localized: "Listening")
+        self.setStatus(String(localized: "Listening"), phase: .listening)
     }
 
     private func markNativeFallbackActive(after issue: TalkRuntimeIssue) {
@@ -3640,7 +3722,7 @@ extension TalkModeManager {
         self.gatewayTalkActiveModeSubtitle = issue.displayMessage
         self.gatewayTalkCurrentFallbackIssue = issue
         self.gatewayTalkLastIssueText = issue.diagnosticSummary
-        self.statusText = issue.fallbackStatusText
+        self.setStatus(issue.fallbackStatusText, phase: .listening)
     }
 
     private func realtimeIssue(message: String, phase: String) -> TalkRuntimeIssue {
@@ -3962,7 +4044,7 @@ extension TalkModeManager {
         self.silenceWindow = TimeInterval(Self.defaultSilenceTimeoutMs) / 1000
         if let missingScope = Self.missingTalkScope(from: error) {
             self.gatewayTalkPermissionState = .missingScope(missingScope)
-            self.statusText = String(localized: "Gateway permission required")
+            self.setStatus(String(localized: "Gateway permission required"), phase: .idle)
             GatewayDiagnostics.log("talk config missing gateway scope=\(missingScope)")
         } else {
             self.gatewayTalkPermissionState = .loadFailed(error.localizedDescription)
@@ -4003,7 +4085,7 @@ extension TalkModeManager {
 
     func markTalkPermissionUpgradeRequested(requestId: String?) {
         self.gatewayTalkPermissionState = .upgradeRequested(requestId: requestId)
-        self.statusText = String(localized: "Approval requested")
+        self.setStatus(String(localized: "Approval requested"), phase: .idle)
     }
 
     private static func missingTalkScope(from error: Error) -> String? {
@@ -4180,14 +4262,15 @@ extension TalkModeManager: TalkRealtimeWebRTCSessionDelegate {
     func realtimeSession(_ session: TalkRealtimeWebRTCSession, didChangeStatus status: String) {
         guard session === self.realtimeSession else { return }
         GatewayDiagnostics.log("talk.timeline realtime status=\(status)")
+        let phase = Self.phase(forRealtimeStatus: status)
         if status == "Listening" {
             self.markRealtimeSessionReady()
         } else {
-            self.statusText = status
+            self.setStatus(Self.presentationText(forRealtimeStatus: status), phase: phase)
         }
-        self.isListening = status == "Listening"
-        self.isSpeaking = status == "Speaking"
-        if status == "Thinking" {
+        self.isListening = phase == .listening
+        self.isSpeaking = phase == .speaking
+        if phase == .thinking || phase == .connecting {
             self.isListening = false
             self.isSpeaking = false
             self.isUserSpeechDetected = false
@@ -4447,20 +4530,19 @@ extension TalkModeManager {
     func _test_realtimeStatusPreservesPushToTalkCapture() -> Bool {
         self.captureMode = .pushToTalk
         self.isListening = false
-        self.statusText = String(localized: "Listening (PTT)")
+        self.setStatus(String(localized: "Listening (PTT)"), phase: .listening)
         self.handleRealtimeRelayStatus("Listening (Realtime)")
         return self.captureMode == .pushToTalk &&
             !self.isListening &&
-            self.statusText == String(localized: "Listening (PTT)")
+            self.phase == .listening
     }
 
-    static func _test_listeningStatusAfterSpeechErrorRestart(
-        currentStatus: String,
-        pendingErrorStatus: String?) -> String?
-    {
-        self.listeningStatusAfterSpeechErrorRestart(
-            currentStatus: currentStatus,
-            pendingErrorStatus: pendingErrorStatus)
+    func _test_markSpeechErrorStatusPendingRestart(_ text: String) {
+        self.speechErrorStatusRevisionPendingRestart = self.setStatus(text, phase: .idle)
+    }
+
+    func _test_restoreListeningStatusAfterSpeechErrorRestart() {
+        self.restoreListeningStatusAfterSpeechErrorRestart()
     }
 
     func _test_prepareRealtimeRelayStart() {
