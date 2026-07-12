@@ -62,7 +62,7 @@ enter_worktree() {
 
 pr_meta_json() {
   local pr="$1"
-  gh pr view "$pr" --json number,title,state,isDraft,author,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,url,body,labels,assignees,reviewRequests,files,additions,deletions,statusCheckRollup
+  gh pr view "$pr" --json number,title,state,isDraft,author,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,isCrossRepository,url,body,labels,assignees,reviewRequests,files,additions,deletions,statusCheckRollup
 }
 
 write_pr_meta_files() {
@@ -73,7 +73,7 @@ write_pr_meta_files() {
   # Security: shell-escape all values with printf %q to prevent command injection
   # via malicious branch names containing $() or backticks. See GHSA-xxxx-xxxx-xxxx.
   local pr_number pr_url pr_author pr_base pr_head pr_head_sha
-  local pr_head_repo pr_head_repo_url pr_head_owner pr_head_repo_name
+  local pr_head_repo pr_head_repo_url pr_head_owner pr_head_repo_name pr_is_cross
   pr_number=$(printf '%s\n' "$json" | jq -r .number)
   pr_url=$(printf '%s\n' "$json" | jq -r .url)
   pr_author=$(printf '%s\n' "$json" | jq -r .author.login)
@@ -84,6 +84,7 @@ write_pr_meta_files() {
   pr_head_repo_url=$(printf '%s\n' "$json" | jq -r '.headRepository.url // ""')
   pr_head_owner=$(printf '%s\n' "$json" | jq -r '.headRepositoryOwner.login // ""')
   pr_head_repo_name=$(printf '%s\n' "$json" | jq -r '.headRepository.name // ""')
+  pr_is_cross=$(printf '%s\n' "$json" | jq -r '.isCrossRepository // true')
 
   printf '%s=%q\n' \
     PR_NUMBER "$pr_number" \
@@ -96,6 +97,7 @@ write_pr_meta_files() {
     PR_HEAD_REPO_URL "$pr_head_repo_url" \
     PR_HEAD_OWNER "$pr_head_owner" \
     PR_HEAD_REPO_NAME "$pr_head_repo_name" \
+    PR_IS_CROSS_REPOSITORY "$pr_is_cross" \
     > .local/pr-meta.env
 }
 

@@ -218,12 +218,58 @@ resolve_prhead_remote_sha() {
   printf '%s\n' "$remote_sha"
 }
 
+# True when local prep rewrote history relative to the current PR tip.
+# createCommitOnBranch can only layer a tree delta on expectedHeadOid; it cannot
+# replace the tip's parent, so rebases must use git force-with-lease instead.
+prep_push_ancestry_must_move() {
+  local lease_sha="$1"
+  local prep_head_sha="$2"
+
+  if [ -z "$lease_sha" ] || [ -z "$prep_head_sha" ]; then
+    return 0
+  fi
+  if git merge-base --is-ancestor "$lease_sha" "$prep_head_sha" 2>/dev/null; then
+    return 1
+  fi
+  return 0
+}
+
 push_prep_head_once() {
   local pr_head="$1"
   local lease_sha="$2"
   local prep_head_sha="$3"
 
-  if [ -n "${PR_HEAD_OWNER:-}" ] && [ -n "${PR_HEAD_REPO_NAME:-}" ] && [ "${OPENCLAW_PR_PUSH_MODE:-graphql}" != "git" ]; then
+  # shellcheck disable=SC1091
+  if [ -f .local/pr-meta.env ]; then
+    source .local/pr-meta.env
+  fi
+
+  local ancestry_must_move=false
+  if prep_push_ancestry_must_move "$lease_sha" "$prep_head_sha"; then
+    ancestry_must_move=true
+  fi
+
+  # Same-repo rebased tips must move ancestry; GraphQL would keep the old
+  # parent and inflate the three-dot PR diff with mainline noise (#103358).
+  local use_git_push=false
+  if [ "${OPENCLAW_PR_PUSH_MODE:-graphql}" = "git" ]; then
+    use_git_push=true
+  elif [ "$ancestry_must_move" = true ] && [ "${PR_IS_CROSS_REPOSITORY:-true}" != "true" ]; then
+    use_git_push=true
+    # Same-repository maintainer pushes are allowed even when the default
+    # GraphQL path would preserve signed web commits on fast-forward tips.
+    if [ -z "${OPENCLAW_ALLOW_UNSIGNED_GIT_PUSH:-}" ]; then
+      OPENCLAW_ALLOW_UNSIGNED_GIT_PUSH=1
+    fi
+  fi
+
+  if [ "$use_git_push" != true ] && [ -n "${PR_HEAD_OWNER:-}" ] && [ -n "${PR_HEAD_REPO_NAME:-}" ]; then
+    if [ "$ancestry_must_move" = true ]; then
+      echo "Refusing GraphQL createCommitOnBranch: prepared head rewrites ancestry relative to $lease_sha." >&2
+      echo "createCommitOnBranch keeps the old parent and pollutes same-base three-dot diffs (#103358)." >&2
+      echo "Set OPENCLAW_PR_PUSH_MODE=git OPENCLAW_ALLOW_UNSIGNED_GIT_PUSH=1 (or use a writable same-repository branch)." >&2
+      return 2
+    fi
     echo "Pushing PR branch through GitHub createCommitOnBranch so the prepared commit is verified." >&2
     graphql_push_to_fork "${PR_HEAD_OWNER}/${PR_HEAD_REPO_NAME}" "$pr_head" "$lease_sha"
     return $?
@@ -235,7 +281,13 @@ push_prep_head_once() {
     return 2
   fi
 
-  git push --force-with-lease=refs/heads/$pr_head:$lease_sha prhead HEAD:$pr_head >&2
+  if [ "$ancestry_must_move" = true ]; then
+    echo "Pushing rebased PR head with git force-with-lease so commit ancestry moves with the tree (#103358)." >&2
+  fi
+
+  if ! git push --force-with-lease=refs/heads/$pr_head:$lease_sha prhead HEAD:$pr_head >&2; then
+    return 1
+  fi
   printf '%s\n' "$prep_head_sha"
 }
 
@@ -268,6 +320,10 @@ push_prep_head_to_pr_branch() {
       echo "Push failed: $push_output"
 
       if printf '%s' "$push_output" | grep -qiE '(permission|denied|403|forbidden)'; then
+        if prep_push_ancestry_must_move "$lease_sha" "$local_prep_head_sha"; then
+          echo "Permission denied on git push and ancestry rewrite is required; GraphQL fallback would pollute the PR three-dot diff (#103358)."
+          exit 1
+        fi
         echo "Permission denied on git push; trying GraphQL createCommitOnBranch fallback..."
         if [ -n "${PR_HEAD_OWNER:-}" ] && [ -n "${PR_HEAD_REPO_NAME:-}" ]; then
           local graphql_oid
@@ -297,6 +353,10 @@ push_prep_head_to_pr_branch() {
         if ! push_output=$(push_prep_head_once "$pr_head" "$lease_sha" "$prep_head_sha" 2>&1); then
           echo "Retry push failed: $push_output"
           if [ -n "${PR_HEAD_OWNER:-}" ] && [ -n "${PR_HEAD_REPO_NAME:-}" ]; then
+            if prep_push_ancestry_must_move "$lease_sha" "$local_prep_head_sha"; then
+              echo "Retry failed and ancestry rewrite is required; refusing GraphQL fallback (#103358)."
+              exit 1
+            fi
             echo "Retry failed; trying GraphQL createCommitOnBranch fallback..."
             local graphql_oid
             graphql_oid=$(graphql_push_to_fork "${PR_HEAD_OWNER}/${PR_HEAD_REPO_NAME}" "$pr_head" "$lease_sha")
@@ -329,11 +389,26 @@ push_prep_head_to_pr_branch() {
   local remote_prep_tree
   local_prep_tree=$(git rev-parse "${local_prep_head_sha}^{tree}")
   remote_prep_tree=$(git rev-parse "pr-$pr-verify^{tree}")
-  git branch -D "pr-$pr-verify" 2>/dev/null || true
   if [ "$local_prep_tree" != "$remote_prep_tree" ]; then
+    git branch -D "pr-$pr-verify" 2>/dev/null || true
     echo "Pushed PR head tree differs from the prepared local tree."
     exit 1
   fi
+
+  # Tree equality is necessary but insufficient after a rebase: GraphQL can
+  # publish the correct tree while leaving the old tip as parent (#103358).
+  if prep_push_ancestry_must_move "$pushed_from_sha" "$local_prep_head_sha"; then
+    local expected_parent remote_parent
+    expected_parent=$(git rev-parse --verify "${local_prep_head_sha}^" 2>/dev/null || true)
+    remote_parent=$(git rev-parse --verify "pr-$pr-verify^" 2>/dev/null || true)
+    if [ -n "$expected_parent" ] && [ -n "$remote_parent" ] && [ "$expected_parent" != "$remote_parent" ]; then
+      git branch -D "pr-$pr-verify" 2>/dev/null || true
+      echo "Pushed PR head parent ($remote_parent) differs from prepared parent ($expected_parent)."
+      echo "Ancestry rewrite was required relative to $pushed_from_sha; GraphQL tip parent would pollute the PR three-dot diff (#103358)."
+      exit 1
+    fi
+  fi
+  git branch -D "pr-$pr-verify" 2>/dev/null || true
 
   # merge-verify owns relevance-aware mainline drift checks. Requiring every
   # prepared head to contain main here forces needless rebases, while GraphQL
