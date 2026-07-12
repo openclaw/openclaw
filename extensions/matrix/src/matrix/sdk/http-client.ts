@@ -48,7 +48,7 @@ export class MatrixAuthedHttpClient {
       throw buildHttpError(response.status, text);
     }
     const contentType = response.headers.get("content-type") ?? "";
-    if (contentType.includes("application/json")) {
+    if (contentType.toLowerCase().includes("application/json")) {
       if (!text.trim()) {
         return {};
       }
