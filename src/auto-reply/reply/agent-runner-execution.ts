@@ -1,5 +1,6 @@
 /** Agent-runner execution loop, fallback handling, and user-facing failure mapping. */
 import crypto from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   hasNonEmptyString,
   normalizeLowercaseStringOrEmpty,
@@ -564,7 +565,7 @@ function collapseRepeatedFailureDetail(message: string): string {
     .map((part) => part.trim())
     .filter(Boolean);
   if (parts.length >= 2 && parts.every((part) => part === parts[0])) {
-    return parts[0];
+    return expectDefined(parts[0], "parts entry at 0");
   }
   return message.trim();
 }
