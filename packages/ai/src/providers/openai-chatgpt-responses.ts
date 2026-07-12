@@ -1113,7 +1113,10 @@ function scheduleSessionWebSocketExpiry(sessionId: string, entry: CachedWebSocke
       return;
     }
     closeWebSocketSilently(entry.socket, 1000, "idle_timeout");
-    websocketSessionCache.delete(sessionId);
+    // Identity check: a newer same-session connection may have replaced this entry.
+    if (websocketSessionCache.get(sessionId) === entry) {
+      websocketSessionCache.delete(sessionId);
+    }
   }, SESSION_WEBSOCKET_CACHE_TTL_MS);
 }
 
@@ -1240,7 +1243,11 @@ async function acquireWebSocket(
         release: ({ keep } = {}) => {
           if (!keep || !isWebSocketReusable(cached.socket)) {
             closeWebSocketSilently(cached.socket);
-            websocketSessionCache.delete(sessionId);
+            // Same ownership guard as the new-connection release path: a newer
+            // same-session entry may already own the cache slot.
+            if (websocketSessionCache.get(sessionId) === cached) {
+              websocketSessionCache.delete(sessionId);
+            }
             return;
           }
           cached.busy = false;
