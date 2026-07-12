@@ -6,6 +6,7 @@
  * continuation belongs to the Codex harness, which installs approval and tool
  * handlers before it starts or resumes the harness-owned Codex thread.
  */
+import { expectDefined } from "@openclaw/normalization-core";
 import { resolveDefaultAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { jsonResult, readStringParam, type AnyAgentTool } from "openclaw/plugin-sdk/core";
@@ -753,7 +754,7 @@ async function resolveEndpointForThread(params: {
     }
   }
   if (matches.length === 1) {
-    return matches[0];
+    return expectDefined(matches[0], "single matching Codex supervision endpoint");
   }
   if (matches.length > 1) {
     throw new Error(`Codex thread id is ambiguous across endpoints: ${params.threadId}`);
@@ -763,8 +764,7 @@ async function resolveEndpointForThread(params: {
 
 function findInProgressTurnId(thread: Record<string, unknown>): string | undefined {
   const turns = asRecordArray(thread.turns);
-  for (let index = turns.length - 1; index >= 0; index -= 1) {
-    const turn = turns[index];
+  for (const turn of turns.toReversed()) {
     if (turn.status === "inProgress" && typeof turn.id === "string") {
       return turn.id;
     }

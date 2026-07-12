@@ -3,6 +3,7 @@
  * tool-call responses.
  */
 import { createHash } from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import {
   consumeAdjustedParamsForToolCall,
@@ -387,7 +388,7 @@ function computerFrameImageIdentity(
   if (images.length !== 1) {
     return undefined;
   }
-  const image = images[0];
+  const image = expectDefined(images[0], "single Codex computer frame image");
   return createHash("sha256")
     .update(JSON.stringify([image.mimeType, image.data]))
     .digest("hex");
@@ -1139,7 +1140,7 @@ function composeAbortSignals(...signals: Array<AbortSignal | undefined>): AbortS
     return new AbortController().signal;
   }
   if (activeSignals.length === 1) {
-    return activeSignals[0];
+    return expectDefined(activeSignals[0], "single active Codex abort signal");
   }
   return AbortSignal.any(activeSignals);
 }
