@@ -318,11 +318,13 @@ class NewSessionPage extends OpenClawLightDomElement {
   }
 
   private maybeLoadBranches() {
+    // Branch data belongs to one repository selection. Clear it before any
+    // exit or request so a previous repo's ref can never reach sessions.create.
+    const requestId = ++this.branchesRequestToken;
+    this.branches = null;
+    this.branchesLoading = false;
+    this.baseRef = "";
     if (this.execNode) {
-      this.branchesRequestToken += 1;
-      this.branches = null;
-      this.branchesLoading = false;
-      this.baseRef = "";
       return;
     }
     const repoRoot = this.folder.trim() || this.workspacePath();
@@ -336,7 +338,6 @@ class NewSessionPage extends OpenClawLightDomElement {
     if (!client) {
       return;
     }
-    const requestId = ++this.branchesRequestToken;
     this.branchesLoading = true;
     void client
       .request<DraftBranches>("worktrees.branches", { repoRoot })
