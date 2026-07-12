@@ -267,6 +267,110 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     }
   });
 
+  it("locks the submitted draft until creation settles and restores it after failure", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const sessionKey = "agent:main:locked-new-session-draft";
+    const submittedMessage = "keep this submitted draft atomic";
+    const gateway = await installMockGateway(page, {
+      workspaceGit: true,
+      methodResponses: {
+        "agents.list": {
+          agents: [
+            {
+              id: "main",
+              identity: { name: "Main" },
+              name: "Main",
+              workspace: WORKSPACE,
+              workspaceGit: true,
+            },
+          ],
+          defaultId: "main",
+          mainKey: "main",
+          scope: "agent",
+        },
+        "worktrees.branches": {
+          branches: [{ kind: "local", name: "main" }],
+          defaultBranch: "main",
+        },
+        "sessions.list": {
+          count: 0,
+          path: "",
+          sessions: [],
+          ts: Date.now(),
+        },
+        "sessions.create": { key: sessionKey },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      await gateway.deferNext("sessions.create");
+
+      const draft = page.locator(".new-session-page__scroll");
+      const message = page.locator(".new-session-page__message");
+      const whereSelect = page.locator(
+        ".new-session-page__select:not(.new-session-page__select--folder)",
+      );
+      const whereSummary = whereSelect.locator("summary");
+      const targetSummaries = page.locator(".new-session-page__select > summary");
+
+      await message.fill(submittedMessage);
+      await whereSummary.click();
+      expect(await whereSelect.getAttribute("open")).not.toBeNull();
+      await page.getByRole("button", { name: "Start session" }).click();
+
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).toMatchObject({ message: submittedMessage });
+      await expect.poll(() => message.isDisabled()).toBe(true);
+      expect(await draft.getAttribute("inert")).not.toBeNull();
+      expect(await draft.getAttribute("aria-busy")).toBe("true");
+      expect(await whereSelect.getAttribute("open")).toBeNull();
+      expect(
+        await targetSummaries.evaluateAll((summaries) =>
+          summaries.map((summary) => summary.getAttribute("aria-disabled")),
+        ),
+      ).toEqual(["true", "true"]);
+
+      await expect(
+        message.fill("silently discarded late edit", { timeout: 250 }),
+      ).rejects.toThrow();
+      await whereSummary.click({ force: true });
+      await page.locator(".agent-chat__suggestion").first().click({ force: true });
+      expect(await whereSelect.getAttribute("open")).toBeNull();
+      expect(await message.inputValue()).toBe(submittedMessage);
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
+
+      await gateway.rejectDeferred("sessions.create", {
+        code: "UNAVAILABLE",
+        message: "session creation unavailable",
+      });
+      await expect.poll(() => message.isDisabled()).toBe(false);
+      expect(await draft.getAttribute("inert")).toBeNull();
+      expect(await draft.getAttribute("aria-busy")).toBe("false");
+      expect(await message.inputValue()).toBe(submittedMessage);
+      expect(
+        await targetSummaries.evaluateAll((summaries) =>
+          summaries.map((summary) => summary.getAttribute("aria-disabled")),
+        ),
+      ).toEqual(["false", "false"]);
+
+      await page.getByRole("button", { name: "Start session" }).click();
+      await expect.poll(async () => (await gateway.getRequests("sessions.create")).length).toBe(2);
+      const retry = (await gateway.getRequests("sessions.create")).at(-1);
+      expect(retry?.params).toMatchObject({ message: submittedMessage });
+      await page.waitForURL((url) => url.searchParams.get("session") === sessionKey, {
+        timeout: 30_000,
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
   it("does not submit a previous repository's worktree base while branches load", async () => {
     const context = await browser.newContext({
       locale: "en-US",
