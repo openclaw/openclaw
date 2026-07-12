@@ -105276,127 +105276,127 @@
         "zh-CN": {
           "stringUnit": {
             "state": "new",
-            "value": "Pending review"
+            "value": "待审核"
           }
         },
         "zh-TW": {
           "stringUnit": {
             "state": "new",
-            "value": "Pending review"
+            "value": "待審核"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "new",
-            "value": "Pending review"
+            "value": "Aguardando análise"
           }
         },
         "de": {
           "stringUnit": {
             "state": "new",
-            "value": "Pending review"
+            "value": "Überprüfung ausstehend"
           }
         },
         "es": {
           "stringUnit": {
             "state": "new",
-            "value": "Pending review"
+            "value": "Pendiente de revisión"
           }
         },
         "ja-JP": {
           "stringUnit": {
             "state": "new",
-            "value": "Pending review"
+            "value": "レビュー待ち"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "new",
-            "value": "Pending review"
+            "value": "검토 대기 중"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "new",
-            "value": "Pending review"
+            "value": "En attente de validation"
           }
         },
         "hi": {
           "stringUnit": {
             "state": "new",
-            "value": "Pending review"
+            "value": "समीक्षा लंबित है"
           }
         },
         "ar": {
           "stringUnit": {
             "state": "new",
-            "value": "Pending review"
+            "value": "في انتظار المراجعة"
           }
         },
         "it": {
           "stringUnit": {
             "state": "new",
-            "value": "Pending review"
+            "value": "In attesa di revisione"
           }
         },
         "tr": {
           "stringUnit": {
             "state": "new",
-            "value": "Pending review"
+            "value": "İnceleme bekliyor"
           }
         },
         "uk": {
           "stringUnit": {
             "state": "new",
-            "value": "Pending review"
+            "value": "Очікує на перевірку"
           }
         },
         "id": {
           "stringUnit": {
             "state": "new",
-            "value": "Pending review"
+            "value": "Menunggu peninjauan"
           }
         },
         "pl": {
           "stringUnit": {
             "state": "new",
-            "value": "Pending review"
+            "value": "Oczekuje na weryfikację"
           }
         },
         "th": {
           "stringUnit": {
             "state": "new",
-            "value": "Pending review"
+            "value": "รอการตรวจสอบ"
           }
         },
         "vi": {
           "stringUnit": {
             "state": "new",
-            "value": "Pending review"
+            "value": "Đang chờ xét duyệt"
           }
         },
         "nl": {
           "stringUnit": {
             "state": "new",
-            "value": "Pending review"
+            "value": "Wacht op beoordeling"
           }
         },
         "fa": {
           "stringUnit": {
             "state": "new",
-            "value": "Pending review"
+            "value": "در انتظار بررسی"
           }
         },
         "ru": {
           "stringUnit": {
             "state": "new",
-            "value": "Pending review"
+            "value": "Ожидает проверки"
           }
         },
         "sv": {
           "stringUnit": {
             "state": "new",
-            "value": "Pending review"
+            "value": "Väntar på granskning"
           }
         }
       }
