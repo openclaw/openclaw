@@ -173,6 +173,10 @@ type AcceptedRestartTarget = {
   prepareRuntimeConfig: () => Promise<OpenClawConfig>;
 };
 
+type AcceptedRestartTargetOwnership = {
+  reject: () => void;
+};
+
 export class GatewayHotReloadCancelledError extends Error {
   constructor() {
     super("config hot reload cancelled by config supersession or in-process restart");
@@ -1082,6 +1086,16 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     };
     latestAcceptedRestartTarget = acceptedTarget;
     configCandidatePending = false;
+    return {
+      reject: () => {
+        if (latestAcceptedRestartTarget !== acceptedTarget) {
+          return;
+        }
+        acceptedRestartTargetGeneration += 1;
+        latestAcceptedRestartTarget = null;
+        configCandidatePending = true;
+      },
+    } satisfies AcceptedRestartTargetOwnership;
   };
 
   const createRestartRequestDetails = (
@@ -1121,6 +1135,21 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       pausedRestartDebt = details;
     }
   };
+
+  const takeConservativeRestartDebt = (): RestartRequestDetails | null => {
+    const debt = conservativeRestartDebt;
+    conservativeRestartDebt = null;
+    return debt;
+  };
+
+  const restoreConservativeRestartDebt = (debt: RestartRequestDetails) => {
+    conservativeRestartDebt ??= debt;
+  };
+
+  const publishAcceptedRestartTarget = (target: AcceptedRestartTarget) => ({
+    ownership: recordAcceptedRestartTarget(target),
+    conservativeDebt: takeConservativeRestartDebt(),
+  });
 
   const markRestartEmissionSettled = () => {
     restartEmissionSettled = true;
@@ -1479,8 +1508,10 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     acceptRestartConfig,
     beginGatewayRestartLifecycle,
     pauseGatewayRestartForConfigCandidate,
+    publishAcceptedRestartTarget,
     recordAcceptedRestartTarget,
     requestGatewayRestart,
+    restoreConservativeRestartDebt,
     retireRejectedRestartRequest,
     stopRestartRetries,
   };
@@ -1526,8 +1557,10 @@ export function startManagedGatewayConfigReloader(
     acceptRestartConfig,
     beginGatewayRestartLifecycle,
     pauseGatewayRestartForConfigCandidate,
+    publishAcceptedRestartTarget,
     recordAcceptedRestartTarget,
     requestGatewayRestart,
+    restoreConservativeRestartDebt,
     stopRestartRetries,
   } = createGatewayReloadHandlers({
     deps: params.deps,
@@ -1709,29 +1742,39 @@ export function startManagedGatewayConfigReloader(
       params.prepareTerminalConfig(plan, applyRuntimeConfigOverrides(nextConfig));
     },
     onConfigAccepted: async (nextConfig, transactionOwnership, sourceConfig, acceptance) => {
-      const recordRestartTarget = () =>
-        recordAcceptedRestartTarget({
-          runtimeConfig: prepareRuntimeCandidate(nextConfig, sourceConfig, transactionOwnership),
-          sourceConfig,
-          prepareRuntimeConfig: async () => {
-            const prepared = await params.activateRuntimeSecrets(
-              prepareRuntimeCandidate(nextConfig, sourceConfig, transactionOwnership),
-              {
-                reason: "restart-check",
-                activate: false,
-              },
-            );
-            return prepared.config;
-          },
-        });
+      const assertCurrent = () => {
+        if (!transactionOwnership.isCurrent()) {
+          throw new GatewayConfigReloadSupersededError();
+        }
+      };
+      const createRestartTarget = (): AcceptedRestartTarget => ({
+        runtimeConfig: prepareRuntimeCandidate(nextConfig, sourceConfig, transactionOwnership),
+        sourceConfig,
+        prepareRuntimeConfig: async () => {
+          const prepared = await params.activateRuntimeSecrets(
+            prepareRuntimeCandidate(nextConfig, sourceConfig, transactionOwnership),
+            {
+              reason: "restart-check",
+              activate: false,
+            },
+          );
+          return prepared.config;
+        },
+      });
       let rollbackSource: (() => Promise<void>) | undefined;
+      let acceptedTargetOwnership: AcceptedRestartTargetOwnership | undefined;
+      let lateConservativeDebt: ReturnType<
+        typeof publishAcceptedRestartTarget
+      >["conservativeDebt"] = null;
       try {
+        assertCurrent();
         const acceptedRestart = acceptRestartConfig(sourceConfig);
         if (!acceptance.runtimeApplied) {
           // acceptRestartConfig leaves returned debt in its paused/conservative owner.
           // This candidate explicitly skipped runtime application, so a later
           // runtime-applied acceptance—not this source-only write—may rearm it.
-          recordRestartTarget();
+          assertCurrent();
+          recordAcceptedRestartTarget(createRestartTarget());
           params.acceptTerminalConfig({
             retireRejectedRestart: acceptedRestart.retireRejectedRestart,
           });
@@ -1753,12 +1796,33 @@ export function startManagedGatewayConfigReloader(
         } else {
           rollbackSource = await acceptance.publishSource?.();
         }
-        recordRestartTarget();
+        assertCurrent();
+        // Target publication clears the candidate pause. Take conservative debt
+        // synchronously at the same edge so acceptance-window failures cannot strand it.
+        const acceptedTarget = publishAcceptedRestartTarget(createRestartTarget());
+        acceptedTargetOwnership = acceptedTarget.ownership;
+        lateConservativeDebt = acceptedTarget.conservativeDebt;
+        if (lateConservativeDebt && lateConservativeDebt !== acceptedRestart.debt) {
+          await runManagedRestart(
+            lateConservativeDebt.plan,
+            nextConfig,
+            transactionOwnership,
+            sourceConfig,
+            {
+              retainDebtAcrossConfigChanges: lateConservativeDebt.retainDebtAcrossConfigChanges,
+            },
+          );
+        }
+        assertCurrent();
         params.acceptTerminalConfig({
-          retireRejectedRestart: acceptedRestart.retireRejectedRestart,
+          retireRejectedRestart: acceptedRestart.retireRejectedRestart && !lateConservativeDebt,
         });
         return rollbackSource;
       } catch (error) {
+        if (lateConservativeDebt) {
+          restoreConservativeRestartDebt(lateConservativeDebt);
+        }
+        acceptedTargetOwnership?.reject();
         await rollbackSource?.();
         throw error;
       }

@@ -1315,6 +1315,8 @@ describe("gateway hot reload superseded tail recovery", () => {
       expect(hoisted.refreshContextWindowCache).toHaveBeenCalledOnce();
 
       handlers.pauseGatewayRestartForConfigCandidate();
+      const acceptedBeforeTailFailure = handlers.acceptRestartConfig(configC);
+      expect(acceptedBeforeTailFailure.debt).toBeUndefined();
       rejectTail?.(new Error("stale A tail failed"));
       await staleTail;
       await vi.runAllTimersAsync();
@@ -1322,22 +1324,21 @@ describe("gateway hot reload superseded tail recovery", () => {
       expect(requestRecoveryRestart).not.toHaveBeenCalled();
       expect(prepareA).not.toHaveBeenCalled();
 
-      const accepted = handlers.acceptRestartConfig(configC);
-      expect(accepted.debt).toBeDefined();
-      if (!accepted.debt) {
-        throw new Error("expected paused stale-tail recovery debt");
-      }
-      const restart = handlers.requestGatewayRestart(accepted.debt.plan, configC, {
-        retainDebtAcrossConfigChanges: accepted.debt.retainDebtAcrossConfigChanges,
-        debtConfig: configC,
-        prepareRuntimeConfig: prepareC,
-      });
-      restart.settle("committed");
-      handlers.recordAcceptedRestartTarget({
+      const accepted = handlers.publishAcceptedRestartTarget({
         runtimeConfig: configC,
         sourceConfig: configC,
         prepareRuntimeConfig: prepareC,
       });
+      expect(accepted.conservativeDebt).toBeDefined();
+      if (!accepted.conservativeDebt) {
+        throw new Error("expected paused stale-tail recovery debt");
+      }
+      const restart = handlers.requestGatewayRestart(accepted.conservativeDebt.plan, configC, {
+        retainDebtAcrossConfigChanges: accepted.conservativeDebt.retainDebtAcrossConfigChanges,
+        debtConfig: configC,
+        prepareRuntimeConfig: prepareC,
+      });
+      restart.settle("committed");
       await vi.runAllTimersAsync();
 
       expect(requestRecoveryRestart).toHaveBeenCalledOnce();
