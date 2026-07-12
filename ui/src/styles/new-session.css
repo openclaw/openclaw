@@ -253,10 +253,9 @@ openclaw-new-session-page {
 }
 
 /* Phones (and short landscape): match the chat thread's mobile inset and
-   condense the target rows — Where and Worktree share one line while the
-   folder picker takes its own full-width line below, so long paths stay
-   readable. The folder chip's visual order moves after the toggle; DOM
-   (and thus reading/tab) order is unchanged. */
+   condense the target rows in DOM order — the folder chip flexes to fill the
+   first line next to Where (its 140px floor pushes Worktree to the next
+   line), so visual, reading, and tab order stay aligned. */
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .new-session-page__scroll {
     padding: 12px 8px;
@@ -267,8 +266,8 @@ openclaw-new-session-page {
   }
 
   .new-session-page__target--folder {
-    order: 2;
-    flex: 1 1 100%;
+    flex: 1 1 140px;
+    min-width: 140px;
   }
 
   .new-session-page__target--folder input {
