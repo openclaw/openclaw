@@ -1,6 +1,6 @@
 // Google Meet tests cover Calendar API request behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { listGoogleMeetCalendarEvents } from "./calendar.js";
+import { extractGoogleMeetUriFromCalendarEvent, listGoogleMeetCalendarEvents } from "./calendar.js";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -47,5 +47,77 @@ describe("Google Calendar requests", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(signal?.aborted).toBe(true);
     await rejection;
+  });
+});
+
+describe("Google Meet calendar URL extraction", () => {
+  it("requires hangout links to match the runtime Meet URL contract", () => {
+    expect(
+      extractGoogleMeetUriFromCalendarEvent({
+        hangoutLink: "http://meet.google.com/abc-defg-hij",
+      }),
+    ).toBeUndefined();
+    expect(
+      extractGoogleMeetUriFromCalendarEvent({
+        hangoutLink: "https://meet.google.com/not-a-code",
+      }),
+    ).toBeUndefined();
+    expect(
+      extractGoogleMeetUriFromCalendarEvent({
+        hangoutLink: "https://meet.google.com/lookup/classroom-alias",
+      }),
+    ).toBeUndefined();
+    expect(
+      extractGoogleMeetUriFromCalendarEvent({
+        hangoutLink: "https://meet.google.com/abc-defg-hij?authuser=0",
+      }),
+    ).toBe("https://meet.google.com/abc-defg-hij?authuser=0");
+  });
+
+  it("ignores malformed conference entrypoints before selecting a valid one", () => {
+    expect(
+      extractGoogleMeetUriFromCalendarEvent({
+        conferenceData: {
+          entryPoints: [
+            {
+              entryPointType: "video",
+              uri: "http://meet.google.com/abc-defg-hij",
+            },
+            {
+              entryPointType: "video",
+              uri: "https://meet.google.com/abc-defg-hij",
+            },
+          ],
+        },
+      }),
+    ).toBe("https://meet.google.com/abc-defg-hij");
+  });
+
+  it("filters Meet-like links in calendar text through the same URL contract", () => {
+    expect(
+      extractGoogleMeetUriFromCalendarEvent({
+        location: "Join https://meet.google.com/not-a-code",
+      }),
+    ).toBeUndefined();
+    expect(
+      extractGoogleMeetUriFromCalendarEvent({
+        location: "Join https://meet.google.com/abc-defg-hijk",
+      }),
+    ).toBeUndefined();
+    expect(
+      extractGoogleMeetUriFromCalendarEvent({
+        location: "Join https://meet.google.com/abc-defg-hij-notes",
+      }),
+    ).toBeUndefined();
+    expect(
+      extractGoogleMeetUriFromCalendarEvent({
+        description: "Join https://meet.google.com/abc-defg-hij.",
+      }),
+    ).toBe("https://meet.google.com/abc-defg-hij");
+    expect(
+      extractGoogleMeetUriFromCalendarEvent({
+        description: "Join https://meet.google.com/abc-defg-hij?authuser=0.",
+      }),
+    ).toBe("https://meet.google.com/abc-defg-hij?authuser=0");
   });
 });

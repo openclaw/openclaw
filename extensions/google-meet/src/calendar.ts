@@ -66,38 +66,66 @@ function appendQuery(url: string, query: Record<string, string | number | boolea
   return parsed.toString();
 }
 
-function isGoogleMeetUri(value: string | undefined): value is string {
+function normalizeGoogleMeetCalendarUri(value: string | undefined): string | undefined {
   if (!value?.trim()) {
-    return false;
+    return undefined;
   }
+  let url: URL;
   try {
-    return new URL(value).hostname === GOOGLE_MEET_URL_HOST;
+    url = new URL(value.trim());
   } catch {
-    return false;
+    return undefined;
   }
+  if (url.protocol !== "https:" || url.hostname.toLowerCase() !== GOOGLE_MEET_URL_HOST) {
+    return undefined;
+  }
+  if (!/^\/[a-z]{3}-[a-z]{4}-[a-z]{3}(?:$|[/?#])/i.test(url.pathname)) {
+    return undefined;
+  }
+  return url.toString();
 }
 
 function extractGoogleMeetUriFromText(value: string | undefined): string | undefined {
-  const match = value?.match(/https:\/\/meet\.google\.com\/[a-z0-9-]+/i);
-  return match?.[0];
+  const match = value?.match(
+    /https:\/\/meet\.google\.com\/[a-z]{3}-[a-z]{4}-[a-z]{3}(?![a-z0-9-])(?:[/?#][^\s<>"')\]]*)?/i,
+  );
+  return normalizeGoogleMeetCalendarUri(match?.[0]?.replace(/[.,;:!]+$/, ""));
+}
+
+function findFirstGoogleMeetCalendarUri(
+  entryPoints: GoogleCalendarConferenceEntryPoint[],
+  predicate: (entry: GoogleCalendarConferenceEntryPoint) => boolean = () => true,
+): string | undefined {
+  for (const entry of entryPoints) {
+    if (!predicate(entry)) {
+      continue;
+    }
+    const uri = normalizeGoogleMeetCalendarUri(entry.uri);
+    if (uri) {
+      return uri;
+    }
+  }
+  return undefined;
 }
 
 export function extractGoogleMeetUriFromCalendarEvent(
   event: GoogleMeetCalendarEvent,
 ): string | undefined {
-  if (isGoogleMeetUri(event.hangoutLink)) {
-    return event.hangoutLink;
+  const hangoutLink = normalizeGoogleMeetCalendarUri(event.hangoutLink);
+  if (hangoutLink) {
+    return hangoutLink;
   }
   const entryPoints = event.conferenceData?.entryPoints ?? [];
-  const videoEntry = entryPoints.find(
-    (entry) => entry.entryPointType === "video" && isGoogleMeetUri(entry.uri),
+  const videoEntryUri = findFirstGoogleMeetCalendarUri(
+    entryPoints,
+    (entry) => entry.entryPointType === "video",
   );
-  if (videoEntry?.uri) {
-    return videoEntry.uri;
+  if (videoEntryUri) {
+    return videoEntryUri;
   }
-  const meetEntry = entryPoints.find((entry) => isGoogleMeetUri(entry.uri));
-  if (meetEntry?.uri) {
-    return meetEntry.uri;
+  const meetEntryUri = findFirstGoogleMeetCalendarUri(entryPoints);
+  if (meetEntryUri) {
+    return meetEntryUri;
   }
   return (
     extractGoogleMeetUriFromText(event.location) ?? extractGoogleMeetUriFromText(event.description)
