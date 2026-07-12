@@ -33,10 +33,10 @@ class NativeStringsTest {
   }
 
   @Test
-  fun configurationLocaleReplacesTheInAppOverride() {
+  fun configurationLocaleUpdatesSystemMode() {
     val app = RuntimeEnvironment.getApplication()
     NativeStringResources.install(app)
-    NativeStringResources.setApplicationLocales(LocaleListCompat.forLanguageTags("en"))
+    NativeStringResources.setApplicationLocales(LocaleListCompat.getEmptyLocaleList())
     assertEquals("Mic off", nativeString("Mic off"))
 
     val configuration = Configuration(app.resources.configuration)
@@ -44,6 +44,19 @@ class NativeStringsTest {
     NativeStringResources.setConfigurationLocales(configuration)
 
     assertEquals("Micro désactivé", nativeString("Mic off"))
+  }
+
+  @Test
+  fun configurationLocaleDoesNotReplacePinnedAppLocale() {
+    val app = RuntimeEnvironment.getApplication()
+    NativeStringResources.install(app)
+    NativeStringResources.setApplicationLocales(LocaleListCompat.forLanguageTags("en"))
+
+    val configuration = Configuration(app.resources.configuration)
+    ConfigurationCompat.setLocales(configuration, LocaleListCompat.forLanguageTags("fr"))
+    NativeStringResources.setConfigurationLocales(configuration)
+
+    assertEquals("Mic off", nativeString("Mic off"))
   }
 
   @Test

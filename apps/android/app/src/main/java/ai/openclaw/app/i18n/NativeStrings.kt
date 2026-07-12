@@ -134,6 +134,7 @@ internal object NativeStringResources {
 
   @Synchronized
   fun setConfigurationLocales(configuration: Configuration) {
+    if (applicationLocales?.isEmpty == false) return
     applicationLocales = ConfigurationCompat.getLocales(configuration)
     localizedContext = null
   }
