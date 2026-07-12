@@ -504,6 +504,37 @@ describe("plugin-sdk root alias", () => {
     expect(aliasMap["@openclaw/llm-core"]).toBe(sourceLlmCorePath);
   });
 
+  it("keeps AI runtime transitive package imports on the source graph", () => {
+    const packageRoot = path.dirname(path.dirname(path.dirname(rootAliasPath)));
+    const sourcePaths = {
+      aiRetryAfter: path.join(packageRoot, "packages", "ai", "src", "internal", "retry-after.ts"),
+      aiRuntime: path.join(packageRoot, "packages", "ai", "src", "internal", "runtime.ts"),
+      codeSpans: path.join(packageRoot, "packages", "markdown-core", "src", "code-spans.ts"),
+      fences: path.join(packageRoot, "packages", "markdown-core", "src", "fences.ts"),
+      numberCoercion: path.join(
+        packageRoot,
+        "packages",
+        "normalization-core",
+        "src",
+        "number-coercion.ts",
+      ),
+    };
+    const lazyModule = loadRootAliasWithStubs({
+      existingPaths: Object.values(sourcePaths),
+      monolithicExports: { slowHelper: (): string => "loaded" },
+    });
+
+    expect((lazyModule.moduleExports.slowHelper as () => string)()).toBe("loaded");
+    const aliasMap = (lazyModule.createJitiOptions.at(-1)?.alias ?? {}) as Record<string, string>;
+    expect(aliasMap["@openclaw/ai/internal/retry-after"]).toBe(sourcePaths.aiRetryAfter);
+    expect(aliasMap["@openclaw/ai/internal/runtime"]).toBe(sourcePaths.aiRuntime);
+    expect(aliasMap["@openclaw/markdown-core/code-spans"]).toBe(sourcePaths.codeSpans);
+    expect(aliasMap["@openclaw/markdown-core/fences"]).toBe(sourcePaths.fences);
+    expect(aliasMap["@openclaw/normalization-core/number-coercion"]).toBe(
+      sourcePaths.numberCoercion,
+    );
+  });
+
   it("keeps bootstrap plugin-sdk aliases deterministic and ignores unsafe subpaths", () => {
     const lazyModule = loadRootAliasWithStubs({
       distExists: true,
@@ -533,6 +564,34 @@ describe("plugin-sdk root alias", () => {
       "@openclaw/llm-core/event-stream",
       "@openclaw/llm-core/types",
       "@openclaw/llm-core/validation",
+      "@openclaw/ai",
+      "@openclaw/ai/providers",
+      "@openclaw/ai/diagnostics",
+      "@openclaw/ai/event-stream",
+      "@openclaw/ai/types",
+      "@openclaw/ai/validation",
+      "@openclaw/ai/internal/anthropic",
+      "@openclaw/ai/internal/openai",
+      "@openclaw/ai/internal/retry-after",
+      "@openclaw/ai/internal/runtime",
+      "@openclaw/ai/internal/shared",
+      "@openclaw/markdown-core",
+      "@openclaw/markdown-core/code-spans",
+      "@openclaw/markdown-core/fences",
+      "@openclaw/markdown-core/frontmatter",
+      "@openclaw/markdown-core/ir",
+      "@openclaw/markdown-core/render",
+      "@openclaw/markdown-core/render-aware-chunking",
+      "@openclaw/markdown-core/tables",
+      "@openclaw/markdown-core/types",
+      "@openclaw/normalization-core",
+      "@openclaw/normalization-core/boolean-coercion",
+      "@openclaw/normalization-core/error-coercion",
+      "@openclaw/normalization-core/number-coercion",
+      "@openclaw/normalization-core/record-coerce",
+      "@openclaw/normalization-core/string-coerce",
+      "@openclaw/normalization-core/string-normalization",
+      "@openclaw/normalization-core/utf16-slice",
       "openclaw/plugin-sdk",
       "@openclaw/plugin-sdk",
     ]);

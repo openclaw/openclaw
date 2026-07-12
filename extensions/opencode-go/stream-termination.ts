@@ -7,7 +7,7 @@ import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-ent
 
 type ProviderStreamFn = NonNullable<ProviderWrapStreamFnContext["streamFn"]>;
 
-export interface OpencodeGoStalledStreamWrapperOptions {
+interface OpencodeGoStalledStreamWrapperOptions {
   /**
    * Provider id this wrapper applies to. Calls whose model.provider does not
    * match are forwarded untouched so the wrapper stays provider-scoped.

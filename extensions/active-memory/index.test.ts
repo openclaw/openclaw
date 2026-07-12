@@ -8,12 +8,17 @@ import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import plugin, { testing } from "./index.js";
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
+
+// Match only lone surrogates so valid supplementary-plane characters remain allowed.
+const UNPAIRED_SURROGATE_RE =
+  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
 async function expectPathMissing(targetPath: string): Promise<void> {
   try {
@@ -61,6 +66,16 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
 });
 
 describe("active-memory plugin", () => {
+  it("keeps previous-message query context UTF-16 well-formed", () => {
+    const query = testing.buildSearchQuery({
+      latestUserMessage: "why?",
+      recentTurns: [{ role: "user", text: `${"x".repeat(119)}🚀tail` }],
+    });
+
+    expect(query).toBe(`${"x".repeat(119)} why?`);
+    expect(query).not.toMatch(UNPAIRED_SURROGATE_RE);
+  });
+
   const hooks: Record<string, Function> = {};
   const hookOptions: Record<string, Record<string, unknown> | undefined> = {};
   const registeredCommands: Record<string, any> = {};
@@ -119,7 +134,7 @@ describe("active-memory plugin", () => {
       agent: {
         runEmbeddedAgent,
         session: {
-          resolveStorePath: vi.fn(() => "/tmp/openclaw-session-store.json"),
+          resolveStorePath: vi.fn(() => path.join(stateDir, "sessions.json")),
           loadSessionStore: vi.fn(() => hoisted.sessionStore),
           saveSessionStore: vi.fn(async () => {}),
           getSessionEntry: vi.fn(
@@ -139,7 +154,7 @@ describe("active-memory plugin", () => {
             }) => {
               let result: Record<string, unknown> | null = null;
               await hoisted.updateSessionStore(
-                "/tmp/openclaw-session-store.json",
+                path.join(stateDir, "sessions.json"),
                 (store: Record<string, Record<string, unknown>>) => {
                   const existing = store[params.sessionKey] ?? params.fallbackEntry;
                   if (!existing) {
@@ -290,6 +305,27 @@ describe("active-memory plugin", () => {
       (result as { prependContext?: unknown } | undefined)?.prependContext,
       "expected prependContext",
     );
+  const runRecallWithSummary = async (params: {
+    prompt: string;
+    summary: string;
+    memoryText?: string;
+  }): Promise<string> => {
+    runEmbeddedAgent.mockImplementationOnce(async (runParams: { sessionFile: string }) => {
+      await writeUsableMemoryTranscript(runParams.sessionFile, params.memoryText ?? params.summary);
+      return { payloads: [{ text: params.summary }] };
+    });
+    return requirePrependContext(
+      await hooks.before_prompt_build(
+        { prompt: params.prompt, messages: [] },
+        {
+          agentId: "main",
+          trigger: "user",
+          sessionKey: "agent:main:main",
+          messageProvider: "webchat",
+        },
+      ),
+    );
+  };
   const expectPrependContextContains = (result: unknown, text: string) => {
     expect(requirePrependContext(result)).toContain(text);
   };
@@ -842,6 +878,45 @@ describe("active-memory plugin", () => {
     expect(result).toBeUndefined();
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
+
+  it.each([
+    {
+      label: "a reserved Codex harness key",
+      sessionKey: "agent:main:harness:codex:supervision:thread-1",
+      entry: { sessionId: "codex-1", updatedAt: 1 },
+    },
+    {
+      label: "a model-locked session",
+      sessionKey: "agent:main:locked-codex-session",
+      entry: {
+        sessionId: "codex-2",
+        updatedAt: 1,
+        modelSelectionLocked: true,
+        agentHarnessId: "codex",
+      },
+    },
+  ])(
+    "skips recall before state or model side effects for $label",
+    async ({ sessionKey, entry }) => {
+      hoisted.sessionStore[sessionKey] = entry;
+      const openKeyedStore = vi.spyOn(api.runtime.state, "openKeyedStore");
+
+      const result = await hooks.before_prompt_build(
+        { prompt: "continue this native Codex task", messages: [] },
+        {
+          agentId: "main",
+          trigger: "user",
+          sessionKey,
+          messageProvider: "webchat",
+        },
+      );
+
+      expect(result).toBeUndefined();
+      expect(openKeyedStore).not.toHaveBeenCalled();
+      expect(hoisted.updateSessionStore).not.toHaveBeenCalled();
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not rewrite session state for skipped turns with no active-memory entry to clear", async () => {
     const result = await hooks.before_prompt_build(
@@ -2839,10 +2914,10 @@ describe("active-memory plugin", () => {
   it("returns partial transcript text on timeout when the subagent has already written assistant output", async () => {
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
-    testing.setTimeoutPartialDataGraceMsForTests(200);
+    testing.setTimeoutPartialDataGraceMsForTests(50);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 1_000,
+      timeoutMs: 100,
       maxSummaryChars: 40,
       persistTranscripts: true,
       logging: true,
@@ -2941,6 +3016,72 @@ describe("active-memory plugin", () => {
     expectLinesToContain(
       lines,
       "🔎 Active Memory Debug: timeout_partial: 32 chars recovered (not persisted)",
+    );
+  });
+
+  it("returns partial transcript text on timeout from SQLite runtime transcript rows", async () => {
+    testing.setMinimumTimeoutMsForTests(1);
+    testing.setSetupGraceTimeoutMsForTests(0);
+    testing.setTimeoutPartialDataGraceMsForTests(100);
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 250,
+      maxSummaryChars: 80,
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const sessionKey = "agent:main:timeout-partial-sqlite-transcript";
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: "s-timeout-partial-sqlite-transcript",
+      updatedAt: 0,
+    };
+    let artifactSessionFile = "";
+    runEmbeddedAgent.mockImplementationOnce(
+      async (params: {
+        abortSignal?: AbortSignal;
+        sessionFile?: string;
+        sessionTarget?: {
+          agentId: string;
+          sessionId: string;
+          sessionKey: string;
+          storePath?: string;
+        };
+      }) => {
+        artifactSessionFile = params.sessionFile ?? "";
+        const target = params.sessionTarget;
+        if (!target) {
+          throw new Error("expected active-memory runtime session target");
+        }
+        await appendSessionTranscriptMessageByIdentity({
+          ...target,
+          message: {
+            role: "assistant",
+            content: "sqlite partial recall summary",
+          },
+        });
+        await waitForAbort(params.abortSignal);
+      },
+    );
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order? timeout partial sqlite", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+
+    expectPrependContextContains(result, "sqlite partial recall summary");
+    if (artifactSessionFile) {
+      await expectPathMissing(artifactSessionFile);
+    }
+    const runParams = lastEmbeddedRunParams();
+    expect(runParams.sessionTarget).toMatchObject({
+      agentId: "main",
+      sessionKey: expect.stringMatching(/^agent:main:timeout-partial-sqlite-transcript:/),
+    });
+    const lines = getActiveMemoryLines(sessionKey);
+    expectLinesToContain(lines, "🧩 Active Memory: status=timeout_partial");
+    expectLinesToContain(
+      lines,
+      "🔎 Active Memory Debug: timeout_partial: 29 chars recovered (not persisted)",
     );
   });
 
@@ -3164,6 +3305,47 @@ describe("active-memory plugin", () => {
     expect(partialText.length).toBeLessThanOrEqual(128);
     expect(partialText).toContain("alpha beta gamma");
     expect(readFileSpy).not.toHaveBeenCalled();
+  });
+
+  it("keeps partial assistant transcript caps UTF-16 safe", async () => {
+    const sessionFile = path.join(stateDir, "surrogate-timeout-transcript.jsonl");
+    await writeTranscriptJsonl(sessionFile, [
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          content: `${"a".repeat(38)}🎉TAILWORD`,
+        },
+      },
+    ]);
+
+    const result = await testing.readPartialAssistantText(sessionFile, {
+      maxChars: 39,
+      maxLines: 10,
+    });
+
+    expect(result).toBe("a".repeat(38));
+  });
+
+  it("keeps joined partial assistant transcript caps UTF-16 safe", async () => {
+    const sessionFile = path.join(stateDir, "joined-surrogate-timeout-transcript.jsonl");
+    await writeTranscriptJsonl(sessionFile, [
+      {
+        type: "message",
+        message: { role: "assistant", content: "a".repeat(37) },
+      },
+      {
+        type: "message",
+        message: { role: "assistant", content: "🎉TAILWORD" },
+      },
+    ]);
+
+    const result = await testing.readPartialAssistantText(sessionFile, {
+      maxChars: 39,
+      maxLines: 10,
+    });
+
+    expect(result).toBe("a".repeat(37));
   });
 
   it("skips malformed JSONL lines when reading partial assistant transcripts", async () => {
@@ -4590,6 +4772,71 @@ describe("active-memory plugin", () => {
     expectLinesToContain(getActiveMemoryLines(sessionKey), "status=unavailable");
   });
 
+  it("rejects completed output when a rotated SQLite transcript reports unavailable memory", async () => {
+    testing.setMinimumTimeoutMsForTests(1);
+    testing.setSetupGraceTimeoutMsForTests(0);
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 1_000,
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const sessionKey = "agent:main:rotated-sqlite-memory-unavailable";
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: "s-rotated-sqlite-memory-unavailable",
+      updatedAt: 0,
+    };
+    runEmbeddedAgent.mockImplementationOnce(
+      async (params: {
+        sessionTarget?: {
+          agentId: string;
+          sessionId: string;
+          sessionKey: string;
+          storePath?: string;
+        };
+      }) => {
+        const target = params.sessionTarget;
+        if (!target?.storePath) {
+          throw new Error("expected active-memory SQLite runtime target");
+        }
+        const rotatedTarget = {
+          ...target,
+          sessionId: "s-rotated-sqlite-memory-unavailable-next",
+        };
+        await appendSessionTranscriptMessageByIdentity({
+          ...rotatedTarget,
+          message: {
+            role: "toolResult",
+            toolCallId: "memory-search-1",
+            toolName: "memory_search",
+            isError: true,
+            content: [],
+            details: {
+              disabled: true,
+              warning: "Memory search is disabled for this session.",
+            },
+          },
+        });
+        return {
+          payloads: [{ text: "This arbitrary output must not become recalled context." }],
+          meta: {
+            agentMeta: {
+              sessionFile: `sqlite:${rotatedTarget.agentId}:${rotatedTarget.sessionId}:${rotatedTarget.storePath}`,
+            },
+          },
+        };
+      },
+    );
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what food do i usually order? rotated sqlite unavailable", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+
+    expect(result).toBeUndefined();
+    expectLinesToContain(getActiveMemoryLines(sessionKey), "status=unavailable");
+  });
+
   it("fast-fails configured-provider-missing memory_search results without injecting provider errors", async () => {
     const CONFIGURED_TIMEOUT_MS = 1_000;
     testing.setMinimumTimeoutMsForTests(1);
@@ -4781,13 +5028,14 @@ describe("active-memory plugin", () => {
     ).not.toEqual([]);
   });
 
-  it("caps active-memory log field lengths", async () => {
+  it("caps active-memory log field lengths without splitting surrogate pairs", async () => {
     api.pluginConfig = {
       agents: ["main"],
       logging: true,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
-    const hugeSession = `agent:main:${"x".repeat(500)}`;
+    const sessionPrefix = `agent:main:${"x".repeat(288)}`;
+    const hugeSession = `${sessionPrefix}😀tail`;
 
     await hooks.before_prompt_build(
       { prompt: "what wings should i order? long log value", messages: [] },
@@ -4805,7 +5053,8 @@ describe("active-memory plugin", () => {
     const startLine = infoLines.find((line: string) => line.includes(" start timeoutMs="));
     const line = requireNonEmptyString(startLine, "active memory start log line missing");
     expect(line.length).toBeLessThan(500);
-    expect(line).toContain("...");
+    expect(line).toContain(`session=${sessionPrefix}...`);
+    expect(line).not.toMatch(/[\uD800-\uDFFF]/u);
   });
 
   it("uses a canonical agent session key when only sessionId is available", async () => {
@@ -5062,6 +5311,73 @@ describe("active-memory plugin", () => {
     expect(prompt).toContain("Bounded memory search query:\nwhat should i grab on the way?");
     expect(prompt).toContain("Conversation context:\nwhat should i grab on the way?");
     expect(prompt).not.toContain("Recent conversation tail:");
+  });
+
+  it("keeps recent conversation context UTF-16 well-formed", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      queryMode: "recent",
+      recentUserTurns: 1,
+      recentAssistantTurns: 1,
+      recentUserChars: 40,
+      recentAssistantChars: 40,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+
+    await hooks.before_prompt_build(
+      {
+        prompt: "what now?",
+        messages: [
+          { role: "user", content: `${"u".repeat(39)}🚀 user tail` },
+          { role: "assistant", content: `${"a".repeat(39)}🚀 assistant tail` },
+        ],
+      },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    const prompt = lastEmbeddedPrompt();
+    expect(prompt).toContain(
+      [
+        "Conversation context:",
+        "Recent conversation tail:",
+        `user: ${"u".repeat(39)}`,
+        `assistant: ${"a".repeat(39)}`,
+        "",
+        "Latest user message:",
+        "what now?",
+      ].join("\n"),
+    );
+    expect(prompt).not.toMatch(UNPAIRED_SURROGATE_RE);
+  });
+
+  it("keeps a whole code point when the bounded search query crosses an emoji", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      queryMode: "message",
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const prefix = "a".repeat(479);
+
+    await hooks.before_prompt_build(
+      {
+        prompt: `${prefix}😀tail`,
+        messages: [],
+      },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    const query = lastEmbeddedPrompt().match(/Bounded memory search query:\n([^\n]*)/u)?.[1];
+    expect(query).toBe(prefix);
   });
 
   it("sends a bounded latest-message query instead of channel metadata to memory search", async () => {
@@ -5335,32 +5651,43 @@ describe("active-memory plugin", () => {
       maxSummaryChars: 40,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
-    runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
-      await writeUsableMemoryTranscript(params.sessionFile, "alpha beta gamma");
-      return {
-        payloads: [
-          {
-            text: "alpha beta gamma delta epsilon zetalongword",
-          },
-        ],
-      };
+    const prependContext = await runRecallWithSummary({
+      prompt: "what wings should i order? word-boundary-truncation-40",
+      summary: "alpha beta gamma delta epsilon zetalongword",
+      memoryText: "alpha beta gamma",
     });
-
-    const result = await hooks.before_prompt_build(
-      { prompt: "what wings should i order? word-boundary-truncation-40", messages: [] },
-      {
-        agentId: "main",
-        trigger: "user",
-        sessionKey: "agent:main:main",
-        messageProvider: "webchat",
-      },
-    );
-
-    const prependContext = requirePrependContext(result);
     expect(prependContext).toContain("alpha beta gamma");
     expect(prependContext).toContain("alpha beta gamma delta epsilon…");
     expect(prependContext).not.toContain("zetalo");
     expect(prependContext).not.toContain("zetalongword");
+  });
+
+  it.each([
+    {
+      name: "split surrogate",
+      summary: `${"a".repeat(38)}🎉TAILWORD`,
+      expected: `${"a".repeat(38)}…`,
+    },
+    {
+      name: "whitespace before a split surrogate",
+      summary: `alpha beta ${"c".repeat(26)} 🎉TAILWORD`,
+      expected: `alpha beta ${"c".repeat(26)}…`,
+    },
+  ])("keeps $name truncation UTF-16 safe", async ({ name, summary, expected }) => {
+    api.pluginConfig = {
+      agents: ["main"],
+      maxSummaryChars: 40,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+
+    const prependContext = await runRecallWithSummary({
+      prompt: `recall summary boundary: ${name}`,
+      summary,
+      memoryText: expected,
+    });
+
+    expect(prependContext).toContain(expected);
+    expect(prependContext).not.toContain("TAILWORD");
   });
 
   it("asks recall subagents to mark mutable operational facts stale unless source status is current", async () => {

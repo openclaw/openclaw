@@ -74,6 +74,11 @@ describe("parsePageRange", () => {
     expect(() => parsePageRange("abc", 20)).toThrow("Invalid page number");
   });
 
+  it("throws on fractional page numbers", () => {
+    expect(() => parsePageRange("1.5", 20)).toThrow('Invalid page number: "1.5"');
+    expect(() => parsePageRange("1,2.5", 20)).toThrow('Invalid page number: "2.5"');
+  });
+
   it("throws on invalid range (start > end)", () => {
     expect(() => parsePageRange("5-3", 20)).toThrow("Invalid page range");
   });

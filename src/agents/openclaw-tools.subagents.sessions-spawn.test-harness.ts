@@ -227,7 +227,6 @@ export async function getSessionsSpawnTool(opts: CreateOpenClawToolsOpts) {
         maxTokens: 100_000,
       },
     }),
-    updateSessionStore: async (_storePath, mutator) => mutator({}),
   });
   cachedSubagentRegistryTesting.setDepsForTest({
     callGateway: (optsUnknown) => hoisted.callGatewayMock(optsUnknown),
@@ -395,6 +394,7 @@ vi.mock("../tasks/detached-task-runtime.js", () => ({
   completeTaskRunByRunId: vi.fn(),
   createRunningTaskRun: vi.fn(),
   failTaskRunByRunId: vi.fn(),
+  findDetachedTaskRun: vi.fn(() => ({ lookup: "available" as const })),
   setDetachedTaskDeliveryStatusByRunId: vi.fn(),
 }));
 

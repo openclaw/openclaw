@@ -125,6 +125,104 @@
     "type": "function"
   },
   {
+    "description": "List agent ids allowed for `sessions_spawn runtime=\"subagent\"`.",
+    "inputSchema": {
+      "properties": {},
+      "type": "object"
+    },
+    "name": "agents_list",
+    "type": "function"
+  },
+  {
+    "description": "Spawn clean child session; default `runtime=\"subagent\"`. `mode=\"run\"` one-shot background work. Subagents inherit parent workspace. Native subagents get task in first visible `[Subagent Task]` message. Native only: `context=\"fork\"` only when child needs current transcript; else omit or `isolated`. Use for fresh child-session work. Delegate sidecar/parallel tasks: batch file reads, multi-step searches, data collection. Avoid delegating quick lookups or single-file reads unless policy prefers delegation. After spawning, do non-overlapping work while run-mode results return.",
+    "inputSchema": {
+      "properties": {
+        "agentId": {
+          "type": "string"
+        },
+        "attachAs": {
+          "properties": {
+            "mountPath": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "attachments": {
+          "items": {
+            "properties": {
+              "content": {
+                "type": "string"
+              },
+              "encoding": {
+                "enum": ["utf8", "base64"],
+                "type": "string"
+              },
+              "mimeType": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": ["name", "content"],
+            "type": "object"
+          },
+          "maxItems": 50,
+          "type": "array"
+        },
+        "cleanup": {
+          "enum": ["delete", "keep"],
+          "type": "string"
+        },
+        "context": {
+          "description": "Native context. Omit/\"isolated\" for clean child; \"fork\" only when child needs requester transcript.",
+          "enum": ["isolated", "fork"],
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "lightContext": {
+          "description": "Light bootstrap context; runtime=\"subagent\" only.",
+          "type": "boolean"
+        },
+        "mode": {
+          "enum": ["run"],
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "runtime": {
+          "enum": ["subagent"],
+          "type": "string"
+        },
+        "sandbox": {
+          "enum": ["inherit", "require"],
+          "type": "string"
+        },
+        "task": {
+          "type": "string"
+        },
+        "taskName": {
+          "description": "Stable alias for later targeting; lowercase letters/digits/underscores/hyphens, starts letter.",
+          "type": "string"
+        },
+        "thinking": {
+          "type": "string"
+        }
+      },
+      "required": ["task"],
+      "type": "object"
+    },
+    "name": "sessions_spawn",
+    "type": "function"
+  },
+  {
     "description": "End current turn. Use after spawning subagents; results arrive as next message.",
     "inputSchema": {
       "properties": {
@@ -143,7 +241,7 @@
     "tools": [
       {
         "deferLoading": true,
-        "description": "Discover/control paired nodes: status, describe, pairing, notify, camera/photos/screen/location/notifications/invoke. Use file_fetch for files.",
+        "description": "List paired nodes with status; describe/control a specific node by passing node. Supports pairing, notify, camera/photos/screen/location/notifications/invoke. Use file_fetch for files.",
         "inputSchema": {
           "properties": {
             "action": {
@@ -243,6 +341,7 @@
               "type": "integer"
             },
             "node": {
+              "description": "Node ID, name, or IP. Required for describe and node-targeted actions; use status to discover nodes.",
               "type": "string"
             },
             "notificationAction": {
@@ -293,7 +392,7 @@
       },
       {
         "deferLoading": true,
-        "description": "Manage Gateway cron jobs and wake events: reminders, check-back-later, delayed follow-ups, recurring work. Do not emulate scheduling with exec sleep/process polling.\n\nMain cron => system events for heartbeat. Isolated cron => background task in `openclaw tasks`.\n\nACTIONS:\n- status: scheduler status\n- list: compact job summaries; includeDisabled true includes disabled; use get for full job details; agentId filter auto-filled from session\n- get: one job; needs jobId\n- add: create job; needs job object\n- update: patch job; needs jobId + patch\n- remove: delete job; needs jobId\n- run: run only if due by default; needs jobId; pass runMode=\"force\" to trigger now\n- runs: run history; needs jobId\n- wake: send wake event; needs text, optional mode; defaults the target to the calling session/agent. Pass top-level sessionKey/agentId to wake a different lane owned by the calling agent.\n\nJOB SCHEMA (for add action):\n{\n  \"name\": \"string\",\n  \"schedule\": { ... },      // required\n  \"payload\": { ... },       // required\n  \"delivery\": { ... },      // optional announce for isolated/current/session, webhook for any target\n  \"sessionTarget\": \"main\" | \"isolated\" | \"current\" | \"session:<id>\",\n  \"enabled\": true | false   // default true\n}\n\nSESSION TARGET OPTIONS:\n- \"main\": main session; requires payload.kind=\"systemEvent\"\n- \"isolated\": ephemeral isolated session; requires payload.kind=\"agentTurn\"\n- \"current\": bind current session at creation\n- \"session:<id>\": persistent named session\n\nDEFAULTS:\n- payload.kind=\"systemEvent\" → defaults to \"main\"\n- payload.kind=\"agentTurn\" → defaults to \"isolated\"\nCurrent binding needs sessionTarget=\"current\".\n\nSCHEDULE TYPES (schedule.kind):\n- \"at\": one-shot absolute time\n  { \"kind\": \"at\", \"at\": \"<ISO-8601 timestamp>\" }\n- \"every\": recurring interval\n  { \"kind\": \"every\", \"everyMs\": <ms>, \"anchorMs\": <optional-ms> }\n- \"cron\": expr in supplied timezone, or Gateway host local timezone when tz omitted\n  { \"kind\": \"cron\", \"expr\": \"<cron-expression>\", \"tz\": \"<optional-IANA-timezone>\" }\n  Write expr in local wall-clock time; do not convert the requested local time to UTC first.\n  tz omitted => Gateway host local timezone, not UTC.\n  Example 6pm Shanghai daily: { \"kind\": \"cron\", \"expr\": \"0 18 * * *\", \"tz\": \"Asia/Shanghai\" }\n\nFor \"at\", ISO timestamps without timezone are UTC.\n\nPAYLOAD TYPES (payload.kind):\n- \"systemEvent\": inject text as system event\n  { \"kind\": \"systemEvent\", \"text\": \"<message>\" }\n- \"agentTurn\": run agent with prompt; isolated/current/session only\n  { \"kind\": \"agentTurn\", \"message\": \"<prompt>\", \"model\": \"<optional>\", \"thinking\": \"<optional>\", \"timeoutSeconds\": <optional, 0=no timeout> }\n\nDELIVERY (top-level):\n  { \"mode\": \"none|announce|webhook\", \"channel\": \"<optional>\", \"to\": \"<optional>\", \"threadId\": \"<optional>\", \"bestEffort\": <optional-bool> }\n  - isolated agentTurn default when omitted: \"announce\"\n  - announce: send to chat channel; isolated/current/session only; optional channel/to\n  - threadId: chat thread/topic id\n  - webhook: POST finished-run event to delivery.to URL\n  - Specific chat/recipient: set announce delivery.channel/to; do not call messaging tools inside run.\n\nCRITICAL CONSTRAINTS:\n- sessionTarget=\"main\" REQUIRES payload.kind=\"systemEvent\"\n- sessionTarget=\"isolated\" | \"current\" | \"session:xxx\" REQUIRES payload.kind=\"agentTurn\"\n- Webhook: delivery.mode=\"webhook\" and delivery.to URL.\nDefault: prefer isolated agentTurn jobs unless the user explicitly wants current-session binding.\n\nRESTRICTED CRON RUNS:\n- Some isolated cron runs get narrow self-cleanup grant: status/list self-only, get/runs current job only, mutation only remove current job.\n\nWAKE MODES (for wake action):\n- \"next-heartbeat\" default: wake next heartbeat\n- \"now\": wake immediately\n\nUse jobId canonical; id accepted compat. contextMessages (0-10) adds previous messages as job context.",
+        "description": "Manage Gateway cron jobs and wake events: reminders, check-back-later, delayed follow-ups, recurring work. Do not emulate scheduling with exec sleep/process polling.\n\nMain cron => system events for heartbeat. Isolated cron => background task in `openclaw tasks`.\n\nACTIONS:\n- status: scheduler status\n- list: compact job summaries; includeDisabled true includes disabled; use get for full job details; agentId filter auto-filled from session\n- get: one job; needs jobId\n- add: create job; needs job object\n- update: patch job; needs jobId + patch\n- remove: delete job; needs jobId\n- run: run only if due by default; needs jobId; pass runMode=\"force\" to trigger now\n- runs: run history; needs jobId\n- wake: send wake event; needs text, optional mode; defaults the target to the calling session/agent. Pass top-level sessionKey/agentId to wake a different lane owned by the calling agent.\n\nJOB SCHEMA (for add action):\n{\n  \"name\": \"string\",\n  \"schedule\": { ... },      // required\n  \"trigger\": { \"script\": \"...\", \"once\": false }, // optional condition gate for every/cron\n  \"payload\": { ... },       // required\n  \"delivery\": { ... },      // optional announce for isolated/current/session, webhook for any target\n  \"sessionTarget\": \"main\" | \"isolated\" | \"current\" | \"session:<id>\",\n  \"enabled\": true | false   // default true\n}\n\nSESSION TARGET OPTIONS:\n- \"main\": main session; requires payload.kind=\"systemEvent\"\n- \"isolated\": ephemeral isolated session; requires payload.kind=\"agentTurn\"\n- \"current\": bind current session at creation\n- \"session:<id>\": persistent named session\n\nDEFAULTS:\n- payload.kind=\"systemEvent\" → defaults to \"main\"\n- payload.kind=\"agentTurn\" → defaults to \"isolated\"\nCurrent binding needs sessionTarget=\"current\".\n\nSCHEDULE TYPES (schedule.kind):\n- \"at\": one-shot absolute time\n  { \"kind\": \"at\", \"at\": \"<ISO-8601 timestamp>\" }\n- \"every\": recurring interval\n  { \"kind\": \"every\", \"everyMs\": <ms>, \"anchorMs\": <optional-ms> }\n- \"cron\": expr in supplied timezone, or Gateway host local timezone when tz omitted\n  { \"kind\": \"cron\", \"expr\": \"<cron-expression>\", \"tz\": \"<optional-IANA-timezone>\" }\n  Write expr in local wall-clock time; do not convert the requested local time to UTC first.\n  tz omitted => Gateway host local timezone, not UTC.\n  Example 6pm Shanghai daily: { \"kind\": \"cron\", \"expr\": \"0 18 * * *\", \"tz\": \"Asia/Shanghai\" }\n\nTRIGGER SCRIPTS (every/cron only):\n- Gate: cron.triggers.enabled. Disabled add -> explain; no model-poll fallback.\n- Headless; owner tool allowlist; quiet check uses no model. Prior JSON: frozen trigger.state. Return/json({ fire: boolean, message?: string, state?: JSONValue }); new state only; never mutate old.\n- fire:false: save state; no payload/run history. fire:true: run payload; append message to systemEvent/agentTurn. Fired state saves only after payload success. Check reads; payload acts.\n- Silent watcher: top-level delivery.mode=\"none\". Isolated agentTurn with no delivery => announce; missing route may fail payload.\n- once:true: disable after first successful fired payload. Limits/check: 30s, 5 tool calls, 16KB state.\n- Tools via hidden Code Mode catalog: await tools.call(\"exec\", { command: \"...\" }); unclear id -> search/describe.\n\nFor \"at\", ISO timestamps without timezone are UTC.\n\nPAYLOAD TYPES (payload.kind):\n- \"systemEvent\": inject text as system event\n  { \"kind\": \"systemEvent\", \"text\": \"<message>\" }\n- \"agentTurn\": run agent with prompt; isolated/current/session only\n  { \"kind\": \"agentTurn\", \"message\": \"<prompt>\", \"model\": \"<optional>\", \"thinking\": \"<optional>\", \"timeoutSeconds\": <optional, 0=no timeout> }\n\nDELIVERY (top-level):\n  { \"mode\": \"none|announce|webhook\", \"channel\": \"<optional>\", \"to\": \"<optional>\", \"threadId\": \"<optional>\", \"bestEffort\": <optional-bool> }\n  - isolated agentTurn default when omitted: \"announce\"\n  - announce: send to chat channel; isolated/current/session only; optional channel/to\n  - threadId: chat thread/topic id\n  - webhook: POST finished-run event to delivery.to URL\n  - Specific chat/recipient: set announce delivery.channel/to; do not call messaging tools inside run.\n\nCRITICAL CONSTRAINTS:\n- sessionTarget=\"main\" REQUIRES payload.kind=\"systemEvent\"\n- sessionTarget=\"isolated\" | \"current\" | \"session:xxx\" REQUIRES payload.kind=\"agentTurn\"\n- Webhook: delivery.mode=\"webhook\" and delivery.to URL.\nDefault: prefer isolated agentTurn jobs unless the user explicitly wants current-session binding.\n\nRESTRICTED CRON RUNS:\n- Some isolated cron runs get narrow self-cleanup grant: status/list self-only, get/runs current job only, mutation only remove current job.\n\nWAKE MODES (for wake action):\n- \"next-heartbeat\" default: wake next heartbeat\n- \"now\": wake immediately\n\nUse jobId canonical; id accepted compat. contextMessages (0-10) adds previous messages as job context.",
         "inputSchema": {
           "additionalProperties": true,
           "properties": {
@@ -335,6 +434,13 @@
                     }
                   ],
                   "description": "Agent id, or null to keep it unset"
+                },
+                "declarationKey": {
+                  "description": "Idempotent declaration identity key",
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "type": "string"
                 },
                 "deleteAfterRun": {
                   "description": "Delete after first run",
@@ -411,6 +517,11 @@
                   "description": "Human description",
                   "type": "string"
                 },
+                "displayName": {
+                  "description": "Human-readable declarative job label",
+                  "maxLength": 200,
+                  "type": "string"
+                },
                 "enabled": {
                   "type": "boolean"
                 },
@@ -453,6 +564,18 @@
                 "name": {
                   "description": "Job name",
                   "type": "string"
+                },
+                "owner": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "agentId": {
+                      "type": "string"
+                    },
+                    "sessionKey": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
                 },
                 "payload": {
                   "additionalProperties": true,
@@ -557,6 +680,21 @@
                 "sessionTarget": {
                   "description": "main | isolated | current | session:<id>",
                   "type": "string"
+                },
+                "trigger": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "once": {
+                      "type": "boolean"
+                    },
+                    "script": {
+                      "maxLength": 65536,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": ["script"],
+                  "type": "object"
                 },
                 "wakeMode": {
                   "description": "Wake timing",
@@ -716,6 +854,18 @@
                 "description": {
                   "type": "string"
                 },
+                "displayName": {
+                  "anyOf": [
+                    {
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Human-readable label; null clears it"
+                },
                 "enabled": {
                   "type": "boolean"
                 },
@@ -766,11 +916,18 @@
                       "type": "boolean"
                     },
                     "fallbacks": {
-                      "description": "Fallback models",
-                      "items": {
-                        "type": "string"
-                      },
-                      "type": "array"
+                      "anyOf": [
+                        {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Fallback models, or null to clear"
                     },
                     "kind": {
                       "description": "Payload kind",
@@ -876,6 +1033,28 @@
                 "sessionTarget": {
                   "description": "Session target",
                   "type": "string"
+                },
+                "trigger": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "once": {
+                          "type": "boolean"
+                        },
+                        "script": {
+                          "maxLength": 65536,
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": ["script"],
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 },
                 "wakeMode": {
                   "enum": ["now", "next-heartbeat"],
@@ -1003,17 +1182,7 @@
       },
       {
         "deferLoading": true,
-        "description": "List agent ids allowed for `sessions_spawn runtime=\"subagent\"`.",
-        "inputSchema": {
-          "properties": {},
-          "type": "object"
-        },
-        "name": "agents_list",
-        "type": "function"
-      },
-      {
-        "deferLoading": true,
-        "description": "List visible sessions; filter by kind, label, agentId, search, activity. Use before sessions_history or sessions_send target selection.",
+        "description": "List visible sessions; filter by kind, label, agentId, search, activity, archive state. Use before sessions_history or sessions_send target selection.",
         "inputSchema": {
           "properties": {
             "activeMinutes": {
@@ -1024,6 +1193,9 @@
               "maxLength": 64,
               "minLength": 1,
               "type": "string"
+            },
+            "archived": {
+              "type": "boolean"
             },
             "includeDerivedTitles": {
               "type": "boolean"
@@ -1119,96 +1291,6 @@
       },
       {
         "deferLoading": true,
-        "description": "Spawn clean child session; default `runtime=\"subagent\"`. `mode=\"run\"` one-shot background work. Subagents inherit parent workspace. Native subagents get task in first visible `[Subagent Task]` message. Native only: `context=\"fork\"` only when child needs current transcript; else omit or `isolated`. Use for fresh child-session work. Delegate sidecar/parallel tasks: batch file reads, multi-step searches, data collection. Avoid delegating quick lookups or single-file reads unless policy prefers delegation. After spawning, do non-overlapping work while run-mode results return.",
-        "inputSchema": {
-          "properties": {
-            "agentId": {
-              "type": "string"
-            },
-            "attachAs": {
-              "properties": {
-                "mountPath": {
-                  "type": "string"
-                }
-              },
-              "type": "object"
-            },
-            "attachments": {
-              "items": {
-                "properties": {
-                  "content": {
-                    "type": "string"
-                  },
-                  "encoding": {
-                    "enum": ["utf8", "base64"],
-                    "type": "string"
-                  },
-                  "mimeType": {
-                    "type": "string"
-                  },
-                  "name": {
-                    "type": "string"
-                  }
-                },
-                "required": ["name", "content"],
-                "type": "object"
-              },
-              "maxItems": 50,
-              "type": "array"
-            },
-            "cleanup": {
-              "enum": ["delete", "keep"],
-              "type": "string"
-            },
-            "context": {
-              "description": "Native context. Omit/\"isolated\" for clean child; \"fork\" only when child needs requester transcript.",
-              "enum": ["isolated", "fork"],
-              "type": "string"
-            },
-            "cwd": {
-              "type": "string"
-            },
-            "label": {
-              "type": "string"
-            },
-            "lightContext": {
-              "description": "Light bootstrap context; runtime=\"subagent\" only.",
-              "type": "boolean"
-            },
-            "mode": {
-              "enum": ["run"],
-              "type": "string"
-            },
-            "model": {
-              "type": "string"
-            },
-            "runtime": {
-              "enum": ["subagent"],
-              "type": "string"
-            },
-            "sandbox": {
-              "enum": ["inherit", "require"],
-              "type": "string"
-            },
-            "task": {
-              "type": "string"
-            },
-            "taskName": {
-              "description": "Stable alias for later targeting; lowercase letters/digits/underscores/hyphens, starts letter.",
-              "type": "string"
-            },
-            "thinking": {
-              "type": "string"
-            }
-          },
-          "required": ["task"],
-          "type": "object"
-        },
-        "name": "sessions_spawn",
-        "type": "function"
-      },
-      {
-        "deferLoading": true,
         "description": "List active and recent subagents for the requester session. If sessions_yield exists, use it for completion; do not poll wait loops.",
         "inputSchema": {
           "properties": {
@@ -1231,6 +1313,10 @@
         "description": "Show /status-like card for current/visible session: model, usage, time, cost, tasks. Use `sessionKey=\"current\"` for current session; UI labels like `openclaw-tui` are not keys. `model` sets session override; `model=default` resets. Use for active model/session config questions.",
         "inputSchema": {
           "properties": {
+            "changesSince": {
+              "minimum": 0,
+              "type": "integer"
+            },
             "model": {
               "type": "string"
             },

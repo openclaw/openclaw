@@ -30,7 +30,7 @@ private val decodedBitmapCache =
 internal fun loadSizedImageAttachment(
   resolver: ContentResolver,
   uri: Uri,
-): PendingImageAttachment {
+): PendingAttachment {
   val fileName = normalizeAttachmentFileName((uri.lastPathSegment ?: "image").substringAfterLast('/'))
   val bitmap = decodeScaledBitmap(resolver, uri, maxDimension = CHAT_ATTACHMENT_MAX_WIDTH)
   if (bitmap == null) {
@@ -67,7 +67,7 @@ internal fun loadSizedImageAttachment(
       },
     )
   val base64 = Base64.encodeToString(encoded.bytes, Base64.NO_WRAP)
-  return PendingImageAttachment(
+  return PendingAttachment(
     id = uri.toString() + "#" + System.currentTimeMillis().toString(),
     fileName = fileName,
     mimeType = "image/jpeg",

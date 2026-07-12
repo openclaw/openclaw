@@ -32,6 +32,8 @@ function writeConfig(kind) {
             },
             browser: {
               enabled: true,
+              noSandbox: true,
+              extraArgs: ["--remote-debugging-address=127.0.0.1", "about:blank"],
               defaultProfile: "docker-cdp",
               ssrfPolicy: { allowedHostnames: ["127.0.0.1"] },
               profiles: {

@@ -131,6 +131,7 @@ describe("buildTelegramMessageContext thread binding override", () => {
     });
 
     expect(ctx?.ctxPayload?.SessionKey).toBe("plugin-binding:openclaw-codex-app-server:session-1");
+    expect(ctx?.ctxPayload?.GroupRequireMention).toBe(true);
   });
 
   it("keeps mention gating for normal channel binding routes", async () => {

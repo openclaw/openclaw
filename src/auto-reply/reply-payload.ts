@@ -66,7 +66,7 @@ export type ReplyPayload = {
 
 // Private device-pair -> Gateway live-display envelope key. Do not re-export
 // through Plugin SDK; this is not a third-party plugin contract.
-export const PAIRING_QR_REPLY_CHANNEL_DATA_KEY = "openclawPairingQr";
+const PAIRING_QR_REPLY_CHANNEL_DATA_KEY = "openclawPairingQr";
 
 export type PairingQrReplyChannelData = {
   setupCode: string;
@@ -215,6 +215,16 @@ export type ReplyPayloadMetadata = {
   assistantMessageIndex?: number;
   /** The runtime owns the transcript decision for this assistant payload. */
   assistantTranscriptOwned?: boolean;
+  /** Foreground freshness prevented a visible final after transcript persistence. */
+  foregroundDeliverySuppression?: {
+    reason: "stale-foreground";
+  };
+  /** Opaque owner for one final-delivery transcript capture on a shared dispatcher. */
+  finalDeliveryCapture?: object;
+  /** Durable pending-final intent represented by this runtime payload. */
+  pendingFinalDeliveryIntentId?: string;
+  /** Restart-safe text this payload contributes to its pending-final intent. */
+  pendingFinalDeliveryRetryText?: string;
   /** replyToId existed before reply threading could inject an implicit target. */
   replyToIdExplicit?: boolean;
   /** Canonical reply policy used by both message-tool dedupe and final delivery routing. */

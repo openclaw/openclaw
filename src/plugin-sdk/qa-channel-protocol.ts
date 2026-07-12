@@ -33,6 +33,11 @@ export type QaBusToolCall = {
   arguments?: Record<string, unknown>;
 };
 
+/** Channel-native command metadata attached to a synthetic inbound message. */
+export type QaBusNativeCommand = {
+  name: string;
+};
+
 /** Stored QA bus message after defaults, reactions, and account ids are normalized. */
 export type QaBusMessage = {
   id: string;
@@ -49,6 +54,7 @@ export type QaBusMessage = {
   deleted?: boolean;
   editedAt?: number;
   attachments?: QaBusAttachment[];
+  nativeCommand?: QaBusNativeCommand;
   toolCalls?: QaBusToolCall[];
   reactions: Array<{
     emoji: string;
@@ -95,6 +101,7 @@ export type QaBusInboundMessageInput = {
   threadTitle?: string;
   replyToId?: string;
   attachments?: QaBusAttachment[];
+  nativeCommand?: QaBusNativeCommand;
   toolCalls?: QaBusToolCall[];
 };
 

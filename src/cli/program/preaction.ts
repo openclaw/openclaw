@@ -53,6 +53,16 @@ function getRootCommand(command: Command): Command {
   return current;
 }
 
+function getActionCommandPath(actionCommand: Command): string[] {
+  const commandPath: string[] = [];
+  let current: Command | null = actionCommand;
+  while (current.parent) {
+    commandPath.unshift(current.name());
+    current = current.parent;
+  }
+  return commandPath;
+}
+
 function getCliLogLevel(actionCommand: Command): LogLevel | undefined {
   const root = getRootCommand(actionCommand);
   if (typeof root.getOptionValueSource !== "function") {
@@ -119,6 +129,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     const jsonOutputMode = isCommandJsonOutputMode(actionCommand, argv);
     const { commandPath, startupPolicy } = resolveCliExecutionStartupContext({
       argv,
+      protocolCommandPath: getActionCommandPath(actionCommand),
       jsonOutputMode,
       env: process.env,
     });

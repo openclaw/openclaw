@@ -6,7 +6,7 @@ read_when:
 title: "Gradium"
 ---
 
-[Gradium](https://gradium.ai) is a text-to-speech provider for OpenClaw. The plugin can render normal audio replies (WAV), voice-note-compatible Opus output, and 8 kHz u-law audio for telephony surfaces.
+[Gradium](https://gradium.ai) is a text-to-speech provider for OpenClaw. It renders standard audio replies (WAV), voice-note-compatible Opus output, and 8 kHz u-law audio for telephony surfaces.
 
 | Property      | Value                                |
 | ------------- | ------------------------------------ |
@@ -17,7 +17,7 @@ title: "Gradium"
 
 ## Install plugin
 
-Install the official plugin, then restart Gateway:
+Gradium is an official external plugin. Install it, then restart Gateway:
 
 ```bash
 openclaw plugins install @openclaw/gradium-speech
@@ -26,7 +26,7 @@ openclaw gateway restart
 
 ## Setup
 
-Create a Gradium API key, then expose it to OpenClaw with either an env var or the config key.
+Create a Gradium API key, then expose it with an env var or the config key. Config takes precedence over the env var.
 
 <Tabs>
   <Tab title="Env var">
@@ -54,8 +54,6 @@ Create a Gradium API key, then expose it to OpenClaw with either an env var or t
   </Tab>
 </Tabs>
 
-The plugin checks the resolved `apiKey` first and falls back to the `GRADIUM_API_KEY` environment variable.
-
 ## Config
 
 ```json5
@@ -76,31 +74,29 @@ The plugin checks the resolved `apiKey` first and falls back to the `GRADIUM_API
 }
 ```
 
-| Key                                             | Type   | Description                                                                                   |
-| ----------------------------------------------- | ------ | --------------------------------------------------------------------------------------------- |
-| `messages.tts.providers.gradium.apiKey`         | string | Resolved API key. Supports `${ENV}` and secret refs.                                          |
-| `messages.tts.providers.gradium.baseUrl`        | string | Override the API origin. Trailing slashes are stripped. Defaults to `https://api.gradium.ai`. |
-| `messages.tts.providers.gradium.speakerVoiceId` | string | Default voice id used when no directive override is present.                                  |
+| Key                                             | Type   | Description                                                                       |
+| ----------------------------------------------- | ------ | --------------------------------------------------------------------------------- |
+| `messages.tts.providers.gradium.apiKey`         | string | Resolved API key. Supports `${ENV}` and secret refs.                              |
+| `messages.tts.providers.gradium.baseUrl`        | string | API origin override. Trailing slashes stripped. Default `https://api.gradium.ai`. |
+| `messages.tts.providers.gradium.speakerVoiceId` | string | Default voice id used when no directive override is present.                      |
 
-The output audio format is selected automatically by the runtime based on the target surface and is not configurable from `openclaw.json`. See [Output](#output) below.
+Output format is chosen automatically by target surface (see [Output](#output)) and is not configurable in `openclaw.json`.
 
 ## Voices
 
-| Name      | Voice ID           |
-| --------- | ------------------ |
-| Emma      | `YTpq7expH9539ERJ` |
-| Kent      | `LFZvm12tW_z0xfGo` |
-| Tiffany   | `Eu9iL_CYe8N-Gkx_` |
-| Christina | `2H4HY2CBNyJHBCrP` |
-| Sydney    | `jtEKaLYNn6iif5PR` |
-| John      | `KWJiFWu2O9nMPYcR` |
-| Arthur    | `3jUdJyOi9pgbxBTK` |
-
-Default voice: Emma.
+| Name               | Voice ID           |
+| ------------------ | ------------------ |
+| Arthur             | `3jUdJyOi9pgbxBTK` |
+| Christina          | `2H4HY2CBNyJHBCrP` |
+| Emma **(default)** | `YTpq7expH9539ERJ` |
+| John               | `KWJiFWu2O9nMPYcR` |
+| Kent               | `LFZvm12tW_z0xfGo` |
+| Sydney             | `jtEKaLYNn6iif5PR` |
+| Tiffany            | `Eu9iL_CYe8N-Gkx_` |
 
 ### Per-message voice override
 
-When the active speech policy allows voice overrides, you can switch voices inline using a directive token. Use `speakerVoiceId` for provider-native voice ids.
+When the active speech policy allows voice overrides, switch voices inline with a directive token (any of these are equivalent, all take a provider-native voice id):
 
 ```text
 /voice:LFZvm12tW_z0xfGo
@@ -114,7 +110,7 @@ If the speech policy disables voice overrides, the directive is consumed but ign
 
 ## Output
 
-The runtime picks the output format from the target surface. The provider does not synthesize other formats today.
+Output format is selected by target surface; the provider does not synthesize other formats.
 
 | Target         | Format      | File ext | Sample rate | Voice-compatible flag |
 | -------------- | ----------- | -------- | ----------- | --------------------- |

@@ -29,6 +29,18 @@ ensure_home_env() {
 
 ensure_home_env
 
+# Track temp paths so fail/exit paths do not leak mktemp dirs/files.
+# Register paths in the caller: command substitutions run in a subshell, so
+# array mutations inside a helper would not reach this shell.
+TMPFILES=()
+cleanup_tmpfiles() {
+  local f
+  for f in "${TMPFILES[@]:-}"; do
+    rm -rf "$f" 2>/dev/null || true
+  done
+}
+trap cleanup_tmpfiles EXIT
+
 resolve_openclaw_effective_home() {
   local openclaw_home="${OPENCLAW_HOME:-}"
   if [[ -z "$openclaw_home" ]]; then
@@ -52,12 +64,14 @@ resolve_openclaw_effective_home() {
 OPENCLAW_EFFECTIVE_HOME="$(resolve_openclaw_effective_home)"
 PREFIX="${OPENCLAW_PREFIX:-${HOME}/.openclaw}"
 OPENCLAW_VERSION="${OPENCLAW_VERSION:-latest}"
-NODE_VERSION="${OPENCLAW_NODE_VERSION:-22.22.0}"
+NODE_VERSION="${OPENCLAW_NODE_VERSION:-22.22.2}"
 NODE_VERSION_REQUESTED=0
 if [[ -n "${OPENCLAW_NODE_VERSION:-}" ]]; then
   NODE_VERSION_REQUESTED=1
 fi
 MIN_NODE_VERSION="22.19.0"
+MIN_NODE_23_VERSION="23.11.0"
+SUPPORTED_NODE_VERSION_LABEL="Node 22.19+, Node 23.11+, or Node 24+"
 APK_NODE_BIN_DIR="/usr/bin"
 NPM_LOGLEVEL="${OPENCLAW_NPM_LOGLEVEL:-error}"
 INSTALL_METHOD="${OPENCLAW_INSTALL_METHOD:-npm}"
@@ -78,7 +92,7 @@ Usage: install-cli.sh [options]
   --git, --github                     Shortcut for --install-method git
   --git-dir, --dir <path>             Checkout directory (default: ~/openclaw, or \$OPENCLAW_HOME/openclaw)
   --version <ver>                     OpenClaw version (default: latest)
-  --node-version <ver>                Node version (default: 22.22.0)
+  --node-version <ver>                Node version (default: 22.22.2)
   --onboard                           Run "openclaw onboard" after install
   --no-onboard                        Skip onboarding (default)
   --set-npm-prefix                    Force npm prefix to ~/.npm-global if current prefix is not writable (Linux)
@@ -423,11 +437,14 @@ linked_node_is_usable() {
 
   current_version="$("$(node_bin)" -v 2>/dev/null || echo "")"
   required_version="$(required_node_version)"
+  if ! node_version_is_supported "$current_version"; then
+    return 1
+  fi
   if ! semver_at_least "$current_version" "$required_version"; then
     return 1
   fi
 
-  "$(node_bin)" -e "require('node:sqlite')" >/dev/null 2>&1
+  "$(node_bin)" -e "const { DatabaseSync } = require('node:sqlite'); const db = new DatabaseSync(':memory:'); const statement = db.prepare('SELECT 1'); const supported = typeof statement.columns === 'function'; db.close(); if (!supported) process.exit(1);" >/dev/null 2>&1
 }
 
 semver_at_least() {
@@ -460,8 +477,32 @@ semver_at_least() {
   ((version_patch >= required_patch))
 }
 
+node_version_is_supported() {
+  local version="${1#v}"
+  local major minor patch
+
+  IFS=. read -r major minor patch <<<"$version"
+  minor="${minor:-0}"
+  patch="${patch:-0}"
+  for part in "$major" "$minor" "$patch"; do
+    if [[ ! "$part" =~ ^[0-9]+$ ]]; then
+      return 1
+    fi
+  done
+
+  if ((major == 22)); then
+    semver_at_least "$version" "$MIN_NODE_VERSION"
+    return
+  fi
+  if ((major == 23)); then
+    semver_at_least "$version" "$MIN_NODE_23_VERSION"
+    return
+  fi
+  ((major > 23))
+}
+
 required_node_version() {
-  if [[ "$NODE_VERSION_REQUESTED" == "1" ]] && semver_at_least "$NODE_VERSION" "$MIN_NODE_VERSION"; then
+  if [[ "$NODE_VERSION_REQUESTED" == "1" ]] && node_version_is_supported "$NODE_VERSION"; then
     printf '%s\n' "$NODE_VERSION"
     return
   fi
@@ -767,6 +808,10 @@ install_node() {
   local expected_sha
   local actual_sha
 
+  if ! node_version_is_supported "$NODE_VERSION"; then
+    fail "Node ${NODE_VERSION} is unsupported; use ${SUPPORTED_NODE_VERSION_LABEL}."
+  fi
+
   os="$(os_detect)"
   arch="$(arch_detect)"
   dir="$(node_dir)"
@@ -786,6 +831,7 @@ install_node() {
 
   mkdir -p "${PREFIX}/tools"
   tmp="$(mktemp -d)"
+  TMPFILES+=("$tmp")
   base_url="https://nodejs.org/dist/v${NODE_VERSION}"
   tarball="node-v${NODE_VERSION}-${os}-${arch}.tar.gz"
   url="${base_url}/${tarball}"
@@ -817,7 +863,7 @@ install_node() {
     local required_version
     installed_version="$("$(node_bin)" -v 2>/dev/null || echo unknown)"
     required_version="$(required_node_version)"
-    fail "Installed Node ${NODE_VERSION} must provide Node >= ${required_version} with node:sqlite; found ${installed_version}. Re-run with --node-version 22.22.0 (or newer)"
+    fail "Installed Node ${NODE_VERSION} must provide Node >= ${required_version} with node:sqlite; found ${installed_version}. Re-run with --node-version 22.22.2 (or newer)"
   fi
   emit_json "{\"event\":\"step\",\"name\":\"node\",\"status\":\"ok\",\"version\":\"${NODE_VERSION}\"}"
 }
@@ -1022,6 +1068,7 @@ ensure_pnpm_git_prepare_allowlist() {
 
   if [[ -f "$workspace_file" ]] && ! grep -Fq "\"${dep}\"" "$workspace_file" && ! grep -Fq "${dep}:" "$workspace_file" && ! grep -Fq -- "- ${dep}" "$workspace_file"; then
     tmp="$(mktemp)"
+    TMPFILES+=("$tmp")
     if grep -q '^allowBuilds:[[:space:]]*$' "$workspace_file"; then
       awk -v dep="$dep" '
         BEGIN { inserted = 0 }
@@ -1182,8 +1229,6 @@ main() {
   if [[ "${OPENCLAW_NO_ONBOARD:-0}" == "1" ]]; then
     RUN_ONBOARD=0
   fi
-
-  cleanup_legacy_submodules
 
   PATH="$(node_dir)/bin:${PREFIX}/bin:${PATH}"
   export PATH

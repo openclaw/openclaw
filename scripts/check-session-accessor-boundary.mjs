@@ -17,6 +17,7 @@ const legacyReaderNames = new Set([
   "readSessionEntries",
   "readSessionEntry",
   "readSessionStoreReadOnly",
+  "readSessionStoreSnapshot",
   "resolveSessionStoreEntry",
 ]);
 const legacyWholeStoreAccessNames = new Set([
@@ -26,7 +27,9 @@ const legacyWholeStoreAccessNames = new Set([
 ]);
 const legacyWriterNames = new Set([
   "applySessionStoreEntryPatch",
+  "recordSessionMetaFromInbound",
   "saveSessionStore",
+  "updateLastRoute",
   "updateSessionStore",
   "updateSessionStoreEntry",
 ]);
@@ -63,15 +66,7 @@ const sessionStoreRuntimeFileBackedCompatNames = new Set([
 ]);
 const embeddedAgentSessionFileRuntimeNames = new Set(["resolveSessionFilePath"]);
 
-export const allowedSessionStoreRuntimeFileBackedCompatExports = new Set([
-  "loadSessionStore",
-  "readLatestAssistantTextFromSessionTranscript",
-  "resolveAndPersistSessionFile",
-  "resolveSessionFilePath",
-  "resolveSessionStoreEntry",
-  "saveSessionStore",
-  "updateSessionStore",
-]);
+export const allowedSessionStoreRuntimeFileBackedCompatExports = new Set([]);
 
 export const migratedSessionAccessorFiles = new Set([
   "packages/memory-host-sdk/src/host/session-files.ts",
@@ -101,6 +96,8 @@ export const migratedSessionAccessorFiles = new Set([
   "src/commands/status.summary.ts",
   "src/commands/tasks.ts",
   "src/config/sessions/combined-store-gateway.ts",
+  "src/config/sessions/delivery-info.ts",
+  "src/config/sessions/goals.ts",
   "src/cron/isolated-agent/delivery-target.ts",
   "src/cron/service/timer.ts",
   "src/gateway/session-compaction-checkpoints.ts",
@@ -156,6 +153,7 @@ export const migratedSessionAccessorWriteFiles = new Set([
   "src/agents/command/attempt-execution.shared.ts",
   "src/agents/command/session-store.ts",
   "src/agents/embedded-agent-runner/run.ts",
+  "src/agents/embedded-agent-subscribe.handlers.compaction.runtime.ts",
   "src/agents/embedded-agent-runner/run/attempt.ts",
   "src/agents/live-model-switch.ts",
   "src/agents/main-session-restart-recovery.ts",
@@ -185,17 +183,23 @@ export const migratedSessionAccessorWriteFiles = new Set([
   "src/auto-reply/reply/session-usage.ts",
   "src/commands/tasks.ts",
   "src/config/sessions/cleanup-service.ts",
+  "src/config/sessions/goals.ts",
   "src/gateway/boot.ts",
+  "src/gateway/server-methods/chat.ts",
+  "src/gateway/server-methods/sessions.ts",
   "src/gateway/server-node-events.ts",
   "src/gateway/session-compaction-checkpoints.ts",
+  "src/infra/outbound/outbound-session.ts",
   "src/plugins/host-hook-cleanup.ts",
   "src/plugins/host-hook-state.ts",
+  "src/plugins/runtime/runtime-channel.ts",
   "src/tui/embedded-backend.ts",
 ]);
 
 export const migratedTranscriptWriterFiles = new Set([
   "src/agents/command/attempt-execution.ts",
   "src/agents/embedded-agent-runner/context-engine-maintenance.ts",
+  "src/auto-reply/reply/session-fork.runtime.ts",
   "src/config/sessions/transcript.ts",
   "src/gateway/server-methods/chat.ts",
   "src/gateway/server-methods/chat-transcript-inject.ts",
@@ -537,6 +541,45 @@ export function findSessionLifecycleCleanupBoundaryViolations(content, fileName 
   );
 }
 
+// Source roots shared by the enforced boundary checks in main() and the debt
+// ratchet below; keeping one list prevents the two scans from drifting apart.
+const readSourceRootPaths = [
+  "packages/memory-host-sdk/src/host",
+  "extensions/discord/src/monitor",
+  "extensions/memory-core/src",
+  "extensions/telegram/src",
+  "extensions/voice-call/src",
+  "src/acp",
+  "src/agents",
+  "src/auto-reply",
+  "src/commands",
+  "src/config/sessions",
+  "src/cron",
+  "src/gateway",
+  "src/infra",
+  "src/plugins",
+  "src/tui",
+];
+const writeSourceRootPaths = [
+  "src/acp",
+  "src/agents",
+  "src/auto-reply",
+  "src/commands",
+  "src/config/sessions",
+  "src/gateway",
+  "src/infra",
+  "src/plugins",
+  "src/tui",
+];
+const transcriptWriterSourceRootPaths = [
+  "src/agents/command",
+  "src/agents/embedded-agent-runner",
+  "src/auto-reply/reply",
+  "src/config/sessions",
+  "src/gateway/server-methods",
+  "src/sessions",
+];
+
 function declarationName(node) {
   if (ts.isFunctionDeclaration(node) && node.name) {
     return node.name.text;
@@ -617,42 +660,165 @@ export function findMemoryHostSessionCorpusBoundaryViolations(content, fileName 
   return violations;
 }
 
+// Debt ratchet: the boundary checks above only scan files already on the
+// migrated lists, so unmigrated files could quietly gain new legacy call
+// sites. The checked-in baseline locks each unmigrated file's current legacy
+// call-site count per concern; any drift from the baseline fails the guard.
+const sessionAccessorDebtBaselineRelativePath = "scripts/lib/session-accessor-debt-baseline.json";
+const debtBaselineRegenCommand = "pnpm lint:tmp:session-accessor-boundary:gen";
+
+// Keys sorted alphabetically so the generated baseline JSON stays deterministic.
+const sessionAccessorDebtConcerns = [
+  {
+    key: "embeddedAgentSessionTarget",
+    sourceRootPaths: ["extensions/voice-call/src"],
+    migratedFiles: migratedEmbeddedAgentSessionTargetFiles,
+    findViolations: findEmbeddedAgentSessionTargetViolations,
+  },
+  {
+    key: "memoryHostSessionCorpus",
+    sourceRootPaths: ["packages/memory-host-sdk/src/host"],
+    migratedFiles: migratedMemoryHostSessionCorpusFiles,
+    findViolations: findMemoryHostSessionCorpusBoundaryViolations,
+  },
+  {
+    key: "sessionAccessorRead",
+    sourceRootPaths: readSourceRootPaths,
+    migratedFiles: new Set([
+      ...migratedSessionAccessorFiles,
+      ...migratedBundledPluginSessionAccessorFiles,
+    ]),
+    findViolations: findSessionAccessorBoundaryViolations,
+  },
+  {
+    key: "sessionAccessorWrite",
+    sourceRootPaths: writeSourceRootPaths,
+    migratedFiles: migratedSessionAccessorWriteFiles,
+    findViolations: findSessionAccessorWriteBoundaryViolations,
+  },
+  {
+    key: "sessionCompactManualTrim",
+    sourceRootPaths: ["src/gateway/server-methods"],
+    migratedFiles: migratedSessionCompactManualTrimFiles,
+    findViolations: findSessionCompactManualTrimBoundaryViolations,
+  },
+  {
+    key: "sessionLifecycleCleanup",
+    sourceRootPaths: readSourceRootPaths,
+    migratedFiles: migratedSessionLifecycleCleanupFiles,
+    findViolations: findSessionLifecycleCleanupBoundaryViolations,
+  },
+  {
+    key: "transcriptWriter",
+    sourceRootPaths: transcriptWriterSourceRootPaths,
+    migratedFiles: migratedTranscriptWriterFiles,
+    findViolations: findTranscriptWriterBoundaryViolations,
+  },
+];
+
+function sortRecordByKey(record) {
+  return Object.fromEntries(
+    Object.entries(record).toSorted(([left], [right]) =>
+      left < right ? -1 : left > right ? 1 : 0,
+    ),
+  );
+}
+
+/** Counts legacy call sites per unmigrated file for every debt concern. */
+async function collectSessionAccessorDebtCounts(repoRoot) {
+  const counts = {};
+  for (const concern of sessionAccessorDebtConcerns) {
+    const violations = await collectFileViolations({
+      repoRoot,
+      sourceRoots: resolveSourceRoots(repoRoot, concern.sourceRootPaths),
+      // Inverse of the enforcement skip: migrated files are held at zero by the
+      // boundary checks, so the ratchet tracks only the unmigrated rest.
+      skipFile: (filePath) =>
+        concern.migratedFiles.has(normalizeRelativePath(path.relative(repoRoot, filePath))),
+      findViolations: concern.findViolations,
+    });
+    const fileCounts = {};
+    for (const violation of violations) {
+      const relativePath = normalizeRelativePath(violation.path);
+      fileCounts[relativePath] = (fileCounts[relativePath] ?? 0) + 1;
+    }
+    counts[concern.key] = sortRecordByKey(fileCounts);
+  }
+  return sortRecordByKey(counts);
+}
+
+/** Ratchet compare: counts above baseline are regressions, below are improvements. */
+export function compareSessionAccessorDebt(currentCounts, baselineCounts) {
+  const regressions = [];
+  const improvements = [];
+  const concerns = [
+    ...new Set([...Object.keys(baselineCounts), ...Object.keys(currentCounts)]),
+  ].toSorted();
+  for (const concern of concerns) {
+    const current = currentCounts[concern] ?? {};
+    const baseline = baselineCounts[concern] ?? {};
+    const filePaths = [...new Set([...Object.keys(baseline), ...Object.keys(current)])].toSorted();
+    for (const filePath of filePaths) {
+      const currentCount = current[filePath] ?? 0;
+      const baselineCount = baseline[filePath] ?? 0;
+      if (currentCount === baselineCount) {
+        continue;
+      }
+      const entry = { concern, path: filePath, currentCount, baselineCount };
+      if (currentCount > baselineCount) {
+        regressions.push(entry);
+      } else {
+        improvements.push(entry);
+      }
+    }
+  }
+  return { regressions, improvements };
+}
+
+// Improvements fail the guard too: passing silently would leave the baseline
+// stale, letting a later change reintroduce legacy call sites up to the old
+// count without tripping the ratchet.
+export function formatSessionAccessorDebtImprovements(improvements) {
+  return [
+    `Legacy session accessor debt dropped below ${sessionAccessorDebtBaselineRelativePath}:`,
+    ...improvements.map(
+      (improvement) =>
+        `- ${improvement.path} [${improvement.concern}]: ${improvement.currentCount} legacy call site(s), stale baseline allows ${improvement.baselineCount}`,
+    ),
+    `Run \`${debtBaselineRegenCommand}\` to ratchet the baseline down and commit it.`,
+  ];
+}
+
+function resolveDebtBaselinePath(repoRoot) {
+  return path.join(repoRoot, ...sessionAccessorDebtBaselineRelativePath.split("/"));
+}
+
+async function readSessionAccessorDebtBaseline(repoRoot) {
+  try {
+    return JSON.parse(await fs.readFile(resolveDebtBaselinePath(repoRoot), "utf8"));
+  } catch (error) {
+    if (error && typeof error === "object" && error.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+}
+
+async function writeSessionAccessorDebtBaseline(repoRoot) {
+  const counts = await collectSessionAccessorDebtCounts(repoRoot);
+  await fs.writeFile(resolveDebtBaselinePath(repoRoot), `${JSON.stringify(counts, null, 2)}\n`);
+}
+
 export async function main() {
   const repoRoot = resolveRepoRoot(import.meta.url);
-  const readSourceRoots = resolveSourceRoots(repoRoot, [
-    "packages/memory-host-sdk/src/host",
-    "extensions/discord/src/monitor",
-    "extensions/memory-core/src",
-    "extensions/telegram/src",
-    "extensions/voice-call/src",
-    "src/acp",
-    "src/agents",
-    "src/auto-reply",
-    "src/commands",
-    "src/config/sessions",
-    "src/cron",
-    "src/gateway",
-    "src/infra",
-    "src/plugins",
-    "src/tui",
-  ]);
-  const writeSourceRoots = resolveSourceRoots(repoRoot, [
-    "src/acp",
-    "src/agents",
-    "src/auto-reply",
-    "src/commands",
-    "src/config/sessions",
-    "src/gateway",
-    "src/plugins",
-    "src/tui",
-  ]);
-  const transcriptWriterSourceRoots = resolveSourceRoots(repoRoot, [
-    "src/agents/command",
-    "src/agents/embedded-agent-runner",
-    "src/config/sessions",
-    "src/gateway/server-methods",
-    "src/sessions",
-  ]);
+  if (process.argv.includes("--update-debt-baseline")) {
+    await writeSessionAccessorDebtBaseline(repoRoot);
+    console.log(`Wrote ${sessionAccessorDebtBaselineRelativePath}`);
+    return;
+  }
+  const readSourceRoots = resolveSourceRoots(repoRoot, readSourceRootPaths);
+  const writeSourceRoots = resolveSourceRoots(repoRoot, writeSourceRootPaths);
+  const transcriptWriterSourceRoots = resolveSourceRoots(repoRoot, transcriptWriterSourceRootPaths);
   const readViolations = await collectFileViolations({
     repoRoot,
     sourceRoots: readSourceRoots,
@@ -745,18 +911,50 @@ export async function main() {
     ...sessionStoreRuntimeCompatViolations,
   ];
 
-  if (violations.length === 0) {
+  const baselineCounts = await readSessionAccessorDebtBaseline(repoRoot);
+  if (!baselineCounts) {
+    console.error(
+      `Missing ${sessionAccessorDebtBaselineRelativePath}; run \`${debtBaselineRegenCommand}\` and commit it.`,
+    );
+    process.exit(1);
+  }
+  const debt = compareSessionAccessorDebt(
+    await collectSessionAccessorDebtCounts(repoRoot),
+    baselineCounts,
+  );
+
+  if (violations.length === 0 && debt.regressions.length === 0 && debt.improvements.length === 0) {
     console.log("session accessor boundary guard passed.");
     return;
   }
 
-  console.error("Found legacy session store usage in session-accessor migrated files:");
-  for (const violation of violations) {
-    console.error(`- ${violation.path}:${violation.line}: ${violation.reason}`);
+  if (violations.length > 0) {
+    console.error("Found legacy session store usage in session-accessor migrated files:");
+    for (const violation of violations) {
+      console.error(`- ${violation.path}:${violation.line}: ${violation.reason}`);
+    }
+    console.error(
+      "Use src/config/sessions/session-accessor.ts helpers for migrated read/write and transcript-writer paths. Expand file-backed SDK compatibility only as an explicit pre-SQLite migration decision.",
+    );
   }
-  console.error(
-    "Use src/config/sessions/session-accessor.ts helpers for migrated read/write and transcript-writer paths. Expand file-backed SDK compatibility only as an explicit pre-SQLite migration decision.",
-  );
+  if (debt.regressions.length > 0) {
+    console.error(
+      `Found new legacy session call sites in unmigrated files (counts exceed ${sessionAccessorDebtBaselineRelativePath}):`,
+    );
+    for (const regression of debt.regressions) {
+      console.error(
+        `- ${regression.path} [${regression.concern}]: ${regression.currentCount} legacy call site(s), baseline allows ${regression.baselineCount}`,
+      );
+    }
+    console.error(
+      `Use src/config/sessions/session-accessor.ts helpers instead of adding legacy call sites. If the increase is an intentional seam-owner change, run \`${debtBaselineRegenCommand}\` and commit the updated baseline.`,
+    );
+  }
+  if (debt.improvements.length > 0) {
+    for (const line of formatSessionAccessorDebtImprovements(debt.improvements)) {
+      console.error(line);
+    }
+  }
   process.exit(1);
 }
 

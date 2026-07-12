@@ -64,15 +64,18 @@ struct IPadSkillWorkshopScreen: View {
                 ScrollView {
                     self.presentedProposalDetail(proposalID: route.proposalID)
                         .padding(.horizontal, OpenClawProMetric.pagePadding)
-                        .padding(.vertical, 16)
+                        .padding(.vertical, OpenClawSpacing.space4)
                 }
                 .background(OpenClawProBackground())
                 .navigationTitle("Proposal")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") {
+                        Button {
                             self.presentedProposalRoute = nil
+                        } label: {
+                            Text("Done")
+                                .font(OpenClawType.subheadSemiBold)
                         }
                     }
                 }
@@ -105,10 +108,15 @@ struct IPadSkillWorkshopScreen: View {
             VStack(alignment: .leading, spacing: 12) {
                 self.agentScopeMenu
                 self.proposalSearchField
-                Picker("Status", selection: self.$statusFilter) {
+                Picker(selection: self.$statusFilter) {
                     ForEach(Self.proposalStatusFilters, id: \.self) { filter in
-                        Text(Self.proposalStatusFilterLabel(filter)).tag(filter)
+                        Text(Self.proposalStatusFilterLabel(filter))
+                            .font(OpenClawType.captionSemiBold)
+                            .tag(filter)
                     }
+                } label: {
+                    Text("Status")
+                        .font(OpenClawType.captionSemiBold)
                 }
                 .pickerStyle(.segmented)
                 .controlSize(.small)
@@ -118,6 +126,7 @@ struct IPadSkillWorkshopScreen: View {
                         Task { await self.loadProposals(force: true) }
                     } label: {
                         Label("Refresh", systemImage: "arrow.clockwise")
+                            .font(OpenClawType.captionSemiBold)
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
@@ -130,12 +139,12 @@ struct IPadSkillWorkshopScreen: View {
                 }
                 if let noticeText {
                     Text(noticeText)
-                        .font(.caption2)
+                        .font(OpenClawType.caption2)
                         .foregroundStyle(OpenClawBrand.accent)
                 }
                 if let errorText {
                     Text(errorText)
-                        .font(.caption2)
+                        .font(OpenClawType.caption2)
                         .foregroundStyle(OpenClawBrand.warn)
                 }
             }
@@ -149,9 +158,9 @@ struct IPadSkillWorkshopScreen: View {
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
                     VStack(alignment: .leading, spacing: 3) {
                         Text("\(self.filteredProposals.count) proposals")
-                            .font(.headline)
+                            .font(OpenClawType.headline)
                         Text(self.statusFilterLabel)
-                            .font(.caption)
+                            .font(OpenClawType.caption)
                             .foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 8)
@@ -161,10 +170,15 @@ struct IPadSkillWorkshopScreen: View {
                 }
 
                 self.agentScopeMenu
-                Picker("Status", selection: self.$statusFilter) {
+                Picker(selection: self.$statusFilter) {
                     ForEach(Self.proposalStatusFilters, id: \.self) { filter in
-                        Text(Self.proposalStatusFilterLabel(filter)).tag(filter)
+                        Text(Self.proposalStatusFilterLabel(filter))
+                            .font(OpenClawType.captionSemiBold)
+                            .tag(filter)
                     }
+                } label: {
+                    Text("Status")
+                        .font(OpenClawType.captionSemiBold)
                 }
                 .pickerStyle(.segmented)
                 .controlSize(.small)
@@ -177,6 +191,7 @@ struct IPadSkillWorkshopScreen: View {
                         Task { await self.loadProposals(force: true) }
                     } label: {
                         Label("Refresh", systemImage: "arrow.clockwise")
+                            .font(OpenClawType.captionSemiBold)
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.bordered)
@@ -186,12 +201,12 @@ struct IPadSkillWorkshopScreen: View {
                 }
                 if let noticeText {
                     Text(noticeText)
-                        .font(.caption2)
+                        .font(OpenClawType.caption2)
                         .foregroundStyle(OpenClawBrand.accent)
                 }
                 if let errorText {
                     Text(errorText)
-                        .font(.caption2)
+                        .font(OpenClawType.caption2)
                         .foregroundStyle(OpenClawBrand.warn)
                 }
             }
@@ -202,12 +217,12 @@ struct IPadSkillWorkshopScreen: View {
     private var proposalSearchField: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
-                .font(.caption.weight(.semibold))
+                .font(OpenClawType.captionSemiBold)
                 .foregroundStyle(.secondary)
             TextField("Search proposals", text: self.$query)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
-                .font(.subheadline)
+                .font(OpenClawType.subhead)
             if !self.query.isEmpty {
                 Button {
                     self.query = ""
@@ -223,24 +238,30 @@ struct IPadSkillWorkshopScreen: View {
     private var agentScopeMenu: some View {
         HStack(spacing: 8) {
             Text("Agent")
-                .font(.caption.weight(.semibold))
+                .font(OpenClawType.captionSemiBold)
                 .foregroundStyle(.secondary)
             Menu {
-                Button("Default agent") {
+                Button {
                     self.selectedAgentScopeID = ""
+                } label: {
+                    Text("Default agent")
+                        .font(OpenClawType.subhead)
                 }
                 ForEach(self.agentScopeOptions, id: \.id) { option in
-                    Button(option.title) {
+                    Button {
                         self.selectedAgentScopeID = option.id
+                    } label: {
+                        Text(option.title)
+                            .font(OpenClawType.subhead)
                     }
                 }
             } label: {
                 HStack(spacing: 6) {
                     Text(self.agentScopeLabel)
-                        .font(.subheadline.weight(.semibold))
+                        .font(OpenClawType.subheadSemiBold)
                         .lineLimit(1)
                     Image(systemName: "chevron.up.chevron.down")
-                        .font(.caption2.weight(.bold))
+                        .font(OpenClawType.caption2Bold)
                 }
                 .frame(maxWidth: .infinity, alignment: .trailing)
             }
@@ -347,42 +368,60 @@ struct IPadSkillWorkshopScreen: View {
                     }
                     .buttonStyle(.plain)
                     .contextMenu {
-                        Button("Inspect") {
+                        Button {
                             self.selectProposal(
                                 proposal,
                                 opensSheet: true,
                                 forceInspect: true)
+                        } label: {
+                            Text("Inspect")
+                                .font(OpenClawType.subhead)
                         }
                         if proposal.status == "pending" {
-                            Button("Apply") {
+                            Button {
                                 Task { await self.run(.apply, proposal: proposal) }
+                            } label: {
+                                Text("Apply")
+                                    .font(OpenClawType.subhead)
                             }
                             .disabled(!self.canApplyProposalMutations || self.busyAction != nil)
-                            Button("Reject", role: .destructive) {
+                            Button(role: .destructive) {
                                 Task { await self.run(.reject, proposal: proposal) }
+                            } label: {
+                                Text("Reject")
+                                    .font(OpenClawType.subhead)
                             }
                             .disabled(!self.canApplyProposalMutations || self.busyAction != nil)
                         }
                     }
                     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                         if proposal.status == "pending" {
-                            Button("Apply") {
+                            Button {
                                 Task { await self.run(.apply, proposal: proposal) }
+                            } label: {
+                                Text("Apply")
+                                    .font(OpenClawType.subhead)
                             }
                             .tint(OpenClawBrand.ok)
                             .disabled(!self.canApplyProposalMutations || self.busyAction != nil)
-                            Button("Reject", role: .destructive) {
+                            Button(role: .destructive) {
                                 Task { await self.run(.reject, proposal: proposal) }
+                            } label: {
+                                Text("Reject")
+                                    .font(OpenClawType.subhead)
                             }
                             .disabled(!self.canApplyProposalMutations || self.busyAction != nil)
                         }
                     }
                     .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                        Button("Inspect") {
+                        Button {
                             self.selectProposal(
                                 proposal,
                                 opensSheet: true,
                                 forceInspect: true)
+                        } label: {
+                            Text("Inspect")
+                                .font(OpenClawType.subhead)
                         }
                         .tint(OpenClawBrand.accent)
                     }
@@ -416,9 +455,9 @@ struct IPadSkillWorkshopScreen: View {
                     ProIconBadge(systemName: "hammer", color: proposal.statusColor)
                     VStack(alignment: .leading, spacing: 4) {
                         Text(proposal.title)
-                            .font(.headline)
+                            .font(OpenClawType.headline)
                         Text(proposal.description)
-                            .font(.caption)
+                            .font(OpenClawType.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -432,23 +471,23 @@ struct IPadSkillWorkshopScreen: View {
 
                 if let content = proposal.content, !content.isEmpty {
                     Text(content)
-                        .font(.caption.monospaced())
+                        .font(OpenClawType.monoSmall)
                         .foregroundStyle(.secondary)
                         .lineLimit(16)
                         .textSelection(.enabled)
                 } else {
                     Text("Select refresh to load the proposal body.")
-                        .font(.caption)
+                        .font(OpenClawType.caption)
                         .foregroundStyle(.secondary)
                 }
 
                 if !proposal.supportFiles.isEmpty {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Support files")
-                            .font(.subheadline.weight(.semibold))
+                            .font(OpenClawType.subheadSemiBold)
                         ForEach(proposal.supportFiles, id: \.path) { file in
                             Text(file.path)
-                                .font(.caption2.monospaced())
+                                .font(OpenClawType.monoCaption2)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
                         }
@@ -482,6 +521,7 @@ struct IPadSkillWorkshopScreen: View {
             Task { await self.run(.apply, proposal: proposal) }
         } label: {
             Label("Apply", systemImage: "checkmark.circle")
+                .font(OpenClawType.captionSemiBold)
                 .frame(maxWidth: self.isCompactWidth ? .infinity : nil)
         }
         .buttonStyle(.borderedProminent)
@@ -494,6 +534,7 @@ struct IPadSkillWorkshopScreen: View {
             Task { await self.run(.reject, proposal: proposal) }
         } label: {
             Label("Reject", systemImage: "xmark.circle")
+                .font(OpenClawType.captionSemiBold)
                 .frame(maxWidth: self.isCompactWidth ? .infinity : nil)
         }
         .buttonStyle(.bordered)
@@ -506,6 +547,7 @@ struct IPadSkillWorkshopScreen: View {
             Task { await self.inspect(proposalID: proposal.id, force: true) }
         } label: {
             Label("Inspect", systemImage: "doc.text.magnifyingglass")
+                .font(OpenClawType.captionSemiBold)
                 .frame(maxWidth: self.isCompactWidth ? .infinity : nil)
         }
         .buttonStyle(.bordered)
@@ -579,7 +621,7 @@ struct IPadSkillWorkshopScreen: View {
             Image(systemName: "lock.shield")
                 .foregroundStyle(OpenClawBrand.warn)
             Text("Admin scope required.")
-                .font(.caption.weight(.semibold))
+                .font(OpenClawType.captionSemiBold)
                 .foregroundStyle(.secondary)
             Spacer(minLength: 8)
         }
@@ -951,11 +993,11 @@ private struct IPadSkillProposalKanbanCard: View {
                             color: self.proposal.statusColor)
                         VStack(alignment: .leading, spacing: 4) {
                             Text(self.proposal.title)
-                                .font(.subheadline.weight(.semibold))
+                                .font(OpenClawType.subheadSemiBold)
                                 .foregroundStyle(self.isSelected ? OpenClawBrand.accent : .primary)
                                 .lineLimit(2)
                             Text(self.proposal.description)
-                                .font(.caption)
+                                .font(OpenClawType.caption)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(3)
                         }
@@ -964,7 +1006,7 @@ private struct IPadSkillProposalKanbanCard: View {
                         ProValuePill(value: self.proposal.status, color: self.proposal.statusColor)
                         Spacer(minLength: 4)
                         Text(self.proposal.ageLabel)
-                            .font(.caption2.weight(.semibold))
+                            .font(OpenClawType.caption2SemiBold)
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -976,6 +1018,7 @@ private struct IPadSkillProposalKanbanCard: View {
                 if self.proposal.status == "pending" {
                     Button(action: self.apply) {
                         Image(systemName: "checkmark.circle")
+                            .font(OpenClawType.captionSemiBold)
                     }
                     .accessibilityLabel("Apply Proposal")
                     .buttonStyle(.bordered)
@@ -984,6 +1027,7 @@ private struct IPadSkillProposalKanbanCard: View {
 
                     Button(role: .destructive, action: self.reject) {
                         Image(systemName: "xmark.circle")
+                            .font(OpenClawType.captionSemiBold)
                     }
                     .accessibilityLabel("Reject Proposal")
                     .buttonStyle(.bordered)
@@ -993,6 +1037,7 @@ private struct IPadSkillProposalKanbanCard: View {
 
                 Button(action: self.inspect) {
                     Image(systemName: "doc.text.magnifyingglass")
+                        .font(OpenClawType.captionSemiBold)
                 }
                 .accessibilityLabel("Inspect Proposal")
                 .buttonStyle(.bordered)
@@ -1000,18 +1045,27 @@ private struct IPadSkillProposalKanbanCard: View {
                 .disabled(self.isInspecting)
             }
         }
-        .padding(12)
+        .padding(OpenClawSpacing.space3)
         .background(
             self.isSelected ? OpenClawBrand.accent.opacity(0.08) : Color.clear,
-            in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            in: RoundedRectangle(cornerRadius: OpenClawRadius.xs, style: .continuous))
         .contentShape(Rectangle())
         .contextMenu {
-            Button("Inspect", action: self.inspect)
+            Button(action: self.inspect) {
+                Text("Inspect")
+                    .font(OpenClawType.subhead)
+            }
             if self.proposal.status == "pending" {
-                Button("Apply", action: self.apply)
-                    .disabled(!self.canApplyProposalMutations || self.isBusy)
-                Button("Reject", role: .destructive, action: self.reject)
-                    .disabled(!self.canApplyProposalMutations || self.isBusy)
+                Button(action: self.apply) {
+                    Text("Apply")
+                        .font(OpenClawType.subhead)
+                }
+                .disabled(!self.canApplyProposalMutations || self.isBusy)
+                Button(role: .destructive, action: self.reject) {
+                    Text("Reject")
+                        .font(OpenClawType.subhead)
+                }
+                .disabled(!self.canApplyProposalMutations || self.isBusy)
             }
         }
     }
@@ -1027,24 +1081,24 @@ struct IPadSkillProposalRow: View {
             ProIconBadge(systemName: self.isBusy ? "hourglass" : "hammer", color: self.proposal.statusColor)
             VStack(alignment: .leading, spacing: 4) {
                 Text(self.proposal.title)
-                    .font(.subheadline.weight(.semibold))
+                    .font(OpenClawType.subheadSemiBold)
                     .foregroundStyle(self.isSelected ? OpenClawBrand.accent : .primary)
                     .lineLimit(1)
                 Text(self.proposal.description)
-                    .font(.caption)
+                    .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             }
             Spacer(minLength: 8)
             Text(self.proposal.ageLabel)
-                .font(.caption2.weight(.semibold))
+                .font(OpenClawType.caption2SemiBold)
                 .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .background(
             self.isSelected ? OpenClawBrand.danger.opacity(0.08) : Color.clear,
-            in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            in: RoundedRectangle(cornerRadius: OpenClawRadius.xs, style: .continuous))
     }
 }
 

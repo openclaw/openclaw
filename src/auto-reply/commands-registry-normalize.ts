@@ -28,7 +28,7 @@ function appendMultilineTail(head: string, tail: string | undefined, spec?: Text
   if (!tail) {
     return head;
   }
-  if (!spec || spec.key === "skill") {
+  if (!spec || spec.key === "skill" || spec.key === "learn") {
     return `${head}\n${tail}`;
   }
   if (spec.key === "reset") {

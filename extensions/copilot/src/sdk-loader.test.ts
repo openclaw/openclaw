@@ -216,6 +216,6 @@ describe("sdk-loader", () => {
 
 describe("sdk dependency constants", () => {
   it("COPILOT_SDK_SPEC pins the canonical SDK spec", () => {
-    expect(COPILOT_SDK_SPEC).toBe("@github/copilot-sdk@1.0.0-beta.9");
+    expect(COPILOT_SDK_SPEC).toBe("@github/copilot-sdk@1.0.5");
   });
 });

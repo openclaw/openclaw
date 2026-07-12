@@ -1,6 +1,7 @@
 // Camera payload validation and artifact writers for node media commands.
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { canonicalizeBase64, estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { toErrorObject } from "../infra/errors.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { normalizeHostname } from "../infra/net/hostname.js";
@@ -16,6 +17,8 @@ import {
 
 const MAX_CAMERA_URL_DOWNLOAD_BYTES = 250 * 1024 * 1024;
 const MAX_CAMERA_BASE64_BYTES = MAX_CAMERA_URL_DOWNLOAD_BYTES;
+// Keep the 250 MiB media path bounded without applying a short control-request deadline.
+const CAMERA_URL_DOWNLOAD_TIMEOUT_MS = 15 * 60_000;
 
 /** Camera orientation accepted by node camera commands. */
 export type CameraFacing = "front" | "back";
@@ -124,14 +127,12 @@ export async function writeUrlToFile(
       url,
       auditContext: "writeUrlToFile",
       policy,
+      requireHttps: true,
+      timeoutMs: CAMERA_URL_DOWNLOAD_TIMEOUT_MS,
     });
     release = guarded.release;
     const res = guarded.response;
     const finalUrl = new URL(guarded.finalUrl);
-    if (finalUrl.protocol !== "https:") {
-      await cancelIgnoredResponseBody(res);
-      throw new Error(`writeUrlToFile: redirect resolved to non-https URL ${guarded.finalUrl}`);
-    }
     if (normalizeHostname(finalUrl.hostname) !== expectedHost) {
       await cancelIgnoredResponseBody(res);
       throw new Error(
@@ -202,12 +203,6 @@ export async function writeUrlToFile(
   return { path: filePath, bytes };
 }
 
-function estimateDecodedBase64Bytes(base64: string): number {
-  const normalized = base64.replace(/\s+/g, "");
-  const padding = normalized.endsWith("==") ? 2 : normalized.endsWith("=") ? 1 : 0;
-  return Math.floor((normalized.length * 3) / 4) - padding;
-}
-
 /** Decode a base64 media payload to disk with preflight and post-decode size checks. */
 export async function writeBase64ToFile(
   filePath: string,
@@ -215,10 +210,14 @@ export async function writeBase64ToFile(
   opts: { maxBytes?: number } = {},
 ) {
   const maxBytes = opts.maxBytes ?? MAX_CAMERA_BASE64_BYTES;
-  if (estimateDecodedBase64Bytes(base64) > maxBytes) {
+  if (estimateBase64DecodedBytes(base64) > maxBytes) {
     throw new Error(`writeBase64ToFile: decoded payload exceeds max ${maxBytes}`);
   }
-  const buf = Buffer.from(base64, "base64");
+  const canonicalBase64 = canonicalizeBase64(base64);
+  if (!canonicalBase64) {
+    throw new Error("writeBase64ToFile: invalid base64 payload");
+  }
+  const buf = Buffer.from(canonicalBase64, "base64");
   if (buf.length > maxBytes) {
     throw new Error(`writeBase64ToFile: decoded ${buf.length} bytes, exceeds max ${maxBytes}`);
   }
@@ -227,7 +226,7 @@ export async function writeBase64ToFile(
 }
 
 /** Require the node remote IP needed to validate URL-backed camera payloads. */
-export function requireNodeRemoteIp(remoteIp?: string): string {
+function requireNodeRemoteIp(remoteIp?: string): string {
   const normalized = remoteIp?.trim();
   if (!normalized) {
     throw new Error("camera URL payload requires node remoteIp");

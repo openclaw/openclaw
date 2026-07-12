@@ -1509,6 +1509,12 @@ describe("plugin sdk alias helpers", () => {
       srcFile: "schema.ts",
       distFile: "schema.mjs",
     });
+    const gatewayProtocolFrameGuards = writeWorkspacePackageEntry({
+      root: fixture.root,
+      packageDir: "gateway-protocol",
+      srcFile: "frame-guards.ts",
+      distFile: "frame-guards.mjs",
+    });
     const netPolicy = writeWorkspacePackageEntry({
       root: fixture.root,
       packageDir: "net-policy",
@@ -1550,6 +1556,12 @@ describe("plugin sdk alias helpers", () => {
       packageDir: "normalization-core",
       srcFile: "index.ts",
       distFile: "index.mjs",
+    });
+    const normalizationBooleanCoercion = writeWorkspacePackageEntry({
+      root: fixture.root,
+      packageDir: "normalization-core",
+      srcFile: "boolean-coercion.ts",
+      distFile: "boolean-coercion.mjs",
     });
     const normalizationStringCoerce = writeWorkspacePackageEntry({
       root: fixture.root,
@@ -1593,6 +1605,12 @@ describe("plugin sdk alias helpers", () => {
       srcFile: "ip.ts",
       distFile: "ip.mjs",
     });
+    const netPolicyUrlProtocol = writeWorkspacePackageEntry({
+      root: fixture.root,
+      packageDir: "net-policy",
+      srcFile: "url-protocol.ts",
+      distFile: "url-protocol.mjs",
+    });
     const modelCatalogProviderId = writeWorkspacePackageEntry({
       root: fixture.root,
       packageDir: "model-catalog-core",
@@ -1603,6 +1621,7 @@ describe("plugin sdk alias helpers", () => {
     fs.rmSync(gatewayClientTimeouts.distFile);
     fs.rmSync(gatewayProtocol.distFile);
     fs.rmSync(gatewayProtocolSchema.distFile);
+    fs.rmSync(gatewayProtocolFrameGuards.distFile);
     fs.rmSync(markdownCore.distFile);
     fs.rmSync(markdownCoreTables.distFile);
     fs.rmSync(mediaGenerationCore.distFile);
@@ -1612,11 +1631,13 @@ describe("plugin sdk alias helpers", () => {
     fs.rmSync(acpCore.distFile);
     fs.rmSync(acpCoreRuntimeTypes.distFile);
     fs.rmSync(normalizationCore.distFile);
+    fs.rmSync(normalizationBooleanCoercion.distFile);
     fs.rmSync(normalizationStringCoerce.distFile);
     fs.rmSync(terminalCore.distFile);
     fs.rmSync(terminalCoreTheme.distFile);
     fs.rmSync(netPolicy.distFile);
     fs.rmSync(netPolicyIp.distFile);
+    fs.rmSync(netPolicyUrlProtocol.distFile);
     fs.rmSync(modelCatalogProviderId.distFile);
     const sourcePluginEntry = writePluginEntry(
       fixture.root,
@@ -1638,6 +1659,9 @@ describe("plugin sdk alias helpers", () => {
     );
     expect(fs.realpathSync(aliases["@openclaw/gateway-protocol/schema"] ?? "")).toBe(
       fs.realpathSync(gatewayProtocolSchema.srcFile),
+    );
+    expect(fs.realpathSync(aliases["@openclaw/gateway-protocol/frame-guards"] ?? "")).toBe(
+      fs.realpathSync(gatewayProtocolFrameGuards.srcFile),
     );
     expect(fs.realpathSync(aliases["@openclaw/markdown-core"] ?? "")).toBe(
       fs.realpathSync(markdownCore.srcFile),
@@ -1666,6 +1690,9 @@ describe("plugin sdk alias helpers", () => {
     expect(fs.realpathSync(aliases["@openclaw/normalization-core"] ?? "")).toBe(
       fs.realpathSync(normalizationCore.srcFile),
     );
+    expect(fs.realpathSync(aliases["@openclaw/normalization-core/boolean-coercion"] ?? "")).toBe(
+      fs.realpathSync(normalizationBooleanCoercion.srcFile),
+    );
     expect(fs.realpathSync(aliases["@openclaw/normalization-core/string-coerce"] ?? "")).toBe(
       fs.realpathSync(normalizationStringCoerce.srcFile),
     );
@@ -1680,6 +1707,9 @@ describe("plugin sdk alias helpers", () => {
     );
     expect(fs.realpathSync(aliases["@openclaw/net-policy/ip"] ?? "")).toBe(
       fs.realpathSync(netPolicyIp.srcFile),
+    );
+    expect(fs.realpathSync(aliases["@openclaw/net-policy/url-protocol"] ?? "")).toBe(
+      fs.realpathSync(netPolicyUrlProtocol.srcFile),
     );
     expect(fs.realpathSync(aliases["@openclaw/model-catalog-core/provider-id"] ?? "")).toBe(
       fs.realpathSync(modelCatalogProviderId.srcFile),
@@ -1700,26 +1730,18 @@ describe("plugin sdk alias helpers", () => {
       srcFile: "connect-error-details.ts",
       distFile: "connect-error-details.mjs",
     });
+    const gatewayProtocolFrameGuards = writeWorkspacePackageEntry({
+      root: fixture.root,
+      packageDir: "gateway-protocol",
+      srcFile: "frame-guards.ts",
+      distFile: "frame-guards.mjs",
+    });
     const mediaGenerationCore = writeWorkspacePackageEntry({
       root: fixture.root,
       packageDir: "media-generation-core",
       srcFile: "catalog.ts",
       distFile: "catalog.mjs",
     });
-    writeWorkspacePackageEntry({
-      root: fixture.root,
-      packageDir: "media-core",
-      srcFile: "read-response-with-limit.ts",
-      distFile: "read-response-with-limit.mjs",
-    });
-    const mediaCoreRootDistFile = path.join(
-      fixture.root,
-      "dist",
-      "media-core",
-      "read-response-with-limit.js",
-    );
-    mkdirSafeDir(path.dirname(mediaCoreRootDistFile));
-    fs.writeFileSync(mediaCoreRootDistFile, "export {};\n", "utf-8");
     writeWorkspacePackageEntry({
       root: fixture.root,
       packageDir: "acp-core",
@@ -1762,8 +1784,8 @@ describe("plugin sdk alias helpers", () => {
     const netPolicy = writeWorkspacePackageEntry({
       root: fixture.root,
       packageDir: "net-policy",
-      srcFile: "redact-sensitive-url.ts",
-      distFile: "redact-sensitive-url.mjs",
+      srcFile: "url-protocol.ts",
+      distFile: "url-protocol.mjs",
     });
     const modelCatalogCore = writeWorkspacePackageEntry({
       root: fixture.root,
@@ -1786,14 +1808,14 @@ describe("plugin sdk alias helpers", () => {
     expect(fs.realpathSync(aliases["@openclaw/gateway-protocol/connect-error-details"] ?? "")).toBe(
       fs.realpathSync(gatewayProtocol.distFile),
     );
+    expect(fs.realpathSync(aliases["@openclaw/gateway-protocol/frame-guards"] ?? "")).toBe(
+      fs.realpathSync(gatewayProtocolFrameGuards.distFile),
+    );
     expect(fs.realpathSync(aliases["@openclaw/markdown-core/render"] ?? "")).toBe(
       fs.realpathSync(markdownCore.distFile),
     );
     expect(fs.realpathSync(aliases["@openclaw/media-generation-core/catalog"] ?? "")).toBe(
       fs.realpathSync(mediaGenerationCore.distFile),
-    );
-    expect(fs.realpathSync(aliases["@openclaw/media-core/read-response-with-limit"] ?? "")).toBe(
-      fs.realpathSync(mediaCoreRootDistFile),
     );
     expect(fs.realpathSync(aliases["@openclaw/acp-core/normalize-text"] ?? "")).toBe(
       fs.realpathSync(acpCoreRootDistFile),
@@ -1804,7 +1826,7 @@ describe("plugin sdk alias helpers", () => {
     expect(fs.realpathSync(aliases["@openclaw/terminal-core/links"] ?? "")).toBe(
       fs.realpathSync(terminalCoreRootDistFile),
     );
-    expect(fs.realpathSync(aliases["@openclaw/net-policy/redact-sensitive-url"] ?? "")).toBe(
+    expect(fs.realpathSync(aliases["@openclaw/net-policy/url-protocol"] ?? "")).toBe(
       fs.realpathSync(netPolicy.distFile),
     );
     expect(
@@ -2031,10 +2053,20 @@ describe("plugin sdk alias helpers", () => {
     const options = buildPluginLoaderJitiOptions({});
 
     expect(options.tryNative).toBe(true);
+    expect(options.nativeModules).toEqual(["openclaw"]);
     expect(options.interopDefault).toBe(true);
     expect(options.extensions).toContain(".js");
     expect(options.extensions).toContain(".ts");
     expect("alias" in options).toBe(false);
+  });
+
+  it("preserves configured jiti native modules while adding openclaw", () => {
+    const options = withEnv(
+      { JITI_NATIVE_MODULES: JSON.stringify(["native-addon", "openclaw"]) },
+      () => buildPluginLoaderJitiOptions({}),
+    );
+
+    expect(options.nativeModules).toEqual(["native-addon", "openclaw"]);
   });
 
   it("uses transpiled module loads for source TypeScript plugin entries", () => {

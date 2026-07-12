@@ -88,7 +88,7 @@ export function resolveSnapshot(vmName: string, hint: string): SnapshotInfo {
   return best;
 }
 
-export function stringSimilarity(a: string, b: string): number {
+function stringSimilarity(a: string, b: string): number {
   if (a === b) {
     return 1;
   }

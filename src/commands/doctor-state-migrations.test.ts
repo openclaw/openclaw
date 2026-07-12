@@ -23,6 +23,7 @@ import type { InstalledPluginInstallRecordInfo } from "../plugins/installed-plug
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  OPENCLAW_STATE_SCHEMA_VERSION,
 } from "../state/openclaw-state-db.js";
 import { loadTaskFlowRegistryStateFromSqlite } from "../tasks/task-flow-registry.store.sqlite.js";
 import { loadTaskRegistryStateFromSqlite } from "../tasks/task-registry.store.sqlite.js";
@@ -169,6 +170,12 @@ vi.mock("../infra/json-files.js", async () => {
     },
   };
 });
+
+vi.mock("../plugins/doctor-contract-registry.js", () => ({
+  collectRelevantDoctorPluginIds: vi.fn(() => []),
+  listPluginDoctorSessionStoreAgentIds: vi.fn(() => []),
+  listPluginDoctorStateMigrationEntries: vi.fn(() => []),
+}));
 
 async function makeTempRoot() {
   const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-"));
@@ -642,6 +649,35 @@ function appendLegacyCrossAgentTask(taskRunsPath: string): void {
   }
 }
 
+function appendLegacyTaskWithObsoleteDeliveryStatus(taskRunsPath: string): void {
+  const sqlite = requireNodeSqlite();
+  const db = new sqlite.DatabaseSync(taskRunsPath);
+  try {
+    db.prepare(
+      `
+        INSERT INTO task_runs (
+          task_id, runtime, requester_session_key, agent_id, run_id, task,
+          status, delivery_status, notify_policy, created_at, last_event_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+    ).run(
+      "legacy-not-requested",
+      "cron",
+      "",
+      "ops",
+      "legacy-not-requested-run",
+      "Legacy cancelled task",
+      "cancelled",
+      "not-requested",
+      "silent",
+      150,
+      160,
+    );
+  } finally {
+    db.close();
+  }
+}
+
 async function detectAndRunMigrations(params: {
   root: string;
   cfg: OpenClawConfig;
@@ -984,7 +1020,7 @@ describe("doctor legacy state migrations", () => {
     const stateDatabasePath = createLegacyAgentDatabaseRegistry(stateDir);
     const { DatabaseSync } = requireNodeSqlite();
     const seededDb = new DatabaseSync(stateDatabasePath);
-    seededDb.exec("PRAGMA user_version = 2;");
+    seededDb.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};`);
     seededDb.close();
 
     const detected = await detectLegacyStateMigrations({
@@ -995,7 +1031,9 @@ describe("doctor legacy state migrations", () => {
     const result = await runLegacyStateMigrations({ detected });
     expect(result.changes).toStrictEqual([]);
     expect(result.warnings).toHaveLength(1);
-    expect(result.warnings[0]).toContain("uses newer schema version 2");
+    expect(result.warnings[0]).toContain(
+      `uses newer schema version ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`,
+    );
 
     const db = new DatabaseSync(stateDatabasePath);
     try {
@@ -1076,6 +1114,159 @@ describe("doctor legacy state migrations", () => {
     } finally {
       db.close();
     }
+  });
+
+  it("migrates legacy ACP metadata from retired custom-root agent stores", async () => {
+    const root = await makeTempRoot();
+    const customRoot = await makeTempRoot();
+    const legacySessionKey = "acp:binding:discord:default:feedface";
+    const sessionKey = "agent:ops:acp:binding:discord:default:feedface";
+    const storePath = path.join(customRoot, "agents", "ops", "sessions", "sessions.json");
+    const cfg: OpenClawConfig = {
+      session: {
+        store: path.join(customRoot, "agents", "{agentId}", "sessions", "sessions.json"),
+      },
+    };
+    writeJson5(storePath, {
+      [legacySessionKey]: {
+        sessionId: "sess-acp",
+        updatedAt: 100,
+        acp: {
+          backend: "acpx",
+          agent: "codex",
+          runtimeSessionName: "codex-discord",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: 123,
+        },
+      },
+    });
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    const result = await runLegacyStateMigrations({
+      detected,
+      config: cfg,
+      now: () => 456,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes.some((change) => change.includes("ACP session metadata"))).toBe(true);
+    const store = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<string, SessionEntry>;
+    expect(store[legacySessionKey]?.acp).toBeUndefined();
+
+    const sqlite = requireNodeSqlite();
+    const db = new sqlite.DatabaseSync(path.join(root, "state", "openclaw.sqlite"));
+    try {
+      const row = db
+        .prepare(
+          "SELECT backend, agent, runtime_session_name, mode, state, last_activity_at FROM acp_sessions WHERE session_key = ?",
+        )
+        .get(sessionKey) as
+        | {
+            backend: string;
+            agent: string;
+            runtime_session_name: string;
+            mode: string;
+            state: string;
+            last_activity_at: number | bigint;
+          }
+        | undefined;
+      expect(row).toMatchObject({
+        backend: "acpx",
+        agent: "codex",
+        runtime_session_name: "codex-discord",
+        mode: "persistent",
+        state: "idle",
+      });
+      expect(Number(row?.last_activity_at)).toBe(123);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("skips symlinked managed-agent ACP metadata stores", async () => {
+    const root = await makeTempRoot();
+    const outsideRoot = await makeTempRoot();
+    const sessionKey = "agent:main:acp:binding:discord:default:feedface";
+    const managedStorePath = path.join(root, "agents", "main", "sessions", "sessions.json");
+    const outsideStorePath = path.join(outsideRoot, "sessions.json");
+    writeJson5(outsideStorePath, {
+      [sessionKey]: {
+        sessionId: "sess-acp",
+        updatedAt: 100,
+        acp: {
+          backend: "acpx",
+          agent: "codex",
+          runtimeSessionName: "codex-discord",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: 123,
+        },
+      },
+    });
+    fs.mkdirSync(path.dirname(managedStorePath), { recursive: true });
+    fs.symlinkSync(outsideStorePath, managedStorePath);
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: {},
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    const result = await runLegacyStateMigrations({ detected });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes.some((change) => change.includes("ACP session metadata"))).toBe(false);
+    const outsideStore = JSON.parse(fs.readFileSync(outsideStorePath, "utf8")) as Record<
+      string,
+      SessionEntry
+    >;
+    expect(outsideStore[sessionKey]?.acp).toBeDefined();
+  });
+
+  it("skips symlinked custom agent-store ACP metadata stores", async () => {
+    const root = await makeTempRoot();
+    const customRoot = await makeTempRoot();
+    const outsideRoot = await makeTempRoot();
+    const sessionKey = "agent:main:acp:binding:discord:default:feedface";
+    const cfg: OpenClawConfig = {
+      session: {
+        store: path.join(customRoot, "agents", "{agentId}", "sessions", "sessions.json"),
+      },
+    };
+    const managedStorePath = path.join(customRoot, "agents", "main", "sessions", "sessions.json");
+    const outsideStorePath = path.join(outsideRoot, "sessions.json");
+    writeJson5(outsideStorePath, {
+      [sessionKey]: {
+        sessionId: "sess-acp",
+        updatedAt: 100,
+        acp: {
+          backend: "acpx",
+          agent: "codex",
+          runtimeSessionName: "codex-discord",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: 123,
+        },
+      },
+    });
+    fs.mkdirSync(path.dirname(managedStorePath), { recursive: true });
+    fs.symlinkSync(outsideStorePath, managedStorePath);
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    const result = await runLegacyStateMigrations({ detected, config: cfg });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes.some((change) => change.includes("ACP session metadata"))).toBe(false);
+    const outsideStore = JSON.parse(fs.readFileSync(outsideStorePath, "utf8")) as Record<
+      string,
+      SessionEntry
+    >;
+    expect(outsideStore[sessionKey]?.acp).toBeDefined();
   });
 
   it("keeps shipped WhatsApp legacy group keys channel-qualified during migration", async () => {
@@ -2410,6 +2601,7 @@ describe("doctor legacy state migrations", () => {
       cfg: {},
       env: { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv,
       homedir: () => root,
+      crossStateDirImports: true,
     });
     expect(detected.preview).toContain(`- Exec approvals: ${sourcePath} → ${targetPath}`);
 
@@ -2452,6 +2644,7 @@ describe("doctor legacy state migrations", () => {
       cfg: {},
       env: { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv,
       homedir: () => root,
+      crossStateDirImports: true,
     });
     writeJson5(targetPath, {
       version: 1,
@@ -2480,7 +2673,7 @@ describe("doctor legacy state migrations", () => {
     });
   });
 
-  it("auto-migrates exec approvals without a valid config snapshot", async () => {
+  it("auto-migrates exec approvals without a valid config snapshot when doctor opts in", async () => {
     const root = await makeTempRoot();
     const stateDir = path.join(root, "custom-state");
     const sourcePath = path.join(root, ".openclaw", "exec-approvals.json");
@@ -2499,6 +2692,7 @@ describe("doctor legacy state migrations", () => {
     const result = await autoMigrateLegacyTaskStateSidecars({
       env: { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv,
       homedir: () => root,
+      crossStateDirImports: true,
     });
 
     expect(result.warnings).toStrictEqual([]);
@@ -2515,6 +2709,74 @@ describe("doctor legacy state migrations", () => {
       security: "deny",
       ask: "always",
     });
+  });
+
+  it("keeps default exec approvals in place without the cross-state-dir opt-in", async () => {
+    // Regression: the implicit preflight (every CLI command, gateway startup)
+    // must never archive files that belong to the default state dir just
+    // because OPENCLAW_STATE_DIR points somewhere else.
+    const root = await makeTempRoot();
+    const stateDir = path.join(root, "custom-state");
+    const sourcePath = path.join(root, ".openclaw", "exec-approvals.json");
+    const targetPath = path.join(stateDir, "exec-approvals.json");
+    writeJson5(sourcePath, {
+      version: 1,
+      socket: {
+        token: "legacy-token",
+      },
+      defaults: {
+        security: "deny",
+        ask: "always",
+      },
+    });
+    const sourceRaw = fs.readFileSync(sourcePath, "utf8");
+
+    const result = await autoMigrateLegacyTaskStateSidecars({
+      env: { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv,
+      homedir: () => root,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).not.toContain(`Migrated exec approvals → ${targetPath}`);
+    expect(result.notices?.join("\n")).toContain(
+      "Exec approvals in the default state dir were not imported",
+    );
+    expect(fs.readFileSync(sourcePath, "utf8")).toBe(sourceRaw);
+    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
+    expect(fs.existsSync(targetPath)).toBe(false);
+  });
+
+  it("keeps default exec approvals in place when autoMigrateLegacyState runs without the opt-in", async () => {
+    const root = await makeTempRoot();
+    const stateDir = path.join(root, "custom-state");
+    const sourcePath = path.join(root, ".openclaw", "exec-approvals.json");
+    const targetPath = path.join(stateDir, "exec-approvals.json");
+    writeJson5(sourcePath, {
+      version: 1,
+      socket: {
+        token: "legacy-token",
+      },
+      defaults: {
+        security: "deny",
+      },
+    });
+    const sourceRaw = fs.readFileSync(sourcePath, "utf8");
+
+    const result = await autoMigrateLegacyState({
+      cfg: {},
+      env: { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv,
+      homedir: () => root,
+      log: { info: vi.fn(), warn: vi.fn() },
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).not.toContain(`Migrated exec approvals → ${targetPath}`);
+    expect(result.notices?.join("\n")).toContain(
+      "Exec approvals in the default state dir were not imported",
+    );
+    expect(fs.readFileSync(sourcePath, "utf8")).toBe(sourceRaw);
+    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
+    expect(fs.existsSync(targetPath)).toBe(false);
   });
 
   it("keeps the plugin-state sidecar when shared state already has a conflicting row", async () => {
@@ -2963,6 +3225,36 @@ describe("doctor legacy state migrations", () => {
     await withStateDir(root, async () => {
       expect(loadTaskRegistryStateFromSqlite().tasks.has("legacy-task")).toBe(true);
       expect(loadTaskFlowRegistryStateFromSqlite().flows.has("legacy-flow")).toBe(true);
+    });
+  });
+
+  it("normalizes obsolete task delivery status before archiving the legacy sidecar", async () => {
+    const root = await makeTempRoot();
+    const { taskRunsPath } = writeLegacyTaskStateSidecars(root);
+    appendLegacyTaskWithObsoleteDeliveryStatus(taskRunsPath);
+
+    const result = await autoMigrateLegacyTaskStateSidecars({
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toContain("Migrated 2 task registry sidecar rows → shared SQLite state");
+    expect(fs.existsSync(taskRunsPath)).toBe(false);
+    expect(fs.existsSync(`${taskRunsPath}.migrated`)).toBe(true);
+
+    const shared = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    expect(
+      shared.db
+        .prepare("SELECT delivery_status FROM task_runs WHERE task_id = ?")
+        .get("legacy-not-requested"),
+    ).toEqual({ delivery_status: "not_applicable" });
+
+    await withStateDir(root, async () => {
+      const tasks = loadTaskRegistryStateFromSqlite().tasks;
+      expect(tasks.get("legacy-not-requested")?.deliveryStatus).toBe("not_applicable");
+      expect(tasks.get("legacy-task")?.deliveryStatus).toBe("not_applicable");
     });
   });
 

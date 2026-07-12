@@ -25,7 +25,7 @@ export type ParsedChannelExplicitTarget = {
   chatType?: "direct" | "group" | "channel";
 };
 
-export function resolveCompatParsedRouteTarget(params: {
+function resolveCompatParsedRouteTarget(params: {
   channel: string;
   rawTarget?: string | null;
   fallbackThreadId?: string | number | null;

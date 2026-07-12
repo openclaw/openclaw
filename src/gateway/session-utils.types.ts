@@ -24,6 +24,7 @@ export type GatewaySessionsDefaults = {
   modelProvider: string | null;
   model: string | null;
   contextTokens: number | null;
+  agentRuntime?: GatewayAgentRuntime;
   thinkingLevels?: GatewayThinkingLevelOption[];
   thinkingOptions?: string[];
   thinkingDefault?: string;
@@ -44,12 +45,18 @@ export type GatewaySessionRow = {
   spawnedBy?: string;
   spawnedWorkspaceDir?: string;
   spawnedCwd?: string;
+  /** Managed worktree bound to this session (repo checkout + branch). */
+  worktree?: SessionEntry["worktree"];
+  /** Session-scoped exec node binding (exec host=node routing). */
+  execNode?: string;
   forkedFromParent?: boolean;
   spawnDepth?: number;
   subagentRole?: SessionEntry["subagentRole"];
   subagentControlScope?: SessionEntry["subagentControlScope"];
   kind: "direct" | "group" | "global" | "unknown";
   label?: string;
+  /** User-defined organization bucket; unrelated to chat-group kind/groupChannel. */
+  category?: string;
   displayName?: string;
   derivedTitle?: string;
   lastMessagePreview?: string;
@@ -60,6 +67,13 @@ export type GatewaySessionRow = {
   chatType?: ChatType;
   origin?: SessionEntry["origin"];
   updatedAt: number | null;
+  archived?: boolean;
+  archivedAt?: number;
+  pinned?: boolean;
+  pinnedAt?: number;
+  unread?: boolean;
+  lastReadAt?: number;
+  lastActivityAt?: number;
   sessionId?: string;
   systemSent?: boolean;
   abortedLastRun?: boolean;
@@ -84,6 +98,7 @@ export type GatewaySessionRow = {
   estimatedCostUsd?: number;
   status?: SessionRunStatus;
   hasActiveRun?: boolean;
+  activeRunIds?: string[];
   subagentRunState?: SubagentRunState;
   hasActiveSubagentRun?: boolean;
   startedAt?: number;
@@ -96,6 +111,7 @@ export type GatewaySessionRow = {
   effectiveResponseUsage?: "on" | "off" | "tokens" | "full";
   modelProvider?: string;
   model?: string;
+  modelSelectionLocked?: boolean;
   agentRuntime?: GatewayAgentRuntime;
   contextTokens?: number;
   contextBudgetStatus?: SessionEntry["contextBudgetStatus"];
@@ -135,5 +151,7 @@ export type SessionsPatchResult = SessionsPatchResultBase<SessionEntry> & {
     modelProvider?: string;
     model?: string;
     agentRuntime?: GatewayAgentRuntime;
+    thinkingLevel?: string;
+    thinkingLevels?: GatewayThinkingLevelOption[];
   };
 };

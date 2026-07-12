@@ -88,6 +88,19 @@ describe("resolveUnusableProfileHint", () => {
     );
   });
 
+  it("quotes exact current profile ids in OAuth reauth guidance", () => {
+    expect(
+      formatOAuthRefreshFailureDoctorLine({
+        profileId: "OpenAI Work Profile",
+        provider: "openai",
+        message:
+          "OAuth token refresh failed for openai: invalid_grant. Please try again or re-authenticate.",
+      }),
+    ).toBe(
+      "- OpenAI Work Profile: re-auth required [invalid_grant] — Run `openclaw models auth login --provider openai --profile-id 'OpenAI Work Profile'`.",
+    );
+  });
+
   it("drops the provider-specific command when the parsed provider is unsafe", () => {
     expect(
       formatOAuthRefreshFailureDoctorLine({

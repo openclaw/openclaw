@@ -40,7 +40,7 @@ function extractConstUnionValues(schema: SchemaLike): string[] {
     .filter((value): value is string => typeof value === "string");
 }
 
-const UI_FILES = ["ui/src/ui/types.ts", "ui/src/ui/ui-types.ts", "ui/src/ui/views/cron.ts"];
+const UI_FILES = ["ui/src/api/types.ts", "ui/src/lib/cron/index.ts", "ui/src/pages/cron/view.ts"];
 
 const SWIFT_MODEL_CANDIDATES = [`${MACOS_APP_SOURCES_DIR}/CronModels.swift`];
 const SWIFT_STATUS_CANDIDATES = [`${MACOS_APP_SOURCES_DIR}/GatewayConnection.swift`];
@@ -86,7 +86,7 @@ describe("cron protocol conformance", () => {
 
   it("cron status shape matches gateway fields in UI + Swift", async () => {
     const cwd = process.cwd();
-    const uiTypes = await fs.readFile(path.join(cwd, "ui/src/ui/types.ts"), "utf-8");
+    const uiTypes = await fs.readFile(path.join(cwd, "ui/src/api/types.ts"), "utf-8");
     expect(uiTypes).toContain("export type CronStatus");
     expect(uiTypes).toContain("jobs:");
     expect(uiTypes).not.toContain("jobCount");

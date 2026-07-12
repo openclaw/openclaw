@@ -13,15 +13,23 @@ import { writeGuardedVaultPage } from "./vault-page-write.js";
 type ImportedSourceState = Parameters<typeof shouldSkipImportedSourceWrite>[0]["state"];
 type VaultRoot = Awaited<ReturnType<typeof fsRoot>>;
 
+function isUnreadableImportedSourcePage(error: unknown): boolean {
+  return error instanceof FsSafeError && (error.code === "not-file" || error.code === "hardlink");
+}
+
 async function readExistingImportedSourcePage(vault: VaultRoot, pagePath: string): Promise<string> {
-  try {
-    return await vault.readText(pagePath);
-  } catch (error) {
-    if (error instanceof FsSafeError && (error.code === "not-file" || error.code === "hardlink")) {
-      return "";
+  let readError: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await vault.readText(pagePath);
+    } catch (error) {
+      readError = error;
     }
-    return await vault.readText(pagePath);
   }
+  if (isUnreadableImportedSourcePage(readError)) {
+    return "";
+  }
+  throw readError;
 }
 
 export async function writeImportedSourcePage(params: {
@@ -36,6 +44,20 @@ export async function writeImportedSourcePage(params: {
   state: ImportedSourceState;
   buildRendered: (raw: string, updatedAt: string) => string;
 }): Promise<{ pagePath: string; changed: boolean; created: boolean }> {
+  const shouldSkip = await shouldSkipImportedSourceWrite({
+    vaultRoot: params.vaultRoot,
+    syncKey: params.syncKey,
+    expectedPagePath: params.pagePath,
+    expectedSourcePath: params.sourcePath,
+    sourceUpdatedAtMs: params.sourceUpdatedAtMs,
+    sourceSize: params.sourceSize,
+    renderFingerprint: params.renderFingerprint,
+    state: params.state,
+  });
+  if (shouldSkip) {
+    return { pagePath: params.pagePath, changed: false, created: false };
+  }
+
   const vault = await fsRoot(params.vaultRoot);
   const pageStat = await vault.stat(params.pagePath).catch((error: unknown) => {
     if (
@@ -48,20 +70,6 @@ export async function writeImportedSourcePage(params: {
   });
   const created = !pageStat;
   const updatedAt = timestampMsToIsoString(params.sourceUpdatedAtMs) ?? new Date().toISOString();
-  const shouldSkip = await shouldSkipImportedSourceWrite({
-    vaultRoot: params.vaultRoot,
-    syncKey: params.syncKey,
-    expectedPagePath: params.pagePath,
-    expectedSourcePath: params.sourcePath,
-    sourceUpdatedAtMs: params.sourceUpdatedAtMs,
-    sourceSize: params.sourceSize,
-    renderFingerprint: params.renderFingerprint,
-    state: params.state,
-  });
-  if (shouldSkip) {
-    return { pagePath: params.pagePath, changed: false, created };
-  }
-
   const raw = await fs.readFile(params.sourcePath, "utf8");
   const rendered = params.buildRendered(raw, updatedAt);
   const existing = pageStat ? await readExistingImportedSourcePage(vault, params.pagePath) : "";

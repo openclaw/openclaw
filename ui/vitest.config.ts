@@ -16,7 +16,7 @@ const repoRoot = path.resolve(here, "..");
 const workspaceSourceAliases = [
   {
     find: "../logging/redact.js",
-    replacement: path.resolve(here, "src/ui/browser-redact.ts"),
+    replacement: path.resolve(here, "src/lib/browser-redact.ts"),
   },
   {
     find: "openclaw/plugin-sdk/test-fixtures",
@@ -58,12 +58,16 @@ const workspaceSourceAliases = [
 const sharedUiTestConfig = {
   isolate: false,
   pool: resolveDefaultVitestPool(),
+  // Real-Chromium layout tests exceed Vitest's 5s default on 4vcpu CI runners;
+  // without this the checks-ui lane flakes on cold hover/interaction tests.
+  testTimeout: 60_000,
+  hookTimeout: 60_000,
 } as const;
 const nodeDrivenBrowserLayoutTests = [
   "src/ui/chat/sidebar-session-picker.browser.test.ts",
-  "src/ui/chat/chat-responsive.browser.test.ts",
-  "src/ui/form-controls.browser.test.ts",
-  "src/ui/views/sessions.browser.test.ts",
+  "src/pages/chat/chat-responsive.browser.test.ts",
+  "src/components/form-controls.browser.test.ts",
+  "src/pages/sessions/view.browser.test.ts",
 ] as const;
 const chromiumExecutableOverrideEnvKey = "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH";
 const systemChromiumExecutableCandidates = [

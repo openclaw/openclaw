@@ -11,6 +11,10 @@ import type {
   PluginHookGatewayStartEvent,
 } from "../plugins/hook-types.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
+import {
+  getActiveGatewayRootWorkCount,
+  resetGatewayWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 
@@ -40,7 +44,8 @@ const hoisted = vi.hoisted(() => {
     skipped: 0,
   }));
   const scheduleRestartAbortedMainSessionRecovery = vi.fn();
-  const scheduleRestartSentinelWake = vi.fn();
+  const scheduleRestartSentinelWake =
+    vi.fn<typeof import("./server-restart-sentinel.js").scheduleRestartSentinelWake>();
   const refreshLatestUpdateRestartSentinel = vi.fn<
     typeof import("./server-restart-sentinel.js").refreshLatestUpdateRestartSentinel
   >(async () => null);
@@ -245,6 +250,8 @@ vi.mock("./server-tailscale.js", () => ({
 const { startGatewayPostAttachRuntime, startGatewaySidecars, testing } =
   await import("./server-startup-post-attach.js");
 const { STARTUP_UNAVAILABLE_GATEWAY_METHODS } = await import("./methods/core-descriptors.js");
+const { createGatewayCloseHandler } = await import("./server-close.js");
+const { createChatRunState } = await import("./server-chat-state.js");
 
 type PostAttachParams = Parameters<typeof startGatewayPostAttachRuntime>[0];
 type PostAttachRuntimeDeps = NonNullable<Parameters<typeof startGatewayPostAttachRuntime>[1]>;
@@ -299,6 +306,7 @@ function firstGatewayStartCall(
 
 describe("startGatewayPostAttachRuntime", () => {
   beforeEach(() => {
+    resetGatewayWorkAdmission();
     closeOpenClawStateDatabaseForTest();
     vi.stubEnv("OPENCLAW_SKIP_CHANNELS", "0");
     vi.stubEnv("OPENCLAW_SKIP_PROVIDERS", "0");
@@ -362,6 +370,7 @@ describe("startGatewayPostAttachRuntime", () => {
   });
 
   afterEach(() => {
+    resetGatewayWorkAdmission();
     closeOpenClawStateDatabaseForTest();
     vi.useRealTimers();
     vi.unstubAllEnvs();
@@ -369,6 +378,10 @@ describe("startGatewayPostAttachRuntime", () => {
 
   it("re-enables startup-gated methods after post-attach sidecars start", async () => {
     const unavailableGatewayMethods = new Set<string>(["chat.history", "models.list"]);
+    const methodsAtRecoveryRegistration: string[][] = [];
+    hoisted.scheduleRestartAbortedMainSessionRecovery.mockImplementationOnce(() => {
+      methodsAtRecoveryRegistration.push([...unavailableGatewayMethods]);
+    });
     const onSidecarsReady = vi.fn();
     const log = { info: vi.fn(), warn: vi.fn() };
 
@@ -397,7 +410,75 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(hoisted.scheduleRestartAbortedMainSessionRecovery).toHaveBeenCalledWith({
       cfg: { hooks: { internal: { enabled: false } } },
     });
+    expect(methodsAtRecoveryRegistration).toStrictEqual([["chat.history", "models.list"]]);
     expect(hoisted.startGatewayMemoryBackend).not.toHaveBeenCalled();
+  });
+
+  it("logs one startup outcome summary after sidecar registration and before readiness", async () => {
+    const events: string[] = [];
+    const outcomeMessages: string[] = [];
+    const log = {
+      info: vi.fn((message: string) => {
+        if (message.startsWith("gateway startup outcomes:")) {
+          outcomeMessages.push(message);
+          events.push("outcomes");
+        } else if (message === "gateway ready") {
+          events.push("ready-log");
+        }
+      }),
+      warn: vi.fn(),
+    };
+
+    await startGatewayPostAttachRuntime({
+      ...createPostAttachParams(),
+      log,
+      agentRuntimePluginPrewarm: { enabled: false },
+      onPostReadySidecars: () => {
+        events.push("post-ready-registered");
+      },
+      onGatewayLifetimeSidecars: () => {
+        events.push("lifetime-registered");
+      },
+      onSidecarsReady: () => {
+        events.push("sidecars-ready");
+      },
+    });
+
+    expect(outcomeMessages).toHaveLength(1);
+    expect(outcomeMessages[0]).toBe(
+      "gateway startup outcomes: internal-hooks=skipped (hooks-disabled); " +
+        "internal-startup-hook=skipped (hooks-disabled); " +
+        "gateway-start-hooks=skipped (no-handlers-loaded); " +
+        "memory-qmd=skipped (not-configured); " +
+        "gmail-watcher=skipped (hooks-disabled); gmail-model=skipped (not-configured)",
+    );
+    expect(events).toEqual([
+      "post-ready-registered",
+      "lifetime-registered",
+      "outcomes",
+      "sidecars-ready",
+      "ready-log",
+    ]);
+  });
+
+  it("reports internal hook load failures without copying the error into the summary", async () => {
+    const log = { info: vi.fn<(message: string) => void>(), warn: vi.fn() };
+    const logHooks = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    hoisted.loadInternalHooks.mockRejectedValueOnce(new Error("private hook path"));
+
+    await startGatewayPostAttachRuntime({
+      ...createPostAttachParams(),
+      log,
+      logHooks,
+      gatewayPluginConfigAtStart: { hooks: { internal: { enabled: true } } } as never,
+    });
+
+    expect(logHooks.error).toHaveBeenCalledWith("failed to load hooks: Error: private hook path");
+    const outcomeMessage = log.info.mock.calls
+      .map(([message]) => message)
+      .find((message) => message.startsWith("gateway startup outcomes:"));
+    expect(outcomeMessage).toContain("internal-hooks=failed (see earlier log)");
+    expect(outcomeMessage).not.toContain("private hook path");
   });
 
   it("refreshes the restart sentinel after sidecars without blocking post-attach", async () => {
@@ -426,6 +507,29 @@ describe("startGatewayPostAttachRuntime", () => {
       expect(refreshLatestUpdateRestartSentinel).toHaveBeenCalledTimes(1);
     });
     expect(events).toEqual(["sidecars", "returned", "sentinel"]);
+  });
+
+  it("keeps delayed restart sentinel recovery admitted until wake work completes", async () => {
+    vi.useFakeTimers();
+    let finishWake: (() => void) | undefined;
+    const wake = new Promise<void>((resolve) => {
+      finishWake = resolve;
+    });
+    hoisted.scheduleRestartSentinelWake.mockReturnValueOnce(wake);
+
+    testing.scheduleRestartSentinelWakeAfterReady({
+      deps: {} as never,
+      log: { warn: vi.fn() },
+    });
+    await vi.advanceTimersByTimeAsync(750);
+
+    expect(hoisted.scheduleRestartSentinelWake).toHaveBeenCalledOnce();
+    expect(getActiveGatewayRootWorkCount()).toBe(1);
+
+    finishWake?.();
+    await vi.waitFor(() => {
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    });
   });
 
   it("starts sidecars while startup logging is still pending", async () => {
@@ -789,8 +893,10 @@ describe("startGatewayPostAttachRuntime", () => {
   });
 
   it("keeps the qmd memory backend lazy by default", async () => {
+    const log = { info: vi.fn(), warn: vi.fn() };
     await startGatewayPostAttachRuntime({
       ...createPostAttachParams(),
+      log,
       gatewayPluginConfigAtStart: {
         hooks: { internal: { enabled: false } },
         memory: { backend: "qmd" },
@@ -798,6 +904,9 @@ describe("startGatewayPostAttachRuntime", () => {
     });
 
     expect(hoisted.startGatewayMemoryBackend).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith(
+      expect.stringContaining("memory-qmd=skipped (startup-disabled)"),
+    );
     expect(
       testing.resolveGatewayMemoryStartupPolicy({ memory: { backend: "qmd" } } as never),
     ).toEqual({ mode: "off" });
@@ -1014,7 +1123,7 @@ describe("startGatewayPostAttachRuntime", () => {
       await startGatewayPostAttachRuntime({
         ...createPostAttachParams(),
         log,
-        deferSidecars: true,
+        sidecarStartup: "defer",
         providerAuthPrewarm: { enabled: true, delayMs: 1_000 },
         onPostReadySidecars,
         onGatewayLifetimeSidecars,
@@ -1035,6 +1144,40 @@ describe("startGatewayPostAttachRuntime", () => {
         expect(hoisted.setAuthProfileFailureHook).toHaveBeenCalledTimes(1);
       });
       expect(hoisted.warmCurrentProviderAuthStateOffMainThread).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.waitFor(() => {
+        expect(hoisted.warmCurrentProviderAuthStateOffMainThread).toHaveBeenCalledTimes(1);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps provider auth failure rewarm without default startup prewarm", async () => {
+    vi.useFakeTimers();
+    const onGatewayLifetimeSidecars = vi.fn();
+
+    try {
+      await startGatewayPostAttachRuntime({
+        ...createPostAttachParams(),
+        sidecarStartup: "defer",
+        providerAuthPrewarm: {},
+        onGatewayLifetimeSidecars,
+      });
+
+      await vi.dynamicImportSettled();
+      await vi.waitFor(() => {
+        expect(hoisted.setAuthProfileFailureHook).toHaveBeenCalledTimes(1);
+      });
+      expect(onGatewayLifetimeSidecars.mock.calls[0]?.[0]).toHaveLength(2);
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(hoisted.warmCurrentProviderAuthStateOffMainThread).not.toHaveBeenCalled();
+
+      const hook = hoisted.setAuthProfileFailureHook.mock.calls[0]?.[0] as (() => void) | undefined;
+      hook?.();
+      expect(hoisted.clearCurrentProviderAuthState).toHaveBeenCalledTimes(1);
 
       await vi.advanceTimersByTimeAsync(1_000);
       await vi.waitFor(() => {
@@ -1098,7 +1241,7 @@ describe("startGatewayPostAttachRuntime", () => {
           } as never,
         }),
         log,
-        deferSidecars: true,
+        sidecarStartup: "defer",
         providerAuthPrewarm: { enabled: true, delayMs: 1_000 },
         onPostReadySidecars,
         onGatewayLifetimeSidecars,
@@ -1204,6 +1347,7 @@ describe("startGatewayPostAttachRuntime", () => {
         getConfig: () => ({ marker: "current" }) as never,
         log,
         delayMs: 1_000,
+        startupWarmEnabled: true,
       });
       await vi.dynamicImportSettled();
       await vi.waitFor(() => {
@@ -1224,7 +1368,7 @@ describe("startGatewayPostAttachRuntime", () => {
     }
   });
 
-  it("keeps the default provider auth prewarm out of the early post-ready window", async () => {
+  it("delays explicit provider auth prewarm beyond the early post-ready window", async () => {
     expect(testing.providerAuthPrewarmStartDelayMs).toBe(5_000);
   });
 
@@ -1241,6 +1385,7 @@ describe("startGatewayPostAttachRuntime", () => {
         getConfig: () => currentCfg,
         log,
         delayMs: 0,
+        startupWarmEnabled: true,
       });
       currentCfg = reloadedCfg;
       await vi.dynamicImportSettled();
@@ -1339,7 +1484,7 @@ describe("startGatewayPostAttachRuntime", () => {
 
         await startGatewayPostAttachRuntime({
           ...createPostAttachParams({
-            deferSidecars: true,
+            sidecarStartup: "defer",
             onChannelsStarted: async () => {
               events.push("channels-started");
             },
@@ -1393,7 +1538,7 @@ describe("startGatewayPostAttachRuntime", () => {
 
         await startGatewayPostAttachRuntime({
           ...createPostAttachParams({
-            deferSidecars: true,
+            sidecarStartup: "defer",
             onPluginServices,
             onSidecarsReady,
           }),
@@ -1498,7 +1643,7 @@ describe("startGatewayPostAttachRuntime", () => {
         const runtimePromise = startGatewayPostAttachRuntime(
           {
             ...createPostAttachParams({
-              deferSidecars: true,
+              sidecarStartup: "defer",
               onPluginServices,
               onSidecarsReady,
             }),
@@ -1860,9 +2005,6 @@ describe("startGatewayPostAttachRuntime", () => {
     const postReadySidecars = [{ stop: vi.fn() }];
     const stopChannel = vi.fn(async () => {});
     const pluginServices = { stop: vi.fn(async () => {}) };
-    const { createGatewayCloseHandler } = await import("./server-close.js");
-    const { createChatRunState } = await import("./server-chat-state.js");
-
     const close = createGatewayCloseHandler({
       bonjourStop: null,
       tailscaleCleanup: null,
@@ -1878,12 +2020,16 @@ describe("startGatewayPostAttachRuntime", () => {
       healthInterval: setInterval(() => {}, 1 << 30),
       dedupeCleanup: setInterval(() => {}, 1 << 30),
       mediaCleanup: null,
+      worktreeCleanup: null,
+      skillCuratorCleanup: vi.fn(),
       agentUnsub: null,
+      taskUnsub: null,
       heartbeatUnsub: null,
       transcriptUnsub: null,
       lifecycleUnsub: null,
       chatRunState: createChatRunState(),
       chatAbortControllers: new Map(),
+      chatQueuedTurns: new Map(),
       removeChatRun: vi.fn(),
       agentRunSeq: new Map(),
       nodeSendToSession: vi.fn(),
@@ -1949,7 +2095,7 @@ describe("startGatewayPostAttachRuntime", () => {
       {
         ...createPostAttachParams(),
         unavailableGatewayMethods,
-        deferSidecars: true,
+        sidecarStartup: "defer",
       },
       createPostAttachRuntimeDeps({ startGatewaySidecars: startGatewaySidecarsValue }),
     );
@@ -1975,6 +2121,68 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(startGatewaySidecarsValue).toHaveBeenCalledTimes(1);
   });
 
+  it("starts the worker environment sidecar before releasing startup-gated methods", async () => {
+    let finishReconcile: (() => void) | undefined;
+    const reconcileReady = new Promise<void>((resolve) => {
+      finishReconcile = resolve;
+    });
+    const workerSidecar = { stop: vi.fn() };
+    const startWorkerEnvironmentRuntime = vi.fn(async () => {
+      await reconcileReady;
+      return workerSidecar;
+    });
+    const onGatewayLifetimeSidecars = vi.fn();
+    const unavailableGatewayMethods = new Set<string>(STARTUP_UNAVAILABLE_GATEWAY_METHODS);
+
+    await startGatewayPostAttachRuntime(
+      {
+        ...createPostAttachParams(),
+        unavailableGatewayMethods,
+        sidecarStartup: "defer",
+        startWorkerEnvironmentRuntime,
+        onGatewayLifetimeSidecars,
+      },
+      createPostAttachRuntimeDeps({
+        startGatewaySidecars: vi.fn(async () => ({
+          pluginServices: null,
+          postReadySidecars: [],
+        })),
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(startWorkerEnvironmentRuntime).toHaveBeenCalledTimes(1);
+    });
+    expect([...unavailableGatewayMethods]).toEqual([...STARTUP_UNAVAILABLE_GATEWAY_METHODS]);
+
+    finishReconcile?.();
+    await vi.waitFor(() => {
+      expect([...unavailableGatewayMethods]).toEqual([]);
+    });
+    expect(onGatewayLifetimeSidecars).toHaveBeenCalledWith(expect.arrayContaining([workerSidecar]));
+  });
+
+  it("does not start the worker environment sidecar after close begins", async () => {
+    const startWorkerEnvironmentRuntime = vi.fn(() => ({ stop: vi.fn() }));
+    const startGatewaySidecarsValue = vi.fn(async () => ({
+      pluginServices: null,
+      postReadySidecars: [],
+    }));
+
+    await startGatewayPostAttachRuntime(
+      {
+        ...createPostAttachParams(),
+        sidecarStartup: "defer",
+        startWorkerEnvironmentRuntime,
+        isClosing: () => true,
+      },
+      createPostAttachRuntimeDeps({ startGatewaySidecars: startGatewaySidecarsValue }),
+    );
+
+    await vi.waitFor(() => expect(startGatewaySidecarsValue).toHaveBeenCalledTimes(1));
+    expect(startWorkerEnvironmentRuntime).not.toHaveBeenCalled();
+  });
+
   it("loads lazy startup plugins before returning with deferred sidecars", async () => {
     const pluginRegistry = {
       plugins: [{ id: "lazy", status: "loaded" }],
@@ -1991,7 +2199,7 @@ describe("startGatewayPostAttachRuntime", () => {
     await startGatewayPostAttachRuntime(
       {
         ...createPostAttachParams({
-          deferSidecars: true,
+          sidecarStartup: "defer",
           loadStartupPlugins,
           onStartupPluginsLoaded,
         }),
@@ -2011,6 +2219,13 @@ describe("startGatewayPostAttachRuntime", () => {
   it("dispatches registered gateway startup internal hooks without configured hook packs", async () => {
     vi.useFakeTimers();
     hoisted.hasInternalHookListeners.mockReturnValue(true);
+    let releaseHook = () => {};
+    hoisted.triggerInternalHook.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseHook = resolve;
+        }),
+    );
     const cfg = {} as never;
     const deps = {} as never;
 
@@ -2049,7 +2264,11 @@ describe("startGatewayPostAttachRuntime", () => {
         },
       );
       expect(hoisted.triggerInternalHook).toHaveBeenCalledWith(hoisted.startupHookEvent);
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+      releaseHook();
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
     } finally {
+      releaseHook();
       vi.useRealTimers();
     }
   });

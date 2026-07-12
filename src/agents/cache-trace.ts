@@ -3,6 +3,7 @@
  */
 import crypto from "node:crypto";
 import path from "node:path";
+import { sanitizeSurrogates } from "@openclaw/ai/internal/shared";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath } from "../utils.js";
@@ -114,11 +115,11 @@ function getWriter(filePath: string): CacheTraceWriter {
 }
 
 function digest(value: unknown): string {
-  const serialized = stableStringify(value);
+  const serialized = stableStringify(value, sanitizeSurrogates);
   return crypto.createHash("sha256").update(serialized).digest("hex");
 }
 
-function summarizeMessages(messages: AgentMessage[]): {
+export function summarizeMessages(messages: AgentMessage[]): {
   messageCount: number;
   messageRoles: Array<string | undefined>;
   messageFingerprints: string[];

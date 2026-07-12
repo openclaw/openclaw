@@ -1,10 +1,12 @@
 /** Materializes configured MCP catalog entries into agent tools and runtime helpers. */
 import crypto from "node:crypto";
-import type { CallToolResult, ContentBlock } from "@modelcontextprotocol/sdk/types.js";
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { normalizeToolParameterSchema } from "@openclaw/ai/internal/openai";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
 import { setPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tools.js";
+import { matchesMcpToolFilterPattern } from "./agent-bundle-mcp-filter.js";
 import {
   buildSafeToolName,
   normalizeReservedToolNames,
@@ -16,45 +18,9 @@ import type {
   McpToolCatalog,
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
-import { normalizeToolParameterSchema } from "./agent-tools-parameter-schema.js";
+import { mcpContentBlockToAgentContent } from "./mcp-content.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import type { AnyAgentTool } from "./tools/common.js";
-
-type ToolResultContentBlock = AgentToolResult<unknown>["content"][number];
-
-// AgentToolResult only carries text/image, but an MCP CallToolResult can also
-// return resource_link, resource, and audio blocks (MCP SDK ContentBlock union).
-// Coercing those into the text/image contract here keeps the boundary honest so
-// downstream provider converters never build an image block with undefined
-// data/media_type, which makes Anthropic 400 and poisons the whole session
-// history (every later turn replays the bad block and 400s too). See #90710.
-function mcpContentBlockToToolResult(block: ContentBlock): ToolResultContentBlock {
-  switch (block.type) {
-    case "text":
-      return { type: "text", text: block.text };
-    case "image":
-      // Only emit an image when the base64 source is actually present.
-      if (block.data && block.mimeType) {
-        return { type: "image", data: block.data, mimeType: block.mimeType };
-      }
-      return { type: "text", text: JSON.stringify(block) };
-    case "audio":
-      return { type: "text", text: `[audio ${block.mimeType}]` };
-    case "resource_link": {
-      const label = block.title ?? block.name;
-      return { type: "text", text: label ? `[${label}] ${block.uri}` : block.uri };
-    }
-    case "resource": {
-      const resource = block.resource;
-      const text = "text" in resource ? resource.text : undefined;
-      return { type: "text", text: text ?? resource.uri };
-    }
-    default:
-      // Forward-compat / untrusted-server guard: stringify any block type the
-      // installed MCP SDK union does not cover instead of dropping it.
-      return { type: "text", text: JSON.stringify(block) };
-  }
-}
 
 function toAgentToolResult(params: {
   serverName: string;
@@ -62,7 +28,7 @@ function toAgentToolResult(params: {
   result: CallToolResult;
 }): AgentToolResult<unknown> {
   const content: AgentToolResult<unknown>["content"] = Array.isArray(params.result.content)
-    ? params.result.content.map(mcpContentBlockToToolResult)
+    ? params.result.content.map(mcpContentBlockToAgentContent)
     : [];
   const structuredContentBlock =
     params.result.structuredContent !== undefined
@@ -128,14 +94,14 @@ function toJsonAgentToolResult(params: {
 }
 
 function requireStringArg(input: unknown, key: string): string {
-  if (
-    !input ||
-    typeof input !== "object" ||
-    typeof (input as Record<string, unknown>)[key] !== "string"
-  ) {
+  if (!input || typeof input !== "object") {
     throw new Error(`${key} is required`);
   }
-  return (input as Record<string, string>)[key];
+  const value = Reflect.get(input, key);
+  if (typeof value !== "string") {
+    throw new Error(`${key} is required`);
+  }
+  return value;
 }
 
 function optionalStringRecordArg(input: unknown, key: string): Record<string, string> | undefined {
@@ -154,31 +120,19 @@ function optionalStringRecordArg(input: unknown, key: string): Record<string, st
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 
-function escapeRegex(value: string): string {
-  return value.replace(/[\\^$+?.()|[\]{}]/g, "\\$&");
-}
-
-function globMatches(pattern: string, value: string): boolean {
-  const trimmed = pattern.trim();
-  if (!trimmed) {
-    return false;
-  }
-  if (!trimmed.includes("*")) {
-    return trimmed === value;
-  }
-  return new RegExp(`^${trimmed.split("*").map(escapeRegex).join(".*")}$`).test(value);
-}
-
 function serverAllowsUtilityTool(
   server: McpToolCatalog["servers"][string],
   operation: string,
 ): boolean {
   const include = server.toolFilter?.include ?? [];
   const exclude = server.toolFilter?.exclude ?? [];
-  if (include.length > 0 && !include.some((pattern) => globMatches(pattern, operation))) {
+  if (
+    include.length > 0 &&
+    !include.some((pattern) => matchesMcpToolFilterPattern(pattern, operation))
+  ) {
     return false;
   }
-  return !exclude.some((pattern) => globMatches(pattern, operation));
+  return !exclude.some((pattern) => matchesMcpToolFilterPattern(pattern, operation));
 }
 
 function addMcpUtilityTool(params: {

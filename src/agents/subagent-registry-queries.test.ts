@@ -36,6 +36,36 @@ function toRunMap(runs: SubagentRunRecord[]): Map<string, SubagentRunRecord> {
 }
 
 describe("subagent registry query regressions", () => {
+  it("selects the newer generation when child runs share a timestamp", () => {
+    const childSessionKey = "agent:main:subagent:same-millisecond";
+    const runs = toRunMap([
+      makeRun({
+        runId: "run-old-tombstone",
+        childSessionKey,
+        requesterSessionKey: "agent:main:old-parent",
+        generation: 1,
+        createdAt: 100,
+        endedAt: 100,
+      }),
+      makeRun({
+        runId: "run-live-successor",
+        childSessionKey,
+        requesterSessionKey: "agent:main:new-parent",
+        generation: 2,
+        createdAt: 100,
+        startedAt: 100,
+      }),
+    ]);
+
+    expect(isSubagentSessionRunActiveFromRuns(runs, childSessionKey)).toBe(true);
+    expect(resolveRequesterForChildSessionFromRuns(runs, childSessionKey)).toMatchObject({
+      requesterSessionKey: "agent:main:new-parent",
+    });
+    expect(getSubagentRunByChildSessionKeyFromRuns(runs, childSessionKey)?.runId).toBe(
+      "run-live-successor",
+    );
+  });
+
   it("does not treat stale unended rows as active child-session liveness", () => {
     const now = Date.now();
     const childSessionKey = "agent:main:subagent:stale-live-check";

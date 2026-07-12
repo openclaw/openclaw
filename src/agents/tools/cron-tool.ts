@@ -109,7 +109,11 @@ function failureDestinationModeSchema(params: { nullableClears: boolean }) {
   return Type.Optional(Type.Union(variants));
 }
 
-function cronPayloadObjectSchema(params: { model: TSchema; toolsAllow: TSchema }) {
+function cronPayloadObjectSchema(params: {
+  model: TSchema;
+  toolsAllow: TSchema;
+  fallbacks: TSchema;
+}) {
   return Type.Object(
     {
       kind: optionalStringEnum(CRON_PAYLOAD_KINDS, { description: "Payload kind" }),
@@ -120,7 +124,7 @@ function cronPayloadObjectSchema(params: { model: TSchema; toolsAllow: TSchema }
       timeoutSeconds: optionalFiniteNumberSchema({ minimum: 0 }),
       lightContext: Type.Optional(Type.Boolean()),
       allowUnsafeExternalContent: Type.Optional(Type.Boolean()),
-      fallbacks: Type.Optional(Type.Array(Type.String(), { description: "Fallback models" })),
+      fallbacks: params.fallbacks,
       toolsAllow: params.toolsAllow,
     },
     { additionalProperties: true },
@@ -161,8 +165,20 @@ function createCronPayloadSchema(): TSchema {
     cronPayloadObjectSchema({
       model: Type.Optional(Type.String({ description: "Model override" })),
       toolsAllow: Type.Optional(Type.Array(Type.String(), { description: "Allowed tools" })),
+      fallbacks: Type.Optional(Type.Array(Type.String(), { description: "Fallback models" })),
     }),
   );
+}
+
+function createCronTriggerSchema(params: { nullableClears: boolean }): TSchema {
+  const trigger = Type.Object(
+    {
+      script: Type.String({ minLength: 1, maxLength: 65_536 }),
+      once: Type.Optional(Type.Boolean()),
+    },
+    { additionalProperties: false },
+  );
+  return Type.Optional(params.nullableClears ? Type.Union([trigger, Type.Null()]) : trigger);
 }
 
 function cronDeliverySchema(params: { nullableClears: boolean }) {
@@ -255,7 +271,28 @@ function createCronJobObjectSchema(): TSchema {
     Type.Object(
       {
         name: Type.Optional(Type.String({ description: "Job name" })),
+        declarationKey: Type.Optional(
+          Type.String({
+            description: "Idempotent declaration identity key",
+            minLength: 1,
+            maxLength: 200,
+            pattern: "\\S",
+          }),
+        ),
+        displayName: Type.Optional(
+          Type.String({ description: "Human-readable declarative job label", maxLength: 200 }),
+        ),
+        owner: Type.Optional(
+          Type.Object(
+            {
+              agentId: Type.Optional(Type.String()),
+              sessionKey: Type.Optional(Type.String()),
+            },
+            { additionalProperties: false },
+          ),
+        ),
         schedule: createCronScheduleSchema(),
+        trigger: createCronTriggerSchema({ nullableClears: false }),
         sessionTarget: Type.Optional(
           Type.String({
             description: "main | isolated | current | session:<id>",
@@ -281,13 +318,20 @@ function createCronPatchObjectSchema(): TSchema {
     Type.Object(
       {
         name: Type.Optional(Type.String({ description: "Job name" })),
+        displayName: Type.Optional(
+          Type.Union([Type.String({ maxLength: 200 }), Type.Null()], {
+            description: "Human-readable label; null clears it",
+          }),
+        ),
         schedule: createCronScheduleSchema(),
+        trigger: createCronTriggerSchema({ nullableClears: true }),
         sessionTarget: Type.Optional(Type.String({ description: "Session target" })),
         wakeMode: optionalStringEnum(CRON_WAKE_MODES),
         payload: Type.Optional(
           cronPayloadObjectSchema({
             model: nullableStringSchema("Model override, or null to clear"),
             toolsAllow: nullableStringArraySchema("Allowed tool ids, or null to clear"),
+            fallbacks: nullableStringArraySchema("Fallback models, or null to clear"),
           }),
         ),
         delivery: createCronDeliveryPatchSchema(),
@@ -413,7 +457,7 @@ function assertNoCronShellExecution(value: unknown): void {
     return;
   }
   const payload = isRecord(value.payload) ? value.payload : undefined;
-  if (payload?.kind === "command") {
+  if (normalizeLowercaseStringOrEmpty(payload?.kind) === "command") {
     throw new Error(
       "cron command payloads cannot be created or edited through the agent cron tool; use the CLI or Gateway API.",
     );
@@ -870,6 +914,7 @@ JOB SCHEMA (for add action):
 {
   "name": "string",
   "schedule": { ... },      // required
+  "trigger": { "script": "...", "once": false }, // optional condition gate for every/cron
   "payload": { ... },       // required
   "delivery": { ... },      // optional announce for isolated/current/session, webhook for any target
   "sessionTarget": "main" | "isolated" | "current" | "session:<id>",
@@ -897,6 +942,14 @@ SCHEDULE TYPES (schedule.kind):
   Write expr in local wall-clock time; do not convert the requested local time to UTC first.
   tz omitted => Gateway host local timezone, not UTC.
   Example 6pm Shanghai daily: { "kind": "cron", "expr": "0 18 * * *", "tz": "Asia/Shanghai" }
+
+TRIGGER SCRIPTS (every/cron only):
+- Gate: cron.triggers.enabled. Disabled add -> explain; no model-poll fallback.
+- Headless; owner tool allowlist; quiet check uses no model. Prior JSON: frozen trigger.state. Return/json({ fire: boolean, message?: string, state?: JSONValue }); new state only; never mutate old.
+- fire:false: save state; no payload/run history. fire:true: run payload; append message to systemEvent/agentTurn. Fired state saves only after payload success. Check reads; payload acts.
+- Silent watcher: top-level delivery.mode="none". Isolated agentTurn with no delivery => announce; missing route may fail payload.
+- once:true: disable after first successful fired payload. Limits/check: 30s, 5 tool calls, 16KB state.
+- Tools via hidden Code Mode catalog: await tools.call("exec", { command: "..." }); unclear id -> search/describe.
 
 For "at", ISO timestamps without timezone are UTC.
 
@@ -1034,10 +1087,30 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
             const canonicalJob = canonicalizeCronToolObject(params.job as Record<string, unknown>);
             assertNoCronShellExecution(canonicalJob);
             assertCronDeliveryInputNonBlankFields(canonicalJob.delivery);
+            if (
+              typeof canonicalJob.declarationKey === "string" &&
+              canonicalJob.declarationKey.trim().length === 0
+            ) {
+              throw new Error("declarationKey must be a non-empty string");
+            }
+            if (
+              typeof canonicalJob.displayName === "string" &&
+              canonicalJob.displayName.trim().length === 0
+            ) {
+              throw new Error("displayName must be a non-empty string");
+            }
+            const enabledExplicit = typeof canonicalJob.enabled === "boolean";
             const job =
               normalizeCronJobCreate(canonicalJob, {
                 sessionContext: { sessionKey: opts?.agentSessionKey },
               }) ?? canonicalJob;
+            if (
+              typeof job.declarationKey === "string" &&
+              job.declarationKey.length > 0 &&
+              !enabledExplicit
+            ) {
+              delete job.enabled;
+            }
             capCronAgentTurnJobToolsAllow(job, opts?.creatorToolAllowlist);
             if (job && typeof job === "object") {
               const { mainKey, alias } = resolveMainSessionAlias(runtimeConfig);
@@ -1158,6 +1231,12 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
             );
             assertNoCronShellExecution(canonicalPatch);
             assertCronDeliveryInputNonBlankFields(canonicalPatch.delivery);
+            if (
+              typeof canonicalPatch.displayName === "string" &&
+              canonicalPatch.displayName.trim().length === 0
+            ) {
+              throw new Error("displayName must be a non-empty string or null");
+            }
             const patch = normalizeCronJobPatch(canonicalPatch) ?? canonicalPatch;
             if (recoveredFlatPatch && isEmptyRecoveredCronPatch(patch)) {
               throw new Error("patch required");

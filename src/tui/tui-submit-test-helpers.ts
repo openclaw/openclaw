@@ -15,6 +15,7 @@ type SubmitHarness = {
   handleBangLine: MockFn;
   canSubmitMessage: MockFn;
   onBlockedMessageSubmit: MockFn;
+  onSubmitError: MockFn;
   onSubmit: (text: string) => void;
 };
 
@@ -31,11 +32,13 @@ export function createSubmitHarness(params?: {
   const handleBangLine = vi.fn();
   const canSubmitMessage = vi.fn(params?.canSubmitMessage ?? (() => true));
   const onBlockedMessageSubmit = vi.fn();
+  const onSubmitError = vi.fn();
   const onSubmit = createEditorSubmitHandler({
     editor,
     handleCommand,
     sendMessage,
     handleBangLine,
+    onSubmitError,
     canSubmitMessage,
     onBlockedMessageSubmit,
   });
@@ -46,6 +49,7 @@ export function createSubmitHarness(params?: {
     handleBangLine,
     canSubmitMessage,
     onBlockedMessageSubmit,
+    onSubmitError,
     onSubmit,
   };
 }

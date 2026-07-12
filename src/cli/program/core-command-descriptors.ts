@@ -8,17 +8,17 @@ export type CoreCliCommandDescriptor = NamedCommandDescriptor;
 const coreCliCommandCatalog = defineCommandDescriptorCatalog([
   {
     name: "crestodian",
-    description: "Open the interactive setup and repair assistant",
+    description: "Open the ring-zero setup and repair helper",
     hasSubcommands: false,
   },
   {
     name: "setup",
-    description: "Initialize local config and an agent workspace",
+    description: "Alias for openclaw onboard",
     hasSubcommands: false,
   },
   {
     name: "onboard",
-    description: "Interactive onboarding for gateway, workspace, and skills",
+    description: "Guided setup for auth, models, Gateway, workspace, channels, and skills",
     hasSubcommands: false,
   },
   {
@@ -29,7 +29,7 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
   {
     name: "config",
     description:
-      "Non-interactive config helpers (get/set/unset/file/validate). Default: starts guided setup.",
+      "Non-interactive config helpers (get/set/patch/unset/file/schema/validate). Run without subcommand for guided setup.",
     hasSubcommands: true,
   },
   {
@@ -44,7 +44,7 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "doctor",
-    description: "Diagnose and repair config, Gateway, plugin, and channel problems",
+    description: "Health checks + quick fixes for the gateway and channels",
     hasSubcommands: false,
   },
   {
@@ -64,12 +64,12 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "message",
-    description: "Send, read, and manage channel messages",
+    description: "Send, read, and manage messages and channel actions",
     hasSubcommands: true,
   },
   {
     name: "mcp",
-    description: "Manage OpenClaw MCP config and channel bridge",
+    description: "Manage OpenClaw mcp.servers config and channel bridge",
     hasSubcommands: true,
     parentDefaultHelp: true,
   },
@@ -80,22 +80,27 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "agent",
-    description: "Run one agent turn via the Gateway",
+    description: "Run an agent turn via the Gateway (use --local for embedded)",
     hasSubcommands: false,
   },
   {
     name: "agents",
-    description: "Manage isolated agents (workspaces, auth, routing)",
+    description: "Manage isolated agents (workspaces + auth + routing)",
     hasSubcommands: true,
   },
   {
     name: "status",
-    description: "Show Gateway, channel, model, and recent-session status",
+    description: "Show channel health and recent session recipients",
     hasSubcommands: false,
   },
   {
     name: "health",
-    description: "Fetch detailed health from the running Gateway",
+    description: "Fetch health from the running gateway",
+    hasSubcommands: false,
+  },
+  {
+    name: "audit",
+    description: "Inspect metadata-only run, tool, and message lifecycle records",
     hasSubcommands: false,
   },
   {
@@ -110,7 +115,7 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "tasks",
-    description: "Inspect durable background tasks and flows",
+    description: "Inspect durable background tasks and TaskFlow state",
     hasSubcommands: true,
   },
 ] as const satisfies ReadonlyArray<CoreCliCommandDescriptor>);

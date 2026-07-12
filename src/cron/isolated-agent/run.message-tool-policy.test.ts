@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createSourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
 import type { SkillSnapshot } from "../../skills/types.js";
+import { applyJobPatch } from "../service/jobs.js";
 import type { CronDeliveryMode } from "../types.js";
 import type { MutableCronSession } from "./run-session-state.js";
 import {
@@ -12,6 +13,7 @@ import {
   isCliProviderMock,
   isHeartbeatOnlyResponseMock,
   loadRunCronIsolatedAgentTurn,
+  loadSessionEntryMock,
   makeCronSession,
   mockRunCronFallbackPassthrough,
   preflightCronModelProviderMock,
@@ -753,6 +755,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     expectRecordFields(
       getMockCallArg(runCliAgentMock, 0, 0, "CLI run"),
       {
+        allowEmptyAssistantReplyAsSilent: true,
         messageChannel: "messagechat",
         requireExplicitMessageTarget: true,
       },
@@ -860,6 +863,45 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     expect(cliRun.toolsAllow).toBeUndefined();
   });
 
+  it("keeps a cron-tool default toolsAllow marker after a self-edit before CLI execution", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
+    isCliProviderMock.mockReturnValue(true);
+    runCliAgentMock.mockResolvedValue({
+      payloads: [{ text: "done" }],
+      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+    });
+    const job = makeMessageToolPolicyJob(
+      { mode: "announce", channel: "messagechat", to: "123" },
+      {
+        kind: "agentTurn",
+        message: "send a message",
+        toolsAllow: ["read", "cron"],
+        toolsAllowIsDefault: true,
+      },
+    );
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        message: "send a clearer message",
+        toolsAllow: ["read", "cron"],
+      },
+    });
+
+    await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job,
+    });
+
+    const cliRun = expectRecordFields(
+      getMockCallArg(runCliAgentMock, 0, 0, "CLI run"),
+      {},
+      "CLI run params",
+    );
+    expect(cliRun.toolsAllow).toBeUndefined();
+  });
+
   it("keeps automatic exec completion notifications when announce delivery is active", async () => {
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
@@ -915,8 +957,13 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
   });
 
   it("releases cron run context references after completion", async () => {
+    const initialSessionEntry = { retained: true };
+    loadSessionEntryMock.mockImplementation((_storePath, sessionKey) =>
+      sessionKey === "agent:default:cron:message-tool-policy" ? initialSessionEntry : undefined,
+    );
     const cronSession = makeCronSession({
-      store: { "agent:default:cron:message-tool-policy": { retained: true } },
+      store: { "agent:default:cron:message-tool-policy": initialSessionEntry },
+      initialSessionEntry,
     });
     resolveCronSessionMock.mockReturnValue(cronSession);
     const { getAgentRunContext, registerAgentRunContext } =
@@ -997,8 +1044,13 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
   });
 
   it("keeps shared cron run context references active after completion", async () => {
+    const initialSessionEntry = { retained: true };
+    loadSessionEntryMock.mockImplementation((_storePath, sessionKey) =>
+      sessionKey === "agent:default:cron:message-tool-policy" ? initialSessionEntry : undefined,
+    );
     const cronSession = makeCronSession({
-      store: { "agent:default:cron:message-tool-policy": { retained: true } },
+      store: { "agent:default:cron:message-tool-policy": initialSessionEntry },
+      initialSessionEntry,
     });
     resolveCronSessionMock.mockReturnValue(cronSession);
     const { clearAgentRunContext, getAgentRunContext, registerAgentRunContext } =
@@ -1042,6 +1094,9 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
   });
 
   it("keeps shared cron context until overlapping invocations finish", async () => {
+    // This test owns process-local run-context reference counting, not the
+    // persistent session admission that serializes real turns on one key.
+    process.env.OPENCLAW_TEST_FAST = "1";
     mockRunCronFallbackPassthrough();
     resolveCronSessionMock.mockImplementation(() => makeCronSession());
     const { claimAgentRunContext, getAgentEventLifecycleGeneration, getAgentRunContext } =
@@ -1176,6 +1231,9 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       job: expect.objectContaining({ id: "fatal-error-payload" }),
       agentSessionKey: "agent:default:cron:message-tool-policy",
       sessionId: "test-session-id",
+      lifecycleRevision: "test-lifecycle-revision",
+      sessionUpdatedAt: expect.any(Number),
+      beforeSessionDelete: expect.any(Function),
       retireReason: "cron-delete-after-run-fatal-error",
     });
     expectDeliveryFields(result.delivery, {
@@ -1212,6 +1270,9 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       }),
       agentSessionKey: "agent:default:cron:message-tool-policy",
       sessionId: "test-session-id",
+      lifecycleRevision: "test-lifecycle-revision",
+      sessionUpdatedAt: expect.any(Number),
+      beforeSessionDelete: expect.any(Function),
       retireReason: "cron-delete-after-run-fatal-error",
     });
   });

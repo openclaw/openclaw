@@ -1,6 +1,7 @@
 /**
  * Resolves CLI runtime aliases to provider/model auth labels and execution ids.
  */
+import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -73,28 +74,23 @@ function normalizeRuntimeModelRefForComparison(
   options: RuntimeAliasComparisonOptions = {},
 ): string {
   const trimmed = raw.trim();
-  const slash = trimmed.indexOf("/");
-  if (slash <= 0 || slash >= trimmed.length - 1) {
+  const parsed = parseModelCatalogRef(trimmed);
+  if (!parsed) {
     return normalizeProviderId(canonicalizeRuntimeAliasProvider(trimmed, options));
   }
-  const provider = trimmed.slice(0, slash).trim();
-  const model = trimmed.slice(slash + 1).trim();
   const canonicalProvider = normalizeProviderId(
-    canonicalizeRuntimeAliasProvider(provider, options),
+    canonicalizeRuntimeAliasProvider(parsed.provider, options),
   );
-  return model ? `${canonicalProvider}/${model}` : canonicalProvider;
+  return `${canonicalProvider}/${parsed.modelId}`;
 }
 
 function normalizeRuntimeModelRefWithoutAlias(raw: string): string {
   const trimmed = raw.trim();
-  const slash = trimmed.indexOf("/");
-  if (slash <= 0 || slash >= trimmed.length - 1) {
+  const parsed = parseModelCatalogRef(trimmed);
+  if (!parsed) {
     return normalizeProviderId(trimmed);
   }
-  const provider = trimmed.slice(0, slash).trim();
-  const model = trimmed.slice(slash + 1).trim();
-  const normalizedProvider = normalizeProviderId(provider);
-  return model ? `${normalizedProvider}/${model}` : normalizedProvider;
+  return `${parsed.provider}/${parsed.modelId}`;
 }
 
 export function areRuntimeModelRefsEquivalent(

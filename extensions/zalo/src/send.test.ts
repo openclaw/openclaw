@@ -119,6 +119,29 @@ describe("zalo send", () => {
     expect(sendPhotoMock).not.toHaveBeenCalled();
   });
 
+  it("keeps outbound text and photo captions UTF-16 safe at the 2000-char limit", async () => {
+    sendMessageMock.mockResolvedValueOnce({
+      ok: true,
+      result: { message_id: "z-msg-surrogate" },
+    });
+    sendPhotoMock.mockResolvedValueOnce({
+      ok: true,
+      result: { message_id: "z-photo-surrogate" },
+    });
+    const boundaryText = `${"a".repeat(1999)}🐱`;
+
+    await sendMessageZalo("dm-chat-surrogate-text", boundaryText, {
+      token: "zalo-token",
+    });
+    await sendPhotoZalo("dm-chat-surrogate-caption", "https://example.com/photo.jpg", {
+      token: "zalo-token",
+      caption: boundaryText,
+    });
+
+    expect(sendMessageMock.mock.calls[0]?.[1]?.text).toBe("a".repeat(1999));
+    expect(sendPhotoMock.mock.calls[0]?.[1]?.caption).toBe("a".repeat(1999));
+  });
+
   it("sends cfg-backed media directly without hosted-media rewrites", async () => {
     sendPhotoMock.mockResolvedValueOnce({
       ok: true,

@@ -1,5 +1,5 @@
 // Setup gateway config helpers build gateway config from onboarding answers.
-import { validateIPv4AddressInput } from "@openclaw/net-policy/ipv4";
+import { validateDottedDecimalIPv4Input } from "@openclaw/net-policy/ipv4";
 import { formatPortRangeHint } from "../cli/error-format.js";
 import { parsePort } from "../cli/shared/parse-port.js";
 import {
@@ -24,7 +24,7 @@ import { findTailscaleBinary } from "../infra/tailscale.js";
 import { resolveSecretInputModeForEnvSelection } from "../plugins/provider-auth-mode.js";
 import { promptSecretRefForSetup } from "../plugins/provider-auth-ref.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { maskApiKey } from "../utils/mask-api-key.js";
+import { maskApiKey } from "../security/secret-mask.js";
 import { t } from "./i18n/index.js";
 import type { WizardPrompter } from "./prompts.js";
 import { resolveSetupSecretInputString } from "./setup.secret-input.js";
@@ -131,7 +131,7 @@ export async function configureGatewayForSetup(
         message: t("wizard.gateway.bindCustomIp"),
         placeholder: "192.168.1.100",
         initialValue: customBindHost ?? "",
-        validate: validateIPv4AddressInput,
+        validate: validateDottedDecimalIPv4Input,
       });
       customBindHost = typeof input === "string" ? input.trim() : undefined;
     }

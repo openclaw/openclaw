@@ -6,6 +6,7 @@ import type {
   ChannelOutboundAdapter,
   ChannelPlugin,
 } from "../channels/plugins/types.public.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 
 /** Registry entry shape used by channel tests without loading real plugins. */
@@ -13,52 +14,19 @@ export type TestChannelRegistration = {
   pluginId: string;
   plugin: unknown;
   source: string;
+  origin?: "bundled" | "global" | "workspace" | "config";
 };
 
 export const createTestRegistry = (channels: TestChannelRegistration[] = []): PluginRegistry => ({
-  plugins: [],
-  tools: [],
-  hooks: [],
-  typedHooks: [],
+  ...createEmptyPluginRegistry(),
   channels: channels as unknown as PluginRegistry["channels"],
   channelSetups: channels.map((entry) => ({
     pluginId: entry.pluginId,
     plugin: entry.plugin as PluginRegistry["channelSetups"][number]["plugin"],
+    ...(entry.origin ? { origin: entry.origin } : {}),
     source: entry.source,
     enabled: true,
   })),
-  providers: [],
-  modelCatalogProviders: [],
-  embeddingProviders: [],
-  speechProviders: [],
-  realtimeTranscriptionProviders: [],
-  realtimeVoiceProviders: [],
-  mediaUnderstandingProviders: [],
-  transcriptSourceProviders: [],
-  imageGenerationProviders: [],
-  videoGenerationProviders: [],
-  musicGenerationProviders: [],
-  webFetchProviders: [],
-  webSearchProviders: [],
-  migrationProviders: [],
-  codexAppServerExtensionFactories: [],
-  agentToolResultMiddlewares: [],
-  memoryEmbeddingProviders: [],
-  textTransforms: [],
-  cliBackends: [],
-  agentHarnesses: [],
-  gatewayHandlers: {},
-  gatewayMethodDescriptors: [],
-  httpRoutes: [],
-  cliRegistrars: [],
-  reloads: [],
-  nodeHostCommands: [],
-  securityAuditCollectors: [],
-  services: [],
-  gatewayDiscoveryServices: [],
-  commands: [],
-  conversationBindingResolvedHandlers: [],
-  diagnostics: [],
 });
 
 export const createChannelTestPluginBase = (params: {

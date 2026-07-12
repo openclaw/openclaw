@@ -1026,15 +1026,3 @@ export function formatWindowsGatewayFirewallGuidance(params: {
     "Windows firewall: if another device cannot connect to the LAN URL, run `openclaw gateway status --deep` from this Windows host.",
   ];
 }
-
-export function formatWindowsGatewayFirewallDiagnostic(
-  diagnostic: WindowsGatewayFirewallDiagnostic,
-): string[] {
-  if (!diagnostic.applies || diagnostic.severity !== "warning") {
-    return [];
-  }
-  return [
-    `Windows firewall: ${diagnostic.message}`,
-    ...diagnostic.details.map((line) => `  ${line}`),
-  ];
-}

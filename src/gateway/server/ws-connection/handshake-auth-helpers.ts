@@ -283,6 +283,24 @@ export function shouldSkipLocalBackendSelfPairing(params: {
   return (params.sharedAuthOk && usesSharedSecretAuth) || usesDeviceTokenAuth;
 }
 
+export function shouldPreserveLocalCliSharedAuthScopes(params: {
+  connectParams: ConnectParams;
+  locality: PairingLocalityKind;
+  hasBrowserOriginHeader: boolean;
+  sharedAuthOk: boolean;
+  authMethod: GatewayAuthResult["method"];
+}): boolean {
+  const isCliClient =
+    params.connectParams.client.id === GATEWAY_CLIENT_IDS.CLI &&
+    params.connectParams.client.mode === GATEWAY_CLIENT_MODES.CLI;
+  if (!isCliClient) {
+    return false;
+  }
+  const isLocal = params.locality === "direct_local" || params.locality === "cli_container_local";
+  const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
+  return isLocal && !params.hasBrowserOriginHeader && params.sharedAuthOk && usesSharedSecretAuth;
+}
+
 function resolveSignatureToken(connectParams: ConnectParams): string | null {
   return (
     connectParams.auth?.token ??

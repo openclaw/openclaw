@@ -1,17 +1,18 @@
 // Guest Transports script supports OpenClaw repository automation.
 import { randomUUID } from "node:crypto";
+import { sleep } from "../../lib/sleep.mjs";
 import { run } from "./host-command.ts";
 import type { PhaseRunner } from "./phase-runner.ts";
 import { encodePowerShell, psSingleQuote } from "./powershell.ts";
 import type { CommandResult } from "./types.ts";
 
-export interface GuestExecOptions {
+interface GuestExecOptions {
   check?: boolean;
   input?: string;
   timeoutMs?: number;
 }
 
-export interface WindowsBackgroundPowerShellOptions {
+interface WindowsBackgroundPowerShellOptions {
   append?: (chunk: string | Uint8Array) => void;
   beforeLaunchAttempt?: () => void;
   completedLogDrainGraceMs?: number;
@@ -42,12 +43,6 @@ function appendOutput(
 
 function timeoutBefore(deadline: number, fallbackMs: number): number {
   return Math.min(fallbackMs, Math.max(1_000, deadline - Date.now()));
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 function throwIfFailed(label: string, result: CommandResult, check: boolean | undefined): void {
@@ -480,7 +475,7 @@ export class LinuxGuest {
   }
 }
 
-export interface MacosGuestOptions extends GuestExecOptions {
+interface MacosGuestOptions extends GuestExecOptions {
   env?: Record<string, string>;
 }
 

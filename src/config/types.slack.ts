@@ -44,6 +44,13 @@ export type SlackChannelConfig = {
   enabled?: boolean;
   /** Require mentioning the bot to trigger replies. */
   requireMention?: boolean;
+  /**
+   * Ignore room messages that mention another user or user group but not this bot.
+   * Requires a resolved bot user ID. Default: false.
+   */
+  ignoreOtherMentions?: boolean;
+  /** Override Slack reply/thread behavior for this channel. */
+  replyToMode?: ReplyToMode;
   /** Optional tool policy overrides for this channel. */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
@@ -154,6 +161,12 @@ export type SlackAccountConfig = {
   name?: string;
   /** Slack connection mode (socket|http|relay). Default: socket. */
   mode?: "socket" | "http" | "relay";
+  /**
+   * Treat this account as one Slack Enterprise Grid org-wide installation.
+   * The declaration is verified against auth.test during monitor startup.
+   * DMs must be disabled or use dmPolicy="open" with effective allowFrom containing "*".
+   */
+  enterpriseOrgInstall?: boolean;
   /** Slack SDK Socket Mode transport options. Ignored in HTTP mode. */
   socketMode?: SlackSocketModeConfig;
   /** Relay-delivered Slack event source. Used when mode is "relay". */

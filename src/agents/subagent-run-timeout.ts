@@ -51,3 +51,13 @@ export function resolveSubagentRunDeadlineMs(
     ? deadlineMs
     : undefined;
 }
+
+/** Clamp a reported terminal time to the run's explicit timeout deadline. */
+export function resolveSubagentRunEffectiveEndedAt(
+  entry: Pick<SubagentRunRecord, "createdAt" | "startedAt" | "runTimeoutSeconds">,
+  endedAt: number,
+  observedStartedAt?: number,
+): number {
+  const deadlineMs = resolveSubagentRunDeadlineMs(entry, observedStartedAt);
+  return deadlineMs !== undefined && endedAt > deadlineMs ? deadlineMs : endedAt;
+}

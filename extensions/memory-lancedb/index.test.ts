@@ -2955,7 +2955,7 @@ describe("memory plugin e2e", () => {
     const fakeRows = [
       {
         id: fakeUuid1,
-        text: "User prefers dark mode",
+        text: `${"x".repeat(59)}🚀tail`,
         category: "preference",
         vector: [0.1],
         importance: 0.8,
@@ -3035,6 +3035,8 @@ describe("memory plugin e2e", () => {
       const text = result.content?.[0]?.text ?? "";
       expect(text).toContain(fakeUuid1);
       expect(text).toContain(fakeUuid2);
+      expect(text).toContain(`- [${fakeUuid1}] ${"x".repeat(59)}...`);
+      expect(text).not.toContain("\uD83D");
       // Ensure truncated 8-char prefix alone is NOT the format used
       expect(text).not.toMatch(/\[890e1fae\]/);
       expect(text).not.toMatch(/\[a1b2c3d4\]/);

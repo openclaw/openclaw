@@ -1,4 +1,5 @@
 // Gateway Protocol schema module defines protocol validation shapes.
+import type { Static } from "typebox";
 import { Type } from "typebox";
 import { InputProvenanceSchema, NonEmptyString, SessionLabelString } from "./primitives.js";
 
@@ -67,7 +68,7 @@ export const AgentEventSchema = Type.Object(
   { additionalProperties: false },
 );
 
-/** Channel context injected into message actions so tools can reply in-place. */
+/** Caller-supplied routing hints. Authorization must use trusted runtime context. */
 export const MessageActionToolContextSchema = Type.Object(
   {
     currentChannelId: Type.Optional(Type.String()),
@@ -117,6 +118,11 @@ export const MessageActionParamsSchema = Type.Object(
     inboundTurnKind: Type.Optional(Type.String({ enum: ["user_request", "room_event"] })),
     agentId: Type.Optional(Type.String()),
     toolContext: Type.Optional(MessageActionToolContextSchema),
+    /**
+     * Explicit operation-local marker for an authenticated direct operator.
+     * Missing values remain delegated, and agent runtime identity wins server-side.
+     */
+    conversationReadOrigin: Type.Optional(Type.Literal("direct-operator")),
     idempotencyKey: NonEmptyString,
   },
   { additionalProperties: false },
@@ -206,6 +212,7 @@ export const AgentParamsSchema = Type.Object(
     timeout: Type.Optional(Type.Integer({ minimum: 0 })),
     bestEffortDeliver: Type.Optional(Type.Boolean()),
     lane: Type.Optional(Type.String()),
+    cwd: Type.Optional(NonEmptyString),
     // One-shot CLI gateway requests can ask the gateway to close process-wide
     // bundle MCP resources after the run instead of keeping them warm.
     cleanupBundleMcpOnRunEnd: Type.Optional(Type.Boolean()),
@@ -288,3 +295,13 @@ export const WakeParamsSchema = Type.Object(
   },
   { additionalProperties: true }, // external wake senders may attach opaque metadata
 );
+
+// Wire types derive directly from local schema consts so public d.ts graphs never
+// pull in the ProtocolSchemas registry.
+export type AgentEvent = Static<typeof AgentEventSchema>;
+export type AgentIdentityParams = Static<typeof AgentIdentityParamsSchema>;
+export type AgentIdentityResult = Static<typeof AgentIdentityResultSchema>;
+export type MessageActionParams = Static<typeof MessageActionParamsSchema>;
+export type PollParams = Static<typeof PollParamsSchema>;
+export type AgentWaitParams = Static<typeof AgentWaitParamsSchema>;
+export type WakeParams = Static<typeof WakeParamsSchema>;

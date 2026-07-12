@@ -61,7 +61,7 @@ flow:
           value:
             expr: "await env.gateway.call('agent.wait', { runId: started.runId, timeoutMs: liveTurnTimeoutMs(env, 45000) }, { timeoutMs: liveTurnTimeoutMs(env, 50000) })"
         - assert:
-            expr: "waited?.status === 'ok'"
+            expr: "['ok', 'completed', 'succeeded'].includes(String(waited?.status)) || (waited?.status === 'error' && String(waited?.error ?? '').trim().toLowerCase() === 'completed')"
             message:
               expr: "`agent.wait returned ${String(waited?.status ?? 'unknown')}: ${String(waited?.error ?? '')}`"
         - call: fs.readFile

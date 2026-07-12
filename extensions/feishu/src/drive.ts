@@ -1,6 +1,8 @@
 // Feishu plugin module implements drive behavior.
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
+import { jsonResult } from "openclaw/plugin-sdk/tool-results";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { listEnabledFeishuAccounts } from "./accounts.js";
 import { cleanupAmbientCommentTypingReaction } from "./comment-reaction.js";
@@ -14,11 +16,7 @@ import {
 import { parseFeishuCommentTarget, type CommentFileType } from "./comment-target.js";
 import { FeishuDriveSchema, type FeishuDriveParams } from "./drive-schema.js";
 import { createFeishuToolClient, resolveAnyEnabledFeishuToolsConfig } from "./tool-account.js";
-import {
-  jsonToolResult,
-  toolExecutionErrorResult,
-  unknownToolActionResult,
-} from "./tool-result.js";
+import { toolExecutionErrorResult, unknownToolActionResult } from "./tool-result.js";
 
 // ============ Actions ============
 
@@ -328,11 +326,27 @@ async function getRootFolderToken(client: Lark.Client): Promise<string> {
   return token;
 }
 
-async function listFolder(client: Lark.Client, folderToken?: string) {
-  // Filter out invalid folder_token values (empty, "0", etc.)
+async function listFolder(client: Lark.Client, params: Record<string, unknown> = {}) {
+  const folderToken =
+    typeof params.folder_token === "string" ? params.folder_token.trim() : undefined;
   const validFolderToken = folderToken && folderToken !== "0" ? folderToken : undefined;
+  const pageSize = readPositiveIntegerParam(params, "page_size", {
+    max: 200,
+    message: "page_size must be a positive integer between 1 and 200",
+  });
+  const pageToken = typeof params.page_token === "string" ? params.page_token.trim() : undefined;
+
+  // Bot credentials have no browsable root. A continuation cursor is only valid with the
+  // same concrete folder token that produced it, so do not forward pagination for root.
+  const listParams = validFolderToken
+    ? {
+        folder_token: validFolderToken,
+        ...(pageSize ? { page_size: pageSize } : {}),
+        ...(pageToken ? { page_token: pageToken } : {}),
+      }
+    : {};
   const res = await client.drive.file.list({
-    params: validFolderToken ? { folder_token: validFolderToken } : {},
+    params: listParams,
   });
   if (res.code !== 0) {
     throw new Error(res.msg);
@@ -580,7 +594,7 @@ async function queryCommentById(
   return response.data?.items?.find((comment) => comment.comment_id?.trim() === params.comment_id);
 }
 
-export async function replyComment(
+async function replyComment(
   client: Lark.Client,
   params: {
     file_token: string;
@@ -769,33 +783,39 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
             });
             switch (p.action) {
               case "list":
-                return jsonToolResult(await listFolder(client, p.folder_token));
+                return jsonResult(
+                  await listFolder(client, {
+                    folder_token: p.folder_token,
+                    page_size: p.page_size,
+                    page_token: p.page_token,
+                  }),
+                );
               case "info":
-                return jsonToolResult(await getFileInfo(client, p.file_token));
+                return jsonResult(await getFileInfo(client, p.file_token));
               case "create_folder":
-                return jsonToolResult(await createFolder(client, p.name, p.folder_token));
+                return jsonResult(await createFolder(client, p.name, p.folder_token));
               case "move":
-                return jsonToolResult(await moveFile(client, p.file_token, p.type, p.folder_token));
+                return jsonResult(await moveFile(client, p.file_token, p.type, p.folder_token));
               case "delete":
-                return jsonToolResult(await deleteFile(client, p.file_token, p.type));
+                return jsonResult(await deleteFile(client, p.file_token, p.type));
               case "list_comments": {
                 const resolved = applyCommentFileTypeDefault(
                   applyAmbientCommentDefaults(p, ctx),
                   "list_comments",
                 );
-                return jsonToolResult(await listComments(client, resolved));
+                return jsonResult(await listComments(client, resolved));
               }
               case "list_comment_replies": {
                 const resolved = applyCommentFileTypeDefault(
                   applyAmbientCommentDefaults(p, ctx),
                   "list_comment_replies",
                 );
-                return jsonToolResult(await listCommentReplies(client, resolved));
+                return jsonResult(await listCommentReplies(client, resolved));
               }
               case "add_comment": {
                 const resolved = applyAddCommentDefaults(applyAddCommentAmbientDefaults(p, ctx));
                 try {
-                  return jsonToolResult(await addComment(client, resolved));
+                  return jsonResult(await addComment(client, resolved));
                 } finally {
                   void cleanupAmbientCommentTypingReaction({
                     client: getDriveInternalClient(client),
@@ -809,7 +829,7 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
                   "reply_comment",
                 );
                 try {
-                  return jsonToolResult(await deliverCommentThreadText(client, resolved));
+                  return jsonResult(await deliverCommentThreadText(client, resolved));
                 } finally {
                   void cleanupAmbientCommentTypingReaction({
                     client: getDriveInternalClient(client),

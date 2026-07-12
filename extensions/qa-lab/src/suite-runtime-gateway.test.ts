@@ -1,6 +1,7 @@
 // Qa Lab tests cover suite runtime gateway plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  fetchJson,
   getGatewayRetryAfterMs,
   isConfigApplyNoopForSnapshot,
   isConfigHashConflict,
@@ -41,13 +42,45 @@ function createConfigMutationEnv(
       waitReady,
     },
     providerMode: "mock-openai",
-    primaryModel: "openai/gpt-5.5",
-    alternateModel: "openai/gpt-5.5-mini",
+    primaryModel: "openai/gpt-5.6-luna",
+    alternateModel: "openai/gpt-5.6-luna-mini",
   } as unknown as QaSuiteRuntimeEnv;
   return { env, waitReady };
 }
 
 describe("qa suite gateway helpers", () => {
+  it("bounds oversized suite gateway JSON responses", async () => {
+    let chunksRead = 0;
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (chunksRead === 0) {
+            chunksRead += 1;
+            controller.enqueue(new TextEncoder().encode('{"payload":"'));
+            return;
+          }
+          if (chunksRead <= 256) {
+            chunksRead += 1;
+            controller.enqueue(new Uint8Array(64 * 1024).fill(0x61));
+            return;
+          }
+          controller.enqueue(new TextEncoder().encode('"}'));
+          controller.close();
+        },
+      }),
+      {
+        headers: { "content-type": "application/json" },
+      },
+    );
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValue({ response, release });
+
+    await expect(fetchJson("http://127.0.0.1:43123/config")).rejects.toThrow(
+      "qa-lab-suite-fetch-json: JSON response exceeds 16777216 bytes",
+    );
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("reads retry-after from the primary gateway error before appended logs", () => {
     const error = new Error(
       "rate limit exceeded for config.patch; retry after 38s\nGateway logs:\nprevious config changed since last load",
@@ -72,7 +105,7 @@ describe("qa suite gateway helpers", () => {
         profile: "coding",
       },
       agents: {
-        list: [{ id: "qa", model: { primary: "openai/gpt-5.5" } }],
+        list: [{ id: "qa", model: { primary: "openai/gpt-5.6-luna" } }],
       },
     };
 
@@ -203,6 +236,32 @@ describe("qa suite gateway helpers", () => {
     expect(waitReady.mock.calls[0]?.[0].timeoutMs).toBeGreaterThan(60_000);
   });
 
+  it("does not wait for a deferred restart beyond the mutation timeout", async () => {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: { ok: true },
+      release,
+    });
+    const gatewayCall = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        return { hash: "hash-1", config: { tools: {} } };
+      }
+      return { ok: true };
+    });
+    const { env, waitReady } = createConfigMutationEnv(gatewayCall);
+
+    await patchConfig({
+      env,
+      patch: { tools: { deny: ["read"] } },
+      restartDelayMs: 300_000,
+    });
+
+    expect(waitReady).toHaveBeenCalledWith({
+      gateway: env.gateway,
+      timeoutMs: 180_000,
+    });
+  });
+
   it("uses the live timeout profile when config mutation races a restart", async () => {
     const release = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockResolvedValue({
@@ -257,14 +316,15 @@ describe("qa suite gateway helpers", () => {
     });
     const { env } = createConfigMutationEnv(gatewayCall);
 
-    await expect(
-      patchConfig({
-        env,
-        patch: { tools: { deny: ["read"] } },
-        replacePaths: ["tools.deny"],
-        restartDelayMs: 0,
-      }),
-    ).resolves.toEqual({ ok: true });
+    const mutation = patchConfig({
+      env,
+      patch: { tools: { deny: ["read"] } },
+      replacePaths: ["tools.deny"],
+      restartDelayMs: 0,
+      restartSettleBufferMs: 1,
+    });
+
+    await expect(mutation).resolves.toEqual({ ok: true });
 
     expect(gatewayCall).toHaveBeenCalledWith(
       "config.patch",

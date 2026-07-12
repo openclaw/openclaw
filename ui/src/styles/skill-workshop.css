@@ -14,6 +14,10 @@
 .content--skill-workshop {
   display: flex;
   flex-direction: column;
+  flex: 1 1 auto;
+  box-sizing: border-box;
+  height: 100%;
+  min-height: 0;
   overflow: hidden;
   padding-bottom: 16px;
 }
@@ -66,7 +70,6 @@
   border: none;
   padding: 9px 14px;
   color: var(--muted);
-  cursor: pointer;
   font: inherit;
   font-size: 13px;
   display: flex;
@@ -202,7 +205,6 @@
 .sw-row {
   padding: 10px 14px;
   border-left: 3px solid transparent;
-  cursor: pointer;
   display: grid;
   grid-template-columns: 14px 1fr auto;
   gap: 8px;
@@ -466,7 +468,6 @@
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--text);
-  cursor: pointer;
   font-size: 14px;
 }
 
@@ -573,7 +574,6 @@
   font-size: 12px;
   color: var(--text);
   text-align: left;
-  cursor: pointer;
   transition:
     background 100ms,
     border-color 100ms;
@@ -686,7 +686,6 @@
   border-radius: var(--radius-md);
   background: var(--bg-elevated);
   color: var(--muted);
-  cursor: pointer;
   font: inherit;
   font-size: 20px;
   line-height: 1;
@@ -762,7 +761,6 @@
 .sw-btn {
   padding: 7px 14px;
   border-radius: var(--radius-md);
-  cursor: pointer;
   font: inherit;
   font-size: 13px;
   font-weight: 600;
@@ -851,7 +849,6 @@
   font: inherit;
   font-size: 12px;
   color: var(--muted);
-  cursor: pointer;
   text-decoration: underline dotted;
   text-underline-offset: 3px;
   text-decoration-color: color-mix(in srgb, var(--muted) 60%, transparent);
@@ -888,7 +885,6 @@
   color: var(--muted);
   font-size: 12.5px;
   font-weight: 500;
-  cursor: pointer;
   white-space: nowrap;
 }
 
@@ -963,7 +959,6 @@
   font-size: 12.5px;
   font-weight: 500;
   color: var(--muted);
-  cursor: pointer;
   transition: color 160ms ease;
   white-space: nowrap;
 }
@@ -1268,7 +1263,6 @@
   font: inherit;
   color: var(--text-strong);
   font-weight: 600;
-  cursor: pointer;
   border-bottom: 1px dotted var(--border-strong);
 }
 
@@ -1289,7 +1283,6 @@
   border-radius: 12px;
   font-size: 12.5px;
   font-weight: 600;
-  cursor: pointer;
   font-family: inherit;
   border: 1px solid;
   transition:
@@ -1378,7 +1371,6 @@
   font: inherit;
   font-size: 12.5px;
   color: var(--accent);
-  cursor: pointer;
   font-weight: 500;
 }
 
@@ -1401,7 +1393,6 @@
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 14px 16px;
-  cursor: pointer;
   font-family: inherit;
   text-align: left;
   color: var(--text);
@@ -1452,7 +1443,6 @@
   gap: 14px;
   padding: 12px 16px;
   border-radius: 12px;
-  cursor: pointer;
   background: transparent;
   border: none;
   font: inherit;

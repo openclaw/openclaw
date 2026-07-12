@@ -128,7 +128,8 @@
     }
   ],
   "contracts": {
-    "speechProviders": ["xiaomi"]
+    "speechProviders": ["xiaomi"],
+    "usageProviders": ["xiaomi", "xiaomi-token-plan"]
   },
   "providerAuthEnvVars": {
     "xiaomi": ["XIAOMI_API_KEY"],
@@ -139,6 +140,7 @@
       "provider": "xiaomi",
       "method": "api-key",
       "choiceId": "xiaomi-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "Xiaomi API key (Pay-as-you-go)",
       "groupId": "xiaomi",
       "groupLabel": "Xiaomi",
@@ -152,6 +154,7 @@
       "provider": "xiaomi-token-plan",
       "method": "token-plan-ams",
       "choiceId": "xiaomi-token-plan-ams",
+      "appGuidedSecret": true,
       "choiceLabel": "Xiaomi Token Plan (Europe)",
       "choiceHint": "Endpoint preset: token-plan-ams.xiaomimimo.com/v1",
       "groupId": "xiaomi",
@@ -166,6 +169,7 @@
       "provider": "xiaomi-token-plan",
       "method": "token-plan-cn",
       "choiceId": "xiaomi-token-plan-cn",
+      "appGuidedSecret": true,
       "choiceLabel": "Xiaomi Token Plan (China)",
       "choiceHint": "Endpoint preset: token-plan-cn.xiaomimimo.com/v1",
       "groupId": "xiaomi",
@@ -180,6 +184,7 @@
       "provider": "xiaomi-token-plan",
       "method": "token-plan-sgp",
       "choiceId": "xiaomi-token-plan-sgp",
+      "appGuidedSecret": true,
       "choiceLabel": "Xiaomi Token Plan (Singapore)",
       "choiceHint": "Endpoint preset: token-plan-sgp.xiaomimimo.com/v1",
       "groupId": "xiaomi",

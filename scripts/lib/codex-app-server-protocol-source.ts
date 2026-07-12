@@ -158,6 +158,7 @@ export async function generateExperimentalCodexAppServerProtocolSource(
   repoRoot = process.cwd(),
 ): Promise<GeneratedCodexAppServerProtocolSource> {
   const { codexRepo } = await resolveCodexAppServerProtocolSource(repoRoot);
+  await validateCodexProtocolSourceVersion({ codexRepo, repoRoot });
   const root = await fs.mkdtemp(path.join(repoRoot, ".tmp-codex-app-server-protocol-"));
   const generatedRoot = path.join(root, "generated");
   const typescriptRoot = path.join(root, "typescript");
@@ -185,6 +186,41 @@ export async function generateExperimentalCodexAppServerProtocolSource(
     jsonRoot,
     cleanup,
   };
+}
+
+export function readCargoWorkspacePackageVersion(manifest: string): string | undefined {
+  const header = /^\s*\[workspace\.package\]\s*(?:#.*)?$/m.exec(manifest);
+  if (!header) {
+    return undefined;
+  }
+  const remainder = manifest.slice(header.index + header[0].length);
+  const nextSection = /^\s*\[/m.exec(remainder);
+  const workspacePackage = remainder.slice(0, nextSection?.index ?? remainder.length);
+  return /^\s*version\s*=\s*"([^"]+)"\s*(?:#.*)?$/m.exec(workspacePackage)?.[1];
+}
+
+export async function validateCodexProtocolSourceVersion(params: {
+  codexRepo: string;
+  repoRoot: string;
+}): Promise<void> {
+  const packageManifest = JSON.parse(
+    await fs.readFile(path.join(params.repoRoot, "extensions/codex/package.json"), "utf8"),
+  ) as { dependencies?: Record<string, unknown> };
+  const expectedVersion = packageManifest.dependencies?.["@openai/codex"];
+  if (typeof expectedVersion !== "string" || expectedVersion.length === 0) {
+    throw new Error("extensions/codex/package.json must pin @openai/codex to an exact version");
+  }
+
+  const cargoManifest = await fs.readFile(
+    path.join(params.codexRepo, "codex-rs/Cargo.toml"),
+    "utf8",
+  );
+  const sourceVersion = readCargoWorkspacePackageVersion(cargoManifest);
+  if (sourceVersion !== expectedVersion) {
+    throw new Error(
+      `Codex protocol source version ${sourceVersion ?? "<unknown>"} does not match @openai/codex ${expectedVersion}. Check out rust-v${expectedVersion} in ${params.codexRepo}.`,
+    );
+  }
 }
 
 async function collectCodexRepoCandidates(repoRoot: string): Promise<string[]> {
@@ -326,6 +362,9 @@ function runCargoProtocolGenerator(codexRepo: string, args: string[]): void {
     cwd: codexRepo,
     stdio: "inherit",
   });
+  if (result.error) {
+    throw new Error(`Failed to start cargo: ${result.error.message}`, { cause: result.error });
+  }
   if (result.status !== 0) {
     throw new Error(`cargo ${args.join(" ")} failed with exit code ${result.status ?? "unknown"}`);
   }
@@ -346,6 +385,11 @@ function formatGeneratedTypeScript(repoRoot: string, root: string): void {
     stdio: "inherit",
     windowsVerbatimArguments: command.windowsVerbatimArguments,
   });
+  if (result.error) {
+    throw new Error(`Failed to start protocol formatter: ${result.error.message}`, {
+      cause: result.error,
+    });
+  }
   if (result.status !== 0) {
     throw new Error(
       `pnpm exec oxfmt --write --threads=1 ${root} failed with exit code ${
@@ -355,7 +399,7 @@ function formatGeneratedTypeScript(repoRoot: string, root: string): void {
   }
 }
 
-export async function rewriteTypeScriptImports(root: string): Promise<void> {
+async function rewriteTypeScriptImports(root: string): Promise<void> {
   const entries = await fs.readdir(root, { withFileTypes: true });
   await Promise.all(
     entries.map(async (entry) => {
@@ -373,7 +417,7 @@ export async function rewriteTypeScriptImports(root: string): Promise<void> {
   );
 }
 
-export function normalizeGeneratedTypeScript(text: string): string {
+function normalizeGeneratedTypeScript(text: string): string {
   return text
     .replace(/(from\s+["'])(\.{1,2}\/[^"']+?)(\.js)?(["'])/g, "$1$2.js$4")
     .replace('export * as v2 from "./v2.js";', 'export * as v2 from "./v2/index.js";')

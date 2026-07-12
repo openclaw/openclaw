@@ -1,6 +1,6 @@
 // Persists queued session deliveries for retry and recovery.
-import { createHash } from "node:crypto";
 import type { ChatType } from "../channels/chat-type.js";
+import { sha256Hex } from "./crypto-digest.js";
 import {
   deleteDeliveryQueueEntry,
   loadDeliveryQueueEntries,
@@ -68,7 +68,7 @@ function buildEntryId(idempotencyKey?: string): string {
   if (!idempotencyKey) {
     return generateSecureUuid();
   }
-  return createHash("sha256").update(idempotencyKey).digest("hex");
+  return sha256Hex(idempotencyKey);
 }
 
 function queuedSessionDeliveryMetadata(entry: QueuedSessionDelivery): DeliveryQueueRowMetadata {

@@ -19,8 +19,8 @@ import {
 } from "../../agents/model-auth.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderAuthEvidence } from "../../secrets/provider-env-vars.js";
+import { maskApiKey } from "../../security/secret-mask.js";
 import { shortenHomePath } from "../../utils.js";
-import { maskApiKey } from "../../utils/mask-api-key.js";
 import type { ProviderAuthOverview } from "./list.types.js";
 
 function formatMarkerOrSecret(value: string): string {

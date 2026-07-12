@@ -11,18 +11,18 @@ import {
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import {
-  buildPortableAuthProfileSecretsStoreForAgentCopy,
+  buildPortableAuthProfileStoreForAgentCopy,
   ensureAuthProfileStore,
 } from "../agents/auth-profiles.js";
 import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { logConfigUpdated } from "../config/logging.js";
 import {
   commitConfigWithPendingPluginInstalls,
   transformConfigWithPendingPluginInstalls,
-} from "../cli/plugins-install-record-commit.js";
-import { logConfigUpdated } from "../config/logging.js";
+} from "../plugins/install-record-commit.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -79,7 +79,7 @@ async function copyPortableAuthProfiles(params: {
   if (!sourceStore || Object.keys(sourceStore.profiles).length === 0) {
     return { copied: 0, skipped: 0 };
   }
-  const portable = buildPortableAuthProfileSecretsStoreForAgentCopy(sourceStore);
+  const portable = buildPortableAuthProfileStoreForAgentCopy(sourceStore);
   if (portable.copiedProfileIds.length === 0) {
     return { copied: 0, skipped: portable.skippedProfileIds.length };
   }
@@ -337,7 +337,7 @@ export async function agentsAddCommand(
         const sourceStore = loadPersistedAuthProfileStore(sourceAgentDir);
         const destStore = loadPersistedAuthProfileStore(agentDir);
         const portable = sourceStore
-          ? buildPortableAuthProfileSecretsStoreForAgentCopy(sourceStore)
+          ? buildPortableAuthProfileStoreForAgentCopy(sourceStore)
           : undefined;
         if (
           portable &&
@@ -426,6 +426,7 @@ export async function agentsAddCommand(
     let selection: ChannelChoice[] = [];
     const channelAccountIds: Partial<Record<ChannelChoice, string>> = {};
     nextConfig = await setupChannels(nextConfig, runtime, prompter, {
+      allowIMessageInstall: true,
       allowSignalInstall: true,
       onSelection: (value) => {
         selection = value;

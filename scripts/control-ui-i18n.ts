@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { completeSimple, type AssistantMessage, type Model } from "openclaw/plugin-sdk/llm";
 import * as ts from "typescript";
 import { formatErrorMessage } from "../src/infra/errors.ts";
+import { sleep } from "./lib/sleep.mjs";
 import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 
 const { formatGeneratedModule } = (await import(
@@ -101,7 +102,7 @@ type RawCopyBaseline = {
 };
 
 const CONTROL_UI_I18N_WORKFLOW = 1;
-const DEFAULT_OPENAI_MODEL = "gpt-5.5";
+const DEFAULT_OPENAI_MODEL = "gpt-5.6-sol";
 const DEFAULT_ANTHROPIC_MODEL = "claude-opus-4-6";
 const DEFAULT_PROVIDER = "openai";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -110,7 +111,12 @@ const LOCALES_DIR = path.join(ROOT, "ui", "src", "i18n", "locales");
 const I18N_ASSETS_DIR = path.join(ROOT, "ui", "src", "i18n", ".i18n");
 const SOURCE_LOCALE_PATH = path.join(LOCALES_DIR, "en.ts");
 const SOURCE_LOCALE = "en";
-const CONTROL_UI_SOURCE_DIR = path.join(ROOT, "ui", "src", "ui");
+const CONTROL_UI_RAW_COPY_SOURCE_DIRS = [
+  path.join(ROOT, "ui", "src", "app"),
+  path.join(ROOT, "ui", "src", "components"),
+  path.join(ROOT, "ui", "src", "lib"),
+  path.join(ROOT, "ui", "src", "pages"),
+] as const;
 const RAW_COPY_BASELINE_PATH = path.join(I18N_ASSETS_DIR, "raw-copy-baseline.json");
 const RAW_COPY_BASELINE_VERSION = 1;
 const MAX_BATCH_ITEMS = 20;
@@ -420,7 +426,7 @@ function compareStringArrays(left: string[], right: string[]) {
   return left.every((value, index) => value === right[index]);
 }
 
-export type PlaceholderMismatch = {
+type PlaceholderMismatch = {
   key: string;
   locale: string;
   sourcePlaceholders: string[];
@@ -634,12 +640,6 @@ function buildBatchPrompt(items: readonly TranslationBatchItem[]): string {
   ].join("\n");
 }
 
-function sleep(ms: number) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
 function formatDuration(ms: number): string {
   if (ms < 1_000) {
     return `${Math.round(ms)}ms`;
@@ -814,7 +814,9 @@ function collectRawCopyFromSource(params: {
 }
 
 async function collectControlUiRawCopyFindings(): Promise<RawCopyFinding[]> {
-  const files = await walkControlUiSourceFiles(CONTROL_UI_SOURCE_DIR);
+  const files = (
+    await Promise.all(CONTROL_UI_RAW_COPY_SOURCE_DIRS.map((dir) => walkControlUiSourceFiles(dir)))
+  ).flat();
   const findings: RawCopyFinding[] = [];
   for (const filePath of files.toSorted((left, right) => left.localeCompare(right))) {
     const source = await readFile(filePath, "utf8");
@@ -1431,6 +1433,14 @@ function extractTranslationResult(message: AssistantMessage): string {
   return text;
 }
 
+// Models intermittently wrap the JSON reply in a Markdown code fence even
+// when told not to; strip it instead of burning a retry on a parse error.
+function parseTranslationReply(raw: string): Record<string, unknown> {
+  const trimmed = raw.trim();
+  const fenced = /^```(?:json)?\s*\n([\s\S]*?)\n```\s*$/.exec(trimmed);
+  return JSON.parse(fenced ? fenced[1] : trimmed) as Record<string, unknown>;
+}
+
 async function translateBatch(
   clientAccess: ClientAccess,
   items: readonly TranslationBatchItem[],
@@ -1448,7 +1458,7 @@ async function translateBatch(
       const raw = await (
         await clientAccess.getClient()
       ).prompt(buildBatchPrompt(items), attemptLabel);
-      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      const parsed = parseTranslationReply(raw);
       const translated = new Map<string, string>();
       for (const item of items) {
         const value = parsed[item.key];
@@ -1495,7 +1505,7 @@ async function translateBatch(
   throw lastError ?? new Error("translation failed");
 }
 
-export type NativeTranslationEntry = {
+type NativeTranslationEntry = {
   id: string;
   source: string;
   sourcePath: string;
@@ -1559,6 +1569,14 @@ type SyncOutcome = {
   wrote: boolean;
 };
 
+export function shouldReuseExistingTranslation(options: {
+  allowTranslate: boolean;
+  force: boolean;
+  isFallback: boolean;
+}): boolean {
+  return !options.isFallback || (!options.allowTranslate && !options.force);
+}
+
 async function syncLocale(
   entry: LocaleEntry,
   options: { checkOnly: boolean; force: boolean; write: boolean },
@@ -1592,8 +1610,13 @@ async function syncLocale(
     const cachedByText = tmByTextHash.get(textHash);
     const existing = existingFlat.get(key);
     const shouldRefreshFallback = previousFallbackKeys.has(key);
+    const shouldReuse = shouldReuseExistingTranslation({
+      allowTranslate,
+      force: options.force,
+      isFallback: shouldRefreshFallback,
+    });
 
-    if (cached && !(allowTranslate && shouldRefreshFallback)) {
+    if (cached && shouldReuse) {
       nextFlat.set(key, cached.translated);
       if (shouldRefreshFallback) {
         fallbackKeys.push(key);
@@ -1612,7 +1635,7 @@ async function syncLocale(
       continue;
     }
 
-    if (existing !== undefined && !(allowTranslate && shouldRefreshFallback)) {
+    if (existing !== undefined && shouldReuse) {
       nextFlat.set(key, existing);
       if (shouldRefreshFallback) {
         fallbackKeys.push(key);
@@ -1626,6 +1649,23 @@ async function syncLocale(
       text,
       textHash,
     });
+  }
+
+  // Writing NEW English fallbacks trips the shipped-fallback CI gate
+  // (test/scripts/control-ui-i18n.test.ts), and post-merge translation is owned
+  // by the control-ui-locale-refresh workflow. An unauthenticated local sync
+  // must fail here instead of silently recording fallback bundles; refreshing
+  // already-recorded fallback copy (force mode) stays allowed.
+  if (!allowTranslate && options.write && !options.checkOnly && !isProviderAuthOptional()) {
+    const newFallbackKeys = pending.filter((item) => !previousFallbackKeys.has(item.key));
+    if (newFallbackKeys.length > 0) {
+      throw new Error(
+        `${localeLabel}: ${newFallbackKeys.length} new key(s) need translation but no provider is configured. ` +
+          `Commit only locales/en.ts and let the control-ui-locale-refresh workflow translate after merge, ` +
+          `or export ANTHROPIC_API_KEY/OPENAI_API_KEY and rerun. ` +
+          `Set ${ENV_AUTH_OPTIONAL}=1 to record English fallbacks anyway.`,
+      );
+    }
   }
 
   if (allowTranslate && pending.length > 0) {

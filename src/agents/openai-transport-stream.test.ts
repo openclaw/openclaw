@@ -1,5 +1,6 @@
 // Verifies OpenAI-compatible streaming payloads, failures, and transport wrapping.
 import { createServer } from "node:http";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import OpenAI from "openai";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import type { Api, Model } from "openclaw/plugin-sdk/llm";
@@ -26,13 +27,13 @@ import {
   prepareTransportAwareSimpleModel,
   resolveTransportAwareSimpleApi,
 } from "./provider-transport-stream.js";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 
 type OpenAICompletionsOutput = Parameters<typeof testing.processOpenAICompletionsStream>[1];
 type OpenAIResponsesOutput = Parameters<typeof testing.processResponsesStream>[1];
 
 type CapturedStreamEvent = {
   type?: string;
+  contentIndex?: number;
   delta?: string;
   content?: string;
   partial?: unknown;
@@ -142,6 +143,15 @@ function expectRecordFields(record: unknown, expected: Record<string, unknown>) 
 }
 
 describe("openai transport stream", () => {
+  it("keeps bounded redacted diagnostics UTF-16 well-formed", () => {
+    const payload = testing.stringifyRedactedPayload(`${"x".repeat(7_998)}🚀tail`);
+    const event = testing.stringifyRedactedEvent(`${"x".repeat(1_998)}🚀tail`);
+
+    expect(payload).toContain(`${"x".repeat(7_998)}…<truncated>`);
+    expect(event).toContain(`${"x".repeat(1_998)}…<truncated>`);
+    expect(payload).not.toContain("\uD83D");
+    expect(event).not.toContain("\uD83D");
+  });
   it("fails Azure Responses streams when headers arrive but no first event follows", async () => {
     vi.useFakeTimers();
     try {
@@ -528,6 +538,7 @@ describe("openai transport stream", () => {
     const model = createAzureResponsesModel();
     const output = createResponsesAssistantOutput(model);
     const pushSpy = vi.fn();
+    const textBlockSignatures: Array<[string, number, string | undefined]> = [];
     const snapshot1 = "Scaled dot-product attention";
     const snapshot2 = "Scaled dot-product attention divides by sqrt(d_k)";
     const snapshot3 = "Scaled dot-product attention divides by sqrt(d_k) before softmax.";
@@ -562,7 +573,21 @@ describe("openai transport stream", () => {
         },
       ]),
       output,
-      { push: pushSpy },
+      {
+        push: (rawEvent) => {
+          pushSpy(rawEvent);
+          const event = rawEvent as CapturedStreamEvent;
+          if (
+            (event.type === "text_start" || event.type === "text_end") &&
+            typeof event.contentIndex === "number"
+          ) {
+            const block = output.content[event.contentIndex] as
+              | { textSignature?: string }
+              | undefined;
+            textBlockSignatures.push([event.type, event.contentIndex, block?.textSignature]);
+          }
+        },
+      },
       model,
     );
 
@@ -584,6 +609,94 @@ describe("openai transport stream", () => {
       ["text_end", 0],
       ["text_end", 0],
       ["text_end", 0],
+    ]);
+    expect(textBlockSignatures).toEqual([
+      ["text_start", 0, '{"v":1,"id":"msg_1","phase":"final_answer"}'],
+      ["text_end", 0, '{"v":1,"id":"msg_1","phase":"final_answer"}'],
+      ["text_end", 0, '{"v":1,"id":"msg_2","phase":"final_answer"}'],
+      ["text_end", 0, '{"v":1,"id":"msg_3","phase":"final_answer"}'],
+    ]);
+  });
+
+  it("stamps deferred message blocks before their first public event", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+    const textEvents: Array<[string, number, string | undefined]> = [];
+    const doneItem = (id: string, text: string) => ({
+      type: "response.output_item.done",
+      item: {
+        type: "message",
+        id,
+        phase: "final_answer",
+        content: [{ type: "output_text", text }],
+      },
+    });
+
+    await testing.processResponsesStream(
+      streamChunks([
+        {
+          type: "response.output_item.added",
+          item: { type: "message", id: "msg_1", phase: "final_answer" },
+        },
+        doneItem("msg_1", "Hello."),
+        {
+          type: "response.output_item.added",
+          item: { type: "message", id: "msg_2", phase: "final_answer" },
+        },
+        doneItem("msg_2", "Hello."),
+        {
+          type: "response.output_item.added",
+          item: { type: "message", id: "msg_3", phase: "final_answer" },
+        },
+        { type: "response.output_text.delta", delta: "Good" },
+        { type: "response.output_text.delta", delta: "bye" },
+        doneItem("msg_3", "Goodbye"),
+        {
+          type: "response.completed",
+          response: { id: "resp-deferred-signatures", status: "completed" },
+        },
+      ]),
+      output,
+      {
+        push: (rawEvent) => {
+          const event = rawEvent as CapturedStreamEvent;
+          if (event.type?.startsWith("text_") && typeof event.contentIndex === "number") {
+            const block = output.content[event.contentIndex] as
+              | { textSignature?: string }
+              | undefined;
+            textEvents.push([event.type, event.contentIndex, block?.textSignature]);
+          }
+        },
+      },
+      model,
+    );
+
+    expect(output.content).toEqual([
+      {
+        type: "text",
+        text: "Hello.",
+        textSignature: '{"v":1,"id":"msg_1","phase":"final_answer"}',
+      },
+      {
+        type: "text",
+        text: "Hello.",
+        textSignature: '{"v":1,"id":"msg_2","phase":"final_answer"}',
+      },
+      {
+        type: "text",
+        text: "Goodbye",
+        textSignature: '{"v":1,"id":"msg_3","phase":"final_answer"}',
+      },
+    ]);
+    expect(textEvents).toEqual([
+      ["text_start", 0, '{"v":1,"id":"msg_1","phase":"final_answer"}'],
+      ["text_end", 0, '{"v":1,"id":"msg_1","phase":"final_answer"}'],
+      ["text_start", 1, '{"v":1,"id":"msg_2","phase":"final_answer"}'],
+      ["text_end", 1, '{"v":1,"id":"msg_2","phase":"final_answer"}'],
+      ["text_start", 2, '{"v":1,"id":"msg_3","phase":"final_answer"}'],
+      ["text_delta", 2, '{"v":1,"id":"msg_3","phase":"final_answer"}'],
+      ["text_delta", 2, '{"v":1,"id":"msg_3","phase":"final_answer"}'],
+      ["text_end", 2, '{"v":1,"id":"msg_3","phase":"final_answer"}'],
     ]);
   });
 
@@ -852,6 +965,7 @@ describe("openai transport stream", () => {
     const payload = {
       tools: [
         { type: "function", name: "exec" },
+        { type: "function", name: "computer" },
         { type: "web_search_preview" },
         { type: "function", function: { name: "wait" } },
       ],
@@ -859,7 +973,11 @@ describe("openai transport stream", () => {
 
     testing.enforceCodeModeResponsesToolSurface(payload);
     testing.assertCodeModeResponsesToolSurface(payload);
-    expect(payload.tools).toHaveLength(2);
+    expect(payload.tools).toEqual([
+      { type: "function", name: "exec" },
+      { type: "function", name: "computer" },
+      { type: "function", function: { name: "wait" } },
+    ]);
   });
 
   it("skips unreadable code mode response payload tool names", () => {
@@ -890,6 +1008,21 @@ describe("openai transport stream", () => {
       { type: "function", name: "exec" },
       { type: "function", function: { name: "wait" } },
     ]);
+  });
+
+  it("rejects duplicate direct-only tools in a code mode payload", () => {
+    const payload = {
+      tools: [
+        { type: "function", name: "exec" },
+        { type: "function", name: "wait" },
+        { type: "function", name: "computer" },
+        { type: "function", name: "computer" },
+      ],
+    };
+
+    expect(() => testing.assertCodeModeResponsesToolSurface(payload)).toThrow(
+      /tool surface violation/,
+    );
   });
 
   it("fails closed when the code mode final payload tool surface is not exec/wait", () => {
@@ -966,6 +1099,124 @@ describe("openai transport stream", () => {
     });
     expect(headers.Accept).toBeUndefined();
     expect(headers.accept).toBeUndefined();
+  });
+
+  it("adds session_id header for the native ChatGPT/Codex Responses transport when a session id is present", () => {
+    const headers = testing.buildOpenAIClientHeaders(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
+        baseUrl: "https://chatgpt.com/backend-api",
+        headers: {},
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-chatgpt-responses">,
+      { systemPrompt: "", messages: [] } as never,
+      undefined,
+      undefined,
+      "session-abc-123",
+    );
+
+    expect(headers.session_id).toBe("session-abc-123");
+  });
+
+  it("omits the session_id header for the native ChatGPT/Codex Responses transport when no session id is available", () => {
+    const headers = testing.buildOpenAIClientHeaders(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
+        baseUrl: "https://chatgpt.com/backend-api",
+        headers: {},
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-chatgpt-responses">,
+      { systemPrompt: "", messages: [] } as never,
+    );
+
+    expect(headers.session_id).toBeUndefined();
+  });
+
+  it("does not add a session_id header for non-native OpenAI Responses transports even when a session id is present", () => {
+    const headers = testing.buildOpenAIClientHeaders(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        headers: {},
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      { systemPrompt: "", messages: [] } as never,
+      undefined,
+      undefined,
+      "session-abc-123",
+    );
+
+    expect(headers.session_id).toBeUndefined();
+  });
+
+  it("does not overwrite an existing session_id header on the native ChatGPT/Codex Responses transport", () => {
+    const headers = testing.buildOpenAIClientHeaders(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
+        baseUrl: "https://chatgpt.com/backend-api",
+        headers: {},
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-chatgpt-responses">,
+      { systemPrompt: "", messages: [] } as never,
+      { session_id: "caller-supplied-session" },
+      undefined,
+      "session-abc-123",
+    );
+
+    expect(headers.session_id).toBe("caller-supplied-session");
+  });
+
+  it("does not add a generated session_id header when the caller supplies a differently-cased one", () => {
+    const headers = testing.buildOpenAIClientHeaders(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
+        baseUrl: "https://chatgpt.com/backend-api",
+        headers: {},
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-chatgpt-responses">,
+      { systemPrompt: "", messages: [] } as never,
+      { Session_ID: "caller-supplied-session" },
+      undefined,
+      "session-abc-123",
+    );
+
+    expect(headers.Session_ID).toBe("caller-supplied-session");
+    expect(headers.session_id).toBeUndefined();
   });
 
   it("adds SSE Accept only to native ChatGPT/Codex Responses stream requests", () => {
@@ -1873,15 +2124,15 @@ describe("openai transport stream", () => {
 
   it("does not emit thinking streams when reasoning is disabled", () => {
     const model = {
-      id: "grok-4.20-beta-latest-reasoning",
-      name: "Grok 4.20 Beta Latest (Reasoning)",
+      id: "grok-4.20-0309-reasoning",
+      name: "Grok 4.20 0309 (Reasoning)",
       api: "openai-completions",
       provider: "xai",
       baseUrl: "https://api.x.ai/v1",
       reasoning: true,
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 2_000_000,
+      contextWindow: 1_000_000,
       maxTokens: 30_000,
     } satisfies Model<"openai-completions">;
 
@@ -2099,6 +2350,62 @@ describe("openai transport stream", () => {
         totalTokens: 30,
       },
     );
+  });
+
+  it("preserves a valid provider-reported usage cost", () => {
+    const model = {
+      id: "openrouter/free",
+      name: "OpenRouter Free",
+      api: "openai-completions",
+      provider: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200_000,
+      maxTokens: 8_192,
+    } satisfies Model<"openai-completions">;
+
+    const usage = parseTransportChunkUsage(
+      {
+        prompt_tokens: 10,
+        completion_tokens: 5,
+        total_tokens: 15,
+        cost: 0,
+      },
+      model,
+    );
+
+    expect(usage.cost.total).toBe(0);
+    expect(usage.cost.totalOrigin).toBe("provider-billed");
+  });
+
+  it("keeps the catalog estimate for an invalid provider-reported usage cost", () => {
+    const model = {
+      id: "openrouter/free",
+      name: "OpenRouter Free",
+      api: "openai-completions",
+      provider: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200_000,
+      maxTokens: 8_192,
+    } satisfies Model<"openai-completions">;
+
+    const usage = parseTransportChunkUsage(
+      {
+        prompt_tokens: 10,
+        completion_tokens: 5,
+        total_tokens: 15,
+        cost: -1,
+      },
+      model,
+    );
+
+    expect(usage.cost.total).toBeCloseTo(0.00002);
+    expect(usage.cost.totalOrigin).toBeUndefined();
   });
 
   it("clamps uncached prompt usage at zero", () => {
@@ -2483,6 +2790,956 @@ describe("openai transport stream", () => {
     expect(output.content).toEqual([{ type: "text", text: "ab" }]);
   });
 
+  it.each([
+    ["omits arguments", undefined],
+    ["sends empty arguments", ""],
+  ])("preserves streamed Responses arguments when done %s", async (_label, doneArguments) => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+    const streamedArguments = '{"path":"docs/nodes/computer-use.md"}';
+
+    await testing.processResponsesStream(
+      streamChunks([
+        {
+          type: "response.output_item.added",
+          item: {
+            type: "function_call",
+            id: "fc_read",
+            call_id: "call_read",
+            name: "read",
+            arguments: "",
+          },
+        },
+        { type: "response.function_call_arguments.delta", delta: streamedArguments },
+        {
+          type: "response.function_call_arguments.done",
+          ...(doneArguments === undefined ? {} : { arguments: doneArguments }),
+          item_id: "fc_read",
+          output_index: 0,
+        },
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "function_call",
+            id: "fc_read",
+            call_id: "call_read",
+            name: "read",
+          },
+        },
+        {
+          type: "response.completed",
+          response: { id: "resp_read", status: "completed" },
+        },
+      ]),
+      output,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+      model,
+    );
+
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_read|fc_read",
+        name: "read",
+        arguments: { path: "docs/nodes/computer-use.md" },
+        partialJson: streamedArguments,
+      },
+    ]);
+    expect(events.map((event) => event.type)).toEqual([
+      "toolcall_start",
+      "toolcall_delta",
+      "toolcall_end",
+    ]);
+  });
+
+  it("keeps idless Responses tool-call ids stable and response-unique", async () => {
+    const runOnce = async () => {
+      const model = createAzureResponsesModel();
+      const output = createResponsesAssistantOutput(model);
+      const events: CapturedStreamEvent[] = [];
+      await testing.processResponsesStream(
+        streamChunks([
+          {
+            type: "response.output_item.added",
+            item: { type: "function_call", name: "computer", arguments: "" },
+          },
+          {
+            type: "response.output_item.done",
+            item: { type: "function_call", name: "computer", arguments: "{}" },
+          },
+        ]),
+        output,
+        { push: (event) => events.push(event as CapturedStreamEvent) },
+        model,
+      );
+      const block = output.content.find((entry) => entry.type === "toolCall") as
+        | { id?: string }
+        | undefined;
+      const end = events.find((event) => event.type === "toolcall_end") as
+        | { toolCall?: { id?: string } }
+        | undefined;
+      if (!block?.id || !end?.toolCall?.id) {
+        throw new Error("missing tool-call lifecycle");
+      }
+      return { blockId: block.id, endId: end.toolCall.id };
+    };
+
+    const first = await runOnce();
+    const second = await runOnce();
+    expect(first.blockId).toMatch(/^call_[0-9a-f]{24}$/);
+    expect(first.endId).toBe(first.blockId);
+    expect(second.endId).toBe(second.blockId);
+    expect(second.blockId).not.toBe(first.blockId);
+  });
+
+  it("materializes one stable tool call for a done-only idless Responses item", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+    const item = {
+      type: "function_call",
+      name: "computer",
+      arguments: '{"action":"screenshot"}',
+      status: "completed",
+    };
+
+    await testing.processResponsesStream(
+      streamChunks([
+        {
+          type: "response.output_item.done",
+          output_index: 0,
+          sequence_number: 0,
+          item,
+        },
+        {
+          type: "response.completed",
+          sequence_number: 1,
+          response: {
+            id: "resp_done_only_idless",
+            status: "completed",
+            output: [item],
+          },
+        },
+      ]),
+      output,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+      model,
+    );
+
+    expect(output.stopReason).toBe("toolUse");
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: expect.stringMatching(/^call_[0-9a-f]{24}$/),
+        name: "computer",
+        arguments: { action: "screenshot" },
+        partialJson: '{"action":"screenshot"}',
+      },
+    ]);
+    const toolEvents = events.filter((event) => event.type?.startsWith("toolcall_")) as Array<{
+      type: string;
+      contentIndex: number;
+      toolCall?: { id?: string };
+    }>;
+    expect(toolEvents.map((event) => [event.type, event.contentIndex])).toEqual([
+      ["toolcall_start", 0],
+      ["toolcall_end", 0],
+    ]);
+    expect(toolEvents[1]?.toolCall?.id).toBe((output.content[0] as { id?: string }).id);
+  });
+
+  it("uses an SDK function call call_id directly when its optional item id is absent", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+    const item = {
+      type: "function_call",
+      call_id: "call_sdk_without_item_id",
+      name: "computer",
+      arguments: '{"action":"screenshot"}',
+      status: "completed",
+    };
+
+    await testing.processResponsesStream(
+      streamChunks([
+        {
+          type: "response.output_item.added",
+          output_index: 0,
+          sequence_number: 0,
+          item,
+        },
+        {
+          type: "response.output_item.done",
+          output_index: 0,
+          sequence_number: 1,
+          item,
+        },
+        {
+          type: "response.completed",
+          sequence_number: 2,
+          response: {
+            id: "resp_sdk_without_item_id",
+            status: "completed",
+            output: [item],
+          },
+        },
+      ]),
+      output,
+      { push: vi.fn() },
+      model,
+    );
+
+    expect(output.stopReason).toBe("toolUse");
+    expect(output.content).toMatchObject([
+      { type: "toolCall", id: "call_sdk_without_item_id", name: "computer" },
+    ]);
+  });
+
+  it("reconciles an idless added Responses item to its canonical done identity", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+    const doneItem = {
+      type: "function_call",
+      id: "fc_canonical",
+      call_id: "call_canonical",
+      name: "computer",
+      arguments: '{"action":"screenshot"}',
+      status: "completed",
+    };
+
+    await testing.processResponsesStream(
+      streamChunks([
+        {
+          type: "response.output_item.added",
+          output_index: 0,
+          sequence_number: 0,
+          item: { type: "function_call", name: "computer", arguments: "" },
+        },
+        {
+          type: "response.output_item.done",
+          output_index: 0,
+          sequence_number: 1,
+          item: doneItem,
+        },
+        {
+          type: "response.completed",
+          sequence_number: 2,
+          response: {
+            id: "resp_canonical_tool_identity",
+            status: "completed",
+            output: [doneItem],
+          },
+        },
+      ]),
+      output,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+      model,
+    );
+
+    expect(output.stopReason).toBe("toolUse");
+    expect(output.content).toMatchObject([
+      { type: "toolCall", id: "call_canonical|fc_canonical", name: "computer" },
+    ]);
+    const end = events.find((event) => event.type === "toolcall_end") as
+      | { toolCall?: { id?: string } }
+      | undefined;
+    expect(end?.toolCall?.id).toBe("call_canonical|fc_canonical");
+  });
+
+  it("keeps interleaved Responses function calls bound to their output indices", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+    const events: Array<{
+      type?: string;
+      contentIndex?: number;
+      toolCall?: { id?: string };
+    }> = [];
+
+    await testing.processResponsesStream(
+      streamChunks([
+        {
+          type: "response.output_item.added",
+          output_index: 0,
+          sequence_number: 1,
+          item: {
+            type: "function_call",
+            id: "fc_click",
+            call_id: "call_click",
+            name: "computer",
+            arguments: "",
+            status: "in_progress",
+          },
+        },
+        {
+          type: "response.output_item.added",
+          output_index: 1,
+          sequence_number: 2,
+          item: {
+            type: "function_call",
+            id: "fc_type",
+            call_id: "call_type",
+            name: "computer",
+            arguments: "",
+            status: "in_progress",
+          },
+        },
+        {
+          type: "response.function_call_arguments.delta",
+          output_index: 1,
+          item_id: "fc_type",
+          sequence_number: 3,
+          delta: '{"action":"type","text":"hello"}',
+        },
+        {
+          type: "response.function_call_arguments.delta",
+          output_index: 0,
+          item_id: "fc_click",
+          sequence_number: 4,
+          delta: '{"action":"left_click","coordinate":[10,20]}',
+        },
+        {
+          type: "response.output_item.done",
+          output_index: 0,
+          sequence_number: 5,
+          item: {
+            type: "function_call",
+            id: "fc_click",
+            call_id: "call_click",
+            name: "computer",
+            arguments: '{"action":"left_click","coordinate":[10,20]}',
+            status: "completed",
+          },
+        },
+        {
+          type: "response.output_item.done",
+          output_index: 1,
+          sequence_number: 6,
+          item: {
+            type: "function_call",
+            id: "fc_type",
+            call_id: "call_type",
+            name: "computer",
+            arguments: '{"action":"type","text":"hello"}',
+            status: "completed",
+          },
+        },
+      ]),
+      output,
+      { push: (event) => events.push(event as (typeof events)[number]) },
+      model,
+    );
+
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_click|fc_click",
+        name: "computer",
+        arguments: { action: "left_click", coordinate: [10, 20] },
+        partialJson: '{"action":"left_click","coordinate":[10,20]}',
+      },
+      {
+        type: "toolCall",
+        id: "call_type|fc_type",
+        name: "computer",
+        arguments: { action: "type", text: "hello" },
+        partialJson: '{"action":"type","text":"hello"}',
+      },
+    ]);
+    expect(
+      events
+        .filter((event) => event.type?.startsWith("toolcall_"))
+        .map((event) => [event.type, event.contentIndex]),
+    ).toEqual([
+      ["toolcall_start", 0],
+      ["toolcall_start", 1],
+      ["toolcall_delta", 1],
+      ["toolcall_delta", 0],
+      ["toolcall_end", 0],
+      ["toolcall_end", 1],
+    ]);
+    expect(
+      events.filter((event) => event.type === "toolcall_end").map((event) => event.toolCall?.id),
+    ).toEqual(["call_click|fc_click", "call_type|fc_type"]);
+  });
+
+  it("rejects reuse of an active Responses tool-call output index", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+    const events: Array<{ type?: string }> = [];
+
+    await expect(
+      testing.processResponsesStream(
+        streamChunks([
+          {
+            type: "response.output_item.added",
+            output_index: 0,
+            item: {
+              type: "function_call",
+              id: "fc_first_index_owner",
+              call_id: "call_first_index_owner",
+              name: "computer",
+              arguments: "",
+            },
+          },
+          {
+            type: "response.output_item.added",
+            output_index: 0,
+            item: {
+              type: "function_call",
+              id: "fc_second_index_owner",
+              call_id: "call_second_index_owner",
+              name: "computer",
+              arguments: "",
+            },
+          },
+        ]),
+        output,
+        { push: (event) => events.push(event as (typeof events)[number]) },
+        model,
+      ),
+    ).rejects.toThrow("Responses stream reused active tool-call output index 0");
+    expect(events.filter((event) => event.type === "toolcall_start")).toHaveLength(1);
+    expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(0);
+  });
+
+  it("keeps parallel unindexed Responses calls bound by identity without orphans", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+    const events: Array<{
+      type?: string;
+      contentIndex?: number;
+      toolCall?: { id?: string; arguments?: unknown };
+    }> = [];
+    const firstItem = {
+      type: "function_call",
+      id: "fc_first_unindexed",
+      call_id: "call_first_unindexed",
+      name: "computer",
+      arguments: '{"slot":1}',
+      status: "completed",
+    };
+    const secondItem = {
+      type: "function_call",
+      id: "fc_second_unindexed",
+      call_id: "call_second_unindexed",
+      name: "computer",
+      arguments: '{"slot":2}',
+      status: "completed",
+    };
+
+    await testing.processResponsesStream(
+      streamChunks([
+        {
+          type: "response.output_item.added",
+          item: { ...firstItem, arguments: "", status: "in_progress" },
+        },
+        {
+          type: "response.output_item.added",
+          item: { ...secondItem, arguments: "", status: "in_progress" },
+        },
+        {
+          type: "response.function_call_arguments.delta",
+          item_id: secondItem.id,
+          delta: secondItem.arguments,
+        },
+        {
+          type: "response.function_call_arguments.delta",
+          item_id: firstItem.id,
+          delta: firstItem.arguments,
+        },
+        {
+          type: "response.function_call_arguments.done",
+          item_id: firstItem.id,
+          arguments: firstItem.arguments,
+        },
+        {
+          type: "response.function_call_arguments.done",
+          item_id: secondItem.id,
+          arguments: secondItem.arguments,
+        },
+        { type: "response.output_item.done", item: firstItem },
+        { type: "response.output_item.done", item: secondItem },
+        {
+          type: "response.completed",
+          response: {
+            id: "resp_parallel_unindexed",
+            status: "completed",
+            output: [firstItem, secondItem],
+          },
+        },
+      ]),
+      output,
+      { push: (event) => events.push(event as (typeof events)[number]) },
+      model,
+    );
+
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_first_unindexed|fc_first_unindexed",
+        name: "computer",
+        arguments: { slot: 1 },
+        partialJson: '{"slot":1}',
+      },
+      {
+        type: "toolCall",
+        id: "call_second_unindexed|fc_second_unindexed",
+        name: "computer",
+        arguments: { slot: 2 },
+        partialJson: '{"slot":2}',
+      },
+    ]);
+    expect(
+      events
+        .filter((event) => event.type === "toolcall_end")
+        .map((event) => [event.contentIndex, event.toolCall?.id, event.toolCall?.arguments]),
+    ).toEqual([
+      [0, "call_first_unindexed|fc_first_unindexed", { slot: 1 }],
+      [1, "call_second_unindexed|fc_second_unindexed", { slot: 2 }],
+    ]);
+    expect(events.filter((event) => event.type === "toolcall_start")).toHaveLength(2);
+  });
+
+  it("fails closed on ambiguous unindexed parallel argument events", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+    const events: Array<{ type?: string }> = [];
+    const firstItem = {
+      type: "function_call",
+      id: "fc_ambiguous_first",
+      call_id: "call_ambiguous_first",
+      name: "computer",
+    };
+    const secondItem = {
+      type: "function_call",
+      id: "fc_ambiguous_second",
+      call_id: "call_ambiguous_second",
+      name: "computer",
+    };
+
+    await expect(
+      testing.processResponsesStream(
+        streamChunks([
+          { type: "response.output_item.added", item: { ...firstItem, arguments: "" } },
+          { type: "response.output_item.added", item: { ...secondItem, arguments: "" } },
+          { type: "response.function_call_arguments.delta", delta: '{"slot":1}' },
+          { type: "response.output_item.done", item: firstItem },
+          { type: "response.output_item.done", item: secondItem },
+          {
+            type: "response.completed",
+            response: { id: "resp_ambiguous_unindexed", status: "completed" },
+          },
+        ]),
+        output,
+        { push: (event) => events.push(event as (typeof events)[number]) },
+        model,
+      ),
+    ).rejects.toThrow("Responses stream completed with unresolved tool calls");
+    expect(events.filter((event) => event.type === "toolcall_start")).toHaveLength(2);
+    expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(0);
+  });
+
+  it("recovers parallel Responses arguments from done events and preserves opening names", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+    const firstItem = {
+      type: "function_call",
+      id: "fc_recovered_first",
+      call_id: "call_recovered_first",
+      name: "read",
+    };
+    const secondItem = {
+      type: "function_call",
+      id: "fc_recovered_second",
+      call_id: "call_recovered_second",
+      name: "write",
+    };
+
+    await testing.processResponsesStream(
+      streamChunks([
+        {
+          type: "response.output_item.added",
+          output_index: 0,
+          item: { ...firstItem, arguments: "" },
+        },
+        {
+          type: "response.output_item.added",
+          output_index: 1,
+          item: { ...secondItem, arguments: "" },
+        },
+        { type: "response.function_call_arguments.delta", delta: '{"ambiguous":true}' },
+        {
+          type: "response.function_call_arguments.done",
+          output_index: 0,
+          item_id: firstItem.id,
+          arguments: '{"path":"README.md"}',
+        },
+        {
+          type: "response.function_call_arguments.done",
+          output_index: 1,
+          item_id: secondItem.id,
+          arguments: '{"path":"README.md","text":"ok"}',
+        },
+        {
+          type: "response.output_item.done",
+          output_index: 0,
+          item: {
+            type: "function_call",
+            id: firstItem.id,
+            call_id: firstItem.call_id,
+          },
+        },
+        {
+          type: "response.output_item.done",
+          output_index: 1,
+          item: {
+            type: "function_call",
+            id: secondItem.id,
+            call_id: secondItem.call_id,
+          },
+        },
+        {
+          type: "response.completed",
+          response: { id: "resp_recovered_parallel", status: "completed" },
+        },
+      ]),
+      output,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+      model,
+    );
+
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_recovered_first|fc_recovered_first",
+        name: "read",
+        arguments: { path: "README.md" },
+        partialJson: '{"path":"README.md"}',
+      },
+      {
+        type: "toolCall",
+        id: "call_recovered_second|fc_recovered_second",
+        name: "write",
+        arguments: { path: "README.md", text: "ok" },
+        partialJson: '{"path":"README.md","text":"ok"}',
+      },
+    ]);
+    expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(2);
+  });
+
+  it("rejects a completed Responses tool call whose function name changed", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+
+    await expect(
+      testing.processResponsesStream(
+        streamChunks([
+          {
+            type: "response.output_item.added",
+            output_index: 0,
+            item: {
+              type: "function_call",
+              id: "fc_name_conflict",
+              call_id: "call_name_conflict",
+              name: "read",
+              arguments: "",
+            },
+          },
+          {
+            type: "response.output_item.done",
+            output_index: 0,
+            item: {
+              type: "function_call",
+              id: "fc_name_conflict",
+              call_id: "call_name_conflict",
+              name: "write",
+              arguments: "{}",
+            },
+          },
+        ]),
+        output,
+        { push: vi.fn() },
+        model,
+      ),
+    ).rejects.toThrow("Responses stream changed tool-call function name from read to write");
+  });
+
+  it("routes an omitted-index suffix by item id across parallel Responses calls", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+    const events: Array<{ type?: string; contentIndex?: number }> = [];
+
+    await testing.processResponsesStream(
+      streamChunks([
+        {
+          type: "response.output_item.added",
+          output_index: 0,
+          item: {
+            type: "function_call",
+            id: "fc_first",
+            call_id: "call_first",
+            name: "computer",
+            arguments: "",
+          },
+        },
+        {
+          type: "response.output_item.added",
+          output_index: 1,
+          item: {
+            type: "function_call",
+            id: "fc_second",
+            call_id: "call_second",
+            name: "computer",
+            arguments: "",
+          },
+        },
+        {
+          type: "response.function_call_arguments.delta",
+          output_index: 0,
+          item_id: "fc_first",
+          delta: '{"slot":',
+        },
+        {
+          type: "response.function_call_arguments.delta",
+          item_id: "fc_first",
+          delta: "0}",
+        },
+        {
+          type: "response.function_call_arguments.delta",
+          output_index: 1,
+          delta: '{"slot":1}',
+        },
+        {
+          type: "response.output_item.done",
+          output_index: 0,
+          item: {
+            type: "function_call",
+            id: "fc_first",
+            call_id: "call_first",
+            name: "computer",
+            arguments: '{"slot":0}',
+          },
+        },
+        {
+          type: "response.output_item.done",
+          output_index: 1,
+          item: {
+            type: "function_call",
+            id: "fc_second",
+            call_id: "call_second",
+            name: "computer",
+            arguments: '{"slot":1}',
+          },
+        },
+      ]),
+      output,
+      { push: (event) => events.push(event as (typeof events)[number]) },
+      model,
+    );
+
+    expect(output.content).toMatchObject([
+      { type: "toolCall", id: "call_first|fc_first", arguments: { slot: 0 } },
+      { type: "toolCall", id: "call_second|fc_second", arguments: { slot: 1 } },
+    ]);
+    expect(
+      events.filter((event) => event.type === "toolcall_delta").map((event) => event.contentIndex),
+    ).toEqual([0, 0, 1]);
+  });
+
+  it("matches omitted-index parallel completions without duplicating indexed calls", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+    const events: Array<{ type?: string; contentIndex?: number }> = [];
+
+    await testing.processResponsesStream(
+      streamChunks([
+        {
+          type: "response.output_item.added",
+          output_index: 0,
+          item: {
+            type: "function_call",
+            id: "fc_first",
+            call_id: "call_first",
+            name: "computer",
+            arguments: "",
+          },
+        },
+        {
+          type: "response.output_item.added",
+          output_index: 1,
+          item: {
+            type: "function_call",
+            id: "fc_second",
+            call_id: "call_second",
+            name: "computer",
+            arguments: "",
+          },
+        },
+        {
+          type: "response.function_call_arguments.delta",
+          output_index: 0,
+          item_id: "fc_first",
+          delta: '{"incomplete":',
+        },
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "function_call",
+            id: "fc_second",
+            call_id: "call_second",
+            name: "computer",
+            arguments: '{"slot":1}',
+          },
+        },
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "function_call",
+            id: "fc_first",
+            call_id: "call_first",
+            name: "computer",
+            arguments: '{"slot":0}',
+          },
+        },
+      ]),
+      output,
+      { push: (event) => events.push(event as (typeof events)[number]) },
+      model,
+    );
+
+    expect(output.content).toMatchObject([
+      { type: "toolCall", id: "call_first|fc_first", arguments: { slot: 0 } },
+      { type: "toolCall", id: "call_second|fc_second", arguments: { slot: 1 } },
+    ]);
+    expect(events.filter((event) => event.type === "toolcall_start")).toHaveLength(2);
+    expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(2);
+  });
+
+  it("rejects omitted-index events whose identity mismatches the sole indexed call", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+    const events: Array<{ type?: string; contentIndex?: number }> = [];
+
+    await testing.processResponsesStream(
+      streamChunks([
+        {
+          type: "response.output_item.added",
+          output_index: 0,
+          item: {
+            type: "function_call",
+            id: "fc_first",
+            call_id: "call_first",
+            name: "computer",
+            arguments: "",
+          },
+        },
+        {
+          type: "response.function_call_arguments.delta",
+          item_id: "fc_other",
+          delta: '{"wrong":true}',
+        },
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "function_call",
+            id: "fc_other",
+            call_id: "call_other",
+            name: "computer",
+            arguments: '{"wrong":true}',
+          },
+        },
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "function_call",
+            id: "fc_first",
+            call_id: "call_first",
+            name: "computer",
+            arguments: '{"slot":0}',
+          },
+        },
+      ]),
+      output,
+      { push: (event) => events.push(event as (typeof events)[number]) },
+      model,
+    );
+
+    expect(output.content).toMatchObject([
+      { type: "toolCall", id: "call_first|fc_first", arguments: { slot: 0 } },
+    ]);
+    expect(events.filter((event) => event.type === "toolcall_start")).toHaveLength(1);
+    expect(events.filter((event) => event.type === "toolcall_delta")).toHaveLength(0);
+    expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(1);
+  });
+
+  it("keeps sequential omitted-index Responses calls unambiguous", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+    const events: Array<{ type?: string; contentIndex?: number }> = [];
+
+    await testing.processResponsesStream(
+      streamChunks([
+        {
+          type: "response.output_item.added",
+          output_index: 7,
+          item: {
+            type: "function_call",
+            id: "fc_first",
+            call_id: "call_first",
+            name: "computer",
+            arguments: "",
+          },
+        },
+        { type: "response.function_call_arguments.delta", delta: '{"slot":0}' },
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "function_call",
+            id: "fc_first",
+            call_id: "call_first",
+            name: "computer",
+            arguments: '{"slot":0}',
+          },
+        },
+        {
+          type: "response.output_item.added",
+          output_index: 8,
+          item: {
+            type: "function_call",
+            id: "fc_second",
+            call_id: "call_second",
+            name: "computer",
+            arguments: "",
+          },
+        },
+        { type: "response.function_call_arguments.delta", delta: '{"slot":1}' },
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "function_call",
+            id: "fc_second",
+            call_id: "call_second",
+            name: "computer",
+            arguments: '{"slot":1}',
+          },
+        },
+      ]),
+      output,
+      { push: (event) => events.push(event as (typeof events)[number]) },
+      model,
+    );
+
+    expect(output.content).toMatchObject([
+      { type: "toolCall", id: "call_first|fc_first", arguments: { slot: 0 } },
+      { type: "toolCall", id: "call_second|fc_second", arguments: { slot: 1 } },
+    ]);
+    expect(
+      events.filter((event) => event.type === "toolcall_delta").map((event) => event.contentIndex),
+    ).toEqual([0, 1]);
+  });
+
   it("handles Azure Responses text content and text delta events", async () => {
     const model = createAzureResponsesModel();
     const output = createResponsesAssistantOutput(model);
@@ -2599,6 +3856,101 @@ describe("openai transport stream", () => {
     await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
     expect(output.content).toStrictEqual([{ type: "text", text: "ok" }]);
+    expect(output.stopReason).toBe("stop");
+  });
+
+  it("surfaces chat-completions refusal deltas as visible assistant text", async () => {
+    const model = {
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      api: "openai-completions" as const,
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: false,
+      input: ["text"] as const,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 4096,
+    } satisfies Model<"openai-completions">;
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-refusal-delta",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: { role: "assistant", content: null, refusal: "I can't help with that." },
+              logprobs: null,
+              finish_reason: "stop",
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+    );
+
+    expect(output.content).toStrictEqual([{ type: "text", text: "I can't help with that." }]);
+    expect(output.stopReason).toBe("stop");
+    expect(
+      events.some(
+        (event) => event.type === "text_delta" && event.delta === "I can't help with that.",
+      ),
+    ).toBe(true);
+  });
+
+  it("surfaces aggregated chat-completions message.refusal as visible assistant text", async () => {
+    const model = {
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      api: "openai-completions" as const,
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: false,
+      input: ["text"] as const,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 4096,
+    } satisfies Model<"openai-completions">;
+    const output = createAssistantOutput(model);
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-refusal-message",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              // Some OpenAI-compatible endpoints deliver a full message instead of delta.
+              message: {
+                role: "assistant",
+                content: null,
+                refusal: "Requests like this are not allowed.",
+              },
+              logprobs: null,
+              finish_reason: "stop",
+            } as unknown as ChatCompletionChunk["choices"][number],
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push() {} },
+    );
+
+    expect(output.content).toStrictEqual([
+      { type: "text", text: "Requests like this are not allowed." },
+    ]);
     expect(output.stopReason).toBe("stop");
   });
 
@@ -2882,7 +4234,7 @@ describe("openai transport stream", () => {
     expect(output.content).toEqual([
       {
         type: "toolCall",
-        id: "call_deepseek_dsml_1",
+        id: expect.stringMatching(/^call_[0-9a-f]{24}$/),
         name: "session_status",
         arguments: { sessionKey: "current" },
         partialArgs: '{"sessionKey":"current"}',
@@ -3050,9 +4402,9 @@ describe("openai transport stream", () => {
     }
   });
 
-  it("parses repeated DeepSeek DSML name attributes consistently", async () => {
+  it("parses repeated DeepSeek DSML calls with response-unique ids", async () => {
     // Guards the cached attribute matchers: repeated parses must stay identical
-    // (no stale RegExp lastIndex) across separate stream invocations.
+    // apart from invocation identity (no stale RegExp lastIndex).
     const model = createDeepSeekCompletionsModel();
     const content =
       '<｜DSML｜tool_calls>\n<｜DSML｜invoke name="session_status">\n<｜DSML｜parameter name="sessionKey" string="true">current</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>';
@@ -3085,16 +4437,18 @@ describe("openai transport stream", () => {
 
     const first = await runOnce();
     const second = await runOnce();
-    expect(second).toEqual(first);
-    expect(first).toEqual([
-      {
-        type: "toolCall",
-        id: "call_deepseek_dsml_1",
-        name: "session_status",
-        arguments: { sessionKey: "current" },
-        partialArgs: '{"sessionKey":"current"}',
-      },
-    ]);
+    for (const resultContent of [first, second]) {
+      expect(resultContent).toEqual([
+        {
+          type: "toolCall",
+          id: expect.stringMatching(/^call_[0-9a-f]{24}$/),
+          name: "session_status",
+          arguments: { sessionKey: "current" },
+          partialArgs: '{"sessionKey":"current"}',
+        },
+      ]);
+    }
+    expect((second[0] as { id?: string }).id).not.toBe((first[0] as { id?: string }).id);
   });
 
   it("recovers split DeepSeek DSML JSON tool calls emitted as text", async () => {
@@ -3155,7 +4509,7 @@ describe("openai transport stream", () => {
     expect(output.content).toEqual([
       {
         type: "toolCall",
-        id: "call_deepseek_dsml_1",
+        id: expect.stringMatching(/^call_[0-9a-f]{24}$/),
         name: "read",
         arguments: { path: "/tmp/native.md" },
         partialArgs: '{"path":"/tmp/native.md"}',
@@ -3472,15 +4826,15 @@ describe("openai transport stream", () => {
   it("omits Responses reasoning params when model compat disables reasoning effort", () => {
     const params = buildOpenAIResponsesParams(
       {
-        id: "grok-4.20-beta-latest-reasoning",
-        name: "Grok 4.20 Beta Latest (Reasoning)",
+        id: "grok-4.20-0309-reasoning",
+        name: "Grok 4.20 0309 (Reasoning)",
         api: "openai-responses",
         provider: "xai",
         baseUrl: "https://api.x.ai/v1",
         reasoning: true,
         input: ["text", "image"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 2_000_000,
+        contextWindow: 1_000_000,
         maxTokens: 30_000,
         compat: { supportsReasoningEffort: false },
       } as unknown as Model<"openai-responses">,
@@ -3513,7 +4867,7 @@ describe("openai transport stream", () => {
         maxTokens: 128_000,
         compat: {
           supportsReasoningEffort: true,
-          supportedReasoningEfforts: ["low", "medium", "high"],
+          supportedReasoningEfforts: ["none", "low", "medium", "high"],
         },
       } as unknown as Model<"openai-responses">,
       {
@@ -3543,7 +4897,7 @@ describe("openai transport stream", () => {
         maxTokens: 128_000,
         compat: {
           supportsReasoningEffort: true,
-          supportedReasoningEfforts: ["low", "medium", "high"],
+          supportedReasoningEfforts: ["none", "low", "medium", "high"],
         },
       } as unknown as Model<"openai-responses">,
       {
@@ -4268,6 +5622,7 @@ describe("openai transport stream", () => {
         id?: string;
         call_id?: string;
         phase?: string;
+        status?: string;
         encrypted_content?: string;
         summary?: unknown;
       }>;
@@ -4290,6 +5645,7 @@ describe("openai transport stream", () => {
       phase: "commentary",
     });
     expect(assistantMessage?.id).toBeUndefined();
+    expect(assistantMessage?.status).toBeUndefined();
     const functionCall = params.input?.find((item) => item.type === "function_call");
     expectRecordFields(functionCall, {
       type: "function_call",
@@ -4376,6 +5732,7 @@ describe("openai transport stream", () => {
         id?: string;
         call_id?: string;
         phase?: string;
+        status?: string;
         encrypted_content?: string;
         summary?: unknown;
       }>;
@@ -4395,6 +5752,7 @@ describe("openai transport stream", () => {
       role: "assistant",
       id: "msg_prior",
       phase: "commentary",
+      status: "completed",
     });
     const functionCall = params.input?.find((item) => item.type === "function_call");
     expectRecordFields(functionCall, {
@@ -5085,6 +6443,32 @@ describe("openai transport stream", () => {
     });
   });
 
+  it.each([
+    {
+      label: "matches xAI's code-less encrypted-content 400",
+      status: 400,
+      message:
+        "Could not decrypt the provided encrypted_content. Ensure the value is the unmodified encrypted_content from a previous response.",
+      expected: true,
+    },
+    {
+      label: "rejects an unrelated decrypt 400",
+      status: 400,
+      message: "Could not decrypt encrypted_content metadata for the OAuth sidecar.",
+      expected: false,
+    },
+    {
+      label: "rejects the xAI phrase on a 500",
+      status: 500,
+      message: "Could not decrypt the provided encrypted_content.",
+      expected: false,
+    },
+  ])("$label", ({ status, message, expected }) => {
+    const error = OpenAI.APIError.generate(status, { error: message }, undefined, new Headers());
+
+    expect(testing.isInvalidEncryptedContentError(error)).toBe(expected);
+  });
+
   it("normalizes overlong Copilot Responses replay tool ids before dispatch", () => {
     const longToolItemId = "iVec" + "A".repeat(360);
     const longToolCallId = `call_ug6lFGKwZDjHfzW8H0PDQRwN|${longToolItemId}`;
@@ -5507,6 +6891,39 @@ describe("openai transport stream", () => {
     ) as { reasoning?: unknown };
 
     expect(params.reasoning).toEqual({ effort: "high", summary: "auto" });
+  });
+
+  it("normalizes canonical reasoning casing in Responses and Chat Completions payloads", () => {
+    const context = {
+      systemPrompt: "system",
+      messages: [],
+      tools: [],
+    } as never;
+    const baseModel = {
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text"] as Model["input"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+    };
+
+    const responses = buildOpenAIResponsesParams(
+      { ...baseModel, api: "openai-responses" } satisfies Model<"openai-responses">,
+      context,
+      { reasoningEffort: " XHIGH " } as never,
+    ) as { reasoning?: unknown };
+    const completions = buildOpenAICompletionsParams(
+      { ...baseModel, api: "openai-completions" } satisfies Model<"openai-completions">,
+      context,
+      { reasoningEffort: " XHIGH " } as never,
+    ) as { reasoning_effort?: unknown };
+
+    expect(responses.reasoning).toEqual({ effort: "xhigh", summary: "auto" });
+    expect(completions.reasoning_effort).toBe("xhigh");
   });
 
   it("uses disabled OpenAI Responses reasoning when the model supports none", () => {
@@ -6828,6 +8245,40 @@ describe("openai transport stream", () => {
     },
   );
 
+  it("disables reasoning for OpenAI gpt-5.6 Chat Completions tool payloads", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5.6-luna",
+        name: "GPT-5.6 Luna",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1000000,
+        maxTokens: 128000,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "lookup_weather",
+            description: "Get forecast",
+            parameters: { type: "object", properties: {}, additionalProperties: false },
+          },
+        ],
+      } as never,
+      {
+        reasoning: "low",
+      } as never,
+    ) as { reasoning_effort?: unknown; tools?: unknown };
+
+    expect(params.tools).toHaveLength(1);
+    expect(params.reasoning_effort).toBe("none");
+  });
+
   it.each([
     ["Azure OpenAI", "https://example.openai.azure.com/openai/v1"],
     ["Foundry", "https://example.services.ai.azure.com/openai/v1"],
@@ -7660,6 +9111,31 @@ describe("openai transport stream", () => {
     );
 
     expect(params.max_completion_tokens).toBe(65_536);
+    expect(params).not.toHaveProperty("max_tokens");
+  });
+
+  it("omits output-token fields when the resolved model has no known cap", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "mimo-v2.5-pro",
+        name: "MiMo V2.5 Pro",
+        api: "openai-completions",
+        provider: "xiaomi",
+        baseUrl: "https://api.xiaomimimo.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_048_576,
+      } as Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    );
+
+    expect(params).not.toHaveProperty("max_completion_tokens");
     expect(params).not.toHaveProperty("max_tokens");
   });
 
@@ -8748,6 +10224,50 @@ describe("openai transport stream", () => {
         | undefined;
       expect(assistant?.tool_calls?.[0]?.extra_content).toBeUndefined();
     });
+
+    it.each([
+      ["gemini-pro-latest", "Gemini Pro Latest"],
+      ["gemini-flash-latest", "Gemini Flash Latest"],
+      ["gemini-flash-lite-latest", "Gemini Flash Lite Latest"],
+    ])(
+      "uses the Gemini skip-validator signature for unsigned tool calls on %s",
+      (modelId, modelName) => {
+        const latestModel = { ...geminiModel, id: modelId, name: modelName };
+        const params = buildOpenAICompletionsParams(
+          latestModel,
+          {
+            messages: [
+              {
+                role: "assistant",
+                api: latestModel.api,
+                provider: latestModel.provider,
+                model: latestModel.id,
+                usage: {
+                  input: 0,
+                  output: 0,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  totalTokens: 0,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+                },
+                stopReason: "toolUse",
+                timestamp: 1,
+                content: [{ type: "toolCall", id: "call_abc", name: "echo_value", arguments: {} }],
+              },
+            ],
+            tools: [],
+          } as never,
+          undefined,
+        ) as { messages: Array<Record<string, unknown>> };
+
+        const assistant = params.messages.find((message) => message.role === "assistant") as
+          | { tool_calls?: Array<{ extra_content?: { google?: { thought_signature?: string } } }> }
+          | undefined;
+        expect(assistant?.tool_calls?.[0]?.extra_content?.google?.thought_signature).toBe(
+          "skip_thought_signature_validator",
+        );
+      },
+    );
   });
 
   it("uses Mistral compat defaults for direct Mistral completions providers", () => {
@@ -9910,7 +11430,7 @@ describe("openai transport stream", () => {
     expect(toolCalls).toHaveLength(1);
   });
 
-  it("does not promote tool calls when provider omits final finish_reason", async () => {
+  it("promotes tool calls when stream completes cleanly without finish_reason", async () => {
     const model = {
       id: "qwen3.6-27b",
       name: "Qwen 3.6 27B",
@@ -9940,7 +11460,154 @@ describe("openai transport stream", () => {
               tool_calls: [
                 {
                   index: 0,
-                  id: "call_unfinished",
+                  id: "call_cleanstream",
+                  function: { name: "bash", arguments: '{"cmd":"echo hi"}' },
+                },
+              ],
+            },
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+    ] as const;
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk as never;
+      }
+    }
+
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, stream, {
+      sawStreamDONE: () => true,
+    });
+
+    expect(output.stopReason).toBe("toolUse");
+    const toolCalls = output.content.filter(
+      (block) => (block as { type?: string }).type === "toolCall",
+    );
+    expect(toolCalls).toHaveLength(1);
+  });
+
+  it.each([
+    { chunks: ["data: [DO", "NE]\r\n\r\n"], expected: true },
+    { chunks: ["data:[DONE]"], expected: true },
+    { chunks: ['data: {"value":"[DONE]"}\n\n'], expected: false },
+    { chunks: [`data: ${"x".repeat(1_024)}data: [DONE]\n\n`], expected: false },
+  ])("detects only an exact bounded SSE terminal line: $chunks", ({ chunks, expected }) => {
+    const detector = testing.createSseDoneDetector();
+    const encoder = new TextEncoder();
+    for (const chunk of chunks) {
+      detector.observe(encoder.encode(chunk));
+    }
+    detector.finish();
+
+    expect(detector.sawDone()).toBe(expected);
+  });
+
+  it("does not promote native tool calls when stream ends without [DONE] and without finish_reason", async () => {
+    const model = {
+      id: "qwen3.6-27b",
+      name: "Qwen 3.6 27B",
+      api: "openai-completions",
+      provider: "vllm",
+      baseUrl: "http://localhost:8000/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 131072,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const output = createAssistantOutput(model);
+    const stream = { push: () => {} };
+
+    const mockChunks = [
+      {
+        id: "chatcmpl-test",
+        object: "chat.completion.chunk" as const,
+        created: 1775425651,
+        model: "qwen3.6-27b",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "call_nodone",
+                  function: { name: "bash", arguments: '{"cmd":"echo hi"}' },
+                },
+              ],
+            },
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+    ] as const;
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk as never;
+      }
+    }
+
+    // sawStreamDONE defaults to false — connection drop without [DONE]
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+
+    // EOF without [DONE] and without finish_reason → fail-closed
+    expect(output.stopReason).toBe("stop");
+    expect(
+      output.content.filter((block) => (block as { type?: string }).type === "toolCall"),
+    ).toStrictEqual([]);
+  });
+
+  it("strips tool calls when stream has visible text and no finish_reason", async () => {
+    const model = {
+      id: "qwen3.6-27b",
+      name: "Qwen 3.6 27B",
+      api: "openai-completions",
+      provider: "vllm",
+      baseUrl: "http://localhost:8000/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 131072,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const output = createAssistantOutput(model);
+    const stream = { push: () => {} };
+
+    const mockChunks = [
+      {
+        id: "chatcmpl-test",
+        object: "chat.completion.chunk" as const,
+        created: 1775425651,
+        model: "qwen3.6-27b",
+        choices: [
+          {
+            index: 0,
+            delta: { content: "Let me think about this." },
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-test",
+        object: "chat.completion.chunk" as const,
+        created: 1775425651,
+        model: "qwen3.6-27b",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "call_with_text",
                   function: { name: "bash", arguments: '{"cmd":"echo hi"}' },
                 },
               ],
@@ -9960,6 +11627,8 @@ describe("openai transport stream", () => {
 
     await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
+    // Visible text + tool calls without finish_reason is ambiguous;
+    // conservatively strip tool calls.
     expect(output.stopReason).toBe("stop");
     expect(
       output.content.filter((block) => (block as { type?: string }).type === "toolCall"),
@@ -10049,6 +11718,217 @@ describe("openai transport stream", () => {
       output.content.filter((block) => (block as { type?: string }).type === "toolCall"),
     ).toStrictEqual([]);
     expect(output.content.some((block) => (block as { type?: string }).type === "text")).toBe(true);
+  });
+
+  it("promotes native tool calls through fetch wrapper when SSE terminates cleanly with [DONE] without finish_reason", async () => {
+    const server = createServer((req, res) => {
+      let body = "";
+      req.setEncoding("utf8");
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        void body;
+        res.writeHead(200, {
+          "content-type": "text/event-stream; charset=utf-8",
+          "cache-control": "no-cache",
+          connection: "keep-alive",
+        });
+        const created = Math.floor(Date.now() / 1000);
+        // Emit a delta.tool_calls chunk with no finish_reason
+        res.write(
+          `data: ${JSON.stringify({
+            id: "chatcmpl-loopback-done",
+            object: "chat.completion.chunk",
+            created,
+            model: "qwen3.6-27b",
+            choices: [
+              {
+                index: 0,
+                delta: {
+                  tool_calls: [
+                    {
+                      index: 0,
+                      id: "call_loopback_done",
+                      function: { name: "bash", arguments: '{"cmd":"echo loopback"}' },
+                    },
+                  ],
+                },
+                finish_reason: null,
+              },
+            ],
+          })}\n\n`,
+        );
+        // Split CRLF-formatted terminal proof across chunks. The SDK accepts this
+        // framing, so the raw terminal observer must preserve the same contract.
+        res.write("data: [DO");
+        res.write("NE]\r\n\r\n");
+        res.end();
+      });
+    });
+
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Missing loopback server address");
+      }
+      const baseModel = {
+        id: "qwen3.6-27b",
+        name: "Qwen 3.6 27B",
+        api: "openai-completions",
+        provider: "vllm",
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 131072,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">;
+      const stream = createOpenAICompletionsTransportStreamFn()(
+        baseModel,
+        {
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "Run a command", timestamp: Date.now() }],
+          tools: [],
+        } as never,
+        { apiKey: "test-key" } as never,
+      );
+
+      let doneReason: string | undefined;
+      let hasToolCallEvent = false;
+      const doneMessage: { content?: Array<{ type?: string }> } = {};
+      for await (const event of stream as AsyncIterable<{
+        type: string;
+        reason?: string;
+        message?: { content?: Array<{ type?: string }> };
+      }>) {
+        if (event.type === "toolcall_start") {
+          hasToolCallEvent = true;
+        }
+        if (event.type === "done") {
+          doneReason = event.reason;
+          if (event.message) {
+            Object.assign(doneMessage, event.message);
+          }
+        }
+      }
+
+      // fetch wrapper detected data: [DONE] → sawStreamDONE=true → promotion to toolUse
+      expect(doneReason).toBe("toolUse");
+      expect(hasToolCallEvent).toBe(true);
+      // The output message should retain the toolCall blocks
+      const toolCallBlocks =
+        doneMessage.content?.filter((block) => block.type === "toolCall") ?? [];
+      expect(toolCallBlocks).toHaveLength(1);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it("keeps tool calls fail-closed through fetch wrapper when stream ends without [DONE] and without finish_reason", async () => {
+    const server = createServer((req, res) => {
+      let body = "";
+      req.setEncoding("utf8");
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        void body;
+        res.writeHead(200, {
+          "content-type": "text/event-stream; charset=utf-8",
+          "cache-control": "no-cache",
+          connection: "keep-alive",
+        });
+        const created = Math.floor(Date.now() / 1000);
+        // Emit delta.tool_calls chunk with no finish_reason
+        res.write(
+          `data: ${JSON.stringify({
+            id: "chatcmpl-loopback-nodone",
+            object: "chat.completion.chunk",
+            created,
+            model: "qwen3.6-27b",
+            choices: [
+              {
+                index: 0,
+                delta: {
+                  tool_calls: [
+                    {
+                      index: 0,
+                      id: "call_loopback_nodone",
+                      function: { name: "bash", arguments: '{"cmd":"echo no done"}' },
+                    },
+                  ],
+                },
+                finish_reason: null,
+              },
+            ],
+          })}\n\n`,
+        );
+        // Close WITHOUT data: [DONE] — simulates connection drop / truncated stream
+        res.end();
+      });
+    });
+
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Missing loopback server address");
+      }
+      const baseModel = {
+        id: "qwen3.6-27b",
+        name: "Qwen 3.6 27B",
+        api: "openai-completions",
+        provider: "vllm",
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 131072,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">;
+      const stream = createOpenAICompletionsTransportStreamFn()(
+        baseModel,
+        {
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "Run a command", timestamp: Date.now() }],
+          tools: [],
+        } as never,
+        { apiKey: "test-key" } as never,
+      );
+
+      let doneReason: string | undefined;
+      const doneMessage: { content?: Array<{ type?: string }> } = {};
+      for await (const event of stream as AsyncIterable<{
+        type: string;
+        reason?: string;
+        message?: { content?: Array<{ type?: string }> };
+      }>) {
+        if (event.type === "done") {
+          doneReason = event.reason;
+          if (event.message) {
+            Object.assign(doneMessage, event.message);
+          }
+        }
+      }
+
+      // EOF without [DONE] → sawStreamDONE stays false → fail-closed
+      expect(doneReason).toBe("stop");
+      const toolCallBlocks =
+        doneMessage.content?.filter((block) => block.type === "toolCall") ?? [];
+      expect(toolCallBlocks).toStrictEqual([]);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
   });
 
   it("keeps tool call blocks when provider signals finish_reason tool_calls", async () => {

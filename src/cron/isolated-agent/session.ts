@@ -2,7 +2,10 @@
 import crypto from "node:crypto";
 import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
 import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
-import { resolveSessionLifecycleTimestamps } from "../../config/sessions/lifecycle.js";
+import {
+  resolveSessionLifecycleTimestamps,
+  resolveSessionWorkStartError,
+} from "../../config/sessions/lifecycle.js";
 import { hasSessionAutoModelFallbackProvenance } from "../../config/sessions/model-override-provenance.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import {
@@ -10,7 +13,7 @@ import {
   resolveSessionResetPolicy,
   type SessionFreshness,
 } from "../../config/sessions/reset-policy.js";
-import { loadSessionStore } from "../../config/sessions/store-load.js";
+import { listSessionEntries, loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
@@ -24,6 +27,7 @@ const FRESH_CRON_CARRIED_PREFERENCE_FIELDS = [
   "reasoningLevel",
   "ttsAuto",
   "responseUsage",
+  "pinnedAt",
   "label",
   "displayName",
 ] as const satisfies readonly (keyof SessionEntry)[];
@@ -66,14 +70,21 @@ function preserveNonAutoModelOverride(target: SessionEntry, entry: SessionEntry)
   const recoveredAutoFallbackOverride =
     entry.modelOverrideSource === undefined && hasSessionAutoModelFallbackProvenance(entry);
   if (entry.modelOverrideSource !== "auto" && !recoveredAutoFallbackOverride) {
+    let preservedModelSelection = false;
     if (entry.modelOverride !== undefined) {
       target.modelOverride = entry.modelOverride;
+      preservedModelSelection = true;
     }
     if (entry.providerOverride !== undefined) {
       target.providerOverride = entry.providerOverride;
     }
     if (entry.modelOverrideSource !== undefined) {
       target.modelOverrideSource = entry.modelOverrideSource;
+    }
+    // Runtime overrides qualify an explicit model selection; carrying one alone
+    // would pin a fresh cron session to a stale engine after its model resets.
+    if (preservedModelSelection && entry.agentRuntimeOverride !== undefined) {
+      target.agentRuntimeOverride = entry.agentRuntimeOverride;
     }
   }
 }
@@ -106,10 +117,25 @@ function sanitizeFreshCronSessionEntry(
   return next;
 }
 
+/**
+ * Reads the current cron session row without an in-process cache snapshot.
+ * Lifecycle admission guards compare this against the run's initial entry, so
+ * the read must bypass cached store snapshots (accessor readConsistency
+ * "latest"). Cron keys are canonicalized before use, so accessor key
+ * resolution selects the same row the cron persist path writes.
+ */
+export function loadCronSessionEntryLatest(
+  storePath: string,
+  sessionKey: string,
+): SessionEntry | undefined {
+  return loadSessionEntry({ sessionKey, storePath, readConsistency: "latest" });
+}
+
 /** Resolves or rolls over the cron session entry for one isolated-agent run. */
 export function resolveCronSession(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
+  sourceSessionKey?: string;
   nowMs: number;
   agentId: string;
   forceNew?: boolean;
@@ -119,8 +145,21 @@ export function resolveCronSession(params: {
   const storePath = resolveStorePath(sessionCfg?.store, {
     agentId: params.agentId,
   });
-  const store = params.store ?? loadSessionStore(storePath);
-  const entry = store[params.sessionKey];
+  const store =
+    params.store ??
+    Object.fromEntries(
+      listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+    );
+  const sourceSessionKey = params.sourceSessionKey?.trim();
+  const sourceSessionDiffers = Boolean(sourceSessionKey && sourceSessionKey !== params.sessionKey);
+  const targetEntry = store[params.sessionKey];
+  const entry = store[sourceSessionKey || params.sessionKey];
+  // Guard the run's target row: archived sessions stay read-only even when a
+  // differing source session seeds the carried preferences.
+  const archivedSessionError = resolveSessionWorkStartError(params.sessionKey, targetEntry);
+  if (archivedSessionError) {
+    throw new Error(archivedSessionError);
+  }
 
   let sessionId: string;
   let isNewSession: boolean;
@@ -162,7 +201,7 @@ export function resolveCronSession(params: {
     systemSent = false;
   }
 
-  const previousSessionId = isNewSession ? entry?.sessionId : undefined;
+  const previousSessionId = isNewSession && !sourceSessionDiffers ? entry?.sessionId : undefined;
   clearBootstrapSnapshotOnSessionRollover({
     sessionKey: params.sessionKey,
     previousSessionId,
@@ -174,11 +213,13 @@ export function resolveCronSession(params: {
       : entry
     : undefined;
 
+  const lifecycleRevision = crypto.randomUUID();
   const sessionEntry: SessionEntry = {
     // Fresh cron sessions keep user preference/auth overrides but drop resume
     // handles and auto-fallback model overrides that belong to the old run.
     ...baseEntry,
     sessionId,
+    lifecycleRevision,
     updatedAt: params.nowMs,
     sessionStartedAt: isNewSession
       ? params.nowMs
@@ -191,5 +232,14 @@ export function resolveCronSession(params: {
     lastInteractionAt: isNewSession ? params.nowMs : baseEntry?.lastInteractionAt,
     systemSent,
   };
-  return { storePath, store, sessionEntry, systemSent, isNewSession, previousSessionId };
+  return {
+    storePath,
+    store,
+    sessionEntry,
+    lifecycleRevision,
+    systemSent,
+    isNewSession,
+    previousSessionId,
+    initialSessionEntry: targetEntry,
+  };
 }

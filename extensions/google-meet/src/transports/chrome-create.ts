@@ -5,6 +5,7 @@ import type { GoogleMeetConfig } from "../config.js";
 import {
   asBrowserTabs,
   callBrowserProxyOnNode,
+  forceMeetEnglishUi,
   readBrowserTab,
   resolveChromeNode,
   type BrowserTab,
@@ -199,7 +200,9 @@ export const CREATE_MEET_FROM_BROWSER_SCRIPT = `async () => {
   }
   const href = current();
   if (meetUrlPattern.test(href)) {
-    return { meetingUri: href, browserUrl: href, browserTitle: document.title, notes };
+    // The /new redirect keeps the hl=en param we open with; strip query/hash so the
+    // meeting link handed to users stays canonical instead of forcing English on them.
+    return { meetingUri: href.split(/[?#]/)[0], browserUrl: href, browserTitle: document.title, notes };
   }
   const pageText = text(document.body);
   if (clickButton(/\\buse microphone\\b/i, "Accepted Meet microphone prompt with browser automation.")) {
@@ -281,6 +284,29 @@ export async function createMeetWithBrowserProxyOnNode(params: {
       targetId: tab.targetId,
       timeoutMs: stepTimeoutMs,
     });
+    // Meet automation scripts match English UI labels; a reused tab may have
+    // been opened by the browser/profile in a non-English locale. Only force
+    // English on the /new creation page or sign-in flow; a reused tab that
+    // already has a meeting code may be an active call, and reloading it would
+    // interrupt the meeting and replace its target.
+    const reusedUrl = tab.url ?? "";
+    const isCreatePage =
+      /^https:\/\/meet\.google\.com\/new(?:$|[/?#])/i.test(reusedUrl) ||
+      reusedUrl.startsWith("https://accounts.google.com/");
+    const englishUrl = isCreatePage && reusedUrl ? forceMeetEnglishUi(reusedUrl) : undefined;
+    if (englishUrl && englishUrl !== reusedUrl) {
+      tab =
+        readBrowserTab(
+          await callBrowserProxyOnNode({
+            runtime: params.runtime,
+            nodeId,
+            method: "POST",
+            path: "/navigate",
+            body: { targetId: tab.targetId, url: englishUrl },
+            timeoutMs: stepTimeoutMs,
+          }),
+        ) ?? tab;
+    }
   } else {
     tab = readBrowserTab(
       await callBrowserProxyOnNode({
@@ -288,7 +314,7 @@ export async function createMeetWithBrowserProxyOnNode(params: {
         nodeId,
         method: "POST",
         path: "/tabs/open",
-        body: { url: GOOGLE_MEET_NEW_URL },
+        body: { url: forceMeetEnglishUi(GOOGLE_MEET_NEW_URL) },
         timeoutMs: stepTimeoutMs,
       }),
     );

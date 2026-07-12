@@ -34,6 +34,22 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<voi
   throw new Error("condition was not met before timeout");
 }
 
+// writeFileSync is not atomic for concurrent readers: the pid file can exist
+// before its payload is flushed, so wait for non-empty content or the parse
+// races into NaN under parallel-suite load.
+async function waitForPidFile(pidPath: string, timeoutMs = 10_000): Promise<number> {
+  let content = "";
+  await waitFor(() => {
+    try {
+      content = fs.readFileSync(pidPath, "utf8").trim();
+    } catch {
+      return false;
+    }
+    return content.length > 0;
+  }, timeoutMs);
+  return Number.parseInt(content, 10);
+}
+
 async function waitForChildClose(child: ReturnType<typeof spawn>, timeoutMs = 5_000) {
   return await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
     (resolve, reject) => {
@@ -478,11 +494,11 @@ describe("secret provider integration proof harness", () => {
               OPENCLAW_ENTRY: fakeOpenClaw,
             },
           },
-          { timeoutKillGraceMs: 50, timeoutMs: 2_000 },
+          { timeoutKillGraceMs: 50, timeoutMs: 500 },
         );
         result.catch(() => {});
-        await waitFor(() => fs.existsSync(readyPath) && fs.existsSync(descendantPidPath));
-        descendantPid = Number.parseInt(fs.readFileSync(descendantPidPath, "utf8"), 10);
+        await waitFor(() => fs.existsSync(readyPath));
+        descendantPid = await waitForPidFile(descendantPidPath);
         expect(Number.isInteger(descendantPid)).toBe(true);
         expect(isProcessAlive(descendantPid)).toBe(true);
 
@@ -740,6 +756,7 @@ describe("secret provider integration proof harness", () => {
 
     await expect(
       proof.runCommand(process.execPath, [scriptPath], {
+        timeoutKillGraceMs: 50,
         timeoutMs: 150,
       }),
     ).rejects.toThrow(/command timed out/u);
@@ -792,8 +809,7 @@ describe("secret provider integration proof harness", () => {
           timeoutMs: 150,
         });
 
-        await waitFor(() => fs.existsSync(descendantPidPath));
-        descendantPid = Number.parseInt(fs.readFileSync(descendantPidPath, "utf8"), 10);
+        descendantPid = await waitForPidFile(descendantPidPath);
         expect(Number.isInteger(descendantPid)).toBe(true);
         expect(isProcessAlive(descendantPid)).toBe(true);
 
@@ -838,8 +854,7 @@ describe("secret provider integration proof harness", () => {
       });
 
       try {
-        await waitFor(() => fs.existsSync(descendantPidPath));
-        descendantPid = Number.parseInt(fs.readFileSync(descendantPidPath, "utf8"), 10);
+        descendantPid = await waitForPidFile(descendantPidPath);
         expect(Number.isInteger(descendantPid)).toBe(true);
         expect(isProcessAlive(descendantPid)).toBe(true);
 
@@ -921,7 +936,7 @@ describe("secret provider integration proof harness", () => {
           `const proof = await import(${JSON.stringify(
             `${pathToFileURL(proofScriptPath).href}?case=parent-signal-${Date.now()}`,
           )});`,
-          `await proof.runCommand(process.execPath, [${JSON.stringify(scriptPath)}], { timeoutMs: 30_000 });`,
+          `await proof.runCommand(process.execPath, [${JSON.stringify(scriptPath)}], { timeoutKillGraceMs: 50, timeoutMs: 30_000 });`,
           "",
         ].join("\n"),
       );
@@ -931,8 +946,8 @@ describe("secret provider integration proof harness", () => {
           cwd: process.cwd(),
           stdio: ["ignore", "ignore", "pipe"],
         });
-        await waitFor(() => fs.existsSync(readyPath) && fs.existsSync(descendantPidPath));
-        descendantPid = Number.parseInt(fs.readFileSync(descendantPidPath, "utf8"), 10);
+        await waitFor(() => fs.existsSync(readyPath));
+        descendantPid = await waitForPidFile(descendantPidPath);
         expect(Number.isInteger(descendantPid)).toBe(true);
         expect(isProcessAlive(descendantPid)).toBe(true);
 

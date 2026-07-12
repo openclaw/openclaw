@@ -7,7 +7,9 @@ import type {
 import type { CronListPageOptions } from "./service/list-page-types.js";
 import * as ops from "./service/ops.js";
 import {
+  type CronAddOptions,
   type CronServiceDeps,
+  type CronUpdatePrecondition,
   type CronWakeMode,
   createCronServiceState,
 } from "./service/state.js";
@@ -18,17 +20,72 @@ export type { CronEvent, CronServiceDeps } from "./service/state.js";
 /** Public cron service facade that owns mutable scheduler state and delegates to locked ops. */
 export class CronService implements CronServiceContract {
   private readonly state;
+  private startInProgress = 0;
+  private startState: { generation: number; promise: Promise<void> } | null = null;
+  private lifecycleGeneration = 0;
 
   constructor(deps: CronServiceDeps) {
     this.state = createCronServiceState(deps);
   }
 
   async start() {
-    await ops.start(this.state);
+    const generation = this.lifecycleGeneration;
+    const pending = this.startState;
+    if (pending) {
+      try {
+        await pending.promise;
+      } catch (err) {
+        if (pending.generation === generation) {
+          throw err;
+        }
+      }
+      if (pending.generation === generation) {
+        return;
+      }
+      await this.start();
+      return;
+    }
+    const promise = this.startOnce(generation);
+    this.startState = { generation, promise };
+    try {
+      await promise;
+    } finally {
+      if (this.startState?.promise === promise) {
+        this.startState = null;
+      }
+    }
+  }
+
+  private async startOnce(generation: number) {
+    this.startInProgress += 1;
+    this.state.schedulerStarted = false;
+    try {
+      await ops.start(this.state);
+      if (generation !== this.lifecycleGeneration) {
+        ops.stop(this.state);
+        return;
+      }
+      this.state.schedulerStarted = !this.state.stopped;
+    } finally {
+      this.startInProgress -= 1;
+    }
   }
 
   stop() {
+    this.lifecycleGeneration += 1;
     ops.stop(this.state);
+  }
+
+  pauseScheduling() {
+    ops.pauseScheduling(this.state);
+  }
+
+  resumeScheduling() {
+    ops.resumeScheduling(this.state);
+  }
+
+  getSuspensionBlockerCount() {
+    return this.startInProgress;
   }
 
   async status() {
@@ -43,12 +100,20 @@ export class CronService implements CronServiceContract {
     return await ops.listPage(this.state, opts);
   }
 
-  async add(input: CronJobCreate) {
-    return await ops.add(this.state, input);
+  async add(input: CronJobCreate, opts?: CronAddOptions) {
+    return await ops.add(this.state, input, opts);
   }
 
   async update(id: string, patch: CronJobPatch) {
     return await ops.update(this.state, id, patch);
+  }
+
+  async updateWithPrecondition(
+    id: string,
+    patch: CronJobPatch,
+    precondition: CronUpdatePrecondition,
+  ) {
+    return await ops.updateWithPrecondition(this.state, id, patch, precondition);
   }
 
   async remove(id: string) {

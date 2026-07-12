@@ -1,15 +1,13 @@
-// Covers dynamic registration of custom model API providers.
-import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   clearApiProviders,
+  defaultApiRegistry,
   getApiProvider,
   registerApiProvider,
   unregisterApiProviders,
-} from "../llm/api-registry.js";
-import {
-  registerBuiltInApiProviders,
-  resetApiProviders,
-} from "../llm/providers/register-builtins.js";
+} from "@openclaw/ai/internal/runtime";
+import { registerBuiltInApiProviders, resetApiProviders } from "@openclaw/ai/providers";
+// Covers dynamic registration of custom model API providers.
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { ensureCustomApiRegistered } from "./custom-api-registry.js";
 import { buildAssistantMessageWithZeroUsage } from "./stream-message-shared.js";
@@ -25,7 +23,7 @@ function getRegisteredTestProvider() {
 describe("ensureCustomApiRegistered", () => {
   afterEach(() => {
     clearApiProviders();
-    registerBuiltInApiProviders();
+    registerBuiltInApiProviders(defaultApiRegistry);
   });
 
   it("registers a custom api provider once", () => {
@@ -117,7 +115,7 @@ describe("ensureCustomApiRegistered", () => {
       sourceId,
     );
 
-    resetApiProviders();
+    resetApiProviders(defaultApiRegistry);
 
     expect(getApiProvider(api)).toBeDefined();
     expect(getApiProvider("openai-responses")).toBeDefined();

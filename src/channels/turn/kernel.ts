@@ -12,7 +12,6 @@ import {
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { toHistoryMediaEntries } from "../inbound-event/media.js";
 import { createChannelReplyPipeline } from "../message/reply-pipeline.js";
-import type { CreateChannelReplyPipelineParams } from "../message/reply-pipeline.js";
 import { recordChannelBotPairLoopAndCheckSuppression } from "./bot-loop-protection.js";
 import {
   EMPTY_CHANNEL_TURN_DISPATCH_COUNTS,
@@ -37,7 +36,6 @@ export { createChannelHistoryWindow } from "./history-window.js";
 export type { ChannelHistoryWindow } from "./history-window.js";
 export type { ChannelBotLoopProtectionFacts } from "./bot-loop-protection.js";
 export {
-  deliverDurableInboundReplyPayload,
   deliverInboundReplyWithMessageSendContext,
   isDurableInboundReplyDeliveryHandled,
   throwIfDurableInboundReplyDeliveryFailed,
@@ -107,18 +105,6 @@ const DEFAULT_EVENT_CLASS: ChannelEventClass = {
   canStartAgentTurn: true,
 };
 const log = createSubsystemLogger("channels/turn/kernel");
-
-/**
- * @deprecated Compatibility assembly for legacy buffered reply dispatchers.
- * New channel plugins should expose `defineChannelMessageAdapter(...)` from
- * `openclaw/plugin-sdk/channel-outbound` and route send/receive behavior through
- * the message lifecycle helpers.
- */
-export function createChannelTurnReplyPipeline(
-  params: CreateChannelReplyPipelineParams,
-): ReturnType<typeof createChannelReplyPipeline> {
-  return createChannelReplyPipeline(params);
-}
 
 function isAdmission(value: unknown): value is ChannelTurnAdmission {
   if (!value || typeof value !== "object") {
@@ -241,10 +227,11 @@ export const recordDroppedChannelInboundHistory = recordDroppedChannelTurnHistor
 function resolveAssembledReplyPipeline(
   params: AssembledChannelTurn,
 ): Pick<AssembledChannelTurn, "dispatcherOptions" | "replyOptions"> {
+  const onTurnAdopted = params.onTurnAdopted ?? params.replyOptions?.onTurnAdopted;
   if (!params.replyPipeline) {
     return {
       dispatcherOptions: params.dispatcherOptions,
-      replyOptions: params.replyOptions,
+      replyOptions: onTurnAdopted ? { ...params.replyOptions, onTurnAdopted } : params.replyOptions,
     };
   }
   const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
@@ -262,6 +249,7 @@ function resolveAssembledReplyPipeline(
     replyOptions: {
       onModelSelected,
       ...params.replyOptions,
+      ...(onTurnAdopted ? { onTurnAdopted } : {}),
     },
   };
 }
@@ -762,20 +750,27 @@ export async function runChannelTurn<
   const admission = resolved.admission ?? preflightAdmission ?? ({ kind: "dispatch" } as const);
   let result: ChannelTurnResult<TDispatchResult>;
   try {
+    // Prepared runDispatch was assembled earlier and ignores late options (including onTurnAdopted).
     const dispatchResult = await dispatchResolvedChannelTurn(
-      admission.kind === "observeOnly"
+      "runDispatch" in resolved
         ? {
             ...resolved,
-            delivery: createNoopChannelEventDeliveryAdapter(),
+            ...(admission.kind === "observeOnly"
+              ? { delivery: createNoopChannelEventDeliveryAdapter() }
+              : {}),
             admission,
             log: params.log,
             messageId: input.id,
           }
         : {
             ...resolved,
+            ...(admission.kind === "observeOnly"
+              ? { delivery: createNoopChannelEventDeliveryAdapter() }
+              : {}),
             admission,
             log: params.log,
             messageId: input.id,
+            ...(params.onTurnAdopted ? { onTurnAdopted: params.onTurnAdopted } : {}),
           },
     );
     result = dispatchResult.dispatched ? { ...dispatchResult, admission } : dispatchResult;

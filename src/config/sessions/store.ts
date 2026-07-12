@@ -2,18 +2,20 @@
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalAgentRuntimeId } from "../../agents/agent-runtime-id.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { resolveStoredSessionOwnerAgentId } from "../../gateway/session-store-key.js";
 import { writeTextAtomic } from "../../infra/json-files.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
-  deliveryContextFromChannelRoute,
-  deliveryContextFromSession,
-  mergeDeliveryContext,
-  normalizeDeliveryContext,
-  normalizeSessionDeliveryFields,
-} from "../../utils/delivery-context.shared.js";
+  AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE,
+  isAgentHarnessSessionKey,
+  isValidAgentHarnessSessionStoreEntry,
+  resolveAgentHarnessSessionStoreError,
+  resolveAgentHarnessSessionStoreEntryError,
+} from "../../sessions/agent-harness-session-key.js";
+import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { getFileStatSnapshot } from "../cache-utils.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
@@ -23,7 +25,7 @@ import {
   type SessionUnreferencedArtifactSweepResult,
 } from "./disk-budget.js";
 import { extractGeneratedTranscriptSessionId } from "./generated-transcript-session-id.js";
-import { deriveSessionMetaPatch } from "./metadata.js";
+import { deriveLastRoutePatch, deriveSessionMetaPatch } from "./metadata.js";
 import { resolveExplicitSessionFilePath, resolveSessionFilePath } from "./paths.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import {
@@ -58,6 +60,7 @@ import {
   applyFileBackedSessionStoreMaintenance,
   type SessionMaintenanceApplyReport,
 } from "./store-maintenance-operations.js";
+import { collectActiveSessionWorkAdmissionKeys } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   capEntryCount,
@@ -115,35 +118,30 @@ export type SessionEntryPatchProjectionResult<TFailure extends SessionEntryPatch
   { ok: true; entry: SessionEntry } | TFailure;
 
 const log = createSubsystemLogger("sessions/store");
-let sessionArchiveRuntimePromise: Promise<
-  typeof import("../../gateway/session-archive.runtime.js")
-> | null = null;
-let trajectoryCleanupRuntimePromise: Promise<typeof import("../../trajectory/cleanup.js")> | null =
-  null;
 const writerStoreFileStats = new WeakMap<
   Record<string, SessionEntry>,
   ReturnType<typeof getFileStatSnapshot> | null
 >();
+const writerLockedSessionEntries = new WeakMap<
+  Record<string, SessionEntry>,
+  ReadonlyMap<string, SessionEntry>
+>();
 
-function loadSessionArchiveRuntime() {
-  // Archive cleanup is a cold maintenance path, so keep it lazy to avoid gateway import cycles.
-  sessionArchiveRuntimePromise ??= import("../../gateway/session-archive.runtime.js");
-  return sessionArchiveRuntimePromise;
-}
+const MODEL_SELECTION_LOCK_REMOVAL_MESSAGE =
+  "Model-selection-locked sessions cannot be removed, unlocked, or reassigned.";
 
-function loadTrajectoryCleanupRuntime() {
-  trajectoryCleanupRuntimePromise ??= import("../../trajectory/cleanup.js");
-  return trajectoryCleanupRuntimePromise;
-}
+type SessionStoreInvariantContext = {
+  allowedLockedEntryRemovals?: ReadonlyMap<string, SessionEntry>;
+  lockedEntriesBefore?: ReadonlyMap<string, SessionEntry>;
+};
 
-function removeThreadFromDeliveryContext(context?: DeliveryContext): DeliveryContext | undefined {
-  if (!context || context.threadId == null) {
-    return context;
-  }
-  const next: DeliveryContext = { ...context };
-  delete next.threadId;
-  return next;
-}
+const loadSessionArchiveRuntime = createLazyRuntimeModule(
+  () => import("../../gateway/session-archive.runtime.js"),
+);
+
+const loadTrajectoryCleanupRuntime = createLazyRuntimeModule(
+  () => import("../../trajectory/cleanup.js"),
+);
 
 export function readSessionUpdatedAt(params: {
   storePath: string;
@@ -228,6 +226,8 @@ type SessionEntryWorkflowOptions = {
 };
 
 export type SessionLifecycleArtifactCleanupParams = {
+  /** Agent owner used by SQLite-backed cleanup when the store path is custom. */
+  agentId?: string;
   /** Session store to clean. */
   storePath: string;
   /** Archive exact transcripts referenced by removed entries before the orphan marker scan. */
@@ -275,6 +275,7 @@ export type ResetSessionEntryLifecycleMutation = Omit<
 export type DeleteSessionEntryLifecycleResult = {
   archivedTranscripts: SessionLifecycleArchivedTranscript[];
   deleted: boolean;
+  expectedEntryMismatch?: true;
   deletedEntry?: SessionEntry;
   deletedSessionFile?: string;
   deletedSessionId?: string;
@@ -289,6 +290,8 @@ export type SessionEntryLifecycleRemoval = {
   archiveRemovedTranscript?: boolean;
   /** Optional guard for stale plans built from a prior store read. */
   expectedSessionId?: string;
+  /** Optional guard for stale plans built from a prior store read. */
+  expectedLifecycleRevision?: string;
   /** Optional guard for stale plans built from a prior store read. */
   expectedUpdatedAt?: number;
 };
@@ -341,6 +344,118 @@ export type DeletedAgentSessionEntryPurgeParams = {
 
 function cloneSessionEntry(entry: SessionEntry): SessionEntry {
   return cloneSessionStoreRecord({ entry }).entry;
+}
+
+function cloneSessionEntries(store: Record<string, SessionEntry>): Record<string, SessionEntry> {
+  return Object.fromEntries(
+    Object.entries(store).map(([sessionKey, entry]) => [sessionKey, cloneSessionEntry(entry)]),
+  );
+}
+
+function replaceSessionEntries(
+  target: Record<string, SessionEntry>,
+  source: Record<string, SessionEntry>,
+): void {
+  for (const sessionKey of Object.keys(target)) {
+    delete target[sessionKey];
+  }
+  Object.assign(target, cloneSessionEntries(source));
+}
+
+function snapshotLockedSessionEntries(
+  store: Record<string, SessionEntry>,
+): ReadonlyMap<string, SessionEntry> {
+  const lockedEntries = new Map<string, SessionEntry>();
+  for (const [sessionKey, entry] of Object.entries(store)) {
+    // Legacy model locks select a model only. Durable harness ownership opts
+    // into the stronger transcript identity fence enforced during writes.
+    if (isValidAgentHarnessSessionStoreEntry(sessionKey, entry)) {
+      lockedEntries.set(sessionKey, cloneSessionEntry(entry));
+    }
+  }
+  return lockedEntries;
+}
+
+function sessionLockOwnerMatches(previous: SessionEntry, next: SessionEntry): boolean {
+  const previousOwner = normalizeOptionalString(previous.agentHarnessId)?.toLowerCase();
+  const nextOwner = normalizeOptionalString(next.agentHarnessId)?.toLowerCase();
+  return (
+    previousOwner === nextOwner &&
+    normalizeOptionalAgentRuntimeId(previousOwner) === normalizeOptionalAgentRuntimeId(nextOwner)
+  );
+}
+
+function hasEquivalentRelocatedLockedEntry(params: {
+  previousKey: string;
+  previousEntry: SessionEntry;
+  store: Record<string, SessionEntry>;
+}): boolean {
+  // Reserved keys are source identities, not aliases. Moving one would let a
+  // writer detach a native harness binding while retaining only its session id.
+  if (isAgentHarnessSessionKey(params.previousKey)) {
+    return false;
+  }
+  const sessionId = normalizeOptionalString(params.previousEntry.sessionId);
+  if (!sessionId) {
+    return false;
+  }
+  for (const [sessionKey, entry] of Object.entries(params.store)) {
+    if (
+      sessionKey === params.previousKey ||
+      entry.modelSelectionLocked !== true ||
+      entry.sessionId !== sessionId ||
+      !sessionLockOwnerMatches(params.previousEntry, entry)
+    ) {
+      continue;
+    }
+    return true;
+  }
+  return false;
+}
+
+function assertLockedSessionEntriesPreserved(params: {
+  allowedRemovals?: ReadonlyMap<string, SessionEntry>;
+  before?: ReadonlyMap<string, SessionEntry>;
+  store: Record<string, SessionEntry>;
+}): void {
+  for (const [sessionKey, previousEntry] of params.before ?? []) {
+    const nextEntry = params.store[sessionKey];
+    if (
+      nextEntry?.modelSelectionLocked === true &&
+      sessionLockOwnerMatches(previousEntry, nextEntry)
+    ) {
+      if (nextEntry.sessionId !== previousEntry.sessionId) {
+        throw new Error(AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE);
+      }
+      continue;
+    }
+    const allowedRemoval = params.allowedRemovals?.get(sessionKey);
+    if (
+      nextEntry === undefined &&
+      allowedRemoval !== undefined &&
+      JSON.stringify(previousEntry) === JSON.stringify(allowedRemoval)
+    ) {
+      continue;
+    }
+    if (
+      nextEntry === undefined &&
+      hasEquivalentRelocatedLockedEntry({
+        previousKey: sessionKey,
+        previousEntry,
+        store: params.store,
+      })
+    ) {
+      continue;
+    }
+    throw new Error(MODEL_SELECTION_LOCK_REMOVAL_MESSAGE);
+  }
+}
+
+function assertValidAgentHarnessSessionEntries(store: Record<string, SessionEntry>): void {
+  const error = resolveAgentHarnessSessionStoreError(store);
+  if (error) {
+    throw new Error(error);
+  }
 }
 
 export function projectSessionEntryForPersistenceRevision(params: {
@@ -635,11 +750,13 @@ function loadMutableSessionStoreForWriter(storePath: string): Record<string, Ses
     });
     if (cached) {
       writerStoreFileStats.set(cached, currentFileStat ?? null);
+      writerLockedSessionEntries.set(cached, snapshotLockedSessionEntries(cached));
       return cached;
     }
   }
   const store = loadSessionStore(storePath, { skipCache: true, clone: false });
   writerStoreFileStats.set(store, currentFileStat ?? null);
+  writerLockedSessionEntries.set(store, snapshotLockedSessionEntries(store));
   return store;
 }
 
@@ -658,21 +775,33 @@ function resolveLifecyclePrimaryEntry(params: {
   store: Record<string, SessionEntry>;
   target: SessionLifecycleStoreTarget;
 }): SessionEntry | undefined {
-  const freshestMatch = resolveFreshestLifecycleStoreMatch({
-    store: params.store,
-    storeKeys: params.target.storeKeys,
-  });
-  if (freshestMatch) {
-    const currentPrimary = params.store[params.target.canonicalKey];
-    if (!currentPrimary || (freshestMatch.entry.updatedAt ?? 0) > (currentPrimary.updatedAt ?? 0)) {
-      params.store[params.target.canonicalKey] = freshestMatch.entry;
-    }
+  const primaryEntry = resolveLifecyclePrimaryEntrySnapshot(params);
+  if (primaryEntry) {
+    params.store[params.target.canonicalKey] = primaryEntry;
   }
   pruneLifecycleLegacyStoreKeys({
     store: params.store,
     target: params.target,
   });
   return params.store[params.target.canonicalKey];
+}
+
+function resolveLifecyclePrimaryEntrySnapshot(params: {
+  store: Record<string, SessionEntry>;
+  target: SessionLifecycleStoreTarget;
+}): SessionEntry | undefined {
+  const currentPrimary = params.store[params.target.canonicalKey];
+  const freshestMatch = resolveFreshestLifecycleStoreMatch({
+    store: params.store,
+    storeKeys: params.target.storeKeys,
+  });
+  if (
+    freshestMatch &&
+    (!currentPrimary || (freshestMatch.entry.updatedAt ?? 0) > (currentPrimary.updatedAt ?? 0))
+  ) {
+    return freshestMatch.entry;
+  }
+  return currentPrimary;
 }
 
 function resolveFreshestLifecycleStoreMatch(params: {
@@ -824,8 +953,17 @@ async function saveSessionStoreUnlocked(
   storePath: string,
   store: Record<string, SessionEntry>,
   opts?: SaveSessionStoreOptions,
+  invariantContext?: SessionStoreInvariantContext,
 ): Promise<void> {
   normalizeSessionStore(store);
+  const lockedEntriesBefore =
+    invariantContext?.lockedEntriesBefore ?? writerLockedSessionEntries.get(store);
+  assertLockedSessionEntriesPreserved({
+    allowedRemovals: invariantContext?.allowedLockedEntryRemovals,
+    before: lockedEntriesBefore,
+    store,
+  });
+  assertValidAgentHarnessSessionEntries(store);
 
   let maintenanceChangedStore = false;
   if (!opts?.skipMaintenance) {
@@ -852,6 +990,15 @@ async function saveSessionStoreUnlocked(
     });
     maintenanceChangedStore = maintenance.changedStore;
   }
+
+  // Maintenance shares the mutable writer-owned object. Recheck after it runs so
+  // no pruning or future cleanup path can bypass the durable lock invariant.
+  assertLockedSessionEntriesPreserved({
+    allowedRemovals: invariantContext?.allowedLockedEntryRemovals,
+    before: lockedEntriesBefore,
+    store,
+  });
+  assertValidAgentHarnessSessionEntries(store);
 
   if (
     opts?.skipSerializeForUnchangedStore &&
@@ -1007,7 +1154,10 @@ export async function saveSessionStore(
   opts?: SaveSessionStoreOptions,
 ): Promise<void> {
   await runExclusiveSessionStoreWrite(storePath, async () => {
-    await saveSessionStoreUnlocked(storePath, store, opts);
+    const currentStore = loadSessionStore(storePath, { skipCache: true, clone: false });
+    await saveSessionStoreUnlocked(storePath, store, opts, {
+      lockedEntriesBefore: snapshotLockedSessionEntries(currentStore),
+    });
   });
 }
 
@@ -1020,9 +1170,22 @@ export async function updateSessionStore<T>(
     storePath,
     async () => {
       const store = loadMutableSessionStoreForWriter(storePath);
+      const storeBeforeMutation = opts?.skipSaveWhenResult ? cloneSessionEntries(store) : undefined;
       const result = await mutator(store);
       if (opts?.skipSaveWhenResult?.(result)) {
-        restoreUnchangedSessionStoreCache(storePath, store);
+        if (!storeBeforeMutation) {
+          throw new Error("Skipped session-store write is missing its original snapshot.");
+        }
+        try {
+          const lockedEntriesBefore = writerLockedSessionEntries.get(store);
+          assertLockedSessionEntriesPreserved({ before: lockedEntriesBefore, store });
+          assertValidAgentHarnessSessionEntries(store);
+        } finally {
+          // A skipped write must return the exact disk-backed snapshot to the object cache,
+          // including when validation rejects it. Otherwise the next writer can persist poison.
+          replaceSessionEntries(store, storeBeforeMutation);
+          restoreUnchangedSessionStoreCache(storePath, store);
+        }
         return result;
       }
       await saveSessionStoreUnlocked(storePath, store, {
@@ -1184,6 +1347,18 @@ export async function resetSessionEntryLifecycle(params: {
     if (previousSessionId) {
       mutation.previousSessionId = previousSessionId;
     }
+    const reusesTranscriptPath =
+      previousSessionFile !== undefined &&
+      normalizePathForLifecycleComparison(previousSessionFile) ===
+        normalizePathForLifecycleComparison(nextSessionFile);
+    // Generated successor paths must exist before callbacks can checkpoint them.
+    // Reused custom paths keep the old callback/archive/header order to preserve observer semantics.
+    if (!reusesTranscriptPath) {
+      ensureLifecycleTranscriptHeader({
+        sessionFile: nextSessionFile,
+        sessionId: nextEntry.sessionId,
+      });
+    }
     await params.afterEntryMutation?.(mutation);
     const archivedTranscripts = await archiveLifecycleSessionTranscripts({
       sessionId: previousSessionId,
@@ -1192,10 +1367,12 @@ export async function resetSessionEntryLifecycle(params: {
       agentId: params.agentId,
       reason: "reset",
     });
-    ensureLifecycleTranscriptHeader({
-      sessionFile: nextSessionFile,
-      sessionId: nextEntry.sessionId,
-    });
+    if (reusesTranscriptPath) {
+      ensureLifecycleTranscriptHeader({
+        sessionFile: nextSessionFile,
+        sessionId: nextEntry.sessionId,
+      });
+    }
     const result: ResetSessionEntryLifecycleResult = {
       ...mutation,
       archivedTranscripts,
@@ -1204,16 +1381,27 @@ export async function resetSessionEntryLifecycle(params: {
   });
 }
 
-/** Deletes one persisted session entry and archives its file-backed transcript artifacts. */
-export async function deleteSessionEntryLifecycle(params: {
+type DeleteSessionEntryLifecycleParams = {
   agentId?: string;
   archiveTranscript: boolean;
+  expectedEntry?: SessionEntry;
+  expectedLifecycleRevision?: string;
+  expectedSessionId?: string;
+  expectedUpdatedAt?: number;
+  requireWriteSuccess?: boolean;
   storePath: string;
   target: SessionLifecycleStoreTarget;
-}): Promise<DeleteSessionEntryLifecycleResult> {
+};
+
+async function deleteSessionEntryLifecycleInternal(
+  params: DeleteSessionEntryLifecycleParams,
+  allowLockedEntryRemoval: boolean,
+): Promise<DeleteSessionEntryLifecycleResult> {
   return await runExclusiveSessionStoreWrite(params.storePath, async () => {
     const store = loadMutableSessionStoreForWriter(params.storePath);
-    const deletedEntry = resolveLifecyclePrimaryEntry({
+    // Compare against an unmodified snapshot. Alias promotion is itself a
+    // mutation and must not enter the cache when a guarded delete is rejected.
+    const deletedEntry = resolveLifecyclePrimaryEntrySnapshot({
       store,
       target: params.target,
     });
@@ -1224,10 +1412,51 @@ export async function deleteSessionEntryLifecycle(params: {
         deleted: false,
       };
     }
+    const expectedEntryMatches =
+      params.expectedEntry === undefined ||
+      JSON.stringify(deletedEntry) === JSON.stringify(params.expectedEntry);
+    const expectedLifecycleRevisionMatches =
+      params.expectedLifecycleRevision === undefined ||
+      deletedEntry.lifecycleRevision === params.expectedLifecycleRevision;
+    const expectedSessionIdMatches =
+      !params.expectedSessionId ||
+      deletedEntry.sessionId === params.expectedSessionId ||
+      (deletedEntry.sessionId === undefined &&
+        params.expectedLifecycleRevision !== undefined &&
+        expectedLifecycleRevisionMatches);
+    const expectedUpdatedAtMatches =
+      params.expectedUpdatedAt === undefined || deletedEntry.updatedAt === params.expectedUpdatedAt;
+    if (
+      !expectedEntryMatches ||
+      !expectedLifecycleRevisionMatches ||
+      !expectedSessionIdMatches ||
+      !expectedUpdatedAtMatches
+    ) {
+      restoreUnchangedSessionStoreCache(params.storePath, store);
+      return {
+        archivedTranscripts: [],
+        deleted: false,
+        expectedEntryMismatch: true,
+      };
+    }
+    pruneLifecycleLegacyStoreKeys({ store, target: params.target });
     const deletedSessionId = deletedEntry.sessionId;
     const deletedSessionFile = deletedEntry.sessionFile;
     delete store[params.target.canonicalKey];
-    await saveSessionStoreUnlocked(params.storePath, store);
+    await saveSessionStoreUnlocked(
+      params.storePath,
+      store,
+      {
+        requireWriteSuccess: params.requireWriteSuccess,
+      },
+      allowLockedEntryRemoval && deletedEntry.modelSelectionLocked === true
+        ? {
+            allowedLockedEntryRemovals: new Map([
+              [params.target.canonicalKey, cloneSessionEntry(deletedEntry)],
+            ]),
+          }
+        : undefined,
+    );
     const archivedTranscripts = params.archiveTranscript
       ? await archiveLifecycleSessionTranscripts({
           sessionId: deletedSessionId,
@@ -1252,6 +1481,63 @@ export async function deleteSessionEntryLifecycle(params: {
   });
 }
 
+/** Deletes one persisted session entry and archives its file-backed transcript artifacts. */
+export async function deleteSessionEntryLifecycle(
+  params: DeleteSessionEntryLifecycleParams,
+): Promise<DeleteSessionEntryLifecycleResult> {
+  return await deleteSessionEntryLifecycleInternal(params, false);
+}
+
+/**
+ * Rolls back the exact locked row created by a failed trusted harness initialization.
+ * This stays separate from public deletion so the lock-removal capability cannot leak.
+ */
+export async function rollbackAgentHarnessSessionEntryLifecycle(
+  params: DeleteSessionEntryLifecycleParams & { expectedEntry: SessionEntry },
+): Promise<DeleteSessionEntryLifecycleResult> {
+  const hasExactTarget =
+    params.target.storeKeys.length === 1 &&
+    params.target.storeKeys[0] === params.target.canonicalKey;
+  const expectedEntryError = resolveAgentHarnessSessionStoreEntryError(
+    params.target.canonicalKey,
+    params.expectedEntry,
+  );
+  if (
+    !hasExactTarget ||
+    expectedEntryError ||
+    !isValidAgentHarnessSessionStoreEntry(params.target.canonicalKey, params.expectedEntry)
+  ) {
+    throw new Error(expectedEntryError ?? MODEL_SELECTION_LOCK_REMOVAL_MESSAGE);
+  }
+  return await deleteSessionEntryLifecycleInternal(params, true);
+}
+
+/** Rolls back the exact locked CLI row created by a failed plugin initializer. */
+export async function rollbackPluginOwnedSessionEntryLifecycle(
+  params: DeleteSessionEntryLifecycleParams & {
+    expectedEntry: SessionEntry;
+    expectedPluginOwnerId: string;
+  },
+): Promise<DeleteSessionEntryLifecycleResult> {
+  const hasExactTarget =
+    params.target.storeKeys.length === 1 &&
+    params.target.storeKeys[0] === params.target.canonicalKey;
+  const expectedEntry = params.expectedEntry;
+  const validPluginOwner = normalizeOptionalString(expectedEntry.pluginOwnerId);
+  const expectedPluginOwner = normalizeOptionalString(params.expectedPluginOwnerId);
+  if (
+    !hasExactTarget ||
+    isAgentHarnessSessionKey(params.target.canonicalKey) ||
+    expectedEntry.agentHarnessId !== undefined ||
+    expectedEntry.modelSelectionLocked !== true ||
+    !validPluginOwner ||
+    validPluginOwner !== expectedPluginOwner
+  ) {
+    throw new Error(MODEL_SELECTION_LOCK_REMOVAL_MESSAGE);
+  }
+  return await deleteSessionEntryLifecycleInternal(params, true);
+}
+
 function shouldRemoveSessionEntry(
   entry: SessionEntry | undefined,
   removal: SessionEntryLifecycleRemoval,
@@ -1266,6 +1552,12 @@ function shouldRemoveSessionEntry(
     return false;
   }
   if (removal.expectedSessionId !== undefined && entry.sessionId !== removal.expectedSessionId) {
+    return false;
+  }
+  if (
+    removal.expectedLifecycleRevision !== undefined &&
+    entry.lifecycleRevision !== removal.expectedLifecycleRevision
+  ) {
     return false;
   }
   if (removal.expectedUpdatedAt !== undefined && entry.updatedAt !== removal.expectedUpdatedAt) {
@@ -1286,6 +1578,7 @@ export async function applySessionEntryLifecycleMutation(params: {
   activeSessionKey?: string;
   maintenanceOverride?: Partial<ResolvedSessionMaintenanceConfig>;
   skipMaintenance?: boolean;
+  preserveActiveWork?: boolean;
   archiveReason?: "deleted" | "reset";
   restrictArchivedTranscriptsToStoreDir?: boolean;
   cleanupArchivedTranscripts?: {
@@ -1309,9 +1602,13 @@ export async function applySessionEntryLifecycleMutation(params: {
 
   await runExclusiveSessionStoreWrite(storePath, async () => {
     const store = loadMutableSessionStoreForWriter(storePath);
+    const activeWorkKeys =
+      params.preserveActiveWork === true
+        ? collectActiveSessionWorkAdmissionKeys({ storePath, store })
+        : undefined;
     for (const removal of params.removals ?? []) {
       const sessionKey = removal.sessionKey.trim();
-      if (!sessionKey) {
+      if (!sessionKey || activeWorkKeys?.has(sessionKey)) {
         continue;
       }
       const entry = store[sessionKey];
@@ -1424,6 +1721,7 @@ export async function purgeDeletedAgentSessionEntries(
 
   await runExclusiveSessionStoreWrite(storePath, async () => {
     const store = loadMutableSessionStoreForWriter(storePath);
+    const allowedLockedEntryRemovals = new Map<string, SessionEntry>();
     for (const sessionKey of Object.keys(store)) {
       const ownerAgentId = resolveStoredSessionOwnerAgentId({
         cfg: params.cfg,
@@ -1431,15 +1729,24 @@ export async function purgeDeletedAgentSessionEntries(
         sessionKey,
       });
       if (ownerAgentId === params.agentId) {
+        const entry = store[sessionKey];
+        if (entry?.modelSelectionLocked === true) {
+          allowedLockedEntryRemovals.set(sessionKey, cloneSessionEntry(entry));
+        }
         delete store[sessionKey];
         removedSessionKeys.push(sessionKey);
       }
     }
-    await saveSessionStoreUnlocked(storePath, store, {
-      onMaintenanceApplied: (report) => {
-        maintenanceReport = report;
+    await saveSessionStoreUnlocked(
+      storePath,
+      store,
+      {
+        onMaintenanceApplied: (report) => {
+          maintenanceReport = report;
+        },
       },
-    });
+      { allowedLockedEntryRemovals },
+    );
     afterCount = Object.keys(store).length;
   });
 
@@ -1541,7 +1848,8 @@ export async function cleanupSessionLifecycleArtifacts(
   let archivedTranscriptArtifacts = 0;
 
   await runExclusiveSessionStoreWrite(storePath, async () => {
-    const store = loadMutableSessionStoreForWriter(storePath);
+    const mutableStore = loadMutableSessionStoreForWriter(storePath);
+    const store = cloneSessionEntries(mutableStore);
     // Delete only rows owned by the named lifecycle. Orphan transcript cleanup
     // reacquires this writer lock later so its reference set cannot go stale.
     for (const [sessionKey, entry] of Object.entries(store)) {
@@ -1567,8 +1875,16 @@ export async function cleanupSessionLifecycleArtifacts(
       }
     }
 
+    // Reject protected-row cleanup before archiving transcripts or removing
+    // trajectory artifacts; persistence-time validation is too late for those side effects.
+    assertLockedSessionEntriesPreserved({
+      before: writerLockedSessionEntries.get(mutableStore),
+      store,
+    });
+    assertValidAgentHarnessSessionEntries(store);
+
     if (removedEntries === 0) {
-      restoreUnchangedSessionStoreCache(storePath, store);
+      restoreUnchangedSessionStoreCache(storePath, mutableStore);
       return;
     }
 
@@ -1595,7 +1911,8 @@ export async function cleanupSessionLifecycleArtifacts(
       storePath,
       restrictToStoreDir: true,
     });
-    await saveSessionStoreUnlocked(storePath, store, { skipMaintenance: true });
+    replaceSessionEntries(mutableStore, store);
+    await saveSessionStoreUnlocked(storePath, mutableStore, { skipMaintenance: true });
   });
 
   return {
@@ -1946,70 +2263,21 @@ export async function updateLastRoute(params: {
     if (!existing && !createIfMissing) {
       return null;
     }
-    const explicitContext = normalizeDeliveryContext(params.deliveryContext);
-    const inlineContext = normalizeDeliveryContext({
+    const patch = deriveLastRoutePatch({
       channel,
       to,
       accountId,
       threadId,
-    });
-    const routeContext = deliveryContextFromChannelRoute(params.route);
-    const mergedInput = mergeDeliveryContext(
-      routeContext,
-      mergeDeliveryContext(explicitContext, inlineContext),
-    );
-    const explicitDeliveryContext = params.deliveryContext;
-    const explicitThreadFromDeliveryContext =
-      explicitDeliveryContext != null && Object.hasOwn(explicitDeliveryContext, "threadId")
-        ? explicitDeliveryContext.threadId
-        : undefined;
-    const explicitThreadValue =
-      explicitThreadFromDeliveryContext ??
-      (threadId != null && threadId !== "" ? threadId : undefined);
-    const explicitRouteProvided = Boolean(
-      routeContext?.channel ||
-      routeContext?.to ||
-      explicitContext?.channel ||
-      explicitContext?.to ||
-      inlineContext?.channel ||
-      inlineContext?.to,
-    );
-    const clearThreadFromFallback = explicitRouteProvided && explicitThreadValue == null;
-    const fallbackContext = clearThreadFromFallback
-      ? removeThreadFromDeliveryContext(deliveryContextFromSession(existing))
-      : deliveryContextFromSession(existing);
-    const merged = mergeDeliveryContext(mergedInput, fallbackContext);
-    const normalized = normalizeSessionDeliveryFields({
       route: params.route,
-      deliveryContext: {
-        channel: merged?.channel,
-        to: merged?.to,
-        accountId: merged?.accountId,
-        threadId: merged?.threadId,
-      },
+      deliveryContext: params.deliveryContext,
+      ctx,
+      groupResolution: params.groupResolution,
+      existing,
+      sessionKey: resolved.normalizedKey,
     });
-    const metaPatch = ctx
-      ? deriveSessionMetaPatch({
-          ctx,
-          sessionKey: resolved.normalizedKey,
-          existing,
-          groupResolution: params.groupResolution,
-        })
-      : null;
-    const basePatch: Partial<SessionEntry> = {
-      route: normalized.route,
-      deliveryContext: normalized.deliveryContext,
-      lastChannel: normalized.lastChannel,
-      lastTo: normalized.lastTo,
-      lastAccountId: normalized.lastAccountId,
-      lastThreadId: normalized.lastThreadId,
-    };
     // Route updates must not refresh activity timestamps; idle/daily reset
     // evaluation relies on updatedAt from actual session turns (#49515).
-    const next = mergeSessionEntryPreserveActivity(
-      existing,
-      metaPatch ? { ...basePatch, ...metaPatch } : basePatch,
-    );
+    const next = mergeSessionEntryPreserveActivity(existing, patch);
     return await persistResolvedSessionEntry({
       storePath,
       store,

@@ -97,7 +97,7 @@ export function classifyProviderRequestError(
 }
 
 /** Detects provider errors that indicate invalid conversation/tool turn state. */
-export function isProviderConversationStateErrorMessage(message: string): boolean {
+function isProviderConversationStateErrorMessage(message: string): boolean {
   const lower = normalizeLowercaseStringOrEmpty(message);
   return (
     (lower.includes("custom tool call output is missing") && lower.includes("call id")) ||

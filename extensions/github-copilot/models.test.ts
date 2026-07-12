@@ -126,6 +126,7 @@ describe("resolveCopilotForwardCompatModel", () => {
       input: ["text", "image"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 400_000,
+      contextTokens: 272_000,
       maxTokens: 128_000,
     });
   });
@@ -200,6 +201,30 @@ describe("resolveCopilotForwardCompatModel", () => {
 });
 
 describe("fetchCopilotUsage", () => {
+  it("targets the public github.com usage endpoint by default", async () => {
+    let calledUrl: string | undefined;
+    const mockFetch = createProviderUsageFetch(async (url) => {
+      calledUrl = url;
+      return makeResponse(200, { copilot_plan: "pro" });
+    });
+
+    await fetchCopilotUsage("token", 5000, mockFetch);
+
+    expect(calledUrl).toBe("https://api.github.com/copilot_internal/user");
+  });
+
+  it("routes usage through the tenant host for *.ghe.com domains", async () => {
+    let calledUrl: string | undefined;
+    const mockFetch = createProviderUsageFetch(async (url) => {
+      calledUrl = url;
+      return makeResponse(200, { copilot_plan: "business" });
+    });
+
+    await fetchCopilotUsage("token", 5000, mockFetch, "acme.ghe.com");
+
+    expect(calledUrl).toBe("https://api.acme.ghe.com/copilot_internal/user");
+  });
+
   it("returns HTTP errors for failed requests", async () => {
     const mockFetch = createProviderUsageFetch(async () => makeResponse(500, "boom"));
     const result = await fetchCopilotUsage("token", 5000, mockFetch);
@@ -334,6 +359,7 @@ describe("github-copilot token", () => {
       expiresAt: now + 60 * 60 * 1000,
       updatedAt: now,
       integrationId: "vscode-chat",
+      domain: "github.com",
     });
 
     const fetchImpl = vi.fn();
@@ -354,14 +380,18 @@ describe("github-copilot token", () => {
   it("fetches and stores token when cache is missing", async () => {
     jsonStoreMocks.loadJsonFile.mockReturnValue(undefined);
 
-    const fetchImpl = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        token: "fresh;proxy-ep=https://proxy.contoso.test;",
-        expires_at: Math.floor(Date.now() / 1000) + 3600,
-      }),
-    });
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          token: "fresh;proxy-ep=https://proxy.contoso.test;",
+          expires_at: Math.floor(Date.now() / 1000) + 3600,
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      ),
+    );
 
     const res = await resolveCopilotApiToken({
       githubToken: "gh",
@@ -541,6 +571,7 @@ describe("fetchCopilotModelCatalog", () => {
       input: ["text", "image"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 400000,
+      contextTokens: 272000,
       maxTokens: 128000,
       compat: { supportedReasoningEfforts: ["low", "medium", "high"] },
     });
@@ -549,6 +580,7 @@ describe("fetchCopilotModelCatalog", () => {
     expect(codex?.input).toEqual(["text"]);
     expect(codex?.reasoning).toBe(true);
     expect(codex?.contextWindow).toBe(400000);
+    expect(codex?.contextTokens).toBeUndefined();
 
     const gemini = out.find((m) => m.id === "gemini-3.1-pro-preview");
     expect(gemini?.api).toBe("openai-completions");
@@ -635,6 +667,7 @@ describe("fetchCopilotModelCatalog", () => {
               type: "chat",
               limits: {
                 max_context_window_tokens: -1,
+                max_prompt_tokens: -1,
                 max_output_tokens: 128000.5,
               },
             },
@@ -647,6 +680,7 @@ describe("fetchCopilotModelCatalog", () => {
               type: "chat",
               limits: {
                 max_context_window_tokens: Number.POSITIVE_INFINITY,
+                max_prompt_tokens: Number.POSITIVE_INFINITY,
                 max_output_tokens: 0,
               },
             },
@@ -667,11 +701,13 @@ describe("fetchCopilotModelCatalog", () => {
       contextWindow: 128000,
       maxTokens: 8192,
     });
+    expect(out[0]).not.toHaveProperty("contextTokens");
     expect(out[1]).toMatchObject({
       id: "gpt-bad-output",
       contextWindow: 128000,
       maxTokens: 8192,
     });
+    expect(out[1]).not.toHaveProperty("contextTokens");
   });
 
   it("throws on non-2xx HTTP responses so the caller can fall back to the static catalog", async () => {

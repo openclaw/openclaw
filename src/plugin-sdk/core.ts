@@ -208,6 +208,7 @@ export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export type { ChannelConfigUiHint } from "../channels/plugins/types.config.js";
 export type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
+export type { ContextEngineSessionTarget } from "../context-engine/types.js";
 
 export { definePluginEntry } from "./plugin-entry.js";
 export {
@@ -218,6 +219,7 @@ export {
 export { KeyedAsyncQueue, enqueueKeyedTask } from "./keyed-async-queue.js";
 export { createDedupeCache, resolveGlobalDedupeCache } from "../infra/dedupe.js";
 export { generateSecureToken, generateSecureUuid } from "../infra/secure-random.js";
+export { resolveTailscalePublishedHost } from "../shared/tailscale-status.js";
 export {
   buildMemorySystemPromptAddition,
   delegateCompactionToRuntime,
@@ -285,7 +287,10 @@ export async function ensureConfiguredAcpBindingReady(params: {
   return runtime.ensureConfiguredAcpBindingReady(params);
 }
 
-export { resolveTailnetHostWithRunner } from "../shared/tailscale-status.js";
+export {
+  resolveTailnetHostWithRunner,
+  resolveTailscaleServeGatewayUrlsWithRunner,
+} from "../shared/tailscale-status.js";
 export type {
   TailscaleStatusCommandResult,
   TailscaleStatusCommandRunner,
@@ -351,6 +356,7 @@ export function buildChannelOutboundSessionRoute(params: {
   agentId: string;
   channel: string;
   accountId?: string | null;
+  recipientSessionExact?: boolean | "direct-alias" | "delivery-identity";
   peer: { kind: "direct" | "group" | "channel"; id: string };
   chatType: "direct" | "group" | "channel";
   from: string;
@@ -367,6 +373,9 @@ export function buildChannelOutboundSessionRoute(params: {
   return {
     sessionKey: baseSessionKey,
     baseSessionKey,
+    ...(params.recipientSessionExact !== undefined
+      ? { recipientSessionExact: params.recipientSessionExact }
+      : {}),
     peer: params.peer,
     chatType: params.chatType,
     from: params.from,

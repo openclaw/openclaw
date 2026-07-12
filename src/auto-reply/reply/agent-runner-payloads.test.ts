@@ -13,6 +13,7 @@ import {
 } from "../reply-payload.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
 import { createBlockReplyPipeline } from "./block-reply-pipeline.js";
+import { createReplyToModeFilterForChannel } from "./reply-threading.js";
 
 const baseParams = {
   isHeartbeat: false,
@@ -117,8 +118,45 @@ describe("buildReplyPayloads media filter integration", () => {
           plugin: createChannelTestPluginBase({ id: "discord" }),
           source: "test",
         },
+        {
+          pluginId: "feishu-plugin",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "feishu" }),
+            meta: {
+              id: "feishu",
+              label: "Feishu",
+              selectionLabel: "Feishu",
+              docsPath: "/channels/feishu",
+              blurb: "test stub",
+              aliases: ["lark"],
+            },
+          },
+        },
       ]),
     );
+  });
+
+  it("shares first-reply threading across staged payload builds", async () => {
+    const applyReplyToMode = createReplyToModeFilterForChannel("first", "whatsapp");
+    const sharedParams = {
+      ...baseParams,
+      replyToMode: "first" as const,
+      replyToChannel: "whatsapp" as const,
+      currentMessageId: "msg",
+      applyReplyToMode,
+    };
+    const first = await buildReplyPayloads({
+      ...sharedParams,
+      payloads: [{ text: "internal commentary", isCommentary: true }],
+    });
+    const fallback = await buildReplyPayloads({
+      ...sharedParams,
+      payloads: [{ text: "run failed", isError: true }],
+    });
+
+    expect(first.replyPayloads[0]?.replyToId).toBe("msg");
+    expect(fallback.replyPayloads[0]?.replyToId).toBeUndefined();
   });
 
   it("records the reply policy used by dedupe and final delivery", async () => {
@@ -445,28 +483,6 @@ describe("buildReplyPayloads media filter integration", () => {
   });
 
   it("delivers distinct same-target replies when target provider is channel alias", async () => {
-    resetPluginRuntimeStateForTest();
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "feishu-plugin",
-          source: "test",
-          plugin: {
-            id: "feishu",
-            meta: {
-              id: "feishu",
-              label: "Feishu",
-              selectionLabel: "Feishu",
-              docsPath: "/channels/feishu",
-              blurb: "test stub",
-              aliases: ["lark"],
-            },
-            capabilities: { chatTypes: ["direct"] },
-            config: { listAccountIds: () => [], resolveAccount: () => ({}) },
-          },
-        },
-      ]),
-    );
     await expectSameTargetRepliesDelivered({ provider: "lark", to: "ou_abc123" });
   });
 
@@ -634,6 +650,36 @@ describe("buildReplyPayloads media filter integration", () => {
     });
 
     expect(replyPayloads.map((payload) => payload.text)).toEqual(["intro", "result"]);
+  });
+
+  it("dedupes against final routes when first-reply state is shared", async () => {
+    const applyReplyToMode = createReplyToModeFilterForChannel("first", "slack");
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      config: {},
+      payloads: [{ text: "intro" }, { text: "result" }],
+      replyToMode: "first",
+      replyToChannel: "slack",
+      currentMessageId: "111.000",
+      applyReplyToMode,
+      messageProvider: "slack",
+      originatingTo: "channel:C1",
+      messagingToolSentTexts: ["result"],
+      messagingToolSentTargets: [
+        {
+          tool: "slack",
+          provider: "slack",
+          to: "channel:C1",
+          threadId: "111.000",
+          text: "result",
+        },
+      ],
+    });
+
+    expect(replyPayloads.map((payload) => [payload.text, payload.replyToId])).toEqual([
+      ["intro", "111.000"],
+      ["result", undefined],
+    ]);
   });
 
   it("does not treat a Discord native reply id as a thread route", async () => {

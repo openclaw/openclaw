@@ -65,7 +65,7 @@ internal fun CommandPalette(
 ) {
   val isConnected by viewModel.isConnected.collectAsState()
   val sessions by viewModel.chatSessions.collectAsState()
-  val models by viewModel.modelCatalog.collectAsState()
+  val models by viewModel.providerModelCatalog.collectAsState()
   val providers by viewModel.modelAuthProviders.collectAsState()
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
   var query by rememberSaveable { mutableStateOf("") }
@@ -198,17 +198,12 @@ private fun CommandActionRow(row: CommandItem) {
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(9.dp),
     ) {
-      Icon(imageVector = row.icon, contentDescription = null, modifier = Modifier.size(19.dp), tint = ClawTheme.colors.text)
+      CommandRowIcon(icon = row.icon)
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
         Text(text = row.title, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Text(text = row.subtitle, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
       }
-      Icon(
-        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-        contentDescription = "Open ${row.title}",
-        modifier = Modifier.size(17.dp),
-        tint = ClawTheme.colors.textMuted,
-      )
+      CommandRowChevron(contentDescription = "Open ${row.title}")
     }
   }
 }
@@ -242,28 +237,40 @@ private fun CommandSessionListRow(
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-      Surface(
-        modifier = Modifier.size(30.dp),
-        shape = CircleShape,
-        color = ClawTheme.colors.canvas,
-        border = BorderStroke(1.dp, ClawTheme.colors.borderStrong),
-      ) {
-        Box(contentAlignment = Alignment.Center) {
-          Icon(imageVector = Icons.Outlined.ChatBubbleOutline, contentDescription = null, modifier = Modifier.size(15.dp), tint = ClawTheme.colors.text)
-        }
-      }
+      CommandRowIcon(icon = Icons.Outlined.ChatBubbleOutline)
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-        Text(text = row.title, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1)
-        Text(text = row.subtitle, style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle, maxLines = 1)
+        Text(text = row.title, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(text = row.subtitle, style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle, maxLines = 1, overflow = TextOverflow.Ellipsis)
       }
-      Text(text = row.metadata, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
-      Icon(
-        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-        contentDescription = "Open session",
-        modifier = Modifier.size(17.dp),
-        tint = ClawTheme.colors.textMuted,
-      )
+      Text(text = row.metadata, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+      CommandRowChevron(contentDescription = "Open session")
     }
+  }
+}
+
+@Composable
+private fun CommandRowIcon(icon: ImageVector) {
+  Surface(
+    modifier = Modifier.size(30.dp),
+    shape = CircleShape,
+    color = ClawTheme.colors.canvas,
+    border = BorderStroke(1.dp, ClawTheme.colors.borderStrong),
+  ) {
+    Box(contentAlignment = Alignment.Center) {
+      Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(15.dp), tint = ClawTheme.colors.text)
+    }
+  }
+}
+
+@Composable
+private fun CommandRowChevron(contentDescription: String) {
+  Box(modifier = Modifier.size(24.dp), contentAlignment = Alignment.Center) {
+    Icon(
+      imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+      contentDescription = contentDescription,
+      modifier = Modifier.size(17.dp),
+      tint = ClawTheme.colors.textMuted,
+    )
   }
 }
 
@@ -295,8 +302,10 @@ internal fun providerCommandSubtitle(
   models: List<GatewayModelSummary>,
 ): String {
   if (!isConnected) return "Connect Gateway to view providers"
-  val readyProviderCount = providerRows(providers = providers, models = models).count { it.ready }
+  val rows = providerRows(providers = providers, models = models)
+  val readyProviderCount = rows.count { it.ready }
   if (readyProviderCount > 0) return "$readyProviderCount providers ready"
+  if (rows.any { it.availability == ProviderAvailability.Unknown }) return "Provider availability unknown"
   return "No ready providers"
 }
 

@@ -8,9 +8,10 @@ import { extractAssistantTextForPhase } from "../../../shared/chat-message-conte
 import { resolveAgentConfig } from "../../agent-scope-config.js";
 import { extractAssistantVisibleText } from "../../embedded-agent-utils.js";
 import {
-  derivePromptTokens,
+  deriveContextPromptTokens,
   hasNonzeroUsage,
   normalizeUsage,
+  type ContextUsage,
   type NormalizedUsage,
 } from "../../usage.js";
 import type { EmbeddedAgentMeta } from "../types.js";
@@ -21,6 +22,7 @@ type UsageSnapshot = {
   output?: number;
   cacheRead?: number;
   cacheWrite?: number;
+  contextUsage?: ContextUsage;
   total?: number;
 };
 
@@ -102,6 +104,18 @@ export function scrubAnthropicRefusalMagic(prompt: string): string {
     ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL,
     ANTHROPIC_MAGIC_STRING_REPLACEMENT,
   );
+}
+
+/** Applies only outer-transport prompt rewrites; native model owners receive the prompt verbatim. */
+export function resolveEmbeddedAttemptBasePrompt(params: {
+  nativeModelOwned: boolean;
+  provider: string;
+  prompt: string;
+}): string {
+  if (params.nativeModelOwned || params.provider !== "anthropic") {
+    return params.prompt;
+  }
+  return scrubAnthropicRefusalMagic(params.prompt);
 }
 
 export function createCompactionDiagId(): string {
@@ -219,7 +233,9 @@ export function buildUsageAgentMetaFields(params: {
     : hasNonzeroUsage(params.lastRunPromptUsage)
       ? params.lastRunPromptUsage
       : toLastCallUsage(params.usageAccumulator);
-  const promptTokens = derivePromptTokens(params.lastRunPromptUsage);
+  const promptTokens = deriveContextPromptTokens({
+    lastCallUsage: params.lastRunPromptUsage,
+  });
   return {
     usage,
     lastCallUsage,

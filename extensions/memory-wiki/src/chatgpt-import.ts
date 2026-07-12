@@ -583,7 +583,7 @@ function replaceSimpleManagedBlock(params: {
   const escapedStart = params.startMarker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const escapedEnd = params.endMarker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const blockPattern = new RegExp(`${escapedStart}[\\s\\S]*?${escapedEnd}`);
-  return params.original.replace(blockPattern, params.replacement);
+  return params.original.replace(blockPattern, () => params.replacement);
 }
 
 function extractSimpleManagedBlock(params: {

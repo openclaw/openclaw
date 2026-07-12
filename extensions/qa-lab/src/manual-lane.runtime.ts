@@ -77,6 +77,7 @@ export async function runQaManualLane(params: QaManualLaneParams) {
   let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
   let lab: Awaited<ReturnType<typeof startQaLabServer>> | undefined;
   let mock: Awaited<ReturnType<typeof startQaProviderServer>> | undefined;
+  let transportCleanup: (() => Promise<void>) | undefined;
   let result: ManualLaneResult | undefined;
   let cleanupError: Error | undefined;
   let runError: unknown;
@@ -86,10 +87,14 @@ export async function runQaManualLane(params: QaManualLaneParams) {
       repoRoot: params.repoRoot,
       embeddedGateway: "disabled",
     });
-    const transport = createQaTransportAdapter({
-      id: params.transportId ?? "qa-channel",
+    const transportFactoryResult = await createQaTransportAdapter({
+      channelId: params.transportId ?? "qa-channel",
+      driver: params.transportId ?? "qa-channel",
+      outputDir: params.repoRoot,
       state: lab.state,
     });
+    const transport = transportFactoryResult.adapter;
+    transportCleanup = transportFactoryResult.cleanup;
     mock = await startQaProviderServer(params.providerMode);
     gateway = await startQaGatewayChild({
       repoRoot: params.repoRoot,
@@ -164,7 +169,12 @@ export async function runQaManualLane(params: QaManualLaneParams) {
   } catch (error) {
     runError = error;
   } finally {
-    cleanupError = await stopManualLaneResources({ gateway, lab, mock });
+    let transportCleanupError: Error | undefined;
+    await transportCleanup?.().catch((error: unknown) => {
+      transportCleanupError = normalizeManualLaneCleanupError(error);
+    });
+    const resourceCleanupError = await stopManualLaneResources({ gateway, lab, mock });
+    cleanupError = transportCleanupError ?? resourceCleanupError;
   }
   if (runError) {
     throw new Error(formatErrorMessage(runError), { cause: runError });

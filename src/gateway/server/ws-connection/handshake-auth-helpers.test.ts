@@ -13,6 +13,7 @@ import {
   resolvePairingLocality,
   resolveUnauthorizedHandshakeContext,
   shouldAllowSilentLocalPairing,
+  shouldPreserveLocalCliSharedAuthScopes,
   shouldSkipLocalBackendSelfPairing,
 } from "./handshake-auth-helpers.js";
 
@@ -30,6 +31,7 @@ type PairingLocalityOverrides = {
 };
 type SilentLocalPairingParams = Parameters<typeof shouldAllowSilentLocalPairing>[0];
 type BackendSelfPairingParams = Parameters<typeof shouldSkipLocalBackendSelfPairing>[0];
+type LocalCliSharedAuthScopeParams = Parameters<typeof shouldPreserveLocalCliSharedAuthScopes>[0];
 
 const CONTROL_UI_WEBCHAT_CONNECT_PARAMS = {
   client: {
@@ -124,6 +126,17 @@ function allowSilentLocalPairing(overrides: Partial<SilentLocalPairingParams>) {
 function skipBackendSelfPairing(overrides: Partial<BackendSelfPairingParams> = {}) {
   return shouldSkipLocalBackendSelfPairing({
     connectParams: GATEWAY_BACKEND_CONNECT_PARAMS,
+    locality: "direct_local",
+    hasBrowserOriginHeader: false,
+    sharedAuthOk: true,
+    authMethod: "token",
+    ...overrides,
+  });
+}
+
+function preserveLocalCliSharedAuthScopes(overrides: Partial<LocalCliSharedAuthScopeParams> = {}) {
+  return shouldPreserveLocalCliSharedAuthScopes({
+    connectParams: CLI_CONNECT_PARAMS,
     locality: "direct_local",
     hasBrowserOriginHeader: false,
     sharedAuthOk: true,
@@ -418,6 +431,36 @@ describe("handshake auth helpers", () => {
     expect(
       skipBackendSelfPairing({
         connectParams: CLI_CONNECT_PARAMS,
+      }),
+    ).toBe(false);
+  });
+
+  it("preserves local CLI shared-auth scopes only for token/password loopback auth", () => {
+    expect(preserveLocalCliSharedAuthScopes()).toBe(true);
+    expect(
+      preserveLocalCliSharedAuthScopes({
+        locality: "cli_container_local",
+        authMethod: "password",
+      }),
+    ).toBe(true);
+    expect(
+      preserveLocalCliSharedAuthScopes({
+        locality: "remote",
+      }),
+    ).toBe(false);
+    expect(
+      preserveLocalCliSharedAuthScopes({
+        authMethod: "device-token",
+      }),
+    ).toBe(false);
+    expect(
+      preserveLocalCliSharedAuthScopes({
+        hasBrowserOriginHeader: true,
+      }),
+    ).toBe(false);
+    expect(
+      preserveLocalCliSharedAuthScopes({
+        connectParams: GATEWAY_BACKEND_CONNECT_PARAMS,
       }),
     ).toBe(false);
   });
