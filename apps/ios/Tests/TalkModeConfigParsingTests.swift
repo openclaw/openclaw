@@ -394,6 +394,20 @@ struct TalkModeManagerTests {
         #expect(manager._test_gatewayTalkActiveModeSubtitle() == nil)
     }
 
+    @Test func `realtime failures remain visible on the watch`() {
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+
+        manager._test_handleRealtimeRelayStatus("Realtime disconnected")
+        #expect(manager.watchPresentation == .localized("Realtime disconnected"))
+
+        manager._test_handleRealtimeRelayStatus("Backend rejected realtime request")
+        #expect(manager.watchPresentation == .verbatim("Backend rejected realtime request"))
+
+        manager._test_handleRealtimeRelayStatus("Reconnecting")
+        #expect(manager.phase == .connecting)
+        #expect(manager.watchPresentation == .phase)
+    }
+
     @Test func `relay close restarts enabled continuous realtime`() {
         let manager = TalkModeManager(allowSimulatorCapture: true)
         manager._test_prepareEnabledRealtimeSessionForClose()

@@ -3704,10 +3704,26 @@ extension TalkModeManager {
             .thinking
         case "Speaking", "Speaking…":
             .speaking
-        case "Connecting realtime…", "Waiting for realtime…":
+        case "Connecting realtime…", "Waiting for realtime…", "Reconnecting", "Reconnecting…":
             .connecting
         default:
             .idle
+        }
+    }
+
+    private static func watchPresentation(forRealtimeStatus status: String) -> TalkWatchPresentation {
+        switch status {
+        case "Listening", "Listening (Realtime)", "Thinking", "Thinking…", "Speaking", "Speaking…",
+             "Connecting realtime…", "Waiting for realtime…", "Ready", "Reconnecting", "Reconnecting…":
+            .phase
+        case "Realtime failed before connecting":
+            .localized("Realtime failed before connecting")
+        case "Realtime disconnected":
+            .localized("Realtime disconnected")
+        case "OpenClaw unavailable":
+            .localized("OpenClaw unavailable")
+        default:
+            .verbatim(status)
         }
     }
 
@@ -3744,7 +3760,10 @@ extension TalkModeManager {
             // state here so the close still enters bounded recovery.
             self.markRealtimeSessionReady()
         } else {
-            self.setStatus(Self.presentationText(forRealtimeStatus: status), phase: phase)
+            self.setStatus(
+                Self.presentationText(forRealtimeStatus: status),
+                phase: phase,
+                watchPresentation: Self.watchPresentation(forRealtimeStatus: status))
             if status == "Ready" {
                 self.realtimeRelaySession = nil
                 self.handleRealtimeSessionFinish()
@@ -4321,7 +4340,10 @@ extension TalkModeManager: TalkRealtimeWebRTCSessionDelegate {
         if status == "Listening" {
             self.markRealtimeSessionReady()
         } else {
-            self.setStatus(Self.presentationText(forRealtimeStatus: status), phase: phase)
+            self.setStatus(
+                Self.presentationText(forRealtimeStatus: status),
+                phase: phase,
+                watchPresentation: Self.watchPresentation(forRealtimeStatus: status))
         }
         self.isListening = phase == .listening
         self.isSpeaking = phase == .speaking
