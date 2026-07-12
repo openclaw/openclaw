@@ -1,6 +1,6 @@
 [
   {
-    "description": "Send/manage channel messages. Supports actions: send.",
+    "description": "Send/manage channel messages. Supports actions: send. This turn visible reply: action=\"send\" + message; completed final sets final=true; progress omits final or sets final=false; target defaults current source; set only elsewhere. Final answer private.",
     "inputSchema": {
       "properties": {
         "accountId": {

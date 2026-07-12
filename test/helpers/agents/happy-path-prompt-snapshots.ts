@@ -418,6 +418,8 @@ function createDynamicTools(params: {
     modelId: MODEL_ID,
     modelApi: "responses",
     modelContextWindowTokens: 272_000,
+    sourceReplyDeliveryMode: "message_tool_only",
+    includeExplicitFinalMessageDelivery: true,
     forceMessageTool: true,
     enableHeartbeatTool: params.trigger === "heartbeat",
     forceHeartbeatTool: params.trigger === "heartbeat",

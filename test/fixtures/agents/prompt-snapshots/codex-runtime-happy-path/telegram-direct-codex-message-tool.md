@@ -208,8 +208,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 52476,
-    "roughTokens": 13119
+    "chars": 52677,
+    "roughTokens": 13170
   },
   "openClawDeveloperInstructions": {
     "chars": 2153,
@@ -220,8 +220,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 6568
   },
   "totalWithDynamicToolsJson": {
-    "chars": 78747,
-    "roughTokens": 19687
+    "chars": 78948,
+    "roughTokens": 19737
   },
   "userInputText": {
     "chars": 1033,
@@ -541,7 +541,7 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
 ```json
 [
   {
-    "description": "Send/manage channel messages. Supports actions: send.",
+    "description": "Send/manage channel messages. Supports actions: send. This turn visible reply: action=\"send\" + message; completed final sets final=true; progress omits final or sets final=false; target defaults current source; set only elsewhere. Final answer private.",
     "inputSchema": {
       "properties": {
         "accountId": {

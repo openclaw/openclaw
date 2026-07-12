@@ -438,6 +438,8 @@ type OpenClawCodingToolsOptions = {
   requireExplicitMessageTarget?: boolean;
   /** Visible source replies must be sent through the message tool when set to message_tool_only. */
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /** Expose the Codex-only explicit final-delivery control in the message tool schema. */
+  includeExplicitFinalMessageDelivery?: boolean;
   /** Action sink available for model-proposed follow-up tasks. */
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   inboundEventKind?: InboundEventKind;
@@ -1023,6 +1025,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             computerContextEpoch: options?.computerContextEpoch,
             requireExplicitMessageTarget: options?.requireExplicitMessageTarget,
             sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
+            includeExplicitFinalMessageDelivery: options?.includeExplicitFinalMessageDelivery,
             taskSuggestionDeliveryMode: options?.taskSuggestionDeliveryMode,
             inboundEventKind: options?.inboundEventKind,
             disableMessageTool: options?.disableMessageTool,

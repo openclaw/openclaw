@@ -208,8 +208,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 52749,
-    "roughTokens": 13188
+    "chars": 52950,
+    "roughTokens": 13238
   },
   "openClawDeveloperInstructions": {
     "chars": 3262,
@@ -220,8 +220,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 6947
   },
   "totalWithDynamicToolsJson": {
-    "chars": 80538,
-    "roughTokens": 20135
+    "chars": 80739,
+    "roughTokens": 20185
   },
   "userInputText": {
     "chars": 1442,
@@ -554,7 +554,7 @@ Full JSON: `codex-dynamic-tools.discord-group.json`
 ```json
 [
   {
-    "description": "Send/manage channel messages. Supports actions: send.",
+    "description": "Send/manage channel messages. Supports actions: send. This turn visible reply: action=\"send\" + message; completed final sets final=true; progress omits final or sets final=false; target defaults current source; set only elsewhere. Final answer private.",
     "inputSchema": {
       "properties": {
         "accountId": {

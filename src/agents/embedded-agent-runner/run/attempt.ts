@@ -1696,6 +1696,9 @@ export async function runEmbeddedAttempt(
             requireExplicitMessageTarget:
               params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
             sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+            includeExplicitFinalMessageDelivery:
+              params.sourceReplyDeliveryMode === "message_tool_only" &&
+              params.runtimePlan?.observability.harnessId === "codex",
             taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
             inboundEventKind: params.currentInboundEventKind,
             disableMessageTool: params.disableMessageTool,

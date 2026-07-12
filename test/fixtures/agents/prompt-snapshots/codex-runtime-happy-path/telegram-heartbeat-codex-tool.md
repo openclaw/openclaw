@@ -209,8 +209,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 53766,
-    "roughTokens": 13442
+    "chars": 53967,
+    "roughTokens": 13492
   },
   "openClawDeveloperInstructions": {
     "chars": 2172,
@@ -221,8 +221,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 6702
   },
   "totalWithDynamicToolsJson": {
-    "chars": 80576,
-    "roughTokens": 20144
+    "chars": 80777,
+    "roughTokens": 20195
   },
   "userInputText": {
     "chars": 1271,
@@ -549,7 +549,7 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
 ```json
 [
   {
-    "description": "Send/manage channel messages. Supports actions: send.",
+    "description": "Send/manage channel messages. Supports actions: send. This turn visible reply: action=\"send\" + message; completed final sets final=true; progress omits final or sets final=false; target defaults current source; set only elsewhere. Final answer private.",
     "inputSchema": {
       "properties": {
         "accountId": {

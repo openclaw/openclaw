@@ -2105,11 +2105,19 @@ describe("message tool schema scoping", () => {
       config: {} as never,
       currentChannelProvider: "telegram",
     });
+    const explicitFinalTool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "telegram",
+      includeExplicitFinalMessageDelivery: true,
+    });
+
     const properties = getToolProperties(tool);
+    const explicitFinalProperties = getToolProperties(explicitFinalTool);
 
     expect(getActionEnum(properties)).toEqual(["send"]);
     expect(properties).toHaveProperty("message");
-    expect(properties).toHaveProperty("final");
+    expect(properties).not.toHaveProperty("final");
+    expect(explicitFinalProperties).toHaveProperty("final");
     expect(properties).toHaveProperty("target");
     expect(properties).toHaveProperty("media");
     expect(properties).not.toHaveProperty("pollId");

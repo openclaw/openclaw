@@ -641,15 +641,20 @@ function buildSendSchema(options: {
   includePresentation: boolean;
   includeDeliveryPin: boolean;
   includeBestEffort: boolean;
+  includeExplicitFinalMessageDelivery: boolean;
 }) {
   const props: Record<string, TSchema> = {
     message: Type.Optional(Type.String()),
-    final: Type.Optional(
-      Type.Boolean({
-        description:
-          "Set true only for the completed final answer to the current source conversation. Leave false or omit for progress, acknowledgements, and proactive messages.",
-      }),
-    ),
+    ...(options.includeExplicitFinalMessageDelivery
+      ? {
+          final: Type.Optional(
+            Type.Boolean({
+              description:
+                "Set true only for the completed final answer to the current source conversation. Leave false or omit for progress, acknowledgements, and proactive messages.",
+            }),
+          ),
+        }
+      : {}),
     effectId: Type.Optional(
       Type.String({
         description: "sendWithEffect id/name.",
@@ -960,6 +965,7 @@ function buildMessageToolSchemaProps(options: {
   includePresentation: boolean;
   includeDeliveryPin: boolean;
   includeBestEffort: boolean;
+  includeExplicitFinalMessageDelivery: boolean;
   extraProperties?: Record<string, TSchema>;
 }) {
   return {
@@ -989,6 +995,7 @@ function buildSendOnlyMessageToolSchemaProps(options: {
   includePresentation: boolean;
   includeDeliveryPin: boolean;
   includeBestEffort: boolean;
+  includeExplicitFinalMessageDelivery: boolean;
   extraProperties?: Record<string, TSchema>;
 }) {
   return {
@@ -1005,6 +1012,7 @@ function buildMessageToolSchemaFromActions(
     includePresentation: boolean;
     includeDeliveryPin: boolean;
     includeBestEffort: boolean;
+    includeExplicitFinalMessageDelivery: boolean;
     extraProperties?: Record<string, TSchema>;
   },
 ) {
@@ -1021,9 +1029,18 @@ const MessageToolSchema = buildMessageToolSchemaFromActions(AllMessageActions, {
   includePresentation: true,
   includeDeliveryPin: true,
   includeBestEffort: false,
+  includeExplicitFinalMessageDelivery: false,
+});
+
+const ExplicitFinalMessageToolSchema = buildMessageToolSchemaFromActions(AllMessageActions, {
+  includePresentation: true,
+  includeDeliveryPin: true,
+  includeBestEffort: false,
+  includeExplicitFinalMessageDelivery: true,
 });
 
 type MessageToolOptions = {
+  includeExplicitFinalMessageDelivery?: boolean;
   agentAccountId?: string;
   agentSessionKey?: string;
   runId?: string;
@@ -1058,6 +1075,7 @@ type MessageToolOptions = {
 
 type MessageToolDiscoveryParams = {
   cfg: OpenClawConfig;
+  includeExplicitFinalMessageDelivery?: boolean;
   currentChannelProvider?: string;
   currentChannelId?: string;
   currentThreadTs?: string;
@@ -1274,6 +1292,7 @@ function buildMessageToolSchema(params: MessageToolDiscoveryParams) {
     includePresentation,
     includeDeliveryPin,
     includeBestEffort,
+    includeExplicitFinalMessageDelivery: params.includeExplicitFinalMessageDelivery === true,
     extraProperties,
   });
 }
@@ -1408,6 +1427,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
   const schema = options?.config
     ? buildMessageToolSchema({
         cfg: options.config,
+        includeExplicitFinalMessageDelivery: options.includeExplicitFinalMessageDelivery === true,
         currentChannelProvider: effectiveCurrentChannel.currentChannelProvider,
         currentChannelId: effectiveCurrentChannel.currentChannelId,
         currentThreadTs,
@@ -1419,7 +1439,9 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         requesterSenderId: options.requesterSenderId,
         senderIsOwner: options.senderIsOwner,
       })
-    : MessageToolSchema;
+    : options?.includeExplicitFinalMessageDelivery === true
+      ? ExplicitFinalMessageToolSchema
+      : MessageToolSchema;
   const description = buildMessageToolDescription({
     config: options?.config,
     currentChannel: effectiveCurrentChannel.currentChannelProvider,

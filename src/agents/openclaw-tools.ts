@@ -184,6 +184,8 @@ export function createOpenClawTools(
     requireExplicitMessageTarget?: boolean;
     /** Visible source replies must be sent through the message tool when set to message_tool_only. */
     sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+    /** Expose the Codex-only explicit final-delivery control in the message tool schema. */
+    includeExplicitFinalMessageDelivery?: boolean;
     /** Action sink available for model-proposed follow-up tasks. */
     taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
     inboundEventKind?: InboundEventKind;
@@ -411,6 +413,7 @@ export function createOpenClawTools(
         sandboxRoot: options?.sandboxRoot,
         requireExplicitTarget: options?.requireExplicitMessageTarget,
         sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
+        includeExplicitFinalMessageDelivery: options?.includeExplicitFinalMessageDelivery,
         inboundEventKind: options?.inboundEventKind,
         requesterSenderId: options?.requesterSenderId ?? undefined,
         senderIsOwner: options?.senderIsOwner,
