@@ -45,6 +45,7 @@ import {
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { asBoolean, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { maybeControlDiscordVoiceAgentRun } from "./agent-control.js";
 import {
   createDiscordOpusEncodeStream,
@@ -314,13 +315,13 @@ function normalizeControlSpeechText(text: string): string {
   return text.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
-function mergeRealtimePartialTranscript(previous: string, next: string): string {
+export function mergeRealtimePartialTranscript(previous: string, next: string): string {
   const trimmed = next.trim();
   if (!trimmed) {
     return previous;
   }
   const merged = trimmed.startsWith(previous) ? trimmed : `${previous}${next}`;
-  return merged.slice(-DISCORD_REALTIME_PARTIAL_TRANSCRIPT_MAX_CHARS);
+  return sliceUtf16Safe(merged, -DISCORD_REALTIME_PARTIAL_TRANSCRIPT_MAX_CHARS);
 }
 
 function resolveDiscordRealtimeWakeNames(params: {
