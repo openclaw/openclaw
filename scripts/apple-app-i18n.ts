@@ -209,10 +209,11 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
     "Text(verbatim: primaryActionTitle)",
   ],
   "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift": [
-    "Label(LocalizedStringKey(title), systemImage: icon)",
-    "OpenClawStatusBadge(label: .localized(status)",
-    "Text(LocalizedStringKey(detail))",
-    "Text(LocalizedStringKey(actionTitle))",
+    "title: LocalizedStringResource",
+    "status: PrivacyPermissionStatus",
+    "detail: LocalizedStringResource",
+    "actionTitle: LocalizedStringResource?",
+    "String(localized: status.resource)",
   ],
   "apps/ios/Sources/LiveActivity/LiveActivityManager.swift": [
     'String(localized: "Connecting...")',
@@ -304,11 +305,6 @@ const RAW_LOCALIZATION_BYPASSES: Record<string, readonly string[]> = {
   "apps/ios/Sources/Design/SettingsProTabActions.swift": [
     "func detailStatusCard(\n        icon: String,\n        title: String",
     "func diagnosticCheckRow(\n        icon: String,\n        title: String",
-  ],
-  "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift": [
-    "Label(title, systemImage: icon)",
-    "Text(detail)",
-    "Text(actionTitle)",
   ],
   "apps/ios/WatchApp/Sources/WatchInboxView.swift": [
     'parts.append("Expires in \\(expiresText)")',
@@ -432,6 +428,17 @@ function parseStringsFile(source: string): Map<string, string> {
     values.set(JSON.parse(match[1] ?? '""') as string, JSON.parse(match[2] ?? '""') as string);
   }
   return values;
+}
+
+export function selectInfoPlistTranslation(
+  source: string,
+  candidates: readonly string[],
+  existingValue?: string,
+): string {
+  if (candidates.length > 0) {
+    return chooseTranslation(source, candidates);
+  }
+  return existingValue?.trim() ? existingValue : source;
 }
 
 async function readOptionalFile(filePath: string): Promise<string | null> {
@@ -723,11 +730,7 @@ async function syncIosInfoPlist(write: boolean): Promise<number> {
           artifact?.entries
             .filter((entry) => entry.source === source)
             .map((entry) => entry.translated) ?? [];
-        const existingValue = existing.get(key);
-        const value =
-          existingValue && existingValue !== source
-            ? existingValue
-            : chooseTranslation(source, candidates);
+        const value = selectInfoPlistTranslation(source, candidates, existing.get(key));
         return `${stringsLiteral(key)} = ${stringsLiteral(value)};`;
       });
       const expected = `${lines.join("\n")}\n`;

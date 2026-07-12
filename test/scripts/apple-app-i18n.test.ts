@@ -7,6 +7,7 @@ import {
   buildIosCatalog,
   checkAppleAppI18n,
   compileMacosLocalizations,
+  selectInfoPlistTranslation,
 } from "../../scripts/apple-app-i18n.ts";
 import { NATIVE_I18N_LOCALES } from "../../scripts/native-app-i18n.ts";
 
@@ -292,6 +293,19 @@ describe("Apple app i18n catalogs", () => {
     expect(watchChinese).toContain('"NSLocalNetworkUsageDescription" = ');
     expect(shareGerman).toContain('"CFBundleDisplayName" = "OpenClaw Share";');
     expect(activityJapanese).toContain('"CFBundleDisplayName" = "OpenClaw Activity";');
+  });
+
+  it("refreshes InfoPlist copy from translations for the current source", () => {
+    expect(
+      selectInfoPlistTranslation(
+        "Use the camera to scan setup codes.",
+        ["Utilisez l’appareil photo pour scanner les codes de configuration."],
+        "Ancienne description de la caméra.",
+      ),
+    ).toBe("Utilisez l’appareil photo pour scanner les codes de configuration.");
+    expect(selectInfoPlistTranslation("OpenClaw Share", [], "OpenClaw Partager")).toBe(
+      "OpenClaw Partager",
+    );
   });
 
   it("compiles macOS catalogs into app-bundle localization directories", async () => {
