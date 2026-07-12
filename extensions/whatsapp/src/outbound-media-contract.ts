@@ -4,7 +4,7 @@ import { sanitizeForPlainText } from "openclaw/plugin-sdk/channel-outbound";
 import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS, runFfmpeg } from "openclaw/plugin-sdk/media-runtime";
 import { resolveOutboundMediaUrls } from "openclaw/plugin-sdk/reply-payload";
 import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
-import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeUniqueStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { resolveWhatsAppDocumentFileName } from "./document-filename.js";
 import { formatError } from "./session-errors.js";
@@ -84,16 +84,12 @@ export function normalizeWhatsAppPayloadTextPreservingIndentation(
   return normalized.trim() ? normalized : "";
 }
 
-function normalizeWhatsAppMediaUrls(mediaUrls: readonly string[]): string[] {
-  return uniqueStrings(mediaUrls.map((entry) => entry.trim()).filter(Boolean));
-}
-
 // The direct API accepts both fields as additive candidates, with mediaUrl first.
 // Keep that contract separate from channel ReplyPayload mediaUrls precedence.
 export function resolveAdditiveWhatsAppMediaUrls(
   payload: Pick<WhatsAppOutboundPayloadLike, "mediaUrl" | "mediaUrls">,
 ): string[] {
-  return normalizeWhatsAppMediaUrls([
+  return normalizeUniqueStringEntries([
     ...(payload.mediaUrl ? [payload.mediaUrl] : []),
     ...(payload.mediaUrls ?? []),
   ]);
@@ -106,8 +102,8 @@ export function normalizeWhatsAppOutboundPayload<T extends WhatsAppOutboundPaylo
     normalizeText?: (text: string | undefined) => string;
   },
 ): NormalizedWhatsAppOutboundPayload<T> {
-  const preferredMediaUrls = normalizeWhatsAppMediaUrls(payload.mediaUrls ?? []);
-  const mediaUrls = normalizeWhatsAppMediaUrls(
+  const preferredMediaUrls = normalizeUniqueStringEntries(payload.mediaUrls);
+  const mediaUrls = normalizeUniqueStringEntries(
     resolveOutboundMediaUrls({ mediaUrl: payload.mediaUrl, mediaUrls: preferredMediaUrls }),
   );
   const normalizeText = options?.normalizeText ?? normalizeWhatsAppPayloadText;
