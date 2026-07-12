@@ -540,14 +540,17 @@ function buildSlackProgressCommentaryRun(
   expectation: SlackProgressCommentaryExpectation,
 ): SlackQaMessageScenarioRun {
   const suffix = randomUUID().slice(0, 8).toUpperCase();
-  const commentaryMarker = `SLACK_QA_COMMENTARY_${suffix}`;
-  const toolMarker = `SLACK_QA_TOOL_${suffix}`;
-  const finalMarker = `SLACK_QA_COMMENTARY_DONE_${suffix}`;
+  // Slack mrkdwn escapes underscores in progress drafts. Hyphenated markers
+  // stay byte-identical across draft edits and final-message reads.
+  const commentaryMarker = `SLACK-QA-COMMENTARY-${suffix}`;
+  const toolMarker = `SLACK-QA-TOOL-${suffix}`;
+  const finalMarker = `SLACK-QA-COMMENTARY-DONE-${suffix}`;
   return {
     expectReply: true,
     input: [
-      `<@${sutUserId}> Before using any tool, send one short user-visible progress update containing exactly ${commentaryMarker}.`,
-      `Then use the exec tool exactly once to run: sleep 5; printf '${toolMarker}\\n'.`,
+      `<@${sutUserId}> This is a Slack progress protocol test. First, emit an assistant commentary message whose entire text is exactly ${commentaryMarker}.`,
+      "Do not call any tool until that commentary message is complete.",
+      `Then use the exec tool exactly once to run: grep '${toolMarker}' /dev/null || sleep 5.`,
       `After the command finishes, reply with only this exact marker: ${finalMarker}`,
     ].join(" "),
     matchText: finalMarker,
@@ -1117,12 +1120,26 @@ function buildSlackQaConfig(
           },
         }
       : baseCfg.agents?.defaults;
-  const qaAgentDefaults = progressOverrides?.verboseDefault
+  const qaAgentDefaults = progressOverrides
     ? {
         ...codexAgentDefaults,
-        verboseDefault: progressOverrides.verboseDefault,
+        ...(progressOverrides.verboseDefault
+          ? { verboseDefault: progressOverrides.verboseDefault }
+          : {}),
       }
     : codexAgentDefaults;
+  const qaAgentList = progressOverrides
+    ? baseCfg.agents?.list?.map((agent) => {
+        if (agent.id !== "qa") {
+          return agent;
+        }
+        // Slack draft edits cannot preserve custom authorship. Remove the
+        // synthetic QA identity so progress scenarios reach the draft path.
+        const qaAgent = { ...agent };
+        delete qaAgent.identity;
+        return qaAgent;
+      })
+    : baseCfg.agents?.list;
   const execApprovalsConfig = approvalOverrides
     ? {
         enabled: true,
@@ -1180,11 +1197,12 @@ function buildSlackQaConfig(
           : {}),
       },
     },
-    ...(codexApprovalConfig || progressOverrides?.verboseDefault
+    ...(codexApprovalConfig || progressOverrides
       ? {
           agents: {
             ...baseCfg.agents,
             ...(qaAgentDefaults ? { defaults: qaAgentDefaults } : {}),
+            ...(qaAgentList ? { list: qaAgentList } : {}),
           },
         }
       : {}),

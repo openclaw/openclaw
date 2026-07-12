@@ -289,7 +289,12 @@ describe("Slack live QA runtime helpers", () => {
         throw new Error(`missing Slack QA scenario: ${scenarioId}`);
       }
       return testing.buildSlackQaConfig(
-        { agents: { defaults: { verboseDefault: "off" } } },
+        {
+          agents: {
+            defaults: { verboseDefault: "off" },
+            list: [{ id: "qa", identity: { name: "C-3PO QA" } }],
+          },
+        },
         {
           channelId: "C123456789",
           driverBotUserId: "U999999999",
@@ -321,6 +326,9 @@ describe("Slack live QA runtime helpers", () => {
       buildScenarioConfig("slack-progress-commentary-verbose-dedupe").agents?.defaults
         ?.verboseDefault,
     ).toBe("on");
+    expect(buildScenarioConfig("slack-progress-commentary-true").agents?.list?.[0]?.identity).toBe(
+      undefined,
+    );
   });
 
   it("verifies progress commentary by Slack message identity", () => {
@@ -347,9 +355,9 @@ describe("Slack live QA runtime helpers", () => {
       const scenario = testing.findScenario([testCase.id])[0];
       const run = scenario?.buildRun("U999999999");
       const input = run && "input" in run ? run.input : "";
-      const commentaryMarker = input.match(/SLACK_QA_COMMENTARY_[0-9A-F]{8}/u)?.[0];
-      const toolMarker = input.match(/SLACK_QA_TOOL_[0-9A-F]{8}/u)?.[0];
-      const finalMarker = input.match(/SLACK_QA_COMMENTARY_DONE_[0-9A-F]{8}/u)?.[0];
+      const commentaryMarker = input.match(/SLACK-QA-COMMENTARY-[0-9A-F]{8}/u)?.[0];
+      const toolMarker = input.match(/SLACK-QA-TOOL-[0-9A-F]{8}/u)?.[0];
+      const finalMarker = input.match(/SLACK-QA-COMMENTARY-DONE-[0-9A-F]{8}/u)?.[0];
       const verifyObserved = run && "verifyObserved" in run ? run.verifyObserved : undefined;
       if (!commentaryMarker || !toolMarker || !finalMarker || !verifyObserved) {
         throw new Error(`missing Slack progress verifier: ${testCase.id}`);
@@ -398,9 +406,9 @@ describe("Slack live QA runtime helpers", () => {
       const run = scenario?.buildRun("U999999999");
       const input = run && "input" in run ? run.input : "";
       const markers = [
-        input.match(/SLACK_QA_COMMENTARY_[0-9A-F]{8}/u)?.[0],
-        input.match(/SLACK_QA_TOOL_[0-9A-F]{8}/u)?.[0],
-        input.match(/SLACK_QA_COMMENTARY_DONE_[0-9A-F]{8}/u)?.[0],
+        input.match(/SLACK-QA-COMMENTARY-[0-9A-F]{8}/u)?.[0],
+        input.match(/SLACK-QA-TOOL-[0-9A-F]{8}/u)?.[0],
+        input.match(/SLACK-QA-COMMENTARY-DONE-[0-9A-F]{8}/u)?.[0],
       ];
       const verifyObserved = run && "verifyObserved" in run ? run.verifyObserved : undefined;
       if (markers.some((marker) => !marker) || !verifyObserved) {
@@ -450,8 +458,8 @@ describe("Slack live QA runtime helpers", () => {
     const scenario = testing.findScenario(["slack-progress-commentary-verbose-dedupe"])[0];
     const run = scenario?.buildRun("U999999999");
     const input = run && "input" in run ? run.input : "";
-    const marker = input.match(/SLACK_QA_COMMENTARY_[0-9A-F]{8}/u)?.[0];
-    const finalMarker = input.match(/SLACK_QA_COMMENTARY_DONE_[0-9A-F]{8}/u)?.[0];
+    const marker = input.match(/SLACK-QA-COMMENTARY-[0-9A-F]{8}/u)?.[0];
+    const finalMarker = input.match(/SLACK-QA-COMMENTARY-DONE-[0-9A-F]{8}/u)?.[0];
     const verifyObserved = run && "verifyObserved" in run ? run.verifyObserved : undefined;
     if (!marker || !finalMarker || !verifyObserved) {
       throw new Error("missing Slack progress dedupe verifier");
