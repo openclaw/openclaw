@@ -207,8 +207,9 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       params.signal,
     );
     if (result.code !== 0) {
-      const stderr = result.stderr.toString("utf8");
-      if (stderr.includes("No such file or directory")) {
+      const stderr = result.stderr.toString("utf8").toLowerCase();
+      // Code 1 is standard for ENOENT in stat; fallback to string checks for other non-zero exits
+      if (result.code === 1 || stderr.includes("no such file") || stderr.includes("aucun fichier") || stderr.includes("nicht gefunden")) {
         return null;
       }
       const message = stderr.trim() || `stat failed with code ${result.code}`;

@@ -25,12 +25,9 @@ export class DuplicateAgentDirError extends Error {
 }
 
 function canonicalizeAgentDir(agentDir: string): string {
-  const resolved = path.resolve(agentDir);
-  if (process.platform === "darwin" || process.platform === "win32") {
-    // Agent dirs collide case-insensitively on the common macOS/Windows filesystems.
-    return normalizeLowercaseStringOrEmpty(resolved);
-  }
-  return resolved;
+  // We use path.resolve directly. Unconditional lowercasing on macOS/Windows
+  // creates false-positive DuplicateAgentDirErrors on case-sensitive volumes.
+  return path.resolve(agentDir);
 }
 
 function collectReferencedAgentIds(cfg: OpenClawConfig): string[] {

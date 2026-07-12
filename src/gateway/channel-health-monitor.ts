@@ -93,6 +93,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
   let stopped = false;
   let checkInFlight = false;
   let timer: ReturnType<typeof setInterval> | null = null;
+  const suppressedAccounts = new Set<string>();
 
   const rKey = (channelId: string, accountId: string) => `${channelId}:${accountId}`;
 
@@ -113,6 +114,10 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
       }
 
       const snapshot = channelManager.getRuntimeSnapshot();
+      const autostartSuppression = channelManager.getAutostartSuppression();
+      if (!autostartSuppression) {
+        suppressedAccounts.clear();
+      }
 
       for (const [channelId, accounts] of Object.entries(snapshot.channelAccounts)) {
         if (!accounts) {
@@ -128,6 +133,17 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           if (channelManager.isManuallyStopped(channelId as ChannelId, accountId)) {
             continue;
           }
+          const key = rKey(channelId, accountId);
+          if (autostartSuppression) {
+            if (status.running !== true && !suppressedAccounts.has(key)) {
+              log.info?.(
+                `[${channelId}:${accountId}] health-monitor: channel autostart suppressed; treating as expected stopped`,
+              );
+              suppressedAccounts.add(key);
+            }
+            continue;
+          }
+          suppressedAccounts.delete(key);
           const healthPolicy: ChannelHealthPolicy = {
             channelId,
             now,
@@ -138,8 +154,13 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           if (health.healthy) {
             continue;
           }
+          if (health.reason === "terminal-disconnect") {
+            log.info?.(
+              `[${channelId}:${accountId}] health-monitor: skipping restart, terminal disconnect`,
+            );
+            continue;
+          }
 
-          const key = rKey(channelId, accountId);
           const record = restartRecords.get(key) ?? {
             lastRestartAt: 0,
             restartsThisHour: [],
@@ -158,7 +179,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           }
 
           pruneOldRestarts(record, now);
-          if (!continuingPendingRestart && record.restartsThisHour.length >= maxRestartsPerHour) {
+          if (record.restartsThisHour.length >= maxRestartsPerHour) {
             log.warn?.(
               `[${channelId}:${accountId}] health-monitor: hit ${maxRestartsPerHour} restarts/hour limit, skipping`,
             );
@@ -171,9 +192,9 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
 
           if (!continuingPendingRestart) {
             record.lastRestartAt = now;
-            record.restartsThisHour.push({ at: now });
-            restartRecords.set(key, record);
           }
+          record.restartsThisHour.push({ at: now });
+          restartRecords.set(key, record);
 
           try {
             if (status.running) {

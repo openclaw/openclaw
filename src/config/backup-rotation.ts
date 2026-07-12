@@ -98,8 +98,9 @@ export async function cleanOrphanBackups(
     if (validSuffixes.has(suffix)) {
       continue;
     }
-    await ioFs.unlink(path.join(dir, entry)).catch(() => {
-      // best-effort
+    await ioFs.unlink(path.join(dir, entry)).catch((err) => {
+      // best-effort, but log to prevent silent disk bloat
+      console.warn(`Failed to clean orphan backup file: ${entry}`, err);
     });
   }
 }

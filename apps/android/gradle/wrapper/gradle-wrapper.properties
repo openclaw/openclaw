@@ -1,9 +1,0 @@
-distributionBase=GRADLE_USER_HOME
-distributionPath=wrapper/dists
-distributionUrl=https\://services.gradle.org/distributions/gradle-9.5.1-bin.zip
-networkTimeout=10000
-retries=0
-retryBackOffMs=500
-validateDistributionUrl=true
-zipStoreBase=GRADLE_USER_HOME
-zipStorePath=wrapper/dists
