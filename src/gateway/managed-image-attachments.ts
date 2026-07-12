@@ -175,11 +175,14 @@ function validateManagedImageBuffer(
   }
 }
 
-function estimateBase64DecodedByteLength(base64: string): number {
+function estimateBase64DecodedByteLength(base64: string): number | null {
   const normalized = base64.replace(/\s+/g, "");
   const paddingMatch = /=+$/u.exec(normalized);
-  const padding = Math.min(paddingMatch?.[0].length ?? 0, 2);
-  return Math.floor((normalized.length * 3) / 4) - padding;
+  const paddingLength = paddingMatch?.[0].length ?? 0;
+  if (paddingLength > 2) {
+    return null;
+  }
+  return Math.floor((normalized.length * 3) / 4) - paddingLength;
 }
 
 function getManagedImageMetadataLimitError(
@@ -305,7 +308,8 @@ function parseImageDataUrl(
     return { kind: "non-image-data-url" };
   }
 
-  if (estimateBase64DecodedByteLength(base64Part) > limits.maxBytes) {
+  const estimatedBytes = estimateBase64DecodedByteLength(base64Part);
+  if (estimatedBytes === null || estimatedBytes > limits.maxBytes) {
     throw createManagedImageAttachmentError(
       `Managed image attachment ${JSON.stringify(alt)} exceeds the ${formatLimitMiB(limits.maxBytes)} byte limit`,
     );
