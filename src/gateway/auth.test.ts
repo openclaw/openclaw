@@ -6,6 +6,7 @@ import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interface
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import {
   assertGatewayAuthConfigured,
+  authorizeControlUiHttpGatewayConnect,
   authorizeHttpGatewayConnect,
   hasForwardedRequestHeaders,
   isLocalDirectRequest,
@@ -75,12 +76,16 @@ describe("gateway auth", () => {
   }
 
   async function expectTailscaleHeaderAuthResult(params: {
-    authorize: typeof authorizeHttpGatewayConnect | typeof authorizeWsControlUiGatewayConnect;
+    authorize:
+      | typeof authorizeHttpGatewayConnect
+      | typeof authorizeWsControlUiGatewayConnect
+      | typeof authorizeControlUiHttpGatewayConnect;
+    connectAuth?: { token: string } | null;
     expected: { ok: false; reason: string } | { ok: true; method: string; user: string };
   }) {
     const res = await params.authorize({
       auth: { mode: "token", token: "secret", allowTailscale: true },
-      connectAuth: null,
+      connectAuth: params.connectAuth ?? null,
       tailscaleWhois: createTailscaleWhois(),
       req: createTailscaleForwardedReq(),
     });
@@ -526,6 +531,135 @@ describe("gateway auth", () => {
       authorize: authorizeWsControlUiGatewayConnect,
       expected: { ok: true, method: "tailscale", user: "peter" },
     });
+  });
+
+  it("enables tailscale header auth on control-ui HTTP bootstrap wrapper", async () => {
+    // Parity with the WS surface: a browser the WS accepts over Tailscale Serve
+    // must also load /control-ui-config.json and assistant media over HTTP.
+    await expectTailscaleHeaderAuthResult({
+      authorize: authorizeControlUiHttpGatewayConnect,
+      expected: { ok: true, method: "tailscale", user: "peter" },
+    });
+  });
+
+  it("still rejects an unauthenticated non-tailscale control-ui HTTP request", async () => {
+    // No token and no verifiable Tailscale identity → 401-equivalent rejection.
+    const res = await authorizeControlUiHttpGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: true },
+      connectAuth: null,
+      tailscaleWhois: createTailscaleWhois(),
+      req: {
+        socket: { remoteAddress: "203.0.113.10" },
+        headers: { host: "ai-hub.bone-egret.ts.net" },
+      } as never,
+    });
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("token_missing");
+  });
+
+  it("still rejects a wrong-token control-ui HTTP request even with tailscale headers", async () => {
+    // An explicit (wrong) shared secret must not fall through to Tailscale auth.
+    await expectTailscaleHeaderAuthResult({
+      authorize: authorizeControlUiHttpGatewayConnect,
+      connectAuth: { token: "wrong" },
+      expected: { ok: false, reason: "token_mismatch" },
+    });
+  });
+
+  it("keeps tailscale header auth disabled unless allowTailscale is enabled on control-ui HTTP", async () => {
+    const res = await authorizeControlUiHttpGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: false },
+      connectAuth: null,
+      tailscaleWhois: createTailscaleWhois(),
+      req: createTailscaleForwardedReq(),
+    });
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("token_missing");
+  });
+
+  it("rejects a control-ui HTTP request whose tailscale whois login does not match the header", async () => {
+    // A forged Tailscale-User-Login header must be confirmed by the tailscaled
+    // whois lookup on the forwarded IP. When whois disagrees, the request is NOT
+    // authenticated as that user — it falls through to token auth and is rejected.
+    // Guards the whois-vs-header binding: dropping it would let this request in.
+    const res = await authorizeControlUiHttpGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: true },
+      connectAuth: null,
+      tailscaleWhois: async () => ({ login: "eve", name: "Eve" }),
+      req: createTailscaleForwardedReq(),
+    });
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("token_missing");
+  });
+
+  it("rejects a disallowed browser Origin on tokenless tailscale control-ui HTTP reads", async () => {
+    // A cross-origin page in the operator's browser must not be able to read
+    // bootstrap config or media by riding the ambient Tailscale identity — the
+    // same boundary the WS Control UI surface enforces with its pre-auth
+    // origin gate.
+    const res = await authorizeControlUiHttpGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: true },
+      connectAuth: null,
+      tailscaleWhois: createTailscaleWhois(),
+      req: createTailscaleForwardedReq(),
+      browserOriginPolicy: {
+        requestHost: "ai-hub.bone-egret.ts.net",
+        origin: "https://evil.example.com",
+        allowedOrigins: [],
+      },
+    });
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("tailscale_origin_not_allowed");
+  });
+
+  it("accepts a same-origin browser Origin on tokenless tailscale control-ui HTTP reads", async () => {
+    // The dashboard itself, loaded over Tailscale Serve, is same-origin with
+    // the request host and must keep working when the browser sends Origin.
+    const res = await authorizeControlUiHttpGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: true },
+      connectAuth: null,
+      tailscaleWhois: createTailscaleWhois(),
+      req: createTailscaleForwardedReq(),
+      browserOriginPolicy: {
+        requestHost: "ai-hub.bone-egret.ts.net",
+        origin: "https://ai-hub.bone-egret.ts.net",
+        allowedOrigins: [],
+      },
+    });
+    expect(res).toEqual({ ok: true, method: "tailscale", user: "peter" });
+  });
+
+  it("accepts an allowlisted browser Origin on tokenless tailscale control-ui HTTP reads", async () => {
+    const res = await authorizeControlUiHttpGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: true },
+      connectAuth: null,
+      tailscaleWhois: createTailscaleWhois(),
+      req: createTailscaleForwardedReq(),
+      browserOriginPolicy: {
+        requestHost: "ai-hub.bone-egret.ts.net",
+        origin: "https://dashboard.example.com",
+        allowedOrigins: ["https://dashboard.example.com"],
+      },
+    });
+    expect(res).toEqual({ ok: true, method: "tailscale", user: "peter" });
+  });
+
+  it("leaves the ws-control-ui surface to its own pre-auth origin gate", async () => {
+    // The WS connection handler rejects disallowed browser origins before auth
+    // runs; the HTTP origin helper must stay scoped to HTTP surfaces so the WS
+    // boundary is enforced exactly once, in one place.
+    const res = await authorizeWsControlUiGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: true },
+      connectAuth: null,
+      tailscaleWhois: createTailscaleWhois(),
+      req: createTailscaleForwardedReq(),
+      browserOriginPolicy: {
+        requestHost: "ai-hub.bone-egret.ts.net",
+        origin: "https://evil.example.com",
+        allowedOrigins: [],
+      },
+    });
+    expect(res).toEqual({ ok: true, method: "tailscale", user: "peter" });
   });
 
   it("uses proxy-aware request client IP by default for rate-limit checks", async () => {

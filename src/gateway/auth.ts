@@ -56,7 +56,7 @@ type ConnectAuth = {
   password?: string;
 };
 
-type GatewayAuthSurface = "http" | "ws-control-ui";
+type GatewayAuthSurface = "http" | "ws-control-ui" | "http-control-ui";
 
 /** Inputs needed to authorize one HTTP or websocket gateway connection. */
 type AuthorizeGatewayConnectParams = {
@@ -66,8 +66,11 @@ type AuthorizeGatewayConnectParams = {
   trustedProxies?: string[];
   tailscaleWhois?: TailscaleWhoisLookup;
   /**
-   * Explicit auth surface. HTTP keeps Tailscale forwarded-header auth disabled.
-   * WS Control UI enables it intentionally for tokenless trusted-host login.
+   * Explicit auth surface. Plain HTTP keeps Tailscale forwarded-header auth
+   * disabled. WS Control UI enables it intentionally for tokenless trusted-host
+   * login; the Control UI HTTP bootstrap/read surface enables it the same way so
+   * a browser that the WS accepts over Tailscale can also load the dashboard's
+   * bootstrap config and assistant media over HTTP.
    */
   authSurface?: GatewayAuthSurface;
   /** Optional rate limiter instance; when provided, failed attempts are tracked per IP. */
@@ -354,7 +357,7 @@ function authorizeTrustedProxy(params: {
 }
 
 function shouldAllowTailscaleHeaderAuth(authSurface: GatewayAuthSurface): boolean {
-  return authSurface === "ws-control-ui";
+  return authSurface === "ws-control-ui" || authSurface === "http-control-ui";
 }
 
 function authorizeHttpBrowserOrigin(params: {
@@ -363,7 +366,7 @@ function authorizeHttpBrowserOrigin(params: {
   isLocalClient: boolean;
   reason: string;
 }): { ok: false; reason: string } | null {
-  if (params.authSurface !== "http") {
+  if (params.authSurface !== "http" && params.authSurface !== "http-control-ui") {
     return null;
   }
 
@@ -518,6 +521,7 @@ async function authorizeGatewayConnectCore(
       const originResult = authorizeTrustedProxyBrowserOrigin({
         authSurface,
         browserOriginPolicy: params.browserOriginPolicy,
+        failureReason: "trusted_proxy_origin_not_allowed",
       });
       if (originResult) {
         return originResult;
@@ -569,6 +573,19 @@ async function authorizeGatewayConnectCore(
       tailscaleWhois,
     });
     if (tailscaleCheck.ok) {
+      // A verified tailnet identity is not enough for browser-triggered HTTP
+      // reads: a cross-origin page in the operator's browser could otherwise
+      // ride the ambient Tailscale identity. Enforce the same Control UI
+      // browser-origin policy the WS surface applies before auth.
+      const originResult = authorizeHttpBrowserOrigin({
+        authSurface,
+        browserOriginPolicy: params.browserOriginPolicy,
+        isLocalClient: localDirect,
+        reason: "tailscale_origin_not_allowed",
+      });
+      if (originResult) {
+        return originResult;
+      }
       limiter?.reset(ip, rateLimitScope);
       return {
         ok: true,
@@ -619,5 +636,22 @@ export async function authorizeWsControlUiGatewayConnect(
   return authorizeGatewayConnect({
     ...params,
     authSurface: "ws-control-ui",
+  });
+}
+
+/**
+ * Authorize a Control UI HTTP bootstrap/read request (config, assistant media,
+ * avatars). Matches the WS Control UI surface's tokenless Tailscale trusted-host
+ * login so a browser reaching the dashboard over Tailscale Serve — which the WS
+ * already accepts — can also load its HTTP bootstrap config and media, instead
+ * of getting a silent 401. Token/password auth for non-Tailscale requests is
+ * unchanged, and trusted-proxy browser-origin checks still apply.
+ */
+export async function authorizeControlUiHttpGatewayConnect(
+  params: Omit<AuthorizeGatewayConnectParams, "authSurface">,
+): Promise<GatewayAuthResult> {
+  return authorizeGatewayConnect({
+    ...params,
+    authSurface: "http-control-ui",
   });
 }
