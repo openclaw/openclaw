@@ -92,6 +92,32 @@ class ChatControllerReconnectRestoreTest {
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
+  fun connectedRefreshLabelsExistingSessionWithoutRecreatingIt() =
+    runTest {
+      val sessionKey = "agent:main:node-device"
+      val gateway = ScriptedGateway(json)
+      gateway.respondWith("sessions.describe", """{"session":{"key":"$sessionKey"}}""")
+      gateway.respondWith("sessions.patch", """{"ok":true,"key":"$sessionKey"}""")
+      gateway.respondWith("chat.history", historyResponse("existing-session", listOf(userTurn)))
+      val controller = newScopedController(gateway)
+
+      controller.prepareMainSessionKey(sessionKey)
+      controller.onGatewayConnected(MainSessionBinding(sessionKey, "OpenClaw App · Pixel · device"))
+      runCurrent()
+
+      assertEquals(0, gateway.callCount("sessions.create"))
+      val patchIndex = gateway.calls.indexOfFirst { it.method == "sessions.patch" }
+      val historyIndex = gateway.calls.indexOfFirst { it.method == "chat.history" }
+      assertTrue(patchIndex >= 0)
+      assertTrue(historyIndex > patchIndex)
+      val patchParams = json.parseToJsonElement(gateway.calls[patchIndex].paramsJson.orEmpty()).jsonObject
+      assertEquals(sessionKey, patchParams["key"]?.jsonPrimitive?.content)
+      assertEquals("OpenClaw App · Pixel · device", patchParams["label"]?.jsonPrimitive?.content)
+      assertEquals(listOf("keep working"), controller.messages.value.map { it.content.first().text })
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
   fun agentSelectionAcknowledgesUnreadDeviceSession() =
     runTest {
       val sessionKey = "agent:main:node-device"
@@ -249,6 +275,40 @@ class ChatControllerReconnectRestoreTest {
       )
       runCurrent()
       assertTrue(gateway.callCount("chat.history") > historyCallsBeforeReconnect)
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun reconnectCancelsStaleAdoptionAndRetriesOnTheNewTransport() =
+    runTest {
+      val sessionKey = "agent:main:node-device"
+      val staleDescribe = CompletableDeferred<String>()
+      var describeCalls = 0
+      val gateway = ScriptedGateway(json)
+      gateway.respond("sessions.describe") {
+        describeCalls += 1
+        if (describeCalls == 1) {
+          staleDescribe.await()
+        } else {
+          """{"session":{"key":"$sessionKey","label":"OpenClaw App · Pixel · device"}}"""
+        }
+      }
+      gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
+      val controller = newScopedController(gateway)
+      val binding = MainSessionBinding(sessionKey, "OpenClaw App · Pixel · device")
+
+      controller.prepareMainSessionKey(sessionKey)
+      controller.onGatewayConnected(binding)
+      runCurrent()
+      assertEquals(1, describeCalls)
+
+      controller.onDisconnected("Reconnecting…")
+      controller.onGatewayConnected(binding)
+      runCurrent()
+
+      assertEquals(2, describeCalls)
+      assertEquals(1, gateway.callCount("chat.history"))
+      assertEquals(sessionKey, controller.sessionKey.value)
     }
 
   @Test

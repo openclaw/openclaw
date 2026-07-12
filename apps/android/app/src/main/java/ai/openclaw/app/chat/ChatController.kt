@@ -50,11 +50,13 @@ internal data class MainSessionBinding(
   val label: String,
 )
 
-private data class MainSessionReadiness(
+private class MainSessionReadiness(
   val gatewayScope: ChatCacheScope,
   val binding: MainSessionBinding,
   val ready: CompletableDeferred<Unit>,
-)
+) {
+  var job: Job? = null
+}
 
 class ChatController internal constructor(
   private val scope: CoroutineScope,
@@ -247,6 +249,7 @@ class ChatController internal constructor(
 
   /** Clears transient chat state when the operator gateway session disconnects. */
   fun onDisconnected(message: String) {
+    retireMainSessionReadiness()
     historyLoadGeneration.incrementAndGet()
     restoreRunStateOnReconnect = true
     reconnectRecoveryGeneration = null
@@ -289,67 +292,78 @@ class ChatController internal constructor(
       return
     }
     desiredMainSessions[requestScope.gatewayId] = mainSession
-    val readiness = CompletableDeferred<Unit>()
+    val readiness =
+      MainSessionReadiness(
+        gatewayScope = requestScope,
+        binding = mainSession,
+        ready = CompletableDeferred(),
+      )
+    val adoptionJob =
+      scope.launch(start = CoroutineStart.LAZY) {
+        try {
+          val adoptionLock = mainSessionAdoptionLocks.computeIfAbsent(requestScope.gatewayId) { Mutex() }
+          adoptionLock.withLock {
+            if (desiredMainSessions[requestScope.gatewayId] != mainSession) return@withLock
+            try {
+              val describeParams = buildJsonObject { put("key", JsonPrimitive(mainSession.key)) }
+              val describeResponse =
+                requestGatewayBound(requestScope.gatewayId, "sessions.describe", describeParams.toString())
+              val describeRoot = json.parseToJsonElement(describeResponse).asObjectOrNull() ?: error("invalid sessions.describe response")
+              if (!describeRoot.containsKey("session")) error("sessions.describe returned no session field")
+              if (desiredMainSessions[requestScope.gatewayId] != mainSession) return@withLock
+              val existingSession = describeRoot["session"].asObjectOrNull()
+              val existingLabel =
+                existingSession
+                  ?.get("label")
+                  .asStringOrNull()
+                  ?.trim()
+                  ?.takeIf { it.isNotEmpty() }
+              if (existingSession == null) {
+                val createParams =
+                  buildJsonObject {
+                    put("key", JsonPrimitive(mainSession.key))
+                    put("agentId", JsonPrimitive(resolveAgentIdForSessionKey(mainSession.key)))
+                    put("label", JsonPrimitive(mainSession.label))
+                  }
+                requestGatewayBound(requestScope.gatewayId, "sessions.create", createParams.toString())
+              } else if (existingLabel == null) {
+                // An existing unlabeled session owns upgrade history already. Patch metadata instead
+                // of replaying create lifecycle behavior against that live session.
+                val patchParams =
+                  buildJsonObject {
+                    put("key", JsonPrimitive(mainSession.key))
+                    put("label", JsonPrimitive(mainSession.label))
+                  }
+                requestGatewayBound(requestScope.gatewayId, "sessions.patch", patchParams.toString())
+              }
+            } catch (err: CancellationException) {
+              throw err
+            } catch (_: Throwable) {
+              // History remains usable under the already-bound key when adoption cannot be verified.
+            }
+          }
+        } finally {
+          readiness.ready.complete(Unit)
+        }
+        // A superseded connect owns the next refresh and must not inherit this response.
+        if (
+          synchronized(mainSessionReadinessLock) { mainSessionReadiness === readiness } &&
+          requestScope == currentCacheScope() &&
+          desiredMainSessions[requestScope.gatewayId] == mainSession
+        ) {
+          refreshConnectedGateway()
+        }
+      }
+    readiness.job = adoptionJob
     val supersededReadiness =
       synchronized(mainSessionReadinessLock) {
         val current = mainSessionReadiness
-        if (
-          current?.gatewayScope == requestScope &&
-          current.binding == mainSession &&
-          !current.ready.isCompleted
-        ) {
-          return
-        }
-        mainSessionReadiness = MainSessionReadiness(requestScope, mainSession, readiness)
-        current?.ready
+        mainSessionReadiness = readiness
+        current
       }
-    supersededReadiness?.complete(Unit)
-    scope.launch {
-      try {
-        val adoptionLock = mainSessionAdoptionLocks.computeIfAbsent(requestScope.gatewayId) { Mutex() }
-        adoptionLock.withLock {
-          if (desiredMainSessions[requestScope.gatewayId] != mainSession) return@withLock
-          try {
-            val describeParams = buildJsonObject { put("key", JsonPrimitive(mainSession.key)) }
-            val describeResponse =
-              requestGatewayBound(requestScope.gatewayId, "sessions.describe", describeParams.toString())
-            val describeRoot = json.parseToJsonElement(describeResponse).asObjectOrNull() ?: error("invalid sessions.describe response")
-            if (!describeRoot.containsKey("session")) error("sessions.describe returned no session field")
-            if (desiredMainSessions[requestScope.gatewayId] != mainSession) return@withLock
-            val existingSession = describeRoot["session"].asObjectOrNull()
-            val existingLabel =
-              existingSession
-                ?.get("label")
-                .asStringOrNull()
-                ?.trim()
-                ?.takeIf { it.isNotEmpty() }
-            if (existingSession == null || existingLabel == null) {
-              val createParams =
-                buildJsonObject {
-                  put("key", JsonPrimitive(mainSession.key))
-                  put("agentId", JsonPrimitive(resolveAgentIdForSessionKey(mainSession.key)))
-                  put("label", JsonPrimitive(mainSession.label))
-                }
-              requestGatewayBound(requestScope.gatewayId, "sessions.create", createParams.toString())
-            }
-          } catch (err: CancellationException) {
-            throw err
-          } catch (_: Throwable) {
-            // History remains usable under the already-bound key when adoption cannot be verified.
-          }
-        }
-      } finally {
-        readiness.complete(Unit)
-      }
-      // A superseded connect owns the next refresh and must not inherit this response.
-      if (
-        requestScope != currentCacheScope() ||
-        desiredMainSessions[requestScope.gatewayId] != mainSession
-      ) {
-        return@launch
-      }
-      refreshConnectedGateway()
-    }
+    supersededReadiness?.job?.cancel()
+    supersededReadiness?.ready?.complete(Unit)
+    adoptionJob.start()
   }
 
   private fun refreshConnectedGateway() {
@@ -363,13 +377,7 @@ class ChatController internal constructor(
 
   /** Invalidates and clears gateway-bound UI state before a target switch can race old responses. */
   fun onGatewayScopeChanging(retireRunState: Boolean = false) {
-    val staleReadiness =
-      synchronized(mainSessionReadinessLock) {
-        val current = mainSessionReadiness
-        mainSessionReadiness = null
-        current?.ready
-      }
-    staleReadiness?.complete(Unit)
+    retireMainSessionReadiness()
     synchronized(gatewayScopeApplyLock) {
       if (retireRunState) {
         restoreRunStateOnReconnect = false
@@ -398,6 +406,17 @@ class ChatController internal constructor(
       // Outbox rows are gateway-scoped too; the next publish repopulates them for the new scope.
       _outboxItems.value = emptyList()
     }
+  }
+
+  private fun retireMainSessionReadiness() {
+    val staleReadiness =
+      synchronized(mainSessionReadinessLock) {
+        val current = mainSessionReadiness
+        mainSessionReadiness = null
+        current
+      }
+    staleReadiness?.job?.cancel()
+    staleReadiness?.ready?.complete(Unit)
   }
 
   /** Restores the selected gateway's local state without waiting for transport availability. */
