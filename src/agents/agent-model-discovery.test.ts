@@ -2,9 +2,17 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
+
+// Loading real bundled provider policy artifacts pulls the full plugin module
+// graph into the vitest runner and hangs discovery-time normalization; mock the
+// surface like model-selection.test.ts so discovery stays hermetic.
+vi.mock("../plugins/provider-public-artifacts.js", () => ({
+  resolveBundledProviderPolicySurface: () => null,
+  resolveProviderPolicySurface: () => null,
+}));
 
 function writeModelsJson(agentDir: string, modelId: string): void {
   fs.writeFileSync(
