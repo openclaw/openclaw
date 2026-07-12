@@ -15,6 +15,7 @@ import ai.openclaw.app.chat.ChatThinkingLevelSelection
 import ai.openclaw.app.chat.MessageSpeechPhase
 import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.chat.VoiceNoteRecorderState
+import ai.openclaw.app.currentAppLanguage
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.nativeText
@@ -36,6 +37,7 @@ import ai.openclaw.app.ui.design.OpenClawMascot
 import ai.openclaw.app.ui.design.agentAvatarSource
 import ai.openclaw.app.ui.gatewayDiagnosticsEndpoint
 import ai.openclaw.app.ui.gatewayStatusForDisplay
+import ai.openclaw.app.ui.localizedUppercase
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -932,7 +934,8 @@ private fun StarterPromptList(onStarterPrompt: (String) -> Unit) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
     Column {
       starterPrompts.forEachIndexed { index, prompt ->
-        StarterPromptRow(prompt = prompt, onClick = { onStarterPrompt(prompt.message) })
+        val message = prompt.message.resolveNativeTextResource()
+        StarterPromptRow(prompt = prompt, onClick = { onStarterPrompt(message) })
         if (index != starterPrompts.lastIndex) {
           HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
         }
@@ -962,26 +965,41 @@ private fun StarterPromptRow(
         Text(text = prompt.mark, style = ClawTheme.type.label, color = ClawTheme.colors.text)
       }
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-        Text(text = nativeString(prompt.title), style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1)
-        Text(text = nativeString(prompt.subtitle), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(text = prompt.title.resolveNativeTextResource(), style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1)
+        Text(text = prompt.subtitle.resolveNativeTextResource(), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
       }
     }
   }
 }
 
-private data class StarterPrompt(
+internal data class StarterPrompt(
   val mark: String,
-  val title: String,
-  val subtitle: String,
-  val message: String,
+  val title: NativeText,
+  val subtitle: NativeText,
+  val message: NativeText,
 )
 
 /** Default prompts shown only for an empty, connected session. */
-private val starterPrompts =
+internal val starterPrompts =
   listOf(
-    StarterPrompt(mark = "1", title = "Catch me up", subtitle = "Summarize recent sessions and next steps.", message = "Catch me up on my recent OpenClaw sessions and suggest next steps."),
-    StarterPrompt(mark = "2", title = "Plan the work", subtitle = "Turn a goal into an actionable checklist.", message = "Help me turn this goal into a practical checklist: "),
-    StarterPrompt(mark = "3", title = "Use this phone", subtitle = "Ask OpenClaw to use Android capabilities.", message = "What can you help me do from this phone right now?"),
+    StarterPrompt(
+      mark = "1",
+      title = nativeText("Catch me up"),
+      subtitle = nativeText("Summarize recent sessions and next steps."),
+      message = nativeText("Catch me up on my recent OpenClaw sessions and suggest next steps."),
+    ),
+    StarterPrompt(
+      mark = "2",
+      title = nativeText("Plan the work"),
+      subtitle = nativeText("Turn a goal into an actionable checklist."),
+      message = nativeText("Help me turn this goal into a practical checklist: "),
+    ),
+    StarterPrompt(
+      mark = "3",
+      title = nativeText("Use this phone"),
+      subtitle = nativeText("Ask OpenClaw to use Android capabilities."),
+      message = nativeText("What can you help me do from this phone right now?"),
+    ),
   )
 
 @Composable
@@ -1366,22 +1384,23 @@ private fun ChatThinkingLevelSelector(
 ) {
   val rows = remember(options) { chatThinkingOptionRows(options) }
   val normalizedSelected = selectedId.trim().lowercase(Locale.US)
+  val languageTag = currentAppLanguage().languageTag
   val selectedLabel =
     options
       .firstOrNull { it.id.trim().lowercase(Locale.US) == normalizedSelected }
-      ?.let(::chatThinkingOptionLabel)
+      ?.let { option -> chatThinkingOptionLabel(option, languageTag) }
       .orEmpty()
   Column(
     modifier = Modifier.fillMaxWidth(),
     verticalArrangement = Arrangement.spacedBy(4.dp),
   ) {
     rows.forEach { row ->
-      val labels = row.map(::chatThinkingOptionLabel)
+      val labels = row.map { option -> chatThinkingOptionLabel(option, languageTag) }
       ClawSegmentedControl(
         options = labels,
         selected = selectedLabel,
         onSelect = { selected ->
-          row.firstOrNull { chatThinkingOptionLabel(it) == selected }?.let { onSelect(it.id) }
+          row.firstOrNull { option -> chatThinkingOptionLabel(option, languageTag) == selected }?.let { onSelect(it.id) }
         },
         modifier = Modifier.fillMaxWidth(),
       )
@@ -1950,13 +1969,29 @@ internal fun chatThinkingOptionRows(options: List<ChatThinkingLevelOption>): Lis
   return options.chunked((options.size + 1) / 2)
 }
 
-internal fun chatThinkingOptionLabel(option: ChatThinkingLevelOption): String =
-  option.label
-    .trim()
-    .ifEmpty { option.id.trim() }
-    .replaceFirstChar { it.uppercase() }
-    .let { label ->
-      if (label.equals(option.id, ignoreCase = true)) nativeString(label) else label
+internal fun chatThinkingOptionLabel(
+  option: ChatThinkingLevelOption,
+  languageTag: String? = null,
+): String {
+  val id = option.id.trim()
+  val rawLabel = option.label.trim().ifEmpty { id }
+  val localizedLabel =
+    if (rawLabel.equals(id, ignoreCase = true)) {
+      when (id.lowercase(Locale.US)) {
+        "off" -> nativeString("Off")
+        "minimal" -> nativeString("Minimal")
+        "low" -> nativeString("Low")
+        "medium" -> nativeString("Medium")
+        "high" -> nativeString("High")
+        "xhigh" -> nativeString("Xhigh")
+        "adaptive" -> nativeString("Adaptive")
+        "max" -> nativeString("Max")
+        else -> rawLabel
+      }
+    } else {
+      rawLabel
     }
+  return localizedUppercase(localizedLabel.take(1), languageTag) + localizedLabel.drop(1)
+}
 
 private fun formatChatTimestamp(timestampMs: Long): String = DateFormat.getTimeInstance(DateFormat.SHORT, Locale.getDefault()).format(Date(timestampMs))

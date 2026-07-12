@@ -3,6 +3,8 @@ package ai.openclaw.app.ui.chat
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatThinkingLevelOption
 import ai.openclaw.app.chat.ChatThinkingLevelSelection
+import ai.openclaw.app.i18n.NativeText
+import ai.openclaw.app.i18n.resolveNativeText
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -10,6 +12,17 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ChatContextMeterTest {
+  @Test
+  fun starterPromptsKeepCatalogSourcesThroughTheSendBoundary() {
+    assertTrue(starterPrompts.all { it.title is NativeText.Resource })
+    assertTrue(starterPrompts.all { it.subtitle is NativeText.Resource })
+    assertTrue(starterPrompts.all { it.message is NativeText.Resource })
+    assertEquals(
+      "Catch me up on my recent OpenClaw sessions and suggest next steps.",
+      starterPrompts.first().message.resolveNativeText(),
+    )
+  }
+
   @Test
   fun contextMeterUsesActiveSessionTokenBudget() {
     val sessions =
@@ -138,7 +151,9 @@ class ChatContextMeterTest {
     val rows = chatThinkingOptionRows(options)
 
     assertEquals(listOf(4, 4), rows.map { it.size })
+    assertEquals("Minimal", chatThinkingOptionLabel(options[1]))
     assertEquals("Xhigh", chatThinkingOptionLabel(options[5]))
+    assertEquals("Adaptive", chatThinkingOptionLabel(options[6]))
     assertEquals("Max", chatThinkingOptionLabel(options.last()))
   }
 }

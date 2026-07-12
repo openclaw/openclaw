@@ -250,7 +250,7 @@ internal fun SessionsScreen(
               }
               if (sortMenuExpanded) {
                 HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
-                listOf(true to "Newest first", false to "Oldest first").forEach { (value, label) ->
+                listOf(true to nativeString("Newest first"), false to nativeString("Oldest first")).forEach { (value, label) ->
                   Surface(
                     onClick = {
                       recentFirst = value
@@ -261,7 +261,7 @@ internal fun SessionsScreen(
                     contentColor = if (recentFirst == value) ClawTheme.colors.text else ClawTheme.colors.textMuted,
                   ) {
                     Text(
-                      text = nativeString(label),
+                      text = label,
                       modifier = Modifier.padding(horizontal = 9.dp, vertical = 8.dp),
                       style = ClawTheme.type.body,
                       color = if (recentFirst == value) ClawTheme.colors.text else ClawTheme.colors.textMuted,
@@ -329,7 +329,7 @@ internal fun SessionsScreen(
               session = session,
               title = displaySessionTitle(session),
               subtitle = if (active) nativeString("Current session") else nativeString("OpenClaw session"),
-              metadata = (session.lastActivityAt ?: session.updatedAtMs)?.let(::relativeSessionTime) ?: "now",
+              metadata = (session.lastActivityAt ?: session.updatedAtMs)?.let(::relativeSessionTime) ?: nativeString("now"),
               active = active,
               compact = compactLayout,
               archived = session.archived == true,
@@ -888,14 +888,18 @@ private fun emptySessionBody(filter: SessionFilter): String =
   }
 
 /** Formats session timestamps for compact mobile metadata. */
-private fun relativeSessionTime(updatedAtMs: Long): String {
-  val deltaMs = (System.currentTimeMillis() - updatedAtMs).coerceAtLeast(0L)
+internal fun relativeSessionTime(
+  updatedAtMs: Long,
+  nowMs: Long = System.currentTimeMillis(),
+): String {
+  val deltaMs = (nowMs - updatedAtMs).coerceAtLeast(0L)
   val minutes = deltaMs / 60_000L
-  if (minutes < 1) return "now"
-  if (minutes < 60) return "${minutes}m"
+  if (minutes < 1) return nativeString("now")
+  if (minutes < 60) return nativeString("\${minutes}m", minutes)
   val hours = minutes / 60
-  if (hours < 24) return "${hours}h"
-  return "${hours / 24}d"
+  if (hours < 24) return nativeString("\${hours}h", hours)
+  val days = hours / 24
+  return nativeString("\${days}d", days)
 }
 
 /** Prefers the editable label, then falls back to the gateway display name. */

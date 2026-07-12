@@ -13,6 +13,8 @@ import ai.openclaw.app.GatewayPendingDeviceSummary
 import ai.openclaw.app.GatewaySkillWorkshopProposal
 import ai.openclaw.app.GatewaySkillWorkshopSummary
 import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.i18n.resolveNativeText
+import ai.openclaw.app.i18n.verbatimText
 import ai.openclaw.app.normalizeOperatorScopes
 import ai.openclaw.app.ui.design.ClawStatus
 import androidx.compose.material.icons.Icons
@@ -752,15 +754,15 @@ class ShellScreenLogicTest {
 
   @Test
   fun settingsSectionTitlesGroupPowerSettingsByMeaning() {
-    assertEquals("Connection", settingsSectionTitleForRoute(SettingsRoute.Gateway))
-    assertEquals("Connection", settingsSectionTitleForRoute(SettingsRoute.NodesDevices))
-    assertEquals("Agents & automation", settingsSectionTitleForRoute(SettingsRoute.ProvidersModels))
-    assertEquals("Agents & automation", settingsSectionTitleForRoute(SettingsRoute.Approvals))
-    assertEquals("Agents & automation", settingsSectionTitleForRoute(SettingsRoute.CronJobs))
-    assertEquals("Phone context & privacy", settingsSectionTitleForRoute(SettingsRoute.PhoneCapabilities))
-    assertEquals("Phone context & privacy", settingsSectionTitleForRoute(SettingsRoute.Notifications))
-    assertEquals("Profile & device", settingsSectionTitleForRoute(SettingsRoute.Appearance))
-    assertEquals("Diagnostics", settingsSectionTitleForRoute(SettingsRoute.Health))
+    assertEquals("Connection", settingsSectionTitleForRoute(SettingsRoute.Gateway).resolveNativeText())
+    assertEquals("Connection", settingsSectionTitleForRoute(SettingsRoute.NodesDevices).resolveNativeText())
+    assertEquals("Agents & automation", settingsSectionTitleForRoute(SettingsRoute.ProvidersModels).resolveNativeText())
+    assertEquals("Agents & automation", settingsSectionTitleForRoute(SettingsRoute.Approvals).resolveNativeText())
+    assertEquals("Agents & automation", settingsSectionTitleForRoute(SettingsRoute.CronJobs).resolveNativeText())
+    assertEquals("Phone context & privacy", settingsSectionTitleForRoute(SettingsRoute.PhoneCapabilities).resolveNativeText())
+    assertEquals("Phone context & privacy", settingsSectionTitleForRoute(SettingsRoute.Notifications).resolveNativeText())
+    assertEquals("Profile & device", settingsSectionTitleForRoute(SettingsRoute.Appearance).resolveNativeText())
+    assertEquals("Diagnostics", settingsSectionTitleForRoute(SettingsRoute.Health).resolveNativeText())
   }
 
   @Test
@@ -784,7 +786,7 @@ class ShellScreenLogicTest {
         "Profile & device",
         "Diagnostics",
       ),
-      sections.map { it.title },
+      sections.map { it.title.resolveNativeText() },
     )
   }
 
@@ -839,7 +841,7 @@ class ShellScreenLogicTest {
 
   private fun emptyNodesDevices(): GatewayNodesDevicesSummary = GatewayNodesDevicesSummary(nodes = emptyList(), pendingDevices = emptyList(), pairedDevices = emptyList())
 
-  private fun settingsRow(route: SettingsRoute): SettingsRow = SettingsRow(route.name, "Value", Icons.Default.Settings, route = route)
+  private fun settingsRow(route: SettingsRoute): SettingsRow = SettingsRow(verbatimText(route.name), verbatimText("Value"), Icons.Default.Settings, route = route)
 
   private fun authProblem(code: String): GatewayConnectionProblem =
     GatewayConnectionProblem(

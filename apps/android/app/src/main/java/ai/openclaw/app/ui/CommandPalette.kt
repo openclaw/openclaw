@@ -3,7 +3,13 @@ package ai.openclaw.app.ui
 import ai.openclaw.app.GatewayModelProviderSummary
 import ai.openclaw.app.GatewayModelSummary
 import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.currentAppLanguage
+import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.i18n.nativeText
+import ai.openclaw.app.i18n.resolveNativeText
+import ai.openclaw.app.i18n.resolveNativeTextResource
+import ai.openclaw.app.i18n.verbatimText
 import ai.openclaw.app.ui.design.ClawEmptyState
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawPlainIconButton
@@ -73,11 +79,11 @@ internal fun CommandPalette(
   val normalizedQuery = query.trim()
   val quickActions =
     listOf(
-      CommandItem(CommandAction.Chat, nativeString("Open Chat"), nativeString("Start or continue a conversation"), Icons.Outlined.ChatBubbleOutline, onOpenChat),
-      CommandItem(CommandAction.Voice, nativeString("Start Voice"), nativeString("Talk or dictate with OpenClaw"), Icons.Outlined.MicNone, onOpenVoice),
-      CommandItem(CommandAction.Sessions, nativeString("Browse Sessions"), nativeString("Find previous conversations"), Icons.Outlined.AccessTime, onOpenSessions),
-      CommandItem(CommandAction.Providers, nativeString("Providers & Models"), providerCommandSubtitle(isConnected, providers, models), Icons.Outlined.Inventory2, onOpenProviders),
-      CommandItem(CommandAction.Settings, nativeString("Settings"), nativeString("Gateway, voice, notifications, privacy"), Icons.Outlined.Settings, onOpenSettings),
+      CommandItem(CommandAction.Chat, nativeText("Open Chat"), nativeText("Start or continue a conversation"), Icons.Outlined.ChatBubbleOutline, onOpenChat),
+      CommandItem(CommandAction.Voice, nativeText("Start Voice"), nativeText("Talk or dictate with OpenClaw"), Icons.Outlined.MicNone, onOpenVoice),
+      CommandItem(CommandAction.Sessions, nativeText("Browse Sessions"), nativeText("Find previous conversations"), Icons.Outlined.AccessTime, onOpenSessions),
+      CommandItem(CommandAction.Providers, nativeText("Providers & Models"), verbatimText(providerCommandSubtitle(isConnected, providers, models)), Icons.Outlined.Inventory2, onOpenProviders),
+      CommandItem(CommandAction.Settings, nativeText("Settings"), nativeText("Gateway, voice, notifications, privacy"), Icons.Outlined.Settings, onOpenSettings),
     )
   val actionRows = quickActions.filter { it.matches(normalizedQuery) }
   val sessionRows =
@@ -147,7 +153,7 @@ internal fun CommandPalette(
                     key = session.key,
                     title = commandSessionTitle(session.displayName),
                     subtitle = if (pendingRunCount > 0) nativeString("Assistant working") else nativeString("OpenClaw session"),
-                    metadata = session.updatedAtMs?.let(::commandRelativeTime) ?: "now",
+                    metadata = session.updatedAtMs?.let(::commandRelativeTime) ?: nativeString("now"),
                   )
                 },
               onOpen = onOpenSession,
@@ -169,13 +175,16 @@ internal enum class CommandAction {
 
 internal data class CommandItem(
   val action: CommandAction,
-  val title: String,
-  val subtitle: String,
+  val title: NativeText,
+  val subtitle: NativeText,
   val icon: ImageVector,
   val onClick: () -> Unit,
 ) {
   /** Matches palette queries against both action title and explanatory subtitle. */
-  fun matches(query: String): Boolean = query.isEmpty() || title.contains(query, ignoreCase = true) || subtitle.contains(query, ignoreCase = true)
+  fun matches(query: String): Boolean =
+    query.isEmpty() ||
+      title.resolveNativeText().contains(query, ignoreCase = true) ||
+      subtitle.resolveNativeText().contains(query, ignoreCase = true)
 }
 
 internal fun commandSessionMatches(
@@ -216,6 +225,8 @@ private fun CommandActionList(rows: List<CommandItem>) {
 
 @Composable
 private fun CommandActionRow(row: CommandItem) {
+  val title = row.title.resolveNativeTextResource()
+  val subtitle = row.subtitle.resolveNativeTextResource()
   Surface(color = Color.Transparent, contentColor = ClawTheme.colors.text) {
     Row(
       modifier =
@@ -223,15 +234,15 @@ private fun CommandActionRow(row: CommandItem) {
           .fillMaxWidth()
           .heightIn(min = 52.dp)
           .clip(RoundedCornerShape(ClawTheme.radii.row))
-          .clickable(onClickLabel = commandActionAccessibilityDescription(row.action, row.title), onClick = row.onClick)
+          .clickable(onClickLabel = commandActionAccessibilityDescription(row.action, title), onClick = row.onClick)
           .padding(horizontal = 2.dp, vertical = 6.dp),
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(9.dp),
     ) {
       CommandRowIcon(icon = row.icon)
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-        Text(text = row.title, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(text = row.subtitle, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(text = title, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(text = subtitle, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
       }
       CommandRowChevron(contentDescription = null)
     }
@@ -314,7 +325,7 @@ private fun CommandAvatar(text: String) {
     border = BorderStroke(1.dp, ClawTheme.colors.border),
   ) {
     Box(contentAlignment = Alignment.Center) {
-      Text(text = text.take(2).uppercase(), style = ClawTheme.type.label)
+      Text(text = localizedUppercase(text.take(2), currentAppLanguage().languageTag), style = ClawTheme.type.label)
     }
   }
 }
@@ -322,7 +333,7 @@ private fun CommandAvatar(text: String) {
 @Composable
 private fun CommandSectionLabel(title: String) {
   Row(modifier = Modifier.fillMaxWidth()) {
-    Text(text = title.uppercase(), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+    Text(text = localizedUppercase(title, currentAppLanguage().languageTag), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
   }
 }
 
@@ -343,12 +354,16 @@ internal fun providerCommandSubtitle(
 private fun commandSessionTitle(displayName: String?): String = displayName?.takeIf { it.isNotBlank() } ?: nativeString("Main session")
 
 /** Formats command-palette session timestamps for compact rows. */
-private fun commandRelativeTime(updatedAtMs: Long): String {
-  val deltaMs = (System.currentTimeMillis() - updatedAtMs).coerceAtLeast(0L)
+internal fun commandRelativeTime(
+  updatedAtMs: Long,
+  nowMs: Long = System.currentTimeMillis(),
+): String {
+  val deltaMs = (nowMs - updatedAtMs).coerceAtLeast(0L)
   val minutes = deltaMs / 60_000L
-  if (minutes < 1) return "now"
-  if (minutes < 60) return "${minutes}m"
+  if (minutes < 1) return nativeString("now")
+  if (minutes < 60) return nativeString("\${minutes}m", minutes)
   val hours = minutes / 60
-  if (hours < 24) return "${hours}h"
-  return "${hours / 24}d"
+  if (hours < 24) return nativeString("\${hours}h", hours)
+  val days = hours / 24
+  return nativeString("\${days}d", days)
 }

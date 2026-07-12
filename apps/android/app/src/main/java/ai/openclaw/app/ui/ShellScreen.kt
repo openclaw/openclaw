@@ -16,7 +16,12 @@ import ai.openclaw.app.NodeRuntime
 import ai.openclaw.app.R
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.currentAppLanguage
+import ai.openclaw.app.i18n.NativeText
+import ai.openclaw.app.i18n.joinedNativeText
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.i18n.nativeText
+import ai.openclaw.app.i18n.resolveNativeTextResource
+import ai.openclaw.app.i18n.verbatimText
 import ai.openclaw.app.node.CanvasController
 import ai.openclaw.app.ui.chat.ChatScreen
 import ai.openclaw.app.ui.design.AgentAvatarSource
@@ -121,16 +126,16 @@ import java.util.Locale
 
 internal enum class Tab(
   val key: String,
-  val label: String,
+  val label: NativeText,
   val icon: ImageVector,
 ) {
-  Overview(key = "overview", label = "Home", icon = Icons.Default.Home),
-  Chat(key = "chat", label = "Chat", icon = Icons.Outlined.ChatBubbleOutline),
-  Voice(key = "voice", label = "Voice", icon = Icons.Outlined.MicNone),
-  Sessions(key = "sessions", label = "Sessions", icon = Icons.Outlined.AccessTime),
-  Settings(key = "settings", label = "Settings", icon = Icons.Outlined.Settings),
-  ProvidersModels(key = "providers-models", label = "Providers", icon = Icons.Outlined.Inventory2),
-  Files(key = "files", label = "Files", icon = Icons.Outlined.Folder),
+  Overview(key = "overview", label = nativeText("Home"), icon = Icons.Default.Home),
+  Chat(key = "chat", label = nativeText("Chat"), icon = Icons.Outlined.ChatBubbleOutline),
+  Voice(key = "voice", label = nativeText("Voice"), icon = Icons.Outlined.MicNone),
+  Sessions(key = "sessions", label = nativeText("Sessions"), icon = Icons.Outlined.AccessTime),
+  Settings(key = "settings", label = nativeText("Settings"), icon = Icons.Outlined.Settings),
+  ProvidersModels(key = "providers-models", label = nativeText("Providers"), icon = Icons.Outlined.Inventory2),
+  Files(key = "files", label = nativeText("Files"), icon = Icons.Outlined.Folder),
 }
 
 private val shellNavTabs = listOf(Tab.Overview, Tab.Chat, Tab.Voice, Tab.Settings)
@@ -219,7 +224,7 @@ fun ShellScreen(
           ClawBottomNav(
             items =
               shellNavTabs.map {
-                ClawNavItem(key = it.key, label = nativeString(it.label), icon = it.icon)
+                ClawNavItem(key = it.key, label = it.label.resolveNativeTextResource(), icon = it.icon)
               },
             selectedKey = if (nav.activeTab in shellNavTabs) nav.activeTab.key else Tab.Overview.key,
             onSelect = { key ->
@@ -780,7 +785,7 @@ private fun OverviewStateChip(
       modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
       verticalArrangement = Arrangement.spacedBy(1.dp),
     ) {
-      Text(text = label.uppercase(), style = ClawTheme.type.caption.copy(fontSize = 10.5.sp, lineHeight = 13.sp), color = ClawTheme.colors.textSubtle, maxLines = 1)
+      Text(text = localizedUppercase(label, currentAppLanguage().languageTag), style = ClawTheme.type.caption.copy(fontSize = 10.5.sp, lineHeight = 13.sp), color = ClawTheme.colors.textSubtle, maxLines = 1)
       Text(text = value, style = ClawTheme.type.caption.copy(fontSize = 14.sp, lineHeight = 17.sp), color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
   }
@@ -1188,7 +1193,7 @@ private fun agentInitials(name: String): String =
     .split(' ', '-', '_')
     .filter { it.isNotBlank() }
     .take(2)
-    .mapNotNull { it.firstOrNull()?.uppercaseChar()?.toString() }
+    .mapNotNull { part -> part.firstOrNull()?.let { localizedUppercase(it.toString(), currentAppLanguage().languageTag) } }
     .joinToString("")
     .ifBlank { "OC" }
 
@@ -1386,7 +1391,7 @@ internal fun overviewRecentSessionRows(
         key = session.key,
         title = title,
         source = sessionSourceLabel(session.key, channelsSummary),
-        metadata = (session.lastActivityAt ?: session.updatedAtMs)?.let(::relativeSessionTime) ?: "",
+        metadata = (session.lastActivityAt ?: session.updatedAtMs)?.let(::overviewRelativeSessionTime) ?: "",
       )
     }
 
@@ -1604,21 +1609,21 @@ private fun SettingsShellScreen(
       val settingsRows =
         listOf(
           SettingsRow(
-            "Gateway",
-            gatewaySummary(gatewayConnectionDisplay),
+            nativeText("Gateway"),
+            verbatimText(gatewaySummary(gatewayConnectionDisplay)),
             Icons.Default.Cloud,
             status = gatewayConnectionDisplay.isConnected,
             route = SettingsRoute.Gateway,
           ),
-          SettingsRow("Nodes & Devices", nodesDevicesSummaryText(nodesDevicesSummary), Icons.Default.Cloud, status = nodesDevicesStatus(nodesDevicesSummary), route = SettingsRoute.NodesDevices),
-          SettingsRow("Channels", channelsSummaryText(channelsSummary), Icons.Default.Notifications, status = channelsStatus(channelsSummary), route = SettingsRoute.Channels),
-          SettingsRow("Agents", if (agents.isEmpty()) nativeString("Load from gateway") else nativeString("\${agents.size} available", agents.size), Icons.Default.Person, status = agents.isNotEmpty(), route = SettingsRoute.Agents),
+          SettingsRow(nativeText("Nodes & Devices"), verbatimText(nodesDevicesSummaryText(nodesDevicesSummary)), Icons.Default.Cloud, status = nodesDevicesStatus(nodesDevicesSummary), route = SettingsRoute.NodesDevices),
+          SettingsRow(nativeText("Channels"), verbatimText(channelsSummaryText(channelsSummary)), Icons.Default.Notifications, status = channelsStatus(channelsSummary), route = SettingsRoute.Channels),
+          SettingsRow(nativeText("Agents"), if (agents.isEmpty()) nativeText("Load from gateway") else nativeText("\${agents.size} available", agents.size), Icons.Default.Person, status = agents.isNotEmpty(), route = SettingsRoute.Agents),
           SettingsRow(
-            "Providers & Models",
+            nativeText("Providers & Models"),
             when {
-              readyProviderCount > 0 -> nativeString("\$readyProviderCount ready", readyProviderCount)
-              unknownProviderCount > 0 -> nativeString("Availability unknown")
-              else -> nativeString("Review readiness")
+              readyProviderCount > 0 -> nativeText("\$readyProviderCount ready", readyProviderCount)
+              unknownProviderCount > 0 -> nativeText("Availability unknown")
+              else -> nativeText("Review readiness")
             },
             Icons.Outlined.Inventory2,
             status =
@@ -1630,31 +1635,34 @@ private fun SettingsShellScreen(
               },
             route = SettingsRoute.ProvidersModels,
           ),
-          SettingsRow("Approvals", approvalsSummary(pendingApprovalsCount), Icons.Default.Lock, status = approvalsStatus(pendingApprovalsCount), route = SettingsRoute.Approvals),
-          SettingsRow("Cron Jobs", cronJobsSummary(cronStatus.jobs), Icons.Outlined.AccessTime, status = if (cronStatus.jobs > 0) cronStatus.enabled else null, route = SettingsRoute.CronJobs),
-          SettingsRow("Usage", usageSummaryText(usageSummary.providers.size), Icons.Default.Storage, status = if (usageSummary.providers.isNotEmpty()) true else null, route = SettingsRoute.Usage),
-          SettingsRow("Skills", skillsSummaryText(skillsSummary.skills), Icons.Default.Settings, status = skillsStatus(skillsSummary.skills), route = SettingsRoute.Skills),
+          SettingsRow(nativeText("Approvals"), verbatimText(approvalsSummary(pendingApprovalsCount)), Icons.Default.Lock, status = approvalsStatus(pendingApprovalsCount), route = SettingsRoute.Approvals),
+          SettingsRow(nativeText("Cron Jobs"), verbatimText(cronJobsSummary(cronStatus.jobs)), Icons.Outlined.AccessTime, status = if (cronStatus.jobs > 0) cronStatus.enabled else null, route = SettingsRoute.CronJobs),
+          SettingsRow(nativeText("Usage"), verbatimText(usageSummaryText(usageSummary.providers.size)), Icons.Default.Storage, status = if (usageSummary.providers.isNotEmpty()) true else null, route = SettingsRoute.Usage),
+          SettingsRow(nativeText("Skills"), verbatimText(skillsSummaryText(skillsSummary.skills)), Icons.Default.Settings, status = skillsStatus(skillsSummary.skills), route = SettingsRoute.Skills),
           SettingsRow(
-            "Skill Workshop",
-            skillWorkshopSummaryText(skillWorkshopSummary),
+            nativeText("Skill Workshop"),
+            verbatimText(skillWorkshopSummaryText(skillWorkshopSummary)),
             Icons.Default.Settings,
             status = skillWorkshopStatus(skillWorkshopSummary),
             route = SettingsRoute.SkillWorkshop,
           ),
-          SettingsRow("Dreaming", dreamingSummaryText(dreamingSummary), Icons.Default.Storage, status = dreamingStatus(dreamingSummary), route = SettingsRoute.Dreaming),
-          SettingsRow("Terminal", nativeString("Shell in the agent workspace"), Icons.Outlined.Terminal, status = isConnected, route = SettingsRoute.Terminal),
-          SettingsRow("Voice", if (speakerEnabled) nativeString("Speaker on") else nativeString("Speaker muted"), Icons.Default.Mic, route = SettingsRoute.Voice),
-          SettingsRow("Canvas", nativeString("Screen surface"), Icons.AutoMirrored.Filled.ScreenShare, status = isConnected, route = SettingsRoute.Canvas),
-          SettingsRow("Notifications", if (notificationForwardingEnabled) nativeString("Smart delivery") else nativeString("Off"), Icons.Default.Notifications, route = SettingsRoute.Notifications),
-          SettingsRow("Phone Capabilities", if (cameraEnabled) nativeString("Camera enabled") else nativeString("Locked"), Icons.Default.Lock, status = !cameraEnabled, route = SettingsRoute.PhoneCapabilities),
+          SettingsRow(nativeText("Dreaming"), verbatimText(dreamingSummaryText(dreamingSummary)), Icons.Default.Storage, status = dreamingStatus(dreamingSummary), route = SettingsRoute.Dreaming),
+          SettingsRow(nativeText("Terminal"), nativeText("Shell in the agent workspace"), Icons.Outlined.Terminal, status = isConnected, route = SettingsRoute.Terminal),
+          SettingsRow(nativeText("Voice"), if (speakerEnabled) nativeText("Speaker on") else nativeText("Speaker muted"), Icons.Default.Mic, route = SettingsRoute.Voice),
+          SettingsRow(nativeText("Canvas"), nativeText("Screen surface"), Icons.AutoMirrored.Filled.ScreenShare, status = isConnected, route = SettingsRoute.Canvas),
+          SettingsRow(nativeText("Notifications"), if (notificationForwardingEnabled) nativeText("Smart delivery") else nativeText("Off"), Icons.Default.Notifications, route = SettingsRoute.Notifications),
+          SettingsRow(nativeText("Phone Capabilities"), if (cameraEnabled) nativeText("Camera enabled") else nativeText("Locked"), Icons.Default.Lock, status = !cameraEnabled, route = SettingsRoute.PhoneCapabilities),
           SettingsRow(
-            "Appearance",
-            "${appearanceThemeSummary(appearanceThemeMode)} · ${appLanguage.displayName}",
+            nativeText("Appearance"),
+            joinedNativeText(
+              separator = " · ",
+              parts = listOf(verbatimText(appearanceThemeSummary(appearanceThemeMode)), verbatimText(appLanguage.displayName)),
+            ),
             Icons.Default.Palette,
             route = SettingsRoute.Appearance,
           ),
-          SettingsRow("About", nativeString("Version and update"), Icons.Default.Storage, route = SettingsRoute.About),
-          SettingsRow("Health", nativeString("Diagnostics"), Icons.Default.Settings, status = isConnected, route = SettingsRoute.Health),
+          SettingsRow(nativeText("About"), nativeText("Version and update"), Icons.Default.Storage, route = SettingsRoute.About),
+          SettingsRow(nativeText("Health"), nativeText("Diagnostics"), Icons.Default.Settings, status = isConnected, route = SettingsRoute.Health),
         )
 
       settingsSections(settingsRows).forEach { section ->
@@ -1667,22 +1675,22 @@ private fun SettingsShellScreen(
       }
 
       item {
-        SettingsSectionTitle("Account")
+        SettingsSectionTitle(nativeText("Account"))
       }
       item {
         SettingsGroup(
-          rows = listOf(SettingsRow("Sign Out", nativeString("Return to setup"), Icons.AutoMirrored.Filled.ExitToApp)),
+          rows = listOf(SettingsRow(nativeText("Sign Out"), nativeText("Return to setup"), Icons.AutoMirrored.Filled.ExitToApp)),
           onOpen = { },
           onAction = { viewModel.pairNewGateway() },
         )
       }
 
       item {
-        SettingsSectionTitle("Licenses")
+        SettingsSectionTitle(nativeText("Licenses"))
       }
       item {
         SettingsGroup(
-          rows = listOf(SettingsRow("Licenses", "", Icons.Default.Storage, route = SettingsRoute.Licenses)),
+          rows = listOf(SettingsRow(nativeText("Licenses"), verbatimText(""), Icons.Default.Storage, route = SettingsRoute.Licenses)),
           onOpen = onRouteChange,
         )
       }
@@ -1841,15 +1849,15 @@ private fun dreamingStatus(summary: GatewayDreamingSummary): Boolean? =
   }
 
 internal data class SettingsRow(
-  val title: String,
-  val value: String,
+  val title: NativeText,
+  val value: NativeText,
   val icon: ImageVector,
   val status: Boolean? = null,
   val route: SettingsRoute? = null,
 )
 
 internal data class SettingsSection(
-  val title: String,
+  val title: NativeText,
   val rows: List<SettingsRow>,
 )
 
@@ -1861,19 +1869,19 @@ internal fun settingsSections(rows: List<SettingsRow>): List<SettingsSection> =
 
 private val settingsSectionOrder =
   listOf(
-    "Connection",
-    "Agents & automation",
-    "Phone context & privacy",
-    "Profile & device",
-    "Diagnostics",
+    nativeText("Connection"),
+    nativeText("Agents & automation"),
+    nativeText("Phone context & privacy"),
+    nativeText("Profile & device"),
+    nativeText("Diagnostics"),
   )
 
-internal fun settingsSectionTitleForRoute(route: SettingsRoute): String =
+internal fun settingsSectionTitleForRoute(route: SettingsRoute): NativeText =
   when (route) {
     SettingsRoute.Gateway,
     SettingsRoute.NodesDevices,
     SettingsRoute.Channels,
-    -> "Connection"
+    -> nativeText("Connection")
 
     SettingsRoute.Agents,
     SettingsRoute.ProvidersModels,
@@ -1884,27 +1892,27 @@ internal fun settingsSectionTitleForRoute(route: SettingsRoute): String =
     SettingsRoute.SkillWorkshop,
     SettingsRoute.Dreaming,
     SettingsRoute.Terminal,
-    -> "Agents & automation"
+    -> nativeText("Agents & automation")
 
     SettingsRoute.Voice,
     SettingsRoute.Canvas,
     SettingsRoute.Notifications,
     SettingsRoute.PhoneCapabilities,
-    -> "Phone context & privacy"
+    -> nativeText("Phone context & privacy")
 
     SettingsRoute.Profile,
     SettingsRoute.Appearance,
     SettingsRoute.About,
     SettingsRoute.Licenses,
-    -> "Profile & device"
+    -> nativeText("Profile & device")
 
-    SettingsRoute.Health -> "Diagnostics"
-    SettingsRoute.Home -> "Diagnostics"
+    SettingsRoute.Health -> nativeText("Diagnostics")
+    SettingsRoute.Home -> nativeText("Diagnostics")
   }
 
 @Composable
-private fun SettingsSectionTitle(title: String) {
-  val localizedTitle = nativeString(title)
+private fun SettingsSectionTitle(title: NativeText) {
+  val localizedTitle = title.resolveNativeTextResource()
   Text(
     text = localizedUppercase(localizedTitle, currentAppLanguage().languageTag),
     style = ClawTheme.type.caption.copy(fontSize = 12.sp, lineHeight = 16.sp),
@@ -1935,7 +1943,11 @@ private fun ProfilePanel(
       ) {
         Box(contentAlignment = Alignment.Center) {
           Text(
-            text = displayName.firstOrNull()?.uppercase() ?: "O",
+            text =
+              displayName
+                .firstOrNull()
+                ?.let { localizedUppercase(it.toString(), currentAppLanguage().languageTag) }
+                ?: "O",
             style = ClawTheme.type.title.copy(fontSize = 14.sp, lineHeight = 17.sp),
             color = ClawTheme.colors.text,
             textAlign = TextAlign.Center,
@@ -1991,7 +2003,8 @@ private fun SettingsListRow(
   showDisclosure: Boolean,
   onClick: () -> Unit,
 ) {
-  val localizedTitle = nativeString(row.title)
+  val localizedTitle = row.title.resolveNativeTextResource()
+  val localizedValue = row.value.resolveNativeTextResource()
   Row(
     modifier =
       Modifier
@@ -2006,8 +2019,8 @@ private fun SettingsListRow(
     Icon(imageVector = row.icon, contentDescription = null, modifier = Modifier.size(20.dp), tint = ClawTheme.colors.text)
     Text(text = localizedTitle, style = ClawTheme.type.body, color = ClawTheme.colors.text, modifier = Modifier.weight(1f), maxLines = 1)
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-      if (row.value.isNotBlank()) {
-        Text(text = row.value, style = ClawTheme.type.caption.copy(fontSize = 13.sp, lineHeight = 17.sp), color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+      if (localizedValue.isNotBlank()) {
+        Text(text = localizedValue, style = ClawTheme.type.caption.copy(fontSize = 13.sp, lineHeight = 17.sp), color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
       }
       row.status?.let { active ->
         Box(modifier = Modifier.size(4.5.dp).clip(CircleShape).background(if (active) ClawTheme.colors.success else ClawTheme.colors.textSubtle))
@@ -2029,14 +2042,18 @@ internal fun settingsRowDisclosureDescription(
   opensRoute: Boolean,
 ): String = if (opensRoute) nativeString("Open \${row.title}", localizedTitle) else localizedTitle
 
-private fun relativeSessionTime(updatedAtMs: Long): String {
-  val deltaMs = (System.currentTimeMillis() - updatedAtMs).coerceAtLeast(0L)
+private fun overviewRelativeSessionTime(
+  updatedAtMs: Long,
+  nowMs: Long = System.currentTimeMillis(),
+): String {
+  val deltaMs = (nowMs - updatedAtMs).coerceAtLeast(0L)
   val minutes = deltaMs / 60_000L
   if (minutes < 1) return nativeString("now")
-  if (minutes < 60) return "${minutes}m"
+  if (minutes < 60) return nativeString("\${minutes}m", minutes)
   val hours = minutes / 60
-  if (hours < 24) return "${hours}h"
-  return "${hours / 24}d"
+  if (hours < 24) return nativeString("\${hours}h", hours)
+  val days = hours / 24
+  return nativeString("\${days}d", days)
 }
 
 private fun displaySessionTitle(displayName: String?): String = displayName?.takeIf { it.isNotBlank() } ?: nativeString("Main session")

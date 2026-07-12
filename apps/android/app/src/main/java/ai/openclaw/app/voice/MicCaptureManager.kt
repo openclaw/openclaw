@@ -363,13 +363,21 @@ internal class MicCaptureManager(
         completePendingTurn()
       }
       "error" -> {
-        val errorMessage =
+        val gatewayError =
           payload["errorMessage"]
             .asStringOrNull()
             ?.trim()
             .orEmpty()
-            .ifEmpty { "Voice request failed" }
-        upsertPendingAssistant(text = errorMessage, isStreaming = false)
+        if (gatewayError.isNotEmpty()) {
+          upsertPendingAssistant(text = gatewayError, isStreaming = false)
+        } else {
+          val failure = nativeText("Voice request failed")
+          upsertPendingAssistant(
+            text = failure.resolveNativeText(),
+            isStreaming = false,
+            localizedSource = failure.source,
+          )
+        }
         completePendingTurn()
       }
       "aborted" -> {
@@ -651,9 +659,15 @@ internal class MicCaptureManager(
 
     val entry = current[targetIndex]
     val updatedText = text ?: entry.text
-    if (updatedText == entry.text && entry.isStreaming == isStreaming && entry.localizedSource == localizedSource) return
+    val updatedLocalizedSource =
+      if (text == null && localizedSource == null) {
+        entry.localizedSource
+      } else {
+        localizedSource
+      }
+    if (updatedText == entry.text && entry.isStreaming == isStreaming && entry.localizedSource == updatedLocalizedSource) return
     val updated = current.toMutableList()
-    updated[targetIndex] = entry.copy(text = updatedText, isStreaming = isStreaming, localizedSource = localizedSource)
+    updated[targetIndex] = entry.copy(text = updatedText, isStreaming = isStreaming, localizedSource = updatedLocalizedSource)
     _conversation.value = updated
   }
 
