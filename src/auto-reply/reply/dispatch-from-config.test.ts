@@ -731,6 +731,8 @@ let replyRunTesting: typeof import("./reply-run-registry.js").__testing;
 let admitReplyTurn: typeof import("./reply-turn-admission.js").admitReplyTurn;
 let runWithReplyOperationLifecycleAdmission: typeof import("./reply-turn-admission.js").runWithReplyOperationLifecycleAdmission;
 let clearOperationalReplyPolicyStateForTest: typeof import("./operational-reply-policy.js").clearOperationalReplyPolicyStateForTest;
+let applyOperationalReplyPolicy: typeof import("./operational-reply-policy.js").applyOperationalReplyPolicy;
+let markOperationalReplyPolicyDelivered: typeof import("./operational-reply-policy.js").markOperationalReplyPolicyDelivered;
 type DispatchReplyArgs = Parameters<
   typeof import("./dispatch-from-config.js").dispatchReplyFromConfig
 >[0];
@@ -751,7 +753,11 @@ beforeAll(async () => {
   } = await import("./reply-run-registry.js"));
   ({ admitReplyTurn, runWithReplyOperationLifecycleAdmission } =
     await import("./reply-turn-admission.js"));
-  ({ clearOperationalReplyPolicyStateForTest } = await import("./operational-reply-policy.js"));
+  ({
+    applyOperationalReplyPolicy,
+    clearOperationalReplyPolicyStateForTest,
+    markOperationalReplyPolicyDelivered,
+  } = await import("./operational-reply-policy.js"));
 });
 
 function createDispatcher(): ReplyDispatcher {
@@ -13601,6 +13607,94 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(persistedOnceKeys).toEqual([expect.any(String)]);
     expect(second.queuedFinal).toBe(false);
     expect(secondDispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("keeps pending operational once reservations from shrinking delivered history", async () => {
+    setNoAbort();
+    const existingKeys = Array.from({ length: 1024 }, (_value, index) => `existing-${index}`);
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s-once-pending-bounded",
+      updatedAt: 0,
+      sendPolicy: "allow",
+      operationalReplyOnceKeys: existingKeys,
+    };
+    const cfg = {
+      messages: {
+        operationalReplies: { policy: "once" },
+      },
+    } satisfies OpenClawConfig;
+    const applyPolicy = (text: string) =>
+      applyOperationalReplyPolicy({
+        cfg,
+        payload: setReplyPayloadMetadata(
+          { text },
+          { deliverDespiteSourceReplySuppression: true },
+        ),
+        explicitCommandTurn: false,
+        sendPolicyDenied: false,
+        sourceChannel: "visiblechat",
+        sourceEventKey: "event-1",
+        sourceSessionKey: "test:once-pending-bounded",
+        sourceStorePath: "/tmp/mock-sessions.json",
+      });
+
+    const succeeds = await applyPolicy("successful pending-window notice");
+    const fails = await applyPolicy("failed pending-window notice");
+
+    expect(succeeds.shouldDeliver).toBe(true);
+    expect(fails.shouldDeliver).toBe(true);
+
+    await markOperationalReplyPolicyDelivered(succeeds, true);
+    await markOperationalReplyPolicyDelivered(fails, false);
+
+    const persistedKeys =
+      (sessionStoreMocks.currentEntry?.operationalReplyOnceKeys as string[] | undefined) ?? [];
+
+    expect(persistedKeys).toHaveLength(1024);
+    expect(persistedKeys[0]).toBe("existing-1");
+    expect(persistedKeys).toContain("existing-1023");
+    expect(persistedKeys.at(-1)).not.toMatch(/^existing-/);
+  });
+
+  it("bounds operational once state to recent delivered notices", async () => {
+    setNoAbort();
+    const existingKeys = Array.from({ length: 1025 }, (_value, index) => `existing-${index}`);
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s-once-bounded",
+      updatedAt: 0,
+      sendPolicy: "allow",
+      operationalReplyOnceKeys: existingKeys,
+    };
+    const dispatcher = createDispatcher();
+    const notice = setReplyPayloadMetadata(
+      { text: "usage limit reached bounded once policy proof" },
+      { deliverDespiteSourceReplySuppression: true },
+    );
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ SessionKey: "test:once-bounded" }),
+      cfg: {
+        messages: {
+          operationalReplies: { policy: "once" },
+        },
+      },
+      dispatcher,
+      replyResolver: vi.fn(async () => notice satisfies ReplyPayload),
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
+
+    const persistedKeys =
+      (sessionStoreMocks.currentEntry?.operationalReplyOnceKeys as string[] | undefined) ?? [];
+
+    expect(result.queuedFinal).toBe(true);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+    expect(persistedKeys).toHaveLength(1024);
+    expect(persistedKeys).not.toContain("existing-0");
+    expect(persistedKeys[0]).toBe("existing-2");
+    expect(persistedKeys.at(-2)).toBe("existing-1024");
+    expect(persistedKeys.at(-1)).not.toMatch(/^existing-/);
   });
 
   it("redirects operational notices to the configured session", async () => {

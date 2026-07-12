@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { loadSessionStore, type SessionEntry } from "../../config/sessions.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import {
   applyOperationalReplyPolicy,
@@ -55,6 +55,20 @@ function applyOncePolicy(params: {
     sourceStorePath: params.storePath,
     sourceEventKey: "event-1",
     sourceChannel: "visiblechat",
+  });
+}
+
+function applyMemoryOncePolicy(text: string) {
+  return applyOperationalReplyPolicy({
+    cfg: onceConfig(),
+    payload: markReplyPayloadForSourceSuppressionDelivery({
+      text,
+      isError: true,
+    }),
+    explicitCommandTurn: false,
+    sendPolicyDenied: false,
+    sourceChannel: "visiblechat",
+    sourceEventKey: "event-1",
   });
 }
 
@@ -113,26 +127,15 @@ describe("operational reply policy", () => {
     expect(duplicateAfterSuccess.shouldDeliver).toBe(false);
   });
 
-  it("keeps durable once keys for the session lifetime", async () => {
-    const existingKeys = Array.from({ length: 1025 }, (_value, index) => `existing-${index}`);
-    const { sessionKey, storePath } = await createSessionStoreFixture({
-      operationalReplyOnceKeys: existingKeys,
-    });
-    const cfg = onceConfig(storePath);
+  it("bounds in-memory once keys to the same recent delivered window", async () => {
+    for (let index = 0; index < 1025; index += 1) {
+      const result = await applyMemoryOncePolicy(`memory bounded notice ${index}`);
+      expect(result.shouldDeliver).toBe(true);
+      await markOperationalReplyPolicyDelivered(result, true);
+    }
 
-    const result = await applyOncePolicy({
-      cfg,
-      sessionKey,
-      storePath,
-      text: "new durable notice",
-    });
-    await markOperationalReplyPolicyDelivered(result, true);
+    const firstAgain = await applyMemoryOncePolicy("memory bounded notice 0");
 
-    const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
-
-    expect(persisted?.operationalReplyOnceKeys?.slice(0, existingKeys.length)).toEqual(
-      existingKeys,
-    );
-    expect(persisted?.operationalReplyOnceKeys).toHaveLength(existingKeys.length + 1);
+    expect(firstAgain.shouldDeliver).toBe(true);
   });
 });

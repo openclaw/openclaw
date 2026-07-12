@@ -17,6 +17,8 @@ import {
 } from "../reply-payload.js";
 
 const deliveredOperationalReplyOnceKeys = new Set<string>();
+const pendingOperationalReplyOnceKeys = new Set<string>();
+const MAX_OPERATIONAL_REPLY_ONCE_KEYS = 1024;
 
 export type OperationalReplyPolicy = "always" | "once" | "redirect" | "silent";
 
@@ -35,6 +37,7 @@ export async function markOperationalReplyPolicyDelivered(
 
 export function clearOperationalReplyPolicyStateForTest(): void {
   deliveredOperationalReplyOnceKeys.clear();
+  pendingOperationalReplyOnceKeys.clear();
 }
 
 export function resolveOperationalReplyPolicy(cfg: OpenClawConfig): {
@@ -132,20 +135,33 @@ function createOperationalReplyRedirectKey(params: {
     .digest("hex");
 }
 
-function rememberOperationalReplyOnceKey(key: string): boolean {
-  if (deliveredOperationalReplyOnceKeys.has(key)) {
+function reserveOperationalReplyOnceKeyInMemory(key: string): boolean {
+  if (hasOperationalReplyOnceKey(key)) {
     return false;
   }
-  deliveredOperationalReplyOnceKeys.add(key);
+  pendingOperationalReplyOnceKeys.add(key);
   return true;
 }
 
-function forgetOperationalReplyOnceKey(key: string): void {
+function releaseOperationalReplyOnceKeyInMemory(key: string): void {
+  pendingOperationalReplyOnceKeys.delete(key);
+}
+
+function markOperationalReplyOnceKeyDeliveredInMemory(key: string): void {
+  pendingOperationalReplyOnceKeys.delete(key);
   deliveredOperationalReplyOnceKeys.delete(key);
+  deliveredOperationalReplyOnceKeys.add(key);
+  while (deliveredOperationalReplyOnceKeys.size > MAX_OPERATIONAL_REPLY_ONCE_KEYS) {
+    const oldestKey = deliveredOperationalReplyOnceKeys.values().next().value;
+    if (!oldestKey) {
+      return;
+    }
+    deliveredOperationalReplyOnceKeys.delete(oldestKey);
+  }
 }
 
 function hasOperationalReplyOnceKey(key: string): boolean {
-  return deliveredOperationalReplyOnceKeys.has(key);
+  return deliveredOperationalReplyOnceKeys.has(key) || pendingOperationalReplyOnceKeys.has(key);
 }
 
 function normalizeOperationalReplyOnceKeys(
@@ -155,6 +171,31 @@ function normalizeOperationalReplyOnceKeys(
     return [];
   }
   return value.filter((key): key is string => typeof key === "string" && key.trim().length > 0);
+}
+
+function appendOperationalReplyOnceKey(keys: readonly string[], key: string): string[] {
+  return [...keys, key];
+}
+
+function boundOperationalReplyOnceKeys(keys: readonly string[]): string[] {
+  return keys.slice(-MAX_OPERATIONAL_REPLY_ONCE_KEYS);
+}
+
+function arraysEqual(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function finalizeOperationalReplyOnceKeys(params: {
+  keys: readonly string[];
+  deliveredKey: string;
+}): string[] {
+  const stillPendingKeys = new Set(pendingOperationalReplyOnceKeys);
+  stillPendingKeys.delete(params.deliveredKey);
+  const pendingKeys = params.keys.filter((key) => stillPendingKeys.has(key));
+  const deliveredKeys = params.keys.filter(
+    (key) => key !== params.deliveredKey && !stillPendingKeys.has(key),
+  );
+  return [...boundOperationalReplyOnceKeys([...deliveredKeys, params.deliveredKey]), ...pendingKeys];
 }
 
 function resolveOperationalReplySourceScope(params: {
@@ -202,14 +243,14 @@ async function reserveOperationalReplyOnceKey(params: {
   }
   const scope = resolveOperationalReplySourceScope(params);
   if (!scope) {
-    return rememberOperationalReplyOnceKey(params.key)
+    return reserveOperationalReplyOnceKeyInMemory(params.key)
       ? { durableReserved: false, key: params.key }
       : null;
   }
   try {
     let reserved = false;
     let alreadySeen = false;
-    const entry = await patchSessionEntry(
+    const persistedEntry = await patchSessionEntry(
       scope,
       (entry) => {
         const keys = normalizeOperationalReplyOnceKeys(entry.operationalReplyOnceKeys);
@@ -218,23 +259,23 @@ async function reserveOperationalReplyOnceKey(params: {
           return null;
         }
         reserved = true;
-        return { operationalReplyOnceKeys: [...keys, params.key] };
+        return { operationalReplyOnceKeys: appendOperationalReplyOnceKey(keys, params.key) };
       },
       { preserveActivity: true },
     );
     if (alreadySeen) {
       return null;
     }
-    if (reserved && entry) {
-      rememberOperationalReplyOnceKey(params.key);
+    if (reserved && persistedEntry) {
+      reserveOperationalReplyOnceKeyInMemory(params.key);
       return { durableReserved: true, key: params.key, scope };
     }
-    return rememberOperationalReplyOnceKey(params.key)
+    return reserveOperationalReplyOnceKeyInMemory(params.key)
       ? { durableReserved: false, key: params.key }
       : null;
   } catch (error) {
     logVerbose(`operational-reply-policy: once persistence skipped: ${formatErrorMessage(error)}`);
-    return rememberOperationalReplyOnceKey(params.key)
+    return reserveOperationalReplyOnceKeyInMemory(params.key)
       ? { durableReserved: false, key: params.key }
       : null;
   }
@@ -243,7 +284,7 @@ async function reserveOperationalReplyOnceKey(params: {
 async function releaseOperationalReplyOnceReservation(
   reservation: OperationalReplyOnceReservation,
 ): Promise<void> {
-  forgetOperationalReplyOnceKey(reservation.key);
+  releaseOperationalReplyOnceKeyInMemory(reservation.key);
   if (!reservation.durableReserved || !reservation.scope) {
     return;
   }
@@ -265,6 +306,36 @@ async function releaseOperationalReplyOnceReservation(
   } catch (error) {
     logVerbose(
       `operational-reply-policy: once reservation release skipped: ${formatErrorMessage(error)}`,
+    );
+  }
+}
+
+async function finalizeOperationalReplyOnceReservation(
+  reservation: OperationalReplyOnceReservation,
+): Promise<void> {
+  markOperationalReplyOnceKeyDeliveredInMemory(reservation.key);
+  if (!reservation.durableReserved || !reservation.scope) {
+    return;
+  }
+  try {
+    await patchSessionEntry(
+      reservation.scope,
+      (entry) => {
+        const keys = normalizeOperationalReplyOnceKeys(entry.operationalReplyOnceKeys);
+        const nextKeys = finalizeOperationalReplyOnceKeys({
+          deliveredKey: reservation.key,
+          keys,
+        });
+        if (arraysEqual(nextKeys, keys)) {
+          return null;
+        }
+        return { operationalReplyOnceKeys: nextKeys };
+      },
+      { preserveActivity: true },
+    );
+  } catch (error) {
+    logVerbose(
+      `operational-reply-policy: once reservation finalization skipped: ${formatErrorMessage(error)}`,
     );
   }
 }
@@ -430,6 +501,8 @@ export async function applyOperationalReplyPolicy(params: {
       markDelivered: async (delivered) => {
         if (!delivered) {
           await releaseOperationalReplyOnceReservation(reservation);
+        } else {
+          await finalizeOperationalReplyOnceReservation(reservation);
         }
       },
     };

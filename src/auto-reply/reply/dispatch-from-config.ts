@@ -57,7 +57,7 @@ import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/ex
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { normalizeExplicitSessionKey } from "../../config/sessions/explicit-session-key-normalization.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
-import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import { loadSessionEntry, patchSessionEntry } from "../../config/sessions/session-accessor.js";
 import { isRecoverableTerminalSessionStatus } from "../../config/sessions/terminal-status.js";
 import {
   appendAssistantMessageToSessionTranscript,
@@ -1073,7 +1073,7 @@ async function clearPendingFinalDeliveryState(params: {
   if (!params.storePath || !params.sessionKey || (identity && !identity.present)) {
     return;
   }
-  await updateSessionEntry(
+  await patchSessionEntry(
     { storePath: params.storePath, sessionKey: params.sessionKey },
     async (entry) => {
       if (identity && !matchesPendingFinalDeliveryIdentity(entry, identity)) {
@@ -1234,7 +1234,7 @@ async function reconcilePendingFinalDeliveryAfterSettlement(params: {
   if (!params.storePath || !params.sessionKey || !identity?.present) {
     return;
   }
-  await updateSessionEntry(
+  await patchSessionEntry(
     { storePath: params.storePath, sessionKey: params.sessionKey },
     async (entry) => {
       if (!matchesPendingFinalDeliveryIdentity(entry, identity)) {
