@@ -39,9 +39,10 @@ type BrowserTarget = { nodeId: string; label: string };
 
 const WORKTREE_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
-/** Last path segment for the folder trigger label; handles both separators. */
+/** Last path segment for the folder trigger label; handles both separators.
+    Falls back to the raw path so filesystem roots ("/", "C:\") stay visible. */
 function folderDisplayName(path: string): string {
-  return path.split(/[\\/]/).findLast((segment) => segment.length > 0) ?? "";
+  return path.split(/[\\/]/).findLast((segment) => segment.length > 0) ?? path;
 }
 
 class NewSessionPage extends OpenClawLightDomElement {
