@@ -4,6 +4,7 @@ import { clearSlackRuntime, setSlackRuntime } from "../runtime.js";
 import type { SlackMessageEvent } from "../types.js";
 import {
   buildSlackInboundContentVersion,
+  hasNewSlackInboundDeliverableMedia,
   withSlackInboundContentVersion,
 } from "./inbound-delivery-identity.js";
 import {
@@ -136,5 +137,38 @@ describe("slack inbound delivery state", () => {
     expect(buildSlackInboundContentVersion(available)).toBe(
       buildSlackInboundContentVersion(refreshed),
     );
+    expect(hasNewSlackInboundDeliverableMedia(available, pending)).toBe(false);
+    expect(hasNewSlackInboundDeliverableMedia(refreshed, available)).toBe(false);
+  });
+
+  it("distinguishes added deliverable media from removals", () => {
+    const files = [{ id: "F1" }, { id: "F2" }];
+    expect(hasNewSlackInboundDeliverableMedia({ files }, { files: files.slice(0, 1) })).toBe(true);
+    expect(hasNewSlackInboundDeliverableMedia({ files: files.slice(0, 1) }, { files })).toBe(false);
+  });
+
+  it("detects new shared-attachment media without re-delivering removals", () => {
+    const first = {
+      is_share: true,
+      ts: "100.001",
+      files: [{ id: "F1" }],
+    };
+    const second = {
+      is_share: true,
+      ts: "100.002",
+      image_url: "https://files.slack.com/preview",
+    };
+    expect(
+      hasNewSlackInboundDeliverableMedia(
+        { attachments: [first, second] },
+        { attachments: [first] },
+      ),
+    ).toBe(true);
+    expect(
+      hasNewSlackInboundDeliverableMedia(
+        { attachments: [first] },
+        { attachments: [first, second] },
+      ),
+    ).toBe(false);
   });
 });

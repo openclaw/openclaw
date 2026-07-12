@@ -102,15 +102,38 @@ function projectSlackInboundContent(content: SlackInboundContent) {
   };
 }
 
-export function hasSlackInboundDeliverableMedia(content: SlackInboundContent): boolean {
+function collectSlackInboundDeliverableMediaIdentities(content: SlackInboundContent): Set<string> {
   const projection = projectSlackInboundContent(content);
-  return (
-    projection.files.some((file) => file.access !== "missing") ||
-    projection.attachments.some(
-      (attachment) =>
-        attachment.hasImage || attachment.files.some((file) => file.access !== "missing"),
-    )
-  );
+  const identities = new Set<string>();
+  for (const file of projection.files) {
+    if (file.access !== "missing") {
+      identities.add(`file:${file.identity}`);
+    }
+  }
+  for (const attachment of projection.attachments) {
+    if (attachment.hasImage) {
+      identities.add(`attachment:${attachment.identity}:image`);
+    }
+    for (const file of attachment.files) {
+      if (file.access !== "missing") {
+        identities.add(`attachment:${attachment.identity}:file:${file.identity}`);
+      }
+    }
+  }
+  return identities;
+}
+
+export function hasNewSlackInboundDeliverableMedia(
+  next: SlackInboundContent,
+  previous: SlackInboundContent,
+): boolean {
+  const previousIdentities = collectSlackInboundDeliverableMediaIdentities(previous);
+  for (const identity of collectSlackInboundDeliverableMediaIdentities(next)) {
+    if (!previousIdentities.has(identity)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function buildSlackInboundContentVersion(content: SlackInboundContent): string {

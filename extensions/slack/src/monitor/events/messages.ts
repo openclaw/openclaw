@@ -18,7 +18,7 @@ import type { SlackMonitorContext } from "../context.js";
 import { resolveSlackEventScope, type SlackEventScope } from "../event-scope.js";
 import {
   buildSlackInboundContentVersion,
-  hasSlackInboundDeliverableMedia,
+  hasNewSlackInboundDeliverableMedia,
   withSlackInboundContentVersion,
 } from "../inbound-delivery-identity.js";
 import type { SlackMessageHandler } from "../message-handler.js";
@@ -44,6 +44,7 @@ export function formatSlackInboundLogLine(params: {
 
 type SlackAssistantMessageRecord = {
   bot_id?: unknown;
+  username?: unknown;
   user?: unknown;
   text?: unknown;
   ts?: unknown;
@@ -173,7 +174,7 @@ function resolveAssistantMessageChangedInbound(params: {
  * notifications silently drops the user's documents.
  *
  * Promote a user-authored `message_changed` back into the regular message
- * pipeline only when its nested `file_share` carries a new media version.
+ * pipeline only when its nested `file_share` adds deliverable media.
  * Plain edits keep flowing to the system-event path so replies are not
  * re-triggered (see #28834).
  */
@@ -204,14 +205,11 @@ function resolveFileShareMessageChangedInbound(params: {
   if (!senderId || !isSlackUserId(senderId)) {
     return undefined;
   }
-  if (!hasSlackInboundDeliverableMedia(next)) {
-    return undefined;
-  }
   const previous = asRecord(changed.previous_message) as SlackAssistantMessageRecord | undefined;
-  const contentVersion = buildSlackInboundContentVersion(next);
-  if (contentVersion === buildSlackInboundContentVersion(previous ?? {})) {
+  if (!hasNewSlackInboundDeliverableMedia(next, previous ?? {})) {
     return undefined;
   }
+  const contentVersion = buildSlackInboundContentVersion(next);
   const channelType = normalizeSlackChannelType(
     asString((changed as SlackMessageChangedEvent & { channel_type?: unknown }).channel_type),
     changed.channel,
@@ -223,6 +221,8 @@ function resolveFileShareMessageChangedInbound(params: {
       channel: changed.channel ?? params.event.channel,
       ...(channelType ? { channel_type: channelType } : {}),
       user: senderId,
+      bot_id: asString(next.bot_id),
+      username: asString(next.username),
       text: asString(next.text),
       ts: asString(next.ts) ?? asString(changed.event_ts),
       thread_ts: asString(next.thread_ts),

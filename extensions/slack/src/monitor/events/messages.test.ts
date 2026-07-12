@@ -496,6 +496,8 @@ describe("registerSlackMessageEvents", () => {
     text?: string;
     previousText?: string;
     subtype?: "file_share" | null;
+    botId?: string;
+    username?: string;
   }) {
     const user = overrides?.user ?? "U1";
     return {
@@ -508,6 +510,8 @@ describe("registerSlackMessageEvents", () => {
         ...(overrides?.subtype === null ? {} : { subtype: overrides?.subtype ?? "file_share" }),
         ts: "123.456",
         user,
+        ...(overrides?.botId ? { bot_id: overrides.botId } : {}),
+        ...(overrides?.username ? { username: overrides.username } : {}),
         text: overrides?.text ?? "please review these",
         files: overrides?.files ?? [
           { id: "F1", name: "packing-slip-1.pdf" },
@@ -631,6 +635,27 @@ describe("registerSlackMessageEvents", () => {
     expect(promoted.files?.map((file) => file.id)).toEqual(["F1", "F2"]);
   });
 
+  it("preserves bot attribution on a promoted subtype-less file finalization", async () => {
+    const { handler, handleSlackMessage } = createHandlers("message", { dmPolicy: "open" });
+    await requireMessageHandler(handler)({
+      event: makeFileShareChangedEvent({
+        subtype: null,
+        botId: "B_OTHER",
+        username: "file integration",
+      }),
+      body: {},
+    });
+
+    expect(handleSlackMessage).toHaveBeenCalledOnce();
+    const [promoted] = handleSlackMessage.mock.calls[0] as unknown as [
+      { bot_id?: string; username?: string },
+    ];
+    expect(promoted).toMatchObject({
+      bot_id: "B_OTHER",
+      username: "file integration",
+    });
+  });
+
   it("promotes a Slack Connect file-access placeholder for files.info hydration", async () => {
     const { handler, handleSlackMessage } = createHandlers("message", { dmPolicy: "open" });
     await requireMessageHandler(handler)({
@@ -690,6 +715,23 @@ describe("registerSlackMessageEvents", () => {
         previousFiles: [{ id: "F1", name: "packing-slip-1.pdf" }],
         text: "edited caption",
         previousText: "original caption",
+      }),
+      body: {},
+    });
+
+    expect(handleSlackMessage).not.toHaveBeenCalled();
+    expect(messageQueueMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not promote a file_share message_changed when media was only removed", async () => {
+    const { handler, handleSlackMessage } = createHandlers("message", { dmPolicy: "open" });
+    await requireMessageHandler(handler)({
+      event: makeFileShareChangedEvent({
+        files: [{ id: "F1", name: "packing-slip-1.pdf" }],
+        previousFiles: [
+          { id: "F1", name: "packing-slip-1.pdf" },
+          { id: "F2", name: "packing-slip-2.pdf" },
+        ],
       }),
       body: {},
     });
