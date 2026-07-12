@@ -293,6 +293,7 @@ describe("signal createSignalEventHandler inbound context", () => {
     const context = requireCapturedContext();
     expect(context.MessageSid).toBe("1700000000999");
     expect(context.ReplyToId).toBe("1700000000002");
+    expect(context.Timestamp).toBe(1700000000999);
     await expect(
       resolveSignalReplyContextWithPersistence({
         accountId: "default",

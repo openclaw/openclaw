@@ -68,7 +68,7 @@ describe("signalMessageActions", () => {
     expect(signalMessageActions.supportsAction?.({ action: "pin" })).toBe(false);
   });
 
-  it("preserves the Signal reply id alias for durable send delivery", async () => {
+  it("keeps inherited Signal reply ids in the durable delivery context", async () => {
     const prepared = await signalMessageActions.prepareSendPayload?.({
       ctx: {
         channel: "signal",
@@ -81,7 +81,7 @@ describe("signalMessageActions", () => {
       replyToId: "1700000000001",
     });
 
-    expect(prepared).toEqual({ text: "reply", replyToId: "1700000000001" });
+    expect(prepared).toEqual({ text: "reply" });
   });
 
   it("blocks reactions when the action gate is disabled", async () => {

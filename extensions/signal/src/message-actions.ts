@@ -6,10 +6,7 @@ import type {
   ChannelMessageActionName,
 } from "openclaw/plugin-sdk/channel-contract";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { removeReactionSignal, sendReactionSignal } from "../reaction-runtime-api.js";
 import { listEnabledSignalAccounts, resolveSignalAccount } from "./accounts.js";
 import { resolveSignalReactionLevel } from "./reaction-level.js";
@@ -100,23 +97,7 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
     return { actions: Array.from(actions) };
   },
   supportsAction: ({ action }) => action === "react",
-  prepareSendPayload: ({ ctx, payload, replyToId }) => {
-    if (ctx.action !== "send") {
-      return null;
-    }
-    if (normalizeOptionalString(payload.replyToId)) {
-      return payload;
-    }
-    const resolvedReplyToId =
-      normalizeOptionalString(replyToId) ?? normalizeOptionalString(ctx.params.replyToId);
-    if (resolvedReplyToId) {
-      return {
-        ...payload,
-        replyToId: resolvedReplyToId,
-      };
-    }
-    return payload;
-  },
+  prepareSendPayload: ({ ctx, payload }) => (ctx.action === "send" ? payload : null),
 
   handleAction: async ({ action, params, cfg, accountId, toolContext }) => {
     if (action === "send") {

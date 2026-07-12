@@ -612,6 +612,7 @@ describe("signal outbound", () => {
         To: "signal:+15550001111",
         ChatType: "direct",
         CurrentMessageId: "1783831798122",
+        ReplyToId: "1783831798000",
       },
       hasRepliedRef,
     });
@@ -620,7 +621,7 @@ describe("signal outbound", () => {
       currentChannelId: "signal:+15550001111",
       currentChatType: "direct",
       currentMessagingTarget: "signal:+15550001111",
-      currentMessageId: "1783831798122",
+      currentMessageId: "1783831798000",
       replyToMode: "first",
       hasRepliedRef,
     });

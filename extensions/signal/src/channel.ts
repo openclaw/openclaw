@@ -615,7 +615,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
             normalizeOptionalString(context.NativeChannelId) ?? currentMessagingTarget,
           currentChatType,
           currentMessagingTarget,
-          currentMessageId: context.CurrentMessageId,
+          currentMessageId: context.ReplyToId ?? context.CurrentMessageId,
           replyToMode: resolveSignalReplyToMode({
             cfg,
             accountId,
