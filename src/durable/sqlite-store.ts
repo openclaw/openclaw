@@ -17,6 +17,7 @@ import {
 import { resolveDurableRuntimeSqlitePath } from "./config.js";
 import type {
   AppendDurableRuntimeEventInput,
+  ClaimDurableWakeDeliveryAttemptInput,
   ClaimDurableRuntimeRunInput,
   ClaimDurableRuntimeStepInput,
   CompactDurableRuntimeRunInput,
@@ -290,6 +291,8 @@ type DurableWakeDeliveryAttemptRow = {
   delivered_at: number | bigint | null;
   failed_at: number | bigint | null;
   unknown_at: number | bigint | null;
+  delivery_claimed_by: string | null;
+  delivery_claim_expires_at: number | bigint | null;
   created_at: number | bigint;
   updated_at: number | bigint;
   metadata_json: string | null;
@@ -592,6 +595,10 @@ function rowToWakeDeliveryAttempt(row: DurableWakeDeliveryAttemptRow): DurableWa
     ...(row.delivered_at == null ? {} : { deliveredAt: Number(row.delivered_at) }),
     ...(row.failed_at == null ? {} : { failedAt: Number(row.failed_at) }),
     ...(row.unknown_at == null ? {} : { unknownAt: Number(row.unknown_at) }),
+    ...(row.delivery_claimed_by ? { deliveryClaimedBy: row.delivery_claimed_by } : {}),
+    ...(row.delivery_claim_expires_at == null
+      ? {}
+      : { deliveryClaimExpiresAt: Number(row.delivery_claim_expires_at) }),
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
     ...(row.metadata_json ? { metadata: parseJsonRecord(row.metadata_json) } : {}),
@@ -973,6 +980,8 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
           delivered_at: input.deliveredAt ?? null,
           failed_at: input.failedAt ?? null,
           unknown_at: input.unknownAt ?? null,
+          delivery_claimed_by: null,
+          delivery_claim_expires_at: null,
           created_at: now,
           updated_at: now,
           metadata_json: serializeJson(input.metadata),
@@ -1027,6 +1036,10 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
       const nextUnknownAt = input.unknownAt === undefined ? current.unknown_at : input.unknownAt;
       const nextMetadataJson =
         input.metadata === undefined ? current.metadata_json : serializeJson(input.metadata);
+      const nextClaim =
+        input.status === "delivered" || input.status === "failed" || input.status === "unknown"
+          ? { delivery_claimed_by: null, delivery_claim_expires_at: null }
+          : {};
       executeQuery(
         db,
         durableDb
@@ -1039,6 +1052,7 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
             delivered_at: nextDeliveredAt == null ? null : Number(nextDeliveredAt),
             failed_at: nextFailedAt == null ? null : Number(nextFailedAt),
             unknown_at: nextUnknownAt == null ? null : Number(nextUnknownAt),
+            ...nextClaim,
             updated_at: now,
             metadata_json: nextMetadataJson,
           })
@@ -1052,6 +1066,54 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
           .where("delivery_attempt_id", "=", input.deliveryAttemptId),
       );
       return rowToWakeDeliveryAttempt(row!);
+    });
+  };
+
+  const claimWakeDeliveryAttemptRecord = (
+    input: ClaimDurableWakeDeliveryAttemptInput,
+  ): DurableWakeDeliveryAttempt | undefined => {
+    const now = input.now ?? Date.now();
+    const claimExpiresAt = now + input.claimTtlMs;
+    return runSqliteImmediateTransactionSync(db, () => {
+      const affected = executeQuery(
+        db,
+        durableDb
+          .updateTable("durable_runtime_wake_delivery_attempts")
+          .set({
+            replay_pass_id: optionalText(input.replayPassId),
+            status: "attempted",
+            evidence_json: input.evidence === undefined ? undefined : serializeJson(input.evidence),
+            attempted_at: now,
+            delivery_claimed_by: optionalText(input.replayPassId),
+            delivery_claim_expires_at: claimExpiresAt,
+            updated_at: now,
+            metadata_json: input.metadata === undefined ? undefined : serializeJson(input.metadata),
+          })
+          .where("delivery_attempt_id", "=", input.deliveryAttemptId)
+          .where((eb) =>
+            eb.or([
+              eb("status", "=", "pending"),
+              eb.and([
+                eb("status", "=", "attempted"),
+                eb.or([
+                  eb("delivery_claim_expires_at", "is", null),
+                  eb("delivery_claim_expires_at", "<=", now),
+                ]),
+              ]),
+            ]),
+          ),
+      );
+      if (affected !== 1) {
+        return undefined;
+      }
+      const row = queryFirst<DurableWakeDeliveryAttemptRow>(
+        db,
+        durableDb
+          .selectFrom("durable_runtime_wake_delivery_attempts")
+          .selectAll()
+          .where("delivery_attempt_id", "=", input.deliveryAttemptId),
+      );
+      return row ? rowToWakeDeliveryAttempt(row) : undefined;
     });
   };
 
@@ -2405,6 +2467,12 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
       input: RecordDurableWakeDeliveryAttemptInput,
     ): DurableWakeDeliveryAttempt {
       return recordWakeDeliveryAttemptRecord(input);
+    },
+
+    claimWakeDeliveryAttempt(
+      input: ClaimDurableWakeDeliveryAttemptInput,
+    ): DurableWakeDeliveryAttempt | undefined {
+      return claimWakeDeliveryAttemptRecord(input);
     },
 
     updateWakeDeliveryAttempt(

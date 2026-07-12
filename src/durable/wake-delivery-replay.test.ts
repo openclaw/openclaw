@@ -163,7 +163,11 @@ describe("durable wake delivery replay", () => {
           deliveryHook: ({ attempt }) => {
             hookCalls += 1;
             expect(attempt.deliveryAttemptId).toBe(scheduledAttempt?.deliveryAttemptId);
-            expect(attempt.status).toBe("pending");
+            expect(attempt.status).toBe("attempted");
+            expect(attempt.evidence).toMatchObject({
+              kind: "wake_delivery_attempt_claimed",
+              previousStatus: "pending",
+            });
             return {
               status: "delivered",
               evidence: {
@@ -223,18 +227,40 @@ describe("durable wake delivery replay", () => {
         wakeId: wake.wakeId,
         status: "attempted",
         attemptedAt: 200,
+        deliveryClaimedBy: "pass:side-effect",
+        deliveryClaimExpiresAt: 30200,
       });
       store.close();
 
       const reopened = openDurableRuntimeSqliteStore({ path: dbPath });
       try {
+        let hookCalls = 0;
+        const leased = await replayDurableWakeDeliveryAttempts({
+          store: reopened,
+          replayPassId: "pass:too-early",
+          now: 300,
+          deliveryHook: () => {
+            hookCalls += 1;
+            return { status: "delivered" };
+          },
+        });
+        expect(leased).toMatchObject({
+          scanned: 1,
+          recorded: 0,
+          delivered: 0,
+          pending: 1,
+        });
+        expect(hookCalls).toBe(0);
+
         const result = await replayDurableWakeDeliveryAttempts({
           store: reopened,
           replayPassId: "pass:confirm-side-effect",
-          now: 300,
+          now: 30_201,
           deliveryHook: ({ attempt }) => {
+            hookCalls += 1;
             expect(attempt.deliveryAttemptId).toBe(attempted?.deliveryAttemptId);
             expect(attempt.status).toBe("attempted");
+            expect(attempt.deliveryClaimedBy).toBe("pass:confirm-side-effect");
             return {
               status: "delivered",
               evidence: {
@@ -251,19 +277,23 @@ describe("durable wake delivery replay", () => {
           deduped: 0,
           delivered: 1,
         });
-        expect(reopened.listWakeDeliveryAttempts({ wakeId: wake.wakeId })).toEqual([
+        expect(hookCalls).toBe(1);
+        const [deliveredAttempt] = reopened.listWakeDeliveryAttempts({ wakeId: wake.wakeId });
+        expect(deliveredAttempt).toEqual(
           expect.objectContaining({
             deliveryAttemptId: attempted?.deliveryAttemptId,
             status: "delivered",
-            attemptedAt: 300,
-            deliveredAt: 300,
+            attemptedAt: 30_201,
+            deliveredAt: 30_201,
             evidence: expect.objectContaining({ kind: "delivery_side_effect_confirmed" }),
           }),
-        ]);
+        );
+        expect(deliveredAttempt).not.toHaveProperty("deliveryClaimedBy");
+        expect(deliveredAttempt).not.toHaveProperty("deliveryClaimExpiresAt");
         expect(reopened.getDurableWake(wake.wakeId)).toMatchObject({
           status: "delivered",
           attemptCount: 2,
-          lastAttemptAt: 300,
+          lastAttemptAt: 30_201,
         });
       } finally {
         reopened.close();
@@ -279,7 +309,10 @@ describe("durable wake delivery replay", () => {
       createPendingWake(store, "delivered", 100);
       createPendingWake(store, "failed", 101);
       createPendingWake(store, "unknown", 102);
-      const statuses = new Map<string, DurableWakeDeliveryAttemptStatus>([
+      const statuses = new Map<
+        string,
+        Exclude<DurableWakeDeliveryAttemptStatus, "pending">
+      >([
         ["discord:thread:delivered", "delivered"],
         ["discord:thread:failed", "failed"],
         ["discord:thread:unknown", "unknown"],

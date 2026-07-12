@@ -32,6 +32,8 @@ export type DurableWakeDeliveryReplayResult = {
   attempts: DurableWakeDeliveryAttempt[];
 };
 
+const DEFAULT_WAKE_DELIVERY_CLAIM_TTL_MS = 30_000;
+
 function routeForWake(wake: DurableWake): {
   routeKind: DurableWakeTargetKind;
   routeRef: string;
@@ -135,23 +137,60 @@ function isReclaimableAttempt(attempt: DurableWakeDeliveryAttempt): boolean {
   return attempt.status === "pending" || attempt.status === "attempted";
 }
 
+function claimAttemptForDelivery(params: {
+  store: DurableRuntimeStore;
+  wake: DurableWake;
+  attempt: DurableWakeDeliveryAttempt;
+  replayPassId: string;
+  claimTtlMs: number;
+  now: number;
+}): DurableWakeDeliveryAttempt | undefined {
+  return params.store.claimWakeDeliveryAttempt({
+    deliveryAttemptId: params.attempt.deliveryAttemptId,
+    replayPassId: params.replayPassId,
+    claimTtlMs: params.claimTtlMs,
+    evidence: {
+      kind: "wake_delivery_attempt_claimed",
+      wakeId: params.wake.wakeId,
+      previousStatus: params.attempt.status,
+    },
+    metadata: {
+      deliveryContract: "durable_wake_delivery_replay_v1",
+      replayPassId: params.replayPassId,
+    },
+    now: params.now,
+  });
+}
+
 async function applyDeliveryHook(params: {
   store: DurableRuntimeStore;
   wake: DurableWake;
   attempt: DurableWakeDeliveryAttempt;
   deliveryHook: DurableWakeDeliveryHook;
   replayPassId: string;
+  claimTtlMs: number;
   now?: number;
 }): Promise<DurableWakeDeliveryAttempt> {
+  const claimed = claimAttemptForDelivery({
+    store: params.store,
+    wake: params.wake,
+    attempt: params.attempt,
+    replayPassId: params.replayPassId,
+    claimTtlMs: params.claimTtlMs,
+    now: params.now ?? Date.now(),
+  });
+  if (!claimed) {
+    return params.store.getWakeDeliveryAttempt(params.attempt.deliveryAttemptId) ?? params.attempt;
+  }
   try {
     const hookResult = await params.deliveryHook({
       wake: params.wake,
-      attempt: params.attempt,
+      attempt: claimed,
     });
     const outcomeAt = params.now ?? Date.now();
     const attempt =
       params.store.updateWakeDeliveryAttempt({
-        deliveryAttemptId: params.attempt.deliveryAttemptId,
+        deliveryAttemptId: claimed.deliveryAttemptId,
         status: hookResult.status,
         ...(hookResult.evidence ? { evidence: hookResult.evidence } : {}),
         ...(hookResult.error ? { error: hookResult.error } : {}),
@@ -161,7 +200,7 @@ async function applyDeliveryHook(params: {
           replayPassId: params.replayPassId,
         },
         now: outcomeAt,
-      }) ?? params.attempt;
+      }) ?? claimed;
     updateWakeOutcome({
       store: params.store,
       wake: params.wake,
@@ -175,7 +214,7 @@ async function applyDeliveryHook(params: {
     const error = err instanceof Error ? err.message : String(err);
     const attempt =
       params.store.updateWakeDeliveryAttempt({
-        deliveryAttemptId: params.attempt.deliveryAttemptId,
+        deliveryAttemptId: claimed.deliveryAttemptId,
         status: "failed",
         evidence: {
           kind: "wake_delivery_hook_error",
@@ -188,7 +227,7 @@ async function applyDeliveryHook(params: {
           replayPassId: params.replayPassId,
         },
         now: failedAt,
-      }) ?? params.attempt;
+      }) ?? claimed;
     updateWakeOutcome({
       store: params.store,
       wake: params.wake,
@@ -204,11 +243,13 @@ export async function replayDurableWakeDeliveryAttempts(params: {
   store: DurableRuntimeStore;
   replayPassId?: string;
   limit?: number;
+  claimTtlMs?: number;
   now?: number;
   deliveryHook?: DurableWakeDeliveryHook;
 }): Promise<DurableWakeDeliveryReplayResult> {
   const now = params.now ?? Date.now();
   const replayPassId = params.replayPassId ?? `wake-delivery-replay:${now}`;
+  const claimTtlMs = params.claimTtlMs ?? DEFAULT_WAKE_DELIVERY_CLAIM_TTL_MS;
   const wakes = params.store.listDurableWakes({
     status: "pending",
     limit: params.limit,
@@ -273,6 +314,7 @@ export async function replayDurableWakeDeliveryAttempts(params: {
         attempt,
         deliveryHook: params.deliveryHook,
         replayPassId,
+        claimTtlMs,
         now: params.now,
       });
     }

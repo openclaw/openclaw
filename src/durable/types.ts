@@ -368,6 +368,8 @@ export type DurableWakeDeliveryAttempt = {
   deliveredAt?: number;
   failedAt?: number;
   unknownAt?: number;
+  deliveryClaimedBy?: string;
+  deliveryClaimExpiresAt?: number;
   createdAt: number;
   updatedAt: number;
   metadata?: Record<string, unknown>;
@@ -670,6 +672,15 @@ export type UpdateDurableWakeDeliveryAttemptInput = {
   now?: number;
 };
 
+export type ClaimDurableWakeDeliveryAttemptInput = {
+  deliveryAttemptId: string;
+  replayPassId: string;
+  claimTtlMs: number;
+  evidence?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+  now?: number;
+};
+
 export type ClaimDurableRuntimeRunInput = {
   operationKind?: string;
   workerId: string;
@@ -803,6 +814,9 @@ export type DurableRuntimeStore = {
   recordWakeDeliveryAttempt(
     input: RecordDurableWakeDeliveryAttemptInput,
   ): DurableWakeDeliveryAttempt;
+  claimWakeDeliveryAttempt(
+    input: ClaimDurableWakeDeliveryAttemptInput,
+  ): DurableWakeDeliveryAttempt | undefined;
   updateWakeDeliveryAttempt(
     input: UpdateDurableWakeDeliveryAttemptInput,
   ): DurableWakeDeliveryAttempt | undefined;
