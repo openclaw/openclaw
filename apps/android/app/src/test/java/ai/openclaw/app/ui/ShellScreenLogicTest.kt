@@ -666,16 +666,16 @@ class ShellScreenLogicTest {
       id: String,
       error: String?,
     ) = GatewayChannelSummary(
-        id = id,
-        label = id,
-        accountCount = 1,
-        enabled = true,
-        configured = true,
-        linked = true,
-        running = error == null,
-        connected = error == null,
-        error = error,
-      )
+      id = id,
+      label = id,
+      accountCount = 1,
+      enabled = true,
+      configured = true,
+      linked = true,
+      running = error == null,
+      connected = error == null,
+      error = error,
+    )
 
     assertEquals(
       "1 issue",
