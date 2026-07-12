@@ -1038,6 +1038,25 @@ describe("WorkboardStore", () => {
     const released = await store.releaseClaim(card.id, { ownerId: "main", status: "review" });
     expect(released.status).toBe("review");
     expect(released.metadata?.claim).toBeUndefined();
+
+    const tokenCard = await store.create({ title: "Token-authorized worker", status: "todo" });
+    const tokenClaim = await store.claim(tokenCard.id, { ownerId: "main", ttlSeconds: 60 });
+
+    await expect(
+      store.heartbeat(tokenCard.id, { ownerId: "other", token: "wrong-token" }),
+    ).rejects.toThrow(/token does not match/);
+    await expect(
+      store.heartbeat(tokenCard.id, { ownerId: "other", token: tokenClaim.token }),
+    ).resolves.toMatchObject({ metadata: { claim: { ownerId: "main" } } });
+
+    await expect(
+      store.releaseClaim(tokenCard.id, { ownerId: "other", token: "wrong-token" }),
+    ).rejects.toThrow(/token does not match/);
+    const tokenReleased = await store.releaseClaim(tokenCard.id, {
+      ownerId: "other",
+      token: tokenClaim.token,
+    });
+    expect(tokenReleased.metadata?.claim).toBeUndefined();
   });
 
   it("atomically guards and adopts dispatcher workspace authority", async () => {
