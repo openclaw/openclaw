@@ -780,6 +780,63 @@ describe("native app i18n inventory", () => {
       };
       expect(ambiguousArtifact.entries[0]?.translated).toBe("Öppna i aktuell kontext");
 
+      const partialChurnEntries = [
+        {
+          id: "native.apple.partial.action.current",
+          kind: "ui-call",
+          line: 1,
+          path: "apps/ios/action.swift",
+          source: "Open",
+          surface: "apple",
+        },
+        {
+          id: "native.apple.partial.state.current",
+          kind: "ui-call",
+          line: 2,
+          path: "apps/ios/state.swift",
+          source: "Open",
+          surface: "apple",
+        },
+      ] satisfies NativeI18nEntry[];
+      await writeFile(
+        artifactPath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            locale: "sv",
+            glossaryHash: refreshedArtifact.glossaryHash,
+            entries: [
+              {
+                id: "native.apple.partial.action.previous",
+                source: "Open",
+                translated: "Öppna",
+              },
+              {
+                id: "native.apple.partial.state.previous",
+                source: "Open",
+                translated: "Open",
+              },
+            ],
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      const partialChurn = await syncNativeLocale("sv", partialChurnEntries, {
+        glossary: [{ source: "Request", target: "Begäran" }],
+        translationsDir,
+        translate: async (pending) =>
+          new Map(pending.map((entry, index) => [entry.id, `Översatt ${index + 1}`])),
+      });
+      expect(partialChurn).toEqual({ changed: true, translated: 2 });
+      const partialChurnArtifact = JSON.parse(await readFile(artifactPath, "utf8")) as {
+        entries: Array<{ translated: string }>;
+      };
+      expect(partialChurnArtifact.entries.map((entry) => entry.translated)).toEqual([
+        "Översatt 1",
+        "Översatt 2",
+      ]);
+
       const duplicateEntries = [
         {
           id: "native.apple.open.action",

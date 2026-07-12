@@ -1530,14 +1530,11 @@ function choosePreviousTranslation(
   source: string,
   entries: readonly { translated: string }[],
 ): string | undefined {
-  const translations = new Set<string>();
-  for (const entry of entries) {
-    if (!entry.translated.trim() || entry.translated === source) {
-      continue;
-    }
-    translations.add(entry.translated);
+  const first = entries[0]?.translated;
+  if (!first?.trim() || first === source) {
+    return undefined;
   }
-  return translations.size === 1 ? translations.values().next().value : undefined;
+  return entries.every((entry) => entry.translated === first) ? first : undefined;
 }
 
 export async function syncNativeLocale(
