@@ -58,25 +58,26 @@ function probeDirectoryWithTemporaryEntry(dir: string): boolean | undefined {
   const name = `.openclaw-case-probe-${randomUUID()}`;
   const probePath = path.join(dir, name);
   let created = false;
+  let result: boolean | undefined;
   try {
     // An empty directory has no read-only lookup evidence. Use one exclusive,
     // zero-byte entry and remove it before config validation can continue.
     fs.writeFileSync(probePath, "", { flag: "wx", mode: 0o600 });
     created = true;
-    return probeDirectoryEntry(dir, name);
+    result = probeDirectoryEntry(dir, name);
   } catch {
-    return undefined;
-  } finally {
-    if (created) {
-      try {
-        fs.unlinkSync(probePath);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-          throw error;
-        }
+    result = undefined;
+  }
+  if (created) {
+    try {
+      fs.unlinkSync(probePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
       }
     }
   }
+  return result;
 }
 
 function defaultPathCaseInsensitive(): boolean {
