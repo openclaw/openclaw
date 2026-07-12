@@ -388,6 +388,14 @@ export const en: TranslationMap = {
     confirmDelete: "Snapshot and delete {name}?",
     confirmForceDelete: "Snapshot failed: {error}\n\nDelete without a snapshot?",
   },
+  agentChip: {
+    openConversation: "Open your conversation with {name}",
+    menuLabel: "Agent menu",
+    agents: "Agents",
+    working: "Working…",
+    ready: "Ready to chat",
+    whatCanAgentDo: "What can {name} do?",
+  },
   newSession: {
     title: "New session",
     hint: "Pick where this session works, then say what to do.",
