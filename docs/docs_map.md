@@ -8814,6 +8814,21 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Live Proof Policy
   - H2: Related
 
+## specs/durable-core-pr2-exact-head-proof.md
+
+- Route: /specs/durable-core-pr2-exact-head-proof
+- Headings:
+  - H1: Durable Core PR2 Exact-Head Proof
+  - H2: Scope
+  - H2: Boundary
+  - H2: Live PR Status
+  - H2: Remote Proof Availability
+  - H2: Focused Scenario Transcript
+  - H2: Scenario Coverage
+  - H2: Architecture And Contract Notes
+  - H2: Additional Command Notes
+  - H2: Remaining Gaps
+
 ## specs/durable-runtime-agent-session-pr-proof-2026-07-01.md
 
 - Route: /specs/durable-runtime-agent-session-pr-proof-2026-07-01
