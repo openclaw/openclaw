@@ -45,6 +45,19 @@ internal data class ChatCacheScope(
   val connectionGeneration: Long,
 )
 
+internal data class MainSessionBinding(
+  val key: String,
+  val label: String,
+)
+
+private class MainSessionReadiness(
+  val gatewayScope: ChatCacheScope,
+  val binding: MainSessionBinding,
+  val ready: CompletableDeferred<Unit>,
+) {
+  var job: Job? = null
+}
+
 class ChatController internal constructor(
   private val scope: CoroutineScope,
   private val json: Json,
@@ -162,6 +175,13 @@ class ChatController internal constructor(
   private val historyRequestSequence = AtomicLong(0)
   private val modelSelectionGeneration = AtomicLong(0)
   private val sessionsRequestSequence = AtomicLong(0)
+
+  // Every live history path awaits this gateway/session readiness. Per-gateway locking keeps
+  // rapid agent switches from letting an older lookup refresh before the new session is ready.
+  private val mainSessionAdoptionLocks = ConcurrentHashMap<String, Mutex>()
+  private val desiredMainSessions = ConcurrentHashMap<String, MainSessionBinding>()
+  private val mainSessionReadinessLock = Any()
+  private var mainSessionReadiness: MainSessionReadiness? = null
   private val gatewayScopeApplyLock = Any()
   private var latestAppliedHistoryRequest = 0L
   private var latestAppliedInFlightRunId: String? = null
@@ -229,6 +249,7 @@ class ChatController internal constructor(
 
   /** Clears transient chat state when the operator gateway session disconnects. */
   fun onDisconnected(message: String) {
+    retireMainSessionReadiness()
     historyLoadGeneration.incrementAndGet()
     restoreRunStateOnReconnect = true
     reconnectRecoveryGeneration = null
@@ -260,6 +281,92 @@ class ChatController internal constructor(
 
   /** Refreshes the connected gateway while preserving recovery ownership after a disconnect. */
   fun onGatewayConnected() {
+    refreshConnectedGateway()
+  }
+
+  /** Creates/adopts the app-owned main session before connected history can load. */
+  internal fun onGatewayConnected(mainSession: MainSessionBinding) {
+    val requestScope = currentCacheScope()
+    if (requestScope == null) {
+      refreshConnectedGateway()
+      return
+    }
+    desiredMainSessions[requestScope.gatewayId] = mainSession
+    val readiness =
+      MainSessionReadiness(
+        gatewayScope = requestScope,
+        binding = mainSession,
+        ready = CompletableDeferred(),
+      )
+    val adoptionJob =
+      scope.launch(start = CoroutineStart.LAZY) {
+        try {
+          val adoptionLock = mainSessionAdoptionLocks.computeIfAbsent(requestScope.gatewayId) { Mutex() }
+          adoptionLock.withLock {
+            if (desiredMainSessions[requestScope.gatewayId] != mainSession) return@withLock
+            try {
+              val describeParams = buildJsonObject { put("key", JsonPrimitive(mainSession.key)) }
+              val describeResponse =
+                requestGatewayBound(requestScope.gatewayId, "sessions.describe", describeParams.toString())
+              val describeRoot = json.parseToJsonElement(describeResponse).asObjectOrNull() ?: error("invalid sessions.describe response")
+              if (!describeRoot.containsKey("session")) error("sessions.describe returned no session field")
+              if (desiredMainSessions[requestScope.gatewayId] != mainSession) return@withLock
+              val existingSession = describeRoot["session"].asObjectOrNull()
+              val existingLabel =
+                existingSession
+                  ?.get("label")
+                  .asStringOrNull()
+                  ?.trim()
+                  ?.takeIf { it.isNotEmpty() }
+              if (existingSession == null) {
+                val createParams =
+                  buildJsonObject {
+                    put("key", JsonPrimitive(mainSession.key))
+                    put("agentId", JsonPrimitive(resolveAgentIdForSessionKey(mainSession.key)))
+                    put("label", JsonPrimitive(mainSession.label))
+                  }
+                requestGatewayBound(requestScope.gatewayId, "sessions.create", createParams.toString())
+              } else if (existingLabel == null) {
+                // An existing unlabeled session owns upgrade history already. Patch metadata instead
+                // of replaying create lifecycle behavior against that live session.
+                val patchParams =
+                  buildJsonObject {
+                    put("key", JsonPrimitive(mainSession.key))
+                    put("label", JsonPrimitive(mainSession.label))
+                  }
+                requestGatewayBound(requestScope.gatewayId, "sessions.patch", patchParams.toString())
+              }
+            } catch (err: CancellationException) {
+              throw err
+            } catch (_: Throwable) {
+              // History remains usable under the already-bound key when adoption cannot be verified.
+            }
+          }
+        } finally {
+          readiness.ready.complete(Unit)
+        }
+        // A superseded connect owns the next refresh and must not inherit this response.
+        if (
+          synchronized(mainSessionReadinessLock) { mainSessionReadiness === readiness } &&
+          requestScope == currentCacheScope() &&
+          desiredMainSessions[requestScope.gatewayId] == mainSession
+        ) {
+          refreshConnectedGateway()
+        }
+      }
+    readiness.job = adoptionJob
+    val supersededReadiness =
+      synchronized(mainSessionReadinessLock) {
+        val current = mainSessionReadiness
+        mainSessionReadiness = readiness
+        current
+      }
+    supersededReadiness?.job?.cancel()
+    supersededReadiness?.ready?.complete(Unit)
+    adoptionJob.start()
+  }
+
+  private fun refreshConnectedGateway() {
     if (!restoreRunStateOnReconnect) {
       refresh()
       return
@@ -270,6 +377,7 @@ class ChatController internal constructor(
 
   /** Invalidates and clears gateway-bound UI state before a target switch can race old responses. */
   fun onGatewayScopeChanging(retireRunState: Boolean = false) {
+    retireMainSessionReadiness()
     synchronized(gatewayScopeApplyLock) {
       if (retireRunState) {
         restoreRunStateOnReconnect = false
@@ -298,6 +406,17 @@ class ChatController internal constructor(
       // Outbox rows are gateway-scoped too; the next publish repopulates them for the new scope.
       _outboxItems.value = emptyList()
     }
+  }
+
+  private fun retireMainSessionReadiness() {
+    val staleReadiness =
+      synchronized(mainSessionReadinessLock) {
+        val current = mainSessionReadiness
+        mainSessionReadiness = null
+        current
+      }
+    staleReadiness?.job?.cancel()
+    staleReadiness?.ready?.complete(Unit)
   }
 
   /** Restores the selected gateway's local state without waiting for transport availability. */
@@ -330,6 +449,28 @@ class ChatController internal constructor(
 
   /** Rebinds chat to a new canonical main session key after gateway hello/agent changes. */
   fun applyMainSessionKey(mainSessionKey: String) {
+    bindMainSessionKey(mainSessionKey, loadHistory = true)
+  }
+
+  /** Rebinds without loading; the connected lifecycle creates/adopts the session first. */
+  internal fun prepareMainSessionKey(mainSessionKey: String) {
+    bindMainSessionKey(mainSessionKey, loadHistory = false)
+  }
+
+  /** Selects a newly chosen agent's main session without racing history ahead of adoption. */
+  internal fun prepareAndSelectMainSessionKey(mainSessionKey: String) {
+    val selectedKey = mainSessionKey.trim()
+    if (selectedKey.isEmpty()) return
+    prepareSessionSelection(selectedKey)
+    bindMainSessionKey(mainSessionKey, loadHistory = false)
+    val key = normalizeRequestedSessionKey(mainSessionKey)
+    if (_sessionKey.value != key) beginHistoryLoad(key, clearMessages = true)
+  }
+
+  private fun bindMainSessionKey(
+    mainSessionKey: String,
+    loadHistory: Boolean,
+  ) {
     val trimmed = mainSessionKey.trim()
     if (trimmed.isEmpty()) return
     val nextState =
@@ -341,6 +482,7 @@ class ChatController internal constructor(
     appliedMainSessionKey = nextState.appliedMainSessionKey
     if (_sessionKey.value == nextState.currentSessionKey) return
     val generation = beginHistoryLoad(nextState.currentSessionKey, clearMessages = true)
+    if (!loadHistory) return
     scope.launch {
       bootstrap(
         sessionKey = nextState.currentSessionKey,
@@ -682,16 +824,20 @@ class ChatController internal constructor(
   fun switchSession(sessionKey: String) {
     val key = normalizeRequestedSessionKey(sessionKey)
     if (key.isEmpty()) return
-    if (key != unreadPatchSessionKey) {
-      unreadPatchSessionKey = key
-      unreadPatchRequested = false
-    }
-    acknowledgeUnreadIfNeeded(key, _sessions.value.firstOrNull { it.key == key })
+    prepareSessionSelection(key)
     if (key == _sessionKey.value) return
     val generation = beginHistoryLoad(key, clearMessages = true)
     scope.launch {
       bootstrap(sessionKey = key, generation = generation, forceHealth = true, refreshSessions = false)
     }
+  }
+
+  private fun prepareSessionSelection(key: String) {
+    if (key != unreadPatchSessionKey) {
+      unreadPatchSessionKey = key
+      unreadPatchRequested = false
+    }
+    acknowledgeUnreadIfNeeded(key, _sessions.value.firstOrNull { it.key == key })
   }
 
   private fun beginHistoryLoad(
@@ -1321,6 +1467,13 @@ class ChatController internal constructor(
     val requestSequence = historyRequestSequence.incrementAndGet()
     val requestModelSelectionGeneration = modelSelectionGeneration.get()
     val requestCacheScope = currentCacheScope()
+    awaitMainSessionReadiness(sessionKey, requestCacheScope)
+    if (
+      !isCurrentHistoryLoad(sessionKey, _sessionKey.value, generation, historyLoadGeneration.get()) ||
+      requestCacheScope != currentCacheScope()
+    ) {
+      return false
+    }
     val history =
       try {
         val historyJson =
@@ -1415,6 +1568,20 @@ class ChatController internal constructor(
     persistTranscript(requestCacheScope, sessionKey, history.messages)
     confirmDurableSendsFromHistory(requestCacheScope, history)
     return true
+  }
+
+  private suspend fun awaitMainSessionReadiness(
+    sessionKey: String,
+    requestScope: ChatCacheScope?,
+  ) {
+    val readiness =
+      synchronized(mainSessionReadinessLock) {
+        mainSessionReadiness
+          ?.takeIf { state ->
+            state.gatewayScope == requestScope && state.binding.key == sessionKey
+          }?.ready
+      }
+    readiness?.await()
   }
 
   /** Canonical history is the only proof that retires journaled sends; every apply checks it. */

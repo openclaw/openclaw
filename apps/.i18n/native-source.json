@@ -331,7 +331,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 127,
+      "line": 128,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Resolution outcome unknown. Actions stay disabled until the Gateway record is verified.",
       "surface": "android",
@@ -339,7 +339,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 129,
+      "line": 130,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "The Gateway still shows this approval as pending. Review it before trying again.",
       "surface": "android",
@@ -347,7 +347,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 131,
+      "line": 132,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Could not load approval details. Refresh and try again.",
       "surface": "android",
@@ -355,7 +355,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 133,
+      "line": 134,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Could not load approvals.",
       "surface": "android",
@@ -363,7 +363,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 135,
+      "line": 136,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Could not resolve approval. Refresh and try again.",
       "surface": "android",
@@ -371,7 +371,7 @@
     },
     {
       "kind": "ui-state-text",
-      "line": 697,
+      "line": 698,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Offline",
       "surface": "android",
@@ -379,7 +379,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1596,
+      "line": 1628,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Cron job started.",
       "surface": "android",
@@ -387,7 +387,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1596,
+      "line": 1628,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Cron run queued.",
       "surface": "android",
@@ -395,7 +395,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1640,
+      "line": 1672,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Cron job disabled.",
       "surface": "android",
@@ -403,7 +403,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1640,
+      "line": 1672,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Cron job enabled.",
       "surface": "android",
@@ -411,7 +411,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3247,
+      "line": 3279,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: no secure gateway endpoint was detected. Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address with Unencrypted selected.",
       "surface": "android",
@@ -419,7 +419,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3249,
+      "line": 3281,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry.",
       "surface": "android",
@@ -427,7 +427,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3251,
+      "line": 3283,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: couldn't reach the secure gateway endpoint for this host.",
       "surface": "android",
@@ -435,7 +435,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 4025,
+      "line": 4056,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Update your Gateway to view provider model config.",
       "surface": "android",
@@ -443,7 +443,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 4027,
+      "line": 4058,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Could not load provider model config.",
       "surface": "android",
