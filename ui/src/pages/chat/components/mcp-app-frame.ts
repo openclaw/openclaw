@@ -5,10 +5,9 @@
  * bridge lands.
  */
 import { html, nothing } from "lit";
-import { guard } from "lit/directives/guard.js";
+import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
-import { until } from "lit/directives/until.js";
 import {
   CONTROL_UI_BASE_PATH_ATTRIBUTE,
   CONTROL_UI_MCP_APP_RESOURCE_PATH,
@@ -18,15 +17,18 @@ import {
 } from "../../../../../src/gateway/control-ui-contract.js";
 import type { McpAppToolPreview, ResolvedMcpAppToolPreview } from "../../../lib/chat/chat-types.ts";
 import { resolveMcpAppPreviewPayload } from "../../../lib/chat/mcp-app.ts";
+import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 
 const MCP_APPS_PROTOCOL_VERSION = "2026-01-26";
 const APP_FRAME_MIN_HEIGHT = 240;
 const APP_FRAME_MAX_HEIGHT = 1200;
 const APP_FRAME_DEFAULT_HEIGHT = 480;
+const APP_FRAME_VIEWPORT_MARGIN = "600px 0px";
 const APP_CSP_MAX_TOTAL_DOMAINS = 32;
 const APP_CSP_MAX_ORIGIN_CHARS = 256;
 const APP_CSP_ORIGIN_PATTERN =
   /^(https?|wss?):\/\/(\*\.)?[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(:\d{1,5})?$/i;
+const APP_CSP_CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
 
 type JsonRpcMessage = {
   jsonrpc?: string;
@@ -40,6 +42,8 @@ type McpAppHostState = {
   initialized: boolean;
   resourceSent: boolean;
 };
+
+type McpAppAccess = { basePath: string; ticket: string };
 
 // Frames register on load; state is keyed by the iframe element so multiple
 // app cards in one chat cannot cross-talk. Entries drop with the DOM nodes.
@@ -184,7 +188,9 @@ export function buildMcpAppSandboxUrl(params: {
       const values = origins
         .filter(
           (origin) =>
-            origin.length <= APP_CSP_MAX_ORIGIN_CHARS && APP_CSP_ORIGIN_PATTERN.test(origin),
+            origin.length <= APP_CSP_MAX_ORIGIN_CHARS &&
+            !APP_CSP_CONTROL_CHARACTER_PATTERN.test(origin) &&
+            APP_CSP_ORIGIN_PATTERN.test(origin),
         )
         .slice(0, remainingDomains);
       remainingDomains -= values.length;
@@ -229,7 +235,8 @@ function resolveMcpAppAccess(): { basePath: string; ticket: string } | undefined
 
 function loadMcpAppView(
   preview: McpAppToolPreview,
-  access: { basePath: string; ticket: string },
+  access: McpAppAccess,
+  signal?: AbortSignal,
 ): Promise<ResolvedMcpAppToolPreview | undefined> {
   return fetch(
     buildMcpAppResourceUrl({
@@ -240,6 +247,7 @@ function loadMcpAppView(
       cache: "no-store",
       credentials: "same-origin",
       headers: { [CONTROL_UI_MCP_APP_TICKET_HEADER]: access.ticket },
+      signal,
     },
   )
     .then(async (response) => {
@@ -277,19 +285,23 @@ function registerAppFrame(preview: ResolvedMcpAppToolPreview) {
 function renderMcpAppStatus(
   preview: McpAppToolPreview,
   message: string,
-  options: { reloadable?: boolean } = {},
+  options: { activate?: () => void; reloadable?: boolean } = {},
 ) {
   return html`
     <div class="chat-tool-card__preview" data-kind="mcp-app">
       <div class="chat-tool-card__preview-header">
         <span class="chat-tool-card__preview-label">${preview.title?.trim() || "App"}</span>
-        ${options.reloadable
+        ${options.activate
           ? html`
-              <button class="btn btn--sm" type="button" @click=${() => window.location.reload()}>
-                Reload page
-              </button>
+              <button class="btn btn--sm" type="button" @click=${options.activate}>Load app</button>
             `
-          : nothing}
+          : options.reloadable
+            ? html`
+                <button class="btn btn--sm" type="button" @click=${() => window.location.reload()}>
+                  Reload page
+                </button>
+              `
+            : nothing}
       </div>
       <div class="chat-tool-card__preview-panel" data-side="mcp-app">
         <div class="chat-tool-card__preview-empty">${message}</div>
@@ -298,10 +310,7 @@ function renderMcpAppStatus(
   `;
 }
 
-function renderResolvedMcpAppPreview(
-  preview: ResolvedMcpAppToolPreview,
-  access: { basePath: string; ticket: string },
-) {
+function renderResolvedMcpAppPreview(preview: ResolvedMcpAppToolPreview, access: McpAppAccess) {
   const sandboxUrl = buildMcpAppSandboxUrl({
     basePath: access.basePath,
     csp: preview.csp,
@@ -335,22 +344,128 @@ function renderResolvedMcpAppPreview(
   `;
 }
 
+class McpAppPreviewElement extends OpenClawLightDomElement {
+  @property({ attribute: false }) preview?: McpAppToolPreview;
+  @property({ attribute: false }) access?: McpAppAccess;
+  @state() private active = false;
+  @state() private failed = false;
+  @state() private resolved?: ResolvedMcpAppToolPreview;
+
+  private intersecting = false;
+  private observer?: IntersectionObserver;
+  private loadController?: AbortController;
+  private resourceKey = "";
+
+  override connectedCallback() {
+    super.connectedCallback();
+    this.style.display = "block";
+    if (typeof IntersectionObserver !== "function") {
+      this.intersecting = true;
+      this.activate();
+      return;
+    }
+    this.observer = new IntersectionObserver(
+      (entries) => {
+        const entry = entries.find((candidate) => candidate.target === this);
+        if (!entry) {
+          return;
+        }
+        this.intersecting = entry.isIntersecting;
+        if (entry.isIntersecting) {
+          this.activate();
+        } else {
+          this.deactivate();
+        }
+      },
+      { rootMargin: APP_FRAME_VIEWPORT_MARGIN },
+    );
+    this.observer.observe(this);
+  }
+
+  override disconnectedCallback() {
+    this.observer?.disconnect();
+    this.observer = undefined;
+    this.deactivate();
+    super.disconnectedCallback();
+  }
+
+  override updated() {
+    const nextResourceKey =
+      this.preview && this.access
+        ? `${this.preview.viewId}:${this.access.basePath}:${this.access.ticket}`
+        : "";
+    if (this.resourceKey && nextResourceKey !== this.resourceKey) {
+      this.deactivate();
+    }
+    this.resourceKey = nextResourceKey;
+    if (this.intersecting && !this.active) {
+      this.activate();
+    }
+  }
+
+  private readonly activate = () => {
+    if (this.active || !this.preview || !this.access) {
+      return;
+    }
+    const preview = this.preview;
+    const access = this.access;
+    const controller = new AbortController();
+    this.loadController?.abort();
+    this.loadController = controller;
+    this.active = true;
+    this.failed = false;
+    void loadMcpAppView(preview, access, controller.signal).then((resolved) => {
+      if (this.loadController !== controller || controller.signal.aborted) {
+        return;
+      }
+      this.loadController = undefined;
+      this.resolved = resolved;
+      this.failed = !resolved;
+    });
+  };
+
+  private deactivate() {
+    this.loadController?.abort();
+    this.loadController = undefined;
+    this.active = false;
+    this.failed = false;
+    this.resolved = undefined;
+  }
+
+  override render() {
+    if (!this.preview || !this.access) {
+      return nothing;
+    }
+    if (!this.active) {
+      return renderMcpAppStatus(this.preview, "App preview paused to save resources.", {
+        activate: this.activate,
+      });
+    }
+    if (this.resolved) {
+      return renderResolvedMcpAppPreview(this.resolved, this.access);
+    }
+    if (this.failed) {
+      return renderMcpAppStatus(
+        this.preview,
+        "App preview unavailable. Reload this page to retry.",
+        { reloadable: true },
+      );
+    }
+    return renderMcpAppStatus(this.preview, "Loading app…");
+  }
+}
+
+if (typeof customElements !== "undefined" && !customElements.get("openclaw-mcp-app-preview")) {
+  customElements.define("openclaw-mcp-app-preview", McpAppPreviewElement);
+}
+
 /** Resolve and render an MCP App preview through the sandboxed host iframe. */
 export function renderMcpAppPreview(preview: McpAppToolPreview) {
   const access = resolveMcpAppAccess();
   if (!access) {
     return nothing;
   }
-  return guard([preview.viewId, access.basePath, access.ticket], () =>
-    until(
-      loadMcpAppView(preview, access).then((resolved) =>
-        resolved
-          ? renderResolvedMcpAppPreview(resolved, access)
-          : renderMcpAppStatus(preview, "App preview unavailable. Reload this page to retry.", {
-              reloadable: true,
-            }),
-      ),
-      renderMcpAppStatus(preview, "Loading app…"),
-    ),
-  );
+  return html`
+    <openclaw-mcp-app-preview .preview=${preview} .access=${access}></openclaw-mcp-app-preview>
+  `;
 }

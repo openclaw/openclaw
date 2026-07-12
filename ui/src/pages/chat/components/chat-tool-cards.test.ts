@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { nothing, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../markdown.ts", async (importOriginal) => await importOriginal());
@@ -711,10 +711,103 @@ describe("tool-cards", () => {
         container,
       );
 
-      expect(container.querySelector('[data-kind="mcp-app"]')).not.toBeNull();
+      expect(container.querySelector("openclaw-mcp-app-preview")).not.toBeNull();
       expect(container.querySelector(".chat-tool-card__raw-toggle")).not.toBeNull();
     } finally {
       fetchMock.mockRestore();
+      if (previousTicket === null) {
+        root.removeAttribute("data-openclaw-mcp-app-sandbox-ticket");
+      } else {
+        root.setAttribute("data-openclaw-mcp-app-sandbox-ticket", previousTicket);
+      }
+    }
+  });
+
+  it("hydrates MCP Apps near the viewport and releases them offscreen", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = document.documentElement;
+    const previousTicket = root.getAttribute("data-openclaw-mcp-app-sandbox-ticket");
+    let observerCallback: IntersectionObserverCallback | undefined;
+    let observedElement: Element | undefined;
+    const observer = {
+      root: null,
+      rootMargin: "600px 0px",
+      thresholds: [0],
+      disconnect: vi.fn(),
+      observe: vi.fn((element: Element) => {
+        observedElement = element;
+      }),
+      takeRecords: vi.fn(() => []),
+      unobserve: vi.fn(),
+    } satisfies IntersectionObserver;
+    class TestIntersectionObserver {
+      constructor(callback: IntersectionObserverCallback) {
+        observerCallback = callback;
+        return observer;
+      }
+    }
+    vi.stubGlobal("IntersectionObserver", TestIntersectionObserver);
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        serverName: "diagrams",
+        toolName: "diagrams_create_view",
+        resource: {
+          uri: "ui://diagrams/app.html",
+          mimeType: "text/html;profile=mcp-app",
+          html: "<!doctype html><html><body>diagram</body></html>",
+        },
+        result: { structuredContent: { status: "ready" } },
+      }),
+    } as Response);
+    root.setAttribute("data-openclaw-mcp-app-sandbox-ticket", "test-ticket");
+
+    try {
+      render(
+        renderToolCard(
+          {
+            id: "msg:mcp-app:lazy",
+            name: "diagrams_create_view",
+            outputText: "rendered",
+            preview: {
+              kind: "mcp-app",
+              serverName: "diagrams",
+              title: "Diagram",
+              viewId: "mcpview_0123456789ABCDEFGHJKMNPQRSTVWXYZ",
+            },
+          },
+          { expanded: true, onToggleExpanded: vi.fn() },
+        ),
+        container,
+      );
+      await Promise.resolve();
+
+      expect(observer.observe).toHaveBeenCalledOnce();
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(observedElement).toBeDefined();
+      observerCallback?.(
+        [{ isIntersecting: true, target: observedElement } as IntersectionObserverEntry],
+        observer,
+      );
+      await vi.waitFor(() => {
+        expect(container.querySelector(".chat-tool-card__preview-frame--mcp-app")).not.toBeNull();
+      });
+      expect(fetchMock).toHaveBeenCalledOnce();
+
+      observerCallback?.(
+        [{ isIntersecting: false, target: observedElement } as IntersectionObserverEntry],
+        observer,
+      );
+      await vi.waitFor(() => {
+        expect(container.querySelector(".chat-tool-card__preview-frame--mcp-app")).toBeNull();
+      });
+      expect(container.textContent).toContain("App preview paused to save resources.");
+    } finally {
+      render(nothing, container);
+      container.remove();
+      fetchMock.mockRestore();
+      vi.unstubAllGlobals();
       if (previousTicket === null) {
         root.removeAttribute("data-openclaw-mcp-app-sandbox-ticket");
       } else {

@@ -966,7 +966,11 @@ describe("handleControlUiHttpRequest", () => {
       fn: async (tmp) => {
         const csp = encodeURIComponent(
           JSON.stringify({
-            connectDomains: ["https://api.example.com", "https://safe.example; script-src *"],
+            connectDomains: [
+              "https://api.example.com",
+              "https://safe.example; script-src *",
+              "https://newline.example\n",
+            ],
             resourceDomains: ["https://cdn.example.com"],
           }),
         );
@@ -995,6 +999,7 @@ describe("handleControlUiHttpRequest", () => {
         expect(policy).toContain("https://api.example.com");
         expect(policy).toContain("https://cdn.example.com");
         expect(policy).not.toContain("safe.example");
+        expect(policy).not.toContain("newline.example");
         expect(CONTROL_UI_MCP_APP_SANDBOX_PROXY_HTML).toContain(
           'view.setAttribute("sandbox", "allow-scripts allow-same-origin")',
         );

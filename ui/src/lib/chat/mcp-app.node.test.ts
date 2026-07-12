@@ -122,6 +122,7 @@ describe("buildMcpAppSandboxUrl", () => {
           connectDomains: [
             "https://api.example.com",
             "https://bad.example; script-src *",
+            "https://newline.example\n",
             ...Array.from({ length: 40 }, (_, index) => `https://api-${index}.example.com`),
           ],
         },
@@ -134,6 +135,7 @@ describe("buildMcpAppSandboxUrl", () => {
     expect(csp.connectDomains).toHaveLength(32);
     expect(csp.connectDomains).toContain("https://api.example.com");
     expect(csp.connectDomains?.some((origin) => origin.includes(";"))).toBe(false);
+    expect(csp.connectDomains).not.toContain("https://newline.example\n");
   });
 });
 
