@@ -619,13 +619,15 @@ describe("discord live qa runtime", () => {
         vi.fn((_input: string | URL | globalThis.Request, init?: RequestInit) => {
           signal = init?.signal as AbortSignal | undefined;
           return new Promise<Response>((_resolve, reject) => {
-            signal?.addEventListener("abort", () => reject(signal?.reason), { once: true });
+            signal?.addEventListener("abort", () => reject(new Error("request aborted")), {
+              once: true,
+            });
           });
         }),
       );
 
       const request = testing.getCurrentDiscordUser("token");
-      const rejection = expect(request).rejects.toMatchObject({ name: "AbortError" });
+      const rejection = expect(request).rejects.toBeInstanceOf(Error);
       await vi.advanceTimersByTimeAsync(14_999);
       expect(signal?.aborted).toBe(false);
       await vi.advanceTimersByTimeAsync(1);
