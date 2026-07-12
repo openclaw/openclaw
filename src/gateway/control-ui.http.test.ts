@@ -1004,7 +1004,7 @@ describe("handleControlUiHttpRequest", () => {
 
   it("serves an authorized MCP App view without caching or framing it", async () => {
     await withControlUiRoot({
-      fn: async (tmp) => {
+      fn: async (_tmp) => {
         const { res, end, setHeader } = makeMockHttpResponse();
         const viewId = "mcpview_0123456789ABCDEFGHJKMNPQRSTVWXYZ";
         serveControlUiMcpAppResource(

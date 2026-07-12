@@ -765,12 +765,10 @@ describe("tool-cards", () => {
       takeRecords: vi.fn(() => []),
       unobserve: vi.fn(),
     } satisfies IntersectionObserver;
-    class TestIntersectionObserver {
-      constructor(callback: IntersectionObserverCallback) {
-        observerCallback = callback;
-        return observer;
-      }
-    }
+    const TestIntersectionObserver = vi.fn(function (callback: IntersectionObserverCallback) {
+      observerCallback = callback;
+      return observer;
+    });
     vi.stubGlobal("IntersectionObserver", TestIntersectionObserver);
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
       ok: true,
@@ -855,12 +853,10 @@ describe("tool-cards", () => {
       takeRecords: vi.fn(() => []),
       unobserve: vi.fn(),
     } satisfies IntersectionObserver;
-    class TestIntersectionObserver {
-      constructor(callback: IntersectionObserverCallback) {
-        observerCallback = callback;
-        return observer;
-      }
-    }
+    const TestIntersectionObserver = vi.fn(function (callback: IntersectionObserverCallback) {
+      observerCallback = callback;
+      return observer;
+    });
     vi.stubGlobal("IntersectionObserver", TestIntersectionObserver);
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
@@ -939,29 +935,27 @@ describe("tool-cards", () => {
       observer: IntersectionObserver;
       target?: Element;
     }> = [];
-    class TestIntersectionObserver {
-      constructor(callback: IntersectionObserverCallback) {
-        const record: (typeof observerRecords)[number] = {
-          callback,
-          observer: undefined as unknown as IntersectionObserver,
-        };
-        const observer = {
-          root: null,
-          rootMargin: "600px 0px",
-          scrollMargin: "0px 0px 0px 0px",
-          thresholds: [0],
-          disconnect: vi.fn(),
-          observe: vi.fn((element: Element) => {
-            record.target = element;
-          }),
-          takeRecords: vi.fn(() => []),
-          unobserve: vi.fn(),
-        } satisfies IntersectionObserver;
-        record.observer = observer;
-        observerRecords.push(record);
-        return observer;
-      }
-    }
+    const TestIntersectionObserver = vi.fn(function (callback: IntersectionObserverCallback) {
+      const record: (typeof observerRecords)[number] = {
+        callback,
+        observer: undefined as unknown as IntersectionObserver,
+      };
+      const observer = {
+        root: null,
+        rootMargin: "600px 0px",
+        scrollMargin: "0px 0px 0px 0px",
+        thresholds: [0],
+        disconnect: vi.fn(),
+        observe: vi.fn((element: Element) => {
+          record.target = element;
+        }),
+        takeRecords: vi.fn(() => []),
+        unobserve: vi.fn(),
+      } satisfies IntersectionObserver;
+      record.observer = observer;
+      observerRecords.push(record);
+      return observer;
+    });
     vi.stubGlobal("IntersectionObserver", TestIntersectionObserver);
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
       ok: true,

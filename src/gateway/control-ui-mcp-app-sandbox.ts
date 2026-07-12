@@ -16,7 +16,16 @@ export type ControlUiMcpAppCsp = {
 
 const CSP_ORIGIN_PATTERN =
   /^(https?|wss?):\/\/(\*\.)?[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(:\d{1,5})?$/i;
-const CSP_CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
+
+function hasCspControlCharacter(value: string): boolean {
+  for (const character of value) {
+    const code = character.charCodeAt(0);
+    if (code <= 0x1f || code === 0x7f) {
+      return true;
+    }
+  }
+  return false;
+}
 
 export const CONTROL_UI_MCP_APP_SANDBOX_PROXY_HTML = `<!doctype html>
 <html>
@@ -75,7 +84,7 @@ function sanitizeCspDomains(value: unknown): string[] {
       (entry): entry is string =>
         typeof entry === "string" &&
         entry.length <= MAX_CSP_ORIGIN_CHARS &&
-        !CSP_CONTROL_CHARACTER_PATTERN.test(entry) &&
+        !hasCspControlCharacter(entry) &&
         CSP_ORIGIN_PATTERN.test(entry),
     )
     .slice(0, MAX_CSP_DOMAINS);

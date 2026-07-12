@@ -5,7 +5,7 @@
  * bridge lands.
  */
 import { html, nothing } from "lit";
-import { property, state } from "lit/decorators.js";
+import { property, state as litState } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
 import {
@@ -27,7 +27,16 @@ const APP_CSP_MAX_TOTAL_DOMAINS = 32;
 const APP_CSP_MAX_ORIGIN_CHARS = 256;
 const APP_CSP_ORIGIN_PATTERN =
   /^(https?|wss?):\/\/(\*\.)?[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(:\d{1,5})?$/i;
-const APP_CSP_CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
+
+function hasAppCspControlCharacter(value: string): boolean {
+  for (const character of value) {
+    const code = character.charCodeAt(0);
+    if (code <= 0x1f || code === 0x7f) {
+      return true;
+    }
+  }
+  return false;
+}
 
 type JsonRpcMessage = {
   jsonrpc?: string;
@@ -188,7 +197,7 @@ export function buildMcpAppSandboxUrl(params: {
         .filter(
           (origin) =>
             origin.length <= APP_CSP_MAX_ORIGIN_CHARS &&
-            !APP_CSP_CONTROL_CHARACTER_PATTERN.test(origin) &&
+            !hasAppCspControlCharacter(origin) &&
             APP_CSP_ORIGIN_PATTERN.test(origin),
         )
         .slice(0, remainingDomains);
@@ -344,9 +353,9 @@ class McpAppPreviewElement extends OpenClawLightDomElement {
 
   @property({ attribute: false }) preview?: McpAppToolPreview;
   @property({ attribute: false }) access?: McpAppAccess;
-  @state() private active = false;
-  @state() private failed = false;
-  @state() private resolved?: ResolvedMcpAppToolPreview;
+  @litState() private active = false;
+  @litState() private failed = false;
+  @litState() private resolved?: ResolvedMcpAppToolPreview;
 
   private intersecting = false;
   private retentionPaused = false;
@@ -398,11 +407,10 @@ class McpAppPreviewElement extends OpenClawLightDomElement {
       this.preview && this.access ? `${this.preview.viewId}:${this.access.basePath}` : "";
     const nextCredentialKey = this.access?.credential ?? "";
     const resourceChanged = Boolean(this.resourceKey && nextResourceKey !== this.resourceKey);
-    const unresolvedCredentialChanged = Boolean(
+    const unresolvedCredentialChanged =
       this.resourceKey === nextResourceKey &&
       this.credentialKey !== nextCredentialKey &&
-      !this.resolved,
-    );
+      !this.resolved;
     if (resourceChanged || unresolvedCredentialChanged) {
       this.deactivate();
     }
