@@ -3409,9 +3409,12 @@ export const th: TranslationMap = {
       refresh: "รีเฟรช",
       refreshing: "กำลังรีเฟรช...",
       paused: "หยุดชั่วคราว",
+      tasksTab: "ระบบอัตโนมัติ",
+      activityTab: "ประวัติการทำงาน",
     },
     suggestions: {
       title: "ไอเดียสำหรับระบบอัตโนมัติ",
+      add: "เพิ่ม",
       schedules: {
         weekdayMornings: "วันธรรมดา เวลา 9:00 น.",
         everyMorning: "ทุกวัน เวลา 8:00 น.",
@@ -3460,16 +3463,18 @@ export const th: TranslationMap = {
     stats: {
       scheduler: "ตัวกำหนดเวลา",
       tasks: "งาน",
+      failing: "ล้มเหลว",
       nextWake: "ปลุกครั้งถัดไป",
     },
     detail: {
       newTitle: "งานตามกำหนดเวลาใหม่",
       newSubtitle: "อธิบายสิ่งที่ OpenClaw ควรทำ แล้วเลือกเวลาที่จะให้ทำงาน",
-      overviewTitle: "กิจกรรมล่าสุด",
-      overviewSubtitle: "การทำงานล่าสุดของงานตามกำหนดเวลาทั้งหมด",
+      back: "การทำงานอัตโนมัติทั้งหมด",
+      settingsTab: "การตั้งค่า",
       historyTitle: "ประวัติการทำงาน",
       detailsSection: "รายละเอียด",
       frequencySection: "ความถี่",
+      active: "ใช้งานอยู่",
       paused: "หยุดชั่วคราว",
     },
     actions: {
@@ -3506,6 +3511,8 @@ export const th: TranslationMap = {
       allStatuses: "ทุกสถานะ",
       allDelivery: "การส่งทั้งหมด",
       noMatching: "ไม่พบการทำงานที่ตรงกัน",
+      emptyTitle: "ยังไม่มีการเรียกใช้งาน",
+      emptyHint: "การเรียกใช้งานจะแสดงที่นี่เมื่อการทำงานอัตโนมัติเริ่มทำงาน",
       loadMore: "โหลดการทำงานเพิ่มเติม",
       runStatusOk: "ตกลง",
       runStatusError: "ข้อผิดพลาด",

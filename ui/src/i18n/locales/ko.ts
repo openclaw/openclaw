@@ -3450,9 +3450,12 @@ export const ko: TranslationMap = {
       refresh: "새로고침",
       refreshing: "새로고침 중...",
       paused: "일시중지됨",
+      tasksTab: "자동화",
+      activityTab: "실행 기록",
     },
     suggestions: {
       title: "자동화 아이디어",
+      add: "추가",
       schedules: {
         weekdayMornings: "평일 오전 9:00",
         everyMorning: "매일 오전 8:00",
@@ -3501,16 +3504,18 @@ export const ko: TranslationMap = {
     stats: {
       scheduler: "스케줄러",
       tasks: "작업",
+      failing: "실패 중",
       nextWake: "다음 실행",
     },
     detail: {
       newTitle: "새 예약 작업",
       newSubtitle: "OpenClaw가 수행할 작업을 설명한 후 실행 시점을 선택하세요.",
-      overviewTitle: "최근 활동",
-      overviewSubtitle: "모든 예약 작업의 최근 실행 내역입니다.",
+      back: "모든 자동화",
+      settingsTab: "설정",
       historyTitle: "실행 기록",
       detailsSection: "세부 정보",
       frequencySection: "빈도",
+      active: "활성",
       paused: "일시 중지됨",
     },
     actions: {
@@ -3547,6 +3552,8 @@ export const ko: TranslationMap = {
       allStatuses: "모든 상태",
       allDelivery: "모든 전달 상태",
       noMatching: "일치하는 실행 기록이 없습니다.",
+      emptyTitle: "아직 실행 내역이 없습니다",
+      emptyHint: "자동화가 실행되면 여기에 실행 내역이 표시됩니다.",
       loadMore: "실행 기록 더 불러오기",
       runStatusOk: "확인",
       runStatusError: "오류",

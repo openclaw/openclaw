@@ -176,6 +176,9 @@ export type CronState = {
   cronJobsSortBy: CronJobsSortBy;
   cronJobsSortDir: CronSortDir;
   cronStatus: CronStatus | null;
+  // Global enabled+error job count for the stats card; null until loaded.
+  // Kept separate from cronJobs, which only holds the filtered/paged table.
+  cronFailingCount: number | null;
   cronError: string | null;
   cronForm: CronFormState;
   // True while the create panel owns the detail pane; job selection (editing)
@@ -227,6 +230,7 @@ export function createInitialCronState(
     cronJobsSortBy: "nextRunAtMs",
     cronJobsSortDir: "asc",
     cronStatus: null,
+    cronFailingCount: null,
     cronError: null,
     cronForm: { ...DEFAULT_CRON_FORM },
     cronCreateOpen: false,
@@ -357,6 +361,26 @@ export async function loadCronStatus(state: CronState) {
     } else {
       state.cronError = String(err);
     }
+  }
+}
+
+export async function loadCronFailingCount(state: CronState) {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  try {
+    // The stats card needs the unfiltered failing total; the jobs table only
+    // holds the current filtered page. limit=1 because only `total` matters.
+    const res = await state.client.request<CronJobsListResult>("cron.list", {
+      enabled: "enabled",
+      lastRunStatus: "error",
+      limit: 1,
+      offset: 0,
+    });
+    state.cronFailingCount = typeof res?.total === "number" ? res.total : null;
+  } catch {
+    // A missing count degrades the card to n/a; never surface as a page error.
+    state.cronFailingCount = null;
   }
 }
 
@@ -1054,10 +1078,17 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
       resetCronFormToDefaults(state);
       result = { saved: true, jobId: extractSavedCronJobId(response) };
     }
-    await loadCronJobsPage(state, { tableFilters: true });
-    await loadCronStatus(state);
+    await reloadCronJobsSnapshot(state);
   });
   return result;
+}
+
+// Every mutation reloads the same trio so the table, scheduler status, and
+// the failing-count stat card can never drift apart after add/toggle/remove.
+async function reloadCronJobsSnapshot(state: CronState) {
+  await loadCronJobsPage(state, { tableFilters: true });
+  await loadCronStatus(state);
+  await loadCronFailingCount(state);
 }
 
 export async function toggleCronJob(
@@ -1071,8 +1102,7 @@ export async function toggleCronJob(
   await withCronBusy(state, async (client) => {
     await client.request("cron.update", { id: job.id, patch: { enabled } });
     updated = true;
-    await loadCronJobsPage(state, { tableFilters: true });
-    await loadCronStatus(state);
+    await reloadCronJobsSnapshot(state);
   });
   return updated;
 }
@@ -1094,8 +1124,7 @@ export async function removeCronJob(state: CronState, job: CronJob) {
       state.cronRunsJobId = null;
       clearCronRunsPage(state);
     }
-    await loadCronJobsPage(state, { tableFilters: true });
-    await loadCronStatus(state);
+    await reloadCronJobsSnapshot(state);
   });
 }
 

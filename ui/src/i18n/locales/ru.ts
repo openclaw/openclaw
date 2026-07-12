@@ -3488,9 +3488,12 @@ export const ru: TranslationMap = {
       refresh: "Обновить",
       refreshing: "Обновление...",
       paused: "Приостановлено",
+      tasksTab: "Автоматизации",
+      activityTab: "История запусков",
     },
     suggestions: {
       title: "Идеи для автоматизации",
+      add: "Добавить",
       schedules: {
         weekdayMornings: "По будням в 9:00",
         everyMorning: "Ежедневно в 8:00",
@@ -3539,16 +3542,18 @@ export const ru: TranslationMap = {
     stats: {
       scheduler: "Планировщик",
       tasks: "Задачи",
+      failing: "С ошибками",
       nextWake: "Следующее пробуждение",
     },
     detail: {
       newTitle: "Новая запланированная задача",
       newSubtitle: "Опишите, что должен делать OpenClaw, затем выберите время запуска.",
-      overviewTitle: "Недавняя активность",
-      overviewSubtitle: "Последние запуски по всем запланированным задачам.",
+      back: "Все автоматизации",
+      settingsTab: "Настройки",
       historyTitle: "История запусков",
       detailsSection: "Сведения",
       frequencySection: "Частота",
+      active: "Активно",
       paused: "Приостановлено",
     },
     actions: {
@@ -3585,6 +3590,8 @@ export const ru: TranslationMap = {
       allStatuses: "Все статусы",
       allDelivery: "Все доставки",
       noMatching: "Нет подходящих запусков.",
+      emptyTitle: "Запусков пока нет",
+      emptyHint: "Запуски появятся здесь после срабатывания автоматизации.",
       loadMore: "Загрузить ещё запуски",
       runStatusOk: "ОК",
       runStatusError: "Ошибка",

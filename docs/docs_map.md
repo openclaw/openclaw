@@ -530,6 +530,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Text formatting
   - H2: Context fields
+  - H2: Outbound payloads
   - H2: Channel notes
   - H2: Related
 
@@ -4869,6 +4870,18 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Config examples
   - H2: Status output
   - H2: Notes
+  - H2: Related
+
+## nodes/presence.md
+
+- Route: /nodes/presence
+- Headings:
+  - H2: Requirements
+  - H2: Check the active computer
+  - H2: How activity becomes presence
+  - H2: Privacy and model context
+  - H2: How connection alerts are routed
+  - H2: Troubleshooting
   - H2: Related
 
 ## nodes/talk.md
