@@ -80,6 +80,24 @@ describe("deriveMemoryWikiOpenItems", () => {
     const item = items.find((entry) => entry.kind === "claim-contradiction");
     expect(item?.claimId).toBe("c1");
     expect(item?.relatedPagePaths).toEqual(["syntheses/a.md", "syntheses/b.md"]);
+    // text must carry the actual competing statements, not the opaque claim id.
+    expect(item?.text).not.toBe("c1");
+    expect(item?.text).toContain("deadline is March 15");
+    expect(item?.text).toContain("deadline is April 1");
+    expect(item?.variants).toEqual([
+      {
+        text: "deadline is March 15",
+        status: "supported",
+        pagePath: "syntheses/a.md",
+        pageTitle: "A",
+      },
+      {
+        text: "deadline is April 1",
+        status: "supported",
+        pagePath: "syntheses/b.md",
+        pageTitle: "B",
+      },
+    ]);
   });
 
   it("returns nothing for a clean vault", () => {

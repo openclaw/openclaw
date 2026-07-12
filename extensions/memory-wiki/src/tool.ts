@@ -1,6 +1,6 @@
 // Memory Wiki plugin module implements tool behavior.
 import path from "node:path";
-import { optionalFiniteNumberSchema } from "openclaw/plugin-sdk/channel-actions";
+import { optionalFiniteNumberSchema, stringEnum } from "openclaw/plugin-sdk/channel-actions";
 import { Type } from "typebox";
 import type { AnyAgentTool, OpenClawConfig } from "../api.js";
 import { applyMemoryWikiMutation, normalizeMemoryWikiMutationInput } from "./apply.js";
@@ -12,6 +12,7 @@ import {
 import { lintMemoryWikiVault } from "./lint.js";
 import {
   collectMemoryWikiOpenItems,
+  countMemoryWikiOpenItems,
   WIKI_OPEN_ITEM_KINDS,
   type MemoryWikiOpenItemKind,
 } from "./open-items.js";
@@ -85,10 +86,9 @@ const WikiClaimSchema = Type.Object(
   },
   { additionalProperties: false },
 );
-const WikiOpenItemKindSchema = Type.Union(WIKI_OPEN_ITEM_KINDS.map((value) => Type.Literal(value)));
 const WikiOpenItemsSchema = Type.Object(
   {
-    kinds: Type.Optional(Type.Array(WikiOpenItemKindSchema, { minItems: 1 })),
+    kinds: Type.Optional(Type.Array(stringEnum(WIKI_OPEN_ITEM_KINDS), { minItems: 1 })),
     limit: Type.Optional(Type.Integer({ minimum: 1 })),
   },
   { additionalProperties: false },
@@ -279,7 +279,9 @@ export function createWikiOpenItemsTool(
               .join("\n\n");
       return {
         content: [{ type: "text", text }],
-        details: { counts: result.counts, items },
+        // counts describe the returned (filtered/limited) items; vaultCounts is
+        // the unfiltered whole-vault tally so callers can tell the two apart.
+        details: { counts: countMemoryWikiOpenItems(items), vaultCounts: result.counts, items },
       };
     },
   };

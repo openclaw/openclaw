@@ -21,6 +21,17 @@ export type MemoryWikiOpenItemKind = (typeof WIKI_OPEN_ITEM_KINDS)[number];
 // the reports/low-confidence.md dashboard stay in agreement.
 const LOW_CONFIDENCE_THRESHOLD = 0.5;
 
+// One competing statement inside a contradiction cluster. Carried on the item so
+// agents (and downstream resolution flows) can present the actual conflicting
+// claims instead of an opaque cluster id.
+export type MemoryWikiOpenItemVariant = {
+  text: string;
+  status: string;
+  pagePath: string;
+  pageTitle: string;
+  confidence?: number;
+};
+
 export type MemoryWikiOpenItem = {
   kind: MemoryWikiOpenItemKind;
   text: string;
@@ -29,13 +40,33 @@ export type MemoryWikiOpenItem = {
   pageId?: string;
   claimId?: string;
   confidence?: number;
+  variants?: MemoryWikiOpenItemVariant[];
   relatedPagePaths?: string[];
 };
 
+export type MemoryWikiOpenItemCounts = Record<MemoryWikiOpenItemKind, number> & { total: number };
+
 export type MemoryWikiOpenItemsResult = {
   items: MemoryWikiOpenItem[];
-  counts: Record<MemoryWikiOpenItemKind, number> & { total: number };
+  counts: MemoryWikiOpenItemCounts;
 };
+
+/** Tally a list of open items by kind (plus a grand total). */
+export function countMemoryWikiOpenItems(items: MemoryWikiOpenItem[]): MemoryWikiOpenItemCounts {
+  const counts: MemoryWikiOpenItemCounts = {
+    "open-question": 0,
+    "page-contradiction": 0,
+    "claim-contradiction": 0,
+    "low-confidence-page": 0,
+    "low-confidence-claim": 0,
+    total: 0,
+  };
+  for (const item of items) {
+    counts[item.kind] += 1;
+    counts.total += 1;
+  }
+  return counts;
+}
 
 /**
  * Derive the unresolved open items (open questions, contradiction clusters, and
@@ -76,15 +107,35 @@ export function deriveMemoryWikiOpenItems(
   }
 
   // Competing-claim clusters (same claim id, divergent text/status across pages).
+  // cluster.label is only the shared claim id, so build the item text from the
+  // actual conflicting statements and carry each variant as structured data.
   for (const cluster of buildClaimContradictionClusters({ pages, now })) {
     const first = cluster.entries[0];
+    const variants: MemoryWikiOpenItemVariant[] = cluster.entries.map((entry) => ({
+      text: entry.text,
+      status: entry.status,
+      pagePath: entry.pagePath,
+      pageTitle: entry.pageTitle,
+      ...(typeof entry.confidence === "number" ? { confidence: entry.confidence } : {}),
+    }));
+    const seen = new Set<string>();
+    const summaryParts: string[] = [];
+    for (const variant of variants) {
+      const key = `${variant.text} ${variant.status}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      summaryParts.push(`"${variant.text}" [${variant.status}]`);
+    }
     items.push({
       kind: "claim-contradiction",
-      text: cluster.label,
+      text: summaryParts.join(" vs "),
       pagePath: first?.pagePath ?? "",
       pageTitle: first?.pageTitle ?? "",
       ...(first?.pageId ? { pageId: first.pageId } : {}),
       claimId: cluster.key,
+      variants,
       relatedPagePaths: cluster.entries.map((entry) => entry.pagePath),
     });
   }
@@ -118,19 +169,7 @@ export function deriveMemoryWikiOpenItems(
     }
   }
 
-  const counts: MemoryWikiOpenItemsResult["counts"] = {
-    "open-question": 0,
-    "page-contradiction": 0,
-    "claim-contradiction": 0,
-    "low-confidence-page": 0,
-    "low-confidence-claim": 0,
-    total: items.length,
-  };
-  for (const item of items) {
-    counts[item.kind] += 1;
-  }
-
-  return { items, counts };
+  return { items, counts: countMemoryWikiOpenItems(items) };
 }
 
 /**
