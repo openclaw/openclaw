@@ -62,7 +62,8 @@ var localeRules = map[string]string{
 - Fixed terminology: “Gateway” is “Gateway 网关”; keep “Skills”, “local loopback”, and “Tailscale” in English.`,
 	"zh-tw": `Locale rules:
 - Write fluent Traditional Chinese using Taiwan terminology and traditional characters; do not emit Simplified Chinese forms. Use neutral documentation tone with “你/你的”.
-- Insert a space between Latin characters or digits and Chinese text when natural. Use Chinese quotation marks “ and ” for Chinese prose; keep ASCII quotes in protected literals.`,
+- Insert a space between Latin characters or digits and Chinese text when natural. Use Chinese quotation marks “ and ” for Chinese prose; keep ASCII quotes in protected literals.
+- Keep security concepts distinct: translate “credentials” as “認證資訊”, not “憑證”; reserve “憑證” for certificates.`,
 	"ja-jp": `Locale rules:
 - Write fluent technical Japanese in a neutral documentation tone. Avoid excessively formal honorifics such as “〜でございます”.
 - Use Japanese quotation marks 「 and 」 for Japanese prose. Do not add or remove spacing around Latin text merely because it borders Japanese; change spacing only when Japanese grammar requires it.
@@ -111,6 +112,7 @@ func localePromptRules(tgtLang string) string {
 
 const documentationQualityRules = `Documentation quality rules:
 - Preserve exact third-party UI labels only when the source clearly uses them as literal interface text: buttons, menu items, settings, form fields, option values, or arrow-separated navigation paths. Indicators include instructions to click, open, select, toggle, copy, or configure an item, plus tables that name fields in a third-party interface. Keep each protected label's spelling, capitalization, punctuation, and Markdown emphasis exactly.
+- In a table documenting third-party fields, preserve literal UI labels in data cells, but translate generic organizational column headings such as “Field”, “Value”, “Description”, “Example”, and “Required”. The same word may be protected when it names an actual UI control elsewhere.
 - Translate the surrounding actions and explanations. Do not preserve ordinary prose merely because it is bold, quoted, title-cased, or inside a table. Translate normal headings, emphasis, descriptions, conceptual labels, link text, and ordinary table headers.
 - Label precedence, highest to lowest: literal third-party UI text; locale-specific fixed terminology stated in this prompt; supplied glossary mappings; normal translation. A higher rule overrides every lower rule and the general instructions to translate all prose, headings, and labels. OpenClaw-owned UI and documentation labels use the highest applicable fixed term or glossary mapping; otherwise translate them normally.
 - Preserve technical meaning over literal wording. Keep authentication, authorization, credentials, tokens, passwords, secrets, identities, and accounts distinct unless the source explicitly equates them. Preserve actors, objects, temporal order, negation, conditions, scope, singular/plural meaning, and requirement strength such as “must”, “required”, “only”, and “never”.
@@ -127,8 +129,10 @@ Rules:
 - Preserve YAML structure inside <frontmatter>; translate only values.
 - Preserve every [[[FM_*]]] marker exactly and translate only text between its START/END pair.
 - Preserve Markdown structure exactly: headings, list nesting, tables, links, emphasis, and line-level content order.
-- Preserve HTML tags and attributes exactly.
-- Do not translate or modify code spans, code blocks, config keys, CLI flags, environment variables, commands, or placeholders such as __OC_I18N_####__.
+- Preserve HTML/MDX tag names, attribute names, nesting, and structural attribute values exactly. Never change resource or behavior attributes such as “href”, “src”, “id”, “icon”, “path”, “type”, or “default”.
+- Translate user-visible prose inside string-valued component attributes such as “title”, “label”, “description”, and “placeholder”, unless a higher-precedence literal UI-label rule protects that value. Do not translate code-like attribute values.
+- Do not translate or modify code spans, executable code or config blocks, config keys, CLI flags, environment variables, commands, or placeholders such as __OC_I18N_####__.
+- Fenced text, transcript, output, and documentation examples are an exception to the preceding block rule: preserve angle-bracket placeholders, square-bracket config/protocol markers, and double-bracket directive tokens exactly, but translate ordinary human prose, including prose surrounding protected directive tokens.
 - Do not alter URLs, anchors, path fragments, or identifier spelling.
 - Do not remove, reorder, merge, summarize, or duplicate content.
 - Use fluent, idiomatic technical language in the target language with a neutral documentation tone; avoid slang and jokes.

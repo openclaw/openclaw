@@ -6,6 +6,7 @@ import path from "node:path";
 import fg from "fast-glob";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
+  CHANNEL_CONTRACT_CONFIG_PATTERNS,
   DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_HEARTBEAT_MS,
   DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS,
   applyDefaultMultiSpecVitestCachePaths,
@@ -29,6 +30,12 @@ import {
 } from "../../scripts/test-projects.test-support.mjs";
 import { captureReaddirSyncCallsDuring } from "../../src/test-utils/fs-scan-assertions.js";
 import { toRepoPath } from "../../src/test-utils/repo-files.js";
+import {
+  channelConfigContractPatterns,
+  channelRegistryContractPatterns,
+  channelSessionContractPatterns,
+  channelSurfaceContractPatterns,
+} from "../vitest/vitest.contracts-shared.ts";
 import { fullSuiteVitestShards } from "../vitest/vitest.test-shards.mjs";
 
 const normalizeRepoPath = toRepoPath;
@@ -4888,5 +4895,20 @@ describe("scripts/test-projects Vitest cache isolation", () => {
       },
     ];
     expect(applyDefaultMultiSpecVitestCachePaths(watch, { cwd: "/repo", env: {} })).toBe(watch);
+  });
+});
+
+describe("scripts/test-projects channel contract lane patterns", () => {
+  // test-projects.test-support.mjs must stay loader-free plain JS, so it
+  // duplicates the per-config channel-contract patterns instead of importing
+  // vitest.contracts-shared.ts. Drift silently drops contract files from lane
+  // routing (it happened once), so pin both enumerations to each other.
+  it("stays in sync with the vitest.contracts-shared lane enumerations", () => {
+    expect(Object.fromEntries(CHANNEL_CONTRACT_CONFIG_PATTERNS)).toEqual({
+      "test/vitest/vitest.contracts-channel-surface.config.ts": channelSurfaceContractPatterns,
+      "test/vitest/vitest.contracts-channel-config.config.ts": channelConfigContractPatterns,
+      "test/vitest/vitest.contracts-channel-registry.config.ts": channelRegistryContractPatterns,
+      "test/vitest/vitest.contracts-channel-session.config.ts": channelSessionContractPatterns,
+    });
   });
 });

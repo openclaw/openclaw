@@ -19,6 +19,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   session_scope TEXT NOT NULL DEFAULT 'conversation' CHECK (session_scope IN ('conversation', 'shared-main', 'group', 'channel')),
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
+  transcript_updated_at INTEGER DEFAULT NULL,
+  transcript_observed_at INTEGER DEFAULT NULL,
   started_at INTEGER,
   ended_at INTEGER,
   status TEXT CHECK (status IS NULL OR status IN ('running', 'done', 'failed', 'killed', 'timeout')),
@@ -116,8 +118,8 @@ CREATE TABLE IF NOT EXISTS session_entries (
 CREATE INDEX IF NOT EXISTS idx_agent_session_entries_updated_at
   ON session_entries(updated_at DESC, session_key);
 
-CREATE INDEX IF NOT EXISTS idx_agent_session_entries_session_id
-  ON session_entries(session_id);
+CREATE INDEX IF NOT EXISTS idx_agent_session_entries_session_updated
+  ON session_entries(session_id, updated_at DESC, session_key);
 
 CREATE TABLE IF NOT EXISTS transcript_events (
   session_id TEXT NOT NULL,
@@ -161,6 +163,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_transcript_message_idempotency
 CREATE INDEX IF NOT EXISTS idx_agent_transcript_event_parent
   ON transcript_event_identities(session_id, parent_id)
   WHERE parent_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_agent_transcript_event_sequence
+  ON transcript_event_identities(session_id, event_type, seq DESC);
 
 CREATE TABLE IF NOT EXISTS cache_entries (
   scope TEXT NOT NULL,

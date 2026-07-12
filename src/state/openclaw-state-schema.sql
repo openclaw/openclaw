@@ -216,6 +216,129 @@ CREATE TABLE IF NOT EXISTS exec_approvals_config (
   updated_at_ms INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS operator_approvals (
+  approval_id TEXT NOT NULL PRIMARY KEY CHECK (
+    length(approval_id) > 0 AND approval_id NOT IN ('.', '..')
+  ),
+  resolution_ref TEXT NOT NULL CHECK (
+    length(resolution_ref) = 43 AND resolution_ref NOT GLOB '*[^A-Za-z0-9_-]*'
+  ),
+  kind TEXT NOT NULL CHECK (kind IN ('exec', 'plugin')),
+  status TEXT NOT NULL CHECK (status IN ('pending', 'allowed', 'denied', 'expired', 'cancelled')),
+  presentation_json TEXT NOT NULL,
+  requested_by_device_id TEXT,
+  requested_by_client_id TEXT,
+  requested_by_device_token_auth INTEGER NOT NULL DEFAULT 0,
+  reviewer_device_ids_json TEXT NOT NULL,
+  source_agent_id TEXT,
+  source_session_key TEXT,
+  source_session_id TEXT,
+  source_run_id TEXT,
+  source_tool_call_id TEXT,
+  source_tool_name TEXT,
+  audience_session_keys_json TEXT NOT NULL,
+  runtime_epoch TEXT NOT NULL,
+  created_at_ms INTEGER NOT NULL,
+  expires_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  decision TEXT CHECK (decision IN ('allow-once', 'allow-always', 'deny')),
+  terminal_reason TEXT CHECK (
+    terminal_reason IN (
+      'user',
+      'timeout',
+      'malformed-verdict',
+      'no-route',
+      'run-aborted',
+      'gateway-restart',
+      'storage-corrupt'
+    )
+  ),
+  resolved_at_ms INTEGER,
+  resolver_kind TEXT CHECK (resolver_kind IN ('device', 'channel', 'runtime', 'system')),
+  resolver_id TEXT,
+  consumed_at_ms INTEGER,
+  consumed_by TEXT,
+  CHECK (expires_at_ms >= created_at_ms),
+  CHECK (updated_at_ms >= created_at_ms),
+  CHECK (resolved_at_ms IS NULL OR resolved_at_ms >= created_at_ms),
+  CHECK (resolved_at_ms IS NULL OR resolved_at_ms <= updated_at_ms),
+  CHECK (consumed_at_ms IS NULL OR consumed_at_ms >= resolved_at_ms),
+  CHECK (consumed_at_ms IS NULL OR consumed_at_ms <= updated_at_ms),
+  CHECK (requested_by_device_token_auth IN (0, 1)),
+  CHECK (
+    (
+      status = 'pending'
+      AND decision IS NULL
+      AND terminal_reason IS NULL
+      AND resolved_at_ms IS NULL
+      AND resolver_kind IS NULL
+      AND resolver_id IS NULL
+      AND consumed_at_ms IS NULL
+      AND consumed_by IS NULL
+    )
+    OR (
+      status = 'allowed'
+      AND decision IN ('allow-once', 'allow-always')
+      AND terminal_reason = 'user'
+      AND resolved_at_ms IS NOT NULL
+      AND resolver_kind IS NOT NULL
+    )
+    OR (
+      status = 'denied'
+      AND decision = 'deny'
+      AND terminal_reason IN ('user', 'malformed-verdict', 'no-route', 'storage-corrupt')
+      AND resolved_at_ms IS NOT NULL
+      AND resolver_kind IS NOT NULL
+      AND consumed_at_ms IS NULL
+      AND consumed_by IS NULL
+    )
+    OR (
+      status = 'expired'
+      AND decision = 'deny'
+      AND terminal_reason = 'timeout'
+      AND resolved_at_ms IS NOT NULL
+      AND resolver_kind IS NOT NULL
+      AND consumed_at_ms IS NULL
+      AND consumed_by IS NULL
+    )
+    OR (
+      status = 'cancelled'
+      AND decision = 'deny'
+      AND terminal_reason IN ('run-aborted', 'gateway-restart')
+      AND resolved_at_ms IS NOT NULL
+      AND resolver_kind IS NOT NULL
+      AND consumed_at_ms IS NULL
+      AND consumed_by IS NULL
+    )
+  ),
+  CHECK (
+    (consumed_at_ms IS NULL AND consumed_by IS NULL)
+    OR (
+      status = 'allowed'
+      AND decision = 'allow-once'
+      AND consumed_at_ms IS NOT NULL
+      AND consumed_by IS NOT NULL
+    )
+  )
+);
+
+CREATE INDEX IF NOT EXISTS idx_operator_approvals_status_expiry
+  ON operator_approvals(status, expires_at_ms, approval_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_operator_approvals_resolution_ref
+  ON operator_approvals(resolution_ref);
+
+CREATE INDEX IF NOT EXISTS idx_operator_approvals_source_session_created
+  ON operator_approvals(source_session_key, created_at_ms DESC, approval_id);
+
+CREATE INDEX IF NOT EXISTS idx_operator_approvals_resolved
+  ON operator_approvals(resolved_at_ms, approval_id)
+  WHERE resolved_at_ms IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_operator_approvals_runtime_pending
+  ON operator_approvals(runtime_epoch, approval_id)
+  WHERE status = 'pending';
+
 CREATE TABLE IF NOT EXISTS schema_meta (
   meta_key TEXT NOT NULL PRIMARY KEY,
   role TEXT NOT NULL,
@@ -709,7 +832,11 @@ CREATE TABLE IF NOT EXISTS acp_replay_sessions (
   complete INTEGER NOT NULL,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
-  next_seq INTEGER NOT NULL
+  next_seq INTEGER NOT NULL,
+  -- Running estimate of this session's ledger footprint (row overhead plus
+  -- all event rows), maintained at insert/trim so budget checks never scan
+  -- acp_replay_events (#100622).
+  estimated_bytes INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_acp_replay_sessions_key_updated
@@ -725,6 +852,7 @@ CREATE TABLE IF NOT EXISTS acp_replay_events (
   session_key TEXT NOT NULL,
   run_id TEXT,
   update_json TEXT NOT NULL,
+  estimated_bytes INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (session_id, seq),
   FOREIGN KEY (session_id) REFERENCES acp_replay_sessions(session_id) ON DELETE CASCADE
 );
@@ -1174,6 +1302,8 @@ CREATE TABLE IF NOT EXISTS task_runs (
   ended_at INTEGER,
   last_event_at INTEGER,
   cleanup_after INTEGER,
+  tool_use_count INTEGER,
+  last_tool_name TEXT,
   error TEXT,
   progress_summary TEXT,
   terminal_summary TEXT,
@@ -1463,6 +1593,38 @@ CREATE TABLE IF NOT EXISTS worker_environment_credentials (
   expires_at_ms INTEGER NOT NULL CHECK (expires_at_ms >= 0),
   delivered_at_ms INTEGER CHECK (delivered_at_ms >= 0),
   FOREIGN KEY (environment_id) REFERENCES worker_environments(environment_id) ON DELETE CASCADE
+);
+
+-- One durable sequence cursor per attached session owner epoch. The environment
+-- binding prevents independent workers with coincident epochs from sharing replay state.
+CREATE TABLE IF NOT EXISTS worker_transcript_commit_heads (
+  session_id TEXT NOT NULL,
+  run_epoch INTEGER NOT NULL CHECK (run_epoch >= 0),
+  environment_id TEXT NOT NULL,
+  next_seq INTEGER NOT NULL CHECK (next_seq >= 1),
+  updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= 0),
+  PRIMARY KEY (session_id, run_epoch)
+);
+
+-- Pending rows preserve a claimed request across gateway restarts. Terminal rows
+-- cache the exact result returned for deterministic at-least-once replay.
+CREATE TABLE IF NOT EXISTS worker_transcript_commits (
+  session_id TEXT NOT NULL,
+  run_epoch INTEGER NOT NULL CHECK (run_epoch >= 0),
+  seq INTEGER NOT NULL CHECK (seq >= 1),
+  request_hash TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('pending', 'terminal')),
+  result_json TEXT,
+  created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
+  updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= 0),
+  PRIMARY KEY (session_id, run_epoch, seq),
+  FOREIGN KEY (session_id, run_epoch)
+    REFERENCES worker_transcript_commit_heads(session_id, run_epoch)
+    ON DELETE CASCADE,
+  CHECK (
+    (state = 'pending' AND result_json IS NULL) OR
+    (state = 'terminal' AND result_json IS NOT NULL)
+  )
 );
 
 CREATE TABLE IF NOT EXISTS fleet_cells (

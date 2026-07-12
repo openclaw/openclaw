@@ -37,8 +37,8 @@ export function createMergePatch(base: unknown, target: unknown): unknown {
   const patch: Record<string, unknown> = {};
   const keys = new Set([...Object.keys(base), ...Object.keys(target)]);
   for (const key of keys) {
-    const hasBase = key in base;
-    const hasTarget = key in target;
+    const hasBase = Object.hasOwn(base, key);
+    const hasTarget = Object.hasOwn(target, key);
     if (!hasTarget) {
       patch[key] = null;
       continue;

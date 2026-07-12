@@ -25,6 +25,7 @@ import {
 } from "./components/chat-background-tasks.ts";
 import {
   handleChatAttachmentDrop,
+  isChatRunWorking,
   renderChatComposer,
   resetChatComposerState,
 } from "./components/chat-composer.ts";
@@ -35,6 +36,7 @@ import {
   renderSessionWorkspaceToggle,
   type SessionWorkspaceProps,
 } from "./components/chat-session-workspace.ts";
+import { isSideChatPanelVisible, renderSideChatPanel } from "./components/chat-side-chat.ts";
 import "./components/chat-sidebar.ts";
 import type {
   DetailFullMessageResult,
@@ -72,8 +74,10 @@ export type ChatProps = {
   compactionStatus?: CompactionStatus | null;
   fallbackStatus?: FallbackStatus | null;
   messages: unknown[];
-  sideResult?: ChatSideResult | null;
-  sideResultPending?: ChatSideResultPending | null;
+  historyPagination?: { loading: boolean; onLoadOlder: () => void };
+  sideChatTurns?: ChatSideResult[];
+  sideChatPending?: ChatSideResultPending | null;
+  sideChatHidden?: boolean;
   toolMessages: unknown[];
   streamSegments: ChatStreamSegment[];
   stream: string | null;
@@ -120,7 +124,7 @@ export type ChatProps = {
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
   onAssistantAttachmentLoaded?: () => void;
   showNewMessages?: boolean;
-  onScrollToBottom?: () => void;
+  onScrollToBottom?: (options?: { smooth?: boolean }) => void;
   onRefresh: () => void;
   onToggleFocusMode?: () => void;
   getDraft?: () => string;
@@ -139,9 +143,15 @@ export type ChatProps = {
   onQueueRetry?: (id: string) => void;
   onQueueSteer?: (id: string) => void;
   onGoalCommand?: (command: string) => void;
-  /** Sends a detached /btw side question (chat selection popup). */
-  onSideQuestion?: (command: string) => void;
-  onDismissSideResult?: () => void;
+  /** Sends a detached /btw side question (selection popup or side-chat
+   * follow-up). `displayQuestion` overrides the pending-turn display when the
+   * command embeds carried follow-up context; `onSendRejected` lets the panel
+   * restore its typed follow-up when the detached send is not accepted. */
+  onSideQuestion?: (command: string, displayQuestion?: string, onSendRejected?: () => void) => void;
+  /** Hides the side-chat panel; the conversation (and a pending run) survives. */
+  onSideChatClose?: () => void;
+  /** Discards the side-chat conversation and retires any pending run. */
+  onSideChatClear?: () => void;
   onNewSession: () => void;
   onClearHistory?: () => void;
   agentsList: {
@@ -202,6 +212,12 @@ export function renderChat(props: ChatProps) {
   const tasksOpen = props.backgroundTasks?.collapsed === false;
   const tasksDockBottom = tasksOpen && props.backgroundTasks?.narrowLayout === true;
   const canCompose = props.canSend;
+  const sideChatProps = {
+    turns: props.sideChatTurns ?? [],
+    pending: props.sideChatPending ?? null,
+    hidden: props.sideChatHidden === true,
+  };
+  const sideChatVisible = isSideChatPanelVisible(sideChatProps);
   let chatSection: HTMLElement | null = null;
 
   const thread = renderChatThread({
@@ -217,6 +233,7 @@ export function renderChat(props: ChatProps) {
     showThinking: props.showThinking,
     showToolCalls: props.showToolCalls,
     runActive: Boolean(props.canAbort),
+    runWorking: isChatRunWorking(props),
     sessions: props.sessions,
     sessionHost: props.sessionHost,
     assistantName: props.assistantName,
@@ -268,8 +285,6 @@ export function renderChat(props: ChatProps) {
     fallbackStatus: props.fallbackStatus,
     messages: props.messages,
     stream: props.stream,
-    sideResult: props.sideResult,
-    sideResultPending: props.sideResultPending,
     queue: props.queue,
     draft: props.draft,
     sessions: props.sessions,
@@ -277,7 +292,6 @@ export function renderChat(props: ChatProps) {
     assistantName: props.assistantName,
     sendShortcut: props.sendShortcut,
     attachments: props.attachments,
-    showNewMessages: props.showNewMessages,
     replyTarget: props.replyTarget,
     realtimeTalkActive: props.realtimeTalkActive,
     realtimeTalkStatus: props.realtimeTalkStatus,
@@ -299,12 +313,25 @@ export function renderChat(props: ChatProps) {
     onQueueRetry: props.onQueueRetry,
     onQueueSteer: props.onQueueSteer,
     onGoalCommand: props.onGoalCommand,
-    onDismissSideResult: props.onDismissSideResult,
     onNewSession: props.onNewSession,
     onClearReply: props.onClearReply,
-    onScrollToBottom: props.onScrollToBottom,
     onAttachmentsChange: props.onAttachmentsChange,
   });
+  const scrollToBottomButton =
+    props.showNewMessages && props.onScrollToBottom
+      ? html`
+          <div class="chat-scroll-to-bottom-wrap">
+            <button
+              class="chat-scroll-to-bottom"
+              type="button"
+              @click=${() => props.onScrollToBottom?.({ smooth: true })}
+              aria-label="Scroll to latest"
+            >
+              ${icons.arrowDown}
+            </button>
+          </div>
+        `
+      : nothing;
 
   return html`
     <section
@@ -333,13 +360,9 @@ export function renderChat(props: ChatProps) {
           props.onClearReply?.();
           return;
         }
-        if (
-          event.key === "Escape" &&
-          (props.sideResult || props.sideResultPending) &&
-          !isChatThreadSearchOpen(props.paneId)
-        ) {
+        if (event.key === "Escape" && sideChatVisible && !isChatThreadSearchOpen(props.paneId)) {
           event.preventDefault();
-          props.onDismissSideResult?.();
+          props.onSideChatClose?.();
           return;
         }
         if ((event.metaKey || event.ctrlKey) && !event.shiftKey && event.key === "f") {
@@ -395,6 +418,18 @@ export function renderChat(props: ChatProps) {
         },
         requestUpdate,
       )}
+      ${props.historyPagination
+        ? html`<div class="chat-history-pagination">
+            <button
+              class="btn btn--sm"
+              type="button"
+              ?disabled=${props.historyPagination.loading}
+              @click=${props.historyPagination.onLoadOlder}
+            >
+              ${props.historyPagination.loading ? t("common.loading") : t("chat.loadOlder")}
+            </button>
+          </div>`
+        : nothing}
 
       <div
         class="chat-workbench ${props.sessionWorkspace?.collapsed
@@ -489,7 +524,17 @@ export function renderChat(props: ChatProps) {
                 onExpand: () => props.onExpandPullRequests?.(),
                 onDismiss: (pullRequest) => props.onDismissPullRequest?.(pullRequest),
               })}
-              ${chatColumnFooter}
+              ${scrollToBottomButton} ${chatColumnFooter}
+              ${renderSideChatPanel({
+                ...sideChatProps,
+                // Detached slash sends are refused while disconnected (see
+                // canSubmitDraft); hide the input instead of eating drafts.
+                canFollowUp:
+                  canCompose && props.connected && typeof props.onSideQuestion === "function",
+                onFollowUp: props.onSideQuestion,
+                onClose: props.onSideChatClose,
+                onClear: props.onSideChatClear,
+              })}
             </div>
 
             ${sidebarOpen
