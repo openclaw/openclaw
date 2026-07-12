@@ -243,7 +243,7 @@ function normalizeGatewayRestartHandoffRow(row: {
   return {
     kind: GATEWAY_SUPERVISOR_RESTART_HANDOFF_KIND,
     version: 1,
-    intentId: row.intent_id.trim().slice(0, MAX_INTENT_ID_LENGTH),
+    intentId: truncateUtf16Safe(row.intent_id.trim(), MAX_INTENT_ID_LENGTH),
     pid: row.pid,
     ...(processInstanceId ? { processInstanceId } : {}),
     createdAt: Math.floor(row.created_at),
