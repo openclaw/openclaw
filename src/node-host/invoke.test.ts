@@ -401,6 +401,49 @@ describe("node host invoke", () => {
   );
 
   it.runIf(process.platform !== "win32")(
+    "resolves node skill cwd locators before preparing system.run",
+    async () => {
+      const stateDir = fs.realpathSync(
+        fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-node-skill-cwd-")),
+      );
+      const skillDir = path.join(stateDir, "skills", "cwd-skill");
+      fs.mkdirSync(skillDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(skillDir, "SKILL.md"),
+        "---\nname: cwd-skill\ndescription: Cwd skill\n---\n",
+      );
+
+      try {
+        await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+          const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
+          const skillBins: SkillBinsProvider = { current: async () => [] };
+          await handleInvoke(
+            {
+              id: "invoke-skill-cwd",
+              nodeId: "node-1",
+              command: "system.run.prepare",
+              paramsJSON: JSON.stringify({
+                command: ["/bin/pwd"],
+                cwd: "node://node-1/skills/cwd-skill",
+              }),
+            },
+            { request } as unknown as GatewayClient,
+            skillBins,
+          );
+
+          const result = request.mock.calls[0]?.[1] as { payloadJSON?: string } | undefined;
+          const payload = JSON.parse(result?.payloadJSON ?? "{}") as {
+            plan?: { cwd?: string };
+          };
+          expect(payload.plan?.cwd).toBe(fs.realpathSync(skillDir));
+        });
+      } finally {
+        fs.rmSync(stateDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "keeps prepared allow-always coverage incomplete when any planned command is prompt-only",
     async () => {
       const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
