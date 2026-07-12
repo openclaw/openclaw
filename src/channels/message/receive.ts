@@ -88,6 +88,12 @@ export function createMessageReceiveContext<TMessage>(params: {
       delete ctx.nackErrorMessage;
     },
     nack: async (error) => {
+      // Nack callbacks must be idempotent because receive pipelines may
+      // revisit completed stages — same reason as ack() above.
+      // See: https://github.com/openclaw/openclaw/issues/104903
+      if (ctx.ackState !== "pending") {
+        return;
+      }
       await params.onNack?.(error);
       ctx.ackState = "nacked";
       ctx.nackErrorMessage = normalizeAckErrorMessage(error);
