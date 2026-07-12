@@ -222,8 +222,8 @@
       "source": "Active",
       "translations": [
         "Активний",
-        "Активні",
-        "Активно"
+        "Активно",
+        "Активні"
       ]
     },
     {
@@ -402,16 +402,16 @@
       "locale": "nl",
       "source": "Allow Once",
       "translations": [
-        "Eén keer toestaan",
-        "Eenmalig toestaan"
+        "Eenmalig toestaan",
+        "Eén keer toestaan"
       ]
     },
     {
       "locale": "pt-BR",
       "source": "Allow Once",
       "translations": [
-        "Permitir uma vez",
-        "Permitir Uma Vez"
+        "Permitir Uma Vez",
+        "Permitir uma vez"
       ]
     },
     {
@@ -626,8 +626,8 @@
       "locale": "pl",
       "source": "Asking OpenClaw",
       "translations": [
-        "Pytanie do OpenClaw",
-        "Pytanie OpenClaw"
+        "Pytanie OpenClaw",
+        "Pytanie do OpenClaw"
       ]
     },
     {
@@ -706,9 +706,9 @@
       "locale": "sv",
       "source": "Attention",
       "translations": [
-        "Åtgärd krävs",
         "Kräver uppmärksamhet",
-        "Observera"
+        "Observera",
+        "Åtgärd krävs"
       ]
     },
     {
@@ -732,8 +732,8 @@
       "locale": "vi",
       "source": "Attention",
       "translations": [
-        "Cần chú ý",
-        "Chú ý"
+        "Chú ý",
+        "Cần chú ý"
       ]
     },
     {
@@ -1014,24 +1014,24 @@
       "locale": "es",
       "source": "Connect to the gateway.",
       "translations": [
-        "Conéctate al gateway.",
-        "Conéctate al Gateway."
+        "Conéctate al Gateway.",
+        "Conéctate al gateway."
       ]
     },
     {
       "locale": "fa",
       "source": "Connect to the gateway.",
       "translations": [
-        "به gateway متصل شوید.",
-        "به Gateway متصل شوید."
+        "به Gateway متصل شوید.",
+        "به gateway متصل شوید."
       ]
     },
     {
       "locale": "it",
       "source": "Connect to the gateway.",
       "translations": [
-        "Connettiti al gateway.",
-        "Connettiti al Gateway."
+        "Connettiti al Gateway.",
+        "Connettiti al gateway."
       ]
     },
     {
@@ -1062,16 +1062,16 @@
       "locale": "th",
       "source": "Connect to the gateway.",
       "translations": [
-        "เชื่อมต่อกับ gateway",
-        "เชื่อมต่อกับ Gateway"
+        "เชื่อมต่อกับ Gateway",
+        "เชื่อมต่อกับ gateway"
       ]
     },
     {
       "locale": "zh-TW",
       "source": "Connect to the gateway.",
       "translations": [
-        "連線至 gateway。",
-        "連線至 Gateway。"
+        "連線至 Gateway。",
+        "連線至 gateway。"
       ]
     },
     {
@@ -1110,8 +1110,8 @@
       "locale": "fr",
       "source": "Connected",
       "translations": [
-        "Connecté",
-        "Connected"
+        "Connected",
+        "Connecté"
       ]
     },
     {
@@ -1361,8 +1361,8 @@
       "locale": "ja-JP",
       "source": "Connection security",
       "translations": [
-        "接続セキュリティ",
-        "接続のセキュリティ"
+        "接続のセキュリティ",
+        "接続セキュリティ"
       ]
     },
     {
@@ -1434,8 +1434,8 @@
       "locale": "fa",
       "source": "Cron Jobs",
       "translations": [
-        "کارهای Cron",
-        "وظایف Cron"
+        "وظایف Cron",
+        "کارهای Cron"
       ]
     },
     {
@@ -1476,8 +1476,8 @@
       "locale": "pl",
       "source": "Cron Jobs",
       "translations": [
-        "Zadania cron",
-        "Zadania Cron"
+        "Zadania Cron",
+        "Zadania cron"
       ]
     },
     {
@@ -1500,8 +1500,8 @@
       "locale": "tr",
       "source": "Cron Jobs",
       "translations": [
-        "Cron İşleri",
-        "Cron Jobs"
+        "Cron Jobs",
+        "Cron İşleri"
       ]
     },
     {
@@ -1690,46 +1690,6 @@
       ]
     },
     {
-      "locale": "de",
-      "source": "Default agent",
-      "translations": [
-        "Standard-Agent",
-        "Standardagent"
-      ]
-    },
-    {
-      "locale": "ja-JP",
-      "source": "Default agent",
-      "translations": [
-        "デフォルトエージェント",
-        "デフォルトのエージェント"
-      ]
-    },
-    {
-      "locale": "th",
-      "source": "Default agent",
-      "translations": [
-        "Agent เริ่มต้น",
-        "เอเจนต์เริ่มต้น"
-      ]
-    },
-    {
-      "locale": "zh-CN",
-      "source": "Default agent",
-      "translations": [
-        "默认 Agent",
-        "默认代理"
-      ]
-    },
-    {
-      "locale": "zh-TW",
-      "source": "Default agent",
-      "translations": [
-        "預設 agent",
-        "預設代理程式"
-      ]
-    },
-    {
       "locale": "ko",
       "source": "Default Agent",
       "translations": [
@@ -1775,6 +1735,46 @@
       "translations": [
         "預設 Agent",
         "預設代理"
+      ]
+    },
+    {
+      "locale": "de",
+      "source": "Default agent",
+      "translations": [
+        "Standard-Agent",
+        "Standardagent"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "Default agent",
+      "translations": [
+        "デフォルトのエージェント",
+        "デフォルトエージェント"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Default agent",
+      "translations": [
+        "Agent เริ่มต้น",
+        "เอเจนต์เริ่มต้น"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Default agent",
+      "translations": [
+        "默认 Agent",
+        "默认代理"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "Default agent",
+      "translations": [
+        "預設 agent",
+        "預設代理程式"
       ]
     },
     {
@@ -1997,8 +1997,8 @@
       "locale": "es",
       "source": "Discovery Logs",
       "translations": [
-        "Registros de descubrimiento",
-        "Registros de Discovery"
+        "Registros de Discovery",
+        "Registros de descubrimiento"
       ]
     },
     {
@@ -2455,8 +2455,8 @@
       "locale": "vi",
       "source": "Dreaming",
       "translations": [
-        "Đang mơ",
-        "Dreaming"
+        "Dreaming",
+        "Đang mơ"
       ]
     },
     {
@@ -2520,8 +2520,8 @@
       "locale": "pt-BR",
       "source": "Enable Talk",
       "translations": [
-        "Ativar conversa",
-        "Ativar Talk"
+        "Ativar Talk",
+        "Ativar conversa"
       ]
     },
     {
@@ -2562,22 +2562,6 @@
       "translations": [
         "啟用 Talk",
         "啟用對話"
-      ]
-    },
-    {
-      "locale": "ar",
-      "source": "enabled",
-      "translations": [
-        "مفعّل",
-        "مُمكّن"
-      ]
-    },
-    {
-      "locale": "pl",
-      "source": "enabled",
-      "translations": [
-        "włączone",
-        "włączono"
       ]
     },
     {
@@ -2656,8 +2640,8 @@
       "locale": "tr",
       "source": "Export Transcript",
       "translations": [
-        "Dökümü dışa aktar",
-        "Dökümü Dışa Aktar"
+        "Dökümü Dışa Aktar",
+        "Dökümü dışa aktar"
       ]
     },
     {
@@ -2736,8 +2720,8 @@
       "locale": "it",
       "source": "Gateway Auth Token",
       "translations": [
-        "Token di autenticazione del Gateway",
-        "Token di autenticazione Gateway"
+        "Token di autenticazione Gateway",
+        "Token di autenticazione del Gateway"
       ]
     },
     {
@@ -2768,8 +2752,8 @@
       "locale": "tr",
       "source": "Gateway Auth Token",
       "translations": [
-        "Gateway kimlik doğrulama belirteci",
-        "Gateway Kimlik Doğrulama Token'ı"
+        "Gateway Kimlik Doğrulama Token'ı",
+        "Gateway kimlik doğrulama belirteci"
       ]
     },
     {
@@ -2786,38 +2770,6 @@
       "translations": [
         "Gateway Auth Token",
         "Gateway 身份验证令牌"
-      ]
-    },
-    {
-      "locale": "ar",
-      "source": "Gateway connected",
-      "translations": [
-        "تم اتصال Gateway",
-        "تم اتصال الـ Gateway"
-      ]
-    },
-    {
-      "locale": "ja-JP",
-      "source": "Gateway connected",
-      "translations": [
-        "Gateway に接続しました",
-        "Gateway接続済み"
-      ]
-    },
-    {
-      "locale": "ru",
-      "source": "Gateway connected",
-      "translations": [
-        "Gateway подключен",
-        "Gateway подключён"
-      ]
-    },
-    {
-      "locale": "tr",
-      "source": "Gateway connected",
-      "translations": [
-        "Gateway bağlandı",
-        "Gateway bağlı"
       ]
     },
     {
@@ -2864,8 +2816,8 @@
       "locale": "vi",
       "source": "Gateway Default",
       "translations": [
-        "Mặc định của Gateway",
-        "Mặc định Gateway"
+        "Mặc định Gateway",
+        "Mặc định của Gateway"
       ]
     },
     {
@@ -2874,6 +2826,70 @@
       "translations": [
         "Gateway 默认",
         "Gateway 默认值"
+      ]
+    },
+    {
+      "locale": "fa",
+      "source": "Gateway Password",
+      "translations": [
+        "رمز عبور Gateway",
+        "گذرواژه Gateway"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "Gateway Password",
+      "translations": [
+        "Password Gateway",
+        "Password del Gateway"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "Gateway Password",
+      "translations": [
+        "Gateway Password",
+        "Gatewayパスワード"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Gateway Password",
+      "translations": [
+        "Gateway Parolası",
+        "Gateway parolası"
+      ]
+    },
+    {
+      "locale": "ar",
+      "source": "Gateway connected",
+      "translations": [
+        "تم اتصال Gateway",
+        "تم اتصال الـ Gateway"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "Gateway connected",
+      "translations": [
+        "Gateway に接続しました",
+        "Gateway接続済み"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Gateway connected",
+      "translations": [
+        "Gateway подключен",
+        "Gateway подключён"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Gateway connected",
+      "translations": [
+        "Gateway bağlandı",
+        "Gateway bağlı"
       ]
     },
     {
@@ -2888,8 +2904,8 @@
       "locale": "ja-JP",
       "source": "Gateway offline",
       "translations": [
-        "Gateway オフライン",
-        "Gateway がオフラインです"
+        "Gateway がオフラインです",
+        "Gateway オフライン"
       ]
     },
     {
@@ -2936,40 +2952,8 @@
       "locale": "vi",
       "source": "Gateway online",
       "translations": [
-        "Gateway đang trực tuyến",
-        "Gateway trực tuyến"
-      ]
-    },
-    {
-      "locale": "fa",
-      "source": "Gateway Password",
-      "translations": [
-        "رمز عبور Gateway",
-        "گذرواژه Gateway"
-      ]
-    },
-    {
-      "locale": "it",
-      "source": "Gateway Password",
-      "translations": [
-        "Password del Gateway",
-        "Password Gateway"
-      ]
-    },
-    {
-      "locale": "ja-JP",
-      "source": "Gateway Password",
-      "translations": [
-        "Gateway Password",
-        "Gatewayパスワード"
-      ]
-    },
-    {
-      "locale": "tr",
-      "source": "Gateway Password",
-      "translations": [
-        "Gateway parolası",
-        "Gateway Parolası"
+        "Gateway trực tuyến",
+        "Gateway đang trực tuyến"
       ]
     },
     {
@@ -2984,9 +2968,9 @@
       "locale": "fr",
       "source": "Gateway settings",
       "translations": [
+        "Paramètres Gateway",
         "Paramètres de Gateway",
-        "Paramètres du Gateway",
-        "Paramètres Gateway"
+        "Paramètres du Gateway"
       ]
     },
     {
@@ -3034,33 +3018,9 @@
       "source": "Host",
       "translations": [
         "Ana Bilgisayar",
-        "Ana makine",
         "Ana Makine",
+        "Ana makine",
         "Host"
-      ]
-    },
-    {
-      "locale": "id",
-      "source": "idle",
-      "translations": [
-        "siaga",
-        "tidak aktif"
-      ]
-    },
-    {
-      "locale": "pl",
-      "source": "idle",
-      "translations": [
-        "bezczynne",
-        "bezczynny"
-      ]
-    },
-    {
-      "locale": "ru",
-      "source": "idle",
-      "translations": [
-        "бездействует",
-        "ожидание"
       ]
     },
     {
@@ -3177,46 +3137,6 @@
     },
     {
       "locale": "ar",
-      "source": "live",
-      "translations": [
-        "مباشر",
-        "متصل"
-      ]
-    },
-    {
-      "locale": "es",
-      "source": "live",
-      "translations": [
-        "en directo",
-        "en vivo"
-      ]
-    },
-    {
-      "locale": "nl",
-      "source": "live",
-      "translations": [
-        "actief",
-        "live"
-      ]
-    },
-    {
-      "locale": "ru",
-      "source": "live",
-      "translations": [
-        "активен",
-        "активно"
-      ]
-    },
-    {
-      "locale": "sv",
-      "source": "live",
-      "translations": [
-        "aktiv",
-        "live"
-      ]
-    },
-    {
-      "locale": "ar",
       "source": "Loading",
       "translations": [
         "Loading",
@@ -3308,8 +3228,8 @@
       "locale": "pl",
       "source": "Loading",
       "translations": [
-        "Ładowanie",
-        "Loading"
+        "Loading",
+        "Ładowanie"
       ]
     },
     {
@@ -3333,8 +3253,8 @@
       "source": "Loading",
       "translations": [
         "Laddar",
-        "Läser in",
-        "Loading"
+        "Loading",
+        "Läser in"
       ]
     },
     {
@@ -3365,8 +3285,8 @@
       "locale": "vi",
       "source": "Loading",
       "translations": [
-        "Đang tải",
-        "Loading"
+        "Loading",
+        "Đang tải"
       ]
     },
     {
@@ -3384,6 +3304,126 @@
       "translations": [
         "Loading",
         "載入中"
+      ]
+    },
+    {
+      "locale": "ar",
+      "source": "Location Services are off in iOS Settings.",
+      "translations": [
+        "خدمات الموقع متوقفة في إعدادات iOS.",
+        "خدمات الموقع مُوقفة في إعدادات iOS."
+      ]
+    },
+    {
+      "locale": "de",
+      "source": "Location Services are off in iOS Settings.",
+      "translations": [
+        "Die Ortungsdienste sind in den iOS-Einstellungen deaktiviert.",
+        "Ortungsdienste sind in den iOS-Einstellungen ausgeschaltet."
+      ]
+    },
+    {
+      "locale": "es",
+      "source": "Location Services are off in iOS Settings.",
+      "translations": [
+        "Los Servicios de ubicación están desactivados en Ajustes de iOS.",
+        "Los servicios de ubicación están desactivados en los ajustes de iOS."
+      ]
+    },
+    {
+      "locale": "fa",
+      "source": "Location Services are off in iOS Settings.",
+      "translations": [
+        "خدمات مکان در تنظیمات iOS خاموش است.",
+        "سرویس‌های موقعیت مکانی در تنظیمات iOS خاموش هستند."
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "Location Services are off in iOS Settings.",
+      "translations": [
+        "Les services de localisation sont désactivés dans les Réglages iOS.",
+        "Les services de localisation sont désactivés dans les réglages iOS."
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "Location Services are off in iOS Settings.",
+      "translations": [
+        "iOS सेटिंग्स में Location Services बंद हैं।",
+        "iOS सेटिंग्स में स्थान सेवाएँ बंद हैं।"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "Location Services are off in iOS Settings.",
+      "translations": [
+        "I Servizi di localizzazione sono disattivati nelle Impostazioni di iOS.",
+        "I servizi di localizzazione sono disattivati nelle Impostazioni di iOS."
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "Location Services are off in iOS Settings.",
+      "translations": [
+        "iOS の設定で位置情報サービスがオフになっています。",
+        "iOS 設定で位置情報サービスがオフになっています。"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Location Services are off in iOS Settings.",
+      "translations": [
+        "Usługi lokalizacji są wyłączone w Ustawieniach iOS.",
+        "Usługi lokalizacji są wyłączone w ustawieniach iOS."
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "Location Services are off in iOS Settings.",
+      "translations": [
+        "Os Serviços de Localização estão desativados nas Configurações do iOS.",
+        "Os Serviços de Localização estão desativados nos Ajustes do iOS."
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Location Services are off in iOS Settings.",
+      "translations": [
+        "Службы геолокации выключены в настройках iOS.",
+        "Службы геолокации отключены в настройках iOS."
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Location Services are off in iOS Settings.",
+      "translations": [
+        "Location Services ถูกปิดอยู่ในการตั้งค่า iOS",
+        "บริการหาตำแหน่งที่ตั้งถูกปิดอยู่ในการตั้งค่า iOS"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Location Services are off in iOS Settings.",
+      "translations": [
+        "Konum Servisleri iOS Ayarları'nda kapalı.",
+        "iOS Ayarları'nda Konum Servisleri kapalı."
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Location Services are off in iOS Settings.",
+      "translations": [
+        "Dịch vụ Vị trí đang tắt trong Cài đặt iOS.",
+        "Dịch vụ định vị đang tắt trong Cài đặt iOS."
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Location Services are off in iOS Settings.",
+      "translations": [
+        "iOS 设置中的定位服务已关闭。",
+        "位置服务已在 iOS 设置中关闭。"
       ]
     },
     {
@@ -3430,8 +3470,8 @@
       "locale": "pl",
       "source": "Location permission is denied in iOS Settings.",
       "translations": [
-        "Uprawnienie do lokalizacji jest odrzucone w ustawieniach iOS.",
-        "Uprawnienie do lokalizacji jest odrzucone w Ustawieniach iOS."
+        "Uprawnienie do lokalizacji jest odrzucone w Ustawieniach iOS.",
+        "Uprawnienie do lokalizacji jest odrzucone w ustawieniach iOS."
       ]
     },
     {
@@ -3454,8 +3494,8 @@
       "locale": "sv",
       "source": "Location permission is denied in iOS Settings.",
       "translations": [
-        "Platsbehörighet är nekad i iOS-inställningarna.",
-        "Platsbehörighet nekas i iOS-inställningarna."
+        "Platsbehörighet nekas i iOS-inställningarna.",
+        "Platsbehörighet är nekad i iOS-inställningarna."
       ]
     },
     {
@@ -3571,126 +3611,6 @@
       ]
     },
     {
-      "locale": "ar",
-      "source": "Location Services are off in iOS Settings.",
-      "translations": [
-        "خدمات الموقع متوقفة في إعدادات iOS.",
-        "خدمات الموقع مُوقفة في إعدادات iOS."
-      ]
-    },
-    {
-      "locale": "de",
-      "source": "Location Services are off in iOS Settings.",
-      "translations": [
-        "Die Ortungsdienste sind in den iOS-Einstellungen deaktiviert.",
-        "Ortungsdienste sind in den iOS-Einstellungen ausgeschaltet."
-      ]
-    },
-    {
-      "locale": "es",
-      "source": "Location Services are off in iOS Settings.",
-      "translations": [
-        "Los Servicios de ubicación están desactivados en Ajustes de iOS.",
-        "Los servicios de ubicación están desactivados en los ajustes de iOS."
-      ]
-    },
-    {
-      "locale": "fa",
-      "source": "Location Services are off in iOS Settings.",
-      "translations": [
-        "خدمات مکان در تنظیمات iOS خاموش است.",
-        "سرویس‌های موقعیت مکانی در تنظیمات iOS خاموش هستند."
-      ]
-    },
-    {
-      "locale": "fr",
-      "source": "Location Services are off in iOS Settings.",
-      "translations": [
-        "Les services de localisation sont désactivés dans les réglages iOS.",
-        "Les services de localisation sont désactivés dans les Réglages iOS."
-      ]
-    },
-    {
-      "locale": "hi",
-      "source": "Location Services are off in iOS Settings.",
-      "translations": [
-        "iOS सेटिंग्स में Location Services बंद हैं।",
-        "iOS सेटिंग्स में स्थान सेवाएँ बंद हैं।"
-      ]
-    },
-    {
-      "locale": "it",
-      "source": "Location Services are off in iOS Settings.",
-      "translations": [
-        "I servizi di localizzazione sono disattivati nelle Impostazioni di iOS.",
-        "I Servizi di localizzazione sono disattivati nelle Impostazioni di iOS."
-      ]
-    },
-    {
-      "locale": "ja-JP",
-      "source": "Location Services are off in iOS Settings.",
-      "translations": [
-        "iOS の設定で位置情報サービスがオフになっています。",
-        "iOS 設定で位置情報サービスがオフになっています。"
-      ]
-    },
-    {
-      "locale": "pl",
-      "source": "Location Services are off in iOS Settings.",
-      "translations": [
-        "Usługi lokalizacji są wyłączone w ustawieniach iOS.",
-        "Usługi lokalizacji są wyłączone w Ustawieniach iOS."
-      ]
-    },
-    {
-      "locale": "pt-BR",
-      "source": "Location Services are off in iOS Settings.",
-      "translations": [
-        "Os Serviços de Localização estão desativados nas Configurações do iOS.",
-        "Os Serviços de Localização estão desativados nos Ajustes do iOS."
-      ]
-    },
-    {
-      "locale": "ru",
-      "source": "Location Services are off in iOS Settings.",
-      "translations": [
-        "Службы геолокации выключены в настройках iOS.",
-        "Службы геолокации отключены в настройках iOS."
-      ]
-    },
-    {
-      "locale": "th",
-      "source": "Location Services are off in iOS Settings.",
-      "translations": [
-        "Location Services ถูกปิดอยู่ในการตั้งค่า iOS",
-        "บริการหาตำแหน่งที่ตั้งถูกปิดอยู่ในการตั้งค่า iOS"
-      ]
-    },
-    {
-      "locale": "tr",
-      "source": "Location Services are off in iOS Settings.",
-      "translations": [
-        "iOS Ayarları'nda Konum Servisleri kapalı.",
-        "Konum Servisleri iOS Ayarları'nda kapalı."
-      ]
-    },
-    {
-      "locale": "vi",
-      "source": "Location Services are off in iOS Settings.",
-      "translations": [
-        "Dịch vụ định vị đang tắt trong Cài đặt iOS.",
-        "Dịch vụ Vị trí đang tắt trong Cài đặt iOS."
-      ]
-    },
-    {
-      "locale": "zh-CN",
-      "source": "Location Services are off in iOS Settings.",
-      "translations": [
-        "iOS 设置中的定位服务已关闭。",
-        "位置服务已在 iOS 设置中关闭。"
-      ]
-    },
-    {
       "locale": "id",
       "source": "Missing %@",
       "translations": [
@@ -3775,8 +3695,8 @@
       "locale": "sv",
       "source": "Needs attention",
       "translations": [
-        "Kräver åtgärd",
-        "Kräver uppmärksamhet"
+        "Kräver uppmärksamhet",
+        "Kräver åtgärd"
       ]
     },
     {
@@ -3833,8 +3753,8 @@
       "locale": "de",
       "source": "No approvals waiting",
       "translations": [
-        "Keine ausstehenden Genehmigungen",
-        "Keine Genehmigungen ausstehend"
+        "Keine Genehmigungen ausstehend",
+        "Keine ausstehenden Genehmigungen"
       ]
     },
     {
@@ -3953,8 +3873,8 @@
       "locale": "vi",
       "source": "No archived sessions",
       "translations": [
-        "Không có phiên đã lưu trữ",
-        "Không có phiên nào đã lưu trữ"
+        "Không có phiên nào đã lưu trữ",
+        "Không có phiên đã lưu trữ"
       ]
     },
     {
@@ -4177,8 +4097,8 @@
       "locale": "th",
       "source": "Not Now",
       "translations": [
-        "ไม่ใช่ตอนนี้",
-        "ยังไม่ใช่ตอนนี้"
+        "ยังไม่ใช่ตอนนี้",
+        "ไม่ใช่ตอนนี้"
       ]
     },
     {
@@ -4206,35 +4126,27 @@
       ]
     },
     {
-      "locale": "pl",
-      "source": "off",
+      "locale": "ar",
+      "source": "OK",
       "translations": [
-        "wył.",
-        "wyłączone"
-      ]
-    },
-    {
-      "locale": "pt-BR",
-      "source": "off",
-      "translations": [
-        "desativado",
-        "desligado"
+        "حسنًا",
+        "موافق"
       ]
     },
     {
       "locale": "ru",
-      "source": "off",
+      "source": "OK",
       "translations": [
-        "выкл.",
-        "выключено"
+        "OK",
+        "ОК"
       ]
     },
     {
-      "locale": "zh-CN",
-      "source": "off",
+      "locale": "zh-TW",
+      "source": "OK",
       "translations": [
-        "关",
-        "关闭"
+        "好",
+        "確定"
       ]
     },
     {
@@ -4309,22 +4221,6 @@
       "translations": [
         "關",
         "關閉"
-      ]
-    },
-    {
-      "locale": "id",
-      "source": "offline",
-      "translations": [
-        "luring",
-        "offline"
-      ]
-    },
-    {
-      "locale": "uk",
-      "source": "offline",
-      "translations": [
-        "не в мережі",
-        "офлайн"
       ]
     },
     {
@@ -4420,8 +4316,8 @@
       "locale": "tr",
       "source": "Offline",
       "translations": [
-        "Çevrimdışı",
-        "Offline"
+        "Offline",
+        "Çevrimdışı"
       ]
     },
     {
@@ -4457,62 +4353,6 @@
       ]
     },
     {
-      "locale": "ar",
-      "source": "OK",
-      "translations": [
-        "حسنًا",
-        "موافق"
-      ]
-    },
-    {
-      "locale": "ru",
-      "source": "OK",
-      "translations": [
-        "OK",
-        "ОК"
-      ]
-    },
-    {
-      "locale": "zh-TW",
-      "source": "OK",
-      "translations": [
-        "好",
-        "確定"
-      ]
-    },
-    {
-      "locale": "ar",
-      "source": "on",
-      "translations": [
-        "قيد التشغيل",
-        "مفعّل"
-      ]
-    },
-    {
-      "locale": "de",
-      "source": "on",
-      "translations": [
-        "an",
-        "ein"
-      ]
-    },
-    {
-      "locale": "pl",
-      "source": "on",
-      "translations": [
-        "wł.",
-        "włączone"
-      ]
-    },
-    {
-      "locale": "zh-CN",
-      "source": "on",
-      "translations": [
-        "开",
-        "开启"
-      ]
-    },
-    {
       "locale": "it",
       "source": "On",
       "translations": [
@@ -4542,14 +4382,6 @@
       "translations": [
         "開",
         "開啟"
-      ]
-    },
-    {
-      "locale": "uk",
-      "source": "online",
-      "translations": [
-        "онлайн",
-        "у мережі"
       ]
     },
     {
@@ -4596,8 +4428,8 @@
       "locale": "vi",
       "source": "Open Gateway Settings",
       "translations": [
-        "Mở cài đặt Gateway",
-        "Mở Cài đặt Gateway"
+        "Mở Cài đặt Gateway",
+        "Mở cài đặt Gateway"
       ]
     },
     {
@@ -4612,8 +4444,8 @@
       "locale": "it",
       "source": "Open Settings",
       "translations": [
-        "Apri impostazioni",
-        "Apri Impostazioni"
+        "Apri Impostazioni",
+        "Apri impostazioni"
       ]
     },
     {
@@ -4628,8 +4460,8 @@
       "locale": "vi",
       "source": "Open Settings",
       "translations": [
-        "Mở cài đặt",
-        "Mở Cài đặt"
+        "Mở Cài đặt",
+        "Mở cài đặt"
       ]
     },
     {
@@ -4758,8 +4590,8 @@
       "locale": "ru",
       "source": "Opens Settings / Gateway",
       "translations": [
-        "Открывает «Настройки / Gateway»",
         "Открывает Settings / Gateway",
+        "Открывает «Настройки / Gateway»",
         "Открывает Настройки / Gateway"
       ]
     },
@@ -4826,8 +4658,8 @@
       "locale": "tr",
       "source": "Overview",
       "translations": [
-        "Genel bakış",
-        "Genel Bakış"
+        "Genel Bakış",
+        "Genel bakış"
       ]
     },
     {
@@ -4922,8 +4754,8 @@
       "locale": "vi",
       "source": "Pairing",
       "translations": [
-        "Đang ghép đôi",
-        "Ghép nối"
+        "Ghép nối",
+        "Đang ghép đôi"
       ]
     },
     {
@@ -5003,8 +4835,8 @@
       "locale": "ru",
       "source": "Pinned",
       "translations": [
-        "Закреплённые",
-        "Закреплено"
+        "Закреплено",
+        "Закреплённые"
       ]
     },
     {
@@ -5027,8 +4859,8 @@
       "locale": "uk",
       "source": "Pinned",
       "translations": [
-        "Закріплені",
-        "Закріплено"
+        "Закріплено",
+        "Закріплені"
       ]
     },
     {
@@ -5059,8 +4891,8 @@
       "locale": "fa",
       "source": "Port",
       "translations": [
-        "پورت",
-        "درگاه"
+        "درگاه",
+        "پورت"
       ]
     },
     {
@@ -5099,16 +4931,16 @@
       "locale": "sv",
       "source": "QR Scanner Unavailable",
       "translations": [
-        "QR-skanner är inte tillgänglig",
-        "QR-skanner inte tillgänglig"
+        "QR-skanner inte tillgänglig",
+        "QR-skanner är inte tillgänglig"
       ]
     },
     {
       "locale": "th",
       "source": "QR Scanner Unavailable",
       "translations": [
-        "ไม่สามารถใช้เครื่องสแกน QR ได้",
-        "สแกนเนอร์ QR ไม่พร้อมใช้งาน"
+        "สแกนเนอร์ QR ไม่พร้อมใช้งาน",
+        "ไม่สามารถใช้เครื่องสแกน QR ได้"
       ]
     },
     {
@@ -5347,8 +5179,8 @@
       "locale": "uk",
       "source": "Reconnect",
       "translations": [
-        "Підключитися повторно",
-        "Повторно підключити"
+        "Повторно підключити",
+        "Підключитися повторно"
       ]
     },
     {
@@ -5589,8 +5421,8 @@
       "locale": "fr",
       "source": "Retry",
       "translations": [
-        "Réessayer",
-        "Retry"
+        "Retry",
+        "Réessayer"
       ]
     },
     {
@@ -5606,8 +5438,8 @@
       "locale": "id",
       "source": "Retry",
       "translations": [
-        "Coba lagi",
         "Coba Lagi",
+        "Coba lagi",
         "Retry"
       ]
     },
@@ -5689,8 +5521,8 @@
       "source": "Retry",
       "translations": [
         "Retry",
-        "Yeniden dene",
-        "Yeniden Dene"
+        "Yeniden Dene",
+        "Yeniden dene"
       ]
     },
     {
@@ -5753,16 +5585,16 @@
       "locale": "es",
       "source": "Same Machine (Dev)",
       "translations": [
-        "Misma máquina (desarrollo)",
-        "Misma máquina (Dev)"
+        "Misma máquina (Dev)",
+        "Misma máquina (desarrollo)"
       ]
     },
     {
       "locale": "it",
       "source": "Same Machine (Dev)",
       "translations": [
-        "Stessa macchina (dev)",
-        "Stessa macchina (Dev)"
+        "Stessa macchina (Dev)",
+        "Stessa macchina (dev)"
       ]
     },
     {
@@ -5785,8 +5617,8 @@
       "locale": "nl",
       "source": "Same Machine (Dev)",
       "translations": [
-        "Zelfde machine (dev)",
-        "Zelfde machine (Dev)"
+        "Zelfde machine (Dev)",
+        "Zelfde machine (dev)"
       ]
     },
     {
@@ -5801,8 +5633,8 @@
       "locale": "pt-BR",
       "source": "Same Machine (Dev)",
       "translations": [
-        "Mesma máquina (dev)",
-        "Mesma máquina (Dev)"
+        "Mesma máquina (Dev)",
+        "Mesma máquina (dev)"
       ]
     },
     {
@@ -5843,8 +5675,8 @@
       "source": "Scan QR",
       "translations": [
         "QR tara",
-        "QR'ı tara",
-        "QR'ı Tara"
+        "QR'ı Tara",
+        "QR'ı tara"
       ]
     },
     {
@@ -5867,8 +5699,8 @@
       "locale": "fr",
       "source": "Scope",
       "translations": [
-        "Périmètre",
-        "Portée"
+        "Portée",
+        "Périmètre"
       ]
     },
     {
@@ -5971,8 +5803,8 @@
       "locale": "ru",
       "source": "Secure (TLS)",
       "translations": [
-        "Защищённое (TLS)",
-        "Защищено (TLS)"
+        "Защищено (TLS)",
+        "Защищённое (TLS)"
       ]
     },
     {
@@ -6096,22 +5928,6 @@
       ]
     },
     {
-      "locale": "de",
-      "source": "setup",
-      "translations": [
-        "einrichten",
-        "Einrichtung"
-      ]
-    },
-    {
-      "locale": "it",
-      "source": "setup",
-      "translations": [
-        "configurazione",
-        "da configurare"
-      ]
-    },
-    {
       "locale": "ar",
       "source": "Setup",
       "translations": [
@@ -6156,8 +5972,8 @@
       "locale": "pt-BR",
       "source": "Setup",
       "translations": [
-        "Configuração",
-        "Configurar"
+        "Configurar",
+        "Configuração"
       ]
     },
     {
@@ -6196,8 +6012,8 @@
       "locale": "fr",
       "source": "Skill Workshop",
       "translations": [
-        "Atelier des Skills",
-        "Atelier Skills"
+        "Atelier Skills",
+        "Atelier des Skills"
       ]
     },
     {
@@ -6580,8 +6396,8 @@
       "locale": "tr",
       "source": "Start failed: %@",
       "translations": [
-        "Başlatılamadı: %@",
-        "Başlatma başarısız: %@"
+        "Başlatma başarısız: %@",
+        "Başlatılamadı: %@"
       ]
     },
     {
@@ -6596,8 +6412,8 @@
       "locale": "fr",
       "source": "Status",
       "translations": [
-        "État",
-        "Statut"
+        "Statut",
+        "État"
       ]
     },
     {
@@ -6833,8 +6649,8 @@
       "locale": "id",
       "source": "Unarchive",
       "translations": [
-        "Batalkan arsip",
-        "Batalkan Pengarsipan"
+        "Batalkan Pengarsipan",
+        "Batalkan arsip"
       ]
     },
     {
@@ -6890,8 +6706,8 @@
       "locale": "tr",
       "source": "Unarchive",
       "translations": [
-        "Arşivden çıkar",
-        "Arşivden Çıkar"
+        "Arşivden Çıkar",
+        "Arşivden çıkar"
       ]
     },
     {
@@ -6915,16 +6731,16 @@
       "locale": "fa",
       "source": "Unencrypted",
       "translations": [
-        "رمزگذاری‌نشده",
-        "رمزنگاری‌نشده"
+        "رمزنگاری‌نشده",
+        "رمزگذاری‌نشده"
       ]
     },
     {
       "locale": "id",
       "source": "Unencrypted",
       "translations": [
-        "Tidak terenkripsi",
-        "Tidak Terenkripsi"
+        "Tidak Terenkripsi",
+        "Tidak terenkripsi"
       ]
     },
     {
@@ -6963,8 +6779,8 @@
       "locale": "de",
       "source": "Unpin",
       "translations": [
-        "Lösen",
-        "Loslösen"
+        "Loslösen",
+        "Lösen"
       ]
     },
     {
@@ -6987,8 +6803,8 @@
       "locale": "id",
       "source": "Unpin",
       "translations": [
-        "Lepas sematan",
-        "Lepas Sematan"
+        "Lepas Sematan",
+        "Lepas sematan"
       ]
     },
     {
@@ -7003,8 +6819,8 @@
       "locale": "tr",
       "source": "Unpin",
       "translations": [
-        "Sabitlemeyi kaldır",
-        "Sabitlemeyi Kaldır"
+        "Sabitlemeyi Kaldır",
+        "Sabitlemeyi kaldır"
       ]
     },
     {
@@ -7051,16 +6867,16 @@
       "locale": "es",
       "source": "Use Manual Setup",
       "translations": [
-        "Usar configuración manual",
-        "Usar Configuración manual"
+        "Usar Configuración manual",
+        "Usar configuración manual"
       ]
     },
     {
       "locale": "fr",
       "source": "Use Manual Setup",
       "translations": [
-        "Utiliser la configuration manuelle",
-        "Utiliser la Configuration manuelle"
+        "Utiliser la Configuration manuelle",
+        "Utiliser la configuration manuelle"
       ]
     },
     {
@@ -7083,8 +6899,8 @@
       "locale": "it",
       "source": "Use Manual Setup",
       "translations": [
-        "Usa configurazione manuale",
-        "Usa Configurazione manuale"
+        "Usa Configurazione manuale",
+        "Usa configurazione manuale"
       ]
     },
     {
@@ -7099,16 +6915,16 @@
       "locale": "pt-BR",
       "source": "Use Manual Setup",
       "translations": [
-        "Usar configuração manual",
-        "Usar Configuração Manual"
+        "Usar Configuração Manual",
+        "Usar configuração manual"
       ]
     },
     {
       "locale": "sv",
       "source": "Use Manual Setup",
       "translations": [
-        "Använd manuell konfiguration",
-        "Använd Manuell konfiguration"
+        "Använd Manuell konfiguration",
+        "Använd manuell konfiguration"
       ]
     },
     {
@@ -7165,6 +6981,70 @@
       "translations": [
         "Голосовий режим",
         "Режим голосу"
+      ]
+    },
+    {
+      "locale": "de",
+      "source": "Voice Wake",
+      "translations": [
+        "Sprachaktivierung",
+        "Voice Wake"
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "Voice Wake",
+      "translations": [
+        "Voice Wake",
+        "वॉइस वेक"
+      ]
+    },
+    {
+      "locale": "id",
+      "source": "Voice Wake",
+      "translations": [
+        "Bangun Suara",
+        "Bangun dengan Suara"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "Voice Wake",
+      "translations": [
+        "Attivazione vocale",
+        "Risveglio vocale"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Voice Wake",
+      "translations": [
+        "Spraakactivering",
+        "Stemactivering"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Voice Wake",
+      "translations": [
+        "Голосовая активация",
+        "Голосовое пробуждение"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Voice Wake",
+      "translations": [
+        "Röstaktivering",
+        "Röstväckning"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Voice Wake",
+      "translations": [
+        "การปลุกด้วยเสียง",
+        "ปลุกด้วยเสียง"
       ]
     },
     {
@@ -7337,70 +7217,6 @@
     },
     {
       "locale": "de",
-      "source": "Voice Wake",
-      "translations": [
-        "Sprachaktivierung",
-        "Voice Wake"
-      ]
-    },
-    {
-      "locale": "hi",
-      "source": "Voice Wake",
-      "translations": [
-        "Voice Wake",
-        "वॉइस वेक"
-      ]
-    },
-    {
-      "locale": "id",
-      "source": "Voice Wake",
-      "translations": [
-        "Bangun dengan Suara",
-        "Bangun Suara"
-      ]
-    },
-    {
-      "locale": "it",
-      "source": "Voice Wake",
-      "translations": [
-        "Attivazione vocale",
-        "Risveglio vocale"
-      ]
-    },
-    {
-      "locale": "nl",
-      "source": "Voice Wake",
-      "translations": [
-        "Spraakactivering",
-        "Stemactivering"
-      ]
-    },
-    {
-      "locale": "ru",
-      "source": "Voice Wake",
-      "translations": [
-        "Голосовая активация",
-        "Голосовое пробуждение"
-      ]
-    },
-    {
-      "locale": "sv",
-      "source": "Voice Wake",
-      "translations": [
-        "Röstaktivering",
-        "Röstväckning"
-      ]
-    },
-    {
-      "locale": "th",
-      "source": "Voice Wake",
-      "translations": [
-        "การปลุกด้วยเสียง",
-        "ปลุกด้วยเสียง"
-      ]
-    },
-    {
-      "locale": "de",
       "source": "Wake Words",
       "translations": [
         "Aktivierungswörter",
@@ -7411,8 +7227,8 @@
       "locale": "fr",
       "source": "Wake Words",
       "translations": [
-        "Mots d’activation",
-        "Mots de réveil"
+        "Mots de réveil",
+        "Mots d’activation"
       ]
     },
     {
@@ -7459,8 +7275,8 @@
       "locale": "tr",
       "source": "Wake Words",
       "translations": [
-        "Uyandırma sözcükleri",
-        "Uyandırma Sözcükleri"
+        "Uyandırma Sözcükleri",
+        "Uyandırma sözcükleri"
       ]
     },
     {
@@ -7507,8 +7323,8 @@
       "locale": "pt-BR",
       "source": "While Using the App",
       "translations": [
-        "Ao usar o app",
-        "Ao Usar o App"
+        "Ao Usar o App",
+        "Ao usar o app"
       ]
     },
     {
@@ -7595,8 +7411,192 @@
       "locale": "tr",
       "source": "Workboard",
       "translations": [
-        "Çalışma panosu",
-        "Çalışma Panosu"
+        "Çalışma Panosu",
+        "Çalışma panosu"
+      ]
+    },
+    {
+      "locale": "ar",
+      "source": "enabled",
+      "translations": [
+        "مفعّل",
+        "مُمكّن"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "enabled",
+      "translations": [
+        "włączone",
+        "włączono"
+      ]
+    },
+    {
+      "locale": "id",
+      "source": "idle",
+      "translations": [
+        "siaga",
+        "tidak aktif"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "idle",
+      "translations": [
+        "bezczynne",
+        "bezczynny"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "idle",
+      "translations": [
+        "бездействует",
+        "ожидание"
+      ]
+    },
+    {
+      "locale": "ar",
+      "source": "live",
+      "translations": [
+        "مباشر",
+        "متصل"
+      ]
+    },
+    {
+      "locale": "es",
+      "source": "live",
+      "translations": [
+        "en directo",
+        "en vivo"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "live",
+      "translations": [
+        "actief",
+        "live"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "live",
+      "translations": [
+        "активен",
+        "активно"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "live",
+      "translations": [
+        "aktiv",
+        "live"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "off",
+      "translations": [
+        "wył.",
+        "wyłączone"
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "off",
+      "translations": [
+        "desativado",
+        "desligado"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "off",
+      "translations": [
+        "выкл.",
+        "выключено"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "off",
+      "translations": [
+        "关",
+        "关闭"
+      ]
+    },
+    {
+      "locale": "id",
+      "source": "offline",
+      "translations": [
+        "luring",
+        "offline"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "offline",
+      "translations": [
+        "не в мережі",
+        "офлайн"
+      ]
+    },
+    {
+      "locale": "ar",
+      "source": "on",
+      "translations": [
+        "قيد التشغيل",
+        "مفعّل"
+      ]
+    },
+    {
+      "locale": "de",
+      "source": "on",
+      "translations": [
+        "an",
+        "ein"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "on",
+      "translations": [
+        "wł.",
+        "włączone"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "on",
+      "translations": [
+        "开",
+        "开启"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "online",
+      "translations": [
+        "онлайн",
+        "у мережі"
+      ]
+    },
+    {
+      "locale": "de",
+      "source": "setup",
+      "translations": [
+        "Einrichtung",
+        "einrichten"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "setup",
+      "translations": [
+        "configurazione",
+        "da configurare"
       ]
     }
   ]
