@@ -442,7 +442,7 @@ private fun SkillWorkshopProposalRow(
       }
       Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         ClawStatusPill(
-          text = if (busy) "loading" else proposal.status,
+          text = skillWorkshopStatusLabel(if (busy) "loading" else proposal.status),
           status = skillWorkshopStatusPill(proposal.status),
         )
         Text(
@@ -497,7 +497,10 @@ private fun SkillWorkshopProposalDetail(
             overflow = TextOverflow.Ellipsis,
           )
         }
-        ClawStatusPill(text = proposal.status, status = skillWorkshopStatusPill(proposal.status))
+        ClawStatusPill(
+          text = skillWorkshopStatusLabel(proposal.status),
+          status = skillWorkshopStatusPill(proposal.status),
+        )
       }
       proposal.description?.let { description ->
         Text(text = description, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
@@ -655,6 +658,16 @@ internal fun skillWorkshopProposalActionEnabled(
   busy: Boolean,
   status: String,
 ): Boolean = isConnected && operatorAdminScopeAvailable && !busy && status == "pending"
+
+internal fun skillWorkshopStatusLabel(status: String): String =
+  when (status) {
+    "pending" -> nativeString("Pending")
+    "quarantined", "stale" -> nativeString("Held")
+    "applied" -> nativeString("Applied")
+    "rejected" -> nativeString("Rejected")
+    "loading" -> nativeString("Loading")
+    else -> status
+  }
 
 private fun skillWorkshopFilterLabel(filter: String): String =
   when (filter) {

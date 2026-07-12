@@ -292,6 +292,17 @@ class ShellScreenLogicTest {
   }
 
   @Test
+  fun skillWorkshopStatusLabelsMapKnownCodesAndPreserveUnknownValues() {
+    assertEquals("Pending", skillWorkshopStatusLabel("pending"))
+    assertEquals("Held", skillWorkshopStatusLabel("quarantined"))
+    assertEquals("Held", skillWorkshopStatusLabel("stale"))
+    assertEquals("Applied", skillWorkshopStatusLabel("applied"))
+    assertEquals("Rejected", skillWorkshopStatusLabel("rejected"))
+    assertEquals("Loading", skillWorkshopStatusLabel("loading"))
+    assertEquals("future_status", skillWorkshopStatusLabel("future_status"))
+  }
+
+  @Test
   fun skillWorkshopVisibleProposalsAreKeyedBySelectedAgentScope() {
     val mainProposal = skillWorkshopProposal("main-proposal", "pending")
     val opsProposal = skillWorkshopProposal("ops-proposal", "pending")
