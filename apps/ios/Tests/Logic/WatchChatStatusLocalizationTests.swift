@@ -9,6 +9,7 @@ struct WatchChatStatusLocalizationTests {
         #expect(snapshot.gatewayStatus.code == .gatewayProblem)
         #expect(snapshot.gatewayStatus.localizationKey == "Gateway update required")
         #expect(snapshot.gatewayStatus.verbatim == nil)
+        #expect(snapshot.agentAvatarURL == "https://example.com/avatar.png")
         #expect(snapshot.talkStatus.code == .talkOff)
         #expect(snapshot.chatStatus?.code == .chatConnectIPhone)
     }
@@ -158,6 +159,7 @@ struct WatchChatStatusLocalizationTests {
             ],
             "gatewayConnected": false,
             "agentName": "Main",
+            "agentAvatarURL": "https://example.com/avatar.png",
             "sessionKey": "main",
             "talkStatus": [
                 "code": OpenClawWatchAppStatusCode.talkOff.rawValue,
