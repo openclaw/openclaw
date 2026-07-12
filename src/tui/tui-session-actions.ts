@@ -520,6 +520,23 @@ export function createSessionActions(context: SessionActionContext) {
           }
           continue;
         }
+        if (message.role === "bashExecution") {
+          // A user-run `!`/`!!` local shell command, not an agent tool call: always
+          // shown on replay regardless of verbose level, matching the live echo in
+          // tui-local-shell.ts (which itself never gates on verbose either).
+          const command = asString(message.command, "");
+          chatLog.addSystem(`[local] $ ${command}`);
+          const output = asString(message.output, "");
+          if (output) {
+            for (const outputLine of output.split("\n")) {
+              chatLog.addSystem(`[local] ${outputLine}`);
+            }
+          }
+          const exitCode = typeof message.exitCode === "number" ? message.exitCode : undefined;
+          const cancelled = message.cancelled === true;
+          chatLog.addSystem(`[local] exit ${cancelled ? "cancelled" : (exitCode ?? "?")}`);
+          continue;
+        }
         if (message.role === "toolResult") {
           if (!showTools) {
             continue;

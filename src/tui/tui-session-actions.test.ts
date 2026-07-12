@@ -1365,6 +1365,54 @@ describe("tui session actions", () => {
     });
   });
 
+  it("replays a persisted bashExecution (`!`/`!!`) message as local-echo system lines", async () => {
+    const loadHistory = vi.fn().mockResolvedValue({
+      sessionId: "session-main",
+      messages: [
+        {
+          role: "bashExecution",
+          command: "echo hi",
+          output: "hi",
+          exitCode: 0,
+          excludeFromContext: false,
+        },
+        {
+          role: "bashExecution",
+          command: "false",
+          output: "",
+          exitCode: 1,
+          cancelled: false,
+          excludeFromContext: true,
+        },
+      ],
+    });
+    const addSystem = vi.fn();
+    const chatLog = {
+      addSystem,
+      addUser: vi.fn(),
+      finalizeAssistant: vi.fn(),
+      clearAll: vi.fn(),
+      clearPendingUsers: vi.fn(),
+      reconcilePendingUsers: vi.fn().mockReturnValue([]),
+      restorePendingUsers: vi.fn(),
+    };
+
+    const { loadHistory: runLoadHistory } = createTestSessionActions({
+      client: { listSessions: vi.fn(), loadHistory } as unknown as TuiBackend,
+      chatLog: chatLog as unknown as import("./components/chat-log.js").ChatLog,
+    });
+
+    await runLoadHistory();
+
+    // Rendered regardless of excludeFromContext: that flag only controls whether the
+    // model sees it, never whether the TUI shows it back to the user on resume.
+    expect(addSystem).toHaveBeenCalledWith("[local] $ echo hi");
+    expect(addSystem).toHaveBeenCalledWith("[local] hi");
+    expect(addSystem).toHaveBeenCalledWith("[local] exit 0");
+    expect(addSystem).toHaveBeenCalledWith("[local] $ false");
+    expect(addSystem).toHaveBeenCalledWith("[local] exit 1");
+  });
+
   it("force-renders after rebuilding chat history so transient status rows are cleared", async () => {
     const loadHistory = vi.fn().mockResolvedValue({
       sessionId: "session-main",
