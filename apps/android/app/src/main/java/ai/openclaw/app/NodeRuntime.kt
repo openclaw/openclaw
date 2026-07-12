@@ -5997,29 +5997,9 @@ class NodeRuntime private constructor(
     val body = raw.substringAfter("<!-- openclaw:dreaming:diary:start -->", raw).substringBefore("<!-- openclaw:dreaming:diary:end -->")
     return body
       .split(Regex("\\n---\\n"))
-      .mapNotNull(::parseDreamDiaryEntry)
+      .mapNotNull(::parseGatewayDreamDiaryEntry)
       .asReversed()
       .take(4)
-  }
-
-  private fun parseDreamDiaryEntry(block: String): GatewayDreamDiaryEntry? {
-    val lines = block.trim().lines()
-    val date =
-      lines
-        .firstOrNull { line ->
-          val trimmed = line.trim()
-          trimmed.length > 2 && trimmed.startsWith("*") && trimmed.endsWith("*")
-        }?.trim()
-        ?.trim('*')
-        ?.takeIf { it.isNotEmpty() }
-    val text =
-      lines
-        .map { it.trim() }
-        .filter { line -> line.isNotEmpty() && !line.startsWith("#") && !line.startsWith("<!--") && !(line.startsWith("*") && line.endsWith("*")) }
-        .joinToString(" ")
-        .replace(Regex("\\s+"), " ")
-        .takeIf { it.isNotEmpty() }
-    return text?.let { GatewayDreamDiaryEntry(date = date ?: "Dream", text = it) }
   }
 
   private fun parseStringArray(items: JsonArray?): List<String> =
@@ -6711,9 +6691,34 @@ data class GatewayDreamingSummary(
 )
 
 data class GatewayDreamDiaryEntry(
-  val date: String,
+  val date: NativeText,
   val text: String,
 )
+
+internal fun parseGatewayDreamDiaryEntry(block: String): GatewayDreamDiaryEntry? {
+  val lines = block.trim().lines()
+  val date =
+    lines
+      .firstOrNull { line ->
+        val trimmed = line.trim()
+        trimmed.length > 2 && trimmed.startsWith("*") && trimmed.endsWith("*")
+      }?.trim()
+      ?.trim('*')
+      ?.takeIf { it.isNotEmpty() }
+  val text =
+    lines
+      .map { it.trim() }
+      .filter { line -> line.isNotEmpty() && !line.startsWith("#") && !line.startsWith("<!--") && !(line.startsWith("*") && line.endsWith("*")) }
+      .joinToString(" ")
+      .replace(Regex("\\s+"), " ")
+      .takeIf { it.isNotEmpty() }
+  return text?.let {
+    GatewayDreamDiaryEntry(
+      date = date?.let(::verbatimText) ?: nativeText("Dream"),
+      text = it,
+    )
+  }
+}
 
 data class GatewayHealthLogsSummary(
   val fileName: String? = null,

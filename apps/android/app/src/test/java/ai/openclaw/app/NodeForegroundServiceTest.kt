@@ -5,6 +5,12 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.take
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -24,6 +30,31 @@ import java.util.UUID
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class NodeForegroundServiceTest {
+  @Test
+  fun stableNotificationStateReemitsWhenLocaleChanges() =
+    runBlocking {
+      val localeChanges = MutableStateFlow(0L)
+      val firstEmission = CompletableDeferred<Unit>()
+      val emissions = mutableListOf<String>()
+      val collection =
+        launch(start = CoroutineStart.UNDISPATCHED) {
+          refreshNotificationOnLocaleChanges(
+            states = flowOf("stable"),
+            localeChanges = localeChanges,
+          ).take(2)
+            .collect { state ->
+              emissions += state
+              if (emissions.size == 1) firstEmission.complete(Unit)
+            }
+        }
+
+      firstEmission.await()
+      localeChanges.value = 1L
+      collection.join()
+
+      assertEquals(listOf("stable", "stable"), emissions)
+    }
+
   @Test
   fun restoreStickyRuntimeCreatesAndActivatesMissingProcessRuntime() =
     runBlocking {

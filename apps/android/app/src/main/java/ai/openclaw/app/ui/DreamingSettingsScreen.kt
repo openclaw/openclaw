@@ -4,6 +4,7 @@ import ai.openclaw.app.GatewayDreamDiaryEntry
 import ai.openclaw.app.GatewayDreamingSummary
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.i18n.resolveNativeText
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawSecondaryButton
 import ai.openclaw.app.ui.design.ClawStatusRow
@@ -166,7 +167,7 @@ private fun DreamDiaryRow(entry: GatewayDreamDiaryEntry) {
     }
     Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
       Text(
-        text = if (entry.date == "Dream") nativeString("Dream") else entry.date,
+        text = entry.date.resolveNativeText(),
         style = ClawTheme.type.body,
         color = ClawTheme.colors.text,
         maxLines = 1,

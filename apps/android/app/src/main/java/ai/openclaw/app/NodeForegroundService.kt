@@ -1,5 +1,6 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.i18n.nativeLocaleChanges
 import ai.openclaw.app.i18n.nativeString
 import android.Manifest
 import android.app.Notification
@@ -21,6 +22,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -88,36 +90,41 @@ class NodeForegroundService : Service() {
     // can update without restarting runtime-owned connection work.
     notificationJob =
       scope.launch {
-        combine(
+        val notificationStates =
           combine(
-            runtime.gatewayConnectionDisplay,
-            runtime.serverName,
-            runtime.voiceCaptureMode,
-            runtime.locationMode,
-          ) { connection, server, mode, _ ->
-            VoiceNotificationBase(
-              status = connection.statusText,
-              server = server,
-              connected = connection.isConnected,
-              mode = mode,
-            )
-          },
-          combine(
-            runtime.micEnabled,
-            runtime.micIsListening,
-            runtime.talkModeListening,
-            runtime.talkModeSpeaking,
-          ) { micEnabled, micListening, talkListening, talkSpeaking ->
-            VoiceNotificationCapture(
-              micEnabled = micEnabled,
-              micListening = micListening,
-              talkListening = talkListening,
-              talkSpeaking = talkSpeaking,
-            )
-          },
-        ) { base, capture ->
-          VoiceNotificationState(base = base, capture = capture)
-        }.collect { state ->
+            combine(
+              runtime.gatewayConnectionDisplay,
+              runtime.serverName,
+              runtime.voiceCaptureMode,
+              runtime.locationMode,
+            ) { connection, server, mode, _ ->
+              VoiceNotificationBase(
+                status = connection.statusText,
+                server = server,
+                connected = connection.isConnected,
+                mode = mode,
+              )
+            },
+            combine(
+              runtime.micEnabled,
+              runtime.micIsListening,
+              runtime.talkModeListening,
+              runtime.talkModeSpeaking,
+            ) { micEnabled, micListening, talkListening, talkSpeaking ->
+              VoiceNotificationCapture(
+                micEnabled = micEnabled,
+                micListening = micListening,
+                talkListening = talkListening,
+                talkSpeaking = talkSpeaking,
+              )
+            },
+          ) { base, capture ->
+            VoiceNotificationState(base = base, capture = capture)
+          }
+        refreshNotificationOnLocaleChanges(
+          states = notificationStates,
+          localeChanges = nativeLocaleChanges,
+        ).collect { state ->
           voiceCaptureMode = state.mode
           val title =
             when {
@@ -413,3 +420,9 @@ private data class VoiceNotificationState(
   val mode: VoiceCaptureMode
     get() = base.mode
 }
+
+/** Re-emits stable runtime state when app-owned notification copy changes locale. */
+internal fun <T> refreshNotificationOnLocaleChanges(
+  states: Flow<T>,
+  localeChanges: Flow<Long>,
+): Flow<T> = combine(states, localeChanges) { state, _ -> state }

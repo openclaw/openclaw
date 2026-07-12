@@ -85,10 +85,16 @@ internal data class GatewayScannedSetupCodeResult(
 )
 
 private val gatewaySetupJson = Json { ignoreUnknownKeys = true }
-private const val remoteGatewaySecurityRule =
-  "Public gateways require wss:// or Tailscale Serve. ws:// is allowed for localhost, .local hosts, the Android emulator, and private LAN IPs."
-private const val remoteGatewaySecurityFix =
-  "Use a private LAN IP for local setup, or enable Tailscale Serve / expose a wss:// gateway URL for remote access."
+
+private fun remoteGatewaySecurityRule(): String =
+  nativeString(
+    "Public gateways require wss:// or Tailscale Serve. ws:// is allowed for localhost, .local hosts, the Android emulator, and private LAN IPs.",
+  )
+
+private fun remoteGatewaySecurityFix(): String =
+  nativeString(
+    "Use a private LAN IP for local setup, or enable Tailscale Serve / expose a wss:// gateway URL for remote access.",
+  )
 
 /** Resolves setup-code or manual UI fields without reading stored credentials. */
 internal fun resolveGatewayConnectConfig(
@@ -305,11 +311,23 @@ internal fun gatewayEndpointValidationMessage(
     GatewayEndpointValidationError.INSECURE_REMOTE_URL ->
       when (source) {
         GatewayEndpointInputSource.SETUP_CODE ->
-          nativeString("Setup code points to an insecure remote gateway. \$remoteGatewaySecurityRule \$remoteGatewaySecurityFix", remoteGatewaySecurityRule, remoteGatewaySecurityFix)
+          nativeString(
+            "Setup code points to an insecure remote gateway. \$remoteGatewaySecurityRule \$remoteGatewaySecurityFix",
+            remoteGatewaySecurityRule(),
+            remoteGatewaySecurityFix(),
+          )
         GatewayEndpointInputSource.QR_SCAN ->
-          nativeString("QR code points to an insecure remote gateway. \$remoteGatewaySecurityRule \$remoteGatewaySecurityFix", remoteGatewaySecurityRule, remoteGatewaySecurityFix)
+          nativeString(
+            "QR code points to an insecure remote gateway. \$remoteGatewaySecurityRule \$remoteGatewaySecurityFix",
+            remoteGatewaySecurityRule(),
+            remoteGatewaySecurityFix(),
+          )
         GatewayEndpointInputSource.MANUAL ->
-          nativeString("\$remoteGatewaySecurityRule \$remoteGatewaySecurityFix", remoteGatewaySecurityRule, remoteGatewaySecurityFix)
+          nativeString(
+            "\$remoteGatewaySecurityRule \$remoteGatewaySecurityFix",
+            remoteGatewaySecurityRule(),
+            remoteGatewaySecurityFix(),
+          )
       }
     GatewayEndpointValidationError.IPV6_ZONE_ID_UNSUPPORTED ->
       when (source) {
