@@ -1980,6 +1980,41 @@ describe("buildChatItems", () => {
     expect(canvasBlocksIn(assistant as MessageGroup)).toHaveLength(1);
   });
 
+  it("deduplicates timestamp-less persisted and live copies in the same turn", () => {
+    const persisted = {
+      ...mcpAppResult("mcp-app-untimestamped", "call-untimestamped", 1_001),
+      timestamp: undefined,
+    };
+    const groups = messageGroups({
+      messages: [{ role: "user", content: "Show the App", timestamp: 1_000 }, persisted],
+      toolMessages: [mcpAppLiveResult("mcp-app-untimestamped", "call-untimestamped", 1_001)],
+      showToolCalls: false,
+    });
+
+    expect(groups.flatMap((group) => canvasBlocksIn(group))).toHaveLength(1);
+  });
+
+  it("keeps distinct App previews when a tool-call ID is reused", () => {
+    const first = {
+      ...mcpAppResult("mcp-app-first", "call-reused", 1_001),
+      timestamp: undefined,
+    };
+    const second = mcpAppLiveResult("mcp-app-second", "call-reused", undefined);
+    const groups = messageGroups({
+      messages: [
+        { role: "user", content: "First App", timestamp: 1_000 },
+        first,
+        { role: "user", content: "Second App", timestamp: 2_000 },
+      ],
+      toolMessages: [second],
+      showToolCalls: false,
+    });
+
+    expect(groups.map((group) => group.role)).toEqual(["user", "assistant", "user", "assistant"]);
+    expect(canvasBlocksIn(groupAt(groups, 1))).toHaveLength(1);
+    expect(canvasBlocksIn(groupAt(groups, 3))).toHaveLength(1);
+  });
+
   it("keeps a persisted App preview with its history-cutoff assistant", () => {
     const groups = messageGroups({
       messages: [
@@ -1998,7 +2033,10 @@ describe("buildChatItems", () => {
   });
 
   it("does not expand a persisted preview across a cutoff user turn", () => {
-    const firstResult = mcpAppResult("mcp-app-first", "call-first", 1_001);
+    const firstResult = {
+      ...mcpAppResult("mcp-app-first", "call-first", 1_001),
+      timestamp: undefined,
+    };
     const groups = messageGroups({
       messages: [
         { role: "user", content: "First request", timestamp: 1_000 },
@@ -2006,7 +2044,7 @@ describe("buildChatItems", () => {
         { role: "user", content: "Second request", timestamp: 2_000 },
         { role: "assistant", content: "Second response", timestamp: 2_001 },
       ],
-      toolMessages: [firstResult],
+      toolMessages: [{ ...firstResult }],
       showToolCalls: false,
       historyRenderLimit: 2,
     });
@@ -2262,6 +2300,31 @@ function mcpAppResult(viewId: string, toolCallId: string, timestamp: number) {
       },
     },
     timestamp,
+  };
+}
+
+function mcpAppLiveResult(
+  viewId: string,
+  toolCallId: string,
+  timestamp: number | undefined,
+) {
+  const persisted = mcpAppResult(viewId, toolCallId, timestamp ?? 0);
+  return {
+    role: "assistant",
+    toolCallId,
+    runId: "run-live",
+    content: [
+      { type: "toolcall", name: "demo__show", arguments: {} },
+      {
+        type: "toolresult",
+        name: "demo__show",
+        text: "ok",
+        details: persisted.details,
+      },
+    ],
+    ...(timestamp == null ? {} : { timestamp }),
+    __openclawToolStreamLive: true,
+    __openclawToolStreamResultReceived: true,
   };
 }
 

@@ -186,8 +186,7 @@ type ChatMessagePreview = {
 };
 
 function extractChatMessagePreview(toolMessage: unknown): ChatMessagePreview | null {
-  const normalized = safeNormalizeMessage(toolMessage);
-  if (!normalized) {
+  if (!safeNormalizeMessage(toolMessage)) {
     return null;
   }
   const cards = extractToolCardsCached(toolMessage, "preview");
@@ -197,7 +196,7 @@ function extractChatMessagePreview(toolMessage: unknown): ChatMessagePreview | n
       return {
         preview: card.preview,
         text: card.outputText ?? null,
-        timestamp: normalized.timestamp ?? null,
+        timestamp: rawMessageTimestamp(toolMessage),
       };
     }
   }
@@ -213,7 +212,13 @@ function extractChatMessagePreview(toolMessage: unknown): ChatMessagePreview | n
   if (preview?.kind !== "canvas") {
     return null;
   }
-  return { preview, text: text ?? null, timestamp: normalized.timestamp ?? null };
+  return { preview, text: text ?? null, timestamp: rawMessageTimestamp(toolMessage) };
+}
+
+function canvasPreviewBaseIdentity(message: unknown, source: ChatMessagePreview): string | null {
+  const toolCallId = resolveMessageToolUseId(asRecord(message) ?? {});
+  const previewId = source.preview.viewId ?? source.preview.url;
+  return toolCallId && previewId ? JSON.stringify([toolCallId, previewId]) : null;
 }
 
 function createCanvasAssistantMessage(
@@ -229,6 +234,30 @@ function createCanvasAssistantMessage(
     source.preview,
     source.text,
   );
+}
+
+function transcriptPositionTimestamp(messages: unknown[], sourceIndex: number): number | null {
+  let previous: number | null = null;
+  for (let index = sourceIndex - 1; index >= 0; index -= 1) {
+    previous = rawMessageTimestamp(messages[index]);
+    if (previous != null) {
+      break;
+    }
+  }
+  let next: number | null = null;
+  for (let index = sourceIndex + 1; index < messages.length; index += 1) {
+    next = rawMessageTimestamp(messages[index]);
+    if (next != null) {
+      break;
+    }
+  }
+  if (previous != null && next != null) {
+    return previous < next ? Math.min(previous + 1, next) : next;
+  }
+  if (previous != null) {
+    return previous + 1;
+  }
+  return next;
 }
 
 function findNearestAssistantMessageIndex(
@@ -1244,14 +1273,17 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     return source ? [{ ...source, message, index }] : [];
   });
   const searchFiltering = props.searchOpen === true && Boolean(props.searchQuery?.trim());
-  const persistedCanvasToolCallIds = new Set<string>();
+  const persistedCanvasIdentities = new Set<string>();
   for (const message of history) {
-    if (!extractChatMessagePreview(message)) {
+    const source = extractChatMessagePreview(message);
+    if (!source) {
       continue;
     }
-    const toolCallId = resolveMessageToolUseId(asRecord(message) ?? {});
-    if (toolCallId) {
-      persistedCanvasToolCallIds.add(toolCallId);
+    const baseIdentity = canvasPreviewBaseIdentity(message, source);
+    if (baseIdentity) {
+      // fetchMcpAppView assigns a fresh viewId to every invocation. Matching the call and
+      // view therefore identifies the same preview while still tolerating a reused call ID.
+      persistedCanvasIdentities.add(baseIdentity);
     }
   }
   const historyStart = resolveHistoryStartIndex(history, props.showToolCalls, historyRenderLimit);
@@ -1310,7 +1342,10 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       items.push({
         kind: "message",
         key: `${messageKey(msg, i)}:canvas`,
-        message: createCanvasAssistantMessage(persistedCanvasSource),
+        message: createCanvasAssistantMessage(
+          persistedCanvasSource,
+          persistedCanvasSource.timestamp ?? transcriptPositionTimestamp(history, i),
+        ),
       });
     }
 
@@ -1366,8 +1401,8 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     appendQueuedSend(queued);
   }
   for (const liftedCanvasSource of liftedCanvasSources) {
-    const toolCallId = resolveMessageToolUseId(asRecord(liftedCanvasSource.message) ?? {});
-    if (toolCallId && persistedCanvasToolCallIds.has(toolCallId)) {
+    const baseIdentity = canvasPreviewBaseIdentity(liftedCanvasSource.message, liftedCanvasSource);
+    if (baseIdentity && persistedCanvasIdentities.has(baseIdentity)) {
       continue;
     }
     const assistantIndex = findNearestAssistantMessageIndex(items, liftedCanvasSource.timestamp);
