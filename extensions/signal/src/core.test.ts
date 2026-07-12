@@ -625,6 +625,12 @@ describe("signal outbound", () => {
       replyToMode: "first",
       hasRepliedRef,
     });
+    expect(
+      signalPlugin.threading?.matchesToolContextTarget?.({
+        target: "+15550001111",
+        toolContext: context,
+      }),
+    ).toBe(true);
   });
 
   it("chunks outbound text without requiring Signal runtime initialization", () => {
