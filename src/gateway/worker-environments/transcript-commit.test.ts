@@ -81,6 +81,14 @@ function createTurnMessages(userText = "Inspect the workspace"): WorkerTranscrip
       api: "openai-responses",
       provider: "openai",
       model: "gpt-5.5",
+      diagnostics: [
+        {
+          type: "provider-warning",
+          timestamp: 201,
+          error: { name: "", message: "diagnostic", stack: "", code: 0 },
+          details: { empty: "", enabled: false },
+        },
+      ],
       usage: ZERO_USAGE,
       stopReason: "toolUse",
       timestamp: 200,
@@ -219,6 +227,14 @@ describe("worker transcript commit application", () => {
           content: expect.arrayContaining([
             expect.objectContaining({ type: "toolCall", id: "call-read-1" }),
           ]),
+          diagnostics: [
+            {
+              type: "provider-warning",
+              timestamp: 201,
+              error: { name: "", message: "diagnostic", stack: "", code: 0 },
+              details: { empty: "", enabled: false },
+            },
+          ],
         }),
       }),
       expect.objectContaining({

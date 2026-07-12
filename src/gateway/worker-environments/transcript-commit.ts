@@ -138,9 +138,11 @@ function buildCommittedMessage(
             ...(diagnostic.error
               ? {
                   error: {
-                    ...(diagnostic.error.name ? { name: diagnostic.error.name } : {}),
+                    ...(diagnostic.error.name === undefined ? {} : { name: diagnostic.error.name }),
                     message: diagnostic.error.message,
-                    ...(diagnostic.error.stack ? { stack: diagnostic.error.stack } : {}),
+                    ...(diagnostic.error.stack === undefined
+                      ? {}
+                      : { stack: diagnostic.error.stack }),
                     ...(diagnostic.error.code === undefined ? {} : { code: diagnostic.error.code }),
                   },
                 }
