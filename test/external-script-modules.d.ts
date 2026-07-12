@@ -92,6 +92,13 @@ declare module "*openclaw-changelog-update/scripts/verify-release-notes.mjs" {
     legacyIssues: Map<number, ContributionRecord>;
     pullRequests: Map<number, ContributionRecord>;
   };
+  export function renderedContributionRecordReferences(
+    record: {
+      legacyIssues: Map<number, ContributionRecord>;
+      pullRequests: Map<number, ContributionRecord>;
+    },
+    writeLedger: boolean,
+  ): number[];
   export function contaminatingPullRequestReferences(params: Record<string, unknown>): unknown[];
   export function canonicalMainCommitMatches(commit: unknown, candidates: unknown[]): unknown[];
   export function canonicalPullRequests(
