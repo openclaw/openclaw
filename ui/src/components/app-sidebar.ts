@@ -31,6 +31,7 @@ import {
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import "./session-menu.ts";
+import "./sidebar-attention.ts";
 import "./sidebar-build-chip.ts";
 import "./sidebar-update-card.ts";
 import "./theme-mode-toggle.ts";
@@ -773,7 +774,18 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     const collapseLabel = t("nav.collapse");
     return html`
       <div class="sidebar-brand">
-        <div class="sidebar-brand__identity">
+        <a
+          class="sidebar-brand__identity"
+          href=${pathForRoute("chat", this.basePath)}
+          aria-label=${t("nav.chat")}
+          @click=${(event: MouseEvent) => {
+            if (!shouldHandleNavigationClick(event)) {
+              return;
+            }
+            event.preventDefault();
+            this.onNavigate?.("chat");
+          }}
+        >
           <span class="sidebar-brand__logo-slot">
             <img
               class="sidebar-brand__logo ${this.logoVisit ? "sidebar-brand__logo--vacated" : ""}"
@@ -784,7 +796,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
             ${this.renderLogoStandIn()}
           </span>
           <span class="sidebar-brand__title">OpenClaw</span>
-        </div>
+        </a>
         <div class="sidebar-brand__actions">
           ${this.renderSearch()}
           <openclaw-tooltip .content=${`${collapseLabel} (⌘B)`}>
@@ -2482,12 +2494,16 @@ class AppSidebar extends OpenClawLightDomContentsElement {
                 showDraft: Boolean(this.draftSessionAgentId),
                 showFallback: true,
               })}
+          ${this.renderSessionCatalogs()}
         </div>
       </section>
-      ${this.renderSessionCatalogs()}
     `;
   }
 
+  // Catalog groups render inside the shared sessions scroller. Sibling
+  // .sidebar-sessions sections would form a second scroll-less region that
+  // flex-squeezes under the shell body's overflow clip and paints rows over
+  // the following section.
   private renderSessionCatalogs() {
     return this.sessionCatalogs.map((catalog) => {
       const sectionId = `catalog:${catalog.id}`;
@@ -2497,44 +2513,42 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       const loadingMore = this.loadingMoreSessionCatalogIds.has(catalog.id);
       const hasMore = hosts.some((host) => Boolean(host.nextCursor));
       return html`
-        <section class="sidebar-sessions">
-          <div class="sidebar-recent-sessions__group" data-session-section=${sectionId}>
-            <div class="sidebar-recent-sessions__head">
-              <button
-                type="button"
-                class="sidebar-session-group-toggle"
-                aria-expanded=${String(!collapsed)}
-                aria-label=${catalog.label}
-                @click=${() => this.toggleSessionSection(sectionId)}
+        <div class="sidebar-recent-sessions__group" data-session-section=${sectionId}>
+          <div class="sidebar-recent-sessions__head">
+            <button
+              type="button"
+              class="sidebar-session-group-toggle"
+              aria-expanded=${String(!collapsed)}
+              aria-label=${catalog.label}
+              @click=${() => this.toggleSessionSection(sectionId)}
+            >
+              <span class="sidebar-session-group-toggle__icon" aria-hidden="true"
+                >${collapsed ? icons.chevronRight : icons.chevronDown}</span
               >
-                <span class="sidebar-session-group-toggle__icon" aria-hidden="true"
-                  >${collapsed ? icons.chevronRight : icons.chevronDown}</span
-                >
-                <span class="sidebar-recent-sessions__label-text">${catalog.label}</span>
-                <span class="sidebar-session-group-count">${rows.length}</span>
-              </button>
-            </div>
-            ${collapsed
-              ? nothing
-              : html`<div class="sidebar-recent-sessions__list">
-                    ${rows.map(({ host, session }) =>
-                      this.renderCatalogSession(catalog, host, session),
-                    )}
-                  </div>
-                  ${hasMore
-                    ? html`<button
-                        type="button"
-                        class="sidebar-session-catalog-load-more"
-                        data-session-catalog-load-more=${catalog.id}
-                        ?disabled=${loadingMore}
-                        aria-busy=${String(loadingMore)}
-                        @click=${() => void this.loadMoreSessionCatalog(catalog.id)}
-                      >
-                        ${t("chat.selectors.loadMoreSessions")}
-                      </button>`
-                    : nothing}`}
+              <span class="sidebar-recent-sessions__label-text">${catalog.label}</span>
+              <span class="sidebar-session-group-count">${rows.length}</span>
+            </button>
           </div>
-        </section>
+          ${collapsed
+            ? nothing
+            : html`<div class="sidebar-recent-sessions__list">
+                  ${rows.map(({ host, session }) =>
+                    this.renderCatalogSession(catalog, host, session),
+                  )}
+                </div>
+                ${hasMore
+                  ? html`<button
+                      type="button"
+                      class="sidebar-session-catalog-load-more"
+                      data-session-catalog-load-more=${catalog.id}
+                      ?disabled=${loadingMore}
+                      aria-busy=${String(loadingMore)}
+                      @click=${() => void this.loadMoreSessionCatalog(catalog.id)}
+                    >
+                      ${t("chat.selectors.loadMoreSessions")}
+                    </button>`
+                  : nothing}`}
+        </div>
       `;
     });
   }
@@ -2664,6 +2678,9 @@ class AppSidebar extends OpenClawLightDomContentsElement {
             ${this.renderSessions()}
           </div>
           <div class="sidebar-shell__footer">
+            <openclaw-sidebar-attention
+              .onNavigate=${(routeId: NavigationRouteId) => this.onNavigate?.(routeId)}
+            ></openclaw-sidebar-attention>
             <openclaw-sidebar-update-card
               .updateAvailable=${this.updateAvailable}
               .updateRunning=${this.updateRunning}

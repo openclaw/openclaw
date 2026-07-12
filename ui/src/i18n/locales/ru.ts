@@ -480,6 +480,7 @@ export const ru: TranslationMap = {
     noEvents: "Событий пока нет.",
   },
   quickSettings: {
+    language: "Язык",
     appearance: {
       lobsterVisits: "Визиты омара",
       lobsterVisitsOn: "Заглядывает время от времени",
@@ -517,6 +518,47 @@ export const ru: TranslationMap = {
       severity: "Серьезность",
       plugin: "Плагин",
     },
+  },
+  approvalPage: {
+    brandName: "OpenClaw",
+    eyebrow: "Operator approval",
+    loadingTitle: "Loading approval",
+    loadingDescription: "Checking the current approval state with the Gateway.",
+    unavailableTitle: "Approval unavailable",
+    unavailableDescription:
+      "This approval could not be found or this device is not authorized to review it.",
+    connectionErrorTitle: "Connection interrupted",
+    connectionErrorDescription:
+      "OpenClaw cannot confirm or record a decision while disconnected. Reconnect to check the current status.",
+    retry: "Повторить",
+    execTitle: "Command approval",
+    pending: "Waiting for your decision",
+    pendingDescription: "Review the request carefully. The first answer from any surface wins.",
+    approvedHere: "Approved here",
+    deniedHere: "Denied here",
+    resolvedElsewhere: "Resolved elsewhere",
+    resolvedElsewhereDescription:
+      "Another surface or an earlier attempt recorded the decision first.",
+    approved: "Approved",
+    denied: "Denied",
+    expired: "Истек",
+    cancelled: "Cancelled",
+    allowedOnceDescription: "The operation was approved for this request only.",
+    allowedAlwaysDescription: "The operation was approved with the always-allow decision.",
+    deniedDescription: "The operation was denied and will not continue.",
+    expiredDescription: "No decision arrived before the deadline, so the operation was denied.",
+    cancelledDescription: "The requesting run ended before a decision could be used.",
+    summaryLabel: "Summary",
+    commandLabel: "Команда",
+    requestLabel: "Request details",
+    nodeLabel: "Узел",
+    toolLabel: "Инструмент",
+    expiresLabel: "Expires",
+    resolvedLabel: "Разрешено",
+    actionsLabel: "Approval decisions",
+    resolvingDecision: "Recording {decision}…",
+    safeToClose: "The decision is recorded. You can close this page.",
+    openControlUi: "Open Control UI",
   },
   agentTools: {
     connectedSource: "Подключено: {id}",
@@ -613,10 +655,10 @@ export const ru: TranslationMap = {
   tabs: {
     agents: "Агенты",
     activity: "Активность",
-    overview: "Обзор",
     workboard: "Рабочая доска",
     worktrees: "Рабочие деревья",
     channels: "Каналы",
+    connection: "Подключение",
     sessions: "Сеансы",
     usage: "Использование",
     cron: "Задания Cron",
@@ -643,10 +685,10 @@ export const ru: TranslationMap = {
   subtitles: {
     agents: "Рабочие пространства, инструменты, идентификаторы.",
     activity: "Сводки активности инструментов в локальном браузере.",
-    overview: "Состояние, точки входа, работоспособность.",
     workboard: "Очередь задач агента и передача сеанса.",
     worktrees: "Изолированные копии для задач агентов и снимки восстановления.",
     channels: "Каналы и настройки.",
+    connection: "Адрес Gateway, учётные данные и статус рукопожатия.",
     sessions: "Активные сеансы и значения по умолчанию.",
     usage: "Использование API и расходы.",
     cron: "Пробуждения и повторяющиеся запуски.",
@@ -1293,7 +1335,12 @@ export const ru: TranslationMap = {
     eventUnarchived: "Разархивировано",
     eventStale: "Устаревший сеанс",
   },
-  overview: {
+  connection: {
+    lostTitle: "Соединение с Gateway потеряно",
+    reconnecting: "Повторное подключение…",
+    offlineHint:
+      "Обновления в реальном времени и действия приостановлены до восстановления соединения.",
+    retryNow: "Повторить сейчас",
     access: {
       title: "Доступ к шлюзу",
       subtitle: "Где подключается панель мониторинга и как она проходит аутентификацию.",
@@ -1302,7 +1349,6 @@ export const ru: TranslationMap = {
       password: "Пароль (не сохраняется)",
       passwordPlaceholder: "системный или общий пароль",
       sessionKey: "Ключ сеанса по умолчанию",
-      language: "Язык",
       connectHint: "Нажмите «Подключиться», чтобы применить изменения подключения.",
       trustedProxy: "Аутентификация выполнена через доверенный прокси.",
       showToken: "Показать токен",
@@ -1319,131 +1365,49 @@ export const ru: TranslationMap = {
       uptime: "Время работы",
       tickInterval: "Интервал тика",
       lastChannelsRefresh: "Последнее обновление каналов",
-      channelsHint:
-        "Используйте «Каналы», чтобы подключить WhatsApp, Telegram, Discord, Signal или iMessage.",
     },
-    stats: {
-      instances: "Экземпляры",
-      instancesHint: "Сигналы присутствия за последние 5 минут.",
-      sessions: "Сеансы",
-      sessionsHint: "Недавние ключи сеансов, отслеживаемые шлюзом.",
-      cron: "Cron",
-      cronNext: "Следующее пробуждение {time}",
-    },
-    notes: {
-      title: "Заметки",
-      subtitle: "Краткие напоминания для настроек удаленного управления.",
-      tailscaleTitle: "Tailscale serve",
-      tailscaleText:
-        "Предпочитайте режим serve, чтобы держать шлюз на loopback с аутентификацией tailnet.",
-      sessionTitle: "Гигиена сеансов",
-      sessionText: "Используйте /new или sessions.patch, чтобы сбросить контекст.",
-      cronTitle: "Напоминания Cron",
-      cronText: "Используйте изолированные сеансы для повторяющихся запусков.",
-    },
-    auth: {
-      required:
-        "Этот шлюз требует аутентификации. Добавьте токен или пароль, затем нажмите Connect.",
-      failed:
-        "Ошибка аутентификации. Снова скопируйте URL с токеном с помощью {command} или обновите токен, затем нажмите Connect.",
-    },
-    pairing: {
-      hint: "Этому устройству требуется подтверждение сопряжения от хоста шлюза.",
-      scopeUpgradeTitle: "Расширение области доступа ожидает подтверждения.",
-      scopeUpgradeSummary:
-        "Это устройство уже сопряжено, но запрошенная более широкая область доступа ожидает подтверждения.",
-      roleUpgradeTitle: "Повышение роли ожидает подтверждения.",
-      roleUpgradeSummary:
-        "Это устройство уже сопряжено, но запрошенное изменение роли ожидает подтверждения.",
-      metadataUpgradeTitle: "Изменение метаданных устройства ожидает подтверждения.",
-      metadataUpgradeSummary:
-        "Это устройство уже сопряжено, но изменение метаданных ожидает подтверждения.",
-      mobileHint:
-        "На мобильном устройстве? Скопируйте полный URL (включая #token=...) из openclaw dashboard --no-open на настольном компьютере.",
-      docsTitle: "Документация по сопряжению устройств (откроется в новой вкладке)",
-      docsLink: "Документация: сопряжение устройств",
-    },
-    insecure: {
-      hint: "Эта страница использует HTTP, поэтому браузер блокирует идентификацию устройства. Используйте HTTPS (Tailscale Serve) или откройте {url} на хосте шлюза.",
-      stayHttp: "Если необходимо остаться на HTTP, задайте {config} (только токен).",
-    },
-    connection: {
+    help: {
       title: "Как подключиться",
       step1: "Запустите gateway на хост-машине:",
       step2: "Получите URL панели мониторинга с токеном:",
       step3: "Вставьте WebSocket URL и токен выше или откройте URL с токеном напрямую.",
-      step4: "Или создайте многоразовый токен:",
-      docsHint: "Для удаленного доступа рекомендуется Tailscale Serve. ",
       docsLink: "Читать документацию →",
-      authDocsTitle: "Документация по аутентификации Control UI (откроется в новой вкладке)",
-      authDocsLink: "Документация: аутентификация Control UI",
-      tailscaleDocsTitle: "Документация Tailscale Serve (откроется в новой вкладке)",
-      tailscaleDocsLink: "Документация: Tailscale Serve",
-      insecureHttpDocsTitle: "Документация по небезопасному HTTP (откроется в новой вкладке)",
-      insecureHttpDocsLink: "Документация: небезопасный HTTP",
       copyCommand: "Копировать команду",
       copyCommandAria: "Копировать команду: {command}",
     },
-    cards: {
-      cost: "Стоимость",
+  },
+  attention: {
+    cronFailed: "Сбой заданий cron: {count}",
+    cronOverdue: "Просрочено заданий cron: {count}",
+    modelAuthExpired: "Срок авторизации модели истёк: {providers}",
+    modelAuthExpiring: "Срок авторизации модели скоро истечёт: {providers}",
+  },
+  palette: {
+    placeholder: "Поиск чатов и команд…",
+    noResults: "Нет результатов",
+    categories: {
+      search: "Поиск",
+      navigation: "Навигация",
       skills: "Навыки",
-      recentSessions: "Недавние сеансы",
-      modelAuth: "Аутентификация модели",
-      modelAuthOk: "{count} в порядке",
-      modelAuthExpired: "{count} истекло",
-      modelAuthExpiring: "{count} истекает",
-      modelAuthProviders: "{count} провайдеров",
-      modelAuthUsageLeft: "осталось {pct}%",
-      modelAuthExpiresIn: "истекает {when}",
-      modelAuthAttentionExpiredTitle: "Срок действия авторизации модели истек",
-      modelAuthAttentionExpiringTitle: "Срок действия авторизации модели скоро истечет",
-      modelAuthAttentionExpiredDesc:
-        "{providers} — повторно авторизуйтесь с помощью openclaw models auth",
-      modelAuthAttentionExpiringEntry: "{provider} ({when})",
     },
-    attention: {
-      title: "Внимание",
+    items: {
+      sessions: "Сеансы",
+      scheduled: "Запланировано",
+      skills: "Навыки",
+      plugins: "Плагины",
+      settings: "Настройки",
+      agents: "Агенты",
+      shellCommand: "Shell Command",
+      debugMode: "Режим отладки",
     },
-    eventLog: {
-      title: "Журнал событий",
+    descriptions: {
+      shellCommand: "Запустить shell",
+      debugMode: "Переключить отладку",
     },
-    logTail: {
-      title: "Журналы шлюза",
-    },
-    quickActions: {
-      newSession: "Новый сеанс",
-      automation: "Автоматизация",
-      refreshAll: "Обновить все",
-      terminal: "Терминал",
-    },
-    palette: {
-      placeholder: "Введите команду…",
-      noResults: "Нет результатов",
-      categories: {
-        search: "Поиск",
-        navigation: "Навигация",
-        skills: "Навыки",
-      },
-      items: {
-        overview: "Обзор",
-        sessions: "Сеансы",
-        scheduled: "Запланировано",
-        skills: "Навыки",
-        plugins: "Плагины",
-        settings: "Настройки",
-        agents: "Агенты",
-        shellCommand: "Shell Command",
-        debugMode: "Режим отладки",
-      },
-      descriptions: {
-        shellCommand: "Запустить shell",
-        debugMode: "Переключить отладку",
-      },
-      footer: {
-        navigate: "навигация",
-        select: "выбрать",
-        close: "закрыть",
-      },
+    footer: {
+      navigate: "навигация",
+      select: "выбрать",
+      close: "закрыть",
     },
   },
   dreaming: {
@@ -1958,13 +1922,6 @@ export const ru: TranslationMap = {
           "Снова откройте панель управления с помощью openclaw dashboard --no-open, чтобы повторно скопировать текущий URL и данные аутентификации.",
       },
     },
-  },
-  connection: {
-    lostTitle: "Соединение с Gateway потеряно",
-    reconnecting: "Повторное подключение…",
-    offlineHint:
-      "Обновления в реальном времени и действия приостановлены до восстановления соединения.",
-    retryNow: "Повторить сейчас",
   },
   chat: {
     disconnected: "Отключено от gateway.",
