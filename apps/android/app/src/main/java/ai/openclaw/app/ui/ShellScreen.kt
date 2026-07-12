@@ -410,7 +410,7 @@ private fun OverviewScreen(
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
   val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
   val isConnected = gatewayConnectionDisplay.isConnected
-  val models by viewModel.modelCatalog.collectAsState()
+  val models by viewModel.providerModelCatalog.collectAsState()
   val providers by viewModel.modelAuthProviders.collectAsState()
   val execApprovals by viewModel.execApprovals.collectAsState()
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
@@ -419,7 +419,9 @@ private fun OverviewScreen(
   val channelsSummary by viewModel.channelsSummary.collectAsState()
   val agents by viewModel.gatewayAgents.collectAsState()
   val defaultAgentId by viewModel.gatewayDefaultAgentId.collectAsState()
-  val readyProviderCount = providerRows(providers = providers, models = models).count { it.ready }
+  val providerRows = providerRows(providers = providers, models = models)
+  val readyProviderCount = providerRows.count { it.ready }
+  val unknownProviderCount = providerRows.count { it.availability == ProviderAvailability.Unknown }
   val pendingApprovalsCount = execApprovals.size + pendingToolCalls.size
   val attentionRows =
     homeAttentionRows(
@@ -428,6 +430,7 @@ private fun OverviewScreen(
       channelsSummary = channelsSummary,
       nodesDevicesSummary = nodesDevicesSummary,
       readyProviderCount = readyProviderCount,
+      unknownProviderCount = unknownProviderCount,
     )
   val secondaryAttentionRows =
     if (nodesDevicesSummary.hasNodeCapabilityApprovalPending()) {
@@ -470,6 +473,7 @@ private fun OverviewScreen(
       viewModel.refreshChatSessions(limit = 20)
       viewModel.refreshAgents()
       viewModel.refreshModelCatalog()
+      viewModel.refreshProviderModels()
       viewModel.refreshCronJobs()
       viewModel.refreshNodesDevices()
       viewModel.refreshChannels()
@@ -1224,6 +1228,7 @@ internal fun homeAttentionRows(
   channelsSummary: GatewayChannelsSummary,
   nodesDevicesSummary: GatewayNodesDevicesSummary,
   readyProviderCount: Int,
+  unknownProviderCount: Int = 0,
 ): List<HomeAttentionRow> =
   listOfNotNull(
     if (!isConnected) {
@@ -1246,7 +1251,7 @@ internal fun homeAttentionRows(
     } else {
       null
     },
-    if (isConnected && readyProviderCount == 0) {
+    if (isConnected && readyProviderCount == 0 && unknownProviderCount == 0) {
       HomeAttentionRow("Providers", "No ready providers", Icons.Outlined.Inventory2, Tab.Settings, SettingsRoute.ProvidersModels)
     } else {
       null
@@ -1493,7 +1498,7 @@ private fun SettingsShellScreen(
   val displayName by viewModel.displayName.collectAsState()
   val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
   val isConnected = gatewayConnectionDisplay.isConnected
-  val models by viewModel.modelCatalog.collectAsState()
+  val models by viewModel.providerModelCatalog.collectAsState()
   val providers by viewModel.modelAuthProviders.collectAsState()
   val cameraEnabled by viewModel.cameraEnabled.collectAsState()
   val notificationForwardingEnabled by viewModel.notificationForwardingEnabled.collectAsState()
@@ -1509,13 +1514,16 @@ private fun SettingsShellScreen(
   val channelsSummary by viewModel.channelsSummary.collectAsState()
   val dreamingSummary by viewModel.dreamingSummary.collectAsState()
   val appearanceThemeMode by viewModel.appearanceThemeMode.collectAsState()
-  val readyProviderCount = providerRows(providers = providers, models = models).count { it.ready }
+  val providerRows = providerRows(providers = providers, models = models)
+  val readyProviderCount = providerRows.count { it.ready }
+  val unknownProviderCount = providerRows.count { it.availability == ProviderAvailability.Unknown }
   val pendingApprovalsCount = execApprovals.size + pendingToolCalls.size
 
   LaunchedEffect(isConnected) {
     if (isConnected) {
       viewModel.refreshAgents()
       viewModel.refreshModelCatalog()
+      viewModel.refreshProviderModels()
       viewModel.refreshCronJobs()
       viewModel.refreshUsage()
       viewModel.refreshSkills()
@@ -1579,9 +1587,19 @@ private fun SettingsShellScreen(
           SettingsRow("Agents", if (agents.isEmpty()) "Load from gateway" else "${agents.size} available", Icons.Default.Person, status = agents.isNotEmpty(), route = SettingsRoute.Agents),
           SettingsRow(
             "Providers & Models",
-            if (readyProviderCount > 0) "$readyProviderCount ready" else "Review readiness",
+            when {
+              readyProviderCount > 0 -> "$readyProviderCount ready"
+              unknownProviderCount > 0 -> "Availability unknown"
+              else -> "Review readiness"
+            },
             Icons.Outlined.Inventory2,
-            status = if (isConnected) readyProviderCount > 0 else false,
+            status =
+              when {
+                !isConnected -> false
+                readyProviderCount > 0 -> true
+                unknownProviderCount > 0 -> null
+                else -> false
+              },
             route = SettingsRoute.ProvidersModels,
           ),
           SettingsRow("Approvals", approvalsSummary(pendingApprovalsCount), Icons.Default.Lock, status = approvalsStatus(pendingApprovalsCount), route = SettingsRoute.Approvals),
