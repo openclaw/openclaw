@@ -259,10 +259,11 @@ function claimedRecord<TPayload, TMetadata>(
   if (base === null) {
     return null;
   }
+  const claimValue = row.claim_token ?? "";
   return {
     ...base,
     claim: {
-      token: row.claim_token ?? "",
+      token: claimValue,
       ownerId: row.claim_owner ?? "",
       claimedAt: row.claimed_at ?? 0,
     },

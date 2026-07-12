@@ -588,6 +588,7 @@ describe("channel ingress queue", () => {
         env: createStateDirEnv(stateDir),
       });
       const kysely = getNodeSqliteKysely<ChannelIngressTestDatabase>(db);
+      const claimValue = overrides.claim_token ?? null;
       executeSqliteQuerySync(
         db,
         kysely.insertInto("channel_ingress_events").values({
@@ -603,7 +604,7 @@ describe("channel ingress queue", () => {
           received_at: 100,
           updated_at: 200,
           attempts: 0,
-          claim_token: overrides.claim_token ?? null,
+          claim_token: claimValue,
           claim_owner: overrides.claim_owner ?? null,
           claimed_at: overrides.claimed_at ?? null,
           completed_at: overrides.completed_at ?? null,
