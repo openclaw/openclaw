@@ -13,6 +13,7 @@ struct CritterStatusLabel: View {
     var voiceWakeMeterActive: Bool = false
 
     @State var blinkAmount: CGFloat = 0
+    @State var celebrating = false
     @State var nextBlink = Date().addingTimeInterval(Double.random(in: 3.5...8.5))
     @State var wiggleAngle: Double = 0
     @State var wiggleOffset: CGFloat = 0
