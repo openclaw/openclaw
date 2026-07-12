@@ -693,11 +693,13 @@ final class TalkModeManager: NSObject {
             self.logger.warning("start blocked: speech permission denied")
             self.stopNativeCaptureAndDiscardTranscript()
             self.deactivateAudioSession()
+            let status = Self.permissionMessage(
+                kind: String(localized: "Speech recognition"),
+                status: SFSpeechRecognizer.authorizationStatus())
             self.setStatus(
-                Self.permissionMessage(
-                    kind: String(localized: "Speech recognition"),
-                    status: SFSpeechRecognizer.authorizationStatus()),
-                phase: .idle)
+                status,
+                phase: .idle,
+                watchPresentation: .verbatim(status))
             return
         }
         guard self.isCurrentStartAttempt(attemptID) else { return }
@@ -719,11 +721,13 @@ final class TalkModeManager: NSObject {
         } catch {
             self.stopNativeCaptureAndDiscardTranscript()
             self.deactivateAudioSession()
+            let status = String(
+                format: String(localized: "Start failed: %@"),
+                error.localizedDescription)
             self.setStatus(
-                String(
-                    format: String(localized: "Start failed: %@"),
-                    error.localizedDescription),
-                phase: .idle)
+                status,
+                phase: .idle,
+                watchPresentation: .verbatim(status))
             self.logger.error("start failed: \(error.localizedDescription, privacy: .public)")
         }
     }
