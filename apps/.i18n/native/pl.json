@@ -14449,6 +14449,11 @@
       "translated": "Połączono"
     },
     {
+      "id": "native.apple.c74420509a41df63",
+      "source": "Reconnecting…",
+      "translated": "Ponowne łączenie…"
+    },
+    {
       "id": "native.apple.1bbd3d2941ae7481",
       "source": "Offline",
       "translated": "Offline"

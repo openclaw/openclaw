@@ -14449,6 +14449,11 @@
       "translated": "接続済み"
     },
     {
+      "id": "native.apple.c74420509a41df63",
+      "source": "Reconnecting…",
+      "translated": "再接続中…"
+    },
+    {
       "id": "native.apple.1bbd3d2941ae7481",
       "source": "Offline",
       "translated": "オフライン"

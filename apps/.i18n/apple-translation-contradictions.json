@@ -5352,6 +5352,54 @@
       ]
     },
     {
+      "locale": "id",
+      "source": "Reconnecting…",
+      "translations": [
+        "Menghubungkan kembali…",
+        "Menghubungkan ulang…"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "Reconnecting…",
+      "translations": [
+        "Riconnessione in corso…",
+        "Riconnessione…"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "Reconnecting…",
+      "translations": [
+        "다시 연결 중…",
+        "재연결 중…"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Reconnecting…",
+      "translations": [
+        "Ansluter igen…",
+        "Återansluter…"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Reconnecting…",
+      "translations": [
+        "Yeniden bağlanılıyor…",
+        "Yeniden bağlanıyor…"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "Reconnecting…",
+      "translations": [
+        "正在重新連線…",
+        "重新連線中…"
+      ]
+    },
+    {
       "locale": "fa",
       "source": "Refresh",
       "translations": [
