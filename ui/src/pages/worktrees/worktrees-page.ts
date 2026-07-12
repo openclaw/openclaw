@@ -102,7 +102,9 @@ class WorktreesPage extends OpenClawLightDomElement {
 
   private invalidateOperations() {
     this.operationEpoch += 1;
+    // Stale operation promises skip their finalizers, so reset every epoch-owned flag here.
     this.busyId = null;
+    this.creating = false;
   }
 
   private captureOperationScope(): WorktreeOperationScope | null {

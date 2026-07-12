@@ -10,8 +10,11 @@ type WorktreesPageTestElement = HTMLElement & {
   records: WorktreeRecord[];
   error: string | null;
   busyId: string | null;
+  creating: boolean;
+  createRepoRoot: string;
   updateComplete: Promise<boolean>;
   requestUpdate: () => void;
+  createWorktree: () => Promise<void>;
   removeWorktree: (record: WorktreeRecord) => Promise<void>;
   restore: (record: WorktreeRecord) => Promise<void>;
 };
@@ -250,5 +253,37 @@ describe("WorktreesPage lifecycle", () => {
 
     expect(page.error).toBeNull();
     expect(page.busyId).toBeNull();
+  });
+
+  it("clears pending create state across a same-client reconnect", async () => {
+    const pendingCreate = deferred<unknown>();
+    const request = vi.fn((method: string) => {
+      if (method === "worktrees.create") {
+        return pendingCreate.promise;
+      }
+      return Promise.resolve({ worktrees: [] });
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const source = mutableGateway(client);
+    const page = document.createElement("openclaw-worktrees-page") as WorktreesPageTestElement;
+    page.context = contextWithGateway(source.gateway);
+    page.createRepoRoot = "/tmp/repo";
+    document.body.append(page);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("worktrees.list", {}));
+
+    const creating = page.createWorktree();
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("worktrees.create", { repoRoot: "/tmp/repo" }),
+    );
+    expect(page.creating).toBe(true);
+
+    source.emit(false);
+    source.emit(true);
+    expect(page.creating).toBe(false);
+
+    pendingCreate.reject(new Error("gateway closed"));
+    await creating;
+    expect(page.creating).toBe(false);
+    expect(page.error).toBeNull();
   });
 });
