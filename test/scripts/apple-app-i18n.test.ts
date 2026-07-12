@@ -106,6 +106,7 @@ describe("Apple app i18n catalogs", () => {
     expect(build.catalog.strings?.["Connect now"]?.localizations?.de?.stringUnit?.value).toBe(
       "Jetzt verbinden",
     );
+    expect(build.catalog.version).toBe("1.0");
     expect(build.catalog.strings?.["Connect now"]?.localizations?.fr?.stringUnit?.value).toBe(
       "Se connecter",
     );

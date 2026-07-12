@@ -339,6 +339,7 @@ type CatalogEntry = {
 type Catalog = {
   sourceLanguage?: string;
   strings?: Record<string, CatalogEntry>;
+  version?: string;
 };
 
 type NativeSourceEntry = {
@@ -552,6 +553,7 @@ export function buildIosCatalog(
     catalog: {
       sourceLanguage: "en",
       strings,
+      version: "1.0",
     },
     contradictions: contradictions.toSorted(
       (left, right) =>
@@ -651,7 +653,7 @@ async function readIosCatalogBuild(): Promise<AppleCatalogBuild> {
 }
 
 function validateCatalog(pathName: string, catalog: Catalog): number {
-  if (catalog.sourceLanguage !== "en" || !catalog.strings) {
+  if (catalog.sourceLanguage !== "en" || catalog.version !== "1.0" || !catalog.strings) {
     throw new Error(`invalid Apple string catalog: ${pathName}`);
   }
   let checked = 0;
