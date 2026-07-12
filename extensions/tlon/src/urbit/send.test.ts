@@ -101,4 +101,22 @@ describe("buildMediaStory", () => {
       },
     ]);
   });
+
+  it("keeps non-image URL paths with image-looking fragments as links", async () => {
+    const { buildMediaStory } = await import("./send.js");
+
+    expect(buildMediaStory("caption", "https://cdn.example/page#preview.png")).toEqual([
+      { inline: ["caption"] },
+      {
+        inline: [
+          {
+            link: {
+              href: "https://cdn.example/page#preview.png",
+              content: "https://cdn.example/page#preview.png",
+            },
+          },
+        ],
+      },
+    ]);
+  });
 });
