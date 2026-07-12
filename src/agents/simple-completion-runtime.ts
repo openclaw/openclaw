@@ -319,7 +319,7 @@ export async function prepareSimpleCompletionModel(params: {
     };
   }
 
-  let resolvedApiKey = rawApiKey;
+  let authValue = rawApiKey;
   let resolvedModel = resolved.model;
   if (rawApiKey) {
     const runtimeCredential = await setRuntimeApiKeyForCompletion({
@@ -331,13 +331,13 @@ export async function prepareSimpleCompletionModel(params: {
       workspaceDir: params.agentDir,
       profileId: auth.profileId,
     });
-    resolvedApiKey = runtimeCredential.apiKey;
+    authValue = runtimeCredential.apiKey;
     resolvedModel = runtimeCredential.model;
   }
 
   const resolvedAuth: ResolvedProviderAuth = {
     ...auth,
-    apiKey: resolvedApiKey,
+    apiKey: authValue,
   };
   const profileCredential = params.profileId ? authStore?.profiles[params.profileId] : undefined;
   const sourceAuthFingerprint = params.bindAuthOwner
