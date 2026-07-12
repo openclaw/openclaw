@@ -119,6 +119,28 @@ describe("cron tool flat-params", () => {
     });
   });
 
+  it("recovers flat trigger params for add", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await tool.execute("call-flat-trigger-add", {
+      action: "add",
+      name: "triggered report",
+      everyMs: 60_000,
+      message: "send report",
+      trigger: { script: " json({ fire: true }) ", once: true },
+    });
+
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+      schedule?: unknown;
+      payload?: unknown;
+      trigger?: unknown;
+    }>();
+    expect(method).toBe("cron.add");
+    expect(params.schedule).toEqual({ kind: "every", everyMs: 60_000 });
+    expect(params.payload).toEqual({ kind: "agentTurn", message: "send report" });
+    expect(params.trigger).toEqual({ script: "json({ fire: true })", once: true });
+  });
+
   it("rejects flat on-exit schedule shorthand for add", async () => {
     const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
 
@@ -244,6 +266,24 @@ describe("cron tool flat-params", () => {
     });
   });
 
+  it("recovers flat trigger params for update", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await tool.execute("call-flat-trigger-update", {
+      action: "update",
+      jobId: "job-trigger",
+      trigger: { script: " json({ fire: false }) " },
+    });
+
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+      id?: string;
+      patch?: { trigger?: unknown };
+    }>();
+    expect(method).toBe("cron.update");
+    expect(params.id).toBe("job-trigger");
+    expect(params.patch?.trigger).toEqual({ script: "json({ fire: false })" });
+  });
+
   it("trims trailing whitespace from recognized job object keys (#95407)", async () => {
     const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
 
@@ -255,6 +295,7 @@ describe("cron tool flat-params", () => {
         "schedule ": { kind: "cron", expr: "30 10,20 * * *", tz: "Europe/Madrid" },
         "sessionTarget ": "isolated",
         "payload ": { kind: "agentTurn", message: "How's it going?" },
+        "trigger ": { script: "json({ fire: true })" },
         "enabled ": true,
       },
     });
@@ -264,6 +305,7 @@ describe("cron tool flat-params", () => {
       schedule?: unknown;
       sessionTarget?: string;
       payload?: unknown;
+      trigger?: unknown;
       enabled?: boolean;
     }>();
     expect(method).toBe("cron.add");
@@ -271,10 +313,12 @@ describe("cron tool flat-params", () => {
     expect(params.schedule).toBeDefined();
     expect(params.sessionTarget).toBe("isolated");
     expect(params.payload).toBeDefined();
+    expect(params.trigger).toEqual({ script: "json({ fire: true })" });
     expect(params.enabled).toBe(true);
     expect(params).not.toHaveProperty("schedule ");
     expect(params).not.toHaveProperty("sessionTarget ");
     expect(params).not.toHaveProperty("payload ");
+    expect(params).not.toHaveProperty("trigger ");
     expect(params).not.toHaveProperty("enabled ");
   });
 
