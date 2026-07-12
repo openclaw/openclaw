@@ -1,4 +1,4 @@
-"CFBundleDisplayName" = "OpenClaw";
+"CFBundleDisplayName" = "$(OPENCLAW_APP_DISPLAY_NAME)";
 "NSCalendarsFullAccessUsageDescription" = "OpenClaw gebruikt je agenda’s om gebeurtenissen en planningscontext te tonen wanneer je agendatoegang inschakelt.";
 "NSCalendarsUsageDescription" = "OpenClaw gebruikt je agenda’s om gebeurtenissen en planningscontext te tonen wanneer je agendatoegang inschakelt.";
 "NSCalendarsWriteOnlyAccessUsageDescription" = "OpenClaw gebruikt je agenda’s om gebeurtenissen toe te voegen wanneer je agendatoegang inschakelt.";

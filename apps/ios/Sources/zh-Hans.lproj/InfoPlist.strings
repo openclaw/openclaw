@@ -1,4 +1,4 @@
-"CFBundleDisplayName" = "OpenClaw";
+"CFBundleDisplayName" = "$(OPENCLAW_APP_DISPLAY_NAME)";
 "NSCalendarsFullAccessUsageDescription" = "当你启用日历访问权限时，OpenClaw 会使用你的日历来显示事件和日程安排上下文。";
 "NSCalendarsUsageDescription" = "当你启用日历访问权限时，OpenClaw 会使用你的日历来显示事件和日程安排上下文。";
 "NSCalendarsWriteOnlyAccessUsageDescription" = "当你启用日历访问权限时，OpenClaw 会使用你的日历来添加事件。";

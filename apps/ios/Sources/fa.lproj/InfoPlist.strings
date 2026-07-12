@@ -1,4 +1,4 @@
-"CFBundleDisplayName" = "OpenClaw";
+"CFBundleDisplayName" = "$(OPENCLAW_APP_DISPLAY_NAME)";
 "NSCalendarsFullAccessUsageDescription" = "OpenClaw از تقویم‌های شما استفاده می‌کند تا وقتی دسترسی به تقویم را فعال می‌کنید، رویدادها و زمینهٔ زمان‌بندی را نشان دهد.";
 "NSCalendarsUsageDescription" = "OpenClaw از تقویم‌های شما استفاده می‌کند تا وقتی دسترسی به تقویم را فعال می‌کنید، رویدادها و زمینهٔ زمان‌بندی را نشان دهد.";
 "NSCalendarsWriteOnlyAccessUsageDescription" = "OpenClaw از تقویم‌های شما استفاده می‌کند تا وقتی دسترسی به تقویم را فعال می‌کنید، رویدادها را اضافه کند.";

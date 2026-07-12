@@ -1,4 +1,4 @@
-"CFBundleDisplayName" = "OpenClaw";
+"CFBundleDisplayName" = "$(OPENCLAW_APP_DISPLAY_NAME)";
 "NSCalendarsFullAccessUsageDescription" = "OpenClaw 會在你啟用行事曆存取權限時，使用你的行事曆來顯示事件與排程情境。";
 "NSCalendarsUsageDescription" = "OpenClaw 會在你啟用行事曆存取權限時，使用你的行事曆來顯示事件與排程情境。";
 "NSCalendarsWriteOnlyAccessUsageDescription" = "OpenClaw 會在你啟用行事曆存取權限時，使用你的行事曆來新增事件。";

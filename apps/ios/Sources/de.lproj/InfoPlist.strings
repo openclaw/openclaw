@@ -1,4 +1,4 @@
-"CFBundleDisplayName" = "OpenClaw";
+"CFBundleDisplayName" = "$(OPENCLAW_APP_DISPLAY_NAME)";
 "NSCalendarsFullAccessUsageDescription" = "OpenClaw verwendet Ihre Kalender, um Ereignisse und Planungskontext anzuzeigen, wenn Sie den Kalenderzugriff aktivieren.";
 "NSCalendarsUsageDescription" = "OpenClaw verwendet Ihre Kalender, um Ereignisse und Planungskontext anzuzeigen, wenn Sie den Kalenderzugriff aktivieren.";
 "NSCalendarsWriteOnlyAccessUsageDescription" = "OpenClaw verwendet Ihre Kalender, um Ereignisse hinzuzufügen, wenn Sie den Kalenderzugriff aktivieren.";

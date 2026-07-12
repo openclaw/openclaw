@@ -1,4 +1,4 @@
-"CFBundleDisplayName" = "OpenClaw";
+"CFBundleDisplayName" = "$(OPENCLAW_APP_DISPLAY_NAME)";
 "NSCalendarsFullAccessUsageDescription" = "OpenClaw, takvim erişimini etkinleştirdiğinizde etkinlikleri ve planlama bağlamını göstermek için takvimlerinizi kullanır.";
 "NSCalendarsUsageDescription" = "OpenClaw, takvim erişimini etkinleştirdiğinizde etkinlikleri ve planlama bağlamını göstermek için takvimlerinizi kullanır.";
 "NSCalendarsWriteOnlyAccessUsageDescription" = "OpenClaw, takvim erişimini etkinleştirdiğinizde etkinlik eklemek için takvimlerinizi kullanır.";

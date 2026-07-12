@@ -1,4 +1,4 @@
-"CFBundleDisplayName" = "OpenClaw";
+"CFBundleDisplayName" = "$(OPENCLAW_APP_DISPLAY_NAME)";
 "NSCalendarsFullAccessUsageDescription" = "캘린더 접근을 활성화하면 OpenClaw가 캘린더를 사용하여 이벤트와 일정 컨텍스트를 표시합니다.";
 "NSCalendarsUsageDescription" = "캘린더 접근을 활성화하면 OpenClaw가 캘린더를 사용하여 이벤트와 일정 컨텍스트를 표시합니다.";
 "NSCalendarsWriteOnlyAccessUsageDescription" = "캘린더 접근을 활성화하면 OpenClaw가 캘린더를 사용하여 이벤트를 추가합니다.";

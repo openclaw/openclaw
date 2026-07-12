@@ -1,4 +1,4 @@
-"CFBundleDisplayName" = "OpenClaw";
+"CFBundleDisplayName" = "$(OPENCLAW_APP_DISPLAY_NAME)";
 "NSCalendarsFullAccessUsageDescription" = "OpenClaw sử dụng lịch của bạn để hiển thị sự kiện và ngữ cảnh lên lịch khi bạn bật quyền truy cập lịch.";
 "NSCalendarsUsageDescription" = "OpenClaw sử dụng lịch của bạn để hiển thị sự kiện và ngữ cảnh lên lịch khi bạn bật quyền truy cập lịch.";
 "NSCalendarsWriteOnlyAccessUsageDescription" = "OpenClaw sử dụng lịch của bạn để thêm sự kiện khi bạn bật quyền truy cập lịch.";
