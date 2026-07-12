@@ -181,8 +181,8 @@ describe("runNodeHost", () => {
     let resolveCloseMcp: (() => void) | undefined;
     mocks.closeMcpManager.mockImplementationOnce(
       () =>
-        new Promise<void>((resolve) => {
-          resolveCloseMcp = resolve;
+        new Promise<undefined>((resolve) => {
+          resolveCloseMcp = () => resolve(undefined);
         }),
     );
     try {
