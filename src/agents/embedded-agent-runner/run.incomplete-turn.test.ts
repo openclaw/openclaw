@@ -1272,7 +1272,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
   it("waits for asynchronous user persistence before retrying a missing terminal turn", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
-    const persistedMessage = { role: "user" as const, content: "test prompt" };
+    const persistedMessage = { role: "user" as const, content: "test prompt", timestamp: 1 };
     let resolvePersistApproved:
       | ((result: {
           sessionFile: string;
