@@ -279,13 +279,6 @@ function shouldSkipGeneratedLlmCoreValidatorExport(checker, symbol) {
     : false;
 }
 
-function isGeneratedPackageDeclaration(declaration) {
-  const relativePath = toRepoRelativePath(declaration.getSourceFile().fileName);
-  // Package builds can make workspace package reexports look newly callable.
-  // Source-surface counts must stay independent of generated dist state.
-  return /^packages\/[^/]+\/dist\//u.test(relativePath);
-}
-
 function isCallableExport(checker, symbol, sourceFile) {
   const target = unwrapAlias(checker, symbol);
   const declaration = target.valueDeclaration ?? target.declarations?.[0] ?? sourceFile;

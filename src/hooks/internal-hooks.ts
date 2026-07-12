@@ -428,9 +428,7 @@ export function isMessageReceivedEvent(
   );
 }
 
-export function isMessagePreAuthEvent(
-  event: InternalHookEvent,
-): event is MessagePreAuthHookEvent {
+export function isMessagePreAuthEvent(event: InternalHookEvent): event is MessagePreAuthHookEvent {
   if (!isHookEventTypeAndAction(event, "message", "pre-auth")) {
     return false;
   }

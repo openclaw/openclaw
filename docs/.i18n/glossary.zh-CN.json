@@ -1546,5 +1546,205 @@
   {
     "source": "Path 3 live SQLite E2E harness",
     "target": "Path 3 live SQLite E2E harness"
+  },
+  {
+    "source": "Audio and voice notes",
+    "target": "???????"
+  },
+  {
+    "source": "Audit history",
+    "target": "????"
+  },
+  {
+    "source": "Tasks",
+    "target": "??"
+  },
+  {
+    "source": "Cron jobs",
+    "target": "Cron ??"
+  },
+  {
+    "source": "Fleet",
+    "target": "Fleet"
+  },
+  {
+    "source": "Multi-tenant hosting",
+    "target": "?????"
+  },
+  {
+    "source": "Docker",
+    "target": "Docker"
+  },
+  {
+    "source": "Podman",
+    "target": "Podman"
+  },
+  {
+    "source": "Gateway security",
+    "target": "Gateway ??"
+  },
+  {
+    "source": "Promos",
+    "target": "Promos"
+  },
+  {
+    "source": "Vault SecretRefs",
+    "target": "Vault SecretRefs"
+  },
+  {
+    "source": "Managed worktrees",
+    "target": "?????"
+  },
+  {
+    "source": "Session search",
+    "target": "????"
+  },
+  {
+    "source": "Session state awareness",
+    "target": "??????"
+  },
+  {
+    "source": "Session tools",
+    "target": "????"
+  },
+  {
+    "source": "Session management",
+    "target": "????"
+  },
+  {
+    "source": "Audit records CLI",
+    "target": "???? CLI"
+  },
+  {
+    "source": "OpenTelemetry",
+    "target": "OpenTelemetry"
+  },
+  {
+    "source": "Multiple gateways",
+    "target": "?? Gateway"
+  },
+  {
+    "source": "Restart recovery",
+    "target": "????"
+  },
+  {
+    "source": "Active computer presence",
+    "target": "??????"
+  },
+  {
+    "source": "System presence",
+    "target": "????"
+  },
+  {
+    "source": "macOS app",
+    "target": "macOS ??"
+  },
+  {
+    "source": "Codex supervision",
+    "target": "Codex ??"
+  },
+  {
+    "source": "Supervise Codex sessions",
+    "target": "?? Codex ??"
+  },
+  {
+    "source": "Codex supervision architecture",
+    "target": "Codex ????"
+  },
+  {
+    "source": "Logbook plugin",
+    "target": "Logbook ??"
+  },
+  {
+    "source": "Featherless plugin",
+    "target": "Featherless ??"
+  },
+  {
+    "source": "featherless",
+    "target": "featherless"
+  },
+  {
+    "source": "LongCat plugin",
+    "target": "LongCat ??"
+  },
+  {
+    "source": "longcat",
+    "target": "longcat"
+  },
+  {
+    "source": "Vault plugin",
+    "target": "Vault ??"
+  },
+  {
+    "source": "vault",
+    "target": "vault"
+  },
+  {
+    "source": "Workspaces plugin",
+    "target": "Workspaces ??"
+  },
+  {
+    "source": "Secrets management",
+    "target": "????"
+  },
+  {
+    "source": "Featherless AI",
+    "target": "Featherless AI"
+  },
+  {
+    "source": "All providers",
+    "target": "?????"
+  },
+  {
+    "source": "Thinking modes",
+    "target": "????"
+  },
+  {
+    "source": "LongCat",
+    "target": "LongCat"
+  },
+  {
+    "source": "Multi-surface operator approvals",
+    "target": "????????"
+  },
+  {
+    "source": "@openclaw/ai package",
+    "target": "@openclaw/ai ?"
+  },
+  {
+    "source": "Chrome Extension",
+    "target": "Chrome ??"
+  },
+  {
+    "source": "Show widget",
+    "target": "?????"
+  },
+  {
+    "source": "Control UI hosted embeds",
+    "target": "Control UI ????"
+  },
+  {
+    "source": "Canvas plugin",
+    "target": "Canvas ??"
+  },
+  {
+    "source": "Gateway protocol client capabilities",
+    "target": "Gateway ???????"
+  },
+  {
+    "source": "Session tools and state changes",
+    "target": "?????????"
+  },
+  {
+    "source": "The Lobster",
+    "target": "The Lobster"
+  },
+  {
+    "source": "Workspaces",
+    "target": "Workspaces"
+  },
+  {
+    "source": "logbook",
+    "target": "logbook"
   }
 ]

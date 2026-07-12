@@ -2964,6 +2964,8 @@ export const zh_TW: TranslationMap = {
     },
     pullRequests: {
       linkLabel: "Pull request #{number}: {title}",
+      createPr: "建立 PR",
+      createPrLabel: "為 {branch} 建立提取要求",
       dismiss: "關閉 pull request #{number}",
       open: "開啟",
       draft: "草稿",

@@ -176,11 +176,7 @@ export function runOxfmt(files, params = {}, deps = {}) {
   const prefixArgs = ["--write", "--threads=1", "--config", path.join(repoRoot, ".oxfmtrc.jsonc")];
   const maxCommandLineBytes =
     params.maxCommandLineBytes ?? docsFormatMaxCommandLineBytesForPlatform(platform);
-  for (const chunk of chunkFilesForCommand(
-    files,
-    prefixArgs,
-    maxCommandLineBytes,
-  )) {
+  for (const chunk of chunkFilesForCommand(files, prefixArgs, maxCommandLineBytes)) {
     const invocation = resolveOxfmtInvocation([...prefixArgs, ...chunk], {
       comSpec: params.comSpec,
       existsSync: deps.existsSync,

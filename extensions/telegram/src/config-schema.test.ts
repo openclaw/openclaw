@@ -34,10 +34,7 @@ describe("telegram custom commands schema", () => {
   it("accepts grouped DM allowFrom entries", () => {
     expectTelegramConfigValid({
       dmPolicy: "allowlist",
-      allowFrom: [
-        "123456789",
-        { number: "987654321", group: "friends" },
-      ],
+      allowFrom: ["123456789", { number: "987654321", group: "friends" }],
       accounts: {
         ops: {
           dmPolicy: "allowlist",

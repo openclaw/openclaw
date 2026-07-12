@@ -15,13 +15,7 @@ import type {
 import type { DmConfig, MentionPatternsPolicyConfig } from "./types.messages.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
-type WhatsAppAllowFromGroup =
-  | "trusted"
-  | "partner"
-  | "friends"
-  | "family"
-  | "work"
-  | "restricted";
+type WhatsAppAllowFromGroup = "trusted" | "partner" | "friends" | "family" | "work" | "restricted";
 
 type WhatsAppGroupedAllowFromEntry = {
   number: string;

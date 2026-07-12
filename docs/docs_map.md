@@ -2869,6 +2869,17 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Index lifecycle
   - H2: Session search vs. memory search
 
+## concepts/session-state.md
+
+- Route: /concepts/session-state
+- Headings:
+  - H2: The signal log
+  - H2: Watchers
+  - H2: Notices: one, not many
+  - H2: Reconciling
+  - H2: Storage and limits
+  - H2: Related
+
 ## concepts/session-tool.md
 
 - Route: /concepts/session-tool

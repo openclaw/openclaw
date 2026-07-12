@@ -469,9 +469,9 @@ describe("loader", () => {
       );
 
       expect(count).toBe(1);
-      expect(hasConfiguredInternalHooks({ channels: { telegram: { dmPolicy: "allowlist" } } })).toBe(
-        true,
-      );
+      expect(
+        hasConfiguredInternalHooks({ channels: { telegram: { dmPolicy: "allowlist" } } }),
+      ).toBe(true);
       expect(
         resolveConfiguredInternalHookNames({
           channels: { telegram: { dmPolicy: "allowlist" } },

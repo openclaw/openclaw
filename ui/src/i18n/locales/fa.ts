@@ -3018,6 +3018,8 @@ export const fa: TranslationMap = {
     },
     pullRequests: {
       linkLabel: "درخواست pull شماره {number}: {title}",
+      createPr: "ایجاد PR",
+      createPrLabel: "ایجاد درخواست ادغام برای {branch}",
       dismiss: "بستن درخواست pull شماره {number}",
       open: "باز",
       draft: "پیش‌نویس",

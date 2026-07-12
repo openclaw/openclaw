@@ -361,10 +361,12 @@ function applyAccountScopedAllowlistConfigEdit(params: {
           ...(currentGroup ? { from: currentGroup } : {}),
           to: accessGroup,
         };
-        return params.formatConfigEntry?.({
-          entry: value ?? params.entry.trim(),
-          accessGroup,
-        }) ?? entry;
+        return (
+          params.formatConfigEntry?.({
+            entry: value ?? params.entry.trim(),
+            accessGroup,
+          }) ?? entry
+        );
       });
     }
   } else {

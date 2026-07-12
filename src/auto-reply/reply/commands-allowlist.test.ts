@@ -612,9 +612,7 @@ describe("handleAllowlistCommand", () => {
       expect(result?.shouldContinue).toBe(false);
       expect(result?.reply?.text).toContain("DM allowlist added");
       const written = await readJsonFile<OpenClawConfig>(configPath);
-      expect(written.channels?.telegram?.allowFrom).toEqual([
-        { number: "789", group: "friends" },
-      ]);
+      expect(written.channels?.telegram?.allowFrom).toEqual([{ number: "789", group: "friends" }]);
     });
   });
 

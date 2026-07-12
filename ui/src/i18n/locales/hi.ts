@@ -2992,6 +2992,8 @@ export const hi: TranslationMap = {
     },
     pullRequests: {
       linkLabel: "Pull request #{number}: {title}",
+      createPr: "PR बनाएँ",
+      createPrLabel: "{branch} के लिए पुल अनुरोध बनाएँ",
       dismiss: "Pull request #{number} खारिज करें",
       open: "खोलें",
       draft: "ड्राफ्ट",

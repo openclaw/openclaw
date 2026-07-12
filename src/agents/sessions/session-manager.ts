@@ -685,11 +685,11 @@ function rememberAppendedSessionEntry(
   const isVerifiedOwnedAppend = (snapshot: SessionFileSnapshot | undefined) =>
     Boolean(
       publishOwnedAppend &&
-        beforeAppendSnapshot &&
-        snapshot &&
-        snapshot.dev === beforeAppendSnapshot.dev &&
-        snapshot.ino === beforeAppendSnapshot.ino &&
-        snapshot.size === beforeAppendSnapshot.size + appendedByteLength,
+      beforeAppendSnapshot &&
+      snapshot &&
+      snapshot.dev === beforeAppendSnapshot.dev &&
+      snapshot.ino === beforeAppendSnapshot.ino &&
+      snapshot.size === beforeAppendSnapshot.size + appendedByteLength,
     );
   if (!cacheOwnedAppend) {
     sessionEntriesCache.delete(resolvedPath);
@@ -2168,7 +2168,7 @@ export class SessionManager {
     const removedParentById = new Map(
       removedEntries.map((entry) => [entry.id, entry.parentId] as const),
     );
-    for (let index = removeStart; index < this.fileEntries.length;) {
+    for (let index = removeStart; index < this.fileEntries.length; ) {
       const entry = this.fileEntries[index];
       if (
         isIndexedSessionEntry(entry) &&

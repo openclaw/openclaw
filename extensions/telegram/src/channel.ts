@@ -44,9 +44,6 @@ import {
   type ResolvedTelegramAccount,
 } from "./accounts.js";
 import { resolveTelegramAutoThreadId } from "./action-threading.js";
-import { lookupTelegramChatId } from "./api-fetch.js";
-import { telegramApprovalCapability } from "./approval-native.js";
-import * as auditModule from "./audit.js";
 import {
   createTelegramAllowFromEntry,
   DEFAULT_TELEGRAM_ALLOW_FROM_GROUP,
@@ -56,6 +53,9 @@ import {
   readTelegramAllowFromEntryNumber,
   TELEGRAM_ALLOW_FROM_GROUPS,
 } from "./allow-from.js";
+import { lookupTelegramChatId } from "./api-fetch.js";
+import { telegramApprovalCapability } from "./approval-native.js";
+import * as auditModule from "./audit.js";
 import {
   deleteCachedTelegramBotInfo,
   readCachedTelegramBotInfo,

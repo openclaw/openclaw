@@ -521,14 +521,14 @@ describe("release Telegram QA workflow", () => {
       (step) => step.name === "Validate required QA credential env",
     );
     expect(validateStep?.env?.RUNNER_ENVIRONMENT).toBe("${{ runner.environment }}");
-    expect(validateStep?.env?.CREDENTIAL_ACQUIRE_TIMEOUT_MS).toBe("60000");
+    expect(validateStep?.env?.CREDENTIAL_ACQUIRE_TIMEOUT_MS).toBe("600000");
     expect(validateStep?.env?.JOB_TIMEOUT_MINUTES).toBe("60");
     expect(validateStep?.env?.LEASE_TTL_MS).toBe("7200000");
     expect(validateStep?.run).toContain('[[ "$RUNNER_ENVIRONMENT" == "github-hosted" ]]');
     expect(validateStep?.run).toContain("JOB_TIMEOUT_MINUTES * 60 * 1000 < LEASE_TTL_MS");
 
     const runStep = job?.steps?.find((step) => step.name === "Run Telegram live lane");
-    expect(runStep?.env?.OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS).toBe("60000");
+    expect(runStep?.env?.OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS).toBe("600000");
     expect(runStep?.env?.OPENCLAW_QA_CREDENTIAL_LEASE_TTL_MS).toBe("7200000");
     expect(runStep?.env?.OPENCLAW_LOG_LEVEL).toBe("trace");
     expect(runStep?.env?.OPENCLAW_QA_TELEGRAM_SUT_CLEANUP_TIMEOUT_MS).toBe("60000");

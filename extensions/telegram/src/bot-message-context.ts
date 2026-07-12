@@ -17,8 +17,8 @@ import {
   expandTelegramAllowFromWithAccessGroups,
   resolveTelegramDmAllow,
 } from "./access-groups.js";
-import { resolveTelegramAllowFromSenderGroup } from "./allow-from.js";
 import { resolveDefaultTelegramAccountId } from "./accounts.js";
+import { resolveTelegramAllowFromSenderGroup } from "./allow-from.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   firstDefined,

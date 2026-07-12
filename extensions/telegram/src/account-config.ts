@@ -5,15 +5,11 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-core";
 import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  normalizeTelegramAllowFromEntry,
-  type TelegramAllowFromEntry,
-} from "./allow-from.js";
+import { normalizeTelegramAllowFromEntry, type TelegramAllowFromEntry } from "./allow-from.js";
 
 function hasWildcardAllowFrom(value: unknown): boolean {
   return (
-    Array.isArray(value) &&
-    value.some((entry) => normalizeTelegramAllowFromEntry(entry) === "*")
+    Array.isArray(value) && value.some((entry) => normalizeTelegramAllowFromEntry(entry) === "*")
   );
 }
 

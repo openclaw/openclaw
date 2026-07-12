@@ -3049,6 +3049,8 @@ export const es: TranslationMap = {
     },
     pullRequests: {
       linkLabel: "Pull request n.º {number}: {title}",
+      createPr: "Crear PR",
+      createPrLabel: "Crear una solicitud de extracción para {branch}",
       dismiss: "Descartar pull request n.º {number}",
       open: "Abierto",
       draft: "Borrador",

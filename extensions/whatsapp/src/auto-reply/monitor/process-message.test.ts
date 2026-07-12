@@ -314,7 +314,9 @@ describe("processMessage group system prompt wiring", () => {
 
     await callProcessMessage();
 
-    expect(buildContextMock.mock.calls[0][0]).toMatchObject({
+    expect(buildContextMock).toHaveBeenCalledTimes(1);
+    const buildContextCall = buildContextMock.mock.calls[0];
+    expect(buildContextCall?.[0]).toMatchObject({
       sender: {
         e164: "+15550002222",
         group: "friends",

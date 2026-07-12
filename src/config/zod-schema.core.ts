@@ -874,7 +874,9 @@ function readAllowFromValidationEntry(entry: unknown): string | number | undefin
 }
 
 export const normalizeAllowFrom = (values?: readonly unknown[]): string[] =>
-  normalizeStringEntries((values ?? []).flatMap((entry) => readAllowFromValidationEntry(entry) ?? []));
+  normalizeStringEntries(
+    (values ?? []).flatMap((entry) => readAllowFromValidationEntry(entry) ?? []),
+  );
 
 /**
  * Closed set of sender-policy/allowFrom dependency violations. Both cases drop

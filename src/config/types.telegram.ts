@@ -99,13 +99,7 @@ export type TelegramCustomCommand = {
   description: string;
 };
 
-type TelegramAllowFromGroup =
-  | "trusted"
-  | "partner"
-  | "friends"
-  | "family"
-  | "work"
-  | "restricted";
+type TelegramAllowFromGroup = "trusted" | "partner" | "friends" | "family" | "work" | "restricted";
 
 type TelegramGroupedAllowFromEntry = {
   number: string | number;

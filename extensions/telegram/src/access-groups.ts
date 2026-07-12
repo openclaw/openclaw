@@ -4,16 +4,13 @@ import {
   expandAllowFromWithAccessGroups,
   parseAccessGroupAllowFromEntry,
 } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeTelegramAllowFromEntries, type TelegramAllowFromEntry } from "./allow-from.js";
 import {
   isSenderAllowed,
   normalizeAllowFrom,
   normalizeDmAllowFromWithStore,
   type NormalizedAllowFrom,
 } from "./bot-access.js";
-import {
-  normalizeTelegramAllowFromEntries,
-  type TelegramAllowFromEntry,
-} from "./allow-from.js";
 
 export async function expandTelegramAllowFromWithAccessGroups(params: {
   cfg?: OpenClawConfig;
