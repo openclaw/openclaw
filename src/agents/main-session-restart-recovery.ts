@@ -6,17 +6,23 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
 import { sanitizePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
   type RestartRecoveryRun,
   type SessionEntry,
-  loadSessionStore,
   resolveAllAgentSessionStoreTargetsSync,
   resolveSessionFilePath,
   resolveSessionTranscriptPathInDir,
 } from "../config/sessions.js";
-import { applySessionEntryReplacements } from "../config/sessions/session-accessor.js";
+import {
+  applySessionEntryReplacements,
+  listSessionEntries,
+} from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { readSessionMessagesAsync } from "../gateway/session-transcript-readers.js";
@@ -514,6 +520,8 @@ async function sendUnresumableSessionNotice(params: {
       method: "message.action",
       params: actionParams,
       timeoutMs: 10_000,
+      clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+      mode: GATEWAY_CLIENT_MODES.BACKEND,
     });
     log.info(
       `sent interrupted main session recovery notice: ${params.sessionKey} (${params.reason})`,
@@ -737,17 +745,17 @@ async function recoverStore(params: {
     providedActiveSessionIds ?? normalizeStringSet(listActiveEmbeddedRunSessionIds());
   const resolveActiveSessionKeys = () =>
     providedActiveSessionKeys ?? normalizeStringSet(listActiveEmbeddedRunSessionKeys());
-  let store: Record<string, SessionEntry>;
+  let entries: Array<{ sessionKey: string; entry: SessionEntry }>;
   try {
-    store = loadSessionStore(params.storePath);
+    entries = listSessionEntries({ storePath: params.storePath });
   } catch (err) {
     log.warn(`failed to load session store ${params.storePath}: ${String(err)}`);
     result.failed++;
     return result;
   }
 
-  for (const [sessionKey, entry] of Object.entries(store).toSorted(([a], [b]) =>
-    a.localeCompare(b),
+  for (const { sessionKey, entry } of entries.toSorted((a, b) =>
+    a.sessionKey.localeCompare(b.sessionKey),
   )) {
     if (!entry || entry.status !== "running" || entry.abortedLastRun !== true) {
       continue;

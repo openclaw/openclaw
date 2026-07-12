@@ -75,6 +75,65 @@ describe("collectCodexRouteWarnings", () => {
     ]);
   });
 
+  it("surfaces enabled Codex Computer Use in doctor warnings", () => {
+    const warnings = collectCodexRouteWarnings({
+      cfg: {
+        plugins: {
+          entries: {
+            codex: {
+              enabled: true,
+              config: {
+                computerUse: {
+                  enabled: true,
+                  healthCheckEnabled: true,
+                  healthCheckIntervalMinutes: 120,
+                  autoRepair: true,
+                },
+              },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+    });
+
+    expect(warnings).toStrictEqual([
+      [
+        "- Codex Computer Use is enabled.",
+        "- Doctor config review found Computer Use enabled; run `/codex computer-use status` to inspect installation, exposure, and the live `list_apps` probe.",
+        "- Periodic Computer Use health checks are enabled with a 120-minute cadence.",
+        "- Stale Computer Use MCP child repair is enabled and limited to SkyComputerUseClient children.",
+      ].join("\n"),
+    ]);
+  });
+
+  it("surfaces opt-in defaults for Codex Computer Use health and repair", () => {
+    const warnings = collectCodexRouteWarnings({
+      cfg: {
+        plugins: {
+          entries: {
+            codex: {
+              enabled: true,
+              config: {
+                computerUse: {
+                  enabled: true,
+                },
+              },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+    });
+
+    expect(warnings).toStrictEqual([
+      [
+        "- Codex Computer Use is enabled.",
+        "- Doctor config review found Computer Use enabled; run `/codex computer-use status` to inspect installation, exposure, and the live `list_apps` probe.",
+        "- Periodic Computer Use health checks are disabled by default; set `computerUse.healthCheckEnabled` to true to enable them.",
+        "- Stale Computer Use MCP child repair is disabled by default; set `computerUse.autoRepair` to true to repair before retrying a failed probe.",
+      ].join("\n"),
+    ]);
+  });
+
   it("still warns when the native Codex runtime is selected with a legacy model ref", () => {
     const warnings = collectCodexRouteWarnings({
       cfg: {
@@ -185,6 +244,68 @@ describe("collectCodexRouteWarnings", () => {
       [
         "- Codex runtime is selected, but the Codex plugin is disabled.",
         "- agents.defaults.model.primary: gpt-5.5 resolves to openai/gpt-5.5 with Codex runtime while the Codex plugin is disabled by config.",
+        "- Run `openclaw doctor --fix`: it enables plugins.entries.codex, or set the affected OpenAI models to an OpenClaw runtime policy.",
+      ].join("\n"),
+    ]);
+  });
+
+  it("requires the Codex plugin for automatic Platform-only gpt-5.6", () => {
+    const warnings = collectCodexRouteWarnings({
+      cfg: {
+        plugins: { entries: { codex: { enabled: false } } },
+        agents: { defaults: { model: { primary: "openai/gpt-5.6" } } },
+      } as unknown as OpenClawConfig,
+    });
+
+    expect(warnings).toStrictEqual([
+      [
+        "- Codex runtime is selected, but the Codex plugin is disabled.",
+        "- agents.defaults.model.primary: openai/gpt-5.6 resolves to openai/gpt-5.6 with Codex runtime while the Codex plugin is disabled by config.",
+        "- Run `openclaw doctor --fix`: it enables plugins.entries.codex, or set the affected OpenAI models to an OpenClaw runtime policy.",
+      ].join("\n"),
+    ]);
+  });
+
+  it("requires the Codex plugin for automatic subscription-only Spark", () => {
+    const warnings = collectCodexRouteWarnings({
+      cfg: {
+        plugins: { entries: { codex: { enabled: false } } },
+        agents: {
+          defaults: { model: { primary: "openai/gpt-5.3-codex-spark" } },
+        },
+      } as unknown as OpenClawConfig,
+    });
+
+    expect(warnings).toStrictEqual([
+      [
+        "- Codex runtime is selected, but the Codex plugin is disabled.",
+        "- agents.defaults.model.primary: openai/gpt-5.3-codex-spark resolves to openai/gpt-5.3-codex-spark with Codex runtime while the Codex plugin is disabled by config.",
+        "- Run `openclaw doctor --fix`: it enables plugins.entries.codex, or set the affected OpenAI models to an OpenClaw runtime policy.",
+      ].join("\n"),
+    ]);
+  });
+
+  it("uses the doctor environment snapshot for implicit OpenAI routing", () => {
+    const cfg = {
+      plugins: { entries: { codex: { enabled: false } } },
+      agents: { defaults: { model: { primary: "openai/gpt-5.4-nano" } } },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      collectCodexRouteWarnings({
+        cfg,
+        env: { OPENAI_BASE_URL: "https://proxy.example.invalid/v1" },
+      }),
+    ).toStrictEqual([]);
+    expect(
+      collectCodexRouteWarnings({
+        cfg,
+        env: { OPENAI_BASE_URL: "https://chatgpt.com/backend-api/codex" },
+      }),
+    ).toStrictEqual([
+      [
+        "- Codex runtime is selected, but the Codex plugin is disabled.",
+        "- agents.defaults.model.primary: openai/gpt-5.4-nano resolves to openai/gpt-5.4-nano with Codex runtime while the Codex plugin is disabled by config.",
         "- Run `openclaw doctor --fix`: it enables plugins.entries.codex, or set the affected OpenAI models to an OpenClaw runtime policy.",
       ].join("\n"),
     ]);
@@ -2066,7 +2187,7 @@ describe("collectCodexRouteWarnings", () => {
     ).toBe("codex");
   });
 
-  it("re-enables the Codex plugin when a default heartbeat model uses Codex runtime", () => {
+  it("keeps Codex disabled when a bare heartbeat model inherits an Anthropic primary", () => {
     const result = maybeRepairCodexRoutes({
       cfg: {
         plugins: {
@@ -2079,6 +2200,31 @@ describe("collectCodexRouteWarnings", () => {
             model: "anthropic/claude-sonnet-4-6",
             heartbeat: {
               model: "gpt-5.5",
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      shouldRepair: true,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toStrictEqual([]);
+    expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(false);
+  });
+
+  it("re-enables the Codex plugin when a qualified default heartbeat uses Codex runtime", () => {
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        plugins: {
+          entries: {
+            codex: { enabled: false },
+          },
+        },
+        agents: {
+          defaults: {
+            model: "anthropic/claude-sonnet-4-6",
+            heartbeat: {
+              model: "openai/gpt-5.5",
             },
           },
         },
@@ -2106,7 +2252,7 @@ describe("collectCodexRouteWarnings", () => {
             model: "anthropic/claude-sonnet-4-6",
             subagents: {
               model: {
-                primary: "gpt-5.5",
+                primary: "openai/gpt-5.5",
               },
             },
           },
@@ -2133,7 +2279,7 @@ describe("collectCodexRouteWarnings", () => {
         agents: {
           defaults: {
             heartbeat: {
-              model: "gpt-5.5",
+              model: "openai/gpt-5.5",
             },
           },
           list: [
@@ -2605,7 +2751,7 @@ describe("collectCodexRouteWarnings", () => {
     expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(false);
   });
 
-  it("re-enables the Codex plugin when a channel model override uses Codex runtime", () => {
+  it("keeps Codex disabled when a bare channel model inherits an Anthropic primary", () => {
     const result = maybeRepairCodexRoutes({
       cfg: {
         plugins: {
@@ -2622,6 +2768,78 @@ describe("collectCodexRouteWarnings", () => {
           modelByChannel: {
             telegram: {
               default: "gpt-5.5",
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      shouldRepair: true,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toStrictEqual([]);
+    expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(false);
+  });
+
+  it("re-enables the Codex plugin when a qualified channel model uses Codex runtime", () => {
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        plugins: {
+          entries: {
+            codex: { enabled: false },
+          },
+        },
+        agents: {
+          defaults: {
+            model: "anthropic/claude-sonnet-4-6",
+          },
+        },
+        channels: {
+          modelByChannel: {
+            telegram: {
+              default: "openai/gpt-5.5",
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      shouldRepair: true,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toStrictEqual([
+      "Enabled plugins.entries.codex because configured agent routes use Codex runtime.",
+    ]);
+    expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(true);
+  });
+
+  it("checks channel model runtime policy for every configured agent", () => {
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        plugins: {
+          entries: {
+            codex: { enabled: false },
+          },
+        },
+        agents: {
+          defaults: {
+            model: "anthropic/claude-sonnet-4-6",
+            models: {
+              "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } },
+            },
+          },
+          list: [
+            { id: "main" },
+            {
+              id: "worker",
+              models: {
+                "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+              },
+            },
+          ],
+        },
+        channels: {
+          modelByChannel: {
+            telegram: {
+              default: "openai/gpt-5.5",
             },
           },
         },
@@ -3796,6 +4014,48 @@ describe("collectCodexRouteWarnings", () => {
     expect(store.main.fallbackNoticeReason).toBeUndefined();
     expect(store.other.updatedAt).toBe(2);
     expect(store.other.agentHarnessId).toBe("codex");
+  });
+
+  it("skips valid locked agent-harness rows while repairing ordinary legacy routes", () => {
+    const supervisedKey = "agent:main:harness:codex:supervision:abc123";
+    const ordinaryLockedKey = "agent:main:ordinary-locked";
+    const lockedEntry: SessionEntry = {
+      sessionId: "s-supervised",
+      updatedAt: 1,
+      modelSelectionLocked: true,
+      agentHarnessId: "codex",
+      agentRuntimeOverride: "codex",
+      modelProvider: "openai-codex",
+      model: "gpt-5.5",
+      providerOverride: "openai-codex",
+      modelOverride: "openai-codex/gpt-5.4",
+      fallbackNoticeSelectedModel: "openai-codex/gpt-5.5",
+    };
+    const store: Record<string, SessionEntry> = {
+      [supervisedKey]: lockedEntry,
+      [ordinaryLockedKey]: { ...lockedEntry, sessionId: "s-ordinary-locked" },
+      ordinary: {
+        sessionId: "s-ordinary",
+        updatedAt: 2,
+        modelProvider: "openai-codex",
+        model: "gpt-5.5",
+        agentHarnessId: "codex",
+      },
+    };
+    const supervised = structuredClone(store[supervisedKey]);
+    const ordinaryLocked = structuredClone(store[ordinaryLockedKey]);
+
+    const result = repairCodexSessionStoreRoutes({ store, now: 123 });
+
+    expect(result).toEqual({ changed: true, sessionKeys: ["ordinary"] });
+    expect(store[supervisedKey]).toEqual(supervised);
+    expect(store[ordinaryLockedKey]).toEqual(ordinaryLocked);
+    expect(store.ordinary).toMatchObject({
+      updatedAt: 123,
+      modelProvider: "openai",
+      model: "gpt-5.5",
+    });
+    expect(store.ordinary.agentHarnessId).toBeUndefined();
   });
 
   it("preserves explicit OpenClaw runtime pins while repairing legacy session routes", () => {

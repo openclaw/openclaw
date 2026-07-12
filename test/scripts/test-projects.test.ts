@@ -6,6 +6,7 @@ import path from "node:path";
 import fg from "fast-glob";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
+  CHANNEL_CONTRACT_CONFIG_PATTERNS,
   DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_HEARTBEAT_MS,
   DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS,
   applyDefaultMultiSpecVitestCachePaths,
@@ -29,6 +30,12 @@ import {
 } from "../../scripts/test-projects.test-support.mjs";
 import { captureReaddirSyncCallsDuring } from "../../src/test-utils/fs-scan-assertions.js";
 import { toRepoPath } from "../../src/test-utils/repo-files.js";
+import {
+  channelConfigContractPatterns,
+  channelRegistryContractPatterns,
+  channelSessionContractPatterns,
+  channelSurfaceContractPatterns,
+} from "../vitest/vitest.contracts-shared.ts";
 import { fullSuiteVitestShards } from "../vitest/vitest.test-shards.mjs";
 
 const normalizeRepoPath = toRepoPath;
@@ -634,11 +641,16 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/e2e/qa-lab/runtime/crestodian-first-run-docker-client.ts",
         [
           "test/scripts/docker-e2e-crestodian.test.ts",
+          "src/cli/program/register.onboard.test.ts",
           "src/cli/run-main.test.ts",
           "src/cli/run-main.exit.test.ts",
+          "src/commands/crestodian-with-inference.test.ts",
+          "src/crestodian/assistant.configured.test.ts",
+          "src/crestodian/assistant.test.ts",
           "src/crestodian/crestodian.test.ts",
           "src/crestodian/operations.test.ts",
           "src/crestodian/overview.test.ts",
+          "src/crestodian/setup-inference.test.ts",
           "src/crestodian/audit.test.ts",
         ],
       ],
@@ -646,24 +658,6 @@ describe("scripts/test-projects changed-target routing", () => {
         "scripts/e2e/crestodian-first-run-spec.json",
         [
           "test/scripts/docker-e2e-crestodian.test.ts",
-          "src/crestodian/operations.test.ts",
-          "src/crestodian/audit.test.ts",
-        ],
-      ],
-      [
-        "scripts/e2e/crestodian-planner-docker.sh",
-        [
-          "test/scripts/docker-build-helper.test.ts",
-          "test/scripts/docker-e2e-plan.test.ts",
-          "test/scripts/docker-e2e-crestodian.test.ts",
-        ],
-      ],
-      [
-        "scripts/e2e/crestodian-planner-docker-client.mjs",
-        [
-          "test/scripts/docker-e2e-crestodian.test.ts",
-          "src/crestodian/assistant.test.ts",
-          "src/crestodian/crestodian.test.ts",
           "src/crestodian/operations.test.ts",
           "src/crestodian/audit.test.ts",
         ],
@@ -1194,6 +1188,13 @@ describe("scripts/test-projects changed-target routing", () => {
     expect(resolveChangedTestTargetPlan(["scripts/tsconfig.json"])).toEqual({
       mode: "targets",
       targets: ["test/scripts/oxlint-config.test.ts"],
+    });
+  });
+
+  it("keeps the scripts typecheck project on its routing tests", () => {
+    expect(resolveChangedTestTargetPlan(["tsconfig.scripts.json"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/changed-lanes.test.ts", "test/scripts/test-projects.test.ts"],
     });
   });
 
@@ -2314,6 +2315,25 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
+  it("routes gateway package targets through the gateway-client lane", () => {
+    expect(
+      buildVitestRunPlans([
+        "packages/gateway-client/src/timeouts.test.ts",
+        "packages/gateway-protocol/src/frame-guards.test.ts",
+      ]),
+    ).toEqual([
+      {
+        config: "test/vitest/vitest.gateway-client.config.ts",
+        forwardedArgs: [],
+        includePatterns: [
+          "packages/gateway-client/src/timeouts.test.ts",
+          "packages/gateway-protocol/src/frame-guards.test.ts",
+        ],
+        watchMode: false,
+      },
+    ]);
+  });
+
   it("routes explicit imported source files through import-graph tests", () => {
     let plans: ReturnType<typeof buildVitestRunPlans> = [];
     withTinyGitRepo(
@@ -2610,8 +2630,6 @@ describe("scripts/test-projects changed-target routing", () => {
       "scripts/e2e/crestodian-first-run-docker.sh",
       "test/e2e/qa-lab/runtime/crestodian-first-run-docker-client.ts",
       "scripts/e2e/crestodian-first-run-spec.json",
-      "scripts/e2e/crestodian-planner-docker.sh",
-      "scripts/e2e/crestodian-planner-docker-client.mjs",
       "scripts/e2e/crestodian-rescue-docker.sh",
       "scripts/e2e/crestodian-rescue-docker-client.ts",
     ];
@@ -2623,13 +2641,17 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/docker-build-helper.test.ts",
         "test/scripts/docker-e2e-plan.test.ts",
         "test/scripts/docker-e2e-crestodian.test.ts",
+        "src/cli/program/register.onboard.test.ts",
         "src/cli/run-main.test.ts",
         "src/cli/run-main.exit.test.ts",
+        "src/commands/crestodian-with-inference.test.ts",
+        "src/crestodian/assistant.configured.test.ts",
+        "src/crestodian/assistant.test.ts",
         "src/crestodian/crestodian.test.ts",
         "src/crestodian/operations.test.ts",
         "src/crestodian/overview.test.ts",
+        "src/crestodian/setup-inference.test.ts",
         "src/crestodian/audit.test.ts",
-        "src/crestodian/assistant.test.ts",
         "src/crestodian/rescue-policy.test.ts",
         "src/crestodian/rescue-message.test.ts",
       ],
@@ -2657,18 +2679,29 @@ describe("scripts/test-projects changed-target routing", () => {
         watchMode: false,
       },
     ]);
-    const toolingPlans = plans.slice(3);
+    const e2ePlans = plans.filter((plan) => plan.config === "test/vitest/vitest.e2e.config.ts");
+    const toolingPlans = plans
+      .slice(3)
+      .filter((plan) => plan.config === "test/vitest/vitest.tooling.config.ts");
     const toolingTargets = toolingPlans.flatMap((plan) => plan.includePatterns ?? []);
 
     expect(toolingPlans.length).toBeGreaterThan(1);
-    expect(
-      toolingPlans.every((plan) => plan.config === "test/vitest/vitest.tooling.config.ts"),
-    ).toBe(true);
     expect(toolingPlans.every((plan) => (plan.includePatterns?.length ?? 0) <= 60)).toBe(true);
     expect(toolingTargets).toContain("test/scripts/run-opengrep.test.ts");
     expect(toolingTargets).not.toContain("test/scripts/docker-build-helper.test.ts");
     expect(toolingTargets).not.toContain("test/scripts/openclaw-e2e-instance.test.ts");
     expect(new Set(toolingTargets).size).toBe(toolingTargets.length);
+    expect(e2ePlans).toEqual([
+      {
+        config: "test/vitest/vitest.e2e.config.ts",
+        forwardedArgs: [
+          "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
+          "test/scripts/sqlite-sessions-transcripts-flip-proof.e2e.test.ts",
+        ],
+        includePatterns: null,
+        watchMode: false,
+      },
+    ]);
   });
 
   it("routes the src scripts test root to the tooling shard", () => {
@@ -2790,18 +2823,29 @@ describe("scripts/test-projects changed-target routing", () => {
         watchMode: false,
       },
     ]);
-    const toolingPlans = plans.slice(3);
+    const e2ePlans = plans.filter((plan) => plan.config === "test/vitest/vitest.e2e.config.ts");
+    const toolingPlans = plans
+      .slice(3)
+      .filter((plan) => plan.config === "test/vitest/vitest.tooling.config.ts");
     const toolingTargets = toolingPlans.flatMap((plan) => plan.includePatterns ?? []);
 
     expect(toolingPlans.length).toBeGreaterThan(1);
-    expect(
-      toolingPlans.every((plan) => plan.config === "test/vitest/vitest.tooling.config.ts"),
-    ).toBe(true);
     expect(toolingPlans.every((plan) => (plan.includePatterns?.length ?? 0) <= 60)).toBe(true);
     expect(toolingTargets).toContain("test/scripts/run-opengrep.test.ts");
     expect(toolingTargets).not.toContain("test/scripts/docker-build-helper.test.ts");
     expect(toolingTargets).not.toContain("test/scripts/openclaw-e2e-instance.test.ts");
     expect(new Set(toolingTargets).size).toBe(toolingTargets.length);
+    expect(e2ePlans).toEqual([
+      {
+        config: "test/vitest/vitest.e2e.config.ts",
+        forwardedArgs: [
+          "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
+          "test/scripts/sqlite-sessions-transcripts-flip-proof.e2e.test.ts",
+        ],
+        includePatterns: null,
+        watchMode: false,
+      },
+    ]);
   });
 
   it("keeps broad shell helper watch targets in one tooling shard", () => {
@@ -2921,6 +2965,33 @@ describe("scripts/test-projects changed-target routing", () => {
         config: "test/vitest/vitest.contracts-plugin.config.ts",
         forwardedArgs: [],
         includePatterns: ["src/plugins/contracts/loader.contract.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("fans contract directory targets out to the owning contract lanes", () => {
+    // Regression: the generic channels project excludes contracts/**, so the
+    // directory target used to run zero tests and exit green.
+    const plans = buildVitestRunPlans(["src/channels/plugins/contracts"]);
+
+    expect(plans.map((plan) => plan.config)).toEqual([
+      "test/vitest/vitest.contracts-channel-surface.config.ts",
+      "test/vitest/vitest.contracts-channel-config.config.ts",
+      "test/vitest/vitest.contracts-channel-registry.config.ts",
+      "test/vitest/vitest.contracts-channel-session.config.ts",
+    ]);
+    expect(plans.every((plan) => plan.includePatterns === null)).toBe(true);
+  });
+
+  it("routes the plugin contracts directory to the plugin contracts lane", () => {
+    const plans = buildVitestRunPlans(["src/plugins/contracts"]);
+
+    expect(plans).toEqual([
+      {
+        config: "test/vitest/vitest.contracts-plugin.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
         watchMode: false,
       },
     ]);
@@ -4679,6 +4750,14 @@ describe("scripts/test-projects Vitest stall watchdog", () => {
           watchMode: false,
         },
         {
+          config: "test/vitest/vitest.gateway-server.config.ts",
+          env: { PATH: "/usr/bin" },
+          includeFilePath: null,
+          includePatterns: null,
+          pnpmArgs: [],
+          watchMode: false,
+        },
+        {
           config: "test/vitest/vitest.extension-feishu.config.ts",
           env: { PATH: "/usr/bin" },
           includeFilePath: null,
@@ -4693,7 +4772,8 @@ describe("scripts/test-projects Vitest stall watchdog", () => {
     expect(specs[0]?.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("2400000");
     expect(specs[1]?.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("2400000");
     expect(specs[2]?.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("2400000");
-    expect(specs[3]?.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe(
+    expect(specs[3]?.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("2400000");
+    expect(specs[4]?.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe(
       DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS,
     );
   });
@@ -4815,5 +4895,20 @@ describe("scripts/test-projects Vitest cache isolation", () => {
       },
     ];
     expect(applyDefaultMultiSpecVitestCachePaths(watch, { cwd: "/repo", env: {} })).toBe(watch);
+  });
+});
+
+describe("scripts/test-projects channel contract lane patterns", () => {
+  // test-projects.test-support.mjs must stay loader-free plain JS, so it
+  // duplicates the per-config channel-contract patterns instead of importing
+  // vitest.contracts-shared.ts. Drift silently drops contract files from lane
+  // routing (it happened once), so pin both enumerations to each other.
+  it("stays in sync with the vitest.contracts-shared lane enumerations", () => {
+    expect(Object.fromEntries(CHANNEL_CONTRACT_CONFIG_PATTERNS)).toEqual({
+      "test/vitest/vitest.contracts-channel-surface.config.ts": channelSurfaceContractPatterns,
+      "test/vitest/vitest.contracts-channel-config.config.ts": channelConfigContractPatterns,
+      "test/vitest/vitest.contracts-channel-registry.config.ts": channelRegistryContractPatterns,
+      "test/vitest/vitest.contracts-channel-session.config.ts": channelSessionContractPatterns,
+    });
   });
 });

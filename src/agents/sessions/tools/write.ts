@@ -183,14 +183,19 @@ function updateWriteHighlightCacheIncremental(
 
   const segments = deltaNormalized.split("\n");
   const lastIndex = cache.normalizedLines.length - 1;
-  cache.normalizedLines[lastIndex] += segments[0];
+  const firstSegment = segments.at(0);
+  const currentLastLine = cache.normalizedLines.at(lastIndex);
+  if (firstSegment === undefined || currentLastLine === undefined) {
+    return rebuildWriteHighlightCacheFull(rawPath, fileContent);
+  }
+  cache.normalizedLines[lastIndex] = currentLastLine + firstSegment;
   cache.highlightedLines[lastIndex] = highlightSingleLine(
     cache.normalizedLines[lastIndex],
     cache.lang,
   );
-  for (let i = 1; i < segments.length; i++) {
-    cache.normalizedLines.push(segments[i]);
-    cache.highlightedLines.push(highlightSingleLine(segments[i], cache.lang));
+  for (const segment of segments.slice(1)) {
+    cache.normalizedLines.push(segment);
+    cache.highlightedLines.push(highlightSingleLine(segment, cache.lang));
   }
   refreshWriteHighlightPrefix(cache);
   return cache;
@@ -345,6 +350,13 @@ function isWriteRecoveryCandidate(error: unknown, signal: AbortSignal | undefine
   );
 }
 
+function successfulWriteResult(path: string, content: string) {
+  return textResult(
+    `Successfully wrote ${Buffer.byteLength(content, "utf8")} bytes to ${path}`,
+    undefined,
+  );
+}
+
 async function recoverSuccessfulWrite(params: {
   absolutePath: string;
   content: string;
@@ -366,15 +378,7 @@ async function recoverSuccessfulWrite(params: {
   if (currentContent !== params.content || !changed) {
     return null;
   }
-  return {
-    content: [
-      {
-        type: "text" as const,
-        text: `Successfully wrote ${params.content.length} bytes to ${params.path}`,
-      },
-    ],
-    details: undefined,
-  };
+  return successfulWriteResult(params.path, params.content);
 }
 
 export function createWriteToolDefinition(
@@ -426,15 +430,7 @@ export function createWriteToolDefinition(
           if (signal?.aborted) {
             throw new Error("Operation aborted");
           }
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: `Successfully wrote ${content.length} bytes to ${path}`,
-              },
-            ],
-            details: undefined,
-          };
+          return successfulWriteResult(path, content);
         } catch (error: unknown) {
           const recovered = await recoverSuccessfulWrite({
             absolutePath,

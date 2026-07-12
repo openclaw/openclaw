@@ -5,6 +5,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { isMessagingToolDuplicate } from "../../agents/embedded-agent-helpers.js";
 import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
+import { hasVisibleMessagingToolTarget } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded-read.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
@@ -250,6 +251,21 @@ export function shouldDedupeMessagingToolRepliesForRoute(params: {
   accountId?: string;
 }): boolean {
   return getMatchingMessagingToolReplyTargets(params).length > 0;
+}
+
+/** Returns true when one visible committed message-tool send matches the source reply route. */
+export function hasVisibleCommittedMessagingToolReplyForRoute(params: {
+  config?: OpenClawConfig;
+  messageProvider?: string;
+  messagingToolSentTargets?: MessagingToolSend[];
+  originatingTo?: string;
+  originatingThreadId?: string | number;
+  replyToId?: string;
+  replyToIsExplicit?: boolean;
+  replyDelivery?: ReplyDeliveryContext;
+  accountId?: string;
+}): boolean {
+  return getMatchingMessagingToolReplyTargets(params).some(hasVisibleMessagingToolTarget);
 }
 
 /** Finds message-tool sends that target the same channel/account/thread as the source reply. */

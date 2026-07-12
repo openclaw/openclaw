@@ -5,6 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
+import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { replaceSqliteTranscriptEvents } from "../config/sessions/session-accessor.sqlite.js";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -97,9 +99,9 @@ describe("gateway server chat", () => {
   const loadChatHistoryWithMessages = async (
     messages: Array<Record<string, unknown>>,
   ): Promise<unknown[]> => {
-    return withMainSessionStore(async (dir) => {
+    return withMainSessionStore(async () => {
       const lines = messages.map((message) => JSON.stringify({ message }));
-      await fs.writeFile(path.join(dir, "sess-main.jsonl"), lines.join("\n"), "utf-8");
+      await replaceMainTranscriptLines(lines);
 
       const res = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
         sessionKey: "main",
@@ -107,6 +109,22 @@ describe("gateway server chat", () => {
       expect(res.ok).toBe(true);
       return res.payload?.messages ?? [];
     });
+  };
+
+  const replaceMainTranscriptLines = async (lines: string[]): Promise<void> => {
+    const storePath = testState.sessionStorePath;
+    if (!storePath) {
+      throw new Error("session store path was not initialized");
+    }
+    const events = lines.map((line, index) => ({
+      ...(JSON.parse(line) as Record<string, unknown>),
+      id: `message-${index}`,
+      type: "message",
+    }));
+    await replaceSqliteTranscriptEvents(
+      { agentId: "main", sessionId: "sess-main", sessionKey: "main", storePath },
+      events,
+    );
   };
 
   const withMainSessionStore = async <T>(
@@ -214,7 +232,9 @@ describe("gateway server chat", () => {
     await withMainSessionStore(async () => {
       let subordinateAdmissionClosed: boolean | undefined;
       dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
-        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 0);
+        });
         const suspension = tryBeginGatewaySuspendAdmission(() => {});
         expect(suspension).not.toBeNull();
         try {
@@ -359,13 +379,12 @@ describe("gateway server chat", () => {
       expect(res.ok).toBe(true);
       expect(res.payload?.runId).toBe("idem-sessions-send-orion");
 
-      const rawStore = JSON.parse(await fs.readFile(testState.sessionStorePath, "utf-8")) as Record<
-        string,
-        {
-          sessionId?: string;
-        }
-      >;
-      expect(rawStore["agent:orion:main"]?.sessionId).toBeTypeOf("string");
+      expect(
+        loadSessionEntry({
+          sessionKey: "agent:orion:main",
+          storePath: testState.sessionStorePath,
+        })?.sessionId,
+      ).toBeTypeOf("string");
     } finally {
       testState.agentsConfig = undefined;
       testState.sessionStorePath = undefined;
@@ -738,7 +757,7 @@ describe("gateway server chat", () => {
           }),
         );
       }
-      await fs.writeFile(path.join(historyDir, "sess-main.jsonl"), lines.join("\n"), "utf-8");
+      await replaceMainTranscriptLines(lines);
 
       const defaultRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
         sessionKey: "main",
@@ -796,8 +815,8 @@ describe("gateway server chat", () => {
       });
       const subscribeRes = await rpcReq(ws, "sessions.subscribe", {});
       expect(subscribeRes.ok).toBe(true);
-      const rejectDispatch = createDeferred<void>();
-      const releasePersistence = createDeferred<void>();
+      const rejectDispatch = createDeferred();
+      const releasePersistence = createDeferred();
       let dispatchStarted = false;
       let persistenceEntered = false;
       const persistLifecycleEvent = sessionLifecycleState.persistGatewaySessionLifecycleEvent;
@@ -1559,18 +1578,16 @@ describe("gateway server chat", () => {
   });
 
   test("routes /btw replies through side-result events without transcript injection", async () => {
-    await withMainSessionStore(async (dir) => {
-      await fs.writeFile(
-        path.join(dir, "sess-main.jsonl"),
-        `${JSON.stringify({
+    await withMainSessionStore(async () => {
+      await replaceMainTranscriptLines([
+        JSON.stringify({
           message: {
             role: "user",
             content: [{ type: "text", text: "main thread context" }],
             timestamp: Date.now(),
           },
-        })}\n`,
-        "utf-8",
-      );
+        }),
+      ]);
       dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
         const [params] = args as [
           {
@@ -1647,18 +1664,16 @@ describe("gateway server chat", () => {
   });
 
   test("routes block-streamed /btw replies through side-result events", async () => {
-    await withMainSessionStore(async (dir) => {
-      await fs.writeFile(
-        path.join(dir, "sess-main.jsonl"),
-        `${JSON.stringify({
+    await withMainSessionStore(async () => {
+      await replaceMainTranscriptLines([
+        JSON.stringify({
           message: {
             role: "assistant",
             content: [{ type: "text", text: "existing context" }],
             timestamp: Date.now(),
           },
-        })}\n`,
-        "utf-8",
-      );
+        }),
+      ]);
       dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
         const [params] = args as [
           {
@@ -1911,13 +1926,10 @@ describe("gateway server chat", () => {
           if (!sessionStorePath) {
             throw new Error("session store path was not initialized");
           }
-          const raw = await fs.readFile(sessionStorePath, "utf-8");
-          const stored = JSON.parse(raw) as {
-            "agent:main:main"?: {
-              verboseLevel?: string;
-            };
-          };
-          expect(stored["agent:main:main"]?.verboseLevel).toBeUndefined();
+          expect(
+            loadSessionEntry({ sessionKey: "agent:main:main", storePath: sessionStorePath })
+              ?.verboseLevel,
+          ).toBeUndefined();
         } finally {
           scopedWs?.close();
         }
@@ -1946,17 +1958,13 @@ describe("gateway server chat", () => {
       if (!sessionStorePath) {
         throw new Error("session store path was not initialized");
       }
-      const raw = await fs.readFile(sessionStorePath, "utf-8");
-      const stored = JSON.parse(raw) as {
-        "agent:main:main"?: {
-          thinkingLevel?: string;
-        };
-        main?: {
-          thinkingLevel?: string;
-        };
-      };
-      expect(stored["agent:main:main"]?.thinkingLevel).toBeUndefined();
-      expect(stored.main?.thinkingLevel).toBeUndefined();
+      expect(
+        loadSessionEntry({ sessionKey: "agent:main:main", storePath: sessionStorePath })
+          ?.thinkingLevel,
+      ).toBeUndefined();
+      expect(
+        loadSessionEntry({ sessionKey: "main", storePath: sessionStorePath })?.thinkingLevel,
+      ).toBeUndefined();
     });
   });
 
@@ -1993,13 +2001,10 @@ describe("gateway server chat", () => {
           if (!sessionStorePath) {
             throw new Error("session store path was not initialized");
           }
-          const raw = await fs.readFile(sessionStorePath, "utf-8");
-          const stored = JSON.parse(raw) as {
-            "agent:main:main"?: {
-              sessionId?: string;
-            };
-          };
-          expect(stored["agent:main:main"]?.sessionId).toBe("sess-main");
+          expect(
+            loadSessionEntry({ sessionKey: "agent:main:main", storePath: sessionStorePath })
+              ?.sessionId,
+          ).toBe("sess-main");
         } finally {
           scopedWs?.close();
         }

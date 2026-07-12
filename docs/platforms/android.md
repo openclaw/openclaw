@@ -274,6 +274,7 @@ The Android Chat tab supports session selection (default `main`, plus other exis
 
 - History: `chat.history` (display-normalized — inline directive tags, plain-text tool-call XML payloads (`<tool_call>`, `<function_call>`, `<tool_calls>`, `<function_calls>`, and truncated variants), and leaked ASCII/full-width model control tokens are stripped; silent-token assistant rows such as exact `NO_REPLY` / `no_reply` are omitted; oversized rows can be replaced with placeholders)
 - Send: `chat.send`
+- Durable sending: every send (text, picked images, and voice notes) is journaled to a per-gateway on-device outbox before any network attempt, so app termination cannot lose submitted input. Sends queued while offline deliver in order on reconnect with stable idempotency keys, and a send is retired only after the turn is visible in canonical `chat.history` — an acknowledgement alone is not treated as proof of delivery. Ambiguous outcomes (lost acknowledgement, app killed mid-send, gateway restart before the transcript write) surface as visible rows with explicit **Retry**/**Delete** instead of auto-resending. Slash commands never auto-replay across a reconnect; they park for explicit retry. The queue is bounded (50 messages and 48 MB of attachment bytes per gateway) and unsent rows expire after 48 hours. Composer drafts that were never submitted are not process-durable.
 - Push updates (best-effort): `chat.subscribe` -> `event:"chat"`
 - Listen: long-press an assistant message and choose **Listen** to hear it; audio renders via gateway `tts.speak` with the configured TTS provider chain, and on-device system TTS is used when the gateway cannot render audio. Playback stops on session switch, new chat, app backgrounding, or chat close.
 
@@ -326,6 +327,25 @@ Camera commands (foreground only; permission-gated): `camera.snap` (jpg), `camer
 ### 9. Workspace files (read-only)
 
 The Home overview includes a **Files** card that browses the active agent's workspace through the read-only `agents.workspace.list` / `agents.workspace.get` gateway RPCs: directory drill-down, text and image previews, and export through the Android share sheet. There are no write operations, and previews are size-capped by the gateway.
+
+## Review command approvals
+
+An operator connection with `operator.admin`, or a paired
+`operator.approvals` connection explicitly targeted by the Gateway, can review
+pending exec requests under **Settings -> Approvals**. The app loads the
+Gateway's sanitized approval record before enabling its buttons, shows any
+security warning and the exact decisions offered by that request, and submits
+the approval ID and owner kind back to the Gateway.
+
+Approval state is shared with the Control UI and supported chat surfaces. The
+first committed answer wins; Android displays that canonical result even when
+another surface answered first. If a resolve response is lost or the Gateway
+disconnects, the app keeps the action locked and reads the approval again
+before offering another decision.
+
+Gateways that predate the unified approval methods fall back to the shipped
+exec-specific methods. Pending review still works, but retained terminal state
+and the richer cross-surface result require an updated Gateway.
 
 ## Assistant entrypoints
 

@@ -1232,7 +1232,12 @@ function restoreTaskRegistryOnce() {
       tasks: snapshotTaskRecords(tasks),
     }));
   } catch (error) {
-    log.warn("Failed to restore task registry", { error });
+    const message = formatErrorMessage(error);
+    // Compact console logs omit structured metadata, so keep the rejected value visible there too.
+    log.warn("Failed to restore task registry", {
+      error: message,
+      consoleMessage: `Failed to restore task registry: ${message}`,
+    });
   }
 }
 
@@ -1822,6 +1827,14 @@ function ensureListener() {
         }
       } else if (evt.stream === "error") {
         patch.error = typeof evt.data?.error === "string" ? evt.data.error : current.error;
+      } else if (evt.stream === "tool" && evt.data?.phase === "start") {
+        // Tool starts are the activity signal surfaced in task summaries; ends
+        // and outputs only refresh lastEventAt.
+        const toolName = typeof evt.data.name === "string" ? evt.data.name.trim() : "";
+        if (toolName) {
+          patch.toolUseCount = (current.toolUseCount ?? 0) + 1;
+          patch.lastToolName = toolName;
+        }
       }
       const stateChangeEvent =
         patch.status && patch.status !== current.status

@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
+import { normalizeOptionalAgentRuntimeId } from "../../agents/agent-runtime-id.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
   entryMatchesAutoFallbackPrimaryProbe,
@@ -11,11 +12,9 @@ import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-bu
 import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
-import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
 import {
   hasCommittedSourceReplyDeliveryEvidence,
   hasVisibleAgentPayload,
-  hasVisibleCommittedMessagingToolDeliveryEvidence,
   hasVisibleOutboundDeliveryEvidence,
 } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import {
@@ -123,7 +122,7 @@ import {
 } from "./queue.js";
 import { normalizeReplyPayloadDirectives } from "./reply-delivery.js";
 import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
-import { shouldDedupeMessagingToolRepliesForRoute } from "./reply-payloads-dedupe.js";
+import { hasVisibleCommittedMessagingToolReplyForRoute } from "./reply-payloads-dedupe.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 import { buildReplyUsageState } from "./reply-usage-state.js";
@@ -194,9 +193,7 @@ function hasSuccessfulFollowupSourceReplyDelivery(params: {
   run: Pick<FollowupRun["run"], "agentAccountId" | "messageProvider">;
   didDeliverSourceReplyViaMessageTool?: boolean;
   messagingToolSourceReplyPayloads?: EmbeddedAgentRunResult["messagingToolSourceReplyPayloads"];
-  messagingToolSentMediaUrls?: EmbeddedAgentRunResult["messagingToolSentMediaUrls"];
   messagingToolSentTargets?: EmbeddedAgentRunResult["messagingToolSentTargets"];
-  messagingToolSentTexts?: EmbeddedAgentRunResult["messagingToolSentTexts"];
 }): boolean {
   if (
     params.didDeliverSourceReplyViaMessageTool === true ||
@@ -204,23 +201,20 @@ function hasSuccessfulFollowupSourceReplyDelivery(params: {
   ) {
     return true;
   }
-  return (
-    hasVisibleCommittedMessagingToolDeliveryEvidence(params) &&
-    shouldDedupeMessagingToolRepliesForRoute({
-      config: params.cfg,
-      messageProvider: resolveOriginMessageProvider({
-        originatingChannel: params.queued.originatingChannel,
-        provider: params.run.messageProvider,
-      }),
-      messagingToolSentTargets: params.messagingToolSentTargets as MessagingToolSend[],
-      originatingTo: resolveOriginMessageTo({ originatingTo: params.queued.originatingTo }),
-      originatingThreadId: params.queued.originatingThreadId,
-      accountId: resolveOriginAccountId({
-        originatingAccountId: params.queued.originatingAccountId,
-        accountId: params.run.agentAccountId,
-      }),
-    })
-  );
+  return hasVisibleCommittedMessagingToolReplyForRoute({
+    config: params.cfg,
+    messageProvider: resolveOriginMessageProvider({
+      originatingChannel: params.queued.originatingChannel,
+      provider: params.run.messageProvider,
+    }),
+    messagingToolSentTargets: params.messagingToolSentTargets,
+    originatingTo: resolveOriginMessageTo({ originatingTo: params.queued.originatingTo }),
+    originatingThreadId: params.queued.originatingThreadId,
+    accountId: resolveOriginAccountId({
+      originatingAccountId: params.queued.originatingAccountId,
+      accountId: params.run.agentAccountId,
+    }),
+  });
 }
 
 function normalizeAssistantFinalDeliveryText(text: string): string {
@@ -753,6 +747,11 @@ export function createFollowupRunner(params: {
       // Multi-source collected turns become atomic at reply-lane admission.
       // Their queue owner uses this boundary to retire source cancellation ids.
       await admitFollowupRunLifecycle(effectiveQueued);
+      // Admission can await transport-owned durability. Supersession during that handoff is
+      // sticky; stop before preflight can emit notices or start provider work for the stale turn.
+      if (isFollowupRunAborted(effectiveQueued)) {
+        return;
+      }
       if (replyOperation.sessionId !== run.sessionId) {
         run = { ...run, sessionId: replyOperation.sessionId };
         effectiveQueued = { ...effectiveQueued, run };
@@ -766,10 +765,16 @@ export function createFollowupRunner(params: {
         : undefined;
       if (admittedSessionEntry?.sessionId === replyOperation.sessionId) {
         activeSessionEntry = admittedSessionEntry;
-        if (admittedSessionEntry.sessionFile) {
-          run = { ...run, sessionFile: admittedSessionEntry.sessionFile };
-          effectiveQueued = { ...effectiveQueued, run };
-        }
+        // Admission is the authority for policy on this exact session generation. A queued
+        // snapshot may predate catalog adoption, but a replacement session must not inherit it.
+        run = {
+          ...run,
+          ...(admittedSessionEntry.sessionFile
+            ? { sessionFile: admittedSessionEntry.sessionFile }
+            : {}),
+          modelSelectionLocked: admittedSessionEntry.modelSelectionLocked === true,
+        };
+        effectiveQueued = { ...effectiveQueued, run };
       }
       const sendPolicyDenied =
         resolveSendPolicy({
@@ -1060,6 +1065,7 @@ export function createFollowupRunner(params: {
               modelId: model,
               agentId: run.agentId,
               sessionKey: run.runtimePolicySessionKey ?? replySessionKey,
+              agentHarnessId: agentHarnessRuntimeOverride,
               agentHarnessRuntimeOverride,
               workspaceDir: run.workspaceDir,
             });
@@ -1107,18 +1113,32 @@ export function createFollowupRunner(params: {
               entry: activeSessionEntry,
               cfg: runtimeConfig,
             });
-            const cliExecutionProvider =
-              (sessionRuntimeOverride && isCliProvider(sessionRuntimeOverride, runtimeConfig)
+            // A locked harness owns the transcript. A configured CLI backend with the
+            // same id must not steal dispatch from that persisted harness.
+            const locksPersistedHarness =
+              activeSessionEntry?.modelSelectionLocked === true &&
+              normalizeOptionalAgentRuntimeId(activeSessionEntry.agentHarnessId) ===
+                sessionRuntimeOverride;
+            const pinnedCliRuntime =
+              !locksPersistedHarness &&
+              sessionRuntimeOverride &&
+              isCliProvider(sessionRuntimeOverride, runtimeConfig)
                 ? sessionRuntimeOverride
-                : undefined) ??
-              resolveCliRuntimeExecutionProvider({
-                provider,
-                cfg: runtimeConfig,
-                agentId: run.agentId,
-                modelId: model,
-                authProfileId: selectedAuthProfile.authProfileId,
-              }) ??
-              provider;
+                : undefined;
+            const cliExecutionProvider =
+              pinnedCliRuntime ??
+              (sessionRuntimeOverride
+                ? provider
+                : (resolveCliRuntimeExecutionProvider({
+                    provider,
+                    cfg: runtimeConfig,
+                    agentId: run.agentId,
+                    modelId: model,
+                    authProfileId: selectedAuthProfile.authProfileId,
+                  }) ?? provider));
+            const useCliExecution =
+              pinnedCliRuntime !== undefined ||
+              (!sessionRuntimeOverride && isCliProvider(cliExecutionProvider, runtimeConfig));
             let attemptCompactionCount = 0;
             const userTurnTranscriptRecorder =
               effectiveQueued.userTurnTranscriptRecorder ?? opts?.userTurnTranscriptRecorder;
@@ -1154,7 +1174,7 @@ export function createFollowupRunner(params: {
                 }
               });
             try {
-              if (isCliProvider(cliExecutionProvider, runtimeConfig)) {
+              if (useCliExecution) {
                 const cliSessionBinding = getCliSessionBinding(
                   activeSessionEntry,
                   cliExecutionProvider,
@@ -1274,6 +1294,7 @@ export function createFollowupRunner(params: {
                     replyOperation,
                     sessionId: run.sessionId,
                     sessionKey: replySessionKey,
+                    runtimePolicySessionKey: run.runtimePolicySessionKey,
                     agentId: run.agentId,
                     trigger: opts?.isHeartbeat === true ? "heartbeat" : "user",
                     sessionFile: run.sessionFile,
@@ -1293,7 +1314,10 @@ export function createFollowupRunner(params: {
                     currentInboundAudio: queued.currentInboundAudio,
                     currentInboundContext,
                     inputProvenance: run.inputProvenance,
+                    modelProvider: provider,
                     provider: cliExecutionProvider,
+                    execOverrides: run.execOverrides,
+                    bashElevated: run.bashElevated,
                     model,
                     ...resolveRunAuthProfile(candidateRun, cliExecutionProvider, {
                       config: runtimeConfig,
@@ -1333,6 +1357,13 @@ export function createFollowupRunner(params: {
                     clientCaps: run.clientCaps,
                     currentChannelId: queued.originatingTo,
                     senderId: run.senderId,
+                    senderName: run.senderName,
+                    senderUsername: run.senderUsername,
+                    senderE164: run.senderE164,
+                    groupId: run.groupId,
+                    groupChannel: run.groupChannel,
+                    groupSpace: run.groupSpace,
+                    spawnedBy: run.spawnedBy,
                     chatId: queued.originatingChatId,
                     channelContext: run.channelContext,
                     currentThreadTs:
@@ -1369,6 +1400,15 @@ export function createFollowupRunner(params: {
               });
               pendingLifecycleTerminal = { provider, model, backstop: lifecycleBackstop };
               const followupCurrentMessageId = resolveFollowupCurrentMessageId();
+              const runSessionTarget =
+                storePath && run.sessionKey
+                  ? {
+                      ...(run.agentId ? { agentId: run.agentId } : {}),
+                      ...(run.sessionId ? { sessionId: run.sessionId } : {}),
+                      sessionKey: run.sessionKey,
+                      storePath,
+                    }
+                  : undefined;
               const result = await runEmbeddedAgent({
                 allowGatewaySubagentBinding: true,
                 lifecycleGeneration,
@@ -1376,6 +1416,7 @@ export function createFollowupRunner(params: {
                 sessionId: run.sessionId,
                 sessionKey: run.sessionKey,
                 agentId: run.agentId,
+                sessionTarget: runSessionTarget,
                 trigger: "user",
                 messageChannel: queued.originatingChannel ?? undefined,
                 messageProvider: run.messageProvider,
@@ -1431,6 +1472,9 @@ export function createFollowupRunner(params: {
                 allowEmptyAssistantReplyAsSilent: run.allowEmptyAssistantReplyAsSilent,
                 provider,
                 model,
+                modelSelectionLocked: run.modelSelectionLocked,
+                agentHarnessId: sessionRuntimeOverride,
+                agentHarnessRuntimeOverride: sessionRuntimeOverride,
                 ...selectedAuthProfile,
                 thinkLevel: candidateThinkLevel,
                 fastMode: candidateFastMode.fastMode,
@@ -1634,9 +1678,7 @@ export function createFollowupRunner(params: {
         run,
         didDeliverSourceReplyViaMessageTool: runResult.didDeliverSourceReplyViaMessageTool,
         messagingToolSourceReplyPayloads: runResult.messagingToolSourceReplyPayloads,
-        messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
         messagingToolSentTargets: runResult.messagingToolSentTargets,
-        messagingToolSentTexts: runResult.messagingToolSentTexts,
       });
       const deliverStrandedReplyRetryFailureDiagnostic = async () => {
         if (!isStrandedReplyRetryFollowup(effectiveQueued)) {

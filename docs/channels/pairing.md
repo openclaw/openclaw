@@ -113,7 +113,7 @@ creates a device pairing request that must be approved.
 Use an already connected Control UI session with `operator.admin` access:
 
 1. Open the Control UI and select **Nodes**.
-2. In **Nodes & devices**, click **Pair mobile device**.
+2. On the **Devices** page, click **Pair mobile device**.
 3. On your phone, open the OpenClaw app → **Settings** → **Gateway**.
 4. Scan the QR code or paste the setup code, then connect.
 
@@ -141,7 +141,7 @@ The setup code is a base64-encoded JSON payload that contains:
 
 - `url`: the Gateway WebSocket URL (`ws://...` or `wss://...`)
 - `urls`: when available, the ordered LAN/Tailnet routes the mobile app can try
-- `bootstrapToken`: a single-use bootstrap token for the initial pairing handshake (expires after 10 minutes; `expiresAtMs` is included in the payload)
+- `bootstrapToken`: a single-use bootstrap token for the initial pairing handshake; the Gateway expires it after 10 minutes
 
 Run `/pair cleanup` to invalidate unused setup codes once pairing finishes.
 
@@ -167,10 +167,10 @@ fail closed before QR/setup-code issuance.
 
 For `gateway.bind=lan` setup URLs, OpenClaw detects persistent Tailscale Serve
 HTTPS roots that proxy the active Gateway's loopback port and advertises them
-alongside the LAN route. Specific-interface `custom` and `tailnet` binds do not
-receive that fallback because a loopback Serve proxy cannot reach those
-listeners. The iOS app probes the advertised routes in order and saves the first
-reachable endpoint.
+alongside the LAN route. The setup command adds this fallback only
+for `lan`; `custom` and `tailnet` keep their explicitly advertised routes. The
+iOS app probes the advertised routes in order and saves the first reachable
+endpoint.
 
 ### Approve a node device
 

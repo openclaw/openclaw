@@ -4,7 +4,8 @@ import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCronJobsStorePath } from "../cron/store.js";
 import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
-import type { GatewayCronServiceContract, GatewayCronState } from "./server-cron.js";
+import type { GatewayCronServiceContract } from "./server-cron-contract.js";
+import type { GatewayCronState } from "./server-cron.js";
 
 type LazyGatewayCronParams = {
   cfg: OpenClawConfig;

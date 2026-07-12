@@ -17,6 +17,7 @@ import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cach
 import type { PluginRegistry } from "../plugins/registry.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
+import { sweepSessionStateWatchNotices } from "../sessions/session-state-events.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
@@ -26,6 +27,11 @@ import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-descriptors.
 import type { refreshLatestUpdateRestartSentinel } from "./server-restart-sentinel.js";
 import type { GatewaySidecarStartupMode } from "./server-sidecar-startup-mode.js";
 import type { logGatewayStartup } from "./server-startup-log.js";
+import {
+  createGatewayStartupOutcomeRecorder,
+  formatGatewayStartupOutcomes,
+  type GatewayStartupOutcomeRecorder,
+} from "./server-startup-outcomes.js";
 import type { startGatewayTailscaleExposure } from "./server-tailscale.js";
 
 const ACP_BACKEND_READY_TIMEOUT_MS = 5_000;
@@ -630,7 +636,7 @@ async function prewarmConfiguredPrimaryModelWithTimeout(
   params: {
     cfg: OpenClawConfig;
     workspaceDir?: string;
-    log: { warn: (msg: string) => void };
+    log: { warn: (msg: string) => void; debug?: (msg: string) => void };
     timeoutMs?: number;
   },
   prewarm: typeof prewarmConfiguredPrimaryModel = prewarmConfiguredPrimaryModel,
@@ -647,7 +653,7 @@ async function prewarmConfiguredPrimaryModelWithTimeout(
     ref: false,
   }).then(() => {
     if (!settled) {
-      params.log.warn(
+      params.log.debug?.(
         `startup model warmup timed out after ${params.timeoutMs ?? PRIMARY_MODEL_PREWARM_TIMEOUT_MS}ms; continuing without waiting`,
       );
     }
@@ -659,7 +665,7 @@ function schedulePrimaryModelPrewarm(
   params: {
     cfg: OpenClawConfig;
     workspaceDir?: string;
-    log: { warn: (msg: string) => void };
+    log: { warn: (msg: string) => void; debug?: (msg: string) => void };
     startupTrace?: GatewayStartupTrace;
   },
   prewarm: typeof prewarmConfiguredPrimaryModel = prewarmConfiguredPrimaryModel,
@@ -700,6 +706,7 @@ export async function startGatewaySidecars(params: {
   };
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
   startupTrace?: GatewayStartupTrace;
+  startupOutcomes?: GatewayStartupOutcomeRecorder;
 }) {
   const postReadySidecars: GatewayPostReadySidecarHandle[] = [];
 
@@ -714,12 +721,24 @@ export async function startGatewaySidecars(params: {
         setInternalHooksEnabled(params.cfg.hooks?.internal?.enabled !== false);
         const loadedCount = await loadInternalHooks(params.cfg, params.defaultWorkspaceDir);
         if (loadedCount > 0) {
+          params.startupOutcomes?.record({ subsystem: "internal-hooks", status: "loaded" });
           params.logHooks.info(
             `loaded ${loadedCount} internal hook handler${loadedCount > 1 ? "s" : ""}`,
           );
+        } else {
+          params.startupOutcomes?.record({
+            subsystem: "internal-hooks",
+            status: "skipped",
+            reason: "no-handlers-loaded",
+          });
         }
       }
     } catch (err) {
+      params.startupOutcomes?.record({
+        subsystem: "internal-hooks",
+        status: "failed",
+        reason: "see earlier log",
+      });
       params.logHooks.error(`failed to load hooks: ${String(err)}`);
     }
   });
@@ -794,6 +813,10 @@ export async function startGatewaySidecars(params: {
   const shouldDispatchGatewayStartupInternalHook =
     internalHooksConfigured || (await hasGatewayStartupInternalHookListeners());
   if (shouldDispatchGatewayStartupInternalHook) {
+    params.startupOutcomes?.record({
+      subsystem: "internal-startup-hook",
+      status: "scheduled",
+    });
     // Run startup hooks after sidecar startup has yielded once so gateway bind
     // and channel startup are not delayed by hook handlers.
     setTimeout(() => {
@@ -1125,6 +1148,7 @@ export async function startGatewayPostAttachRuntime(
     onPluginServices?: (pluginServices: PluginServicesHandle | null) => void;
     onPostReadySidecars?: (postReadySidecars: GatewayPostReadySidecarHandle[]) => void;
     onGatewayLifetimeSidecars?: (sidecars: GatewayPostReadySidecarHandle[]) => void;
+    startWorkerEnvironmentRuntime?: () => Awaitable<GatewayPostReadySidecarHandle | null>;
     onSidecarsReady?: () => void;
     isClosing?: () => boolean;
     startupTrace?: GatewayStartupTrace;
@@ -1175,6 +1199,13 @@ export async function startGatewayPostAttachRuntime(
     return await startupPluginsLoadPromise;
   };
   await loadStartupPluginsIfNeeded();
+
+  const memoryStartupPolicy = resolveGatewayMemoryStartupPolicy(params.gatewayPluginConfigAtStart);
+  const startupOutcomes = createGatewayStartupOutcomeRecorder({
+    cfg: params.gatewayPluginConfigAtStart,
+    gatewayStartHooks: hasGatewayStartHooks(pluginRegistry),
+    memoryStartupMode: memoryStartupPolicy.mode,
+  });
 
   const startupLogPromise = measureStartup(params.startupTrace, "post-attach.log", () =>
     runtimeDeps.logGatewayStartup({
@@ -1259,8 +1290,12 @@ export async function startGatewayPostAttachRuntime(
             onChannelsStarted: params.onChannelsStarted,
             onPluginServices: reportPluginServices,
             shouldStartPluginServices: () => params.isClosing?.() !== true,
+            startupOutcomes,
           }),
         );
+        const workerEnvironmentSidecar = params.isClosing?.()
+          ? null
+          : ((await params.startWorkerEnvironmentRuntime?.()) ?? null);
         const loaderStatsAfter = getPluginModuleLoaderStats();
         params.startupTrace?.detail("sidecars.plugin-loader", [
           ["callsCount", loaderStatsAfter.calls - loaderStatsBefore.calls],
@@ -1292,6 +1327,9 @@ export async function startGatewayPostAttachRuntime(
         }
         const postReadySidecars = [...result.postReadySidecars];
         const gatewayLifetimeSidecars: GatewayPostReadySidecarHandle[] = [];
+        if (workerEnvironmentSidecar) {
+          gatewayLifetimeSidecars.push(workerEnvironmentSidecar);
+        }
         if (params.agentRuntimePluginPrewarm?.enabled !== false) {
           gatewayLifetimeSidecars.push(
             scheduleAgentRuntimePluginPrewarm({
@@ -1327,6 +1365,7 @@ export async function startGatewayPostAttachRuntime(
         }
         params.onPostReadySidecars?.(postReadySidecars);
         params.onGatewayLifetimeSidecars?.(gatewayLifetimeSidecars);
+        params.log.info(formatGatewayStartupOutcomes(startupOutcomes.snapshot()));
         params.onSidecarsReady?.();
         params.startupTrace?.detail("sidecars.ready", [
           [
@@ -1352,6 +1391,10 @@ export async function startGatewayPostAttachRuntime(
         log: params.log,
         refreshLatestUpdateRestartSentinel: runtimeDeps.refreshLatestUpdateRestartSentinel,
       });
+      const sessionStateSweepHandle = setImmediate(() => {
+        sweepSessionStateWatchNotices();
+      });
+      sessionStateSweepHandle.unref?.();
       if (!hasGatewayStartHooks(sidecarsResult.pluginRegistry)) {
         return;
       }
