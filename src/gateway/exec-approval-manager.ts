@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { buildApprovalPresentation } from "../infra/approval-presentation.js";
+import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
 import type {
   ExecApprovalDecision,
   ExecApprovalRequestPayload as InfraExecApprovalRequestPayload,
@@ -329,6 +330,10 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     const source = resolveApprovalSource(record.request);
     return {
       id: record.id,
+      resolutionRef: buildApprovalResolutionRef({
+        approvalId: record.id,
+        approvalKind: this.approvalKind,
+      }),
       kind: this.approvalKind,
       status,
       presentation,

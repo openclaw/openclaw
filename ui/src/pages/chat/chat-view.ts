@@ -25,6 +25,7 @@ import {
 } from "./components/chat-background-tasks.ts";
 import {
   handleChatAttachmentDrop,
+  isChatRunWorking,
   renderChatComposer,
   resetChatComposerState,
 } from "./components/chat-composer.ts";
@@ -232,6 +233,7 @@ export function renderChat(props: ChatProps) {
     showThinking: props.showThinking,
     showToolCalls: props.showToolCalls,
     runActive: Boolean(props.canAbort),
+    runWorking: isChatRunWorking(props),
     sessions: props.sessions,
     sessionHost: props.sessionHost,
     assistantName: props.assistantName,

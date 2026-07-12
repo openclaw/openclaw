@@ -7,7 +7,7 @@ import {
   resolveAuthHintKind,
   resolvePairingHint,
   shouldShowInsecureContextHint,
-} from "./overview-hints.ts";
+} from "./connection-hints.ts";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -59,7 +59,7 @@ describe("resolveGatewayTokenForUrlEdit", () => {
       "openclaw.control.settings.v1",
       JSON.stringify({
         gatewayUrl: "wss://other-gateway.example/openclaw",
-        token: "legacy-durable-token",
+        token: "gateway-token",
       }),
     );
 

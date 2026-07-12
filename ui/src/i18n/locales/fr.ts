@@ -482,6 +482,7 @@ export const fr: TranslationMap = {
     noEvents: "No events yet.",
   },
   quickSettings: {
+    language: "Langue",
     appearance: {
       lobsterVisits: "Visites du homard",
       lobsterVisitsOn: "Passe de temps en temps",
@@ -616,10 +617,10 @@ export const fr: TranslationMap = {
   tabs: {
     agents: "Agents",
     activity: "Activité",
-    overview: "Aperçu",
     workboard: "Tableau de travail",
     worktrees: "Worktrees",
     channels: "Canaux",
+    connection: "Connexion",
     sessions: "Sessions",
     usage: "Utilisation",
     cron: "Tâches cron",
@@ -646,10 +647,10 @@ export const fr: TranslationMap = {
   subtitles: {
     agents: "Espaces de travail, outils, identités.",
     activity: "Résumés d’activité des outils locaux au navigateur.",
-    overview: "Statut, points d’entrée, santé.",
     workboard: "File de travail de l’agent et transfert de session.",
     worktrees: "Checkouts de tâches d’agent isolés et instantanés de récupération.",
     channels: "Canaux et paramètres.",
+    connection: "Point de terminaison du Gateway, identifiants et état de la négociation.",
     sessions: "Sessions actives et valeurs par défaut.",
     usage: "Utilisation de l’API et coûts.",
     cron: "Réveils et exécutions récurrentes.",
@@ -1306,157 +1307,80 @@ export const fr: TranslationMap = {
     eventUnarchived: "Désarchivé",
     eventStale: "Session inactive",
   },
-  overview: {
+  connection: {
+    lostTitle: "Connexion au Gateway perdue",
+    reconnecting: "Reconnexion…",
+    offlineHint:
+      "Les mises à jour en direct et les actions sont en pause jusqu’au rétablissement de la connexion.",
+    retryNow: "Réessayer maintenant",
     access: {
-      title: "Accès Gateway",
+      title: "Accès au Gateway",
       subtitle: "Où le tableau de bord se connecte et comment il s’authentifie.",
       wsUrl: "URL WebSocket",
-      token: "Jeton Gateway",
+      token: "Jeton du Gateway",
       password: "Mot de passe (non enregistré)",
       passwordPlaceholder: "mot de passe système ou partagé",
       sessionKey: "Clé de session par défaut",
-      language: "Langue",
-      connectHint: "Cliquez sur Connect pour appliquer les modifications de connexion.",
+      connectHint: "Cliquez sur Connecter pour appliquer les modifications de connexion.",
       trustedProxy: "Authentifié via un proxy de confiance.",
       showToken: "Afficher le jeton",
       hideToken: "Masquer le jeton",
-      toggleTokenVisibility: "Basculer la visibilité du jeton",
+      toggleTokenVisibility: "Afficher ou masquer le jeton",
       showPassword: "Afficher le mot de passe",
       hidePassword: "Masquer le mot de passe",
-      togglePasswordVisibility: "Basculer la visibilité du mot de passe",
+      togglePasswordVisibility: "Afficher ou masquer le mot de passe",
     },
     snapshot: {
-      title: "Capture",
-      subtitle: "Dernières informations de handshake du Gateway.",
+      title: "Instantané",
+      subtitle: "Dernières informations de négociation du Gateway.",
       status: "Statut",
-      uptime: "Temps de fonctionnement",
-      tickInterval: "Intervalle de tick",
+      uptime: "Durée de fonctionnement",
+      tickInterval: "Intervalle de rafraîchissement",
       lastChannelsRefresh: "Dernière actualisation des canaux",
-      channelsHint: "Utilisez Channels pour lier WhatsApp, Telegram, Discord, Signal ou iMessage.",
     },
-    stats: {
-      instances: "Instances",
-      instancesHint: "Balises de présence au cours des 5 dernières minutes.",
-      sessions: "Sessions",
-      sessionsHint: "Clés de session récentes suivies par le Gateway.",
-      cron: "Cron",
-      cronNext: "Prochain réveil {time}",
-    },
-    notes: {
-      title: "Notes",
-      subtitle: "Rappels rapides pour les configurations de contrôle à distance.",
-      tailscaleTitle: "Tailscale serve",
-      tailscaleText:
-        "Privilégiez le mode serve pour garder le Gateway sur loopback avec l’authentification tailnet.",
-      sessionTitle: "Hygiène des sessions",
-      sessionText: "Utilisez /new ou sessions.patch pour réinitialiser le contexte.",
-      cronTitle: "Rappels cron",
-      cronText: "Utilisez des sessions isolées pour les exécutions récurrentes.",
-    },
-    auth: {
-      required:
-        "Ce Gateway nécessite une authentification. Ajoutez un jeton ou un mot de passe, puis cliquez sur Connect.",
-      failed:
-        "Échec de l’authentification. Recopiez une URL avec jeton avec {command}, ou mettez à jour le jeton, puis cliquez sur Connect.",
-    },
-    pairing: {
-      hint: "Cet appareil nécessite une approbation d’appairage de l’hôte Gateway.",
-      scopeUpgradeTitle: "Mise à niveau de portée en attente d’approbation.",
-      scopeUpgradeSummary:
-        "Cet appareil est déjà appairé, mais l’élargissement de portée demandé est en attente d’approbation.",
-      roleUpgradeTitle: "Mise à niveau du rôle en attente d’approbation.",
-      roleUpgradeSummary:
-        "Cet appareil est déjà appairé, mais le changement de rôle demandé est en attente d’approbation.",
-      metadataUpgradeTitle: "Modification des métadonnées de l’appareil en attente d’approbation.",
-      metadataUpgradeSummary:
-        "Cet appareil est déjà appairé, mais la modification des métadonnées est en attente d’approbation.",
-      mobileHint:
-        "Sur mobile ? Copiez l’URL complète (y compris #token=...) depuis openclaw dashboard --no-open sur votre ordinateur.",
-      docsTitle: "Documentation sur l’appairage des appareils (s’ouvre dans un nouvel onglet)",
-      docsLink: "Documentation : Appairage des appareils",
-    },
-    insecure: {
-      hint: "Cette page utilise HTTP, le navigateur bloque donc l’identité de l’appareil. Utilisez HTTPS (Tailscale Serve) ou ouvrez {url} sur l’hôte Gateway.",
-      stayHttp: "Si vous devez rester en HTTP, définissez {config} (jeton uniquement).",
-    },
-    connection: {
+    help: {
       title: "Comment se connecter",
       step1: "Démarrez le Gateway sur votre machine hôte :",
-      step2: "Obtenez une URL du tableau de bord avec jeton :",
+      step2: "Obtenez une URL de tableau de bord avec jeton :",
       step3:
         "Collez l’URL WebSocket et le jeton ci-dessus, ou ouvrez directement l’URL avec jeton.",
-      step4: "Ou générez un jeton réutilisable :",
-      docsHint: "Pour l’accès à distance, Tailscale Serve est recommandé. ",
       docsLink: "Lire la documentation →",
-      authDocsTitle:
-        "Documentation sur l’authentification de la Control UI (s’ouvre dans un nouvel onglet)",
-      authDocsLink: "Documentation : Authentification de la Control UI",
-      tailscaleDocsTitle: "Documentation sur Tailscale Serve (s’ouvre dans un nouvel onglet)",
-      tailscaleDocsLink: "Documentation : Tailscale Serve",
-      insecureHttpDocsTitle: "Documentation sur HTTP non sécurisé (s’ouvre dans un nouvel onglet)",
-      insecureHttpDocsLink: "Documentation : HTTP non sécurisé",
       copyCommand: "Copier la commande",
       copyCommandAria: "Copier la commande : {command}",
     },
-    cards: {
-      cost: "Coût",
+  },
+  attention: {
+    cronFailed: "Échec de {count} tâche(s) cron",
+    cronOverdue: "{count} tâche(s) cron en retard",
+    modelAuthExpired: "Authentification du modèle expirée : {providers}",
+    modelAuthExpiring: "Authentification du modèle bientôt expirée : {providers}",
+  },
+  palette: {
+    placeholder: "Rechercher des discussions et des commandes…",
+    noResults: "Aucun résultat",
+    categories: {
+      search: "Recherche",
+      navigation: "Navigation",
       skills: "Skills",
-      recentSessions: "Sessions récentes",
-      modelAuth: "Authentification des modèles",
-      modelAuthOk: "{count} ok",
-      modelAuthExpired: "{count} expirés",
-      modelAuthExpiring: "{count} expirent bientôt",
-      modelAuthProviders: "{count} fournisseurs",
-      modelAuthUsageLeft: "Il reste {pct} %",
-      modelAuthExpiresIn: "expire {when}",
-      modelAuthAttentionExpiredTitle: "Authentification des modèles expirée",
-      modelAuthAttentionExpiringTitle: "L'authentification des modèles expire bientôt",
-      modelAuthAttentionExpiredDesc: "{providers} — réauthentifiez-vous avec openclaw models auth",
-      modelAuthAttentionExpiringEntry: "{provider} ({when})",
     },
-    attention: {
-      title: "Attention",
+    items: {
+      sessions: "Sessions",
+      scheduled: "Planifié",
+      skills: "Skills",
+      plugins: "Plugins",
+      settings: "Paramètres",
+      agents: "Agents",
+      shellCommand: "Commande shell",
+      debugMode: "Mode débogage",
     },
-    eventLog: {
-      title: "Journal des événements",
+    descriptions: {
+      shellCommand: "Exécuter le shell",
+      debugMode: "Activer/désactiver le débogage",
     },
-    logTail: {
-      title: "Journaux Gateway",
-    },
-    quickActions: {
-      newSession: "Nouvelle session",
-      automation: "Automatisation",
-      refreshAll: "Tout actualiser",
-      terminal: "Terminal",
-    },
-    palette: {
-      placeholder: "Saisissez une commande…",
-      noResults: "Aucun résultat",
-      categories: {
-        search: "Rechercher",
-        navigation: "Navigation",
-        skills: "Skills",
-      },
-      items: {
-        overview: "Aperçu",
-        sessions: "Sessions",
-        scheduled: "Planifié",
-        skills: "Skills",
-        plugins: "Plugins",
-        settings: "Paramètres",
-        agents: "Agents",
-        shellCommand: "Commande shell",
-        debugMode: "Mode débogage",
-      },
-      descriptions: {
-        shellCommand: "Exécuter le shell",
-        debugMode: "Basculer le débogage",
-      },
-      footer: {
-        navigate: "naviguer",
-        select: "sélectionner",
-        close: "fermer",
-      },
+    footer: {
+      navigate: "naviguer",
+      select: "sélectionner",
+      close: "fermer",
     },
   },
   dreaming: {
@@ -1975,13 +1899,6 @@ export const fr: TranslationMap = {
           "Rouvrez le dashboard avec openclaw dashboard --no-open pour recopier l’URL actuelle et les détails d’authentification.",
       },
     },
-  },
-  connection: {
-    lostTitle: "Connexion au Gateway perdue",
-    reconnecting: "Reconnexion…",
-    offlineHint:
-      "Les mises à jour en direct et les actions sont en pause jusqu’au rétablissement de la connexion.",
-    retryNow: "Réessayer maintenant",
   },
   chat: {
     disconnected: "Déconnecté du Gateway.",

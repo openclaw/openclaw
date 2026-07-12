@@ -306,7 +306,10 @@ vi.mock("./slash-commands.runtime.js", () => {
   };
 });
 
-type RegisterFn = (params: { ctx: unknown; account: unknown }) => Promise<void>;
+type RegisterFn = (params: {
+  ctx: unknown;
+  account: unknown;
+}) => Promise<{ mode: "single"; name: string } | { mode: "native" } | { mode: "disabled" }>;
 const { registerSlackMonitorSlashCommands } = (await import("./slash.js")) as {
   registerSlackMonitorSlashCommands: RegisterFn;
 };
@@ -324,7 +327,7 @@ afterEach(() => {
 });
 
 async function registerCommands(ctx: unknown, account: unknown, trackEvent?: () => void) {
-  await registerSlackMonitorSlashCommands({
+  return await registerSlackMonitorSlashCommands({
     ctx: ctx as never,
     account: account as never,
     trackEvent,
@@ -1207,6 +1210,8 @@ function createPolicyHarness(overrides?: {
   allowFrom?: string[];
   useAccessGroups?: boolean;
   slashEphemeral?: boolean;
+  slashCommandEnabled?: boolean;
+  slashCommandName?: string;
   shouldDropMismatchedSlackEvent?: (body: unknown) => boolean;
   resolveChannelName?: () => Promise<{ name?: string; type?: string }>;
 }) {
@@ -1238,8 +1243,8 @@ function createPolicyHarness(overrides?: {
     useAccessGroups: overrides?.useAccessGroups ?? true,
     channelsConfig: overrides?.channelsConfig,
     slashCommand: {
-      enabled: true,
-      name: "openclaw",
+      enabled: overrides?.slashCommandEnabled ?? true,
+      name: overrides?.slashCommandName ?? "openclaw",
       ephemeral: overrides?.slashEphemeral ?? true,
       sessionPrefix: "slack:slash",
     },
@@ -1334,6 +1339,36 @@ function expectUnauthorizedResponse(respond: ReturnType<typeof vi.fn>) {
     response_type: "ephemeral",
   });
 }
+
+describe("Slack App Home command presentation", () => {
+  it("returns the configured single command when it is registered", async () => {
+    const harness = createPolicyHarness({ slashCommandName: "acme" });
+
+    await expect(registerCommands(harness.ctx, harness.account)).resolves.toEqual({
+      mode: "single",
+      name: "acme",
+    });
+    expect(harness.commands.size).toBe(1);
+  });
+
+  it("omits the single command when slash commands are disabled", async () => {
+    const harness = createPolicyHarness({ slashCommandEnabled: false });
+
+    await expect(registerCommands(harness.ctx, harness.account)).resolves.toEqual({
+      mode: "disabled",
+    });
+    expect(harness.commands.size).toBe(0);
+  });
+
+  it("omits the single command when native commands take precedence", async () => {
+    const harness = createArgMenusHarness();
+
+    await expect(registerCommands(harness.ctx, harness.account)).resolves.toEqual({
+      mode: "native",
+    });
+    expect(harness.commands.size).toBeGreaterThan(0);
+  });
+});
 
 describe("slack slash commands channel policy", () => {
   it("drops mismatched slash payloads before dispatch", async () => {
