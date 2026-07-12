@@ -95,6 +95,27 @@ describe("ensureTool", () => {
     expect(downloadRelease).toHaveBeenCalledOnce();
   });
 
+  it("bounds release-check success bodies without using response.json()", async () => {
+    const { ensureTool } = await import("./tools-manager.js");
+    const release = vi.fn(async () => {});
+    const response = new Response("x".repeat(1024 * 1024 + 1), { status: 200 });
+    const json = vi.fn(async () => {
+      throw new Error("response.json() should not be called");
+    });
+    Object.defineProperty(response, "json", { value: json });
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response,
+      release,
+      finalUrl: "https://api.github.com/repos/sharkdp/fd/releases/latest",
+    });
+
+    await expect(ensureTool("fd", true)).resolves.toBeUndefined();
+
+    expect(json).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledOnce();
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
+  });
+
   it("extracts Windows zip downloads via safe archive API with size limits", async () => {
     vi.doMock("node:os", async (importOriginal) => ({
       ...(await importOriginal<typeof import("node:os")>()),
