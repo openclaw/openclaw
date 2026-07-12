@@ -134,7 +134,6 @@ export {
   readLatestSessionUsageFromTranscriptAsync,
   readLatestRecentSessionUsageFromTranscriptAsync,
   readRecentSessionUsageFromTranscriptAsync,
-  readRecentSessionMessagesAsync,
   readRecentSessionMessagesWithStatsAsync,
   readRecentSessionTranscriptLines,
   readRecentSessionUsageFromTranscript,

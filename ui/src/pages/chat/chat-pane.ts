@@ -1895,7 +1895,9 @@ class ChatPane extends OpenClawLightDomElement {
       messages: catalogKey ? this.catalogMessages : state.chatMessages,
       renderAllLoadedHistory:
         !catalogKey &&
-        (this.nativeHistoryExpanded || state.chatHistoryPagination?.completeSnapshot === true),
+        (this.nativeHistoryExpanded ||
+          (state.chatHistoryPagination?.hasMore === false &&
+            state.chatHistoryPagination.completeSnapshot === true)),
       historyPagination:
         catalogKey || state.chatHistoryPagination?.hasMore || this.loadingOlder
           ? {

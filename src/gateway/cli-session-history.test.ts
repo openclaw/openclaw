@@ -240,10 +240,12 @@ describe("cli session history", () => {
         "utf-8",
       );
 
+      const importedId = (message: Record<string, unknown> | undefined) =>
+        (message?.["__openclaw"] as { id?: string } | undefined)?.id;
       const first = readClaudeCliSessionMessages({ cliSessionId: sessionId, homeDir });
       const second = readClaudeCliSessionMessages({ cliSessionId: sessionId, homeDir });
-      expect(first[0]?.["__openclaw"]?.id).toBe(`claude-cli:${sessionId}:line:1`);
-      expect(second[0]?.["__openclaw"]?.id).toBe(first[0]?.["__openclaw"]?.id);
+      expect(importedId(first[0])).toBe(`claude-cli:${sessionId}:line:1`);
+      expect(importedId(second[0])).toBe(importedId(first[0]));
     });
   });
 

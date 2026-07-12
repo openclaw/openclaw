@@ -5380,9 +5380,9 @@ describe("gateway server chat", () => {
         expect(firstPage.payload?.messages?.map(readOpenClawSeq)).toEqual([3]);
         expect(firstPage.payload?.hasMore).toBe(true);
         expect(firstPage.payload?.nextOffset).toBeGreaterThan(0);
-        expect(captured.some((event) => event.action === "truncated" && event.count > 0)).toBe(
-          true,
-        );
+        expect(
+          captured.some((event) => event.action === "truncated" && (event.count ?? 0) > 0),
+        ).toBe(true);
 
         let offset = expectDefined(firstPage.payload?.nextOffset, "second page offset");
         const olderMessages: unknown[] = [];
