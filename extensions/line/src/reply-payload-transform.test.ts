@@ -232,8 +232,8 @@ describe("parseLineDirectives", () => {
   });
 
   describe("blank required template fields", () => {
-    // A blank question/label/title/text produces an empty required field that LINE
-    // rejects with HTTP 400, dropping the whole message. The template must be skipped.
+    // A blank required field produces a template that LINE rejects with HTTP 400,
+    // dropping the whole message. The template must be skipped.
     const noTemplate = (text: string) => {
       expect(getLineData(parseLineDirectives({ text })).templateMessage, text).toBeUndefined();
     };
@@ -244,8 +244,19 @@ describe("parseLineDirectives", () => {
       noTemplate("[[confirm: Delete? | Yes | ]]");
     });
 
-    it("skips buttons when the title or text is blank", () => {
-      noTemplate("[[buttons:  | Choose | Opt1:d1]]");
+    it("omits a blank optional buttons title", () => {
+      expect(
+        getLineData(parseLineDirectives({ text: "[[buttons:  | Choose | Opt1:d1]]" }))
+          .templateMessage,
+      ).toEqual({
+        type: "buttons",
+        text: "Choose",
+        actions: [{ type: "message", label: "Opt1", data: "d1" }],
+        altText: "Choose",
+      });
+    });
+
+    it("skips buttons when the required text is blank", () => {
       noTemplate("[[buttons: Menu |  | Opt1:d1]]");
     });
 

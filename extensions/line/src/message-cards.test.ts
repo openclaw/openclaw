@@ -47,6 +47,15 @@ describe("createConfirmTemplate", () => {
 });
 
 describe("createButtonTemplate", () => {
+  it("omits a blank optional title", () => {
+    const template = createButtonTemplate(undefined, "Text", [messageAction("OK")]);
+    expect(template).toMatchObject({
+      altText: "Text",
+      template: { type: "buttons", text: "Text" },
+    });
+    expect(template.template).not.toHaveProperty("title");
+  });
+
   it("limits actions to 4", () => {
     const actions = Array.from({ length: 6 }, (_, i) => messageAction(`Button ${i}`));
     const template = createButtonTemplate("Title", "Text", actions);

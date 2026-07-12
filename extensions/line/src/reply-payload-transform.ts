@@ -167,15 +167,15 @@ export function parseLineDirectives(payload: ReplyPayload): ReplyPayload {
         return { type: "message" as const, label, data: data || label };
       });
 
-      // LINE rejects a buttons template with an empty title or text (HTTP 400), dropping
-      // the whole message; skip the template when a required field is blank.
-      if (actions.length > 0 && title && bodyText) {
+      // LINE accepts an omitted title but rejects an explicit empty title and requires text.
+      // Omit the optional field so a valid text-only button template still reaches the user.
+      if (actions.length > 0 && bodyText) {
         lineData.templateMessage = {
           type: "buttons",
-          title,
+          ...(title ? { title } : {}),
           text: bodyText,
           actions: actions.slice(0, 4),
-          altText: `${title}: ${bodyText}`,
+          altText: title ? `${title}: ${bodyText}` : bodyText,
         };
       }
     }
