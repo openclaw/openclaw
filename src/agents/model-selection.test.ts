@@ -4,7 +4,11 @@ import type { OpenClawConfig } from "../config/types.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
-import { isModelKeyAllowedBySet, providerWildcardModelKey } from "./model-selection-shared.js";
+import {
+  isModelKeyAllowedBySet,
+  providerWildcardModelKey,
+  resolveAllowedModelSelection,
+} from "./model-selection-shared.js";
 import {
   buildAllowedModelSet,
   buildConfiguredModelCatalog,
@@ -2831,6 +2835,75 @@ describe("model-selection", () => {
         }),
       ).toBe("off");
     });
+  });
+});
+
+describe("resolveAllowedModelSelection", () => {
+  it("warns when substituting a model not in the allowlist with the first allowed catalog entry", async () => {
+    const warnLogs = createWarnLogCapture("openclaw-model-selection-test");
+    try {
+      const result = resolveAllowedModelSelection({
+        provider: "opencode-go",
+        model: "kimi-k2.7-code",
+        allowAny: false,
+        allowedKeys: new Set(["opencode-go/kimi-k2.6"]),
+        allowedCatalog: [{ provider: "opencode-go", id: "deepseek-v4-pro" }] as Array<{
+          provider: string;
+          id: string;
+        }>,
+      });
+
+      expect(result).toEqual({ provider: "opencode-go", model: "deepseek-v4-pro" });
+      expect(
+        await warnLogs.findText(
+          'Model "opencode-go/kimi-k2.7-code" not in allowlist; substituting "opencode-go/deepseek-v4-pro"',
+        ),
+      ).toBeDefined();
+    } finally {
+      warnLogs.cleanup();
+    }
+  });
+
+  it("returns null when the model is not allowed and the catalog is empty", () => {
+    const result = resolveAllowedModelSelection({
+      provider: "opencode-go",
+      model: "kimi-k2.7-code",
+      allowAny: false,
+      allowedKeys: new Set(["opencode-go/kimi-k2.6"]),
+      allowedCatalog: [],
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("returns the normalized model ref when the key is in the allowed set", () => {
+    const result = resolveAllowedModelSelection({
+      provider: "opencode-go",
+      model: "kimi-k2.6",
+      allowAny: false,
+      allowedKeys: new Set(["opencode-go/kimi-k2.6"]),
+      allowedCatalog: [{ provider: "opencode-go", id: "deepseek-v4-pro" }] as Array<{
+        provider: string;
+        id: string;
+      }>,
+    });
+
+    expect(result).toEqual({ provider: "opencode-go", model: "kimi-k2.6" });
+  });
+
+  it("returns the normalized model ref when allowAny is true", () => {
+    const result = resolveAllowedModelSelection({
+      provider: "opencode-go",
+      model: "kimi-k2.7-code",
+      allowAny: true,
+      allowedKeys: new Set(["opencode-go/kimi-k2.6"]),
+      allowedCatalog: [{ provider: "opencode-go", id: "deepseek-v4-pro" }] as Array<{
+        provider: string;
+        id: string;
+      }>,
+    });
+
+    expect(result).toEqual({ provider: "opencode-go", model: "kimi-k2.7-code" });
   });
 });
 
