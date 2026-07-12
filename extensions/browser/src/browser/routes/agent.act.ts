@@ -214,7 +214,10 @@ function buildExistingSessionWaitPredicate(params: {
     checks.push(`document.readyState === "complete"`);
   }
   if (params.fn) {
-    checks.push(`Boolean(await (${params.fn})())`);
+    // `fn` is admitted only by the same evaluateEnabled gate as evaluate.
+    // Preserve its async semantics; document binding guards scheduler rebinding.
+    const source = normalizeBrowserEvaluateFunctionSource(params.fn);
+    checks.push(`Boolean(await (${source})())`);
   }
   if (checks.length === 0) {
     return null;
@@ -281,7 +284,10 @@ async function waitForExistingSessionCondition(
           try {
             return { kind: "result", ready: Boolean(await (${predicate})) };
           } catch (error) {
-            return { kind: "error", message: error instanceof Error ? error.message : String(error) };
+            const message = error && typeof error === "object" && "message" in error
+              ? String(error.message)
+              : String(error);
+            return { kind: "error", message };
           }
         }`);
         if (!outcome || typeof outcome !== "object") {

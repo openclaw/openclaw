@@ -113,6 +113,8 @@ describe("existing-session interaction navigation guard", () => {
         }),
     );
     routeState.tab.url = "https://example.com";
+    routeState.profileCtx.closeTab.mockReset();
+    routeState.profileCtx.closeTab.mockResolvedValue(undefined);
     routeState.profileCtx.listTabs.mockReset();
     routeState.profileCtx.listTabs.mockResolvedValue([
       {
@@ -201,6 +203,23 @@ describe("existing-session interaction navigation guard", () => {
       "https://example.com",
     );
     expect(String(evaluate.mock.calls[1]?.[0])).toContain("document.title === 'ready'");
+  });
+
+  it("preserves promise-returning predicates inside the bound document", async () => {
+    const evaluate = vi
+      .fn()
+      .mockResolvedValueOnce("https://example.com")
+      .mockResolvedValueOnce({ kind: "result", ready: true });
+    chromeMcpMocks.withChromeMcpDocument.mockImplementationOnce(
+      async (_params, task) => await task({ evaluate }),
+    );
+
+    const response = await runAction({ kind: "wait", fn: "() => Promise.resolve(true)" });
+
+    expect(response.statusCode).toBe(200);
+    const script = String(evaluate.mock.calls[1]?.[0]);
+    expect(script).toContain("Boolean(await");
+    expect(routeState.profileCtx.closeTab).not.toHaveBeenCalled();
   });
 
   it("does not run a wait predicate in a document rejected by navigation policy", async () => {

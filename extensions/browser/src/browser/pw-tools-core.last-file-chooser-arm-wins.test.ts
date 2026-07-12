@@ -119,8 +119,10 @@ describe("pw-tools-core", () => {
     const waitForLoadState = vi.fn(async () => {});
     const waitForFunction = vi.fn(async () => {});
     const waitForTimeout = vi.fn(async () => {});
+    const documentHandle = { dispose: vi.fn(async () => {}) };
 
     const page = {
+      evaluateHandle: vi.fn(async () => documentHandle),
       locator: vi.fn(() => ({
         first: () => ({ waitFor: waitForSelector }),
       })),
@@ -152,9 +154,13 @@ describe("pw-tools-core", () => {
     expect(waitForLoadState).toHaveBeenCalledWith("networkidle", {
       timeout: 1234,
     });
-    expect(waitForFunction).toHaveBeenCalledWith("window.ready===true", {
-      timeout: 1234,
-    });
+    expect(waitForFunction).toHaveBeenCalledWith(
+      expect.any(Function),
+      { document: documentHandle },
+      { timeout: 1234 },
+    );
+    expect(String(waitForFunction.mock.calls[0]?.[0])).toContain("window.ready===true");
+    expect(documentHandle.dispose).toHaveBeenCalledOnce();
   });
 
   it("clamps wait timeoutMs to 120000 for wait steps", async () => {
