@@ -208,7 +208,16 @@ function resolveFileShareMessageChangedInbound(params: {
     return undefined;
   }
   const previous = asRecord(changed.previous_message) as SlackAssistantMessageRecord | undefined;
-  if (!hasNewSlackInboundDeliverableMedia(next, previous ?? {})) {
+  const messageTs = asString(next.ts);
+  if (
+    !previous ||
+    !messageTs ||
+    asString(previous.ts) !== messageTs ||
+    asString(previous.user) !== senderId
+  ) {
+    return undefined;
+  }
+  if (!hasNewSlackInboundDeliverableMedia(next, previous)) {
     return undefined;
   }
   const contentVersion = buildSlackInboundContentVersion(next);
@@ -223,7 +232,7 @@ function resolveFileShareMessageChangedInbound(params: {
       bot_id: asString(next.bot_id),
       username: asString(next.username),
       text: asString(next.text),
-      ts: asString(next.ts) ?? asString(changed.event_ts),
+      ts: messageTs,
       thread_ts: asString(next.thread_ts),
       parent_user_id: asString(next.parent_user_id),
       event_ts: changed.event_ts,

@@ -492,7 +492,12 @@ describe("registerSlackMessageEvents", () => {
   function makeFileShareChangedEvent(overrides?: {
     user?: string;
     files?: Array<{ id: string; name?: string; mode?: string; file_access?: string }>;
-    previousFiles?: Array<{ id: string; name?: string; mode?: string; file_access?: string }>;
+    previousFiles?: Array<{
+      id: string;
+      name?: string;
+      mode?: string;
+      file_access?: string;
+    }> | null;
     text?: string;
     previousText?: string;
     subtype?: "file_share" | null;
@@ -528,7 +533,11 @@ describe("registerSlackMessageEvents", () => {
         ts: "123.456",
         user,
         text: overrides?.previousText ?? "please review these",
-        files: overrides?.previousFiles ?? [{ id: "F1", name: "packing-slip-1.pdf" }],
+        ...(overrides?.previousFiles === null
+          ? {}
+          : {
+              files: overrides?.previousFiles ?? [{ id: "F1", name: "packing-slip-1.pdf" }],
+            }),
       },
       event_ts: "123.999",
     };
@@ -716,6 +725,25 @@ describe("registerSlackMessageEvents", () => {
     expect(promoted).toMatchObject({
       files: [{ id: "F1", mode: "file_access", file_access: "check_file_info" }],
     });
+  });
+
+  it("promotes new media when a valid previous message had no media fields", async () => {
+    const { handler, handleSlackMessage } = createHandlers("message", { dmPolicy: "open" });
+    await requireMessageHandler(handler)({
+      event: makeFileShareChangedEvent({ previousFiles: null }),
+      body: {},
+    });
+
+    expect(handleSlackMessage).toHaveBeenCalledOnce();
+  });
+
+  it("does not promote media when the previous message snapshot is unavailable", async () => {
+    const { handler, handleSlackMessage } = createHandlers("message", { dmPolicy: "open" });
+    const event: Record<string, unknown> = makeFileShareChangedEvent();
+    delete event.previous_message;
+    await requireMessageHandler(handler)({ event, body: {} });
+
+    expect(handleSlackMessage).not.toHaveBeenCalled();
   });
 
   it("keeps plain message_changed edits on the system-event path (no re-triggered replies)", async () => {
