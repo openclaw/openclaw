@@ -6,6 +6,7 @@ import { escapeRegExp, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utilit
 import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
 import { closeQaHttpServer } from "../../bus-server.js";
 import { QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY } from "../../qa-web-search-provider.js";
+import { parseQaDebugRequestCursor } from "../shared/debug-request-cursor.js";
 import { writeJson } from "../shared/http-json.js";
 
 type ResponsesInputItem = Record<string, unknown>;
@@ -97,6 +98,7 @@ export function resolveProviderVariant(model: string | undefined): MockOpenAiPro
 }
 
 type MockOpenAiRequestSnapshot = {
+  cursor: number;
   raw: string;
   body: Record<string, unknown>;
   prompt: string;
@@ -112,6 +114,8 @@ type MockOpenAiRequestSnapshot = {
   toolOutputCallId?: string;
   toolOutputStructuredError?: true;
 };
+
+type MockOpenAiRequestSnapshotInput = Omit<MockOpenAiRequestSnapshot, "cursor">;
 
 // Runtime-context delimiters are owned by src/agents/internal-runtime-context.ts.
 // This mock mirrors the wire shape so delimiter drift fails through QA timeouts.
@@ -3784,6 +3788,16 @@ export async function startQaMockOpenAiServer(params?: {
   };
   let lastRequest: MockOpenAiRequestSnapshot | null = null;
   const requests: MockOpenAiRequestSnapshot[] = [];
+  let nextRequestCursor = 1;
+  const recordRequest = (snapshot: MockOpenAiRequestSnapshotInput) => {
+    const recorded = { ...snapshot, cursor: nextRequestCursor++ };
+    lastRequest = recorded;
+    requests.push(recorded);
+    if (requests.length > MOCK_OPENAI_DEBUG_REQUEST_LIMIT) {
+      requests.splice(0, requests.length - MOCK_OPENAI_DEBUG_REQUEST_LIMIT);
+    }
+    return recorded;
+  };
   const inflightRequests = new Map<number, { prompt: string; allInputText: string }>();
   let nextInflightRequestId = 1;
   const imageGenerationRequests: Array<Record<string, unknown>> = [];
@@ -3812,8 +3826,45 @@ export async function startQaMockOpenAiServer(params?: {
         writeJson(res, 200, lastRequest ?? { ok: false, error: "no request recorded" });
         return;
       }
+      if (req.method === "GET" && url.pathname === "/debug/request-cursor") {
+        writeJson(res, 200, { cursor: nextRequestCursor - 1 });
+        return;
+      }
       if (req.method === "GET" && url.pathname === "/debug/requests") {
-        writeJson(res, 200, requests);
+        const afterText = url.searchParams.get("after");
+        if (afterText === null) {
+          writeJson(res, 200, requests);
+          return;
+        }
+        const after = parseQaDebugRequestCursor(afterText);
+        if (after === null) {
+          writeJson(res, 400, { error: "after must be a non-negative safe integer" });
+          return;
+        }
+        const latestCursor = nextRequestCursor - 1;
+        const oldestCursor = requests[0]?.cursor ?? nextRequestCursor;
+        if (after > latestCursor) {
+          writeJson(res, 409, {
+            error: "request cursor is ahead of the latest recorded request",
+            after,
+            latestCursor,
+          });
+          return;
+        }
+        if (after < oldestCursor - 1) {
+          writeJson(res, 409, {
+            error: "request cursor expired",
+            after,
+            oldestCursor,
+            latestCursor,
+          });
+          return;
+        }
+        writeJson(
+          res,
+          200,
+          requests.filter((request) => request.cursor > after),
+        );
         return;
       }
       if (req.method === "GET" && url.pathname === "/debug/inflight-requests") {
@@ -3897,7 +3948,7 @@ export async function startQaMockOpenAiServer(params?: {
           inflightRequests.delete(inflightRequestId);
         }
         const resolvedModel = typeof body.model === "string" ? body.model : "";
-        lastRequest = {
+        recordRequest({
           raw,
           body,
           prompt,
@@ -3912,11 +3963,7 @@ export async function startQaMockOpenAiServer(params?: {
           plannedToolArgs: extractPlannedToolArgs(events),
           toolOutputCallId: extractToolOutputCallId(input) || undefined,
           ...(extractToolOutputStructuredError(input) ? { toolOutputStructuredError: true } : {}),
-        };
-        requests.push(lastRequest);
-        if (requests.length > MOCK_OPENAI_DEBUG_REQUEST_LIMIT) {
-          requests.splice(0, requests.length - MOCK_OPENAI_DEBUG_REQUEST_LIMIT);
-        }
+        });
         if (body.stream === false) {
           const completion = events.at(-1);
           if (!completion || completion.type !== "response.completed") {
@@ -3959,7 +4006,7 @@ export async function startQaMockOpenAiServer(params?: {
         // is what lets a single parity run diff assertions across both lanes.
         // Reuse the normalized model so an empty-string body.model no longer
         // leaks through to `lastRequest.model`.
-        lastRequest = {
+        recordRequest({
           raw,
           body: body as Record<string, unknown>,
           prompt: extractLastUserText(input),
@@ -3973,11 +4020,7 @@ export async function startQaMockOpenAiServer(params?: {
           plannedToolArgs: extractPlannedToolArgs(events),
           toolOutputCallId: extractToolOutputCallId(input) || undefined,
           ...(extractToolOutputStructuredError(input) ? { toolOutputStructuredError: true } : {}),
-        };
-        requests.push(lastRequest);
-        if (requests.length > MOCK_OPENAI_DEBUG_REQUEST_LIMIT) {
-          requests.splice(0, requests.length - MOCK_OPENAI_DEBUG_REQUEST_LIMIT);
-        }
+        });
         if (body.stream === true) {
           writeAnthropicSse(res, streamEvents);
           return;

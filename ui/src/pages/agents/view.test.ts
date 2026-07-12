@@ -152,7 +152,7 @@ describe("renderAgents", () => {
     render(renderAgents(createProps({ activePanel: "memory" })), container);
 
     const tabs = [...container.querySelectorAll(".agent-tab")].map((tab) => directText(tab));
-    expect(tabs.slice(-2)).toEqual(["Cron Jobs", "Memory"]);
+    expect(tabs.slice(-2)).toEqual(["Automations", "Memory"]);
     const panel = container.querySelector<HTMLElement & { agentId: string }>(
       "openclaw-agent-memory-panel",
     );
