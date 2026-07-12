@@ -397,6 +397,33 @@ describe("message lifecycle primitives", () => {
     expect(ctx.nackErrorMessage).toBe("retry failure");
   });
 
+  it("coalesces overlapping nack callbacks and retains the first error", async () => {
+    let resolveNack: (() => void) | undefined;
+    const onNack = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveNack = resolve;
+        }),
+    );
+    const ctx = createMessageReceiveContext({
+      id: "rx-nack-overlap",
+      channel: "telegram",
+      message: { text: "hello" },
+      onNack,
+    });
+    const firstError = new Error("first failure");
+
+    const first = ctx.nack(firstError);
+    const duplicate = ctx.nack(new Error("duplicate failure"));
+    await vi.waitFor(() => expect(onNack).toHaveBeenCalledOnce());
+    resolveNack?.();
+    await Promise.all([first, duplicate]);
+
+    expect(onNack).toHaveBeenCalledWith(firstError);
+    expect(ctx.ackState).toBe("nacked");
+    expect(ctx.nackErrorMessage).toBe("first failure");
+  });
+
   it("maps ack policies to lifecycle stages", () => {
     expect(shouldAckMessageAfterStage("after_receive_record", "receive_record")).toBe(true);
     expect(shouldAckMessageAfterStage("after_receive_record", "agent_dispatch")).toBe(false);
