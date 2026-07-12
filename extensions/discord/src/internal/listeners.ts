@@ -56,6 +56,25 @@ export abstract class MessageCreateListener extends BaseListener {
   abstract override handle(data: DiscordMessageDispatchData, client: Client): Promise<void> | void;
 }
 
+export abstract class MessageUpdateListener extends BaseListener {
+  readonly type = GatewayDispatchEvents.MessageUpdate;
+  abstract override handle(data: DiscordMessageDispatchData, client: Client): Promise<void> | void;
+}
+
+export type DiscordMessageDeleteDispatchData = {
+  id: string;
+  channel_id: string;
+  guild_id?: string;
+};
+
+export abstract class MessageDeleteListener extends BaseListener {
+  readonly type = GatewayDispatchEvents.MessageDelete;
+  abstract override handle(
+    data: DiscordMessageDeleteDispatchData,
+    client: Client,
+  ): Promise<void> | void;
+}
+
 export abstract class InteractionCreateListener extends BaseListener {
   readonly type = GatewayDispatchEvents.InteractionCreate;
 }
