@@ -7,6 +7,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import * as readline from "node:readline";
+import { setTimeout as sleep } from "node:timers/promises";
 import {
   DEFAULT_PROVIDER,
   parseModelRef,
@@ -67,6 +68,7 @@ const DEFAULT_QUERY_MODE = "recent" as const;
 const DEFAULT_QMD_SEARCH_MODE = "search" as const;
 const DEFAULT_TRANSCRIPT_DIR = "active-memory";
 const ACTIVE_MEMORY_RECALL_LANE = "active-memory";
+const ACTIVE_MEMORY_CLEANUP_RETRY_DELAYS_MS = [0, 50, 250] as const;
 const DEFAULT_CIRCUIT_BREAKER_MAX_TIMEOUTS = 3;
 const DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS = 60_000;
 const DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW = ["memory_search", "memory_get"] as const;
@@ -3148,6 +3150,43 @@ async function persistActiveMemoryTranscriptArtifact(params: {
   );
 }
 
+async function cleanupActiveMemoryRecallSession(params: {
+  agentId: string;
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+}): Promise<void> {
+  const sessionKeySegmentPrefix =
+    parseAgentSessionKey(params.sessionKey)?.rest ?? params.sessionKey;
+  let lastError: unknown;
+  for (const delayMs of ACTIVE_MEMORY_CLEANUP_RETRY_DELAYS_MS) {
+    if (delayMs > 0) {
+      await sleep(delayMs);
+    }
+    try {
+      const result = await cleanupSessionLifecycleArtifacts({
+        agentId: params.agentId,
+        archiveRemovedEntryTranscripts: false,
+        orphanTranscriptMinAgeMs: 0,
+        sessionKeySegmentPrefix,
+        storePath: params.storePath,
+        transcriptContentMarker: `"runId":"${params.sessionId}"`,
+      });
+      if (result.removedEntries !== 1) {
+        throw new Error(
+          `active-memory recall cleanup removed ${String(result.removedEntries)} sessions`,
+        );
+      }
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(`active-memory recall cleanup failed: ${String(lastError)}`);
+}
+
 async function runRecallSubagent(params: {
   api: OpenClawPluginApi;
   config: ResolvedActiveRecallPluginConfig;
@@ -3415,22 +3454,19 @@ async function runRecallSubagent(params: {
           );
         });
       }
-      const sessionKeySegmentPrefix =
-        parseAgentSessionKey(subagentSessionKey)?.rest ?? subagentSessionKey;
-      await cleanupSessionLifecycleArtifacts({
+      await cleanupActiveMemoryRecallSession({
         agentId: params.agentId,
-        archiveRemovedEntryTranscripts: false,
-        orphanTranscriptMinAgeMs: 0,
-        sessionKeySegmentPrefix,
+        sessionId: subagentSessionId,
+        sessionKey: subagentSessionKey,
         storePath,
-        transcriptContentMarker: `"runId":"${subagentSessionId}"`,
       }).catch((error: unknown) => {
         const message = toSingleLineLogValue(
           error instanceof Error ? error.message : String(error),
         );
-        params.api.logger.debug?.(
+        params.api.logger.warn?.(
           `active-memory: failed to clean up recall session ${subagentSessionKey}: ${message}`,
         );
+        throw error;
       });
     }
     await transientWorkspace?.cleanup();

@@ -730,6 +730,28 @@ describe("active-memory plugin", () => {
     expect(secondSessionKey).not.toBe(firstSessionKey);
   });
 
+  it("retries transient SQLite recall cleanup failures", async () => {
+    hoisted.cleanupSessionLifecycleArtifacts.mockRejectedValueOnce(
+      new Error("session store is busy"),
+    );
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order? retry cleanup", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    expectPrependContextContains(result, "lemon pepper wings");
+    expect(hoisted.cleanupSessionLifecycleArtifacts).toHaveBeenCalledTimes(2);
+    expect(api.logger.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("failed to clean up recall session"),
+    );
+  });
+
   it("registers a session-scoped active-memory toggle command", async () => {
     const command = registeredCommands["active-memory"];
     const sessionKey = "agent:main:active-memory-toggle";
