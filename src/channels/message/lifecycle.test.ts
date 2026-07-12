@@ -372,6 +372,60 @@ describe("message lifecycle primitives", () => {
     expect(ctx.nackErrorMessage).toBe("offset failed");
   });
 
+  it("nack is idempotent and does not re-trigger onNack callback", async () => {
+    const onNack = vi.fn(async () => undefined);
+    const ctx = createMessageReceiveContext({
+      id: "rx-nack-idempotent",
+      channel: "telegram",
+      message: { text: "hello" },
+      onNack,
+    });
+
+    const firstError = new Error("first nack");
+    await ctx.nack(firstError);
+    expect(onNack).toHaveBeenCalledTimes(1);
+    expect(onNack).toHaveBeenCalledWith(firstError);
+    expect(ctx.ackState).toBe("nacked");
+    expect(ctx.nackErrorMessage).toBe("first nack");
+
+    const secondError = new Error("second nack");
+    await ctx.nack(secondError);
+    // onNack must not fire again for duplicate nack calls
+    expect(onNack).toHaveBeenCalledTimes(1);
+    // First nack's error and state are preserved
+    expect(ctx.ackState).toBe("nacked");
+    expect(ctx.nackErrorMessage).toBe("first nack");
+  });
+
+  it("retries nack when onNack callback rejects", async () => {
+    let calls = 0;
+    const onNack = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) {
+        throw new Error("nack callback transient failure");
+      }
+    });
+    const ctx = createMessageReceiveContext({
+      id: "rx-nack-retry",
+      channel: "telegram",
+      message: { text: "hello" },
+      onNack,
+    });
+
+    const nackErr = new Error("receive failed");
+    await ctx.nack(nackErr).catch(() => undefined);
+    // onNack rejected → state must stay unchanged so callers can retry
+    expect(ctx.ackState).toBe("pending");
+    expect(ctx.nackErrorMessage).toBeUndefined();
+    expect(onNack).toHaveBeenCalledTimes(1);
+
+    // Retry: onNack succeeds this time → nack completes
+    await ctx.nack(nackErr);
+    expect(onNack).toHaveBeenCalledTimes(2);
+    expect(ctx.ackState).toBe("nacked");
+    expect(ctx.nackErrorMessage).toBe("receive failed");
+  });
+
   it("maps ack policies to lifecycle stages", () => {
     expect(shouldAckMessageAfterStage("after_receive_record", "receive_record")).toBe(true);
     expect(shouldAckMessageAfterStage("after_receive_record", "agent_dispatch")).toBe(false);

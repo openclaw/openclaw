@@ -88,6 +88,11 @@ export function createMessageReceiveContext<TMessage>(params: {
       delete ctx.nackErrorMessage;
     },
     nack: async (error) => {
+      // Nack callbacks must be idempotent because receive pipelines may
+      // revisit completed stages and retry after nack.
+      if (ctx.ackState === "nacked") {
+        return;
+      }
       await params.onNack?.(error);
       ctx.ackState = "nacked";
       ctx.nackErrorMessage = normalizeAckErrorMessage(error);
