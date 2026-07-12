@@ -320,14 +320,28 @@ openclaw-new-session-page {
   cursor: default;
 }
 
-/* Phones (and short landscape): match the chat thread's mobile inset; the
-   trigger row is already compact, so it needs no further condensing. */
+/* Phones (and short landscape): match the chat thread's mobile inset, and
+   anchor menus to the trigger row instead of their trigger — a near
+   viewport-wide panel under a non-leftmost trigger would otherwise run past
+   the right edge. */
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .new-session-page__scroll {
     padding: 12px 8px;
   }
 
   .new-session-page__triggers {
+    position: relative;
     gap: 4px 12px;
+  }
+
+  .new-session-page__select {
+    position: static;
+  }
+
+  .new-session-page__menu {
+    right: 0;
+    left: 0;
+    width: auto;
+    max-width: none;
   }
 }

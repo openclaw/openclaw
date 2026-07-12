@@ -126,6 +126,21 @@ class NewSessionPage extends OpenClawLightDomElement {
     }
   };
 
+  // Mutual exclusion must hook the details toggle, not just pointerdown:
+  // keyboard activation (Enter/Space on a summary) opens without any pointer
+  // event, and two open panels would overlap.
+  private readonly handleMenuToggle = (event: Event) => {
+    const details = event.currentTarget as HTMLDetailsElement;
+    if (!details.open) {
+      return;
+    }
+    for (const other of this.openMenus()) {
+      if (other !== details) {
+        other.open = false;
+      }
+    }
+  };
+
   override updated() {
     const agentsReady = this.agents().length > 0;
     const openKey = this.data?.agentId ?? "";
@@ -647,7 +662,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     const selected = this.selectedAgent();
     const label = selected?.identity?.name ?? selected?.name ?? selected?.id ?? this.agentId;
     return html`
-      <details class="new-session-page__select">
+      <details class="new-session-page__select" @toggle=${this.handleMenuToggle}>
         <summary class="new-session-page__trigger" title=${t("newSession.agent")}>
           <span class="new-session-page__target-icon" aria-hidden="true">${icons.bot}</span>
           <span class="new-session-page__trigger-label">${label}</span>
@@ -683,7 +698,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     const worktreeAvailable = this.worktreeAvailable();
     const branches = this.branches;
     return html`
-      <details class="new-session-page__select">
+      <details class="new-session-page__select" @toggle=${this.handleMenuToggle}>
         <summary
           class="new-session-page__trigger"
           title=${t("newSession.where")}
@@ -787,12 +802,19 @@ class NewSessionPage extends OpenClawLightDomElement {
 
   private renderFolderSelect() {
     const browseAvailable = this.browseAvailable();
-    const folderName = folderDisplayName(this.folder.trim() || this.workspacePath());
-    const label = folderName || t("newSession.folderPlaceholder");
+    const folder = this.folder.trim();
+    // An empty folder on a node session means that node's default directory —
+    // never the Gateway workspace, so no local-workspace fallback there.
+    const label = folder
+      ? folderDisplayName(folder)
+      : this.execNode
+        ? t("newSession.folderPlaceholder")
+        : folderDisplayName(this.workspacePath()) || t("newSession.folderPlaceholder");
     return html`
       <details
         class="new-session-page__select new-session-page__select--folder"
         @toggle=${(event: Event) => {
+          this.handleMenuToggle(event);
           const details = event.currentTarget as HTMLDetailsElement;
           if (details.open) {
             this.browserOpen = true;
