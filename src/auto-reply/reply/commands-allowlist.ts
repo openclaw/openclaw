@@ -351,6 +351,10 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
           Surface: channelId,
           OriginatingChannel: channelId,
           AccountId: accountId,
+          // Drop origin-channel-derived context ownership: a guild/channel
+          // OwnerAllowFrom from the origin surface must not be reused to
+          // authorize the sender as an owner of the target channel (#104984).
+          OwnerAllowFrom: undefined,
         },
         cfg: params.cfg,
         commandAuthorized: true,
