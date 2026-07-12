@@ -98,7 +98,9 @@ describe("embedded attempt session lock lifecycle", () => {
       });
 
     await nestedWriteStarted;
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     const settledBeforeNestedWrite = parentSettled;
     finishNestedWrite();
     await Promise.all([parentWrite, nestedWrite]);
@@ -148,7 +150,9 @@ describe("embedded attempt session lock lifecycle", () => {
       });
 
     await nestedWriteStarted;
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     const settledBeforeNestedWrite = parentSettled;
     const releasedBeforeNestedWrite = releaseOwned.mock.calls.length;
     finishNestedWrite();
@@ -199,7 +203,9 @@ describe("embedded attempt session lock lifecycle", () => {
       });
 
     await nestedWriteStarted;
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     const settledBeforeNestedWrite = parentSettled;
     finishNestedWrite();
     await Promise.all([parentWrite, nestedWrite]);
@@ -254,7 +260,9 @@ describe("embedded attempt session lock lifecycle", () => {
 
     await ownedReleaseStarted;
     startLateWrite();
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     const settledBeforeRelease = lateWriteSettled;
     const acquisitionsBeforeRelease = acquireSessionWriteLockLocal.mock.calls.length;
     finishOwnedRelease();
