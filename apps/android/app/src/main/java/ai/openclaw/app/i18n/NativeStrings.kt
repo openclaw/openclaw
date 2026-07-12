@@ -81,6 +81,7 @@ internal fun NativeText.resolveNativeTextResource(): String =
 private fun resolveNativeFormatArg(value: Any): Any = if (value is NativeText) value.resolveNativeText() else value
 
 internal fun notifyNativeLocaleChanged() {
+  NativeStringResources.invalidateLocalizedContext()
   nativeLocaleRevision.update { it + 1 }
 }
 
@@ -115,13 +116,31 @@ internal object NativeStringResources {
   @Volatile
   private var applicationLocales: LocaleListCompat? = null
 
+  @Volatile
+  private var localizedContext: Context? = null
+
+  @Synchronized
   fun install(context: Context) {
     applicationContext = context.applicationContext
     applicationLocales = null
+    localizedContext = null
   }
 
+  @Synchronized
   fun setApplicationLocales(locales: LocaleListCompat) {
     applicationLocales = locales
+    localizedContext = null
+  }
+
+  @Synchronized
+  fun setConfigurationLocales(configuration: Configuration) {
+    applicationLocales = ConfigurationCompat.getLocales(configuration)
+    localizedContext = null
+  }
+
+  @Synchronized
+  fun invalidateLocalizedContext() {
+    localizedContext = null
   }
 
   fun resolve(
@@ -129,23 +148,31 @@ internal object NativeStringResources {
     vararg formatArgs: Any,
   ): String {
     val context = applicationContext ?: return formatNativeSource(source, formatArgs)
-    val locales =
-      applicationLocales
-        ?: LocaleManagerCompat
-          .getApplicationLocales(context)
-          .takeUnless { it.isEmpty }
-        ?: context.readStoredAppLocales()
     val localized =
-      if (locales.isEmpty) {
-        context
-      } else {
-        val configuration = Configuration(context.resources.configuration)
-        ConfigurationCompat.setLocales(configuration, locales)
-        context.createConfigurationContext(configuration)
-      }
+      localizedContext
+        ?: synchronized(this) {
+          localizedContext
+            ?: context
+              .localizedContext(
+                applicationLocales
+                  ?: LocaleManagerCompat
+                    .getApplicationLocales(context)
+                    .takeUnless { it.isEmpty }
+                  ?: context.readStoredAppLocales(),
+              ).also { localizedContext = it }
+        }
     return localized.nativeString(source, *formatArgs)
   }
 }
+
+private fun Context.localizedContext(locales: LocaleListCompat): Context =
+  if (locales.isEmpty) {
+    this
+  } else {
+    val configuration = Configuration(resources.configuration)
+    ConfigurationCompat.setLocales(configuration, locales)
+    createConfigurationContext(configuration)
+  }
 
 private fun Context.readStoredAppLocales(): LocaleListCompat {
   if (Build.VERSION.SDK_INT >= 33) return LocaleListCompat.getEmptyLocaleList()

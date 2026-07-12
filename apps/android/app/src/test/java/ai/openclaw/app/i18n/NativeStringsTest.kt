@@ -1,6 +1,9 @@
 package ai.openclaw.app.i18n
 
 import android.content.Context
+import android.content.res.Configuration
+import androidx.core.os.ConfigurationCompat
+import androidx.core.os.LocaleListCompat
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -27,6 +30,20 @@ class NativeStringsTest {
         3,
       ),
     )
+  }
+
+  @Test
+  fun configurationLocaleReplacesTheInAppOverride() {
+    val app = RuntimeEnvironment.getApplication()
+    NativeStringResources.install(app)
+    NativeStringResources.setApplicationLocales(LocaleListCompat.forLanguageTags("en"))
+    assertEquals("Mic off", nativeString("Mic off"))
+
+    val configuration = Configuration(app.resources.configuration)
+    ConfigurationCompat.setLocales(configuration, LocaleListCompat.forLanguageTags("fr"))
+    NativeStringResources.setConfigurationLocales(configuration)
+
+    assertEquals("Micro désactivé", nativeString("Mic off"))
   }
 
   @Test

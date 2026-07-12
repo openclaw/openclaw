@@ -128,6 +128,7 @@ class NodeApp : Application() {
     super.onConfigurationChanged(newConfig)
     // The process runtime survives Activity recreation, so retained text and
     // serialized Home Canvas state need an explicit locale refresh signal.
+    NativeStringResources.setConfigurationLocales(newConfig)
     notifyNativeLocaleChanged()
   }
 }
