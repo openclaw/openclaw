@@ -5,6 +5,7 @@
  */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { Type, type TSchema } from "typebox";
+import { messageReportsUnexpectedProperty } from "../../../packages/gateway-protocol/src/validation-errors.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../../config/config.js";
 import { resolveCronCreationDelivery } from "../../cron/delivery-context.js";
 import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-target-validation.js";
@@ -819,7 +820,7 @@ function isOlderGatewayWithoutCompactCronList(error: unknown): boolean {
     error instanceof GatewayClientRequestError &&
     error.gatewayCode === "INVALID_REQUEST" &&
     error.message.includes("invalid cron.list params") &&
-    error.message.includes("unexpected property 'compact'")
+    messageReportsUnexpectedProperty(error.message, "compact")
   );
 }
 

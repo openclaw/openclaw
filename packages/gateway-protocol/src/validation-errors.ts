@@ -75,14 +75,6 @@ export function formatValidationErrors(errors: ValidationError[] | null | undefi
   return unique.length > 0 ? unique.join("; ") : "unknown validation error";
 }
 
-/**
- * True when a formatValidationErrors message rejects `propertyName` as an
- * unexpected additional property. Matches both delimiter styles: legacy
- * single-quoted text from gateways predating the JSON-safe delimiters, and
- * current JSON-quoted text. Version-fallback detectors use this to recognize an
- * older gateway rejecting an additive field and retry without it; matching only
- * one style would strand mixed-version clients against the other.
- */
 export function messageReportsUnexpectedProperty(message: string, propertyName: string): boolean {
   return (
     message.includes(`unexpected property '${propertyName}'`) ||

@@ -13,6 +13,7 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/schema/error-codes.js";
+import { messageReportsUnexpectedProperty } from "../../../packages/gateway-protocol/src/validation-errors.js";
 import { getRuntimeConfig, resolveGatewayPort } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { mintAgentRuntimeIdentityToken } from "../../gateway/agent-runtime-identity-token.js";
@@ -425,7 +426,7 @@ function isStaleGatewayAgentRuntimeIdentityRejection(error: unknown): boolean {
   return (
     message.includes("invalid connect params") &&
     message.includes("/auth") &&
-    message.includes("unexpected property 'agentRuntimeIdentityToken'")
+    messageReportsUnexpectedProperty(message, "agentRuntimeIdentityToken")
   );
 }
 
@@ -448,7 +449,7 @@ function isStaleGatewayNodeInvokeTurnSourceRejection(error: unknown): boolean {
     return false;
   }
   return ["turnSourceChannel", "turnSourceTo", "turnSourceAccountId", "turnSourceThreadId"].some(
-    (field) => message.includes(`unexpected property '${field}'`),
+    (field) => messageReportsUnexpectedProperty(message, field),
   );
 }
 

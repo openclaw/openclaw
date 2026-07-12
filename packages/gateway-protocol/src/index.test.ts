@@ -4,6 +4,7 @@ import { TALK_TEST_PROVIDER_ID } from "../../../src/test-utils/talk-test-provide
 import * as protocol from "./index.js";
 import {
   formatValidationErrors,
+  messageReportsUnexpectedProperty,
   validateChatAbortParams,
   validateChatHistoryParams,
   validateChatMetadataParams,
@@ -415,6 +416,35 @@ describe("formatValidationErrors", () => {
 
     expect(formatValidationErrors([err, err])).toBe(
       "at /auth: must have required property 'token'",
+    );
+  });
+});
+
+describe("messageReportsUnexpectedProperty", () => {
+  it.each([
+    ["legacy single-quoted", "at /auth: unexpected property 'agentRuntimeIdentityToken'"],
+    ["JSON-quoted", 'at /auth: unexpected property "agentRuntimeIdentityToken"'],
+  ])("matches an unexpected-property rejection in %s form", (_label, message) => {
+    expect(messageReportsUnexpectedProperty(message, "agentRuntimeIdentityToken")).toBe(true);
+  });
+
+  it("matches the current formatValidationErrors output for the same property", () => {
+    const message = formatValidationErrors([
+      {
+        keyword: "additionalProperties",
+        instancePath: "/auth",
+        params: { additionalProperty: "timeZone" },
+      },
+    ]);
+    expect(messageReportsUnexpectedProperty(message, "timeZone")).toBe(true);
+  });
+
+  it("does not match a different property or an unrelated failure", () => {
+    expect(
+      messageReportsUnexpectedProperty('at root: unexpected property "timeZone"', "compact"),
+    ).toBe(false);
+    expect(messageReportsUnexpectedProperty("must have required property 'token'", "token")).toBe(
+      false,
     );
   });
 });
