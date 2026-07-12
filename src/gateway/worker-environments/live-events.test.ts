@@ -252,6 +252,10 @@ describe("worker live events", () => {
     const first = msg(1, "first", 0, "run-prefix");
     const second = msg(2, "second", 0, "run-buffered");
     const retry = msg(2, "replacement", 1, second.runId);
+    const terminal = {
+      ...live(3, lifecycle({ phase: "end", endedAt: 200 }), first.runId),
+      lastAckedSeq: 1,
+    };
 
     ack(second, 0);
     ack(first);
@@ -263,14 +267,40 @@ describe("worker live events", () => {
     expect(getAgentRunContext(first.runId)).toBeDefined();
     expect(events.map((event) => event.runId)).toEqual([first.runId]);
 
-    const firstEvent = events[0];
-    clearAgentRunContext(first.runId, firstEvent?.lifecycleGeneration, firstEvent?.contextClaimId);
-    expect(getAgentRunContext(first.runId)).toBeUndefined();
+    ack(terminal, 1);
+    expect(getAgentRunContext(first.runId)).toBeDefined();
+    expect(getAgentRunContext(second.runId)).toBeUndefined();
+    expect(events.map((event) => event.runId)).toEqual([first.runId]);
 
-    ack(retry);
-    ack(retry);
-    expect(events.map((event) => event.runId)).toEqual([first.runId, second.runId]);
-    expect(deltas()).toEqual(["first", "second"]);
+    ack(retry, 3);
+    ack(terminal, 3);
+    expect(events.map((event) => [event.runId, event.stream])).toEqual([
+      [first.runId, "assistant"],
+      [second.runId, "assistant"],
+      [first.runId, "lifecycle"],
+    ]);
+    expect(deltas()).toEqual(["first", "second", undefined]);
+  });
+
+  it("does not borrow capacity past another new run", () => {
+    start({ maxActiveRuns: 1 });
+    const first = msg(1, "first", 0, "run-prefix");
+    const second = msg(2, "second", 0, "run-buffered");
+    const third = msg(3, "third", 0, "run-intervening");
+    const terminal = {
+      ...live(4, lifecycle({ phase: "end", endedAt: 200 }), first.runId),
+      lastAckedSeq: 0,
+    };
+
+    ack(second, 0);
+    ack(third, 0);
+    ack(terminal, 0);
+    ack(first);
+    ack(msg(2, "replacement", 1, second.runId), 1);
+
+    expect(events.map((event) => event.runId)).toEqual([first.runId]);
+    expect(getAgentRunContext(second.runId)).toBeUndefined();
+    expect(getAgentRunContext(third.runId)).toBeUndefined();
   });
 
   it("bounds a retained capacity tail with normal resync", () => {
@@ -293,9 +323,9 @@ describe("worker live events", () => {
       details: { reason: "resync-required", ackedSeq: 1, expectedSeq: 2 },
     });
 
-    const firstEvent = events[0];
-    clearAgentRunContext(first.runId, firstEvent?.lifecycleGeneration, firstEvent?.contextClaimId);
-    ack(msg(2, "fresh", 1, second.runId));
+    fail(msg(2, "blocked", 1, second.runId), "capacity-exceeded");
+    fail(msg(2, "stale", 1, second.runId), "resync-required");
+    ack(msg(1, "fresh", 0, second.runId));
     expect(deltas()).toEqual(["first", "fresh"]);
   });
 

@@ -489,9 +489,37 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     return undefined;
   };
 
+  const hasReachableBufferedTerminal = (
+    window: LiveEventWindow,
+    admittedRunId: string,
+    countedRunIds: ReadonlySet<string>,
+  ): boolean => {
+    // Borrow one source-ended slot only when this ordered drain can reach that
+    // active run's terminal without claiming another new run first.
+    for (let seq = window.ackedSeq + 2; seq <= window.ackedSeq + windowSize; seq += 1) {
+      const pending = window.pending.get(seq);
+      if (!pending) {
+        return false;
+      }
+      const pendingRunId = pending.request.runId;
+      if (countedRunIds.has(pendingRunId)) {
+        if (isDefinitiveTerminal(pending.request.event)) {
+          return true;
+        }
+        continue;
+      }
+      if (pendingRunId !== admittedRunId) {
+        // Another new run would consume the borrowed slot before the terminal.
+        return false;
+      }
+    }
+    return false;
+  };
+
   const claimRun = (
     window: LiveEventWindow,
     runId: string,
+    allowBufferedTerminalCapacity: boolean,
   ): WorkerLiveEventFailure | OwnedLiveRun => {
     if (window.terminalRuns.has(runId)) {
       return invalidEvent();
@@ -527,13 +555,16 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     if (pruneFailure) {
       return pruneFailure;
     }
-    let activeRunCount = 0;
+    const countedRunIds = new Set<string>();
     for (const activeRunId of window.activeRuns.keys()) {
       if (!window.terminalRuns.has(activeRunId)) {
-        activeRunCount += 1;
+        countedRunIds.add(activeRunId);
       }
     }
-    if (activeRunCount >= maxActiveRuns) {
+    if (
+      countedRunIds.size >= maxActiveRuns &&
+      !(allowBufferedTerminalCapacity && hasReachableBufferedTerminal(window, runId, countedRunIds))
+    ) {
       return capacityExceeded();
     }
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
@@ -579,8 +610,9 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
   const publish = (
     window: LiveEventWindow,
     request: WorkerLiveEventParams,
+    allowBufferedTerminalCapacity: boolean,
   ): WorkerLiveEventFailure | undefined => {
-    const owned = claimRun(window, request.runId);
+    const owned = claimRun(window, request.runId, allowBufferedTerminalCapacity);
     if ("ok" in owned) {
       return owned;
     }
@@ -611,7 +643,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     let buffered = firstPending;
     let publishedPrefix = false;
     while (request) {
-      const failed = publish(window, request);
+      const failed = publish(window, request, buffered !== undefined);
       if (failed) {
         if (failed.details.reason === "capacity-exceeded" && buffered) {
           // Keep the ordered tail retryable while the active prefix claim drains.
