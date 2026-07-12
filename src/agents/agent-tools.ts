@@ -1217,4 +1217,3 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
 export function createOpenClawCodingTools(options?: OpenClawCodingToolsOptions): AnyAgentTool[] {
   return createOpenClawCodingToolsInternal(options);
 }
-export { testing as __testing };
