@@ -237,9 +237,9 @@ describe("PluginsPage", () => {
     const routeData: PluginsRouteData = {
       gateway: harness.gateway,
       gatewaySnapshot: harness.gateway.snapshot,
+      initialTab: null,
       result,
       error: null,
-      initialTab: null,
     };
 
     const { page } = await mountPage(
@@ -288,9 +288,9 @@ describe("PluginsPage", () => {
     const routeData: PluginsRouteData = {
       gateway: harness.gateway,
       gatewaySnapshot: harness.gateway.snapshot,
+      initialTab: null,
       result: createResult(),
       error: null,
-      initialTab: null,
     };
     const { page } = await mountPage(context, routeData);
 
@@ -313,9 +313,9 @@ describe("PluginsPage", () => {
     const routeData: PluginsRouteData = {
       gateway: harness.gateway,
       gatewaySnapshot: harness.gateway.snapshot,
+      initialTab: null,
       result: createResult(),
       error: null,
-      initialTab: null,
     };
     const { page } = await mountPage(
       createContext(
@@ -349,6 +349,7 @@ describe("PluginsPage", () => {
       {
         gateway: harness.gateway,
         gatewaySnapshot: harness.gateway.snapshot,
+        initialTab: null,
         result: createResult(),
         error: null,
       },
@@ -401,6 +402,7 @@ describe("PluginsPage", () => {
       {
         gateway: harness.gateway,
         gatewaySnapshot: harness.gateway.snapshot,
+        initialTab: null,
         result: createResult(),
         error: null,
       },
@@ -433,6 +435,7 @@ describe("PluginsPage", () => {
       {
         gateway: harness.gateway,
         gatewaySnapshot: harness.gateway.snapshot,
+        initialTab: null,
         result: createResult(),
         error: null,
       },
@@ -474,6 +477,7 @@ describe("PluginsPage", () => {
       {
         gateway: harness.gateway,
         gatewaySnapshot: harness.gateway.snapshot,
+        initialTab: null,
         result: createResult(),
         error: null,
       },
@@ -519,6 +523,7 @@ describe("PluginsPage", () => {
       {
         gateway: harness.gateway,
         gatewaySnapshot: harness.gateway.snapshot,
+        initialTab: null,
         result: createResult(),
         error: null,
       },
@@ -563,6 +568,7 @@ describe("PluginsPage", () => {
       {
         gateway: harness.gateway,
         gatewaySnapshot: harness.gateway.snapshot,
+        initialTab: null,
         result: createResult(),
         error: null,
       },
@@ -612,6 +618,7 @@ describe("PluginsPage", () => {
     const { page } = await mountPage(createContext(harness.gateway, refreshConfig), {
       gateway: harness.gateway,
       gatewaySnapshot: harness.gateway.snapshot,
+      initialTab: null,
       result: disabledResult,
       error: null,
     });
@@ -666,6 +673,7 @@ describe("PluginsPage", () => {
       {
         gateway: harness.gateway,
         gatewaySnapshot: harness.gateway.snapshot,
+        initialTab: null,
         result: { plugins: [createPlugin(), removable], diagnostics: [], mutationAllowed: true },
         error: null,
       },
@@ -716,6 +724,7 @@ describe("PluginsPage", () => {
       {
         gateway: gatewayHarness.gateway,
         gatewaySnapshot: gatewayHarness.gateway.snapshot,
+        initialTab: null,
         result: createResult(),
         error: null,
       },
@@ -784,6 +793,7 @@ describe("PluginsPage", () => {
       {
         gateway: gatewayHarness.gateway,
         gatewaySnapshot: gatewayHarness.gateway.snapshot,
+        initialTab: null,
         result: createResult(),
         error: null,
       },
@@ -821,6 +831,7 @@ describe("PluginsPage", () => {
       {
         gateway: gatewayHarness.gateway,
         gatewaySnapshot: gatewayHarness.gateway.snapshot,
+        initialTab: null,
         result: createResult(),
         error: null,
       },
@@ -860,6 +871,7 @@ describe("PluginsPage", () => {
       {
         gateway: gatewayHarness.gateway,
         gatewaySnapshot: gatewayHarness.gateway.snapshot,
+        initialTab: null,
         result: createResult(),
         error: null,
       },
