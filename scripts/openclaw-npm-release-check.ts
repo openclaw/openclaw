@@ -163,7 +163,7 @@ function isNodeModulesPackageRoot(segments: string[], index: number): boolean {
   if (parent === "node_modules") {
     return true;
   }
-  return parent?.startsWith("@") && segments[index - 2] === "node_modules";
+  return parent !== undefined && parent.startsWith("@") && segments[index - 2] === "node_modules";
 }
 
 function pathContainsPackedTestCargo(packedPath: string): boolean {
@@ -328,7 +328,7 @@ export function runNpmReleaseCheckCommand(
   },
 ): string {
   const env = options.env ?? process.env;
-  const output = execFileSync(invocation.command, invocation.args, {
+  const execOptions = {
     cwd: options.cwd,
     encoding: options.encoding,
     env,
@@ -337,7 +337,11 @@ export function runNpmReleaseCheckCommand(
     stdio: options.stdio,
     timeout: options.timeoutMs ?? resolveNpmReleaseCheckCommandTimeoutMs(env),
     windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-  }) as Buffer | string | null;
+  } as Parameters<typeof execFileSync>[2] & { windowsVerbatimArguments?: boolean };
+  const output = execFileSync(invocation.command, invocation.args, execOptions) as
+    | Buffer
+    | string
+    | null;
   if (output == null) {
     return "";
   }

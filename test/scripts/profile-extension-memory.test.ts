@@ -99,7 +99,7 @@ describe("scripts/profile-extension-memory", () => {
       ["--timeout-ms", "1e3"],
       ["--combined-timeout-ms", "90000ms"],
       ["--top", "0x10"],
-    ];
+    ] as const;
 
     for (const [flag, value] of cases) {
       const result = runProfileExtensionMemory([flag, value]);
@@ -259,7 +259,7 @@ describe("scripts/profile-extension-memory", () => {
       name: "spawn-error",
       body: "",
       timeoutMs: 30_000,
-      spawnImpl: () => {
+      spawnImpl: (() => {
         const child = new EventEmitter() as EventEmitter & {
           kill: () => boolean;
           stderr: EventEmitter;
@@ -270,7 +270,7 @@ describe("scripts/profile-extension-memory", () => {
         child.kill = () => true;
         queueMicrotask(() => child.emit("error", new Error("spawn denied")));
         return child;
-      },
+      }) as unknown as typeof spawn,
     });
 
     expect(Date.now() - startedAt).toBeLessThan(1000);

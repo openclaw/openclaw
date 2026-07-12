@@ -4,7 +4,6 @@
  * config-mutation, and runtime-config-snapshot.
  */
 
-import { loadSessionStore as loadSessionStoreImpl } from "../config/sessions/store-load.js";
 export {
   getSessionEntry,
   listSessionEntries,
@@ -13,14 +12,6 @@ export {
   updateSessionStoreEntry,
   upsertSessionEntry,
 } from "./session-store-runtime.js";
-
-/**
- * @deprecated Use getSessionEntry/listSessionEntries for reads and
- * patchSessionEntry/upsertSessionEntry for writes. This whole-store helper is
- * kept only during the transition before SQLite migration. Callers must
- * migrate away from reading sessions.json directly.
- */
-export const loadSessionStore = loadSessionStoreImpl;
 
 export { resolveDefaultAgentId } from "../agents/agent-scope.js";
 export {
@@ -148,22 +139,7 @@ export type {
   TtsPersonaPromptConfig,
   TtsProvider,
 } from "../config/types.js";
-export {
-  clearSessionStoreCacheForTest,
-  /**
-   * @deprecated Use patchSessionEntry/upsertSessionEntry for writes. This
-   * whole-store helper is kept only during the transition before SQLite
-   * migration. Callers must migrate away from writing sessions.json directly.
-   */
-  saveSessionStore,
-  /**
-   * @deprecated Use patchSessionEntry/upsertSessionEntry for writes. This
-   * whole-store helper is kept only during the transition before SQLite
-   * migration. Callers must migrate away from updating sessions.json directly.
-   */
-  updateSessionStore,
-  resolveSessionStoreEntry,
-} from "../config/sessions/store.js";
+export { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
 // SDK-facing names are a shipped plugin contract; internals route through the
 // session accessor so the storage backend can change beneath them.
 export {

@@ -108,12 +108,15 @@ struct IPadSkillWorkshopScreen: View {
             VStack(alignment: .leading, spacing: 12) {
                 self.agentScopeMenu
                 self.proposalSearchField
-                Picker("Status", selection: self.$statusFilter) {
+                Picker(selection: self.$statusFilter) {
                     ForEach(Self.proposalStatusFilters, id: \.self) { filter in
                         Text(Self.proposalStatusFilterLabel(filter))
                             .font(OpenClawType.captionSemiBold)
                             .tag(filter)
                     }
+                } label: {
+                    Text("Status")
+                        .font(OpenClawType.captionSemiBold)
                 }
                 .pickerStyle(.segmented)
                 .controlSize(.small)
@@ -167,12 +170,15 @@ struct IPadSkillWorkshopScreen: View {
                 }
 
                 self.agentScopeMenu
-                Picker("Status", selection: self.$statusFilter) {
+                Picker(selection: self.$statusFilter) {
                     ForEach(Self.proposalStatusFilters, id: \.self) { filter in
                         Text(Self.proposalStatusFilterLabel(filter))
                             .font(OpenClawType.captionSemiBold)
                             .tag(filter)
                     }
+                } label: {
+                    Text("Status")
+                        .font(OpenClawType.captionSemiBold)
                 }
                 .pickerStyle(.segmented)
                 .controlSize(.small)
@@ -1120,13 +1126,11 @@ private struct IPadSkillProposalManifest: Decodable {
 
 struct IPadSkillProposalManifestEntry: Decodable {
     let id: String
-    let kind: String
     let status: String
     let title: String
     let description: String
     let skillName: String
     let skillKey: String
-    let createdAt: String
     let updatedAt: String
     let scanState: String
 }
@@ -1153,11 +1157,9 @@ struct IPadSkillProposalInspectResponse: Decodable {
 
 struct IPadSkillProposalRecord: Decodable {
     let id: String
-    let kind: String
     let status: String
     let title: String
     let description: String
-    let createdAt: String
     let updatedAt: String
     let target: IPadSkillProposalTarget
 }
@@ -1174,26 +1176,22 @@ struct IPadSkillProposalSupportFile: Decodable {
 
 struct IPadSkillProposal: Identifiable {
     let id: String
-    let kind: String
     let status: String
     let title: String
     let description: String
     let skillName: String
     let skillKey: String
-    let createdAtMs: Double
     let updatedAtMs: Double
     var content: String?
     var supportFiles: [IPadSkillProposalSupportFile]
 
     init(entry: IPadSkillProposalManifestEntry, previous: IPadSkillProposal?) {
         self.id = entry.id
-        self.kind = entry.kind
         self.status = entry.status
         self.title = entry.title.isEmpty ? entry.skillName : entry.title
         self.description = entry.description
         self.skillName = entry.skillName
         self.skillKey = entry.skillKey
-        self.createdAtMs = Self.parseDate(entry.createdAt)
         self.updatedAtMs = Self.parseDate(entry.updatedAt)
         self.content = previous?.updatedAtMs == self.updatedAtMs ? previous?.content : nil
         self.supportFiles = previous?.updatedAtMs == self.updatedAtMs ? previous?.supportFiles ?? [] : []
@@ -1202,13 +1200,11 @@ struct IPadSkillProposal: Identifiable {
     init(inspect: IPadSkillProposalInspectResponse, previous: IPadSkillProposal?) {
         let record = inspect.record
         self.id = record.id
-        self.kind = record.kind
         self.status = record.status
         self.title = record.title.isEmpty ? record.target.skillName : record.title
         self.description = record.description
         self.skillName = record.target.skillName
         self.skillKey = record.target.skillKey
-        self.createdAtMs = Self.parseDate(record.createdAt)
         self.updatedAtMs = Self.parseDate(record.updatedAt)
         self.content = Self.stripFrontmatter(inspect.content)
         self.supportFiles = inspect.supportFiles ?? previous?.supportFiles ?? []

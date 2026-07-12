@@ -4,6 +4,7 @@ import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import type { Duplex } from "node:stream";
+import vm from "node:vm";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -117,6 +118,51 @@ async function captureA2uiFixtureResponse(
   return await captureHttpResponse(createA2uiHttpRequestHandler({ rootDir }), url, method);
 }
 
+function extractInjectedScript(html: string): string {
+  const match = html.match(/<script>([\s\S]+)<\/script>/);
+  if (!match?.[1]) {
+    throw new Error("expected injected canvas live reload script");
+  }
+  return match[1];
+}
+
+type MockLiveReloadSocket = {
+  onclose?: (event: { code: number; reason: string }) => void;
+  onerror?: (event: Error) => void;
+  onmessage?: (event: { data?: string }) => void;
+};
+
+function runInjectedScript(WebSocket: (this: MockLiveReloadSocket) => void) {
+  const consoleError = vi.fn();
+  let pagehide: (() => void) | undefined;
+  const runtime: Record<string, unknown> = {
+    URLSearchParams,
+    WebSocket,
+    addEventListener: (event: string, listener: () => void) => {
+      if (event === "pagehide") {
+        pagehide = listener;
+      }
+    },
+    console: { error: consoleError },
+    encodeURIComponent,
+    location: {
+      host: "control.example",
+      protocol: "https:",
+      reload: vi.fn(),
+      search: "",
+    },
+  };
+  runtime.window = runtime;
+  runtime.self = runtime;
+  runtime.globalThis = runtime;
+  vm.createContext(runtime);
+  vm.runInContext(
+    extractInjectedScript(injectCanvasLiveReload("<html><body>Hello</body></html>")),
+    runtime,
+  );
+  return { consoleError, pagehide: () => pagehide?.() };
+}
+
 describe("canvas host", () => {
   const quietRuntime = {
     ...defaultRuntime,
@@ -194,6 +240,56 @@ describe("canvas host", () => {
     expect(out).toContain("openclawSendUserAction");
   });
 
+  it("reports websocket initialization errors instead of swallowing them silently", () => {
+    function ThrowingWebSocket(): never {
+      throw new TypeError("constructor failed");
+    }
+    const { consoleError } = runInjectedScript(ThrowingWebSocket);
+
+    expect(consoleError).toHaveBeenCalledTimes(1);
+    expect(consoleError).toHaveBeenCalledWith(
+      "OpenClaw canvas live reload unavailable:",
+      expect.objectContaining({ message: "constructor failed" }),
+    );
+  });
+
+  it("reports asynchronous websocket connection errors once", () => {
+    const sockets: MockLiveReloadSocket[] = [];
+    function CapturingWebSocket(this: MockLiveReloadSocket): void {
+      sockets.push(this);
+    }
+    const { consoleError } = runInjectedScript(CapturingWebSocket);
+
+    expect(sockets).toHaveLength(1);
+    sockets[0]?.onerror?.(new Error("connect failed"));
+    sockets[0]?.onclose?.({ code: 1006, reason: "abnormal closure" });
+
+    expect(consoleError).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not report a normal close after connecting", () => {
+    const sockets: MockLiveReloadSocket[] = [];
+    const { consoleError, pagehide } = runInjectedScript(function (this: MockLiveReloadSocket) {
+      sockets.push(this);
+    });
+
+    pagehide();
+    sockets[0]?.onclose?.({ code: 1001, reason: "page closed" });
+
+    expect(consoleError).not.toHaveBeenCalled();
+  });
+
+  it("reports an abnormal close without a preceding error event", () => {
+    const sockets: MockLiveReloadSocket[] = [];
+    const { consoleError } = runInjectedScript(function (this: MockLiveReloadSocket) {
+      sockets.push(this);
+    });
+
+    sockets[0]?.onclose?.({ code: 1011, reason: "server error" });
+
+    expect(consoleError).toHaveBeenCalledTimes(1);
+  });
+
   it("creates a default index.html when missing", async () => {
     const dir = await createCaseDir();
     const handler = await createTestCanvasHostHandler(dir);
@@ -224,6 +320,52 @@ describe("canvas host", () => {
 
       const wsResponse = await captureHandlerResponse(handler, CANVAS_WS_PATH);
       expect(wsResponse.status).toBe(404);
+    } finally {
+      await handler.close();
+    }
+  });
+
+  it("serves sandbox-marked documents with a CSP sandbox header and no live reload", async () => {
+    const dir = await createCaseDir();
+    const docDir = path.join(dir, "documents", "widget-1");
+    await fs.mkdir(docDir, { recursive: true });
+    await fs.writeFile(
+      path.join(docDir, "manifest.json"),
+      JSON.stringify({ id: "widget-1", cspSandbox: "scripts" }),
+      "utf8",
+    );
+    await fs.writeFile(path.join(docDir, "index.html"), "<html><body>widget</body></html>", "utf8");
+    const plainDir = path.join(dir, "documents", "plain-1");
+    await fs.mkdir(plainDir, { recursive: true });
+    await fs.writeFile(
+      path.join(plainDir, "manifest.json"),
+      JSON.stringify({ id: "plain-1" }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(plainDir, "index.html"),
+      "<html><body>plain</body></html>",
+      "utf8",
+    );
+    const handler = await createTestCanvasHostHandler(dir);
+
+    try {
+      const widget = await captureHandlerResponse(
+        handler,
+        `${CANVAS_HOST_PATH}/documents/widget-1/index.html`,
+      );
+      expect(widget.status).toBe(200);
+      // Opaque origin on direct navigation: widget script must not run as the app origin.
+      expect(widget.headers["content-security-policy"]).toBe("sandbox allow-scripts");
+      expect(widget.body).toContain("widget");
+      expect(widget.body).not.toContain(CANVAS_WS_PATH);
+
+      const plain = await captureHandlerResponse(
+        handler,
+        `${CANVAS_HOST_PATH}/documents/plain-1/index.html`,
+      );
+      expect(plain.status).toBe(200);
+      expect(plain.headers["content-security-policy"]).toBeUndefined();
     } finally {
       await handler.close();
     }
