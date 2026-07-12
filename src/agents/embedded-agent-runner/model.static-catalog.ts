@@ -7,6 +7,7 @@ import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { planManifestModelCatalogRows } from "../../model-catalog/manifest-planner.js";
 import { normalizePluginsConfig } from "../../plugins/config-state.js";
+import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import { listOpenClawPluginManifestMetadata } from "../../plugins/manifest-metadata-scan.js";
 import { passesManifestOwnerBasePolicy } from "../../plugins/manifest-owner-policy.js";
 import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
@@ -210,7 +211,12 @@ export function canonicalizeManifestModelCatalogProviderAlias(params: {
   return (
     resolveManifestModelCatalogProviderAlias({
       provider,
-      plugins: loadPluginManifestRegistry({
+      // Warm model-resolution passes call this per turn (and twice per pass via
+      // normalizeProviderModelRef). loadPluginManifestRegistry re-runs full
+      // filesystem discovery + manifest parsing every call; reuse the
+      // process-stable Gateway plugin-metadata snapshot instead so warm turns
+      // don't rescan manifests just to canonicalize a known alias (#105543).
+      plugins: loadManifestMetadataSnapshot({
         config: params.cfg,
         workspaceDir: params.workspaceDir,
         env: params.env ?? process.env,
