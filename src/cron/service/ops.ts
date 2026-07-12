@@ -1160,6 +1160,7 @@ async function finishPreparedManualRun(
           error: triggerSkipped
             ? "queued manual run skipped: trigger condition not met"
             : coreResult.error,
+          deliveryError: coreResult.deliveryError,
           summary: triggerSkipped ? undefined : coreResult.summary,
           diagnostics: coreResult.diagnostics,
           delivered: coreResult.delivered,

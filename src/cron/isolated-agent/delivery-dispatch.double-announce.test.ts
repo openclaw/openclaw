@@ -1744,6 +1744,8 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
     expectResultFields(state.result, {
       status: "ok",
+      delivered: false,
+      deliveryError: "refusing inherited shared-bucket delivery target",
     });
     expect(callGateway).toHaveBeenCalledWith({
       method: "sessions.delete",

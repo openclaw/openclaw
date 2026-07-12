@@ -1504,16 +1504,22 @@ async function finalizeCronRun(params: {
     delivered: deliveryResult.delivered,
   });
   if (deliveryResult.result) {
+    const deliveryError = deliveryResult.result.deliveryError ?? deliveryResult.deliveryError;
+    const deliveryDiagnosticError =
+      deliveryError ??
+      (deliveryResult.result.status === "error" ? deliveryResult.result.error : undefined);
     const resultWithDeliveryMeta: RunCronAgentTurnResult = {
       ...deliveryResult.result,
+      delivered: deliveryResult.result.delivered ?? deliveryResult.delivered,
       deliveryAttempted:
         deliveryResult.result.deliveryAttempted ?? deliveryResult.deliveryAttempted,
+      deliveryError,
       delivery: deliveryTrace,
       diagnostics: mergeCronRunDiagnostics(
         runDiagnostics,
         deliveryResult.result.diagnostics,
-        deliveryResult.result.status === "error" && deliveryResult.result.error
-          ? createCronRunDiagnosticsFromError("delivery", deliveryResult.result.error)
+        deliveryDiagnosticError
+          ? createCronRunDiagnosticsFromError("delivery", deliveryDiagnosticError)
           : undefined,
       ),
     };
@@ -1532,12 +1538,12 @@ async function finalizeCronRun(params: {
         deliveryResult.result.errorKind !== "delivery-target" &&
         !params.isAborted()
       ) {
-        const deliveryError = resultWithDeliveryMeta.error;
+        const failedDeliveryError = resultWithDeliveryMeta.error;
         const successfulResult: RunCronAgentTurnResult = {
           ...resultWithDeliveryMeta,
           status: "ok",
           delivered: resultWithDeliveryMeta.delivered ?? deliveryResult.delivered,
-          ...(deliveryError ? { deliveryError } : {}),
+          ...(failedDeliveryError ? { deliveryError: failedDeliveryError } : {}),
         };
         // Preserve the dispatcher's final summary and diagnostics, but keep the
         // downstream send failure out of execution-only status and error fields.

@@ -1532,12 +1532,16 @@ export async function dispatchCronDelivery(
       if (!params.deliveryBestEffort) {
         return buildDeliveryState(failDeliveryTarget(params.resolvedDelivery.error.message));
       }
+      delivered = false;
+      deliveryError = params.resolvedDelivery.error.message;
       await logCronDeliveryWarn(`[cron:${params.job.id}] ${params.resolvedDelivery.error.message}`);
       return buildDeliveryState(
         params.withRunSession({
           status: "ok",
           summary,
           outputText,
+          delivered,
+          deliveryError,
           deliveryAttempted,
           ...params.telemetry,
         }),
