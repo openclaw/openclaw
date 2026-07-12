@@ -182,6 +182,8 @@ describe("native app i18n inventory", () => {
             Button("Swift first " + "argument") {}
             Text(enabled ? "Enabled " + "now" : "Disabled " + "now")
             Text(LocalizedStringKey("Localized key"))
+            let count = 2
+            Text(AttributedString(localized: "^[\\(count) entry](inflect: true)"))
           }
 
           var statusText: String {
@@ -231,6 +233,7 @@ describe("native app i18n inventory", () => {
         "Enabled now",
         "Disabled now",
         "Localized key",
+        "^[\\(count) entry](inflect: true)",
         "Switch ready",
         "Switch waiting",
         "Kotlin first argument",
@@ -497,7 +500,7 @@ describe("native app i18n inventory", () => {
       entries.some(
         (entry) =>
           entry.source ===
-          "Approve this device on the gateway.\n1) `\\(commandLine)`\n2) `/pair approve` in your OpenClaw chat\n\\(requestLine)\nOpenClaw will also retry automatically when you return to this app.",
+          "Approve this device on the gateway.\n1) `%1$@`\n2) `/pair approve` in your OpenClaw chat\n%2$@\nOpenClaw will also retry automatically when you return to this app.",
       ),
     ).toBe(true);
     expect(
@@ -515,7 +518,7 @@ describe("native app i18n inventory", () => {
           entry.path === "apps/ios/Sources/Gateway/GatewayConnectionController.swift" &&
           entry.kind === "ui-localized-call-multiline" &&
           entry.source ===
-            "Can't reach gateway at \\(host):\\(port). Verify Tailscale Serve is enabled and publishes this Gateway.",
+            "Can't reach gateway at %1$@:%2$@. Verify Tailscale Serve is enabled and publishes this Gateway.",
       ),
     ).toBe(true);
     expect(entries.some((entry) => entry.source === "Approve this device on the gateway.\n")).toBe(

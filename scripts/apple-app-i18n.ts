@@ -30,7 +30,10 @@ export const APPLE_I18N_LOCALES = [
   "sv",
 ] as const;
 const REQUIRED_LOCALES = ["en", ...APPLE_I18N_LOCALES];
-const FORMAT_RE = /%(?:\d+\$)?[@a-z]/giu;
+const FORMAT_RE = /%(?:\d+\$)?(?:lld|ld|[@a-z])/giu;
+const INFLECTED_COUNT_INTERPOLATION_RE = /\\\([A-Za-z_][A-Za-z0-9_]*\)/gu;
+const INFLECTED_COUNT_INTERPOLATION_EXACT_RE = /^\\\([A-Za-z_][A-Za-z0-9_]*\)$/u;
+const INFLECTED_COUNT_MARKER = "](inflect: true)";
 const IOS_CATALOG_PATH = "apps/ios/Resources/Localizable.xcstrings";
 const NATIVE_SOURCE_PATH = "apps/.i18n/native-source.json";
 const NATIVE_TRANSLATIONS_DIR = "apps/.i18n/native";
@@ -66,7 +69,7 @@ const IOS_INFO_PLIST_TARGETS = [
   },
 ] as const;
 const EXPLICIT_LOCALIZED_CALL =
-  /(?:\bString\s*\(\s*localized:|\bLocalizedStringResource\s*\(|(?:\b[A-Za-z_]\w*)?\.localized\s*\()\s*"((?:\\.|[^"\\])*)"/gu;
+  /(?:\bString\s*\(\s*localized:|\bAttributedString\s*\(\s*localized:|\bLocalizedStringResource\s*\(|(?:\b[A-Za-z_]\w*)?\.localized\s*\()\s*"((?:\\.|[^"\\])*)"/gu;
 const AMBIGUOUS_RUNTIME_INTERPOLATIONS = [
   {
     label: "interpolated String(localized:) key",
@@ -425,9 +428,30 @@ function isIosCatalogEntry(entry: NativeSourceEntry): boolean {
     entry.surface === "apple" &&
     IOS_SOURCE_PREFIXES.some((prefix) => entry.path.startsWith(prefix)) &&
     IOS_CATALOG_KINDS.has(entry.kind) &&
-    !entry.source.includes("\\(") &&
+    (!entry.source.includes("\\(") || isInflectedCountSource(entry.source)) &&
     !IOS_CATALOG_EXCLUSIONS.has(entry.source)
   );
+}
+
+function isInflectedCountSource(value: string): boolean {
+  if (!value.includes(INFLECTED_COUNT_MARKER)) {
+    return false;
+  }
+  const interpolations = value.match(/\\\([^)]*\)/gu) ?? [];
+  return (
+    interpolations.length > 0 &&
+    interpolations.every((interpolation) =>
+      INFLECTED_COUNT_INTERPOLATION_EXACT_RE.test(interpolation),
+    )
+  );
+}
+
+function appleCatalogValue(value: string): string {
+  if (!isInflectedCountSource(value)) {
+    return value;
+  }
+  INFLECTED_COUNT_INTERPOLATION_RE.lastIndex = 0;
+  return value.replace(INFLECTED_COUNT_INTERPOLATION_RE, "%lld");
 }
 
 function chooseTranslation(source: string, translations: readonly string[]): string {
@@ -450,30 +474,34 @@ export function buildIosCatalog(
   explicitSources: readonly string[] = [],
 ): AppleCatalogBuild {
   const iosEntries = nativeSource.entries.filter(isIosCatalogEntry);
+  const catalogEntries = iosEntries.map(
+    (entry) => [entry, appleCatalogValue(entry.source)] as const,
+  );
   const sources = [
-    ...new Set([...iosEntries.map((entry) => entry.source), ...explicitSources]),
+    ...new Set([...catalogEntries.map(([, source]) => source), ...explicitSources]),
   ].toSorted((left, right) => left.localeCompare(right, "en"));
   const appleIdsBySource = new Map<string, Set<string>>();
-  for (const entry of iosEntries) {
-    const ids = appleIdsBySource.get(entry.source) ?? new Set<string>();
+  for (const [entry, source] of catalogEntries) {
+    const ids = appleIdsBySource.get(source) ?? new Set<string>();
     ids.add(entry.id);
-    appleIdsBySource.set(entry.source, ids);
+    appleIdsBySource.set(source, ids);
   }
   const existingStrings = existingCatalog.strings ?? {};
   const translationsByLocale = new Map(
     translations.map((artifact) => {
       const bySource = new Map<string, string[]>();
       for (const entry of artifact.entries) {
-        if (!sources.includes(entry.source)) {
+        const source = appleCatalogValue(entry.source);
+        if (!sources.includes(source)) {
           continue;
         }
-        const appleIds = appleIdsBySource.get(entry.source);
+        const appleIds = appleIdsBySource.get(source);
         if (appleIds && !appleIds.has(entry.id)) {
           continue;
         }
-        const values = bySource.get(entry.source) ?? [];
-        values.push(entry.translated);
-        bySource.set(entry.source, values);
+        const values = bySource.get(source) ?? [];
+        values.push(appleCatalogValue(entry.translated));
+        bySource.set(source, values);
       }
       return [artifact.locale, bySource] as const;
     }),

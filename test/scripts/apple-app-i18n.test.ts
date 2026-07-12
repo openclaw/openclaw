@@ -122,6 +122,40 @@ describe("Apple app i18n catalogs", () => {
     ]);
   });
 
+  it("converts inflected Swift count resources into typed catalog placeholders", () => {
+    const source = "^[\\(count) entry](inflect: true)";
+    const translated = "^[\\(count) Eintrag](inflect: true)";
+    const build = buildIosCatalog(
+      { sourceLanguage: "en", strings: {} },
+      {
+        version: 1,
+        entries: [
+          {
+            id: "native.apple.count",
+            kind: "ui-localized-call",
+            line: 1,
+            path: "apps/ios/Sources/Example.swift",
+            source,
+            surface: "apple",
+          },
+        ],
+      },
+      [
+        {
+          version: 1,
+          locale: "de",
+          entries: [{ id: "native.apple.count", source, translated }],
+        },
+      ],
+    );
+
+    const key = "^[%lld entry](inflect: true)";
+    expect(build.catalog.strings?.[key]?.localizations?.en?.stringUnit?.value).toBe(key);
+    expect(build.catalog.strings?.[key]?.localizations?.de?.stringUnit?.value).toBe(
+      "^[%lld Eintrag](inflect: true)",
+    );
+  });
+
   it("keeps custom component text on explicit localized or verbatim paths", async () => {
     const design = await readFile("apps/ios/Sources/Design/OpenClawProComponents.swift", "utf8");
     const agentOverview = await readFile(
