@@ -1666,18 +1666,32 @@ function readFallbackGatewayLogs(sinceMs) {
 }
 
 function readConfiguredPluginLoadPaths(checkout, deployment) {
-  if (deployment && !deployment.workingDirectory) {
+  let managedDeployment = deployment;
+  try {
+    managedDeployment ??= readManagedGatewayLaunchAgent(checkout);
+  } catch {
+    return null;
+  }
+  if (!managedDeployment.workingDirectory) {
     return null;
   }
   try {
     const output = runBuiltGatewayCli(
       checkout,
       ["config", "get", "plugins.load", "--json"],
-      deployment,
+      managedDeployment,
       { stderr: "pipe" },
     );
     const paths = JSON.parse(output)?.paths;
-    return Array.isArray(paths) ? paths.filter((entry) => typeof entry === "string") : [];
+    return Array.isArray(paths)
+      ? paths
+          .filter((entry) => typeof entry === "string")
+          .map((entry) =>
+            path.isAbsolute(entry)
+              ? entry
+              : path.resolve(managedDeployment.workingDirectory, entry),
+          )
+      : [];
   } catch (error) {
     const errorOutput = [error?.stdout, error?.stderr, error?.message]
       .filter((entry) => typeof entry === "string" || Buffer.isBuffer(entry))
