@@ -43,8 +43,17 @@ openclaw-chat-page {
   opacity: 0.1;
 }
 
+.chat > * {
+  transition: opacity 140ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.chat[data-attachment-drop-active] > * {
+  opacity: 0.5;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .chat::after {
+  .chat::after,
+  .chat > * {
     transition-duration: 0ms;
   }
 }
