@@ -32,6 +32,7 @@ import { isPathInside } from "openclaw/plugin-sdk/security-runtime";
 import {
   cleanupSessionLifecycleArtifacts,
   formatSqliteSessionFileMarker,
+  patchSessionEntry,
   parseSqliteSessionFileMarker,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import {
@@ -3236,19 +3237,27 @@ async function runRecallSubagent(params: {
 
   let harnessHasUsableMemoryResult = false;
   let harnessHasUnavailableMemorySearchResult = false;
+  let transcriptArtifactPersisted = false;
   let runtimeSessionCreated = false;
   try {
-    await params.api.runtime.agent.session.upsertSessionEntry({
+    const runtimeEntry = {
+      pluginOwnerId: params.api.id,
+      sessionId: subagentSessionId,
+      sessionFile: runtimeSessionFile,
+      updatedAt: Date.now(),
+    };
+    const createdEntry = await patchSessionEntry({
       agentId: params.agentId,
+      fallbackEntry: runtimeEntry,
+      replaceEntry: true,
       sessionKey: subagentSessionKey,
+      skipMaintenance: true,
       storePath,
-      entry: {
-        pluginOwnerId: params.api.id,
-        sessionId: subagentSessionId,
-        sessionFile: runtimeSessionFile,
-        updatedAt: Date.now(),
-      },
+      update: (_entry, context) => (context.existingEntry ? null : runtimeEntry),
     });
+    if (createdEntry?.sessionId !== subagentSessionId) {
+      throw new Error(`active-memory recall session already exists: ${subagentSessionKey}`);
+    }
     runtimeSessionCreated = true;
     params.onTranscriptSources?.(transcriptSources);
     if (persistedDir) {
@@ -3344,6 +3353,7 @@ async function runRecallSubagent(params: {
         sources: transcriptSources,
         sessionFile: artifactSessionFile,
       });
+      transcriptArtifactPersisted = true;
     }
     const transcriptState = await readMergedActiveMemoryTranscriptState({
       sources: transcriptSources,
@@ -3392,6 +3402,19 @@ async function runRecallSubagent(params: {
     throw error;
   } finally {
     if (runtimeSessionCreated) {
+      if (params.config.persistTranscripts && !transcriptArtifactPersisted) {
+        await persistActiveMemoryTranscriptArtifact({
+          sources: transcriptSources,
+          sessionFile: artifactSessionFile,
+        }).catch((error: unknown) => {
+          const message = toSingleLineLogValue(
+            error instanceof Error ? error.message : String(error),
+          );
+          params.api.logger.debug?.(
+            `active-memory: failed to persist recall transcript ${artifactSessionFile}: ${message}`,
+          );
+        });
+      }
       const sessionKeySegmentPrefix =
         parseAgentSessionKey(subagentSessionKey)?.rest ?? subagentSessionKey;
       await cleanupSessionLifecycleArtifacts({

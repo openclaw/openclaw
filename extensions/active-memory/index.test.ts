@@ -48,6 +48,7 @@ const hoisted = vi.hoisted(() => {
   return {
     closeActiveMemorySearchManager: vi.fn(async () => {}),
     cleanupSessionLifecycleArtifacts: vi.fn(),
+    patchSessionEntry: vi.fn(),
     runtimeTranscriptFiles: {} as Record<string, string>,
     sessionStore,
     updateSessionStore: vi.fn(
@@ -72,6 +73,7 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
   return {
     ...actual,
     cleanupSessionLifecycleArtifacts: hoisted.cleanupSessionLifecycleArtifacts,
+    patchSessionEntry: hoisted.patchSessionEntry,
     updateSessionStore: hoisted.updateSessionStore,
   };
 });
@@ -517,6 +519,31 @@ describe("active-memory plugin", () => {
         payloads: [{ text: "- lemon pepper wings\n- blue cheese" }],
       };
     });
+    hoisted.patchSessionEntry.mockImplementation(
+      async (params: {
+        fallbackEntry?: Record<string, unknown>;
+        replaceEntry?: boolean;
+        sessionKey: string;
+        skipMaintenance?: boolean;
+        update: (
+          entry: Record<string, unknown>,
+          context: { existingEntry?: Record<string, unknown> },
+        ) => Record<string, unknown> | null;
+      }) => {
+        const existingEntry = hoisted.sessionStore[params.sessionKey];
+        const entry = existingEntry ?? params.fallbackEntry;
+        if (!entry) {
+          return null;
+        }
+        const patch = params.update({ ...entry }, { existingEntry });
+        if (!patch) {
+          return existingEntry ?? entry;
+        }
+        const next = params.replaceEntry ? { ...patch } : { ...entry, ...patch };
+        hoisted.sessionStore[params.sessionKey] = next;
+        return next;
+      },
+    );
     hoisted.cleanupSessionLifecycleArtifacts.mockImplementation(
       async (params: { sessionKeySegmentPrefix: string }) => {
         const entry = Object.entries(hoisted.sessionStore).find(([sessionKey]) => {
@@ -654,6 +681,19 @@ describe("active-memory plugin", () => {
       sessionId,
       sessionFile: runtimeSessionFile,
     });
+    expect(hoisted.patchSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fallbackEntry: expect.objectContaining({
+          pluginOwnerId: "active-memory",
+          sessionId,
+          sessionFile: runtimeSessionFile,
+        }),
+        replaceEntry: true,
+        sessionKey,
+        skipMaintenance: true,
+        storePath: path.join(stateDir, "sessions.json"),
+      }),
+    );
     expect(hoisted.cleanupSessionLifecycleArtifacts).toHaveBeenCalledWith({
       agentId: "main",
       archiveRemovedEntryTranscripts: false,
@@ -3468,6 +3508,19 @@ describe("active-memory plugin", () => {
     expect(result).toBeUndefined();
     expectLinesToContain(getActiveMemoryLines(sessionKey), "🧩 Active Memory: status=failed");
     expect(getActiveMemoryLines(sessionKey).join("\n")).not.toContain(
+      "must not be surfaced from generic errors",
+    );
+    const transcriptDir = path.join(
+      stateDir,
+      "plugins",
+      "active-memory",
+      "transcripts",
+      "agents",
+      "main",
+      "active-memory",
+    );
+    const transcriptPath = await expectSingleTranscriptArtifact(transcriptDir);
+    expect(await fs.readFile(transcriptPath, "utf8")).toContain(
       "must not be surfaced from generic errors",
     );
   });
