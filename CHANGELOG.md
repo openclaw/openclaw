@@ -30,7 +30,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Control UI configuration saves:** lock structured and raw configuration controls while save, apply, reload, or update operations are pending so later edits cannot be accepted and then discarded by the authoritative refresh. (#105532)
 - **iOS Watch relay commands:** allow paired iPhone nodes to advertise and invoke `watch.status` and `watch.notify` through the default Gateway policy while preserving the direct watchOS node's fixed minimal command surface.
 - **Swabble status config:** honor the global `--config` path when reading service status instead of silently using the default configuration.
 - **Gradium TTS credential egress:** reject non-HTTPS, foreign-host, and hostname-lookalike base URLs before dispatching API keys, and pin guarded transport to Gradium's documented API hostname. (#101280) Thanks @zhangguiping-xydt.
