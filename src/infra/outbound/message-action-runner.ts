@@ -200,6 +200,7 @@ function resolveGatewayActionOptions(gateway?: MessageActionRunnerGateway) {
 }
 
 const MESSAGE_ACTION_RECONCILIATION_TIMEOUT_MS = 60_000;
+const MESSAGE_ACTION_RECONCILIATION_MAX_MS = 9 * 60_000;
 
 async function callGatewayMessageAction<T>(params: {
   gateway?: MessageActionRunnerGateway;
@@ -230,7 +231,10 @@ async function callGatewayMessageAction<T>(params: {
     (requesterAccountId !== undefined ||
       requesterSenderId !== undefined ||
       params.actionParams.senderIsOwner !== undefined);
-  const invokeGatewayAction = async (options: typeof callParams): Promise<T> => {
+  type GatewayActionCallOptions = Omit<typeof callParams, "timeoutMs"> & {
+    timeoutMs: number | null;
+  };
+  const invokeGatewayAction = async (options: GatewayActionCallOptions): Promise<T> => {
     if (!carriesTrustedRequester) {
       return await callGatewayLeastPrivilege<T>(options);
     }
@@ -241,32 +245,35 @@ async function callGatewayMessageAction<T>(params: {
   try {
     return await invokeGatewayAction(callParams);
   } catch (error) {
-    if (!isGatewayTransportError(error) || error.kind !== "timeout") {
+    if (
+      !isGatewayTransportError(error) ||
+      error.kind !== "timeout" ||
+      params.actionParams.action !== "send"
+    ) {
       throw error;
     }
     throwIfAborted(params.abortSignal);
   }
 
+  const reconciliationSignal = params.abortSignal
+    ? AbortSignal.any([
+        params.abortSignal,
+        AbortSignal.timeout(MESSAGE_ACTION_RECONCILIATION_MAX_MS),
+      ])
+    : undefined;
   const reconciliationCall = {
     ...callParams,
-    timeoutMs: Math.max(callParams.timeoutMs, MESSAGE_ACTION_RECONCILIATION_TIMEOUT_MS),
+    // `null` keeps startup bounded but removes the per-request timer after
+    // hello. The dedicated signal bounds a joined in-flight action without
+    // reconnecting every minute or inheriting the run's much longer lifetime.
+    timeoutMs: params.abortSignal
+      ? null
+      : Math.max(callParams.timeoutMs, MESSAGE_ACTION_RECONCILIATION_TIMEOUT_MS),
+    signal: reconciliationSignal,
   };
-  // A caller-side timeout does not cancel Gateway work. When the caller owns a
-  // cancellation lifecycle, keep reattaching with the same idempotency key so
-  // a late delivery is not shown to the model as a failure it may resend.
-  for (;;) {
-    try {
-      return await invokeGatewayAction(reconciliationCall);
-    } catch (error) {
-      if (!isGatewayTransportError(error) || error.kind !== "timeout") {
-        throw error;
-      }
-      if (!params.abortSignal) {
-        throw error;
-      }
-      throwIfAborted(params.abortSignal);
-    }
-  }
+  // A caller-side timeout does not cancel Gateway work. Reattach once with the
+  // unchanged idempotency key so the live Gateway can join the original work.
+  return await invokeGatewayAction(reconciliationCall);
 }
 
 async function resolveGatewayActionIdempotencyKey(idempotencyKey?: string): Promise<string> {

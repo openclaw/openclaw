@@ -185,6 +185,23 @@ describe("dynamic tool execution helpers", () => {
         config: undefined,
       }),
     ).toBe(CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS);
+    expect(
+      resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-message-transport-timeout",
+          namespace: null,
+          tool: "message",
+          arguments: {
+            action: "send",
+            message: "long outbound update",
+            timeoutMs: 30_000,
+          },
+        },
+        config: undefined,
+      }),
+    ).toBe(CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS);
   });
 
   it("uses media image config and caps excessive dynamic tool timeouts", () => {

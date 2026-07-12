@@ -985,98 +985,107 @@ describe("runMessageAction plugin dispatch", () => {
       );
     });
 
-    it("keeps reconnecting a timed-out gateway send with the original idempotency key", async () => {
-      const handleActionResult = vi.fn(async () => jsonResult({ ok: true, local: true }));
-      const gatewayPlugin = createGatewayActionPlugin({
-        pluginId: "gatewaychat",
-        label: "Gateway Chat",
-        blurb: "Gateway Chat timeout reconciliation test plugin.",
-        actions: ["send"],
-        messaging: {
-          targetResolver: {
-            looksLikeId: () => true,
-          },
-        },
-        handleAction: handleActionResult,
-      });
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "gatewaychat",
-            source: "test",
-            plugin: gatewayPlugin,
-          },
-        ]),
-      );
-      const timeout = Object.assign(new Error("gateway timeout after 30000ms"), {
-        name: "GatewayTransportError",
-        kind: "timeout",
-      });
-      mocks.callGatewayLeastPrivilege
-        .mockRejectedValueOnce(timeout)
-        .mockRejectedValueOnce(timeout)
-        .mockResolvedValueOnce({ ok: true, messageId: "gw-send-late" });
-      const controller = new AbortController();
-
-      const result = await runMessageAction({
-        cfg: {
-          channels: {
-            gatewaychat: {
-              enabled: true,
+    it.each([
+      ["a caller-owned deadline", true, null],
+      ["one bounded wait without a caller signal", false, 60_000],
+    ] as const)(
+      "reattaches a timed-out gateway send with %s and the original idempotency key",
+      async (_label, withAbortSignal, expectedTimeoutMs) => {
+        const handleActionResult = vi.fn(async () => jsonResult({ ok: true, local: true }));
+        const gatewayPlugin = createGatewayActionPlugin({
+          pluginId: "gatewaychat",
+          label: "Gateway Chat",
+          blurb: "Gateway Chat timeout reconciliation test plugin.",
+          actions: ["send"],
+          messaging: {
+            targetResolver: {
+              looksLikeId: () => true,
             },
           },
-        } as OpenClawConfig,
-        action: "send",
-        params: {
-          channel: "gatewaychat",
-          target: "user-123",
-          message: "hello from agent",
-        },
-        gateway: {
-          clientName: "cli",
-          mode: "cli",
-          timeoutMs: 30_000,
-        },
-        abortSignal: controller.signal,
-        dryRun: false,
-      });
+          handleAction: handleActionResult,
+        });
+        setActivePluginRegistry(
+          createTestRegistry([
+            {
+              pluginId: "gatewaychat",
+              source: "test",
+              plugin: gatewayPlugin,
+            },
+          ]),
+        );
+        const timeout = Object.assign(new Error("gateway timeout after 30000ms"), {
+          name: "GatewayTransportError",
+          kind: "timeout",
+        });
+        mocks.callGatewayLeastPrivilege
+          .mockRejectedValueOnce(timeout)
+          .mockResolvedValueOnce({ ok: true, messageId: "gw-send-late" });
+        const controller = new AbortController();
 
-      expect(mocks.callGatewayLeastPrivilege).toHaveBeenCalledTimes(3);
-      const firstCall = readMockCallArg(
-        mocks.callGatewayLeastPrivilege,
-        "first gateway least privilege call",
-      );
-      const secondCall = readMockCallArg(
-        mocks.callGatewayLeastPrivilege,
-        "second gateway least privilege call",
-        1,
-      );
-      const thirdCall = readMockCallArg(
-        mocks.callGatewayLeastPrivilege,
-        "third gateway least privilege call",
-        2,
-      );
-      expect(secondCall).toEqual({ ...firstCall, timeoutMs: 60_000 });
-      expect(thirdCall).toEqual(secondCall);
-      const gatewayParams = readRecordField(firstCall, "params", "gateway call params");
-      expectRecordFields(
-        gatewayParams,
-        {
+        const result = await runMessageAction({
+          cfg: {
+            channels: {
+              gatewaychat: {
+                enabled: true,
+              },
+            },
+          } as OpenClawConfig,
+          action: "send",
+          params: {
+            channel: "gatewaychat",
+            target: "user-123",
+            message: "hello from agent",
+          },
+          gateway: {
+            clientName: "cli",
+            mode: "cli",
+            timeoutMs: 30_000,
+          },
+          abortSignal: withAbortSignal ? controller.signal : undefined,
+          dryRun: false,
+        });
+
+        expect(mocks.callGatewayLeastPrivilege).toHaveBeenCalledTimes(2);
+        const firstCall = readMockCallArg(
+          mocks.callGatewayLeastPrivilege,
+          "first gateway least privilege call",
+        );
+        const secondCall = readMockCallArg(
+          mocks.callGatewayLeastPrivilege,
+          "second gateway least privilege call",
+          1,
+        );
+        expect(secondCall).toMatchObject({
+          ...firstCall,
+          timeoutMs: expectedTimeoutMs,
+          signal: withAbortSignal ? expect.any(AbortSignal) : undefined,
+        });
+        if (withAbortSignal) {
+          expect(secondCall.signal).toBeInstanceOf(AbortSignal);
+          expect(secondCall.signal).not.toBe(firstCall.signal);
+        } else {
+          expect(secondCall.signal).toBeUndefined();
+        }
+        const gatewayParams = readRecordField(firstCall, "params", "gateway call params");
+        expectRecordFields(
+          gatewayParams,
+          {
+            channel: "gatewaychat",
+            action: "send",
+            idempotencyKey: "idem-gateway-action",
+          },
+          "gateway call params",
+        );
+        expect(handleActionResult).not.toHaveBeenCalled();
+        expect(result).toMatchObject({
+          kind: "send",
           channel: "gatewaychat",
           action: "send",
-          idempotencyKey: "idem-gateway-action",
-        },
-        "gateway call params",
-      );
-      expect(handleActionResult).not.toHaveBeenCalled();
-      expect(result).toMatchObject({
-        kind: "send",
-        channel: "gatewaychat",
-        action: "send",
-        handledBy: "plugin",
-        payload: { ok: true, messageId: "gw-send-late" },
-      });
-    });
+          handledBy: "plugin",
+          payload: { ok: true, messageId: "gw-send-late" },
+        });
+      },
+    );
 
     it("does not reconnect a timed-out gateway send after cancellation", async () => {
       const handleActionResult = vi.fn(async () => jsonResult({ ok: true, local: true }));
@@ -1108,9 +1117,10 @@ describe("runMessageAction plugin dispatch", () => {
       });
       mocks.callGatewayLeastPrivilege
         .mockRejectedValueOnce(timeout)
-        .mockImplementationOnce(async () => {
+        .mockImplementationOnce(async (call: { signal?: AbortSignal }) => {
           controller.abort();
-          throw timeout;
+          expect(call.signal?.aborted).toBe(true);
+          throw Object.assign(new Error("gateway request aborted"), { name: "AbortError" });
         });
 
       await expect(
