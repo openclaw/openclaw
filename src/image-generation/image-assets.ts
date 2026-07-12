@@ -143,14 +143,15 @@ export function generatedImageAssetFromBase64(params: {
   sniffMimeType?: boolean;
   maxBytes?: number;
 }): GeneratedImageAsset | undefined {
-  const maxBytes = params.maxBytes ?? MAX_IMAGE_BYTES;
   const base64 = normalizeOptionalString(params.base64);
   if (!base64) {
     return undefined;
   }
-  const estimatedSize = estimateBase64DecodedBytes(base64);
-  if (estimatedSize > maxBytes) {
-    return undefined;
+  if (params.maxBytes !== undefined) {
+    const estimatedSize = estimateBase64DecodedBytes(base64);
+    if (estimatedSize > params.maxBytes) {
+      return undefined;
+    }
   }
   const canonicalBase64 = canonicalizeBase64(base64);
   if (!canonicalBase64) {
