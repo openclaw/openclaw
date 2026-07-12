@@ -3025,6 +3025,8 @@ export const id: TranslationMap = {
     },
     pullRequests: {
       linkLabel: "Pull request #{number}: {title}",
+      createPr: "Buat PR",
+      createPrLabel: "Buat pull request untuk {branch}",
       dismiss: "Tutup pull request #{number}",
       open: "Terbuka",
       draft: "Draf",

@@ -3034,6 +3034,8 @@ export const nl: TranslationMap = {
     },
     pullRequests: {
       linkLabel: "Pull request #{number}: {title}",
+      createPr: "PR aanmaken",
+      createPrLabel: "Een pull request aanmaken voor {branch}",
       dismiss: "Pull request #{number} negeren",
       open: "Open",
       draft: "Concept",

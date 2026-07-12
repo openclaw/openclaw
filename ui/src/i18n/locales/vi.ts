@@ -3014,6 +3014,8 @@ export const vi: TranslationMap = {
     },
     pullRequests: {
       linkLabel: "Pull request #{number}: {title}",
+      createPr: "Tạo PR",
+      createPrLabel: "Tạo yêu cầu kéo cho {branch}",
       dismiss: "Bỏ qua pull request #{number}",
       open: "Mở",
       draft: "Bản nháp",
