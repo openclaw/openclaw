@@ -782,9 +782,18 @@ export class CodexAppServerEventProjector {
     const hasDeliverableAssistantOnCompletedTurn =
       this.completedTurn?.status === "completed" &&
       assistantTexts.some((text) => text.trim().length > 0);
+    // Keep synthetic tool.result rows for transcript integrity, but do not
+    // promote missing_tool_result to the run promptError when the authoritative
+    // outcome is already an abort/interrupt. Otherwise mid-exec cancel paths
+    // kill the attempt with a generic invariant error (#104898).
+    const authoritativeAbortOrInterrupt =
+      this.aborted || this.completedTurn?.status === "interrupted";
     this.synthesizeMissingToolResults({
       synthesize: legacyFailClosed,
-      recordPromptError: legacyFailClosed && !hasDeliverableAssistantOnCompletedTurn,
+      recordPromptError:
+        legacyFailClosed &&
+        !hasDeliverableAssistantOnCompletedTurn &&
+        !authoritativeAbortOrInterrupt,
     });
     const lastAssistant =
       assistantTexts.length > 0
@@ -830,8 +839,10 @@ export class CodexAppServerEventProjector {
     const turnFailed = this.completedTurn?.status === "failed";
     const promptError =
       this.promptError ??
-      this.synthesizedMissingToolResultError ??
-      (turnFailed ? (this.completedTurn?.error?.message ?? "codex app-server turn failed") : null);
+      (turnFailed
+        ? (this.completedTurn?.error?.message ?? "codex app-server turn failed")
+        : null) ??
+      this.synthesizedMissingToolResultError;
     const agentHarnessResultClassification = classifyAgentHarnessTerminalOutcome({
       assistantTexts,
       reasoningText,

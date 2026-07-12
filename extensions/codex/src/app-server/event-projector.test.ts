@@ -3525,6 +3525,133 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.assistantTexts).toEqual([]);
   });
 
+  it("does not promote missing_tool_result to promptError when aborted mid-exec", async () => {
+    const trajectoryRecorder = {
+      filePath: "trajectory.jsonl",
+      recordEvent: vi.fn(),
+      flush: vi.fn(async () => undefined),
+    };
+    const projector = await createProjector(undefined, { trajectoryRecorder });
+    projector.markAborted();
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-still-running",
+          command: "pnpm test extensions/codex",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "inProgress",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: null,
+          durationMs: null,
+        },
+      }),
+    );
+    await projector.handleNotification(turnWithStatus("interrupted"));
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.aborted).toBe(true);
+    expect(result.promptError).toBeNull();
+    expect(result.promptErrorSource).toBeNull();
+    expect(result.lastToolError?.error).toContain("without a matching tool.result");
+    expect(trajectoryRecorder.recordEvent).toHaveBeenCalledWith(
+      "tool.result",
+      expect.objectContaining({
+        toolCallId: "cmd-still-running",
+        status: "failed",
+        isError: true,
+        result: { status: "failed", reason: "missing_tool_result" },
+      }),
+    );
+  });
+
+  it("does not promote missing_tool_result to promptError for interrupted turns with pending tools", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-interrupted-pending",
+          command: "/bin/bash -lc 'sleep 600'",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "inProgress",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: null,
+          durationMs: null,
+        },
+      }),
+    );
+    await projector.handleNotification(
+      turnWithStatus("interrupted", [
+        {
+          type: "agentMessage",
+          id: "msg-partial",
+          text: "still working on the long command",
+        },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.aborted).toBe(false);
+    expect(result.promptError).toBeNull();
+    expect(result.promptErrorSource).toBeNull();
+    expect(result.assistantTexts).toEqual(["still working on the long command"]);
+    expect(result.lastToolError?.error).toContain("without a matching tool.result");
+    expect(result.lastAssistant?.stopReason).toBe("stop");
+  });
+
+  it("prefers real turn error over synthesized missing-tool-result when both are present", async () => {
+    const projector = await createProjector(await createParams());
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-failed-turn",
+          command: "node long-script.js",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "inProgress",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: null,
+          durationMs: null,
+        },
+      }),
+    );
+    // Turn fails with a real stream error while the tool is still running.
+    await projector.handleNotification({
+      method: "turn/completed",
+      params: {
+        threadId: THREAD_ID,
+        turn: {
+          id: TURN_ID,
+          status: "failed",
+          error: { message: "stream connection reset" },
+          items: [],
+        },
+      },
+    } as ProjectorNotification);
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    // The real turn error must be the headline, not the synthesized message.
+    expect(result.promptError).toBe("stream connection reset");
+    expect(result.promptError).not.toContain("without a matching tool.result");
+    expect(result.promptErrorSource).toBe("prompt");
+  });
+
   it("uses streamed command output when final command snapshots omit aggregated output", async () => {
     const onAgentEvent = vi.fn();
     const trajectoryRecorder = {
