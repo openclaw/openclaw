@@ -76,7 +76,7 @@ describe("renderPluginsHubTabs", () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 
-  it("hands focus to the destination strip after keyboard activation", () => {
+  it("hands focus to the destination strip after keyboard activation", async () => {
     const onSelect = vi.fn();
     const source = mount({ active: "installed", onSelect });
     // element.click() dispatches with detail 0, matching keyboard activation.
@@ -85,12 +85,14 @@ describe("renderPluginsHubTabs", () => {
 
     source.remove();
     const destination = mount({ active: "workshop", onSelect: () => undefined });
+    // Focus lands on a microtask once the rendered strip is connected.
+    await Promise.resolve();
     expect(document.activeElement).toBe(
       destination.querySelector<HTMLButtonElement>("#plugins-tab-workshop"),
     );
   });
 
-  it("does not steal focus after mouse activation", () => {
+  it("does not steal focus after mouse activation", async () => {
     const source = mount({ active: "installed", onSelect: () => undefined });
     source
       .querySelector<HTMLButtonElement>("#plugins-tab-skills")
@@ -98,6 +100,7 @@ describe("renderPluginsHubTabs", () => {
     source.remove();
 
     const destination = mount({ active: "skills", onSelect: () => undefined });
+    await Promise.resolve();
     expect(document.activeElement).not.toBe(
       destination.querySelector<HTMLButtonElement>("#plugins-tab-skills"),
     );

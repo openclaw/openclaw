@@ -88,9 +88,16 @@ function reclaimFocus(tab: PluginsHubTab, element: Element | undefined) {
   }
   const pending = pendingFocus;
   pendingFocus = null;
-  if (Date.now() - pending.at <= PENDING_FOCUS_WINDOW_MS) {
-    (element as HTMLElement).focus();
+  if (Date.now() - pending.at > PENDING_FOCUS_WINDOW_MS) {
+    return;
   }
+  // The ref fires while the strip is still inside lit's template fragment;
+  // focus only works once the rendered tree is connected to the document.
+  queueMicrotask(() => {
+    if (element.isConnected) {
+      (element as HTMLElement).focus();
+    }
+  });
 }
 
 /**
