@@ -45,7 +45,9 @@ type TestChatPane = HTMLElement & {
   handleTranscriptScroll: (event: Event) => void;
   historyAutoLoadBlocked: boolean;
   syncHistoryObserver: () => void;
-  loadCatalogSession: (key: CatalogSessionKey, older: boolean) => Promise<void>;
+  loadCatalogSession: (key: CatalogSessionKey, older: boolean) => Promise<boolean>;
+  loadOlderMessages: () => Promise<void>;
+  hasOlderMessages: () => boolean;
 };
 
 const suggestion: TaskSuggestion = {
@@ -405,6 +407,23 @@ describe("chat pane catalog session lifecycle", () => {
     expect(pane.historyAutoLoadBlocked).toBe(false);
     expect(pane.syncHistoryObserver).toHaveBeenCalledOnce();
     expect(state.handleChatScroll).toHaveBeenCalledWith(event);
+  });
+
+  it("re-arms a blocked auto-load when the manual fallback is clicked", async () => {
+    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    // A short (non-scrollable) thread cannot emit a scroll event, so a blocked
+    // auto-load must be recoverable through the fallback's loadOlderMessages call.
+    state.sessionKey = "catalog:claude:gateway%3Alocal:thread-1";
+    pane.historyAutoLoadBlocked = true;
+    pane.loadCatalogSession = vi.fn(async () => false);
+    pane.hasOlderMessages = vi.fn(() => true);
+
+    await pane.loadOlderMessages();
+
+    // loadOlderMessages clears the block on entry, so the retry is not stranded.
+    expect(pane.loadCatalogSession).toHaveBeenCalledOnce();
+    expect(pane.historyAutoLoadBlocked).toBe(true);
   });
 });
 

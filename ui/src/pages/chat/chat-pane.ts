@@ -1744,7 +1744,12 @@ class ChatPane extends OpenClawLightDomElement {
       historyPagination: catalogKey
         ? {
             loading: this.loadingOlder,
-            manualFallback: this.hasOlderMessages() && typeof IntersectionObserver !== "function",
+            // Also surface the button when auto-load is blocked after a failure: a
+            // non-scrollable (short) thread can never emit the scroll event that
+            // re-arms the observer, so the button is the only retry path.
+            manualFallback:
+              this.hasOlderMessages() &&
+              (typeof IntersectionObserver !== "function" || this.historyAutoLoadBlocked),
             onLoadOlder: () => void this.loadOlderMessages(),
           }
         : undefined,
