@@ -5,6 +5,7 @@ import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { FsListDirResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import { beginNativeWindowDragFromTopInset } from "../../app/native-window-drag.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { icons } from "../../components/icons.ts";
@@ -15,12 +16,7 @@ import { buildAgentMainSessionKey, normalizeAgentId } from "../../lib/sessions/s
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import {
-  renderWelcomeHero,
-  renderWelcomeRecentSessions,
-  renderWelcomeSuggestions,
-  selectWelcomeRecentSessions,
-} from "../chat/components/chat-welcome.ts";
+import { renderWelcomeState } from "../chat/components/chat-welcome.ts";
 import { buildDraftSessionCreateParams } from "./create-params.ts";
 
 type NewSessionRouteData = { agentId?: string };
@@ -711,26 +707,35 @@ class NewSessionPage extends OpenClawLightDomElement {
     `;
   }
 
-  /** Same hero as the chat welcome screen, keyed to the draft's selected agent. */
-  private renderHero() {
-    const agent = this.selectedAgent();
-    const identity = agent?.identity;
+  /** Target row + composer, rendered mid-screen between the hero and recents. */
+  private renderDraftBlock() {
+    const worktreeNameInvalid =
+      this.worktree &&
+      this.worktreeName.trim() !== "" &&
+      !WORKTREE_NAME_PATTERN.test(this.worktreeName.trim());
     return html`
-      <div class="agent-chat__welcome" style="--agent-color: var(--accent)">
-        ${renderWelcomeHero({
-          assistantName: identity?.name ?? agent?.name ?? agent?.id ?? "",
-          assistantAvatar: identity?.avatar ?? identity?.emoji ?? null,
-          assistantAvatarUrl: identity?.avatarUrl ?? null,
-          hint: t("newSession.hint"),
-        })}
+      <div class="new-session-page__draft">
+        ${this.renderTargetBar()} ${this.renderBrowser()}
+        ${worktreeNameInvalid
+          ? html`<div class="new-session-page__error">${t("newSession.worktreeNameInvalid")}</div>`
+          : nothing}
+        ${this.error ? html`<div class="new-session-page__error">${this.error}</div>` : nothing}
+        ${this.renderComposer()}
       </div>
     `;
   }
 
-  /** Recent chats to jump back into, or the canned starters when none exist. */
-  private renderRecents() {
+  /** Same welcome block as the empty-chat start screen, keyed to the draft's agent. */
+  private renderWelcome() {
+    const agent = this.selectedAgent();
+    const identity = agent?.identity;
     const gateway = this.context?.gateway.snapshot;
-    const recents = selectWelcomeRecentSessions({
+    return renderWelcomeState({
+      assistantName: identity?.name ?? agent?.name ?? agent?.id ?? "",
+      assistantAvatar: identity?.avatar ?? identity?.emoji ?? null,
+      assistantAvatarUrl: identity?.avatarUrl ?? null,
+      hint: t("newSession.hint"),
+      composer: this.renderDraftBlock(),
       sessions: this.context?.sessions.state.result,
       sessionKey: buildAgentMainSessionKey({
         agentId: this.agentId || "main",
@@ -741,37 +746,22 @@ class NewSessionPage extends OpenClawLightDomElement {
         agentsList: this.context?.agents.state.agentsList ?? null,
         hello: gateway?.hello ?? null,
       },
-    });
-    if (recents.length > 0) {
-      return renderWelcomeRecentSessions(recents, (sessionKey) => {
-        this.context?.gateway.setSessionKey(sessionKey);
-        this.context?.navigate("chat", { search: searchForSession(sessionKey) });
-      });
-    }
-    return renderWelcomeSuggestions({
       onDraftChange: (next) => {
         this.message = next;
       },
       onSend: () => void this.submit(),
+      onOpenSession: (sessionKey) => {
+        this.context?.gateway.setSessionKey(sessionKey);
+        this.context?.navigate("chat", { search: searchForSession(sessionKey) });
+      },
     });
   }
 
   override render() {
-    const worktreeNameInvalid =
-      this.worktree &&
-      this.worktreeName.trim() !== "" &&
-      !WORKTREE_NAME_PATTERN.test(this.worktreeName.trim());
     return html`
       <div class="new-session-page">
-        <div class="new-session-page__inner">
-          ${this.renderHero()} ${this.renderTargetBar()} ${this.renderBrowser()}
-          ${worktreeNameInvalid
-            ? html`<div class="new-session-page__error">
-                ${t("newSession.worktreeNameInvalid")}
-              </div>`
-            : nothing}
-          ${this.error ? html`<div class="new-session-page__error">${this.error}</div>` : nothing}
-          ${this.renderComposer()} ${this.renderRecents()}
+        <div class="new-session-page__scroll" @mousedown=${beginNativeWindowDragFromTopInset}>
+          ${this.renderWelcome()}
         </div>
       </div>
     `;
@@ -801,7 +791,7 @@ class NewSessionPage extends OpenClawLightDomElement {
           <div class="agent-chat__composer-combobox">
             <textarea
               class="new-session-page__message"
-              rows="4"
+              rows="3"
               placeholder=${t("newSession.messagePlaceholder")}
               .value=${this.message}
               @input=${(event: Event) => {

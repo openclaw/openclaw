@@ -101,7 +101,24 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       // "+" navigates to the same route with ?agent=<id>).
       const response = await page.goto(`${server.baseUrl}new`);
       expect(response?.status()).toBe(200);
+      // The draft page shows the start-screen welcome hero for the agent.
+      await page.getByRole("heading", { name: "Main" }).waitFor();
       await page.locator(".new-session-page__message").waitFor();
+
+      // Unified layout: the draft block (target row above the composer) sits
+      // inside the start-screen welcome, below the hero.
+      const heroBox = await page.locator(".agent-chat__welcome h2").boundingBox();
+      const targetsBox = await page.locator(".new-session-page__targets").boundingBox();
+      const composerBox = await page.locator(".new-session-page__composer").boundingBox();
+      expect(heroBox).not.toBeNull();
+      expect(targetsBox).not.toBeNull();
+      expect(composerBox).not.toBeNull();
+      expect((heroBox?.y ?? 0) + (heroBox?.height ?? 0)).toBeLessThanOrEqual(
+        (targetsBox?.y ?? 0) + 1,
+      );
+      expect((targetsBox?.y ?? 0) + (targetsBox?.height ?? 0)).toBeLessThanOrEqual(
+        (composerBox?.y ?? 0) + 1,
+      );
 
       const folderInput = page.getByRole("textbox", { name: "Folder", exact: true });
       await expect.poll(() => folderInput.inputValue()).toBe(WORKSPACE);
