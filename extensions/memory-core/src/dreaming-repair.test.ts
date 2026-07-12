@@ -123,6 +123,56 @@ describe("dreaming artifact repair", () => {
     expect(audit.issues).toStrictEqual([]);
   });
 
+  it("detects heartbeat-derived corpus lines by source references", async () => {
+    const workspaceDir = await createWorkspace();
+    const sessionPath = path.join(
+      workspaceDir,
+      "..",
+      "agents",
+      "main",
+      "sessions",
+      "heartbeat-session.jsonl",
+    );
+    await fs.mkdir(path.dirname(sessionPath), { recursive: true });
+    await fs.writeFile(
+      sessionPath,
+      [
+        JSON.stringify({
+          type: "message",
+          message: { role: "user", content: "[OpenClaw heartbeat poll]" },
+        }),
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "Heartbeat received. Main is active." }],
+          },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    await fs.mkdir(path.join(workspaceDir, "memory", ".dreams", "session-corpus"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-11.txt"),
+      [
+        "[main/sessions/heartbeat-session.jsonl#L2] Heartbeat received. Main is active.",
+        "[main/sessions/heartbeat-session.jsonl#L1] [OpenClaw heartbeat poll]",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const audit = await auditDreamingArtifacts({ workspaceDir });
+
+    expect(audit.heartbeatContaminatedSessionCorpusFileCount).toBe(1);
+    expect(audit.heartbeatContaminatedSessionCorpusLineCount).toBe(1);
+    expect(
+      audit.issues.some((issue) => issue.code === "dreaming-session-corpus-heartbeat-derived"),
+    ).toBe(true);
+  });
+
   it("rejects relative workspace paths during audit and repair", async () => {
     await expect(auditDreamingArtifacts({ workspaceDir: "relative/workspace" })).rejects.toThrow(
       "workspaceDir must be an absolute path",
@@ -136,7 +186,11 @@ describe("dreaming artifact repair", () => {
     const workspaceDir = await createWorkspace();
     const sessionCorpusDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus");
     await fs.mkdir(sessionCorpusDir, { recursive: true });
-    await fs.writeFile(path.join(sessionCorpusDir, "2026-04-11.txt"), "corpus\n", "utf-8");
+    await fs.writeFile(
+      path.join(sessionCorpusDir, "2026-04-11.txt"),
+      "[main/dreaming-narrative-light.jsonl#L1] Write a dream diary entry from these memory fragments:\n",
+      "utf-8",
+    );
     await fs.writeFile(
       path.join(workspaceDir, "memory", ".dreams", "session-ingestion.json"),
       JSON.stringify({ version: 3, files: {}, seenMessages: {} }, null, 2),
@@ -154,6 +208,8 @@ describe("dreaming artifact repair", () => {
     expect(repair.archivedSessionCorpus).toBe(true);
     expect(repair.archivedSessionIngestion).toBe(true);
     expect(repair.archivedDreamsDiary).toBe(false);
+    expect(repair.removedHeartbeatDerivedLines).toBeUndefined();
+    expect(repair.clearedSessionCheckpointKeys).toBeUndefined();
     const archiveDir = requireArchiveDir(repair.archiveDir);
     expect(archiveDir).toBe(
       path.join(workspaceDir, ".openclaw-repair", "dreaming", "2026-04-11T21-30-00-000Z"),
@@ -172,7 +228,11 @@ describe("dreaming artifact repair", () => {
     const workspaceDir = await createWorkspace();
     const sessionCorpusDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus");
     await fs.mkdir(sessionCorpusDir, { recursive: true });
-    await fs.writeFile(path.join(sessionCorpusDir, "2026-04-11.txt"), "corpus\n", "utf-8");
+    await fs.writeFile(
+      path.join(sessionCorpusDir, "2026-04-11.txt"),
+      "[main/dreaming-narrative-light.jsonl#L1] Write a dream diary entry from these memory fragments:\n",
+      "utf-8",
+    );
     await Promise.all([
       writeMemoryCoreWorkspaceEntries({
         namespace: DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
@@ -229,7 +289,11 @@ describe("dreaming artifact repair", () => {
     const workspaceDir = await createWorkspace();
     const sessionCorpusDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus");
     await fs.mkdir(sessionCorpusDir, { recursive: true });
-    await fs.writeFile(path.join(sessionCorpusDir, "2026-04-11.txt"), "corpus\n", "utf-8");
+    await fs.writeFile(
+      path.join(sessionCorpusDir, "2026-04-11.txt"),
+      "[main/dreaming-narrative-light.jsonl#L1] Write a dream diary entry from these memory fragments:\n",
+      "utf-8",
+    );
     await writeMemoryCoreWorkspaceEntries({
       namespace: DREAMING_DAILY_INGESTION_NAMESPACE,
       workspaceDir,
@@ -293,5 +357,172 @@ describe("dreaming artifact repair", () => {
     const audit = await auditDreamingArtifacts({ workspaceDir });
 
     expect(audit.sessionIngestionExists).toBe(false);
+  });
+
+  it("targeted repair removes only heartbeat-derived corpus lines and clears scoped checkpoints", async () => {
+    const workspaceDir = await createWorkspace();
+    const sessionPath = path.join(
+      workspaceDir,
+      "..",
+      "agents",
+      "main",
+      "sessions",
+      "heartbeat-session.jsonl",
+    );
+    await fs.mkdir(path.dirname(sessionPath), { recursive: true });
+    await fs.writeFile(
+      sessionPath,
+      [
+        JSON.stringify({
+          type: "message",
+          message: { role: "user", content: "[OpenClaw heartbeat poll]" },
+        }),
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "Heartbeat received. Main is active." }],
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          message: { role: "assistant", content: [{ type: "text", text: "normal content" }] },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    await fs.mkdir(path.join(workspaceDir, "memory", ".dreams", "session-corpus"), {
+      recursive: true,
+    });
+    const corpusPath = path.join(
+      workspaceDir,
+      "memory",
+      ".dreams",
+      "session-corpus",
+      "2026-04-11.txt",
+    );
+    await fs.writeFile(
+      corpusPath,
+      [
+        "[main/sessions/heartbeat-session.jsonl#L2] Heartbeat received. Main is active.",
+        "[main/sessions/heartbeat-session.jsonl#L3] normal content",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    await Promise.all([
+      writeMemoryCoreWorkspaceEntries({
+        namespace: DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
+        workspaceDir,
+        entries: [
+          {
+            key: "main:sessions/heartbeat-session.jsonl",
+            value: {
+              lastSize: 120,
+              lastMtimeMs: 1_000,
+              lastContentHash: "hash",
+              cursorLine: 42,
+            },
+          },
+          {
+            key: "main:sessions/other.jsonl",
+            value: {
+              lastSize: 200,
+              lastMtimeMs: 2_000,
+              lastContentHash: "hash-2",
+              cursorLine: 10,
+            },
+          },
+        ],
+      }),
+      writeMemoryCoreWorkspaceEntries({
+        namespace: DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
+        workspaceDir,
+        entries: [
+          {
+            key: "main:heartbeat-session",
+            value: { scope: "main", index: 0, hashes: ["heartbeat"] },
+          },
+          {
+            key: "main:other",
+            value: { scope: "main", index: 0, hashes: ["other"] },
+          },
+        ],
+      }),
+    ]);
+
+    const repair = await repairDreamingArtifacts({ workspaceDir });
+
+    expect(repair.changed).toBe(true);
+    expect(repair.removedHeartbeatDerivedLines).toBe(1);
+    expect((repair.clearedSessionCheckpointKeys ?? 0) > 0).toBe(true);
+    const rewritten = await fs.readFile(corpusPath, "utf-8");
+    expect(rewritten).toContain("normal content");
+    expect(rewritten).not.toContain("Heartbeat received. Main is active.");
+
+    const filesEntries = await readMemoryCoreWorkspaceEntries({
+      namespace: DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
+      workspaceDir,
+    });
+    expect(
+      filesEntries.some((entry) => entry.key === "main:sessions/heartbeat-session.jsonl"),
+    ).toBe(false);
+    expect(filesEntries.some((entry) => entry.key === "main:sessions/other.jsonl")).toBe(true);
+
+    const seenEntries = await readMemoryCoreWorkspaceEntries({
+      namespace: DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
+      workspaceDir,
+    });
+    expect(seenEntries.some((entry) => entry.key === "main:heartbeat-session")).toBe(false);
+    expect(seenEntries.some((entry) => entry.key === "main:other")).toBe(true);
+  });
+
+  it("does not remove fallback sentence by text without heartbeat provenance linkage", async () => {
+    const workspaceDir = await createWorkspace();
+    const sessionPath = path.join(workspaceDir, "..", "agents", "main", "sessions", "notes.jsonl");
+    await fs.mkdir(path.dirname(sessionPath), { recursive: true });
+    await fs.writeFile(
+      sessionPath,
+      [
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "text",
+                text: "A memory trace surfaced, but details were unavailable in this run.",
+              },
+            ],
+          },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    await fs.mkdir(path.join(workspaceDir, "memory", ".dreams", "session-corpus"), {
+      recursive: true,
+    });
+    const corpusPath = path.join(
+      workspaceDir,
+      "memory",
+      ".dreams",
+      "session-corpus",
+      "2026-04-11.txt",
+    );
+    await fs.writeFile(
+      corpusPath,
+      "[main/sessions/notes.jsonl#L1] A memory trace surfaced, but details were unavailable in this run.\n",
+      "utf-8",
+    );
+
+    const repair = await repairDreamingArtifacts({ workspaceDir });
+
+    expect(repair.removedHeartbeatDerivedLines).toBeUndefined();
+    const rewritten = await fs.readFile(corpusPath, "utf-8");
+    expect(rewritten).toContain(
+      "A memory trace surfaced, but details were unavailable in this run.",
+    );
   });
 });
