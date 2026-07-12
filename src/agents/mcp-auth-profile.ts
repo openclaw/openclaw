@@ -126,8 +126,8 @@ async function resolveMcpBearerToken(params: {
       clientCert: resolved.clientCert,
       clientKey: resolved.clientKey,
       resourceUrl: resolved.url,
-      // OAuth discovery and token refresh must be bounded. Runtime transports
-      // stay unbounded because they own long-lived SSE and streamable bodies.
+      // External bearer projection performs only OAuth discovery/token work,
+      // so the configured deadline can own the full short-lived response.
       timeoutMs: resolved.requestTimeoutMs,
     }),
     headers: withoutMcpAuthorizationHeader(resolved.headers),

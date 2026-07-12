@@ -106,6 +106,16 @@ async function closeLoopbackServer(server: Server): Promise<void> {
   await closed;
 }
 
+function expectBoundedTimeout(error: unknown, undiciCode: string): void {
+  if (error instanceof Error && error.name === "TimeoutError") {
+    return;
+  }
+  expect(error).toMatchObject({
+    name: "TypeError",
+    cause: expect.objectContaining({ code: undiciCode }),
+  });
+}
+
 describe("MCP HTTP fetch helpers", () => {
   const fetchCalls: Array<{
     url: string | URL | Request;
@@ -306,19 +316,53 @@ describe("MCP HTTP fetch helpers", () => {
         }
       });
       const baseUrl = await listenOnLoopback(server);
-      const fetch = buildMcpHttpFetch({ resourceUrl: `${baseUrl}/mcp`, timeoutMs: 100 });
+      const fetch = buildMcpHttpFetch({ resourceUrl: `${baseUrl}/mcp`, timeoutMs: 500 });
 
       try {
         const pending = fetch(`${baseUrl}/token`, { method: "POST" });
         if (stage === "headers") {
-          await expect(pending).rejects.toMatchObject({ name: "TimeoutError" });
+          const error = await pending.then(
+            () => undefined,
+            (error: unknown) => error,
+          );
+          expect(error).toBeDefined();
+          expectBoundedTimeout(error, "UND_ERR_HEADERS_TIMEOUT");
           return;
         }
         const response = await pending;
-        await expect(response.json()).rejects.toMatchObject({ name: "TimeoutError" });
+        const error = await response.json().then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+        expect(error).toBeDefined();
+        expectBoundedTimeout(error, "UND_ERR_BODY_TIMEOUT");
       } finally {
         await closeLoopbackServer(server);
       }
     },
   );
+
+  it("composes caller cancellation with the configured timeout", async () => {
+    const controller = new AbortController();
+    testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: TestAgent,
+      EnvHttpProxyAgent: TestEnvHttpProxyAgent,
+      ProxyAgent: TestProxyAgent,
+      fetch: async (_url: string | URL | Request, init?: unknown) => {
+        const signal =
+          typeof init === "object" && init !== null && "signal" in init
+            ? (init as { signal?: AbortSignal }).signal
+            : undefined;
+        controller.abort();
+        expect(signal?.aborted).toBe(true);
+        return new Response(null, { status: 204 });
+      },
+    };
+    const fetch = buildMcpHttpFetch({
+      resourceUrl: "https://mcp.example.com/mcp",
+      timeoutMs: 60_000,
+    });
+
+    await fetch("https://mcp.example.com/token", { signal: controller.signal });
+  });
 });
