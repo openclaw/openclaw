@@ -158,6 +158,25 @@ class ProviderModelStatusTest {
   }
 
   @Test
+  fun configuredModelCopyHandlesZeroOneAndMany() {
+    assertEquals("No configured models", configuredModelsCountText(0))
+    assertEquals("1 configured model", configuredModelsCountText(1))
+    assertEquals("2 configured models", configuredModelsCountText(2))
+    assertEquals(
+      "No configured models. Refresh to recheck availability.",
+      configuredModelsOverviewText(0),
+    )
+    assertEquals(
+      "1 configured model. Refresh to recheck availability.",
+      configuredModelsOverviewText(1),
+    )
+    assertEquals(
+      "2 configured models. Refresh to recheck availability.",
+      configuredModelsOverviewText(2),
+    )
+  }
+
+  @Test
   fun videoCapabilitySurvivesGatewayParsingAndRendering() {
     val payload =
       Json

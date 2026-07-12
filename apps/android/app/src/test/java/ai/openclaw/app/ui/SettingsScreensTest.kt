@@ -192,6 +192,13 @@ class SettingsScreensTest {
   }
 
   @Test
+  fun cronDetailDeliveryStatusUsesLocalizedLabelsAndNullFallback() {
+    assertEquals("Delivered", cronJobDeliveryStatusText("delivered"))
+    assertEquals("future-status", cronJobDeliveryStatusText("future-status"))
+    assertEquals("None", cronJobDeliveryStatusText(null))
+  }
+
+  @Test
   fun approvalActionsUseUnabridgedSafetyLabelsInLargeFontSafeOrder() {
     assertEquals(
       listOf(

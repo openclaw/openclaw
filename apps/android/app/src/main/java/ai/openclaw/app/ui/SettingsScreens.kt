@@ -2254,7 +2254,7 @@ private fun CronJobDetailPanel(
         SettingsMetric(nativeString("Last Duration"), job.lastDurationMs?.let { "${it}ms" } ?: nativeString("None")),
         SettingsMetric(nativeString("Consecutive Errors"), job.consecutiveErrors?.toString() ?: "0"),
         SettingsMetric(nativeString("Consecutive Skips"), job.consecutiveSkipped?.toString() ?: "0"),
-        SettingsMetric(nativeString("Delivery Status"), job.lastDeliveryStatus ?: nativeString("None")),
+        SettingsMetric(nativeString("Delivery Status"), cronJobDeliveryStatusText(job.lastDeliveryStatus)),
       ),
   )
   job.payloadText?.let { text ->
@@ -2267,6 +2267,8 @@ private fun CronJobDetailPanel(
     CronJobTextPanel(title = nativeString("Delivery Error"), text = text, warning = true)
   }
 }
+
+internal fun cronJobDeliveryStatusText(status: String?): String = status?.let(::cronDeliveryStatusLabel) ?: nativeString("None")
 
 @Composable
 private fun CronJobFieldsPanel(rows: List<SettingsMetric>) {

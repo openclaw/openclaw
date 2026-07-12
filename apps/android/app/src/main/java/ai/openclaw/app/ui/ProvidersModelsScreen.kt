@@ -281,7 +281,7 @@ private fun ProviderOverviewPanel(
         ProviderMetricTile(label = nativeString("Unknown"), value = unknownCount.toString(), modifier = Modifier.weight(1f))
       }
       Text(
-        text = if (isConnected) nativeString("\$modelCount configured models. Refresh to recheck availability.", modelCount) else nativeString("Connect your Gateway to view provider readiness."),
+        text = if (isConnected) configuredModelsOverviewText(modelCount) else nativeString("Connect your Gateway to view provider readiness."),
         style = ClawTheme.type.body,
         color = ClawTheme.colors.textMuted,
       )
@@ -317,12 +317,26 @@ private fun ProviderListRow(row: ProviderRow) {
       ProviderBadge(text = row.name)
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
         Text(text = row.name, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(text = if (row.modelCount > 0) nativeString("\${row.modelCount} configured models", row.modelCount) else nativeString("No configured models"), style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
+        Text(text = configuredModelsCountText(row.modelCount), style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
       }
       AvailabilityPill(availability = row.availability, label = row.status)
     }
   }
 }
+
+internal fun configuredModelsOverviewText(count: Int): String =
+  when (count) {
+    0 -> nativeString("No configured models. Refresh to recheck availability.")
+    1 -> nativeString("1 configured model. Refresh to recheck availability.")
+    else -> nativeString("\$count configured models. Refresh to recheck availability.", count)
+  }
+
+internal fun configuredModelsCountText(count: Int): String =
+  when (count) {
+    0 -> nativeString("No configured models")
+    1 -> nativeString("1 configured model")
+    else -> nativeString("\$count configured models", count)
+  }
 
 @Composable
 private fun ProviderModelRow(model: GatewayModelSummary) {

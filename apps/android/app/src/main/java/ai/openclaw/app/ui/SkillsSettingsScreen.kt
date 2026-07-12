@@ -240,7 +240,7 @@ private fun skillSubtitle(skill: GatewaySkillSummary): String {
     when {
       skill.disabled -> nativeString("Disabled")
       skill.blockedByAllowlist -> nativeString("Blocked")
-      skill.missingCount > 0 -> nativeString("\${skill.missingCount} missing", skill.missingCount)
+      skill.missingCount > 0 -> skillMissingItemsText(skill.missingCount)
       !skill.eligible -> nativeString("Needs setup")
       else -> null
     }
@@ -251,9 +251,22 @@ private fun skillConfigurationText(skill: GatewaySkillSummary): String =
   when {
     skill.disabled -> nativeString("This skill is disabled on the gateway. Android shows detail only; enable or configure it from desktop or CLI.")
     skill.blockedByAllowlist -> nativeString("This skill is blocked by the gateway allowlist. Android can inspect it, but allowlist changes stay on desktop or CLI.")
-    skill.missingCount > 0 -> nativeString("This skill needs \${skill.missingCount} setup item(s). Android shows what is installed; setup/config changes stay on desktop or CLI.", skill.missingCount)
+    skill.missingCount > 0 -> skillMissingConfigurationText(skill.missingCount)
     !skill.eligible -> nativeString("This skill is installed but not currently eligible to run. Use desktop or CLI for configuration changes.")
     else -> nativeString("Ready on this gateway. Android detail is read-only; install, update, and configuration changes stay on desktop or CLI.")
+  }
+
+internal fun skillMissingItemsText(count: Int): String =
+  when (count) {
+    0 -> nativeString("No missing items")
+    1 -> nativeString("1 missing item")
+    else -> nativeString("\$count missing items", count)
+  }
+
+internal fun skillMissingConfigurationText(count: Int): String =
+  when (count) {
+    1 -> nativeString("This skill needs 1 setup item. Android shows what is installed; setup/config changes stay on desktop or CLI.")
+    else -> nativeString("This skill needs \$count setup items. Android shows what is installed; setup/config changes stay on desktop or CLI.", count)
   }
 
 private fun skillSourceLabel(skill: GatewaySkillSummary): String =

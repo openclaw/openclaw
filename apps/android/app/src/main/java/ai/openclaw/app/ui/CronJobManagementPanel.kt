@@ -642,13 +642,22 @@ internal fun cronWakeModeOptions(): List<CronWakeModeOption> =
 
 internal fun cronWakeModeLabel(code: String): String = cronWakeModeOptions().firstOrNull { it.code == code }?.label ?: code
 
-private fun cronRunSubtitle(run: GatewayCronRunSummary): String =
+internal fun cronRunSubtitle(run: GatewayCronRunSummary): String =
   listOfNotNull(
     run.durationMs?.let { "${it}ms" },
-    run.deliveryStatus,
+    run.deliveryStatus?.let(::cronDeliveryStatusLabel),
     run.model,
     run.error ?: run.summary,
   ).joinToString(" · ").ifBlank { nativeString("No details") }
+
+internal fun cronDeliveryStatusLabel(status: String): String =
+  when (status.lowercase()) {
+    "delivered" -> nativeString("Delivered")
+    "not-delivered" -> nativeString("Not delivered")
+    "unknown" -> nativeString("Unknown")
+    "not-requested" -> nativeString("Not requested")
+    else -> status
+  }
 
 private fun cronRunStatusText(status: String?): String =
   when (status?.lowercase()) {
