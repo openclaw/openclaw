@@ -548,11 +548,19 @@ export async function cleanupArchivedSessionTranscripts(opts: {
         if (now - timestamp > rule.olderThanMs) {
           const stat = await fs.promises.stat(fullPath).catch(() => null);
           if (stat?.isFile()) {
-            opts.onRemoveFile?.(canonicalizePathForComparison(fullPath));
-            if (!opts.dryRun) {
-              await fs.promises.rm(fullPath).catch(() => undefined);
+            if (opts.dryRun) {
+              opts.onRemoveFile?.(canonicalizePathForComparison(fullPath));
+              removed += 1;
+            } else {
+              const didRemove = await fs.promises.rm(fullPath).then(
+                () => true,
+                () => false,
+              );
+              if (didRemove) {
+                opts.onRemoveFile?.(canonicalizePathForComparison(fullPath));
+                removed += 1;
+              }
             }
-            removed += 1;
           }
         }
         // An archive name carries exactly one `.{reason}.{timestamp}` suffix,
