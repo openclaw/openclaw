@@ -47,8 +47,6 @@ import {
   updateSqliteSessionLastRoute,
   loadExactSqliteSessionEntry,
   loadLatestSqliteAssistantText,
-  loadLatestSqliteAssistantMessage,
-  loadLatestSqliteMessage,
   loadSqliteSessionEntry,
   loadSqliteTranscriptEvents,
   loadSqliteTranscriptEventsSync,
@@ -94,11 +92,6 @@ import {
   type SessionEntryLifecycleMutationResult,
   type SessionEntryLifecycleRemoval,
   type SessionEntryLifecycleUpsert,
-  type SessionEntryPatchProjectionContext,
-  type SessionEntryPatchProjectionFailure,
-  type SessionEntryPatchProjectionResult,
-  type SessionEntryPatchProjectionSnapshot,
-  type SessionEntryPatchProjectionTarget,
   type SessionLifecycleArchivedTranscript,
   type SessionLifecycleArtifactCleanupParams,
   type SessionLifecycleArtifactCleanupResult,
@@ -289,6 +282,8 @@ export type TranscriptEvent = unknown;
 
 export type SessionTranscriptStats = {
   eventCount: number;
+  lastMutationAtMs?: number;
+  lastObservedMutationAtMs?: number;
   maxSeq: number;
   sizeBytes: number;
 };
@@ -330,16 +325,6 @@ export type LatestTranscriptAssistantText = {
   id?: string;
   text: string;
   timestamp?: number;
-};
-
-export type LatestTranscriptAssistantMessage = {
-  id?: string;
-  message: unknown;
-};
-
-export type LatestTranscriptMessage = {
-  id?: string;
-  message: unknown;
 };
 
 export type SessionTranscriptWriteLockAccessorContext = {
@@ -784,12 +769,25 @@ export type SessionEntryCreateWithTranscriptOptions = {
   requireWriteSuccess?: boolean;
 };
 
-export type SessionPatchProjectionContext = SessionEntryPatchProjectionContext;
-export type SessionPatchProjectionFailure = SessionEntryPatchProjectionFailure;
+export type SessionPatchProjectionSnapshot = {
+  entries: ReadonlyArray<{ sessionKey: string; entry: SessionEntry }>;
+};
+
+export type SessionPatchProjectionTarget = {
+  candidateKeys?: readonly string[];
+  primaryKey: string;
+};
+
+export type SessionPatchProjectionContext = SessionPatchProjectionSnapshot &
+  SessionPatchProjectionTarget & {
+    existingEntry?: SessionEntry;
+  };
+
+export type SessionPatchProjectionFailure = { ok: false };
+
 export type SessionPatchProjectionResult<TFailure extends SessionPatchProjectionFailure> =
-  SessionEntryPatchProjectionResult<TFailure>;
-export type SessionPatchProjectionSnapshot = SessionEntryPatchProjectionSnapshot;
-export type SessionPatchProjectionTarget = SessionEntryPatchProjectionTarget;
+  | { ok: true; entry: SessionEntry }
+  | TFailure;
 
 export type {
   DeleteSessionEntryLifecycleResult,
@@ -2358,22 +2356,6 @@ export function readLatestTranscriptAssistantText(
   options: { includeTranscriptOnlyOpenClawAssistant?: boolean } = {},
 ): LatestTranscriptAssistantText | undefined {
   return loadLatestSqliteAssistantText(scope, options);
-}
-
-/** Reads the latest assistant message payload without materializing the whole transcript. */
-export function readLatestTranscriptAssistantMessage(
-  scope: SessionTranscriptReadScope,
-  options: { includeTranscriptOnlyOpenClawAssistant?: boolean } = {},
-): LatestTranscriptAssistantMessage | undefined {
-  return loadLatestSqliteAssistantMessage(scope, options);
-}
-
-/** Reads the latest transcript message payload without materializing the whole transcript. */
-export function readLatestTranscriptMessage(
-  scope: SessionTranscriptReadScope,
-  options: { includeTranscriptOnlyOpenClawAssistant?: boolean } = {},
-): LatestTranscriptMessage | undefined {
-  return loadLatestSqliteMessage(scope, options);
 }
 
 /**
