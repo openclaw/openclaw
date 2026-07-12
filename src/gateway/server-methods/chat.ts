@@ -3208,11 +3208,16 @@ async function readChatHistoryPage(params: {
     ),
     overreadContextMessage,
   );
-  const cliHistory = resolveChatHistoryWithCliSessionImports({
-    entry,
-    provider,
-    localMessages: localMessagesWithBoundaryFilter,
-  });
+  // The ignore flag must gate this resolver too: the tail-window merge can report
+  // imported=true while the full merge below dedupes everything to imported=false,
+  // and an ungated re-resolve here would recurse through this branch forever.
+  const cliHistory = params.ignoreCliSessionImports
+    ? { messages: localMessagesWithBoundaryFilter, imported: false as const }
+    : resolveChatHistoryWithCliSessionImports({
+        entry,
+        provider,
+        localMessages: localMessagesWithBoundaryFilter,
+      });
   if (offset !== undefined && !cliHistory.imported) {
     return readChatHistoryPage({ ...params, ignoreCliSessionImports: true });
   }

@@ -3699,6 +3699,108 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.history terminates when the full local read dedupes every claude-cli import", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await connectOk(ws);
+      const sessionDir = await createSessionDir();
+      const sessionId = "sess-claude-cli-dedupe-loop";
+      const homeEnvSnapshot = captureEnv(["HOME"]);
+      const homeDir = path.join(sessionDir, "home");
+      const cliSessionId = "0f5b202c-f6bb-4046-9475-d2f15fd07531";
+      const claudeProjectsDir = path.join(homeDir, ".claude", "projects", "workspace");
+      const dupBaseMs = Date.parse("2026-03-26T16:29:54.800Z");
+      await fs.mkdir(claudeProjectsDir, { recursive: true });
+      await fs.writeFile(
+        path.join(claudeProjectsDir, `${cliSessionId}.jsonl`),
+        [
+          JSON.stringify({
+            type: "user",
+            uuid: "dup-user-1",
+            timestamp: new Date(dupBaseMs).toISOString(),
+            message: { role: "user", content: "dup user question" },
+          }),
+          JSON.stringify({
+            type: "assistant",
+            uuid: "dup-assistant-1",
+            timestamp: new Date(dupBaseMs + 1000).toISOString(),
+            message: {
+              role: "assistant",
+              model: "claude-sonnet-4-6",
+              content: [{ type: "text", text: "dup assistant reply" }],
+            },
+          }),
+        ].join("\n"),
+        "utf-8",
+      );
+      setTestEnvValue("HOME", homeDir);
+      try {
+        await writeSessionStore({
+          entries: {
+            main: {
+              sessionId,
+              sessionFile: testSessionFilePath(sessionDir, sessionId),
+              updatedAt: futureFixtureUpdatedAt(),
+              modelProvider: "claude-cli",
+              model: "claude-sonnet-4-6",
+              cliSessionBindings: {
+                "claude-cli": { sessionId: cliSessionId },
+              },
+            },
+          },
+        });
+        // The two import copies are the oldest local records; 45 newer
+        // local-only records push them past the limit-1 tail window (40 raw
+        // messages), so the tail merge incorporates the import while the full
+        // read dedupes everything. This layout used to recurse forever.
+        await writeMainSessionTranscript(
+          sessionDir,
+          [
+            JSON.stringify({
+              message: {
+                role: "user",
+                content: [{ type: "text", text: "dup user question" }],
+                timestamp: dupBaseMs,
+              },
+            }),
+            JSON.stringify({
+              message: {
+                role: "assistant",
+                content: [{ type: "text", text: "dup assistant reply" }],
+                timestamp: dupBaseMs + 1000,
+              },
+            }),
+            ...Array.from({ length: 45 }, (_, index) =>
+              JSON.stringify({
+                message: {
+                  role: index % 2 === 0 ? "user" : "assistant",
+                  content: [{ type: "text", text: `local-only message ${index + 1}` }],
+                  timestamp: dupBaseMs + 60_000 + index,
+                },
+              }),
+            ),
+          ],
+          sessionId,
+        );
+
+        const history = await rpcReq<{
+          messages?: unknown[];
+          hasMore?: boolean;
+          nextOffset?: number;
+          totalMessages?: number;
+        }>(ws, "chat.history", { sessionKey: "main", limit: 1 });
+        expect(history.ok).toBe(true);
+        expect(history.payload?.totalMessages).toBe(47);
+        expect(history.payload?.hasMore).toBe(true);
+        expect(history.payload?.nextOffset).toBeGreaterThan(0);
+        expect(JSON.stringify(history.payload?.messages?.at(-1))).toContain(
+          "local-only message 45",
+        );
+      } finally {
+        homeEnvSnapshot.restore();
+      }
+    });
+  });
+
   test("chat.history overreads one local message to drop stale announce pairs at the limit boundary", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);
