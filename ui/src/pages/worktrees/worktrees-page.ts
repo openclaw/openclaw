@@ -15,7 +15,11 @@ import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 
 type WorktreesListResult = { worktrees: WorktreeRecord[] };
 type WorktreesRemoveResult = { removed: boolean; snapshotError?: string };
-type WorktreeBranchesResult = { branches: Array<{ name: string }>; defaultBranch?: string };
+type WorktreeBranchesResult = {
+  branches: Array<{ name: string }>;
+  defaultBranch?: string;
+  headBranch?: string;
+};
 
 type WorktreeOperationScope = {
   gateway: ApplicationContext["gateway"];
@@ -266,8 +270,8 @@ class WorktreesPage extends OpenClawLightDomElement {
       .then((result) => {
         if (this.isOperationScopeCurrent(scope) && repoRoot === this.createRepoRoot.trim()) {
           this.createBranches = result.branches.map((branch) => branch.name);
-          if (!this.createBaseRef && result.defaultBranch) {
-            this.createBaseRef = result.defaultBranch;
+          if (!this.createBaseRef) {
+            this.createBaseRef = result.defaultBranch ?? result.headBranch ?? "";
           }
         }
       })

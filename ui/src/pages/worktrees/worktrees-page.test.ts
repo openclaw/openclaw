@@ -12,8 +12,11 @@ type WorktreesPageTestElement = HTMLElement & {
   busyId: string | null;
   creating: boolean;
   createRepoRoot: string;
+  createBaseRef: string;
+  createBranches: string[];
   updateComplete: Promise<boolean>;
   requestUpdate: () => void;
+  loadCreateBranches: () => void;
   createWorktree: () => Promise<void>;
   removeWorktree: (record: WorktreeRecord) => Promise<void>;
   restore: (record: WorktreeRecord) => Promise<void>;
@@ -285,5 +288,26 @@ describe("WorktreesPage lifecycle", () => {
     await creating;
     expect(page.creating).toBe(false);
     expect(page.error).toBeNull();
+  });
+
+  it("uses the current branch when a repository has no remote default", async () => {
+    const request = vi.fn((method: string) => {
+      if (method === "worktrees.branches") {
+        return Promise.resolve({ branches: [{ name: "main" }], headBranch: "main" });
+      }
+      return Promise.resolve({ worktrees: [] });
+    });
+    const page = document.createElement("openclaw-worktrees-page") as WorktreesPageTestElement;
+    page.context = contextWithGateway(
+      gatewayWithClient({ request } as unknown as GatewayBrowserClient),
+    );
+    page.createRepoRoot = "/tmp/repo";
+    document.body.append(page);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("worktrees.list", {}));
+
+    page.loadCreateBranches();
+
+    await vi.waitFor(() => expect(page.createBranches).toEqual(["main"]));
+    expect(page.createBaseRef).toBe("main");
   });
 });
