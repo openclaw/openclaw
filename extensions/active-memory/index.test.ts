@@ -579,7 +579,14 @@ describe("active-memory plugin", () => {
     vi.restoreAllMocks();
     testing.resetActiveRecallCacheForTests();
     if (stateDir) {
-      await fs.rm(stateDir, { recursive: true, force: true });
+      try {
+        await fs.rm(stateDir, { recursive: true, force: true });
+      } catch (error) {
+        // Windows may keep sqlite handles briefly open after plugin teardown.
+        if ((error as NodeJS.ErrnoException).code !== "EBUSY") {
+          throw error;
+        }
+      }
       stateDir = "";
     }
   });
@@ -6481,6 +6488,100 @@ describe("active-memory plugin", () => {
     expect(testing.getCircuitBreakerEntry("agent:old")).toBeUndefined();
     expect(testing.getCircuitBreakerEntry("agent:peer")?.consecutiveTimeouts).toBe(1);
     expect(testing.getCircuitBreakerEntry("agent:later")?.consecutiveTimeouts).toBe(1);
+  });
+
+  it("runtime proof: plugin timeout path trips breaker and tracks distinct keys", async () => {
+    const CONFIGURED_TIMEOUT_MS = 25;
+    testing.setMinimumTimeoutMsForTests(1);
+    testing.setSetupGraceTimeoutMsForTests(0);
+    const agentIds = Array.from({ length: 8 }, (_, i) => `cbagent${i}`);
+    api.pluginConfig = {
+      agents: agentIds,
+      timeoutMs: CONFIGURED_TIMEOUT_MS,
+      logging: true,
+      circuitBreakerMaxTimeouts: 1,
+      circuitBreakerCooldownMs: 60_000,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    runEmbeddedAgent.mockImplementation(
+      async (params: { abortSignal?: AbortSignal }) => await waitForAbort(params.abortSignal),
+    );
+
+    for (const agentId of agentIds) {
+      const sessionKey = `agent:${agentId}:proof`;
+      hoisted.sessionStore[sessionKey] = {
+        sessionId: `s-${agentId}`,
+        updatedAt: 0,
+      };
+      await hooks.before_prompt_build(
+        { prompt: `proof timeout ${agentId}`, messages: [] },
+        {
+          agentId,
+          trigger: "user",
+          sessionKey,
+          messageProvider: "webchat",
+        },
+      );
+    }
+
+    const sizeAfterDistinctTimeouts = testing.getTimeoutCircuitBreakerSize();
+    const embeddedRuns = runEmbeddedAgent.mock.calls.length;
+    expect(embeddedRuns).toBeGreaterThanOrEqual(6);
+    expect(sizeAfterDistinctTimeouts).toBe(embeddedRuns);
+
+    // Re-run the first agent that actually timed out → breaker open, no extra embedded run.
+    const probeAgent = agentIds.find((agentId) =>
+      Boolean(
+        testing.getCircuitBreakerEntry(
+          testing.buildCircuitBreakerKey(agentId, "github-copilot", "gpt-5.4-mini"),
+        ),
+      ),
+    );
+    expect(probeAgent).toBeTruthy();
+    const probeSession = `agent:${probeAgent}:proof`;
+    const callsBeforeSkip = runEmbeddedAgent.mock.calls.length;
+    await hooks.before_prompt_build(
+      { prompt: "proof breaker skip", messages: [] },
+      {
+        agentId: probeAgent,
+        trigger: "user",
+        sessionKey: probeSession,
+        messageProvider: "webchat",
+      },
+    );
+    expect(runEmbeddedAgent.mock.calls.length).toBe(callsBeforeSkip);
+
+    const infoLines = vi
+      .mocked(api.logger.info)
+      .mock.calls.map((call: unknown[]) => String(call[0]));
+    const redacted = infoLines
+      .filter((line) => line.includes("active-memory:") || line.includes("circuit breaker"))
+      .map((line) =>
+        line
+          .replace(/session=[^\s]+/g, "session=<redacted>")
+          .replace(/queryChars=\d+/g, "queryChars=<n>"),
+      );
+
+    expect(redacted.some((line) => line.includes("circuit breaker open"))).toBe(true);
+
+    const proof = {
+      path: "before_prompt_build → recordCircuitBreakerTimeout(config.circuitBreakerCooldownMs)",
+      timeoutMs: CONFIGURED_TIMEOUT_MS,
+      circuitBreakerMaxTimeouts: 1,
+      circuitBreakerCooldownMs: 60_000,
+      distinctAgentsAttempted: agentIds.length,
+      distinctAgentsTimedOut: embeddedRuns,
+      breakerMapSize: sizeAfterDistinctTimeouts,
+      embeddedRuns,
+      skippedAdditionalRunOnOpenBreaker: true,
+      redactedPluginLogs: redacted.slice(-12),
+    };
+    await fs.writeFile(
+      path.join(process.cwd(), ".tmp-am-runtime-proof.json"),
+      `${JSON.stringify(proof, null, 2)}\n`,
+      "utf8",
+    );
+    expect(proof.breakerMapSize).toBe(proof.embeddedRuns);
   });
 });
 
