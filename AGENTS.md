@@ -120,7 +120,7 @@ Skills own workflows; root owns hard policy and routing.
 - Checks in a normal source checkout: `pnpm check:changed` delegates to Crabbox/Testbox; lanes: `pnpm changed:lanes --json`; staged: `pnpm check:changed --staged`; full: `pnpm check`.
 - Checks in a Codex worktree or linked/sparse checkout: avoid direct local `pnpm check*`; use `node scripts/crabbox-wrapper.mjs run ... -- env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 corepack pnpm check:changed` so pnpm runs inside Testbox, not locally.
 - Direct Testbox runs: pass `--provider blacksmith-testbox`; `OPENCLAW_TESTBOX=1` only selects `scripts/pr` prepare behavior.
-- Crabbox wrapper stop: pass the lease as `--id <lease>`; positional ids are rejected.
+- Crabbox wrapper stop: `node scripts/crabbox-wrapper.mjs stop --provider <provider> --id <lease>`; no positional id or `--timing-json`.
 - Extension tests: `pnpm test:extensions`, `pnpm test extensions`, `pnpm test extensions/<id>`.
 - Typecheck: `tsgo` lanes only (`pnpm tsgo*`, `pnpm check:test-types`); never add `tsc --noEmit`, `typecheck`, `check:types`.
 - Formatting: `oxfmt`, not Prettier. Use repo wrappers (`pnpm format:*`, `pnpm lint:*`, `scripts/run-oxlint.mjs`).
