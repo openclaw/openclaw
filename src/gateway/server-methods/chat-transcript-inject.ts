@@ -161,7 +161,6 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
 
 /** Append a TUI-local `!`/`!!` shell command result to a session transcript, no agent turn. */
 export async function appendInjectedBashExecutionMessageToTranscript(params: {
-  transcriptPath?: string;
   storePath?: string;
   sessionId?: string;
   sessionKey?: string;
@@ -190,20 +189,19 @@ export async function appendInjectedBashExecutionMessageToTranscript(params: {
   };
 
   try {
-    if (!params.transcriptPath && (!params.storePath || !params.sessionId || !params.sessionKey)) {
+    if (!params.storePath || !params.sessionId || !params.sessionKey) {
       return { ok: false, error: "transcript identity not resolved" };
     }
     const turn = await persistSessionTranscriptTurn(
       {
-        sessionKey: params.sessionKey ?? "",
-        ...(params.transcriptPath ? { sessionFile: params.transcriptPath } : {}),
-        ...(params.storePath ? { storePath: params.storePath } : {}),
-        ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+        sessionId: params.sessionId,
         ...(params.agentId ? { agentId: params.agentId } : {}),
       },
       {
         updateMode: "inline",
-        touchSessionEntry: Boolean(params.storePath && params.sessionId && params.sessionKey),
+        touchSessionEntry: true,
         ...(params.config ? { config: params.config } : {}),
         messages: [
           { message: messageBody, idempotencyLookup: "scan", now, useRawWhenLinear: true },

@@ -1,29 +1,80 @@
 // Guardrail: TUI-local `!`/`!!` shell command persistence must attach to the current
-// leaf with a `parentId` (like other injected transcript messages) and must round-trip
+// append parent (like other injected transcript messages) and must round-trip
 // excludeFromContext so `!!` output never reaches the model while `!` output does.
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+  appendTranscriptMessageSync,
+  loadTranscriptEvents,
+  replaceSessionEntry,
+  type TranscriptEvent,
+  withTranscriptWriteLock,
+} from "../../config/sessions/session-accessor.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { appendInjectedBashExecutionMessageToTranscript } from "./chat-transcript-inject.js";
-import { createTranscriptFixtureSync } from "./chat.test-helpers.js";
 
-function readLastTranscriptRecord(transcriptPath: string): Record<string, unknown> {
-  const lines = fs
-    .readFileSync(transcriptPath, "utf-8")
-    .split(/\r?\n/)
-    .filter((line) => line.length > 0);
-  expect(lines.length).toBeGreaterThanOrEqual(2);
-  return JSON.parse(lines.at(-1) as string) as Record<string, unknown>;
+type SqliteTranscriptFixture = {
+  agentId: string;
+  dir: string;
+  sessionKey: string;
+  sessionId: string;
+  storePath: string;
+};
+
+async function createSqliteTranscriptFixture(params: {
+  prefix: string;
+  sessionId: string;
+}): Promise<SqliteTranscriptFixture> {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), params.prefix));
+  const sessionKey = "main";
+  const agentId = "main";
+  const storePath = path.join(dir, "sessions.json");
+  await replaceSessionEntry(
+    { agentId, sessionKey, storePath },
+    { sessionId: params.sessionId, updatedAt: Date.now() },
+  );
+  return { agentId, dir, sessionKey, sessionId: params.sessionId, storePath };
+}
+
+async function cleanupFixture(fixture: { dir: string }) {
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
+  fs.rmSync(fixture.dir, { recursive: true, force: true });
+}
+
+function fixtureScope(fixture: SqliteTranscriptFixture) {
+  return {
+    agentId: fixture.agentId,
+    sessionId: fixture.sessionId,
+    sessionKey: fixture.sessionKey,
+    storePath: fixture.storePath,
+  };
+}
+
+async function readLastTranscriptRecord(
+  fixture: SqliteTranscriptFixture,
+): Promise<Record<string, unknown>> {
+  const events = (await loadTranscriptEvents(fixtureScope(fixture))) as Record<string, unknown>[];
+  expect(events.length).toBeGreaterThanOrEqual(2);
+  return events.at(-1) as Record<string, unknown>;
 }
 
 describe("appendInjectedBashExecutionMessageToTranscript", () => {
   it("appends a bashExecution message with parentId, agent-visible by default", async () => {
-    const { dir, transcriptPath } = createTranscriptFixtureSync({
+    const fixture = await createSqliteTranscriptFixture({
       prefix: "openclaw-chat-inject-bash-",
       sessionId: "sess-1",
     });
     try {
+      const prior = appendTranscriptMessageSync(fixtureScope(fixture), {
+        message: { role: "user", content: [{ type: "text", text: "run something" }] },
+      });
+
       const appended = await appendInjectedBashExecutionMessageToTranscript({
-        transcriptPath,
+        ...fixtureScope(fixture),
         command: "ls",
         output: "a.txt\nb.txt",
         exitCode: 0,
@@ -32,8 +83,10 @@ describe("appendInjectedBashExecutionMessageToTranscript", () => {
       expect(appended.ok).toBe(true);
       expect(appended.messageId).toBeTypeOf("string");
 
-      const last = readLastTranscriptRecord(transcriptPath);
-      expect(Object.hasOwn(last, "parentId")).toBe(true);
+      const last = await readLastTranscriptRecord(fixture);
+      // Attaches to the current append parent so compaction and chat.history
+      // projection keep a connected chain.
+      expect(last.parentId).toBe(prior?.messageId);
       const message = last.message as Record<string, unknown>;
       expect(message.role).toBe("bashExecution");
       expect(message.command).toBe("ls");
@@ -42,18 +95,18 @@ describe("appendInjectedBashExecutionMessageToTranscript", () => {
       // `!` (agent-visible): excludeFromContext must not be set at all.
       expect(Object.hasOwn(message, "excludeFromContext")).toBe(false);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      await cleanupFixture(fixture);
     }
   });
 
   it("persists excludeFromContext: true for a `!!` command", async () => {
-    const { dir, transcriptPath } = createTranscriptFixtureSync({
+    const fixture = await createSqliteTranscriptFixture({
       prefix: "openclaw-chat-inject-bash-bangbang-",
       sessionId: "sess-1",
     });
     try {
       const appended = await appendInjectedBashExecutionMessageToTranscript({
-        transcriptPath,
+        ...fixtureScope(fixture),
         command: "cat secrets.env",
         output: "API_KEY=fake",
         exitCode: 0,
@@ -61,80 +114,60 @@ describe("appendInjectedBashExecutionMessageToTranscript", () => {
       });
 
       expect(appended.ok).toBe(true);
-      const last = readLastTranscriptRecord(transcriptPath);
+      const last = await readLastTranscriptRecord(fixture);
       const message = last.message as Record<string, unknown>;
       expect(message.role).toBe("bashExecution");
       expect(message.excludeFromContext).toBe(true);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      await cleanupFixture(fixture);
     }
   });
 
-  it("appends as a side entry while an agent run owns the active leaf", async () => {
-    // Regression: injecting a `!` result while a run is mid-turn used to append an
-    // active-leaf entry, which the run's session-file fence reported as a takeover
-    // ("session file changed while embedded prompt lock was released"), killing the run.
-    const { dir, transcriptPath } = createTranscriptFixtureSync({
+  it("attaches to the run's append parent while a side-branch leaf control is active", async () => {
+    // While an agent run is in flight, the newest transcript event can be a
+    // side-mode leaf control owning the visible leaf. An injected `!` row must
+    // chain onto that control's appendParentId — not sever the run's branch —
+    // so the run adopts the row on its next append instead of orphaning it.
+    const fixture = await createSqliteTranscriptFixture({
       prefix: "openclaw-chat-inject-bash-midrun-",
       sessionId: "sess-1",
     });
     try {
-      fs.appendFileSync(
-        transcriptPath,
-        `${JSON.stringify({
-          type: "message",
-          id: "user-1",
-          parentId: null,
-          timestamp: new Date(1).toISOString(),
-          message: { role: "user", content: "run something", timestamp: 1 },
-        })}\n${JSON.stringify({
-          // The leaf control an in-flight run leaves while released for its prompt.
-          type: "leaf",
-          id: "leaf-1",
-          parentId: "user-1",
-          targetId: "user-1",
-          appendParentId: "user-1",
-          appendMode: "side",
-        })}\n`,
-        "utf-8",
-      );
+      const timestamp = new Date().toISOString();
+      await withTranscriptWriteLock(fixtureScope(fixture), async (context) => {
+        await context.replaceEvents([
+          {
+            type: "message",
+            id: "user-1",
+            parentId: null,
+            timestamp,
+            message: { role: "user", content: [{ type: "text", text: "start a run" }] },
+          },
+          {
+            type: "leaf",
+            id: "leaf-1",
+            parentId: "user-1",
+            timestamp,
+            targetId: "user-1",
+            appendParentId: "user-1",
+            appendMode: "side",
+          },
+        ] satisfies TranscriptEvent[]);
+      });
 
       const appended = await appendInjectedBashExecutionMessageToTranscript({
-        transcriptPath,
-        command: "echo mid-run",
-        output: "mid-run",
+        ...fixtureScope(fixture),
+        command: "git status",
+        output: "clean",
         exitCode: 0,
       });
 
       expect(appended.ok).toBe(true);
-      const last = readLastTranscriptRecord(transcriptPath);
-      expect((last.message as Record<string, unknown>).role).toBe("bashExecution");
+      const last = await readLastTranscriptRecord(fixture);
       expect(last.parentId).toBe("user-1");
-      // Side append: the run keeps the active leaf and adopts this entry later.
-      expect(last.appendMode).toBe("side");
+      expect((last.message as Record<string, unknown>).role).toBe("bashExecution");
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("appends as a normal active entry when no run holds the leaf", async () => {
-    const { dir, transcriptPath } = createTranscriptFixtureSync({
-      prefix: "openclaw-chat-inject-bash-idle-",
-      sessionId: "sess-1",
-    });
-    try {
-      const appended = await appendInjectedBashExecutionMessageToTranscript({
-        transcriptPath,
-        command: "echo idle",
-        output: "idle",
-        exitCode: 0,
-      });
-
-      expect(appended.ok).toBe(true);
-      const last = readLastTranscriptRecord(transcriptPath);
-      expect(Object.hasOwn(last, "appendMode")).toBe(false);
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      await cleanupFixture(fixture);
     }
   });
 

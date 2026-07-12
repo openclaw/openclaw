@@ -1,5 +1,5 @@
 // Exercises slower TUI PTY paths against real local and Gateway backends.
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -11,6 +11,7 @@ import {
 } from "../../test/helpers/openclaw-test-instance.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { createDeferred } from "../test-utils/deferred.js";
 import { GatewayChatClient } from "./gateway-chat.js";
 import { sleep, startPty, waitFor, type PtyRun } from "./tui-pty-test-support.js";
@@ -918,21 +919,35 @@ describe("TUI PTY real backends", () => {
 
         // Both rows must be persisted with the right context visibility. The
         // persist write lands after the `[local] exit` echo renders, so poll.
-        const readBashExecutionRows = async () => {
-          const transcripts = await readdir(fixture.tempDir, { recursive: true });
-          const sessionFiles = transcripts.filter((file) => file.endsWith(".jsonl"));
-          const contents = await Promise.all(
-            sessionFiles.map((file) => readFile(path.join(fixture.tempDir, file), "utf8")),
-          );
-          return contents
-            .flatMap((content) => content.split("\n").filter(Boolean))
-            .map((line) => JSON.parse(line) as Record<string, unknown>)
+        // Transcripts live in the per-agent SQLite DB, so read the raw event
+        // rows from every agent database under the temp state dir.
+        const readTranscriptEventRows = async () => {
+          const files = await readdir(fixture.tempDir, { recursive: true });
+          const databases = files.filter((file) => file.endsWith("openclaw-agent.sqlite"));
+          const { DatabaseSync } = requireNodeSqlite();
+          const events: Array<Record<string, unknown>> = [];
+          for (const file of databases) {
+            const db = new DatabaseSync(path.join(fixture.tempDir, file), { readOnly: true });
+            try {
+              const rows = db
+                .prepare("SELECT event_json FROM transcript_events ORDER BY seq")
+                .all() as Array<{ event_json: string }>;
+              events.push(
+                ...rows.map((row) => JSON.parse(row.event_json) as Record<string, unknown>),
+              );
+            } finally {
+              db.close();
+            }
+          }
+          return events;
+        };
+        const readBashExecutionRows = async () =>
+          (await readTranscriptEventRows())
             .filter(
               (row) =>
                 (row.message as Record<string, unknown> | undefined)?.role === "bashExecution",
             )
             .map((row) => row.message as Record<string, unknown>);
-        };
         let rows: Array<Record<string, unknown>> = [];
         const rowsDeadline = Date.now() + LOCAL_OUTPUT_TIMEOUT_MS;
         while (rows.length < 2 && Date.now() < rowsDeadline) {
@@ -961,31 +976,20 @@ describe("TUI PTY real backends", () => {
         });
         const modelRequest = JSON.stringify(fixture.mockModel.requests()[1]?.body);
         if (!modelRequest.includes("PROOF_AGENT_VISIBLE_123")) {
-          const transcripts = await readdir(fixture.tempDir, { recursive: true });
-          const sessionFiles = transcripts.filter((file) => file.endsWith(".jsonl"));
-          const dumps = await Promise.all(
-            sessionFiles.map(async (file) => {
-              const content = await readFile(path.join(fixture.tempDir, file), "utf8");
-              const summary = content
-                .split("\n")
-                .filter(Boolean)
-                .map((line) => {
-                  const row = JSON.parse(line) as Record<string, unknown>;
-                  const message = row.message as Record<string, unknown> | undefined;
-                  return JSON.stringify({
-                    type: row.type,
-                    id: row.id,
-                    parentId: row.parentId,
-                    appendMode: row.appendMode,
-                    role: message?.role,
-                  });
-                })
-                .join("\n  ");
-              return `${file}:\n  ${summary}`;
-            }),
-          );
+          const dump = (await readTranscriptEventRows())
+            .map((row) => {
+              const message = row.message as Record<string, unknown> | undefined;
+              return JSON.stringify({
+                type: row.type,
+                id: row.id,
+                parentId: row.parentId,
+                appendMode: row.appendMode,
+                role: message?.role,
+              });
+            })
+            .join("\n  ");
           throw new Error(
-            `model request missing PROOF_AGENT_VISIBLE_123\nrequest=${modelRequest.slice(0, 2000)}\n\ntranscripts:\n${dumps.join("\n")}`,
+            `model request missing PROOF_AGENT_VISIBLE_123\nrequest=${modelRequest.slice(0, 2000)}\n\ntranscript events:\n  ${dump}`,
           );
         }
         expect(modelRequest).toContain("PROOF_AGENT_VISIBLE_123");
