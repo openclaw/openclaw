@@ -8,12 +8,14 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
 import { clearConfigCache, getRuntimeConfig } from "../config/config.js";
+import { appendTranscriptEvent, loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { invalidateSessionStoreCache } from "../config/sessions/store-cache.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
 import { createDeferred } from "../test-utils/deferred.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { setMaxChatHistoryMessagesBytesForTest } from "./server-constants.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/shared-types.js";
@@ -97,13 +99,12 @@ function testSessionFilePath(sessionDir: string, sessionId: string): string {
   return path.join(sessionDir, `${sessionId}.jsonl`);
 }
 
-async function writeMainSessionStore(sessionDir?: string, sessionId = "sess-main") {
+async function writeMainSessionStore(_sessionDir?: string, sessionId = "sess-main") {
   await writeSessionStore({
     entries: {
       main: {
         sessionId,
         updatedAt: futureFixtureUpdatedAt(),
-        ...(sessionDir ? { sessionFile: testSessionFilePath(sessionDir, sessionId) } : {}),
       },
     },
   });
@@ -136,11 +137,32 @@ async function writeGatewayConfig(config: Record<string, unknown>) {
 }
 
 async function writeMainSessionTranscript(
-  sessionDir: string,
+  _sessionDir: string,
   lines: string[],
   sessionId = "sess-main",
+  opts?: {
+    agentId?: string;
+    sessionKey?: string;
+  },
 ) {
-  await fs.writeFile(testSessionFilePath(sessionDir, sessionId), `${lines.join("\n")}\n`, "utf-8");
+  const storePath = testState.sessionStorePath;
+  if (!storePath) {
+    throw new Error("session store path was not initialized");
+  }
+  for (const line of lines) {
+    if (!line.trim()) {
+      continue;
+    }
+    await appendTranscriptEvent(
+      {
+        agentId: opts?.agentId ?? "main",
+        sessionId,
+        sessionKey: opts?.sessionKey ?? "agent:main:main",
+        storePath,
+      },
+      JSON.parse(line) as unknown,
+    );
+  }
 }
 
 async function removeTempDir(dir: string): Promise<void> {
@@ -594,11 +616,13 @@ describe("gateway server chat", () => {
         },
       });
       const catalog =
-        createDeferred<Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalog"]>>>();
+        createDeferred<
+          Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>>
+        >();
       const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
       const context = {
-        loadGatewayModelCatalog: vi
-          .fn<GatewayRequestContext["loadGatewayModelCatalog"]>()
+        loadGatewayModelCatalogSnapshot: vi
+          .fn<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>()
           .mockReturnValue(catalog.promise),
         logGateway: {
           info: vi.fn(),
@@ -628,7 +652,7 @@ describe("gateway server chat", () => {
         context,
       });
 
-      expect(context.loadGatewayModelCatalog).toHaveBeenCalledTimes(1);
+      expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledTimes(1);
       expect(responses).toHaveLength(1);
       expect(responses[0]?.ok).toBe(true);
       const payload = responses[0]?.payload as
@@ -645,6 +669,278 @@ describe("gateway server chat", () => {
       testState.sessionStorePath = undefined;
       await removeTempDir(sessionDir);
     }
+  });
+
+  test("chat.startup projects route thinking metadata per agent and session auth", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-gw-startup-routes-",
+        agentEnv: "main",
+        env: {
+          CHATGPT_OAUTH_TOKEN: undefined,
+          CODEX_API_KEY: undefined,
+          CODEX_HOME: "/__openclaw_gateway_startup_routes__/codex",
+          OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+          OPENAI_API_KEY: undefined,
+          OPENAI_BASE_URL: undefined,
+          OPENAI_OAUTH_TOKEN: undefined,
+        },
+      },
+      async (state) => {
+        const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+        try {
+          testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+          const config = {
+            agents: {
+              defaults: {
+                model: { primary: "openai/gpt-5.5" },
+                models: { "openai/gpt-5.5": {} },
+              },
+              list: [{ id: "main", default: true }, { id: "work" }],
+            },
+            auth: {
+              order: { openai: ["openai:api", "openai:chatgpt", "openai:expired"] },
+            },
+          };
+          await state.writeConfig(config);
+          clearConfigCache();
+          await writeSessionStore({
+            entries: {
+              "agent:work:main": {
+                sessionId: "sess-work",
+                modelProvider: "openai",
+                model: "gpt-5.5",
+                authProfileOverride: "openai:chatgpt",
+                authProfileOverrideSource: "user",
+                updatedAt: Date.now(),
+              },
+              "agent:work:auto": {
+                sessionId: "sess-work-auto",
+                modelProvider: "openai",
+                model: "gpt-5.5",
+                authProfileOverride: "openai:expired",
+                authProfileOverrideSource: "auto",
+                updatedAt: Date.now(),
+              },
+              "agent:work:auto-preferred": {
+                sessionId: "sess-work-auto-preferred",
+                modelProvider: "openai",
+                model: "gpt-5.5",
+                authProfileOverride: "openai:chatgpt",
+                authProfileOverrideSource: "auto",
+                updatedAt: Date.now(),
+              },
+              "agent:work:legacy-auto": {
+                sessionId: "sess-work-legacy-auto",
+                modelProvider: "openai",
+                model: "gpt-5.5",
+                authProfileOverride: "openai:expired",
+                authProfileOverrideCompactionCount: 0,
+                updatedAt: Date.now(),
+              },
+            },
+          });
+          await state.writeAuthProfiles({
+            version: 1,
+            profiles: {
+              "openai:chatgpt": {
+                type: "oauth",
+                provider: "openai",
+                access: "chatgpt-access",
+                refresh: "chatgpt-refresh",
+                expires: Date.now() + 30 * 60_000,
+              },
+            },
+          });
+          await state.writeAuthProfiles(
+            {
+              version: 1,
+              profiles: {
+                "openai:api": {
+                  type: "api_key",
+                  provider: "openai",
+                  key: "platform-api-key",
+                },
+                "openai:chatgpt": {
+                  type: "oauth",
+                  provider: "openai",
+                  access: "work-chatgpt-access",
+                  refresh: "work-chatgpt-refresh",
+                  expires: Date.now() + 30 * 60_000,
+                },
+                "openai:expired": {
+                  type: "oauth",
+                  provider: "openai",
+                  access: "expired-work-chatgpt-access",
+                  expires: Date.now() - 60_000,
+                },
+              },
+            },
+            "work",
+          );
+          const platformRoute = {
+            id: "gpt-5.5",
+            name: "GPT-5.5",
+            provider: "openai",
+            api: "openai-responses" as const,
+            baseUrl: "https://api.openai.com/v1",
+            contextWindow: 1_000_000,
+            reasoning: true,
+            compat: { supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh"] },
+          };
+          const subscriptionRoute = {
+            ...platformRoute,
+            api: "openai-chatgpt-responses" as const,
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+            contextWindow: 400_000,
+            reasoning: false,
+            compat: { supportedReasoningEfforts: ["low"] },
+            params: { apiKey: "private-route-token" },
+          };
+          const catalogSnapshot = {
+            entries: [subscriptionRoute],
+            routeVariants: [subscriptionRoute, platformRoute],
+          };
+          const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+          const context = {
+            loadGatewayModelCatalogSnapshot: vi
+              .fn<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>()
+              .mockResolvedValue(catalogSnapshot),
+            logGateway: {
+              info: vi.fn(),
+              warn: vi.fn(),
+              error: vi.fn(),
+              debug: vi.fn(),
+            },
+            chatAbortControllers: new Map(),
+            chatRunBuffers: new Map(),
+            getRuntimeConfig: () => config,
+          } as unknown as GatewayRequestContext;
+          const { createGatewayAgentModelCatalogProjector } =
+            await import("./server-methods/models-list-result.js");
+          const persistedConfig = getRuntimeConfig();
+          expect(persistedConfig.auth?.order?.openai).toEqual([
+            "openai:api",
+            "openai:chatgpt",
+            "openai:expired",
+          ]);
+          const expiredPreferenceEvaluation = await createGatewayAgentModelCatalogProjector({
+            cfg: persistedConfig,
+            agentId: "work",
+            snapshot: catalogSnapshot,
+            preferredProfileId: "openai:expired",
+          }).evaluateEntry(subscriptionRoute, catalogSnapshot.routeVariants);
+          expect(expiredPreferenceEvaluation).toMatchObject({
+            availability: true,
+            selectedProfileId: "openai:api",
+            selectedRoute: { authRequirement: "api-key" },
+          });
+          const { chatHandlers } = await import("./server-methods/chat.js");
+
+          await chatHandlers["chat.startup"]({
+            req: {
+              type: "req",
+              id: "startup-dual-route-catalog",
+              method: "chat.startup",
+              params: { sessionKey: "agent:work:main" },
+            },
+            params: { sessionKey: "agent:work:main" },
+            client: null,
+            isWebchatConnect: () => false,
+            respond: ((ok, payload, error) => {
+              responses.push({ ok, payload, error });
+            }) as RespondFn,
+            context,
+          });
+
+          expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledTimes(1);
+          expect(responses).toHaveLength(1);
+          expect(responses[0]?.ok).toBe(true);
+          const payload = responses[0]?.payload as
+            | {
+                metadata?: { models?: unknown[] };
+                sessionInfo?: { thinkingLevels?: Array<{ id?: string }> };
+                defaults?: { thinkingLevels?: Array<{ id?: string }> };
+                agentsList?: {
+                  agents?: Array<{ id?: string; thinkingLevels?: Array<{ id?: string }> }>;
+                };
+              }
+            | undefined;
+          expect(payload?.metadata?.models).toEqual([
+            {
+              id: "gpt-5.5",
+              name: "GPT-5.5",
+              provider: "openai",
+              contextWindow: 400_000,
+              reasoning: false,
+              available: true,
+            },
+          ]);
+          expect(payload?.sessionInfo?.thinkingLevels?.map((level) => level.id)).toEqual(["off"]);
+          expect(payload?.defaults?.thinkingLevels?.map((level) => level.id)).toEqual(["off"]);
+          const mainAgent = payload?.agentsList?.agents?.find((agent) => agent.id === "main");
+          const workAgent = payload?.agentsList?.agents?.find((agent) => agent.id === "work");
+          expect(mainAgent?.thinkingLevels?.map((level) => level.id)).toEqual(["off"]);
+          expect(workAgent?.thinkingLevels?.map((level) => level.id)).toContain("high");
+          const serialized = JSON.stringify(responses[0]?.payload);
+          expect(serialized).not.toContain("private-route-token");
+          expect(serialized).not.toContain("platform-api-key");
+          expect(serialized).not.toContain("chatgpt-access");
+          expect(serialized).not.toContain("supportedReasoningEfforts");
+          expect(serialized).not.toContain(platformRoute.baseUrl);
+          expect(serialized).not.toContain(subscriptionRoute.baseUrl);
+
+          for (const [index, [sessionKey, expectedRoute]] of [
+            ["agent:work:auto-preferred", "subscription"],
+            ["agent:work:auto", "platform"],
+            ["agent:work:legacy-auto", "platform"],
+          ].entries()) {
+            responses.length = 0;
+            await chatHandlers["chat.startup"]({
+              req: {
+                type: "req",
+                id: `startup-preferred-route-${index}`,
+                method: "chat.startup",
+                params: { sessionKey },
+              },
+              params: { sessionKey },
+              client: null,
+              isWebchatConnect: () => false,
+              respond: ((ok, responsePayload, error) => {
+                responses.push({ ok, payload: responsePayload, error });
+              }) as RespondFn,
+              context,
+            });
+
+            expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledTimes(index + 2);
+            expect(responses).toHaveLength(1);
+            expect(responses[0]?.ok).toBe(true);
+            const preferredPayload = responses[0]?.payload as
+              | {
+                  metadata?: { models?: Array<{ contextWindow?: number }> };
+                  sessionInfo?: { thinkingLevels?: Array<{ id?: string }> };
+                }
+              | undefined;
+            expect(preferredPayload?.metadata?.models?.[0]?.contextWindow, sessionKey).toBe(
+              expectedRoute === "subscription" ? 400_000 : 1_000_000,
+            );
+            const thinkingLevels = preferredPayload?.sessionInfo?.thinkingLevels?.map(
+              (level) => level.id,
+            );
+            if (expectedRoute === "subscription") {
+              expect(thinkingLevels, sessionKey).toEqual(["off"]);
+            } else {
+              expect(thinkingLevels, sessionKey).toContain("high");
+            }
+          }
+        } finally {
+          testState.sessionStorePath = undefined;
+          await removeTempDir(sessionDir);
+        }
+      },
+    );
   });
 
   test("chat.startup omits metadata when configured model visibility needs full discovery", async () => {
@@ -730,25 +1026,24 @@ describe("gateway server chat", () => {
       await writeGatewayConfig(config);
       const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
       const context = {
-        loadGatewayModelCatalog: vi
-          .fn<GatewayRequestContext["loadGatewayModelCatalog"]>()
+        loadGatewayModelCatalogSnapshot: vi
+          .fn<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>()
           .mockImplementation(async () => {
             await Promise.resolve();
             await Promise.resolve();
-            return [
+            const entries = [
               {
                 id: "gpt-main",
                 name: "GPT Main",
                 provider: "openai",
-                input: ["text"],
               },
               {
                 id: "MiniMax-M2.7-highspeed",
                 name: "MiniMax M2.7 Highspeed",
                 provider: "minimax",
-                input: ["text"],
               },
             ];
+            return { entries, routeVariants: entries };
           }),
         logGateway: {
           info: vi.fn(),
@@ -778,7 +1073,7 @@ describe("gateway server chat", () => {
         context,
       });
 
-      expect(context.loadGatewayModelCatalog).toHaveBeenCalledTimes(1);
+      expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledTimes(1);
       expect(responses).toHaveLength(1);
       expect(responses[0]?.ok).toBe(true);
       const payload = responses[0]?.payload as
@@ -1421,7 +1716,8 @@ describe("gateway server chat", () => {
 
   test("chat.send does not recreate a session deleted while admission waits", async () => {
     const sessionDir = autoCleanupTempDirs.make("openclaw-gw-");
-    const releaseMutation = createDeferred();
+    const performDeletion = createDeferred();
+    let mutation: Promise<void> | undefined;
     try {
       testState.sessionStorePath = path.join(sessionDir, "sessions.json");
       await writeSessionStore({
@@ -1432,18 +1728,46 @@ describe("gateway server chat", () => {
           },
         },
       });
+      const [{ deleteSessionEntryLifecycle }, { loadSessionEntry: loadGatewaySessionEntry }] =
+        await Promise.all([
+          import("../config/sessions/session-accessor.js"),
+          import("./session-utils.js"),
+        ]);
+      const seededSession = loadGatewaySessionEntry("main");
+      const seededSessionId = seededSession.entry?.sessionId;
+      expect(seededSessionId).toBe("sess-main");
       const mutationStarted = createDeferred();
-      const mutation = runExclusiveSessionLifecycleMutation({
-        scope: testState.sessionStorePath,
-        identities: ["agent:main:main", "sess-main"],
+      mutation = runExclusiveSessionLifecycleMutation({
+        scope: seededSession.storePath,
+        identities: [seededSession.canonicalKey, seededSessionId],
         run: async () => {
           mutationStarted.resolve();
-          await releaseMutation.promise;
+          await performDeletion.promise;
+          // Use the resolved store target: writeSessionStore also rewrites the
+          // suite config, adding an unrelated config-watcher race to this test.
+          const deletion = await deleteSessionEntryLifecycle({
+            agentId: "main",
+            archiveTranscript: false,
+            expectedEntry: seededSession.entry,
+            expectedSessionId: seededSessionId,
+            requireWriteSuccess: true,
+            storePath: seededSession.storePath,
+            target: {
+              canonicalKey: seededSession.canonicalKey,
+              storeKeys: seededSession.storeKeys,
+            },
+          });
+          expect(deletion.deleted).toBe(true);
         },
       });
       await mutationStarted.promise;
 
-      const sendResponses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const sendResponses: Array<{
+        ok: boolean;
+        payload?: unknown;
+        error?: unknown;
+        meta?: unknown;
+      }> = [];
       const context = createDirectChatContext();
       const runId = "idem-deleted-during-admission";
       const params = {
@@ -1458,8 +1782,8 @@ describe("gateway server chat", () => {
           params,
           client: null,
           isWebchatConnect: () => false,
-          respond: ((ok, payload, error) => {
-            sendResponses.push({ ok, payload, error });
+          respond: ((ok, payload, error, meta) => {
+            sendResponses.push({ ok, payload, error, meta });
           }) as RespondFn,
           context,
         }),
@@ -1468,20 +1792,25 @@ describe("gateway server chat", () => {
         expect(context.dedupe.has(pendingChatSendDedupeKey(runId))).toBe(true);
       }, FAST_WAIT_OPTS);
 
-      await writeSessionStore({ entries: {} });
-      releaseMutation.resolve();
+      performDeletion.resolve();
       await mutation;
       await send;
 
-      expect(sendResponses).toHaveLength(1);
-      expect(sendResponses[0]?.ok).toBe(false);
-      expect(sendResponses[0]?.error).toMatchObject({
-        message: expect.stringMatching(/deleted while starting work/i),
-      });
+      expect(sendResponses).toEqual([
+        {
+          ok: false,
+          payload: undefined,
+          error: expect.objectContaining({
+            message: expect.stringMatching(/deleted while starting work/i),
+          }),
+          meta: undefined,
+        },
+      ]);
       expect(context.chatAbortControllers.has(runId)).toBe(false);
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
     } finally {
-      releaseMutation.resolve();
+      performDeletion.resolve();
+      await Promise.allSettled(mutation ? [mutation] : []);
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;
       clearConfigCache();
@@ -2567,6 +2896,11 @@ describe("gateway server chat", () => {
       );
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
 
+      const queuedEntry = context.chatQueuedTurns.get("idem-queued-followup");
+      expect(queuedEntry).toBeDefined();
+      queuedEntry?.controller.abort();
+      expect(context.chatQueuedTurns.has("idem-queued-followup")).toBe(false);
+
       queuedLifecycle?.onComplete?.();
       expect(context.chatQueuedTurns.has("idem-queued-followup")).toBe(false);
       await vi.waitFor(
@@ -3263,12 +3597,13 @@ describe("gateway server chat", () => {
       if (!sessionStorePath) {
         throw new Error("expected session store path");
       }
-      const stored = JSON.parse(await fs.readFile(sessionStorePath, "utf-8")) as Record<
-        string,
-        { lastChannel?: string; lastTo?: string } | undefined
-      >;
-      expect(stored["agent:main:main"]?.lastChannel).toBe("whatsapp");
-      expect(stored["agent:main:main"]?.lastTo).toBe("+1555");
+      const stored = loadSessionEntry({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        storePath: sessionStorePath,
+      });
+      expect(stored?.lastChannel).toBe("whatsapp");
+      expect(stored?.lastTo).toBe("+1555");
 
       await vi.waitFor(async () => {
         const completed = await rpcReq<{ status?: string }>(ws, "chat.send", {
@@ -3669,6 +4004,77 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.history preserves canonical parallel tool calls and bounded result diffs", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      const fullDiff = `-12 old line\n+12 ${"new line ".repeat(20)}`;
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "call-edit",
+                name: "edit",
+                arguments: { path: "src/a.ts", oldText: "old line", newText: "new line" },
+              },
+              {
+                type: "toolCall",
+                id: "call-read",
+                name: "read",
+                arguments: { path: "src/b.ts" },
+              },
+            ],
+            timestamp: 1,
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "toolResult",
+            toolCallId: "call-edit",
+            toolName: "edit",
+            content: [{ type: "text", text: "Updated src/a.ts" }],
+            details: { diff: fullDiff, internal: "not for display" },
+            timestamp: 2,
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "toolResult",
+            toolCallId: "call-read",
+            toolName: "read",
+            content: [{ type: "text", text: "contents of b" }],
+            timestamp: 3,
+          },
+        }),
+      ]);
+
+      const messages = await fetchHistoryMessages(ws, { maxChars: 48 });
+      expect(messages).toHaveLength(3);
+      const callMessage = messages[0] as {
+        content?: Array<{ id?: string; name?: string }>;
+      };
+      expect(callMessage.content?.map((block) => [block.id, block.name])).toEqual([
+        ["call-edit", "edit"],
+        ["call-read", "read"],
+      ]);
+      const editResult = messages[1] as {
+        toolCallId?: string;
+        details?: Record<string, unknown>;
+      };
+      expect(editResult.toolCallId).toBe("call-edit");
+      expect(editResult.details).toEqual({ diff: expect.any(String) });
+      const projectedDiff = editResult.details?.diff;
+      expect(typeof projectedDiff).toBe("string");
+      expect(projectedDiff).toContain("-12 old line");
+      expect(projectedDiff).toContain("...(truncated)...");
+      expect((projectedDiff as string).length).toBeLessThanOrEqual(
+        48 + "\n...(truncated)...".length,
+      );
+    });
+  });
+
   test("chat.history strips inline directives from displayed message text", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);
@@ -3904,21 +4310,25 @@ describe("gateway server chat", () => {
       await connectOk(ws);
       const sessionDir = await createSessionDir();
       await writeSessionStore({
+        agentId: "work",
         entries: {
           global: { sessionId: "sess-global", updatedAt: Date.now() },
         },
       });
-      await fs.writeFile(
-        path.join(sessionDir, "sess-global.jsonl"),
-        `${JSON.stringify({
-          id: "msg-global-agent",
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "global agent content" }],
-            timestamp: Date.now(),
-          },
-        })}\n`,
-        "utf-8",
+      await writeMainSessionTranscript(
+        sessionDir,
+        [
+          JSON.stringify({
+            id: "msg-global-agent",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "global agent content" }],
+              timestamp: Date.now(),
+            },
+          }),
+        ],
+        "sess-global",
+        { agentId: "work", sessionKey: "global" },
       );
 
       const full = await fetchChatMessage(ws, {
@@ -3931,9 +4341,10 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.message.get reports oversized transcript entries as unavailable", async () => {
+  test("chat.message.get reports oversized archive transcript entries as unavailable", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      const sessionId = "sess-oversized-archive";
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir, sessionId });
       const oversizedLine = JSON.stringify({
         id: "msg-oversized",
         message: {
@@ -3942,7 +4353,11 @@ describe("gateway server chat", () => {
           timestamp: Date.now(),
         },
       });
-      await writeMainSessionTranscript(sessionDir, [oversizedLine]);
+      await fs.writeFile(
+        `${testSessionFilePath(sessionDir, sessionId)}.reset.2026-02-16T22-26-34.000Z`,
+        [JSON.stringify({ type: "session", version: 1, id: sessionId }), oversizedLine].join("\n"),
+        "utf-8",
+      );
 
       const full = await fetchChatMessage(ws, {
         sessionKey: "main",
@@ -3951,6 +4366,30 @@ describe("gateway server chat", () => {
       expect(full.ok).toBe(false);
       expect(full.unavailableReason).toBe("oversized");
       expect(full.message).toBeUndefined();
+    });
+  });
+
+  test("chat.message.get returns active SQLite oversized transcript entries", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      const oversizedText = "x".repeat(300 * 1024);
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          id: "msg-oversized-sqlite",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: oversizedText }],
+            timestamp: Date.now(),
+          },
+        }),
+      ]);
+
+      const full = await fetchChatMessage(ws, {
+        sessionKey: "main",
+        messageId: "msg-oversized-sqlite",
+      });
+      expect(full.ok).toBe(true);
+      expect(JSON.stringify(full.message)).toContain(oversizedText.slice(0, 256));
     });
   });
 

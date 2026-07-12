@@ -63,11 +63,7 @@ const manifestNormalizationSnapshot = vi.hoisted(() => ({
               "gemini-3.1-flash-preview": "gemini-3-flash-preview",
             },
           },
-          xai: {
-            aliases: {
-              "grok-4.20-experimental-beta-0304-reasoning": "grok-4.20-beta-latest-reasoning",
-            },
-          },
+          xai: { aliases: {} },
           openrouter: {
             prefixWhenBare: "openrouter",
           },
@@ -133,6 +129,7 @@ vi.mock("./provider-model-normalization.runtime.js", () => ({
 vi.mock("../plugins/provider-public-artifacts.js", () => ({
   resolveBundledProviderPolicySurface:
     providerPolicySurfaceMock.resolveBundledProviderPolicySurface,
+  resolveProviderPolicySurface: providerPolicySurfaceMock.resolveBundledProviderPolicySurface,
 }));
 
 vi.mock("./model-selection-cli.js", () => ({
@@ -427,13 +424,13 @@ describe("model-selection", () => {
         expected: { provider: "google", model: "gemini-3.1-flash-lite" },
       },
       {
-        name: "normalizes deprecated xai grok 4.20 beta ids",
+        name: "preserves provider-owned xai grok 4.20 beta ids",
         variants: [
           "xai/grok-4.20-experimental-beta-0304-reasoning",
           "grok-4.20-experimental-beta-0304-reasoning",
         ],
         defaultProvider: "xai",
-        expected: { provider: "xai", model: "grok-4.20-beta-latest-reasoning" },
+        expected: { provider: "xai", model: "grok-4.20-experimental-beta-0304-reasoning" },
       },
       {
         name: "keeps OpenAI codex refs on the openai provider",
@@ -1187,6 +1184,7 @@ describe("model-selection", () => {
         { provider: "ollama", id: "existing", name: "Existing" },
         {
           api: "ollama",
+          baseUrl: "http://127.0.0.1:11434",
           compat: undefined,
           contextTokens: undefined,
           provider: "ollama",
@@ -1469,7 +1467,11 @@ describe("model-selection", () => {
           id: "moonshotai/kimi-k2.5",
           name: "Kimi K2.5 (Configured)",
           alias: "Kimi K2.5 (NVIDIA)",
+          api: undefined,
+          baseUrl: "https://nvidia.example.com",
           contextWindow: 32_000,
+          contextTokens: undefined,
+          input: undefined,
           reasoning: true,
           compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
         },

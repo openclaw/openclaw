@@ -208,6 +208,7 @@ export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export type { ChannelConfigUiHint } from "../channels/plugins/types.config.js";
 export type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
+export type { ContextEngineSessionTarget } from "../context-engine/types.js";
 
 export { definePluginEntry } from "./plugin-entry.js";
 export {
@@ -218,6 +219,7 @@ export {
 export { KeyedAsyncQueue, enqueueKeyedTask } from "./keyed-async-queue.js";
 export { createDedupeCache, resolveGlobalDedupeCache } from "../infra/dedupe.js";
 export { generateSecureToken, generateSecureUuid } from "../infra/secure-random.js";
+export { resolveTailscalePublishedHost } from "../shared/tailscale-status.js";
 export {
   buildMemorySystemPromptAddition,
   delegateCompactionToRuntime,

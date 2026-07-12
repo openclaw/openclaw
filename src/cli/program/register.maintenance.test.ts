@@ -1,6 +1,7 @@
 // Register maintenance tests cover maintenance command registration in the CLI program.
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS_ENV } from "../../commands/doctor-invocation.js";
 import { registerMaintenanceCommands } from "./register.maintenance.js";
 
 const mocks = vi.hoisted(() => ({
@@ -68,6 +69,10 @@ describe("registerMaintenanceCommands doctor action", () => {
     vi.clearAllMocks();
   });
 
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("exits with code 0 after successful doctor run", async () => {
     doctorCommand.mockResolvedValue(undefined);
 
@@ -101,6 +106,90 @@ describe("registerMaintenanceCommands doctor action", () => {
     const [runtimeArg, options] = commandCall(doctorCommand);
     expect(runtimeArg).toBe(runtime);
     expect(options.repair).toBe(true);
+    expect(options.crossStateDirImports).toBe(true);
+  });
+
+  it("denies cross-state imports when an automation parent disables them", async () => {
+    doctorCommand.mockResolvedValue(undefined);
+    vi.stubEnv(DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS_ENV, "1");
+
+    await runMaintenanceCli(["doctor", "--fix", "--non-interactive"]);
+
+    const [, options] = commandCall(doctorCommand);
+    expect(options.repair).toBe(true);
+    expect(options.crossStateDirImports).toBe(false);
+  });
+
+  it("denies cross-state imports for older update parents", async () => {
+    doctorCommand.mockResolvedValue(undefined);
+    vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
+
+    await runMaintenanceCli(["doctor", "--fix", "--non-interactive"]);
+
+    const [, options] = commandCall(doctorCommand);
+    expect(options.crossStateDirImports).toBe(false);
+  });
+
+  it("passes session sqlite options to doctor command", async () => {
+    doctorCommand.mockResolvedValue(undefined);
+
+    await runMaintenanceCli([
+      "doctor",
+      "--session-sqlite",
+      "import",
+      "--session-sqlite-store",
+      "/tmp/openclaw/sessions.json",
+      "--json",
+    ]);
+
+    expect(doctorCommand).toHaveBeenCalledTimes(1);
+    const [runtimeArg, options] = commandCall(doctorCommand);
+    expect(runtimeArg).toBe(runtime);
+    expect(options.sessionSqlite).toBe("import");
+    expect(options.sessionSqliteStore).toBe("/tmp/openclaw/sessions.json");
+    expect(options.json).toBe(true);
+    expect(runtime.exit).toHaveBeenCalledWith(0);
+  });
+
+  it("passes session sqlite recover GitHub issue option to doctor command", async () => {
+    doctorCommand.mockResolvedValue(undefined);
+
+    await runMaintenanceCli(["doctor", "--session-sqlite", "recover", "--github-issue", "--yes"]);
+
+    expect(doctorCommand).toHaveBeenCalledTimes(1);
+    const [, options] = commandCall(doctorCommand);
+    expect(options.sessionSqlite).toBe("recover");
+    expect(options.sessionSqliteGithubIssue).toBe(true);
+    expect(options.yes).toBe(true);
+    expect(runtime.exit).toHaveBeenCalledWith(0);
+  });
+
+  it("passes session sqlite compact mode to doctor command", async () => {
+    doctorCommand.mockResolvedValue(undefined);
+
+    await runMaintenanceCli([
+      "doctor",
+      "--session-sqlite",
+      "compact",
+      "--session-sqlite-agent",
+      "main",
+    ]);
+
+    expect(doctorCommand).toHaveBeenCalledTimes(1);
+    const [, options] = commandCall(doctorCommand);
+    expect(options.sessionSqlite).toBe("compact");
+    expect(options.sessionSqliteAgent).toBe("main");
+    expect(runtime.exit).toHaveBeenCalledWith(0);
+  });
+
+  it("rejects session sqlite selectors without session sqlite mode", async () => {
+    await runMaintenanceCli(["doctor", "--session-sqlite-agent", "main"]);
+
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      "doctor session SQLite options require --session-sqlite. Use `openclaw doctor --session-sqlite dry-run ...`.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(2);
   });
 
   it("runs doctor lint mode without invoking repair doctor", async () => {

@@ -22,6 +22,12 @@ describe("sidebar pinned routes", () => {
     expect(SETTINGS_NAVIGATION_ROUTES).toContain("worktrees");
   });
 
+  it("moves activity into system settings and drops stale pinned entries", () => {
+    expect(SIDEBAR_NAV_ROUTES).not.toContain("activity");
+    expect(SETTINGS_NAVIGATION_ROUTES).toContain("activity");
+    expect(normalizeSidebarPinnedRoutes(["activity", "overview"])).toEqual(["overview"]);
+  });
+
   it("keeps channel management and settings slices out of the customizable sidebar", () => {
     expect(SIDEBAR_NAV_ROUTES).not.toContain("channels");
     expect(SIDEBAR_NAV_ROUTES).not.toContain("config");
@@ -32,11 +38,19 @@ describe("sidebar pinned routes", () => {
   });
 
   it("normalizes persisted pinned routes, dropping unknown and duplicate entries", () => {
-    expect(normalizeSidebarPinnedRoutes(["usage", "overview", "usage", "worktrees", 7])).toEqual([
-      "usage",
+    expect(
+      normalizeSidebarPinnedRoutes(["usage", "overview", "usage", "worktrees", "instances", 7]),
+    ).toEqual(["usage", "overview"]);
+    expect(normalizeSidebarPinnedRoutes([])).toEqual([]);
+  });
+
+  it("keeps the plugin manager in the customizable workspace routes", () => {
+    expect(normalizeSidebarPinnedRoutes(["plugins", "overview", "plugins"])).toEqual([
+      "plugins",
       "overview",
     ]);
-    expect(normalizeSidebarPinnedRoutes([])).toEqual([]);
+    expect(sidebarMoreRoutes(["overview"])).toContain("plugins");
+    expect(SETTINGS_NAVIGATION_ROUTES).not.toContain("plugins");
   });
 
   it("falls back to null for non-list values so callers use defaults", () => {

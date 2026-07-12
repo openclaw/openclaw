@@ -120,7 +120,11 @@ describe("config schema", () => {
     expect(groupPolicyLabel).toBeTypeOf("string");
     expect(groupPolicyLabel?.trim().length).toBeGreaterThan(0);
     expect(res.uiHints["mcp.servers.*.headers.*"]?.sensitive).toBe(true);
+    expect(res.uiHints["mcp.servers.*.env.*"]?.sensitive).toBe(true);
     expect(res.uiHints["mcp.servers.*.url"]?.tags).toContain(SENSITIVE_URL_HINT_TAG);
+    expect(res.uiHints["nodeHost.mcp.servers.*.headers.*"]?.sensitive).toBe(true);
+    expect(res.uiHints["nodeHost.mcp.servers.*.env.*"]?.sensitive).toBe(true);
+    expect(res.uiHints["nodeHost.mcp.servers.*.url"]?.tags).toContain(SENSITIVE_URL_HINT_TAG);
     expect(res.uiHints["models.providers.*.baseUrl"]?.tags).toContain(SENSITIVE_URL_HINT_TAG);
     expect(res.uiHints["proxy.tls.caFile"]?.tags).toEqual(
       expect.arrayContaining(["security", "network", "storage"]),
@@ -184,6 +188,42 @@ describe("config schema", () => {
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("clientCert");
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("toolFilter");
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("codex");
+  });
+
+  it("accepts node-host MCP servers with the shared MCP server schema", () => {
+    const result = OpenClawSchema.safeParse({
+      nodeHost: {
+        mcp: {
+          servers: {
+            local: {
+              command: "node",
+              args: ["server.mjs"],
+              toolFilter: { include: ["read_*"] },
+            },
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+    const invalid = OpenClawSchema.safeParse({
+      nodeHost: { mcp: { servers: { broken: { transport: "stdio" } } } },
+    });
+    expect(invalid.success).toBe(false);
+    if (!invalid.success) {
+      expect(invalid.error.issues[0]?.message).toBe(
+        '"stdio" transport requires a non-empty command',
+      );
+    }
+  });
+
+  it("rejects blank or whitespace-padded node-host MCP server names", () => {
+    for (const serverName of ["", "  ", " docs "]) {
+      expect(() =>
+        OpenClawSchema.parse({
+          nodeHost: { mcp: { servers: { [serverName]: { command: "server" } } } },
+        }),
+      ).toThrow(/MCP server name must be non-empty and must not have surrounding whitespace/);
+    }
   });
 
   it("rejects empty Codex MCP agent scopes", () => {
@@ -264,6 +304,41 @@ describe("config schema", () => {
         }),
       ).toThrow();
     }
+  });
+
+  it("accepts MCP OAuth auth profile bindings for refreshable bearer projection", () => {
+    expect(() =>
+      OpenClawSchema.parse({
+        mcp: {
+          servers: {
+            ducktape: {
+              url: "https://agents.ducktape.xyz/mcp",
+              transport: "streamable-http",
+              auth: "oauth",
+              oauth: {
+                authProfileId: "ducktape:mcp",
+              },
+            },
+          },
+        },
+      }),
+    ).not.toThrow();
+    expect(() =>
+      OpenClawSchema.parse({
+        mcp: {
+          servers: {
+            ducktape: {
+              url: "https://agents.ducktape.xyz/mcp",
+              transport: "streamable-http",
+              auth: "oauth",
+              oauth: {
+                authProfileId: "  ",
+              },
+            },
+          },
+        },
+      }),
+    ).toThrow();
   });
 
   it("accepts stdio transport for command-bearing MCP servers", () => {

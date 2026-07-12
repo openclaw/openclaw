@@ -1,6 +1,7 @@
 // Control UI tests cover config behavior.
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import "../../styles.css";
 import type { ThemeMode, ThemeName } from "../../app/theme.ts";
 import { createConfigViewState, renderConfig, type ConfigProps } from "./view.ts";
 
@@ -58,12 +59,30 @@ describe("config view", () => {
     onImportCustomTheme: vi.fn(),
     onClearCustomTheme: vi.fn(),
     onOpenCustomThemeImport: vi.fn(),
-    borderRadius: 50,
-    setBorderRadius: vi.fn(),
     textScale: 100,
     setTextScale: vi.fn(),
     gatewayUrl: "",
     assistantName: "OpenClaw",
+  });
+
+  it("lets config pages grow with their content instead of creating an inner viewport", async () => {
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      customThemeImportExpanded: true,
+    });
+    document.body.append(container);
+
+    try {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      });
+
+      const content = queryRequired(container, ".config-content", HTMLElement);
+      expect(content.scrollHeight - content.clientHeight).toBeLessThanOrEqual(1);
+    } finally {
+      container.remove();
+    }
   });
 
   function findActionButtons(container: HTMLElement): {
@@ -758,6 +777,32 @@ describe("config view", () => {
     expect(item.querySelector(".config-diff__path")?.textContent?.trim()).toBe("gateway.mode");
     expect(item.querySelector(".config-diff__from")?.textContent?.trim()).toBe('"local"');
     expect(item.querySelector(".config-diff__to")?.textContent?.trim()).toBe('"remote"');
+  });
+
+  it("preserves UTF-16 boundaries in pending change summaries", () => {
+    const boundaryValue = `${"A".repeat(35)}😀ZZZZZ`;
+    const adjacentValue = `${"B".repeat(34)}😀YYYYYY`;
+    const { container } = renderConfigView({
+      formValue: {
+        boundary: boundaryValue,
+        adjacent: adjacentValue,
+      },
+      originalValue: {
+        boundary: "before",
+        adjacent: "before",
+      },
+    });
+
+    const items = Array.from(container.querySelectorAll(".config-diff__item"));
+    const values = new Map(
+      items.map((item) => [
+        item.querySelector(".config-diff__path")?.textContent?.trim(),
+        item.querySelector(".config-diff__to")?.textContent?.trim(),
+      ]),
+    );
+
+    expect(values.get("boundary")).toBe(`"${"A".repeat(35)}...`);
+    expect(values.get("adjacent")).toBe(`"${"B".repeat(34)}😀...`);
   });
 
   it("renders array diff summaries without serializing array values", () => {

@@ -613,6 +613,7 @@ function writeRecoverCurrentTabResult(
         url: result.browser.browserUrl ?? result.tab?.url ?? "unknown",
         transport: result.transport,
         mode: "transcribe",
+        agentId: "main",
         state: "active",
         createdAt: "",
         updatedAt: "",

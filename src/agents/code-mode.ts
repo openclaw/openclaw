@@ -126,6 +126,7 @@ type CodeModeRunState = {
 type CodeModeToolContext = ToolSearchToolContext;
 
 export type CodeModeFailureCode =
+  | "aborted"
   | "invalid_input"
   | "runtime_unavailable"
   | "timeout"
@@ -741,10 +742,14 @@ async function runCodeModeWorker(
       }, timeoutMs);
       onAbort = () => {
         void worker.terminate();
+        const abortReason = signal?.reason;
         finish({
           status: "failed",
-          error: "code mode timeout exceeded",
-          code: "timeout",
+          error:
+            abortReason instanceof CodeModeHeadlessTimeoutError
+              ? "code mode timeout exceeded"
+              : "code mode execution aborted",
+          code: abortReason instanceof CodeModeHeadlessTimeoutError ? "timeout" : "aborted",
           output: [],
         });
       };
@@ -788,14 +793,26 @@ async function runCodeModeWorker(
   }
 }
 
-class CodeModeHeadlessTimeoutError extends Error {
+export class CodeModeHeadlessAbortError extends Error {
+  constructor(message = "code mode execution aborted") {
+    super(message);
+    this.name = "CodeModeHeadlessAbortError";
+  }
+}
+
+export class CodeModeHeadlessTimeoutError extends Error {
   constructor(message = "code mode headless wall-clock timeout exceeded") {
     super(message);
     this.name = "CodeModeHeadlessTimeoutError";
   }
 }
 
-function createHeadlessAbortScope(signal: AbortSignal | undefined, wallClockMs: number) {
+// Explicit return type: declaration emit cannot name the inferred AbortSignal
+// in the DOM-free core lane (@types/node keeps it in a non-exported module).
+function createHeadlessAbortScope(
+  signal: AbortSignal | undefined,
+  wallClockMs: number,
+): { signal: AbortSignal; cleanup: () => void } {
   const controller = new AbortController();
   const onAbort = () => controller.abort(signal?.reason);
   signal?.addEventListener("abort", onAbort, { once: true });
@@ -812,10 +829,14 @@ function createHeadlessAbortScope(signal: AbortSignal | undefined, wallClockMs: 
   };
 }
 
-function headlessAbortError(signal: AbortSignal): CodeModeHeadlessTimeoutError {
+function headlessAbortError(
+  signal: AbortSignal,
+): CodeModeHeadlessAbortError | CodeModeHeadlessTimeoutError {
   return signal.reason instanceof CodeModeHeadlessTimeoutError
     ? signal.reason
-    : new CodeModeHeadlessTimeoutError("code mode headless execution aborted");
+    : signal.reason instanceof CodeModeHeadlessAbortError
+      ? signal.reason
+      : new CodeModeHeadlessAbortError();
 }
 
 function headlessFailure(params: {
@@ -1070,12 +1091,11 @@ export async function runCodeModeScriptHeadless(params: {
       );
     }
   } catch (error) {
+    const timedOut = error instanceof CodeModeHeadlessTimeoutError;
+    const aborted = error instanceof CodeModeHeadlessAbortError;
     return headlessFailure({
-      code: error instanceof CodeModeHeadlessTimeoutError ? "timeout" : codeModeFailureCode(error),
-      error:
-        error instanceof CodeModeHeadlessTimeoutError
-          ? error.message
-          : codeModeFailureMessage(error),
+      code: timedOut ? "timeout" : aborted ? "aborted" : codeModeFailureCode(error),
+      error: timedOut || aborted ? error.message : codeModeFailureMessage(error),
       output,
       toolCallCount,
     });
@@ -1641,6 +1661,7 @@ export const testing = {
   activeRuns,
   resumingRunIds,
   codeModeWorkerUrl,
+  createHeadlessAbortScope,
   normalizeCodeModeWorkerResult,
   runCodeModeWorker,
   resolveCodeModeHeadlessConfig,

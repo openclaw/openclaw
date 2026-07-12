@@ -17,8 +17,9 @@ import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-routing.js";
-import { resolveIngressWorkspaceOverrideForSpawnedRun } from "../../agents/spawned-context.js";
+import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import type { SilentReplyPromptMode } from "../../agents/system-prompt.types.js";
+import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { updateAmbientTranscriptWatermark } from "../../config/sessions/ambient-transcript-watermark.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
@@ -28,6 +29,10 @@ import {
 } from "../../config/sessions/paths.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { consumeSessionSkillSuggestion } from "../../config/sessions/skill-suggestions.js";
+import {
+  formatSqliteSessionFileMarker,
+  sqliteSessionFileMarkerMatchesSession,
+} from "../../config/sessions/sqlite-marker.js";
 import { resolveSessionStoreEntry } from "../../config/sessions/store.js";
 import type { PendingSkillSuggestion, SessionEntry } from "../../config/sessions/types.js";
 import { resolveSilentReplySettings } from "../../config/silent-reply.js";
@@ -544,7 +549,7 @@ export async function runPreparedReply(
     sessionKey,
     sessionId,
     storePath,
-    workspaceDir,
+    workspaceDir: configuredWorkspaceDir,
     sessionEntryHandle,
     sessionStore,
   } = params;
@@ -605,6 +610,14 @@ export async function runPreparedReply(
   const useFastReplyRuntime = shouldUseReplyFastTestRuntime({
     cfg,
     isFastTestEnv: process.env.OPENCLAW_TEST_FAST === "1",
+  });
+  const thinkingRuntime = resolveEffectiveAgentRuntime({
+    cfg,
+    provider,
+    modelId: model,
+    agentId,
+    sessionKey: runtimePolicySessionKey,
+    sessionEntry,
   });
   const fullAccessState = resolveEmbeddedFullAccessState({
     execElevated: {
@@ -741,17 +754,19 @@ export async function runPreparedReply(
           rawBodyTrimmed.length > 0)));
   const startupAction =
     softResetTriggered || /^\/reset(?:\s|$)/i.test(normalizedCommandBody) ? "reset" : "new";
-  const spawnedWorkspaceOverride = resolveIngressWorkspaceOverrideForSpawnedRun({
+  const sessionWorkspaceOverride = resolveIngressWorkspaceOverrideForSessionRun({
     spawnedBy: sessionEntry?.spawnedBy,
     workspaceDir: sessionEntry?.spawnedWorkspaceDir,
+    cwd: sessionEntry?.spawnedCwd,
   });
+  const workspaceDir = sessionWorkspaceOverride ?? configuredWorkspaceDir;
   const bareResetPromptState =
     isBareSessionReset && workspaceDir
       ? await resolveBareSessionResetPromptState({
           cfg,
           workspaceDir,
           isPrimaryRun: !isSubagentSessionKey(sessionKey) && !isAcpSessionKey(sessionKey),
-          isCanonicalWorkspace: !spawnedWorkspaceOverride,
+          isCanonicalWorkspace: !sessionWorkspaceOverride,
           hasBootstrapFileAccess: () =>
             resolveBareResetBootstrapFileAccess({
               cfg,
@@ -908,7 +923,13 @@ export async function runPreparedReply(
       : undefined;
     if (
       maybeLevel &&
-      isThinkingLevelSupported({ provider, model, level: maybeLevel, catalog: thinkingCatalog })
+      isThinkingLevelSupported({
+        provider,
+        model,
+        level: maybeLevel,
+        catalog: thinkingCatalog,
+        agentRuntime: thinkingRuntime,
+      })
     ) {
       resolvedThinkLevel = maybeLevel;
       prefixedBodyBase = parts.slice(1).join(" ").trim();
@@ -981,10 +1002,11 @@ export async function runPreparedReply(
             isFirstTurnInSession,
             workspaceDir,
             cfg,
+            execOverrides,
             skillFilter: opts?.skillFilter,
           });
         });
-  sessionEntry = skillResult.sessionEntry ?? sessionEntry;
+  sessionEntry = skillResult.sessionEntry;
   if (sessionEntry) {
     sessionEntryHandle?.replaceCurrent(sessionEntry);
   }
@@ -1009,6 +1031,7 @@ export async function runPreparedReply(
     model,
     level: resolvedThinkLevel,
     catalog: thinkingCatalog,
+    agentRuntime: thinkingRuntime,
   });
   const shouldHydrateThinkingCatalog =
     !thinkingLevelSupported ||
@@ -1027,6 +1050,7 @@ export async function runPreparedReply(
       model,
       level: resolvedThinkLevel,
       catalog: thinkingCatalog,
+      agentRuntime: thinkingRuntime,
     });
   }
   if (!thinkingLevelSupported) {
@@ -1036,7 +1060,7 @@ export async function runPreparedReply(
     if (explicitThink) {
       typing.cleanup();
       return {
-        text: `Thinking level "${resolvedThinkLevel}" is not supported for ${provider}/${model}. Use one of: ${formatThinkingLevels(provider, model, ", ", thinkingCatalog)}.`,
+        text: `Thinking level "${resolvedThinkLevel}" is not supported for ${provider}/${model}. Use one of: ${formatThinkingLevels(provider, model, ", ", thinkingCatalog, thinkingRuntime)}.`,
       };
     }
     const fallbackThinkLevel = resolveSupportedThinkingLevel({
@@ -1044,6 +1068,7 @@ export async function runPreparedReply(
       model,
       level: resolvedThinkLevel,
       catalog: thinkingCatalog,
+      agentRuntime: thinkingRuntime,
     });
     if (fallbackThinkLevel !== resolvedThinkLevel) {
       // Execution fallbacks are turn-local; directive/model persistence owns
@@ -1089,14 +1114,22 @@ export async function runPreparedReply(
       sessionId: latestSessionId,
       storePath,
     });
+    const existingSessionFile = latestSessionEntry?.sessionFile;
+    const sessionFile =
+      existingSessionFile &&
+      sqliteSessionFileMarkerMatchesSession(existingSessionFile, latestSessionId)
+        ? existingSessionFile
+        : storePath
+          ? formatSqliteSessionFileMarker({
+              agentId,
+              sessionId: latestSessionId,
+              storePath,
+            })
+          : resolveSessionFilePath(latestSessionId, latestSessionEntry, sessionFilePathOptions);
     return {
       sessionEntry: latestSessionEntry,
       sessionId: latestSessionId,
-      sessionFile: resolveSessionFilePath(
-        latestSessionId,
-        latestSessionEntry,
-        sessionFilePathOptions,
-      ),
+      sessionFile,
     };
   };
   let preparedSessionState = resolvePreparedSessionState();
@@ -1477,6 +1510,7 @@ export async function runPreparedReply(
       sessionKey,
       runtimePolicySessionKey,
       messageProvider,
+      clientCaps: ctx.GatewayClientCaps,
       chatType: replyRoute.chatType,
       agentAccountId: replyRoute.accountId,
       groupId: resolveGroupSessionKey(sessionCtx)?.id ?? undefined,
@@ -1484,6 +1518,8 @@ export async function runPreparedReply(
         normalizeOptionalString(sessionCtx.GroupChannel) ??
         normalizeOptionalString(sessionCtx.GroupSubject),
       groupSpace: normalizeOptionalString(sessionCtx.GroupSpace),
+      // Parent lineage authenticates inherited group policy for queued CLI/MCP runs.
+      spawnedBy: normalizeOptionalString(preparedSessionState.sessionEntry?.spawnedBy),
       senderId: normalizeOptionalString(sessionCtx.SenderId),
       channelContext: ctx.ChannelContext ?? sessionCtx.ChannelContext,
       senderName: normalizeOptionalString(sessionCtx.SenderName),
@@ -1502,6 +1538,7 @@ export async function runPreparedReply(
       skillsSnapshot,
       provider,
       model,
+      modelSelectionLocked: preparedSessionState.sessionEntry?.modelSelectionLocked === true,
       hasSessionModelOverride: runHasSessionModelOverride,
       modelOverrideSource: runModelOverrideSource,
       hasAutoFallbackProvenance: runHasAutoFallbackProvenance || undefined,
@@ -1554,6 +1591,7 @@ export async function runPreparedReply(
       inputProvenance,
       extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
       sourceReplyDeliveryMode,
+      taskSuggestionDeliveryMode: opts?.taskSuggestionDeliveryMode,
       silentReplyPromptMode,
       extraSystemPromptStatic,
       cliSessionBindingFacts,

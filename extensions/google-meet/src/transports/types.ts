@@ -22,6 +22,8 @@ type GoogleMeetManualActionReason =
   | "meet-admission-required"
   | "meet-permission-required"
   | "meet-audio-choice-required"
+  | "meet-locale-required"
+  | "meet-session-conflict"
   | "browser-control-unavailable";
 
 type GoogleMeetSpeechBlockedReason =
@@ -110,6 +112,8 @@ export type GoogleMeetSession = {
   url: string;
   transport: GoogleMeetTransport;
   mode: GoogleMeetMode;
+  /** Canonical agent owner for every later consult and bridge restart. */
+  agentId: string;
   state: GoogleMeetSessionState;
   createdAt: string;
   updatedAt: string;

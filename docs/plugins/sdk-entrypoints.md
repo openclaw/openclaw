@@ -114,12 +114,8 @@ export default definePluginEntry({
   name: "My Plugin",
   description: "Short summary",
   register(api) {
-    api.registerProvider({
-      /* ... */
-    });
-    api.registerTool({
-      /* ... */
-    });
+    api.registerProvider({/* ... */});
+    api.registerTool({/* ... */});
   },
 });
 ```
@@ -137,6 +133,11 @@ export default definePluginEntry({
 | `register`                | `(api: OpenClawPluginApi) => void`                               | Yes      | -                   |
 
 - `id` must match your `openclaw.plugin.json` manifest.
+- External session catalogs use
+  `openclaw/plugin-sdk/session-catalog` and
+  `api.registerSessionCatalog({ id, label, list, read, continueSession?, archive? })`.
+  Core owns the `sessions.catalog.*` Gateway methods; providers return host,
+  session, and normalized transcript projections without registering RPCs.
 - `kind` is deprecated: declare an exclusive slot (`"memory"` or
   `"context-engine"`) in the `openclaw.plugin.json` manifest `kind` field
   instead. Runtime-entry `kind` remains only as a compatibility fallback for
@@ -144,6 +145,11 @@ export default definePluginEntry({
 - `configSchema` can be a function for lazy evaluation. OpenClaw resolves and
   memoizes the schema on first access, so expensive schema builders only run
   once.
+- A `nodeHostCommands` descriptor can define `isAvailable({ config, env })`.
+  Returning `false` omits that command and its capability from the headless
+  node's Gateway declaration. OpenClaw evaluates it against the node-local
+  startup config; command handlers should still validate availability when
+  invoked.
 
 ## `defineChannelPluginEntry`
 

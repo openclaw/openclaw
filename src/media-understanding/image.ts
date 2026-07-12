@@ -260,9 +260,9 @@ async function prepareResolvedImageRuntime(
         apiKey,
         "GitHub Copilot image-auth exchange",
       ),
+      config: params.cfg,
     });
     const protectedAuth = protectPreparedProviderRuntimeAuth({
-      sourceApiKey: apiKey,
       provider: model.provider,
       preparedAuth: { apiKey: copilotToken.token, baseUrl: copilotToken.baseUrl },
     });

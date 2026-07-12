@@ -364,7 +364,7 @@ describe("monitorDiscordProvider", () => {
     expect(createdBindingManagers[0]?.stop).toHaveBeenCalledTimes(1);
   });
 
-  it("disconnects the shared gateway and suppresses late gateway errors when startup fails before lifecycle begins", async () => {
+  it("disconnects the shared gateway and keeps a late error guard when startup fails before lifecycle begins", async () => {
     const disconnect = vi.fn();
     const emitter = new EventEmitter();
     const gateway = { emitter, disconnect, isConnected: false };
@@ -385,13 +385,10 @@ describe("monitorDiscordProvider", () => {
 
     expect(monitorLifecycleMock).not.toHaveBeenCalled();
     expect(disconnect).toHaveBeenCalledTimes(1);
-    expect(
-      emitter.emit("error", new Error("Max reconnect attempts (0) reached after code 1005")),
-    ).toBe(true);
-    expectMockLogContains(
-      runtime.error,
-      "suppressed late gateway reconnect-exhausted error after dispose",
-    );
+    expect(emitter.listenerCount("error")).toBe(1);
+    expect(() =>
+      emitter.emit("error", new Error("late gateway error after cleanup")),
+    ).not.toThrow();
   });
 
   it("fails closed before lifecycle when Discord bot identity fetch rejects", async () => {
@@ -953,8 +950,9 @@ describe("monitorDiscordProvider", () => {
         .mocked(runtime.log)
         .mock.calls.some(
           (call) =>
-            String(call[0]).includes("native slash command deploy warning (not message send):") &&
-            String(call[0]).includes("Discord REST request was aborted"),
+            String(call[0]).includes(
+              "slash command deploy failed (message send/receive unaffected):",
+            ) && String(call[0]).includes("Discord REST request was aborted"),
         ),
     ).toBe(true);
   });
@@ -996,7 +994,7 @@ describe("monitorDiscordProvider", () => {
     const warningMessages = vi
       .mocked(runtime.log)
       .mock.calls.map((call) => String(call[0]))
-      .filter((message) => message.includes("native slash command deploy rate limited"));
+      .filter((message) => message.includes("slash command deploy rate limited"));
     expect(warningMessages).toHaveLength(1);
     expect(warningMessages[0]).toContain("retry after 0s");
     expect(warningMessages[0]).toContain("Message send/receive is unaffected.");
@@ -1041,6 +1039,15 @@ describe("monitorDiscordProvider", () => {
     });
 
     expect(details).toBe(" (retryAfter=3.2s, scope=route)");
+  });
+
+  it("keeps truncated Discord deploy response bodies UTF-16 safe", () => {
+    const prefix = "a".repeat(798);
+    const details = providerTesting.formatDiscordDeployErrorDetails({
+      rawBody: `${prefix}😀tail`,
+    });
+
+    expect(details).toBe(` (body="${prefix}...)`);
   });
 
   it("formats rejected Discord deploy entries with command details", () => {

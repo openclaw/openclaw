@@ -2,11 +2,15 @@
 import { statSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { emitAgentEvent } from "../infra/agent-events.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { resetLogger, setLoggerOverride } from "../logging/logger.js";
+import { loggingState } from "../logging/state.js";
+import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabase,
@@ -112,6 +116,9 @@ describe("task-registry store runtime", () => {
     ORIGINAL_ENV.restore();
     resetTaskRegistryForTests();
     resetTaskFlowRegistryForTests({ persist: false });
+    loggingState.rawConsole = null;
+    setLoggerOverride(null);
+    resetLogger();
   });
 
   it("uses the configured task store for restore and save", () => {
@@ -151,6 +158,57 @@ describe("task-registry store runtime", () => {
     };
     expect(latestSnapshot.tasks.size).toBe(2);
     expect(latestSnapshot.tasks.get("task-restored")?.task).toBe("Restored task");
+  });
+
+  it("logs restore parser failures and keeps the registry empty", async () => {
+    const warnLogs = createWarnLogCapture("openclaw-task-registry-restore-test");
+    const invalidValue = "not-requested";
+    try {
+      configureTaskRegistryRuntime({
+        store: {
+          loadSnapshot: () => {
+            throw new Error(
+              `Invalid persisted task delivery status: ${JSON.stringify(invalidValue)}`,
+            );
+          },
+          saveSnapshot: () => {},
+        },
+      });
+
+      expect(findTaskByRunId("run-restored")).toBeUndefined();
+      expect(await warnLogs.findText(invalidValue)).toContain(invalidValue);
+      expect(getTaskById("task-restored")).toBeUndefined();
+    } finally {
+      warnLogs.cleanup();
+    }
+  });
+
+  it("includes restore parser failures in compact console warnings", () => {
+    const warn = vi.fn();
+    const invalidValue = "future-invalid-status";
+    setLoggerOverride({ level: "silent", consoleLevel: "warn", consoleStyle: "compact" });
+    loggingState.rawConsole = {
+      log: vi.fn(),
+      info: vi.fn(),
+      warn,
+      error: vi.fn(),
+    };
+    configureTaskRegistryRuntime({
+      store: {
+        loadSnapshot: () => {
+          throw new Error(
+            `Invalid persisted task delivery status: ${JSON.stringify(invalidValue)}`,
+          );
+        },
+        saveSnapshot: () => {},
+      },
+    });
+
+    expect(findTaskByRunId("run-restored")).toBeUndefined();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]?.[0])).toContain(
+      `Failed to restore task registry: Invalid persisted task delivery status: "${invalidValue}"`,
+    );
   });
 
   it("uses scoped owner lookups for fresh owner task reads", () => {
@@ -560,6 +618,36 @@ describe("task-registry store runtime", () => {
           taskId: created.taskId,
           agentId: "worker",
           requesterAgentId: "main",
+        });
+      },
+    );
+  });
+
+  it("persists tool activity across sqlite restore", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-task-tool-activity-" },
+      async () => {
+        const created = createTaskRecord({
+          runtime: "subagent",
+          ownerKey: "agent:main:main",
+          scopeKind: "session",
+          childSessionKey: "agent:main:subagent:tools",
+          runId: "run-tool-activity-sqlite",
+          task: "Sweep files",
+          status: "running",
+          deliveryStatus: "not_applicable",
+        });
+        emitAgentEvent({
+          runId: "run-tool-activity-sqlite",
+          stream: "tool",
+          data: { phase: "start", name: "read", toolCallId: "call-1" },
+        });
+
+        resetTaskRegistryForTests({ persist: false });
+        expect(findTaskByRunId("run-tool-activity-sqlite")).toMatchObject({
+          taskId: created.taskId,
+          toolUseCount: 1,
+          lastToolName: "read",
         });
       },
     );

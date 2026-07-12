@@ -1,6 +1,6 @@
 // Memory Core tests cover index plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { OpenClawPluginCommandDefinition } from "openclaw/plugin-sdk/core";
+import type { OpenClawPluginApi, OpenClawPluginCommandDefinition } from "openclaw/plugin-sdk/core";
 import type { MemoryPluginRuntime } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,21 +13,37 @@ import {
 import { buildPromptSection } from "./src/prompt-section.js";
 
 const closeMemorySearchManagerMock = vi.hoisted(() => vi.fn(async () => {}));
+const getMemorySearchManagerMock = vi.hoisted(() => vi.fn(async () => null));
+const createMemoryRuntimeMock = vi.hoisted(() =>
+  vi.fn(() => ({
+    closeAllMemorySearchManagers: vi.fn(async () => {}),
+    closeMemorySearchManager: closeMemorySearchManagerMock,
+    getMemorySearchManager: getMemorySearchManagerMock,
+  })),
+);
 
 vi.mock("./src/runtime-provider.js", () => ({
+  createMemoryRuntime: createMemoryRuntimeMock,
   memoryRuntime: {
     closeAllMemorySearchManagers: vi.fn(async () => {}),
     closeMemorySearchManager: closeMemorySearchManagerMock,
-    getMemorySearchManager: vi.fn(async () => null),
+    getMemorySearchManager: getMemorySearchManagerMock,
   },
 }));
 
 import plugin from "./index.js";
 
+const hostRuntime = {
+  llm: {
+    acquireLocalService: async () => undefined,
+  },
+} as unknown as OpenClawPluginApi["runtime"];
+
 function registerMemoryCoreRuntime(): MemoryPluginRuntime {
   let runtime: MemoryPluginRuntime | undefined;
   plugin.register(
     createTestPluginApi({
+      runtime: hostRuntime,
       registerMemoryCapability(capability) {
         runtime = capability.runtime;
       },
@@ -93,6 +109,7 @@ describe("memory-core plugin runtime registration", () => {
     let command: OpenClawPluginCommandDefinition | undefined;
     plugin.register(
       createTestPluginApi({
+        runtime: hostRuntime,
         registerCommand(definition) {
           command = definition;
         },
@@ -112,6 +129,15 @@ describe("memory-core plugin runtime registration", () => {
     await runtime.closeMemorySearchManager?.({ cfg, agentId: "main" });
 
     expect(closeMemorySearchManagerMock).toHaveBeenCalledWith({ cfg, agentId: "main" });
+  });
+
+  it("binds the host local-service hook to the registered memory runtime", async () => {
+    const runtime = registerMemoryCoreRuntime();
+    const cfg = {} as OpenClawConfig;
+
+    await runtime.getMemorySearchManager({ cfg, agentId: "main" });
+
+    expect(createMemoryRuntimeMock).toHaveBeenCalledWith(hostRuntime.llm.acquireLocalService);
   });
 });
 

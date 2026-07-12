@@ -9,7 +9,7 @@ import {
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatSlackFileReferenceList } from "../file-reference.js";
 import type { SlackAttachment, SlackFile } from "../types.js";
-import { resolveSlackBlocksText } from "./block-text.js";
+import { chooseSlackPrimaryText, resolveSlackBlocksText } from "./block-text.js";
 import { logVerbose } from "./thread.runtime.js";
 
 export type SlackThreadStarter = {
@@ -86,20 +86,31 @@ function resolveSlackMessageText(message: {
   blocks?: unknown[];
   attachments?: SlackAttachment[];
 }): string | undefined {
-  return (
+  const messageText =
     normalizeOptionalString(message.text) ??
-    resolveSlackAttachmentFallbackText(message.attachments) ??
-    resolveSlackBlocksFallbackText(message.blocks)
-  );
+    resolveSlackAttachmentFallbackText(message.attachments);
+  return chooseSlackPrimaryText({
+    messageText,
+    blocksText: resolveSlackBlocksText(message.blocks),
+  });
 }
 
 export async function resolveSlackThreadStarter(params: {
   channelId: string;
   threadTs: string;
   client: SlackWebClient;
+  /** Enterprise cache partition. Omit to preserve workspace-install cache identity. */
+  workspaceScope?: { accountId: string; teamId: string };
 }): Promise<SlackThreadStarter | null> {
   evictThreadStarterCache();
-  const cacheKey = `${params.channelId}:${params.threadTs}`;
+  const cacheKey = params.workspaceScope
+    ? JSON.stringify([
+        params.workspaceScope.accountId,
+        params.workspaceScope.teamId,
+        params.channelId,
+        params.threadTs,
+      ])
+    : `${params.channelId}:${params.threadTs}`;
   const cached = THREAD_STARTER_CACHE.get(cacheKey);
   if (cached) {
     const now = asDateTimestampMs(Date.now());

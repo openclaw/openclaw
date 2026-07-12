@@ -140,11 +140,12 @@ export function requiresToolCallId(modelId: string): boolean {
 }
 
 function getGeminiMajorVersion(modelId: string): number | undefined {
-  const match = modelId.toLowerCase().match(/^gemini(?:-live)?-(\d+)/);
+  const match = modelId.toLowerCase().match(/(?:^|\/)gemini(?:-live)?-(\d+)/);
   if (!match) {
     return undefined;
   }
-  return Number.parseInt(match[1], 10);
+  const majorVersion = match.at(1);
+  return majorVersion === undefined ? undefined : Number.parseInt(majorVersion, 10);
 }
 
 function supportsMultimodalFunctionResponse(modelId: string): boolean {
@@ -557,8 +558,11 @@ export function buildGoogleSimpleThinking<T extends GoogleApiType>(
   }
 
   const clampedReasoning = clampThinkingLevel(model, options.reasoning);
+  if (clampedReasoning === "off") {
+    return { enabled: false };
+  }
   const effort = (
-    clampedReasoning === "off" || clampedReasoning === "max" ? "high" : clampedReasoning
+    clampedReasoning === "max" ? "high" : clampedReasoning
   ) as ClampedGoogleThinkingLevel;
 
   if (

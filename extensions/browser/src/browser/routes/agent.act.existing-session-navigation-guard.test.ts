@@ -43,6 +43,14 @@ vi.mock("../navigation-guard.js", () => navigationGuardMocks);
 vi.mock("./agent.shared.js", () => createExistingSessionAgentSharedModule());
 
 const DEFAULT_SSRF_POLICY = { allowPrivateNetwork: false } as const;
+const GUARDED_TARGET_REFRESH_ACTIONS = [
+  { kind: "hover", ref: "btn-1" },
+  { kind: "scrollIntoView", ref: "btn-1" },
+  { kind: "drag", startRef: "item-1", endRef: "slot-1" },
+  { kind: "select", ref: "menu-1", values: ["alpha"] },
+  { kind: "fill", fields: [{ ref: "input-1", value: "Ada" }] },
+  { kind: "evaluate", fn: "() => document.title" },
+] as const;
 
 const { registerBrowserAgentActRoutes } = await import("./agent.act.js");
 const routeState = existingSessionRouteState;
@@ -150,6 +158,24 @@ describe("existing-session interaction navigation guard", () => {
     expectNavigationProbeUrls(Array.from({ length: 8 }, () => "https://example.com"));
   });
 
+  it.each(GUARDED_TARGET_REFRESH_ACTIONS)(
+    "resolves current target after guarded $kind interaction",
+    async (body) => {
+      routeState.profileCtx.listTabs
+        .mockResolvedValueOnce([routeState.tab])
+        .mockResolvedValue([{ targetId: "new-target", url: routeState.tab.url }]);
+
+      const response = await runAction(body);
+
+      expect(response.statusCode).toBe(200);
+      expect(response.body).toMatchObject({
+        ok: true,
+        targetId: "new-target",
+        url: routeState.tab.url,
+      });
+    },
+  );
+
   it("threads one request budget through coordinate actions and navigation probes", async () => {
     const handler = getActPostHandler();
     const response = createBrowserRouteResponse();
@@ -230,6 +256,24 @@ describe("existing-session interaction navigation guard", () => {
     expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledWith(
       expect.objectContaining({
         fn: "async () => {\nconst value = 41; return value + 1;\n}",
+      }),
+    );
+  });
+
+  it("forwards evaluate timeoutMs to Chrome MCP existing-session execution", async () => {
+    chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValueOnce(42 as never);
+
+    const response = await runAction(
+      { kind: "evaluate", fn: "() => 1 + 1", timeoutMs: 60_000 },
+      null,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledOnce();
+    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fn: "() => 1 + 1",
+        timeoutMs: 60_000,
       }),
     );
   });

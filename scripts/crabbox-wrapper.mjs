@@ -24,6 +24,10 @@ import {
   isProviderAdvertised,
   parseProvidersFromHelp,
 } from "./crabbox-wrapper-providers.mjs";
+import {
+  prepareTestboxLeaseFreshness,
+  recordTestboxLeaseFreshness,
+} from "./testbox-lease-freshness.mjs";
 import { resolvePathEnvKey, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -365,7 +369,11 @@ function buildBatchCommandLine(command, commandArgs) {
   return `"${[escapedCommand, ...escapedArgs].join(" ")}"`;
 }
 
-function checkedOutput(command, commandArgs, timeoutMs = resolveMetadataProbeTimeoutMs(process.env)) {
+function checkedOutput(
+  command,
+  commandArgs,
+  timeoutMs = resolveMetadataProbeTimeoutMs(process.env),
+) {
   const invocation = spawnInvocation(command, commandArgs, process.env, process.platform);
   const result = spawnSync(invocation.command, invocation.args, {
     cwd: repoRoot,
@@ -451,10 +459,12 @@ function satisfiesMinimumCrabboxVersion(version, minimum) {
 
 function gitOutput(commandArgs) {
   const gitBinary = resolvePathBinary("git", process.env, process.platform) ?? "git";
-  const invocation = spawnInvocation(gitBinary, commandArgs, process.env, process.platform);
+  const gitEnv = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null" };
+  const invocation = spawnInvocation(gitBinary, commandArgs, gitEnv, process.platform);
   const result = spawnSync(invocation.command, invocation.args, {
     cwd: repoRoot,
     encoding: "utf8",
+    env: gitEnv,
     stdio: ["ignore", "pipe", "pipe"],
     windowsVerbatimArguments: invocation.windowsVerbatimArguments,
   });
@@ -926,6 +936,21 @@ function blacksmithTestboxPrivateKeyPath(id) {
   return resolve(crabboxConfigDir(), "testboxes", id, "id_ed25519");
 }
 
+// Crabbox claims bind raw Testbox ids to one repo before remote execution.
+// Check the same sidecar so a dependency exit bug cannot make refusal green.
+function blacksmithTestboxClaimRepoRoot(id) {
+  const configuredStateRoot = process.env.XDG_STATE_HOME?.trim();
+  const stateDir = configuredStateRoot
+    ? resolve(configuredStateRoot, "crabbox")
+    : resolve(crabboxConfigDir(), "state");
+  const claimPath = resolve(stateDir, "claims", `${id}.json`);
+  if (!pathExists(claimPath)) {
+    return "";
+  }
+  const claim = JSON.parse(readFileSync(claimPath, "utf8"));
+  return typeof claim.repoRoot === "string" ? claim.repoRoot : "";
+}
+
 function enforceCrabboxOwnedBlacksmithLease(commandArgs) {
   if (commandArgs[0] !== "run") {
     return;
@@ -939,18 +964,24 @@ function enforceCrabboxOwnedBlacksmithLease(commandArgs) {
   }
 
   const keyPath = blacksmithTestboxPrivateKeyPath(id);
-  if (pathExists(keyPath)) {
-    return;
+  if (!pathExists(keyPath)) {
+    console.error(
+      [
+        `[crabbox] provider=blacksmith-testbox --id ${id} has no Crabbox SSH key at ${userDisplayPath(keyPath)}.`,
+        "[crabbox] create reusable Testboxes through Crabbox before reusing them: node scripts/crabbox-wrapper.mjs warmup --provider blacksmith-testbox --idle-timeout 90m",
+        "[crabbox] direct `blacksmith testbox warmup` leases can be used with `blacksmith testbox run`, but Crabbox cannot sync or run them by id.",
+      ].join("\n"),
+    );
+    process.exit(2);
   }
 
-  console.error(
-    [
-      `[crabbox] provider=blacksmith-testbox --id ${id} has no Crabbox SSH key at ${userDisplayPath(keyPath)}.`,
-      "[crabbox] create reusable Testboxes through Crabbox before reusing them: node scripts/crabbox-wrapper.mjs warmup --provider blacksmith-testbox --idle-timeout 90m",
-      "[crabbox] direct `blacksmith testbox warmup` leases can be used with `blacksmith testbox run`, but Crabbox cannot sync or run them by id.",
-    ].join("\n"),
-  );
-  process.exit(2);
+  const claimRepoRoot = blacksmithTestboxClaimRepoRoot(id);
+  if (claimRepoRoot && claimRepoRoot !== repoRoot && !hasOption(commandArgs, "--reclaim")) {
+    console.error(
+      `[crabbox] lease ${id} is claimed by repo ${claimRepoRoot}; use --reclaim to claim it for ${repoRoot}`,
+    );
+    process.exit(2);
+  }
 }
 
 function preserveTemporaryCrabboxRuns() {
@@ -2929,7 +2960,8 @@ function isSparseCheckout() {
 }
 
 function isWorktreeClean() {
-  return gitOutput(["status", "--porcelain=v1"]).stdout === "";
+  const status = gitOutput(["status", "--porcelain=v1"]);
+  return status.status === 0 && status.stdout === "";
 }
 
 function shouldUseFullCheckoutForCleanRemoteSync(commandArgs, _providerName) {
@@ -3173,6 +3205,23 @@ function injectFullCheckoutLeaseReclaim(commandArgs) {
   return normalizedArgs;
 }
 
+function injectRemoteTestboxCi(commandArgs, providerName) {
+  if (commandArgs[0] !== "run" || canonicalProviderName(providerName) !== "blacksmith-testbox") {
+    return commandArgs;
+  }
+  const normalizedArgs = [...commandArgs];
+  const { start } = runCommandBounds(normalizedArgs);
+  if (start < 0) {
+    return normalizedArgs;
+  }
+  if (hasOption(normalizedArgs, "--shell")) {
+    normalizedArgs[start] = `export CI=true; ${normalizedArgs[start]}`;
+  } else {
+    normalizedArgs.splice(start, 0, "env", "CI=true");
+  }
+  return normalizedArgs;
+}
+
 const version = probeCrabboxMetadata(binary, ["--version"]);
 const help = probeCrabboxMetadata(binary, ["run", "--help"]);
 const providers = parseProvidersFromHelp(help.text);
@@ -3253,6 +3302,19 @@ if (canonicalProvider === "blacksmith-testbox") {
   enforceCrabboxOwnedBlacksmithLease(normalizedArgs);
 }
 
+let testboxLeaseFreshness;
+try {
+  testboxLeaseFreshness = prepareTestboxLeaseFreshness({
+    args: normalizedArgs,
+    env: { ...process.env, CI: process.env.CI || "true" },
+    provider: canonicalProvider,
+    repoRoot,
+  });
+} catch (error) {
+  console.error(`[crabbox] ${error instanceof Error ? error.message : String(error)}`);
+  process.exit(2);
+}
+
 let childCwd = repoRoot;
 let cleanupChildCwd = () => {};
 let fullCheckout = null;
@@ -3329,6 +3391,9 @@ if (normalizedArgs[0] === "run" && isBrokeredWsl2RemoteTarget(normalizedArgs, pr
 }
 
 const childEnv = { ...process.env };
+if (canonicalProvider === "blacksmith-testbox" && !childEnv.CI) {
+  childEnv.CI = "true";
+}
 if (
   isLocalContainerProvider(provider) &&
   !childEnv.CRABBOX_LOCAL_CONTAINER_DOCKER_SOCKET &&
@@ -3364,7 +3429,7 @@ try {
   cleanupOnce();
   throw error;
 }
-const childArgs =
+const childArgs = injectRemoteTestboxCi(
   childCwd === repoRoot
     ? injectRemoteWindowsHydratedNodeModulesBootstrap(
         injectRemoteAwsMacosSwiftBootstrap(
@@ -3384,7 +3449,9 @@ const childArgs =
           provider,
         ),
         remoteChangedGateBase,
-      );
+      ),
+  provider,
+);
 let fullCheckoutKeepaliveIntervalMsValue = 0;
 if (fullCheckout) {
   try {
@@ -3395,6 +3462,11 @@ if (fullCheckout) {
   }
 }
 const childInvocation = spawnInvocation(binary, childArgs, childEnv, process.platform);
+// Fast-fail hint context: run --id reuse dies in under a second when the
+// lease hit its idle timeout, with only a bare nonzero exit from the binary.
+const reusedRunLeaseId = normalizedArgs[0] === "run" ? optionValue(normalizedArgs, "--id") : "";
+const childStartedAtMs = Date.now();
+const FAST_FAIL_HINT_WINDOW_MS = 15_000;
 const child = spawn(childInvocation.command, childInvocation.args, {
   cwd: childCwd,
   stdio: "inherit",
@@ -3437,16 +3509,37 @@ child.on("exit", (code, signal) => {
   if (childTreeShutdownStarted) {
     return;
   }
+  let exitCode = code;
   let fullCheckoutAvailable = true;
   if (fullCheckout) {
     fullCheckoutAvailable = assertFullCheckoutAvailableBeforeExit(fullCheckout.dir);
+  }
+  if (!signal && code === 0) {
+    try {
+      recordTestboxLeaseFreshness(testboxLeaseFreshness);
+    } catch (error) {
+      console.error(
+        `[crabbox] failed to record Testbox lease freshness: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      exitCode = 2;
+    }
   }
   cleanupOnce();
   if (signal) {
     process.exit(signalExitCodes.get(signal) ?? 1);
     return;
   }
-  process.exit(fullCheckoutAvailable ? (code ?? 1) : 1);
+  const finalExitCode = fullCheckoutAvailable ? (exitCode ?? 1) : 1;
+  if (
+    finalExitCode !== 0 &&
+    reusedRunLeaseId &&
+    Date.now() - childStartedAtMs < FAST_FAIL_HINT_WINDOW_MS
+  ) {
+    console.error(
+      `[crabbox] run --id ${reusedRunLeaseId} failed fast; reusable leases expire after their idle timeout and rejected flags also exit immediately. Check the first error line above, verify the lease with \`node scripts/crabbox-wrapper.mjs list\`, or warm a fresh one with \`node scripts/crabbox-wrapper.mjs warmup\`.`,
+    );
+  }
+  process.exit(finalExitCode);
 });
 
 child.on("error", (error) => {

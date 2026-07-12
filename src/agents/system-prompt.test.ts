@@ -951,6 +951,49 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
+  it("adds run-scoped Ultra orchestration only when sessions_spawn is callable", () => {
+    const base = {
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_spawn"],
+      subagentDelegationMode: "prefer",
+    } satisfies Parameters<typeof buildAgentSystemPrompt>[0];
+    const maxPrompt = buildAgentSystemPrompt(base);
+    const ultraPrompt = buildAgentSystemPrompt({
+      ...base,
+      proactiveSubagentOrchestration: true,
+    });
+    const deferredUltraPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["tool_search"],
+      capabilityToolNames: ["sessions_spawn"],
+      proactiveSubagentOrchestration: true,
+    });
+    const minimalUltraPrompt = buildAgentSystemPrompt({
+      ...base,
+      promptMode: "minimal",
+      proactiveSubagentOrchestration: true,
+    });
+    const unavailablePrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["subagents"],
+      proactiveSubagentOrchestration: true,
+    });
+    const rawPrompt = buildAgentSystemPrompt({
+      ...base,
+      promptMode: "none",
+      proactiveSubagentOrchestration: true,
+    });
+
+    expect(maxPrompt).not.toContain("## Proactive Sub-Agent Orchestration");
+    expect(ultraPrompt).toContain("## Proactive Sub-Agent Orchestration");
+    expect(ultraPrompt).toContain("Ultra mode is active");
+    expect(ultraPrompt).not.toContain("Mode: prefer");
+    expect(deferredUltraPrompt).toContain("## Proactive Sub-Agent Orchestration");
+    expect(minimalUltraPrompt).toContain("## Proactive Sub-Agent Orchestration");
+    expect(unavailablePrompt).not.toContain("## Proactive Sub-Agent Orchestration");
+    expect(rawPrompt).not.toContain("## Proactive Sub-Agent Orchestration");
+  });
+
   it("omits prefer delegation guidance when sessions_spawn is unavailable", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -1101,7 +1144,10 @@ describe("buildAgentSystemPrompt", () => {
         },
       });
 
-      expect(prompt).toContain("use `message(action=send)` for visible source-channel output");
+      expect(prompt).toContain(
+        "you MUST call `message(action=send)` for visible source-channel output",
+      );
+      expect(prompt).toContain("skipping the tool means the user receives nothing");
       expect(prompt).toContain(
         "Tool/generated media paths are attachments, not prose; send one with `media`, multiple with `attachments: [{media: ...}]`.",
       );
@@ -1180,7 +1226,9 @@ describe("buildAgentSystemPrompt", () => {
       },
     });
 
-    expect(prompt).toContain("use `message(action=send)` for visible source-channel output");
+    expect(prompt).toContain(
+      "you MUST call `message(action=send)` for visible source-channel output",
+    );
     expect(prompt).not.toContain("Group/channel etiquette");
   });
 
@@ -1313,6 +1361,40 @@ describe("buildAgentSystemPrompt", () => {
     expect(line).toContain("channel=telegram");
     expect(line).toContain("capabilities=inlinebuttons");
     expect(line).toContain("thinking=low");
+  });
+
+  it("keeps the runtime line cache-stable across isolated cron runs", () => {
+    // Isolated cron run-scoped keys carry a fresh per-run id every run (forceNew). Rendering it
+    // verbatim re-busts byte-exact prefix caching for the tool catalog after it (#96677 / #43148).
+    const buildForRun = (runId: string) =>
+      buildRuntimeLine({
+        agentId: "work",
+        sessionKey: `agent:work:cron:nightly-job:run:${runId}`,
+        sessionId: runId,
+        host: "host",
+        os: "linux",
+      });
+    const lineA = buildForRun("11111111-1111-1111-1111-111111111111");
+    const lineB = buildForRun("22222222-2222-2222-2222-222222222222");
+
+    expect(lineA).toContain("session=agent:work:cron:nightly-job");
+    expect(lineA).not.toContain(":run:");
+    expect(lineA).not.toContain("sessionId=");
+    // Two runs of the same job render identical bytes, so the cached prefix is reused.
+    expect(lineA).toBe(lineB);
+  });
+
+  it("preserves a stable session id that is not the run-scope id", () => {
+    const line = buildRuntimeLine({
+      agentId: "work",
+      sessionKey: "agent:work:cron:nightly-job:run:run-id",
+      sessionId: "stable-session-id",
+      host: "host",
+      os: "linux",
+    });
+
+    expect(line).toContain("session=agent:work:cron:nightly-job");
+    expect(line).toContain("sessionId=stable-session-id");
   });
 
   it("renders extra system prompt exactly once", () => {

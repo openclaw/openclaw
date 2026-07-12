@@ -37,6 +37,39 @@ function makeQaSuiteTestLabHandle(): QaLabServerHandle {
 }
 
 describe("qa suite", () => {
+  it("continues ordered cleanup after a resource reports failure", async () => {
+    const calls: string[] = [];
+    const failure = new Error("gateway pipe failed");
+
+    const errors = await qaSuiteProgressTesting.runQaSuiteCleanupSteps([
+      async () => {
+        calls.push("gateway");
+        throw failure;
+      },
+      async () => {
+        calls.push("transport");
+      },
+      async () => {
+        calls.push("lab");
+      },
+    ]);
+
+    expect(calls).toEqual(["gateway", "transport", "lab"]);
+    expect(errors).toEqual([failure]);
+  });
+
+  it("keeps the primary suite error as the cause of aggregated cleanup failures", () => {
+    const runError = new Error("gateway infrastructure failed");
+
+    expect(() =>
+      qaSuiteProgressTesting.throwQaSuiteCleanupErrors({
+        cleanupErrors: [new Error("transport cleanup failed")],
+        runFailed: true,
+        runError,
+      }),
+    ).toThrow(expect.objectContaining({ cause: runError }));
+  });
+
   it("rejects unsupported transport ids before starting the lab", async () => {
     const startLab = vi.fn();
 
@@ -342,8 +375,8 @@ describe("qa suite", () => {
           createReportNotes: () => [],
         } as unknown as QaTransportAdapter,
         providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.5",
-        alternateModel: "mock-openai/gpt-5.5-alt",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        alternateModel: "mock-openai/gpt-5.6-luna-alt",
         fastMode: true,
         concurrency: 1,
       });
@@ -378,8 +411,8 @@ describe("qa suite", () => {
           createReportNotes: () => [],
         } as unknown as QaTransportAdapter,
         providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.5",
-        alternateModel: "mock-openai/gpt-5.5-alt",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        alternateModel: "mock-openai/gpt-5.6-luna-alt",
         fastMode: true,
         concurrency: 1,
         writeEvidenceFile: false,
@@ -431,8 +464,8 @@ describe("qa suite", () => {
           createReportNotes: () => [],
         } as unknown as QaTransportAdapter,
         providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.5",
-        alternateModel: "mock-openai/gpt-5.5-alt",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        alternateModel: "mock-openai/gpt-5.6-luna-alt",
         fastMode: true,
         concurrency: 1,
         channelDriverSelection: {
@@ -540,6 +573,10 @@ describe("qa suite", () => {
         },
       },
     });
+    const sutOpenClawCommand = {
+      executablePath: "/usr/local/bin/openclaw-telegram-sut-launcher",
+      usePackagedPlugins: true,
+    };
 
     expect(
       qaSuiteProgressTesting.buildQaIsolatedScenarioWorkerParams({
@@ -547,8 +584,8 @@ describe("qa suite", () => {
         outputDir: "/repo/.artifacts/qa-e2e/scenarios/patched-control-ui",
         providerMode: "mock-openai",
         transportId: "qa-channel",
-        primaryModel: "mock-openai/gpt-5.5",
-        alternateModel: "mock-openai/gpt-5.5-alt",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        alternateModel: "mock-openai/gpt-5.6-luna-alt",
         fastMode: true,
         scenario,
         startLab,
@@ -556,6 +593,7 @@ describe("qa suite", () => {
           adapterFactories: [adapterFactory],
           channelId: "telegram",
           adapterOptions: { repoRoot: "/repo" },
+          sutOpenClawCommand,
           thinkingDefault: "minimal",
           claudeCliAuthMode: "subscription",
           enabledPluginIds: ["acpx"],
@@ -569,6 +607,7 @@ describe("qa suite", () => {
       adapterFactories: [adapterFactory],
       channelId: "telegram",
       adapterOptions: { repoRoot: "/repo" },
+      sutOpenClawCommand,
       concurrency: 1,
       startLab,
       controlUiEnabled: true,
@@ -641,18 +680,18 @@ describe("qa suite", () => {
   it("remaps mock-openai model refs onto the app-server OpenAI provider for codex cells only", () => {
     expect(
       qaSuiteProgressTesting.remapModelRefForForcedRuntime({
-        modelRef: "mock-openai/gpt-5.5",
+        modelRef: "mock-openai/gpt-5.6-luna",
         providerMode: "mock-openai",
         forcedRuntime: "codex",
       }),
-    ).toBe("openai/gpt-5.5");
+    ).toBe("openai/gpt-5.6-luna");
     expect(
       qaSuiteProgressTesting.remapModelRefForForcedRuntime({
-        modelRef: "mock-openai/gpt-5.5",
+        modelRef: "mock-openai/gpt-5.6-luna",
         providerMode: "mock-openai",
         forcedRuntime: "openclaw",
       }),
-    ).toBe("mock-openai/gpt-5.5");
+    ).toBe("mock-openai/gpt-5.6-luna");
   });
 });
 

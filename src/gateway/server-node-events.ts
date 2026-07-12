@@ -14,8 +14,8 @@ import {
   resolveEventSessionRoutingPolicy,
   scopedHeartbeatWakeOptionsForPolicy,
 } from "../infra/event-session-routing.js";
-import { updatePairedNodeMetadata } from "../infra/node-pairing.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
+import { resolveAgentHarnessSessionContextError } from "../sessions/agent-harness-session-key.js";
 import {
   NODE_PRESENCE_ALIVE_EVENT,
   normalizeNodePresenceAliveReason,
@@ -402,6 +402,9 @@ export const handleNodeEvent = async (
       const rawMainKey = normalizeMainKey(cfg.session?.mainKey);
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : rawMainKey;
       const { storePath, entry, canonicalKey, storeKeys } = loadSessionEntry(sessionKey);
+      if (resolveAgentHarnessSessionContextError(canonicalKey, entry)) {
+        return undefined;
+      }
       const now = Date.now();
       const fingerprint = resolveVoiceTranscriptFingerprint(obj, text);
       if (shouldDropDuplicateVoiceTranscript({ sessionKey: canonicalKey, fingerprint, now })) {
@@ -477,6 +480,9 @@ export const handleNodeEvent = async (
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : `node-${nodeId}`;
       const cfg = getRuntimeConfig();
       const { storePath, entry, canonicalKey, storeKeys } = loadSessionEntry(sessionKey);
+      if (resolveAgentHarnessSessionContextError(canonicalKey, entry)) {
+        return undefined;
+      }
 
       let message = (link?.message ?? "").trim();
       const transcriptMessage = message;
@@ -647,7 +653,10 @@ export const handleNodeEvent = async (
       }
       const key = sanitizeInboundSystemTags(keyRaw);
       const sessionKeyRaw = normalizeOptionalString(obj.sessionKey) ?? `node-${nodeId}`;
-      const { canonicalKey: sessionKey } = loadSessionEntry(sessionKeyRaw);
+      const { canonicalKey: sessionKey, entry } = loadSessionEntry(sessionKeyRaw);
+      if (resolveAgentHarnessSessionContextError(sessionKey, entry)) {
+        return undefined;
+      }
       const packageNameRaw = normalizeOptionalString(obj.packageName);
       const packageName = packageNameRaw ? sanitizeInboundSystemTags(packageNameRaw) : null;
       const title = compactNotificationEventText(
@@ -885,17 +894,13 @@ export const handleNodeEvent = async (
 
       const lastSeenReason = normalizeNodePresenceAliveReason(obj.trigger);
       try {
-        const [nodeUpdated, deviceUpdated] = await Promise.all([
-          updatePairedNodeMetadata(nodeId, {
-            lastSeenAtMs: now,
-            lastSeenReason,
-          }),
-          updatePairedDeviceMetadata(deviceId, {
-            lastSeenAtMs: now,
-            lastSeenReason,
-          }),
-        ]);
-        if (!nodeUpdated && !deviceUpdated) {
+        // Node last-seen lives on the device record; node.pair.list projects
+        // it from there, so one write covers both surfaces.
+        const deviceUpdated = await updatePairedDeviceMetadata(deviceId, {
+          lastSeenAtMs: now,
+          lastSeenReason,
+        });
+        if (!deviceUpdated) {
           return { ok: true, event: evt.event, handled: false, reason: "unpaired" };
         }
         recentNodePresencePersistAt.set(deviceId, now);

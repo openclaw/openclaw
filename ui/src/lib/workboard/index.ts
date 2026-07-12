@@ -65,7 +65,7 @@ export const WORKBOARD_TEMPLATE_IDS = ["bugfix", "docs", "release", "pr_review",
 export const WORKBOARD_DIAGNOSTIC_SEVERITIES = ["warning", "error", "critical"] as const;
 
 const WORKBOARD_ENGINE_MODELS = {
-  codex: "openai/gpt-5.5",
+  codex: "openai/gpt-5.6-sol",
   claude: "anthropic/claude-sonnet-4-6",
 } as const;
 
@@ -2909,7 +2909,7 @@ function clampSessionCaptureText(value: string): string {
   if (compact.length <= SESSION_CAPTURE_TEXT_MAX_CHARS) {
     return compact;
   }
-  return `${compact.slice(0, SESSION_CAPTURE_TEXT_MAX_CHARS - 3).trimEnd()}...`;
+  return `${truncateUtf16Safe(compact, SESSION_CAPTURE_TEXT_MAX_CHARS - 3).trimEnd()}...`;
 }
 
 function clampSessionCaptureTitle(value: string): string {
@@ -2917,7 +2917,7 @@ function clampSessionCaptureTitle(value: string): string {
   if (compact.length <= WORKBOARD_CAPTURE_TITLE_MAX_CHARS) {
     return compact;
   }
-  return `${compact.slice(0, WORKBOARD_CAPTURE_TITLE_MAX_CHARS - 3).trimEnd()}...`;
+  return `${truncateUtf16Safe(compact, WORKBOARD_CAPTURE_TITLE_MAX_CHARS - 3).trimEnd()}...`;
 }
 
 function sessionTitle(session: GatewaySessionRow, recentUserText: string | null): string {

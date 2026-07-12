@@ -498,7 +498,7 @@ describe("scoped vitest configs", () => {
     expectForkedIsolatedRunner(defaultInfraConfig);
   });
 
-  it("keeps the process lane off the openclaw runtime setup", () => {
+  it("keeps process, runtime config, and tooling lanes off the openclaw runtime setup", () => {
     expect(normalizeConfigPaths(requireTestConfig(defaultProcessConfig).setupFiles)).toEqual([
       "test/setup.ts",
     ]);
@@ -508,6 +508,9 @@ describe("scoped vitest configs", () => {
     expect(normalizeConfigPaths(requireTestConfig(defaultPluginSdkConfig).setupFiles)).toEqual([
       "test/setup.ts",
       "test/setup-openclaw-runtime.ts",
+    ]);
+    expect(normalizeConfigPaths(requireTestConfig(defaultToolingConfig).setupFiles)).toEqual([
+      "test/setup.ts",
     ]);
   });
 
@@ -975,6 +978,7 @@ describe("scoped vitest configs", () => {
     const testConfig = requireTestConfig(defaultMediaUnderstandingConfig);
     expect(testConfig.dir).toBe(path.join(process.cwd(), "src"));
     expect(testConfig.include).toEqual(["media-understanding/**/*.test.ts"]);
+    expect(normalizeConfigPaths(testConfig.setupFiles)).toEqual(["test/setup.ts"]);
   });
 
   it("keeps tooling tests in their own lane", () => {

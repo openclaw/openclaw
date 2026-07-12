@@ -5,9 +5,11 @@ import {
   listSessionEntries,
   type SessionEntryLifecycleRemoval,
 } from "../config/sessions/session-accessor.js";
+import { resolveMaintenanceConfig } from "../config/sessions/store-maintenance-runtime.js";
 import type { CronConfig } from "../config/types.cron.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import { hasPendingGeneratedMediaTaskForSessionKey } from "../tasks/task-status-access.js";
 import type { Logger } from "./service/state.js";
 
 const DEFAULT_RETENTION_MS = 24 * 3_600_000; // 24 hours
@@ -74,8 +76,15 @@ export async function sweepCronRunSessions(params: {
   try {
     const cutoff = now - retentionMs;
     const removals: SessionEntryLifecycleRemoval[] = [];
-    for (const { sessionKey, entry } of listSessionEntries({ storePath, clone: false })) {
+    for (const { sessionKey, entry } of listSessionEntries({ storePath })) {
       if (!isCronRunSessionKey(sessionKey)) {
+        continue;
+      }
+      const continuation = entry.cronRunContinuation;
+      const hasPendingMedia = Boolean(
+        continuation && hasPendingGeneratedMediaTaskForSessionKey(sessionKey),
+      );
+      if (continuation && hasPendingMedia) {
         continue;
       }
       const updatedAt = entry.updatedAt ?? 0;
@@ -90,14 +99,24 @@ export async function sweepCronRunSessions(params: {
       }
     }
     if (removals.length > 0) {
+      // Archive-age cleanup follows the session maintenance retention knob:
+      // the reaper's cron retention decides which rows die, but archived
+      // transcript files are conversation history owned by the archive
+      // retention policy (null = keep until the disk budget evicts).
+      const archiveRetentionMs = resolveMaintenanceConfig().resetArchiveRetentionMs;
       const result = await applySessionEntryLifecycleMutation({
         storePath,
         removals,
+        preserveActiveWork: true,
         restrictArchivedTranscriptsToStoreDir: true,
-        cleanupArchivedTranscripts: {
-          rules: [{ reason: "deleted", olderThanMs: retentionMs }],
-          nowMs: now,
-        },
+        ...(archiveRetentionMs == null
+          ? {}
+          : {
+              cleanupArchivedTranscripts: {
+                rules: [{ reason: "deleted", olderThanMs: archiveRetentionMs }],
+                nowMs: now,
+              },
+            }),
         captureArtifactCleanupError: true,
       });
       pruned = result.removedEntries;

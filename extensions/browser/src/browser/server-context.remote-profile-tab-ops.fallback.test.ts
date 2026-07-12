@@ -79,7 +79,7 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
     expect(tabs.map((t) => t.targetId)).toEqual(["T1"]);
   });
 
-  it("filters browser-internal targets from raw CDP tab listing", async () => {
+  it("filters browser-internal and non-page targets from raw CDP tab listing", async () => {
     vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue(null);
     const { remote } = deps.createRemoteRouteHarness(
       vi.fn(
@@ -97,6 +97,27 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
             url: "chrome-untrusted://foo/",
             webSocketDebuggerUrl: "wss://1.1.1.1:9222/devtools/page/UNTRUSTED",
             type: "page",
+          },
+          {
+            id: "WORKER",
+            title: "Dedicated Worker",
+            url: "https://example.com/worker.js",
+            webSocketDebuggerUrl: "wss://1.1.1.1:9222/devtools/page/WORKER",
+            type: "worker",
+          },
+          {
+            id: "SERVICE_WORKER",
+            title: "Service Worker",
+            url: "https://example.com/sw.js",
+            webSocketDebuggerUrl: "wss://1.1.1.1:9222/devtools/page/SERVICE_WORKER",
+            type: "service_worker",
+          },
+          {
+            id: "IFRAME",
+            title: "Iframe",
+            url: "https://example.com/frame",
+            webSocketDebuggerUrl: "wss://1.1.1.1:9222/devtools/page/IFRAME",
+            type: "iframe",
           },
           {
             id: "T1",
@@ -160,6 +181,44 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
     await expect(remote.openTab("about:blank")).rejects.toBeInstanceOf(
       deps.BrowserCdpEndpointBlockedError,
     );
+    expect(state.profiles.get("remote")?.lastTargetId).not.toBe("T_BLOCKED");
+  });
+
+  it.each([
+    {
+      id: "WORKER",
+      title: "Worker",
+      url: "https://example.com/worker.js",
+      type: "worker",
+    },
+    {
+      id: "INTERNAL",
+      title: "Settings",
+      url: "chrome://settings/",
+      type: "page",
+    },
+  ])("rejects non-selectable $type target $id returned by raw tab creation", async (created) => {
+    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue(null);
+    vi.spyOn(deps.cdpModule, "createTargetViaCdp").mockRejectedValue(
+      new Error("Target.createTarget unavailable"),
+    );
+    const fetchMock = vi.fn(async (url: unknown) => {
+      const u = String(url);
+      if (!u.includes("/json/new")) {
+        throw new Error(`unexpected fetch: ${u}`);
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          ...created,
+          webSocketDebuggerUrl: `wss://1.1.1.1:9222/devtools/page/${created.id}`,
+        }),
+      } as unknown as Response;
+    });
+    const { state, remote } = deps.createRemoteRouteHarness(fetchMock);
+
+    await expect(remote.openTab("https://example.com")).rejects.toThrow(/non-selectable target/);
+    expect(state.profiles.get("remote")?.lastTargetId).not.toBe(created.id);
   });
 
   it("fails closed for remote tab opens in strict mode without Playwright", async () => {
@@ -240,7 +299,11 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
     expect(createTargetViaCdp).toHaveBeenCalledWith({
       cdpUrl: "https://1.1.1.1:9222/chrome?token=abc",
       url: "https://example.com",
-      ssrfPolicy: { allowPrivateNetwork: true },
+      ssrfPolicy: {
+        allowPrivateNetwork: true,
+        allowedHostnames: ["1.1.1.1"],
+        hostnameAllowlist: ["1.1.1.1"],
+      },
       timeouts: {
         httpTimeoutMs: 4321,
         handshakeTimeoutMs: 8765,

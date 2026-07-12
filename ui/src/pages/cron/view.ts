@@ -37,6 +37,8 @@ import { formatRelativeTimestamp, formatMs } from "../../lib/format.ts";
 import { formatCronSchedule, formatNextRun } from "../../lib/presenter.ts";
 import { searchForSession } from "../../lib/sessions/index.ts";
 import { normalizeStringEntries, uniqueStrings } from "../../lib/string-coerce.ts";
+import type { CronQuickCreateDraft } from "./quick-create.ts";
+import { renderCronSuggestions } from "./suggestions.ts";
 
 type CronProps = {
   basePath: string;
@@ -91,6 +93,8 @@ type CronProps = {
   onRemove: (job: CronJob) => void;
   /** Open the simplified creation wizard. */
   onQuickCreate?: () => void;
+  /** Open the wizard pre-filled from an automation-ideas card. */
+  onUseSuggestion?: (draft: Partial<CronQuickCreateDraft>) => void;
   onLoadRuns: (jobId: string) => void;
   onLoadMoreJobs: () => void;
   onJobsFiltersChange: (patch: {
@@ -430,30 +434,41 @@ export function renderCron(props: CronProps) {
         : t("cron.form.fixFieldsPlural", { count: String(blockingFields.length) })
       : "";
   return html`
-    <section class="card cron-summary-strip">
-      <div class="cron-summary-strip__left">
-        <div class="cron-summary-item">
-          <div class="cron-summary-label">${t("cron.summary.enabled")}</div>
-          <div class="cron-summary-value">
-            <span class=${`chip ${props.status?.enabled ? "chip-ok" : "chip-danger"}`}>
-              ${props.status
-                ? props.status.enabled
-                  ? t("cron.summary.yes")
-                  : t("cron.summary.no")
-                : t("common.na")}
-            </span>
+    <section class="card summary-strip">
+      <div class="summary-strip__stats">
+        <div class="summary-stat" data-stat="scheduler">
+          <span class="summary-stat__icon" aria-hidden="true">${icon("activity")}</span>
+          <div class="summary-stat__copy">
+            <div class="summary-stat__label">${t("cron.summary.scheduler")}</div>
+            <div class="summary-stat__value">
+              <span class=${`chip ${props.status?.enabled ? "chip-ok" : "chip-danger"}`}>
+                ${props.status
+                  ? props.status.enabled
+                    ? t("common.enabled")
+                    : t("common.disabled")
+                  : t("common.na")}
+              </span>
+            </div>
           </div>
         </div>
-        <div class="cron-summary-item">
-          <div class="cron-summary-label">${t("cron.summary.jobs")}</div>
-          <div class="cron-summary-value">${props.status?.jobs ?? t("common.na")}</div>
+        <div class="summary-stat" data-stat="jobs">
+          <span class="summary-stat__icon" aria-hidden="true">${icon("calendarClock")}</span>
+          <div class="summary-stat__copy">
+            <div class="summary-stat__label">${t("cron.summary.jobs")}</div>
+            <div class="summary-stat__value">${props.status?.jobs ?? t("common.na")}</div>
+          </div>
         </div>
-        <div class="cron-summary-item">
-          <div class="cron-summary-label">${t("cron.summary.nextWake")}</div>
-          <div class="cron-summary-value">${formatNextRun(props.status?.nextWakeAtMs ?? null)}</div>
+        <div class="summary-stat" data-stat="next-wake">
+          <span class="summary-stat__icon" aria-hidden="true">${icon("clock")}</span>
+          <div class="summary-stat__copy">
+            <div class="summary-stat__label">${t("cron.summary.nextWake")}</div>
+            <div class="summary-stat__value">
+              ${formatNextRun(props.status?.nextWakeAtMs ?? null)}
+            </div>
+          </div>
         </div>
       </div>
-      <div class="cron-summary-strip__actions">
+      <div class="summary-strip__actions">
         ${openNewJob
           ? html`
               <button class="btn btn--primary" @click=${openNewJob}>
@@ -471,6 +486,15 @@ export function renderCron(props: CronProps) {
         ${props.error ? html`<span class="muted">${props.error}</span>` : nothing}
       </div>
     </section>
+
+    ${props.onUseSuggestion
+      ? renderCronSuggestions({
+          // Front and center on a fresh page; a slim collapsed band once real jobs exist.
+          expanded: !props.loading && props.jobs.length === 0 && !hasActiveJobsFilters,
+          busy: props.busy,
+          onUse: props.onUseSuggestion,
+        })
+      : nothing}
 
     <section class=${`cron-workspace ${formCollapsed ? "cron-workspace--form-collapsed" : ""}`}>
       <div class="cron-workspace-main">

@@ -35,6 +35,14 @@ const shouldSuppressBuiltInModel = vi.fn().mockReturnValue(false);
 const shouldSuppressBuiltInModelFromManifest = vi.fn().mockReturnValue(false);
 const normalizeProviderResolvedModelWithPlugin = vi.hoisted(() =>
   vi.fn(({ context }) => {
+    if (context?.provider === "anthropic" && context?.modelId === "claude-sonnet-5") {
+      return {
+        ...context.model,
+        input: ["text", "image"],
+        contextWindow: 1_000_000,
+        contextTokens: 1_000_000,
+      };
+    }
     if (
       context?.provider === "anthropic" &&
       context?.modelId === "claude-sonnet-4-5" &&
@@ -73,18 +81,28 @@ vi.mock("../agents/auth-profiles/profile-list.js", () => ({
 }));
 
 vi.mock("../agents/auth-profiles/store.js", () => ({
+  getRuntimeAuthProfileStoreSnapshot: vi.fn(() => undefined),
   loadAuthProfileStoreWithoutExternalProfiles: ensureAuthProfileStore,
+  updateAuthProfileStoreWithLock: vi.fn(async () => ensureAuthProfileStore()),
 }));
 
-vi.mock("../agents/model-auth.js", () => ({
-  hasUsableCustomProviderApiKey,
-  hasSyntheticLocalProviderAuthConfig,
-  resolveAwsSdkEnvVarName,
-  resolveEnvApiKey,
-}));
+vi.mock("../agents/model-auth.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/model-auth.js")>();
+  return {
+    ...actual,
+    hasUsableCustomProviderApiKey,
+    hasSyntheticLocalProviderAuthConfig,
+    resolveAwsSdkEnvVarName,
+    resolveEnvApiKey,
+  };
+});
 
 vi.mock("../agents/model-catalog.js", () => ({
   loadModelCatalog,
+  loadModelCatalogSnapshot: async (...args: Parameters<typeof loadModelCatalog>) => {
+    const entries = await loadModelCatalog(...args);
+    return { entries, routeVariants: entries };
+  },
 }));
 
 vi.mock("../agents/embedded-agent-runner/model.js", () => ({
@@ -495,6 +513,23 @@ describe("models list/status", () => {
     );
   });
 
+  it("models list renders a configured Sonnet 5 table row through provider normalization", async () => {
+    getRuntimeConfig.mockReturnValue({
+      agents: { defaults: { model: "anthropic/claude-sonnet-5" } },
+    });
+    const runtime = makeRuntime();
+
+    await modelsListCommand({}, runtime);
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    const output = runtime.log.mock.calls.map(([line]) => String(line)).join("\n");
+    expect(output).toContain("anthropic/claude-sonnet-5");
+    expect(output).toContain("text+image");
+    const normalizationContext =
+      normalizeProviderResolvedModelWithPlugin.mock.calls.at(-1)?.[0]?.context;
+    expect(normalizationContext?.model).not.toHaveProperty("cost");
+  });
+
   it.each(["z.ai", "Z.AI", "z-ai"] as const)(
     "models list provider filter normalizes %s alias",
     async (provider) => {
@@ -571,7 +606,7 @@ describe("models list/status", () => {
     expect(model.available).toBe(true);
   });
 
-  it("models list all includes unauthenticated provider catalog rows", async () => {
+  it("models list all includes catalog rows with unknown auth availability", async () => {
     setDefaultZaiRegistry({ available: false });
     hasProviderStaticCatalogForFilter.mockResolvedValueOnce(true);
     loadProviderCatalogModelsForList.mockResolvedValueOnce([MOONSHOT_MODEL]);
@@ -588,7 +623,7 @@ describe("models list/status", () => {
     const model = payload.models[0];
     expect(model.key).toBe("moonshot/kimi-k2.6");
     expect(model.name).toBe("Kimi K2.6");
-    expect(model.available).toBe(false);
+    expect(model.available).toBeNull();
     expect(model.missing).toBe(false);
   });
 
@@ -755,7 +790,7 @@ describe("models list/status", () => {
     expect(model.missing).toBe(false);
   });
 
-  it("toModelRow marks unavailable when cfg/authStore and availability are undefined", () => {
+  it("toModelRow keeps auth availability unknown when no evidence exists", () => {
     const row = toModelRow({
       model: makeGoogleAntigravityTemplate(
         "claude-opus-4-6-thinking",
@@ -764,10 +799,11 @@ describe("models list/status", () => {
       key: "google-antigravity/claude-opus-4-6-thinking",
       tags: [],
       availableKeys: undefined,
+      authAvailability: undefined,
     });
 
     expect(row.missing).toBe(false);
-    expect(row.available).toBe(false);
+    expect(row.available).toBeNull();
   });
 });
 

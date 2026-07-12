@@ -19,7 +19,10 @@ import { isLikelyDiscordVideoMedia } from "./media-detection.js";
 import type { ThreadBindingRecord } from "./monitor/thread-bindings.js";
 import { normalizeDiscordOutboundTarget } from "./normalize.js";
 import { normalizeDiscordApprovalPayload } from "./outbound-approval.js";
-import { buildDiscordPresentationPayload } from "./outbound-components.js";
+import {
+  buildDiscordPresentationPayload,
+  DISCORD_PRESENTATION_CAPABILITIES,
+} from "./outbound-components.js";
 import { sendDiscordOutboundPayload } from "./outbound-payload.js";
 import {
   loadDiscordSendRuntime,
@@ -113,32 +116,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
   sanitizeText: ({ text }) => stripDiscordInternalRuntimeScaffolding(text),
   pollMaxOptions: 10,
   normalizePayload: ({ payload }) => normalizeDiscordApprovalPayload(payload),
-  presentationCapabilities: {
-    supported: true,
-    buttons: true,
-    selects: true,
-    context: true,
-    divider: true,
-    limits: {
-      actions: {
-        maxActions: 25,
-        maxActionsPerRow: 5,
-        maxRows: 5,
-        maxLabelLength: 80,
-        supportsDisabled: true,
-      },
-      selects: {
-        maxOptions: 25,
-        maxLabelLength: 100,
-        maxValueBytes: 100,
-      },
-      text: {
-        maxLength: DISCORD_TEXT_CHUNK_LIMIT,
-        encoding: "characters",
-        markdownDialect: "discord-markdown",
-      },
-    },
-  },
+  presentationCapabilities: DISCORD_PRESENTATION_CAPABILITIES,
   deliveryCapabilities: {
     durableFinal: {
       text: true,

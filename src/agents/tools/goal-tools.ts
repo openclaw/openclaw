@@ -18,7 +18,7 @@ import {
   type AnyAgentTool,
   ToolInputError,
   jsonResult,
-  readNumberParam,
+  readPositiveIntegerParam,
   readStringParam,
 } from "./common.js";
 
@@ -31,6 +31,7 @@ type GoalToolOptions = {
 
 type GoalSessionScope = {
   sessionKey: string;
+  agentId: string;
   storePath: string;
 };
 
@@ -39,7 +40,8 @@ const CreateGoalToolSchema = Type.Object({
     description: "Concrete objective to pursue. Create only when explicitly requested.",
   }),
   token_budget: Type.Optional(
-    Type.Number({
+    Type.Integer({
+      minimum: 1,
       description: "Optional positive token budget for this goal.",
     }),
   ),
@@ -65,6 +67,7 @@ function resolveGoalSessionScope(options: GoalToolOptions): GoalSessionScope {
   );
   return {
     sessionKey,
+    agentId,
     storePath: resolveStorePath(options.config?.session?.store, {
       agentId,
     }),
@@ -101,13 +104,13 @@ export function createCreateGoalTool(options: GoalToolOptions): AnyAgentTool {
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const objective = readStringParam(params, "objective", { required: true });
-      const tokenBudget = readNumberParam(params, "token_budget", { integer: true });
-      if (tokenBudget !== undefined && tokenBudget <= 0) {
-        // Budgets are positive limits; zero would immediately make accounting ambiguous.
-        throw new ToolInputError("token_budget must be positive");
-      }
+      const tokenBudget = readPositiveIntegerParam(params, "token_budget", {
+        message: "token_budget must be a positive integer",
+      });
+      const scope = resolveGoalSessionScope(options);
       const goal = await createSessionGoal({
-        ...resolveGoalSessionScope(options),
+        ...scope,
+        actor: { type: "agent", id: scope.sessionKey },
         objective,
         ...(tokenBudget !== undefined ? { tokenBudget } : {}),
       });
@@ -138,8 +141,10 @@ export function createUpdateGoalTool(options: GoalToolOptions): AnyAgentTool {
         );
       }
       const note = readStringParam(params, "note");
+      const scope = resolveGoalSessionScope(options);
       const goal = await updateSessionGoalStatus({
-        ...resolveGoalSessionScope(options),
+        ...scope,
+        actor: { type: "agent", id: scope.sessionKey },
         status: status as (typeof MODEL_UPDATABLE_SESSION_GOAL_STATUSES)[number],
         ...(note ? { note } : {}),
       });

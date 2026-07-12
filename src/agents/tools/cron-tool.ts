@@ -943,7 +943,13 @@ SCHEDULE TYPES (schedule.kind):
   tz omitted => Gateway host local timezone, not UTC.
   Example 6pm Shanghai daily: { "kind": "cron", "expr": "0 18 * * *", "tz": "Asia/Shanghai" }
 
-Optional trigger scripts poll headlessly on every/cron schedules and run the payload only when they return { fire: true }.
+TRIGGER SCRIPTS (every/cron only):
+- Gate: cron.triggers.enabled. Disabled add -> explain; no model-poll fallback.
+- Headless; owner tool allowlist; quiet check uses no model. Prior JSON: frozen trigger.state. Return/json({ fire: boolean, message?: string, state?: JSONValue }); new state only; never mutate old.
+- fire:false: save state; no payload/run history. fire:true: run payload; append message to systemEvent/agentTurn. Fired state saves only after payload success. Check reads; payload acts.
+- Silent watcher: top-level delivery.mode="none". Isolated agentTurn with no delivery => announce; missing route may fail payload.
+- once:true: disable after first successful fired payload. Limits/check: 30s, 5 tool calls, 16KB state.
+- Tools via hidden Code Mode catalog: await tools.call("exec", { command: "..." }); unclear id -> search/describe.
 
 For "at", ISO timestamps without timezone are UTC.
 

@@ -13,6 +13,7 @@ import {
   isCliProviderMock,
   isHeartbeatOnlyResponseMock,
   loadRunCronIsolatedAgentTurn,
+  loadSessionEntryMock,
   makeCronSession,
   mockRunCronFallbackPassthrough,
   preflightCronModelProviderMock,
@@ -754,6 +755,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     expectRecordFields(
       getMockCallArg(runCliAgentMock, 0, 0, "CLI run"),
       {
+        allowEmptyAssistantReplyAsSilent: true,
         messageChannel: "messagechat",
         requireExplicitMessageTarget: true,
       },
@@ -955,8 +957,13 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
   });
 
   it("releases cron run context references after completion", async () => {
+    const initialSessionEntry = { retained: true };
+    loadSessionEntryMock.mockImplementation((_storePath, sessionKey) =>
+      sessionKey === "agent:default:cron:message-tool-policy" ? initialSessionEntry : undefined,
+    );
     const cronSession = makeCronSession({
-      store: { "agent:default:cron:message-tool-policy": { retained: true } },
+      store: { "agent:default:cron:message-tool-policy": initialSessionEntry },
+      initialSessionEntry,
     });
     resolveCronSessionMock.mockReturnValue(cronSession);
     const { getAgentRunContext, registerAgentRunContext } =
@@ -1037,8 +1044,13 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
   });
 
   it("keeps shared cron run context references active after completion", async () => {
+    const initialSessionEntry = { retained: true };
+    loadSessionEntryMock.mockImplementation((_storePath, sessionKey) =>
+      sessionKey === "agent:default:cron:message-tool-policy" ? initialSessionEntry : undefined,
+    );
     const cronSession = makeCronSession({
-      store: { "agent:default:cron:message-tool-policy": { retained: true } },
+      store: { "agent:default:cron:message-tool-policy": initialSessionEntry },
+      initialSessionEntry,
     });
     resolveCronSessionMock.mockReturnValue(cronSession);
     const { clearAgentRunContext, getAgentRunContext, registerAgentRunContext } =
@@ -1082,6 +1094,9 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
   });
 
   it("keeps shared cron context until overlapping invocations finish", async () => {
+    // This test owns process-local run-context reference counting, not the
+    // persistent session admission that serializes real turns on one key.
+    process.env.OPENCLAW_TEST_FAST = "1";
     mockRunCronFallbackPassthrough();
     resolveCronSessionMock.mockImplementation(() => makeCronSession());
     const { claimAgentRunContext, getAgentEventLifecycleGeneration, getAgentRunContext } =

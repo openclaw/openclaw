@@ -23,7 +23,7 @@ import {
 } from "./bash-tools.exec-host-shared.js";
 
 const mocks = vi.hoisted(() => ({
-  resolveExecApprovals: vi.fn(() => ({
+  resolveExecApprovals: vi.fn(async () => ({
     defaults: {
       security: "allowlist",
       ask: "off",
@@ -38,6 +38,7 @@ const mocks = vi.hoisted(() => ({
     },
     allowlist: [],
     file: { version: 1, agents: {} },
+    hash: "approvals-hash",
   })),
 }));
 
@@ -45,7 +46,7 @@ vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
   const mod = await importOriginal<typeof import("../infra/exec-approvals.js")>();
   return {
     ...mod,
-    resolveExecApprovals: mocks.resolveExecApprovals,
+    resolveExecApprovalsLocked: mocks.resolveExecApprovals,
   };
 });
 
@@ -111,7 +112,7 @@ describe("sendExecApprovalFollowupResult", () => {
     sendExecApprovalFollowup.mockReset();
     logWarn.mockReset();
     mocks.resolveExecApprovals.mockReset();
-    mocks.resolveExecApprovals.mockReturnValue({
+    mocks.resolveExecApprovals.mockResolvedValue({
       defaults: {
         security: "allowlist",
         ask: "off",
@@ -126,6 +127,7 @@ describe("sendExecApprovalFollowupResult", () => {
       },
       allowlist: [],
       file: { version: 1, agents: {} },
+      hash: "approvals-hash",
     });
     resetExecApprovalFollowupRuntimeHandoffsForTests();
   });
@@ -391,8 +393,8 @@ describe("isExecApprovalFollowupSessionRebound", () => {
 });
 
 describe("resolveExecHostApprovalContext", () => {
-  it("does not let exec-approvals.json broaden security beyond the requested policy", () => {
-    mocks.resolveExecApprovals.mockReturnValue({
+  it("does not let exec-approvals.json broaden security beyond the requested policy", async () => {
+    mocks.resolveExecApprovals.mockResolvedValue({
       defaults: {
         security: "allowlist",
         ask: "off",
@@ -407,9 +409,10 @@ describe("resolveExecHostApprovalContext", () => {
       },
       allowlist: [],
       file: { version: 1, agents: {} },
+      hash: "approvals-hash",
     });
 
-    const result = resolveExecHostApprovalContext({
+    const result = await resolveExecHostApprovalContext({
       agentId: "agent-main",
       security: "allowlist",
       ask: "off",
@@ -419,8 +422,8 @@ describe("resolveExecHostApprovalContext", () => {
     expect(result.hostSecurity).toBe("allowlist");
   });
 
-  it("does not let host ask=off suppress a stricter requested ask mode", () => {
-    mocks.resolveExecApprovals.mockReturnValue({
+  it("does not let host ask=off suppress a stricter requested ask mode", async () => {
+    mocks.resolveExecApprovals.mockResolvedValue({
       defaults: {
         security: "full",
         ask: "off",
@@ -435,9 +438,10 @@ describe("resolveExecHostApprovalContext", () => {
       },
       allowlist: [],
       file: { version: 1, agents: {} },
+      hash: "approvals-hash",
     });
 
-    const result = resolveExecHostApprovalContext({
+    const result = await resolveExecHostApprovalContext({
       agentId: "agent-main",
       security: "full",
       ask: "always",
@@ -447,8 +451,8 @@ describe("resolveExecHostApprovalContext", () => {
     expect(result.hostAsk).toBe("always");
   });
 
-  it("clamps askFallback to the effective host security", () => {
-    mocks.resolveExecApprovals.mockReturnValue({
+  it("clamps askFallback to the effective host security", async () => {
+    mocks.resolveExecApprovals.mockResolvedValue({
       defaults: {
         security: "full",
         ask: "always",
@@ -463,9 +467,10 @@ describe("resolveExecHostApprovalContext", () => {
       },
       allowlist: [],
       file: { version: 1, agents: {} },
+      hash: "approvals-hash",
     });
 
-    const result = resolveExecHostApprovalContext({
+    const result = await resolveExecHostApprovalContext({
       agentId: "agent-main",
       security: "allowlist",
       ask: "always",
@@ -605,6 +610,39 @@ describe("buildExecApprovalPendingToolResult", () => {
     expect(text).toContain("native chat exec approvals are not configured on Discord");
     expect(text).not.toContain("/approve");
     expect(text).not.toContain("Pending command:");
+  });
+
+  it("preserves node metadata in unavailable recovery guidance", () => {
+    const result = buildExecApprovalPendingToolResult({
+      host: "node",
+      nodeId: "node-mac-1",
+      command: "uname -a",
+      cwd: "/tmp",
+      warningText: "",
+      approvalId: "approval-id",
+      approvalSlug: "approval-slug",
+      expiresAtMs: Date.now() + 60_000,
+      initiatingSurface: {
+        kind: "enabled",
+        channel: undefined,
+        channelLabel: "Web UI",
+      },
+      sentApproverDms: false,
+      unavailableReason: "no-approval-route",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "approval-unavailable",
+      host: "node",
+      nodeId: "node-mac-1",
+    });
+    const text = result.content.find((part) => part.type === "text")?.text ?? "";
+    expect(text).toContain(
+      "Print the Control UI URL with `openclaw dashboard --no-open`, open it in a browser, then use the approval inbox.",
+    );
+    expect(text).toContain(
+      "Inspect the node's effective exec policy with `openclaw approvals get --node node-mac-1`.",
+    );
   });
 
   it("keeps the Telegram unavailable reply when Discord DM approvals are not fully configured", () => {

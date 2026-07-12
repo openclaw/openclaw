@@ -10,6 +10,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS,
   DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS,
+  TOOLING_EXCLUDED_TESTS,
+  VITEST_CONFIG_NO_OUTPUT_TIMEOUT_MS,
   installVitestNoOutputWatchdog,
   resolveDefaultVitestNoOutputTimeoutMs,
   resolveDirectNodeVitestArgs,
@@ -35,6 +37,13 @@ const posixIt = process.platform === "win32" ? it.skip : it;
 const LOAD_SENSITIVE_PROCESS_TIMEOUT_MS = process.env.CI ? 30_000 : 15_000;
 
 describe("scripts/run-vitest", () => {
+  it.each([...VITEST_CONFIG_NO_OUTPUT_TIMEOUT_MS.keys(), ...TOOLING_EXCLUDED_TESTS])(
+    "keeps hardcoded Vitest path %s valid",
+    (referencedPath) => {
+      expect(fs.existsSync(nodePath.resolve(referencedPath))).toBe(true);
+    },
+  );
+
   it("adds --no-maglev to vitest child processes by default", () => {
     expect(resolveVitestNodeArgs({ PATH: "/usr/bin" })).toEqual(["--no-maglev"]);
   });
@@ -486,6 +495,7 @@ describe("scripts/run-vitest", () => {
       "--config=test/vitest/vitest.contracts-plugin.config.ts",
       "--config=test/vitest/vitest.infra.config.ts",
       "--config=test/vitest/vitest.gateway-core.config.ts",
+      "--config=test/vitest/vitest.gateway-server.config.ts",
     ]) {
       expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["run", configArg])).toEqual({
         PATH: "/usr/bin",
@@ -540,6 +550,13 @@ describe("scripts/run-vitest", () => {
         "run",
         "--config",
         "/repo/test/vitest/vitest.gateway-core.config.ts",
+      ]),
+    ).toBe(DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS);
+    expect(
+      resolveDefaultVitestNoOutputTimeoutMs([
+        "run",
+        "--config",
+        "/repo/test/vitest/vitest.gateway-server.config.ts",
       ]),
     ).toBe(DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS);
   });

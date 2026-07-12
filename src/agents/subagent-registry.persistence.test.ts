@@ -6,13 +6,16 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./subagent-registry.mocks.shared.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import {
   clearSessionStoreCacheForTest,
   drainSessionStoreWriterQueuesForTest,
 } from "../config/sessions/store.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue, withEnv } from "../test-utils/env.js";
+import { scheduleOrphanRecovery } from "./subagent-orphan-recovery.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import {
@@ -218,6 +221,7 @@ describe("subagent registry persistence", () => {
       startedAt: 111,
       endedAt: 222,
     });
+    vi.mocked(scheduleOrphanRecovery).mockReset();
     vi.mocked(onAgentEvent).mockReset();
     vi.mocked(onAgentEvent).mockReturnValue(() => undefined);
   });
@@ -321,15 +325,14 @@ describe("subagent registry persistence", () => {
       updatedAt: completedAt,
     });
     const store = await readSubagentSessionStore(storePath);
-    store["agent:main:subagent:kill-race"] = {
+    await replaceSessionEntry({ storePath, sessionKey: "agent:main:subagent:kill-race" }, {
       ...store["agent:main:subagent:kill-race"],
       status: "done",
       startedAt,
       endedAt: completedAt,
       runtimeMs: 500,
       abortedLastRun: true,
-    };
-    await fs.writeFile(storePath, `${JSON.stringify(store)}\n`, "utf8");
+    } as SessionEntry);
 
     await persistSubagentSessionTiming({
       runId: "run-kill-race",
@@ -817,6 +820,43 @@ describe("subagent registry persistence", () => {
     ]);
   });
 
+  it("preserves restored interrupted-recovery owners for orphan replay", async () => {
+    const now = Date.now();
+    const runId = "run-interrupted-recovery-restore";
+    await writePersistedRegistry(
+      {
+        version: 2,
+        runs: {
+          [runId]: {
+            runId,
+            childSessionKey: "agent:main:subagent:interrupted-recovery-restore",
+            requesterSessionKey: "agent:main:main",
+            requesterDisplayKey: "main",
+            task: "replay interrupted terminal",
+            cleanup: "keep",
+            createdAt: now - 100,
+            startedAt: now - 50,
+            endedAt: now,
+            endedReason: "subagent-error",
+            outcome: { status: "error", error: "restart interrupted run" },
+            terminalOwner: "interrupted-recovery",
+            completion: { required: false, resultText: null, capturedAt: now },
+          },
+        },
+      },
+      { seedChildSessions: false },
+    );
+
+    restartRegistry();
+    await waitForRegistryWork(() => vi.mocked(scheduleOrphanRecovery).mock.calls.length > 0);
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(scheduleOrphanRecovery).toHaveBeenCalledOnce();
+    expect(listSubagentRunsForRequester("agent:main:main")).toEqual([
+      expect.objectContaining({ runId, terminalOwner: "interrupted-recovery" }),
+    ]);
+  });
+
   it("reconciles stale unended restored runs that are not restart-recoverable", async () => {
     const now = Date.now();
     const runId = "run-stale-unended-restore";
@@ -850,7 +890,7 @@ describe("subagent registry persistence", () => {
     expect(listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
   });
 
-  it("keeps stale unended restored runs with abortedLastRun for restart recovery", async () => {
+  it("keeps stale unended restored runs with abortedLastRun for lifecycle recovery", async () => {
     vi.mocked(callGateway).mockImplementationOnce(async (request) => {
       expectFields(request, {
         method: "agent.wait",
@@ -891,12 +931,17 @@ describe("subagent registry persistence", () => {
     });
 
     restartRegistry();
-    await waitForRegistryWork(() => vi.mocked(callGateway).mock.calls.length > 0);
+    await waitForRegistryWork(
+      () =>
+        vi.mocked(callGateway).mock.calls.length > 0 &&
+        vi.mocked(scheduleOrphanRecovery).mock.calls.length > 0,
+    );
 
     expect(callGateway).toHaveBeenCalledTimes(1);
     const [request] = vi.mocked(callGateway).mock.calls.at(0) ?? [];
     expectFields(request, { method: "agent.wait" });
     expectFields((request as { params?: unknown } | undefined)?.params, { runId });
+    expect(scheduleOrphanRecovery).toHaveBeenCalledOnce();
     expect(
       listSubagentRunsForRequester("agent:main:main").some((entry) => entry.runId === runId),
     ).toBe(true);
