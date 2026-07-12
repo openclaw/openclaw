@@ -26,12 +26,14 @@ import {
   type JsonValue,
   type WorkspaceDoc,
 } from "./schema.js";
+import { projectSharedChangeRequest, projectSharedTab } from "./sharing-projection.js";
 import { WorkspaceStore } from "./store.js";
 
 type WorkspaceToolParams = {
   api: OpenClawPluginApi;
   context?: OpenClawPluginToolContext;
   store?: WorkspaceStore;
+  storeForDomain?: (isolationDomainId: string) => WorkspaceStore;
   broadcast?: WorkspaceBroadcast;
   dataRead?: ResolveBindingOptions;
 };
@@ -46,6 +48,7 @@ type MutationParams = {
 
 const TAB_SLUG_PATTERN = /^[a-z0-9-]{1,40}$/;
 const WIDGET_ID_PATTERN = /^[A-Za-z0-9_-]{1,48}$/;
+const RESOURCE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const TOOL_DESCRIPTION_SUFFIX = " Call workspace_get first when you need the current document.";
 
 /**
@@ -185,6 +188,25 @@ function readOptionalBoolean(record: Record<string, unknown>, key: string): bool
   return value;
 }
 
+function readOptionalInteger(record: Record<string, unknown>, key: string): number | undefined {
+  const value = record[key];
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Number.isInteger(value) || (value as number) < 1) {
+    throw new Error(`${key} must be a positive integer`);
+  }
+  return value as number;
+}
+
+function readRequiredPositiveInteger(record: Record<string, unknown>, key: string): number {
+  const value = readOptionalInteger(record, key);
+  if (value === undefined) {
+    throw new Error(`${key} is required`);
+  }
+  return value;
+}
+
 function readSlug(record: Record<string, unknown>, key = "slug"): string {
   const slug = readRequiredString(record, key, key);
   if (!TAB_SLUG_PATTERN.test(slug)) {
@@ -196,6 +218,14 @@ function readSlug(record: Record<string, unknown>, key = "slug"): string {
 function readWidgetId(record: Record<string, unknown>, key = "id"): string {
   const id = readRequiredString(record, key, key);
   if (!WIDGET_ID_PATTERN.test(id)) {
+    throw new Error(`${key} is invalid`);
+  }
+  return id;
+}
+
+function readResourceId(record: Record<string, unknown>, key = "id"): string {
+  const id = readRequiredString(record, key, key);
+  if (!RESOURCE_ID_PATTERN.test(id)) {
     throw new Error(`${key} is invalid`);
   }
   return id;
@@ -478,6 +508,72 @@ export function createWorkspaceTools(params: WorkspaceToolParams): AnyAgentTool[
     actor,
     broadcast,
   };
+  const currentTeamsToolCall = () => {
+    if (!params.context || !params.api.teams?.context.isBound(params.context)) {
+      return undefined;
+    }
+    return params.api.teams.context.require(params.context);
+  };
+  const requireLegacyAdminTool = (): void => {
+    if (currentTeamsToolCall()) {
+      throw new Error("workspace admin tool is unavailable to delegated Teams agents");
+    }
+  };
+  const authorizeToolAccess = async (
+    call: NonNullable<ReturnType<typeof currentTeamsToolCall>>,
+    input: {
+      permission: string;
+      resources: Array<{ namespace: "workspaces"; type: "workspace" | "tab"; id: string }>;
+    },
+  ) => {
+    const decision = await params.api.teams.authorization.decide({
+      context: call,
+      permission: input.permission,
+      resources: input.resources,
+    });
+    if (!decision.allowed) {
+      throw new Error("workspace access denied");
+    }
+    return {
+      context: decision.context,
+      store: params.storeForDomain?.(decision.context.isolationDomainId) ?? store,
+    };
+  };
+  const authorizeToolStore = async (
+    call: NonNullable<ReturnType<typeof currentTeamsToolCall>>,
+    input: {
+      permission: string;
+      resources: Array<{ namespace: "workspaces"; type: "workspace" | "tab"; id: string }>;
+    },
+  ): Promise<WorkspaceStore> => {
+    return (await authorizeToolAccess(call, input)).store;
+  };
+  const requireExactToolStore = async (input: {
+    permission: string;
+    resources: Array<{ namespace: "workspaces"; type: "workspace" | "tab"; id: string }>;
+  }): Promise<WorkspaceStore> => {
+    const call = currentTeamsToolCall();
+    if (!call) {
+      throw new Error("an active Workspaces tool context is required");
+    }
+    return await authorizeToolStore(call, input);
+  };
+  const requesterFromContext = (
+    context: Awaited<ReturnType<typeof authorizeToolAccess>>["context"],
+  ) => {
+    if (context.principal.kind === "human") {
+      return { principalId: context.principal.id, kind: "human" as const };
+    }
+    if (!context.delegatedSession) {
+      throw new Error("a delegated agent assignment is required");
+    }
+    return {
+      principalId: context.principal.id,
+      kind: "agent" as const,
+      delegationId: context.delegatedSession.id,
+      sponsorPrincipalId: context.delegatedSession.sponsorPrincipalId,
+    };
+  };
   return [
     {
       name: "workspace_get",
@@ -485,8 +581,162 @@ export function createWorkspaceTools(params: WorkspaceToolParams): AnyAgentTool[
       description: "Read the full Workspaces document so an agent can diff before mutating it.",
       parameters: Type.Object({}, { additionalProperties: false }),
       execute: async () => {
-        const doc = store.read();
+        const teamsCall = currentTeamsToolCall();
+        const readableStore = teamsCall
+          ? await authorizeToolStore(teamsCall, {
+              permission: "workspaces.workspace.read",
+              resources: [{ namespace: "workspaces", type: "workspace", id: store.workspaceId }],
+            })
+          : store;
+        const doc = readableStore.read();
         return jsonResult({ doc, workspaceVersion: doc.workspaceVersion });
+      },
+    },
+    {
+      name: "workspace_tab_get",
+      label: "Workspace Tab Get",
+      description: "Read one exact workspace tab by its immutable resource id.",
+      parameters: Type.Object(
+        { id: Type.String({ description: "Immutable tab resource id." }) },
+        { additionalProperties: false },
+      ),
+      execute: async (_toolCallId, rawParams) => {
+        const record = readRecord(rawParams, ["id"]);
+        const id = readResourceId(record);
+        const readableStore = await requireExactToolStore({
+          permission: "workspaces.tab.read",
+          resources: [{ namespace: "workspaces", type: "tab", id }],
+        });
+        const doc = readableStore.read();
+        const tab = doc.tabs.find((entry) => entry.id === id);
+        if (!tab) {
+          throw new Error("workspace tab not found");
+        }
+        return jsonResult({
+          workspaceId: doc.workspaceId,
+          workspaceVersion: doc.workspaceVersion,
+          tab: projectSharedTab(tab),
+        });
+      },
+    },
+    {
+      name: "workspace_change_request_create",
+      label: "Workspace Change Request Create",
+      description: "Propose a complete replacement for one exact tab without applying it.",
+      parameters: Type.Object(
+        {
+          tabId: Type.String({ description: "Immutable tab resource id." }),
+          baseRevision: Type.Integer({ minimum: 1 }),
+          proposal: Type.Unknown(),
+          idempotencyKey: Type.String({ minLength: 1, maxLength: 128 }),
+        },
+        { additionalProperties: false },
+      ),
+      execute: async (_toolCallId, rawParams) => {
+        const record = readRecord(rawParams, [
+          "tabId",
+          "baseRevision",
+          "proposal",
+          "idempotencyKey",
+        ]);
+        const tabId = readResourceId(record, "tabId");
+        const call = currentTeamsToolCall();
+        if (!call) {
+          throw new Error("an active Workspaces tool context is required");
+        }
+        const authorized = await authorizeToolAccess(call, {
+          permission: "workspaces.tab.changeRequest.create",
+          resources: [{ namespace: "workspaces", type: "tab", id: tabId }],
+        });
+        const request = authorized.store.createChangeRequest({
+          id: randomUUID(),
+          tabId,
+          requester: requesterFromContext(authorized.context),
+          baseTabRevision: readRequiredPositiveInteger(record, "baseRevision"),
+          idempotencyKey: readRequiredString(record, "idempotencyKey"),
+          proposal: record.proposal,
+        });
+        return jsonResult({ request: projectSharedChangeRequest(request) });
+      },
+    },
+    {
+      name: "workspace_change_request_list",
+      label: "Workspace Change Request List",
+      description: "List this delegated principal's change requests for one exact tab.",
+      parameters: Type.Object(
+        {
+          tabId: Type.String({ description: "Immutable tab resource id." }),
+          state: Type.Optional(
+            Type.Union([
+              Type.Literal("pending"),
+              Type.Literal("approved"),
+              Type.Literal("rejected"),
+              Type.Literal("cancelled"),
+              Type.Literal("conflict"),
+            ]),
+          ),
+        },
+        { additionalProperties: false },
+      ),
+      execute: async (_toolCallId, rawParams) => {
+        const record = readRecord(rawParams, ["tabId", "state"]);
+        const tabId = readResourceId(record, "tabId");
+        const call = currentTeamsToolCall();
+        if (!call) {
+          throw new Error("an active Workspaces tool context is required");
+        }
+        const authorized = await authorizeToolAccess(call, {
+          permission: "workspaces.tab.read",
+          resources: [{ namespace: "workspaces", type: "tab", id: tabId }],
+        });
+        const requester = requesterFromContext(authorized.context);
+        const state = readOptionalString(record, "state") as
+          | "pending"
+          | "approved"
+          | "rejected"
+          | "cancelled"
+          | "conflict"
+          | undefined;
+        const requests = authorized.store.listChangeRequests({
+          tabId,
+          requesterPrincipalId: requester.principalId,
+          ...(state ? { state } : {}),
+        });
+        return jsonResult({ requests: requests.map(projectSharedChangeRequest) });
+      },
+    },
+    {
+      name: "workspace_change_request_cancel",
+      label: "Workspace Change Request Cancel",
+      description: "Cancel this delegated principal's pending change request.",
+      parameters: Type.Object(
+        {
+          tabId: Type.String({ description: "Immutable tab resource id." }),
+          requestId: Type.String({ description: "Change request id." }),
+        },
+        { additionalProperties: false },
+      ),
+      execute: async (_toolCallId, rawParams) => {
+        const record = readRecord(rawParams, ["tabId", "requestId"]);
+        const tabId = readResourceId(record, "tabId");
+        const requestId = readResourceId(record, "requestId");
+        const call = currentTeamsToolCall();
+        if (!call) {
+          throw new Error("an active Workspaces tool context is required");
+        }
+        const authorized = await authorizeToolAccess(call, {
+          permission: "workspaces.tab.changeRequest.create",
+          resources: [{ namespace: "workspaces", type: "tab", id: tabId }],
+        });
+        const existing = authorized.store.readChangeRequest(requestId);
+        if (!existing || existing.tabId !== tabId) {
+          throw new Error("workspace change request not found");
+        }
+        const request = authorized.store.cancelChangeRequest({
+          id: requestId,
+          requester: requesterFromContext(authorized.context),
+        });
+        return jsonResult({ request: projectSharedChangeRequest(request) });
       },
     },
     {
@@ -504,6 +754,7 @@ export function createWorkspaceTools(params: WorkspaceToolParams): AnyAgentTool[
         { additionalProperties: false },
       ),
       execute: async (_toolCallId, rawParams) => {
+        requireLegacyAdminTool();
         const record = readRecord(rawParams, ["title", "slug", "icon"]);
         const title = readRequiredString(record, "title", "title");
         const icon = readOptionalString(record, "icon");
@@ -541,7 +792,11 @@ export function createWorkspaceTools(params: WorkspaceToolParams): AnyAgentTool[
       description: toolDescription("Update a workspace tab title, icon, or hidden state."),
       parameters: Type.Object(
         {
-          slug: Type.String({ description: "Tab slug." }),
+          id: Type.Optional(Type.String({ description: "Immutable tab id for Teams access." })),
+          slug: Type.Optional(Type.String({ description: "Legacy local tab slug." })),
+          ifRevision: Type.Optional(
+            Type.Integer({ minimum: 1, description: "Required current tab revision." }),
+          ),
           title: Type.Optional(Type.String({ description: "New title." })),
           icon: Type.Optional(Type.String({ description: "New icon." })),
           hidden: Type.Optional(Type.Boolean({ description: "Hide or show the tab." })),
@@ -549,22 +804,59 @@ export function createWorkspaceTools(params: WorkspaceToolParams): AnyAgentTool[
         { additionalProperties: false },
       ),
       execute: async (_toolCallId, rawParams) => {
-        const record = readRecord(rawParams, ["slug", "title", "icon", "hidden"]);
-        const slug = readSlug(record);
+        const record = readRecord(rawParams, [
+          "id",
+          "slug",
+          "ifRevision",
+          "title",
+          "icon",
+          "hidden",
+        ]);
+        const teamsCall = currentTeamsToolCall();
+        const id = teamsCall ? readResourceId(record) : undefined;
+        const slug = teamsCall ? undefined : readSlug(record);
+        const targetStore = teamsCall
+          ? await authorizeToolStore(teamsCall, {
+              permission: "workspaces.tab.write",
+              resources: [{ namespace: "workspaces", type: "tab", id: id! }],
+            })
+          : store;
+        const ifRevision = readOptionalInteger(record, "ifRevision");
         const title = readOptionalString(record, "title");
         const icon = readOptionalString(record, "icon");
         const hidden = readOptionalBoolean(record, "hidden");
-        return await runMutation({
-          ...mutationBase,
-          changedTabSlug: slug,
-          mutate: (draft) => {
-            Object.assign(findTab(draft, slug), {
+        let changedTabSlug: string | undefined;
+        const result = targetStore.mutate(
+          (draft) => {
+            const tab = id ? draft.tabs.find((entry) => entry.id === id) : findTab(draft, slug!);
+            if (!tab) {
+              throw new Error("workspace tab not found");
+            }
+            if (ifRevision !== undefined && tab.revision !== ifRevision) {
+              throw new Error("workspace tab revision conflict");
+            }
+            changedTabSlug = tab.slug;
+            Object.assign(tab, {
               ...(title !== undefined ? { title } : {}),
               ...(icon !== undefined ? { icon } : {}),
               ...(hidden !== undefined ? { hidden } : {}),
             });
           },
-        });
+          { actor },
+        );
+        if (teamsCall && id) {
+          const tab = result.doc.tabs.find((entry) => entry.id === id);
+          if (!tab) {
+            throw new Error("workspace tab not found");
+          }
+          return jsonResult({
+            workspaceId: result.doc.workspaceId,
+            workspaceVersion: result.doc.workspaceVersion,
+            tab: projectSharedTab(tab),
+          });
+        }
+        broadcastChange(broadcast, { doc: result.doc, actor, changedTabSlug });
+        return jsonResult({ doc: result.doc, workspaceVersion: result.doc.workspaceVersion });
       },
     },
     {
@@ -576,6 +868,7 @@ export function createWorkspaceTools(params: WorkspaceToolParams): AnyAgentTool[
         { additionalProperties: false },
       ),
       execute: async (_toolCallId, rawParams) => {
+        requireLegacyAdminTool();
         const record = readRecord(rawParams, ["slug"]);
         const slug = readSlug(record);
         return await runMutation({
@@ -601,6 +894,7 @@ export function createWorkspaceTools(params: WorkspaceToolParams): AnyAgentTool[
         { additionalProperties: false },
       ),
       execute: async (_toolCallId, rawParams) => {
+        requireLegacyAdminTool();
         const record = readRecord(rawParams, ["order"]);
         const order = readOrder(record.order);
         return await runMutation({
@@ -632,6 +926,7 @@ export function createWorkspaceTools(params: WorkspaceToolParams): AnyAgentTool[
         { additionalProperties: false },
       ),
       execute: async (_toolCallId, rawParams) => {
+        requireLegacyAdminTool();
         const record = readRecord(rawParams, [
           "tab",
           "id",
@@ -668,6 +963,7 @@ export function createWorkspaceTools(params: WorkspaceToolParams): AnyAgentTool[
         { additionalProperties: false },
       ),
       execute: async (_toolCallId, rawParams) => {
+        requireLegacyAdminTool();
         const record = readRecord(rawParams, [
           "tab",
           "id",
@@ -712,6 +1008,7 @@ export function createWorkspaceTools(params: WorkspaceToolParams): AnyAgentTool[
         { additionalProperties: false },
       ),
       execute: async (_toolCallId, rawParams) => {
+        requireLegacyAdminTool();
         const record = readRecord(rawParams, ["tab", "id", "grid", "toTab"]);
         if (record.grid !== undefined && record.toTab !== undefined) {
           throw new Error("workspace_widget_move accepts either grid or toTab, not both");
@@ -761,6 +1058,7 @@ export function createWorkspaceTools(params: WorkspaceToolParams): AnyAgentTool[
         { additionalProperties: false },
       ),
       execute: async (_toolCallId, rawParams) => {
+        requireLegacyAdminTool();
         const record = readRecord(rawParams, ["tab", "id"]);
         const tabSlug = readSlug(record, "tab");
         const id = readWidgetId(record);
@@ -795,6 +1093,7 @@ export function createWorkspaceTools(params: WorkspaceToolParams): AnyAgentTool[
         { additionalProperties: false },
       ),
       execute: async (_toolCallId, rawParams) => {
+        requireLegacyAdminTool();
         const record = readRecord(rawParams, ["tab", "layout"]);
         const tabSlug = readSlug(record, "tab");
         const layout = readLayout(record.layout);
@@ -818,6 +1117,7 @@ export function createWorkspaceTools(params: WorkspaceToolParams): AnyAgentTool[
       ),
       parameters: Type.Object({ doc: Type.Unknown() }, { additionalProperties: false }),
       execute: async (_toolCallId, rawParams) => {
+        requireLegacyAdminTool();
         const record = readRecord(rawParams, ["doc"]);
         const result = store.replace(record.doc, { actor });
         broadcastChange(broadcast, { doc: result.doc, actor });
@@ -841,6 +1141,7 @@ export function createWorkspaceTools(params: WorkspaceToolParams): AnyAgentTool[
         { additionalProperties: false },
       ),
       execute: async (_toolCallId, rawParams) => {
+        requireLegacyAdminTool();
         const record = readRecord(rawParams, ["name", "title"]);
         const scaffold = await scaffoldWorkspaceWidget({
           name: readRequiredString(record, "name", "name"),
@@ -871,6 +1172,7 @@ export function createWorkspaceTools(params: WorkspaceToolParams): AnyAgentTool[
       description: "Restore the newest workspace undo snapshot.",
       parameters: Type.Object({}, { additionalProperties: false }),
       execute: async () => {
+        requireLegacyAdminTool();
         const doc = store.undo();
         broadcastChange(broadcast, { doc, actor });
         return jsonResult({ doc, workspaceVersion: doc.workspaceVersion });
@@ -885,6 +1187,7 @@ export function createWorkspaceTools(params: WorkspaceToolParams): AnyAgentTool[
         "because only the trusted Control UI may call the gateway on a widget's behalf.",
       parameters: Type.Object({ binding: BindingSchema }, { additionalProperties: false }),
       execute: async (_toolCallId, rawParams) => {
+        requireLegacyAdminTool();
         const record = readRecord(rawParams, ["binding"]);
         try {
           return jsonResult({ data: await resolveBinding(record.binding, params.dataRead) });

@@ -290,6 +290,38 @@ describe("WorkspaceStore", () => {
     });
   });
 
+  it("restores a deleted tab under a fresh resource id", async () => {
+    await withStore((store) => {
+      store.mutate(
+        (draft) => {
+          draft.tabs.push({
+            id: "finance",
+            revision: 1,
+            slug: "finance",
+            title: "Finance",
+            hidden: false,
+            createdBy: "user",
+            widgets: [],
+          });
+          draft.prefs.tabOrder.push("finance");
+        },
+        { actor: "user" },
+      );
+      store.mutate(
+        (draft) => {
+          draft.tabs = draft.tabs.filter((tab) => tab.id !== "finance");
+          draft.prefs.tabOrder = draft.prefs.tabOrder.filter((slug) => slug !== "finance");
+        },
+        { actor: "user" },
+      );
+
+      const restored = store.undo();
+      const finance = restored.tabs.find((tab) => tab.slug === "finance");
+      expect(finance?.id).not.toBe("finance");
+      expect(finance?.revision).toBe(1);
+    });
+  });
+
   it("evicts the oldest undo snapshot past the ring size", async () => {
     await withStore((store) => {
       store.read();
