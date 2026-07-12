@@ -240,6 +240,7 @@ export class UrbitSSEClient {
     const decoder = new TextDecoder();
     let buffer = "";
     let bufferBytes = 0;
+    let pendingDelimiterNewline = false;
 
     const appendPending = (text: string) => {
       const previousCodeUnit = buffer.charCodeAt(buffer.length - 1);
@@ -261,19 +262,25 @@ export class UrbitSSEClient {
     };
     const consumeText = (text: string) => {
       let offset = 0;
-      while (offset < text.length) {
-        // The blank-line delimiter can straddle chunks. Drain it before
-        // counting later events against the retained pending-event budget.
-        if (buffer.endsWith("\n") && text[offset] === "\n") {
-          this.processEvent(buffer.slice(0, -1));
+      if (pendingDelimiterNewline && text.length > 0) {
+        pendingDelimiterNewline = false;
+        if (text.startsWith("\n")) {
+          this.processEvent(buffer);
           buffer = "";
           bufferBytes = 0;
-          offset += 1;
-          continue;
+          offset = 1;
+        } else {
+          // A trailing newline stays outside the budget until the next byte
+          // distinguishes an event delimiter from retained event data.
+          appendPending("\n");
         }
+      }
+      while (offset < text.length) {
         const eventEnd = text.indexOf("\n\n", offset);
         if (eventEnd === -1) {
-          appendPending(text.slice(offset));
+          const endsWithNewline = text.endsWith("\n");
+          appendPending(text.slice(offset, endsWithNewline ? -1 : undefined));
+          pendingDelimiterNewline = endsWithNewline;
           return;
         }
         appendPending(text.slice(offset, eventEnd));

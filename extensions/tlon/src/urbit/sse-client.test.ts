@@ -301,14 +301,15 @@ describe("UrbitSSEClient", () => {
         expect(handler).toHaveBeenCalledWith({ text: "😀" });
       });
 
-      it("counts a boundary-sized surrogate pair split across string chunks once", async () => {
+      it("accepts a boundary-sized event with split surrogate pair and delimiter", async () => {
         const cap = 16 * 1024 * 1024;
         const prefix = 'id: 1\ndata: {"json":{"text":"';
         const suffix = '"}}';
         const padLen = cap - Buffer.byteLength(prefix + "😀" + suffix, "utf8");
         const stream = Readable.from([
           prefix + "a".repeat(padLen) + "\uD83D",
-          `\uDE00${suffix}\n\n`,
+          `\uDE00${suffix}\n`,
+          "\n",
         ]);
         const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123", {
           autoReconnect: false,
