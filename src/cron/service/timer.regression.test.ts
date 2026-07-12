@@ -887,7 +887,8 @@ describe("cron service timer regressions", () => {
       });
       await runnerStarted.promise;
 
-      const runId = `cron:no-timeout-cancel:${scheduledAt}`;
+      const claimedAt = scheduledAt + 1;
+      const runId = `cron:no-timeout-cancel:${claimedAt}`;
       const task = listTaskRecords().find(
         (entry) => entry.runtime === "cron" && entry.runId === runId,
       );
@@ -1072,7 +1073,7 @@ describe("cron service timer regressions", () => {
 
       const timerPromise = onTimer(state);
       const observedAbortSignal = await runnerStarted.promise;
-      const runId = `cron:cancel-before-timeout:${scheduledAt}`;
+      const runId = `cron:cancel-before-timeout:${scheduledAt + 1}`;
       let timerSettled = false;
       void timerPromise.then(() => {
         timerSettled = true;
@@ -1150,7 +1151,7 @@ describe("cron service timer regressions", () => {
       now += Math.ceil(FAST_TIMEOUT_SECONDS * 1_000) + 10;
       await cleanupStarted.promise;
 
-      const runId = `cron:late-cancel-after-timeout:${scheduledAt}`;
+      const runId = `cron:late-cancel-after-timeout:${scheduledAt + 1}`;
       const task = listTaskRecords().find(
         (entry) => entry.runtime === "cron" && entry.runId === runId,
       );
@@ -1687,7 +1688,7 @@ describe("cron service timer regressions", () => {
       });
 
       const timerPromise = onTimer(state);
-      const runId = `cron:main-session-cancel-boundary:${scheduledAt}`;
+      const runId = `cron:main-session-cancel-boundary:${scheduledAt + 1}`;
       for (
         let attempt = 0;
         attempt < 10 && runHeartbeatOnce.mock.calls.length === 0;
@@ -1723,7 +1724,7 @@ describe("cron service timer regressions", () => {
       await vi.advanceTimersByTimeAsync(0);
       await timerPromise;
 
-      const expectedSessionKey = `agent:main:cron:main-session-cancel-boundary:run:${scheduledAt}`;
+      const expectedSessionKey = `agent:main:cron:main-session-cancel-boundary:run:${scheduledAt + 1}`;
       expect(enqueueSystemEvent).toHaveBeenCalledWith(
         "queued downstream work",
         expect.objectContaining({
@@ -1888,7 +1889,7 @@ describe("cron service timer regressions", () => {
     const persisted = await loadCronStore(store.storePath);
     const persistedJob = persisted.jobs.find((job) => job.id === cronJob.id);
     expect(persistedJob?.state.lastStatus).not.toBe("ok");
-    expect(persistedJob?.state.runningAtMs).toBe(scheduledAt);
+    expect(persistedJob?.state.runningAtMs).toBe(scheduledAt + 1);
   });
 
   it("persists the due-job start timestamp before creating the cron task run", async () => {
@@ -2303,11 +2304,11 @@ describe("cron service timer regressions", () => {
       .filter((evt) => evt.action === "started")
       .map((evt) => evt.runAtMs);
 
-    expect(firstDone?.state.lastRunAtMs).toBe(dueAt);
-    expect(firstDone?.state.lastDurationMs).toBe(50);
+    expect(firstDone?.state.lastRunAtMs).toBe(dueAt + 1);
+    expect(firstDone?.state.lastDurationMs).toBe(49);
     expect(secondDone?.state.lastRunAtMs).toBe(dueAt + 50);
     expect(secondDone?.state.lastDurationMs).toBe(20);
-    expect(startedAtEvents).toEqual([dueAt, dueAt + 50]);
+    expect(startedAtEvents).toEqual([dueAt + 1, dueAt + 50]);
   });
 
   it("honors cron maxConcurrentRuns for due jobs", async () => {
@@ -2730,7 +2731,7 @@ describe("cron service timer regressions", () => {
     const persistedReplacementClaimedJob = persisted.jobs.find(
       (entry) => entry.id === replacementClaimedJob.id,
     );
-    expect(persistedJob?.state.runningAtMs).toBe(scheduledAt);
+    expect(persistedJob?.state.runningAtMs).toBe(scheduledAt + 1);
     expect(persistedJob?.state.lastStatus).toBeUndefined();
     expect(persistedUnstartedJob?.state.runningAtMs).toBeUndefined();
     expect(persistedUnstartedJob?.state.lastStatus).toBeUndefined();

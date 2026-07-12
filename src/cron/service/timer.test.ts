@@ -148,7 +148,8 @@ describe("cron service timer seam coverage", () => {
 
     await onTimer(state);
 
-    const cronRunSessionKey = `agent:main:cron:main-heartbeat-job:run:${now}`;
+    const claimedAt = now + 1;
+    const cronRunSessionKey = `agent:main:cron:main-heartbeat-job:run:${claimedAt}`;
     expect(enqueueSystemEvent).toHaveBeenCalledWith("heartbeat seam tick", {
       agentId: undefined,
       sessionKey: cronRunSessionKey,
@@ -170,8 +171,8 @@ describe("cron service timer seam coverage", () => {
     }
     expect(job.state.lastStatus).toBe("ok");
     expect(job.state.runningAtMs).toBeUndefined();
-    expect(job.state.nextRunAtMs).toBe(now + 60_000);
-    const task = findTaskByRunId(`cron:main-heartbeat-job:${now}`);
+    expect(job.state.nextRunAtMs).toBe(claimedAt + 60_000);
+    const task = findTaskByRunId(`cron:main-heartbeat-job:${claimedAt}`);
     if (!task) {
       throw new Error("expected cron task ledger record");
     }
@@ -180,16 +181,16 @@ describe("cron service timer seam coverage", () => {
     expect(task.ownerKey).toBe("");
     expect(task.scopeKind).toBe("system");
     expect(task.childSessionKey).toBe(cronRunSessionKey);
-    expect(task.runId).toBe(`cron:main-heartbeat-job:${now}`);
+    expect(task.runId).toBe(`cron:main-heartbeat-job:${claimedAt}`);
     expect(task.label).toBe("main heartbeat job");
     expect(task.task).toBe("main heartbeat job");
     expect(task.status).toBe("succeeded");
     expect(task.deliveryStatus).toBe("not_applicable");
     expect(task.notifyPolicy).toBe("silent");
-    expect(task.startedAt).toBe(now);
-    expect(task.lastEventAt).toBe(now);
-    expect(task.endedAt).toBe(now);
-    expect(task?.cleanupAfter).toBe(now + 7 * 24 * 60 * 60_000);
+    expect(task.startedAt).toBe(claimedAt);
+    expect(task.lastEventAt).toBe(claimedAt);
+    expect(task.endedAt).toBe(claimedAt);
+    expect(task?.cleanupAfter).toBe(claimedAt + 7 * 24 * 60 * 60_000);
 
     const delays = timeoutSpy.mock.calls
       .map(([, delay]) => delay)
@@ -264,7 +265,7 @@ describe("cron service timer seam coverage", () => {
         message: "run isolated cron",
       }),
     );
-    const task = findTaskByRunId(`cron:isolated-agent-job:${now}`);
+    const task = findTaskByRunId(`cron:isolated-agent-job:${now + 1}`);
     if (!task) {
       throw new Error("expected isolated cron task ledger record");
     }
@@ -306,7 +307,7 @@ describe("cron service timer seam coverage", () => {
       expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
     });
 
-    const task = findTaskByRunId(`cron:isolated-agent-job:${now}`);
+    const task = findTaskByRunId(`cron:isolated-agent-job:${now + 1}`);
     if (!task) {
       throw new Error("expected active cron task ledger record");
     }
@@ -352,7 +353,7 @@ describe("cron service timer seam coverage", () => {
       { jobId: "main-heartbeat-job", error: ledgerError },
       "cron: failed to create task ledger record",
     );
-    const cronRunSessionKey = `agent:main:cron:main-heartbeat-job:run:${now}`;
+    const cronRunSessionKey = `agent:main:cron:main-heartbeat-job:run:${now + 1}`;
     expect(enqueueSystemEvent).toHaveBeenCalledWith("heartbeat seam tick", {
       agentId: undefined,
       sessionKey: cronRunSessionKey,

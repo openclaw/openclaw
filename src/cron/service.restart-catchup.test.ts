@@ -152,6 +152,7 @@ describe("CronService restart catch-up", () => {
 
   it("executes an overdue recurring job immediately on start", async () => {
     const dueAt = Date.parse("2025-12-13T15:00:00.000Z");
+    const claimedAt = Date.parse("2025-12-13T17:00:00.001Z");
     const lastRunAt = Date.parse("2025-12-12T15:00:00.000Z");
 
     await withRestartedCron(
@@ -180,8 +181,8 @@ describe("CronService restart catch-up", () => {
         const listedJobs = await cron.list({ includeDisabled: true });
         const updated = listedJobs.find((job) => job.id === "restart-overdue-job");
         expect(updated?.state.lastStatus).toBe("ok");
-        expect(updated?.state.lastRunAtMs).toBe(Date.parse("2025-12-13T17:00:00.000Z"));
-        expect(updated?.state.nextRunAtMs).toBeGreaterThan(Date.parse("2025-12-13T17:00:00.000Z"));
+        expect(updated?.state.lastRunAtMs).toBe(claimedAt);
+        expect(updated?.state.nextRunAtMs).toBeGreaterThan(claimedAt);
       },
     );
   });
@@ -344,12 +345,13 @@ describe("CronService restart catch-up", () => {
         },
       ],
       async ({ cron, enqueueSystemEvent, requestHeartbeat }) => {
+        const claimedAt = Date.parse("2025-12-13T04:02:00.001Z");
         expectQueuedSystemEvent(enqueueSystemEvent, "catch missed slot");
         expect(requestHeartbeat).toHaveBeenCalled();
 
         const listedJobs = await cron.list({ includeDisabled: true });
         const updated = listedJobs.find((job) => job.id === "restart-missed-slot");
-        expect(updated?.state.lastRunAtMs).toBe(Date.parse("2025-12-13T04:02:00.000Z"));
+        expect(updated?.state.lastRunAtMs).toBe(claimedAt);
       },
     );
   });

@@ -202,12 +202,19 @@ export async function ensureLoaded(
   const storeRevision = getCronJobStoreRevision(state.deps.storePath);
   // Fast path: trust the in-memory copy unless this process or another SQLite
   // connection advanced the store revision.
-  if (
-    state.store &&
-    !opts?.forceReload &&
-    loadedStoreRevisionByState.get(state) === storeRevision
-  ) {
-    return;
+  if (state.store && !opts?.forceReload) {
+    const loadedRevision = loadedStoreRevisionByState.get(state);
+    if (loadedRevision === undefined) {
+      loadedStoreRevisionByState.set(state, storeRevision);
+      persistedDeliveryTargetSnapshotByState.set(
+        state,
+        snapshotPersistedDeliveryTargets(storeRevision, state.store),
+      );
+      return;
+    }
+    if (loadedRevision === storeRevision) {
+      return;
+    }
   }
   const previousJobsById = new Map<string, CronJob>();
   for (const job of state.store?.jobs ?? []) {

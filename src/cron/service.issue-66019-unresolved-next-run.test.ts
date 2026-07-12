@@ -153,7 +153,8 @@ describe("#66019 unresolved next-run repro", () => {
       error: "synthetic failure",
     });
     const naturalNext = scheduledAt + 5_000;
-    const backoffNext = scheduledAt + 30_000;
+    const claimedAt = scheduledAt + 1;
+    const backoffNext = claimedAt + 30_000;
     const nextRunSpy = vi
       .spyOn(schedule, "computeNextRunAtMs")
       .mockReturnValueOnce(undefined)

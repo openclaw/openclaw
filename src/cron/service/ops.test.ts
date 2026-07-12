@@ -593,11 +593,12 @@ describe("cron service ops seam coverage", () => {
         storePath,
         now,
       });
+      const claimedAt = now + 1;
 
       await runMissedJobs(state);
 
       expectTaskRun({
-        runId: `cron:startup-timeout:${now}`,
+        runId: `cron:startup-timeout:${claimedAt}`,
         runtime: "cron",
         status: "timed_out",
         sourceId: "startup-timeout",
