@@ -873,7 +873,10 @@ export class ExtensionRelayBridge {
       }
       case "Target.createTarget": {
         const url = typeof request.params?.url === "string" ? request.params.url : "about:blank";
-        const created = (await this.callExtension({ type: "createTab", url })) as {
+        // Default automated tabs to background while preserving an explicit foreground request.
+        const background =
+          typeof request.params?.background === "boolean" ? request.params.background : true;
+        const created = (await this.callExtension({ type: "createTab", url, background })) as {
           tabId?: unknown;
         } | null;
         if (typeof created?.tabId !== "number") {

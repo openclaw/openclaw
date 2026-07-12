@@ -250,7 +250,7 @@ describe("ExtensionRelayBridge", () => {
 
   it("creates a tab inside the group and returns its synthetic target", async () => {
     const bridge = new ExtensionRelayBridge();
-    const { handlers } = wireExtension(bridge);
+    const { socket, handlers } = wireExtension(bridge);
     sendHello(handlers);
 
     const client = new FakeSocket();
@@ -266,6 +266,35 @@ describe("ExtensionRelayBridge", () => {
 
     const response = client.frames().find((frame) => frame.id === 2);
     expect(response?.result).toMatchObject({ targetId: "target-999" });
+    expect(socket.frames().find((frame) => frame.type === "createTab")).toMatchObject({
+      url: "https://new.test",
+      background: true,
+    });
+  });
+
+  it("preserves an explicit foreground Target.createTarget request", async () => {
+    const bridge = new ExtensionRelayBridge();
+    const { socket, handlers } = wireExtension(bridge);
+    sendHello(handlers);
+
+    const client = new FakeSocket();
+    const cdp = bridge.attachCdpClientSocket(client);
+    cdp.onMessage(
+      JSON.stringify({
+        id: 1,
+        method: "Target.createTarget",
+        params: { url: "https://foreground.test", background: false },
+      }),
+    );
+    await flush();
+
+    expect(client.frames().find((frame) => frame.id === 1)?.result).toMatchObject({
+      targetId: "target-999",
+    });
+    expect(socket.frames().find((frame) => frame.type === "createTab")).toMatchObject({
+      url: "https://foreground.test",
+      background: false,
+    });
   });
 
   it("emits Target.detachedFromTarget when a shared tab leaves the group", async () => {
