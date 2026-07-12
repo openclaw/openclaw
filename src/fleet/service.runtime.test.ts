@@ -731,6 +731,40 @@ describe("fleet service", () => {
     expect(getFleetCell(env, "acme")?.image).toBe("ghcr.io/openclaw/openclaw:latest");
   });
 
+  it("surfaces restore error as Error.cause when upgrade fails and restore fails", async () => {
+    const containers = createContainerMock();
+    const service = createFleetService({
+      env,
+      containers: containers.runtime,
+      now: () => 1000,
+    });
+    await service.create({ tenant: "acme", gatewayToken: "old-token" });
+
+    // Simulate upgrade failure (replacement container not running) followed by
+    // restore failure (runtime unavailable).
+    containers.inspect
+      .mockResolvedValueOnce(runningInspection())
+      .mockResolvedValueOnce({ kind: "missing", state: "missing" })
+      .mockResolvedValueOnce({
+        kind: "unavailable",
+        error: "daemon unavailable for restore",
+      } as any);
+
+    let caughtUpgradeError: Error | undefined;
+    try {
+      await service.upgrade("acme");
+    } catch (error) {
+      caughtUpgradeError = error as Error;
+    }
+
+    expect(caughtUpgradeError).toBeDefined();
+    expect(caughtUpgradeError!.message).toMatch(/previous container could not be restored/iu);
+    expect(caughtUpgradeError!.cause).toBeDefined();
+    expect((caughtUpgradeError!.cause as Error).message).toMatch(
+      /daemon unavailable for restore/iu,
+    );
+  });
+
   it("restores the previous cell when the replacement container is not running", async () => {
     const containers = createContainerMock();
     const service = createFleetService({
