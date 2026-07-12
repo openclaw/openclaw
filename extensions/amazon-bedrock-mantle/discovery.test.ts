@@ -9,6 +9,7 @@ const {
   mergeImplicitMantleProvider,
   resetIamTokenCacheForTest,
   resetMantleDiscoveryCacheForTest,
+  getMantleDiscoveryCacheSnapshotForTest,
   resolveImplicitMantleProvider,
   resolveMantleBearerToken,
   resolveMantleRuntimeBearerToken,
@@ -506,6 +507,74 @@ describe("bedrock mantle discovery", () => {
     const serialized = JSON.stringify({ first, second });
     expect(serialized).not.toContain(tokenA);
     expect(serialized).not.toContain(tokenB);
+  });
+
+  it("bounds discovery cache growth under token rotation and purges expired entries", async () => {
+    let now = 1_000_000;
+    const mockFetch = vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => {
+      const auth = String(
+        (init?.headers as Record<string, string> | undefined)?.Authorization ?? "",
+      );
+      const token = auth.replace(/^Bearer\s+/i, "");
+      return modelDiscoveryResponse({
+        data: [{ id: `model-for-${token}`, object: "model" }],
+      });
+    });
+
+    const tokens: string[] = [];
+    for (let i = 0; i < 70; i += 1) {
+      const token = `mantle-rotating-token-${String(i).padStart(3, "0")}`; // pragma: allowlist secret
+      tokens.push(token);
+      await discoverMantleModels({
+        region: "us-east-1",
+        bearerToken: token,
+        fetchFn: mockFetch as unknown as typeof fetch,
+        now: () => now,
+      });
+      now += 1_000;
+    }
+
+    const snapshot = getMantleDiscoveryCacheSnapshotForTest();
+    expect(snapshot.size).toBe(64);
+    expect(snapshot.keys.every((key) => key.startsWith("us-east-1:"))).toBe(true);
+    for (const token of tokens) {
+      expect(snapshot.keys.join("\n")).not.toContain(token);
+    }
+
+    // Expire us-east rows, then insert eu-west + a fresh us-east; eu must survive.
+    now += 3_600_000;
+    await discoverMantleModels({
+      region: "eu-west-1",
+      bearerToken: "mantle-eu-token", // pragma: allowlist secret
+      fetchFn: mockFetch as unknown as typeof fetch,
+      now: () => now,
+    });
+    await discoverMantleModels({
+      region: "us-east-1",
+      bearerToken: "mantle-after-expiry", // pragma: allowlist secret
+      fetchFn: mockFetch as unknown as typeof fetch,
+      now: () => now,
+    });
+    const afterExpiry = getMantleDiscoveryCacheSnapshotForTest();
+    expect(afterExpiry.keys.some((key) => key.startsWith("eu-west-1:"))).toBe(true);
+    expect(afterExpiry.keys.filter((key) => key.startsWith("us-east-1:")).length).toBe(1);
+
+    // Same token still hits within TTL.
+    mockFetch.mockClear();
+    const hitToken = "mantle-cache-hit-token"; // pragma: allowlist secret
+    await discoverMantleModels({
+      region: "us-west-2",
+      bearerToken: hitToken,
+      fetchFn: mockFetch as unknown as typeof fetch,
+      now: () => now,
+    });
+    await discoverMantleModels({
+      region: "us-west-2",
+      bearerToken: hitToken,
+      fetchFn: mockFetch as unknown as typeof fetch,
+      now: () => now + 30_000,
+    });
+    expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 
   it("returns stale cache on fetch failure", async () => {

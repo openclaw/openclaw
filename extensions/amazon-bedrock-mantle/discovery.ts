@@ -290,6 +290,9 @@ type MantleDiscoveryConfig = {
 
 const discoveryCache = new Map<string, MantleCacheEntry>();
 
+/** Match Ollama/agent discovery caps: hard bound under credential rotation. */
+const MAX_MANTLE_DISCOVERY_CACHE_ENTRIES = 64;
+
 /** Stable non-reversible cache identity; never log or export this value. */
 function fingerprintMantleBearerToken(token: string): string {
   return createHash("sha256").update(token, "utf8").digest("hex");
@@ -299,9 +302,51 @@ function buildMantleDiscoveryCacheKey(region: string, bearerToken: string): stri
   return `${normalizeLowercaseStringOrEmpty(region)}:${fingerprintMantleBearerToken(bearerToken)}`;
 }
 
+function mantleDiscoveryCacheTtlMs(): number {
+  return DEFAULT_REFRESH_INTERVAL_SECONDS * 1000;
+}
+
+function isMantleDiscoveryCacheFresh(entry: MantleCacheEntry, nowMs: number): boolean {
+  return nowMs - entry.fetchedAt < mantleDiscoveryCacheTtlMs();
+}
+
+function purgeExpiredMantleDiscoveryCache(nowMs: number): void {
+  for (const [key, entry] of discoveryCache) {
+    if (!isMantleDiscoveryCacheFresh(entry, nowMs)) {
+      discoveryCache.delete(key);
+    }
+  }
+}
+
+function setMantleDiscoveryCacheEntry(key: string, entry: MantleCacheEntry, nowMs: number): void {
+  purgeExpiredMantleDiscoveryCache(nowMs);
+  if (discoveryCache.has(key)) {
+    discoveryCache.delete(key);
+  }
+  while (discoveryCache.size >= MAX_MANTLE_DISCOVERY_CACHE_ENTRIES) {
+    const oldestKey = discoveryCache.keys().next().value;
+    if (typeof oldestKey !== "string") {
+      break;
+    }
+    discoveryCache.delete(oldestKey);
+  }
+  discoveryCache.set(key, entry);
+}
+
 /** Clear the Mantle discovery cache for tests. */
 export function resetMantleDiscoveryCacheForTest(): void {
   discoveryCache.clear();
+}
+
+/** Test-only cache inspection; keys are region:fingerprint (never raw tokens). */
+export function getMantleDiscoveryCacheSnapshotForTest(): {
+  size: number;
+  keys: string[];
+} {
+  return {
+    size: discoveryCache.size,
+    keys: [...discoveryCache.keys()],
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -332,7 +377,7 @@ export async function discoverMantleModels(params: {
   // Check cache (region alone is not an authorization boundary).
   const cacheKey = buildMantleDiscoveryCacheKey(region, bearerToken);
   const cached = discoveryCache.get(cacheKey);
-  if (cached && now() - cached.fetchedAt < DEFAULT_REFRESH_INTERVAL_SECONDS * 1000) {
+  if (cached && isMantleDiscoveryCacheFresh(cached, now())) {
     return cached.models;
   }
 
@@ -373,7 +418,7 @@ export async function discoverMantleModels(params: {
       }))
       .toSorted((a, b) => a.id.localeCompare(b.id));
 
-    discoveryCache.set(cacheKey, { models, fetchedAt: now() });
+    setMantleDiscoveryCacheEntry(cacheKey, { models, fetchedAt: now() }, now());
     return models;
   } catch (error) {
     log.debug?.("Mantle model discovery error", {
