@@ -335,9 +335,78 @@ export function resolveReplySessionPreprocessingState(
   };
 }
 
+/**
+ * Raised when the optimistic-concurrency commit of reply session
+ * initialization loses the revision compare-and-swap. The message shape is
+ * load-bearing: channel monitors (e.g. the Telegram poller) match it to
+ * classify the failure as retryable.
+ */
+export class ReplySessionInitConflictError extends Error {
+  constructor(sessionKey: string) {
+    super(`reply session initialization conflicted for ${sessionKey}`);
+    this.name = "ReplySessionInitConflictError";
+  }
+}
+
+const SESSION_INIT_CONFLICT_MAX_ATTEMPTS = 5;
+const SESSION_INIT_CONFLICT_BASE_BACKOFF_MS = 250;
+const SESSION_INIT_CONFLICT_MAX_BACKOFF_MS = 4000;
+const SESSION_INIT_CONFLICT_JITTER_MS = 100;
+
+/**
+ * Retries `attempt` on session-init CAS conflicts with jittered exponential
+ * backoff. Conflicts are expected when another writer (restart recovery,
+ * a concurrent dashboard tab, an active reply run) is mid-commit on the same
+ * session key; those commits settle in well under a second, so a delayed
+ * fresh attempt almost always wins. Must only wrap the *unlocked* outer
+ * attempt: sleeping while holding the session-store writer lane would stall
+ * every other writer on the store.
+ */
+export async function runWithSessionInitConflictRetry<T>(
+  attempt: () => Promise<T>,
+  options?: {
+    maxAttempts?: number;
+    signal?: AbortSignal;
+    sleep?: (ms: number) => Promise<void>;
+  },
+): Promise<T> {
+  const maxAttempts = options?.maxAttempts ?? SESSION_INIT_CONFLICT_MAX_ATTEMPTS;
+  const sleep =
+    options?.sleep ??
+    ((ms: number) =>
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, ms);
+      }));
+  for (let attemptIndex = 0; ; attemptIndex += 1) {
+    try {
+      return await attempt();
+    } catch (error) {
+      if (
+        !(error instanceof ReplySessionInitConflictError) ||
+        attemptIndex >= maxAttempts - 1 ||
+        options?.signal?.aborted === true
+      ) {
+        throw error;
+      }
+      const backoffMs =
+        Math.min(
+          SESSION_INIT_CONFLICT_MAX_BACKOFF_MS,
+          SESSION_INIT_CONFLICT_BASE_BACKOFF_MS * 2 ** attemptIndex,
+        ) + Math.floor(Math.random() * SESSION_INIT_CONFLICT_JITTER_MS);
+      log.debug(
+        `reply session initialization conflicted; retrying in ${backoffMs}ms (attempt ${attemptIndex + 2}/${maxAttempts})`,
+      );
+      await sleep(backoffMs);
+    }
+  }
+}
+
 /** Initializes or reuses the reply session state for one inbound turn. */
 export async function initSessionState(params: InitSessionStateParams): Promise<SessionInitResult> {
-  return await initSessionStateAttempt(params, false);
+  return await runWithSessionInitConflictRetry(
+    async () => await initSessionStateAttempt(params, false),
+    { signal: params.signal },
+  );
 }
 
 async function initSessionStateAttempt(
@@ -1056,7 +1125,9 @@ async function initSessionStateAttemptLocked(
     if (!staleSnapshotRetried) {
       return await initSessionStateAttemptLocked(params, attemptContext, true, undefined);
     }
-    throw new Error(`reply session initialization conflicted for ${sessionKey}`);
+    // Propagate a typed conflict so initSessionState can retry with backoff
+    // outside the store writer lane instead of surfacing this to the caller.
+    throw new ReplySessionInitConflictError(sessionKey);
   }
   sessionEntry = committed.sessionEntry;
   sessionId = sessionEntry.sessionId;
