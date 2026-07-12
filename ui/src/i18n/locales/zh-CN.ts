@@ -2960,6 +2960,8 @@ export const zh_CN: TranslationMap = {
     },
     pullRequests: {
       linkLabel: "拉取请求 #{number}：{title}",
+      createPr: "创建 PR",
+      createPrLabel: "为 {branch} 创建拉取请求",
       dismiss: "关闭拉取请求 #{number}",
       open: "打开",
       draft: "草稿",

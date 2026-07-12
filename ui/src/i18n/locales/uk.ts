@@ -3029,6 +3029,8 @@ export const uk: TranslationMap = {
     },
     pullRequests: {
       linkLabel: "Pull request #{number}: {title}",
+      createPr: "Створити PR",
+      createPrLabel: "Створити запит на злиття для {branch}",
       dismiss: "Відхилити pull request #{number}",
       open: "Відкрито",
       draft: "Чернетка",

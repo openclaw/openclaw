@@ -39,11 +39,11 @@ extension GatewayConnectionController {
         let requiresTLS = !trimmedHost.isEmpty && !LoopbackHost.isLocalNetworkHost(trimmedHost)
         let effectiveTLS = requestedTLS || requiresTLS
         let helperText: String? = if requiresTLS {
-            "Secure connection is required for this host."
+            String(localized: "Secure connection is required for this host.")
         } else if effectiveTLS {
             nil
         } else {
-            "Use only on a trusted private network."
+            String(localized: "Use only on a trusted private network.")
         }
         return GatewayManualTransportPresentation(
             requiresTLS: requiresTLS,

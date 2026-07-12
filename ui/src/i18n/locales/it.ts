@@ -3053,6 +3053,8 @@ export const it: TranslationMap = {
     },
     pullRequests: {
       linkLabel: "Pull request #{number}: {title}",
+      createPr: "Crea PR",
+      createPrLabel: "Crea una pull request per {branch}",
       dismiss: "Ignora pull request #{number}",
       open: "Aperta",
       draft: "Bozza",

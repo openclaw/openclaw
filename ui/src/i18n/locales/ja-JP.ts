@@ -3032,6 +3032,8 @@ export const ja_JP: TranslationMap = {
     },
     pullRequests: {
       linkLabel: "プルリクエスト #{number}: {title}",
+      createPr: "PRを作成",
+      createPrLabel: "{branch} のプルリクエストを作成",
       dismiss: "プルリクエスト #{number} を非表示",
       open: "オープン",
       draft: "下書き",

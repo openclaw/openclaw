@@ -3046,6 +3046,8 @@ export const ru: TranslationMap = {
     },
     pullRequests: {
       linkLabel: "Pull request #{number}: {title}",
+      createPr: "Создать PR",
+      createPrLabel: "Создать запрос на слияние для ветки {branch}",
       dismiss: "Скрыть pull request #{number}",
       open: "Открыть",
       draft: "Черновик",

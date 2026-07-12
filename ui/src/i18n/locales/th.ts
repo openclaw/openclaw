@@ -2971,6 +2971,8 @@ export const th: TranslationMap = {
     },
     pullRequests: {
       linkLabel: "Pull request #{number}: {title}",
+      createPr: "สร้าง PR",
+      createPrLabel: "สร้าง pull request สำหรับ {branch}",
       dismiss: "ปิด Pull request #{number}",
       open: "เปิด",
       draft: "ฉบับร่าง",

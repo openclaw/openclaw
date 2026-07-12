@@ -2996,6 +2996,8 @@ export const ar: TranslationMap = {
     },
     pullRequests: {
       linkLabel: "طلب سحب رقم {number}: {title}",
+      createPr: "إنشاء طلب سحب",
+      createPrLabel: "إنشاء طلب سحب للفرع {branch}",
       dismiss: "تجاهل طلب السحب رقم {number}",
       open: "مفتوح",
       draft: "مسودة",
