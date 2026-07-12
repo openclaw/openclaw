@@ -20,6 +20,7 @@ import {
   resolveExecApprovalUnavailableState,
   resolveExecHostApprovalContext,
   sendExecApprovalFollowupResult,
+  shouldResolveExecApprovalUnavailableInline,
 } from "./bash-tools.exec-host-shared.js";
 
 const mocks = vi.hoisted(() => ({
@@ -576,6 +577,46 @@ describe("buildExecApprovalPendingToolResult", () => {
     });
     expect(state.sentApproverDms).toBe(false);
     expect(state.unavailableReason).toBe("no-approval-route");
+  });
+
+  it("resolves no-route approvals inline for every trigger, not just cron (#104413)", () => {
+    // The gateway only pre-resolves `decision: null` after expiring the record
+    // for lack of any approval route; nothing can approve it afterwards, so a
+    // CLI `openclaw agent` turn must apply askFallback promptly instead of
+    // hanging until the turn abort.
+    expect(
+      shouldResolveExecApprovalUnavailableInline({
+        unavailableReason: "no-approval-route",
+        preResolvedDecision: null,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps waiting when a route exists or a real decision arrived", () => {
+    expect(
+      shouldResolveExecApprovalUnavailableInline({
+        unavailableReason: null,
+        preResolvedDecision: null,
+      }),
+    ).toBe(false);
+    expect(
+      shouldResolveExecApprovalUnavailableInline({
+        unavailableReason: "no-approval-route",
+        preResolvedDecision: "allow-once",
+      }),
+    ).toBe(false);
+    expect(
+      shouldResolveExecApprovalUnavailableInline({
+        unavailableReason: "no-approval-route",
+        preResolvedDecision: undefined,
+      }),
+    ).toBe(false);
+    expect(
+      shouldResolveExecApprovalUnavailableInline({
+        unavailableReason: "initiating-platform-disabled",
+        preResolvedDecision: null,
+      }),
+    ).toBe(false);
   });
 
   it("keeps a local /approve prompt when the initiating Discord surface is disabled", () => {
