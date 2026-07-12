@@ -12,6 +12,8 @@ const {
   fetchWithTimeoutMock,
   readProviderJsonResponseMock,
   resolveApiKeyForProviderMock,
+  resolveProviderHttpRequestConfigMock,
+  sanitizeConfiguredModelProviderRequestMock,
 } = getProviderHttpMocks();
 
 let buildXaiVideoGenerationProvider: typeof import("./video-generation-provider.js").buildXaiVideoGenerationProvider;
@@ -357,6 +359,57 @@ describe("xai video generation provider", () => {
     expect(result.videos[0]?.fileName).toBe("video-1.webm");
     expect(result.metadata?.requestId).toBe("req_123");
     expect(result.metadata?.mode).toBe("generate");
+  });
+
+  it("applies configured xAI request policy to video generation requests", async () => {
+    const requestPolicy = {
+      headers: { "X-Xai-Trace": "trace-1" },
+      proxy: { mode: "env-proxy" as const },
+    };
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          request_id: "req_policy",
+        }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce({
+        json: async () => ({
+          request_id: "req_policy",
+          status: "done",
+          video: { url: "https://cdn.x.ai/policy.mp4" },
+        }),
+      })
+      .mockResolvedValueOnce({
+        headers: new Headers({ "content-type": "video/mp4" }),
+        arrayBuffer: async () => Buffer.from("video-bytes"),
+      });
+
+    await buildXaiVideoGenerationProvider().generateVideo({
+      provider: "xai",
+      model: "grok-imagine-video",
+      prompt: "Product demo shot",
+      cfg: {
+        models: {
+          providers: {
+            xai: {
+              request: requestPolicy,
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(sanitizeConfiguredModelProviderRequestMock).toHaveBeenCalledWith(requestPolicy);
+    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "xai",
+        capability: "video",
+        request: requestPolicy,
+      }),
+    );
   });
 
   it("rejects generated video downloads that exceed the configured media cap", async () => {
