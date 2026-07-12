@@ -324,7 +324,7 @@ describe("resolveMessagingToolPayloadDedupe", () => {
     });
   });
 
-  it("preserves global evidence fallback for legacy multi-target records", () => {
+  it("rejects global evidence fallback for legacy mixed-route records", () => {
     expect(
       resolveMessagingToolPayloadDedupe({
         messageProvider: "slack",
@@ -332,6 +332,26 @@ describe("resolveMessagingToolPayloadDedupe", () => {
         messagingToolSentTargets: [
           { tool: "slack", provider: "slack", to: "channel:C1" },
           { tool: "discord", provider: "discord", to: "channel:C2" },
+        ],
+      }),
+    ).toEqual({
+      shouldDedupePayloads: true,
+      matchingRoute: true,
+      routeSentTexts: [],
+      routeSentMediaUrls: [],
+      useGlobalSentTextEvidenceFallback: false,
+      useGlobalSentMediaUrlEvidenceFallback: false,
+    });
+  });
+
+  it("preserves global evidence fallback when every legacy target matches", () => {
+    expect(
+      resolveMessagingToolPayloadDedupe({
+        messageProvider: "slack",
+        originatingTo: "channel:C1",
+        messagingToolSentTargets: [
+          { tool: "slack", provider: "slack", to: "channel:C1" },
+          { tool: "message", provider: "slack", to: "channel:C1" },
         ],
       }),
     ).toEqual({
