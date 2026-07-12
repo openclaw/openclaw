@@ -53,7 +53,7 @@ type ShellSettingsSearchLoadState = {
   runtime: {
     context: ApplicationContext;
   };
-  handleSettingsSearchQueryChange: (query: string) => void;
+  handleSettingsSearchQueryChange: (query: string) => Promise<void>;
 };
 
 type TestWebKitWindow = Window & {
@@ -215,8 +215,7 @@ describe("OpenClaw shell settings search", () => {
       context: { runtimeConfig } as unknown as ApplicationContext,
     };
 
-    shell.handleSettingsSearchQueryChange("browser");
-    await Promise.resolve();
+    await shell.handleSettingsSearchQueryChange("browser");
 
     expect(runtimeConfig.ensureLoaded).toHaveBeenCalledOnce();
     expect(runtimeConfig.ensureSchemaLoaded).toHaveBeenCalledOnce();
@@ -244,17 +243,48 @@ describe("OpenClaw shell settings search", () => {
       context: { runtimeConfig: firstRuntimeConfig } as unknown as ApplicationContext,
     };
 
-    shell.handleSettingsSearchQueryChange("browser");
+    const load = shell.handleSettingsSearchQueryChange("browser");
     shell.runtime = {
       context: { runtimeConfig: secondRuntimeConfig } as unknown as ApplicationContext,
     };
     finishLoad?.();
-    await Promise.resolve();
+    await load;
 
     expect(firstRuntimeConfig.ensureLoaded).toHaveBeenCalledOnce();
     expect(firstRuntimeConfig.ensureSchemaLoaded).not.toHaveBeenCalled();
     expect(secondRuntimeConfig.ensureSchemaLoaded).not.toHaveBeenCalled();
   });
+
+  it.each(["config", "schema"] as const)(
+    "contains rejected %s loads within settings search",
+    async (failureStage) => {
+      const runtimeConfig = {
+        ensureLoaded: vi.fn(() =>
+          failureStage === "config"
+            ? Promise.reject(new Error("config unavailable"))
+            : Promise.resolve(),
+        ),
+        ensureSchemaLoaded: vi.fn(() =>
+          failureStage === "schema"
+            ? Promise.reject(new Error("schema unavailable"))
+            : Promise.resolve(),
+        ),
+      } as unknown as ApplicationContext["runtimeConfig"];
+      const shell = document.createElement(
+        "openclaw-app-shell",
+      ) as unknown as ShellSettingsSearchLoadState;
+      shell.runtime = {
+        context: { runtimeConfig } as unknown as ApplicationContext,
+      };
+
+      await expect(shell.handleSettingsSearchQueryChange("browser")).resolves.toBeUndefined();
+
+      expect(runtimeConfig.ensureLoaded).toHaveBeenCalledOnce();
+      expect(runtimeConfig.ensureSchemaLoaded).toHaveBeenCalledTimes(
+        failureStage === "schema" ? 1 : 0,
+      );
+    },
+  );
 });
 
 describe("OpenClaw shell keyboard shortcuts", () => {

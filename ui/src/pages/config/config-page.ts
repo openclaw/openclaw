@@ -398,11 +398,12 @@ export class ConfigPage extends OpenClawLightDomElement {
           this.runtimeConfigSource === runtimeConfig
             ? runtimeConfig.ensureSchemaLoaded()
             : undefined,
-        );
+        )
+        .catch(() => undefined);
       return;
     }
     if (!config.configSchema && !config.configSchemaLoading) {
-      void runtimeConfig.ensureSchemaLoaded();
+      void runtimeConfig.ensureSchemaLoaded().catch(() => undefined);
     }
   }
 

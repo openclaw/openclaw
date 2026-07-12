@@ -7,12 +7,7 @@ import { configRouteData, type ConfigRouteData } from "./route-data.ts";
 
 function loadConfigRoute(context: ApplicationContext, location: RouteLocation) {
   const primaryLoad = context.runtimeConfig.ensureLoaded();
-  void primaryLoad.then(
-    () => {
-      void context.runtimeConfig.ensureSchemaLoaded();
-    },
-    () => undefined,
-  );
+  void primaryLoad.then(() => context.runtimeConfig.ensureSchemaLoaded()).catch(() => undefined);
   return configRouteData(location);
 }
 
