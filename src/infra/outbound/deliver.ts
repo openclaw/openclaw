@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Outbound delivery core runs plugin hooks, queue durability, channel adapter
 // sends, commit hooks, diagnostics, transcript mirroring, and payload outcomes.
 import { hasTrustedMessageAuditListeners } from "../../audit/message-audit-events.js";
@@ -1878,7 +1879,12 @@ async function deliverOutboundPayloadsCore(
                 availableReportedIndices.has(reported.resultIndex) &&
                 !coveredIndices.includes(reported.resultIndex) &&
                 results[reported.resultIndex]?.channel === delivery.channel &&
-                resultPlatformIds(results[reported.resultIndex]).has(receiptId),
+                resultPlatformIds(
+                  expectDefined(
+                    results[reported.resultIndex],
+                    "results entry at reported.result index",
+                  ),
+                ).has(receiptId),
             )
             .map((reported) => reported.resultIndex);
           // One receipt part covers one progress result. Repeated parts preserve
@@ -2268,8 +2274,10 @@ async function deliverOutboundPayloadsCore(
             presentation: effectivePayload.presentation,
             interactive: effectivePayload.interactive,
             channelData: effectivePayload.channelData,
+            location: effectivePayload.location,
           }) ||
-          effectivePayload.audioAsVoice === true)
+          effectivePayload.audioAsVoice === true ||
+          effectivePayload.videoAsNote === true)
       ) {
         const beforeCount = results.length;
         const delivery = await deliveryHandler.sendPayload(

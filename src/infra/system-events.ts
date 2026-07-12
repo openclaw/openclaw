@@ -2,6 +2,7 @@
 // prefixed to the next prompt. We intentionally avoid persistence to keep
 // events ephemeral. Events are session-scoped and require an explicit key.
 
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -186,7 +187,7 @@ function resetQueueState(key: string, entry: SessionQueue) {
     return;
   }
   for (let index = entry.queue.length - 1; index >= 0; index -= 1) {
-    const contextKey = entry.queue[index].contextKey ?? null;
+    const contextKey = expectDefined(entry.queue[index], "queue entry at index").contextKey ?? null;
     if (contextKey !== null) {
       entry.lastContextKey = contextKey;
       return;
@@ -206,7 +207,9 @@ export function consumeSystemEventEntries(
   }
   if (
     consumedEntries.length > entry.queue.length ||
-    !consumedEntries.every((event, index) => areSystemEventsEqual(entry.queue[index], event))
+    !consumedEntries.every((event, index) =>
+      areSystemEventsEqual(expectDefined(entry.queue[index], "queue entry at index"), event),
+    )
   ) {
     return [];
   }

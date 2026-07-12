@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Gateway node command policy.
 // Computes per-platform allowlists from built-in, plugin, runtime, and config inputs.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
@@ -6,6 +7,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   NODE_BROWSER_PROXY_COMMAND,
   NODE_EXEC_APPROVALS_COMMANDS,
+  NODE_FS_LIST_DIR_COMMAND,
   NODE_MCP_TOOLS_CALL_COMMAND,
   NODE_SYSTEM_NOTIFY_COMMAND,
   NODE_SYSTEM_RUN_COMMANDS,
@@ -61,6 +63,7 @@ const IOS_SYSTEM_COMMANDS = [NODE_SYSTEM_NOTIFY_COMMAND];
 const SYSTEM_COMMANDS = [
   ...NODE_SYSTEM_RUN_COMMANDS,
   ...NODE_EXEC_APPROVALS_COMMANDS,
+  NODE_FS_LIST_DIR_COMMAND,
   NODE_SYSTEM_NOTIFY_COMMAND,
   NODE_BROWSER_PROXY_COMMAND,
   NODE_MCP_TOOLS_CALL_COMMAND,
@@ -68,6 +71,7 @@ const SYSTEM_COMMANDS = [
 const DESKTOP_HOST_COMMANDS = new Set<string>([
   ...NODE_SYSTEM_RUN_COMMANDS,
   ...NODE_EXEC_APPROVALS_COMMANDS,
+  NODE_FS_LIST_DIR_COMMAND,
   NODE_BROWSER_PROXY_COMMAND,
   NODE_MCP_TOOLS_CALL_COMMAND,
   ...SCREEN_COMMANDS,
@@ -393,7 +397,9 @@ function resolveNodeCommandAllowlistInternal(
   const platformId = normalizePlatformId(node?.platform, node?.deviceFamily);
   const base = filterDesktopHostCommandDefaults({
     platformId,
-    commands: PLATFORM_DEFAULTS[platformId] ?? PLATFORM_DEFAULTS.unknown,
+    commands:
+      expectDefined(PLATFORM_DEFAULTS[platformId], "platform defaults entry at platform id") ??
+      PLATFORM_DEFAULTS.unknown,
     includeDesktopHostCommands: options?.includeDesktopHostCommands,
   });
   const talkCommands = hasTalkSurface(node) ? TALK_PTT_COMMANDS : [];
