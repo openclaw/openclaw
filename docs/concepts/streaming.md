@@ -50,11 +50,12 @@ Model output
 not every newline, before falling back to length chunking once the text
 exceeds the limit.
 
-All bundled channels spell these overrides as
+Bundled channels spell these overrides as
 `channels.<id>.streaming.{chunkMode,block.enabled,block.coalesce}`. The flat
 `*.chunkMode` / `*.blockStreaming` / `*.blockStreamingCoalesce` spellings are
-legacy: `openclaw doctor --fix` migrates them into the nested shape, and
-bundled channel schemas reject them. External SDK plugin configs that still
+legacy everywhere except Matrix and Feishu (their nested migration is still
+pending): `openclaw doctor --fix` migrates them into the nested shape, and
+migrated channel schemas reject them. External SDK plugin configs that still
 use the flat spellings keep working through a deprecated fallback (with a
 runtime warning) until the next release train.
 

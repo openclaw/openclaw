@@ -42,6 +42,36 @@ describe("whatsapp normalizeCompatibilityConfig streaming aliases", () => {
     expect(personal?.blockStreamingCoalesce).toBeUndefined();
   });
 
+  it("seeds named accounts from accounts.default over root (layered inheritance)", () => {
+    const result = normalizeCompatibilityConfig({
+      cfg: whatsappConfig({
+        chunkMode: "length",
+        accounts: {
+          default: { blockStreaming: true },
+          work: { chunkMode: "newline" },
+        },
+      }),
+    });
+
+    const whatsapp = result.config.channels?.whatsapp as unknown as Record<string, unknown>;
+    const accounts = whatsapp.accounts as Record<string, Record<string, unknown>>;
+    expect(whatsapp.streaming).toEqual({ chunkMode: "length" });
+    expect(accounts.default?.streaming).toEqual({
+      chunkMode: "length",
+      block: { enabled: true },
+    });
+    // The old flat keys resolved per key across named > accounts.default >
+    // root, so the materialized work object must inherit the default
+    // account's block setting, not just the root chunk mode.
+    expect(accounts.work?.streaming).toEqual({
+      chunkMode: "newline",
+      block: { enabled: true },
+    });
+
+    const second = normalizeCompatibilityConfig({ cfg: result.config });
+    expect(second.changes).toEqual([]);
+  });
+
   it("keeps the legacy ackReaction migration and stays idempotent", () => {
     const first = normalizeCompatibilityConfig({
       cfg: {

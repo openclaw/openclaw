@@ -18,6 +18,6 @@ export function warnFlatStreamingKeyFallback(flatKey: string, nestedPath: string
   }
   warnedFlatStreamingKeys.add(flatKey);
   log.warn(
-    `Flat channel streaming key "${flatKey}" is deprecated for SDK consumers; move it to streaming.${nestedPath}. The flat fallback is removed after the next release train.`,
+    `Flat channel streaming key "${flatKey}" is deprecated; move it to streaming.${nestedPath}. The flat fallback is removed after the next release train.`,
   );
 }

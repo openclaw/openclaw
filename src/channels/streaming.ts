@@ -41,14 +41,15 @@ export type StreamingCompatEntry = {
   draftChunk?: unknown;
 };
 
-// Nested streaming config wins. All bundled channels now use nested streaming
-// schemas and doctor migrates their flat spellings, so in-tree the flat
-// delivery keys (chunkMode, blockStreaming, blockStreamingCoalesce,
-// draftChunk) are dead config that schemas reject. The fallback reads below
-// remain only for external SDK plugin configs and emit a once-per-key
-// deprecation warning; remove them (and the flat StreamingCompatEntry fields)
-// after the next release train closes the SDK deprecation window. Mode-family
-// aliases (streamMode) are doctor-only and stay unread here.
+// Nested streaming config wins. Every bundled channel except Matrix and
+// Feishu now uses a nested-only streaming schema with doctor migrating the
+// flat spellings, so in-tree the flat delivery keys (chunkMode,
+// blockStreaming, blockStreamingCoalesce, draftChunk) are legacy config. The
+// fallback reads below serve external SDK plugin configs plus the pending
+// Matrix/Feishu migrations and emit a once-per-key deprecation warning;
+// remove them (and the flat StreamingCompatEntry fields) once those channels
+// migrate and the next release train closes the SDK deprecation window.
+// Mode-family aliases (streamMode) are doctor-only and stay unread here.
 
 function asObjectRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
