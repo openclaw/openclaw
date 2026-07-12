@@ -37,6 +37,7 @@ const ROOT_SECTIONS = [
   "discovery",
   "talk",
   "gateway",
+  "cloudWorkers",
   "memory",
   "plugins",
 ] as const;
@@ -204,6 +205,10 @@ const TARGET_KEYS = [
   "nodeHost.browserProxy",
   "nodeHost.browserProxy.enabled",
   "nodeHost.browserProxy.allowProfiles",
+  "nodeHost.mcp",
+  "nodeHost.mcp.servers",
+  "nodeHost.skills",
+  "nodeHost.skills.enabled",
   "media",
   "media.preserveFilenames",
   "audio",

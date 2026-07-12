@@ -1,8 +1,11 @@
 // Control UI tests cover config behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ConfigSchemaResponse, ConfigSnapshot } from "../../api/types.ts";
 import {
   applyConfigSnapshot,
   applyConfig,
+  createRuntimeConfigCapability,
   ensureAgentConfigEntry,
   findAgentConfigEntryIndex,
   loadConfig,
@@ -10,11 +13,42 @@ import {
   resetConfigPendingChanges,
   saveConfig,
   stageDefaultAgentConfigEntry,
-  updateMcpServerEnabled,
   updateConfigFormValue,
   updateConfigRawValue,
   type ConfigState,
 } from "./index.ts";
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, reject, resolve };
+}
+
+function createGatewayHarness(client: GatewayBrowserClient) {
+  let snapshot = { client, connected: true, sessionKey: "main" };
+  const listeners = new Set<(next: typeof snapshot) => void>();
+  return {
+    gateway: {
+      get snapshot() {
+        return snapshot;
+      },
+      subscribe(listener: (next: typeof snapshot) => void) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    },
+    publish: (connected: boolean) => {
+      snapshot = { client, connected, sessionKey: "main" };
+      for (const listener of listeners) {
+        listener(snapshot);
+      }
+    },
+  };
+}
 
 function createState(): ConfigState {
   return {
@@ -273,6 +307,111 @@ describe("loadConfig", () => {
   });
 });
 
+describe("createRuntimeConfigCapability", () => {
+  it("rejects stale config and schema work after reconnecting the same client", async () => {
+    const firstConfig = deferred<ConfigSnapshot>();
+    const secondConfig = deferred<ConfigSnapshot>();
+    const firstSchema = deferred<ConfigSchemaResponse>();
+    const secondSchema = deferred<ConfigSchemaResponse>();
+    const configRequests = [firstConfig, secondConfig];
+    const schemaRequests = [firstSchema, secondSchema];
+    const request = vi.fn((method: string) => {
+      const pending = method === "config.get" ? configRequests.shift() : schemaRequests.shift();
+      if (!pending) {
+        throw new Error(`unexpected request: ${method}`);
+      }
+      return pending.promise;
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway, publish } = createGatewayHarness(client);
+    const runtimeConfig = createRuntimeConfigCapability(gateway);
+
+    const staleConfigLoad = runtimeConfig.ensureLoaded();
+    const staleSchemaLoad = runtimeConfig.ensureSchemaLoaded();
+    publish(false);
+    publish(true);
+    const currentConfigLoad = runtimeConfig.ensureLoaded();
+    const currentSchemaLoad = runtimeConfig.ensureSchemaLoaded();
+
+    firstConfig.resolve({ config: { source: "stale" }, valid: true, issues: [], raw: "{}" });
+    firstSchema.reject(new Error("stale schema failure"));
+    await Promise.all([staleConfigLoad, staleSchemaLoad]);
+
+    expect(runtimeConfig.state.configSnapshot).toBeNull();
+    expect(runtimeConfig.state.configSchema).toBeNull();
+    expect(runtimeConfig.state.lastError).toBeNull();
+    expect(runtimeConfig.state.configLoading).toBe(true);
+    expect(runtimeConfig.state.configSchemaLoading).toBe(true);
+
+    secondConfig.resolve({ config: { source: "current" }, valid: true, issues: [], raw: "{}" });
+    secondSchema.resolve({
+      schema: { type: "object" },
+      uiHints: {},
+      version: "current",
+      generatedAt: "2026-07-09T00:00:00.000Z",
+    });
+    await Promise.all([currentConfigLoad, currentSchemaLoad]);
+
+    expect(runtimeConfig.state.configSnapshot?.config).toEqual({ source: "current" });
+    expect(runtimeConfig.state.configSchema).toEqual({ type: "object" });
+    expect(runtimeConfig.state.configSchemaVersion).toBe("current");
+    expect(runtimeConfig.state.configLoading).toBe(false);
+    expect(runtimeConfig.state.configSchemaLoading).toBe(false);
+    runtimeConfig.dispose();
+  });
+
+  it("keeps a replacement save isolated from stale same-client completion", async () => {
+    const staleSave = deferred<void>();
+    const currentSave = deferred<void>();
+    let saveCount = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "config.set") {
+        saveCount += 1;
+        await (saveCount === 1 ? staleSave.promise : currentSave.promise);
+        return {};
+      }
+      if (method === "config.get") {
+        return {
+          hash: "current-hash",
+          config: { source: "current" },
+          valid: true,
+          issues: [],
+          raw: '{"source":"current"}',
+        };
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway, publish } = createGatewayHarness(client);
+    const runtimeConfig = createRuntimeConfigCapability(gateway);
+    applyConfigSnapshot(runtimeConfig.state, {
+      hash: "base-hash",
+      config: { source: "base" },
+      valid: true,
+      issues: [],
+      raw: '{"source":"base"}',
+    });
+    updateConfigFormValue(runtimeConfig.state, ["source"], "draft");
+
+    const oldOperation = runtimeConfig.save();
+    publish(false);
+    publish(true);
+    const currentOperation = runtimeConfig.save();
+
+    staleSave.resolve();
+    await expect(oldOperation).resolves.toBe(false);
+    expect(runtimeConfig.state.configSaving).toBe(true);
+    expect(runtimeConfig.state.configFormDirty).toBe(true);
+
+    currentSave.resolve();
+    await expect(currentOperation).resolves.toBe(true);
+    expect(runtimeConfig.state.configSaving).toBe(false);
+    expect(runtimeConfig.state.configFormDirty).toBe(false);
+    expect(runtimeConfig.state.configSnapshot?.config).toEqual({ source: "current" });
+    runtimeConfig.dispose();
+  });
+});
+
 describe("openConfigFile", () => {
   it("surfaces failed open responses and copies the returned config path", async () => {
     const request = vi.fn().mockResolvedValue({
@@ -476,40 +615,6 @@ describe("updateConfigFormValue", () => {
       },
     });
     expect(state.configFormDirty).toBe(false);
-  });
-});
-
-describe("updateMcpServerEnabled", () => {
-  it("removes disabled-only MCP overrides when enabling", () => {
-    const state = createState();
-    applyConfigSnapshot(state, {
-      hash: "hash-mcp",
-      config: { mcp: { servers: { local: { enabled: false } } } },
-      valid: true,
-      issues: [],
-      raw: "{}",
-    });
-
-    updateMcpServerEnabled(state, "local", true);
-
-    expect(state.configForm).toEqual({ mcp: { servers: {} } });
-    expect(state.configFormDirty).toBe(true);
-  });
-
-  it("keeps real MCP server configuration when enabling", () => {
-    const state = createState();
-    applyConfigSnapshot(state, {
-      hash: "hash-mcp",
-      config: { mcp: { servers: { local: { command: "node", enabled: false } } } },
-      valid: true,
-      issues: [],
-      raw: "{}",
-    });
-
-    updateMcpServerEnabled(state, "local", true);
-
-    expect(state.configForm).toEqual({ mcp: { servers: { local: { command: "node" } } } });
-    expect(state.configFormDirty).toBe(true);
   });
 });
 

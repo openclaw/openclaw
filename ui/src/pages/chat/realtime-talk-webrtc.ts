@@ -71,8 +71,9 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     this.audio.style.display = "none";
     document.body.append(this.audio);
     peer.addEventListener("track", (event) => {
-      if (this.audio) {
-        this.audio.srcObject = event.streams[0];
+      const stream = event.streams[0];
+      if (this.audio && stream) {
+        this.audio.srcObject = stream;
       }
     });
     const media = await this.awaitSetupStep(peer, openRealtimeTalkInput(this.ctx.inputDeviceId));
@@ -261,7 +262,9 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
         this.bufferToolDelta(event);
         return;
       case "response.function_call_arguments.done":
-        void this.handleToolCall(event);
+        void this.handleToolCall(event).catch((error: unknown) => {
+          this.reportToolResultSubmissionError(error);
+        });
         return;
       case "input_audio_buffer.speech_started":
         this.ctx.callbacks.onStatus?.("listening", "Speech detected");
@@ -407,6 +410,14 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       },
     });
     this.requestResponseCreate();
+  }
+
+  private reportToolResultSubmissionError(error: unknown): void {
+    if (this.closed) {
+      return;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    this.ctx.callbacks.onStatus?.("error", message);
   }
 
   private sendControlSpeechMessage(message: string): void {

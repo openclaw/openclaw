@@ -208,7 +208,7 @@ export function withResolvedTelegramForumFlag<T extends { chat: object }>(
 }
 
 export async function resolveTelegramGroupAllowFromContext(params: {
-  cfg?: OpenClawConfig;
+  cfg: OpenClawConfig;
   chatId: string | number;
   accountId?: string;
   dmPolicy?: DmPolicy;
@@ -225,7 +225,8 @@ export async function resolveTelegramGroupAllowFromContext(params: {
   readChannelAllowFromStore?: typeof readChannelAllowFromStore;
   resolveTelegramGroupConfig: (
     chatId: string | number,
-    messageThreadId?: number,
+    messageThreadId: number | undefined,
+    cfg: OpenClawConfig,
   ) => {
     groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
     topicConfig?: TelegramTopicConfig;
@@ -253,6 +254,7 @@ export async function resolveTelegramGroupAllowFromContext(params: {
   const { groupConfig, topicConfig } = params.resolveTelegramGroupConfig(
     params.chatId,
     threadIdForConfig,
+    params.cfg,
   );
   const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
   const effectiveDmPolicy = resolveTelegramEffectiveDmPolicy({
@@ -493,7 +495,6 @@ export function buildTypingThreadParams(messageThreadId?: number) {
 
 export function resolveTelegramStreamMode(telegramCfg?: {
   streaming?: unknown;
-  streamMode?: unknown;
 }): TelegramStreamMode {
   return resolveTelegramPreviewStreamMode(telegramCfg);
 }

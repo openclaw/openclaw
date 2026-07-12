@@ -30,7 +30,9 @@ function makeContextParams(
     isTerminalEnabled: vi.fn(() => false),
     execApprovalManager: undefined,
     pluginApprovalManager: undefined,
+    listSessionPendingApprovals: undefined,
     loadGatewayModelCatalog: vi.fn(async () => []),
+    loadGatewayModelCatalogSnapshot: vi.fn(async () => ({ entries: [], routeVariants: [] })),
     getHealthCache: vi.fn(() => null),
     refreshHealthSnapshot: vi.fn(async () => ({}) as never),
     logHealth: { error: vi.fn() },
@@ -152,8 +154,11 @@ describe("createGatewayRequestContext", () => {
       socket: { close: vi.fn() },
     };
     const clients = new Set([target, unrelated]) as never;
+    const invalidateDeviceTransports = vi.fn();
 
-    const context = createGatewayRequestContext(makeContextParams({ clients }));
+    const context = createGatewayRequestContext(
+      makeContextParams({ clients, invalidateDeviceTransports }),
+    );
     context.invalidateClientsForDevice?.("device-1", { reason: "device-token-rotated" });
 
     expect((target as { invalidated?: boolean }).invalidated).toBe(true);
@@ -164,6 +169,9 @@ describe("createGatewayRequestContext", () => {
 
     expect((unrelated as { invalidated?: boolean }).invalidated).toBeUndefined();
     expect(unrelated.socket.close).not.toHaveBeenCalled();
+    expect(invalidateDeviceTransports).toHaveBeenCalledWith("device-1", {
+      reason: "device-token-rotated",
+    });
   });
 
   it("disconnectClientsForDevice also marks the invalidated flag before closing", () => {
@@ -173,13 +181,17 @@ describe("createGatewayRequestContext", () => {
       socket: { close: vi.fn() },
     };
     const clients = new Set([target]) as never;
+    const disconnectDeviceTransports = vi.fn();
 
-    const context = createGatewayRequestContext(makeContextParams({ clients }));
+    const context = createGatewayRequestContext(
+      makeContextParams({ clients, disconnectDeviceTransports }),
+    );
     context.disconnectClientsForDevice?.("device-1");
 
     expect((target as { invalidated?: boolean }).invalidated).toBe(true);
     expect((target as { invalidatedReason?: string }).invalidatedReason).toBe("device-removed");
     expect(target.socket.close).toHaveBeenCalledWith(4001, "device removed");
+    expect(disconnectDeviceTransports).toHaveBeenCalledWith("device-1", undefined);
   });
 
   it("invalidateClientsForDevice filters by role when provided", () => {

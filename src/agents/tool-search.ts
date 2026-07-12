@@ -11,7 +11,7 @@ import {
   uniqueStrings,
   uniqueValues,
 } from "@openclaw/normalization-core/string-normalization";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tools.js";
@@ -21,9 +21,11 @@ import {
   type HookContext,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
+import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import type { AgentMessage, AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.js";
 import type { ToolDefinition } from "./sessions/index.js";
 import { appendBoundedTextTail, SESSION_TOOL_STDERR_TAIL_BYTES } from "./sessions/tools/limits.js";
+import { isAgentToolReplaySafe } from "./tool-replay-safety.js";
 import { asToolParamsRecord, jsonResult, ToolInputError } from "./tools/common.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -112,6 +114,7 @@ export type ToolSearchToolContext = {
   catalogRef?: ToolSearchCatalogRef;
   abortSignal?: AbortSignal;
   executeTool?: ToolSearchCatalogToolExecutor;
+  forceRestartSafeTools?: boolean;
 };
 
 /** Catalog entry retained behind compacted Tool Search control tools. */
@@ -657,13 +660,16 @@ function classifyTool(tool: CatalogTool): {
 } {
   const meta = getPluginToolMeta(tool as AnyAgentTool);
   const pluginId = meta?.pluginId?.trim();
-  if (pluginId === "bundle-mcp") {
-    const mcp = meta?.mcp;
+  const mcp = meta?.mcp;
+  if (mcp) {
     return {
       source: "mcp",
-      sourceName: pluginId,
-      ...(mcp ? { mcp } : {}),
+      sourceName: mcp.safeServerName || pluginId || "mcp",
+      mcp,
     };
+  }
+  if (pluginId === "bundle-mcp") {
+    return { source: "mcp", sourceName: pluginId };
   }
   if (pluginId) {
     return { source: "openclaw", sourceName: pluginId };
@@ -710,7 +716,7 @@ function shouldCatalogTool(tool: AnyAgentTool): boolean {
   if (TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name)) {
     return false;
   }
-  return true;
+  return tool.catalogMode !== "direct-only";
 }
 
 /**
@@ -1808,6 +1814,27 @@ export class ToolSearchRuntime {
     return await this.callEntry(catalog, entry, input, options);
   };
 
+  isReplaySafeExactId = (id: string): boolean => {
+    let entry: ToolSearchCatalogEntry;
+    try {
+      const catalog = resolveCatalog(this.ctx);
+      entry = findEntryByExactId(catalog, id);
+    } catch {
+      return false;
+    }
+    if (entry.source !== "openclaw") {
+      return false;
+    }
+    const pluginMeta = getPluginToolMeta(entry.tool as Parameters<typeof getPluginToolMeta>[0]);
+    if (pluginMeta) {
+      return pluginMeta.mcp ? false : pluginMeta.replaySafe === true;
+    }
+    if (getChannelAgentToolMeta(entry.tool as never)) {
+      return false;
+    }
+    return isAgentToolReplaySafe(entry.tool);
+  };
+
   private readonly callEntry = async (
     catalog: ToolSearchCatalogSession,
     entry: ToolSearchCatalogEntry,
@@ -1896,7 +1923,8 @@ export function applyToolCatalogCompaction(params: {
 
   const visible: AnyAgentTool[] = [];
   const catalog: ToolSearchCatalogEntry[] = [];
-  const shouldCatalog = params.shouldCatalogTool ?? shouldCatalogTool;
+  const shouldCatalog = (tool: AnyAgentTool) =>
+    shouldCatalogTool(tool) && (params.shouldCatalogTool?.(tool) ?? true);
   for (const tool of params.tools) {
     if (params.isVisibleControlTool(tool)) {
       visible.push(tool);
@@ -2195,7 +2223,7 @@ function runCodeModeChild(params: {
       }
       const rejectOnExit = () => {
         const suffix = stderrTail.trim();
-        const detail = suffix ? `: ${suffix.slice(-500)}` : "";
+        const detail = suffix ? `: ${sliceUtf16Safe(suffix, -500)}` : "";
         settle(() =>
           reject(
             new Error(
@@ -2390,4 +2418,3 @@ export const testing = {
   appendToolSearchCodeStderrTail,
   runCodeModeChild,
 };
-export { testing as __testing };

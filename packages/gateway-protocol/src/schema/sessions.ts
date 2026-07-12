@@ -1,5 +1,7 @@
 // Gateway Protocol schema module defines protocol validation shapes.
+import type { Static } from "typebox";
 import { Type } from "typebox";
+import { ErrorShapeSchema } from "./frames.js";
 import { PluginJsonValueSchema } from "./plugins.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
 
@@ -73,6 +75,12 @@ export const SessionFileRelevanceSchema = Type.Union([
   Type.Literal("mixed"),
 ]);
 
+const SessionFileHashSchema = Type.String({
+  minLength: 64,
+  maxLength: 64,
+  pattern: "^[a-f0-9]{64}$",
+});
+
 /** One file path referenced by a session transcript. */
 export const SessionFileEntrySchema = Type.Object(
   {
@@ -84,6 +92,7 @@ export const SessionFileEntrySchema = Type.Object(
     size: Type.Optional(Type.Integer({ minimum: 0 })),
     updatedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
     content: Type.Optional(Type.String()),
+    hash: Type.Optional(SessionFileHashSchema),
   },
   { additionalProperties: false },
 );
@@ -155,6 +164,81 @@ export const SessionsFilesGetResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Overwrites one existing session workspace file with hash-based CAS. */
+export const SessionsFilesSetParamsSchema = Type.Object(
+  {
+    sessionKey: NonEmptyString,
+    path: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
+    content: Type.String(),
+    expectedHash: SessionFileHashSchema,
+  },
+  { additionalProperties: false },
+);
+
+/** Result for overwriting one session workspace file. */
+export const SessionsFilesSetResultSchema = Type.Object(
+  {
+    sessionKey: NonEmptyString,
+    root: Type.Optional(NonEmptyString),
+    file: SessionFileEntrySchema,
+  },
+  { additionalProperties: false },
+);
+
+/** Change status for one file in a session checkout diff. */
+export const SessionDiffFileStatusSchema = Type.Union([
+  Type.Literal("added"),
+  Type.Literal("modified"),
+  Type.Literal("deleted"),
+  Type.Literal("renamed"),
+]);
+
+/** One changed file in a session checkout diff. */
+export const SessionDiffFileSchema = Type.Object(
+  {
+    path: NonEmptyString,
+    oldPath: Type.Optional(NonEmptyString),
+    status: SessionDiffFileStatusSchema,
+    additions: Type.Integer({ minimum: 0 }),
+    deletions: Type.Integer({ minimum: 0 }),
+    binary: Type.Optional(Type.Boolean()),
+    untracked: Type.Optional(Type.Boolean()),
+    /** Per-file unified patch text; absent for binary or oversized files. */
+    patch: Type.Optional(Type.String()),
+    truncated: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
+/** Reads the git diff of a session checkout against its base branch. */
+export const SessionsDiffParamsSchema = Type.Object(
+  {
+    sessionKey: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
+/** Branch + working-tree diff for one session checkout. */
+export const SessionsDiffResultSchema = Type.Object(
+  {
+    sessionKey: NonEmptyString,
+    root: Type.Optional(NonEmptyString),
+    branch: Type.Optional(NonEmptyString),
+    /** Display label of the diff base: the default branch name or "HEAD". */
+    baseRef: Type.Optional(NonEmptyString),
+    files: Type.Array(SessionDiffFileSchema),
+    additions: Type.Integer({ minimum: 0 }),
+    deletions: Type.Integer({ minimum: 0 }),
+    truncated: Type.Optional(Type.Boolean()),
+    unavailableReason: Type.Optional(
+      Type.Union([Type.Literal("unknown_session"), Type.Literal("not_git")]),
+    ),
+  },
+  { additionalProperties: false },
+);
+
 /** Lists sessions with optional scope, activity, label, and preview filters. */
 export const SessionsListParamsSchema = Type.Object(
   {
@@ -188,6 +272,41 @@ export const SessionsListParamsSchema = Type.Object(
     search: Type.Optional(Type.String()),
     /** True lists archived sessions; false or omitted lists active sessions. */
     archived: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
+/** Searches one agent's indexed session transcripts, optionally within selected sessions. */
+export const SessionsSearchParamsSchema = Type.Object(
+  {
+    agentId: Type.Optional(NonEmptyString),
+    sessionKeys: Type.Optional(Type.Array(NonEmptyString, { minItems: 1, maxItems: 200 })),
+    query: Type.String({ minLength: 1, maxLength: 4096 }),
+    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 25 })),
+  },
+  { additionalProperties: false },
+);
+
+/** One full-text session transcript match with follow-up provenance. */
+export const SessionsSearchHitSchema = Type.Object(
+  {
+    sessionKey: NonEmptyString,
+    sessionId: NonEmptyString,
+    messageId: NonEmptyString,
+    role: Type.Union([Type.Literal("user"), Type.Literal("assistant")]),
+    timestamp: Type.Integer({ minimum: 0 }),
+    snippet: Type.String(),
+    score: Type.Number(),
+  },
+  { additionalProperties: false },
+);
+
+/** Full-text search response; indexing marks a still-running first-use reconcile. */
+export const SessionsSearchResultSchema = Type.Object(
+  {
+    results: Type.Array(SessionsSearchHitSchema),
+    indexing: Type.Optional(Type.Boolean()),
+    truncated: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );
@@ -256,11 +375,31 @@ export const SessionsCreateParamsSchema = Type.Object(
     task: Type.Optional(Type.String()),
     message: Type.Optional(Type.String()),
     worktree: Type.Optional(Type.Boolean()),
+    worktreeBaseRef: Type.Optional(
+      Type.String({
+        minLength: 1,
+        description: "Base ref for the new managed worktree branch. Requires worktree=true.",
+      }),
+    ),
+    worktreeName: Type.Optional(
+      Type.String({
+        pattern: "^[a-z0-9][a-z0-9-]{0,63}$",
+        description:
+          "Managed worktree name; becomes branch openclaw/<name>. Requires worktree=true.",
+      }),
+    ),
+    execNode: Type.Optional(
+      Type.String({
+        minLength: 1,
+        description:
+          "Bind session exec to host=node with this node id/name. Requires operator.admin.",
+      }),
+    ),
     cwd: Type.Optional(
       Type.String({
         minLength: 1,
         description:
-          "Absolute source directory for a managed worktree. Requires worktree=true and operator.admin.",
+          "Absolute source directory for a managed worktree, or the working directory on execNode. Requires operator.admin.",
       }),
     ),
   },
@@ -284,6 +423,7 @@ export const SessionsCreateResultSchema = Type.Object(
     sessionId: Type.Optional(NonEmptyString),
     entry: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
     runStarted: Type.Optional(Type.Boolean()),
+    runError: Type.Optional(ErrorShapeSchema),
     worktree: Type.Optional(SessionWorktreeInfoSchema),
   },
   { additionalProperties: true },
@@ -308,6 +448,8 @@ export const SessionsMessagesSubscribeParamsSchema = Type.Object(
   {
     key: NonEmptyString,
     agentId: Type.Optional(NonEmptyString),
+    /** Opt in to sanitized durable approval events for this session and its descendants. */
+    includeApprovals: Type.Optional(Type.Literal(true)),
   },
   { additionalProperties: false },
 );
@@ -386,6 +528,7 @@ export const SessionsPatchParamsSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+export type SessionsPatchParams = Static<typeof SessionsPatchParamsSchema>;
 
 /** Updates or clears one plugin namespace value on a session record. */
 export const SessionsPluginPatchParamsSchema = Type.Object(
@@ -437,6 +580,52 @@ export const SessionsDeleteParamsSchema = Type.Object(
      * operator.admin.
      */
     archivedOnly: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
+/** Lists the gateway-owned custom session group catalog (names + order). */
+export const SessionsGroupsListParamsSchema = Type.Object({}, { additionalProperties: false });
+
+/** One custom session group catalog entry. */
+export const SessionGroupSchema = Type.Object(
+  {
+    name: SessionLabelString,
+    position: Type.Integer({ minimum: 0 }),
+  },
+  { additionalProperties: false },
+);
+
+/** Custom session group catalog in display order. */
+export const SessionsGroupsListResultSchema = Type.Object(
+  { groups: Type.Array(SessionGroupSchema) },
+  { additionalProperties: false },
+);
+
+/** Replaces the ordered group catalog; creates listed names, keeps member categories untouched. */
+export const SessionsGroupsPutParamsSchema = Type.Object(
+  { names: Type.Array(SessionLabelString, { maxItems: 200 }) },
+  { additionalProperties: false },
+);
+
+/** Renames a group and repoints every member session's category. */
+export const SessionsGroupsRenameParamsSchema = Type.Object(
+  { name: SessionLabelString, to: SessionLabelString },
+  { additionalProperties: false },
+);
+
+/** Deletes a group and clears every member session's category. */
+export const SessionsGroupsDeleteParamsSchema = Type.Object(
+  { name: SessionLabelString },
+  { additionalProperties: false },
+);
+
+/** Result for group catalog mutations, with member sessions updated where applicable. */
+export const SessionsGroupsMutationResultSchema = Type.Object(
+  {
+    ok: Type.Literal(true),
+    groups: Type.Array(SessionGroupSchema),
+    updatedSessions: Type.Optional(Type.Integer({ minimum: 0 })),
   },
   { additionalProperties: false },
 );
@@ -580,6 +769,8 @@ export const SessionsUsageParamsSchema = Type.Object(
     includeHistorical: Type.Optional(Type.Boolean()),
     /** UTC offset to use when mode is `specific` (for example, UTC-4 or UTC+5:30). */
     utcOffset: Type.Optional(Type.String({ pattern: "^UTC[+-]\\d{1,2}(?::[0-5]\\d)?$" })),
+    /** IANA time zone for `specific`; preferred over `utcOffset`, which remains a compatibility fallback. */
+    timeZone: Type.Optional(NonEmptyString),
     /** Maximum sessions to return (default 50). */
     limit: Type.Optional(Type.Integer({ minimum: 1 })),
     /** Include context weight breakdown (systemPromptReport). */
@@ -587,3 +778,61 @@ export const SessionsUsageParamsSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+// Wire types derive directly from local schema consts so public d.ts graphs never
+// pull in the ProtocolSchemas registry.
+export type SessionsListParams = Static<typeof SessionsListParamsSchema>;
+export type SessionsCleanupParams = Static<typeof SessionsCleanupParamsSchema>;
+export type SessionsPreviewParams = Static<typeof SessionsPreviewParamsSchema>;
+export type SessionsDescribeParams = Static<typeof SessionsDescribeParamsSchema>;
+export type SessionsResolveParams = Static<typeof SessionsResolveParamsSchema>;
+export type SessionsSearchParams = Static<typeof SessionsSearchParamsSchema>;
+export type SessionsSearchHit = Static<typeof SessionsSearchHitSchema>;
+export type SessionsSearchResult = Static<typeof SessionsSearchResultSchema>;
+export type SessionCompactionCheckpoint = Static<typeof SessionCompactionCheckpointSchema>;
+export type SessionOperationEvent = Static<typeof SessionOperationEventSchema>;
+export type SessionsCompactionListParams = Static<typeof SessionsCompactionListParamsSchema>;
+export type SessionsCompactionGetParams = Static<typeof SessionsCompactionGetParamsSchema>;
+export type SessionsCompactionBranchParams = Static<typeof SessionsCompactionBranchParamsSchema>;
+export type SessionsCompactionRestoreParams = Static<typeof SessionsCompactionRestoreParamsSchema>;
+export type SessionsCompactionListResult = Static<typeof SessionsCompactionListResultSchema>;
+export type SessionsCompactionGetResult = Static<typeof SessionsCompactionGetResultSchema>;
+export type SessionsCompactionBranchResult = Static<typeof SessionsCompactionBranchResultSchema>;
+export type SessionsCompactionRestoreResult = Static<typeof SessionsCompactionRestoreResultSchema>;
+export type SessionWorktreeInfo = Static<typeof SessionWorktreeInfoSchema>;
+export type SessionsCreateParams = Static<typeof SessionsCreateParamsSchema>;
+export type SessionsCreateResult = Static<typeof SessionsCreateResultSchema>;
+export type SessionsSendParams = Static<typeof SessionsSendParamsSchema>;
+export type SessionsMessagesSubscribeParams = Static<typeof SessionsMessagesSubscribeParamsSchema>;
+export type SessionsMessagesUnsubscribeParams = Static<
+  typeof SessionsMessagesUnsubscribeParamsSchema
+>;
+export type SessionsAbortParams = Static<typeof SessionsAbortParamsSchema>;
+export type SessionsPluginPatchParams = Static<typeof SessionsPluginPatchParamsSchema>;
+export type SessionsPluginPatchResult = Static<typeof SessionsPluginPatchResultSchema>;
+export type SessionsResetParams = Static<typeof SessionsResetParamsSchema>;
+export type SessionsDeleteParams = Static<typeof SessionsDeleteParamsSchema>;
+export type SessionGroup = Static<typeof SessionGroupSchema>;
+export type SessionsGroupsListParams = Static<typeof SessionsGroupsListParamsSchema>;
+export type SessionsGroupsListResult = Static<typeof SessionsGroupsListResultSchema>;
+export type SessionsGroupsPutParams = Static<typeof SessionsGroupsPutParamsSchema>;
+export type SessionsGroupsRenameParams = Static<typeof SessionsGroupsRenameParamsSchema>;
+export type SessionsGroupsDeleteParams = Static<typeof SessionsGroupsDeleteParamsSchema>;
+export type SessionsGroupsMutationResult = Static<typeof SessionsGroupsMutationResultSchema>;
+export type SessionsCompactParams = Static<typeof SessionsCompactParamsSchema>;
+export type SessionsUsageParams = Static<typeof SessionsUsageParamsSchema>;
+export type SessionFileKind = Static<typeof SessionFileKindSchema>;
+export type SessionFileRelevance = Static<typeof SessionFileRelevanceSchema>;
+export type SessionFileEntry = Static<typeof SessionFileEntrySchema>;
+export type SessionFileBrowserEntry = Static<typeof SessionFileBrowserEntrySchema>;
+export type SessionFileBrowserResult = Static<typeof SessionFileBrowserResultSchema>;
+export type SessionsFilesListParams = Static<typeof SessionsFilesListParamsSchema>;
+export type SessionsFilesListResult = Static<typeof SessionsFilesListResultSchema>;
+export type SessionsFilesGetParams = Static<typeof SessionsFilesGetParamsSchema>;
+export type SessionsFilesGetResult = Static<typeof SessionsFilesGetResultSchema>;
+export type SessionsFilesSetParams = Static<typeof SessionsFilesSetParamsSchema>;
+export type SessionsFilesSetResult = Static<typeof SessionsFilesSetResultSchema>;
+export type SessionDiffFileStatus = Static<typeof SessionDiffFileStatusSchema>;
+export type SessionDiffFile = Static<typeof SessionDiffFileSchema>;
+export type SessionsDiffParams = Static<typeof SessionsDiffParamsSchema>;
+export type SessionsDiffResult = Static<typeof SessionsDiffResultSchema>;

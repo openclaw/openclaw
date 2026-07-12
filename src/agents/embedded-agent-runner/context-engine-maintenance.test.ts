@@ -9,7 +9,7 @@ import {
 } from "../../process/command-queue.js";
 import * as commandQueueModule from "../../process/command-queue.js";
 import { createQueuedTaskRun as createQueuedTaskRunOrNull } from "../../tasks/task-executor.js";
-import { resetTaskFlowRegistryForTests } from "../../tasks/task-flow-registry.js";
+import { getTaskFlowById, resetTaskFlowRegistryForTests } from "../../tasks/task-flow-registry.js";
 import {
   getTaskById,
   listTasksForOwnerKey,
@@ -366,6 +366,12 @@ describe("runContextEngineMaintenance", () => {
   });
 
   it("passes a rewrite-capable runtime context into maintain()", async () => {
+    const sessionTarget = {
+      agentId: "main",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      storePath: "/tmp/state/openclaw.sqlite",
+    };
     const maintain = vi.fn(async (_params?: unknown) => ({
       changed: false,
       bytesFreed: 0,
@@ -382,6 +388,7 @@ describe("runContextEngineMaintenance", () => {
       },
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
+      sessionTarget,
       sessionFile: "/tmp/session.jsonl",
       reason: "turn",
       runtimeContext: { workspaceDir: "/tmp/workspace" },
@@ -396,11 +403,15 @@ describe("runContextEngineMaintenance", () => {
     expectRecordFields(maintainParams, {
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
+      sessionTarget,
       sessionFile: "/tmp/session.jsonl",
     });
-    expect(
-      requireRecord(maintainParams.runtimeContext, "maintain runtime context").workspaceDir,
-    ).toBe("/tmp/workspace");
+    const maintainRuntimeContext = requireRecord(
+      maintainParams.runtimeContext,
+      "maintain runtime context",
+    );
+    expect(maintainRuntimeContext.workspaceDir).toBe("/tmp/workspace");
+    expect(maintainRuntimeContext.sessionTarget).toEqual(sessionTarget);
     const runtimeContext = maintainParams.runtimeContext as
       | { rewriteTranscriptEntries?: (request: unknown) => Promise<unknown> }
       | undefined;
@@ -654,7 +665,7 @@ describe("runContextEngineMaintenance", () => {
           requesterSessionKey: sessionKey,
           taskKind: TURN_MAINTENANCE_TASK_KIND,
           notifyPolicy: "silent",
-          deliveryStatus: "pending",
+          deliveryStatus: "not_applicable",
         });
 
         if (!releaseForeground) {
@@ -1494,6 +1505,21 @@ describe("runContextEngineMaintenance", () => {
         await waitForAssertion(() => expect(maintain).toHaveBeenCalledTimes(1));
         expect(sendMessageMock).not.toHaveBeenCalled();
         expect(peekSystemEvents(sessionKey)).toStrictEqual([]);
+
+        const tasks = listTasksForOwnerKey(sessionKey).filter(
+          (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
+        );
+        expect(tasks).toHaveLength(1);
+        await waitForAssertion(() =>
+          expect(getTaskById(tasks[0].taskId)?.status).toBe("succeeded"),
+        );
+        const task = requireRecord(getTaskById(tasks[0].taskId), "maintenance task");
+        expectRecordFields(task, {
+          status: "succeeded",
+          notifyPolicy: "silent",
+          deliveryStatus: "not_applicable",
+        });
+        expect(task.parentFlowId).toBeUndefined();
       } finally {
         vi.useRealTimers();
       }
@@ -1552,6 +1578,14 @@ describe("runContextEngineMaintenance", () => {
             "Background task update: Context engine turn maintenance.",
           ),
         );
+        const task = listTasksForOwnerKey(sessionKey).find(
+          (candidate) => candidate.taskKind === TURN_MAINTENANCE_TASK_KIND,
+        );
+        const parentFlowId = task?.parentFlowId;
+        if (!parentFlowId) {
+          throw new Error("Expected visible maintenance to have a task flow");
+        }
+        expect(getTaskFlowById(parentFlowId)?.status).toBe("running");
 
         if (!releaseMaintenance) {
           throw new Error("Expected maintenance release callback to be initialized");
@@ -1563,6 +1597,7 @@ describe("runContextEngineMaintenance", () => {
             "Background task done: Context engine turn maintenance",
           ),
         );
+        expect(getTaskFlowById(parentFlowId)?.status).toBe("succeeded");
       } finally {
         vi.useRealTimers();
       }
@@ -1609,6 +1644,14 @@ describe("runContextEngineMaintenance", () => {
             "Background task failed: Context engine turn maintenance",
           ),
         );
+        const task = listTasksForOwnerKey(sessionKey).find(
+          (candidate) => candidate.taskKind === TURN_MAINTENANCE_TASK_KIND,
+        );
+        const parentFlowId = task?.parentFlowId;
+        if (!parentFlowId) {
+          throw new Error("Expected failed maintenance to have a task flow");
+        }
+        expect(getTaskFlowById(parentFlowId)?.status).toBe("failed");
       } finally {
         vi.useRealTimers();
       }

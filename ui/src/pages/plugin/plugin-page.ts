@@ -1,11 +1,13 @@
 import { consume } from "@lit/context";
-import { html, LitElement, nothing } from "lit";
+import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient, GatewayControlUiPluginTab } from "../../api/gateway.ts";
 import type { RouteId } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveEmbedSandbox } from "../../lib/chat/tool-display.ts";
+import { OpenClawLightDomContentsElement } from "../../lit/openclaw-element.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { pluginTabKey } from "./route.ts";
 
 /**
@@ -18,19 +20,27 @@ type BundledPluginTabView = {
     host: object;
     client: GatewayBrowserClient | null;
     connected: boolean;
+    embed?: {
+      embedSandboxMode: ApplicationContext<RouteId>["config"]["current"]["embedSandboxMode"];
+      allowExternalEmbedUrls: boolean;
+    };
     onRequestUpdate?: () => void;
+    // L5: custom widgets need the gateway HTTP base (iframe src) and the session
+    // key (prompt dispatch). Bundled views that don't use them ignore these.
+    basePath?: string;
+    sessionKey?: string;
   }) => unknown;
   stop: (host: object) => void;
 };
 
 // Keyed by pluginId/tabId: tab ids are only unique within their plugin.
 const BUNDLED_TAB_VIEWS: Record<string, () => Promise<BundledPluginTabView>> = {
-  "codex-supervisor/sessions": async () => {
+  "workspaces/workspaces": async () => {
     const [view, controller] = await Promise.all([
-      import("./codex-sessions-view.ts"),
-      import("./codex-sessions-controller.ts"),
+      import("./workspace-view.ts"),
+      import("./workspace-controller.ts"),
     ]);
-    return { render: view.renderCodexSessions, stop: controller.stopCodexSessionsPolling };
+    return { render: view.renderWorkspace, stop: controller.stopWorkspace };
   },
   "logbook/logbook": async () => {
     const [view, controller] = await Promise.all([
@@ -41,32 +51,29 @@ const BUNDLED_TAB_VIEWS: Record<string, () => Promise<BundledPluginTabView>> = {
   },
 };
 
-export class PluginPage extends LitElement {
-  override createRenderRoot() {
-    return this;
-  }
-
+export class PluginPage extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) pluginId = "";
   @property({ attribute: false }) tabId = "";
 
-  @consume({ context: applicationContext, subscribe: false })
+  @consume({ context: applicationContext, subscribe: true })
   private context?: ApplicationContext<RouteId>;
 
   @state() private bundledView: BundledPluginTabView | null = null;
 
   private bundledViewId: string | null = null;
   private bundledViewLoadToken: object | null = null;
-  private stopGatewaySubscription: (() => void) | undefined;
-
-  override connectedCallback() {
-    super.connectedCallback();
-    this.style.display = "contents";
-    this.stopGatewaySubscription ??= this.context?.gateway.subscribe(() => this.requestUpdate());
-  }
+  private bundledViewHost: object = {};
+  private gatewaySource?: ApplicationContext<RouteId>["gateway"];
+  private gatewayClient: GatewayBrowserClient | null = null;
+  private gatewayConnected = false;
+  private readonly subscriptions = new SubscriptionsController(this).watch(
+    () => this.context?.gateway,
+    (gateway, notify) => gateway.subscribe(notify),
+    (gateway) => this.updateGatewaySource(gateway),
+  );
 
   override disconnectedCallback() {
-    this.stopGatewaySubscription?.();
-    this.stopGatewaySubscription = undefined;
+    this.subscriptions.clear();
     this.stopBundledView();
     super.disconnectedCallback();
   }
@@ -76,10 +83,14 @@ export class PluginPage extends LitElement {
   }
 
   protected loadBundledView(key: string): Promise<BundledPluginTabView> {
-    return BUNDLED_TAB_VIEWS[key]();
+    const load = BUNDLED_TAB_VIEWS[key];
+    return load ? load() : Promise.reject(new Error(`Unknown bundled plugin tab: ${key}`));
   }
 
   override willUpdate() {
+    if (!this.isConnected) {
+      return;
+    }
     const key = this.tabKey();
     const hasBundledDescriptor = this.tabInfo() !== undefined && key in BUNDLED_TAB_VIEWS;
     // Switching between plugin tabs reuses this element; the previous bundled
@@ -105,10 +116,32 @@ export class PluginPage extends LitElement {
   }
 
   private stopBundledView() {
-    this.bundledView?.stop(this);
+    this.replaceBundledViewHost();
     this.bundledView = null;
     this.bundledViewId = null;
     this.bundledViewLoadToken = null;
+  }
+
+  private replaceBundledViewHost() {
+    this.bundledView?.stop(this.bundledViewHost);
+    // Async controller work is keyed by host. A new host makes every completion
+    // from the retired connection epoch unreachable without coupling plugins to Lit.
+    this.bundledViewHost = {};
+  }
+
+  private updateGatewaySource(gateway: ApplicationContext<RouteId>["gateway"]) {
+    const { client, connected } = gateway.snapshot;
+    if (
+      this.gatewaySource === gateway &&
+      this.gatewayClient === client &&
+      this.gatewayConnected === connected
+    ) {
+      return;
+    }
+    this.replaceBundledViewHost();
+    this.gatewaySource = gateway;
+    this.gatewayClient = client;
+    this.gatewayConnected = connected;
   }
 
   private tabInfo(): GatewayControlUiPluginTab | undefined {
@@ -129,11 +162,22 @@ export class PluginPage extends LitElement {
         return nothing;
       }
       const snapshot = context.gateway.snapshot;
+      // Config may be absent in unit harnesses; the Workspaces view defaults the
+      // embed policy to strict when `embed` is omitted.
+      const config = context.config?.current;
       return this.bundledView.render({
-        host: this,
+        host: this.bundledViewHost,
         client: snapshot.client,
         connected: snapshot.connected,
+        embed: config
+          ? {
+              embedSandboxMode: config.embedSandboxMode,
+              allowExternalEmbedUrls: config.allowExternalEmbedUrls,
+            }
+          : undefined,
         onRequestUpdate: () => this.requestUpdate(),
+        basePath: context.basePath,
+        sessionKey: snapshot.sessionKey,
       });
     }
     if (info?.path) {

@@ -199,6 +199,8 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     replacement: "channels.<id>.streaming.*",
     docsPath: "/channels/channel-routing",
     tests: ["src/commands/doctor/shared/channel-legacy-config-migrate.test.ts"],
+    notes:
+      "Runtime no longer reads the flat aliases (src/channels/streaming.ts is nested-only); doctor keeps this migration to move shipped configs during upgrade. Channels without a nested streaming schema (signal, irc, googlechat, whatsapp) still treat flat keys as canonical.",
   }),
   deprecatedCompatRecord({
     code: "doctor-webchat-channel-config",
@@ -282,6 +284,21 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     tests: ["src/commands/doctor/shared/legacy-config-migrate.test.ts"],
     notes:
       "Doctor preserves the shipped upgrade path only; runtime compatibility should stay behind explicit bundledDiscovery config.",
+  }),
+  deprecatedCompatRecord({
+    code: "doctor-codex-supervisor-plugin-config",
+    owner: "plugin",
+    introduced: "2026-05-29",
+    deprecated: "2026-07-09",
+    warningStarts: "2026-07-09",
+    removeAfter: "2026-10-09",
+    source: "plugins.entries.codex-supervisor and codex-supervisor plugin policy references",
+    migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.providers.ts",
+    replacement: "plugins.entries.codex.config.supervision",
+    docsPath: "/plugins/codex-supervision",
+    tests: ["src/commands/doctor/shared/legacy-config-migrate.test.ts"],
+    notes:
+      "The core bootstrap migration must remain available when the external Codex plugin is not installed yet.",
   }),
   deprecatedCompatRecord({
     code: "doctor-web-search-plugin-config",

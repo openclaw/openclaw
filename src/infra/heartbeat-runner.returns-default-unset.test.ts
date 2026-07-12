@@ -27,6 +27,7 @@ import {
   resolveHeartbeatPrompt,
   runHeartbeatOnce,
 } from "./heartbeat-runner.js";
+import { seedSessionStore } from "./heartbeat-runner.test-utils.js";
 import {
   resolveHeartbeatDeliveryTarget,
   resolveHeartbeatDeliveryTargetWithSessionRoute,
@@ -257,6 +258,23 @@ function replyBody(
     Body?: string;
     Provider?: string;
   };
+}
+
+type HeartbeatSeedOverride = Partial<Parameters<typeof seedSessionStore>[2]>;
+
+async function seedWhatsAppSession(
+  storePath: string,
+  sessionKey: string,
+  entry: HeartbeatSeedOverride = {},
+): Promise<void> {
+  await seedSessionStore(storePath, sessionKey, {
+    sessionId: "sid",
+    updatedAt: Date.now(),
+    lastChannel: "whatsapp",
+    lastProvider: "whatsapp",
+    lastTo: "120363401234567890@g.us",
+    ...entry,
+  });
 }
 
 beforeAll(async () => {
@@ -839,17 +857,7 @@ describe("runHeartbeatOnce", () => {
       };
       const sessionKey = resolveMainSessionKey(cfg);
 
-      await fs.writeFile(
-        storePath,
-        JSON.stringify({
-          [sessionKey]: {
-            sessionId: "sid",
-            updatedAt: Date.now(),
-            lastChannel: "whatsapp",
-            lastTo: "120363401234567890@g.us",
-          },
-        }),
-      );
+      await seedWhatsAppSession(storePath, sessionKey);
 
       replySpy.mockResolvedValue([{ text: "Let me check..." }, { text: "Final alert" }]);
       const sendWhatsApp = vi
@@ -904,17 +912,7 @@ describe("runHeartbeatOnce", () => {
       };
       const sessionKey = resolveAgentMainSessionKey({ cfg, agentId: "ops" });
 
-      await fs.writeFile(
-        storePath,
-        JSON.stringify({
-          [sessionKey]: {
-            sessionId: "sid",
-            updatedAt: Date.now(),
-            lastChannel: "whatsapp",
-            lastTo: "120363401234567890@g.us",
-          },
-        }),
-      );
+      await seedWhatsAppSession(storePath, sessionKey);
       replySpy.mockResolvedValue([{ text: "Final alert" }]);
       const sendWhatsApp = vi
         .fn<
@@ -989,18 +987,7 @@ describe("runHeartbeatOnce", () => {
 
       await fs.mkdir(sessionsDir, { recursive: true });
       await fs.writeFile(sessionFile, "", "utf-8");
-      await fs.writeFile(
-        storePath,
-        JSON.stringify({
-          [sessionKey]: {
-            sessionId,
-            sessionFile,
-            updatedAt: Date.now(),
-            lastChannel: "whatsapp",
-            lastTo: "120363401234567890@g.us",
-          },
-        }),
-      );
+      await seedWhatsAppSession(storePath, sessionKey, { sessionId, sessionFile });
 
       replySpy.mockResolvedValue([{ text: "Final alert" }]);
       const sendWhatsApp = vi
@@ -1099,23 +1086,12 @@ describe("runHeartbeatOnce", () => {
         });
         applyOverride({ cfg, sessionKey: overrideSessionKey });
 
-        await fs.writeFile(
-          storePath,
-          JSON.stringify({
-            [mainSessionKey]: {
-              sessionId: "sid-main",
-              updatedAt: Date.now(),
-              lastChannel: "whatsapp",
-              lastTo: "120363401234567890@g.us",
-            },
-            [overrideSessionKey]: {
-              sessionId: `sid-${peerKind}`,
-              updatedAt: Date.now() + 10_000,
-              lastChannel: "whatsapp",
-              lastTo: peerId,
-            },
-          }),
-        );
+        await seedWhatsAppSession(storePath, mainSessionKey, { sessionId: "sid-main" });
+        await seedWhatsAppSession(storePath, overrideSessionKey, {
+          sessionId: `sid-${peerKind}`,
+          updatedAt: Date.now() + 10_000,
+          lastTo: peerId,
+        });
 
         replySpy.mockClear();
         replySpy.mockResolvedValue([{ text: message }]);
@@ -1190,23 +1166,12 @@ describe("runHeartbeatOnce", () => {
         cfg.agents.defaults.heartbeat.session = subagentKey;
       }
 
-      await fs.writeFile(
-        storePath,
-        JSON.stringify({
-          [mainSessionKey]: {
-            sessionId: "sid-main",
-            updatedAt: Date.now(),
-            lastChannel: "whatsapp",
-            lastTo: "120363401234567890@g.us",
-          },
-          [subagentKey]: {
-            sessionId: "sid-subagent",
-            updatedAt: Date.now() + 10_000,
-            lastChannel: "whatsapp",
-            lastTo: "99999@g.us",
-          },
-        }),
-      );
+      await seedWhatsAppSession(storePath, mainSessionKey, { sessionId: "sid-main" });
+      await seedWhatsAppSession(storePath, subagentKey, {
+        sessionId: "sid-subagent",
+        updatedAt: Date.now() + 10_000,
+        lastTo: "99999@g.us",
+      });
 
       replySpy.mockClear();
       replySpy.mockResolvedValue([{ text: "Main session heartbeat" }]);
@@ -1256,19 +1221,10 @@ describe("runHeartbeatOnce", () => {
       };
       const sessionKey = resolveMainSessionKey(cfg);
 
-      await fs.writeFile(
-        storePath,
-        JSON.stringify({
-          [sessionKey]: {
-            sessionId: "sid",
-            updatedAt: Date.now(),
-            lastChannel: "whatsapp",
-            lastTo: "120363401234567890@g.us",
-            lastHeartbeatText: "Final alert",
-            lastHeartbeatSentAt: 0,
-          },
-        }),
-      );
+      await seedWhatsAppSession(storePath, sessionKey, {
+        lastHeartbeatText: "Final alert",
+        lastHeartbeatSentAt: 0,
+      });
 
       replySpy.mockResolvedValue([{ text: "Final alert" }]);
       const sendWhatsApp = vi
@@ -1371,18 +1327,7 @@ describe("runHeartbeatOnce", () => {
         };
         const sessionKey = resolveMainSessionKey(cfg);
 
-        await fs.writeFile(
-          storePath,
-          JSON.stringify({
-            [sessionKey]: {
-              sessionId: "sid",
-              updatedAt: Date.now(),
-              lastChannel: "whatsapp",
-              lastProvider: "whatsapp",
-              lastTo: "120363401234567890@g.us",
-            },
-          }),
-        );
+        await seedWhatsAppSession(storePath, sessionKey);
 
         replySpy.mockClear();
         replySpy.mockResolvedValue(replies);
@@ -1433,18 +1378,7 @@ describe("runHeartbeatOnce", () => {
         session: { store: storePath },
       };
       const sessionKey = resolveMainSessionKey(cfg);
-      await fs.writeFile(
-        storePath,
-        JSON.stringify({
-          [sessionKey]: {
-            sessionId: "sid",
-            updatedAt: Date.now(),
-            lastChannel: "whatsapp",
-            lastProvider: "whatsapp",
-            lastTo: "120363401234567890@g.us",
-          },
-        }),
-      );
+      await seedWhatsAppSession(storePath, sessionKey);
 
       replySpy.mockResolvedValue([
         { text: "All clear" },
@@ -1491,20 +1425,7 @@ describe("runHeartbeatOnce", () => {
       const sessionKey = resolveMainSessionKey(cfg);
       const agentId = resolveAgentIdFromSessionKey(sessionKey);
       const storePath = resolveStorePath(storeTemplate, { agentId });
-
-      await fs.mkdir(path.dirname(storePath), { recursive: true });
-      await fs.writeFile(
-        storePath,
-        JSON.stringify({
-          [sessionKey]: {
-            sessionId: "sid",
-            updatedAt: Date.now(),
-            lastChannel: "whatsapp",
-            lastProvider: "whatsapp",
-            lastTo: "120363401234567890@g.us",
-          },
-        }),
-      );
+      await seedWhatsAppSession(storePath, sessionKey);
 
       replySpy.mockResolvedValue({ text: "Hello from heartbeat" });
       const sendWhatsApp = vi
@@ -1618,17 +1539,7 @@ describe("runHeartbeatOnce", () => {
       session: { store: storePath },
     };
     const sessionKey = resolveMainSessionKey(cfg);
-    await fs.writeFile(
-      storePath,
-      JSON.stringify({
-        [sessionKey]: {
-          sessionId: "sid",
-          updatedAt: Date.now(),
-          lastChannel: "whatsapp",
-          lastTo: "120363401234567890@g.us",
-        },
-      }),
-    );
+    await seedWhatsAppSession(storePath, sessionKey);
     if (params.queueCronEvent) {
       enqueueSystemEvent("Cron: QMD maintenance completed", {
         sessionKey,
@@ -1712,17 +1623,7 @@ Some global directive after tasks.
       channels: { whatsapp: { allowFrom: ["*"] } },
       session: { store: storePath },
     };
-    await fs.writeFile(
-      storePath,
-      JSON.stringify({
-        [resolveMainSessionKey(cfg)]: {
-          sessionId: "sid",
-          updatedAt: Date.now(),
-          lastChannel: "whatsapp",
-          lastTo: "120363401234567890@g.us",
-        },
-      }),
-    );
+    await seedWhatsAppSession(storePath, resolveMainSessionKey(cfg));
     const replySpy = vi.fn().mockResolvedValue({ text: "Handled due heartbeat tasks" });
     const sendWhatsApp = vi
       .fn<
@@ -1783,17 +1684,7 @@ tasks:
       channels: { whatsapp: { allowFrom: ["*"] } },
       session: { store: storePath },
     };
-    await fs.writeFile(
-      storePath,
-      JSON.stringify({
-        [resolveMainSessionKey(cfg)]: {
-          sessionId: "sid",
-          updatedAt: Date.now(),
-          lastChannel: "whatsapp",
-          lastTo: "120363401234567890@g.us",
-        },
-      }),
-    );
+    await seedWhatsAppSession(storePath, resolveMainSessionKey(cfg));
     const replySpy = vi.fn().mockResolvedValue({ text: "Handled due heartbeat tasks" });
     const sendWhatsApp = vi
       .fn<
@@ -1970,17 +1861,7 @@ tasks:
       session: { store: storePath },
     };
     const sessionKey = resolveMainSessionKey(cfg);
-    await fs.writeFile(
-      storePath,
-      JSON.stringify({
-        [sessionKey]: {
-          sessionId: "sid",
-          updatedAt: Date.now(),
-          lastChannel: "whatsapp",
-          lastTo: "120363401234567890@g.us",
-        },
-      }),
-    );
+    await seedWhatsAppSession(storePath, sessionKey);
     enqueueSystemEvent("Cron: rotate logs", {
       sessionKey,
       contextKey: "cron:rotate-logs",
@@ -2027,17 +1908,7 @@ tasks:
       session: { store: storePath },
     };
     const sessionKey = resolveMainSessionKey(cfg);
-    await fs.writeFile(
-      storePath,
-      JSON.stringify({
-        [sessionKey]: {
-          sessionId: "sid",
-          updatedAt: Date.now(),
-          lastChannel: "whatsapp",
-          lastTo: "120363401234567890@g.us",
-        },
-      }),
-    );
+    await seedWhatsAppSession(storePath, sessionKey);
     enqueueSystemEvent("exec finished: backup completed", {
       sessionKey,
       contextKey: "exec:backup",

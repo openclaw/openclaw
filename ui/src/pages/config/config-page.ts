@@ -1,10 +1,10 @@
 import { consume } from "@lit/context";
-import { html, LitElement, nothing } from "lit";
+import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { FastMode } from "../../api/types.ts";
-import type { RouteId } from "../../app-route-paths.ts";
+import { pathForRoute, type RouteId } from "../../app-route-paths.ts";
 import {
   applicationContext,
   type ApplicationContext,
@@ -21,8 +21,10 @@ import {
 import { startThemeTransition } from "../../app/theme-transition.ts";
 import { resolveTheme, type ThemeMode, type ThemeName } from "../../app/theme.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
-import { t } from "../../i18n/index.ts";
+import { i18n, isSupportedLocale, t, type Locale } from "../../i18n/index.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
+import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { renderMcp } from "./mcp.ts";
 import {
   renderQuickSettings,
@@ -95,12 +97,12 @@ const SCOPED_CONFIG_SECTION_KEYS = new Set<string>([
   ...AI_AGENTS_SECTION_KEYS,
 ]);
 const KNOWN_CHANNELS = [
-  { id: "telegram", label: "Telegram" },
-  { id: "discord", label: "Discord" },
-  { id: "slack", label: "Slack" },
-  { id: "whatsapp", label: "WhatsApp" },
-  { id: "signal", label: "Signal" },
-  { id: "imessage", label: "iMessage" },
+  { id: "telegram", labelKey: "configPage.channels.telegram" },
+  { id: "discord", labelKey: "configPage.channels.discord" },
+  { id: "slack", labelKey: "configPage.channels.slack" },
+  { id: "whatsapp", labelKey: "configPage.channels.whatsapp" },
+  { id: "signal", labelKey: "configPage.channels.signal" },
+  { id: "imessage", labelKey: "configPage.channels.imessage" },
 ] as const;
 
 const SYSTEM_INFO_POLL_INTERVAL_MS = 10_000;
@@ -203,7 +205,9 @@ function quickChannels(config: unknown): QuickSettingsChannel[] {
     configuredIds.length > 0
       ? configuredIds.toSorted((left, right) => left.localeCompare(right))
       : KNOWN_CHANNELS.map(({ id }) => id);
-  const labels = new Map<string, string>(KNOWN_CHANNELS.map(({ id, label }) => [id, label]));
+  const labels = new Map<string, string>(
+    KNOWN_CHANNELS.map(({ id, labelKey }) => [id, t(labelKey)]),
+  );
   return channelIds.map((id) => {
     const value = configured[id];
     const connected = Boolean(value && typeof value === "object" && Object.keys(value).length);
@@ -213,7 +217,7 @@ function quickChannels(config: unknown): QuickSettingsChannel[] {
         labels.get(id) ??
         id.replace(/[-_]+/g, " ").replace(/\b\w/g, (character) => character.toUpperCase()),
       connected,
-      detail: connected ? "Configured" : undefined,
+      detail: connected ? t("common.configured") : undefined,
     };
   });
 }
@@ -271,8 +275,8 @@ function applyTextScale(value: unknown) {
   );
 }
 
-export class ConfigPage extends LitElement {
-  @consume({ context: applicationContext, subscribe: false })
+export class ConfigPage extends OpenClawLightDomElement {
+  @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
   @property({ attribute: "page-id" }) pageId: ConfigPageId = "config";
@@ -315,16 +319,43 @@ export class ConfigPage extends LitElement {
   @state() private customThemeImportExpanded = false;
   @state() private customThemeImportFocusToken = 0;
   private customThemeImportSelectOnSuccess = false;
-  private readonly configViewState: ConfigViewState = createConfigViewState();
+  private configViewState: ConfigViewState = createConfigViewState();
+  private runtimeConfigSource: ApplicationContext["runtimeConfig"] | null = null;
+  private systemInfoGatewaySource: ApplicationContext["gateway"] | null = null;
   private systemInfoClient: GatewayBrowserClient | null = null;
   private systemInfoLoading = false;
   private systemInfoRequestId = 0;
   private systemInfoPollInterval: ReturnType<typeof globalThis.setInterval> | null = null;
-  private stops: Array<() => void> = [];
-
-  override createRenderRoot() {
-    return this;
-  }
+  private readonly subscriptions = new SubscriptionsController(this)
+    .watch(
+      () => this.context?.runtimeConfig,
+      (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
+      (runtimeConfig) => this.synchronizeRuntimeConfig(runtimeConfig),
+    )
+    .watch(
+      () => this.context?.overlays,
+      (overlays, notify) => overlays.subscribe(notify),
+    )
+    .watch(
+      () => this.context?.config,
+      (config, notify) => config.subscribe(notify),
+    )
+    .watch(
+      () => this.context?.gateway,
+      (gateway, notify) => gateway.subscribe(notify),
+      (gateway) => this.synchronizeSystemInfoGateway(gateway),
+    )
+    .watch(
+      () => this.context?.webPush,
+      (webPush, notify) => webPush.subscribe(notify),
+    )
+    .watch(
+      () => this.context?.theme,
+      (theme, notify) => theme.subscribe(notify),
+      () => {
+        this.settings = loadSettings();
+      },
+    );
 
   override connectedCallback() {
     super.connectedCallback();
@@ -334,42 +365,20 @@ export class ConfigPage extends LitElement {
       globalThis.location?.search ?? "",
     );
     this.selections = { ...this.selections, [this.pageId]: linkedSelection };
-    this.stops = [
-      this.context.runtimeConfig.subscribe(() => this.requestUpdate()),
-      this.context.overlays.subscribe(() => this.requestUpdate()),
-      this.context.config.subscribe(() => this.requestUpdate()),
-      this.context.gateway.subscribe((snapshot) => {
-        this.handleSystemInfoGatewaySnapshot(snapshot);
-        this.requestUpdate();
-      }),
-      this.context.webPush.subscribe(() => this.requestUpdate()),
-      this.context.theme.subscribe(() => {
-        this.settings = loadSettings();
-      }),
-    ];
-    this.handleSystemInfoGatewaySnapshot(this.context.gateway.snapshot);
-    const config = this.context.runtimeConfig.state;
-    if (!config.configSnapshot && !config.configLoading) {
-      void this.context.runtimeConfig
-        .ensureLoaded()
-        .then(() => this.context.runtimeConfig.ensureSchemaLoaded());
-    } else if (!config.configSchema && !config.configSchemaLoading) {
-      void this.context.runtimeConfig.ensureSchemaLoaded();
-    }
   }
 
   override disconnectedCallback() {
     this.stopSystemInfoPolling();
     this.invalidateSystemInfoRequest();
+    this.runtimeConfigSource = null;
+    this.resetConfigViewState();
+    this.systemInfoGatewaySource = null;
     this.systemInfoClient = null;
-    for (const stop of this.stops) {
-      stop();
-    }
-    this.stops = [];
+    this.subscriptions.clear();
     super.disconnectedCallback();
   }
 
-  override updated(changed: Map<PropertyKey, unknown>) {
+  override updated(changed: PropertyValues) {
     const pageChanged = changed.has("pageId") && changed.get("pageId") !== undefined;
     const modeChanged = changed.has("settingsMode") && changed.get("settingsMode") !== undefined;
     if (pageChanged || modeChanged) {
@@ -380,6 +389,45 @@ export class ConfigPage extends LitElement {
 
   private isSystemInfoVisible(): boolean {
     return this.pageId === "config" && this.settingsMode === "quick";
+  }
+
+  private synchronizeRuntimeConfig(runtimeConfig: ApplicationContext["runtimeConfig"]) {
+    if (runtimeConfig !== this.runtimeConfigSource) {
+      this.runtimeConfigSource = runtimeConfig;
+      this.resetConfigViewState();
+    }
+    const config = runtimeConfig.state;
+    if (!config.configSnapshot && !config.configLoading) {
+      void runtimeConfig
+        .ensureLoaded()
+        .then(() =>
+          this.runtimeConfigSource === runtimeConfig
+            ? runtimeConfig.ensureSchemaLoaded()
+            : undefined,
+        );
+      return;
+    }
+    if (!config.configSchema && !config.configSchemaLoading) {
+      void runtimeConfig.ensureSchemaLoaded();
+    }
+  }
+
+  private synchronizeSystemInfoGateway(gateway: ApplicationContext["gateway"]) {
+    if (gateway !== this.systemInfoGatewaySource) {
+      this.stopSystemInfoPolling();
+      this.invalidateSystemInfoRequest();
+      this.systemInfoGatewaySource = gateway;
+      this.resetConfigViewState();
+      this.systemInfoClient = null;
+      this.systemInfo = null;
+      this.systemInfoUnavailable = false;
+    }
+    this.handleSystemInfoGatewaySnapshot(gateway.snapshot);
+  }
+
+  private resetConfigViewState() {
+    // Revealed secrets and raw caches never cross a capability/source epoch.
+    this.configViewState = createConfigViewState();
   }
 
   private handleSystemInfoGatewaySnapshot(snapshot: ApplicationGatewaySnapshot) {
@@ -439,19 +487,29 @@ export class ConfigPage extends LitElement {
     this.systemInfoLoading = false;
   }
 
-  private isCurrentSystemInfoRequest(requestId: number, client: GatewayBrowserClient): boolean {
-    const gateway = this.context.gateway.snapshot;
+  private isCurrentSystemInfoRequest(
+    requestId: number,
+    client: GatewayBrowserClient,
+    gatewaySource: ApplicationContext["gateway"],
+  ): boolean {
+    const gateway = gatewaySource.snapshot;
     return (
       this.isConnected &&
       this.isSystemInfoVisible() &&
       requestId === this.systemInfoRequestId &&
+      this.systemInfoGatewaySource === gatewaySource &&
+      this.context.gateway === gatewaySource &&
       gateway.connected &&
       gateway.client === client
     );
   }
 
   private async loadSystemInfo() {
-    const gateway = this.context.gateway.snapshot;
+    const gatewaySource = this.systemInfoGatewaySource;
+    if (!gatewaySource || gatewaySource !== this.context.gateway) {
+      return;
+    }
+    const gateway = gatewaySource.snapshot;
     const client = gateway.client;
     if (
       !gateway.connected ||
@@ -467,12 +525,12 @@ export class ConfigPage extends LitElement {
     this.systemInfoLoading = true;
     try {
       const response = await client.request("system.info", {});
-      if (!this.isCurrentSystemInfoRequest(requestId, client)) {
+      if (!this.isCurrentSystemInfoRequest(requestId, client, gatewaySource)) {
         return;
       }
       this.systemInfo = response as SystemInfoResult;
     } catch (error) {
-      if (!this.isCurrentSystemInfoRequest(requestId, client)) {
+      if (!this.isCurrentSystemInfoRequest(requestId, client, gatewaySource)) {
         return;
       }
       if (isMissingOperatorReadScopeError(error) || isUnknownSystemInfoMethodError(error)) {
@@ -481,7 +539,7 @@ export class ConfigPage extends LitElement {
         this.stopSystemInfoPolling();
       }
     } finally {
-      if (this.isCurrentSystemInfoRequest(requestId, client)) {
+      if (this.isCurrentSystemInfoRequest(requestId, client, gatewaySource)) {
         this.systemInfoLoading = false;
       }
     }
@@ -519,9 +577,18 @@ export class ConfigPage extends LitElement {
       themeMode: next.themeMode,
       customTheme: next.customTheme,
       textScale: next.textScale,
+      lobsterPetVisits: next.lobsterPetVisits,
+      lobsterPetSounds: next.lobsterPetSounds,
     });
     applyTextScale(this.settings.textScale);
+    // theme.refresh() also republishes non-theme appearance prefs (text
+    // scale, lobster pet visits/sounds) to app-host subscribers.
     this.context.theme.refresh();
+  }
+
+  private setLocale(locale: Locale) {
+    this.settings = patchSettings({ locale });
+    void i18n.setLocale(locale);
   }
 
   private setTheme(
@@ -583,7 +650,7 @@ export class ConfigPage extends LitElement {
       this.customThemeImportSelectOnSuccess = false;
       this.customThemeImportMessage = {
         kind: "success",
-        text: `Imported ${customTheme.label}.`,
+        text: t("configPage.themeImported", { name: customTheme.label }),
       };
     } catch (error) {
       this.customThemeImportMessage = {
@@ -605,7 +672,7 @@ export class ConfigPage extends LitElement {
     });
     this.customThemeImportMessage = {
       kind: "success",
-      text: "Custom theme removed.",
+      text: t("configPage.themeRemoved"),
     };
   }
 
@@ -732,9 +799,9 @@ export class ConfigPage extends LitElement {
       configSaving: configState.configSaving,
       configApplying: configState.configApplying,
       connected: configState.connected,
+      pluginsHref: pathForRoute("plugins", this.context.basePath),
       onSaveConfig: () => void runtimeConfig.save(),
       onApplyConfig: () => void runtimeConfig.apply(),
-      onServerEnabledChange: (name, enabled) => runtimeConfig.setMcpServerEnabled(name, enabled),
       editor: renderConfig({
         ...props,
         activeSection: "mcp",
@@ -751,10 +818,12 @@ export class ConfigPage extends LitElement {
     const agentsDefaults = asConfigRecord(asConfigRecord(configObject.agents)?.defaults);
     const model = typeof agentsDefaults?.model === "string" ? agentsDefaults.model : "default";
     const thinkingLevel =
-      typeof agentsDefaults?.thinkingLevel === "string" ? agentsDefaults.thinkingLevel : "off";
+      typeof agentsDefaults?.thinkingDefault === "string" ? agentsDefaults.thinkingDefault : "off";
     const fastMode = agentsDefaults?.fastMode;
     const appConfig = this.context.config.current;
     return renderQuickSettings({
+      locale: isSupportedLocale(this.settings.locale) ? this.settings.locale : i18n.getLocale(),
+      onLocaleChange: (locale) => this.setLocale(locale),
       currentModel: model,
       thinkingLevel,
       fastMode: fastMode === "auto" || typeof fastMode === "boolean" ? fastMode : false,
@@ -783,6 +852,12 @@ export class ConfigPage extends LitElement {
         this.navigate("ai-agents");
       },
       setTextScale: (value) => this.setTextScale(value),
+      lobsterPetVisits: this.settings.lobsterPetVisits !== false,
+      setLobsterPetVisits: (enabled) =>
+        this.applySettings({ ...this.settings, lobsterPetVisits: enabled }),
+      lobsterPetSounds: this.settings.lobsterPetSounds === true,
+      setLobsterPetSounds: (enabled) =>
+        this.applySettings({ ...this.settings, lobsterPetSounds: enabled }),
       onOpenCustomThemeImport: () => {
         this.pageId = "appearance";
         this.setFormMode("form");
@@ -806,7 +881,7 @@ export class ConfigPage extends LitElement {
       onSaveConfig: () => void runtimeConfig.save(),
       onApplyConfig: () => void runtimeConfig.apply(),
       onThinkingChange: (level) =>
-        runtimeConfig.patchForm(["agents", "defaults", "thinkingLevel"], level),
+        runtimeConfig.patchForm(["agents", "defaults", "thinkingDefault"], level),
       onFastModeChange: (mode: FastMode) =>
         runtimeConfig.patchForm(["agents", "defaults", "fastMode"], mode),
       onChannelConfigure: () => this.navigate("communications"),
@@ -841,11 +916,15 @@ export class ConfigPage extends LitElement {
       return nothing;
     }
     const modes = [
-      ["quick", "Simple"],
-      ["advanced", "Advanced"],
+      ["quick", t("configPage.simple")],
+      ["advanced", t("configPage.advanced")],
     ] as const;
     return html`
-      <div class="config-view-toggle qs-segmented" role="tablist" aria-label="Settings view">
+      <div
+        class="config-view-toggle qs-segmented"
+        role="tablist"
+        aria-label=${t("configPage.settingsView")}
+      >
         ${modes.map(
           ([mode, label]) => html`
             <button
