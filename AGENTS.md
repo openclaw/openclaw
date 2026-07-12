@@ -132,6 +132,7 @@ Skills own workflows; root owns hard policy and routing.
 - Use `$openclaw-testing` for test/CI choice and `$crabbox` for remote/full/E2E proof.
 - At task start, if code changes, tests, builds, typechecks, lint fan-out, Docker, packaging, E2E, or live proof are likely, classify source trust and immediately pre-warm the safe Crabbox backend in a background command session. Trusted maintainer code defaults to Blacksmith Testbox; untrusted contributor/fork code uses secretless fork CI or sanitized direct AWS Crabbox under the rule above. Continue inspection/editing while it hydrates; sync the current checkout for every run, reuse the lease, then stop it before handoff.
 - Warm Testbox from the task checkout; lease ownership is checkout-path scoped.
+- Testbox cleanup: `blacksmith testbox stop --id <tbx_id>`; id is not positional.
 - PR review artifacts: keep template enum values; put evidence detail in summaries.
 - Crabbox request means real scenario proof: install/update/call/repro user path; not just copy tests and run them remotely.
 - Visual proof: use Crabbox, set up like a user, then screenshot-verify. No harness/bypass/shortcut unless explicitly asked.
@@ -186,6 +187,7 @@ Skills own workflows; root owns hard policy and routing.
 - Contributor PRs: parsed context requires authored `What Problem This Solves` and `Evidence` sections. Do not require field-level proof forms; reviewers inspect code, tests, and CI for correctness.
 - PR artifacts/screenshots: attach to PR/comment/external artifact store. Never push screenshots, videos, proof images, or proof assets to OpenClaw or any product repo branch, including temp artifact branches. Use Crabbox artifact publishing plus the manifest URL. Do not commit `.github/pr-assets`.
 - CI polling: exact SHA, relevant checks only, minimal fields. Skip routine noise (`Auto response`, `Labeler`, docs agents, performance/stale). Logs only after failure/completion or concrete need.
+- Trusted-workflow release-branch CI: pass `target_ref` + `release_candidate_ref`; never `release_gate` (requires workflow head == target).
 - Agent PR landing to `main`: use only the repo-native `scripts/pr` wrapper: run `scripts/pr review-init <PR>`, follow its emitted checkout/guard guidance, initialize and complete review artifacts with `scripts/pr review-artifacts-init <PR>`, validate them with `scripts/pr review-validate-artifacts <PR>`, then run `OPENCLAW_TESTBOX=1 scripts/pr prepare-run <PR>` and `scripts/pr merge-run <PR>`. The Testbox flag is mandatory for agents so prepare verifies hosted CI/Testbox on the current head or reuses a patch-identical pre-rebase run green within 24 hours instead of running full gates locally. For owner-approved reviewed fork code without hosted Testbox, use `OPENCLAW_PR_GATES_REMOTE=testbox` instead. Do not rebase only because `main` advanced; merge drift is advisory unless strict drift is explicitly enabled, while GitHub still blocks conflicts. Do not idle on `auto-response` or `check-docs`.
 
 ## Code
