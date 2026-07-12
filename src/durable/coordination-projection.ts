@@ -152,11 +152,11 @@ function stringArray(value: unknown): string[] | undefined {
 }
 
 function latestStep(steps: readonly DurableRuntimeStep[]): DurableRuntimeStep | undefined {
-  return [...steps].sort((left, right) => right.updatedAt - left.updatedAt)[0];
+  return steps.toSorted((left, right) => right.updatedAt - left.updatedAt)[0];
 }
 
 function latestOpenStep(steps: readonly DurableRuntimeStep[]): DurableRuntimeStep | undefined {
-  return [...steps]
+  return steps
     .filter(
       (step) =>
         step.status !== "succeeded" &&
@@ -165,7 +165,7 @@ function latestOpenStep(steps: readonly DurableRuntimeStep[]): DurableRuntimeSte
         step.status !== "lost" &&
         step.status !== "skipped",
     )
-    .sort((left, right) => right.updatedAt - left.updatedAt)[0];
+    .toSorted((left, right) => right.updatedAt - left.updatedAt)[0];
 }
 
 function inferWaitingReason(params: {

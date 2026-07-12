@@ -293,13 +293,13 @@ function shouldSurfaceForegroundYieldProgress(params: {
   payloadCount: number;
   runParams: RunEmbeddedAgentParamsWithSessionFile;
 }): boolean {
-  if (params.attempt.yieldDetected !== true || params.payloadCount > 0) {
+  if (!params.attempt.yieldDetected || params.payloadCount > 0) {
     return false;
   }
   if (
-    params.attempt.didSendViaMessagingTool === true ||
-    params.attempt.didDeliverSourceReplyViaMessageTool === true ||
-    params.attempt.didSendDeterministicApprovalPrompt === true
+    params.attempt.didSendViaMessagingTool ||
+    params.attempt.didDeliverSourceReplyViaMessageTool ||
+    params.attempt.didSendDeterministicApprovalPrompt
   ) {
     return false;
   }

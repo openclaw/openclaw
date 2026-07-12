@@ -108,7 +108,7 @@ export function createDurableRuntimeRegistry(): DurableRuntimeRegistry {
     },
 
     listRuntimes(): DurableRuntimeDefinition[] {
-      return [...runtimes.values()].map((definition) => ({ ...definition }));
+      return Array.from(runtimes.values(), (definition) => ({ ...definition }));
     },
 
     registerStepHandler(

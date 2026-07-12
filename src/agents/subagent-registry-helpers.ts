@@ -302,10 +302,8 @@ export function reconcileOrphanedRun(params: {
     return true;
   }
 
-  let changed = false;
   if (typeof params.entry.endedAt !== "number") {
     params.entry.endedAt = now;
-    changed = true;
   }
   const orphanOutcome = withSubagentOutcomeTiming(
     {
@@ -319,11 +317,9 @@ export function reconcileOrphanedRun(params: {
   );
   if (shouldUpdateRunOutcome(params.entry.outcome, orphanOutcome)) {
     params.entry.outcome = orphanOutcome;
-    changed = true;
   }
   if (params.entry.endedReason !== SUBAGENT_ENDED_REASON_ERROR) {
     params.entry.endedReason = SUBAGENT_ENDED_REASON_ERROR;
-    changed = true;
   }
   params.entry.execution = {
     ...params.entry.execution,
@@ -332,7 +328,7 @@ export function reconcileOrphanedRun(params: {
     endedAt: params.entry.endedAt,
     outcome: params.entry.outcome,
   };
-  changed = true;
+  let changed = true;
 
   recordDurableSubagentTerminal({
     runId: params.runId,

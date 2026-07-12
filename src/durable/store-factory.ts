@@ -27,4 +27,5 @@ export function openDurableRuntimeStore(
     case "sqlite":
       return openDurableRuntimeSqliteStore({ path: options.path, env: options.env });
   }
+  throw new Error("Unsupported durable runtime store backend. Supported backends: sqlite");
 }
