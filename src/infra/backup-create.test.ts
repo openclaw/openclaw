@@ -13,6 +13,7 @@ import {
   closeOpenClawStateDatabase,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   testApi as backupCreateInternals,
@@ -70,6 +71,36 @@ async function listArchiveEntryDetails(
     },
   });
   return entries;
+}
+
+function createUnsafeIndexDrift(sqlitePath: string): void {
+  const sqlite = requireNodeSqlite();
+  const database = new sqlite.DatabaseSync(sqlitePath);
+  try {
+    database.exec(`
+      CREATE TABLE unsafe_index_records (
+        id INTEGER PRIMARY KEY,
+        indexed_value TEXT NOT NULL,
+        alternate_value TEXT NOT NULL
+      );
+      CREATE INDEX unsafe_index_records_value ON unsafe_index_records(indexed_value);
+      INSERT INTO unsafe_index_records (indexed_value, alternate_value)
+      VALUES ('alpha', 'zeta'), ('beta', 'eta'), ('gamma', 'theta');
+    `);
+    database.enableDefensive?.(false);
+    database.exec("PRAGMA writable_schema = ON;");
+    database
+      .prepare(
+        "UPDATE sqlite_schema SET sql = 'CREATE INDEX unsafe_index_records_value ON unsafe_index_records(alternate_value)' WHERE name = 'unsafe_index_records_value'",
+      )
+      .run();
+    const schemaVersion = Number(
+      Object.values(database.prepare("PRAGMA schema_version;").get() as Record<string, unknown>)[0],
+    );
+    database.exec(`PRAGMA writable_schema = OFF; PRAGMA schema_version = ${schemaVersion + 1};`);
+  } finally {
+    database.close();
+  }
 }
 
 describe("formatBackupCreateSummary", () => {
@@ -607,6 +638,76 @@ describe("createBackupArchive", () => {
         } finally {
           closeOpenClawStateDatabase();
         }
+      },
+    );
+  });
+
+  it("rejects stale secondary indexes before creating a backup archive", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-unsafe-index-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputDir = state.path("backups");
+        await fs.mkdir(outputDir, { recursive: true });
+        openOpenClawStateDatabase({ env: state.env });
+        closeOpenClawStateDatabase();
+        createUnsafeIndexDrift(resolveOpenClawStateSqlitePath(state.env));
+
+        await expect(
+          createBackupArchive({
+            output: outputDir,
+            includeWorkspace: false,
+            nowMs: Date.UTC(2026, 4, 9, 8, 30, 30),
+          }),
+        ).rejects.toThrow(
+          /integrity_check failed.*missing from index unsafe_index_records_value/iu,
+        );
+        expect(await fs.readdir(outputDir)).toEqual([]);
+      },
+    );
+  });
+
+  it("rejects foreign-key violations before creating a backup archive", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-foreign-key-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputDir = state.path("backups");
+        await fs.mkdir(outputDir, { recursive: true });
+        openOpenClawStateDatabase({ env: state.env });
+        closeOpenClawStateDatabase();
+
+        const sqlite = requireNodeSqlite();
+        const database = new sqlite.DatabaseSync(resolveOpenClawStateSqlitePath(state.env));
+        try {
+          database.exec("PRAGMA foreign_keys = OFF;");
+          database
+            .prepare("INSERT INTO task_delivery_state (task_id) VALUES (?)")
+            .run("missing-task");
+          expect(database.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
+          expect(database.prepare("PRAGMA integrity_check").get()).toEqual({
+            integrity_check: "ok",
+          });
+        } finally {
+          database.close();
+        }
+
+        await expect(
+          createBackupArchive({
+            output: outputDir,
+            includeWorkspace: false,
+            nowMs: Date.UTC(2026, 4, 9, 8, 30, 30),
+          }),
+        ).rejects.toThrow(
+          /foreign_key_check failed.*task_delivery_state row 1 references task_runs \(foreign key 0\)/iu,
+        );
+        expect(await fs.readdir(outputDir)).toEqual([]);
       },
     );
   });

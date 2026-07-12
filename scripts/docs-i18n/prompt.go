@@ -129,6 +129,7 @@ Rules:
 - Preserve YAML structure inside <frontmatter>; translate only values.
 - Preserve every [[[FM_*]]] marker exactly and translate only text between its START/END pair.
 - Preserve Markdown structure exactly: headings, list nesting, tables, links, emphasis, and line-level content order.
+- Preserve Markdown list nodes exactly: ordered versus unordered kind, nesting, item count, and ordered-list starting number. Do not let translated prose accidentally become a list item; for example, if a wrapped date would begin a line with “1.”, rephrase it or keep it on the preceding line when the source is not a list.
 - Preserve HTML/MDX tag names, attribute names, nesting, and structural attribute values exactly. Never change resource or behavior attributes such as “href”, “src”, “id”, “icon”, “path”, “type”, or “default”.
 - Translate user-visible prose inside string-valued component attributes such as “title”, “label”, “description”, and “placeholder”, unless a higher-precedence literal UI-label rule protects that value. Do not translate code-like attribute values.
 - Do not translate or modify code spans, executable code or config blocks, config keys, CLI flags, environment variables, commands, or placeholders such as __OC_I18N_####__.
@@ -142,7 +143,7 @@ Rules:
 
 - Glossary terms are mandatory under the label precedence rules above. When a source term matches a glossary entry, use its target exactly, including headings, link labels, and short UI-style labels.
 - If a glossary target is identical to the source text, preserve that term exactly as written.
-- Keep product names in English: OpenClaw, Raspberry Pi, WhatsApp, Telegram, Discord, iMessage, Slack, Microsoft Teams, Google Chat, Signal.
+- Keep product names in English: OpenClaw, Raspberry Pi, WhatsApp, Telegram, Discord, iMessage, Slack, Microsoft Teams, Google Chat, Signal. When they name the documented product, provider, protocol, integration, runtime, or plugin, also preserve ambiguous names exactly: Render, Matrix, Raft, Chutes, fal (title: Fal), Fireworks, Inferrs, Meta, Runway, Synthetic, Upstash Box, Lobster, Mantis, Tokenjuice. Translate the same words normally when the source clearly uses them as ordinary prose instead of a name.
 - Never output an empty response; if unsure, return the source text unchanged.
 
 %s

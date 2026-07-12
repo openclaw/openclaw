@@ -3,6 +3,7 @@ import childProcess from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { isSqliteLockError } from "./sqlite-transaction.js";
 
@@ -149,12 +150,20 @@ function parseMountCommandEntries(contents: string): MountEntry[] {
   for (const line of contents.split("\n")) {
     const linuxMatch = /^(.+) on (.+) type ([^,\s)]+) \(/.exec(line);
     if (linuxMatch) {
-      entries.push({ source: linuxMatch[1], mountPoint: linuxMatch[2], fsType: linuxMatch[3] });
+      entries.push({
+        source: linuxMatch[1],
+        mountPoint: expectDefined(linuxMatch[2], "linux match capture group 2"),
+        fsType: expectDefined(linuxMatch[3], "linux match capture group 3"),
+      });
       continue;
     }
     const bsdMatch = /^(.+) on (.+) \(([^,\s)]+)/.exec(line);
     if (bsdMatch) {
-      entries.push({ source: bsdMatch[1], mountPoint: bsdMatch[2], fsType: bsdMatch[3] });
+      entries.push({
+        source: bsdMatch[1],
+        mountPoint: expectDefined(bsdMatch[2], "bsd match capture group 2"),
+        fsType: expectDefined(bsdMatch[3], "bsd match capture group 3"),
+      });
     }
   }
   return entries;
