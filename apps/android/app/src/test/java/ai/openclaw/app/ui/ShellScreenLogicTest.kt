@@ -665,8 +665,7 @@ class ShellScreenLogicTest {
     fun channel(
       id: String,
       error: String?,
-    ) =
-      GatewayChannelSummary(
+    ) = GatewayChannelSummary(
         id = id,
         label = id,
         accountCount = 1,
