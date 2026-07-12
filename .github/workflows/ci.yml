@@ -18,11 +18,6 @@ on:
         required: false
         default: false
         type: boolean
-      dispatch_id:
-        description: Optional parent workflow dispatch identifier
-        required: false
-        default: ""
-        type: string
   push:
     branches: [main]
     paths-ignore:
@@ -36,7 +31,7 @@ on:
 permissions:
   contents: read
 
-run-name: ${{ github.event_name == 'workflow_dispatch' && inputs.dispatch_id != '' && format('CI {0}', inputs.dispatch_id) || (github.event_name == 'workflow_dispatch' && inputs.release_gate && format('CI release gate {0}', inputs.target_ref) || 'CI') }}
+run-name: ${{ github.event_name == 'workflow_dispatch' && inputs.release_gate && format('CI release gate {0}', inputs.target_ref) || 'CI' }}
 
 concurrency:
   group: ${{ github.event_name == 'workflow_dispatch' && format('{0}-manual-v1-{1}', github.workflow, github.run_id) || (github.event_name == 'pull_request' && format('{0}-v7-{1}', github.workflow, github.event.pull_request.number) || (github.repository == 'openclaw/openclaw' && format('{0}-v7-{1}', github.workflow, github.ref) || format('{0}-v7-{1}-{2}', github.workflow, github.ref, github.sha))) }}
@@ -677,10 +672,9 @@ jobs:
           path: |
             dist/
             dist-runtime/
-            packages/*/dist/
             extensions/*/src/host/**/.bundle.hash
             extensions/*/src/host/**/*.bundle.js
-          key: ${{ runner.os }}-dist-build-v2-${{ needs.preflight.outputs.checkout_revision }}
+          key: ${{ runner.os }}-dist-build-${{ needs.preflight.outputs.checkout_revision }}
 
       - name: Build dist
         if: steps.dist_build_cache.outputs.cache-hit != 'true'
@@ -693,7 +687,7 @@ jobs:
         run: pnpm ui:i18n:check
 
       - name: Pack built runtime artifacts
-        run: tar --posix -cf dist-runtime-build.tar.zst --use-compress-program zstdmt dist dist-runtime packages/*/dist
+        run: tar --posix -cf dist-runtime-build.tar.zst --use-compress-program zstdmt dist dist-runtime
 
       - name: Upload built runtime artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -839,7 +833,6 @@ jobs:
           path: |
             dist/
             dist-runtime/
-            packages/*/dist/
             extensions/*/src/host/**/.bundle.hash
             extensions/*/src/host/**/*.bundle.js
           key: ${{ steps.dist_build_cache.outputs.cache-primary-key }}
@@ -968,7 +961,6 @@ jobs:
           export OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS=180000
           export NODE_OPTIONS=--max-old-space-size=16384
           node scripts/package-openclaw-for-docker.mjs \
-            --allow-unreleased-changelog \
             --output-dir "$package_dir" \
             --output-name openclaw-current.tgz
           export OPENCLAW_CURRENT_PACKAGE_TGZ="$PWD/$package_dir/openclaw-current.tgz"
@@ -1166,10 +1158,6 @@ jobs:
         with:
           go-version-file: scripts/docs-i18n/go.mod
           cache-dependency-path: scripts/docs-i18n/go.sum
-
-      - name: Verify docs i18n Go toolchain
-        if: matrix.requires_go == true
-        run: test "$(go env GOVERSION)" = "go1.25.12"
 
       - name: Configure Node test resources
         run: echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
