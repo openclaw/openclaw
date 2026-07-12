@@ -1,5 +1,6 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.i18n.NativeStringResources
 import android.app.Notification
 import android.app.NotificationManager
 import android.app.Service
@@ -182,6 +183,7 @@ class NodeForegroundServiceTest {
     app.openFileOutput(localesFile, Context.MODE_PRIVATE).bufferedWriter().use { writer ->
       writer.write("""<?xml version='1.0' encoding='UTF-8' standalone='yes' ?><locales application_locales="fr" />""")
     }
+    NativeStringResources.install(app)
     val controller = Robolectric.buildService(NodeForegroundService::class.java)
 
     try {
