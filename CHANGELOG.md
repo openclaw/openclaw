@@ -225,7 +225,6 @@ Docs: https://docs.openclaw.ai
 - **Task state migration:** canonicalize legacy `not-requested` delivery statuses during sidecar import and existing shared-database open so upgraded task registries and linked TaskFlows recover without manual SQL, and surface rejected persisted values in compact console diagnostics. (#103946) Thanks @bek91.
 - **Reply pre-delivery recovery:** bound each pre-delivery callback with an owner-overridable deadline, release serialized reply lanes after hung plugin work, and preserve durable final-delivery retry state only when transport never started. (#104256) Thanks @NianJiuZst.
 - **Signal native quote replies:** preserve the active inbound message as a native quote across agent, explicit, durable, and chunked sends while keeping reply-mode policy inside the Signal plugin. (#105347) Thanks @jesse-merhi.
-- **Cron memory search:** preserve global embedding model, provider, credentials, and sources when isolated or trigger cron runs target an agent with a partial memory-search override. (#104196) Thanks @AnthonyStainer.
 
 ## 2026.7.1
 
