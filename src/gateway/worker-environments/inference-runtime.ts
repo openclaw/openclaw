@@ -613,13 +613,23 @@ export function createWorkerInferenceExecutor(
         authProfileId: approved.prepared.auth.profileId,
       }),
     };
+    const streamPolicyOptions: WorkerInferenceStartParams["options"] = {
+      ...(request.options.temperature !== undefined
+        ? { temperature: request.options.temperature }
+        : {}),
+      ...(request.options.maxTokens !== undefined ? { maxTokens: request.options.maxTokens } : {}),
+      ...(request.options.reasoning !== undefined ? { reasoning: request.options.reasoning } : {}),
+      ...(request.options.thinkingBudgets
+        ? { thinkingBudgets: { ...request.options.thinkingBudgets } }
+        : {}),
+    };
     dependencies.applyStreamPolicy(
       streamAgent,
       config,
       approved.provider,
       approved.model,
-      request.options,
-      request.options.reasoning,
+      streamPolicyOptions,
+      streamPolicyOptions.reasoning,
       target.agentId,
       approved.workspaceDir,
       providerModel,

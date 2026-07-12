@@ -344,6 +344,26 @@ describe("worker inference provider runtime", () => {
     }
   });
 
+  it("projects worker options before applying provider stream policy", async () => {
+    const runtime = setup();
+    const inferenceRequest = request();
+    Object.assign(inferenceRequest.options, {
+      extra_body: { mode: "worker" },
+      transport: "sse",
+      response_format: { type: "json_object" },
+    });
+
+    expect(await runtime.executor(params(inferenceRequest, vi.fn()))).toMatchObject({
+      type: "done",
+    });
+    expect(runtime.applyStreamPolicy.mock.calls[0]?.[4]).toEqual({
+      temperature: 0.25,
+      maxTokens: 256,
+      reasoning: "low",
+      thinkingBudgets: { low: 96 },
+    });
+  });
+
   it("preserves adaptive provider policy while lowering the core stream effort", async () => {
     const runtime = setup();
     const inferenceRequest = request();
