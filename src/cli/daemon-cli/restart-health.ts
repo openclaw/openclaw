@@ -532,6 +532,7 @@ export async function waitForGatewayHealthyRestart(params: {
 }): Promise<GatewayRestartSnapshot> {
   const attempts = params.attempts ?? DEFAULT_RESTART_HEALTH_ATTEMPTS;
   const delayMs = params.delayMs ?? DEFAULT_RESTART_HEALTH_DELAY_MS;
+  const standardDeadlineMs = attempts * delayMs;
 
   const probeAuth = await resolveGatewayRestartProbeAuth(params.env).catch(() => undefined);
   let snapshot = await inspectGatewayRestart({
@@ -601,11 +602,10 @@ export async function waitForGatewayHealthyRestart(params: {
         // lease TTL so a wedged migration cannot hold restart/update callers indefinitely.
         migrationDeadlineMs = elapsedMs + STARTUP_MIGRATION_LEASE_TTL_MS;
       } else if (!migrationActive && migrationDeadlineMs !== undefined) {
-        postMigrationDeadlineMs ??= elapsedMs + DEFAULT_RESTART_HEALTH_TIMEOUT_MS;
+        postMigrationDeadlineMs ??= elapsedMs + standardDeadlineMs;
       }
     }
 
-    const standardDeadlineMs = attempts * delayMs;
     if (elapsedMs >= standardDeadlineMs || migrationDeadlineMs !== undefined) {
       const deadlineMs = migrationActive
         ? migrationDeadlineMs

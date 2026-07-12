@@ -199,7 +199,7 @@ describe("runDaemonRestart health checks", () => {
   });
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["OPENCLAW_CONTAINER_HINT", "OPENCLAW_PROFILE"]);
+    envSnapshot = captureEnv(["OPENCLAW_CONTAINER_HINT", "OPENCLAW_PROFILE", "OPENCLAW_STATE_DIR"]);
     delete process.env.OPENCLAW_CONTAINER_HINT;
     service.readCommand.mockReset();
     service.restart.mockReset();
@@ -324,6 +324,24 @@ describe("runDaemonRestart health checks", () => {
 
     expect(requireMockCallArg(runServiceStart, "runServiceStart").expectedPort).toBeUndefined();
     expect(requireMockCallArg(runServiceRestart, "runServiceRestart").expectedPort).toBeUndefined();
+  });
+
+  it("uses the installed service environment for managed restart health", async () => {
+    process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-caller-state";
+    service.readCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway", "--port", "18789"],
+      environment: { OPENCLAW_STATE_DIR: "/tmp/openclaw-service-state" },
+    });
+
+    await runDaemonRestart({ json: true });
+
+    expect(waitForGatewayHealthyRestart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env: expect.objectContaining({
+          OPENCLAW_STATE_DIR: "/tmp/openclaw-service-state",
+        }),
+      }),
+    );
   });
 
   it("repairs toward an explicitly configured gateway port", async () => {

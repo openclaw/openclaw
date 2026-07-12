@@ -82,7 +82,10 @@ function formatRestartFailure(params: {
   };
 }
 
-async function resolveGatewayLifecyclePort(service = resolveGatewayService()) {
+async function resolveGatewayLifecycleContext(service = resolveGatewayService()): Promise<{
+  port: number;
+  env: NodeJS.ProcessEnv;
+}> {
   const command = await service.readCommand(process.env).catch(() => null);
   const serviceEnv = command?.environment ?? undefined;
   const mergedEnv = {
@@ -91,7 +94,15 @@ async function resolveGatewayLifecyclePort(service = resolveGatewayService()) {
   } as NodeJS.ProcessEnv;
 
   const portFromArgs = parsePortFromArgs(command?.programArguments);
-  return portFromArgs ?? resolveGatewayPort(await readBestEffortConfig(), mergedEnv);
+  const config = await readBestEffortConfig().catch(() => undefined);
+  return {
+    port: portFromArgs ?? resolveGatewayPort(config, mergedEnv),
+    env: mergedEnv,
+  };
+}
+
+async function resolveGatewayLifecyclePort(service = resolveGatewayService()) {
+  return (await resolveGatewayLifecycleContext(service)).port;
 }
 
 function resolveGatewayPortFallback(): Promise<number> {
@@ -343,9 +354,11 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
   let restartedWithoutServiceManager = false;
   const restartIntent = resolveGatewayRestartIntentOptions(opts);
   const configuredPort = await resolveExplicitGatewayConfigPort();
-  const managedRestartPort =
-    configuredPort ??
-    (await resolveGatewayLifecyclePort(service).catch(() => resolveGatewayPortFallback()));
+  const managedRestartContext = await resolveGatewayLifecycleContext(service).catch(async () => ({
+    port: await resolveGatewayPortFallback(),
+    env: process.env,
+  }));
+  const managedRestartPort = configuredPort ?? managedRestartContext.port;
   // An unmanaged run loop keeps its lock port across in-process restarts, even
   // when config changes underneath it. Use that port for both the signal and
   // health proof or a valid CLI/env override looks like a failed restart.
@@ -426,6 +439,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         port: managedRestartPort,
         attempts: restartHealthAttempts,
         delayMs: POST_RESTART_HEALTH_DELAY_MS,
+        env: managedRestartContext.env,
         includeUnknownListenersAsStale: process.platform === "win32",
       });
 
@@ -449,6 +463,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
           port: managedRestartPort,
           attempts: restartHealthAttempts,
           delayMs: POST_RESTART_HEALTH_DELAY_MS,
+          env: managedRestartContext.env,
           includeUnknownListenersAsStale: process.platform === "win32",
         });
       }

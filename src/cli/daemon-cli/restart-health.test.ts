@@ -519,6 +519,33 @@ describe("inspectGatewayRestart", () => {
     expect(sleep).toHaveBeenCalledTimes(7);
   });
 
+  it("keeps the caller's full readiness window after an observed migration ends", async () => {
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "free",
+      listeners: [],
+      hints: [],
+    });
+    let migrationPolls = 0;
+    const isStartupMigrationActive = vi.fn(() => {
+      migrationPolls += 1;
+      return migrationPolls < 4;
+    });
+
+    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyRestart({
+      service: makeGatewayService({ status: "running", pid: 8000 }),
+      port: 18789,
+      attempts: 18,
+      delayMs: 10_000,
+      isStartupMigrationActive,
+    });
+
+    expect(snapshot.waitOutcome).toBe("timeout");
+    expect(snapshot.elapsedMs).toBe(210_000);
+    expect(sleep).toHaveBeenCalledTimes(21);
+  });
+
   it("keeps the standard timeout for a running non-migration startup failure", async () => {
     inspectPortUsage.mockResolvedValue({
       port: 18789,
