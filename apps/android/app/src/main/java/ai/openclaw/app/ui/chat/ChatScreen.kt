@@ -15,7 +15,10 @@ import ai.openclaw.app.chat.ChatThinkingLevelSelection
 import ai.openclaw.app.chat.MessageSpeechPhase
 import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.chat.VoiceNoteRecorderState
+import ai.openclaw.app.i18n.NativeText
+import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.i18n.resolveNativeTextResource
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
 import ai.openclaw.app.ui.copyGatewayDiagnosticsReport
 import ai.openclaw.app.ui.design.AgentAvatarSource
@@ -218,7 +221,7 @@ fun ChatScreen(
     selectedModelRef?.let { selected ->
       modelCatalog.firstOrNull { it.providerQualifiedRef() == selected }?.name?.takeIf { it.isNotBlank() }
         ?: selected.substringAfterLast('/')
-    } ?: "Model"
+    } ?: nativeString("Model")
   val micCaptureActive = micEnabled || micIsListening || micCooldown || talkModeEnabled || talkModeListening
   val voiceNoteRecorder =
     rememberVoiceNoteRecorderController(
@@ -270,7 +273,7 @@ fun ChatScreen(
   }
 
   var input by rememberSaveable { mutableStateOf("") }
-  var shareImportNotice by rememberSaveable { mutableStateOf<String?>(null) }
+  var shareImportNotice by remember { mutableStateOf<NativeText?>(null) }
 
   LaunchedEffect(chatDraft) {
     input = mergeChatDraft(chatDraft, input) ?: return@LaunchedEffect
@@ -309,7 +312,7 @@ fun ChatScreen(
       attachments.addAll(merged.attachments)
       shareImportNotice =
         if (merged.failedImageCount + merged.droppedImageCount > 0) {
-          nativeString("Some shared images were omitted or could not be added.")
+          nativeText("Some shared images were omitted or could not be added.")
         } else {
           null
         }
@@ -892,11 +895,11 @@ private fun EmptyChatHint(
       Text(
         text =
           if (healthOk) {
-            "Start with a prompt, or use voice."
+            nativeString("Start with a prompt, or use voice.")
           } else if (gatewayOffline) {
-            "Use the recovery options below to reconnect."
+            nativeString("Use the recovery options below to reconnect.")
           } else {
-            "Chat is checking Gateway health."
+            nativeString("Chat is checking Gateway health.")
           },
         style = ClawTheme.type.body,
         color = ClawTheme.colors.textMuted,
@@ -1193,7 +1196,7 @@ private fun ChatComposer(
   offlineStatus: String,
   pendingRunCount: Int,
   shareStaging: Boolean,
-  shareImportNotice: String?,
+  shareImportNotice: NativeText?,
   onDismissShareImportNotice: () -> Unit,
   commands: List<ChatCommandEntry>,
   onThinkingLevelChange: (String) -> Unit,
@@ -1240,7 +1243,7 @@ private fun ChatComposer(
         horizontalArrangement = Arrangement.spacedBy(4.dp),
       ) {
         Text(
-          text = shareImportNotice,
+          text = shareImportNotice.resolveNativeTextResource(),
           style = ClawTheme.type.caption,
           color = ClawTheme.colors.warning,
           modifier = Modifier.weight(1f),

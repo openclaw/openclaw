@@ -9,7 +9,10 @@ import ai.openclaw.app.SensitiveFeatureConfig
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.isLocalCleartextGatewayHost
 import ai.openclaw.app.hasPhotoReadPermission
+import ai.openclaw.app.i18n.NativeText
+import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.i18n.resolveNativeTextResource
 import ai.openclaw.app.node.DeviceNotificationListenerService
 import ai.openclaw.app.photoReadPermissionsForRequest
 import ai.openclaw.app.ui.design.ClawDesignTheme
@@ -305,8 +308,8 @@ fun OnboardingFlow(
     var manualTls by rememberSaveable { mutableStateOf(false) }
     var token by rememberSaveable { mutableStateOf("") }
     var password by rememberSaveable { mutableStateOf("") }
-    var setupError by rememberSaveable { mutableStateOf<String?>(null) }
-    var setupScanError by rememberSaveable { mutableStateOf<String?>(null) }
+    var setupError by remember { mutableStateOf<NativeText?>(null) }
+    var setupScanError by remember { mutableStateOf<NativeText?>(null) }
     var attemptedConnect by rememberSaveable { mutableStateOf(false) }
     var attemptedGatewayName by rememberSaveable { mutableStateOf<String?>(null) }
     var lastGatewayInputSource by rememberSaveable { mutableStateOf(OnboardingGatewayInputSource.SetupScanner) }
@@ -520,7 +523,7 @@ fun OnboardingFlow(
       viewModel.refreshGatewayConnection()
     }
 
-    fun showSetupScanError(message: String) {
+    fun showSetupScanError(message: NativeText) {
       setupError = null
       setupScanError = message
       inlineQrScannerActive = false
@@ -532,7 +535,7 @@ fun OnboardingFlow(
     ) {
       val trimmed = code.trim()
       if (trimmed.isEmpty()) {
-        setupError = nativeString("Enter the setup code from openclaw qr.")
+        setupError = nativeText("Enter the setup code from openclaw qr.")
         return
       }
       val plan =
@@ -555,8 +558,8 @@ fun OnboardingFlow(
             ?.let { parseGatewayEndpointResult(it.url).error }
         setupError =
           endpointError?.let {
-            gatewayEndpointValidationMessage(it, GatewayEndpointInputSource.SETUP_CODE)
-          } ?: nativeString("Setup code was not accepted. Generate a fresh code with openclaw qr.")
+            gatewayEndpointValidationText(it, GatewayEndpointInputSource.SETUP_CODE)
+          } ?: nativeText("Setup code was not accepted. Generate a fresh code with openclaw qr.")
         return
       }
       connectGateway(plan = plan, inputSource = inputSource)
@@ -573,8 +576,8 @@ fun OnboardingFlow(
             GatewayEndpointValidationError.INSECURE_REMOTE_URL,
             GatewayEndpointValidationError.IPV6_ZONE_ID_UNSUPPORTED,
             ->
-              gatewayEndpointValidationMessage(scanned.error, GatewayEndpointInputSource.QR_SCAN)
-            else -> nativeString("That QR code is not an OpenClaw setup QR. Generate a fresh code with openclaw qr, then try again.")
+              gatewayEndpointValidationText(scanned.error, GatewayEndpointInputSource.QR_SCAN)
+            else -> nativeText("That QR code is not an OpenClaw setup QR. Generate a fresh code with openclaw qr, then try again.")
           }
         showSetupScanError(message)
         return
@@ -586,7 +589,7 @@ fun OnboardingFlow(
 
     fun pairFromManualFields() {
       if (manualTokenLooksLikeSetupCode(token)) {
-        setupError = nativeString("That looks like a setup code. Go back and choose Setup Gateway, then Use setup code.")
+        setupError = nativeText("That looks like a setup code. Go back and choose Setup Gateway, then Use setup code.")
         return
       }
       val transport =
@@ -614,7 +617,7 @@ fun OnboardingFlow(
             ?.let(::parseGatewayEndpointResult)
             ?.error
             ?: GatewayEndpointValidationError.INVALID_URL
-        setupError = gatewayEndpointValidationMessage(endpointError, GatewayEndpointInputSource.MANUAL)
+        setupError = gatewayEndpointValidationText(endpointError, GatewayEndpointInputSource.MANUAL)
         return
       }
       connectGateway(plan = plan, inputSource = OnboardingGatewayInputSource.Manual)
@@ -637,7 +640,7 @@ fun OnboardingFlow(
           try {
             InputImage.fromFilePath(context, uri)
           } catch (_: Exception) {
-            showSetupScanError(nativeString("Could not read that image. Choose a clear screenshot or image of the QR from openclaw qr."))
+            showSetupScanError(nativeText("Could not read that image. Choose a clear screenshot or image of the QR from openclaw qr."))
             return@rememberLauncherForActivityResult
           }
         setupBarcodeScanner
@@ -645,18 +648,18 @@ fun OnboardingFlow(
           .addOnSuccessListener { barcodes ->
             val rawValue = barcodes.firstNotNullOfOrNull { barcode -> barcode.rawValue?.takeIf { it.isNotBlank() } }
             if (rawValue == null) {
-              showSetupScanError(nativeString("No setup QR code was found in that image. Choose the QR generated by openclaw qr, or enter the setup code manually."))
+              showSetupScanError(nativeText("No setup QR code was found in that image. Choose the QR generated by openclaw qr, or enter the setup code manually."))
               return@addOnSuccessListener
             }
             handleScannedSetupCode(rawValue, inputSource = OnboardingGatewayInputSource.SetupGallery)
           }.addOnFailureListener {
-            showSetupScanError(nativeString("Could not read a QR code from that image. Choose a clearer image or enter the setup code manually."))
+            showSetupScanError(nativeText("Could not read a QR code from that image. Choose a clearer image or enter the setup code manually."))
           }
       }
 
     setupScanError?.let { message ->
       SetupScanErrorDialog(
-        message = message,
+        message = message.resolveNativeTextResource(),
         onDismiss = { setupScanError = null },
         onChooseAnotherImage = {
           setupScanError = null
@@ -754,7 +757,7 @@ fun OnboardingFlow(
           onRequestCameraPermission = { cameraPermissionLauncher.launch(Manifest.permission.CAMERA) },
           onCodeScanned = { rawValue -> handleScannedSetupCode(rawValue, inputSource = OnboardingGatewayInputSource.SetupScanner) },
           onCameraError = {
-            showSetupScanError(nativeString("Could not start the camera. Choose a QR image from gallery or enter the setup code manually."))
+            showSetupScanError(nativeText("Could not start the camera. Choose a QR image from gallery or enter the setup code manually."))
           },
           onCloseScanner = { inlineQrScannerActive = false },
           onChooseFromGallery = {
@@ -773,7 +776,7 @@ fun OnboardingFlow(
         SetupCodeEntryScreen(
           modifier = modifier,
           setupCode = setupCode,
-          error = setupError,
+          error = setupError?.resolveNativeTextResource(),
           onBack = ::goBack,
           onSetupCodeChange = {
             setupCode = it
@@ -789,7 +792,7 @@ fun OnboardingFlow(
           manualTls = manualTls,
           token = token,
           password = password,
-          error = setupError,
+          error = setupError?.resolveNativeTextResource(),
           onBack = ::goBack,
           onManualHostChange = {
             manualHost = it
@@ -1152,13 +1155,13 @@ private fun SetupCodeInstructionsScreen(
         item {
           Column(modifier = Modifier.fillMaxWidth().padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
             SetupInstruction(
-              step = "Step 1",
+              step = nativeString("Step 1"),
               title = nativeString("Start your Gateway."),
               body = "openclaw gateway",
               monospaceBody = true,
             )
             SetupInstruction(
-              step = "Step 2",
+              step = nativeString("Step 2"),
               title = nativeString("Generate a QR code."),
               body = "openclaw qr",
               monospaceBody = true,
@@ -2507,14 +2510,14 @@ internal fun gatewayRecoveryProgressItems(
       )
     GatewayRecoveryUiState.Pairing ->
       listOf(
-        GatewayRecoveryProgressItem("Gateway received this phone", GatewayRecoveryProgressStatus.Complete),
-        GatewayRecoveryProgressItem("Waiting for device approval", GatewayRecoveryProgressStatus.Current),
-        GatewayRecoveryProgressItem("Retrying automatically", GatewayRecoveryProgressStatus.Pending),
+        GatewayRecoveryProgressItem(nativeString("Gateway received this phone"), GatewayRecoveryProgressStatus.Complete),
+        GatewayRecoveryProgressItem(nativeString("Waiting for device approval"), GatewayRecoveryProgressStatus.Current),
+        GatewayRecoveryProgressItem(nativeString("Retrying automatically"), GatewayRecoveryProgressStatus.Pending),
       )
     GatewayRecoveryUiState.ApprovalRequired ->
       listOf(
-        GatewayRecoveryProgressItem("Gateway needs device approval", GatewayRecoveryProgressStatus.Current),
-        GatewayRecoveryProgressItem("Run the approval command on the Gateway", GatewayRecoveryProgressStatus.Pending),
+        GatewayRecoveryProgressItem(nativeString("Gateway needs device approval"), GatewayRecoveryProgressStatus.Current),
+        GatewayRecoveryProgressItem(nativeString("Run the approval command on the Gateway"), GatewayRecoveryProgressStatus.Pending),
       )
     GatewayRecoveryUiState.NodeCapabilityApprovalPending -> emptyList()
     GatewayRecoveryUiState.Connected,

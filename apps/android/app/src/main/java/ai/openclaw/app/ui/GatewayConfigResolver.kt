@@ -1,7 +1,10 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.gateway.isLocalCleartextGatewayHost
+import ai.openclaw.app.i18n.NativeText
+import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.i18n.resolveNativeText
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -86,13 +89,13 @@ internal data class GatewayScannedSetupCodeResult(
 
 private val gatewaySetupJson = Json { ignoreUnknownKeys = true }
 
-private fun remoteGatewaySecurityRule(): String =
-  nativeString(
+private fun remoteGatewaySecurityRuleText(): NativeText =
+  nativeText(
     "Public gateways require wss:// or Tailscale Serve. ws:// is allowed for localhost, .local hosts, the Android emulator, and private LAN IPs.",
   )
 
-private fun remoteGatewaySecurityFix(): String =
-  nativeString(
+private fun remoteGatewaySecurityFixText(): NativeText =
+  nativeText(
     "Use a private LAN IP for local setup, or enable Tailscale Serve / expose a wss:// gateway URL for remote access.",
   )
 
@@ -306,43 +309,48 @@ internal fun resolveScannedSetupCodeResult(rawInput: String): GatewayScannedSetu
 internal fun gatewayEndpointValidationMessage(
   error: GatewayEndpointValidationError,
   source: GatewayEndpointInputSource,
-): String =
+): String = gatewayEndpointValidationText(error, source).resolveNativeText()
+
+internal fun gatewayEndpointValidationText(
+  error: GatewayEndpointValidationError,
+  source: GatewayEndpointInputSource,
+): NativeText =
   when (error) {
     GatewayEndpointValidationError.INSECURE_REMOTE_URL ->
       when (source) {
         GatewayEndpointInputSource.SETUP_CODE ->
-          nativeString(
+          nativeText(
             "Setup code points to an insecure remote gateway. \$remoteGatewaySecurityRule \$remoteGatewaySecurityFix",
-            remoteGatewaySecurityRule(),
-            remoteGatewaySecurityFix(),
+            remoteGatewaySecurityRuleText(),
+            remoteGatewaySecurityFixText(),
           )
         GatewayEndpointInputSource.QR_SCAN ->
-          nativeString(
+          nativeText(
             "QR code points to an insecure remote gateway. \$remoteGatewaySecurityRule \$remoteGatewaySecurityFix",
-            remoteGatewaySecurityRule(),
-            remoteGatewaySecurityFix(),
+            remoteGatewaySecurityRuleText(),
+            remoteGatewaySecurityFixText(),
           )
         GatewayEndpointInputSource.MANUAL ->
-          nativeString(
+          nativeText(
             "\$remoteGatewaySecurityRule \$remoteGatewaySecurityFix",
-            remoteGatewaySecurityRule(),
-            remoteGatewaySecurityFix(),
+            remoteGatewaySecurityRuleText(),
+            remoteGatewaySecurityFixText(),
           )
       }
     GatewayEndpointValidationError.IPV6_ZONE_ID_UNSUPPORTED ->
       when (source) {
         GatewayEndpointInputSource.SETUP_CODE ->
-          nativeString("Setup code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname.")
+          nativeText("Setup code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname.")
         GatewayEndpointInputSource.QR_SCAN ->
-          nativeString("QR code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname.")
+          nativeText("QR code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname.")
         GatewayEndpointInputSource.MANUAL ->
-          nativeString("IPv6 zone IDs are not supported. Use an unscoped IPv6 address or a LAN hostname.")
+          nativeText("IPv6 zone IDs are not supported. Use an unscoped IPv6 address or a LAN hostname.")
       }
     GatewayEndpointValidationError.INVALID_URL ->
       when (source) {
-        GatewayEndpointInputSource.SETUP_CODE -> nativeString("Setup code has invalid gateway URL.")
-        GatewayEndpointInputSource.QR_SCAN -> nativeString("QR code did not contain a valid setup code.")
-        GatewayEndpointInputSource.MANUAL -> nativeString("Enter a valid manual endpoint to connect.")
+        GatewayEndpointInputSource.SETUP_CODE -> nativeText("Setup code has invalid gateway URL.")
+        GatewayEndpointInputSource.QR_SCAN -> nativeText("QR code did not contain a valid setup code.")
+        GatewayEndpointInputSource.MANUAL -> nativeText("Enter a valid manual endpoint to connect.")
       }
   }
 

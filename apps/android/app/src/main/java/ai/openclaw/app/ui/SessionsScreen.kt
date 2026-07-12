@@ -636,16 +636,16 @@ private fun SessionRow(
         },
       ) {
         if (archived) {
-          SessionMenuItem("Unarchive") {
+          SessionMenuItem(nativeString("Unarchive")) {
             menuExpanded = false
             onSetArchived(false)
           }
-          SessionMenuItem("Delete…") {
+          SessionMenuItem(nativeString("Delete…")) {
             menuExpanded = false
             onDelete()
           }
         } else if (groupMenuVisible) {
-          SessionMenuItem("← Back") { groupMenuVisible = false }
+          SessionMenuItem(nativeString("← Back")) { groupMenuVisible = false }
           categories.forEach { category ->
             SessionMenuItem(category) {
               menuExpanded = false
@@ -653,13 +653,13 @@ private fun SessionRow(
               onMoveToGroup(category)
             }
           }
-          SessionMenuItem("New group…") {
+          SessionMenuItem(nativeString("New group…")) {
             menuExpanded = false
             groupMenuVisible = false
             onNewGroup()
           }
           if (!session.category.isNullOrBlank()) {
-            SessionMenuItem("Remove from group") {
+            SessionMenuItem(nativeString("Remove from group")) {
               menuExpanded = false
               groupMenuVisible = false
               onRemoveFromGroup()
@@ -674,16 +674,16 @@ private fun SessionRow(
             menuExpanded = false
             onSetUnread(session.unread != true)
           }
-          SessionMenuItem("Rename…") {
+          SessionMenuItem(nativeString("Rename…")) {
             menuExpanded = false
             onRename()
           }
-          SessionMenuItem("Fork") {
+          SessionMenuItem(nativeString("Fork")) {
             menuExpanded = false
             onFork()
           }
-          SessionMenuItem("Move to group") { groupMenuVisible = true }
-          SessionMenuItem("Archive") {
+          SessionMenuItem(nativeString("Move to group")) { groupMenuVisible = true }
+          SessionMenuItem(nativeString("Archive")) {
             menuExpanded = false
             onSetArchived(true)
           }
@@ -717,15 +717,15 @@ private fun SessionGroupHeader(
         ),
     )
     DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
-      SessionMenuItem("Rename group…") {
+      SessionMenuItem(nativeString("Rename group…")) {
         menuExpanded = false
         onRename()
       }
-      SessionMenuItem("New group…") {
+      SessionMenuItem(nativeString("New group…")) {
         menuExpanded = false
         onNewGroup()
       }
-      SessionMenuItem("Delete group…") {
+      SessionMenuItem(nativeString("Delete group…")) {
         menuExpanded = false
         onDelete()
       }
