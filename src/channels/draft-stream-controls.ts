@@ -129,20 +129,25 @@ export async function takeMessageIdAfterStop<T>(
 
 /**
  * Stops a draft stream and deletes its preview message when the stored id is valid.
+ *
+ * The stored id is only cleared on a successful DELETE, and only when the current id
+ * still matches the deleted id (compare-and-clear).  A failed DELETE retains the id
+ * so later cleanup calls can retry it.
  */
 export async function clearFinalizableDraftMessage<T>(
   params: ClearFinalizableDraftMessageParams<T>,
 ): Promise<void> {
-  const messageId = await takeMessageIdAfterStop({
-    stopForClear: params.stopForClear,
-    readMessageId: params.readMessageId,
-    clearMessageId: params.clearMessageId,
-  });
+  await params.stopForClear();
+  const messageId = params.readMessageId();
   if (!params.isValidMessageId(messageId)) {
     return;
   }
   try {
     await params.deleteMessage(messageId);
+    const currentId = params.readMessageId();
+    if (currentId === messageId) {
+      params.clearMessageId();
+    }
     params.onDeleteSuccess?.(messageId);
   } catch (err) {
     params.warn?.(`${params.warnPrefix}: ${formatErrorMessage(err)}`);
