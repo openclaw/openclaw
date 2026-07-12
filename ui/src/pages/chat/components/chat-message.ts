@@ -580,10 +580,10 @@ type StreamGroupOptions = {
 };
 
 function renderReadingIndicatorBubble() {
+  // Working spark: pulsing brand mark where the reply will materialize.
+  // aria-hidden; the composer's sr-only run-status region announces phases.
   return html`
-    <div class="chat-bubble chat-reading-indicator" aria-hidden="true">
-      <span class="chat-reading-indicator__dots"> <span></span><span></span><span></span> </span>
-    </div>
+    <div class="chat-bubble chat-reading-indicator" aria-hidden="true">${icons.spark}</div>
   `;
 }
 
@@ -633,6 +633,7 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
 
 type RenderMessageGroupOptions = {
   onOpenSidebar?: (content: SidebarContent) => void;
+  onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
   sessionKey?: string;
   agentId?: string;
   showReasoning: boolean;
@@ -671,6 +672,7 @@ function buildGroupedMessageRenderOptions(
     isStreaming: group.isStreaming && index === group.messages.length - 1,
     sessionKey: opts.sessionKey,
     agentId: opts.agentId,
+    onOpenWorkspaceFile: opts.onOpenWorkspaceFile,
     duplicateCount: item.duplicateCount ?? 1,
     showReasoning: opts.showReasoning,
     showToolCalls: opts.showToolCalls ?? true,
@@ -1828,6 +1830,7 @@ function renderInlineToolCards(
     sessionKey?: string;
     agentId?: string;
     onOpenSidebar?: (content: SidebarContent) => void;
+    onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
     isToolExpanded?: (toolCardId: string) => boolean;
     onToggleToolExpanded?: (toolCardId: string) => void;
     runActive?: boolean;
@@ -1848,6 +1851,7 @@ function renderInlineToolCards(
           sessionKey: opts.sessionKey,
           agentId: opts.agentId,
           onOpenSidebar: opts.onOpenSidebar,
+          onOpenWorkspaceFile: opts.onOpenWorkspaceFile,
           canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
           embedSandboxMode: opts.embedSandboxMode ?? "scripts",
           allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
@@ -2042,6 +2046,7 @@ function renderGroupedMessage(
     onAssistantAttachmentLoaded?: () => void;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
+    onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
   },
   onOpenSidebar?: (content: SidebarContent) => void,
 ) {
@@ -2195,6 +2200,7 @@ function renderGroupedMessage(
           sessionKey: opts.sessionKey,
           agentId: opts.agentId,
           onOpenSidebar,
+          onOpenWorkspaceFile: opts.onOpenWorkspaceFile,
           isToolExpanded: opts.isToolExpanded,
           onToggleToolExpanded: opts.onToggleToolExpanded,
           runActive: opts.runActive,
@@ -2293,12 +2299,14 @@ function renderGroupedMessage(
                               opts.embedSandboxMode ?? "scripts",
                               opts.allowExternalEmbedUrls ?? false,
                               opts.runActive,
+                              opts.onOpenWorkspaceFile,
                             )
                           : renderInlineToolCards(toolCards, {
                               messageKey,
                               sessionKey: opts.sessionKey,
                               agentId: opts.agentId,
                               onOpenSidebar,
+                              onOpenWorkspaceFile: opts.onOpenWorkspaceFile,
                               isToolExpanded: opts.isToolExpanded,
                               onToggleToolExpanded: opts.onToggleToolExpanded,
                               runActive: opts.runActive,
@@ -2346,6 +2354,7 @@ function renderGroupedMessage(
                   sessionKey: opts.sessionKey,
                   agentId: opts.agentId,
                   onOpenSidebar,
+                  onOpenWorkspaceFile: opts.onOpenWorkspaceFile,
                   isToolExpanded: opts.isToolExpanded,
                   onToggleToolExpanded: opts.onToggleToolExpanded,
                   runActive: opts.runActive,

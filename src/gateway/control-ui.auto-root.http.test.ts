@@ -6,6 +6,7 @@ import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { CONTROL_UI_MCP_APP_SANDBOX_TICKET_ATTRIBUTE } from "./control-ui-contract.js";
 
 const { resolveControlUiRootSyncMock, isPackageProvenControlUiRootSyncMock } = vi.hoisted(() => ({
   resolveControlUiRootSyncMock: vi.fn(),
@@ -84,8 +85,10 @@ describe("handleControlUiHttpRequest auto-detected root", () => {
 
       expect(handled).toBe(true);
       expect(res.statusCode).toBe(200);
-      expect(responseBody(end)).toBe(
-        '<html data-openclaw-terminal-enabled="false">fallback-hardlink</html>\n',
+      expect(responseBody(end)).toMatch(
+        new RegExp(
+          `^<html ${CONTROL_UI_MCP_APP_SANDBOX_TICKET_ATTRIBUTE}="[^"]+" data-openclaw-terminal-enabled="false">fallback-hardlink</html>\\n$`,
+        ),
       );
     });
   });

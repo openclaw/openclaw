@@ -122,8 +122,8 @@ export function buildControlUiMcpAppSandboxCspHeader(csp: ControlUiMcpAppCsp): s
     `media-src ${joinCspSources(["data:", "blob:", ...resourceDomains])}`,
     `connect-src ${joinCspSources(["data:", "blob:", ...connectDomains])}`,
     "worker-src blob:",
-    `frame-src ${joinCspSources(["'self'", "data:", "blob:", ...frameDomains])}`,
-    `base-uri ${baseUriDomains.length > 0 ? joinCspSources(baseUriDomains) : "'none'"}`,
+    `frame-src ${frameDomains.length > 0 ? joinCspSources(frameDomains) : "'none'"}`,
+    `base-uri ${baseUriDomains.length > 0 ? joinCspSources(baseUriDomains) : "'self'"}`,
     "object-src 'none'",
     "frame-ancestors 'self'",
   ].join("; ");

@@ -129,7 +129,8 @@ Rules:
 - Preserve YAML structure inside <frontmatter>; translate only values.
 - Preserve every [[[FM_*]]] marker exactly and translate only text between its START/END pair.
 - Preserve Markdown structure exactly: headings, list nesting, tables, links, emphasis, and line-level content order.
-- Preserve HTML tags and attributes exactly.
+- Preserve HTML/MDX tag names, attribute names, nesting, and structural attribute values exactly. Never change resource or behavior attributes such as “href”, “src”, “id”, “icon”, “path”, “type”, or “default”.
+- Translate user-visible prose inside string-valued component attributes such as “title”, “label”, “description”, and “placeholder”, unless a higher-precedence literal UI-label rule protects that value. Do not translate code-like attribute values.
 - Do not translate or modify code spans, code blocks, config keys, CLI flags, environment variables, commands, or placeholders such as __OC_I18N_####__.
 - Do not alter URLs, anchors, path fragments, or identifier spelling.
 - Do not remove, reorder, merge, summarize, or duplicate content.

@@ -611,6 +611,39 @@ function extraArgsBeyondRowTarget(
   return Object.keys(extras).length > 0 ? extras : null;
 }
 
+function resolveToolWorkspaceFilePath(card: ToolCard, view: ToolCallView): string | null {
+  if (card.args && typeof card.args === "object" && !Array.isArray(card.args)) {
+    const args = card.args as Record<string, unknown>;
+    for (const key of ["path", "file_path", "filePath", "notebook_path"]) {
+      const value = args[key];
+      if (typeof value === "string" && value.trim()) {
+        return value;
+      }
+    }
+  }
+  const fallback = `${view.targetDetail ? `${view.targetDetail}/` : ""}${view.target ?? ""}`;
+  return fallback.trim() || null;
+}
+
+function renderToolWorkspaceFilePath(
+  label: string,
+  path: string | null,
+  onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void,
+) {
+  return path && onOpenWorkspaceFile
+    ? html`
+        <button
+          class="chat-tool-card__detail chat-tool-card__detail-link"
+          type="button"
+          title="Open file"
+          @click=${() => onOpenWorkspaceFile({ path })}
+        >
+          ${label}
+        </button>
+      `
+    : html`<div class="chat-tool-card__detail">${label}</div>`;
+}
+
 function renderTerminalBlock(command: string, output: string | undefined, isError: boolean) {
   return html`
     <div class="chat-tool-term ${isError ? "chat-tool-term--error" : ""}">
@@ -690,6 +723,7 @@ export function renderToolCard(
     sessionKey?: string;
     agentId?: string;
     onOpenSidebar?: (content: SidebarContent) => void;
+    onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
     canvasPluginSurfaceUrl?: string | null;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
@@ -754,6 +788,7 @@ export function renderToolCard(
                 opts.embedSandboxMode ?? "scripts",
                 opts.allowExternalEmbedUrls ?? false,
                 opts.runActive,
+                opts.onOpenWorkspaceFile,
               )}
             </div>
           `
@@ -770,6 +805,7 @@ export function renderExpandedToolCardContent(
   embedSandboxMode: EmbedSandboxMode = "scripts",
   allowExternalEmbedUrls = false,
   runActive?: boolean,
+  onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void,
 ) {
   const view = resolveToolCallView({ name: card.name, args: card.args, details: card.details });
   const display = resolveToolDisplay({ name: card.name, args: card.args });
@@ -783,6 +819,10 @@ export function renderExpandedToolCardContent(
   const hasInput = Boolean(card.inputText?.trim());
   const isError = isToolCardError(card);
   const outcome = resolveToolCardOutcome(card, runActive);
+  const workspaceFilePath =
+    view.kind === "read" || view.kind === "edit" || view.kind === "write"
+      ? resolveToolWorkspaceFilePath(card, view)
+      : null;
   const canOpenSidebar = Boolean(onOpenSidebar);
   const fullMessageRequest = buildToolSidebarFullMessageRequest(card, sessionKey);
   const previewSidebarContent =
@@ -851,9 +891,11 @@ export function renderExpandedToolCardContent(
     return html`
       <div class="chat-tool-card ${isError ? "chat-tool-card--error" : ""}">
         <div class="chat-tool-card__header">
-          <div class="chat-tool-card__detail">
-            ${view.targetDetail ? `${view.targetDetail}/` : ""}${view.target ?? ""}
-          </div>
+          ${renderToolWorkspaceFilePath(
+            `${view.targetDetail ? `${view.targetDetail}/` : ""}${view.target ?? ""}`,
+            workspaceFilePath,
+            onOpenWorkspaceFile,
+          )}
           ${sidebarAction}
         </div>
         ${renderDiffBlock(view.diff, outcome)}
@@ -880,7 +922,11 @@ export function renderExpandedToolCardContent(
       ${detail || canOpenSidebar
         ? html`
             <div class="chat-tool-card__header">
-              ${detail ? html`<div class="chat-tool-card__detail">${detail}</div>` : nothing}
+              ${detail
+                ? view.kind === "read"
+                  ? renderToolWorkspaceFilePath(detail, workspaceFilePath, onOpenWorkspaceFile)
+                  : html`<div class="chat-tool-card__detail">${detail}</div>`
+                : nothing}
               ${sidebarAction}
             </div>
           `

@@ -2077,15 +2077,8 @@
       "count": 1,
       "kind": "html-attribute",
       "name": "aria-label",
-      "path": "ui/src/pages/chat/components/chat-composer.ts",
-      "text": "BTW side question pending"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "aria-label",
-      "path": "ui/src/pages/chat/components/chat-composer.ts",
-      "text": "BTW side result"
+      "path": "ui/src/pages/chat/chat-view.ts",
+      "text": "Scroll to latest"
     },
     {
       "count": 1,
@@ -2107,20 +2100,6 @@
       "name": "aria-label",
       "path": "ui/src/pages/chat/components/chat-composer.ts",
       "text": "Compact recommended session context"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "aria-label",
-      "path": "ui/src/pages/chat/components/chat-composer.ts",
-      "text": "Dismiss BTW question"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "aria-label",
-      "path": "ui/src/pages/chat/components/chat-composer.ts",
-      "text": "Dismiss BTW result"
     },
     {
       "count": 1,
@@ -2169,13 +2148,6 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/chat/components/chat-composer.ts",
-      "text": "BTW"
-    },
-    {
-      "count": 2,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer.ts",
       "text": "close"
     },
     {
@@ -2218,13 +2190,6 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/chat/components/chat-composer.ts",
-      "text": "Not saved to chat history"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer.ts",
       "text": "run"
     },
     {
@@ -2254,13 +2219,6 @@
       "name": "text",
       "path": "ui/src/pages/chat/components/chat-composer.ts",
       "text": "Tab"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer.ts",
-      "text": "Thinking…"
     },
     {
       "count": 1,
@@ -2441,6 +2399,62 @@
       "count": 1,
       "kind": "html-attribute",
       "name": "aria-label",
+      "path": "ui/src/pages/chat/components/chat-side-chat.ts",
+      "text": "Clear side chat"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/pages/chat/components/chat-side-chat.ts",
+      "text": "Close side chat"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/pages/chat/components/chat-side-chat.ts",
+      "text": "Follow up in side chat"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/pages/chat/components/chat-side-chat.ts",
+      "text": "Send follow-up"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/pages/chat/components/chat-side-chat.ts",
+      "text": "Side chat"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/chat/components/chat-side-chat.ts",
+      "text": "Not saved to chat history"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/chat/components/chat-side-chat.ts",
+      "text": "Side chat"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/chat/components/chat-side-chat.ts",
+      "text": "Thinking…"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
       "path": "ui/src/pages/chat/components/chat-sidebar.ts",
       "text": "Close sidebar"
     },
@@ -2450,6 +2464,13 @@
       "name": "aria-label",
       "path": "ui/src/pages/chat/components/chat-sidebar.ts",
       "text": "Copy path"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/pages/chat/components/chat-sidebar.ts",
+      "text": "Edit file"
     },
     {
       "count": 1,
@@ -2491,6 +2512,20 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/chat/components/chat-sidebar.ts",
+      "text": "Discard"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/chat/components/chat-sidebar.ts",
+      "text": "Loading…"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/chat/components/chat-sidebar.ts",
       "text": "No content available"
     },
     {
@@ -2499,6 +2534,20 @@
       "name": "text",
       "path": "ui/src/pages/chat/components/chat-sidebar.ts",
       "text": "No previewable markdown content."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/chat/components/chat-sidebar.ts",
+      "text": "Overwrite"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/chat/components/chat-sidebar.ts",
+      "text": "Reload"
     },
     {
       "count": 1,
@@ -2569,6 +2618,13 @@
       "name": "aria-label",
       "path": "ui/src/pages/chat/components/chat-tool-cards.ts",
       "text": "Open tool details in side panel"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "title",
+      "path": "ui/src/pages/chat/components/chat-tool-cards.ts",
+      "text": "Open file"
     },
     {
       "count": 1,
@@ -3631,6 +3687,20 @@
       "count": 1,
       "kind": "html-attribute",
       "name": "placeholder",
+      "path": "ui/src/pages/connection/view.ts",
+      "text": "ws://100.x.y.z:18789"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "placeholder",
+      "path": "ui/src/pages/connection/view.ts",
+      "text": "OPENCLAW_GATEWAY_TOKEN"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
       "path": "ui/src/pages/cron/view.ts",
       "text": "+1555... or chat id"
     },
@@ -4028,6 +4098,13 @@
     },
     {
       "count": 1,
+      "kind": "html-attribute",
+      "name": "title",
+      "path": "ui/src/pages/nodes/view-inventory.ts",
+      "text": "The Gateway cannot wake an offline Windows node. Start the machine or restore its network connection."
+    },
+    {
+      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/nodes/view-inventory.ts",
@@ -4074,6 +4151,13 @@
       "name": "text",
       "path": "ui/src/pages/nodes/view-inventory.ts",
       "text": "gateway"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/nodes/view-inventory.ts",
+      "text": "manual wake required"
     },
     {
       "count": 1,
@@ -4149,6 +4233,13 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
+      "path": "ui/src/pages/nodes/view-inventory.ts",
+      "text": "version drift"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
       "path": "ui/src/pages/nodes/view.ts",
       "text": "Any node"
     },
@@ -4179,48 +4270,6 @@
       "name": "text",
       "path": "ui/src/pages/nodes/view.ts",
       "text": "Use default"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "description",
-      "path": "ui/src/pages/overview/overview-page.ts",
-      "text": "This connection does not have the operator.read scope. Some features may be unavailable."
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "title",
-      "path": "ui/src/pages/overview/overview-page.ts",
-      "text": "Gateway Error"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "title",
-      "path": "ui/src/pages/overview/overview-page.ts",
-      "text": "Missing operator.read scope"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "title",
-      "path": "ui/src/pages/overview/overview-page.ts",
-      "text": "Skills with missing dependencies"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "placeholder",
-      "path": "ui/src/pages/overview/view.ts",
-      "text": "OPENCLAW_GATEWAY_TOKEN"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "placeholder",
-      "path": "ui/src/pages/overview/view.ts",
-      "text": "ws://100.x.y.z:18789"
     },
     {
       "count": 1,

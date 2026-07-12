@@ -1000,6 +1000,8 @@ describe("handleControlUiHttpRequest", () => {
         );
         expect(policy).toContain("sandbox allow-scripts");
         expect(policy).toContain("frame-ancestors 'self'");
+        expect(policy).toContain("frame-src 'none'");
+        expect(policy).toContain("base-uri 'self'");
         expect(policy).toContain("https://api.example.com");
         expect(policy).toContain("https://cdn.example.com");
         expect(policy).not.toContain("safe.example");
