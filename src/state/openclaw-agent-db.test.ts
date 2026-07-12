@@ -1072,6 +1072,14 @@ describe("openclaw agent database", () => {
       "idx_agent_session_entries_session_updated",
       "idx_agent_transcript_event_sequence",
     ]);
+    const transcriptIndex = migrated.db
+      .prepare("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?")
+      .get("idx_agent_transcript_event_sequence") as { sql?: unknown } | undefined;
+    expect(
+      typeof transcriptIndex?.sql === "string"
+        ? transcriptIndex.sql.replace(/\s+/g, " ").trim()
+        : transcriptIndex?.sql,
+    ).toContain("ON transcript_event_identities(session_id, event_type, seq DESC)");
     expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
   });
 

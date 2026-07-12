@@ -205,19 +205,22 @@ describe("sqlite hot query plans", () => {
          LIMIT 1
       `,
     });
-    expectPlanUsesIndex({
-      db: database.db,
-      indexName: "idx_agent_transcript_event_sequence",
-      params: ["session-1"],
-      sql: `
+    const latestMessagePlan = explainQueryPlan(
+      database.db,
+      `
         SELECT te.event_json
           FROM transcript_events AS te
           JOIN transcript_event_identities AS ti
             ON ti.session_id = te.session_id AND ti.seq = te.seq
          WHERE te.session_id = ? AND ti.event_type = 'message'
-         ORDER BY te.seq DESC
+         ORDER BY ti.seq DESC
          LIMIT 1
       `,
-    });
+      ["session-1"],
+    );
+    expect(latestMessagePlan).toContain(
+      "USING COVERING INDEX idx_agent_transcript_event_sequence (session_id=? AND event_type=?)",
+    );
+    expect(latestMessagePlan).not.toContain("USE TEMP B-TREE FOR ORDER BY");
   });
 });

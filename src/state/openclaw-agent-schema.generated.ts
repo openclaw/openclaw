@@ -165,7 +165,7 @@ CREATE INDEX IF NOT EXISTS idx_agent_transcript_event_parent
   WHERE parent_id IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_agent_transcript_event_sequence
-  ON transcript_event_identities(session_id, seq DESC, event_type);
+  ON transcript_event_identities(session_id, event_type, seq DESC);
 
 CREATE TABLE IF NOT EXISTS cache_entries (
   scope TEXT NOT NULL,

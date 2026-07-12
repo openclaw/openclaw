@@ -1485,7 +1485,7 @@ export function loadLatestSqliteAssistantText(
       .select("te.event_json as event_json")
       .where("te.session_id", "=", resolved.sessionId)
       .where("ti.event_type", "=", "message")
-      .orderBy("te.seq", "desc"),
+      .orderBy("ti.seq", "desc"),
   );
   for (const row of rows) {
     const latest = parseLatestAssistantMessageEvent(row.event_json, options);
@@ -1518,7 +1518,7 @@ export function loadLatestSqliteAssistantMessage(
       .select("te.event_json as event_json")
       .where("te.session_id", "=", resolved.sessionId)
       .where("ti.event_type", "=", "message")
-      .orderBy("te.seq", "desc"),
+      .orderBy("ti.seq", "desc"),
   );
   for (const row of rows) {
     const latest = parseLatestAssistantMessageEvent(row.event_json, options);
@@ -1547,7 +1547,7 @@ export function loadLatestSqliteMessage(
       .select("te.event_json as event_json")
       .where("te.session_id", "=", resolved.sessionId)
       .where("ti.event_type", "=", "message")
-      .orderBy("te.seq", "desc")
+      .orderBy("ti.seq", "desc")
       .limit(1),
   );
   return row ? parseLatestMessageEvent(row.event_json, options) : undefined;
