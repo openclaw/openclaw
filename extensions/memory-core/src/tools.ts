@@ -802,21 +802,29 @@ export function createMemoryGetTool(options: {
           | undefined;
         const { readAgentMemoryFile, resolveMemoryBackendConfig } = await loadMemoryToolRuntime();
         if (requestedCorpus === "wiki") {
-          const supplement = await getSupplementMemoryReadResult({
-            relPath,
-            from: from ?? undefined,
-            lines: lines ?? undefined,
-            agentId,
-            agentSessionKey: options.agentSessionKey,
-            sandboxed: options.sandboxed,
-            corpus: requestedCorpus,
-          });
+          let supplement: Awaited<ReturnType<typeof getSupplementMemoryReadResult>> | undefined;
+          let supplementError: string | undefined;
+          try {
+            supplement = await getSupplementMemoryReadResult({
+              relPath,
+              from: from ?? undefined,
+              lines: lines ?? undefined,
+              agentId,
+              agentSessionKey: options.agentSessionKey,
+              sandboxed: options.sandboxed,
+              corpus: requestedCorpus,
+            });
+          } catch (err) {
+            // Supplement lookup threw (e.g. DB or config error);
+            // surface the backend failure instead of "not found".
+            supplementError = formatErrorMessage(err);
+          }
           return jsonResult(
             supplement ?? {
               path: relPath,
               text: "",
               disabled: true,
-              error: "wiki corpus result not found",
+              error: supplementError ?? "wiki corpus result not found",
             },
           );
         }

@@ -896,4 +896,32 @@ describe("memory tools", () => {
       error: "primary read failed",
     });
   });
+
+  it("returns structured error when corpus=wiki supplement get throws", async () => {
+    registerMemoryCorpusSupplement("memory-wiki", {
+      search: async () => [],
+      get: async () => {
+        throw new Error("wiki supplement get failed");
+      },
+    });
+
+    const tool = createMemoryGetToolOrThrow();
+    const result = await tool.execute("call_get_wiki_throws", {
+      path: "entities/alpha.md",
+      corpus: "wiki",
+    });
+
+    const details = result.details as {
+      path: string;
+      text: string;
+      disabled: boolean;
+      error: string;
+    };
+    expect(details).toEqual({
+      path: "entities/alpha.md",
+      text: "",
+      disabled: true,
+      error: expect.stringContaining("wiki supplement get failed"),
+    });
+  });
 });

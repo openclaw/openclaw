@@ -172,10 +172,25 @@ type MemoryPluginState = {
   promptSupplements: MemoryPromptSupplementRegistration[];
 };
 
-const memoryPluginState: MemoryPluginState = {
-  corpusSupplements: [],
-  promptSupplements: [],
-};
+const MEMORY_PLUGIN_STATE_KEY = Symbol.for("openclaw.memoryPluginState");
+
+function resolveMemoryPluginState(): MemoryPluginState {
+  const host = globalThis as typeof globalThis & {
+    [MEMORY_PLUGIN_STATE_KEY]?: MemoryPluginState;
+  };
+  const existing = host[MEMORY_PLUGIN_STATE_KEY];
+  if (existing) {
+    return existing;
+  }
+  const created: MemoryPluginState = {
+    corpusSupplements: [],
+    promptSupplements: [],
+  };
+  host[MEMORY_PLUGIN_STATE_KEY] = created;
+  return created;
+}
+
+const memoryPluginState = resolveMemoryPluginState();
 
 export function registerMemoryCorpusSupplement(
   pluginId: string,

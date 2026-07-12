@@ -400,6 +400,19 @@ describe("memory plugin state", () => {
     ).resolves.toEqual([{ corpus: "wiki", path: "sources/alpha.md", score: 1, snippet: "x" }]);
   });
 
+  it("shares corpus supplement registry through globalThis across module reloads", async () => {
+    registerMemoryCorpusSupplement("memory-wiki", {
+      search: async () => [{ corpus: "wiki", path: "sources/alpha.md", score: 1, snippet: "x" }],
+      get: async () => null,
+    });
+
+    vi.resetModules();
+    const reloaded = await import("./memory-state.js");
+
+    expect(reloaded.listMemoryCorpusSupplements()).toHaveLength(1);
+    expect(reloaded.listMemoryCorpusSupplements()[0]?.pluginId).toBe("memory-wiki");
+  });
+
   it("uses the registered flush plan resolver", () => {
     registerMemoryFlushPlanResolver(() => ({
       softThresholdTokens: 1,
