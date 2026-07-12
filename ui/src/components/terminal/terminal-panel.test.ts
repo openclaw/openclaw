@@ -53,6 +53,7 @@ vi.mock("./terminal-runtime.ts", () => {
 import { OpenClawTerminalPanel } from "./terminal-panel.ts";
 
 const TERMINAL_PANEL_ELEMENT_NAME = "test-openclaw-terminal-panel";
+const TERMINAL_LIFECYCLE_WAIT_TIMEOUT_MS = 10_000;
 
 // Keep the mounted panel and i18n manager in the current module graph when
 // the non-isolated runner has retained an earlier production registration.
@@ -60,6 +61,12 @@ class TestTerminalPanel extends OpenClawTerminalPanel {}
 
 if (!customElements.get(TERMINAL_PANEL_ELEMENT_NAME)) {
   customElements.define(TERMINAL_PANEL_ELEMENT_NAME, TestTerminalPanel);
+}
+
+// Shared 4-vCPU UI CI can starve lifecycle work past Vitest's 1s waitFor default.
+// The UI suite's 60s test timeout remains the enclosing upper bound.
+function waitForTerminalLifecycle(assertion: () => void | Promise<void>): Promise<void> {
+  return vi.waitFor(assertion, { timeout: TERMINAL_LIFECYCLE_WAIT_TIMEOUT_MS });
 }
 
 describe("OpenClawTerminalPanel", () => {
@@ -114,7 +121,7 @@ describe("OpenClawTerminalPanel", () => {
 
     panel.toggle();
 
-    await vi.waitFor(() => {
+    await waitForTerminalLifecycle(() => {
       expect(requests[0]).toEqual({
         method: "terminal.open",
         params: { agentId: "ops", cols: 100, rows: 30 },
@@ -124,7 +131,7 @@ describe("OpenClawTerminalPanel", () => {
     expect(getComputedStyle(createOptions!.parent).caretColor).toBe("rgba(0, 0, 0, 0)");
     const styles = (OpenClawTerminalPanel.styles as { cssText: string }).cssText;
     expect(styles).toMatch(/\.tp-new\s*\{[^}]*align-self:\s*center/u);
-    await vi.waitFor(() => {
+    await waitForTerminalLifecycle(() => {
       expect(requests).toContainEqual({
         method: "terminal.resize",
         params: { sessionId: "session-1", cols: 100, rows: 30 },
@@ -133,7 +140,7 @@ describe("OpenClawTerminalPanel", () => {
 
     createOptions?.onData?.(new TextEncoder().encode("pwd\n"));
     createOptions?.onResize?.({ columns: 120, rows: 40 });
-    await vi.waitFor(() => {
+    await waitForTerminalLifecycle(() => {
       expect(requests).toContainEqual({
         method: "terminal.input",
         params: { sessionId: "session-1", data: "pwd\n" },
@@ -181,7 +188,7 @@ describe("OpenClawTerminalPanel", () => {
     document.body.append(panel);
 
     // No toggle: the terminal-only document opens its session on mount.
-    await vi.waitFor(() => {
+    await waitForTerminalLifecycle(() => {
       expect(requests.some((entry) => entry.method === "terminal.open")).toBe(true);
     });
     await panel.updateComplete;
@@ -238,7 +245,7 @@ describe("OpenClawTerminalPanel", () => {
     document.body.append(panel);
 
     panel.toggle();
-    await vi.waitFor(() => {
+    await waitForTerminalLifecycle(() => {
       expect(requests.filter((entry) => entry.method === "terminal.open")).toHaveLength(1);
     });
 
@@ -251,7 +258,7 @@ describe("OpenClawTerminalPanel", () => {
 
     await panel.updateComplete;
     (panel.renderRoot.querySelector(".tp-tab__close") as HTMLElement).click();
-    await vi.waitFor(() => {
+    await waitForTerminalLifecycle(() => {
       expect(requests).toContainEqual({
         method: "terminal.close",
         params: { sessionId: "session-1" },
@@ -261,7 +268,7 @@ describe("OpenClawTerminalPanel", () => {
     expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe("[]");
 
     panel.toggle();
-    await vi.waitFor(() => {
+    await waitForTerminalLifecycle(() => {
       expect(requests.filter((entry) => entry.method === "terminal.open")).toHaveLength(2);
     });
     expect(requests.some((entry) => entry.method === "terminal.attach")).toBe(false);
@@ -301,13 +308,13 @@ describe("OpenClawTerminalPanel", () => {
     document.body.append(panel);
     panel.toggle();
 
-    await vi.waitFor(() => {
+    await waitForTerminalLifecycle(() => {
       expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toContain("old-session");
     });
     panel.client = newClient;
     await panel.updateComplete;
 
-    await vi.waitFor(() => {
+    await waitForTerminalLifecycle(() => {
       expect(newRequests).toContain("terminal.open");
     });
     expect(oldRequests.filter((method) => method === "terminal.open")).toHaveLength(1);
@@ -337,7 +344,7 @@ describe("OpenClawTerminalPanel", () => {
     document.body.append(panel);
     panel.toggle();
 
-    await vi.waitFor(() => {
+    await waitForTerminalLifecycle(() => {
       expect(createGhosttyTerminalMock).toHaveBeenCalledOnce();
     });
     const staleOptions = createGhosttyTerminalMock.mock.calls[0]![0] as CreateOptions;
@@ -345,13 +352,13 @@ describe("OpenClawTerminalPanel", () => {
     panel.remove();
     document.body.append(panel);
 
-    await vi.waitFor(() => {
+    await waitForTerminalLifecycle(() => {
       expect(createGhosttyTerminalMock).toHaveBeenCalledTimes(2);
       expect(requests.filter((method) => method === "terminal.open")).toHaveLength(1);
     });
     staleBoot.resolve(staleController);
 
-    await vi.waitFor(() => {
+    await waitForTerminalLifecycle(() => {
       expect(staleController.dispose).toHaveBeenCalledOnce();
     });
     expect(staleHost.isConnected).toBe(false);
@@ -423,7 +430,7 @@ describe("OpenClawTerminalPanel", () => {
     panel.available = true;
     document.body.append(panel);
     panel.toggle();
-    await vi.waitFor(() => {
+    await waitForTerminalLifecycle(() => {
       expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toContain("session-1");
     });
 
