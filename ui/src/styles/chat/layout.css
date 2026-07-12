@@ -1456,39 +1456,6 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   }
 }
 
-.agent-chat__composer-progress {
-  display: flex;
-  align-items: center;
-  box-sizing: border-box;
-  width: 100%;
-  min-height: 28px;
-  padding: 4px 12px 0;
-  color: var(--muted);
-  pointer-events: none;
-}
-
-.agent-chat__composer-progress--mobile {
-  display: none;
-}
-
-.agent-chat__composer-progress .agent-chat__run-status {
-  width: 100%;
-  max-width: none;
-  height: auto;
-  padding: 0;
-  justify-content: flex-start;
-  color: inherit;
-  font-size: var(--control-ui-text-sm);
-}
-
-.agent-chat__composer-progress--done {
-  color: var(--ok);
-}
-
-.agent-chat__composer-progress--interrupted {
-  color: var(--warn);
-}
-
 .agent-chat__composer-combobox {
   position: relative;
   display: flex;
@@ -2521,52 +2488,9 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   text-overflow: ellipsis;
 }
 
-/* Chrome-free status text: the working state pairs a pulsing dot with the
-   tool-row text wave (chatToolRowPulse/chatToolRowTextWave live in
-   tool-cards.css, same bundle) so active work reads identically everywhere.
-   Terminal states keep their semantic hue in text/icon only. */
-.agent-chat__run-status--in-progress {
-  color: color-mix(in srgb, var(--text) 78%, var(--muted));
-}
-
-.agent-chat__run-status-dot {
-  flex-shrink: 0;
-  width: 7px;
-  height: 7px;
-  border-radius: var(--radius-full);
-  background: var(--accent-2, #14b8a6);
-  animation: chatToolRowPulse 1.1s ease-in-out infinite;
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .agent-chat__run-status--in-progress .agent-chat__run-status-label {
-    background-image: linear-gradient(
-      90deg,
-      var(--text) 0%,
-      var(--text) 35%,
-      color-mix(in srgb, var(--text) 42%, var(--bg) 58%) 50%,
-      var(--text) 65%,
-      var(--text) 100%
-    );
-    background-size: 200% 100%;
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
-    animation: chatToolRowTextWave 2.2s ease-in-out infinite;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .agent-chat__run-status-dot {
-    animation: none;
-    opacity: 0.8;
-  }
-}
-
-.agent-chat__run-status--done {
-  color: var(--ok);
-}
-
+/* Interrupted is the only visible composer run status: killed runs leave no
+   transcript marker, so silence would read as "finished". Working/Done are
+   covered by the thread spark, content arriving, and Stop reverting. */
 .agent-chat__run-status--interrupted {
   color: var(--warn);
 }
@@ -2822,10 +2746,8 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
     gap: 0;
   }
 
-  .agent-chat__composer-progress--mobile {
-    display: flex;
-  }
-
+  /* The interrupted toast stays desktop-only; the composer grid has no slot
+     for it and the sr-only run-status region still announces on mobile. */
   .agent-chat__composer-run-status {
     display: none;
   }

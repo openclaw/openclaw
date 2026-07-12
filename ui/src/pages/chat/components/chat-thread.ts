@@ -99,6 +99,8 @@ type ChatThreadProps = {
   showToolCalls: boolean;
   /** True while the session has an abortable live run (marks running tool rows). */
   runActive?: boolean;
+  /** True while the agent is visibly working (isChatRunWorking); shows the working spark. */
+  runWorking?: boolean;
   sessions: SessionsListResult | null;
   /** Host context resolving global-alias session keys (scope=global fleets). */
   /** Includes assistantAgentId so bare-global welcome recents scope to the selected agent. */
@@ -756,6 +758,9 @@ export function renderChatThread(props: ChatThreadProps) {
     streamStartedAt: props.streamStartedAt,
     queue: props.queue,
     showToolCalls: props.showToolCalls,
+    // Initial history load keeps the skeleton as the empty-thread signal; the
+    // working spark takes over once content (or a send/stream) exists.
+    runWorking: Boolean(props.runWorking) && !props.loading,
     searchOpen: state.searchOpen,
     searchQuery: state.searchQuery,
     historyRenderLimit,

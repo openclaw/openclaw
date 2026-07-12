@@ -580,10 +580,10 @@ type StreamGroupOptions = {
 };
 
 function renderReadingIndicatorBubble() {
+  // Working spark: pulsing brand mark where the reply will materialize.
+  // aria-hidden; the composer's sr-only run-status region announces phases.
   return html`
-    <div class="chat-bubble chat-reading-indicator" aria-hidden="true">
-      <span class="chat-reading-indicator__dots"> <span></span><span></span><span></span> </span>
-    </div>
+    <div class="chat-bubble chat-reading-indicator" aria-hidden="true">${icons.spark}</div>
   `;
 }
 

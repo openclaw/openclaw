@@ -388,11 +388,6 @@ function chatHtml(opts: ChatFixtureOptions = {}) {
                           </section>
                         </details>
                       </div>
-                      <div class="agent-chat__composer-progress">
-                        <span class="agent-chat__run-status agent-chat__run-status--in-progress">
-                          ${iconSvg()}<span class="agent-chat__run-status-label">In progress</span>
-                        </span>
-                      </div>
                       <span class="agent-chat__token-count">8</span>
                     </div>
                   </div>
@@ -1291,7 +1286,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             input: rectFor(".agent-chat__input"),
             thread: rectFor(".chat-thread"),
             footer: rectFor(".agent-chat__composer-footer"),
-            progress: rectFor(".agent-chat__composer-progress"),
             textarea: rectFor(".agent-chat__composer-combobox > textarea"),
             meta: rectFor(".agent-chat__composer-meta"),
             model: rectFor(".chat-composer-model-control"),
@@ -1307,7 +1301,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         const input = expectControlRect(controls.input, "composer");
         const thread = expectControlRect(controls.thread, "chat thread");
         const footer = expectControlRect(controls.footer, "composer footer");
-        const progress = expectControlRect(controls.progress, "composer progress");
         const textarea = expectControlRect(controls.textarea, "composer textarea");
         const meta = expectControlRect(controls.meta, "composer metadata");
         const model = expectControlRect(controls.model, "composer model control");
@@ -1316,17 +1309,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         const attach = expectControlRect(controls.attach, "composer attach control");
         const send = expectControlRect(controls.send, "composer send control");
 
-        for (const control of [
-          footer,
-          progress,
-          textarea,
-          meta,
-          model,
-          context,
-          settings,
-          attach,
-          send,
-        ]) {
+        for (const control of [footer, textarea, meta, model, context, settings, attach, send]) {
           expect(control.x).toBeGreaterThanOrEqual(input.x - 1);
           expect(control.x + control.width).toBeLessThanOrEqual(input.x + input.width + 1);
         }
