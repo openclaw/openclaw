@@ -422,6 +422,7 @@ function createPluginCandidatesFromManifestRegistry(
     ...(record.workspaceDir !== undefined ? { workspaceDir: record.workspaceDir } : {}),
     ...(record.format !== undefined ? { format: record.format } : {}),
     ...(record.bundleFormat !== undefined ? { bundleFormat: record.bundleFormat } : {}),
+    ...(record.packageManifest !== undefined ? { packageManifest: record.packageManifest } : {}),
   }));
 }
 
@@ -2124,6 +2125,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         rootDir: pluginRoot,
         origin: candidate.origin,
         preferBuiltPluginArtifacts,
+        packageManifest: candidate.packageManifest,
       });
       const runtimeSetupEntry = manifestRecord.setupSource
         ? resolvePluginRuntimeArtifact({
@@ -2131,6 +2133,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
             rootDir: pluginRoot,
             origin: candidate.origin,
             preferBuiltPluginArtifacts,
+            packageManifest: candidate.packageManifest,
           })
         : undefined;
 
