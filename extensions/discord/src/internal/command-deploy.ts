@@ -301,7 +301,7 @@ function stableCommandKey(command: Pick<APIApplicationCommand, "name" | "type">)
 
 function isApplicationCommandLimitError(error: unknown): boolean {
   return (
-    Boolean(error) &&
+    error !== null &&
     typeof error === "object" &&
     "discordCode" in error &&
     error.discordCode === DISCORD_APPLICATION_COMMAND_LIMIT_REACHED
