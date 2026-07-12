@@ -181,7 +181,7 @@ describe.runIf(browserMode)("chat file editor", () => {
     const edit = { hash: "hash-1", save: vi.fn(), fetchLatest: vi.fn() };
     const first = await mountFile({
       kind: "file",
-      draftKey: "session-a\u0000shared.txt",
+      draftKey: "gateway-a\u0000pane-left\u0000session-a\u0000shared.txt",
       path: "shared.txt",
       name: "shared.txt",
       content: "session a",
@@ -194,7 +194,7 @@ describe.runIf(browserMode)("chat file editor", () => {
 
     const otherSession = await mountFile({
       kind: "file",
-      draftKey: "session-b\u0000shared.txt",
+      draftKey: "gateway-a\u0000pane-right\u0000session-a\u0000shared.txt",
       path: "shared.txt",
       name: "shared.txt",
       content: "session b",
@@ -207,7 +207,7 @@ describe.runIf(browserMode)("chat file editor", () => {
 
     const restored = await mountFile({
       kind: "file",
-      draftKey: "session-a\u0000shared.txt",
+      draftKey: "gateway-a\u0000pane-left\u0000session-a\u0000shared.txt",
       path: "shared.txt",
       name: "shared.txt",
       content: "session a",

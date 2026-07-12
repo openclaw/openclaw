@@ -1,6 +1,7 @@
 // Shared workspace filesystem access for gateway file browsers and editors.
 // All entry points route through fs-safe roots (realpathed root, symlink and
 // hardlink rejection) so no caller can access files outside a workspace root.
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { root as fsSafeRoot, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
 
@@ -10,6 +11,8 @@ export type WorkspaceDirEntry = WorkspacePathStat & { name: string };
 
 /** Shared preview cap: keeps file payloads comfortably under client WS limits. */
 export const WORKSPACE_PREVIEW_MAX_BYTES = 256 * 1024;
+
+const workspaceFileUpdateQueues = new Map<string, Promise<void>>();
 
 async function openWorkspaceRoot(rootDir: string): Promise<WorkspaceRoot | undefined> {
   try {
@@ -78,17 +81,73 @@ export async function readWorkspaceFile(
   }
 }
 
-export async function writeWorkspaceFile(
+export type WorkspaceFileUpdateResult =
+  | { status: "updated"; hash: string; stat: WorkspacePathStat }
+  | { status: "conflict"; currentHash: string }
+  | { status: "unsafe" };
+
+function enqueueWorkspaceFileUpdate<T>(key: string, update: () => Promise<T>): Promise<T> {
+  const previous = workspaceFileUpdateQueues.get(key) ?? Promise.resolve();
+  const result = previous.then(update, update);
+  const settled = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  workspaceFileUpdateQueues.set(key, settled);
+  void settled.finally(() => {
+    if (workspaceFileUpdateQueues.get(key) === settled) {
+      workspaceFileUpdateQueues.delete(key);
+    }
+  });
+  return result;
+}
+
+export async function updateWorkspaceFile(
   rootDir: string,
   browserPath: string,
   content: string,
-): Promise<true | undefined> {
+  expectedHash: string,
+): Promise<WorkspaceFileUpdateResult> {
   const workspaceRoot = await openWorkspaceRoot(rootDir);
   if (!workspaceRoot) {
-    return undefined;
+    return { status: "unsafe" };
   }
-  await workspaceRoot.write(browserPath, content, { encoding: "utf8" });
-  return true;
+  const queueKey = `${workspaceRoot.rootReal}\0${browserPath}`;
+  // Keep the read/hash/write sequence ordered for product writers so two
+  // Control UI saves cannot both accept one stale hash and overwrite each other.
+  return await enqueueWorkspaceFileUpdate<WorkspaceFileUpdateResult>(queueKey, async () => {
+    let current: ReadResult;
+    try {
+      current = await workspaceRoot.read(browserPath, {
+        hardlinks: "reject",
+        maxBytes: WORKSPACE_PREVIEW_MAX_BYTES,
+        nonBlockingRead: true,
+        symlinks: "reject",
+      });
+    } catch {
+      return { status: "unsafe" };
+    }
+    if (decodeUtf8Strict(current.buffer) === undefined) {
+      return { status: "unsafe" };
+    }
+    const currentHash = createHash("sha256").update(current.buffer).digest("hex");
+    if (currentHash !== expectedHash) {
+      return { status: "conflict", currentHash };
+    }
+    await workspaceRoot.write(browserPath, content, {
+      encoding: "utf8",
+      renameIdentity: "strict",
+    });
+    const stat = await workspaceRoot.stat(browserPath);
+    if (workspaceStatKind(stat) !== "file") {
+      return { status: "unsafe" };
+    }
+    return {
+      status: "updated",
+      hash: createHash("sha256").update(content, "utf8").digest("hex"),
+      stat,
+    };
+  });
 }
 
 export function decodeUtf8Strict(buffer: Buffer): string | undefined {
