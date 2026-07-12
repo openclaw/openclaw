@@ -112,9 +112,11 @@ Models use the existing `nodes` tool with `action: "invoke"`,
 
 HealthKit deliberately does not reveal whether read access was denied. Missing
 metrics therefore mean only that no readable value was returned; they do not
-prove either denial or absence of health data. OpenClaw does not ingest Health
-data in the background and does not use summaries for diagnosis or medical
-advice.
+prove either denial or absence of health data. If HealthKit reports that the
+authorized history window does not cover the requested period, OpenClaw rejects
+the request instead of labeling partial totals as a full-period summary. OpenClaw
+does not ingest Health data in the background and does not use summaries for
+diagnosis or medical advice.
 
 By default, the Apple Watch companion keeps using the existing iPhone relay and
 does not need a separate Gateway pairing. Pair the Watch with the iPhone in

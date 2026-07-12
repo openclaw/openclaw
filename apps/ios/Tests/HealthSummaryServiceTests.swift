@@ -39,4 +39,19 @@ struct HealthSummaryServiceTests {
         #expect(HealthSummaryService.mergedDuration(intervals: intervals, clippedTo: range) == 3 * 60 * 60)
         #expect(HealthSummaryService.mergedDuration(intervals: [], clippedTo: range) == nil)
     }
+
+    @Test func `limited Health history never masquerades as a full period`() throws {
+        let formatter = ISO8601DateFormatter()
+        let start = try #require(formatter.date(from: "2026-07-06T00:00:00Z"))
+        let beforeStart = try #require(formatter.date(from: "2026-07-05T00:00:00Z"))
+        let afterStart = try #require(formatter.date(from: "2026-07-10T00:00:00Z"))
+
+        #expect(HealthSummaryService.authorizationCovers(startDate: start, earliestAuthorizedDates: []))
+        #expect(HealthSummaryService.authorizationCovers(
+            startDate: start,
+            earliestAuthorizedDates: [beforeStart, start]))
+        #expect(!HealthSummaryService.authorizationCovers(
+            startDate: start,
+            earliestAuthorizedDates: [beforeStart, afterStart]))
+    }
 }

@@ -65,6 +65,7 @@ actor HealthSummaryService: HealthSummaryServicing {
 
         let now = Date()
         let range = Self.dateRange(period: params.period, now: now, calendar: .current)
+        try await self.requireAuthorizationCoverage(for: range)
         let stepCount = try await self.stepCount(in: range)
         let sleepDuration = try await self.sleepDuration(in: range)
         let restingHeartRate = try await self.restingHeartRate(in: range)
@@ -121,8 +122,33 @@ actor HealthSummaryService: HealthSummaryServicing {
         return duration + current.duration
     }
 
+    static func authorizationCovers(
+        startDate: Date,
+        earliestAuthorizedDates: some Sequence<Date>) -> Bool
+    {
+        !earliestAuthorizedDates.contains { $0 > startDate }
+    }
+
     private static func roundedMinutes(_ seconds: TimeInterval) -> Int {
         Int((seconds / 60).rounded())
+    }
+
+    private func requireAuthorizationCoverage(for range: DateInterval) async throws {
+        if #available(iOS 26.0, *) {
+            let dates = try await self.healthStore.earliestAuthorizedSampleDate(
+                for: HealthAuthorization.readTypes)
+            guard Self.authorizationCovers(
+                startDate: range.start,
+                earliestAuthorizedDates: dates.values)
+            else {
+                throw NSError(domain: "Health", code: 3, userInfo: [
+                    NSLocalizedDescriptionKey: """
+                    HEALTH_HISTORY_LIMITED: requested period predates permitted Health history; grant full history or \
+                    request a shorter period
+                    """,
+                ])
+            }
+        }
     }
 
     private func stepCount(in range: DateInterval) async throws -> Int? {
