@@ -706,6 +706,98 @@ describe("msteamsPlugin message actions", () => {
     });
   });
 
+  it("uses selected account policy to block channel-list when root Teams policy is open", async () => {
+    const cfg = {
+      channels: {
+        msteams: {
+          groupPolicy: "open",
+          dmPolicy: "open",
+          accounts: {
+            secondary: {
+              appId: "secondary-app-id",
+              appPassword: "secondary-secret",
+              webhook: { port: 3979 },
+              groupPolicy: "allowlist",
+              teams: {
+                "22222222-2222-2222-2222-222222222222": {
+                  channels: {
+                    "19:other@thread.tacv2": { enabled: true },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    await expect(
+      runAction({
+        action: "channel-list",
+        cfg,
+        accountId: "secondary",
+        requesterAccountId: "secondary",
+        params: { teamId: graphTeamId },
+      }),
+    ).rejects.toThrow("Microsoft Teams channel list requires access to every channel in the team.");
+    expect(listChannelsMSTeamsMock).not.toHaveBeenCalled();
+  });
+
+  it("uses selected account policy to allow channel-list when root Teams policy is restrictive", async () => {
+    const cfg = {
+      channels: {
+        msteams: {
+          groupPolicy: "allowlist",
+          teams: {
+            "22222222-2222-2222-2222-222222222222": {
+              channels: {
+                "19:other@thread.tacv2": { enabled: true },
+              },
+            },
+          },
+          accounts: {
+            secondary: {
+              appId: "secondary-app-id",
+              appPassword: "secondary-secret",
+              webhook: { port: 3979 },
+              groupPolicy: "open",
+              teams: {
+                "*": {
+                  channels: {
+                    "*": { enabled: true },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    await expectSuccessfulAction({
+      mockFn: listChannelsMSTeamsMock,
+      mockResult: { channels: [{ id: "channel-1" }] },
+      action: "channel-list",
+      cfg,
+      accountId: "secondary",
+      requesterAccountId: "secondary",
+      actionParams: { teamId: graphTeamId },
+      runtimeParams: {
+        accountId: "secondary",
+        teamId: graphTeamId,
+      },
+      details: okMSTeamsActionDetails("channel-list", {
+        channels: [{ id: "channel-1" }],
+      }),
+      contentDetails: {
+        ok: true,
+        channel: "msteams",
+        action: "channel-list",
+        channels: [{ id: "channel-1" }],
+      },
+    });
+  });
+
   it("routes channel-info through the Teams runtime", async () => {
     await expectSuccessfulAction({
       mockFn: getChannelInfoMSTeamsMock,
@@ -1183,6 +1275,99 @@ describe("msteamsPlugin message actions", () => {
       }),
     ).rejects.toThrow("Microsoft Teams read target is not allowed.");
     expect(getMessageMSTeamsMock).not.toHaveBeenCalled();
+  });
+
+  it("uses selected account policy to block Graph reads when root Teams policy is open", async () => {
+    const cfg = {
+      channels: {
+        msteams: {
+          groupPolicy: "open",
+          dmPolicy: "open",
+          accounts: {
+            secondary: {
+              appId: "secondary-app-id",
+              appPassword: "secondary-secret",
+              webhook: { port: 3979 },
+              groupPolicy: "allowlist",
+              teams: {
+                "22222222-2222-2222-2222-222222222222": {
+                  channels: {
+                    "19:other@thread.tacv2": { enabled: true },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    await expect(
+      runAction({
+        action: "read",
+        cfg,
+        accountId: "secondary",
+        requesterAccountId: "secondary",
+        params: { to: graphChannelTarget, messageId: "msg-1" },
+      }),
+    ).rejects.toThrow("Microsoft Teams read target is not allowed.");
+    expect(getMessageMSTeamsMock).not.toHaveBeenCalled();
+  });
+
+  it("uses selected account policy to allow Graph reads when root Teams policy is restrictive", async () => {
+    const cfg = {
+      channels: {
+        msteams: {
+          groupPolicy: "allowlist",
+          teams: {
+            "22222222-2222-2222-2222-222222222222": {
+              channels: {
+                "19:other@thread.tacv2": { enabled: true },
+              },
+            },
+          },
+          accounts: {
+            secondary: {
+              appId: "secondary-app-id",
+              appPassword: "secondary-secret",
+              webhook: { port: 3979 },
+              groupPolicy: "open",
+              teams: {
+                "*": {
+                  channels: {
+                    "*": { enabled: true },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    await expectSuccessfulAction({
+      mockFn: getMessageMSTeamsMock,
+      mockResult: readMessage,
+      action: "read",
+      cfg,
+      accountId: "secondary",
+      requesterAccountId: "secondary",
+      actionParams: { to: graphChannelTarget, messageId: "msg-1" },
+      runtimeParams: {
+        accountId: "secondary",
+        to: graphChannelTarget,
+        messageId: "msg-1",
+      },
+      details: okMSTeamsActionDetails("read", {
+        message: readMessage,
+      }),
+      contentDetails: {
+        ok: true,
+        channel: "msteams",
+        action: "read",
+        message: readMessage,
+      },
+    });
   });
 
   it.each([
