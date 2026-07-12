@@ -5,6 +5,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { completeSimple, type AssistantMessage, type Model } from "openclaw/plugin-sdk/llm";
 import * as ts from "typescript";
 import { formatErrorMessage } from "../src/infra/errors.ts";
@@ -1322,7 +1323,8 @@ function extractTranslationResult(message: AssistantMessage): string {
 function parseTranslationReply(raw: string): Record<string, unknown> {
   const trimmed = raw.trim();
   const fenced = /^```(?:json)?\s*\n([\s\S]*?)\n```\s*$/.exec(trimmed);
-  return JSON.parse(fenced ? fenced[1] : trimmed) as Record<string, unknown>;
+  const json = fenced ? expectDefined(fenced[1], "fenced translation JSON body") : trimmed;
+  return JSON.parse(json);
 }
 
 export function parseTranslationBatchReply(
