@@ -7,10 +7,100 @@ struct OpenClawActivityAttributes: ActivityAttributes {
     var sessionKey: String
 
     struct ContentState: Codable, Hashable {
-        var statusText: String
-        var isIdle: Bool
-        var isDisconnected: Bool
-        var isConnecting: Bool
+        enum Status: String, CaseIterable, Codable, Hashable {
+            case connecting
+            case reconnecting
+            case approvalNeeded
+            case actionRequired
+            case attention
+            case idle
+            case disconnected
+        }
+
+        var status: Status
+        var verbatimDetail: String?
         var startedAt: Date
+
+        private enum CodingKeys: String, CodingKey {
+            case status
+            case verbatimDetail
+            case startedAt
+        }
+
+        private enum LegacyCodingKeys: String, CodingKey {
+            case statusText
+            case isIdle
+            case isDisconnected
+            case isConnecting
+        }
+
+        init(status: Status, verbatimDetail: String?, startedAt: Date) {
+            self.status = status
+            self.verbatimDetail = verbatimDetail
+            self.startedAt = startedAt
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.startedAt = try container.decode(Date.self, forKey: .startedAt)
+
+            if let status = try container.decodeIfPresent(Status.self, forKey: .status) {
+                self.status = status
+                self.verbatimDetail = try container.decodeIfPresent(String.self, forKey: .verbatimDetail)
+                return
+            }
+
+            // Live Activities can outlive an app update. Decode the shipped boolean
+            // schema once, then all new writes use the semantic status shape.
+            let legacy = try decoder.container(keyedBy: LegacyCodingKeys.self)
+            let statusText = try legacy.decodeIfPresent(String.self, forKey: .statusText)
+            let presentation = Self.legacyPresentation(
+                statusText: statusText,
+                isIdle: try legacy.decodeIfPresent(Bool.self, forKey: .isIdle) ?? false,
+                isDisconnected: try legacy.decodeIfPresent(Bool.self, forKey: .isDisconnected) ?? false,
+                isConnecting: try legacy.decodeIfPresent(Bool.self, forKey: .isConnecting) ?? false)
+            self.status = presentation.status
+            self.verbatimDetail = presentation.verbatimDetail
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(self.status, forKey: .status)
+            try container.encodeIfPresent(self.verbatimDetail, forKey: .verbatimDetail)
+            try container.encode(self.startedAt, forKey: .startedAt)
+        }
+
+        private static func legacyPresentation(
+            statusText: String?,
+            isIdle: Bool,
+            isDisconnected: Bool,
+            isConnecting: Bool) -> (status: Status, verbatimDetail: String?)
+        {
+            if isDisconnected {
+                return (.disconnected, nil)
+            }
+            if isIdle {
+                return (.idle, nil)
+            }
+
+            let trimmed = statusText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let detail = trimmed.isEmpty ? nil : trimmed
+            if isConnecting {
+                if detail == String(localized: "Reconnecting...") || detail == "Reconnecting..." {
+                    return (.reconnecting, nil)
+                }
+                if detail == String(localized: "Connecting...") || detail == "Connecting..." {
+                    return (.connecting, nil)
+                }
+                return (.connecting, detail)
+            }
+            if detail == String(localized: "Approval needed") || detail == "Approval needed" {
+                return (.approvalNeeded, nil)
+            }
+            if detail == String(localized: "Action required") || detail == "Action required" {
+                return (.actionRequired, nil)
+            }
+            return (.attention, detail)
+        }
     }
 }

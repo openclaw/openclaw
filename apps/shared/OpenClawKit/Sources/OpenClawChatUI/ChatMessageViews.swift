@@ -714,10 +714,10 @@ struct ChatOutboxStatusLabel: View {
         }
         .foregroundStyle(self.state.isFailed ? AnyShapeStyle(OpenClawChatTheme.danger) : AnyShapeStyle(.secondary))
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(self.accessibilityText)
+        .accessibilityLabel(Text(self.accessibilityText))
     }
 
-    private var title: String {
+    private var title: LocalizedStringResource {
         switch self.state {
         case .queued:
             "Queued"
@@ -747,7 +747,7 @@ struct ChatOutboxStatusLabel: View {
         }
     }
 
-    private var accessibilityText: String {
+    private var accessibilityText: LocalizedStringResource {
         switch self.state {
         case .queued:
             "Queued, sends when reconnected"
