@@ -514,6 +514,10 @@ export function normalizeCompatibilityConfig({
       // Runtime mode resolution dropped legacy streamMode reads; the doctor
       // resolver keeps them so migration preserves configured intent.
       resolvedMode: resolveLegacyAliasStreamingMode(entry, "off"),
+      // Discord previews default to progress only while `streaming` is absent;
+      // migrating delivery-only aliases (e.g. blockStreaming) creates the
+      // object, so pin progress or migration silently disables previews.
+      aliasOnlyMode: "progress",
       includePreviewChunk: true,
     }),
     normalizeAccountExtra: ({ account, pathPrefix }) => {
