@@ -225,7 +225,11 @@ class SettingsScreensTest {
     val noticeBody = source.substring(noticeStart, noticeEnd)
     assertTrue(noticeBody.contains("onDismiss: () -> Unit"))
     assertTrue(noticeBody.contains("notice.approvalId"))
-    assertTrue(noticeBody.contains("contentDescription = \"Dismiss approval notice\""))
+    assertTrue(
+      noticeBody.contains(
+        "contentDescription = nativeString(\"Dismiss approval notice\")",
+      ),
+    )
   }
 
   private fun settingsScreensSource(): String {

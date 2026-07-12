@@ -28,7 +28,7 @@ internal object NativeStringResources {
     source: String,
     vararg formatArgs: Any,
   ): String {
-    val context = applicationContext ?: return source
+    val context = applicationContext ?: return formatNativeSource(source, formatArgs)
     val appLocales = AppCompatDelegate.getApplicationLocales()
     val tags = appLocales.toLanguageTags()
     val cached = localizedContext
@@ -65,7 +65,7 @@ internal fun nativeStringResource(
   source: String,
   vararg formatArgs: Any,
 ): String {
-  val resourceId = nativeStringResourceIds[source] ?: return source
+  val resourceId = nativeStringResourceIds[source] ?: return formatNativeSource(source, formatArgs)
   return if (formatArgs.isEmpty()) stringResource(resourceId) else stringResource(resourceId, *formatArgs)
 }
 
@@ -73,6 +73,19 @@ internal fun Context.nativeString(
   source: String,
   vararg formatArgs: Any,
 ): String {
-  val resourceId = nativeStringResourceIds[source] ?: return source
+  val resourceId = nativeStringResourceIds[source] ?: return formatNativeSource(source, formatArgs)
   return if (formatArgs.isEmpty()) getString(resourceId) else getString(resourceId, *formatArgs)
+}
+
+private val nativeInterpolationPattern = Regex("""\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[^{}]+})""")
+
+private fun formatNativeSource(
+  source: String,
+  formatArgs: Array<out Any>,
+): String {
+  if (formatArgs.isEmpty()) return source
+  var index = 0
+  return nativeInterpolationPattern.replace(source) { match ->
+    formatArgs.getOrNull(index++)?.toString() ?: match.value
+  }
 }
