@@ -18,11 +18,18 @@ or validating a change without wasting hours.
 
 Prove the touched surface first. Do not reflexively run the whole suite.
 
-Agent sessions are remote-first for tests and computationally intensive work.
-Classify source trust before selecting a backend. Trusted maintainer code
-defaults to Blacksmith Testbox. Untrusted contributor or fork code must use
-secretless fork CI or sanitized direct AWS Crabbox; never sync or run it on the
-credential-hydrated Blacksmith workflow.
+Agent sessions use Crabbox for tests and computationally intensive work.
+Classify source trust before selecting a backend. Trusted maintainer code uses
+the effective provider selected by Crabbox; the repository default is
+Blacksmith Testbox when the operator has not chosen another provider. Untrusted
+contributor or fork code must use secretless fork CI or sanitized direct AWS
+Crabbox; never sync or run it on the credential-hydrated Blacksmith workflow.
+
+A configured local provider does not turn agent tests into host-local tests.
+When Crabbox selects `local-container`, run the command through the wrapper so
+the test executes inside the Docker lease. Do not substitute a direct host
+`scripts/run-vitest.mjs` or `pnpm test` invocation, and do not report local
+container evidence as remote or Testbox proof.
 
 When trusted work is likely to change code or need tests, builds, typechecks,
 lint fan-out, Docker, packaging, E2E, or live proof, immediately start this in
@@ -30,7 +37,6 @@ a background command session:
 
 ```bash
 node scripts/crabbox-wrapper.mjs warmup \
-  --provider blacksmith-testbox \
   --keep \
   --timing-json
 ```
@@ -98,10 +104,12 @@ read-only, docs-only, or clearly trivial work that will not run tests or heavy
 commands.
 
 1. Inspect the diff and classify the touched surface:
-   - any agent-run test, focused or broad: run it on the pre-warmed safe remote
-     backend; Blacksmith Testbox only for trusted maintainer code
+   - any trusted agent-run test, focused or broad: run it on the pre-warmed
+     effective Crabbox backend; local-container is valid Docker isolation but
+     is not remote proof
    - changed gates, builds, typechecks, lint fan-out, Docker, package, E2E, or
-     live work: run it remotely; these are never routine laptop work
+     live work: run it through Crabbox; use a remote backend when the requested
+     proof requires remote, cross-platform, or Testbox semantics
    - normal source checkout, `pnpm check:changed`: it delegates to
      Crabbox/Testbox, but prefer the explicit kept-lease path when a Testbox was
      pre-warmed so the task reuses one lease
@@ -119,22 +127,25 @@ commands.
 ## Guardrails
 
 - Do not kill unrelated processes or tests. If something is running elsewhere, treat it as owned by the user or another agent.
-- Do not run tests or computationally intensive commands locally unless the user explicitly asks for local proof. Remote-provider unavailability permits only a narrow reported fallback, not a silent local full gate.
+- Do not run tests or computationally intensive commands directly on the host
+  unless the user explicitly asks for host-local proof. A configured
+  local-container backend is still a Crabbox run, not this fallback.
 - Prefer GitHub Actions for release/Docker proof when the workflow already has the prepared image and secrets.
 - Use `scripts/committer "<msg>" <paths...>` when committing; stage only your files.
-- If dependencies are missing on the selected remote box, run `pnpm install` there, retry
+- If dependencies are missing on the selected Crabbox backend, run `pnpm install` there, retry
   once, then report the first actionable error. Do not reconcile or reinstall a
   local Codex worktree merely to run validation.
 - In a Codex worktree or linked/sparse checkout, do not run direct local
   `pnpm test*`, `pnpm check*`, `pnpm crabbox:run`, or `scripts/committer`. Use
-  `node scripts/crabbox-wrapper.mjs` for remote proof, and `git commit --no-verify`
-  only after the relevant remote proof is already clean. The direct
+  `node scripts/crabbox-wrapper.mjs` for isolated proof, and `git commit --no-verify`
+  only after the relevant Crabbox proof is already clean. The direct
   `node scripts/run-vitest.mjs` path is an explicit local fallback only.
-- For remote proof, use the Crabbox wrapper first, but name the actual backend.
+- Use the Crabbox wrapper first, and name the actual backend and proof class.
   Direct AWS Crabbox uses `provider=aws` and `cbx_...` ids. Delegated
   Blacksmith Testbox through Crabbox uses `provider=blacksmith-testbox`,
   `syncDelegated=true`, and `tbx_...` ids. Both satisfy "remote proof" when the
-  requested proof surface allows either.
+  requested proof surface allows either; local-container satisfies local Docker
+  isolation only.
 - Treat contributor and fork patches as untrusted unless a maintainer
   explicitly approves credentialed execution after review. For untrusted AWS
   runs, `CRABBOX_ENV_ALLOW=CI` must replace the repo's

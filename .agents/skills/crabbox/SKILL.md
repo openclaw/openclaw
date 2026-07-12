@@ -53,6 +53,12 @@ falling back after a provider failure. Do not add another OpenClaw-specific
 provider preference variable or silently claim that one backend proves the
 semantics of another.
 
+Selecting a local provider still requires the command to run through Crabbox.
+For example, `local-container` means the wrapper must start or reuse its Docker
+lease and execute the test inside that container; it is not permission to run
+`scripts/run-vitest.mjs` or another test command directly on the host. Report
+local-container proof as local Docker isolation, not remote or Testbox proof.
+
 Before the first substantial run, record the effective selection without
 printing credentials:
 
@@ -169,8 +175,10 @@ env -u CRABBOX_AWS_INSTANCE_PROFILE \
   crabbox stop --provider aws <cbx_id>
 ```
 
-- Always report the actual provider and id. `cbx_...` means AWS Crabbox;
-  `tbx_...` means Blacksmith Testbox through Crabbox. If the output only says
+- Always report the actual provider and id from wrapper/config output. A
+  `cbx_...` id is shared by direct providers, including local-container, so it
+  does not identify AWS by itself; `tbx_...` identifies Blacksmith Testbox
+  through Crabbox. If the output only says
   `blacksmith testbox list`, use `blacksmith testbox list --all` before
   concluding no box exists.
 - If a warm direct-provider lease smells stale, retry with `--full-resync`
@@ -184,8 +192,9 @@ env -u CRABBOX_AWS_INSTANCE_PROFILE \
   is available, say true live provider auth is blocked instead of silently using
   a fake key.
 - Agent-run tests, including targeted edit-loop tests, default to a pre-warmed
-  remote box selected by source trust. Local test execution requires an
-  explicit user request or a reported remote-provider blocker.
+  effective Crabbox backend selected by source trust and operator preference.
+  Direct host test execution requires an explicit user request or a reported
+  backend blocker.
 - Do not treat inherited shell env as operator intent. In particular,
   `OPENCLAW_LOCAL_CHECK_MODE=throttled` from the local shell is not permission
   to move broad `pnpm check:changed`, `pnpm test:changed`, full `pnpm test`, or
@@ -481,7 +490,7 @@ Efficient flow:
 1. Reproduce or prove the pre-fix symptom from the real user-facing entrypoint
    when feasible. If the issue cannot be reproduced, capture the exact command
    and observed behavior instead.
-2. Patch locally and run narrow tests on the pre-warmed remote box.
+2. Patch locally and run narrow tests on the pre-warmed Crabbox backend.
 3. Run one Crabbox E2E command that starts from the user-facing entrypoint:
    package install, Docker setup, onboarding, channel add, gateway start, or
    agent turn as appropriate.
@@ -500,7 +509,7 @@ Keep it efficient:
   top of that PR.
 - Use `--full-resync` before replacing a warmed direct-provider lease when the
   remote workdir or sync fingerprint appears stale.
-- For agent code tasks, reuse the pre-warmed remote box across focused tests
+- For agent code tasks, reuse the pre-warmed Crabbox backend across focused tests
   and heavy proof. Use a one-shot only when a single late proof is genuinely
   the task's only remote command.
 - Prefer `OPENCLAW_CURRENT_PACKAGE_TGZ` with Docker/package lanes when testing a
@@ -562,8 +571,8 @@ Interactive CLI/onboarding:
 
 ## Reuse And Keepalive
 
-Agent code tasks should pre-warm and reuse one remote box selected by source
-trust for focused tests and heavy proof. One-shot runs remain appropriate for a
+Agent code tasks should pre-warm and reuse one Crabbox backend selected by
+source trust and operator preference for focused tests and heavy proof. One-shot runs remain appropriate for a
 single late proof when early warmup was not warranted.
 
 Reuse the lease, not stale source. Each command must sync the current checkout;
