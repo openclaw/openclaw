@@ -160,13 +160,7 @@ describe("buildCodexMcpThreadConfig", () => {
         },
       },
     });
-    expect(result.configPatch).toMatchObject({
-      openclaw_gee_runtime: {
-        "telegram:geeclaw": {
-          hostMode: "gee-hosted",
-        },
-      },
-    });
+    expect(result.configPatch).not.toHaveProperty("openclaw_gee_runtime");
   });
 
   it("fails closed when a Gee-owned endpoint is missing prepared runtime facts", () => {

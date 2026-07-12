@@ -35,6 +35,7 @@ import type { SilentReplyPromptMode } from "../../system-prompt.types.js";
 import type { PromptMode } from "../../system-prompt.types.js";
 import type { EmbeddedAgentExecutionPhase } from "../execution-phase.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
+import type { EmbeddedRunGeeRuntimePreparedFacts } from "./types.js";
 export type { ClientToolDefinition } from "../../command/shared-types.js";
 
 export type EmbeddedRunTrigger = "cron" | "heartbeat" | "manual" | "memory" | "overflow" | "user";
@@ -149,7 +150,7 @@ export type RunEmbeddedAgentParams = {
   /** Effective model fallback chain for this session attempt. Undefined uses config defaults. */
   modelFallbacksOverride?: string[];
   /** Gee-owned prepared facts for a Gee-hosted OpenClaw turn. */
-  geeRuntimePreparedFacts?: Record<string, unknown>;
+  geeRuntimePreparedFacts?: EmbeddedRunGeeRuntimePreparedFacts;
   /** Session-pinned embedded harness id. Prevents runtime hot-switching. */
   agentHarnessId?: string;
   /** Explicit runtime override selected for this turn. Unlike agentHarnessId, this may force OpenClaw. */

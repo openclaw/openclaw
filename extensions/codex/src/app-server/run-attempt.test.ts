@@ -990,7 +990,9 @@ describe("runCodexAppServerAttempt", () => {
     });
 
     const startRequest = request.mock.calls.find(([method]) => method === "thread/start");
-    expect((startRequest?.[1] as { config?: unknown } | undefined)?.config).toMatchObject({
+    const startConfig = (startRequest?.[1] as { config?: Record<string, unknown> } | undefined)
+      ?.config;
+    expect(startConfig).toMatchObject({
       mcp_servers: {
         search: {
           url: "https://mcp.example.com/mcp",
@@ -1000,6 +1002,7 @@ describe("runCodexAppServerAttempt", () => {
       "features.code_mode_only": false,
       "features.apply_patch_streaming_events": true,
     });
+    expect(startConfig).not.toHaveProperty("openclaw_gee_runtime");
     const binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.mcpServersFingerprint).toBe("mcp-v1");
   });

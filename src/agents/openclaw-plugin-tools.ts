@@ -14,6 +14,7 @@ import { resolvePluginTools } from "../plugins/tools.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { resolveApiKeyForProfile, resolveAuthProfileOrder } from "./auth-profiles.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import type { EmbeddedRunGeeRuntimePreparedFacts } from "./embedded-agent-runner/run/types.js";
 import {
   resolveGeeRuntimeToolAllowlist,
   resolveGeeRuntimeToolPolicy,
@@ -26,6 +27,7 @@ import { applyPluginToolDeliveryDefaults } from "./plugin-tool-delivery-defaults
 import type { AnyAgentTool } from "./tools/common.js";
 
 type ResolveOpenClawPluginToolsOptions = OpenClawPluginToolOptions & {
+  geeRuntimePreparedFacts?: EmbeddedRunGeeRuntimePreparedFacts;
   pluginToolAllowlist?: string[];
   pluginToolDenylist?: string[];
   currentChannelId?: string;

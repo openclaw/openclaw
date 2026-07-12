@@ -128,7 +128,6 @@ export function buildCodexMcpThreadConfig(config: unknown): CodexMcpThreadConfig
     fingerprintSource.openclaw_ownership = serializeOwnershipDecisions(ownershipDecisions);
   }
   if (geeRuntimePreparedFacts.serialized) {
-    configPatch.openclaw_gee_runtime = geeRuntimePreparedFacts.serialized;
     fingerprintSource.openclaw_gee_runtime = geeRuntimePreparedFacts.serialized;
   }
   if (Object.keys(fingerprintSource).length === 0) {

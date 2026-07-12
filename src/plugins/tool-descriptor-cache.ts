@@ -102,7 +102,6 @@ function buildDescriptorContextCacheKey(params: {
       params.currentRuntimeConfig,
       params.configCacheKeyMemo,
     ),
-    geeRuntimePreparedFacts: ctx.geeRuntimePreparedFacts ?? null,
     fsPolicy: ctx.fsPolicy ?? null,
     workspaceDir: ctx.workspaceDir ?? null,
     agentDir: ctx.agentDir ?? null,
