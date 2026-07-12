@@ -2481,29 +2481,50 @@ export const de: TranslationMap = {
     },
     suggestions: {
       title: "Vorschläge",
-      morningBrief: {
-        title: "Morgenüberblick",
-        schedule: "Werktags um 8:00 Uhr",
-        description:
-          "Beginnen Sie jeden Werktag mit einer Zusammenfassung der Aktivitäten über Nacht und der Prioritäten.",
-        prompt:
-          "Gib mir einen Morgenüberblick: Fasse die Aktivitäten über Nacht, ungelesene Nachrichten und die wichtigsten Prioritäten für heute zusammen.",
+      schedules: {
+        weekdayMornings: "Wochentags um 9:00 Uhr",
+        everyMorning: "Täglich um 8:00 Uhr",
+        weekly: "Montags um 9:00 Uhr",
+        hourly: "Stündlich",
       },
-      weeklyReview: {
-        title: "Wochenrückblick",
-        schedule: "Freitags um 16:00 Uhr",
-        description:
-          "Verwandelt die Sitzungen der Woche jeden Freitag in ein prägnantes Status-Update.",
-        prompt:
-          "Schreibe einen Wochenrückblick: Fasse zusammen, woran diese Woche gearbeitet wurde, was ausgeliefert wurde und welche offenen Folgeaufgaben es gibt.",
-      },
-      followUps: {
-        title: "Follow-up-Monitor",
-        schedule: "Wochentags um 9:00 Uhr",
-        description:
-          "Überprüft kürzliche Unterhaltungen und markiert alles, was auf eine Antwort wartet.",
-        prompt:
-          "Überprüfe kürzliche Unterhaltungen und markiere alles, was auf eine Antwort wartet oder meine Aufmerksamkeit erfordert.",
+      ideas: {
+        repoPulse: {
+          name: "Repo-Überblick",
+          tagline:
+            "Über Nacht aufgetretene Issues, PRs und CI-Fehler, nach Dringlichkeit geordnet.",
+          prompt:
+            "Prüfe die Aktivitäten der vergangenen Nacht in meinen Repositorys: neue Issues, Pull Requests und CI-Fehler. Fasse die drei Punkte zusammen, die heute am dringendsten meine Aufmerksamkeit erfordern, jeweils mit einem Link und einer einzeiligen Begründung.",
+        },
+        standupGhostwriter: {
+          name: "Stand-up-Ghostwriter",
+          tagline: "Dein Stand-up-Update, aus der gestrigen Arbeit erstellt.",
+          prompt:
+            "Erstelle mein Stand-up-Update aus den gestrigen Commits, zusammengeführten Pull Requests und offenen Review-Threads. Höchstens drei Stichpunkte: erledigt, in Arbeit, blockiert.",
+        },
+        hackerNewsScout: {
+          name: "Hacker-News-Scout",
+          tagline: "Drei Links, die deinen Kaffee wert sind, mit pointierten Einschätzungen.",
+          prompt:
+            "Durchsuche die heutige Hacker-News-Startseite nach Beiträgen über KI-Agenten, Entwicklertools und TypeScript. Sende mir die drei interessantesten Links, jeweils mit einer einzeiligen pointierten Einschätzung.",
+        },
+        dependencyRadar: {
+          name: "Abhängigkeitsradar",
+          tagline: "Veraltete oder anfällige Abhängigkeiten mit Upgrade-Hinweisen.",
+          prompt:
+            "Prüfe mein Hauptprojekt auf veraltete oder anfällige Abhängigkeiten. Liste die wichtigen Updates jeweils mit einem einzeiligen Risikohinweis auf und erstelle den Upgrade-Befehl.",
+        },
+        watchdog: {
+          name: "Nachtwache",
+          tagline: "Stündliche Zustandsprüfung mit einem einzeiligen Fazit.",
+          prompt:
+            "Prüfe, ob meine Dienste und das Gateway fehlerfrei funktionieren: Durchsuche die neuesten Protokolle nach neuen Fehlern, Neustarts oder ungewöhnlicher Auslastung. Antworte mit einer einzigen kurzen Entwarnungszeile, wenn alles in Ordnung ist; falls etwas nicht funktioniert, gib an, was fehlgeschlagen ist und wo die Fehlersuche beginnen sollte.",
+        },
+        polyglotMinute: {
+          name: "Polyglotte Minute",
+          tagline: "Eine nützliche fremdsprachige Redewendung zum Morgenkaffee.",
+          prompt:
+            "Bringe mir eine nützliche japanische Redewendung bei: die Redewendung, ihre Aussprache, ihre wörtliche Bedeutung und wann man sie verwendet. Beschränke dich auf weniger als fünf Zeilen.",
+        },
       },
     },
     stats: {
@@ -2669,6 +2690,7 @@ export const de: TranslationMap = {
       saving: "Wird gespeichert...",
       saveChanges: "Änderungen speichern",
       createTask: "Aufgabe erstellen",
+      createAndRun: "Erstellen und jetzt ausführen",
       cancel: "Abbrechen",
     },
     jobState: {

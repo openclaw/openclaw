@@ -2400,23 +2400,49 @@ export const zh_TW: TranslationMap = {
     },
     suggestions: {
       title: "建議",
-      morningBrief: {
-        title: "晨間簡報",
-        schedule: "平日上午 8:00",
-        description: "在每個平日開始時，查看隔夜活動和優先事項的摘要。",
-        prompt: "給我一份晨間簡報：摘要隔夜活動、未讀訊息，以及今天的首要優先事項。",
+      schedules: {
+        weekdayMornings: "平日上午 9:00",
+        everyMorning: "每天上午 8:00",
+        weekly: "每週一上午 9:00",
+        hourly: "每小時",
       },
-      weeklyReview: {
-        title: "每週回顧",
-        schedule: "星期五下午 4:00",
-        description: "每週五將本週的工作階段整理成精簡的狀態更新。",
-        prompt: "撰寫每週回顧：總結本週進行了哪些工作、交付了哪些內容，以及尚待跟進的事項。",
-      },
-      followUps: {
-        title: "跟進監控",
-        schedule: "平日上午 9:00",
-        description: "檢視最近的對話，並標記任何正在等待回覆的事項。",
-        prompt: "檢視最近的對話，並標記任何正在等待回覆或需要我注意的事項。",
+      ideas: {
+        repoPulse: {
+          name: "儲存庫動態",
+          tagline: "依緊急程度排列夜間出現的問題、PR 與 CI 失敗。",
+          prompt:
+            "檢視我的儲存庫在夜間的活動：新問題、提取要求與 CI 失敗。摘要列出今天最需要我關注的三件事，每項附上連結及一行原因。",
+        },
+        standupGhostwriter: {
+          name: "站立會議代筆",
+          tagline: "根據昨天的工作草擬站立會議更新。",
+          prompt:
+            "根據昨天的提交、已合併的提取要求與未結的審查討論串，草擬我的站立會議更新。最多三個項目：已完成、進行中、受阻。",
+        },
+        hackerNewsScout: {
+          name: "Hacker News 偵察員",
+          tagline: "三個值得邊喝咖啡邊看的連結，附上犀利短評。",
+          prompt:
+            "瀏覽今天的 Hacker News 首頁，尋找關於 AI 代理、開發者工具與 TypeScript 的貼文。傳送三個最有趣的連結給我，每個連結附上一行犀利短評。",
+        },
+        dependencyRadar: {
+          name: "相依套件雷達",
+          tagline: "過時或有漏洞的相依套件，附升級說明。",
+          prompt:
+            "檢查我的主要專案是否有過時或有漏洞的相依套件。列出值得注意的更新，每項附上一行風險說明，並草擬升級命令。",
+        },
+        watchdog: {
+          name: "夜間監控",
+          tagline: "每小時進行健康檢查，並提供一行結論。",
+          prompt:
+            "檢查我的服務和 Gateway 是否正常：掃描最近的記錄，找出新的錯誤、重新啟動或異常負載。若一切正常，請僅回覆一行簡短的正常訊息；若發現問題，請回報失敗的項目，以及應從何處開始調查。",
+        },
+        polyglotMinute: {
+          name: "多語一分鐘",
+          tagline: "搭配晨間咖啡，學一句實用外語。",
+          prompt:
+            "教我一句實用的日語：包括句子、發音方式、字面意思，以及使用時機。請控制在五行以內。",
+        },
       },
     },
     stats: {
@@ -2569,6 +2595,7 @@ export const zh_TW: TranslationMap = {
       saving: "儲存中...",
       saveChanges: "儲存變更",
       createTask: "建立任務",
+      createAndRun: "建立並立即執行",
       cancel: "取消",
     },
     jobState: {

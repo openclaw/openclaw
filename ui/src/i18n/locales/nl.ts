@@ -2464,27 +2464,50 @@ export const nl: TranslationMap = {
     },
     suggestions: {
       title: "Suggesties",
-      morningBrief: {
-        title: "Ochtendbriefing",
-        schedule: "Weekdagen om 8:00 AM",
-        description:
-          "Begin elke werkdag met een samenvatting van de activiteit gedurende de nacht en prioriteiten.",
-        prompt:
-          "Geef me een ochtendbriefing: vat de activiteit gedurende de nacht, ongelezen berichten en de belangrijkste prioriteiten voor vandaag samen.",
+      schedules: {
+        weekdayMornings: "Werkdagen om 9:00",
+        everyMorning: "Dagelijks om 8:00",
+        weekly: "Maandag om 9:00",
+        hourly: "Elk uur",
       },
-      weeklyReview: {
-        title: "Weekoverzicht",
-        schedule: "Vrijdagen om 4:00 PM",
-        description: "Zet de sessies van de week elke vrijdag om in een beknopte statusupdate.",
-        prompt:
-          "Schrijf een wekelijkse review: vat samen waaraan deze week is gewerkt, wat is opgeleverd en welke follow-ups nog openstaan.",
-      },
-      followUps: {
-        title: "Follow-upmonitor",
-        schedule: "Werkdagen om 9:00",
-        description: "Bekijk recente gesprekken en markeer alles wat op een antwoord wacht.",
-        prompt:
-          "Bekijk recente gesprekken en markeer alles wat op een antwoord wacht of mijn aandacht nodig heeft.",
+      ideas: {
+        repoPulse: {
+          name: "Repo-overzicht",
+          tagline:
+            "Nieuwe issues, PR's en CI-fouten van de afgelopen nacht, gerangschikt op urgentie.",
+          prompt:
+            "Bekijk de activiteit van de afgelopen nacht in mijn repositories: nieuwe issues, pull requests en CI-fouten. Vat de drie zaken samen die vandaag het meest mijn aandacht vereisen, elk met een link en een reden van één regel.",
+        },
+        standupGhostwriter: {
+          name: "Stand-upghostwriter",
+          tagline: "Je stand-upupdate, opgesteld op basis van het werk van gisteren.",
+          prompt:
+            "Stel mijn stand-upupdate op aan de hand van de commits, samengevoegde pull requests en openstaande reviewthreads van gisteren. Maximaal drie opsommingstekens: gedaan, bezig, geblokkeerd.",
+        },
+        hackerNewsScout: {
+          name: "Hacker News-verkenner",
+          tagline: "Drie links voor bij je koffie, met scherpe meningen.",
+          prompt:
+            "Scan de voorpagina van Hacker News van vandaag op berichten over AI-agents, ontwikkelaarstools en TypeScript. Stuur me de drie interessantste links, elk met een scherpe mening van één regel.",
+        },
+        dependencyRadar: {
+          name: "Dependencyradar",
+          tagline: "Verouderde of kwetsbare dependencies, met upgrade-opmerkingen.",
+          prompt:
+            "Controleer mijn hoofdproject op verouderde of kwetsbare dependencies. Vermeld de belangrijke updates, elk met een risico-opmerking van één regel, en stel de upgradeopdracht op.",
+        },
+        watchdog: {
+          name: "Nachtwacht",
+          tagline: "Elk uur een statuscontrole met een oordeel van één regel.",
+          prompt:
+            "Controleer of mijn services en Gateway goed werken: scan recente logs op nieuwe fouten, herstarts of ongebruikelijke belasting. Antwoord met één korte regel dat alles in orde is als er geen problemen zijn; als iets niet werkt, meld dan wat er is misgegaan en waar ik moet beginnen met zoeken.",
+        },
+        polyglotMinute: {
+          name: "Polyglotminuut",
+          tagline: "Eén nuttige zin in een vreemde taal bij je ochtendkoffie.",
+          prompt:
+            "Leer me één nuttige Japanse zin: de zin, de uitspraak, de letterlijke betekenis en wanneer je deze gebruikt. Houd het onder de vijf regels.",
+        },
       },
     },
     stats: {
@@ -2643,6 +2666,7 @@ export const nl: TranslationMap = {
       saving: "Opslaan...",
       saveChanges: "Wijzigingen opslaan",
       createTask: "Taak maken",
+      createAndRun: "Nu aanmaken en uitvoeren",
       cancel: "Annuleren",
     },
     jobState: {

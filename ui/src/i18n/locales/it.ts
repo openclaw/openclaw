@@ -2474,29 +2474,49 @@ export const it: TranslationMap = {
     },
     suggestions: {
       title: "Suggerimenti",
-      morningBrief: {
-        title: "Riepilogo del mattino",
-        schedule: "Giorni feriali alle 8:00",
-        description:
-          "Inizia ogni giorno feriale con un riepilogo dell’attività notturna e delle priorità.",
-        prompt:
-          "Dammi un riepilogo del mattino: riassumi l’attività notturna, i messaggi non letti e le priorità principali per oggi.",
+      schedules: {
+        weekdayMornings: "Giorni feriali alle 9:00",
+        everyMorning: "Ogni giorno alle 8:00",
+        weekly: "Ogni lunedì alle 9:00",
+        hourly: "Ogni ora",
       },
-      weeklyReview: {
-        title: "Revisione settimanale",
-        schedule: "Venerdì alle 16:00",
-        description:
-          "Trasforma le sessioni della settimana in un aggiornamento di stato conciso ogni venerdì.",
-        prompt:
-          "Scrivi una revisione settimanale: riassumi su cosa si è lavorato questa settimana, cosa è stato rilasciato e i follow-up aperti.",
-      },
-      followUps: {
-        title: "Monitor dei follow-up",
-        schedule: "Giorni feriali alle 9:00",
-        description:
-          "Rivedi le conversazioni recenti e segnala tutto ciò che è in attesa di una risposta.",
-        prompt:
-          "Rivedi le conversazioni recenti e segnala tutto ciò che è in attesa di una risposta o richiede la mia attenzione.",
+      ideas: {
+        repoPulse: {
+          name: "Stato dei repository",
+          tagline: "Problemi, PR ed errori CI della notte, classificati per urgenza.",
+          prompt:
+            "Esamina l'attività notturna nei miei repository: nuovi problemi, pull request ed errori CI. Riassumi i tre elementi che richiedono maggiormente la mia attenzione oggi, ciascuno con un link e una motivazione di una riga.",
+        },
+        standupGhostwriter: {
+          name: "Ghostwriter dello stand-up",
+          tagline: "Il tuo aggiornamento per lo stand-up, redatto in base al lavoro di ieri.",
+          prompt:
+            "Prepara il mio aggiornamento per lo stand-up in base ai commit di ieri, alle pull request unite e alle discussioni di revisione aperte. Massimo tre punti: completato, in corso, bloccato.",
+        },
+        hackerNewsScout: {
+          name: "Esploratore di Hacker News",
+          tagline: "Tre link da leggere davanti a un caffè, con opinioni incisive.",
+          prompt:
+            "Esamina la pagina principale di Hacker News di oggi alla ricerca di post su agenti IA, strumenti per sviluppatori e TypeScript. Inviami i tre link più interessanti, ciascuno con un'opinione incisiva di una riga.",
+        },
+        dependencyRadar: {
+          name: "Radar delle dipendenze",
+          tagline: "Dipendenze obsolete o vulnerabili, con note sull'aggiornamento.",
+          prompt:
+            "Controlla se nel mio progetto principale sono presenti dipendenze obsolete o vulnerabili. Elenca gli aggiornamenti rilevanti, ciascuno con una nota di una riga sui rischi, e prepara il comando di aggiornamento.",
+        },
+        watchdog: {
+          name: "Sorveglianza notturna",
+          tagline: "Controllo dello stato ogni ora con un verdetto di una riga.",
+          prompt:
+            "Verifica che i miei servizi e il gateway siano operativi: esamina i log recenti alla ricerca di nuovi errori, riavvii o carichi insoliti. Se è tutto a posto, rispondi con un'unica breve riga di conferma; se qualcosa sembra non funzionare, indica cosa non ha funzionato e da dove iniziare a indagare.",
+        },
+        polyglotMinute: {
+          name: "Minuto poliglotta",
+          tagline: "Una frase utile in una lingua straniera da imparare con il caffè del mattino.",
+          prompt:
+            "Insegnami una frase utile in giapponese: la frase, come pronunciarla, il suo significato letterale e quando usarla. Usa meno di cinque righe.",
+        },
       },
     },
     stats: {
@@ -2658,6 +2678,7 @@ export const it: TranslationMap = {
       saving: "Salvataggio...",
       saveChanges: "Salva modifiche",
       createTask: "Crea attività",
+      createAndRun: "Crea ed esegui ora",
       cancel: "Annulla",
     },
     jobState: {

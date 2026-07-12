@@ -2468,27 +2468,50 @@ export const tr: TranslationMap = {
     },
     suggestions: {
       title: "Öneriler",
-      morningBrief: {
-        title: "Sabah özeti",
-        schedule: "Hafta içi her gün 08:00",
-        description:
-          "Hafta içi her güne gece boyunca olan etkinliklerin ve önceliklerin özetiyle başlayın.",
-        prompt:
-          "Bana bir sabah özeti ver: gece boyunca olan etkinlikleri, okunmamış mesajları ve bugünün en önemli önceliklerini özetle.",
+      schedules: {
+        weekdayMornings: "Hafta içi 09:00",
+        everyMorning: "Her gün 08:00'de",
+        weekly: "Pazartesi günleri 09:00'da",
+        hourly: "Her saat",
       },
-      weeklyReview: {
-        title: "Haftalık gözden geçirme",
-        schedule: "Cuma günleri 16:00",
-        description: "Her Cuma haftanın oturumlarını kısa bir durum güncellemesine dönüştürün.",
-        prompt:
-          "Haftalık bir değerlendirme yazın: bu hafta üzerinde çalışılanları, yayınlananları ve açık takip maddelerini özetleyin.",
-      },
-      followUps: {
-        title: "Takip izleyicisi",
-        schedule: "Hafta içi 09:00",
-        description: "Son konuşmaları gözden geçirin ve yanıt bekleyenleri işaretleyin.",
-        prompt:
-          "Son konuşmaları gözden geçirin ve yanıt bekleyen ya da dikkatimi gerektiren herhangi bir şeyi işaretleyin.",
+      ideas: {
+        repoPulse: {
+          name: "Repo nabzı",
+          tagline: "Gece oluşan sorunlar, PR'lar ve CI hataları, aciliyetlerine göre sıralanır.",
+          prompt:
+            "Depolarımdaki gece etkinliklerini incele: yeni sorunlar, pull request'ler ve CI hataları. Bugün en çok ilgilenmem gereken üç şeyi, her biri için bir bağlantı ve tek satırlık bir gerekçeyle özetle.",
+        },
+        standupGhostwriter: {
+          name: "Standup metin yazarı",
+          tagline: "Dünkü çalışmalarınızdan hazırlanan standup güncellemeniz.",
+          prompt:
+            "Dünkü commit'lerden, birleştirilmiş pull request'lerden ve açık inceleme ileti dizilerinden standup güncellememi hazırla. En fazla üç madde: tamamlanan, devam eden, engellenen.",
+        },
+        hackerNewsScout: {
+          name: "Hacker News gözlemcisi",
+          tagline: "Kahvenize eşlik edecek, çarpıcı yorumlarla üç bağlantı.",
+          prompt:
+            "Bugünkü Hacker News ana sayfasını AI aracıları, geliştirici araçları ve TypeScript hakkındaki gönderiler için tara. En ilginç üç bağlantıyı, her biri için tek satırlık çarpıcı bir yorumla bana gönder.",
+        },
+        dependencyRadar: {
+          name: "Bağımlılık radarı",
+          tagline:
+            "Yükseltme notlarıyla birlikte güncel olmayan veya güvenlik açığı bulunan bağımlılıklar.",
+          prompt:
+            "Ana projemde güncel olmayan veya güvenlik açığı bulunan bağımlılıkları kontrol et. Dikkate değer güncellemeleri, her biri için tek satırlık bir risk notuyla listele ve yükseltme komutunu hazırla.",
+        },
+        watchdog: {
+          name: "Gece nöbeti",
+          tagline: "Tek satırlık sonuçla saatlik sistem durumu kontrolü.",
+          prompt:
+            "Hizmetlerimin ve Gateway'in sağlıklı olduğunu kontrol et: yeni hatalar, yeniden başlatmalar veya olağan dışı yükler için son günlükleri tara. Her şey yolundaysa tek ve kısa bir sorun yok mesajıyla yanıt ver; bir şey bozuk görünüyorsa neyin başarısız olduğunu ve incelemeye nereden başlanacağını bildir.",
+        },
+        polyglotMinute: {
+          name: "Çok dilli dakika",
+          tagline: "Sabah kahvenizle birlikte kullanışlı bir yabancı ifade.",
+          prompt:
+            "Bana Japonca kullanışlı bir ifade öğret: ifadeyi, nasıl telaffuz edildiğini, kelimesi kelimesine anlamını ve ne zaman kullanılacağını belirt. Beş satırdan kısa tut.",
+        },
       },
     },
     stats: {
@@ -2648,6 +2671,7 @@ export const tr: TranslationMap = {
       saving: "Kaydediliyor...",
       saveChanges: "Değişiklikleri kaydet",
       createTask: "Görev oluştur",
+      createAndRun: "Oluştur ve şimdi çalıştır",
       cancel: "İptal",
     },
     jobState: {

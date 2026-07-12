@@ -2397,23 +2397,48 @@ export const zh_CN: TranslationMap = {
     },
     suggestions: {
       title: "建议",
-      morningBrief: {
-        title: "晨间简报",
-        schedule: "工作日上午 8:00",
-        description: "在每个工作日开始时，查看夜间活动和优先事项摘要。",
-        prompt: "给我一份晨间简报：总结夜间活动、未读消息以及今天的首要事项。",
+      schedules: {
+        weekdayMornings: "工作日上午 9:00",
+        everyMorning: "每天上午 8:00",
+        weekly: "每周一上午 9:00",
+        hourly: "每小时",
       },
-      weeklyReview: {
-        title: "每周回顾",
-        schedule: "周五下午 4:00",
-        description: "每周五将本周的会话整理成简洁的状态更新。",
-        prompt: "撰写每周回顾：总结本周完成的工作、已发布的内容以及未完成的后续事项。",
-      },
-      followUps: {
-        title: "跟进监视器",
-        schedule: "工作日上午 9:00",
-        description: "查看最近的对话，并标记任何等待回复的事项。",
-        prompt: "查看最近的对话，并标记任何正在等待回复或需要我关注的事项。",
+      ideas: {
+        repoPulse: {
+          name: "仓库动态",
+          tagline: "按紧急程度排列夜间出现的问题、PR 和 CI 失败。",
+          prompt:
+            "查看我的代码仓库中夜间的活动：新问题、拉取请求和 CI 失败。总结今天最需要我关注的三件事，每项附上链接和一句话说明原因。",
+        },
+        standupGhostwriter: {
+          name: "站会代笔",
+          tagline: "根据昨天的工作起草站会更新。",
+          prompt:
+            "根据昨天的提交、已合并的拉取请求和未解决的审查讨论，起草我的站会更新。最多三条：已完成、进行中、受阻。",
+        },
+        hackerNewsScout: {
+          name: "Hacker News 侦察员",
+          tagline: "三条值得边喝咖啡边看的链接，附犀利点评。",
+          prompt:
+            "浏览今天 Hacker News 首页上有关 AI 智能体、开发者工具和 TypeScript 的帖子。向我发送最有趣的三个链接，每个链接附上一句犀利点评。",
+        },
+        dependencyRadar: {
+          name: "依赖项雷达",
+          tagline: "过时或存在漏洞的依赖项，附升级说明。",
+          prompt:
+            "检查我的主要项目中是否有过时或存在漏洞的依赖项。列出值得关注的更新，每项附上一句风险说明，并起草升级命令。",
+        },
+        watchdog: {
+          name: "夜间监控",
+          tagline: "每小时进行健康检查，并给出一句话结论。",
+          prompt:
+            "检查我的服务和 Gateway 是否健康：扫描最近的日志，查找新的错误、重启或异常负载。如果一切正常，仅用一行简短的话回复一切正常；如果发现异常，请报告故障内容以及应从何处开始排查。",
+        },
+        polyglotMinute: {
+          name: "多语一分钟",
+          tagline: "晨间咖啡时间，学一句实用外语。",
+          prompt: "教我一句实用的日语：包括短语、发音、字面意思和使用场景。控制在五行以内。",
+        },
       },
     },
     stats: {
@@ -2566,6 +2591,7 @@ export const zh_CN: TranslationMap = {
       saving: "保存中...",
       saveChanges: "保存更改",
       createTask: "创建任务",
+      createAndRun: "创建并立即运行",
       cancel: "取消",
     },
     jobState: {

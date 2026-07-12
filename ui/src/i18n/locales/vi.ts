@@ -2440,29 +2440,49 @@ export const vi: TranslationMap = {
     },
     suggestions: {
       title: "Gợi ý",
-      morningBrief: {
-        title: "Tóm tắt buổi sáng",
-        schedule: "Các ngày trong tuần lúc 8:00 SA",
-        description:
-          "Bắt đầu mỗi ngày trong tuần bằng bản tóm tắt hoạt động qua đêm và các ưu tiên.",
-        prompt:
-          "Hãy cung cấp cho tôi bản tóm tắt buổi sáng: tóm tắt hoạt động qua đêm, tin nhắn chưa đọc và các ưu tiên hàng đầu cho hôm nay.",
+      schedules: {
+        weekdayMornings: "Các ngày trong tuần lúc 9:00 SA",
+        everyMorning: "Hằng ngày lúc 8:00 AM",
+        weekly: "Thứ Hai lúc 9:00 AM",
+        hourly: "Mỗi giờ",
       },
-      weeklyReview: {
-        title: "Đánh giá hằng tuần",
-        schedule: "Thứ Sáu lúc 4:00 CH",
-        description:
-          "Biến các phiên trong tuần thành bản cập nhật trạng thái ngắn gọn vào mỗi thứ Sáu.",
-        prompt:
-          "Viết bản đánh giá hằng tuần: tóm tắt những việc đã làm trong tuần này, những gì đã phát hành và các việc cần theo dõi còn mở.",
-      },
-      followUps: {
-        title: "Trình theo dõi follow-up",
-        schedule: "Các ngày trong tuần lúc 9:00 SA",
-        description:
-          "Xem lại các cuộc trò chuyện gần đây và đánh dấu mọi nội dung đang chờ phản hồi.",
-        prompt:
-          "Xem lại các cuộc trò chuyện gần đây và đánh dấu mọi nội dung đang chờ phản hồi hoặc cần tôi chú ý.",
+      ideas: {
+        repoPulse: {
+          name: "Nhịp kho mã",
+          tagline: "Các sự cố, PR và lỗi CI qua đêm, được xếp hạng theo mức độ khẩn cấp.",
+          prompt:
+            "Xem lại hoạt động qua đêm trong các kho mã của tôi: sự cố mới, pull request và lỗi CI. Tóm tắt ba việc cần tôi chú ý nhất hôm nay, mỗi việc kèm theo một liên kết và lý do trong một dòng.",
+        },
+        standupGhostwriter: {
+          name: "Trợ lý viết báo cáo standup",
+          tagline: "Bản cập nhật standup của bạn, được soạn từ công việc hôm qua.",
+          prompt:
+            "Soạn bản cập nhật standup của tôi dựa trên các commit hôm qua, các pull request đã hợp nhất và các luồng đánh giá còn mở. Tối đa ba gạch đầu dòng: đã làm, đang làm, bị chặn.",
+        },
+        hackerNewsScout: {
+          name: "Trinh sát Hacker News",
+          tagline: "Ba liên kết đáng để bạn vừa uống cà phê vừa đọc, kèm nhận định sắc bén.",
+          prompt:
+            "Quét trang chủ Hacker News hôm nay để tìm các bài viết về tác nhân AI, công cụ dành cho nhà phát triển và TypeScript. Gửi cho tôi ba liên kết thú vị nhất, mỗi liên kết kèm một nhận định sắc bén trong một dòng.",
+        },
+        dependencyRadar: {
+          name: "Ra-đa dependency",
+          tagline: "Các dependency lỗi thời hoặc có lỗ hổng, kèm ghi chú nâng cấp.",
+          prompt:
+            "Kiểm tra dự án chính của tôi để tìm các dependency lỗi thời hoặc có lỗ hổng. Liệt kê các bản cập nhật đáng chú ý, mỗi bản kèm ghi chú rủi ro trong một dòng, rồi soạn lệnh nâng cấp.",
+        },
+        watchdog: {
+          name: "Canh gác ban đêm",
+          tagline: "Kiểm tra tình trạng mỗi giờ với kết luận trong một dòng.",
+          prompt:
+            "Kiểm tra xem các dịch vụ và Gateway của tôi có hoạt động bình thường không: quét nhật ký gần đây để tìm lỗi mới, các lần khởi động lại hoặc tải bất thường. Chỉ trả lời bằng một dòng ngắn xác nhận mọi thứ đều ổn khi không có vấn đề; nếu có vẻ có sự cố, hãy báo cáo lỗi xảy ra ở đâu và nên bắt đầu kiểm tra từ đâu.",
+        },
+        polyglotMinute: {
+          name: "Một phút đa ngôn ngữ",
+          tagline: "Một cụm từ nước ngoài hữu ích bên tách cà phê buổi sáng.",
+          prompt:
+            "Dạy tôi một cụm từ tiếng Nhật hữu ích: cụm từ đó, cách phát âm, nghĩa đen và thời điểm sử dụng. Giới hạn trong năm dòng.",
+        },
       },
     },
     stats: {
@@ -2617,6 +2637,7 @@ export const vi: TranslationMap = {
       saving: "Đang lưu...",
       saveChanges: "Lưu thay đổi",
       createTask: "Tạo tác vụ",
+      createAndRun: "Tạo và chạy ngay",
       cancel: "Hủy",
     },
     jobState: {

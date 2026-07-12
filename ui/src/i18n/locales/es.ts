@@ -2468,29 +2468,49 @@ export const es: TranslationMap = {
     },
     suggestions: {
       title: "Sugerencias",
-      morningBrief: {
-        title: "Resumen matutino",
-        schedule: "Días laborables a las 8:00 AM",
-        description:
-          "Empieza cada día laborable con un resumen de la actividad nocturna y las prioridades.",
-        prompt:
-          "Dame un resumen matutino: resume la actividad nocturna, los mensajes sin leer y las principales prioridades para hoy.",
+      schedules: {
+        weekdayMornings: "Días laborables a las 9:00 a. m.",
+        everyMorning: "Todos los días a las 8:00 a. m.",
+        weekly: "Los lunes a las 9:00 a. m.",
+        hourly: "Cada hora",
       },
-      weeklyReview: {
-        title: "Revisión semanal",
-        schedule: "Viernes a las 4:00 PM",
-        description:
-          "Convierte las sesiones de la semana en una actualización de estado concisa cada viernes.",
-        prompt:
-          "Escribe una revisión semanal: resume en qué se trabajó esta semana, qué se lanzó y los seguimientos pendientes.",
-      },
-      followUps: {
-        title: "Monitor de seguimiento",
-        schedule: "Días laborables a las 9:00 a. m.",
-        description:
-          "Revisa las conversaciones recientes y marca cualquier cosa que esté esperando una respuesta.",
-        prompt:
-          "Revisa las conversaciones recientes y marca cualquier cosa que esté esperando una respuesta o que necesite mi atención.",
+      ideas: {
+        repoPulse: {
+          name: "Pulso de repositorios",
+          tagline: "Incidencias, PR y fallos de CI de la noche, ordenados por urgencia.",
+          prompt:
+            "Revisa la actividad de la noche en mis repositorios: nuevas incidencias, solicitudes de incorporación de cambios y fallos de CI. Resume las tres cosas que más requieren mi atención hoy, cada una con un enlace y un motivo en una línea.",
+        },
+        standupGhostwriter: {
+          name: "Redactor de reuniones diarias",
+          tagline: "El borrador de tu actualización diaria, basado en el trabajo de ayer.",
+          prompt:
+            "Redacta mi actualización diaria a partir de los commits de ayer, las solicitudes de incorporación de cambios fusionadas y los hilos de revisión abiertos. Tres viñetas como máximo: terminado, en curso y bloqueado.",
+        },
+        hackerNewsScout: {
+          name: "Explorador de Hacker News",
+          tagline: "Tres enlaces para acompañar tu café, con opiniones contundentes.",
+          prompt:
+            "Revisa la portada de Hacker News de hoy en busca de publicaciones sobre agentes de IA, herramientas para desarrolladores y TypeScript. Envíame los tres enlaces más interesantes, cada uno con una opinión contundente en una línea.",
+        },
+        dependencyRadar: {
+          name: "Radar de dependencias",
+          tagline: "Dependencias obsoletas o vulnerables, con notas de actualización.",
+          prompt:
+            "Comprueba si mi proyecto principal tiene dependencias obsoletas o vulnerables. Enumera las actualizaciones destacadas, cada una con una nota de riesgo en una línea, y prepara el comando de actualización.",
+        },
+        watchdog: {
+          name: "Vigilancia nocturna",
+          tagline: "Comprobación del estado cada hora con un veredicto en una línea.",
+          prompt:
+            "Comprueba que mis servicios y el gateway funcionen correctamente: revisa los registros recientes en busca de nuevos errores, reinicios o cargas inusuales. Responde con una sola línea breve indicando que todo está bien cuando no haya problemas; si algo parece estar fallando, informa de qué ha fallado y dónde empezar a buscar.",
+        },
+        polyglotMinute: {
+          name: "Minuto políglota",
+          tagline: "Una frase útil en otro idioma para acompañar tu café matutino.",
+          prompt:
+            "Enséñame una frase útil en japonés: la frase, cómo se pronuncia, su significado literal y cuándo usarla. Limítate a menos de cinco líneas.",
+        },
       },
     },
     stats: {
@@ -2653,6 +2673,7 @@ export const es: TranslationMap = {
       saving: "Guardando...",
       saveChanges: "Guardar cambios",
       createTask: "Crear tarea",
+      createAndRun: "Crear y ejecutar ahora",
       cancel: "Cancelar",
     },
     jobState: {

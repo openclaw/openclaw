@@ -2443,25 +2443,49 @@ export const ko: TranslationMap = {
     },
     suggestions: {
       title: "제안",
-      morningBrief: {
-        title: "아침 브리핑",
-        schedule: "평일 오전 8:00",
-        description: "밤사이 활동과 우선순위 요약으로 평일을 시작하세요.",
-        prompt:
-          "아침 브리핑을 제공해 주세요: 밤사이 활동, 읽지 않은 메시지, 오늘의 최우선 과제를 요약해 주세요.",
+      schedules: {
+        weekdayMornings: "평일 오전 9:00",
+        everyMorning: "매일 오전 8:00",
+        weekly: "매주 월요일 오전 9:00",
+        hourly: "매시간",
       },
-      weeklyReview: {
-        title: "주간 리뷰",
-        schedule: "금요일 오후 4:00",
-        description: "매주 금요일, 이번 주의 세션을 간결한 상태 업데이트로 정리합니다.",
-        prompt:
-          "주간 리뷰를 작성하세요: 이번 주에 작업한 내용, 출시된 것, 진행 중인 후속 조치를 요약하세요.",
-      },
-      followUps: {
-        title: "후속 조치 모니터",
-        schedule: "평일 오전 9:00",
-        description: "최근 대화를 검토하고 답장을 기다리는 항목을 표시합니다.",
-        prompt: "최근 대화를 검토하고 답장을 기다리거나 내 주의가 필요한 항목을 표시하세요.",
+      ideas: {
+        repoPulse: {
+          name: "리포지토리 동향",
+          tagline: "밤사이 발생한 이슈, PR, CI 실패를 긴급도순으로 정리합니다.",
+          prompt:
+            "내 리포지토리에서 밤사이 발생한 활동(새 이슈, pull request, CI 실패)을 검토하세요. 오늘 가장 주의가 필요한 세 가지를 링크와 한 줄짜리 이유와 함께 요약하세요.",
+        },
+        standupGhostwriter: {
+          name: "스탠드업 대필가",
+          tagline: "어제 작업을 바탕으로 스탠드업 업데이트 초안을 작성합니다.",
+          prompt:
+            "어제의 커밋, 병합된 pull request, 미해결 리뷰 스레드를 바탕으로 내 스탠드업 업데이트 초안을 작성하세요. 완료, 진행 중, 차단됨의 세 가지 항목으로 제한하세요.",
+        },
+        hackerNewsScout: {
+          name: "Hacker News 탐색기",
+          tagline: "커피 한잔하며 볼 만한 링크 세 개와 핵심 의견을 전해드립니다.",
+          prompt:
+            "오늘의 Hacker News 첫 페이지에서 AI 에이전트, 개발자 도구, TypeScript에 관한 게시물을 살펴보세요. 가장 흥미로운 링크 세 개를 각각 한 줄짜리 핵심 의견과 함께 보내주세요.",
+        },
+        dependencyRadar: {
+          name: "종속성 레이더",
+          tagline: "오래되었거나 취약한 종속성을 업그레이드 참고 사항과 함께 알려드립니다.",
+          prompt:
+            "내 주요 프로젝트에서 오래되었거나 취약한 종속성을 확인하세요. 주목할 만한 업데이트를 각각 한 줄짜리 위험 참고 사항과 함께 나열하고 업그레이드 명령어 초안을 작성하세요.",
+        },
+        watchdog: {
+          name: "야간 감시",
+          tagline: "매시간 상태를 점검하고 한 줄로 결과를 알려드립니다.",
+          prompt:
+            "내 서비스와 Gateway가 정상인지 확인해 주세요. 최근 로그에서 새로운 오류, 재시작 또는 비정상적인 부하를 찾아보세요. 모든 것이 정상이면 이상 없다는 짧은 한 줄로 답변하고, 문제가 있는 것 같으면 무엇이 실패했는지와 어디부터 살펴봐야 하는지 알려 주세요.",
+        },
+        polyglotMinute: {
+          name: "다국어 학습 1분",
+          tagline: "모닝 커피와 함께 배우는 유용한 외국어 표현 하나.",
+          prompt:
+            "유용한 일본어 표현 하나를 가르쳐 주세요. 표현, 발음 방법, 직역한 의미, 언제 사용하는지를 알려 주세요. 다섯 줄 이내로 작성해 주세요.",
+        },
       },
     },
     stats: {
@@ -2614,6 +2638,7 @@ export const ko: TranslationMap = {
       saving: "저장 중...",
       saveChanges: "변경 사항 저장",
       createTask: "작업 만들기",
+      createAndRun: "지금 생성 및 실행",
       cancel: "취소",
     },
     jobState: {

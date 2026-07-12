@@ -2486,29 +2486,49 @@ export const fr: TranslationMap = {
     },
     suggestions: {
       title: "Suggestions",
-      morningBrief: {
-        title: "Briefing du matin",
-        schedule: "En semaine à 8:00 AM",
-        description:
-          "Commencez chaque jour de semaine par un résumé de l’activité de la nuit et des priorités.",
-        prompt:
-          "Fais-moi un briefing du matin : résume l’activité de la nuit, les messages non lus et les principales priorités pour aujourd’hui.",
+      schedules: {
+        weekdayMornings: "Jours de semaine à 9:00",
+        everyMorning: "Tous les jours à 8 h 00",
+        weekly: "Le lundi à 9 h 00",
+        hourly: "Toutes les heures",
       },
-      weeklyReview: {
-        title: "Revue hebdomadaire",
-        schedule: "Le vendredi à 4:00 PM",
-        description:
-          "Transformez les sessions de la semaine en une mise à jour concise de l’état chaque vendredi.",
-        prompt:
-          "Rédiger une revue hebdomadaire : résumer ce sur quoi on a travaillé cette semaine, ce qui a été livré et les suivis en cours.",
-      },
-      followUps: {
-        title: "Suivi des relances",
-        schedule: "Jours de semaine à 9:00",
-        description:
-          "Passer en revue les conversations récentes et signaler tout élément en attente d’une réponse.",
-        prompt:
-          "Passer en revue les conversations récentes et signaler tout élément en attente d’une réponse ou nécessitant mon attention.",
+      ideas: {
+        repoPulse: {
+          name: "Pouls des dépôts",
+          tagline: "Problèmes, PR et échecs de CI survenus pendant la nuit, classés par urgence.",
+          prompt:
+            "Passez en revue l’activité nocturne dans mes dépôts : nouveaux problèmes, pull requests et échecs de CI. Résumez les trois éléments qui nécessitent le plus mon attention aujourd’hui, chacun avec un lien et une justification en une ligne.",
+        },
+        standupGhostwriter: {
+          name: "Rédacteur de stand-up",
+          tagline: "Votre compte rendu de stand-up, rédigé à partir du travail d’hier.",
+          prompt:
+            "Rédigez mon compte rendu de stand-up à partir des commits d’hier, des pull requests fusionnées et des fils de revue ouverts. Trois puces au maximum : terminé, en cours, bloqué.",
+        },
+        hackerNewsScout: {
+          name: "Éclaireur Hacker News",
+          tagline: "Trois liens à consulter autour d’un café, avec des avis tranchés.",
+          prompt:
+            "Parcourez la page d’accueil de Hacker News aujourd’hui à la recherche de publications sur les agents d’IA, les outils de développement et TypeScript. Envoyez-moi les trois liens les plus intéressants, chacun accompagné d’un avis tranché en une ligne.",
+        },
+        dependencyRadar: {
+          name: "Radar des dépendances",
+          tagline: "Dépendances obsolètes ou vulnérables, avec des notes de mise à niveau.",
+          prompt:
+            "Vérifiez si mon projet principal contient des dépendances obsolètes ou vulnérables. Répertoriez les mises à jour notables avec, pour chacune, une note d’une ligne sur les risques, et préparez la commande de mise à niveau.",
+        },
+        watchdog: {
+          name: "Veille de nuit",
+          tagline: "Contrôle de l’état toutes les heures avec un verdict en une ligne.",
+          prompt:
+            "Vérifie que mes services et mon Gateway fonctionnent correctement : analyse les journaux récents à la recherche de nouvelles erreurs, de redémarrages ou d’une charge inhabituelle. Réponds par une seule courte phrase indiquant que tout va bien si aucun problème n’est détecté ; si quelque chose semble défaillant, indique ce qui a échoué et où commencer les recherches.",
+        },
+        polyglotMinute: {
+          name: "Minute polyglotte",
+          tagline: "Une expression étrangère utile avec votre café du matin.",
+          prompt:
+            "Apprends-moi une expression utile en japonais : l’expression, sa prononciation, son sens littéral et quand l’utiliser. Réponds en moins de cinq lignes.",
+        },
       },
     },
     stats: {
@@ -2670,6 +2690,7 @@ export const fr: TranslationMap = {
       saving: "Enregistrement...",
       saveChanges: "Enregistrer les modifications",
       createTask: "Créer une tâche",
+      createAndRun: "Créer et exécuter maintenant",
       cancel: "Annuler",
     },
     jobState: {

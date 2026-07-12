@@ -2454,26 +2454,49 @@ export const id: TranslationMap = {
     },
     suggestions: {
       title: "Saran",
-      morningBrief: {
-        title: "Ringkasan pagi",
-        schedule: "Hari kerja pukul 8:00 AM",
-        description: "Mulai setiap hari kerja dengan ringkasan aktivitas semalam dan prioritas.",
-        prompt:
-          "Beri saya ringkasan pagi: rangkum aktivitas semalam, pesan yang belum dibaca, dan prioritas utama untuk hari ini.",
+      schedules: {
+        weekdayMornings: "Hari kerja pukul 9:00",
+        everyMorning: "Setiap hari pukul 08.00",
+        weekly: "Setiap Senin pukul 09.00",
+        hourly: "Setiap jam",
       },
-      weeklyReview: {
-        title: "Tinjauan mingguan",
-        schedule: "Jumat pukul 4:00 PM",
-        description: "Ubah sesi minggu ini menjadi pembaruan status singkat setiap hari Jumat.",
-        prompt:
-          "Tulis tinjauan mingguan: rangkum apa yang dikerjakan minggu ini, apa yang telah dirilis, dan tindak lanjut yang masih terbuka.",
-      },
-      followUps: {
-        title: "Pemantau tindak lanjut",
-        schedule: "Hari kerja pukul 9:00",
-        description: "Tinjau percakapan terbaru dan tandai apa pun yang menunggu balasan.",
-        prompt:
-          "Tinjau percakapan terbaru dan tandai apa pun yang menunggu balasan atau memerlukan perhatian saya.",
+      ideas: {
+        repoPulse: {
+          name: "Denyut repositori",
+          tagline: "Masalah, PR, dan kegagalan CI semalam, diurutkan berdasarkan urgensi.",
+          prompt:
+            "Tinjau aktivitas semalam di repositori saya: masalah baru, pull request, dan kegagalan CI. Rangkum tiga hal yang paling membutuhkan perhatian saya hari ini, masing-masing dengan tautan dan alasan satu baris.",
+        },
+        standupGhostwriter: {
+          name: "Penulis bayangan standup",
+          tagline: "Pembaruan standup Anda, disusun dari pekerjaan kemarin.",
+          prompt:
+            "Susun pembaruan standup saya berdasarkan commit kemarin, pull request yang digabungkan, dan utas tinjauan yang masih terbuka. Maksimal tiga poin: selesai, sedang dikerjakan, terhambat.",
+        },
+        hackerNewsScout: {
+          name: "Pengintai Hacker News",
+          tagline: "Tiga tautan yang layak menemani kopi Anda, beserta opini tajam.",
+          prompt:
+            "Pindai halaman depan Hacker News hari ini untuk mencari postingan tentang agen AI, alat bantu developer, dan TypeScript. Kirimkan tiga tautan paling menarik, masing-masing dengan opini tajam satu baris.",
+        },
+        dependencyRadar: {
+          name: "Radar dependensi",
+          tagline: "Dependensi usang atau rentan, beserta catatan pemutakhiran.",
+          prompt:
+            "Periksa proyek utama saya untuk mencari dependensi yang usang atau rentan. Cantumkan pembaruan penting, masing-masing dengan catatan risiko satu baris, lalu susun perintah pemutakhirannya.",
+        },
+        watchdog: {
+          name: "Pengawasan malam",
+          tagline: "Pemeriksaan kesehatan setiap jam dengan kesimpulan satu baris.",
+          prompt:
+            "Periksa apakah layanan dan Gateway saya berjalan dengan baik: pindai log terbaru untuk menemukan kesalahan baru, mulai ulang, atau beban yang tidak biasa. Balas dengan satu baris singkat yang menyatakan semuanya baik-baik saja jika tidak ada masalah; jika ada yang tampak rusak, laporkan apa yang gagal dan dari mana harus mulai memeriksanya.",
+        },
+        polyglotMinute: {
+          name: "Menit poliglot",
+          tagline: "Satu frasa asing yang berguna untuk menemani kopi pagi Anda.",
+          prompt:
+            "Ajari saya satu frasa yang berguna dalam bahasa Jepang: frasanya, cara mengucapkannya, arti harfiahnya, dan kapan menggunakannya. Batasi hingga kurang dari lima baris.",
+        },
       },
     },
     stats: {
@@ -2629,6 +2652,7 @@ export const id: TranslationMap = {
       saving: "Menyimpan...",
       saveChanges: "Simpan perubahan",
       createTask: "Buat tugas",
+      createAndRun: "Buat & jalankan sekarang",
       cancel: "Batal",
     },
     jobState: {
