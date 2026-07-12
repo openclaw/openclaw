@@ -1,41 +1,38 @@
-// Voice Call tests cover config compat plugin behavior.
+// Voice Call tests cover setup-time config migration behavior.
 import { describe, expect, it } from "vitest";
-import {
-  VOICE_CALL_LEGACY_CONFIG_REMOVAL_VERSION,
-  collectVoiceCallLegacyConfigIssues,
-  formatVoiceCallLegacyConfigWarnings,
-  migrateVoiceCallLegacyConfigInput,
-  normalizeVoiceCallLegacyConfigInput,
-  parseVoiceCallPluginConfig,
-} from "./config-migration.js";
+import { migrateVoiceCallLegacyConfigInput } from "./config-migration.js";
 
-describe("voice-call config compatibility", () => {
+describe("voice-call config migration", () => {
   it("maps deprecated provider and twilio.from fields into canonical config", () => {
-    const parsed = parseVoiceCallPluginConfig({
-      enabled: true,
-      provider: "log",
-      twilio: {
-        from: "+15550001234",
+    const migration = migrateVoiceCallLegacyConfigInput({
+      value: {
+        enabled: true,
+        provider: "log",
+        twilio: {
+          from: "+15550001234",
+        },
       },
     });
 
-    expect(parsed.provider).toBe("mock");
-    expect(parsed.fromNumber).toBe("+15550001234");
+    expect(migration.config.provider).toBe("mock");
+    expect(migration.config.fromNumber).toBe("+15550001234");
   });
 
   it("moves legacy streaming OpenAI fields into streaming.providers.openai", () => {
-    const normalized = normalizeVoiceCallLegacyConfigInput({
-      streaming: {
-        enabled: true,
-        sttProvider: "openai",
-        openaiApiKey: "test",
-        sttModel: "gpt-4o-transcribe",
-        silenceDurationMs: 700,
-        vadThreshold: 0.4,
+    const migration = migrateVoiceCallLegacyConfigInput({
+      value: {
+        streaming: {
+          enabled: true,
+          sttProvider: "openai",
+          openaiApiKey: "test",
+          sttModel: "gpt-4o-transcribe",
+          silenceDurationMs: 700,
+          vadThreshold: 0.4,
+        },
       },
     });
 
-    const streaming = normalized.streaming as
+    const streaming = migration.config.streaming as
       | {
           enabled?: boolean;
           provider?: string;
@@ -64,18 +61,20 @@ describe("voice-call config compatibility", () => {
   });
 
   it("removes legacy realtime agentContext system prompt toggle", () => {
-    const normalized = normalizeVoiceCallLegacyConfigInput({
-      realtime: {
-        agentContext: {
-          enabled: true,
-          includeSystemPrompt: false,
-          includeWorkspaceFiles: true,
+    const migration = migrateVoiceCallLegacyConfigInput({
+      value: {
+        realtime: {
+          agentContext: {
+            enabled: true,
+            includeSystemPrompt: false,
+            includeWorkspaceFiles: true,
+          },
         },
       },
     });
 
     const agentContext = (
-      normalized.realtime as
+      migration.config.realtime as
         | {
             agentContext?: {
               enabled?: boolean;
@@ -117,71 +116,6 @@ describe("voice-call config compatibility", () => {
     expect(migration.changes).toEqual([
       "Removed invalid plugins.entries.voice-call.config.streaming.silenceDurationMs.",
       "Removed invalid plugins.entries.voice-call.config.streaming.vadThreshold.",
-    ]);
-    expect(migration.issues.map((issue) => issue.path)).toEqual([
-      "streaming.silenceDurationMs",
-      "streaming.vadThreshold",
-    ]);
-  });
-
-  it("reports doctor-oriented legacy issues and warnings", () => {
-    const raw = {
-      provider: "log",
-      twilio: {
-        from: "+15550001234",
-      },
-      streaming: {
-        sttProvider: "openai",
-        openaiApiKey: "test",
-      },
-      realtime: {
-        agentContext: {
-          includeSystemPrompt: true,
-        },
-      },
-    };
-
-    expect(collectVoiceCallLegacyConfigIssues(raw)).toEqual([
-      {
-        path: "provider",
-        replacement: "provider",
-        message: 'Replace provider "log" with "mock".',
-      },
-      {
-        path: "twilio.from",
-        replacement: "fromNumber",
-        message: "Move twilio.from to fromNumber.",
-      },
-      {
-        path: "streaming.sttProvider",
-        replacement: "streaming.provider",
-        message: "Move streaming.sttProvider to streaming.provider.",
-      },
-      {
-        path: "streaming.openaiApiKey",
-        replacement: "streaming.providers.openai.apiKey",
-        message: "Move streaming.openaiApiKey to streaming.providers.openai.apiKey.",
-      },
-      {
-        path: "realtime.agentContext.includeSystemPrompt",
-        replacement: "realtime.agentContext",
-        message:
-          "Remove realtime.agentContext.includeSystemPrompt; realtime context now uses the generated agent prompt.",
-      },
-    ]);
-    expect(
-      formatVoiceCallLegacyConfigWarnings({
-        value: raw,
-        configPathPrefix: "plugins.entries.voice-call.config",
-        doctorFixCommand: "openclaw doctor --fix",
-      }),
-    ).toEqual([
-      `[voice-call] legacy config keys detected under plugins.entries.voice-call.config; runtime loading will not rewrite them, and support for the legacy shape will be removed in ${VOICE_CALL_LEGACY_CONFIG_REMOVAL_VERSION}. Run "openclaw doctor --fix".`,
-      '[voice-call] plugins.entries.voice-call.config.provider: Replace provider "log" with "mock".',
-      "[voice-call] plugins.entries.voice-call.config.twilio.from: Move twilio.from to fromNumber.",
-      "[voice-call] plugins.entries.voice-call.config.streaming.sttProvider: Move streaming.sttProvider to streaming.provider.",
-      "[voice-call] plugins.entries.voice-call.config.streaming.openaiApiKey: Move streaming.openaiApiKey to streaming.providers.openai.apiKey.",
-      "[voice-call] plugins.entries.voice-call.config.realtime.agentContext.includeSystemPrompt: Remove realtime.agentContext.includeSystemPrompt; realtime context now uses the generated agent prompt.",
     ]);
   });
 
