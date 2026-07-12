@@ -4815,7 +4815,13 @@ export async function runEmbeddedAttempt(
         log.debug(
           `run cleanup: stage=post-compaction-session-events runId=${params.runId} sessionId=${params.sessionId}`,
         );
-        await sessionLockController.withSessionWriteLock(async () => {
+        log.debug(
+          `run cleanup: stage=final-snapshot-lock-wait runId=${params.runId} sessionId=${params.sessionId}`,
+        );
+        const finalSnapshotWrite = sessionLockController.withSessionWriteLock(async () => {
+          log.debug(
+            `run cleanup: stage=final-snapshot-lock-acquired runId=${params.runId} sessionId=${params.sessionId}`,
+          );
           // Check if ANY compaction occurred during the entire attempt (prompt + retry).
           // Using a cumulative count (> 0) instead of a delta check avoids missing
           // compactions that complete during activeSession.prompt() before the delta
@@ -4926,6 +4932,12 @@ export async function runEmbeddedAttempt(
               log.warn(`failed to persist prompt error entry: ${String(entryErr)}`);
             }
           }
+        });
+        await finalSnapshotWrite.catch((err: unknown) => {
+          log.warn(
+            `run cleanup: stage=final-snapshot-lock-failed runId=${params.runId} sessionId=${params.sessionId} error=${formatErrorMessage(err)}`,
+          );
+          throw err;
         });
 
         // Let the active context engine run its post-turn lifecycle. These hooks
