@@ -492,6 +492,7 @@ final class NodeAppModel {
     private let calendarService: any CalendarServicing
     private let remindersService: any RemindersServicing
     private let motionService: any MotionServicing
+    private let healthSummaryService: any HealthSummaryServicing
     private let watchMessagingService: any WatchMessagingServicing
     #if DEBUG
     @ObservationIgnored private var testAgentRequestHandler: ((AgentDeepLink) async throws -> Void)?
@@ -770,6 +771,7 @@ final class NodeAppModel {
         calendarService: any CalendarServicing = CalendarService(),
         remindersService: any RemindersServicing = RemindersService(),
         motionService: any MotionServicing = MotionService(),
+        healthSummaryService: any HealthSummaryServicing = HealthSummaryService(),
         watchMessagingService: any WatchMessagingServicing = WatchMessagingService(),
         talkMode: TalkModeManager = TalkModeManager(),
         voiceNoteRecorder: OpenClawVoiceNoteRecorder = OpenClawVoiceNoteRecorder(),
@@ -786,6 +788,7 @@ final class NodeAppModel {
         self.calendarService = calendarService
         self.remindersService = remindersService
         self.motionService = motionService
+        self.healthSummaryService = healthSummaryService
         self.watchMessagingService = watchMessagingService
         self.talkMode = talkMode
         self.voiceNoteRecorder = voiceNoteRecorder
@@ -2627,6 +2630,20 @@ final class NodeAppModel {
         }
     }
 
+    private func handleHealthInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        guard let params = try? Self.decodeParams(OpenClawHealthSummaryParams.self, from: req.paramsJSON) else {
+            return BridgeInvokeResponse(
+                id: req.id,
+                ok: false,
+                error: OpenClawNodeError(
+                    code: .invalidRequest,
+                    message: "INVALID_REQUEST: period must be today, 7d, or 30d"))
+        }
+        let payload = try await self.healthSummaryService.summary(params: params)
+        let json = try Self.encodePayload(payload)
+        return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+    }
+
     private func handleTalkInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
         try Task.checkCancellation()
         switch req.command {
@@ -2991,6 +3008,11 @@ extension NodeAppModel {
         ]) { [weak self] req in
             guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
             return try await self.handleMotionInvoke(req)
+        }
+
+        register([OpenClawHealthCommand.summary.rawValue]) { [weak self] req in
+            guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
+            return try await self.handleHealthInvoke(req)
         }
 
         register([
