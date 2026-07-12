@@ -398,12 +398,14 @@ async function publishArchive(tempArchivePath: string, archivePath: string): Pro
 }
 
 function isAllowedRestorePath(rawPath: string): boolean {
-  const normalized = path.posix.normalize(rawPath.replaceAll("\\", "/"));
-  if (
-    normalized !== rawPath.replaceAll("\\", "/") ||
-    normalized.startsWith("/") ||
-    normalized.startsWith("../")
-  ) {
+  // Fleet archives use POSIX separators only. A literal backslash would
+  // validate as one path but extract as another on POSIX, so it is rejected
+  // outright at both backup and restore time.
+  if (rawPath.includes("\\")) {
+    return false;
+  }
+  const normalized = path.posix.normalize(rawPath);
+  if (normalized !== rawPath || normalized.startsWith("/") || normalized.startsWith("../")) {
     return false;
   }
   return (

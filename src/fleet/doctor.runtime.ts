@@ -5,6 +5,7 @@ import {
   cellNetworkName,
   cellOwnerId,
   FLEET_DISK_LIMIT_LABEL,
+  validateDiskSize,
   FLEET_GATEWAY_PORT,
   FLEET_OWNER_LABEL,
   FLEET_TENANT_LABEL,
@@ -71,6 +72,36 @@ async function directoryFindings(params: {
       ),
     ];
   }
+}
+
+function diskLimitFinding(
+  runtime: "docker" | "podman",
+  diskLimit: string,
+  applied: string | undefined,
+): FleetDoctorFinding {
+  try {
+    validateDiskSize(diskLimit);
+  } catch {
+    return finding(
+      "disk-limit",
+      "fail",
+      `Container disk limit label is malformed and would break upgrade/restore replay: ${diskLimit}.`,
+    );
+  }
+  if (runtime === "docker" && applied !== diskLimit) {
+    return finding(
+      "disk-limit",
+      "fail",
+      `Container disk limit label is ${diskLimit} but the applied storage option is ${applied ?? "unset"}.`,
+    );
+  }
+  return finding(
+    "disk-limit",
+    "pass",
+    runtime === "docker"
+      ? `Container writable-layer disk limit is ${diskLimit}.`
+      : `Container writable-layer disk limit was requested as ${diskLimit}; Podman does not expose the applied storage option for verification.`,
+  );
 }
 
 export async function runFleetDoctor(params: {
@@ -244,23 +275,9 @@ export async function runFleetDoctor(params: {
         const diskLimit = inspection.labels[FLEET_DISK_LIMIT_LABEL];
         if (diskLimit !== undefined) {
           // Docker reports the applied quota via HostConfig.StorageOpt; Podman's
-          // inspect schema has no such field, so only the label can be checked there.
-          const applied = inspection.storageOpt.size;
-          findings.push(
-            record.runtime === "docker" && applied !== diskLimit
-              ? finding(
-                  "disk-limit",
-                  "fail",
-                  `Container disk limit label is ${diskLimit} but the applied storage option is ${applied ?? "unset"}.`,
-                )
-              : finding(
-                  "disk-limit",
-                  "pass",
-                  record.runtime === "docker"
-                    ? `Container writable-layer disk limit is ${diskLimit}.`
-                    : `Container writable-layer disk limit was requested as ${diskLimit}; Podman does not expose the applied storage option for verification.`,
-                ),
-          );
+          // inspect schema has no such field, so only the label can be checked
+          // there. A malformed label would also break upgrade/restore replay.
+          findings.push(diskLimitFinding(record.runtime, diskLimit, inspection.storageOpt.size));
         } else if (inspection.storageOpt.size !== undefined) {
           findings.push(
             finding(

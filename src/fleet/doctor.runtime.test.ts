@@ -221,6 +221,15 @@ describe("fleet doctor", () => {
       },
     ],
     [
+      "disk-limit",
+      "fail",
+      (inspection: ReturnType<typeof healthyInspection>) => {
+        // Malformed label would break upgrade/restore replay on any runtime.
+        inspection.labels["openclaw.fleet.disk-limit"] = "not-a-size";
+        inspection.storageOpt = { size: "not-a-size" };
+      },
+    ],
+    [
       "container-running",
       "warn",
       (inspection: ReturnType<typeof healthyInspection>) => {

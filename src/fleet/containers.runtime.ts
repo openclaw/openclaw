@@ -574,6 +574,7 @@ const defaultFleetContainerStreamExecutor: FleetContainerStreamExecutor = (
       child.kill("SIGTERM");
     };
     process.stdout.once("error", onTargetError);
+    process.stderr.once("error", onTargetError);
     // Honor target backpressure: pause the child stream while the terminal or
     // pipe drains so a noisy follow stream cannot buffer without bound.
     const pipeWithBackpressure = (
@@ -595,6 +596,7 @@ const defaultFleetContainerStreamExecutor: FleetContainerStreamExecutor = (
       stdout.flush();
       stderr.flush();
       process.stdout.removeListener("error", onTargetError);
+      process.stderr.removeListener("error", onTargetError);
       resolve({ code, signal });
     });
   });
