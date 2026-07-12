@@ -1,3 +1,5 @@
+// Diagnostic memory sampler with threshold/growth pressure detection and repeat suppression.
+import { getHeapStatistics } from "node:v8";
 // Diagnostic memory helpers capture process memory facts for support diagnostics.
 import {
   emitInternalDiagnosticEvent as emitDiagnosticEvent,
@@ -6,13 +8,28 @@ import {
 } from "../infra/diagnostic-events.js";
 import { writeDiagnosticMemoryPressureBundleSync } from "./diagnostic-stability-bundle.js";
 import { createSubsystemLogger } from "./subsystem.js";
-
-// Diagnostic memory sampler with threshold/growth pressure detection and repeat suppression.
 const MB = 1024 * 1024;
 const DEFAULT_RSS_WARNING_BYTES = 1536 * MB;
 const DEFAULT_RSS_CRITICAL_BYTES = 3072 * MB;
-const DEFAULT_HEAP_WARNING_BYTES = 1024 * MB;
-const DEFAULT_HEAP_CRITICAL_BYTES = 2048 * MB;
+const HEAP_WARNING_MIN_BYTES = 1024 * MB;
+const HEAP_CRITICAL_MIN_BYTES = 2048 * MB;
+
+/** V8 heap size limit at module load — used to scale default heap thresholds. */
+const heapSizeLimit = () => {
+  try {
+    return getHeapStatistics().heap_size_limit;
+  } catch {
+    return 0;
+  }
+};
+const DEFAULT_HEAP_WARNING_BYTES = Math.max(
+  HEAP_WARNING_MIN_BYTES,
+  Math.floor(heapSizeLimit() * 0.375),
+);
+const DEFAULT_HEAP_CRITICAL_BYTES = Math.max(
+  HEAP_CRITICAL_MIN_BYTES,
+  Math.floor(heapSizeLimit() * 0.75),
+);
 const DEFAULT_RSS_GROWTH_WARNING_BYTES = 512 * MB;
 const DEFAULT_RSS_GROWTH_CRITICAL_BYTES = 1024 * MB;
 const DEFAULT_GROWTH_WINDOW_MS = 10 * 60 * 1000;
