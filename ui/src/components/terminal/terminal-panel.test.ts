@@ -52,15 +52,13 @@ vi.mock("./terminal-runtime.ts", () => {
 
 import { OpenClawTerminalPanel } from "./terminal-panel.ts";
 
-const TERMINAL_PANEL_ELEMENT_NAME = "test-openclaw-terminal-panel";
+const TERMINAL_PANEL_ELEMENT_NAME = `test-openclaw-terminal-panel-${crypto.randomUUID()}`;
 
 // Keep the mounted panel and i18n manager in the current module graph when
 // the non-isolated runner has retained an earlier production registration.
 class TestTerminalPanel extends OpenClawTerminalPanel {}
 
-if (!customElements.get(TERMINAL_PANEL_ELEMENT_NAME)) {
-  customElements.define(TERMINAL_PANEL_ELEMENT_NAME, TestTerminalPanel);
-}
+customElements.define(TERMINAL_PANEL_ELEMENT_NAME, TestTerminalPanel);
 
 describe("OpenClawTerminalPanel", () => {
   beforeEach(async () => {
