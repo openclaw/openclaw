@@ -1,5 +1,10 @@
 // Browser tests cover pw tools core ssrf guard plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+function requireInvocationOrder(mock: { invocationCallOrder: number[] }, context: string): number {
+  return expectDefined(mock.invocationCallOrder[0], context);
+}
 
 const pageState = vi.hoisted(() => ({
   page: null as Record<string, unknown> | null,
@@ -1002,9 +1007,12 @@ describe("pw-tools-core browser SSRF guards", () => {
       ssrfPolicy: { allowPrivateNetwork: false },
     });
 
-    expect(sessionMocks.withPageNavigationRequestGuard.mock.invocationCallOrder[0]).toBeLessThan(
-      evaluate.mock.invocationCallOrder[0],
-    );
+    expect(
+      requireInvocationOrder(
+        sessionMocks.withPageNavigationRequestGuard.mock,
+        "request guard invocation",
+      ),
+    ).toBeLessThan(requireInvocationOrder(evaluate.mock, "page evaluation invocation"));
   });
 
   it("preserves helper compatibility when no ssrfPolicy is provided", async () => {
@@ -1069,8 +1077,11 @@ describe("pw-tools-core browser SSRF guards", () => {
       targetId: "tab-1",
     });
     expect(
-      sessionMocks.assertPageNavigationCompletedSafely.mock.invocationCallOrder[0],
-    ).toBeLessThan(ariaSnapshot.mock.invocationCallOrder[0]);
+      requireInvocationOrder(
+        sessionMocks.assertPageNavigationCompletedSafely.mock,
+        "safe-navigation assertion invocation",
+      ),
+    ).toBeLessThan(requireInvocationOrder(ariaSnapshot.mock, "ARIA snapshot invocation"));
   });
 
   it("re-checks current page URL before role snapshots", async () => {
@@ -1097,8 +1108,11 @@ describe("pw-tools-core browser SSRF guards", () => {
       targetId: "tab-1",
     });
     expect(
-      sessionMocks.assertPageNavigationCompletedSafely.mock.invocationCallOrder[0],
-    ).toBeLessThan(ariaSnapshot.mock.invocationCallOrder[0]);
+      requireInvocationOrder(
+        sessionMocks.assertPageNavigationCompletedSafely.mock,
+        "safe-navigation assertion invocation",
+      ),
+    ).toBeLessThan(requireInvocationOrder(ariaSnapshot.mock, "ARIA snapshot invocation"));
   });
 
   it("re-checks current page URL before aria snapshots", async () => {
@@ -1120,7 +1134,15 @@ describe("pw-tools-core browser SSRF guards", () => {
       targetId: "tab-1",
     });
     expect(
-      sessionMocks.assertPageNavigationCompletedSafely.mock.invocationCallOrder[0],
-    ).toBeLessThan(pageCdpMocks.withPageScopedCdpClient.mock.invocationCallOrder[0]);
+      requireInvocationOrder(
+        sessionMocks.assertPageNavigationCompletedSafely.mock,
+        "safe-navigation assertion invocation",
+      ),
+    ).toBeLessThan(
+      requireInvocationOrder(
+        pageCdpMocks.withPageScopedCdpClient.mock,
+        "page-scoped CDP invocation",
+      ),
+    );
   });
 });
