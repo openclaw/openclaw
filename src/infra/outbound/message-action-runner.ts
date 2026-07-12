@@ -219,24 +219,58 @@ function resolveGatewayActionOptions(gateway?: MessageActionRunnerGateway) {
   return resolveOutboundMessageGatewayOptions(gateway);
 }
 
+const MESSAGE_ACTION_RECONCILIATION_TIMEOUT_MS = 60_000;
+
 async function callGatewayMessageAction<T>(params: {
   gateway?: MessageActionRunnerGateway;
   actionParams: Record<string, unknown>;
+  abortSignal?: AbortSignal;
 }): Promise<T> {
-  const { callGatewayLeastPrivilege } = await loadMessageActionGatewayRuntime();
+  const { callGatewayLeastPrivilege, isGatewayTransportError } =
+    await loadMessageActionGatewayRuntime();
   const gateway = resolveGatewayActionOptions(params.gateway);
   const agentRuntimeIdentityToken = await params.gateway?.resolveAgentRuntimeIdentityToken?.();
-  return await callGatewayLeastPrivilege<T>({
+  const call = {
     url: gateway.url,
     token: gateway.token,
     method: "message.action",
     params: params.actionParams,
     timeoutMs: gateway.timeoutMs,
+    signal: params.abortSignal,
     clientName: gateway.clientName,
     clientDisplayName: gateway.clientDisplayName,
     mode: gateway.mode,
     agentRuntimeIdentityToken,
-  });
+  };
+  try {
+    return await callGatewayLeastPrivilege<T>(call);
+  } catch (error) {
+    if (!isGatewayTransportError(error) || error.kind !== "timeout") {
+      throw error;
+    }
+    throwIfAborted(params.abortSignal);
+  }
+
+  const reconciliationCall = {
+    ...call,
+    timeoutMs: Math.max(call.timeoutMs, MESSAGE_ACTION_RECONCILIATION_TIMEOUT_MS),
+  };
+  // A caller-side timeout does not cancel Gateway work. When the caller owns a
+  // cancellation lifecycle, keep reattaching with the same idempotency key so
+  // a late delivery is not shown to the model as a failure it may resend.
+  for (;;) {
+    try {
+      return await callGatewayLeastPrivilege<T>(reconciliationCall);
+    } catch (error) {
+      if (!isGatewayTransportError(error) || error.kind !== "timeout") {
+        throw error;
+      }
+      if (!params.abortSignal) {
+        throw error;
+      }
+      throwIfAborted(params.abortSignal);
+    }
+  }
 }
 
 async function resolveGatewayActionIdempotencyKey(idempotencyKey?: string): Promise<string> {
@@ -690,6 +724,7 @@ async function runGatewayPluginMessageActionOrNull(params: {
   );
   const payload = await callGatewayMessageAction<unknown>({
     gateway: params.gateway,
+    abortSignal: params.input.abortSignal,
     actionParams: {
       channel: params.channel,
       action: params.action,
