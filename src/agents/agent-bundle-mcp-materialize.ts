@@ -440,9 +440,7 @@ export async function materializeBundleMcpToolsForRun(params: {
           (agentResult.details as Record<string, unknown>).mcpAppPreview = buildMcpAppCanvasPayload(
             {
               ...view,
-              ...(result["_meta"] !== undefined
-                ? { resultMetaState: "unavailable" as const }
-                : {}),
+              ...(result["_meta"] !== undefined ? { resultMetaState: "unavailable" as const } : {}),
             },
           );
         }
