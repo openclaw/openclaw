@@ -1,7 +1,7 @@
 // Real-browser proof for opening workspace files from chat links and the workspace browser.
 import fs from "node:fs";
 import path from "node:path";
-import { chromium, type Browser, type Page } from "playwright";
+import { chromium, type Browser } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
