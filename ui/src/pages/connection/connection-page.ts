@@ -58,15 +58,16 @@ class ConnectionPage extends OpenClawLightDomElement {
 
   private resetDraft(gateway: ApplicationContext["gateway"]) {
     const sessionKey = gateway.snapshot.sessionKey;
+    const { gatewayUrl, token, password } = gateway.connection;
     this.gatewayClient = gateway.snapshot.client;
     this.settings = {
       ...loadSettings(),
-      gatewayUrl: gateway.connection.gatewayUrl,
-      token: gateway.connection.token,
+      gatewayUrl,
+      token,
       sessionKey,
       lastActiveSessionKey: sessionKey,
     };
-    this.password = gateway.connection.password;
+    this.password = password;
     this.sessionKeyDirty = false;
     this.resetSensitiveUi();
   }
