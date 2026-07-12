@@ -11,7 +11,7 @@ describe("buildCronAgentDefaultsConfig memory search preservation", () => {
       provider: "openai",
       model: "text-embedding-3-large",
       sources: ["memory", "sessions"],
-      remote: { apiKey: "[redacted]" },
+      remote: { apiKey: "redacted" },
       query: {
         hybrid: {
           temporalDecay: { enabled: true },
@@ -43,7 +43,7 @@ describe("buildCronAgentDefaultsConfig memory search preservation", () => {
       provider: "openai",
       model: "text-embedding-3-large",
       sources: ["memory", "sessions"],
-      remote: { apiKey: "[redacted]" },
+      remote: { apiKey: "redacted" },
       experimental: { sessionMemory: true },
       query: {
         hybrid: {
