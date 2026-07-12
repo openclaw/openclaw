@@ -840,7 +840,7 @@ export class GoogleMeetRuntime {
     // event can re-enter, so the final snapshot remains inside one teardown.
     if (session.mode === "transcribe") {
       this.#transcriptFinalizing.add(session.id);
-      await this.#captureTranscriptSnapshot(session, { finalize: true }).catch((error) => {
+      await this.#captureTranscriptSnapshot(session, { finalize: true }).catch((error: unknown) => {
         this.params.logger.debug?.(
           `[google-meet] final transcript snapshot ignored: ${formatErrorMessage(error)}`,
         );

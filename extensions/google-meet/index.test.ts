@@ -2628,10 +2628,12 @@ describe("google-meet plugin", () => {
     onNonFinalTranscriptRead?: () => void;
     transcript?: {
       droppedLines?: number;
+      epoch?: string;
       lines: Array<{ at?: string; speaker?: string; text: string }>;
     };
     finalTranscript?: {
       droppedLines?: number;
+      epoch?: string;
       lines: Array<{ at?: string; speaker?: string; text: string }>;
     };
     transcriptSequence?: Array<{
@@ -2915,7 +2917,9 @@ describe("google-meet plugin", () => {
       const secondRead = invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.transcript", {
         sessionId: joined.session.id,
       });
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
       expect(activeReads).toBe(1);
       const leaving = invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.leave", {
         sessionId: joined.session.id,
@@ -3774,9 +3778,15 @@ describe("google-meet plugin", () => {
         selector.includes("aria-live") && page.visible ? region : null,
       ),
       querySelectorAll: vi.fn((selector: string) => {
-        if (selector === "button") return [leaveButton];
-        if (selector === "input") return [];
-        if (selector.includes("aria-live")) return page.visible ? [region] : [];
+        if (selector === "button") {
+          return [leaveButton];
+        }
+        if (selector === "input") {
+          return [];
+        }
+        if (selector.includes("aria-live")) {
+          return page.visible ? [region] : [];
+        }
         return [];
       }),
     };
@@ -3812,7 +3822,7 @@ describe("google-meet plugin", () => {
     expect(first.leaveReason).toBeUndefined();
     page.caption = "Alice\nmeeting ended after the recap";
     await inspect();
-    const state = windowState.__openclawMeetCaptions as {
+    const state = windowState["__openclawMeetCaptions"] as {
       lines: Array<{ text: string }>;
       visible: Array<{ text: string }>;
     };
@@ -3859,7 +3869,7 @@ describe("google-meet plugin", () => {
       })})`,
     ).runInContext(context) as () => string | Promise<string>;
     await inspectNextSession();
-    const nextState = windowState.__openclawMeetCaptions as {
+    const nextState = windowState["__openclawMeetCaptions"] as {
       droppedLines: number;
       sessionId?: string;
       lines: Array<{ text: string }>;

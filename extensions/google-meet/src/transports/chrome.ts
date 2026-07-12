@@ -777,7 +777,7 @@ function meetTranscriptScript(meetingUrl: string, meetingSessionId: string, fina
   let currentMeetingUrl;
   try {
     const currentUrl = new URL(location.href);
-    currentMeetingUrl = currentUrl.origin + currentUrl.pathname.toLowerCase().replace(/\\\/$/, "");
+    currentMeetingUrl = currentUrl.origin + currentUrl.pathname.toLowerCase().replace(/\\/$/, "");
   } catch {
     return JSON.stringify({ urlMatched: false });
   }
