@@ -207,7 +207,13 @@ describe("session state events", () => {
     recordSessionStateEvent(eventInput(), database);
     await vi.advanceTimersByTimeAsync(300);
     expect(wakes).toHaveBeenCalledWith(
-      expect.objectContaining({ source: "session-state", sessionKey: watcher }),
+      // intent "immediate" is load-bearing: event-intent wakes defer on heartbeat
+      // dueness and would sit on the notice until the next scheduled tick.
+      expect.objectContaining({
+        source: "session-state",
+        sessionKey: watcher,
+        intent: "immediate",
+      }),
     );
   });
 

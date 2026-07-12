@@ -162,8 +162,11 @@ export function decodeSessionStateNoticeContextKey(contextKey: string): string |
   return Buffer.from(encoded, "hex").toString("utf8");
 }
 
+// Terse on purpose: this line lands in model prompts, possibly repeatedly across
+// turns. Text must stay byte-stable per frozen watermark so queue dedupe holds,
+// and the reconciliation call must be self-contained (explicit target sessionKey).
 function sessionStateNoticeText(targetSessionKey: string, lastSeenSequence: number): string {
-  return `Another actor has interacted with child session "${targetSessionKey}" since you last synced. Your assumptions about that session may be stale. Call session_status with sessionKey "${targetSessionKey}" and changesSince ${lastSeenSequence} before acting on it.`;
+  return `Session "${targetSessionKey}" changed (other actor). Reconcile before acting: session_status sessionKey "${targetSessionKey}" changesSince ${lastSeenSequence}.`;
 }
 
 function shouldWakeWatcher(watcherSessionKey: string): boolean {
@@ -192,9 +195,12 @@ function enqueueSessionStateNotice(params: {
   if (!shouldWakeWatcher(params.watcherSessionKey)) {
     return;
   }
+  // intent "immediate": event-intent wakes defer on heartbeat dueness, which would
+  // delay stale-state notices by up to the whole heartbeat interval. Task/cron
+  // wake-now paths use the same class; the flood guard remains the backstop.
   requestHeartbeat({
     source: "session-state",
-    intent: "event",
+    intent: "immediate",
     reason: `session-state:${params.targetSessionKey}`,
     sessionKey: params.watcherSessionKey,
   });
