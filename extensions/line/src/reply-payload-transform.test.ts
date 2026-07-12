@@ -231,6 +231,36 @@ describe("parseLineDirectives", () => {
     });
   });
 
+  describe("blank required template fields", () => {
+    // A blank question/label/title/text produces an empty required field that LINE
+    // rejects with HTTP 400, dropping the whole message. The template must be skipped.
+    const noTemplate = (text: string) => {
+      expect(getLineData(parseLineDirectives({ text })).templateMessage, text).toBeUndefined();
+    };
+
+    it("skips confirm when the question or a label is blank", () => {
+      noTemplate("[[confirm:  | Yes | No]]");
+      noTemplate("[[confirm: Delete? |  | No]]");
+      noTemplate("[[confirm: Delete? | Yes | ]]");
+    });
+
+    it("skips buttons when the title or text is blank", () => {
+      noTemplate("[[buttons:  | Choose | Opt1:d1]]");
+      noTemplate("[[buttons: Menu |  | Opt1:d1]]");
+    });
+
+    it("still builds confirm/buttons when all required fields are present", () => {
+      expect(
+        getLineData(parseLineDirectives({ text: "[[confirm: Delete? | Yes | No]]" }))
+          .templateMessage,
+      ).toMatchObject({ type: "confirm" });
+      expect(
+        getLineData(parseLineDirectives({ text: "[[buttons: Menu | Choose | Opt1:d1]]" }))
+          .templateMessage,
+      ).toMatchObject({ type: "buttons" });
+    });
+  });
+
   describe("media_player", () => {
     it("parses media_player directives across full/minimal/paused variants", () => {
       const cases = [

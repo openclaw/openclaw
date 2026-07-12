@@ -107,15 +107,19 @@ export function parseLineDirectives(payload: ReplyPayload): ReplyPayload {
       const yesAction = parseConfirmAction(yesPart);
       const noAction = parseConfirmAction(noPart);
 
-      lineData.templateMessage = {
-        type: "confirm",
-        text: question,
-        confirmLabel: yesAction.label,
-        confirmData: yesAction.data,
-        cancelLabel: noAction.label,
-        cancelData: noAction.data,
-        altText: question,
-      };
+      // LINE rejects a confirm template with an empty question or action label (HTTP 400),
+      // dropping the whole message; skip the template when a required field is blank.
+      if (question && yesAction.label && noAction.label) {
+        lineData.templateMessage = {
+          type: "confirm",
+          text: question,
+          confirmLabel: yesAction.label,
+          confirmData: yesAction.data,
+          cancelLabel: noAction.label,
+          cancelData: noAction.data,
+          altText: question,
+        };
+      }
     }
     text = text.replace(confirmMatch[0], "").trim();
   }
@@ -163,7 +167,9 @@ export function parseLineDirectives(payload: ReplyPayload): ReplyPayload {
         return { type: "message" as const, label, data: data || label };
       });
 
-      if (actions.length > 0) {
+      // LINE rejects a buttons template with an empty title or text (HTTP 400), dropping
+      // the whole message; skip the template when a required field is blank.
+      if (actions.length > 0 && title && bodyText) {
         lineData.templateMessage = {
           type: "buttons",
           title,
