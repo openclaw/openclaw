@@ -26,6 +26,7 @@ vi.mock("./mcp-ui-resource.js", () => ({
     toolName: string;
     uiResourceUri: string;
     toolCallId?: string;
+    resultMetaState?: "unavailable";
   }) => ({
     kind: "canvas",
     view: { id: view.viewId, title: view.title },
@@ -36,6 +37,7 @@ vi.mock("./mcp-ui-resource.js", () => ({
       toolName: view.toolName,
       uiResourceUri: view.uiResourceUri,
       ...(view.toolCallId ? { toolCallId: view.toolCallId } : {}),
+      ...(view.resultMetaState ? { resultMetaState: view.resultMetaState } : {}),
     },
   }),
 }));
@@ -183,6 +185,7 @@ describe("createBundleMcpToolRuntime", () => {
       serverName: "demo",
       result: {
         content: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }],
+        _meta: { "ui/state": { selected: true } },
       },
     });
     sessionRuntime.mcpAppsEnabled = true;
@@ -202,6 +205,7 @@ describe("createBundleMcpToolRuntime", () => {
           toolName: "show",
           uiResourceUri: "ui://demo/app",
           toolCallId: "call-1",
+          resultMetaState: "unavailable",
         },
       },
     });

@@ -15,6 +15,7 @@ export type McpAppPreviewDescriptor = {
   toolName?: string;
   uiResourceUri?: string;
   toolCallId?: string;
+  resultMetaState?: "unavailable";
 };
 
 type CanvasPreview = {
@@ -66,6 +67,7 @@ function coerceMcpAppDescriptor(
   const toolName = getRecordStringField(record, "toolName");
   const uiResourceUri = getRecordStringField(record, "uiResourceUri");
   const toolCallId = getRecordStringField(record, "toolCallId");
+  const resultMetaState = record?.resultMetaState === "unavailable" ? "unavailable" : undefined;
   const hasCompleteDescriptor = Boolean(
     serverName &&
     serverName.length <= 256 &&
@@ -77,7 +79,14 @@ function coerceMcpAppDescriptor(
     toolCallId.length <= 512,
   );
   return hasCompleteDescriptor
-    ? { viewId, serverName, toolName, uiResourceUri, toolCallId }
+    ? {
+        viewId,
+        serverName,
+        toolName,
+        uiResourceUri,
+        toolCallId,
+        ...(resultMetaState ? { resultMetaState } : {}),
+      }
     : { viewId };
 }
 

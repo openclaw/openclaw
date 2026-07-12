@@ -20,6 +20,7 @@ describe("extractCanvasFromText", () => {
             toolName: "show",
             uiResourceUri: "ui://demo/app",
             toolCallId: "call-1",
+            resultMetaState: "unavailable",
           },
         },
       }),
@@ -31,6 +32,7 @@ describe("extractCanvasFromText", () => {
         toolName: "show",
         uiResourceUri: "ui://demo/app",
         toolCallId: "call-1",
+        resultMetaState: "unavailable",
       },
     });
   });

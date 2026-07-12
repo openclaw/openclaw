@@ -339,6 +339,7 @@ export function buildMcpAppCanvasPayload(view: {
   toolName: string;
   uiResourceUri: string;
   toolCallId?: string;
+  resultMetaState?: "unavailable";
 }) {
   assertBoundedViewDescriptor(view);
   return {
@@ -356,6 +357,7 @@ export function buildMcpAppCanvasPayload(view: {
       toolName: view.toolName,
       uiResourceUri: view.uiResourceUri,
       ...(view.toolCallId ? { toolCallId: view.toolCallId } : {}),
+      ...(view.resultMetaState ? { resultMetaState: view.resultMetaState } : {}),
     },
   };
 }

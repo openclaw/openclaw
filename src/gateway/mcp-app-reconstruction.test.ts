@@ -21,6 +21,7 @@ describe("MCP App transcript reconstruction", () => {
       {
         role: "toolResult",
         toolCallId: "call-1",
+        toolName: "demo__show",
         content: [
           { type: "text", text: "ok" },
           { type: "audio", data: "YXVkaW8=", mimeType: "audio/mpeg" },
@@ -70,6 +71,7 @@ describe("MCP App transcript reconstruction", () => {
           {
             role: "toolResult",
             toolCallId: "call-other",
+            toolName: "demo__show",
             details: {
               mcpServer: "demo",
               mcpTool: "show",
@@ -90,6 +92,103 @@ describe("MCP App transcript reconstruction", () => {
     ).toBeUndefined();
   });
 
+  it("binds reused call IDs to the nearest preceding matching tool", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "shared", name: "other__tool", args: { secret: 1 } }],
+      },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "shared", name: "demo__show", args: { page: 2 } }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "shared",
+        toolName: "demo__show",
+        content: [],
+        details: {
+          mcpServer: "demo",
+          mcpTool: "show",
+          mcpAppPreview: {
+            mcpApp: {
+              viewId: "mcp-app-reused",
+              serverName: "demo",
+              toolName: "show",
+              uiResourceUri: "ui://demo/app",
+              toolCallId: "shared",
+            },
+          },
+        },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "shared", name: "demo__show", args: { page: 3 } }],
+      },
+    ];
+
+    expect(findMcpAppReconstructionData(messages, "mcp-app-reused")?.toolInput).toEqual({
+      page: 2,
+    });
+  });
+
+  it("declines restart reconstruction when app-only result metadata was not persisted", () => {
+    expect(
+      findMcpAppReconstructionData(
+        [
+          {
+            role: "assistant",
+            content: [{ type: "toolCall", id: "call-old", name: "demo__show", args: {} }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call-old",
+            toolName: "demo__show",
+            content: [{ type: "text", text: "stale" }],
+            details: {
+              mcpServer: "demo",
+              mcpTool: "show",
+              mcpAppPreview: {
+                mcpApp: {
+                  viewId: "mcp-app-meta",
+                  serverName: "demo",
+                  toolName: "show",
+                  uiResourceUri: "ui://demo/app",
+                  toolCallId: "call-old",
+                },
+              },
+            },
+          },
+          {
+            role: "assistant",
+            content: [{ type: "toolCall", id: "call-1", name: "demo__show", args: {} }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call-1",
+            toolName: "demo__show",
+            content: [],
+            details: {
+              mcpServer: "demo",
+              mcpTool: "show",
+              mcpAppPreview: {
+                mcpApp: {
+                  viewId: "mcp-app-meta",
+                  serverName: "demo",
+                  toolName: "show",
+                  uiResourceUri: "ui://demo/app",
+                  toolCallId: "call-1",
+                  resultMetaState: "unavailable",
+                },
+              },
+            },
+          },
+        ],
+        "mcp-app-meta",
+      ),
+    ).toBeUndefined();
+  });
+
   it("rejects a descriptor without its matching tool-call input", () => {
     expect(
       findMcpAppReconstructionData(
@@ -97,6 +196,7 @@ describe("MCP App transcript reconstruction", () => {
           {
             role: "toolResult",
             toolCallId: "call-1",
+            toolName: "demo__show",
             content: [],
             details: {
               mcpServer: "demo",
@@ -122,11 +222,12 @@ describe("MCP App transcript reconstruction", () => {
     const messages = [
       {
         role: "assistant",
-        content: [{ type: "toolCall", id: "call-1", args: { page: 1 } }],
+        content: [{ type: "toolCall", id: "call-1", name: "demo__show", args: { page: 1 } }],
       },
       {
         role: "toolResult",
         toolCallId: "call-1",
+        toolName: "demo__show",
         content: [{ type: "text", text: "ok" }],
         details: {
           mcpServer: "demo",

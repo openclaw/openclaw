@@ -19,6 +19,7 @@ type McpAppDescriptor = {
   toolName: string;
   uiResourceUri: string;
   toolCallId: string;
+  resultMetaState?: "unavailable";
 };
 
 type ReconstructionData = {
@@ -33,6 +34,10 @@ type ReconstructionResult = {
 };
 
 type TranscriptVisit = (visit: (message: unknown) => void) => Promise<void>;
+type TranscriptResult = Omit<ReconstructionData, "toolInput"> & { modelToolName: string };
+type TranscriptResultRead =
+  | { kind: "restorable"; value: TranscriptResult }
+  | { kind: "unavailable" };
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -52,6 +57,8 @@ function readDescriptor(value: unknown): McpAppDescriptor | undefined {
   const toolName = readString(record, "toolName");
   const uiResourceUri = readString(record, "uiResourceUri");
   const toolCallId = readString(record, "toolCallId");
+  const rawResultMetaState = record?.resultMetaState;
+  const resultMetaState = rawResultMetaState === "unavailable" ? rawResultMetaState : undefined;
   if (
     !viewId ||
     viewId.length > 128 ||
@@ -62,18 +69,30 @@ function readDescriptor(value: unknown): McpAppDescriptor | undefined {
     !uiResourceUri?.startsWith("ui://") ||
     uiResourceUri.length > 2048 ||
     !toolCallId ||
-    toolCallId.length > 512
+    toolCallId.length > 512 ||
+    (rawResultMetaState !== undefined && resultMetaState === undefined)
   ) {
     return undefined;
   }
-  return { viewId, serverName, toolName, uiResourceUri, toolCallId };
+  return {
+    viewId,
+    serverName,
+    toolName,
+    uiResourceUri,
+    toolCallId,
+    ...(resultMetaState ? { resultMetaState } : {}),
+  };
 }
 
 function readToolInputFromMessage(
   value: unknown,
   toolCallId: string,
+  modelToolName: string,
 ): { found: true; input: unknown } | undefined {
   const message = asRecord(value);
+  if (readString(message, "role")?.toLowerCase() !== "assistant") {
+    return undefined;
+  }
   const content = Array.isArray(message?.content) ? message.content : [];
   for (const blockValue of content) {
     const block = asRecord(blockValue);
@@ -82,6 +101,11 @@ function readToolInputFromMessage(
     }
     const type = readString(block, "type")?.toLowerCase();
     if (type !== "toolcall" && type !== "tool_call" && type !== "tooluse" && type !== "tool_use") {
+      continue;
+    }
+    const blockToolName =
+      readString(block, "name") ?? readString(block, "toolName") ?? readString(block, "tool_name");
+    if (blockToolName !== modelToolName) {
       continue;
     }
     return { found: true, input: block?.arguments ?? block?.input ?? block?.args ?? {} };
@@ -105,10 +129,7 @@ function readCallToolResult(message: Record<string, unknown>, details: Record<st
   } as CallToolResult;
 }
 
-function readTranscriptResult(
-  value: unknown,
-  viewId: string,
-): Omit<ReconstructionData, "toolInput"> | undefined {
+function readTranscriptResult(value: unknown, viewId: string): TranscriptResultRead | undefined {
   const message = asRecord(value);
   if (!message || readString(message, "role")?.toLowerCase() !== "toolresult") {
     return undefined;
@@ -118,18 +139,27 @@ function readTranscriptResult(
     return undefined;
   }
   const preview = asRecord(details.mcpAppPreview);
-  const descriptor = readDescriptor(asRecord(preview?.mcpApp));
-  if (!descriptor || descriptor.viewId !== viewId) {
+  const rawDescriptor = asRecord(preview?.mcpApp);
+  if (readString(rawDescriptor, "viewId") !== viewId) {
     return undefined;
+  }
+  const descriptor = readDescriptor(rawDescriptor);
+  const modelToolName = readString(message, "toolName") ?? readString(message, "tool_name");
+  if (!descriptor || !modelToolName) {
+    return { kind: "unavailable" };
   }
   if (
     readString(message, "toolCallId") !== descriptor.toolCallId ||
     readString(details, "mcpServer") !== descriptor.serverName ||
-    readString(details, "mcpTool") !== descriptor.toolName
+    readString(details, "mcpTool") !== descriptor.toolName ||
+    descriptor.resultMetaState === "unavailable"
   ) {
-    return undefined;
+    return { kind: "unavailable" };
   }
-  return { descriptor, toolResult: readCallToolResult(message, details) };
+  return {
+    kind: "restorable",
+    value: { descriptor, modelToolName, toolResult: readCallToolResult(message, details) },
+  };
 }
 
 /** Finds a server-authored descriptor and its canonical tool call/result pair. */
@@ -137,19 +167,32 @@ export function findMcpAppReconstructionData(
   messages: unknown[],
   viewId: string,
 ): ReconstructionData | undefined {
-  for (const value of messages.toReversed()) {
-    const result = readTranscriptResult(value, viewId);
-    if (!result) {
+  for (let resultIndex = messages.length - 1; resultIndex >= 0; resultIndex -= 1) {
+    const read = readTranscriptResult(messages[resultIndex], viewId);
+    if (!read) {
       continue;
     }
-    const input = messages
-      .map((message) => readToolInputFromMessage(message, result.descriptor.toolCallId))
-      .find((entry) => entry?.found);
+    if (read.kind === "unavailable") {
+      return undefined;
+    }
+    const result = read.value;
+    let input: { found: true; input: unknown } | undefined;
+    for (let inputIndex = resultIndex - 1; inputIndex >= 0; inputIndex -= 1) {
+      input = readToolInputFromMessage(
+        messages[inputIndex],
+        result.descriptor.toolCallId,
+        result.modelToolName,
+      );
+      if (input) {
+        break;
+      }
+    }
     if (!input) {
-      continue;
+      return undefined;
     }
+    const { modelToolName: _modelToolName, ...reconstruction } = result;
     return {
-      ...result,
+      ...reconstruction,
       toolInput: input.input,
     };
   }
@@ -161,27 +204,45 @@ export async function findMcpAppReconstructionDataByVisit(
   visitTranscript: TranscriptVisit,
   viewId: string,
 ): Promise<ReconstructionData | undefined> {
-  let result: Omit<ReconstructionData, "toolInput"> | undefined;
+  let resultRead: TranscriptResultRead | undefined;
+  let resultIndex = -1;
+  let messageIndex = 0;
   await visitTranscript((message) => {
-    result = readTranscriptResult(message, viewId) ?? result;
+    const read = readTranscriptResult(message, viewId);
+    if (read) {
+      resultRead = read;
+      resultIndex = messageIndex;
+    }
+    messageIndex += 1;
   });
-  if (!result) {
+  if (!resultRead || resultRead.kind === "unavailable") {
     return undefined;
   }
-  const resolvedResult = result;
+  const resolvedResult = resultRead.value;
   let toolInput: unknown;
   let foundInput = false;
+  messageIndex = 0;
   await visitTranscript((message) => {
-    if (foundInput) {
+    if (messageIndex >= resultIndex) {
+      messageIndex += 1;
       return;
     }
-    const input = readToolInputFromMessage(message, resolvedResult.descriptor.toolCallId);
+    const input = readToolInputFromMessage(
+      message,
+      resolvedResult.descriptor.toolCallId,
+      resolvedResult.modelToolName,
+    );
     if (input) {
       foundInput = true;
       toolInput = input.input;
     }
+    messageIndex += 1;
   });
-  return foundInput ? { ...resolvedResult, toolInput } : undefined;
+  if (!foundInput) {
+    return undefined;
+  }
+  const { modelToolName: _modelToolName, ...reconstruction } = resolvedResult;
+  return { ...reconstruction, toolInput };
 }
 
 function getRestoreInFlight(): Map<string, Promise<ReconstructionResult | undefined>> {
