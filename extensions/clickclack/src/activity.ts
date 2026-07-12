@@ -22,7 +22,7 @@ import type { ClickClackMessage, ClickClackMessageProvenance } from "./types.js"
 const CLICKCLACK_COMMENTARY_FLUSH_MS = 700;
 
 /** Item event payload shape delivered by `replyOptions.onItemEvent`. */
-export type ClickClackItemEventPayload = {
+type ClickClackItemEventPayload = {
   itemId?: string;
   toolCallId?: string;
   kind?: string;
@@ -36,7 +36,7 @@ export type ClickClackItemEventPayload = {
 };
 
 /** Destination for durable activity rows (channel or DM conversation). */
-export type ClickClackActivityTarget = {
+type ClickClackActivityTarget = {
   channelId?: string;
   conversationId?: string;
 };

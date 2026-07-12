@@ -18,11 +18,11 @@ import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { logConfigUpdated } from "../config/logging.js";
 import {
   commitConfigWithPendingPluginInstalls,
   transformConfigWithPendingPluginInstalls,
-} from "../cli/plugins-install-record-commit.js";
-import { logConfigUpdated } from "../config/logging.js";
+} from "../plugins/install-record-commit.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -426,6 +426,7 @@ export async function agentsAddCommand(
     let selection: ChannelChoice[] = [];
     const channelAccountIds: Partial<Record<ChannelChoice, string>> = {};
     nextConfig = await setupChannels(nextConfig, runtime, prompter, {
+      allowIMessageInstall: true,
       allowSignalInstall: true,
       onSelection: (value) => {
         selection = value;
@@ -508,4 +509,3 @@ export const testing = {
   copyPortableAuthProfiles,
   formatSkippedOAuthProfilesMessage,
 };
-export { testing as __testing };

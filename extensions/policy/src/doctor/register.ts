@@ -119,7 +119,7 @@ const SUPPORTED_SANDBOX_MODES = ["off", "non-main", "all"] as const;
 let registered = false;
 const policyEvaluationCache = new WeakMap<HealthCheckContext, Promise<PolicyEvaluation>>();
 
-export type PolicyDoctorRegistrationHost = {
+type PolicyDoctorRegistrationHost = {
   readonly registerHealthCheck: (check: HealthCheck) => void;
 };
 
@@ -4806,11 +4806,12 @@ function scopedPolicyFields(
 }
 
 function scopedPolicyValue(overlay: Record<string, unknown>, path: readonly string[]): unknown {
-  const scopedRoot = path[0] === "agents" ? overlay.agents : overlay[path[0]];
-  if (path[0] === "agents") {
-    return getPolicyPath(scopedRoot, path.slice(1));
+  const [root, ...remainingPath] = path;
+  if (!root) {
+    return undefined;
   }
-  return getPolicyPath(scopedRoot, path.slice(1));
+  const scopedRoot = root === "agents" ? overlay.agents : overlay[root];
+  return getPolicyPath(scopedRoot, remainingPath);
 }
 
 function getPolicyPath(value: unknown, path: readonly string[]): unknown {

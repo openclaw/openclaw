@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import type { RootHelpRenderOptions } from "../src/cli/program/root-help.js";
 import type { OpenClawConfig } from "../src/config/config.js";
 import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
@@ -270,7 +271,7 @@ function resolveSubcommandHelpSourceSignature(sourceRootDir: string = rootDir): 
   return hash.digest("hex");
 }
 
-export function readBundledChannelCatalog(
+function readBundledChannelCatalog(
   extensionsDirOverride: string = extensionsDir,
 ): BundledChannelCatalog {
   const entries: ExtensionChannelEntry[] = [];
@@ -343,9 +344,6 @@ function createIsolatedRootHelpRenderContext(
         workspace: workspaceDir,
       },
     },
-    plugins: {
-      loadPaths: [],
-    },
   };
   return { config, env };
 }
@@ -367,7 +365,9 @@ async function mapWithConcurrency<T, R>(
         if (index >= values.length) {
           return;
         }
-        results[index] = await run(values[index]);
+        results[index] = await run(
+          expectDefined(values[index], `CLI metadata concurrency input at index ${index}`),
+        );
       }
     }),
   );
@@ -382,14 +382,16 @@ async function spawnText(
     failureMessage: string;
     killGraceMs?: number;
     maxOutputBytes?: number;
+    spawnProcess?: typeof spawn;
     timeoutMs: number;
   },
 ): Promise<string> {
   const maxOutputBytes = options.maxOutputBytes ?? COMMAND_HELP_RENDER_MAX_OUTPUT_BYTES;
   const killGraceMs = options.killGraceMs ?? COMMAND_HELP_RENDER_KILL_GRACE_MS;
+  const spawnProcess = options.spawnProcess ?? spawn;
   const useProcessGroup = process.platform !== "win32";
   return await new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, args, {
+    const child = spawnProcess(process.execPath, args, {
       cwd: options.cwd,
       detached: useProcessGroup,
       env: options.env,
@@ -399,6 +401,7 @@ async function spawnText(
     let stderr = "";
     let outputBytes = 0;
     let outputExceeded = false;
+    let outputStreamError: { streamName: "stdout" | "stderr"; error: Error } | undefined;
     let settled = false;
     let timedOut = false;
     let waitingForKillGrace = false;
@@ -483,6 +486,15 @@ async function spawnText(
     };
     const finishClose = (result: { code: number | null; signal: NodeJS.Signals | null }) => {
       settle(() => {
+        if (outputStreamError) {
+          reject(
+            new Error(
+              `${options.failureMessage}: ${outputStreamError.streamName} read error: ${outputStreamError.error.message}`,
+              { cause: outputStreamError.error },
+            ),
+          );
+          return;
+        }
         if (result.code === 0 && !timedOut && !outputExceeded) {
           resolve(stdout);
           return;
@@ -522,6 +534,15 @@ async function spawnText(
       signalChild("SIGTERM");
       scheduleKill();
     };
+    const failOutputStream = (streamName: "stdout" | "stderr", error: Error) => {
+      // Keep the first stop cause: killing for a timeout or output cap can make
+      // the stdio pipes fail secondarily while the child is shutting down.
+      if (outputStreamError || timedOut || outputExceeded) {
+        return;
+      }
+      outputStreamError = { streamName, error };
+      requestStop();
+    };
     const timeout = setTimeout(() => {
       timedOut = true;
       requestStop();
@@ -552,6 +573,12 @@ async function spawnText(
         return;
       }
       stderr += chunk;
+    });
+    child.stdout.once("error", (error: Error) => {
+      failOutputStream("stdout", error);
+    });
+    child.stderr.once("error", (error: Error) => {
+      failOutputStream("stderr", error);
     });
     child.once("error", (error) => {
       settle(() => {

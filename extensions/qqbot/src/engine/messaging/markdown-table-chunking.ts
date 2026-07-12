@@ -16,7 +16,7 @@ type ActiveFence = {
   marker: string;
 };
 
-export type QQBotMarkdownChunker = {
+type QQBotMarkdownChunker = {
   chunkText: (text: string, limit: number) => string[];
   flushPendingText: (limit: number) => string[];
 };
@@ -262,7 +262,8 @@ class QQBotMarkdownChunkingState {
     const bodyLines = pendingFenceOpenLine ? [...this.textLines] : this.textLines.slice(1);
     this.textLines = [];
     this.pendingTextFenceOpenLine = null;
-    if (bodyLines.length > 0 && isClosingFenceLine(bodyLines[bodyLines.length - 1], fence)) {
+    const lastBodyLine = bodyLines.at(-1);
+    if (lastBodyLine !== undefined && isClosingFenceLine(lastBodyLine, fence)) {
       bodyLines.pop();
     }
     if (this.activeFence && bodyLines.length === 0) {

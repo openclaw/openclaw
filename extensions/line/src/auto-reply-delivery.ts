@@ -43,7 +43,7 @@ export type LineAutoReplyDeps = {
   | "onReplyError"
 >;
 
-export type LineAutoReplyDeliveryResult =
+type LineAutoReplyDeliveryResult =
   | { status: "delivered"; replyTokenUsed: boolean }
   | { status: "partial"; replyTokenUsed: boolean; error: Error };
 

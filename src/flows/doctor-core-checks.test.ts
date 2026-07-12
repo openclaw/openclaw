@@ -95,6 +95,9 @@ function createDeps(overrides: Partial<CoreHealthCheckDeps> = {}): CoreHealthChe
     async collectProviderCatalogProjectionFindings() {
       return [];
     },
+    async collectLocalAudioAccelerationFindings() {
+      return [];
+    },
     async collectGatewayHealthFindings() {
       return [];
     },
@@ -168,6 +171,27 @@ describe("CORE_HEALTH_CHECKS", () => {
         check.description.endsWith("represented in the health registry."),
       ),
     ).toBe(false);
+  });
+
+  it("reports local STT auto-selection diagnostics", async () => {
+    const finding: HealthFinding = {
+      checkId: "core/doctor/local-audio-acceleration",
+      severity: "info",
+      message:
+        "Local STT auto-selection: whisper-cli (capable=metal, observed=unknown); build capability is not runtime observation.",
+    };
+    const check = getCheck(
+      createCoreHealthChecks(
+        createDeps({
+          async collectLocalAudioAccelerationFindings() {
+            return [finding];
+          },
+        }),
+      ),
+      "core/doctor/local-audio-acceleration",
+    );
+
+    await expect(check.detect({ mode: "lint", runtime, cfg: {} })).resolves.toEqual([finding]);
   });
 
   it("warns when autonomous Skill Workshop capture is enabled but policy hides its tool", async () => {
@@ -357,6 +381,7 @@ describe("CORE_HEALTH_CHECKS", () => {
       "core/doctor/skills-readiness",
     );
 
+    expect(check).toMatchObject({ defaultEnabled: false });
     expect(check["repair"]).toBeTypeOf("function");
 
     const findings = await check.detect({
@@ -874,6 +899,47 @@ describe("CORE_HEALTH_CHECKS", () => {
       expect.objectContaining({
         status: "skipped",
         reason: "legacy doctor session lock contribution owns cleanup",
+      }),
+    );
+  });
+});
+
+describe("core/doctor/bootstrap-size", () => {
+  let tmp: string | undefined;
+
+  afterEach(async () => {
+    if (tmp !== undefined) {
+      await fs.rm(tmp, { recursive: true, force: true });
+      tmp = undefined;
+    }
+  });
+
+  it("honors the per-agent bootstrapMaxChars override in health findings", async () => {
+    tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-bootstrap-"));
+    // This size fits the global default but exceeds the default agent's effective budget.
+    await fs.writeFile(join(tmp, "AGENTS.md"), "a".repeat(15_000), "utf-8");
+
+    const check = getCheck(CORE_HEALTH_CHECKS, "core/doctor/bootstrap-size");
+    const findings = await check.detect({
+      mode: "lint",
+      runtime,
+      cfg: {
+        agents: {
+          defaults: {
+            workspace: tmp,
+            bootstrapMaxChars: 20_000,
+          },
+          list: [{ id: "custom-agent", default: true, bootstrapMaxChars: 10_000 }],
+        },
+      },
+    });
+
+    expect(findings).toContainEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/bootstrap-size",
+        severity: "warning",
+        message: expect.stringContaining("AGENTS.md"),
+        fixHint: expect.stringContaining("agents.list[].bootstrapMaxChars"),
       }),
     );
   });

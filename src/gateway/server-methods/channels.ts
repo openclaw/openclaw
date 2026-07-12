@@ -247,7 +247,7 @@ function resolveChannelGatewayAccountId(params: {
 }
 
 /** Log out one channel account through its owning channel plugin. */
-export async function logoutChannelAccount(params: {
+async function logoutChannelAccount(params: {
   channelId: ChannelId;
   accountId?: string | null;
   cfg: OpenClawConfig;
@@ -282,7 +282,7 @@ export async function logoutChannelAccount(params: {
 }
 
 /** Start one channel account through its owning channel plugin. */
-export async function startChannelAccount(params: {
+async function startChannelAccount(params: {
   channelId: ChannelId;
   accountId?: string | null;
   cfg: OpenClawConfig;
@@ -309,7 +309,7 @@ export async function startChannelAccount(params: {
 }
 
 /** Stop one channel account through its owning channel plugin. */
-export async function stopChannelAccount(params: {
+async function stopChannelAccount(params: {
   channelId: ChannelId;
   accountId?: string | null;
   cfg: OpenClawConfig;

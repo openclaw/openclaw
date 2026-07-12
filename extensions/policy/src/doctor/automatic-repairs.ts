@@ -21,6 +21,7 @@ const AUTOMATIC_REPAIR_CHECK_IDS = new Set<PolicyCheckId>([
   CHECK_IDS.policyToolsElevatedEnabled,
   CHECK_IDS.policyToolsRequiredDenyMissing,
   CHECK_IDS.policyGatewayControlUiInsecure,
+  CHECK_IDS.policyGatewayHttpEndpointEnabled,
   CHECK_IDS.policyGatewayRemoteEnabled,
   CHECK_IDS.policyIngressOpenGroupsDenied,
   CHECK_IDS.policyIngressGroupMentionRequired,
@@ -95,6 +96,8 @@ function applyAutomaticPatch(
       return mergeRequiredDenyTools(cfg, findings);
     case CHECK_IDS.policyGatewayControlUiInsecure:
       return disableInsecureControlUi(cfg, findings);
+    case CHECK_IDS.policyGatewayHttpEndpointEnabled:
+      return setFindingConfigValues(cfg, findings, "enabled", false);
     case CHECK_IDS.policyGatewayRemoteEnabled:
       return disableRemoteGatewayMode(cfg, findings);
     case CHECK_IDS.policyIngressOpenGroupsDenied:

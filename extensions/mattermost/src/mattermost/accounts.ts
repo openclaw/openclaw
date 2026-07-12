@@ -134,22 +134,25 @@ export function resolveMattermostAccount(params: {
     oncharPrefixes: merged.oncharPrefixes,
     requireMention,
     textChunkLimit: merged.textChunkLimit,
-    chunkMode: resolveChannelStreamingChunkMode(merged) ?? merged.chunkMode,
+    chunkMode: resolveChannelStreamingChunkMode(merged),
     streamingMode: resolveChannelPreviewStreamMode(merged, "partial"),
-    blockStreaming: resolveChannelStreamingBlockEnabled(merged) ?? merged.blockStreaming,
-    blockStreamingCoalesce:
-      resolveChannelStreamingBlockCoalesce(merged) ?? merged.blockStreamingCoalesce,
+    blockStreaming: resolveChannelStreamingBlockEnabled(merged),
+    blockStreamingCoalesce: resolveChannelStreamingBlockCoalesce(merged),
   };
 }
 
 /**
  * Resolve the effective replyToMode for a given chat type.
- * Mattermost auto-threading only applies to channel and group messages.
+ * Direct messages stay flat unless explicitly opted into a per-chat-type mode.
  */
 export function resolveMattermostReplyToMode(
   account: ResolvedMattermostAccount,
   kind: MattermostChatTypeKey,
 ): MattermostReplyToMode {
+  const scopedMode = account.config.replyToModeByChatType?.[kind];
+  if (scopedMode !== undefined) {
+    return scopedMode;
+  }
   if (kind === "direct") {
     return "off";
   }

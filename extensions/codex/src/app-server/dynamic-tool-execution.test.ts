@@ -151,6 +151,32 @@ describe("dynamic tool execution helpers", () => {
         call: {
           threadId: "thread-1",
           turnId: "turn-1",
+          callId: "call-computer-wait",
+          namespace: null,
+          tool: "computer",
+          arguments: { action: "wait", duration: 100 },
+        },
+        config: undefined,
+      }),
+    ).toBe(220_000);
+    expect(
+      resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-computer-transport-timeout",
+          namespace: null,
+          tool: "computer",
+          arguments: { action: "left_click", coordinate: [1, 1], timeoutMs: 1_000 },
+        },
+        config: undefined,
+      }),
+    ).toBe(34_000);
+    expect(
+      resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
           callId: "call-image-generate-default",
           namespace: null,
           tool: "image_generate",
@@ -608,6 +634,46 @@ describe("dynamic tool execution helpers", () => {
       consoleMessage:
         "codex process tool timeout: action=poll sessionId=process-session toolTimeoutMs=1 requestedWaitMs=30000; per-tool-call watchdog, not session idle; repeated lines usually mean process-poll retry churn, not model progress",
     });
+  });
+
+  it("does not split surrogate pairs when truncating timeout log fields", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const action = `${"a".repeat(156)}😀tail`;
+    const sessionId = `${"s".repeat(156)}😀tail`;
+    const response = handleDynamicToolCallWithTimeout({
+      call: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-utf16-log-field",
+        namespace: null,
+        tool: "process",
+        arguments: { action, sessionId, timeout: 30_000 },
+      },
+      toolBridge: {
+        handleToolCall: vi.fn(() => new Promise<never>(() => {})),
+      },
+      signal: new AbortController().signal,
+      timeoutMs: 1,
+    });
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    const result = await response;
+    const firstResultItem = result.contentItems[0];
+    const resultText = firstResultItem?.type === "inputText" ? firstResultItem.text : "";
+    const [, details] = warn.mock.calls[0] ?? [];
+    const highSurrogate = String.fromCharCode(0xd83d);
+
+    expect(result.success).toBe(false);
+    expect(details).toMatchObject({
+      processAction: `${"a".repeat(156)}...`,
+      processSessionId: `${"s".repeat(156)}...`,
+    });
+    expect(resultText).not.toContain(highSurrogate);
+    expect(String((details as Record<string, unknown>).consoleMessage)).not.toContain(
+      highSurrogate,
+    );
   });
 
   it("keeps async-start metadata on internal dynamic tool progress only", () => {

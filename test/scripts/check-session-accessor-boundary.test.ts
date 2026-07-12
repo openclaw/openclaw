@@ -209,14 +209,37 @@ describe("session accessor boundary guard", () => {
     expect(allowedSessionStoreRuntimeFileBackedCompatExports).toEqual(
       new Set([
         "loadSessionStore",
-        "readLatestAssistantTextFromSessionTranscript",
-        "resolveAndPersistSessionFile",
         "resolveSessionFilePath",
         "resolveSessionStoreEntry",
-        "saveSessionStore",
         "updateSessionStore",
       ]),
     );
+  });
+
+  it("allows the exact beta.5 compatibility exports without opening aliases", () => {
+    expect(
+      findSessionStoreRuntimeFileBackedCompatExportViolations(`
+        export function loadSessionStore() {}
+        export function updateSessionStore() {}
+        export function resolveSessionFilePath() {}
+        export { resolveSessionStoreEntry } from "../config/sessions/store-entry.js";
+      `),
+    ).toEqual([]);
+    expect(
+      findSessionStoreRuntimeFileBackedCompatExportViolations(`
+        export { resolveSessionFilePath as resolveLegacySessionFilePath } from "../config/sessions/paths.js";
+        export { saveSessionStore } from "../config/sessions/store.js";
+      `),
+    ).toEqual([
+      {
+        line: 2,
+        reason: 'exports unratcheted file-backed SDK session helper "resolveSessionFilePath"',
+      },
+      {
+        line: 3,
+        reason: 'exports unratcheted file-backed SDK session helper "saveSessionStore"',
+      },
+    ]);
   });
 
   it("collects file-backed SDK session compatibility exports", () => {
@@ -413,7 +436,7 @@ describe("session accessor boundary guard", () => {
   it("flags legacy transcript writer imports", () => {
     expect(
       findTranscriptWriterBoundaryViolations(`
-        import { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
+        import { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.test-support.js";
         import { emitSessionTranscriptUpdate as emitUpdate } from "../sessions/transcript-events.js";
       `),
     ).toEqual([

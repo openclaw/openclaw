@@ -1,4 +1,5 @@
 // Control UI tests cover workboard behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
@@ -87,6 +88,156 @@ const sampleTask = {
 describe("workboard controller", () => {
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  describe("runtime ownership", () => {
+    it("keeps state pristine when lifecycle teardown happens before first access", () => {
+      const host = {};
+
+      stopWorkboardLifecycleRefresh(host);
+
+      expect(getWorkboardState(host).mutationReadiness).toBe("ready");
+    });
+
+    it("isolates state and loads between hosts", async () => {
+      const firstHost = {};
+      const secondHost = {};
+      const firstCard = { ...sampleCard, title: "First host" };
+      const secondCard = { ...sampleCard, title: "Second host" };
+      const firstClient = createClient({
+        "workboard.cards.list": { cards: [firstCard], statuses: ["todo", "done"] },
+      });
+      const secondClient = createClient({
+        "workboard.cards.list": { cards: [secondCard], statuses: ["todo", "done"] },
+      });
+
+      await Promise.all([
+        loadWorkboard({ host: firstHost, client: firstClient as never, force: true }),
+        loadWorkboard({ host: secondHost, client: secondClient as never, force: true }),
+      ]);
+
+      const firstState = getWorkboardState(firstHost);
+      const secondState = getWorkboardState(secondHost);
+      firstState.query = "first";
+
+      expect(firstState).not.toBe(secondState);
+      expect(firstState.cards).toEqual([firstCard]);
+      expect(secondState.cards).toEqual([secondCard]);
+      expect(secondState.query).toBe("");
+    });
+
+    it("rejects an invalidated generation after its replacement loads", async () => {
+      const host = {};
+      const staleList = createDeferred<unknown>();
+      const currentCard = { ...sampleCard, title: "Current generation" };
+      let listCalls = 0;
+      const client = createClient((method) => {
+        if (method === "workboard.cards.list") {
+          listCalls += 1;
+          return listCalls === 1
+            ? staleList.promise
+            : { cards: [currentCard], statuses: ["todo", "done"] };
+        }
+        return {};
+      });
+
+      const staleLoad = loadWorkboard({ host, client: client as never, force: true });
+      await Promise.resolve();
+      stopWorkboardLifecycleRefresh(host);
+      await loadWorkboard({ host, client: client as never, force: true });
+
+      staleList.resolve({
+        cards: [{ ...sampleCard, title: "Stale generation" }],
+        statuses: ["todo", "done"],
+      });
+      await staleLoad;
+
+      expect(listCalls).toBe(2);
+      expect(getWorkboardState(host).cards).toEqual([currentCard]);
+    });
+
+    it("cleans up only the stopped host polling timer", async () => {
+      vi.useFakeTimers();
+      const stoppedHost = {};
+      const activeHost = {};
+      const stoppedClient = createClient({
+        "workboard.cards.list": { cards: [], statuses: ["todo", "done"] },
+      });
+      const activeClient = createClient({
+        "workboard.cards.list": { cards: [], statuses: ["todo", "done"] },
+      });
+      getWorkboardState(stoppedHost).autoRefreshIntervalMs = 5000;
+      getWorkboardState(activeHost).autoRefreshIntervalMs = 5000;
+
+      configureWorkboardPolling({
+        host: stoppedHost,
+        client: stoppedClient as never,
+        enabled: true,
+      });
+      configureWorkboardPolling({
+        host: activeHost,
+        client: activeClient as never,
+        enabled: true,
+      });
+      expect(vi.getTimerCount()).toBe(2);
+
+      stopWorkboardPolling(stoppedHost);
+      expect(vi.getTimerCount()).toBe(1);
+      await vi.advanceTimersByTimeAsync(5000);
+
+      expect(stoppedClient.request).not.toHaveBeenCalled();
+      expect(activeClient.request).toHaveBeenCalledWith("workboard.cards.list", {});
+      stopWorkboardPolling(activeHost);
+    });
+
+    it("tracks lifecycle writes until a same-host reload can proceed", async () => {
+      const host = {};
+      const linkedCard = { ...sampleCard, sessionKey: sampleSession.key };
+      const updatedCard = { ...linkedCard, status: "running" as const };
+      const lifecycleWrite = createDeferred<{ card: WorkboardCard }>();
+      const state = getWorkboardState(host);
+      state.loaded = true;
+      state.cards = [linkedCard];
+      state.lifecycleTasksPrepared = true;
+      state.lifecycleTasksPreparedAt = Date.now();
+      const client = createClient((method) => {
+        if (method === "workboard.cards.update") {
+          return lifecycleWrite.promise;
+        }
+        if (method === "workboard.cards.list") {
+          return { cards: [updatedCard], statuses: ["todo", "running"] };
+        }
+        return {};
+      });
+
+      const syncing = syncWorkboardLifecycle({
+        host,
+        client: client as never,
+        sessions: [sampleSession],
+      });
+      await vi.waitFor(() => {
+        expect(client.request).toHaveBeenCalledWith(
+          "workboard.cards.update",
+          expect.objectContaining({ id: linkedCard.id }),
+        );
+      });
+      stopWorkboardLifecycleRefresh(host);
+
+      const capture = captureSessionToWorkboard({
+        host,
+        client: client as never,
+        session: sampleSession,
+      });
+      await Promise.resolve();
+      expect(client.request).not.toHaveBeenCalledWith("workboard.cards.list", {});
+
+      lifecycleWrite.resolve({ card: updatedCard });
+      await syncing;
+      await capture;
+
+      expect(client.request).toHaveBeenCalledWith("workboard.cards.list", {});
+      expect(state.cards).toEqual([updatedCard]);
+    });
   });
 
   it("loads cards through the plugin gateway method", async () => {
@@ -331,7 +482,12 @@ describe("workboard controller", () => {
       taskId: card.taskId,
       runId: `run-${index}`,
     }));
-    state.tasksByCardId = new Map(cards.map((card, index) => [card.id, tasks[index]]));
+    state.tasksByCardId = new Map(
+      cards.map((card, index) => [
+        card.id,
+        expectDefined(tasks[index], `workboard task fixture ${index}`),
+      ]),
+    );
     let failedTaskRequests = 0;
     const client = createClient((method, params) => {
       if (method === "workboard.cards.list") {
@@ -3440,18 +3596,21 @@ describe("workboard controller", () => {
     );
   });
 
-  it("clamps long session labels before creating captured cards", async () => {
+  it("clamps captured session fields without splitting surrogate pairs", async () => {
     const host = {};
-    const longLabel = "x".repeat(220);
+    const titlePrefix = "x".repeat(176);
+    const textPrefix = "y".repeat(696);
     const client = createClient((method) => {
       if (method === "workboard.cards.list") {
         return { cards: [], statuses: ["todo"] };
       }
       if (method === "chat.history") {
-        return { messages: [] };
+        return {
+          messages: [{ role: "user", content: [{ type: "text", text: `${textPrefix}😀tail` }] }],
+        };
       }
       if (method === "workboard.cards.create") {
-        return { card: { ...sampleCard, title: `${"x".repeat(177)}...` } };
+        return { card: { ...sampleCard, title: `${titlePrefix}...` } };
       }
       return {};
     });
@@ -3459,14 +3618,17 @@ describe("workboard controller", () => {
     await captureSessionToWorkboard({
       host,
       client: client as never,
-      session: { ...sampleSession, label: longLabel },
+      session: { ...sampleSession, label: `${titlePrefix}😀tail` },
     });
 
     expect(client.request).toHaveBeenNthCalledWith(
       3,
       "workboard.cards.create",
       expect.objectContaining({
-        title: `${"x".repeat(177)}...`,
+        title: `${titlePrefix}...`,
+        notes: [`Session: ${sampleSession.key}`, "", `Recent user prompt: ${textPrefix}...`].join(
+          "\n",
+        ),
       }),
     );
   });
@@ -4017,7 +4179,7 @@ describe("workboard controller", () => {
         kind: "agent-session",
         engine: "codex",
         mode: "autonomous",
-        model: "openai/gpt-5.5",
+        model: "openai/gpt-5.6-sol",
         status: "running",
         sessionKey: sampleTaskSessionKey,
         runId: "run-1",
@@ -4050,7 +4212,7 @@ describe("workboard controller", () => {
       "agent",
       expect.objectContaining({
         sessionKey: sampleTaskSessionKey,
-        model: "openai/gpt-5.5",
+        model: "openai/gpt-5.6-sol",
         message: expect.stringContaining("Work on this OpenClaw Workboard card: Build board"),
       }),
     );
@@ -4065,7 +4227,7 @@ describe("workboard controller", () => {
           execution: expect.objectContaining({
             engine: "codex",
             mode: "autonomous",
-            model: "openai/gpt-5.5",
+            model: "openai/gpt-5.6-sol",
             runId: "run-1",
           }),
         }),
@@ -4760,9 +4922,9 @@ describe("workboard controller", () => {
       cardId: parent.id,
     });
 
-    const remaining = getWorkboardState(host).cards[0];
+    const remaining = expectDefined(getWorkboardState(host).cards[0], "remaining child card");
     expect(remaining).toMatchObject({ id: child.id });
-    expect(remaining?.metadata?.links).toBeUndefined();
+    expect(remaining.metadata?.links).toBeUndefined();
 
     client.request.mockClear();
     await startWorkboardCard({

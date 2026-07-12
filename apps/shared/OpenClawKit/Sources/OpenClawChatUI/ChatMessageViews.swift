@@ -208,6 +208,7 @@ struct ChatMessageBubble: View {
     let assistantAvatarTint: Color?
     let showsAssistantAvatar: Bool
     let isClean: Bool
+    let contextWindowTokens: Int?
 
     var body: some View {
         if self.isUser {
@@ -245,7 +246,8 @@ struct ChatMessageBubble: View {
             markdownVariant: self.markdownVariant,
             userAccent: self.userAccent,
             showsAssistantTrace: self.showsAssistantTrace,
-            isClean: self.isClean)
+            isClean: self.isClean,
+            contextWindowTokens: self.contextWindowTokens)
     }
 }
 
@@ -259,6 +261,7 @@ private struct ChatMessageBody: View {
     let userAccent: Color?
     let showsAssistantTrace: Bool
     let isClean: Bool
+    let contextWindowTokens: Int?
 
     var body: some View {
         let text = self.primaryText
@@ -321,8 +324,7 @@ private struct ChatMessageBody: View {
             if self.showsAssistantTrace, !self.toolCalls.isEmpty {
                 ForEach(self.toolCalls.indices, id: \.self) { idx in
                     ToolCallCard(
-                        content: self.toolCalls[idx],
-                        isUser: self.isUser)
+                        content: self.toolCalls[idx])
                 }
             }
 
@@ -336,6 +338,17 @@ private struct ChatMessageBody: View {
                         isUser: self.isUser,
                         toolName: toolResult.name)
                 }
+            }
+
+            if let usagePresentation = self.usagePresentation {
+                Text(usagePresentation.text)
+                    .font(OpenClawChatTypography.caption2)
+                    .monospacedDigit()
+                    .foregroundStyle(self.usageTint(usagePresentation.pressure))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(String(localized: "Message usage"))
+                    .accessibilityValue(usagePresentation.accessibilityValue)
             }
         }
         .textSelection(.enabled)
@@ -397,6 +410,23 @@ private struct ChatMessageBody: View {
     private var isToolResultMessage: Bool {
         let role = self.message.role.lowercased()
         return role == "toolresult" || role == "tool_result"
+    }
+
+    private var usagePresentation: ChatMessageUsagePresentation? {
+        ChatMessageUsagePresentation.make(
+            message: self.message,
+            contextWindowTokens: self.contextWindowTokens)
+    }
+
+    private func usageTint(_ pressure: ChatMessageUsagePresentation.Pressure) -> Color {
+        switch pressure {
+        case .normal:
+            OpenClawChatTheme.muted
+        case .warning:
+            OpenClawChatTheme.warning
+        case .danger:
+            OpenClawChatTheme.danger
+        }
     }
 
     private var toolResultTitle: String {
@@ -505,7 +535,6 @@ private struct AttachmentRow: View {
 
 private struct ToolCallCard: View {
     let content: OpenClawChatMessageContent
-    let isUser: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -662,8 +691,8 @@ struct ChatSpeechStatusChip: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(self.isPreparing
-            ? Text("Preparing audio, tap to cancel")
-            : Text("Speaking, tap to stop"))
+            ? "Preparing audio, tap to cancel"
+            : "Speaking, tap to stop")
     }
 }
 

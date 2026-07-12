@@ -1,5 +1,6 @@
-// Ollama node inference exposes local models to agents through paired node hosts.
 import { jsonResult } from "openclaw/plugin-sdk/channel-actions";
+// Ollama node inference exposes local models to agents through paired node hosts.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   readFiniteNumberParam,
   readPositiveIntegerParam,
@@ -179,7 +180,7 @@ async function fetchLoadedModelNames(baseUrl: string): Promise<Set<string>> {
   }
 }
 
-export async function discoverOllamaNodeModels(
+async function discoverOllamaNodeModels(
   baseUrl = OLLAMA_DEFAULT_BASE_URL,
 ): Promise<OllamaModelsPayload> {
   const apiBase = resolveOllamaApiBase(baseUrl);
@@ -388,7 +389,7 @@ function findNode(nodes: NodeSummary[], query: string): NodeSummary {
   if (matches.length > 1) {
     throw new Error(`node ${JSON.stringify(query)} is ambiguous; use its nodeId`);
   }
-  return matches[0];
+  return expectDefined(matches[0], "single matching Ollama inference node");
 }
 
 function parseInvokePayload(raw: unknown): Record<string, unknown> {

@@ -1,4 +1,5 @@
 // Control UI tests cover workboard behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { nothing, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -149,6 +150,7 @@ describe("renderWorkboard", () => {
     const request = vi.fn(async () => ({ card: state.cards[0] }));
     state.loaded = true;
     state.dispatching = true;
+    state.detailCardId = "card-1";
     state.cards = [
       {
         id: "card-1",
@@ -183,6 +185,15 @@ describe("renderWorkboard", () => {
     expect(buttonByLabel(container, "Delete card")?.disabled).toBe(true);
     expect(
       container.querySelector<HTMLSelectElement>(".workboard-card__move-select")?.disabled,
+    ).toBe(true);
+    const detailActions = container.querySelector<HTMLElement>(".workboard-detail__actions");
+    expect(detailActions).not.toBeNull();
+    expect(buttonByLabel(detailActions!, "Edit card")?.disabled).toBe(true);
+    expect(buttonByLabel(detailActions!, "Archive card")?.disabled).toBe(true);
+    expect(buttonByLabel(detailActions!, "Stop session")?.disabled).toBe(true);
+    expect(buttonByLabel(detailActions!, "Delete card")?.disabled).toBe(true);
+    expect(
+      detailActions!.querySelector<HTMLSelectElement>(".workboard-card__move-select")?.disabled,
     ).toBe(true);
     expect(container.querySelector<HTMLElement>(".workboard-card")?.getAttribute("draggable")).toBe(
       "false",
@@ -932,11 +943,13 @@ describe("renderWorkboard", () => {
       ),
     ];
     expect(selects).toHaveLength(3);
+    const firstSelect = expectDefined(selects[0], "first workboard filter");
+    const secondSelect = expectDefined(selects[1], "second workboard filter");
 
-    selects[0].open = true;
-    selects[0].dispatchEvent(new Event("toggle"));
-    selects[1].open = true;
-    selects[1].dispatchEvent(new Event("toggle"));
+    firstSelect.open = true;
+    firstSelect.dispatchEvent(new Event("toggle"));
+    secondSelect.open = true;
+    secondSelect.dispatchEvent(new Event("toggle"));
 
     expect(selects[0]?.open).toBe(false);
     expect(selects[1]?.open).toBe(true);
@@ -1050,17 +1063,20 @@ describe("renderWorkboard", () => {
       expect(select).toBeTruthy();
       expect(trigger).toBeTruthy();
       expect(options.length).toBeGreaterThan(2);
-      options[1].disabled = true;
+      const firstOption = expectDefined(options[0], "first workboard filter option");
+      const disabledOption = expectDefined(options[1], "disabled workboard filter option");
+      const thirdOption = expectDefined(options[2], "third workboard filter option");
+      disabledOption.disabled = true;
 
       trigger!.focus();
       dispatchKey(trigger!, "ArrowDown");
       expect(select?.open).toBe(true);
-      expect(document.activeElement).toBe(options[0]);
+      expect(document.activeElement).toBe(firstOption);
 
-      dispatchKey(options[0], "ArrowDown");
-      expect(document.activeElement).toBe(options[2]);
+      dispatchKey(firstOption, "ArrowDown");
+      expect(document.activeElement).toBe(thirdOption);
 
-      dispatchKey(options[2], "End");
+      dispatchKey(thirdOption, "End");
       expect(document.activeElement).toBe(options.at(-1));
 
       dispatchKey(options.at(-1)!, "h");
@@ -1241,6 +1257,69 @@ describe("renderWorkboard", () => {
       .querySelector<HTMLButtonElement>('button[aria-label="Delete card"]')
       ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onOpenSession).not.toHaveBeenCalled();
+  });
+
+  it("mirrors compact card actions in the detail drawer", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const sessionKey = "agent:main:detail-parity";
+    state.loaded = true;
+    state.detailCardId = "card-1";
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Detail parity",
+        status: "running",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+        sessionKey,
+      },
+    ];
+    const container = document.createElement("div");
+    const onOpenSession = vi.fn();
+
+    render(
+      renderWorkboard({
+        host,
+        client: { request: vi.fn() } as unknown as GatewayBrowserClient,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [
+          {
+            key: sessionKey,
+            kind: "direct",
+            displayName: "Detail parity session",
+            updatedAt: 2,
+            hasActiveRun: true,
+            status: "running",
+          },
+        ],
+        onOpenSession,
+      }),
+      container,
+    );
+
+    const actions = container.querySelector<HTMLElement>(".workboard-detail__actions");
+    expect(actions).not.toBeNull();
+    expect(buttonByLabel(actions!, "Edit card")).not.toBeNull();
+    expect(buttonByLabel(actions!, "Archive card")).not.toBeNull();
+    expect(buttonByLabel(actions!, "Stop session")).not.toBeNull();
+    expect(buttonByLabel(actions!, "Open session")).not.toBeNull();
+    expect(buttonByLabel(actions!, "Delete card")).not.toBeNull();
+
+    const moveSelect = actions!.querySelector<HTMLSelectElement>(".workboard-card__move-select");
+    expect(moveSelect?.getAttribute("aria-label")).toBe("Status: Detail parity");
+    expect([...moveSelect!.options].map((option) => option.textContent?.trim())).toContain(
+      "Review",
+    );
+
+    buttonByLabel(actions!, "Edit card")?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(state.draftOpen).toBe(true);
+    expect(state.editingCardId).toBe("card-1");
   });
 
   it("keeps focus inside the card modal and restores focus on Escape", async () => {
@@ -2814,6 +2893,11 @@ describe("renderWorkboard", () => {
       expect(menu?.style.getPropertyValue("--workboard-select-menu-top")).toBe("162px");
       expect(menu?.style.getPropertyValue("--workboard-select-menu-width")).toBe("240px");
       expect(menu?.style.getPropertyValue("--workboard-select-menu-max-height")).toBe("320px");
+      expect(menu?.style.visibility).toBe("visible");
+
+      select!.open = false;
+      select!.dispatchEvent(new Event("toggle"));
+      expect(menu?.style.visibility).toBe("hidden");
     } finally {
       innerWidth.mockRestore();
     }

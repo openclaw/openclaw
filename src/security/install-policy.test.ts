@@ -355,6 +355,25 @@ describe("runInstallPolicy", () => {
     expect(warnings.join("\n")).toContain("blocked by install policy");
   });
 
+  it("keeps truncated operator block reasons UTF-16 safe", async () => {
+    const reasonPrefix = "r".repeat(999);
+    const result = await runInstallPolicy({
+      config: configWithPolicy(scriptPath, {
+        POLICY_RESPONSE: JSON.stringify({
+          protocolVersion: 1,
+          decision: "block",
+          reason: `${reasonPrefix}🎉tail`,
+        }),
+      }),
+      request: baseRequest(sourceDir),
+    });
+
+    expect(result?.blocked).toEqual({
+      code: "security_scan_blocked",
+      reason: `blocked by install policy: ${reasonPrefix}...`,
+    });
+  });
+
   it("preserves allow findings without file or line", async () => {
     const result = await runInstallPolicy({
       config: configWithPolicy(scriptPath, {

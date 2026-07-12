@@ -6,6 +6,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readResponseWithLimit } from "../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
@@ -161,7 +162,7 @@ export function normalizeMimeType(value: string | undefined): string | undefined
 }
 
 /** Parses a Content-Type header into normalized MIME and optional charset values. */
-export function parseContentType(value: string | undefined): {
+function parseContentType(value: string | undefined): {
   mimeType?: string;
   charset?: string;
 } {
@@ -273,7 +274,7 @@ function clampText(text: string, maxChars: number): string {
   if (text.length <= maxChars) {
     return text;
   }
-  return text.slice(0, maxChars);
+  return truncateUtf16Safe(text, maxChars);
 }
 
 function withInputFileTimeout<T>(params: {

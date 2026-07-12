@@ -355,4 +355,35 @@ describe("createDiscordGatewayPlugin", () => {
     expect(logs).toContain("lastErrorCode=WS_ERR_TOO_MANY_BUFFERED_PARTS");
     expect(logs).toContain("hint=possible ws receiver buffered-parts limit");
   });
+
+  it("keeps gateway close reason logs UTF-16 safe", () => {
+    const socket = new EventEmitter() as EventEmitter & { binaryType?: string };
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+    const plugin = createPlugin(
+      {
+        webSocketCtor: function WebSocketCtor() {
+          return socket;
+        } as unknown as NonNullable<
+          Parameters<typeof createDiscordGatewayPlugin>[0]["testing"]
+        >["webSocketCtor"],
+      },
+      {},
+      runtime,
+    );
+    const createdSocket = (
+      plugin as unknown as { createWebSocket: (url: string) => typeof socket }
+    ).createWebSocket("wss://gateway.discord.gg");
+
+    createdSocket.emit("close", 1008, Buffer.from(`${"A".repeat(239)}🧪 tail`));
+
+    const log = String(runtime.log.mock.calls.at(-1)?.[0]);
+    expect(log).toContain("discord: gateway websocket closed");
+    expect(log).toContain("code=1008");
+    expect(log).toContain(`reason=${"A".repeat(239)}...`);
+    expect(log).toContain("hint=possible ws receiver buffered-parts limit");
+  });
 });

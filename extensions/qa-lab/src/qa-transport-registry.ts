@@ -30,7 +30,7 @@ export type QaTransportAdapterFactoryResult<
 
 export type QaTransportAdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
 
-export type QaTransportAdapterFactoryRegistry = {
+type QaTransportAdapterFactoryRegistry = {
   create: (context: QaTransportFactoryContext) => Promise<QaTransportAdapterFactoryResult>;
 };
 

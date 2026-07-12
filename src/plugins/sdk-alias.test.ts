@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   bundledDistPluginFile,
   bundledPluginFile,
@@ -1509,6 +1510,12 @@ describe("plugin sdk alias helpers", () => {
       srcFile: "schema.ts",
       distFile: "schema.mjs",
     });
+    const gatewayProtocolFrameGuards = writeWorkspacePackageEntry({
+      root: fixture.root,
+      packageDir: "gateway-protocol",
+      srcFile: "frame-guards.ts",
+      distFile: "frame-guards.mjs",
+    });
     const netPolicy = writeWorkspacePackageEntry({
       root: fixture.root,
       packageDir: "net-policy",
@@ -1615,6 +1622,7 @@ describe("plugin sdk alias helpers", () => {
     fs.rmSync(gatewayClientTimeouts.distFile);
     fs.rmSync(gatewayProtocol.distFile);
     fs.rmSync(gatewayProtocolSchema.distFile);
+    fs.rmSync(gatewayProtocolFrameGuards.distFile);
     fs.rmSync(markdownCore.distFile);
     fs.rmSync(markdownCoreTables.distFile);
     fs.rmSync(mediaGenerationCore.distFile);
@@ -1652,6 +1660,9 @@ describe("plugin sdk alias helpers", () => {
     );
     expect(fs.realpathSync(aliases["@openclaw/gateway-protocol/schema"] ?? "")).toBe(
       fs.realpathSync(gatewayProtocolSchema.srcFile),
+    );
+    expect(fs.realpathSync(aliases["@openclaw/gateway-protocol/frame-guards"] ?? "")).toBe(
+      fs.realpathSync(gatewayProtocolFrameGuards.srcFile),
     );
     expect(fs.realpathSync(aliases["@openclaw/markdown-core"] ?? "")).toBe(
       fs.realpathSync(markdownCore.srcFile),
@@ -1719,6 +1730,12 @@ describe("plugin sdk alias helpers", () => {
       packageDir: "gateway-protocol",
       srcFile: "connect-error-details.ts",
       distFile: "connect-error-details.mjs",
+    });
+    const gatewayProtocolFrameGuards = writeWorkspacePackageEntry({
+      root: fixture.root,
+      packageDir: "gateway-protocol",
+      srcFile: "frame-guards.ts",
+      distFile: "frame-guards.mjs",
     });
     const mediaGenerationCore = writeWorkspacePackageEntry({
       root: fixture.root,
@@ -1791,6 +1808,9 @@ describe("plugin sdk alias helpers", () => {
     );
     expect(fs.realpathSync(aliases["@openclaw/gateway-protocol/connect-error-details"] ?? "")).toBe(
       fs.realpathSync(gatewayProtocol.distFile),
+    );
+    expect(fs.realpathSync(aliases["@openclaw/gateway-protocol/frame-guards"] ?? "")).toBe(
+      fs.realpathSync(gatewayProtocolFrameGuards.distFile),
     );
     expect(fs.realpathSync(aliases["@openclaw/markdown-core/render"] ?? "")).toBe(
       fs.realpathSync(markdownCore.distFile),
@@ -2405,7 +2425,11 @@ export const syntheticRuntimeMarker = {
         }),
       ).toBe(distFile);
     } finally {
-      process.argv[1] = originalArgv1;
+      if (originalArgv1 === undefined) {
+        process.argv.splice(1, 1);
+      } else {
+        process.argv[1] = originalArgv1;
+      }
     }
   });
 
@@ -2826,7 +2850,7 @@ describe("buildPluginLoaderJitiOptions", () => {
 
     const alias = buildPluginLoaderJitiOptions(aliasMap).alias as Record<string, string>;
 
-    expect(alias.gamma.length).toBeLessThan(32);
+    expect(expectDefined(alias.gamma, "alias.gamma test invariant").length).toBeLessThan(32);
   });
 
   it("does not attach an empty alias map", () => {

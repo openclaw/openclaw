@@ -1,6 +1,7 @@
 /** Broad plugin loader coverage for manifest discovery, runtime registration, and diagnostics. */
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { applyBootstrapHookOverrides } from "../agents/bootstrap-hooks.js";
 import { listRegisteredAgentHarnesses } from "../agents/harness/registry.js";
@@ -467,9 +468,9 @@ function runSinglePluginRegistryScenarios<
 function loadRegistryFromScenarioPlugins(plugins: readonly TempPlugin[]) {
   return plugins.length === 1
     ? loadRegistryFromSinglePlugin({
-        plugin: plugins[0],
+        plugin: expectDefined(plugins[0], "plugins[0] test invariant"),
         pluginConfig: {
-          allow: [plugins[0].id],
+          allow: [expectDefined(plugins[0], "plugins[0] test invariant").id],
         },
       })
     : loadRegistryFromAllowedPlugins([...plugins]);
@@ -1276,6 +1277,38 @@ describe("loadOpenClawPlugins", () => {
       pluginId: "trusted-policy-register-fail",
       message: "plugin failed during register: Error: register boom",
     });
+  });
+
+  it("rolls back worker providers when plugin register fails", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "worker-provider-register-fail",
+      filename: "worker-provider-register-fail.cjs",
+      body: `module.exports = { id: "worker-provider-register-fail", register(api) {
+  api.registerWorkerProvider({
+    id: "failed-worker",
+    provision: async () => { throw new Error("not called"); },
+    inspect: async () => ({ status: "unknown" }),
+    destroy: async () => {}
+  });
+  throw new Error("register boom");
+} };`,
+    });
+    updatePluginManifest(plugin, {
+      contracts: { workerProviders: ["failed-worker"] },
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["worker-provider-register-fail"],
+      },
+    });
+
+    expect(registry.workerProviders.size).toBe(0);
+    const loaded = registry.plugins.find((entry) => entry.id === "worker-provider-register-fail");
+    expect(loaded?.status).toBe("error");
+    expect(loaded?.error).toContain("register boom");
   });
 
   it("loads declared installed trusted policies through plugin manifests", () => {
@@ -2693,7 +2726,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
     manifestSpy.mockRestore();
   });
 
-  it("only publishes plugin commands to the global registry during activating loads", () => {
+  it("only publishes command and interactive globals during activating loads", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "command-plugin",
@@ -2707,10 +2740,16 @@ module.exports = { id: "throws-after-import", register() {} };`,
             acceptsArgs: true,
             handler: async ({ args }) => ({ text: \`paired:\${args ?? ""}\` }),
           });
+          api.registerInteractiveHandler({
+            channel: "telegram",
+            namespace: "pair",
+            handle: async () => ({ handled: true }),
+          });
         },
       };`,
     });
     clearPluginCommands();
+    clearPluginInteractiveHandlers();
 
     const scoped = loadOpenClawPlugins({
       cache: false,
@@ -2727,7 +2766,15 @@ module.exports = { id: "throws-after-import", register() {} };`,
 
     expect(scoped.plugins.find((entry) => entry.id === "command-plugin")?.status).toBe("loaded");
     expect(scoped.commands.map((entry) => entry.command.name)).toEqual(["pair"]);
+    expect(scoped.interactiveHandlers).toEqual([
+      expect.objectContaining({
+        channel: "telegram",
+        namespace: "pair",
+        pluginId: "command-plugin",
+      }),
+    ]);
     expect(getPluginCommandSpecs("telegram")).toStrictEqual([]);
+    expect(resolvePluginInteractiveNamespaceMatch("telegram", "pair:device")).toBeNull();
 
     const active = loadOpenClawPlugins({
       cache: false,
@@ -2749,8 +2796,16 @@ module.exports = { id: "throws-after-import", register() {} };`,
         acceptsArgs: true,
       },
     ]);
+    expect(resolvePluginInteractiveNamespaceMatch("telegram", "pair:device")).toMatchObject({
+      namespace: "pair",
+      payload: "device",
+      registration: {
+        pluginId: "command-plugin",
+      },
+    });
 
     clearPluginCommands();
+    clearPluginInteractiveHandlers();
   });
 
   it("clears plugin agent harnesses during activating reloads", () => {
@@ -4080,6 +4135,61 @@ module.exports = { id: "throws-after-import", register() {} };`,
     });
     expect((globalThis as Record<string, unknown>)[marker]).toEqual(["discovery", "full"]);
     delete (globalThis as Record<string, unknown>)[marker];
+  });
+
+  it("ignores plugin-supplied conversation-read authority claims", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "conversation-read-provenance-test",
+      filename: "conversation-read-provenance-test.cjs",
+      body: `module.exports = {
+        id: "conversation-read-provenance-test",
+        register(api) {
+          const createTool = (name) => () => ({
+            name,
+            description: name,
+            parameters: {},
+            execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
+          });
+          api.registerTool(createTool("attested_tool"), {
+            name: "attested_tool",
+            conversationReadPolicy: "current-or-configured-v1",
+            supportsConversationReadPolicyV1: true,
+          });
+          api.registerTool(createTool("unknown_policy_tool"), {
+            name: "unknown_policy_tool",
+            conversationReadPolicy: "future-policy",
+          });
+        },
+      };`,
+    });
+    updatePluginManifest(plugin, {
+      contracts: { tools: ["attested_tool", "unknown_policy_tool"] },
+    });
+
+    const registry = loadOpenClawPlugins({
+      activate: false,
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["conversation-read-provenance-test"],
+        },
+      },
+    });
+
+    expect(registry.tools).toHaveLength(2);
+    expect(registry.tools).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ names: ["attested_tool"], origin: "config" }),
+        expect.objectContaining({ names: ["unknown_policy_tool"], origin: "config" }),
+      ]),
+    );
+    for (const entry of registry.tools) {
+      expect(entry).not.toHaveProperty("conversationReadPolicy");
+      expect(entry).not.toHaveProperty("supportsConversationReadPolicyV1");
+    }
   });
 
   it("rejects plugin tool registration without manifest tool ownership", () => {
@@ -7391,6 +7501,102 @@ module.exports = {
     ).toBe("loaded");
   });
 
+  it("ignores built artifacts when the bundled source plugin opts out of core dist", () => {
+    const repoRoot = makeTempDir();
+    const sourceDir = path.join(repoRoot, "extensions", "source-only-artifact-test");
+    const runtimeDir = path.join(sourceDir, "dist");
+    const builtPluginDir = path.join(repoRoot, "dist", "extensions", "source-only-artifact-test");
+    mkdirSafe(path.join(repoRoot, ".git"));
+    mkdirSafe(path.join(repoRoot, "src"));
+    mkdirSafe(sourceDir);
+    mkdirSafe(runtimeDir);
+    mkdirSafe(builtPluginDir);
+    fs.writeFileSync(path.join(repoRoot, "pnpm-workspace.yaml"), "packages: []\n", "utf-8");
+    fs.writeFileSync(
+      path.join(sourceDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        { id: "source-only-artifact-test", configSchema: EMPTY_PLUGIN_SCHEMA },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(sourceDir, "package.json"),
+      JSON.stringify({
+        openclaw: {
+          extensions: ["./index.ts"],
+          build: { bundledDist: false },
+        },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(sourceDir, "index.ts"),
+      'export default { id: "source-only-artifact-test", register() {} };\n',
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(runtimeDir, "index.js"),
+      'throw new Error("stale package-local dist should not load");\n',
+      "utf-8",
+    );
+    fs.copyFileSync(
+      path.join(sourceDir, "openclaw.plugin.json"),
+      path.join(builtPluginDir, "openclaw.plugin.json"),
+    );
+    fs.writeFileSync(
+      path.join(builtPluginDir, "package.json"),
+      JSON.stringify({ openclaw: { extensions: ["./index.js"] } }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(builtPluginDir, "index.js"),
+      'throw new Error("stale discovered core dist should not load");\n',
+      "utf-8",
+    );
+    const bundledRuntimeDir = path.join(
+      repoRoot,
+      "dist-runtime",
+      "extensions",
+      "source-only-artifact-test",
+    );
+    mkdirSafe(bundledRuntimeDir);
+    fs.writeFileSync(
+      path.join(bundledRuntimeDir, "index.js"),
+      'throw new Error("stale core dist should not load");\n',
+      "utf-8",
+    );
+
+    const config = {
+      plugins: {
+        allow: ["source-only-artifact-test"],
+        entries: { "source-only-artifact-test": { enabled: true } },
+      },
+    };
+    const registry = withEnv(
+      {
+        OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(repoRoot, "dist", "extensions"),
+        OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+      },
+      () => {
+        const manifestRegistry = loadPluginManifestRegistry({ config });
+        return loadOpenClawPlugins({
+          cache: false,
+          preferBuiltPluginArtifacts: true,
+          onlyPluginIds: ["source-only-artifact-test"],
+          config,
+          manifestRegistry,
+        });
+      },
+    );
+
+    expect(registry.plugins.find((entry) => entry.id === "source-only-artifact-test")?.status).toBe(
+      "loaded",
+    );
+  });
+
   it("prefers package-local dist artifacts over workspace source TS when requested", () => {
     useNoBundledPlugins();
     const pluginDir = makeTempDir();
@@ -8792,6 +8998,28 @@ module.exports = {
         label: scenario.label,
       });
     });
+  });
+
+  it("stays quiet when every non-bundled plugin is explicitly enabled", () => {
+    useNoBundledPlugins();
+    clearPluginLoaderCache();
+    const { workspaceDir } = writeWorkspacePlugin({
+      id: "warn-explicitly-enabled-plugin",
+    });
+    const warnings: string[] = [];
+    loadOpenClawPlugins({
+      cache: false,
+      workspaceDir,
+      logger: createWarningLogger(warnings),
+      config: {
+        plugins: {
+          enabled: true,
+          entries: { "warn-explicitly-enabled-plugin": { enabled: true } },
+        },
+      },
+    });
+
+    expect(warnings.join("\n")).not.toContain("plugins.allow is empty");
   });
 
   it("warns when plugins.allow entries do not match any discovered plugin ids", () => {
