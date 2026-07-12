@@ -136,7 +136,7 @@ export type ChatProps = {
   onRequestUpdate?: () => void;
   onHistoryKeydown?: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
   onSlashIntent?: () => void | Promise<void>;
-  onSend: () => void;
+  onSend: () => void | Promise<void>;
   onCompact?: () => void | Promise<void>;
   onOpenSessionCheckpoints?: () => void | Promise<void>;
   onToggleRealtimeTalk?: () => void;
@@ -264,7 +264,7 @@ export function renderChat(props: ChatProps) {
     onChatScroll: props.onChatScroll,
     onDraftChange: props.onDraftChange,
     getDraft: props.getDraft,
-    onSend: props.onSend,
+    onSend: () => void props.onSend(),
     onSetReply: props.onSetReply,
     // Archived/non-composable sessions must not offer selection actions:
     // withholding the callback keeps the popup from rendering at all.

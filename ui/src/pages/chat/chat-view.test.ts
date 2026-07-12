@@ -3064,6 +3064,36 @@ describe("chat slash menu accessibility", () => {
     expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("");
   });
 
+  it("resyncs a restored draft after an asynchronous local send fails", async () => {
+    let draft = "";
+    const sendSettled = createDeferred<void>();
+    const container = document.createElement("div");
+    const onDraftChange = vi.fn((next: string) => {
+      draft = next;
+    });
+    const onSend = vi.fn(async () => {
+      draft = "";
+      await sendSettled.promise;
+      draft = "/new --name";
+    });
+    const renderWithDraft = () => {
+      render(
+        renderChat(createChatProps({ draft, getDraft: () => draft, onDraftChange, onSend })),
+        container,
+      );
+    };
+
+    renderWithDraft();
+    inputDraft(container, "/new --name");
+    container.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("");
+
+    sendSettled.resolve();
+    await vi.waitFor(() => {
+      expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("/new --name");
+    });
+  });
+
   it("ignores a stale native InputEvent replay after send clears the host draft", () => {
     let draft = "";
     const container = document.createElement("div");

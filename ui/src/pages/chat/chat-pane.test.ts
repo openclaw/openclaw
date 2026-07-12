@@ -12,9 +12,10 @@ import type {
   TaskSuggestionsListResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { buildCatalogSessionKey, type CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
-import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { createSessionCapability, type SessionCapability } from "../../lib/sessions/index.ts";
 import "./chat-pane.ts";
 import type { ChatPageHost } from "./chat-state.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
@@ -22,6 +23,7 @@ import type { SidebarContent } from "./components/chat-sidebar.ts";
 
 type TestChatPane = HTMLElement & {
   active: boolean;
+  applyGatewaySnapshot: (snapshot: ApplicationContext["gateway"]["snapshot"]) => void;
   chatState: { attach: (state: ChatPageHost) => void };
   context: ApplicationContext;
   state: ChatPageHost;
@@ -35,7 +37,11 @@ type TestChatPane = HTMLElement & {
   handleTaskSuggestionEvent: (event: TaskSuggestionEvent) => void;
   refreshTaskSuggestions: () => Promise<void>;
   taskSuggestions: TaskSuggestion[];
-  onPaneSessionChange?: (paneId: string, sessionKey: string) => void;
+  onPaneSessionChange?: (
+    paneId: string,
+    sessionKey: string,
+    options?: { replace?: boolean },
+  ) => void;
   sessionKey: string;
   catalogSession: SessionCatalogSession | null;
   catalogItemMessage: (
@@ -94,6 +100,7 @@ function createSessionContext(
         hello: { features: { methods: ["taskSuggestions.list"] } },
       },
     },
+    config: { current: { terminalEnabled: false } },
     agents: { state: { agentsList: null } },
     sessions,
   } as unknown as ApplicationContext;
@@ -140,6 +147,35 @@ function createTestChatPane(params: { client: GatewayBrowserClient; sessions: Se
 }
 
 describe("chat pane initialization", () => {
+  it("keeps the connected client while canonicalizing the initial main route", () => {
+    const client = {} as GatewayBrowserClient;
+    const sessions = {} as SessionCapability;
+    const { pane, state } = createTestChatPane({ client, sessions });
+    const navigate = vi.fn();
+    const snapshot = {
+      client,
+      connected: true,
+      hello: {
+        snapshot: {
+          sessionDefaults: {
+            defaultAgentId: "main",
+            mainKey: "main",
+            mainSessionKey: "agent:main:main",
+          },
+        },
+      },
+    } as unknown as ApplicationContext["gateway"]["snapshot"];
+    pane.sessionKey = "main";
+    state.sessionKey = "main";
+    pane.connectedClient = null;
+    pane.onPaneSessionChange = navigate;
+
+    pane.applyGatewaySnapshot(snapshot);
+
+    expect(navigate).toHaveBeenCalledWith("single", "agent:main:main", { replace: true });
+    expect(pane.connectedClient).toBe(client);
+  });
+
   it("sets the pane route before attaching outbox projection", () => {
     const pane = document.createElement("openclaw-chat-pane") as unknown as TestChatPane;
     const targetSessionKey = "agent:main:pane-b";
@@ -237,7 +273,58 @@ describe("chat pane session creation lifecycle", () => {
     await expect(pane.createSession({ label: "Research Plan" })).resolves.toBe(true);
     expect(sessions.create).toHaveBeenCalledWith(
       expect.objectContaining({ label: "Research Plan" }),
+      expect.objectContaining({ onCreated: expect.any(Function) }),
     );
+  });
+
+  it("hands the created key to navigation before list refresh retires the pane", async () => {
+    const nextSessionKey = "agent:main:research-plan";
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.create") {
+        return { key: nextSessionKey };
+      }
+      if (method === "sessions.list") {
+        return {
+          ts: 1,
+          path: "(multiple)",
+          count: 1,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [{ key: nextSessionKey, kind: "direct", updatedAt: 1 }],
+        } satisfies SessionsListResult;
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const sessions = createSessionCapability({
+      snapshot: {
+        client,
+        connected: true,
+        sessionKey: "agent:main:current",
+        assistantAgentId: "main",
+        hello: null,
+      },
+      subscribe: () => () => undefined,
+      subscribeEvents: () => () => undefined,
+    });
+    const { pane } = createTestChatPane({ client, sessions });
+    const navigate = vi.fn();
+    pane.onPaneSessionChange = navigate;
+    const stop = sessions.subscribe((state) => {
+      if (state.loading) {
+        Object.defineProperty(pane, "isConnected", {
+          configurable: true,
+          value: false,
+        });
+      }
+    });
+
+    try {
+      await expect(pane.createSession({ label: "Research Plan" })).resolves.toBe(true);
+      expect(navigate).toHaveBeenCalledWith("single", nextSessionKey);
+    } finally {
+      stop();
+      sessions.dispose();
+    }
   });
 
   it("drops a created session after a same-client reconnect", async () => {

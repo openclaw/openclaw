@@ -1086,13 +1086,33 @@ class ChatPane extends OpenClawLightDomElement {
     state.lastError = null;
     state.chatError = null;
     const previousSessionKey = state.sessionKey;
-    const nextSessionKey = await sessions.create({
-      ...params,
-      currentSessionKey: previousSessionKey,
-      agentId:
-        scopedAgentParamsForSession(state, previousSessionKey).agentId ??
-        resolveAgentIdFromSessionKey(previousSessionKey),
-    });
+    let createdSessionAdopted = false;
+    const adoptCreatedSession = (nextSessionKey: string) => {
+      if (!isCurrent() || state.sessionKey !== previousSessionKey || !canCreateChatSession(state)) {
+        return false;
+      }
+      this.chatState.captureCreatedSessionComposer(nextSessionKey);
+      this.onPaneSessionChange?.(this.paneId, nextSessionKey);
+      createdSessionAdopted = true;
+      return true;
+    };
+    const nextSessionKey = await sessions.create(
+      {
+        ...params,
+        currentSessionKey: previousSessionKey,
+        agentId:
+          scopedAgentParamsForSession(state, previousSessionKey).agentId ??
+          resolveAgentIdFromSessionKey(previousSessionKey),
+      },
+      {
+        // sessions.create refreshes the list before resolving. Hand the key to
+        // the route first so that refresh-driven renders cannot retire this pane.
+        onCreated: (key) => void adoptCreatedSession(key),
+      },
+    );
+    if (createdSessionAdopted) {
+      return true;
+    }
     if (!isCurrent()) {
       return false;
     }
@@ -1112,9 +1132,7 @@ class ChatPane extends OpenClawLightDomElement {
       }
       return false;
     }
-    this.chatState.captureCreatedSessionComposer(nextSessionKey);
-    this.onPaneSessionChange?.(this.paneId, nextSessionKey);
-    return true;
+    return adoptCreatedSession(nextSessionKey);
   };
 
   private syncActiveBindings() {
@@ -1306,9 +1324,7 @@ class ChatPane extends OpenClawLightDomElement {
       this.removeEventListener("focusin", this.handlePaneFocus);
     });
     const pageState = createPageState(this.context, chatState.createRenderLifecycle(), this);
-    pageState.createChatSession = async (params) => {
-      await this.createSession(params);
-    };
+    pageState.createChatSession = (params) => this.createSession(params);
     pageState.exportCurrentChat = () =>
       exportChatMarkdown(pageState.chatMessages, pageState.assistantName);
     pageState.refreshCurrentSessionTools = async () => {
@@ -1560,6 +1576,10 @@ class ChatPane extends OpenClawLightDomElement {
       canonicalRouteSessionKey &&
       canonicalRouteSessionKey !== routeSessionKey
     ) {
+      // Route canonicalization retires this render before normal startup can
+      // bind the client. Keep lifecycle-guarded actions usable while the
+      // parent replaces the alias route with its canonical session key.
+      this.connectedClient = snapshot.client;
       this.onPaneSessionChange?.(this.paneId, canonicalRouteSessionKey, { replace: true });
       state.requestUpdate?.();
       return;
@@ -1929,8 +1949,7 @@ class ChatPane extends OpenClawLightDomElement {
         state.chatAttachments = next;
         state.requestUpdate?.();
       },
-      onSend: () =>
-        catalogKey ? void this.continueCatalogSession(catalogKey) : void state.handleSendChat(),
+      onSend: () => (catalogKey ? this.continueCatalogSession(catalogKey) : state.handleSendChat()),
       onCompact: () => void state.handleSendChat("/compact"),
       onOpenSessionCheckpoints: () => {
         const search = new URLSearchParams({ session: state.sessionKey });

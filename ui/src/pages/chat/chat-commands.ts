@@ -57,7 +57,7 @@ export type ChatCommandHost = Parameters<typeof handleAbortChat>[0] &
     chatModelCatalog: ModelCatalogEntry[];
     sessionsResult?: SessionsListResult | null;
     sessionsResultAgentId?: string | null;
-    createChatSession?: (params?: { label?: string }) => Promise<void>;
+    createChatSession?: (params?: { label?: string }) => Promise<boolean | void>;
     exportCurrentChat?: () => Promise<void> | void;
     refreshCurrentSessionTools?: () => Promise<void>;
     refreshCurrentChat?: () => Promise<void>;
@@ -196,6 +196,30 @@ export function shouldQueueLocalSlashCommand(name: string): boolean {
   return !["stop", "export-session", "steer", "redirect", "new"].includes(name);
 }
 
+type NewSessionCommand =
+  | { kind: "anonymous" }
+  | { kind: "named"; label: string }
+  | { kind: "invalid" };
+
+function parseNewSessionCommand(args: string): NewSessionCommand {
+  const match = /^--name(?:\s+(.*))?$/su.exec(args.trim());
+  if (!match) {
+    return { kind: "anonymous" };
+  }
+  let label = (match[1] ?? "").trim();
+  if (!label) {
+    return { kind: "invalid" };
+  }
+  const quote = label[0];
+  if (quote === '"' || quote === "'") {
+    if (label.at(-1) !== quote) {
+      return { kind: "invalid" };
+    }
+    label = label.slice(1, -1).trim();
+  }
+  return label ? { kind: "named", label } : { kind: "invalid" };
+}
+
 export async function dispatchChatSlashCommand(
   host: ChatCommandHost,
   name: string,
@@ -211,9 +235,16 @@ export async function dispatchChatSlashCommand(
         setChatCommandError(host, "New Chat is unavailable.");
         return "failed";
       }
-      const label = args.trim();
-      await host.createChatSession(label ? { label } : undefined);
-      return "completed";
+      const command = parseNewSessionCommand(args);
+      if (command.kind === "invalid") {
+        setChatCommandError(host, "Usage: /new --name <title>");
+        return "failed";
+      }
+      const created =
+        command.kind === "named"
+          ? await host.createChatSession({ label: command.label })
+          : await host.createChatSession();
+      return created === false ? "failed" : "completed";
     }
     case "reset":
       await opts.sendResetMessage(args ? `/reset ${args}` : "/reset", opts);

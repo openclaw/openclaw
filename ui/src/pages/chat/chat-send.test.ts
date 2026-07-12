@@ -1356,14 +1356,14 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("");
   });
 
-  it("passes a typed /new name to session creation", async () => {
+  it("passes an explicit typed /new --name title to session creation", async () => {
     const request = vi.fn(async (method: string) => {
       throw new Error(`Unexpected request: ${method}`);
     });
     const createChatSession = vi.fn();
     const host = makeHost({
       client: { request } as unknown as ChatHost["client"],
-      chatMessage: "/new Research Plan",
+      chatMessage: "/new --name Research Plan",
       sessionKey: "agent:main",
       createChatSession,
     });
@@ -1373,6 +1373,59 @@ describe("handleSendChat", () => {
     expect(request).not.toHaveBeenCalled();
     expect(createChatSession).toHaveBeenCalledWith({ label: "Research Plan" });
     expect(host.chatMessage).toBe("");
+  });
+
+  it("removes matching outer quotes from an explicit /new --name title", async () => {
+    const createChatSession = vi.fn();
+    const host = makeHost({
+      chatMessage: '/new --name "Research Plan"',
+      createChatSession,
+    });
+
+    await handleSendChat(host);
+
+    expect(createChatSession).toHaveBeenCalledWith({ label: "Research Plan" });
+  });
+
+  it("keeps arbitrary typed /new text on the anonymous create path", async () => {
+    const createChatSession = vi.fn();
+    const host = makeHost({
+      chatMessage: "/new Research Plan",
+      createChatSession,
+    });
+
+    await handleSendChat(host);
+
+    expect(createChatSession).toHaveBeenCalledWith();
+  });
+
+  it.each(["/new --name", '/new --name ""', '/new --name "Research Plan'])(
+    "rejects malformed explicit /new --name syntax: %s",
+    async (command) => {
+      const createChatSession = vi.fn();
+      const host = makeHost({
+        chatMessage: command,
+        createChatSession,
+      });
+
+      await handleSendChat(host);
+
+      expect(createChatSession).not.toHaveBeenCalled();
+      expect(host.chatMessage).toBe(command);
+      expect(host.chatError).toBe("Usage: /new --name <title>");
+    },
+  );
+
+  it("restores the typed command when session creation cannot switch routes", async () => {
+    const createChatSession = vi.fn(async () => false);
+    const host = makeHost({
+      chatMessage: "/new --name Research Plan",
+      createChatSession,
+    });
+
+    await handleSendChat(host);
+
+    expect(host.chatMessage).toBe("/new --name Research Plan");
   });
 
   it("does not queue typed /new behind an active run", async () => {

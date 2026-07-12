@@ -108,7 +108,7 @@ type ChatComposerProps = {
   onRequestUpdate?: () => void;
   onHistoryKeydown?: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
   onSlashIntent?: () => void | Promise<void>;
-  onSend: () => void;
+  onSend: () => void | Promise<void>;
   onCompact?: () => void | Promise<void>;
   onToggleRealtimeTalk?: () => void;
   onDismissRealtimeTalkError?: () => void;
@@ -636,7 +636,7 @@ function selectSlashCommand(
     state.slashMenuOpen = false;
     resetSlashMenuState(state);
     commitComposerDraft(props, `/${cmd.name}`);
-    props.onSend();
+    void props.onSend();
   } else {
     commitComposerDraft(props, `/${cmd.name} `);
     closeSlashMenuIfNeeded(state, requestUpdate);
@@ -678,7 +678,7 @@ function selectSlashArg(
   resetSlashMenuState(state);
   commitComposerDraft(props, `/${cmdName} ${arg}`);
   if (run) {
-    props.onSend();
+    void props.onSend();
   }
   requestUpdate();
 }
@@ -2177,6 +2177,13 @@ export function renderChatComposer(props: ChatComposerProps) {
       adjustTextareaHeight(target);
     }
   };
+  const sendAndSyncComposerDraft = (target: HTMLTextAreaElement | null) => {
+    const pending = props.onSend();
+    syncComposerDraftAfterSend(target);
+    if (pending) {
+      void pending.finally(() => syncComposerDraftAfterSend(target));
+    }
+  };
 
   const handleKeyDown = (event: KeyboardEvent) => {
     if (state.composerComposing || event.isComposing || event.keyCode === 229) {
@@ -2309,8 +2316,7 @@ export function renderChatComposer(props: ChatComposerProps) {
       event.preventDefault();
       const target = event.target as HTMLTextAreaElement;
       commitComposerDraft(props, target.value);
-      props.onSend();
-      syncComposerDraftAfterSend(target);
+      sendAndSyncComposerDraft(target);
     }
   };
 
@@ -2369,8 +2375,7 @@ export function renderChatComposer(props: ChatComposerProps) {
       return;
     }
     commitComposerDraft(props, draft);
-    props.onSend();
-    syncComposerDraftAfterSend(composerTextarea);
+    sendAndSyncComposerDraft(composerTextarea);
   };
   const handleVoicePrimaryAction = () => {
     if (props.realtimeTalkActive) {

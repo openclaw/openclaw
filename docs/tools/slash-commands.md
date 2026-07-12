@@ -171,7 +171,7 @@ plugins.
   <Accordion title="Sessions and runs">
     | Command | Description |
     | --- | --- |
-    | `/new [model]` | Archive the current session and start a fresh one; in Control UI, optional text names a newly created dashboard session instead |
+    | `/new [model]` | Archive the current session and start a fresh one; Control UI also supports `/new --name <title>` for a labeled dashboard session |
     | `/reset [soft [message]]` | Reset the current session in place. `soft` keeps the transcript, drops reused CLI backend session ids, and reruns startup |
     | `/name <title>` | Name or rename the current session. Omit the title to see the current name and a suggestion |
     | `/compact [instructions]` | Compact the session context. See [Compaction](/concepts/compaction) |
@@ -183,12 +183,14 @@ plugins.
 
     <Note>
       Control UI intercepts typed `/new` to create and switch to a fresh
-      dashboard session. When `/new <name>` creates a new dashboard session,
-      `<name>` becomes its session name; use `/model` to change models and
-      `/name <title>` to rename the current session. When `session.dmScope:
-      "main"` is configured and the current parent is the agent's main session,
-      typed `/new` resets the main session in place instead. Typed `/reset`
-      still runs the Gateway's in-place reset.
+      dashboard session. Use `/new --name <title>` to name the new session;
+      quotes around a multi-word title are optional. Bare `/new` and other
+      `/new <text>` forms keep the existing anonymous dashboard-session
+      behavior. Use `/model` to change models and `/name <title>` to rename the
+      current session. When `session.dmScope: "main"` is configured and the
+      current parent is the agent's main session, typed `/new` resets the main
+      session in place instead. Typed `/reset` still runs the Gateway's in-place
+      reset.
     </Note>
 
   </Accordion>
@@ -499,7 +501,7 @@ See [BTW side questions](/tools/btw) for the full behavior.
   </Accordion>
   <Accordion title="Argument notes">
     - Commands accept an optional `:` between the command and args (`/think: high`, `/send: on`).
-    - Outside Control UI, `/new <model>` accepts a model alias, `provider/model`, or a provider name (fuzzy match); if no match, the text is treated as the message body. In Control UI, when `/new <name>` creates a new dashboard session, `<name>` becomes its session name; use `/model` to switch models.
+    - Outside Control UI, `/new <model>` accepts a model alias, `provider/model`, or a provider name (fuzzy match); if no match, the text is treated as the message body. In Control UI, `/new --name <title>` labels the new dashboard session; other `/new <text>` forms keep the existing anonymous-create behavior. Use `/model` to switch models.
     - `/allowlist add|remove` requires `commands.config: true` and honors channel `configWrites`.
 
   </Accordion>

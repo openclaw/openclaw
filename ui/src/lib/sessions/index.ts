@@ -82,6 +82,11 @@ export type SessionRunTerminal = {
   endedAt: number;
 };
 
+export type SessionCreateOptions = {
+  /** Runs after the Gateway returns the key and before the canonical list refresh publishes. */
+  onCreated?: (key: string) => void;
+};
+
 export type SessionPatch = {
   label?: string | null;
   category?: string | null;
@@ -174,8 +179,11 @@ export type SessionCapability = {
   reconcileChanged: (payload: unknown, options?: SessionReconcileOptions) => SessionChangedResult;
   reconcileRunTerminal: (terminal: SessionRunTerminal) => boolean;
   refresh: (options?: SessionRefreshOptions) => Promise<void>;
-  createResult: (params?: SessionCreateParams) => Promise<SessionCreateOutcome | null>;
-  create: (params?: SessionCreateParams) => Promise<string | null>;
+  createResult: (
+    params?: SessionCreateParams,
+    options?: SessionCreateOptions,
+  ) => Promise<SessionCreateOutcome | null>;
+  create: (params?: SessionCreateParams, options?: SessionCreateOptions) => Promise<string | null>;
   patch: (
     key: string,
     patch: SessionPatch,
@@ -792,7 +800,10 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     return request;
   };
 
-  const createResult = async (params: SessionCreateParams = {}) => {
+  const createResult = async (
+    params: SessionCreateParams = {},
+    options: SessionCreateOptions = {},
+  ) => {
     const scope = captureConnection();
     if (!scope || state.loading) {
       return null;
@@ -806,6 +817,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       if (!isCurrentConnection(scope)) {
         return null;
       }
+      options.onCreated?.(result.key);
       await refresh({ agentId: params.agentId, force: true });
       if (!isCurrentConnection(scope)) {
         return null;
@@ -824,8 +836,8 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     }
   };
 
-  const create = async (params: SessionCreateParams = {}) =>
-    (await createResult(params))?.key ?? null;
+  const create = async (params: SessionCreateParams = {}, options: SessionCreateOptions = {}) =>
+    (await createResult(params, options))?.key ?? null;
 
   const LEGACY_GROUPS_STORAGE_KEY = "openclaw:sessions:custom-groups";
   let groupsLoadedEpoch = -1;
