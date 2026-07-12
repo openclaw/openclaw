@@ -219,6 +219,7 @@ async function runKimiSearch(params: {
   baseUrl: string;
   model: string;
   timeoutSeconds: number;
+  signal?: AbortSignal;
 }): Promise<KimiSearchResult> {
   const endpoint = `${params.baseUrl.trim().replace(/\/$/, "")}/chat/completions`;
   const messages: Array<Record<string, unknown>> = [{ role: "user", content: params.query }];
@@ -230,6 +231,7 @@ async function runKimiSearch(params: {
       {
         url: endpoint,
         timeoutSeconds: params.timeoutSeconds,
+        signal: params.signal,
         init: {
           method: "POST",
           headers: {
@@ -344,6 +346,7 @@ async function runKimiSearch(params: {
 export async function executeKimiWebSearchProviderTool(
   ctx: { config?: OpenClawConfig; searchConfig?: SearchConfigRecord },
   args: Record<string, unknown>,
+  opts?: { signal?: AbortSignal },
 ): Promise<Record<string, unknown>> {
   const searchConfig = mergeScopedSearchConfig(
     ctx.searchConfig,
@@ -395,6 +398,7 @@ export async function executeKimiWebSearchProviderTool(
     baseUrl,
     model,
     timeoutSeconds: resolveSearchTimeoutSeconds(searchConfig),
+    signal: opts?.signal,
   });
   if (!result.grounded) {
     return {
