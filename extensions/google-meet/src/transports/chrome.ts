@@ -56,6 +56,7 @@ export const testing = {
   meetLeaveScriptForTest: meetLeaveScript,
   parseMeetBrowserStatusForTest: parseMeetBrowserStatus,
   resolveBrowserGatewayTimeoutMsForTest: resolveBrowserGatewayTimeoutMs,
+  resolveLocalBrowserRequestForTest: resolveLocalBrowserRequest,
 };
 
 function isGoogleMeetTalkBackMode(mode: GoogleMeetMode): boolean {
@@ -209,7 +210,7 @@ export async function launchChromeMeet(params: {
   }
 
   const result = await openMeetWithBrowserRequest({
-    callBrowser: callLocalBrowserRequest,
+    callBrowser: await resolveLocalBrowserRequest(params.runtime),
     config: params.config,
     mode: params.mode,
     url: params.url,
@@ -319,6 +320,28 @@ async function callLocalBrowserRequest(params: BrowserRequestParams) {
     },
     { progress: false },
   );
+}
+
+async function resolveLocalBrowserRequest(runtime: PluginRuntime): Promise<BrowserRequestCaller> {
+  // Gateway-hosted plugin work stays in-process; otherwise agent tools would
+  // need an external operator.admin token just to reach the local browser.
+  if (!(await runtime.gateway.isAvailable())) {
+    return callLocalBrowserRequest;
+  }
+  return async (params) =>
+    await runtime.gateway.request(
+      "browser.request",
+      {
+        method: params.method,
+        path: params.path,
+        body: params.body,
+        timeoutMs: params.timeoutMs,
+      },
+      {
+        timeoutMs: resolveBrowserGatewayTimeoutMs(params.timeoutMs),
+        scopes: ["operator.admin"],
+      },
+    );
 }
 
 function resolveBrowserGatewayTimeoutMs(timeoutMs: number): number {
@@ -873,12 +896,13 @@ async function leaveMeetWithBrowserRequest(params: {
 }
 
 export async function leaveChromeMeet(params: {
+  runtime: PluginRuntime;
   config: GoogleMeetConfig;
   meetingUrl: string;
   tab: GoogleMeetBrowserTab;
 }): Promise<{ left: boolean; note: string }> {
   return await leaveMeetWithBrowserRequest({
-    callBrowser: callLocalBrowserRequest,
+    callBrowser: await resolveLocalBrowserRequest(params.runtime),
     config: params.config,
     meetingUrl: params.meetingUrl,
     tab: params.tab,
@@ -1183,6 +1207,7 @@ async function inspectRecoverableMeetTab(params: {
 }
 
 export async function recoverCurrentMeetTab(params: {
+  runtime: PluginRuntime;
   config: GoogleMeetConfig;
   mode?: GoogleMeetMode;
   readOnly?: boolean;
@@ -1197,8 +1222,9 @@ export async function recoverCurrentMeetTab(params: {
   message: string;
 }> {
   const timeoutMs = Math.max(1_000, params.config.chrome.joinTimeoutMs);
+  const callBrowser = await resolveLocalBrowserRequest(params.runtime);
   const tabs = asBrowserTabs(
-    await callLocalBrowserRequest({
+    await callBrowser({
       method: "GET",
       path: "/tabs",
       timeoutMs: Math.min(timeoutMs, 5_000),
@@ -1219,7 +1245,7 @@ export async function recoverCurrentMeetTab(params: {
   return {
     transport: "chrome",
     ...(await inspectRecoverableMeetTab({
-      callBrowser: callLocalBrowserRequest,
+      callBrowser,
       config: params.config,
       mode: params.mode,
       readOnly: params.readOnly,

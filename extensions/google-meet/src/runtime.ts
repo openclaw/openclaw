@@ -434,6 +434,7 @@ export class GoogleMeetRuntime {
       });
     }
     return recoverCurrentMeetTab({
+      runtime: this.params.runtime,
       config: this.params.config,
       url,
     });
@@ -943,6 +944,7 @@ export class GoogleMeetRuntime {
             tab,
           })
         : await leaveChromeMeet({
+            runtime: this.params.runtime,
             config: this.params.config,
             meetingUrl: session.url,
             tab,
@@ -1280,6 +1282,7 @@ export class GoogleMeetRuntime {
               url: session.url,
             })
           : await recoverCurrentMeetTab({
+              runtime: this.params.runtime,
               config: this.params.config,
               mode: session.mode,
               readOnly: options.readOnly,

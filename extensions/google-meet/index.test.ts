@@ -1472,6 +1472,33 @@ describe("google-meet plugin", () => {
     expect(gatewayJoinParams.requesterSessionKey).toBe("agent:main:discord:channel:general");
   });
 
+  it("requests admin scope only for the bundled tool Gateway fallback", async () => {
+    const { tools } = setup(
+      {},
+      { toolContext: { sessionKey: "agent:main:discord:channel:general" } },
+    );
+    const callGatewayFromCli = vi.fn(async () => ({ ok: true }));
+    googleMeetPluginTesting.setCallGatewayFromCliForTests(callGatewayFromCli);
+    const tool = tools[0] as {
+      execute: (id: string, params: unknown) => Promise<unknown>;
+    };
+
+    await tool.execute("id", {
+      action: "join",
+      url: "https://meet.google.com/abc-defg-hij",
+      mode: "transcribe",
+    });
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "googlemeet.join",
+      expect.any(Object),
+      expect.objectContaining({
+        requesterSessionKey: "agent:main:discord:channel:general",
+      }),
+      { progress: false, scopes: ["operator.admin"] },
+    );
+  });
+
   it("keeps Twilio calls on the agent that invoked the tool", async () => {
     const { tools, gatewayRequest } = setup(
       { defaultTransport: "twilio" },
@@ -1496,13 +1523,42 @@ describe("google-meet plugin", () => {
         agentId: "support",
         requesterSessionKey: "agent:support:main",
       }),
-      { timeoutMs: 60_000 },
+      { timeoutMs: 60_000, scopes: ["operator.admin"] },
     );
     expect(voiceCallMocks.joinMeetViaVoiceCallGateway).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: "support",
         sessionKey: `agent:support:google-meet:${result.details.session.id}`,
       }),
+    );
+  });
+
+  it("derives trusted agent ownership from the invoking session key", async () => {
+    const { tools, gatewayRequest } = setup(
+      { defaultTransport: "twilio" },
+      {
+        gatewayAvailable: true,
+        toolContext: { sessionKey: "agent:support:pr103522-live" },
+      },
+    );
+    const tool = tools[0] as {
+      execute: (id: string, params: unknown) => Promise<{ details: { session: { id: string } } }>;
+    };
+
+    await tool.execute("id", {
+      action: "join",
+      url: "https://meet.google.com/abc-defg-hij",
+      dialInNumber: "+15551234567",
+      agentId: "spoofed",
+    });
+
+    expect(gatewayRequest).toHaveBeenCalledWith(
+      "googlemeet.join",
+      expect.objectContaining({
+        agentId: "support",
+        requesterSessionKey: "agent:support:pr103522-live",
+      }),
+      { timeoutMs: 60_000, scopes: ["operator.admin"] },
     );
   });
 
@@ -1564,7 +1620,7 @@ describe("google-meet plugin", () => {
         agentId: "support",
         requesterSessionKey: "agent:support:main",
       }),
-      { timeoutMs: 60_000 },
+      { timeoutMs: 60_000, scopes: ["operator.admin"] },
     );
     expect(result.details.session.agentId).toBe("support");
     expect(result.details.listenVerified).toBe(true);
@@ -5239,6 +5295,7 @@ describe("google-meet plugin", () => {
       await Promise.all([runtime.leave(first.session.id), runtime.leave(second.session.id)]);
       expect(leaveChromeMeet).toHaveBeenCalledOnce();
       expect(leaveChromeMeet).toHaveBeenCalledWith({
+        runtime: expect.any(Object),
         config: expect.any(Object),
         meetingUrl: "https://meet.google.com/abc-defg-hij",
         tab: { targetId: "shared-meet-tab", openedByPlugin: true },
@@ -5301,6 +5358,7 @@ describe("google-meet plugin", () => {
       expect(stop).toHaveBeenCalledOnce();
       expect(leaveChromeMeet).toHaveBeenCalledOnce();
       expect(leaveChromeMeet).toHaveBeenCalledWith({
+        runtime: expect.any(Object),
         config: expect.any(Object),
         meetingUrl: "https://meet.google.com/abc-defg-hij",
         tab: { targetId: "old-meet-tab", openedByPlugin: true },
@@ -5361,6 +5419,7 @@ describe("google-meet plugin", () => {
       expect(first.session.state).toBe("ended");
       expect(first.session.browserLeft).toBe(true);
       expect(leaveChromeMeet).toHaveBeenCalledWith({
+        runtime: expect.any(Object),
         config: expect.any(Object),
         meetingUrl: "https://meet.google.com/abc-defg-hij",
         tab: { targetId: "retained-meet-tab", openedByPlugin: true },
@@ -5428,6 +5487,7 @@ describe("google-meet plugin", () => {
       expect(replacementStop).toHaveBeenCalledOnce();
       expect(leaveChromeMeet).toHaveBeenCalledTimes(2);
       expect(leaveChromeMeet).toHaveBeenLastCalledWith({
+        runtime: expect.any(Object),
         config: expect.any(Object),
         meetingUrl: "https://meet.google.com/abc-defg-hij",
         tab: { targetId: "replacement-meet-tab", openedByPlugin: true },
@@ -5610,6 +5670,7 @@ describe("google-meet plugin", () => {
       await expect(runtime.leave(joined.session.id)).rejects.toThrow("bridge stop failed");
 
       expect(leaveChromeMeet).toHaveBeenCalledWith({
+        runtime: expect.any(Object),
         config: expect.any(Object),
         meetingUrl: "https://meet.google.com/abc-defg-hij",
         tab: { targetId: "meet-tab", openedByPlugin: true },
