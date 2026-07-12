@@ -656,7 +656,6 @@ async function verifySqliteSnapshots(params: {
       },
     });
 
-    const sqlite = requireNodeSqlite();
     for (const entry of sqliteEntries) {
       const extractedPath = path.join(tempDir, ...entry.normalized.split("/"));
       const extractedStat = await fs.lstat(extractedPath);
@@ -672,6 +671,14 @@ async function verifySqliteSnapshots(params: {
       let database: DatabaseSync | undefined;
       try {
         await assertSqliteSnapshotFileShape(extractedPath, entry.normalized, extractedStat.size);
+        const expectedRole = resolveExpectedSqliteRole(entry);
+        if (!expectedRole) {
+          // Plugin-owned databases may require owner-specific functions,
+          // collations, or virtual-table modules. Core can validate their
+          // snapshot shape, but only canonical schemas are safe to interpret.
+          continue;
+        }
+        const sqlite = requireNodeSqlite();
         database = new sqlite.DatabaseSync(extractedPath, {
           allowExtension: true,
           readOnly: true,
@@ -688,10 +695,7 @@ async function verifySqliteSnapshots(params: {
           archivePath: entry.normalized,
           pragma: "integrity_check",
         });
-        const expectedRole = resolveExpectedSqliteRole(entry);
-        if (expectedRole) {
-          assertExpectedSqliteRole(database, entry.normalized, expectedRole);
-        }
+        assertExpectedSqliteRole(database, entry.normalized, expectedRole);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         throw new Error(
@@ -707,7 +711,7 @@ async function verifySqliteSnapshots(params: {
   }
 }
 
-/** Verify a backup archive, extracting SQLite snapshots only for integrity checks. */
+/** Verify a backup archive, including snapshot shape and canonical SQLite integrity checks. */
 export async function backupVerifyCommand(
   runtime: RuntimeEnv,
   opts: BackupVerifyOptions,

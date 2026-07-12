@@ -275,6 +275,41 @@ describe("backupVerifyCommand", () => {
     );
   });
 
+  it("does not interpret plugin-owned SQLite schemas without their owner runtime", async () => {
+    const stateAssetArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw`;
+    const sqliteArchivePath = `${stateAssetArchivePath}/plugins/dedicated/custom.sqlite`;
+    const sqlitePayload = await createSqlitePayload((database) => {
+      database.exec(`
+        CREATE TABLE records (value TEXT NOT NULL);
+        CREATE INDEX records_like ON records(value) WHERE value LIKE 'A%';
+        PRAGMA case_sensitive_like = ON;
+        INSERT INTO records (value) VALUES ('alpha'), ('Apple');
+      `);
+    });
+
+    await withBrokenArchiveFixture(
+      {
+        tempPrefix: "openclaw-backup-plugin-owned-sqlite-",
+        manifestAssetArchivePath: stateAssetArchivePath,
+        payloads: [
+          {
+            fileName: "custom.sqlite",
+            contents: sqlitePayload,
+            archivePath: sqliteArchivePath,
+          },
+        ],
+      },
+      async (archivePath) => {
+        const runtime = createBackupVerifyRuntime();
+        await expect(backupVerifyCommand(runtime, { archive: archivePath })).resolves.toMatchObject(
+          {
+            ok: true,
+          },
+        );
+      },
+    );
+  });
+
   it("rejects a structurally valid archive containing a malformed SQLite snapshot", async () => {
     const stateAssetArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw`;
     const sqliteArchivePath = `${stateAssetArchivePath}/state/openclaw.sqlite`;
