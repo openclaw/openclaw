@@ -1275,6 +1275,78 @@ describe("gateway hot reload superseded tail recovery", () => {
     }
   });
 
+  it("pauses stale-target recovery until a newer valid config is accepted", async () => {
+    vi.useFakeTimers();
+    const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
+    const handlers = createReloadHandlersForTest(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      requestRecoveryRestart,
+    );
+    const configA = { logging: { level: "info" as const } } satisfies OpenClawConfig;
+    const configC = { logging: { level: "debug" as const } } satisfies OpenClawConfig;
+    const prepareA = vi.fn(async () => configA);
+    const prepareC = vi.fn(async () => configC);
+    handlers.recordAcceptedRestartTarget({
+      runtimeConfig: configA,
+      sourceConfig: configA,
+      prepareRuntimeConfig: prepareA,
+    });
+    let rejectTail: ((error: Error) => void) | undefined;
+    hoisted.refreshContextWindowCache.mockImplementationOnce(
+      async () =>
+        await new Promise<never>((_resolve, reject) => {
+          rejectTail = reject;
+        }),
+    );
+    const plan = createHotTailPlan({
+      changedPaths: ["agents.defaults.workspace"],
+      hotReasons: ["agents.defaults.workspace"],
+    });
+
+    try {
+      const staleTail = handlers.applyHotReload(plan, configA, {
+        isCurrent: () => false,
+        publish: async (commit) => await commit(),
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(hoisted.refreshContextWindowCache).toHaveBeenCalledOnce();
+
+      handlers.pauseGatewayRestartForConfigCandidate();
+      rejectTail?.(new Error("stale A tail failed"));
+      await staleTail;
+      await vi.runAllTimersAsync();
+
+      expect(requestRecoveryRestart).not.toHaveBeenCalled();
+      expect(prepareA).not.toHaveBeenCalled();
+
+      const accepted = handlers.acceptRestartConfig(configC);
+      expect(accepted.debt).toBeDefined();
+      if (!accepted.debt) {
+        throw new Error("expected paused stale-tail recovery debt");
+      }
+      const restart = handlers.requestGatewayRestart(accepted.debt.plan, configC, {
+        retainDebtAcrossConfigChanges: accepted.debt.retainDebtAcrossConfigChanges,
+        debtConfig: configC,
+        prepareRuntimeConfig: prepareC,
+      });
+      restart.settle("committed");
+      handlers.recordAcceptedRestartTarget({
+        runtimeConfig: configC,
+        sourceConfig: configC,
+        prepareRuntimeConfig: prepareC,
+      });
+      await vi.runAllTimersAsync();
+
+      expect(requestRecoveryRestart).toHaveBeenCalledOnce();
+      expect(prepareC).toHaveBeenCalledOnce();
+    } finally {
+      handlers.stopRestartRetries();
+    }
+  });
+
   it.each(["mcp", "gmail", "channel", "context"] as const)(
     "does not restart into invalid config B after revocation during the $surface tail",
     async (surface) => {

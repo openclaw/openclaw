@@ -161,7 +161,7 @@ export function startGatewayConfigReloader(opts: {
       runtimeApplied: boolean;
       publishSource?: () => Promise<() => Promise<void>>;
     },
-  ) => void | Promise<void>;
+  ) => void | (() => Promise<void>) | Promise<void | (() => Promise<void>)>;
   /** Publishes a newer source snapshot when effective runtime bytes are unchanged. */
   onEffectiveConfigUnchanged?: (
     nextConfig: OpenClawConfig,
@@ -413,44 +413,50 @@ export function startGatewayConfigReloader(opts: {
       // a baseline-only candidate, which can discard prepared lifecycle state.
       await flushPendingRuntimeApplication();
       assertCurrent();
-      await opts.onConfigAccepted?.(
-        committedRuntimeConfig ?? nextConfig,
-        ownership,
-        nextSourceConfig,
-        {
-          runtimeApplied: options.runtimeApplied !== false,
-          ...(options.publishSource ? { publishSource: options.publishSource } : {}),
-        },
-      );
-      assertCurrent();
-      await options.publishSource?.();
-      assertCurrent();
-      currentSourceConfig = nextSourceConfig;
-      if (options.runtimeApplied === false) {
-        // Persisted-but-skipped candidates are not runtime truth. Keep the
-        // effective baseline so a later safe edit cannot publish them indirectly.
-        lastSourceOnlyWriteHash = persistedHash ?? null;
-        lastSourceOnlyReapplyRuntimeOverlays = ownership.reapplyRuntimeOverlays;
-        lastSourceOnlyRuntimeRefresh = ownership.runtimeRefresh;
-        lastSourceOnlyRuntimeConfig = nextConfig;
-        lastSourceOnlySourceConfig = nextSourceConfig;
-        return;
+      let rollbackAcceptedSource: (() => Promise<void>) | undefined;
+      try {
+        rollbackAcceptedSource = await opts.onConfigAccepted?.(
+          committedRuntimeConfig ?? nextConfig,
+          ownership,
+          nextSourceConfig,
+          {
+            runtimeApplied: options.runtimeApplied !== false,
+            ...(options.publishSource ? { publishSource: options.publishSource } : {}),
+          },
+        );
+        assertCurrent();
+        rollbackAcceptedSource ??= await options.publishSource?.();
+        assertCurrent();
+        currentSourceConfig = nextSourceConfig;
+        if (options.runtimeApplied === false) {
+          // Persisted-but-skipped candidates are not runtime truth. Keep the
+          // effective baseline so a later safe edit cannot publish them indirectly.
+          lastSourceOnlyWriteHash = persistedHash ?? null;
+          lastSourceOnlyReapplyRuntimeOverlays = ownership.reapplyRuntimeOverlays;
+          lastSourceOnlyRuntimeRefresh = ownership.runtimeRefresh;
+          lastSourceOnlyRuntimeConfig = nextConfig;
+          lastSourceOnlySourceConfig = nextSourceConfig;
+          return;
+        }
+        if (persistedHash === lastSourceOnlyWriteHash) {
+          lastSourceOnlyWriteHash = null;
+          lastSourceOnlyReapplyRuntimeOverlays = null;
+          lastSourceOnlyRuntimeRefresh = undefined;
+          lastSourceOnlyRuntimeConfig = null;
+          lastSourceOnlySourceConfig = null;
+        }
+        currentConfig = committedRuntimeConfig ?? nextConfig;
+        currentCompareConfig = nextCompareConfig;
+        currentReapplyRuntimeOverlays = ownership.reapplyRuntimeOverlays;
+        currentRuntimeRefresh = ownership.runtimeRefresh;
+        currentPluginInstallRecords = nextPluginInstallRecords;
+        settings = committedRuntimeConfig
+          ? resolveGatewayReloadSettings(committedRuntimeConfig)
+          : nextSettings;
+      } catch (error) {
+        await rollbackAcceptedSource?.();
+        throw error;
       }
-      if (persistedHash === lastSourceOnlyWriteHash) {
-        lastSourceOnlyWriteHash = null;
-        lastSourceOnlyReapplyRuntimeOverlays = null;
-        lastSourceOnlyRuntimeRefresh = undefined;
-        lastSourceOnlyRuntimeConfig = null;
-        lastSourceOnlySourceConfig = null;
-      }
-      currentConfig = committedRuntimeConfig ?? nextConfig;
-      currentCompareConfig = nextCompareConfig;
-      currentReapplyRuntimeOverlays = ownership.reapplyRuntimeOverlays;
-      currentRuntimeRefresh = ownership.runtimeRefresh;
-      currentPluginInstallRecords = nextPluginInstallRecords;
-      settings = committedRuntimeConfig
-        ? resolveGatewayReloadSettings(committedRuntimeConfig)
-        : nextSettings;
     };
     if (changedPaths.length === 0) {
       let publishedSourceRollback: (() => Promise<void>) | undefined;

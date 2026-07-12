@@ -672,7 +672,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         params.logReload.warn(
           `${surface} failed after config supersession${detail}; recovery deferred to the newer config`,
         );
-        if (!restartRequestTransaction && latestAcceptedRestartTarget) {
+        if (!configCandidatePending && !restartRequestTransaction && latestAcceptedRestartTarget) {
           const target = latestAcceptedRestartTarget;
           const restartTransaction = requestGatewayRestart(recoveryPlan, target.runtimeConfig, {
             retainDebtAcrossConfigChanges: true,
@@ -1054,9 +1054,34 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
   // Keep it separate from config-owned debt that later baselines may retire.
   let conservativeRestartDebt: RestartRequestDetails | null = null;
   let latestAcceptedRestartTarget: AcceptedRestartTarget | null = null;
+  let acceptedRestartTargetGeneration = 0;
+  let configCandidatePending = false;
 
   const recordAcceptedRestartTarget = (target: AcceptedRestartTarget) => {
-    latestAcceptedRestartTarget = target;
+    const generation = ++acceptedRestartTargetGeneration;
+    const acceptedTarget: AcceptedRestartTarget = {
+      ...target,
+      prepareRuntimeConfig: async () => {
+        if (
+          configCandidatePending ||
+          generation !== acceptedRestartTargetGeneration ||
+          latestAcceptedRestartTarget !== acceptedTarget
+        ) {
+          throw new GatewayConfigReloadSupersededError();
+        }
+        const prepared = await target.prepareRuntimeConfig();
+        if (
+          configCandidatePending ||
+          generation !== acceptedRestartTargetGeneration ||
+          latestAcceptedRestartTarget !== acceptedTarget
+        ) {
+          throw new GatewayConfigReloadSupersededError();
+        }
+        return prepared;
+      },
+    };
+    latestAcceptedRestartTarget = acceptedTarget;
+    configCandidatePending = false;
   };
 
   const createRestartRequestDetails = (
@@ -1234,6 +1259,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
   };
 
   const pauseGatewayRestartForConfigCandidate = () => {
+    configCandidatePending = true;
     const lifecycle = beginGatewayRestartLifecycle();
     // Candidate acceptance owns debt rearm. Until then, invalid/failed config
     // must leave the prior committed restart paused.
@@ -1695,9 +1721,6 @@ export function startManagedGatewayConfigReloader(
                 activate: false,
               },
             );
-            if (!transactionOwnership.isCurrent()) {
-              throw new GatewayConfigReloadSupersededError();
-            }
             return prepared.config;
           },
         });
@@ -1734,6 +1757,7 @@ export function startManagedGatewayConfigReloader(
         params.acceptTerminalConfig({
           retireRejectedRestart: acceptedRestart.retireRejectedRestart,
         });
+        return rollbackSource;
       } catch (error) {
         await rollbackSource?.();
         throw error;

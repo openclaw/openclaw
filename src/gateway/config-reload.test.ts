@@ -744,7 +744,7 @@ function createReloaderHarness(
         runtimeApplied: boolean;
         publishSource?: () => Promise<() => Promise<void>>;
       },
-    ) => void | Promise<void>;
+    ) => void | (() => Promise<void>) | Promise<void | (() => Promise<void>)>;
     onEffectiveConfigUnchanged?: (
       nextConfig: OpenClawConfig,
       ownership: GatewayConfigReloadTransactionOwnership,
@@ -2693,6 +2693,54 @@ describe("startGatewayConfigReloader", () => {
     expect(harness.log.error).toHaveBeenCalledWith(
       "config reload failed: Error: restart debt admission failed",
     );
+
+    await harness.reloader.stop();
+  });
+
+  it("rolls back masked source publication when superseded after acceptance", async () => {
+    const initialConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      logging: { level: "info" as const },
+    } satisfies OpenClawConfig;
+    const sourceConfig = {
+      ...initialConfig,
+      logging: { level: "debug" as const },
+    } satisfies OpenClawConfig;
+    const rollbackSource = vi.fn(async () => {});
+    let emitSupersedingChange = () => {};
+    const harness = createReloaderHarness(
+      vi.fn(async () => makeSnapshot({ config: initialConfig, hash: "superseding-write" })),
+      {
+        initialConfig,
+        onConfigAccepted: async (_nextConfig, _ownership, _sourceConfig, acceptance) => {
+          const rollback = await acceptance.publishSource?.();
+          queueMicrotask(emitSupersedingChange);
+          return rollback;
+        },
+        onEffectiveConfigUnchanged: async () => rollbackSource,
+      },
+    );
+    emitSupersedingChange = () => harness.watcher.emit("change");
+
+    harness.emitWrite({
+      configPath: "/tmp/openclaw.json",
+      sourceConfig,
+      runtimeConfig: sourceConfig,
+      preparedCandidate: {
+        runtimeConfig: initialConfig,
+        compareConfig: initialConfig,
+        reapplyRuntimeOverlays: () => initialConfig,
+      },
+      persistedHash: "masked-source-superseded",
+      revision: 1,
+      fingerprint: "runtime-masked-source-superseded",
+      sourceFingerprint: "source-masked-source-superseded",
+      writtenAtMs: Date.now(),
+    });
+    await vi.runAllTimersAsync();
+
+    expect(harness.onEffectiveConfigUnchanged).toHaveBeenCalledOnce();
+    expect(rollbackSource).toHaveBeenCalledOnce();
 
     await harness.reloader.stop();
   });
