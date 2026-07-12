@@ -82,12 +82,31 @@ const AMBIGUOUS_RUNTIME_INTERPOLATIONS = [
   {
     label: "interpolated localized resource",
     pattern:
-      /(?:\bString\s*\(\s*localized:|\bAttributedString\s*\(\s*localized:|\bLocalizedStringResource\s*\(|(?:\b[A-Za-z_]\w*)?\.localized(?:Format)?\s*\()\s*"((?:\\.|[^"\\])*)"/gu,
+      /(?:\bString\s*\(\s*localized:|\bAttributedString\s*\(\s*localized:|\bLocalizedString(?:Key|Resource)\s*\(|(?:\b[A-Za-z_]\w*)?\.localized(?:Format)?\s*\()\s*"((?:\\.|[^"\\])*)"/gu,
+    allowsInflection: true,
+  },
+  {
+    label: "interpolated multiline localized resource",
+    pattern:
+      /\b(?:String\s*\(\s*localized:|AttributedString\s*\(\s*localized:|LocalizedString(?:Key|Resource)\s*\()\s*"""([\s\S]*?)"""/gu,
     allowsInflection: true,
   },
   {
     label: "interpolated SwiftUI text literal",
-    pattern: /\b(?:Text|Label|Button|Link|Section)\s*\(\s*"((?:\\.|[^"\\])*)"/gu,
+    pattern:
+      /\b(?:Text|Label|Button|TextField|SecureField|Picker|Section|LabeledContent|Toggle|Menu|ShareLink|Link|TextEditor|ProgressView|Gauge|DisclosureGroup|ControlGroup|DatePicker|Stepper)\s*\(\s*"((?:\\.|[^"\\])*)"/gu,
+    allowsInflection: false,
+  },
+  {
+    label: "interpolated multiline SwiftUI text literal",
+    pattern:
+      /\b(?:Text|Label|Button|TextField|SecureField|Picker|Section|LabeledContent|Toggle|Menu|ShareLink|Link|TextEditor|ProgressView|Gauge|DisclosureGroup|ControlGroup|DatePicker|Stepper)\s*\(\s*"""([\s\S]*?)"""/gu,
+    allowsInflection: false,
+  },
+  {
+    label: "interpolated multiline SwiftUI modifier literal",
+    pattern:
+      /\.(?:accessibilityLabel|accessibilityHint|alert|confirmationDialog|help|navigationTitle)\s*\(\s*"""([\s\S]*?)"""/gu,
     allowsInflection: false,
   },
   {
@@ -102,6 +121,22 @@ const AMBIGUOUS_RUNTIME_INTERPOLATIONS = [
     allowsInflection: false,
   },
 ] as const;
+
+export function findAmbiguousRuntimeInterpolations(source: string): string[] {
+  const violations: string[] = [];
+  for (const { label, pattern, allowsInflection } of AMBIGUOUS_RUNTIME_INTERPOLATIONS) {
+    pattern.lastIndex = 0;
+    for (const match of source.matchAll(pattern)) {
+      const literal = match[1] ?? "";
+      if (!literal.includes("\\(") || (allowsInflection && isInflectedCountSource(literal))) {
+        continue;
+      }
+      violations.push(label);
+      break;
+    }
+  }
+  return violations;
+}
 const APPLE_LOCALE_DIRECTORIES: Record<string, string> = {
   "ja-JP": "ja",
   "zh-CN": "zh-Hans",
@@ -626,16 +661,8 @@ async function validateRuntimeInterpolationPaths(): Promise<void> {
   const violations: string[] = [];
   for (const file of files) {
     const source = await readFile(file, "utf8");
-    for (const { label, pattern, allowsInflection } of AMBIGUOUS_RUNTIME_INTERPOLATIONS) {
-      pattern.lastIndex = 0;
-      for (const match of source.matchAll(pattern)) {
-        const literal = match[1] ?? "";
-        if (!literal.includes("\\(") || (allowsInflection && isInflectedCountSource(literal))) {
-          continue;
-        }
-        violations.push(`${path.relative(ROOT, file)}: ${label}`);
-        break;
-      }
+    for (const label of findAmbiguousRuntimeInterpolations(source)) {
+      violations.push(`${path.relative(ROOT, file)}: ${label}`);
     }
   }
   if (violations.length) {

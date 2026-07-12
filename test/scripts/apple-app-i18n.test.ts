@@ -7,6 +7,7 @@ import {
   buildIosCatalog,
   checkAppleAppI18n,
   compileMacosLocalizations,
+  findAmbiguousRuntimeInterpolations,
   selectInfoPlistTranslation,
 } from "../../scripts/apple-app-i18n.ts";
 import { NATIVE_I18N_LOCALES } from "../../scripts/native-app-i18n.ts";
@@ -271,6 +272,30 @@ describe("Apple app i18n catalogs", () => {
     expect(watch).toContain('format: String(localized: "Expires in %@")');
     expect(watch).not.toContain('parts.append("Expires in \\(expiresText)")');
     expect(watchDirect).not.toContain('self.statusText = "');
+  });
+
+  it("rejects interpolated runtime copy across every supported Swift syntax", () => {
+    const source = String.raw`
+      let key = LocalizedStringKey("Hello \(name)")
+      let detail = String(localized: """
+        Welcome \(name)
+        """)
+      Toggle("Enable \(feature)", isOn: $enabled)
+      Menu("""
+        Open \(item)
+        """) {}
+      view.accessibilityHint("""
+        Select \(item)
+        """)
+    `;
+
+    expect(findAmbiguousRuntimeInterpolations(source)).toEqual([
+      "interpolated localized resource",
+      "interpolated multiline localized resource",
+      "interpolated SwiftUI text literal",
+      "interpolated multiline SwiftUI text literal",
+      "interpolated multiline SwiftUI modifier literal",
+    ]);
   });
 
   it("generates InfoPlist localizations for every shipped iOS target", async () => {
