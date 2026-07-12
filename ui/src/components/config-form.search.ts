@@ -193,6 +193,15 @@ export function matchesNodeSearch(params: {
     return false;
   }
   const values = Array.isArray(value) ? value : Array.isArray(schema.default) ? schema.default : [];
+  if (values.length === 0) {
+    return matchesNodeSearch({
+      schema: itemsSchema,
+      value: undefined,
+      path: [...path, 0],
+      hints,
+      criteria,
+    });
+  }
   return values.some((entry, index) =>
     matchesNodeSearch({
       schema: itemsSchema,

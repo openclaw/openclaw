@@ -67,4 +67,27 @@ describe("config form search", () => {
     });
     expect(negative).toBe(false);
   });
+
+  it("searches array item schemas before entries exist", () => {
+    const matched = matchesNodeSearch({
+      schema: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            source: {
+              type: "string",
+              description: "Credential source for outgoing requests",
+            },
+          },
+        },
+      },
+      value: [],
+      path: ["headers"],
+      hints: {},
+      criteria: parseConfigSearchQuery("credential source"),
+    });
+
+    expect(matched).toBe(true);
+  });
 });
