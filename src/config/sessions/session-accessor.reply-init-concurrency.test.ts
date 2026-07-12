@@ -180,6 +180,7 @@ const sessionId = process.env.TRANSCRIPT_REWRITE_SESSION_ID;
 const readyPath = process.env.TRANSCRIPT_REWRITE_READY_PATH;
 const proceedPath = process.env.TRANSCRIPT_REWRITE_PROCEED_PATH;
 const resultPath = process.env.TRANSCRIPT_REWRITE_RESULT_PATH;
+const rewriteMode = process.env.TRANSCRIPT_REWRITE_MODE ?? "read-then-replace";
 if (!storePath || !sessionId || !readyPath || !proceedPath || !resultPath) {
   throw new Error("transcript rewrite child env is incomplete");
 }
@@ -194,6 +195,30 @@ try {
       storePath,
     },
     async (transcript) => {
+      if (rewriteMode === "replace-twice") {
+        const firstReplacement = [
+          { type: "session", version: 3, id: sessionId },
+          {
+            type: "message",
+            id: "first-replacement",
+            parentId: null,
+            message: { role: "assistant", content: "first replacement" },
+          },
+        ];
+        await transcript.replaceEvents(firstReplacement);
+        await writeJsonFile(readyPath, { eventCount: firstReplacement.length });
+        await waitForFile(proceedPath);
+        await transcript.replaceEvents([
+          firstReplacement[0],
+          {
+            type: "message",
+            id: "first-replacement",
+            parentId: null,
+            message: { role: "assistant", content: "second replacement" },
+          },
+        ]);
+        return;
+      }
       const events = await transcript.readEvents();
       await writeJsonFile(readyPath, { eventCount: events.length });
       await waitForFile(proceedPath);
@@ -464,6 +489,93 @@ describe("session accessor cross-process concurrency", () => {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
+
+  it("guards a second replace after replacing without a prior read", async () => {
+    const tempDir = tempDirs.make("openclaw-transcript-double-replace-");
+    const sessionAccessorUrl = pathToFileURL(
+      path.resolve("src/config/sessions/session-accessor.ts"),
+    ).href;
+    const storePath = path.join(tempDir, "sessions.json");
+    const readyPath = path.join(tempDir, "rewrite-ready.json");
+    const proceedPath = path.join(tempDir, "rewrite-proceed");
+    const resultPath = path.join(tempDir, "rewrite-result.json");
+    const sessionId = "double-replace-without-read";
+    const scope = {
+      agentId: AGENT_ID,
+      sessionId,
+      sessionKey: SESSION_KEY,
+      storePath,
+    };
+    const firstReplacement = [
+      { type: "session", version: 3, id: sessionId },
+      {
+        type: "message",
+        id: "first-replacement",
+        parentId: null,
+        message: { role: "assistant", content: "first replacement" },
+      },
+    ];
+    let child: ReturnType<typeof spawn> | undefined;
+
+    try {
+      await upsertSessionEntry(scope, { sessionId, updatedAt: Date.now() });
+      child = spawn(
+        process.execPath,
+        [
+          "--import",
+          "tsx",
+          "--input-type=module",
+          "--eval",
+          createTranscriptRewriteChildScript(sessionAccessorUrl),
+        ],
+        {
+          env: {
+            ...process.env,
+            TRANSCRIPT_REWRITE_MODE: "replace-twice",
+            TRANSCRIPT_REWRITE_PROCEED_PATH: proceedPath,
+            TRANSCRIPT_REWRITE_READY_PATH: readyPath,
+            TRANSCRIPT_REWRITE_RESULT_PATH: resultPath,
+            TRANSCRIPT_REWRITE_SESSION_ID: sessionId,
+            TRANSCRIPT_REWRITE_STORE_PATH: storePath,
+          },
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      );
+      await waitForFile(readyPath);
+      expect(await readJsonFile<{ eventCount: number }>(readyPath)).toEqual({ eventCount: 2 });
+      await appendTranscriptMessage(scope, {
+        cwd: tempDir,
+        eventId: "concurrent-append",
+        message: { role: "user", content: "concurrent append" },
+        parentId: "first-replacement",
+      });
+      await fs.writeFile(proceedPath, "go\n", "utf8");
+      await waitForChild(child, "double transcript rewrite");
+
+      expect(await readJsonFile<TranscriptRewriteChildResult>(resultPath)).toMatchObject({
+        ok: false,
+        name: "SqliteTranscriptMutationConflictError",
+        message: `SQLite transcript changed while preparing rewrite for ${sessionId}`,
+      });
+      await expect(loadTranscriptEvents(scope)).resolves.toEqual([
+        ...firstReplacement,
+        expect.objectContaining({
+          type: "message",
+          id: "concurrent-append",
+          parentId: "first-replacement",
+          message: expect.objectContaining({
+            role: "user",
+            content: "concurrent append",
+          }),
+        }),
+      ]);
+    } finally {
+      if (child?.exitCode === null) {
+        child.kill();
+      }
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  }, 15_000);
 
   it("refreshes a read snapshot after an append in the same locked callback", async () => {
     const tempDir = tempDirs.make("openclaw-transcript-self-append-");

@@ -2006,8 +2006,7 @@ export async function withSqliteTranscriptWriteLock<T>(
           throw new SqliteTranscriptMutationConflictError(resolved.sessionId);
         }
         const expectedSnapshot = transcriptSnapshot?.rows;
-        let nextSnapshot: SqliteTranscriptSnapshotRow[] | undefined;
-        runOpenClawAgentWriteTransaction((writeDatabase) => {
+        const nextSnapshot = runOpenClawAgentWriteTransaction((writeDatabase) => {
           if (expectedSnapshot !== undefined) {
             // The writer queue is process-local. Revalidate after BEGIN IMMEDIATE
             // so a committed cross-process append cannot be deleted by the rewrite.
@@ -2018,13 +2017,9 @@ export async function withSqliteTranscriptWriteLock<T>(
             );
           }
           replaceSqliteTranscriptEventsInTransaction(writeDatabase, resolved, events);
-          if (expectedSnapshot !== undefined) {
-            nextSnapshot = readSqliteTranscriptSnapshot(writeDatabase, resolved.sessionId).rows;
-          }
+          return readSqliteTranscriptSnapshot(writeDatabase, resolved.sessionId).rows;
         }, toDatabaseOptions(resolved));
-        if (nextSnapshot !== undefined) {
-          transcriptSnapshot = { kind: "current", rows: nextSnapshot };
-        }
+        transcriptSnapshot = { kind: "current", rows: nextSnapshot };
       },
       appendMessage: async (options) => {
         let result: TranscriptMessageAppendResult<unknown> | undefined;
