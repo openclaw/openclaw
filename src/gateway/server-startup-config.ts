@@ -28,6 +28,7 @@ import {
 } from "../secrets/runtime-gateway-auth-surfaces.js";
 import {
   activateSecretsRuntimeSnapshotState,
+  graftActiveSecretsRuntimeAuthState,
   getActiveSecretsRuntimeSnapshotRevision,
   hasCurrentAuthStoreCredentialsRevision,
 } from "../secrets/runtime-state.js";
@@ -340,6 +341,9 @@ export function createRuntimeSecretsActivator(params: {
             phase: activationParams.reason,
           },
         );
+        if (activationParams.includeAuthStoreRefs === false) {
+          graftActiveSecretsRuntimeAuthState(prepared);
+        }
         return await finishPreparedSnapshot(prepared, activationParams);
       } catch (err) {
         return handleSecretsActivationError(err, activationParams, config);

@@ -740,12 +740,16 @@ function createReloaderHarness(
       nextConfig: OpenClawConfig,
       ownership: GatewayConfigReloadTransactionOwnership,
       sourceConfig: OpenClawConfig,
-      acceptance: { runtimeApplied: boolean },
+      acceptance: {
+        runtimeApplied: boolean;
+        publishSource?: () => Promise<() => Promise<void>>;
+      },
     ) => void | Promise<void>;
     onEffectiveConfigUnchanged?: (
+      nextConfig: OpenClawConfig,
       ownership: GatewayConfigReloadTransactionOwnership,
       sourceConfig: OpenClawConfig,
-    ) => void | Promise<void>;
+    ) => Promise<() => Promise<void>>;
     onConfigApplied?: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
     onConfigChange?: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
     onNoopConfigCommit?: (
@@ -778,7 +782,9 @@ function createReloaderHarness(
       (async (_plan: GatewayReloadPlan, _nextConfig: OpenClawConfig) => {}),
   );
   const onConfigAccepted = vi.fn(options.onConfigAccepted ?? (async () => {}));
-  const onEffectiveConfigUnchanged = vi.fn(options.onEffectiveConfigUnchanged ?? (async () => {}));
+  const onEffectiveConfigUnchanged = vi.fn(
+    options.onEffectiveConfigUnchanged ?? (async () => async () => {}),
+  );
   const onNoopConfigCommit = vi.fn(
     options.onNoopConfigCommit ??
       (async (
@@ -2641,10 +2647,52 @@ describe("startGatewayConfigReloader", () => {
     await vi.runAllTimersAsync();
 
     expect(harness.onEffectiveConfigUnchanged).toHaveBeenCalledWith(
+      initialConfig,
       expect.any(Object),
       sourceConfig,
     );
     expect(harness.onConfigAccepted).toHaveBeenCalledOnce();
+
+    await harness.reloader.stop();
+  });
+
+  it("does not publish a masked source edit when acceptance fails", async () => {
+    const initialConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      logging: { level: "info" as const },
+    } satisfies OpenClawConfig;
+    const sourceConfig = {
+      ...initialConfig,
+      logging: { level: "debug" as const },
+    } satisfies OpenClawConfig;
+    const harness = createReloaderHarness(vi.fn(), {
+      initialConfig,
+      onConfigAccepted: async () => {
+        throw new Error("restart debt admission failed");
+      },
+    });
+
+    harness.emitWrite({
+      configPath: "/tmp/openclaw.json",
+      sourceConfig,
+      runtimeConfig: sourceConfig,
+      preparedCandidate: {
+        runtimeConfig: initialConfig,
+        compareConfig: initialConfig,
+        reapplyRuntimeOverlays: () => initialConfig,
+      },
+      persistedHash: "masked-source-rejected",
+      revision: 1,
+      fingerprint: "runtime-masked-source-rejected",
+      sourceFingerprint: "source-masked-source-rejected",
+      writtenAtMs: Date.now(),
+    });
+    await vi.runAllTimersAsync();
+
+    expect(harness.onEffectiveConfigUnchanged).not.toHaveBeenCalled();
+    expect(harness.log.error).toHaveBeenCalledWith(
+      "config reload failed: Error: restart debt admission failed",
+    );
 
     await harness.reloader.stop();
   });
@@ -2709,6 +2757,7 @@ describe("startGatewayConfigReloader", () => {
     const reboundOwnership = harness.onConfigAccepted.mock.calls[1]?.[1];
     expect(reboundOwnership?.isCurrent()).toBe(true);
     expect(reboundOwnership?.reapplyRuntimeOverlays(sourceConfig).logging?.level).toBe("debug");
+    expect(harness.onConfigAccepted.mock.calls[1]?.[0]).toEqual(applyDebugOverride(sourceConfig));
 
     await harness.reloader.stop();
   });

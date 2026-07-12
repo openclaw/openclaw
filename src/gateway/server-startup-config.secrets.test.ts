@@ -1105,6 +1105,62 @@ describe("gateway startup config secret preflight", () => {
     }
   });
 
+  it("grafts live auth stores onto one-shot config-write snapshots", async () => {
+    const agentDir = "/tmp/openclaw-managed-write-auth-store";
+    const credential = {
+      type: "api_key" as const,
+      provider: "openai",
+      key: "live-auth-store-key",
+    };
+    setRuntimeAuthProfileStoreSnapshot(
+      { version: 1, profiles: { "openai:default": credential } },
+      agentDir,
+    );
+    const active = preparedSnapshot(gatewayTokenConfig({}));
+    active.authStores = [
+      {
+        agentDir,
+        store: { version: 1, profiles: { "openai:default": credential } },
+      },
+    ];
+    active.authStoreCredentialsRevision = getRuntimeAuthProfileStoreCredentialsRevision();
+    activateSecretsRuntimeSnapshotState({
+      snapshot: active,
+      refreshContext: {
+        env: {},
+        explicitAgentDirs: null,
+        includeAuthStoreRefs: true,
+        loadablePluginOrigins: new Map(),
+      },
+      refreshHandler: null,
+    });
+    const prepareRuntimeSecretsSnapshot = vi.fn(async (params: { config: OpenClawConfig }) =>
+      preparedSnapshot(params.config),
+    );
+    const activateRuntimeSecrets = runtimeSecretsActivatorForTest({
+      prepareRuntimeSecretsSnapshot,
+      activateRuntimeSecretsSnapshot: activateSecretsRuntimeSnapshotForTest,
+    });
+
+    const prepared = await activateRuntimeSecrets(
+      gatewayTokenConfig({ logging: { level: "debug" } }),
+      {
+        reason: "reload",
+        activate: false,
+        includeAuthStoreRefs: false,
+      },
+    );
+    expect(prepared.authStores[0]?.store.profiles["openai:default"]).toEqual(credential);
+    await activateRuntimeSecrets.activatePreparedSnapshot?.(prepared, {
+      reason: "reload",
+      activate: true,
+      includeAuthStoreRefs: false,
+    });
+    expect(getRuntimeAuthProfileStoreSnapshot(agentDir)?.profiles["openai:default"]).toEqual(
+      credential,
+    );
+  });
+
   it("keeps the full secrets runtime path when startup config has a SecretRef", async () => {
     const harness = createGatewayStartupSecretsRuntimeHarness("openclaw-startup-secret-ref-");
     await expectImportedStartupConfigUsesFullSecretsRuntime(
