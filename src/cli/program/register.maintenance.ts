@@ -5,6 +5,30 @@ import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveDoctorCrossStateDirImports } from "../../commands/doctor-invocation.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
+import { hasExplicitOptions } from "../command-options.js";
+
+const STATE_SQLITE_CONFLICTING_OPTION_NAMES = [
+  "workspaceSuggestions",
+  "yes",
+  "repair",
+  "fix",
+  "force",
+  "nonInteractive",
+  "generateGatewayToken",
+  "allowExec",
+  "deep",
+  "lint",
+  "postUpgrade",
+  "sessionSqlite",
+  "sessionSqliteStore",
+  "sessionSqliteAgent",
+  "sessionSqliteAllAgents",
+  "githubIssue",
+  "severityMin",
+  "all",
+  "skip",
+  "only",
+] as const;
 
 /** Register maintenance commands that inspect or mutate local OpenClaw state. */
 export function registerMaintenanceCommands(program: Command) {
@@ -74,13 +98,13 @@ export function registerMaintenanceCommands(program: Command) {
       (v: string, prev: string[]) => [...prev, v],
       [],
     )
-    .action(async (opts) => {
+    .action(async (opts, command) => {
       if (
         typeof opts.stateSqlite === "string" &&
-        (opts.lint === true || opts.postUpgrade === true || typeof opts.sessionSqlite === "string")
+        hasExplicitOptions(command, STATE_SQLITE_CONFLICTING_OPTION_NAMES)
       ) {
         defaultRuntime.error(
-          "doctor shared-state SQLite maintenance cannot be combined with lint, post-upgrade, or session SQLite modes.",
+          "doctor shared-state SQLite maintenance can only be combined with --json.",
         );
         defaultRuntime.exit(2);
         return;
