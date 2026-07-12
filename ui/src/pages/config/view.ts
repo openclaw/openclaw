@@ -25,7 +25,10 @@ import {
 } from "../../components/config-form.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
-import { APPEARANCE_SETTINGS_BLOCKS, COMMUNICATION_SETTINGS_BLOCKS } from "./settings-search.ts";
+import {
+  APPEARANCE_SETTINGS_TARGET_IDS,
+  COMMUNICATION_SETTINGS_TARGET_IDS,
+} from "./settings-targets.ts";
 
 const TEXT_SCALE_LABELS: Record<TextScaleStop, string> = {
   90: "configView.textSizes.small",
@@ -866,7 +869,7 @@ function renderNotificationsSection(props: ConfigProps) {
     return html`
       <div class="settings-notifications">
         <section
-          id=${COMMUNICATION_SETTINGS_BLOCKS.notifications.id}
+          id=${COMMUNICATION_SETTINGS_TARGET_IDS.notifications}
           class="settings-notifications__card"
         >
           <div class="settings-notifications__header">
@@ -915,7 +918,7 @@ function renderNotificationsSection(props: ConfigProps) {
   return html`
     <div class="settings-notifications">
       <section
-        id=${COMMUNICATION_SETTINGS_BLOCKS.notifications.id}
+        id=${COMMUNICATION_SETTINGS_TARGET_IDS.notifications}
         class="settings-notifications__card"
       >
         <div class="settings-notifications__header">
@@ -1041,7 +1044,7 @@ function renderAppearanceSection(props: ConfigProps) {
   ];
   return html`
     <div class="settings-appearance">
-      <div id=${APPEARANCE_SETTINGS_BLOCKS.theme.id} class="settings-appearance__section">
+      <div id=${APPEARANCE_SETTINGS_TARGET_IDS.theme} class="settings-appearance__section">
         <h3 class="settings-appearance__heading">${t("configView.appearance.theme")}</h3>
         <p class="settings-appearance__hint">${t("configView.appearance.chooseTheme")}</p>
         <div class="settings-theme-grid">
@@ -1166,7 +1169,7 @@ function renderAppearanceSection(props: ConfigProps) {
             `}
       </div>
 
-      <div id=${APPEARANCE_SETTINGS_BLOCKS.textSize.id} class="settings-appearance__section">
+      <div id=${APPEARANCE_SETTINGS_TARGET_IDS.textSize} class="settings-appearance__section">
         <h3 class="settings-appearance__heading">${t("configView.appearance.textSize")}</h3>
         <div class="settings-text-scale">
           <div class="settings-text-scale__options">
@@ -1186,7 +1189,7 @@ function renderAppearanceSection(props: ConfigProps) {
         </div>
       </div>
 
-      <div id=${APPEARANCE_SETTINGS_BLOCKS.connection.id} class="settings-appearance__section">
+      <div id=${APPEARANCE_SETTINGS_TARGET_IDS.connection} class="settings-appearance__section">
         <h3 class="settings-appearance__heading">${t("configView.connection.title")}</h3>
         <div class="settings-info-grid">
           <div class="settings-info-row">

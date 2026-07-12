@@ -14,98 +14,91 @@ import {
   COMMUNICATION_SECTION_KEYS,
   INFRASTRUCTURE_SECTION_KEYS,
 } from "./config-sections.ts";
+import {
+  APPEARANCE_SETTINGS_TARGET_IDS,
+  COMMUNICATION_SETTINGS_TARGET_IDS,
+  GENERAL_SETTINGS_TARGET_IDS,
+} from "./settings-targets.ts";
 
 type StaticSettingsBlock = SettingsSearchBlock & {
-  id: string;
   searchText: string;
 };
 
-export const GENERAL_SETTINGS_BLOCKS = {
+const GENERAL_SETTINGS_BLOCKS = {
   model: {
     routeId: "config",
-    id: "settings-general-model",
     label: "Model & Thinking",
-    hash: "#settings-general-model",
+    hash: `#${GENERAL_SETTINGS_TARGET_IDS.model}`,
     searchText: "model thinking fast mode auto standard",
   },
   channels: {
     routeId: "config",
-    id: "settings-general-channels",
     label: "Channels",
-    hash: "#settings-general-channels",
+    hash: `#${GENERAL_SETTINGS_TARGET_IDS.channels}`,
     searchText: "channels telegram discord slack whatsapp signal imessage connected configure",
   },
   security: {
     routeId: "config",
-    id: "settings-general-security",
     label: "Security",
-    hash: "#settings-general-security",
+    hash: `#${GENERAL_SETTINGS_TARGET_IDS.security}`,
     searchText: "security gateway auth exec policy device auth browser tool profile",
   },
   system: {
     routeId: "config",
-    id: "settings-general-system",
     label: "Gateway Host",
-    hash: "#settings-general-system",
+    hash: `#${GENERAL_SETTINGS_TARGET_IDS.system}`,
     searchText: "gateway host system cpu memory disk uptime node address",
   },
   appearance: {
     routeId: "config",
-    id: "settings-general-appearance",
     label: "Appearance",
-    hash: "#settings-general-appearance",
+    hash: `#${GENERAL_SETTINGS_TARGET_IDS.appearance}`,
     searchText: "appearance theme mode text size lobster",
   },
   personal: {
     routeId: "config",
-    id: "settings-general-personal",
     label: "Personal",
-    hash: "#settings-general-personal",
+    hash: `#${GENERAL_SETTINGS_TARGET_IDS.personal}`,
     searchText: "personal user assistant identity avatar image",
   },
   automations: {
     routeId: "config",
-    id: "settings-general-automations",
     label: "Automations",
-    hash: "#settings-general-automations",
+    hash: `#${GENERAL_SETTINGS_TARGET_IDS.automations}`,
     searchText: "automations scheduled tasks cron skills mcp servers",
   },
 } as const satisfies Record<string, StaticSettingsBlock>;
 
-export const APPEARANCE_SETTINGS_BLOCKS = {
+const APPEARANCE_SETTINGS_BLOCKS = {
   theme: {
     routeId: "appearance",
-    id: "settings-appearance-theme",
     label: "Theme",
     search: "?section=__appearance__",
-    hash: "#settings-appearance-theme",
+    hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.theme}`,
     searchText: "theme family import tweakcn light dark system",
   },
   textSize: {
     routeId: "appearance",
-    id: "settings-appearance-text-size",
     label: "Text size",
     search: "?section=__appearance__",
-    hash: "#settings-appearance-text-size",
+    hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.textSize}`,
     searchText: "text size scale small default large xl xxl",
   },
   connection: {
     routeId: "appearance",
-    id: "settings-appearance-connection",
     label: "Connection",
     search: "?section=__appearance__",
-    hash: "#settings-appearance-connection",
+    hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.connection}`,
     searchText: "connection gateway status assistant version",
   },
 } as const satisfies Record<string, StaticSettingsBlock>;
 
-export const COMMUNICATION_SETTINGS_BLOCKS = {
+const COMMUNICATION_SETTINGS_BLOCKS = {
   notifications: {
     routeId: "communications",
-    id: "settings-communications-notifications",
     label: "Push notifications",
     search: "?section=__notifications__",
-    hash: "#settings-communications-notifications",
+    hash: `#${COMMUNICATION_SETTINGS_TARGET_IDS.notifications}`,
     searchText: "push notifications browser permission subscription vapid gateway",
   },
 } as const satisfies Record<string, StaticSettingsBlock>;
