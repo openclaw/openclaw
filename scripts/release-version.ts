@@ -1,7 +1,7 @@
 // Release Version keeps the core and explicitly selected native release trains aligned.
 import fs from "node:fs";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import {
   canonicalAndroidVersionCode,
   normalizeAndroidVersionCode,

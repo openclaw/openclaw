@@ -1,7 +1,7 @@
 // Analyze script supports OpenClaw repository automation.
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import ts from "typescript";
+import { expectDefined } from "../../../packages/normalization-core/src/expect.js";
 import {
   canonicalSymbolInfo,
   countIdentifierUsages,

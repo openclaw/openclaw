@@ -1,4 +1,4 @@
-import { expectDefined } from "@openclaw/normalization-core";
+import { expectDefined } from "../../packages/normalization-core/src/expect.js";
 
 export interface TranslationMap {
   [key: string]: string | TranslationMap;

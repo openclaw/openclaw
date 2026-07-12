@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
+import { expectDefined } from "../../packages/normalization-core/src/expect.js";
 
 /** Rendered baseline artifact for the sessions/transcripts SQLite schema. */
 export type SqliteSessionSchemaBaselineRender = {

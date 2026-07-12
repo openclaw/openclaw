@@ -1,7 +1,7 @@
 // Prepare Codex Ci Config script supports OpenClaw repository automation.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
 
 function tomlString(value: string): string {
   return JSON.stringify(value);
