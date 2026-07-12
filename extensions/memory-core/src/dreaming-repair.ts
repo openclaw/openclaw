@@ -702,7 +702,7 @@ export async function repairDreamingArtifacts(params: {
           err instanceof Error ? err.message : String(err)
         }`,
       );
-      return { removed: 0 };
+      return { removed: 0, archivedPath: undefined };
     });
     clearedSessionCheckpointKeys += legacy.removed;
     if (legacy.archivedPath) {
