@@ -126,6 +126,10 @@ function createTestChatPane(params: { client: GatewayBrowserClient; sessions: Se
     sessionsLoading: false,
     sidebarContent: null,
     sidebarOpen: false,
+    // Minimal scroll host so scheduleChatScroll is a no-op instead of throwing.
+    chatScrollGeneration: 0,
+    chatScrollCommitCleanup: null,
+    renderLifecycle: { afterCommit: () => () => {}, invalidate: () => {} },
   } as unknown as ChatPageHost;
   pane.context = createSessionContext(params.client, params.sessions);
   pane.state = state;
@@ -438,6 +442,33 @@ describe("chat pane catalog session lifecycle", () => {
     expect(progressed).toBe(false);
     // Cursor cleared → hasOlderMessages() is false, so the observer will not refire.
     expect(pane.catalogCursor).toBeUndefined();
+  });
+
+  it("keeps paging when an advancing older page renders nothing new", async () => {
+    const readPage: SessionsCatalogReadResult = {
+      hostId: "gateway:local",
+      threadId: "thread-1",
+      // A page of only unsupported/empty items renders nothing but still advances
+      // the cursor: older renderable history may sit behind it, so paging continues.
+      items: [{ id: "x1", type: "other" }],
+      nextCursor: "cursor-2",
+    };
+    const client = {
+      request: vi.fn(async () => readPage),
+    } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const key = "catalog:claude:gateway%3Alocal:thread-1";
+    state.sessionKey = key;
+    pane.sessionKey = key;
+    pane.catalogCursor = "cursor-1";
+
+    const progressed = await pane.loadCatalogSession(
+      { catalogId: "claude", hostId: "gateway:local", threadId: "thread-1" },
+      true,
+    );
+
+    expect(progressed).toBe(true);
+    expect(pane.catalogCursor).toBe("cursor-2");
   });
 
   it("re-arms a failed older-page load only after another user scroll", () => {

@@ -834,12 +834,14 @@ class ChatPane extends OpenClawLightDomElement {
         .filter((message) => message !== null);
       const nextMessages = older ? this.prependUniqueCatalogMessages(messages) : messages;
       const grew = nextMessages.length > this.catalogMessages.length;
-      // Exhaust pagination when an older read makes no forward progress — no next
-      // cursor, a cursor that does not advance, or no newly rendered messages
-      // (empty/filtered/all-duplicate page). Otherwise the re-armed observer would
-      // re-issue the identical request in an unbounded loop against a stale provider.
+      // Exhaust only when the cursor cannot advance (absent or unchanged): that is
+      // the sole proof no more history exists, and it stops the re-armed observer
+      // from re-issuing the identical request in an unbounded loop. An advancing
+      // cursor with no newly rendered messages (a page that is entirely filtered
+      // or duplicate) must keep paging — real older history may sit behind it, and
+      // each request advances toward a real end.
       const olderExhausted =
-        older && (!page.nextCursor || page.nextCursor === requestedOlderCursor || !grew);
+        older && (!page.nextCursor || page.nextCursor === requestedOlderCursor);
       this.pendingHistoryAnchor =
         older && grew ? this.currentHistoryAnchor(state.sessionKey) : null;
       this.catalogMessages = nextMessages;
