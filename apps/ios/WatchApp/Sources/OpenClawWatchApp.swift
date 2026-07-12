@@ -262,14 +262,14 @@ extension WatchInboxStore {
             transport: "screenshot")
         self.consume(
             appSnapshot: WatchAppSnapshotMessage(
-                gatewayStatusText: "Connected",
+                gatewayStatus: OpenClawWatchAppStatus(code: .gatewayConnected),
                 gatewayConnected: true,
                 agentName: "Molty",
                 agentAvatarURL: nil,
                 agentAvatarText: "M",
                 sessionKey: "watch-screenshot-session",
                 gatewayStableID: "watch-screenshot-gateway",
-                talkStatusText: "Ready",
+                talkStatus: OpenClawWatchAppStatus(code: .talkReady),
                 talkEnabled: true,
                 talkListening: false,
                 talkSpeaking: false,
@@ -286,7 +286,6 @@ extension WatchInboxStore {
                         text: "Gateway is online and ready.",
                         timestampMs: sentAtMs - 30000),
                 ],
-                chatStatusText: "Live gateway conversation",
                 sentAtMs: sentAtMs,
                 snapshotId: "watch-screenshot-now-face"))
     }

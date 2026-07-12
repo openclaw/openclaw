@@ -68,23 +68,371 @@ struct WatchExecApprovalSnapshotMessage: Codable, Equatable {
 typealias WatchExecApprovalSnapshotRequestMessage = OpenClawWatchExecApprovalSnapshotRequestMessage
 typealias WatchExecApprovalSnapshotRequestItem = OpenClawWatchExecApprovalSnapshotRequestItem
 typealias WatchExecApprovalResolveMessage = OpenClawWatchExecApprovalResolveMessage
+typealias WatchAppCommand = OpenClawWatchAppCommand
+
+enum WatchStatusLocalizationKey: String {
+    case connected
+    case offline
+    case gatewayProblemRequestIDFormat
+    case ready
+    case connecting
+    case listening
+    case thinking
+    case speaking
+    case off
+    case missingFormat
+    case requestingApproval
+    case approvalRequested
+    case apiKeyMissing
+    case unavailable
+    case connectIPhoneChat
+    case noChatMessages
+    case chatUnavailable
+    case noMessagesSynced
+    case waitingForIPhone
+    case refresh
+    case openChat
+    case chat
+    case startTalk
+    case stopTalk
+    case sendingFormat
+    case failedFormat
+    case sentFormat
+    case queuedFormat
+    case refreshingFromIPhone
+    case allowOnce
+    case allowAlways
+    case deny
+    case retryApproval
+    case allowedOnce
+    case approvalSetToAlwaysAllow
+    case denied
+    case approvalResolved
+    case approvalExpired
+    case approvalNoLongerAvailable
+    case approvalResolvedElsewhere
+    case approvalReplaced
+    case approvalUnavailable
+
+    var localized: String {
+        switch self {
+        case .connected:
+            String(localized: "Connected")
+        case .offline:
+            String(localized: "Offline")
+        case .gatewayProblemRequestIDFormat:
+            String(localized: "%@ (request ID: %@)")
+        case .ready:
+            String(localized: "Ready")
+        case .connecting:
+            String(localized: "Connecting")
+        case .listening:
+            String(localized: "Listening")
+        case .thinking:
+            String(localized: "Thinking")
+        case .speaking:
+            String(localized: "Speaking")
+        case .off:
+            String(localized: "Off")
+        case .missingFormat:
+            String(localized: "Missing %@")
+        case .requestingApproval:
+            String(localized: "Requesting approval")
+        case .approvalRequested:
+            String(localized: "Approval requested")
+        case .apiKeyMissing:
+            String(localized: "API key missing")
+        case .unavailable:
+            String(localized: "Unavailable")
+        case .connectIPhoneChat:
+            String(localized: "Connect iPhone chat to read messages")
+        case .noChatMessages:
+            String(localized: "No chat messages yet")
+        case .chatUnavailable:
+            String(localized: "Chat unavailable")
+        case .noMessagesSynced:
+            String(localized: "No messages synced")
+        case .waitingForIPhone:
+            String(localized: "Waiting for iPhone")
+        case .refresh:
+            String(localized: "Refresh")
+        case .openChat:
+            String(localized: "Open Chat")
+        case .chat:
+            String(localized: "Chat")
+        case .startTalk:
+            String(localized: "Start Talk")
+        case .stopTalk:
+            String(localized: "Stop Talk")
+        case .sendingFormat:
+            String(localized: "Sending %@…")
+        case .failedFormat:
+            String(localized: "%@ failed: %@")
+        case .sentFormat:
+            String(localized: "%@: sent")
+        case .queuedFormat:
+            String(localized: "%@: queued")
+        case .refreshingFromIPhone:
+            String(localized: "Refreshing from iPhone…")
+        case .allowOnce:
+            String(localized: "Allow Once")
+        case .allowAlways:
+            String(localized: "Allow Always")
+        case .deny:
+            String(localized: "Deny")
+        case .retryApproval:
+            String(localized: "Couldn't reach iPhone. Tap to retry.")
+        case .allowedOnce:
+            String(localized: "Allowed once")
+        case .approvalSetToAlwaysAllow:
+            String(localized: "Approval set to Always Allow.")
+        case .denied:
+            String(localized: "Denied")
+        case .approvalResolved:
+            String(localized: "Approval resolved")
+        case .approvalExpired:
+            String(localized: "Approval expired")
+        case .approvalNoLongerAvailable:
+            String(localized: "Approval no longer available")
+        case .approvalResolvedElsewhere:
+            String(localized: "Approval resolved elsewhere")
+        case .approvalReplaced:
+            String(localized: "Approval replaced")
+        case .approvalUnavailable:
+            String(localized: "Approval unavailable")
+        }
+    }
+}
+
+enum WatchDeliveryStatusCode: String, Codable, Equatable {
+    case sending
+    case sent
+    case queued
+    case failed
+    case blocked
+}
+
+struct WatchAppCommandStatus: Codable, Equatable {
+    var command: WatchAppCommand
+    var code: WatchDeliveryStatusCode
+    var detail: String?
+    var legacyVerbatim: String? = nil
+
+    func localizedText(
+        localize: (WatchStatusLocalizationKey) -> String = { $0.localized }) -> String
+    {
+        if let legacyVerbatim {
+            return legacyVerbatim
+        }
+        let label = self.command.localizedLabel(localize: localize)
+        return switch self.code {
+        case .sending:
+            String(format: localize(.sendingFormat), label)
+        case .sent:
+            String(format: localize(.sentFormat), label)
+        case .queued:
+            String(format: localize(.queuedFormat), label)
+        case .failed:
+            String(format: localize(.failedFormat), label, self.detail ?? localize(.unavailable))
+        case .blocked:
+            localize(.refreshingFromIPhone)
+        }
+    }
+
+    static func decodeLegacyLocalizedText(_ text: String) -> Self? {
+        guard !text.isEmpty else { return nil }
+        return Self(
+            command: .refresh,
+            code: .failed,
+            detail: nil,
+            legacyVerbatim: text)
+    }
+}
+
+struct WatchReplyStatus: Codable, Equatable {
+    var code: WatchDeliveryStatusCode
+    var actionLabel: String
+    var detail: String?
+    var legacyVerbatim: String? = nil
+
+    func localizedText(
+        localize: (WatchStatusLocalizationKey) -> String = { $0.localized }) -> String
+    {
+        if let legacyVerbatim {
+            return legacyVerbatim
+        }
+        return switch self.code {
+        case .sending:
+            String(format: localize(.sendingFormat), self.actionLabel)
+        case .sent:
+            String(format: localize(.sentFormat), self.actionLabel)
+        case .queued:
+            String(format: localize(.queuedFormat), self.actionLabel)
+        case .failed:
+            String(
+                format: localize(.failedFormat),
+                self.actionLabel,
+                self.detail ?? localize(.unavailable))
+        case .blocked:
+            localize(.refreshingFromIPhone)
+        }
+    }
+
+    static func decodeLegacyLocalizedText(_ text: String) -> Self? {
+        guard !text.isEmpty else { return nil }
+        return Self(
+            code: .failed,
+            actionLabel: "",
+            detail: nil,
+            legacyVerbatim: text)
+    }
+}
+
+enum WatchExecApprovalStatusCode: String, Codable, Equatable {
+    case sending
+    case sent
+    case queued
+    case retry
+    case legacy
+}
+
+struct WatchExecApprovalStatus: Codable, Equatable {
+    var code: WatchExecApprovalStatusCode
+    var decision: WatchExecApprovalDecision?
+    var legacyVerbatim: String? = nil
+
+    func localizedText(
+        localize: (WatchStatusLocalizationKey) -> String = { $0.localized }) -> String
+    {
+        if let legacyVerbatim {
+            return legacyVerbatim
+        }
+        guard self.code != .retry else {
+            return localize(.retryApproval)
+        }
+        let label = (self.decision ?? .allowOnce).localizedLabel(localize: localize)
+        return switch self.code {
+        case .sending:
+            String(format: localize(.sendingFormat), label)
+        case .sent:
+            String(format: localize(.sentFormat), label)
+        case .queued:
+            String(format: localize(.queuedFormat), label)
+        case .retry:
+            localize(.retryApproval)
+        case .legacy:
+            legacyVerbatim ?? localize(.unavailable)
+        }
+    }
+
+    static func decodeLegacyLocalizedText(_ text: String) -> Self? {
+        guard !text.isEmpty else { return nil }
+        return Self(code: .legacy, legacyVerbatim: text)
+    }
+}
+
+enum WatchExecApprovalOutcomeCode: String, Codable, Equatable {
+    case allowedOnce
+    case allowedAlways
+    case denied
+    case resolved
+    case expired
+    case notFound
+    case resolvedElsewhere
+    case replaced
+    case unavailable
+    case verbatim
+}
+
+struct WatchExecApprovalOutcome: Codable, Equatable {
+    var code: WatchExecApprovalOutcomeCode
+    var verbatim: String? = nil
+
+    func localizedText(
+        localize: (WatchStatusLocalizationKey) -> String = { $0.localized }) -> String
+    {
+        if let verbatim {
+            return verbatim
+        }
+        return switch self.code {
+        case .allowedOnce:
+            localize(.allowedOnce)
+        case .allowedAlways:
+            localize(.approvalSetToAlwaysAllow)
+        case .denied:
+            localize(.denied)
+        case .resolved:
+            localize(.approvalResolved)
+        case .expired:
+            localize(.approvalExpired)
+        case .notFound:
+            localize(.approvalNoLongerAvailable)
+        case .resolvedElsewhere:
+            localize(.approvalResolvedElsewhere)
+        case .replaced:
+            localize(.approvalReplaced)
+        case .unavailable:
+            localize(.approvalUnavailable)
+        case .verbatim:
+            localize(.unavailable)
+        }
+    }
+
+    static func decodeLegacyLocalizedText(_ text: String) -> Self? {
+        guard !text.isEmpty else { return nil }
+        return Self(code: .verbatim, verbatim: text)
+    }
+}
+
+private extension WatchAppCommand {
+    func localizedLabel(
+        localize: (WatchStatusLocalizationKey) -> String) -> String
+    {
+        switch self {
+        case .refresh:
+            localize(.refresh)
+        case .openChat:
+            localize(.openChat)
+        case .sendChat:
+            localize(.chat)
+        case .startTalk:
+            localize(.startTalk)
+        case .stopTalk:
+            localize(.stopTalk)
+        }
+    }
+}
+
+private extension WatchExecApprovalDecision {
+    func localizedLabel(
+        localize: (WatchStatusLocalizationKey) -> String) -> String
+    {
+        switch self {
+        case .allowOnce:
+            localize(.allowOnce)
+        case .allowAlways:
+            localize(.allowAlways)
+        case .deny:
+            localize(.deny)
+        }
+    }
+}
 
 struct WatchAppSnapshotMessage: Codable, Equatable {
-    var gatewayStatusText: String
+    var gatewayStatus: OpenClawWatchAppStatus
     var gatewayConnected: Bool
     var agentName: String
     var agentAvatarURL: String?
     var agentAvatarText: String?
     var sessionKey: String
     var gatewayStableID: String?
-    var talkStatusText: String
+    var talkStatus: OpenClawWatchAppStatus
     var talkEnabled: Bool
     var talkListening: Bool
     var talkSpeaking: Bool
     var pendingApprovalCount: Int
     var chatItems: [WatchChatItem]?
-    var chatStatusCode: OpenClawWatchChatStatusCode?
-    var chatStatusText: String?
+    var chatStatus: OpenClawWatchAppStatus?
     var sentAtMs: Int64?
     var snapshotId: String?
 
@@ -94,8 +442,7 @@ struct WatchAppSnapshotMessage: Codable, Equatable {
         else {
             return nil
         }
-        let gatewayStatusText = (payload["gatewayStatusText"] as? String)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let gatewayConnected = Self.boolValue(payload["gatewayConnected"])
         let agentName = (payload["agentName"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let agentAvatarURL = (payload["agentAvatarUrl"] as? String)?
@@ -105,8 +452,9 @@ struct WatchAppSnapshotMessage: Codable, Equatable {
         let sessionKey = (payload["sessionKey"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let gatewayStableID = WatchGatewayID.exact(payload["gatewayStableID"] as? String)
-        let talkStatusText = (payload["talkStatusText"] as? String)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let talkEnabled = Self.boolValue(payload["talkEnabled"])
+        let talkListening = Self.boolValue(payload["talkListening"])
+        let talkSpeaking = Self.boolValue(payload["talkSpeaking"])
         let pendingApprovalCount = (payload["pendingApprovalCount"] as? Int)
             ?? (payload["pendingApprovalCount"] as? NSNumber)?.intValue
             ?? 0
@@ -114,56 +462,202 @@ struct WatchAppSnapshotMessage: Codable, Equatable {
         let snapshotId = (payload["snapshotId"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let chatItems = (payload["chatItems"] as? [Any])?.compactMap(Self.parseChatItem)
-        let chatStatusCode = (payload["chatStatusCode"] as? String)
-            .flatMap(OpenClawWatchChatStatusCode.init(rawValue:))
-        let chatStatusText = (payload["chatStatusText"] as? String)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
         return Self(
-            gatewayStatusText: gatewayStatusText.isEmpty ? "Unknown" : gatewayStatusText,
-            gatewayConnected: Self.boolValue(payload["gatewayConnected"]),
+            gatewayStatus: Self.parseStatus(payload["gatewayStatus"])
+                ?? Self.decodeLegacyGatewayStatus(
+                    text: payload["gatewayStatusText"] as? String,
+                    connected: gatewayConnected),
+            gatewayConnected: gatewayConnected,
             agentName: agentName.isEmpty ? "Main" : agentName,
             agentAvatarURL: agentAvatarURL?.isEmpty == false ? agentAvatarURL : nil,
             agentAvatarText: agentAvatarText?.isEmpty == false ? agentAvatarText : nil,
             sessionKey: sessionKey.isEmpty ? "main" : sessionKey,
             gatewayStableID: gatewayStableID,
-            talkStatusText: talkStatusText.isEmpty ? "Off" : talkStatusText,
-            talkEnabled: Self.boolValue(payload["talkEnabled"]),
-            talkListening: Self.boolValue(payload["talkListening"]),
-            talkSpeaking: Self.boolValue(payload["talkSpeaking"]),
+            talkStatus: Self.parseStatus(payload["talkStatus"])
+                ?? Self.decodeLegacyTalkStatus(
+                    text: payload["talkStatusText"] as? String,
+                    enabled: talkEnabled,
+                    listening: talkListening,
+                    speaking: talkSpeaking),
+            talkEnabled: talkEnabled,
+            talkListening: talkListening,
+            talkSpeaking: talkSpeaking,
             pendingApprovalCount: max(0, pendingApprovalCount),
             chatItems: chatItems,
-            chatStatusCode: chatStatusCode,
-            chatStatusText: chatStatusText?.isEmpty == false ? chatStatusText : nil,
+            chatStatus: Self.parseStatus(payload["chatStatus"])
+                ?? Self.decodeLegacyChatStatus(
+                    code: payload["chatStatusCode"] as? String,
+                    text: payload["chatStatusText"] as? String),
             sentAtMs: sentAtMs,
             snapshotId: snapshotId)
     }
 
     static func localizedChatStatusText(
-        statusCode: OpenClawWatchChatStatusCode?,
-        legacyText: String?,
+        status: OpenClawWatchAppStatus?,
         chatCount: Int,
-        hasAppSnapshot: Bool) -> String
+        hasAppSnapshot: Bool,
+        localize: (WatchStatusLocalizationKey) -> String = { $0.localized }) -> String
     {
-        if let statusCode {
-            return switch statusCode {
-            case .connectIPhone:
-                String(localized: "Connect iPhone chat to read messages")
-            case .noMessages:
-                String(localized: "No chat messages yet")
-            case .unavailable:
-                String(localized: "Chat unavailable")
-            }
-        }
-        if let legacyText, !legacyText.isEmpty {
-            return legacyText
+        if let status {
+            return status.localizedText(localize: localize)
         }
         if chatCount > 0 {
             return String(
                 AttributedString(localized: "^[\(chatCount) recent message](inflect: true)").characters)
         }
         return hasAppSnapshot
-            ? String(localized: "No messages synced")
-            : String(localized: "Waiting for iPhone")
+            ? localize(.noMessagesSynced)
+            : localize(.waitingForIPhone)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case gatewayStatus
+        case gatewayStatusText
+        case gatewayConnected
+        case agentName
+        case agentAvatarURL
+        case agentAvatarText
+        case sessionKey
+        case gatewayStableID
+        case talkStatus
+        case talkStatusText
+        case talkEnabled
+        case talkListening
+        case talkSpeaking
+        case pendingApprovalCount
+        case chatItems
+        case chatStatus
+        case chatStatusCode
+        case chatStatusText
+        case sentAtMs
+        case snapshotId
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.gatewayConnected = try container.decode(Bool.self, forKey: .gatewayConnected)
+        self.agentName = try container.decode(String.self, forKey: .agentName)
+        self.agentAvatarURL = try container.decodeIfPresent(String.self, forKey: .agentAvatarURL)
+        self.agentAvatarText = try container.decodeIfPresent(String.self, forKey: .agentAvatarText)
+        self.sessionKey = try container.decode(String.self, forKey: .sessionKey)
+        self.gatewayStableID = try container.decodeIfPresent(String.self, forKey: .gatewayStableID)
+        self.talkEnabled = try container.decode(Bool.self, forKey: .talkEnabled)
+        self.talkListening = try container.decode(Bool.self, forKey: .talkListening)
+        self.talkSpeaking = try container.decode(Bool.self, forKey: .talkSpeaking)
+        self.pendingApprovalCount = try container.decode(Int.self, forKey: .pendingApprovalCount)
+        self.chatItems = try container.decodeIfPresent([WatchChatItem].self, forKey: .chatItems)
+        self.sentAtMs = try container.decodeIfPresent(Int64.self, forKey: .sentAtMs)
+        self.snapshotId = try container.decodeIfPresent(String.self, forKey: .snapshotId)
+        self.gatewayStatus = try container.decodeIfPresent(
+            OpenClawWatchAppStatus.self,
+            forKey: .gatewayStatus) ?? Self.decodeLegacyGatewayStatus(
+            text: container.decodeIfPresent(String.self, forKey: .gatewayStatusText),
+            connected: self.gatewayConnected)
+        self.talkStatus = try container.decodeIfPresent(
+            OpenClawWatchAppStatus.self,
+            forKey: .talkStatus) ?? Self.decodeLegacyTalkStatus(
+            text: container.decodeIfPresent(String.self, forKey: .talkStatusText),
+            enabled: self.talkEnabled,
+            listening: self.talkListening,
+            speaking: self.talkSpeaking)
+        self.chatStatus = try container.decodeIfPresent(
+            OpenClawWatchAppStatus.self,
+            forKey: .chatStatus) ?? Self.decodeLegacyChatStatus(
+            code: container.decodeIfPresent(String.self, forKey: .chatStatusCode),
+            text: container.decodeIfPresent(String.self, forKey: .chatStatusText))
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(self.gatewayStatus, forKey: .gatewayStatus)
+        try container.encode(self.gatewayConnected, forKey: .gatewayConnected)
+        try container.encode(self.agentName, forKey: .agentName)
+        try container.encodeIfPresent(self.agentAvatarURL, forKey: .agentAvatarURL)
+        try container.encodeIfPresent(self.agentAvatarText, forKey: .agentAvatarText)
+        try container.encode(self.sessionKey, forKey: .sessionKey)
+        try container.encodeIfPresent(self.gatewayStableID, forKey: .gatewayStableID)
+        try container.encode(self.talkStatus, forKey: .talkStatus)
+        try container.encode(self.talkEnabled, forKey: .talkEnabled)
+        try container.encode(self.talkListening, forKey: .talkListening)
+        try container.encode(self.talkSpeaking, forKey: .talkSpeaking)
+        try container.encode(self.pendingApprovalCount, forKey: .pendingApprovalCount)
+        try container.encodeIfPresent(self.chatItems, forKey: .chatItems)
+        try container.encodeIfPresent(self.chatStatus, forKey: .chatStatus)
+        try container.encodeIfPresent(self.sentAtMs, forKey: .sentAtMs)
+        try container.encodeIfPresent(self.snapshotId, forKey: .snapshotId)
+    }
+
+    private static func parseStatus(_ value: Any?) -> OpenClawWatchAppStatus? {
+        guard let payload = value as? [String: Any],
+              let rawCode = payload["code"] as? String
+        else {
+            return nil
+        }
+        let verbatim = payload["verbatim"] as? String
+        guard let code = OpenClawWatchAppStatusCode(rawValue: rawCode) else {
+            guard let verbatim, !verbatim.isEmpty else { return nil }
+            return OpenClawWatchAppStatus(code: .legacy, verbatim: verbatim)
+        }
+        return OpenClawWatchAppStatus(
+            code: code,
+            localizationKey: payload["localizationKey"] as? String,
+            arguments: payload["arguments"] as? [String] ?? [],
+            verbatim: verbatim)
+    }
+
+    private static func decodeLegacyGatewayStatus(
+        text: String?,
+        connected: Bool) -> OpenClawWatchAppStatus
+    {
+        if connected {
+            return OpenClawWatchAppStatus(code: .gatewayConnected)
+        }
+        guard let text, !text.isEmpty else {
+            return OpenClawWatchAppStatus(code: .gatewayOffline)
+        }
+        return OpenClawWatchAppStatus(code: .legacy, verbatim: text)
+    }
+
+    private static func decodeLegacyTalkStatus(
+        text: String?,
+        enabled: Bool,
+        listening: Bool,
+        speaking: Bool) -> OpenClawWatchAppStatus
+    {
+        if speaking {
+            return OpenClawWatchAppStatus(code: .talkSpeaking)
+        }
+        if listening {
+            return OpenClawWatchAppStatus(code: .talkListening)
+        }
+        if !enabled {
+            return OpenClawWatchAppStatus(code: .talkOff)
+        }
+        guard let text, !text.isEmpty else {
+            return OpenClawWatchAppStatus(code: .talkReady)
+        }
+        return OpenClawWatchAppStatus(code: .legacy, verbatim: text)
+    }
+
+    private static func decodeLegacyChatStatus(
+        code: String?,
+        text: String?) -> OpenClawWatchAppStatus?
+    {
+        let statusCode = switch code {
+        case "connectIPhone":
+            OpenClawWatchAppStatusCode.chatConnectIPhone
+        case "noMessages":
+            OpenClawWatchAppStatusCode.chatNoMessages
+        case "unavailable":
+            OpenClawWatchAppStatusCode.chatUnavailable
+        default:
+            nil
+        }
+        if let statusCode {
+            return OpenClawWatchAppStatus(code: statusCode)
+        }
+        guard let text, !text.isEmpty else { return nil }
+        return OpenClawWatchAppStatus(code: .legacy, verbatim: text)
     }
 
     private static func parseChatItem(_ item: Any) -> WatchChatItem? {
@@ -199,7 +693,6 @@ struct WatchAppSnapshotMessage: Codable, Equatable {
 typealias WatchChatCompletionMessage = OpenClawWatchChatCompletionMessage
 typealias WatchChatItem = OpenClawWatchChatItem
 typealias WatchAppSnapshotRequestMessage = OpenClawWatchAppSnapshotRequestMessage
-typealias WatchAppCommand = OpenClawWatchAppCommand
 typealias WatchAppCommandMessage = OpenClawWatchAppCommandMessage
 typealias WatchPromptAction = OpenClawWatchAction
 
@@ -226,7 +719,7 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
     var isResolving: Bool
     var pendingDecision: WatchExecApprovalDecision?
     var activeResolutionAttemptID: String?
-    var statusText: String?
+    var status: WatchExecApprovalStatus?
     var statusAt: Date?
 
     var id: WatchExecApprovalIdentityKey {
@@ -237,5 +730,174 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
 
     var approvalID: String {
         self.approval.id
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case approval
+        case transport
+        case sourceSentAtMs
+        case updatedAt
+        case isResolving
+        case pendingDecision
+        case activeResolutionAttemptID
+        case status
+        case statusText
+        case statusAt
+    }
+
+    init(
+        approval: WatchExecApprovalItem,
+        transport: String,
+        sourceSentAtMs: Int64?,
+        updatedAt: Date,
+        isResolving: Bool,
+        pendingDecision: WatchExecApprovalDecision?,
+        activeResolutionAttemptID: String?,
+        status: WatchExecApprovalStatus?,
+        statusAt: Date?)
+    {
+        self.approval = approval
+        self.transport = transport
+        self.sourceSentAtMs = sourceSentAtMs
+        self.updatedAt = updatedAt
+        self.isResolving = isResolving
+        self.pendingDecision = pendingDecision
+        self.activeResolutionAttemptID = activeResolutionAttemptID
+        self.status = status
+        self.statusAt = statusAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.approval = try container.decode(WatchExecApprovalItem.self, forKey: .approval)
+        self.transport = try container.decode(String.self, forKey: .transport)
+        self.sourceSentAtMs = try container.decodeIfPresent(Int64.self, forKey: .sourceSentAtMs)
+        self.updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+        self.isResolving = try container.decode(Bool.self, forKey: .isResolving)
+        self.pendingDecision = try container.decodeIfPresent(
+            WatchExecApprovalDecision.self,
+            forKey: .pendingDecision)
+        self.activeResolutionAttemptID = try container.decodeIfPresent(
+            String.self,
+            forKey: .activeResolutionAttemptID)
+        self.status = try container.decodeIfPresent(
+            WatchExecApprovalStatus.self,
+            forKey: .status) ?? Self.decodeLegacyStatus(
+            container.decodeIfPresent(String.self, forKey: .statusText))
+        self.statusAt = try container.decodeIfPresent(Date.self, forKey: .statusAt)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(self.approval, forKey: .approval)
+        try container.encode(self.transport, forKey: .transport)
+        try container.encodeIfPresent(self.sourceSentAtMs, forKey: .sourceSentAtMs)
+        try container.encode(self.updatedAt, forKey: .updatedAt)
+        try container.encode(self.isResolving, forKey: .isResolving)
+        try container.encodeIfPresent(self.pendingDecision, forKey: .pendingDecision)
+        try container.encodeIfPresent(
+            self.activeResolutionAttemptID,
+            forKey: .activeResolutionAttemptID)
+        try container.encodeIfPresent(self.status, forKey: .status)
+        try container.encodeIfPresent(self.statusAt, forKey: .statusAt)
+    }
+
+    private static func decodeLegacyStatus(_ text: String?) -> WatchExecApprovalStatus? {
+        text.flatMap(WatchExecApprovalStatus.decodeLegacyLocalizedText)
+    }
+}
+
+extension OpenClawWatchAppStatus {
+    func localizedText(
+        localize: (WatchStatusLocalizationKey) -> String = { $0.localized },
+        localizePresentation: (String, [String]) -> String = {
+            key,
+            arguments in
+            String(
+                format: String(localized: String.LocalizationValue(key)),
+                locale: .current,
+                arguments: arguments.map { $0 as CVarArg })
+        }) -> String
+    {
+        return switch self.code {
+        case .gatewayConnected:
+            localize(.connected)
+        case .gatewayOffline:
+            localize(.offline)
+        case .gatewayProblem:
+            self.localizedPresentation(localize: localizePresentation)
+        case .gatewayProblemWithRequestID:
+            self.localizedGatewayProblemWithRequestID(
+                localize: localize,
+                localizePresentation: localizePresentation)
+        case .talkOff:
+            localize(.off)
+        case .talkReady:
+            localize(.ready)
+        case .talkConnecting:
+            localize(.connecting)
+        case .talkListening:
+            localize(.listening)
+        case .talkThinking:
+            localize(.thinking)
+        case .talkSpeaking:
+            localize(.speaking)
+        case .talkOffline:
+            localize(.offline)
+        case .talkPermissionRequired:
+            if let scope = self.arguments.first {
+                String(format: localize(.missingFormat), scope)
+            } else {
+                localize(.unavailable)
+            }
+        case .talkRequestingApproval:
+            localize(.requestingApproval)
+        case .talkApprovalRequested:
+            localize(.approvalRequested)
+        case .talkAPIKeyMissing:
+            localize(.apiKeyMissing)
+        case .talkFailure:
+            self.verbatim ?? localize(.unavailable)
+        case .chatConnectIPhone:
+            localize(.connectIPhoneChat)
+        case .chatNoMessages:
+            localize(.noChatMessages)
+        case .chatUnavailable:
+            localize(.chatUnavailable)
+        case .legacy:
+            self.verbatim ?? localize(.unavailable)
+        }
+    }
+
+    private func localizedPresentation(
+        localize: (String, [String]) -> String) -> String
+    {
+        if let verbatim {
+            return verbatim
+        }
+        guard let localizationKey else {
+            return WatchStatusLocalizationKey.unavailable.localized
+        }
+        return localize(localizationKey, self.arguments)
+    }
+
+    private func localizedGatewayProblemWithRequestID(
+        localize: (WatchStatusLocalizationKey) -> String,
+        localizePresentation: (String, [String]) -> String) -> String
+    {
+        guard let requestID = self.arguments.last else {
+            return self.localizedPresentation(localize: localizePresentation)
+        }
+        let title = if let verbatim {
+            verbatim
+        } else if let localizationKey {
+            localizePresentation(localizationKey, Array(self.arguments.dropLast()))
+        } else {
+            localize(.unavailable)
+        }
+        return String(
+            format: localize(.gatewayProblemRequestIDFormat),
+            title,
+            requestID)
     }
 }

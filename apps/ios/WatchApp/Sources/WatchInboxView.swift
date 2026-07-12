@@ -539,17 +539,16 @@ private struct WatchControlSurfaceView: View {
 
     private var chatStatusText: String {
         WatchAppSnapshotMessage.localizedChatStatusText(
-            statusCode: self.store.appSnapshot?.chatStatusCode,
-            legacyText: self.store.appSnapshot?.chatStatusText,
+            status: self.store.appSnapshot?.chatStatus,
             chatCount: self.chatCount,
             hasAppSnapshot: self.store.hasAppSnapshot)
     }
 
     private var chatSendStatusText: String? {
-        guard let status = store.appCommandStatusText, status.hasPrefix("Chat:") else {
+        guard self.store.appCommandStatus?.command == .sendChat else {
             return nil
         }
-        return status
+        return self.store.appCommandStatusText
     }
 
     private var greetingText: String {
@@ -1108,7 +1107,8 @@ private enum WatchExecApprovalDisplay {
     }
 
     static func statusText(for record: WatchExecApprovalRecord) -> String? {
-        let statusText = record.statusText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let statusText = record.status?.localizedText()
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !statusText.isEmpty {
             return statusText
         }
@@ -1515,7 +1515,7 @@ private struct WatchExecApprovalListView: View {
         if let expiresText = Self.expiresText(record.approval.expiresAtMs) {
             parts.append(expiresText)
         }
-        if let statusText = record.statusText, !statusText.isEmpty {
+        if let statusText = record.status?.localizedText(), !statusText.isEmpty {
             parts.append(statusText)
         }
         return parts.isEmpty ? String(localized: "Pending review") : parts.joined(separator: " · ")

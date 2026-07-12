@@ -22,7 +22,7 @@ private struct GatewayRelayIdentityResponse: Decodable {
 
 private struct WatchChatPreview {
     var items: [OpenClawWatchChatItem]
-    var statusCode: OpenClawWatchChatStatusCode?
+    var status: OpenClawWatchAppStatus?
 }
 
 private struct WatchChatMetadataEnvelope: Decodable {
@@ -389,7 +389,7 @@ final class NodeAppModel {
 
     private var operatorGatewayProblem: GatewayConnectionProblem?
     var gatewayDisplayStatusText: String {
-        self.lastGatewayProblem?.statusText ?? self.gatewayStatusText
+        self.lastGatewayProblem?.localizedStatusText ?? self.gatewayStatusText
     }
 
     private var mainSessionBaseKey: String = "main"
@@ -5679,7 +5679,6 @@ extension NodeAppModel {
         gatewayStableID: String,
         decision: OpenClawWatchExecApprovalDecision?,
         resolvedAtMs: Int64? = nil,
-        outcomeText: String? = nil,
         source: String,
         syncSnapshots: Bool = true) async
     {
@@ -5694,8 +5693,7 @@ extension NodeAppModel {
             gatewayStableID: gatewayStableID,
             decision: decision,
             resolvedAtMs: resolvedAtMs ?? Int64(Date().timeIntervalSince1970 * 1000),
-            source: source,
-            outcomeText: outcomeText)
+            source: source)
         do {
             _ = try await self.watchMessagingService.sendExecApprovalResolved(message)
         } catch {
@@ -5724,9 +5722,6 @@ extension NodeAppModel {
                 gatewayStableID: gatewayStableID,
                 decision: terminal.decision.flatMap(OpenClawWatchExecApprovalDecision.init(rawValue:)),
                 resolvedAtMs: terminal.resolvedAtMs,
-                outcomeText: Self.execApprovalTerminalText(
-                    terminal,
-                    alreadyResolved: source == "another-reviewer"),
                 source: source,
                 syncSnapshots: syncSnapshots)
         case .expired:
@@ -5853,7 +5848,7 @@ extension NodeAppModel {
                 guard self.isOperatorGatewayConnected else {
                     return WatchChatPreview(
                         items: [],
-                        statusCode: .connectIPhone)
+                        status: OpenClawWatchAppStatus(code: .chatConnectIPhone))
                 }
                 payload = try await IOSGatewayChatTransport(gateway: self.operatorSession)
                     .requestHistory(sessionKey: self.chatSessionKey)
@@ -5862,12 +5857,14 @@ extension NodeAppModel {
             let items = Self.makeWatchChatItems(from: payload.messages ?? [])
             return WatchChatPreview(
                 items: items,
-                statusCode: items.isEmpty ? .noMessages : nil)
+                status: items.isEmpty
+                    ? OpenClawWatchAppStatus(code: .chatNoMessages)
+                    : nil)
         } catch {
             GatewayDiagnostics.log("watch app snapshot: chat preview failed error=\(error.localizedDescription)")
             return WatchChatPreview(
                 items: [],
-                statusCode: .unavailable)
+                status: OpenClawWatchAppStatus(code: .chatUnavailable))
         }
     }
 
@@ -6014,27 +6011,107 @@ extension NodeAppModel {
         self.pruneExpiredWatchExecApprovalPrompts()
         let watchGatewayConnected = self.isAppleReviewDemoModeEnabled
             || (self.gatewayConnected && self.operatorConnected)
-        let displayStatusText = self.gatewayDisplayStatusText
-        let watchGatewayStatusText = watchGatewayConnected || displayStatusText != "Connected"
-            ? displayStatusText
-            : self.operatorStatusText
         return OpenClawWatchAppSnapshotMessage(
-            gatewayStatusText: watchGatewayStatusText,
+            gatewayStatus: self.makeWatchGatewayStatus(connected: watchGatewayConnected),
             gatewayConnected: watchGatewayConnected,
             agentName: self.chatAgentName,
             agentAvatarURL: self.chatAgentAvatarURL,
             agentAvatarText: self.chatAgentAvatarText,
             sessionKey: self.chatSessionKey,
             gatewayStableID: self.currentWatchChatGatewayStableID(),
-            talkStatusText: self.talkMode.statusText,
+            talkStatus: self.makeWatchTalkStatus(),
             talkEnabled: self.talkMode.isEnabled,
             talkListening: self.talkMode.isListening,
             talkSpeaking: self.talkMode.isSpeaking,
             pendingApprovalCount: self.watchExecApprovalPromptsByID.count,
             chatItems: chatPreview?.items,
-            chatStatusCode: chatPreview?.statusCode,
+            chatStatus: chatPreview?.status,
             sentAtMs: Int64(Date().timeIntervalSince1970 * 1000),
             snapshotId: UUID().uuidString)
+    }
+
+    private func makeWatchGatewayStatus(connected: Bool) -> OpenClawWatchAppStatus {
+        if connected {
+            return OpenClawWatchAppStatus(code: .gatewayConnected)
+        }
+        if let problem = self.lastGatewayProblem {
+            return Self.makeWatchGatewayProblemStatus(problem)
+        }
+        return OpenClawWatchAppStatus(code: .gatewayOffline)
+    }
+
+    private static func makeWatchGatewayProblemStatus(
+        _ problem: GatewayConnectionProblem) -> OpenClawWatchAppStatus
+    {
+        let requestID = switch problem.kind {
+        case .pairingRequired, .pairingRoleUpgradeRequired, .pairingScopeUpgradeRequired,
+             .pairingMetadataUpgradeRequired, .protocolMismatch:
+            problem.requestId
+        default:
+            nil
+        }
+        let code: OpenClawWatchAppStatusCode = requestID != nil
+            ? .gatewayProblemWithRequestID
+            : .gatewayProblem
+        let requestArguments = requestID.map { [$0] } ?? []
+        return switch problem.titlePresentation {
+        case let .localized(key):
+            OpenClawWatchAppStatus(
+                code: code,
+                localizationKey: key,
+                arguments: requestArguments)
+        case let .localizedFormat(key, arguments):
+            OpenClawWatchAppStatus(
+                code: code,
+                localizationKey: key,
+                arguments: arguments + requestArguments)
+        case let .verbatim(value):
+            OpenClawWatchAppStatus(
+                code: code,
+                arguments: requestArguments,
+                verbatim: value)
+        }
+    }
+
+    private func makeWatchTalkStatus() -> OpenClawWatchAppStatus {
+        if !self.talkMode.isEnabled {
+            return OpenClawWatchAppStatus(code: .talkOff)
+        }
+        if self.talkMode.isSpeaking {
+            return OpenClawWatchAppStatus(code: .talkSpeaking)
+        }
+        if self.talkMode.isListening {
+            return OpenClawWatchAppStatus(code: .talkListening)
+        }
+        if !self.talkMode.isGatewayConnected {
+            return OpenClawWatchAppStatus(code: .talkOffline)
+        }
+        switch self.talkMode.gatewayTalkPermissionState {
+        case .unknown, .ready:
+            break
+        case let .missingScope(scope):
+            return OpenClawWatchAppStatus(code: .talkPermissionRequired, arguments: [scope])
+        case .requestingUpgrade:
+            return OpenClawWatchAppStatus(code: .talkRequestingApproval)
+        case .upgradeRequested:
+            return OpenClawWatchAppStatus(code: .talkApprovalRequested)
+        case let .requestFailed(message), let .loadFailed(message):
+            return OpenClawWatchAppStatus(code: .talkFailure, verbatim: message)
+        case .apiKeyMissing:
+            return OpenClawWatchAppStatus(code: .talkAPIKeyMissing)
+        }
+        return switch self.talkMode.phase {
+        case .connecting:
+            OpenClawWatchAppStatus(code: .talkConnecting)
+        case .thinking:
+            OpenClawWatchAppStatus(code: .talkThinking)
+        case .listening:
+            OpenClawWatchAppStatus(code: .talkListening)
+        case .speaking:
+            OpenClawWatchAppStatus(code: .talkSpeaking)
+        case .idle:
+            OpenClawWatchAppStatus(code: .talkReady)
+        }
     }
 
     private func handleWatchAppCommand(_ event: WatchAppCommandEvent) async {

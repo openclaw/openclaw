@@ -201,11 +201,11 @@ enum WatchMessagingPayloadCodec {
     {
         var payload: [String: Any] = [
             "type": OpenClawWatchPayloadType.appSnapshot.rawValue,
-            "gatewayStatusText": message.gatewayStatusText,
+            "gatewayStatus": self.encodeAppStatus(message.gatewayStatus),
             "gatewayConnected": message.gatewayConnected,
             "agentName": message.agentName,
             "sessionKey": message.sessionKey,
-            "talkStatusText": message.talkStatusText,
+            "talkStatus": self.encodeAppStatus(message.talkStatus),
             "talkEnabled": message.talkEnabled,
             "talkListening": message.talkListening,
             "talkSpeaking": message.talkSpeaking,
@@ -236,14 +236,25 @@ enum WatchMessagingPayloadCodec {
                 return encoded
             }
         }
-        if let chatStatusCode = message.chatStatusCode {
-            payload["chatStatusCode"] = chatStatusCode.rawValue
-        }
-        if let chatStatusText = nonEmpty(message.chatStatusText) {
-            payload["chatStatusText"] = chatStatusText
+        if let chatStatus = message.chatStatus {
+            payload["chatStatus"] = self.encodeAppStatus(chatStatus)
         }
         if let snapshotId = nonEmpty(message.snapshotId) {
             payload["snapshotId"] = snapshotId
+        }
+        return payload
+    }
+
+    private static func encodeAppStatus(_ status: OpenClawWatchAppStatus) -> [String: Any] {
+        var payload: [String: Any] = ["code": status.code.rawValue]
+        if let localizationKey = exactNonEmpty(status.localizationKey) {
+            payload["localizationKey"] = localizationKey
+        }
+        if !status.arguments.isEmpty {
+            payload["arguments"] = status.arguments
+        }
+        if let verbatim = exactNonEmpty(status.verbatim) {
+            payload["verbatim"] = verbatim
         }
         return payload
     }

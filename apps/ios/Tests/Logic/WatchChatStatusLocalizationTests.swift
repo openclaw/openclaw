@@ -3,64 +3,131 @@ import OpenClawKit
 import Testing
 
 struct WatchChatStatusLocalizationTests {
-    @Test func `snapshot parser keeps known status codes`() throws {
-        let snapshot = try #require(WatchAppSnapshotMessage.parsePayload(Self.payload(
-            chatStatusCode: OpenClawWatchChatStatusCode.connectIPhone.rawValue,
-            chatStatusText: "Legacy status")))
+    @Test func `snapshot parser keeps semantic status presentation`() throws {
+        let snapshot = try #require(WatchAppSnapshotMessage.parsePayload(Self.semanticPayload()))
 
-        #expect(snapshot.chatStatusCode == .connectIPhone)
-        #expect(snapshot.chatStatusText == "Legacy status")
+        #expect(snapshot.gatewayStatus.code == .gatewayProblem)
+        #expect(snapshot.gatewayStatus.localizationKey == "Gateway update required")
+        #expect(snapshot.gatewayStatus.verbatim == nil)
+        #expect(snapshot.talkStatus.code == .talkOff)
+        #expect(snapshot.chatStatus?.code == .chatConnectIPhone)
     }
 
-    @Test func `snapshot parser preserves legacy fallback for unknown status codes`() throws {
-        let snapshot = try #require(WatchAppSnapshotMessage.parsePayload(Self.payload(
-            chatStatusCode: "futureStatus",
-            chatStatusText: "Future status from iPhone")))
+    @Test func `legacy snapshot text decodes but is not written again`() throws {
+        let legacyJSON = """
+        {
+          "gatewayStatusText": "Ancien statut",
+          "gatewayConnected": false,
+          "agentName": "Main",
+          "sessionKey": "main",
+          "talkStatusText": "Ancien mode vocal",
+          "talkEnabled": true,
+          "talkListening": false,
+          "talkSpeaking": false,
+          "pendingApprovalCount": 0,
+          "chatStatusText": "Ancien chat"
+        }
+        """
+        let snapshot = try JSONDecoder().decode(
+            WatchAppSnapshotMessage.self,
+            from: Data(legacyJSON.utf8))
 
-        #expect(snapshot.chatStatusCode == nil)
-        #expect(snapshot.chatStatusText == "Future status from iPhone")
+        #expect(snapshot.gatewayStatus.verbatim == "Ancien statut")
+        #expect(snapshot.talkStatus.verbatim == "Ancien mode vocal")
+        #expect(snapshot.chatStatus?.verbatim == "Ancien chat")
+
+        let encoded = try JSONEncoder().encode(snapshot)
+        let object = try #require(
+            JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        #expect(object["gatewayStatusText"] == nil)
+        #expect(object["talkStatusText"] == nil)
+        #expect(object["chatStatusText"] == nil)
+        #expect(object["chatStatus"] != nil)
     }
 
-    @Test func `watch renders known status locally before legacy text`() {
+    @Test func `watch locale resolves semantic chat status independently from phone`() throws {
+        let snapshot = try #require(WatchAppSnapshotMessage.parsePayload(Self.semanticPayload()))
         let rendered = WatchAppSnapshotMessage.localizedChatStatusText(
-            statusCode: .noMessages,
-            legacyText: "English status from iPhone",
+            status: snapshot.chatStatus,
             chatCount: 0,
-            hasAppSnapshot: true)
+            hasAppSnapshot: true,
+            localize: { key in
+                key == .connectIPhoneChat
+                    ? "Connectez le chat de l'iPhone"
+                    : key.rawValue
+            })
 
-        #expect(rendered == String(localized: "No chat messages yet"))
+        #expect(rendered == "Connectez le chat de l'iPhone")
+        #expect(rendered != "Connect iPhone chat to read messages")
     }
 
-    @Test func `watch renders legacy text when status code is unknown`() throws {
-        let snapshot = try #require(WatchAppSnapshotMessage.parsePayload(Self.payload(
-            chatStatusCode: "futureStatus",
-            chatStatusText: "Future status from iPhone")))
-        let rendered = WatchAppSnapshotMessage.localizedChatStatusText(
-            statusCode: snapshot.chatStatusCode,
-            legacyText: snapshot.chatStatusText,
-            chatCount: 0,
-            hasAppSnapshot: true)
+    @Test func `persisted semantic command status follows current watch locale`() {
+        let status = WatchAppCommandStatus(command: .sendChat, code: .sent)
+        let english = status.localizedText(localize: Self.english)
+        let french = status.localizedText(localize: Self.french)
 
-        #expect(rendered == "Future status from iPhone")
+        #expect(english == "Chat: sent")
+        #expect(french == "Discussion : envoyée")
+        #expect(status.command == .sendChat)
     }
 
-    private static func payload(
-        chatStatusCode: String,
-        chatStatusText: String) -> [String: Any]
-    {
+    @Test func `gateway presentation localizes key and keeps backend override verbatim`() {
+        let localized = OpenClawWatchAppStatus(
+            code: .gatewayProblem,
+            localizationKey: "Gateway update required")
+        let backendOverride = OpenClawWatchAppStatus(
+            code: .gatewayProblem,
+            verbatim: "Gateway says update channel beta")
+
+        #expect(localized.localizedText(
+            localizePresentation: { key, _ in
+                key == "Gateway update required" ? "Mise à jour requise" : key
+            }) == "Mise à jour requise")
+        #expect(backendOverride.localizedText() == "Gateway says update channel beta")
+    }
+
+    private static func semanticPayload() -> [String: Any] {
         [
             "type": OpenClawWatchPayloadType.appSnapshot.rawValue,
-            "gatewayStatusText": "Connected",
-            "gatewayConnected": true,
+            "gatewayStatus": [
+                "code": OpenClawWatchAppStatusCode.gatewayProblem.rawValue,
+                "localizationKey": "Gateway update required",
+            ],
+            "gatewayConnected": false,
             "agentName": "Main",
             "sessionKey": "main",
-            "talkStatusText": "Off",
+            "talkStatus": [
+                "code": OpenClawWatchAppStatusCode.talkOff.rawValue,
+            ],
             "talkEnabled": false,
             "talkListening": false,
             "talkSpeaking": false,
             "pendingApprovalCount": 0,
-            "chatStatusCode": chatStatusCode,
-            "chatStatusText": chatStatusText,
+            "chatStatus": [
+                "code": OpenClawWatchAppStatusCode.chatConnectIPhone.rawValue,
+            ],
         ]
+    }
+
+    private static func english(_ key: WatchStatusLocalizationKey) -> String {
+        switch key {
+        case .chat:
+            "Chat"
+        case .sentFormat:
+            "%@: sent"
+        default:
+            key.rawValue
+        }
+    }
+
+    private static func french(_ key: WatchStatusLocalizationKey) -> String {
+        switch key {
+        case .chat:
+            "Discussion"
+        case .sentFormat:
+            "%@ : envoyée"
+        default:
+            key.rawValue
+        }
     }
 }

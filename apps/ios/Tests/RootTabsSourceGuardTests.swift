@@ -1005,8 +1005,7 @@ extension RootTabsSourceGuardTests {
             from: matchingOwnerGuard,
             to: "self.appSnapshot = merged")
         #expect(ownerMatchedMerge.contains("merged.chatItems = self.appSnapshot?.chatItems"))
-        #expect(ownerMatchedMerge.contains("merged.chatStatusCode = self.appSnapshot?.chatStatusCode"))
-        #expect(ownerMatchedMerge.contains("merged.chatStatusText = self.appSnapshot?.chatStatusText"))
+        #expect(ownerMatchedMerge.contains("merged.chatStatus = self.appSnapshot?.chatStatus"))
     }
 
     @Test func `watch generic prompts wait for the active gateway owner`() throws {
@@ -1117,13 +1116,12 @@ extension RootTabsSourceGuardTests {
         #expect(snapshotConsume.contains("recordKey.gatewayID == WatchGatewayID.key(snapshotGatewayID)"))
         #expect(snapshotConsume.contains(
             "Self.gatewayIDsMatch(approval.gatewayStableID, snapshotGatewayID)"))
-        #expect(snapshotConsume.contains("Approval resolved elsewhere"))
+        #expect(snapshotConsume.contains("WatchExecApprovalOutcome(code: .resolvedElsewhere)"))
         #expect(snapshotConsume.contains("authoritativeOutcome: false"))
         #expect(terminalConsumes.components(separatedBy: "self.recordExecApprovalTerminal(").count == 3)
         #expect(terminalConsumes.contains("func terminalExecApprovalOutcomeText("))
         #expect(terminalHelpers.contains("WatchApprovalID.key(tombstone.approvalId) == key.approvalID"))
         #expect(terminalHelpers.contains("WatchGatewayID.key(tombstone.gatewayStableID) == key.gatewayID"))
-        #expect(terminalHelpers.contains("maxExecApprovalTerminalOutcomeCharacters"))
         #expect(terminalHelpers.contains("maxExecApprovalTerminalTombstones"))
         #expect(terminalHelpers.contains("upgraded.recordedAt = Date()"))
         #expect(source.contains("execApprovalTerminalTombstoneLifetime: TimeInterval"))

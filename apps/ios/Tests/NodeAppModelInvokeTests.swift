@@ -4614,13 +4614,47 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
 
         let snapshot = try #require(watchService.lastSentAppSnapshot)
         #expect(snapshot.gatewayConnected == true)
-        #expect(snapshot.gatewayStatusText == "Connected")
+        #expect(snapshot.gatewayStatus.code == .gatewayConnected)
+        #expect(snapshot.gatewayStatus.verbatim == nil)
         #expect(snapshot.agentName == "Main")
         #expect(snapshot.sessionKey == "main")
         #expect(try Array(#require(snapshot.gatewayStableID).utf8) == Array(gatewayStableID.utf8))
-        #expect(!snapshot.talkStatusText.isEmpty)
+        #expect(snapshot.talkStatus.code != .legacy)
+        #expect(snapshot.talkStatus.verbatim == nil)
         #expect(snapshot.talkEnabled == true)
         #expect(snapshot.pendingApprovalCount == 0)
+    }
+
+    @Test @MainActor func `watch gateway problem keeps localization semantics`() async throws {
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(watchMessagingService: watchService)
+        appModel._test_applyOperatorGatewayConnectionProblem(GatewayConnectionProblem(
+            kind: .pairingRequired,
+            owner: .gateway,
+            title: "Pairing approval required",
+            message: "Approve this device.",
+            titlePresentation: .localized("Pairing approval required"),
+            requestId: "request-42",
+            retryable: false,
+            pauseReconnect: true))
+
+        watchService.emitAppSnapshotRequest(
+            WatchAppSnapshotRequestEvent(
+                requestId: "localized-gateway-problem",
+                sentAtMs: 123,
+                transport: "sendMessage"))
+        for _ in 0..<20 {
+            if watchService.lastSentAppSnapshot != nil {
+                break
+            }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        let status = try #require(watchService.lastSentAppSnapshot?.gatewayStatus)
+        #expect(status.code == .gatewayProblemWithRequestID)
+        #expect(status.localizationKey == "Pairing approval required")
+        #expect(status.arguments == ["request-42"])
+        #expect(status.verbatim == nil)
     }
 
     @Test @MainActor func `watch app snapshot publishes offline when operator disconnects`() async {
@@ -4652,7 +4686,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         }
 
         #expect(watchService.lastSentAppSnapshot?.gatewayConnected == false)
-        #expect(watchService.lastSentAppSnapshot?.gatewayStatusText == "Offline")
+        #expect(watchService.lastSentAppSnapshot?.gatewayStatus.code == .gatewayOffline)
     }
 
     @Test @MainActor func `watch app snapshot publishes online when operator reconnects`() async {
@@ -4683,7 +4717,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         }
 
         #expect(watchService.lastSentAppSnapshot?.gatewayConnected == true)
-        #expect(watchService.lastSentAppSnapshot?.gatewayStatusText == "Connected")
+        #expect(watchService.lastSentAppSnapshot?.gatewayStatus.code == .gatewayConnected)
     }
 
     @Test @MainActor func `watch app snapshot uses configured agent avatar`() async throws {
@@ -6698,17 +6732,17 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
     @Test @MainActor func `watch application context retains app and approval snapshots`() throws {
         let appPayload = WatchMessagingPayloadCodec.encodeAppSnapshotPayload(
             OpenClawWatchAppSnapshotMessage(
-                gatewayStatusText: "Connected",
+                gatewayStatus: OpenClawWatchAppStatus(code: .gatewayConnected),
                 gatewayConnected: true,
                 agentName: "Main",
                 sessionKey: "main",
                 gatewayStableID: "gateway-a",
-                talkStatusText: "Off",
+                talkStatus: OpenClawWatchAppStatus(code: .talkOff),
                 talkEnabled: false,
                 talkListening: false,
                 talkSpeaking: false,
                 pendingApprovalCount: 1,
-                chatStatusCode: .connectIPhone,
+                chatStatus: OpenClawWatchAppStatus(code: .chatConnectIPhone),
                 snapshotId: "app-a"))
         let approvalPayload = WatchMessagingPayloadCodec.encodeExecApprovalSnapshotPayload(
             OpenClawWatchExecApprovalSnapshotMessage(
@@ -6736,7 +6770,9 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let nestedApprovals = try #require(
             combined[OpenClawWatchPayloadType.execApprovalSnapshot.rawValue] as? [String: Any])
         #expect(nestedApp["gatewayStableID"] as? String == "gateway-a")
-        #expect(nestedApp["chatStatusCode"] as? String == "connectIPhone")
+        let nestedChatStatus = try #require(nestedApp["chatStatus"] as? [String: Any])
+        #expect(nestedChatStatus["code"] as? String == "chatConnectIPhone")
+        #expect(nestedApp["chatStatusCode"] == nil)
         #expect(nestedApp["snapshotId"] as? String == "app-a")
         #expect(nestedApprovals["snapshotId"] as? String == "approval-a")
         #expect(nestedApprovals["gatewayStableID"] as? String == "gateway-a")

@@ -29,6 +29,7 @@ public enum OpenClawWatchRisk: String, Codable, Sendable, Equatable {
 
 public enum OpenClawWatchExecApprovalDecision: String, Codable, Sendable, Equatable {
     case allowOnce = "allow-once"
+    case allowAlways = "allow-always"
     case deny
 }
 
@@ -276,69 +277,238 @@ public struct OpenClawWatchChatCompletionMessage: Codable, Sendable, Equatable {
     }
 }
 
-public enum OpenClawWatchChatStatusCode: String, Codable, Sendable, Equatable {
-    case connectIPhone
-    case noMessages
-    case unavailable
+public enum OpenClawWatchAppStatusCode: String, Codable, Sendable, Equatable {
+    case gatewayConnected
+    case gatewayOffline
+    case gatewayProblem
+    case gatewayProblemWithRequestID
+    case talkOff
+    case talkReady
+    case talkConnecting
+    case talkListening
+    case talkThinking
+    case talkSpeaking
+    case talkOffline
+    case talkPermissionRequired
+    case talkRequestingApproval
+    case talkApprovalRequested
+    case talkAPIKeyMissing
+    case talkFailure
+    case chatConnectIPhone
+    case chatNoMessages
+    case chatUnavailable
+    case legacy
+}
+
+public struct OpenClawWatchAppStatus: Codable, Sendable, Equatable {
+    public var code: OpenClawWatchAppStatusCode
+    public var localizationKey: String?
+    public var arguments: [String]
+    public var verbatim: String?
+
+    public init(
+        code: OpenClawWatchAppStatusCode,
+        localizationKey: String? = nil,
+        arguments: [String] = [],
+        verbatim: String? = nil)
+    {
+        self.code = code
+        self.localizationKey = localizationKey
+        self.arguments = arguments
+        self.verbatim = verbatim
+    }
 }
 
 public struct OpenClawWatchAppSnapshotMessage: Codable, Sendable, Equatable {
     public var type: OpenClawWatchPayloadType
-    public var gatewayStatusText: String
+    public var gatewayStatus: OpenClawWatchAppStatus
     public var gatewayConnected: Bool
     public var agentName: String
     public var agentAvatarURL: String?
     public var agentAvatarText: String?
     public var sessionKey: String
     public var gatewayStableID: String?
-    public var talkStatusText: String
+    public var talkStatus: OpenClawWatchAppStatus
     public var talkEnabled: Bool
     public var talkListening: Bool
     public var talkSpeaking: Bool
     public var pendingApprovalCount: Int
     public var chatItems: [OpenClawWatchChatItem]?
-    public var chatStatusCode: OpenClawWatchChatStatusCode?
-    public var chatStatusText: String?
+    public var chatStatus: OpenClawWatchAppStatus?
     public var sentAtMs: Int64?
     public var snapshotId: String?
 
     public init(
-        gatewayStatusText: String,
+        gatewayStatus: OpenClawWatchAppStatus,
         gatewayConnected: Bool,
         agentName: String,
         agentAvatarURL: String? = nil,
         agentAvatarText: String? = nil,
         sessionKey: String,
         gatewayStableID: String? = nil,
-        talkStatusText: String,
+        talkStatus: OpenClawWatchAppStatus,
         talkEnabled: Bool,
         talkListening: Bool,
         talkSpeaking: Bool,
         pendingApprovalCount: Int,
         chatItems: [OpenClawWatchChatItem]? = nil,
-        chatStatusCode: OpenClawWatchChatStatusCode? = nil,
-        chatStatusText: String? = nil,
+        chatStatus: OpenClawWatchAppStatus? = nil,
         sentAtMs: Int64? = nil,
         snapshotId: String? = nil)
     {
         self.type = .appSnapshot
-        self.gatewayStatusText = gatewayStatusText
+        self.gatewayStatus = gatewayStatus
         self.gatewayConnected = gatewayConnected
         self.agentName = agentName
         self.agentAvatarURL = agentAvatarURL
         self.agentAvatarText = agentAvatarText
         self.sessionKey = sessionKey
         self.gatewayStableID = gatewayStableID
-        self.talkStatusText = talkStatusText
+        self.talkStatus = talkStatus
         self.talkEnabled = talkEnabled
         self.talkListening = talkListening
         self.talkSpeaking = talkSpeaking
         self.pendingApprovalCount = pendingApprovalCount
         self.chatItems = chatItems
-        self.chatStatusCode = chatStatusCode
-        self.chatStatusText = chatStatusText
+        self.chatStatus = chatStatus
         self.sentAtMs = sentAtMs
         self.snapshotId = snapshotId
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case type
+        case gatewayStatus
+        case gatewayStatusText
+        case gatewayConnected
+        case agentName
+        case agentAvatarURL
+        case agentAvatarText
+        case sessionKey
+        case gatewayStableID
+        case talkStatus
+        case talkStatusText
+        case talkEnabled
+        case talkListening
+        case talkSpeaking
+        case pendingApprovalCount
+        case chatItems
+        case chatStatus
+        case chatStatusCode
+        case chatStatusText
+        case sentAtMs
+        case snapshotId
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.type = try container.decode(OpenClawWatchPayloadType.self, forKey: .type)
+        self.gatewayConnected = try container.decode(Bool.self, forKey: .gatewayConnected)
+        self.agentName = try container.decode(String.self, forKey: .agentName)
+        self.agentAvatarURL = try container.decodeIfPresent(String.self, forKey: .agentAvatarURL)
+        self.agentAvatarText = try container.decodeIfPresent(String.self, forKey: .agentAvatarText)
+        self.sessionKey = try container.decode(String.self, forKey: .sessionKey)
+        self.gatewayStableID = try container.decodeIfPresent(String.self, forKey: .gatewayStableID)
+        self.talkEnabled = try container.decode(Bool.self, forKey: .talkEnabled)
+        self.talkListening = try container.decode(Bool.self, forKey: .talkListening)
+        self.talkSpeaking = try container.decode(Bool.self, forKey: .talkSpeaking)
+        self.pendingApprovalCount = try container.decode(Int.self, forKey: .pendingApprovalCount)
+        self.chatItems = try container.decodeIfPresent([OpenClawWatchChatItem].self, forKey: .chatItems)
+        self.sentAtMs = try container.decodeIfPresent(Int64.self, forKey: .sentAtMs)
+        self.snapshotId = try container.decodeIfPresent(String.self, forKey: .snapshotId)
+
+        self.gatewayStatus = try container.decodeIfPresent(
+            OpenClawWatchAppStatus.self,
+            forKey: .gatewayStatus) ?? Self.decodeLegacyGatewayStatus(
+            text: container.decodeIfPresent(String.self, forKey: .gatewayStatusText),
+            connected: self.gatewayConnected)
+        self.talkStatus = try container.decodeIfPresent(
+            OpenClawWatchAppStatus.self,
+            forKey: .talkStatus) ?? Self.decodeLegacyTalkStatus(
+            text: container.decodeIfPresent(String.self, forKey: .talkStatusText),
+            enabled: self.talkEnabled,
+            listening: self.talkListening,
+            speaking: self.talkSpeaking)
+        self.chatStatus = try container.decodeIfPresent(
+            OpenClawWatchAppStatus.self,
+            forKey: .chatStatus) ?? Self.decodeLegacyChatStatus(
+            code: container.decodeIfPresent(String.self, forKey: .chatStatusCode),
+            text: container.decodeIfPresent(String.self, forKey: .chatStatusText))
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(self.type, forKey: .type)
+        try container.encode(self.gatewayStatus, forKey: .gatewayStatus)
+        try container.encode(self.gatewayConnected, forKey: .gatewayConnected)
+        try container.encode(self.agentName, forKey: .agentName)
+        try container.encodeIfPresent(self.agentAvatarURL, forKey: .agentAvatarURL)
+        try container.encodeIfPresent(self.agentAvatarText, forKey: .agentAvatarText)
+        try container.encode(self.sessionKey, forKey: .sessionKey)
+        try container.encodeIfPresent(self.gatewayStableID, forKey: .gatewayStableID)
+        try container.encode(self.talkStatus, forKey: .talkStatus)
+        try container.encode(self.talkEnabled, forKey: .talkEnabled)
+        try container.encode(self.talkListening, forKey: .talkListening)
+        try container.encode(self.talkSpeaking, forKey: .talkSpeaking)
+        try container.encode(self.pendingApprovalCount, forKey: .pendingApprovalCount)
+        try container.encodeIfPresent(self.chatItems, forKey: .chatItems)
+        try container.encodeIfPresent(self.chatStatus, forKey: .chatStatus)
+        try container.encodeIfPresent(self.sentAtMs, forKey: .sentAtMs)
+        try container.encodeIfPresent(self.snapshotId, forKey: .snapshotId)
+    }
+
+    private static func decodeLegacyGatewayStatus(
+        text: String?,
+        connected: Bool) -> OpenClawWatchAppStatus
+    {
+        if connected {
+            return OpenClawWatchAppStatus(code: .gatewayConnected)
+        }
+        guard let text, !text.isEmpty else {
+            return OpenClawWatchAppStatus(code: .gatewayOffline)
+        }
+        return OpenClawWatchAppStatus(code: .legacy, verbatim: text)
+    }
+
+    private static func decodeLegacyTalkStatus(
+        text: String?,
+        enabled: Bool,
+        listening: Bool,
+        speaking: Bool) -> OpenClawWatchAppStatus
+    {
+        if speaking {
+            return OpenClawWatchAppStatus(code: .talkSpeaking)
+        }
+        if listening {
+            return OpenClawWatchAppStatus(code: .talkListening)
+        }
+        if !enabled {
+            return OpenClawWatchAppStatus(code: .talkOff)
+        }
+        guard let text, !text.isEmpty else {
+            return OpenClawWatchAppStatus(code: .talkReady)
+        }
+        return OpenClawWatchAppStatus(code: .legacy, verbatim: text)
+    }
+
+    private static func decodeLegacyChatStatus(
+        code: String?,
+        text: String?) -> OpenClawWatchAppStatus?
+    {
+        let statusCode = switch code {
+        case "connectIPhone":
+            OpenClawWatchAppStatusCode.chatConnectIPhone
+        case "noMessages":
+            OpenClawWatchAppStatusCode.chatNoMessages
+        case "unavailable":
+            OpenClawWatchAppStatusCode.chatUnavailable
+        default:
+            nil
+        }
+        if let statusCode {
+            return OpenClawWatchAppStatus(code: statusCode)
+        }
+        guard let text, !text.isEmpty else { return nil }
+        return OpenClawWatchAppStatus(code: .legacy, verbatim: text)
     }
 }
 
