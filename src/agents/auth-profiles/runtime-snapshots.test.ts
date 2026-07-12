@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   getRuntimeAuthProfileStoreSnapshot,
+  getRuntimeAuthProfileStoreSnapshotsRevision,
   replaceRuntimeAuthProfileStoreSnapshots,
   setRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
@@ -52,6 +53,18 @@ function expectOpenAICodexSnapshotCredential(
 }
 
 describe("runtime auth profile snapshots", () => {
+  it("advances revision for every snapshot mutation", () => {
+    const initialRevision = getRuntimeAuthProfileStoreSnapshotsRevision();
+    setRuntimeAuthProfileStoreSnapshot(createStore("set"));
+    expect(getRuntimeAuthProfileStoreSnapshotsRevision()).toBe(initialRevision + 1);
+
+    replaceRuntimeAuthProfileStoreSnapshots([]);
+    expect(getRuntimeAuthProfileStoreSnapshotsRevision()).toBe(initialRevision + 2);
+
+    clearRuntimeAuthProfileStoreSnapshots();
+    expect(getRuntimeAuthProfileStoreSnapshotsRevision()).toBe(initialRevision + 3);
+  });
+
   it("isolates set/get/replace snapshot mutations without structuredClone", () => {
     const structuredCloneSpy = vi.spyOn(globalThis, "structuredClone");
     const agentDir = "/tmp/openclaw-auth-runtime-snapshot-agent";

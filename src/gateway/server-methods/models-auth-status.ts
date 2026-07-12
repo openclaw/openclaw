@@ -37,7 +37,7 @@ import type {
   UsageWindow,
 } from "../../infra/provider-usage.types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { refreshActiveSecretsRuntimeSnapshot } from "../../secrets/runtime.js";
+import { refreshActiveProviderAuthRuntimeSnapshot } from "../../secrets/runtime.js";
 import { asDateTimestampMs } from "../../shared/number-coercion.js";
 import { abortChatRunsForProvider, type ChatAbortOps } from "../chat-abort.js";
 import { formatForLog } from "../ws-log.js";
@@ -126,7 +126,7 @@ export function invalidateModelAuthStatusCache(): void {
 async function refreshModelAuthStatusRuntimeState(): Promise<void> {
   invalidateModelAuthStatusCache();
   try {
-    if (await refreshActiveSecretsRuntimeSnapshot()) {
+    if (await refreshActiveProviderAuthRuntimeSnapshot()) {
       return;
     }
   } catch (err) {
@@ -431,7 +431,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      await refreshActiveSecretsRuntimeSnapshot();
+      await refreshActiveProviderAuthRuntimeSnapshot();
       invalidateModelAuthStatusCache();
       clearCurrentProviderAuthState();
       void warmCurrentProviderAuthStateOffMainThread(context.getRuntimeConfig()).catch(
