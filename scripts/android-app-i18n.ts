@@ -418,38 +418,7 @@ const ALLOWED_UI_LITERALS = new Map<string, ReadonlySet<string>>([
       "WhatsApp",
     ]),
   ],
-  [
-    "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
-    new Set([
-      "Connected",
-      "Continue",
-      "Checking approval…",
-      "Connecting Gateway",
-      "Connection issue",
-      "Go back",
-      "I have approved",
-      "Node Approval Pending",
-      "Pairing Gateway",
-      "Retry connection",
-      "Still connecting",
-    ]),
-  ],
-  [
-    "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
-    new Set(["Chat", "Files", "Home", "Providers", "Sessions", "Settings", "Voice"]),
-  ],
   ["apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt", new Set(["Off"])],
-  [
-    "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
-    new Set([
-      "Ask OpenClaw to use Android capabilities.",
-      "Catch me up",
-      "Plan the work",
-      "Summarize recent sessions and next steps.",
-      "Turn a goal into an actionable checklist.",
-      "Use this phone",
-    ]),
-  ],
   [
     "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillWorkshopSettingsScreen.kt",
     new Set(["all", "applied", "held", "pending", "rejected"]),
