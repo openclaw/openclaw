@@ -57,6 +57,7 @@ import {
 } from "../security/dangerous-tools.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
+import type { GatewayAuthorizationSubject } from "./authorization/contracts.js";
 
 type GatewayScopedToolSurface = "http" | "loopback";
 
@@ -67,6 +68,7 @@ export function resolveGatewayScopedTools(params: {
   runtimePolicySessionKey?: string;
   agentId?: string;
   sessionId?: string;
+  authorizationSubject?: GatewayAuthorizationSubject;
   modelProvider?: string;
   modelId?: string;
   onYield?: (message: string) => Promise<void> | void;
@@ -272,6 +274,7 @@ export function resolveGatewayScopedTools(params: {
     currentMessageId: params.currentMessageId,
     currentInboundAudio: params.currentInboundAudio,
     sessionId: params.sessionId,
+    authorizationSubject: params.authorizationSubject,
     onYield: params.onYield,
     requireExplicitMessageTarget: params.requireExplicitMessageTarget,
     senderIsOwner: params.senderIsOwner,
