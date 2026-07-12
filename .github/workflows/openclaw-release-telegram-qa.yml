@@ -1255,6 +1255,7 @@ jobs:
             OPENCLAW_EMBEDDED_ABORT_SETTLE_TIMEOUT_MS
             OPENCLAW_GATEWAY_TOKEN
             OPENCLAW_HOME
+            OPENCLAW_LOG_LEVEL
             OPENCLAW_NO_RESPAWN
             OPENCLAW_OAUTH_DIR
             OPENCLAW_QA_ALLOW_LOCAL_IMAGE_PROVIDER
@@ -2097,6 +2098,7 @@ jobs:
           OPENCLAW_QA_TELEGRAM_SUT_PROCESS_BOUNDARY_DIR: ${{ steps.create_sut.outputs.boundary_evidence_dir }}
           OPENCLAW_QA_TELEGRAM_SUT_RUNTIME_EXECUTABLE: ${{ steps.create_sut.outputs.runtime_executable }}
           OPENCLAW_QA_TELEGRAM_SUT_UID: ${{ steps.create_sut.outputs.uid }}
+          OPENCLAW_LOG_LEVEL: trace
           SUT_RUNTIME_ROOT: ${{ steps.create_sut.outputs.runtime_root }}
           SUT_UID: ${{ steps.create_sut.outputs.uid }}
           TARGET_REF: ${{ inputs.target_ref }}
@@ -2258,8 +2260,53 @@ jobs:
           const maxInputRecordBytes = 1_048_576;
           const oversizedMarker = "[truncated oversized gateway log record] ";
           const omittedMarker = "[omitted oversized gateway log record]\n";
+          const safeVerboseMessagePrefixes = [
+            "embedded run start:",
+            "[trace:embedded-run] prep stages:",
+            "[trace:embedded-run] core-plugin-tool stages:",
+            "embedded run prompt start:",
+            "[context-diag] pre-prompt:",
+            "model.call.started",
+            "model_call_started",
+            "embedded run prompt end:",
+            "run cleanup:",
+          ];
           const retained = [];
           let retainedBytes = 0;
+
+          function extractLogTapeMessage(record) {
+            if (!record || typeof record !== "object" || Array.isArray(record)) {
+              return undefined;
+            }
+            const numericKeys = Object.keys(record)
+              .filter((key) => /^\d+$/u.test(key))
+              .sort((left, right) => Number(left) - Number(right));
+            for (let index = numericKeys.length - 1; index >= 0; index -= 1) {
+              const value = record[numericKeys[index]];
+              if (typeof value === "string") {
+                return value;
+              }
+            }
+            return undefined;
+          }
+
+          function shouldRetainRecord(line) {
+            let record;
+            try {
+              record = JSON.parse(line);
+            } catch {
+              return false;
+            }
+            const level = record?._meta?.logLevelName;
+            if (level !== "DEBUG" && level !== "TRACE") {
+              return true;
+            }
+            const message = extractLogTapeMessage(record);
+            return (
+              typeof message === "string" &&
+              safeVerboseMessagePrefixes.some((prefix) => message.startsWith(prefix))
+            );
+          }
 
           function boundRedactedLine(line) {
             const redactedLine = `${redactQaGatewayDebugText(line)}\n`;
@@ -2309,7 +2356,9 @@ jobs:
               retainLine(omittedMarker);
             } else {
               const line = Buffer.concat(recordParts, recordBytes).toString("utf8").replace(/\r$/u, "");
-              retainLine(boundRedactedLine(line));
+              if (shouldRetainRecord(line)) {
+                retainLine(boundRedactedLine(line));
+              }
             }
             recordParts = [];
             recordBytes = 0;
