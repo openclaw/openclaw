@@ -107,6 +107,32 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
     const video = page.video();
     await installMockGateway(page, {
       controlUiTabs: [{ group: "control", id: "logbook", label: "Logbook", pluginId: "logbook" }],
+      methodResponses: {
+        "config.get": {
+          config: {},
+          hash: "settings-search-e2e",
+        },
+        "config.schema": {
+          schema: {
+            type: "object",
+            properties: {
+              browser: {
+                type: "object",
+                title: "Browser",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                    title: "Enabled",
+                  },
+                },
+              },
+            },
+          },
+          uiHints: {},
+          version: "e2e",
+          generatedAt: "2026-07-12T00:00:00.000Z",
+        },
+      },
     });
 
     try {
@@ -249,6 +275,19 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
           "Appearance",
         ]);
       await captureSettingsSidebarProof(settingsSidebar, "01c-settings-search-group.png");
+      await holdUiProof(page);
+      await settingsSearch.fill("browser");
+      const browserResult = settingsSidebar.getByRole("link", {
+        name: "Browser",
+        exact: true,
+      });
+      await expect.poll(() => browserResult.isVisible()).toBe(true);
+      await browserResult.click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/infrastructure");
+      await expect.poll(() => new URL(page.url()).search).toBe("?section=browser");
+      await expect.poll(() => new URL(page.url()).hash).toBe("#config-section-browser");
+      await expect.poll(() => page.locator("#config-section-browser").isVisible()).toBe(true);
+      await captureSettingsSidebarProof(settingsSidebar, "01c-settings-search-deep-link.png");
       await holdUiProof(page);
       await settingsSearch.fill("does-not-exist");
       await expect.poll(() => settingsLinks.count()).toBe(0);
