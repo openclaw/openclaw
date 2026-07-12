@@ -1678,6 +1678,7 @@ async function runUpdatedInstallGatewayRestart(params: {
   invocationCwd?: string;
   env?: NodeJS.ProcessEnv;
   nodeRunner?: string;
+  timeoutMs: number;
 }): Promise<boolean> {
   const entrypoint = await resolveGatewayInstallEntrypoint(params.result.root);
   if (!entrypoint) {
@@ -1695,7 +1696,10 @@ async function runUpdatedInstallGatewayRestart(params: {
     {
       cwd: params.result.root,
       env: resolveUpdatedInstallCommandEnv(params.env ?? process.env, params.invocationCwd),
-      timeoutMs: SERVICE_REFRESH_TIMEOUT_MS,
+      // The restarted CLI owns bounded readiness, including the canonical startup-migration
+      // lease. The outer watchdog preserves the caller's per-step update budget instead of
+      // imposing the old fixed 60-second boundary.
+      timeoutMs: params.timeoutMs,
     },
   );
   if (res.code === 0) {
@@ -2574,6 +2578,7 @@ async function maybeRestartService(params: {
   nodeRunner?: string;
   skipLegacyServiceRestart?: boolean;
   requireRunningServiceAfterRestart?: boolean;
+  timeoutMs: number;
 }): Promise<boolean> {
   const verifyRestartedGateway = async (
     expectedGatewayVersion: string | undefined,
@@ -2587,6 +2592,7 @@ async function maybeRestartService(params: {
           invocationCwd: params.invocationCwd,
           env: params.serviceEnv,
           nodeRunner: params.nodeRunner,
+          timeoutMs: params.timeoutMs,
         });
         return;
       }
@@ -2763,6 +2769,7 @@ async function maybeRestartService(params: {
           invocationCwd: params.invocationCwd,
           env: params.serviceEnv,
           nodeRunner: params.nodeRunner,
+          timeoutMs: params.timeoutMs,
         });
         if (
           updatedInstallRestartNeedsServiceRootProof &&
@@ -4633,6 +4640,7 @@ async function updateCommandInternal(
     skipLegacyServiceRestart,
     requireRunningServiceAfterRestart:
       resultWithPostUpdate.mode === "git" && preManagedServiceStop?.stopped === true,
+    timeoutMs: updateStepTimeoutMs,
   });
   if (!restartOk) {
     await markControlPlaneUpdateRestartSentinelFailureBestEffort({

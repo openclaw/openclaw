@@ -58,7 +58,7 @@ function postRestartHealthAttempts(): number {
 function formatRestartFailure(params: {
   health: GatewayRestartSnapshot;
   port: number;
-  timeoutSeconds: number;
+  defaultTimeoutSeconds: number;
 }): { statusLine: string; failMessage: string } {
   if (params.health.waitOutcome === "stopped-free") {
     const elapsedSeconds = Math.max(1, Math.round((params.health.elapsedMs ?? 0) / 1000));
@@ -68,9 +68,17 @@ function formatRestartFailure(params: {
     };
   }
 
+  const timeoutSeconds = Math.max(
+    1,
+    Math.round(
+      params.health.elapsedMs === undefined
+        ? params.defaultTimeoutSeconds
+        : params.health.elapsedMs / 1000,
+    ),
+  );
   return {
-    statusLine: `Timed out after ${params.timeoutSeconds}s waiting for gateway port ${params.port} to become healthy.`,
-    failMessage: `Gateway restart timed out after ${params.timeoutSeconds}s waiting for health checks.`,
+    statusLine: `Timed out after ${timeoutSeconds}s waiting for gateway port ${params.port} to become healthy.`,
+    failMessage: `Gateway restart timed out after ${timeoutSeconds}s waiting for health checks.`,
   };
 }
 
@@ -453,7 +461,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       const failure = formatRestartFailure({
         health,
         port: managedRestartPort,
-        timeoutSeconds: restartWaitSeconds,
+        defaultTimeoutSeconds: restartWaitSeconds,
       });
       const runningNoPortLine =
         health.runtime.status === "running" && health.portUsage.status === "free"

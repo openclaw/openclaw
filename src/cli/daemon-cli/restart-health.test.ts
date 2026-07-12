@@ -16,6 +16,9 @@ const resolveGatewayProbeAuthSafeWithSecretInputs = vi.hoisted(() =>
     auth: {},
   })),
 );
+const hasActiveStartupMigrationLease = vi.hoisted(() =>
+  vi.fn<(_params?: unknown) => boolean>(() => false),
+);
 
 vi.mock("../../infra/ports.js", () => ({
   classifyPortListener: (listener: unknown, port: number) => classifyPortListener(listener, port),
@@ -34,6 +37,11 @@ vi.mock("../../config/io.js", () => ({
 vi.mock("../../gateway/probe-auth.js", () => ({
   resolveGatewayProbeAuthSafeWithSecretInputs: (opts: unknown) =>
     resolveGatewayProbeAuthSafeWithSecretInputs(opts),
+}));
+
+vi.mock("../../infra/startup-migration-checkpoint.js", () => ({
+  hasActiveStartupMigrationLease: (params: unknown) => hasActiveStartupMigrationLease(params),
+  STARTUP_MIGRATION_LEASE_TTL_MS: 5 * 60_000,
 }));
 
 vi.mock("../../utils.js", async () => {
@@ -159,6 +167,8 @@ describe("inspectGatewayRestart", () => {
       ok: false,
       close: null,
     });
+    hasActiveStartupMigrationLease.mockReset();
+    hasActiveStartupMigrationLease.mockReturnValue(false);
   });
 
   afterEach(() => {
@@ -437,6 +447,125 @@ describe("inspectGatewayRestart", () => {
     expect(snapshot.runtime.status).toBe("stopped");
     expect(snapshot.waitOutcome).toBe("timeout");
     expect(sleep).toHaveBeenCalledTimes(2);
+  });
+
+  it("waits through a healthy long-running startup migration", async () => {
+    let inspections = 0;
+    inspectPortUsage.mockImplementation(async () => {
+      inspections += 1;
+      if (inspections < 15) {
+        return {
+          port: 18789,
+          status: "free",
+          listeners: [],
+          hints: [],
+        };
+      }
+      return {
+        port: 18789,
+        status: "busy",
+        listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
+        hints: [],
+      };
+    });
+    const isStartupMigrationActive = vi.fn(() => true);
+
+    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyRestart({
+      service: makeGatewayService({ status: "running", pid: 8000 }),
+      port: 18789,
+      attempts: 6,
+      delayMs: 10_000,
+      isStartupMigrationActive,
+    });
+
+    expect(snapshot.healthy).toBe(true);
+    expect(snapshot.waitOutcome).toBe("healthy");
+    expect(snapshot.elapsedMs).toBe(140_000);
+    expect(sleep).toHaveBeenCalledTimes(14);
+    expect(isStartupMigrationActive).toHaveBeenCalled();
+  });
+
+  it("keeps the readiness window after an observed migration ends near the standard deadline", async () => {
+    let inspections = 0;
+    inspectPortUsage.mockImplementation(async () => {
+      inspections += 1;
+      return inspections < 8
+        ? { port: 18789, status: "free", listeners: [], hints: [] }
+        : {
+            port: 18789,
+            status: "busy",
+            listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
+            hints: [],
+          };
+    });
+    let migrationPolls = 0;
+    const isStartupMigrationActive = vi.fn(() => {
+      migrationPolls += 1;
+      return migrationPolls < 7;
+    });
+
+    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyRestart({
+      service: makeGatewayService({ status: "running", pid: 8000 }),
+      port: 18789,
+      attempts: 6,
+      delayMs: 10_000,
+      isStartupMigrationActive,
+    });
+
+    expect(snapshot.waitOutcome).toBe("healthy");
+    expect(snapshot.elapsedMs).toBe(70_000);
+    expect(sleep).toHaveBeenCalledTimes(7);
+  });
+
+  it("keeps the standard timeout for a running non-migration startup failure", async () => {
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "free",
+      listeners: [],
+      hints: [],
+    });
+    const isStartupMigrationActive = vi.fn(() => false);
+
+    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyRestart({
+      service: makeGatewayService({ status: "running", pid: 8000 }),
+      port: 18789,
+      attempts: 6,
+      delayMs: 10_000,
+      isStartupMigrationActive,
+    });
+
+    expect(snapshot.healthy).toBe(false);
+    expect(snapshot.waitOutcome).toBe("timeout");
+    expect(snapshot.elapsedMs).toBe(60_000);
+    expect(sleep).toHaveBeenCalledTimes(6);
+    expect(isStartupMigrationActive).toHaveBeenCalledTimes(7);
+  });
+
+  it("bounds a startup migration that never reaches readiness", async () => {
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "free",
+      listeners: [],
+      hints: [],
+    });
+    const isStartupMigrationActive = vi.fn(() => true);
+
+    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyRestart({
+      service: makeGatewayService({ status: "running", pid: 8000 }),
+      port: 18789,
+      attempts: 1,
+      delayMs: 60_000,
+      isStartupMigrationActive,
+    });
+
+    expect(snapshot.healthy).toBe(false);
+    expect(snapshot.waitOutcome).toBe("timeout");
+    expect(snapshot.elapsedMs).toBe(300_000);
+    expect(sleep).toHaveBeenCalledTimes(5);
   });
 
   it("accepts matching-version restart liveness when the probe lacks operator scope", async () => {

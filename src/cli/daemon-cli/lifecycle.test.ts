@@ -483,6 +483,20 @@ describe("runDaemonRestart health checks", () => {
     expect(renderRestartDiagnostics).toHaveBeenCalledTimes(1);
   });
 
+  it("reports the extended migration-aware timeout duration", async () => {
+    waitForGatewayHealthyRestart.mockResolvedValue({
+      healthy: false,
+      staleGatewayPids: [],
+      runtime: { status: "running", pid: 4242 },
+      portUsage: { port: 18789, status: "free", listeners: [], hints: [] },
+      waitOutcome: "timeout",
+      elapsedMs: 360_000,
+    });
+
+    const error = await expectRestartError(runDaemonRestart({ json: true }));
+    expect(error.message).toBe("Gateway restart timed out after 360s waiting for health checks.");
+  });
+
   it("waits longer for Windows gateway restart health", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     waitForGatewayHealthyRestart.mockResolvedValue({
