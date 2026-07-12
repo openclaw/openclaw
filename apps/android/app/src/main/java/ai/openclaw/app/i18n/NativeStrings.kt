@@ -3,6 +3,8 @@ package ai.openclaw.app.i18n
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.res.Configuration
+import android.os.Build
+import android.util.Xml
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.res.stringResource
 import androidx.core.app.LocaleManagerCompat
@@ -16,6 +18,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.update
+import org.xmlpull.v1.XmlPullParser
 
 sealed interface NativeText {
   data class Resource(
@@ -126,7 +129,12 @@ internal object NativeStringResources {
     vararg formatArgs: Any,
   ): String {
     val context = applicationContext ?: return formatNativeSource(source, formatArgs)
-    val locales = applicationLocales ?: LocaleManagerCompat.getApplicationLocales(context)
+    val locales =
+      applicationLocales
+        ?: LocaleManagerCompat
+          .getApplicationLocales(context)
+          .takeUnless { it.isEmpty }
+        ?: context.readStoredAppLocales()
     val localized =
       if (locales.isEmpty) {
         context
@@ -137,6 +145,26 @@ internal object NativeStringResources {
       }
     return localized.nativeString(source, *formatArgs)
   }
+}
+
+private fun Context.readStoredAppLocales(): LocaleListCompat {
+  if (Build.VERSION.SDK_INT >= 33) return LocaleListCompat.getEmptyLocaleList()
+  // AppCompat only hydrates auto-stored locales when a delegate attaches. A cold service
+  // has no delegate, so mirror AndroidX's XML read until the platform owns app locales.
+  val languageTags =
+    runCatching {
+      openFileInput(APP_LOCALES_FILE).use { input ->
+        val parser = Xml.newPullParser()
+        parser.setInput(input, "UTF-8")
+        while (parser.next() != XmlPullParser.END_DOCUMENT) {
+          if (parser.eventType == XmlPullParser.START_TAG && parser.name == APP_LOCALES_TAG) {
+            return@use parser.getAttributeValue(null, APP_LOCALES_ATTRIBUTE).orEmpty()
+          }
+        }
+        ""
+      }
+    }.getOrDefault("")
+  return LocaleListCompat.forLanguageTags(languageTags)
 }
 
 internal fun nativeString(
@@ -225,3 +253,8 @@ private fun String.kotlinInterpolationEnd(start: Int): Int? {
   }
   return null
 }
+
+private const val APP_LOCALES_FILE =
+  "androidx.appcompat.app.AppCompatDelegate.application_locales_record_file"
+private const val APP_LOCALES_TAG = "locales"
+private const val APP_LOCALES_ATTRIBUTE = "application_locales"
