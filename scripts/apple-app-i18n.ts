@@ -804,7 +804,7 @@ export async function checkAppleAppI18n() {
   if (!macosCatalog.strings) {
     throw new Error(`invalid Apple string catalog: ${MACOS_CATALOG.path}`);
   }
-  const expectedMacosKeys = new Set(Object.values(MACOS_CATALOG.coverage).flat());
+  const expectedMacosKeys: Set<string> = new Set(Object.values(MACOS_CATALOG.coverage).flat());
   const actualMacosKeys = new Set(Object.keys(macosCatalog.strings));
   const missingMacosKeys = [...expectedMacosKeys].filter((key) => !actualMacosKeys.has(key));
   const extraMacosKeys = [...actualMacosKeys].filter((key) => !expectedMacosKeys.has(key));
