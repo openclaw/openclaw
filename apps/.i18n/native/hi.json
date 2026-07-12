@@ -3539,6 +3539,11 @@
       "translated": "माइक्रोफ़ोन सक्षम करें"
     },
     {
+      "id": "native.android.066337249b9d9d30",
+      "source": "Refresh",
+      "translated": "रीफ़्रेश करें"
+    },
+    {
       "id": "native.android.eb6ff96aba8f67b4",
       "source": "Files unavailable",
       "translated": "फ़ाइलें उपलब्ध नहीं हैं"
@@ -4132,11 +4137,6 @@
       "id": "native.android.42af8acef7e61a34",
       "source": "Chat error",
       "translated": "चैट त्रुटि"
-    },
-    {
-      "id": "native.android.e368d73d1c767bed",
-      "source": "Off",
-      "translated": "बंद"
     },
     {
       "id": "native.android.f392ee2d50d6b7ce",

@@ -3539,6 +3539,11 @@
       "translated": "Mikrofonu Etkinleştir"
     },
     {
+      "id": "native.android.066337249b9d9d30",
+      "source": "Refresh",
+      "translated": "Yenile"
+    },
+    {
       "id": "native.android.eb6ff96aba8f67b4",
       "source": "Files unavailable",
       "translated": "Dosyalar kullanılamıyor"
@@ -4132,11 +4137,6 @@
       "id": "native.android.42af8acef7e61a34",
       "source": "Chat error",
       "translated": "Sohbet hatası"
-    },
-    {
-      "id": "native.android.e368d73d1c767bed",
-      "source": "Off",
-      "translated": "Kapalı"
     },
     {
       "id": "native.android.f392ee2d50d6b7ce",
