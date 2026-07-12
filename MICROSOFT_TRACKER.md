@@ -9,7 +9,7 @@
 > - Priority guide: **P0** = crash/blocker/security, **P1** = significant bug/regression, **P2** = minor bug/enhancement, **P3** = nice-to-have/stale
 > - Items marked _(stale)_ have been flagged by the stale bot due to inactivity
 >
-> **Last updated:** 2026-07-11 (post-purge audit: refreshed from currently open GitHub issues/PRs and rebuilt from PR #49126 format)
+> **Last updated:** 2026-07-12 (post-purge audit: refreshed from currently open GitHub issues/PRs and rebuilt from PR #49126 format)
 
 ---
 
@@ -17,12 +17,12 @@
 
 | Category                  | Issues | PRs    | Total   | Closed | Remaining |
 | ------------------------- | ------ | ------ | ------- | ------ | --------- |
-| MS Teams (channel plugin) | 14     | 56     | 70      | 0      | 70        |
-| Windows platform          | 47     | 23     | 70      | 0      | 70        |
-| WSL                       | 6      | 0      | 6       | 0      | 6         |
-| Azure                     | 11     | 4      | 15      | 0      | 15        |
+| MS Teams (channel plugin) | 16     | 50     | 66      | 0      | 66        |
+| Windows platform          | 46     | 23     | 69      | 0      | 69        |
+| WSL                       | 7      | 0      | 7       | 0      | 7         |
+| Azure                     | 11     | 5      | 16      | 0      | 16        |
 | SharePoint / M365         | 0      | 0      | 0       | 0      | 0         |
-| **Total**                 | **78** | **83** | **161** | **0**  | **161**   |
+| **Total**                 | **80** | **78** | **158** | **0**  | **158**   |
 
 ---
 
@@ -30,18 +30,20 @@
 
 ### Bugs / Crashes
 
-| Resolved? | Priority | #       | Title                                                                                                                                                       | Labels                                                                                                                                            | Assignee |
-| --------- | -------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
-| [ ]       | P1       | #102356 | [Bug]: Microsoft Teams streaming drops next chunk after whitespace collapse                                                                                 | `bug` `maintainer` `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:source-repro` +3                           |          |
-| [ ]       | P1       | #101049 | [Bug]: msteams plugin npm install can leave an empty dependency tree — plugin loads, provider dies silently, Microsoft sees delivery errors                 | `clawsweeper:needs-live-repro` `impact:message-loss` `P0` `issue-rating: 🐚 platinum hermit` `maturity:stable` `impact:ux-release-blocker`        |          |
-| [ ]       | P1       | #67177  | [msteams] Inbound file attachments silently fail in DMs — file.download.info downloadUrl not rewritten to Graph shares endpoint                             | `P1` `clawsweeper:no-new-fix-pr` `clawsweeper:source-repro` `clawsweeper:linked-pr-open` `impact:message-loss` `issue-rating: 🦞 diamond lobster` |          |
-| [ ]       | P2       | #104381 | [Bug]: MSTeams provider-prefixed explicit target IDs miss resolver gate                                                                                     | `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:source-repro` `clawsweeper:linked-pr-open` `impact:message-loss` `issue-rating: 🦞 diamond lobster` |          |
-| [ ]       | P2       | #102376 | [Bug]: MS Teams inbound mentions, quoted replies, and forwards are not normalized for agent text                                                            | `bug` `maintainer` `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:source-repro` `clawsweeper:linked-pr-open` +2                                    |          |
-| [ ]       | P2       | #102274 | msteams: streaming merges post-tool text segment into the preamble bubble (onPartialReply slices at a stale offset — #76262 regressed #56071)               | `no-stale` `P1` `clawsweeper:fix-shape-clear` `clawsweeper:queueable-fix` `clawsweeper:source-repro` `impact:message-loss` +1                     |          |
-| [ ]       | P2       | #95737  | [Bug]: msteams channel allowlist never works — messages always dropped regardless of configuration due to "groupAllowFrom" problem                          | `bug` `bug:behavior` `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:source-repro` `clawsweeper:linked-pr-open` +2                                  |          |
-| [ ]       | P2       | #94939  | [Bug]: 6.x state migration leaves channel conversation-store SQLite empty (0 bytes) — orphans references, breaks proactive (Bot Framework) sends (MS Teams) | `P1` `clawsweeper:no-new-fix-pr` `clawsweeper:linked-pr-open` `clawsweeper:needs-live-repro` `impact:data-loss` `impact:message-loss` +1          |          |
-| [ ]       | P2       | #91723  | msteams: streaming double-posts replies over 4000 chars after SDK rebase (#76262 regressed #59297)                                                          | `P1` `clawsweeper:no-new-fix-pr` `clawsweeper:source-repro` `clawsweeper:linked-pr-open` `impact:message-loss` `issue-rating: 🦞 diamond lobster` |          |
-| [ ]       | P2       | #88836  | [Bug]: msteams messages with attachments misthreaded                                                                                                        | `bug` `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:source-repro` `clawsweeper:linked-pr-open` `impact:message-loss` +1                           |          |
+| Resolved? | Priority | #       | Title                                                                                                                                                       | Labels                                                                                                                                                               | Assignee |
+| --------- | -------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| [ ]       | P0       | #105322 | Teams: local multi-user Workspaces sharing with exact tab RBAC                                                                                              | `P3` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` `clawsweeper:needs-security-review` `impact:security` +2 |          |
+| [ ]       | P1       | #102356 | [Bug]: Microsoft Teams streaming drops next chunk after whitespace collapse                                                                                 | `bug` `maintainer` `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:source-repro` +3                                              |          |
+| [ ]       | P1       | #101049 | [Bug]: msteams plugin npm install can leave an empty dependency tree — plugin loads, provider dies silently, Microsoft sees delivery errors                 | `clawsweeper:needs-live-repro` `impact:message-loss` `P0` `issue-rating: 🐚 platinum hermit` `maturity:stable` `impact:ux-release-blocker`                           |          |
+| [ ]       | P1       | #67177  | [msteams] Inbound file attachments silently fail in DMs — file.download.info downloadUrl not rewritten to Graph shares endpoint                             | `P1` `clawsweeper:no-new-fix-pr` `clawsweeper:source-repro` `clawsweeper:linked-pr-open` `impact:message-loss` `issue-rating: 🦞 diamond lobster`                    |          |
+| [ ]       | P2       | #104521 | Native approval buttons for Feishu, Microsoft Teams, and Mattermost                                                                                         | `P2` `clawsweeper:source-repro` `issue-rating: 🦞 diamond lobster` `maturity:stable` `impact:ux-friction`                                                            |          |
+| [ ]       | P2       | #104381 | [Bug]: MSTeams provider-prefixed explicit target IDs miss resolver gate                                                                                     | `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:source-repro` `clawsweeper:linked-pr-open` `impact:message-loss` `issue-rating: 🦞 diamond lobster`                    |          |
+| [ ]       | P2       | #102376 | [Bug]: MS Teams inbound mentions, quoted replies, and forwards are not normalized for agent text                                                            | `bug` `maintainer` `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:source-repro` `clawsweeper:linked-pr-open` +2                                                       |          |
+| [ ]       | P2       | #102274 | msteams: streaming merges post-tool text segment into the preamble bubble (onPartialReply slices at a stale offset — #76262 regressed #56071)               | `no-stale` `P1` `clawsweeper:fix-shape-clear` `clawsweeper:queueable-fix` `clawsweeper:source-repro` `impact:message-loss` +1                                        |          |
+| [ ]       | P2       | #95737  | [Bug]: msteams channel allowlist never works — messages always dropped regardless of configuration due to "groupAllowFrom" problem                          | `bug` `bug:behavior` `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:source-repro` `clawsweeper:linked-pr-open` +2                                                     |          |
+| [ ]       | P2       | #94939  | [Bug]: 6.x state migration leaves channel conversation-store SQLite empty (0 bytes) — orphans references, breaks proactive (Bot Framework) sends (MS Teams) | `P1` `clawsweeper:no-new-fix-pr` `clawsweeper:linked-pr-open` `clawsweeper:needs-live-repro` `impact:data-loss` `impact:message-loss` +1                             |          |
+| [ ]       | P2       | #91723  | msteams: streaming double-posts replies over 4000 chars after SDK rebase (#76262 regressed #59297)                                                          | `P1` `clawsweeper:no-new-fix-pr` `clawsweeper:source-repro` `clawsweeper:linked-pr-open` `impact:message-loss` `issue-rating: 🦞 diamond lobster`                    |          |
+| [ ]       | P2       | #88836  | [Bug]: msteams messages with attachments misthreaded                                                                                                        | `bug` `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:source-repro` `clawsweeper:linked-pr-open` `impact:message-loss` +1                                              |          |
 
 ### Feature Requests
 
@@ -56,64 +58,58 @@
 
 ## 2. MS Teams Channel Plugin — PRs
 
-| Resolved? | Priority | #       | Title                                                                                                                 | Size | Assignee     |
-| --------- | -------- | ------- | --------------------------------------------------------------------------------------------------------------------- | ---- | ------------ |
-| [ ]       | P0       | #103914 | fix: block workspace dotenv endpoint overrides [AI]                                                                   | XS   |              |
-| [ ]       | P0       | #103679 | feat(channels): add typed cross-surface approval actions                                                              | XL   |              |
-| [ ]       | P0       | #102883 | fix(crestodian): keep onboarding connected through restart                                                            | XL   | @steipete    |
-| [ ]       | P0       | #102197 | improve: warn before non-ClawHub plugin installs                                                                      | XL   | @jesse-merhi |
-| [ ]       | P0       | #101755 | Create Claw agent and root install record                                                                             | XL   |              |
-| [ ]       | P0       | #101265 | fix(secrets): keep startup alive when TTS SecretRefs are missing                                                      | L    |              |
-| [ ]       | P0       | #100858 | feat(message): add universal pagination contract with cursor support for MSTeams                                      | M    |              |
-| [ ]       | P0       | #100371 | fix(msteams): reset sessions on app removal lifecycle                                                                 | XL   |              |
-| [ ]       | P0       | #100350 | fix(msteams): handle bot removal and uninstallation to mark sessions stale                                            | M    |              |
-| [ ]       | P0       | #97922  | fix(subagents): escalate expected completions on delivery give-up instead of dropping them                            | XL   | @steipete    |
-| [ ]       | P0       | #97017  | fix: zhipu silentOverflow + cron watchdog stage misclassification                                                     | XL   |              |
-| [ ]       | P0       | #95764  | fix(msteams): allow groupAllowFrom to match conversation IDs                                                          | S    |              |
-| [ ]       | P0       | #94978  | feat(msteams): Microsoft Teams voice (CVI) + video + chat + governance                                                | XL   |              |
-| [ ]       | P0       | #92603  | fix(cron): summarize shell failures directly                                                                          | XL   |              |
-| [ ]       | P0       | #91722  | Refactor HTTP egress around external proxy enforcement                                                                | XL   |              |
-| [ ]       | P0       | #91438  | feat(voice-call): Microsoft Teams provider — CVI voice/video calls                                                    | XL   |              |
-| [ ]       | P0       | #91069  | Feat/mordiem document reader skill                                                                                    | XL   |              |
-| [ ]       | P0       | #87169  | Support separate Teams Graph tenant                                                                                   | S    |              |
-| [ ]       | P0       | #77784  | Add Teams delegated auth for plugin tools                                                                             | XL   |              |
-| [ ]       | P0       | #55828  | feat(msteams): add native plugin interactivity parity                                                                 | XL   |              |
-| [ ]       | P0       | #46303  | fix: drain inbound debounce buffer and followup queues before SIGUSR1 reload                                          | XL   |              |
-| [ ]       | P1       | #97781  | fix(msteams): bound SSO API JSON response reads to prevent OOM                                                        | L    |              |
-| [ ]       | P1       | #97340  | Spinen/msteams multi account                                                                                          | XL   |              |
-| [ ]       | P1       | #95867  | fix(msteams): sanitize internal tool-trace lines from outbound text (#90684)                                          | XS   |              |
-| [ ]       | P1       | #92591  | feat(msteams): respond to channel messages by keyword without an @mention                                             | S    |              |
-| [ ]       | P1       | #91644  | feat(gateway): add OpenAI-compatible /v1/audio/speech endpoint                                                        | L    |              |
-| [ ]       | P1       | #89944  | Idr msteams adaptive card tables                                                                                      | M    |              |
-| [ ]       | P1       | #88845  | Require signed beta desktop distribution                                                                              | XL   |              |
-| [ ]       | P1       | #82354  | fix(msteams): emit message:sent hook on reply delivery                                                                | M    |              |
-| [ ]       | P1       | #79185  | fix(tts/xiaomi): support Token Plan TTS endpoint                                                                      | S    |              |
-| [ ]       | P1       | #77921  | feat(inworld): default to inworld-tts-2 (Realtime TTS-2)                                                              | XS   |              |
-| [ ]       | P1       | #75043  | Add provider-aware automatic TTS emotion mapping                                                                      | XL   |              |
-| [ ]       | P1       | #59986  | refactor(plugins): add lane-oriented channel interface                                                                | XL   |              |
-| [ ]       | P2       | #104288 | fix(msteams): add timeouts to SharePoint file send requests                                                           | M    |              |
-| [ ]       | P2       | #104120 | fix(msteams): add timeouts to file consent upload requests                                                            | S    |              |
-| [ ]       | P2       | #103993 | feat(xai): add native streaming TTS                                                                                   | L    |              |
-| [ ]       | P2       | #103692 | fix(msteams): strip internal tool-trace banners from outbound text                                                    | M    |              |
-| [ ]       | P2       | #102984 | fix(azure-speech): add timeout to voices list request                                                                 | S    |              |
-| [ ]       | P2       | #102379 | fix(msteams): normalize inbound mentions and forwards                                                                 | L    | @galiniliev  |
-| [ ]       | P2       | #102366 | fix(msteams): emit native cjs runtime entrypoints                                                                     | S    | @galiniliev  |
-| [ ]       | P2       | #102357 | fix: Microsoft Teams streaming keeps chunk after whitespace collapse                                                  | S    | @galiniliev  |
-| [ ]       | P2       | #102277 | fix(msteams): keep post-tool replies from merging into streamed preambles                                             | XS   |              |
-| [ ]       | P2       | #101995 | fix(msteams): use fetchGraphAbsoluteUrl for replies nextLink                                                          | XS   |              |
-| [ ]       | P2       | #101280 | fix(gradium): TTS rejects untrusted base URLs before sending API keys                                                 | S    |              |
-| [ ]       | P2       | #100166 | fix(msteams): paginate thread replies to include newest context (#98870)                                              | M    |              |
-| [ ]       | P2       | #98972  | fix: block channel reads outside allowlists [AI]                                                                      | XL   | @joshavant   |
-| [ ]       | P2       | #98862  | fix(msteams): proactive sends fail after conversation migration                                                       | S    |              |
-| [ ]       | P2       | #96648  | Fix MSTeams card actions with durable receive before ACK                                                              | L    |              |
-| [ ]       | P2       | #94348  | fix(msteams): keep attachment replies in channel threads                                                              | S    |              |
-| [ ]       | P2       | #93292  | feat(msteams): per-call topLevel override on send action for proactive new channel threads                            | S    |              |
-| [ ]       | P2       | #91729  | fix(msteams): trim streamed prefix in long-reply fallback to stop >4000-char double-post (regressed #59297 in #76262) | M    |              |
-| [ ]       | P2       | #89152  | feat(hooks): add agent turn end hook                                                                                  | XL   |              |
-| [ ]       | P2       | #88103  | Update Teams CLI install command                                                                                      | XS   |              |
-| [ ]       | P2       | #84560  | feat(cli): support --dm-policy and --dm-allowlist in channels add                                                     |      |              |
-| [ ]       | P2       | #83988  | fix(tts): defer text settlement for final-mode TTS to eliminate churn (#83511)                                        | XL   |              |
-| [ ]       | P2       | #78839  | [codex] Add Teams member-info action gate                                                                             | S    |              |
+| Resolved? | Priority | #       | Title                                                                                                                 | Size | Assignee    |
+| --------- | -------- | ------- | --------------------------------------------------------------------------------------------------------------------- | ---- | ----------- |
+| [ ]       | P0       | #103914 | fix: block workspace dotenv endpoint overrides [AI]                                                                   | XS   |             |
+| [ ]       | P0       | #101755 | Create Claw agent and root install record                                                                             | XL   |             |
+| [ ]       | P0       | #101265 | fix(secrets): keep startup alive when TTS SecretRefs are missing                                                      | L    |             |
+| [ ]       | P0       | #100858 | feat(message): add universal pagination contract with cursor support for MSTeams                                      | M    |             |
+| [ ]       | P0       | #100350 | fix(msteams): handle bot removal and uninstallation to mark sessions stale                                            | M    |             |
+| [ ]       | P0       | #97922  | fix(subagents): escalate expected completions on delivery give-up instead of dropping them                            | XL   | @steipete   |
+| [ ]       | P0       | #97017  | fix: zhipu silentOverflow + cron watchdog stage misclassification                                                     | XL   |             |
+| [ ]       | P0       | #95764  | fix(msteams): allow groupAllowFrom to match conversation IDs                                                          | S    |             |
+| [ ]       | P0       | #94978  | feat(msteams): Microsoft Teams voice (CVI) + video + chat + governance                                                | XL   |             |
+| [ ]       | P0       | #92603  | fix(cron): summarize shell failures directly                                                                          | XL   |             |
+| [ ]       | P0       | #91722  | Refactor HTTP egress around external proxy enforcement                                                                | XL   |             |
+| [ ]       | P0       | #91438  | feat(voice-call): Microsoft Teams provider — CVI voice/video calls                                                    | XL   |             |
+| [ ]       | P0       | #91069  | Feat/mordiem document reader skill                                                                                    | XL   |             |
+| [ ]       | P0       | #87169  | Support separate Teams Graph tenant                                                                                   | S    |             |
+| [ ]       | P0       | #77784  | Add Teams delegated auth for plugin tools                                                                             | XL   |             |
+| [ ]       | P0       | #55828  | feat(msteams): add native plugin interactivity parity                                                                 | XL   |             |
+| [ ]       | P1       | #104288 | fix(msteams): add timeouts to SharePoint file send requests                                                           | M    |             |
+| [ ]       | P1       | #97781  | fix(msteams): bound SSO API JSON response reads to prevent OOM                                                        | L    |             |
+| [ ]       | P1       | #95867  | fix(msteams): sanitize internal tool-trace lines from outbound text (#90684)                                          | XS   |             |
+| [ ]       | P1       | #92591  | feat(msteams): respond to channel messages by keyword without an @mention                                             | S    |             |
+| [ ]       | P1       | #91644  | feat(gateway): add OpenAI-compatible /v1/audio/speech endpoint                                                        | L    |             |
+| [ ]       | P1       | #89944  | Idr msteams adaptive card tables                                                                                      | M    |             |
+| [ ]       | P1       | #88845  | Require signed beta desktop distribution                                                                              | XL   |             |
+| [ ]       | P1       | #82354  | fix(msteams): emit message:sent hook on reply delivery                                                                | M    |             |
+| [ ]       | P1       | #79185  | fix(tts/xiaomi): support Token Plan TTS endpoint                                                                      | S    |             |
+| [ ]       | P1       | #77921  | feat(inworld): default to inworld-tts-2 (Realtime TTS-2)                                                              | XS   |             |
+| [ ]       | P1       | #75043  | Add provider-aware automatic TTS emotion mapping                                                                      | XL   |             |
+| [ ]       | P1       | #59986  | refactor(plugins): add lane-oriented channel interface                                                                | XL   |             |
+| [ ]       | P2       | #104692 | feat(msteams): support multiple bot accounts                                                                          | XL   |             |
+| [ ]       | P2       | #104691 | fix(msteams): proactive sends fail after conversation migration                                                       | S    |             |
+| [ ]       | P2       | #104690 | fix(msteams): reset sessions on app removal lifecycle                                                                 | XL   | @steipete   |
+| [ ]       | P2       | #104120 | fix(msteams): add timeouts to file consent upload requests                                                            | M    |             |
+| [ ]       | P2       | #103993 | feat(xai): add native streaming TTS                                                                                   | L    |             |
+| [ ]       | P2       | #103692 | fix(msteams): strip internal tool-trace banners from outbound text                                                    | M    |             |
+| [ ]       | P2       | #102984 | fix(azure-speech): add timeout to voices list request                                                                 | S    |             |
+| [ ]       | P2       | #102379 | fix(msteams): normalize inbound mentions and forwards                                                                 | L    | @galiniliev |
+| [ ]       | P2       | #102357 | fix: Microsoft Teams streaming keeps chunk after whitespace collapse                                                  | S    | @galiniliev |
+| [ ]       | P2       | #102277 | fix(msteams): keep post-tool replies from merging into streamed preambles                                             | XS   |             |
+| [ ]       | P2       | #101995 | fix(msteams): use fetchGraphAbsoluteUrl for replies nextLink                                                          | XS   |             |
+| [ ]       | P2       | #100166 | fix(msteams): paginate thread replies to include newest context (#98870)                                              | M    |             |
+| [ ]       | P2       | #98972  | fix: block channel reads outside allowlists [AI]                                                                      | XL   | @joshavant  |
+| [ ]       | P2       | #96648  | Fix MSTeams card actions with durable receive before ACK                                                              | L    |             |
+| [ ]       | P2       | #94348  | fix(msteams): keep attachment replies in channel threads                                                              | S    |             |
+| [ ]       | P2       | #93292  | feat(msteams): per-call topLevel override on send action for proactive new channel threads                            | S    |             |
+| [ ]       | P2       | #91729  | fix(msteams): trim streamed prefix in long-reply fallback to stop >4000-char double-post (regressed #59297 in #76262) | M    |             |
+| [ ]       | P2       | #89152  | feat(hooks): add agent turn end hook                                                                                  | XL   |             |
+| [ ]       | P2       | #88103  | Update Teams CLI install command                                                                                      | XS   |             |
+| [ ]       | P2       | #84560  | feat(cli): support --dm-policy and --dm-allowlist in channels add                                                     |      |             |
+| [ ]       | P2       | #83988  | fix(tts): defer text settlement for final-mode TTS to eliminate churn (#83511)                                        | XL   |             |
+| [ ]       | P2       | #78839  | [codex] Add Teams member-info action gate                                                                             | S    |             |
 
 ---
 
@@ -127,7 +123,6 @@
 | [ ]       | P0       | #98470  | [Bug]: openclaw doctor misses Windows cloud-synced state dirs                                                                                                                           | `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:source-repro` `clawsweeper:linked-pr-open` `impact:session-state` `impact:security` +2                                                |             |
 | [ ]       | P0       | #89527  | 建议：为国内 Windows 用户提供一键安装器方案                                                                                                                                             | `P3` `clawsweeper:no-new-fix-pr` `clawsweeper:fix-shape-clear` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` `clawsweeper:needs-security-review` +2    |             |
 | [ ]       | P0       | #83890  | Windows restart script builds ProcessStartInfo.Arguments via string concatenation without quoting embedded double-quotes                                                                | `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:fix-shape-clear` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-security-review` `clawsweeper:needs-live-repro` +2          |             |
-| [ ]       | P1       | #103137 | [Bug]: browser evaluate aborts at hardcoded ~15s on Windows/2026.6.11; --timeout-ms ignored                                                                                             | `bug` `regression`                                                                                                                                                                  |             |
 | [ ]       | P1       | #102286 | Windows: multiple gateway-down failure modes (kill-and-rebind restart loop, config-edit no-relaunch, browser launch crash, blocking pricing fetches)                                    | `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` `clawsweeper:needs-live-repro` `impact:session-state` `impact:crash-loop` +4 |             |
 | [ ]       | P1       | #100075 | [[Bug]: Windows Companion gives "Auth did not match" and openclaw onboard redirects to MyClaw.ai                                                                                        | `bug` `regression` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-info` `P0` +3                                                               |             |
 | [ ]       | P1       | #96835  | [Bug]: exec tool on Windows (v2026.6.10) pops visible cmd/PowerShell window for every command — regression from v2026.6.8                                                               | `bug` `stale` `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-info` +2                                                                    |             |
@@ -186,10 +181,10 @@
 | [ ]       | P0       | #97086  | feat(mxc): add Windows MXC sandbox backend                                            | XL   | @steipete   |
 | [ ]       | P0       | #96164  | fix(exec): resolve PowerShell 7 via where.exe on Windows                              | S    |             |
 | [ ]       | P0       | #85264  | fix(infra): scope Windows path realpath caches                                        | M    | @vincentkoc |
-| [ ]       | P1       | #104234 | fix(process): bound Windows exec timeout cleanup                                      | S    |             |
 | [ ]       | P1       | #97436  | test: make workshop symlink tests compatible with Windows                             | XS   |             |
 | [ ]       | P1       | #94514  | docs: add Windows pnpm fallback for Corepack EPERM                                    | XS   |             |
 | [ ]       | P1       | #69059  | fix: retry sqlite-vec load without .dll suffix on Windows                             | S    |             |
+| [ ]       | P2       | #104234 | fix(process): bound Windows exec timeout cleanup                                      | M    |             |
 | [ ]       | P2       | #104086 | fix(shell): resolve pwsh.exe/.cmd/.bat on PATH for Windows shell discovery            | S    |             |
 | [ ]       | P2       | #104053 | fix(shell): use PowerShell CLI args for custom pwsh/powershell shell paths on Windows | XS   |             |
 | [ ]       | P2       | #101528 | fix(infra): attach error listener to detached spawn in windows-task-restart           | XS   |             |
@@ -212,14 +207,15 @@
 
 ### Bugs / Crashes
 
-| Resolved? | Priority | #      | Title                                                                                                                                           | Labels                                                                                                                                                               | Assignee |
-| --------- | -------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
-| [ ]       | P0       | #91522 | member-info fails with "fetch failed" on WSL2 in 2026.6.1 (SSRF fetch guard / undici dispatcher regression)                                     | `stale` `P1` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` `clawsweeper:needs-security-review` +4           |          |
-| [ ]       | P0       | #80336 | [Bug]: placeholder.openclaw.cloud unreachable on WSL2 with custom gateway port                                                                  | `bug` `bug:behavior` `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` +6                                  |          |
-| [ ]       | P1       | #84610 | [Bug]: Gateway loops with SIGTERM every ~90s after upgrade 2026.4.23→2026.5.18 (WSL2). Inbound msg received but cli watchdog kills mid-response | `P1` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` `clawsweeper:needs-live-repro` `impact:message-loss` +3  |          |
-| [ ]       | P1       | #73602 | [Bug]: WhatsApp flaps and Telegram polling stalls on WSL2 in 2026.4.26                                                                          | `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` `clawsweeper:needs-live-repro` `impact:session-state` +4 |          |
-| [ ]       | P2       | #92777 | [Bug]: TUI: Backspace key stops working after agent response renders (WSL2/Ubuntu)                                                              | `bug` `stale` `bug:behavior` `P1` `clawsweeper:needs-info` `issue-rating: 🦐 gold shrimp` +1                                                                         |          |
-| [ ]       | P2       | #90953 | [Bug]: installing error message "WSL version output did not include a parseable WSL version"                                                    | `bug` `P1` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` `clawsweeper:source-repro` +3                      |          |
+| Resolved? | Priority | #       | Title                                                                                                                                           | Labels                                                                                                                                                               | Assignee |
+| --------- | -------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| [ ]       | P0       | #91522  | member-info fails with "fetch failed" on WSL2 in 2026.6.1 (SSRF fetch guard / undici dispatcher regression)                                     | `stale` `P1` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` `clawsweeper:needs-security-review` +4           |          |
+| [ ]       | P0       | #80336  | [Bug]: placeholder.openclaw.cloud unreachable on WSL2 with custom gateway port                                                                  | `bug` `bug:behavior` `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` +6                                  |          |
+| [ ]       | P1       | #84610  | [Bug]: Gateway loops with SIGTERM every ~90s after upgrade 2026.4.23→2026.5.18 (WSL2). Inbound msg received but cli watchdog kills mid-response | `P1` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` `clawsweeper:needs-live-repro` `impact:message-loss` +3  |          |
+| [ ]       | P1       | #73602  | [Bug]: WhatsApp flaps and Telegram polling stalls on WSL2 in 2026.4.26                                                                          | `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` `clawsweeper:needs-live-repro` `impact:session-state` +4 |          |
+| [ ]       | P2       | #105306 | [Bug]: browser snapshot fails with connectOverCDP socket hang up when proxy.enabled is true (WSL/Linux)                                         | `bug`                                                                                                                                                                |          |
+| [ ]       | P2       | #92777  | [Bug]: TUI: Backspace key stops working after agent response renders (WSL2/Ubuntu)                                                              | `bug` `stale` `bug:behavior` `P1` `clawsweeper:needs-info` `issue-rating: 🦐 gold shrimp` +1                                                                         |          |
+| [ ]       | P2       | #90953  | [Bug]: installing error message "WSL version output did not include a parseable WSL version"                                                    | `bug` `P1` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` `clawsweeper:source-repro` +3                      |          |
 
 ### Feature Requests
 
@@ -260,12 +256,13 @@ _No currently open items found._
 
 ## 8. Azure (Provider / Infrastructure) — PRs
 
-| Resolved? | Priority | #      | Title                                                                    | Size | Assignee |
-| --------- | -------- | ------ | ------------------------------------------------------------------------ | ---- | -------- |
-| [ ]       | P0       | #70922 | refactor(whatsapp): centralize account policy                            | L    |          |
-| [ ]       | P1       | #93833 | fix(azure): responses model aliases route correctly                      | M    |          |
-| [ ]       | P2       | #98259 | fix(openai): enable prompt cache keys for Azure                          | M    |          |
-| [ ]       | P2       | #96000 | fix(session-lock): allow reentrant acquire from inner transcript writers | XS   |          |
+| Resolved? | Priority | #       | Title                                                                    | Size | Assignee |
+| --------- | -------- | ------- | ------------------------------------------------------------------------ | ---- | -------- |
+| [ ]       | P0       | #70922  | refactor(whatsapp): centralize account policy                            | L    |          |
+| [ ]       | P1       | #93833  | fix(azure): responses model aliases route correctly                      | M    |          |
+| [ ]       | P2       | #104817 | fix(exa): cover centralized web search secrets                           | XS   |          |
+| [ ]       | P2       | #98259  | fix(openai): enable prompt cache keys for Azure                          | M    |          |
+| [ ]       | P2       | #96000  | fix(session-lock): allow reentrant acquire from inner transcript writers | XS   |          |
 
 ---
 
@@ -291,14 +288,11 @@ _No currently open items found._
 
 | Category                  | Type  | Priority | #       | Title                                                                                                                                |
 | ------------------------- | ----- | -------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| MS Teams (channel plugin) | issue | P0       | #105322 | Teams: local multi-user Workspaces sharing with exact tab RBAC                                                                       |
 | MS Teams (channel plugin) | pr    | P0       | #103914 | fix: block workspace dotenv endpoint overrides [AI]                                                                                  |
-| MS Teams (channel plugin) | pr    | P0       | #103679 | feat(channels): add typed cross-surface approval actions                                                                             |
-| MS Teams (channel plugin) | pr    | P0       | #102883 | fix(crestodian): keep onboarding connected through restart                                                                           |
-| MS Teams (channel plugin) | pr    | P0       | #102197 | improve: warn before non-ClawHub plugin installs                                                                                     |
 | MS Teams (channel plugin) | pr    | P0       | #101755 | Create Claw agent and root install record                                                                                            |
 | MS Teams (channel plugin) | pr    | P0       | #101265 | fix(secrets): keep startup alive when TTS SecretRefs are missing                                                                     |
 | MS Teams (channel plugin) | pr    | P0       | #100858 | feat(message): add universal pagination contract with cursor support for MSTeams                                                     |
-| MS Teams (channel plugin) | pr    | P0       | #100371 | fix(msteams): reset sessions on app removal lifecycle                                                                                |
 | MS Teams (channel plugin) | pr    | P0       | #100350 | fix(msteams): handle bot removal and uninstallation to mark sessions stale                                                           |
 | MS Teams (channel plugin) | pr    | P0       | #97922  | fix(subagents): escalate expected completions on delivery give-up instead of dropping them                                           |
 | MS Teams (channel plugin) | pr    | P0       | #97017  | fix: zhipu silentOverflow + cron watchdog stage misclassification                                                                    |
@@ -311,7 +305,6 @@ _No currently open items found._
 | MS Teams (channel plugin) | pr    | P0       | #87169  | Support separate Teams Graph tenant                                                                                                  |
 | MS Teams (channel plugin) | pr    | P0       | #77784  | Add Teams delegated auth for plugin tools                                                                                            |
 | MS Teams (channel plugin) | pr    | P0       | #55828  | feat(msteams): add native plugin interactivity parity                                                                                |
-| MS Teams (channel plugin) | pr    | P0       | #46303  | fix: drain inbound debounce buffer and followup queues before SIGUSR1 reload                                                         |
 | Windows platform          | issue | P0       | #102755 | [Bug]: The project won't start on Windows and WSL.                                                                                   |
 | Windows platform          | issue | P0       | #98470  | [Bug]: openclaw doctor misses Windows cloud-synced state dirs                                                                        |
 | Windows platform          | issue | P0       | #89527  | 建议：为国内 Windows 用户提供一键安装器方案                                                                                          |
@@ -336,8 +329,8 @@ _No currently open items found._
 | MS Teams (channel plugin) | issue | P1       | #102356 | [Bug]: Microsoft Teams streaming drops next chunk after whitespace collapse                                                                                                             |
 | MS Teams (channel plugin) | issue | P1       | #101049 | [Bug]: msteams plugin npm install can leave an empty dependency tree — plugin loads, provider dies silently, Microsoft sees delivery errors                                             |
 | MS Teams (channel plugin) | issue | P1       | #67177  | [msteams] Inbound file attachments silently fail in DMs — file.download.info downloadUrl not rewritten to Graph shares endpoint                                                         |
+| MS Teams (channel plugin) | pr    | P1       | #104288 | fix(msteams): add timeouts to SharePoint file send requests                                                                                                                             |
 | MS Teams (channel plugin) | pr    | P1       | #97781  | fix(msteams): bound SSO API JSON response reads to prevent OOM                                                                                                                          |
-| MS Teams (channel plugin) | pr    | P1       | #97340  | Spinen/msteams multi account                                                                                                                                                            |
 | MS Teams (channel plugin) | pr    | P1       | #95867  | fix(msteams): sanitize internal tool-trace lines from outbound text (#90684)                                                                                                            |
 | MS Teams (channel plugin) | pr    | P1       | #92591  | feat(msteams): respond to channel messages by keyword without an @mention                                                                                                               |
 | MS Teams (channel plugin) | pr    | P1       | #91644  | feat(gateway): add OpenAI-compatible /v1/audio/speech endpoint                                                                                                                          |
@@ -348,7 +341,6 @@ _No currently open items found._
 | MS Teams (channel plugin) | pr    | P1       | #77921  | feat(inworld): default to inworld-tts-2 (Realtime TTS-2)                                                                                                                                |
 | MS Teams (channel plugin) | pr    | P1       | #75043  | Add provider-aware automatic TTS emotion mapping                                                                                                                                        |
 | MS Teams (channel plugin) | pr    | P1       | #59986  | refactor(plugins): add lane-oriented channel interface                                                                                                                                  |
-| Windows platform          | issue | P1       | #103137 | [Bug]: browser evaluate aborts at hardcoded ~15s on Windows/2026.6.11; --timeout-ms ignored                                                                                             |
 | Windows platform          | issue | P1       | #102286 | Windows: multiple gateway-down failure modes (kill-and-rebind restart loop, config-edit no-relaunch, browser launch crash, blocking pricing fetches)                                    |
 | Windows platform          | issue | P1       | #100075 | [[Bug]: Windows Companion gives "Auth did not match" and openclaw onboard redirects to MyClaw.ai                                                                                        |
 | Windows platform          | issue | P1       | #96835  | [Bug]: exec tool on Windows (v2026.6.10) pops visible cmd/PowerShell window for every command — regression from v2026.6.8                                                               |
@@ -374,7 +366,6 @@ _No currently open items found._
 | Windows platform          | issue | P1       | #74378  | [Bug]: OpenClaw CLI commands remain alive as node.exe processes after execution on Windows                                                                                              |
 | Windows platform          | issue | P1       | #71699  | [Bug]: Gateway hard-crashes with 0xC0000409 (STATUS_STACK_BUFFER_OVERRUN) on Windows during Mattermost streaming reply; auto-respawn frequently wedges                                  |
 | Windows platform          | issue | P1       | #63491  | [Bug]: Windows Scheduled Task gateway restart/health becomes inconsistent after ready                                                                                                   |
-| Windows platform          | pr    | P1       | #104234 | fix(process): bound Windows exec timeout cleanup                                                                                                                                        |
 | Windows platform          | pr    | P1       | #97436  | test: make workshop symlink tests compatible with Windows                                                                                                                               |
 | Windows platform          | pr    | P1       | #94514  | docs: add Windows pnpm fallback for Corepack EPERM                                                                                                                                      |
 | Windows platform          | pr    | P1       | #69059  | fix: retry sqlite-vec load without .dll suffix on Windows                                                                                                                               |
@@ -394,6 +385,7 @@ _No currently open items found._
 | ------------------------- | ----- | -------- | ------ | ------------------------------------------------------------------------------------------------------------------------- |
 | MS Teams (channel plugin) | issue | P2       | #91856 | msteams: support Copilot-only streaming without enabling Teams DM streaming                                               |
 | MS Teams (channel plugin) | issue | P2       | #81084 | [Feature]: MSTeams channel-bound agents need opt-out from per-thread sessions                                             |
+| MS Teams (channel plugin) | pr    | P0       | #95764 | fix(msteams): allow groupAllowFrom to match conversation IDs                                                              |
 | Windows platform          | issue | P1       | #96835 | [Bug]: exec tool on Windows (v2026.6.10) pops visible cmd/PowerShell window for every command — regression from v2026.6.8 |
 | Windows platform          | issue | P1       | #88371 | Windows QuickStart defaults first chat to paid Anthropic model without credit warning                                     |
 | Windows platform          | issue | P1       | #85268 | [Bug]: [Windows] exec spawn: all commands hang with no output (stdio pipe deadlock)                                       |
