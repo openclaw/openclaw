@@ -1,8 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { GatewayPrincipal } from "../../packages/gateway-protocol/src/schema/frames.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
-import { bindGatewayClientAuthorizationDomain } from "./authorization/client-domain.js";
+import {
+  bindGatewayClientAuthorizationDelegation,
+  bindGatewayClientAuthorizationDomain,
+} from "./authorization/client-domain.js";
 import type {
   GatewayAuthorizationRuntime,
   GatewayMethodAccessPolicy,
@@ -28,7 +32,7 @@ const DOMAIN = { id: "domain-1" } as const;
 const ACCESS_POLICY: GatewayMethodAccessPolicy = {
   kind: "resource",
   permission: "workboard.card.read",
-  resolveResources: () => [{ namespace: "plugin:workboard", type: "card", id: "card-1" }],
+  resolveResources: () => [{ namespace: "workboard", type: "card", id: "card-1" }],
 };
 
 afterEach(() => {
@@ -89,12 +93,20 @@ describe("gateway method authorization", () => {
   async function dispatchIsolated(params: {
     role?: "operator" | "node";
     scopes?: string[];
-    principal?: typeof PRINCIPAL;
+    principal?: GatewayPrincipal;
     domain?: typeof DOMAIN;
     access?: GatewayMethodAccessPolicy;
     authorization: GatewayAuthorizationRuntime;
     getRuntimeConfig?: () => Record<string, unknown>;
     synthetic?: boolean;
+    delegation?: {
+      id: string;
+      assignmentId: string;
+    };
+    injectedDelegation?: {
+      id: string;
+      assignmentId: string;
+    };
     unavailableMethods?: ReadonlySet<string>;
     controlPlaneWrite?: boolean;
   }) {
@@ -120,8 +132,8 @@ describe("gateway method authorization", () => {
               name: method,
               handler,
               scope: "operator.write",
+              access: params.access,
             }),
-            ...(params.access ? { access: params.access } : {}),
             ...(params.controlPlaneWrite ? { controlPlaneWrite: true } : {}),
           };
     const methodRegistry = createGatewayMethodRegistry([descriptor]);
@@ -136,10 +148,22 @@ describe("gateway method authorization", () => {
         maxProtocol: 1,
       },
       ...(params.principal ? { principal: params.principal } : {}),
-      ...(params.synthetic ? { internal: { pluginRuntimeOwnerId: "trusted-plugin-owner" } } : {}),
+      ...(params.synthetic || params.injectedDelegation
+        ? {
+            internal: {
+              ...(params.synthetic ? { pluginRuntimeOwnerId: "trusted-plugin-owner" } : {}),
+              ...(params.injectedDelegation
+                ? { authorizationDelegation: params.injectedDelegation }
+                : {}),
+            },
+          }
+        : {}),
     } as NonNullable<Parameters<typeof handleGatewayRequest>[0]["client"]>;
     if (params.domain) {
       bindGatewayClientAuthorizationDomain(client, params.domain);
+    }
+    if (params.delegation) {
+      bindGatewayClientAuthorizationDelegation(client, params.delegation);
     }
 
     await handleGatewayRequest({
@@ -276,11 +300,88 @@ describe("gateway method authorization", () => {
       domain: DOMAIN,
       method: METHOD,
       permission: "workboard.card.read",
-      resources: [{ namespace: "plugin:workboard", type: "card", id: "card-1" }],
+      resources: [{ namespace: "workboard", type: "card", id: "card-1" }],
     });
     expect(handler).toHaveBeenCalledOnce();
-    expect(authorizationContexts).toEqual([{ principalId: "principal-1", domain: DOMAIN }]);
+    expect(authorizationContexts).toEqual([
+      {
+        principalId: "principal-1",
+        principalKind: "human",
+        domain: DOMAIN,
+        method: METHOD,
+        permission: "workboard.card.read",
+        resources: [{ namespace: "workboard", type: "card", id: "card-1" }],
+        pluginId: "workboard",
+        requestId: "req-isolated",
+      },
+    ]);
     expect(respond).toHaveBeenCalledWith(true, { ok: true });
+  });
+
+  it("projects only a server-attested service delegation into request context", async () => {
+    const servicePrincipal = {
+      issuer: "core",
+      subject: "agent:main",
+      kind: "service",
+    } as const;
+    const delegation = {
+      id: "delegation-1",
+      assignmentId: "assignment-1",
+    };
+    const { authorizationContexts } = await dispatchIsolated({
+      principal: servicePrincipal,
+      domain: DOMAIN,
+      access: ACCESS_POLICY,
+      delegation,
+      authorization: {
+        mode: "isolated",
+        authorize: async () => ({
+          allowed: true,
+          principalId: "principal-agent",
+          domain: DOMAIN,
+          delegation: { ...delegation, sponsorPrincipalId: "principal-owner" },
+        }),
+      },
+    });
+
+    expect(authorizationContexts).toEqual([
+      expect.objectContaining({
+        principalId: "principal-agent",
+        principalKind: "service",
+        requestId: "req-isolated",
+        delegation: { ...delegation, sponsorPrincipalId: "principal-owner" },
+      }),
+    ]);
+  });
+
+  it("ignores delegation injected through the plugin-visible client object", async () => {
+    const servicePrincipal = {
+      issuer: "core",
+      subject: "agent:main",
+      kind: "service",
+    } as const;
+    const injectedDelegation = {
+      id: "delegation-1",
+      assignmentId: "assignment-1",
+    };
+    const authorize = vi.fn(async () => ({
+      allowed: true as const,
+      principalId: "principal-agent",
+      domain: DOMAIN,
+      delegation: { ...injectedDelegation, sponsorPrincipalId: "principal-owner" },
+    }));
+    const { handler } = await dispatchIsolated({
+      principal: servicePrincipal,
+      domain: DOMAIN,
+      access: ACCESS_POLICY,
+      injectedDelegation,
+      authorization: { mode: "isolated", authorize },
+    });
+
+    expect(authorize).toHaveBeenCalledWith(
+      expect.not.objectContaining({ delegation: expect.anything() }),
+    );
+    expect(handler).not.toHaveBeenCalled();
   });
 
   it("preserves unclassified method dispatch in explicit legacy mode", async () => {

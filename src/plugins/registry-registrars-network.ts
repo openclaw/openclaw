@@ -44,7 +44,7 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
     record: PluginRecord,
     method: string,
     handler: GatewayRequestHandler,
-    opts?: { scope?: OperatorScope },
+    opts?: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[2],
   ) => {
     const trimmed = method.trim();
     if (!trimmed) {
@@ -76,6 +76,7 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
         name: trimmed,
         handler: wrappedHandler,
         scope: normalizedScope.scope,
+        access: opts?.access,
       }),
     );
   };

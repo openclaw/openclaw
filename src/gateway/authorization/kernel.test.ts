@@ -206,8 +206,113 @@ describe("gateway authorization kernel", () => {
     });
     expect(result).toEqual({
       allowed: true,
-      security: { principalId: "principal-1", domain: { id: "domain-1" } },
+      security: {
+        principalId: "principal-1",
+        principalKind: "human",
+        domain: { id: "domain-1" },
+        method: "sessions.get",
+        permission: "session.read",
+        resources: [resource],
+      },
     });
+  });
+
+  it("snapshots plugin action and resources before awaiting the provider", async () => {
+    const mutableResource = { namespace: "core", type: "session", id: "session-original" };
+    const policy = {
+      kind: "resource" as const,
+      permission: "session.read",
+      resolveResources: () => [mutableResource],
+    };
+    let resolveDecision: (() => void) | undefined;
+    const authorize = vi.fn(
+      () =>
+        new Promise<{
+          allowed: true;
+          principalId: string;
+          domain: { id: string };
+        }>((resolve) => {
+          resolveDecision = () =>
+            resolve({ allowed: true, principalId: "principal-1", domain: { id: "domain-1" } });
+        }),
+    );
+    const pending = authorizeGatewayAccess({
+      runtime: { mode: "isolated", authorize },
+      policy,
+      principal,
+      method: "sessions.get",
+      params: {},
+      getConfig: () => config,
+    });
+    await vi.waitFor(() => expect(authorize).toHaveBeenCalledOnce());
+
+    mutableResource.id = "session-forged";
+    policy.permission = "session.write";
+    resolveDecision?.();
+
+    await expect(pending).resolves.toEqual({
+      allowed: true,
+      security: expect.objectContaining({
+        permission: "session.read",
+        resources: [{ namespace: "core", type: "session", id: "session-original" }],
+      }),
+    });
+  });
+
+  it("snapshots the server delegation reference before awaiting the provider", async () => {
+    const mutableDelegation = { id: "delegation-1", assignmentId: "assignment-1" };
+    let resolveDecision: (() => void) | undefined;
+    const authorize = vi.fn(
+      () =>
+        new Promise<{
+          allowed: true;
+          principalId: string;
+          domain: { id: string };
+          delegation: { id: string; assignmentId: string; sponsorPrincipalId: string };
+        }>((resolve) => {
+          resolveDecision = () =>
+            resolve({
+              allowed: true,
+              principalId: "principal-agent",
+              domain: { id: "domain-1" },
+              delegation: {
+                id: "delegation-1",
+                assignmentId: "assignment-1",
+                sponsorPrincipalId: "principal-owner",
+              },
+            });
+        }),
+    );
+    const pending = authorizeGatewayAccess({
+      runtime: { mode: "isolated", authorize },
+      policy: resourcePolicy(() => [resource]),
+      principal: { issuer: "core", subject: "agent:main", kind: "service" },
+      delegation: mutableDelegation,
+      method: "sessions.get",
+      params: {},
+      getConfig: () => config,
+    });
+    await vi.waitFor(() => expect(authorize).toHaveBeenCalledOnce());
+
+    mutableDelegation.id = "injected-delegation";
+    mutableDelegation.assignmentId = "injected-assignment";
+    resolveDecision?.();
+
+    await expect(pending).resolves.toEqual({
+      allowed: true,
+      security: expect.objectContaining({
+        delegation: {
+          id: "delegation-1",
+          assignmentId: "assignment-1",
+          sponsorPrincipalId: "principal-owner",
+        },
+      }),
+    });
+    expect(authorize).toHaveBeenCalledWith(
+      expect.objectContaining({
+        delegation: { id: "delegation-1", assignmentId: "assignment-1" },
+      }),
+    );
   });
 
   it.each([

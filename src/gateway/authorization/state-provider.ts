@@ -18,6 +18,7 @@ import type {
 type AuthorizationProviderDatabase = Pick<
   OpenClawStateKyselyDatabase,
   | "authorization_domain_memberships"
+  | "authorization_delegations"
   | "authorization_grants"
   | "authorization_principals"
   | "authorization_resources"
@@ -44,6 +45,47 @@ function authorizeFromState(
   );
   if (!principal) {
     return { allowed: false, reason: "unknown-principal" };
+  }
+
+  let validatedDelegation:
+    | { id: string; assignmentId: string; sponsorPrincipalId: string }
+    | undefined;
+  if (request.principal.kind === "service") {
+    if (!request.delegation) {
+      return { allowed: false, reason: "forbidden" };
+    }
+    const delegation = executeSqliteQueryTakeFirstSync(
+      db,
+      kysely
+        .selectFrom("authorization_delegations as delegation")
+        .innerJoin("authorization_domain_memberships as agent_membership", (join) =>
+          join
+            .onRef("agent_membership.domain_id", "=", "delegation.domain_id")
+            .onRef("agent_membership.principal_id", "=", "delegation.agent_principal_id"),
+        )
+        .innerJoin("authorization_domain_memberships as sponsor_membership", (join) =>
+          join
+            .onRef("sponsor_membership.domain_id", "=", "delegation.domain_id")
+            .onRef("sponsor_membership.principal_id", "=", "delegation.sponsor_principal_id"),
+        )
+        .select("delegation.sponsor_principal_id")
+        .where("delegation.domain_id", "=", request.domain.id)
+        .where("delegation.delegation_id", "=", request.delegation.id)
+        .where("delegation.assignment_id", "=", request.delegation.assignmentId)
+        .where("delegation.agent_principal_id", "=", principal.principal_id)
+        .where("delegation.state", "=", "active")
+        .where("sponsor_membership.role", "=", "owner"),
+    );
+    if (!delegation) {
+      return { allowed: false, reason: "forbidden" };
+    }
+    validatedDelegation = {
+      id: request.delegation.id,
+      assignmentId: request.delegation.assignmentId,
+      sponsorPrincipalId: delegation.sponsor_principal_id,
+    };
+  } else if (request.delegation) {
+    return { allowed: false, reason: "forbidden" };
   }
 
   const resources = [
@@ -111,6 +153,7 @@ function authorizeFromState(
     allowed: true,
     principalId: principal.principal_id,
     domain: request.domain,
+    ...(validatedDelegation ? { delegation: validatedDelegation } : {}),
   };
 }
 

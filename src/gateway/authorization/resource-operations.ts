@@ -488,6 +488,34 @@ export function replayAuthorizationResourceOperation(input: {
   }, input.database);
 }
 
+/** Host-only replay path: plugin scope is loader-bound and the persisted operation resolves domain. */
+export function replayAuthorizationResourceOperationForHost(input: {
+  database?: OpenClawStateDatabaseOptions;
+  operationScope: string;
+  operationId: string;
+}): PreparedAuthorizationResourceOperation {
+  const operationScope = requiredIdentifier(input.operationScope, "authorization operation scope");
+  const operationId = requiredIdentifier(input.operationId, "authorization operation id");
+  const { db } = openOpenClawStateDatabase(input.database);
+  const operation = executeSqliteQueryTakeFirstSync(
+    db,
+    getNodeSqliteKysely<AuthorizationResourceDatabase>(db)
+      .selectFrom("authorization_resource_operations")
+      .select("domain_id")
+      .where("operation_id", "=", operationId)
+      .where("operation_scope", "=", operationScope),
+  );
+  if (!operation) {
+    throw new Error("unknown authorization resource operation");
+  }
+  return replayAuthorizationResourceOperation({
+    domainId: operation.domain_id,
+    operationScope,
+    operationId,
+    database: input.database,
+  });
+}
+
 export function getAuthorizationResourceOwner(input: {
   database?: OpenClawStateDatabaseOptions;
   domainId: string;
