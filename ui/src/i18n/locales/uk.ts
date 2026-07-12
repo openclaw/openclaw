@@ -3358,6 +3358,12 @@ export const uk: TranslationMap = {
         activityErrorMany: "Активність: {count} інструментів, містить помилки.",
       },
     },
+    workRun: {
+      workedFor: "Працював протягом {duration}",
+      worked: "Працював",
+      workedForError: "Працював протягом {duration}, виникли помилки.",
+      workedError: "Працював, виникли помилки.",
+    },
     backgroundTasks: {
       label: "Фонові завдання",
       title: "Фонові завдання",

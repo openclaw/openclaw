@@ -3282,6 +3282,12 @@ export const zh_CN: TranslationMap = {
         activityErrorMany: "活动：{count} 个工具，包含错误。",
       },
     },
+    workRun: {
+      workedFor: "工作了 {duration}",
+      worked: "已工作",
+      workedForError: "工作了 {duration}，期间出现错误。",
+      workedError: "已工作，期间出现错误。",
+    },
     backgroundTasks: {
       label: "后台任务",
       title: "后台任务",

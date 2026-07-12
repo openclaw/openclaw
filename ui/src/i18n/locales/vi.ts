@@ -3341,6 +3341,12 @@ export const vi: TranslationMap = {
         activityErrorMany: "Hoạt động: {count} công cụ, bao gồm lỗi.",
       },
     },
+    workRun: {
+      workedFor: "Đã hoạt động trong {duration}",
+      worked: "Đã hoạt động",
+      workedForError: "Đã hoạt động trong {duration}, có lỗi.",
+      workedError: "Đã hoạt động, có lỗi.",
+    },
     backgroundTasks: {
       label: "Tác vụ nền",
       title: "Tác vụ nền",

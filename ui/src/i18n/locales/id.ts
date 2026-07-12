@@ -3352,6 +3352,12 @@ export const id: TranslationMap = {
         activityErrorMany: "Aktivitas: {count} alat, mencakup kesalahan.",
       },
     },
+    workRun: {
+      workedFor: "Berjalan selama {duration}",
+      worked: "Berjalan",
+      workedForError: "Berjalan selama {duration}, termasuk kesalahan.",
+      workedError: "Berjalan, termasuk kesalahan.",
+    },
     backgroundTasks: {
       label: "Tugas latar belakang",
       title: "Tugas latar belakang",

@@ -3318,6 +3318,12 @@ export const hi: TranslationMap = {
         activityErrorMany: "गतिविधि: {count} टूल, त्रुटियाँ शामिल हैं.",
       },
     },
+    workRun: {
+      workedFor: "{duration} तक काम किया",
+      worked: "काम किया",
+      workedForError: "{duration} तक काम किया, इसमें त्रुटियाँ शामिल हैं।",
+      workedError: "काम किया, इसमें त्रुटियाँ शामिल हैं।",
+    },
     backgroundTasks: {
       label: "बैकग्राउंड कार्य",
       title: "बैकग्राउंड कार्य",
