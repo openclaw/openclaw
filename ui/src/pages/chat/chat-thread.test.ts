@@ -1627,6 +1627,23 @@ describe("buildChatItems", () => {
     ]);
   });
 
+  it("keeps steerable queued sends out of the thread until sending starts", () => {
+    const queued = {
+      id: "pending-send-1",
+      text: "wait above the composer",
+      createdAt: 2,
+      sendSubmittedAtMs: 10,
+    };
+
+    expect(messageGroups({ queue: [{ ...queued, sendState: "waiting-idle" }] })).toStrictEqual([]);
+
+    const groups = messageGroups({ queue: [{ ...queued, sendState: "sending" }] });
+    expect(groups).toHaveLength(1);
+    expect(messageRecord(groupAt(groups, 0)).content).toStrictEqual([
+      { type: "text", text: "wait above the composer" },
+    ]);
+  });
+
   it("renders submitted queued attachment sends with attachment blocks before chat.send ACK", () => {
     const groups = messageGroups({
       queue: [

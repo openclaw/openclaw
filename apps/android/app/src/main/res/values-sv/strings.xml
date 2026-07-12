@@ -333,7 +333,6 @@
     <string name="native_395407e069aaa185" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mikrofonbehörighet krävs"</string>
     <string name="native_3961dba0e09c90f4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Anslut Gateway för att läsa in förslag från Skill Workshop."</string>
     <string name="native_39bd8d494d8df83b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Alla system fungerar"</string>
-    <string name="native_39cd5c4eaaade8b3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Installerade skills"</string>
     <string name="native_3a1f56623c408220" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway kan inte nås"</string>
     <string name="native_3a386d2bb69adffc" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OC"</string>
     <string name="native_3a5ecca188c0579c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Uppdaterad"</string>
@@ -606,7 +605,6 @@
     <string name="native_6e117ba97cbfb6f0" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway identifierade inte den aktiva %1$s-leverantören"</string>
     <string name="native_6e293a8c009e0011" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Väntar"</string>
     <string name="native_6e2ebdab3c02a3e6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Äldsta först"</string>
-    <string name="native_6e4ff84ba2e719dd" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s/%2$s"</string>
     <string name="native_6e56137e21d3222a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Skärm"</string>
     <string name="native_6e8a74ada297ff53" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Körs sedan"</string>
     <string name="native_6e917656866ca5b0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"IPv6-zon-ID:n stöds inte. Använd en IPv6-adress utan omfång eller ett LAN-värdnamn."</string>
@@ -1047,7 +1045,7 @@
     <string name="native_c1970bb2cdf299b7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"NULL (MISSLYCKADES)"</string>
     <string name="native_c1c1009d3f37ec05" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Uppdatera"</string>
     <string name="native_c1c224b03cd9bc7b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Administratör"</string>
-    <string name="native_c1ebc7817870e5be" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kräver uppmärksamhet"</string>
+    <string name="native_c1ebc7817870e5be" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kräver åtgärd"</string>
     <string name="native_c22d5e02fbec7d65" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Parkoppla den här enheten med din Gateway för att endast väcka den vid faktiskt arbete, ha en aktuell agentöversikt nära till hands och undvika batterikrävande bakgrundsloopar."</string>
     <string name="native_c253f451bdd56431" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Svara"</string>
     <string name="native_c26225b6c16a4bc7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Leverantörskatalog"</string>

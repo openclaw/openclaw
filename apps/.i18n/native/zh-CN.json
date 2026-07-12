@@ -6104,9 +6104,29 @@
       "translated": "管理已安装的 Skills，并从 ClawHub 添加受信任的版本。"
     },
     {
-      "id": "native.android.8d8bafb716f856dd",
-      "source": "Needs Setup",
-      "translated": "需要设置"
+      "id": "native.android.9c353cf3a7ec08e9",
+      "source": "Browse",
+      "translated": "浏览"
+    },
+    {
+      "id": "native.android.c6d0b8c171da5e69",
+      "source": "Skill changes require operator.admin. Reconnect with an admin-capable gateway token.",
+      "translated": "更改 Skill 需要 operator.admin 权限。请使用具备管理员权限的 Gateway 令牌重新连接。"
+    },
+    {
+      "id": "native.android.cf0bc487b537dd04",
+      "source": "Inspect and manage installed skill state.",
+      "translated": "检查并管理已安装 Skill 的状态。"
+    },
+    {
+      "id": "native.android.92e94c3027f3e5ce",
+      "source": "Status",
+      "translated": "状态"
+    },
+    {
+      "id": "native.android.3866fe91a977b21a",
+      "source": "Missing",
+      "translated": "缺失"
     },
     {
       "id": "native.android.9507bc022dc2e3ed",
@@ -6119,9 +6139,9 @@
       "translated": "正在刷新"
     },
     {
-      "id": "native.android.c6d0b8c171da5e69",
-      "source": "Skill changes require operator.admin. Reconnect with an admin-capable gateway token.",
-      "translated": "更改 Skill 需要 operator.admin 权限。请使用具备管理员权限的 Gateway 令牌重新连接。"
+      "id": "native.android.8748f97cadea1632",
+      "source": "Search installed skills",
+      "translated": "搜索已安装的 Skills"
     },
     {
       "id": "native.android.73f15da5b2ffdf3c",
@@ -6142,36 +6162,6 @@
       "id": "native.android.193fa2086c682510",
       "source": "No installed skills match this search.",
       "translated": "没有与此搜索匹配的已安装 Skills。"
-    },
-    {
-      "id": "native.android.cf0bc487b537dd04",
-      "source": "Inspect and manage installed skill state.",
-      "translated": "检查并管理已安装 Skill 的状态。"
-    },
-    {
-      "id": "native.android.92e94c3027f3e5ce",
-      "source": "Status",
-      "translated": "状态"
-    },
-    {
-      "id": "native.android.3866fe91a977b21a",
-      "source": "Missing",
-      "translated": "缺失"
-    },
-    {
-      "id": "native.android.944e0db270dbef5c",
-      "source": "Installed skills",
-      "translated": "已安装的 Skills"
-    },
-    {
-      "id": "native.android.47ee8c52e754f17d",
-      "source": "${visibleCount}/${totalCount}",
-      "translated": "${visibleCount}/${totalCount}"
-    },
-    {
-      "id": "native.android.8748f97cadea1632",
-      "source": "Search installed skills",
-      "translated": "搜索已安装的 Skills"
     },
     {
       "id": "native.android.e7aa097ca1a41857",
@@ -6254,16 +6244,6 @@
       "translated": "正在搜索"
     },
     {
-      "id": "native.android.559e047666ce63f8",
-      "source": "Dismiss",
-      "translated": "关闭"
-    },
-    {
-      "id": "native.android.0c00aa53506c3cd3",
-      "source": "Acknowledge Gateway warning and install",
-      "translated": "确认 Gateway 警告并安装"
-    },
-    {
       "id": "native.android.cc0b71a70901e723",
       "source": "Version $it",
       "translated": "Version $it"
@@ -6279,9 +6259,24 @@
       "translated": "Loading"
     },
     {
+      "id": "native.android.c27608d140fad1ba",
+      "source": "Needs attention",
+      "translated": "需要关注"
+    },
+    {
       "id": "native.android.e63592576acd892e",
       "source": "Review",
       "translated": "Review"
+    },
+    {
+      "id": "native.android.559e047666ce63f8",
+      "source": "Dismiss",
+      "translated": "关闭"
+    },
+    {
+      "id": "native.android.0c00aa53506c3cd3",
+      "source": "Acknowledge Gateway warning and install",
+      "translated": "确认 Gateway 警告并安装"
     },
     {
       "id": "native.android.9be29ded6a7097bf",
@@ -6312,6 +6307,16 @@
       "id": "native.android.268a3461947b22d3",
       "source": "Cancel",
       "translated": "取消"
+    },
+    {
+      "id": "native.android.5f24ed8fa0ca7622",
+      "source": "All",
+      "translated": "全部"
+    },
+    {
+      "id": "native.android.8d8bafb716f856dd",
+      "source": "Needs Setup",
+      "translated": "需要设置"
     },
     {
       "id": "native.android.815c8dab8db8a6c1",
