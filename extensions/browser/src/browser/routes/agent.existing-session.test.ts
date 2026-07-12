@@ -462,7 +462,7 @@ describe("existing-session browser routes", () => {
   });
 
   it("supports glob URL waits for existing-session profiles", async () => {
-    const evaluate = vi.fn(async () => "https://example.com/");
+    const evaluate = vi.fn(async (_fn: string) => "https://example.com/");
     chromeMcpMocks.withChromeMcpDocument.mockImplementationOnce(
       async (_params, task) => await task({ evaluate }),
     );
