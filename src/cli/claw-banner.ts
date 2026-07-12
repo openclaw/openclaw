@@ -6,6 +6,7 @@ import {
   decorativeEmoji,
   supportsDecorativeEmoji,
 } from "../../packages/terminal-core/src/decorative-emoji.js";
+import { restoreTerminalState } from "../../packages/terminal-core/src/restore.js";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import type { RuntimeEnv } from "../runtime.js";
 
@@ -110,6 +111,18 @@ async function animateBanner(opts: {
     drewFrame = true;
     write(`${prefix}${lines.map((line) => `\x1b[K${line}`).join("\n")}\n`);
   };
+  // Ctrl-C during the ~1s sequence would otherwise kill the process with the
+  // cursor still hidden: default signal death skips the finally block. The
+  // banner runs before any other component installs signal handlers, so a
+  // scoped restore-and-exit handler is safe here and removed right after.
+  const onSignal = (signal: "SIGINT" | "SIGTERM") => {
+    restoreTerminalState(`claw banner ${signal}`);
+    process.exit(signal === "SIGINT" ? 130 : 143);
+  };
+  const onSigint = () => onSignal("SIGINT");
+  const onSigterm = () => onSignal("SIGTERM");
+  process.once("SIGINT", onSigint);
+  process.once("SIGTERM", onSigterm);
   write("\x1b[?25l");
   try {
     // Molt wipe: dim shell ahead of a bright 2-column edge, color behind it.
@@ -148,6 +161,8 @@ async function animateBanner(opts: {
     }
     draw(staticBannerLines());
   } finally {
+    process.off("SIGINT", onSigint);
+    process.off("SIGTERM", onSigterm);
     write("\x1b[?25h");
   }
 }

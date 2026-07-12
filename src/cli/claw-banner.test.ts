@@ -59,6 +59,25 @@ describe("printClawBanner", () => {
     expect(finalRows).toEqual(testing.staticBannerLines().map((line) => stripAnsi(line)));
   });
 
+  it("installs scoped signal handlers only while animating", async () => {
+    const before = process.listenerCount("SIGINT");
+    let during = -1;
+    const { runtime } = runtimeStub();
+    await printClawBanner(runtime, {
+      columns: 120,
+      isTty: true,
+      rich: true,
+      env: {},
+      rng: () => 0.99,
+      sleep: async () => {
+        during = Math.max(during, process.listenerCount("SIGINT"));
+      },
+      write: () => {},
+    });
+    expect(during).toBe(before + 1);
+    expect(process.listenerCount("SIGINT")).toBe(before);
+  });
+
   it("varies snips and shimmer passes with the rng", async () => {
     // rng below the thresholds adds a second shimmer pass and a second snip.
     const maximal = (await runAnimated(() => 0)).filter((c) => c.includes("\x1b[K"));
