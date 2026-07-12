@@ -90,6 +90,14 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     return call[0] as { prompt?: string; suppressNextUserMessagePersistence?: boolean };
   }
 
+  function markUserMessagePersisted(attemptParams: unknown): void {
+    (
+      attemptParams as {
+        onUserMessagePersisted?: (message: { role: "user"; content: string }) => void;
+      }
+    ).onUserMessagePersisted?.({ role: "user", content: "test prompt" });
+  }
+
   it("counts failed tool results in trace tool summaries", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
@@ -810,8 +818,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
   it("retries reasoning-only GPT turns with a visible-answer continuation instruction", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      makeAttemptResult({
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
+      markUserMessagePersisted(attemptParams);
+      return makeAttemptResult({
         assistantTexts: [],
         lastAssistant: {
           role: "assistant",
@@ -826,8 +835,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
             },
           ],
         } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
-      }),
-    );
+      });
+    });
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: ["Visible answer."],
@@ -1074,8 +1083,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
   it("retries generic empty GPT turns with a visible-answer continuation instruction", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      makeAttemptResult({
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
+      markUserMessagePersisted(attemptParams);
+      return makeAttemptResult({
         assistantTexts: [],
         lastAssistant: {
           role: "assistant",
@@ -1084,8 +1094,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
           model: "gpt-5.4",
           content: [{ type: "text", text: "" }],
         } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
-      }),
-    );
+      });
+    });
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: ["Visible answer."],
@@ -1161,13 +1171,14 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
   it("retries missing terminal assistant turns with the same prompt without re-persisting the user message", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      makeAttemptResult({
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
+      markUserMessagePersisted(attemptParams);
+      return makeAttemptResult({
         assistantTexts: [],
         lastAssistant: undefined,
         currentAttemptAssistant: undefined,
-      }),
-    );
+      });
+    });
     const recoveredAssistant = {
       role: "assistant",
       stopReason: "end_turn",
@@ -1198,6 +1209,41 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expectWarnMessageWith("missing assistant terminal message detected");
     expectNoWarnMessageWith("empty response detected");
     expectNoWarnMessageWith("incomplete turn detected");
+  });
+
+  it("persists a missing-turn retry when the first attempt never persisted the user message", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: undefined,
+        currentAttemptAssistant: undefined,
+      }),
+    );
+    const recoveredAssistant = {
+      role: "assistant",
+      stopReason: "end_turn",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "text", text: "Recovered answer." }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["currentAttemptAssistant"]>;
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Recovered answer."],
+        lastAssistant: recoveredAssistant,
+        currentAttemptAssistant: recoveredAssistant,
+      }),
+    );
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-missing-assistant-unpersisted-retry",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(runAttemptCall(1).suppressNextUserMessagePersistence).toBe(false);
   });
 
   it("retries zero-token empty Claude stop turns with a visible-answer continuation instruction", async () => {

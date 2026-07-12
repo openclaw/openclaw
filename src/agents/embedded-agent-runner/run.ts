@@ -2169,6 +2169,9 @@ async function runEmbeddedAgentInternal(
         };
         const blockedBeforeAgentRun = messageMetadata["__openclaw"]?.beforeAgentRunBlocked;
         const markCurrentUserMessagePersisted = () => {
+          // Once this turn is in the transcript, every later attempt must reuse it.
+          // Re-appending on any retry path would duplicate the same user message.
+          suppressNextUserMessagePersistence = true;
           if (params.currentMessageId !== undefined) {
             lastPersistedCurrentMessageId = params.currentMessageId;
           }
@@ -4548,7 +4551,6 @@ async function runEmbeddedAgentInternal(
           ) {
             reasoningOnlyRetryAttempts += 1;
             reasoningOnlyRetryInstruction = nextReasoningOnlyRetryInstruction;
-            suppressNextUserMessagePersistence = true;
             log.warn(
               `reasoning-only assistant turn detected: runId=${params.runId} sessionId=${params.sessionId} ` +
                 `provider=${activeErrorContext.provider}/${activeErrorContext.model} — retrying ${reasoningOnlyRetryAttempts}/${maxReasoningOnlyRetryAttempts} ` +
@@ -4571,7 +4573,6 @@ async function runEmbeddedAgentInternal(
             missingAssistantRetryAttempts < MAX_MISSING_ASSISTANT_RETRIES
           ) {
             missingAssistantRetryAttempts += 1;
-            suppressNextUserMessagePersistence = true;
             log.warn(
               `missing assistant terminal message detected: runId=${params.runId} sessionId=${params.sessionId} ` +
                 `provider=${activeErrorContext.provider}/${activeErrorContext.model} — retrying ${missingAssistantRetryAttempts}/${MAX_MISSING_ASSISTANT_RETRIES} with same prompt`,
@@ -4585,7 +4586,6 @@ async function runEmbeddedAgentInternal(
           ) {
             emptyResponseRetryAttempts += 1;
             emptyResponseRetryInstruction = nextEmptyResponseRetryInstruction;
-            suppressNextUserMessagePersistence = true;
             log.warn(
               `empty response detected: runId=${params.runId} sessionId=${params.sessionId} ` +
                 `provider=${activeErrorContext.provider}/${activeErrorContext.model} — retrying ${emptyResponseRetryAttempts}/${maxEmptyResponseRetryAttempts} ` +
