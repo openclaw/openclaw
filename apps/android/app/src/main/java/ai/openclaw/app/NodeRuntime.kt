@@ -149,16 +149,31 @@ private class ExecApprovalWriteOutcomeUnknown : IllegalStateException("approval 
 
 private class GatewayApprovalRpcUnavailable : IllegalStateException("Gateway approval RPC catalog is inconsistent")
 
-private enum class SkillWorkshopGatewayAction(
+internal enum class SkillWorkshopGatewayAction(
   val methodSuffix: String,
   val expectedStatus: String,
-  val notice: String,
-  val verb: String,
+  val notice: NativeText,
+  val verb: NativeText,
 ) {
-  Apply("apply", "applied", "Proposal applied.", "apply"),
-  Reject("reject", "rejected", "Proposal rejected.", "reject"),
-  Quarantine("quarantine", "quarantined", "Proposal quarantined.", "quarantine"),
+  Apply("apply", "applied", nativeText("Proposal applied."), nativeText("apply")),
+  Reject("reject", "rejected", nativeText("Proposal rejected."), nativeText("reject")),
+  Quarantine("quarantine", "quarantined", nativeText("Proposal quarantined."), nativeText("quarantine")),
 }
+
+internal fun skillWorkshopUnexpectedStatusText(
+  status: String?,
+  action: SkillWorkshopGatewayAction,
+): NativeText {
+  val statusText = status?.takeIf { it.isNotBlank() }?.let(::verbatimText) ?: nativeText("unknown")
+  return nativeText(
+    "Gateway returned status '\$statusLabel' after \${action.verb}.",
+    statusText,
+    action.verb,
+  )
+}
+
+internal fun skillWorkshopActionFailureText(action: SkillWorkshopGatewayAction): NativeText =
+  nativeText("Could not \${action.verb} Skill Workshop proposal.", action.verb)
 
 internal data class PendingNotificationNodeEvent(
   val event: String,
@@ -4709,12 +4724,10 @@ class NodeRuntime private constructor(
         if (skillWorkshopMutationSeq.get() == mutationSeq && _skillWorkshopSummary.value.agentId == requestAgentId) {
           if (updatedProposal?.status == action.expectedStatus) {
             _skillWorkshopSummary.value = _skillWorkshopSummary.value.withProposal(updatedProposal)
-            _skillWorkshopNoticeText.value = nativeText(action.notice)
+            _skillWorkshopNoticeText.value = action.notice
             mutationConfirmed = true
           } else {
-            val statusLabel = updatedProposal?.status?.takeIf { it.isNotBlank() } ?: "unknown"
-            _skillWorkshopErrorText.value =
-              nativeText("Gateway returned status '\$statusLabel' after \${action.verb}.", statusLabel, action.verb)
+            _skillWorkshopErrorText.value = skillWorkshopUnexpectedStatusText(updatedProposal?.status, action)
           }
         }
       }
@@ -4733,7 +4746,7 @@ class NodeRuntime private constructor(
     } catch (_: Throwable) {
       publishGatewayData(gatewayScope) {
         if (skillWorkshopMutationSeq.get() == mutationSeq && _skillWorkshopSummary.value.agentId == requestAgentId) {
-          _skillWorkshopErrorText.value = nativeText("Could not \${action.verb} Skill Workshop proposal.", action.verb)
+          _skillWorkshopErrorText.value = skillWorkshopActionFailureText(action)
         }
       }
     } finally {
