@@ -108,8 +108,7 @@ fun gatewayTalkSetupStatusText(state: GatewayTalkSetupState): String =
     is GatewayTalkSetupState.Unverified -> nativeString("Unverified")
   }
 
-fun gatewayTalkSetupDescription(state: GatewayTalkSetupState): String =
-  gatewayTalkSetupDescriptionText(state).resolveNativeText()
+fun gatewayTalkSetupDescription(state: GatewayTalkSetupState): String = gatewayTalkSetupDescriptionText(state).resolveNativeText()
 
 internal fun gatewayTalkSetupDescriptionText(state: GatewayTalkSetupState): NativeText =
   when (state) {

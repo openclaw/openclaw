@@ -173,7 +173,10 @@ internal fun skillWorkshopUnexpectedStatusText(
 }
 
 internal fun skillWorkshopActionFailureText(action: SkillWorkshopGatewayAction): NativeText =
-  nativeText("Could not \${action.verb} Skill Workshop proposal.", action.verb)
+  nativeText(
+    "Could not \${action.verb} Skill Workshop proposal.",
+    action.verb,
+  )
 
 internal data class PendingNotificationNodeEvent(
   val event: String,
