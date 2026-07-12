@@ -151,9 +151,9 @@ function applyAuthoritativeRecoveryProjection(
     ...(projection.participants !== undefined ? { participants: projection.participants } : {}),
     is_group: projection.is_group,
     sender: projection.sender,
-    ...(projection.destination_caller_id !== undefined
-      ? { destination_caller_id: projection.destination_caller_id }
-      : {}),
+    // Exact-GUID history is authoritative for this outgoing-only field: when
+    // history omits it, clear any stale notification value instead of inheriting.
+    destination_caller_id: projection.destination_caller_id ?? null,
     is_from_me: projection.is_from_me,
   };
 }

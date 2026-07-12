@@ -193,10 +193,10 @@ describe("repairIMessageConversationAnchor", () => {
       chat_guid: "iMessage;-;+15550000002",
       chat_identifier: "+15550000002",
       sender: "+15550000002",
-      destination_caller_id: "+15550000001",
       is_from_me: false,
       is_group: false,
     });
+    expect(repaired?.destination_caller_id ?? null).toBeNull();
   });
 
   it("routes repaired direct replies to the remote peer instead of the stale local sender", async () => {
@@ -261,6 +261,69 @@ describe("repairIMessageConversationAnchor", () => {
     expect(imessageTo).toBe("imessage:+15550000002");
     expect(ctxPayload.To).toBe("imessage:+15550000002");
     expect(ctxPayload.To).not.toBe("imessage:+15550000001");
+  });
+
+  it("clears stale destination_caller_id on the monitor path when history omits it", async () => {
+    const { buildIMessageInboundContext, resolveIMessageInboundDecision } =
+      await import("./inbound-processing.js");
+    const message = anchorlessMessage({
+      guid: "33333333-3333-4333-8333-333333333333",
+      sender: "+15550000001",
+      destination_caller_id: "+15550000001",
+    });
+    const client = mockClient([
+      {
+        id: 42,
+        messages: [
+          {
+            guid: "33333333-3333-4333-8333-333333333333",
+            chat_id: 42,
+            chat_guid: "iMessage;-;+15550000002",
+            chat_identifier: "+15550000002",
+            sender: "+15550000002",
+            is_from_me: false,
+            is_group: false,
+          },
+        ],
+      },
+    ]);
+
+    const repaired = await repairIMessageConversationAnchor({
+      client: client as never,
+      message,
+    });
+    expect(repaired?.sender).toBe("+15550000002");
+    expect(repaired?.destination_caller_id ?? null).toBeNull();
+
+    const decision = await resolveIMessageInboundDecision({
+      cfg: {} as never,
+      accountId: "default",
+      message: repaired!,
+      messageText: repaired!.text ?? "",
+      bodyText: repaired!.text ?? "",
+      allowFrom: ["*"],
+      groupAllowFrom: [],
+      groupPolicy: "open",
+      dmPolicy: "open",
+      storeAllowFrom: [],
+      historyLimit: 0,
+      groupHistories: new Map(),
+    });
+    expect(decision.kind).toBe("dispatch");
+    if (decision.kind !== "dispatch") {
+      return;
+    }
+
+    const { imessageTo, ctxPayload } = await buildIMessageInboundContext({
+      cfg: {} as never,
+      decision,
+      message: repaired!,
+      historyLimit: 0,
+      groupHistories: new Map(),
+    });
+
+    expect(imessageTo).toBe("imessage:+15550000002");
+    expect(ctxPayload.To).toBe("imessage:+15550000002");
   });
 
   it("drops fail-closed when authoritative history says is_from_me=true", async () => {
