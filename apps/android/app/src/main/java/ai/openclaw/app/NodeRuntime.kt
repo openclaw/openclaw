@@ -2238,7 +2238,7 @@ class NodeRuntime private constructor(
         sentAtMs = nowMs,
         displayName = client.displayName?.trim()?.takeIf { it.isNotEmpty() } ?: "Android",
         version = client.version,
-        platform = NodePresenceAliveBeacon.androidPlatformLabel(),
+        platform = NodePresenceAliveBeacon.androidPlatformMetadata(),
         deviceFamily = client.deviceFamily,
         modelIdentifier = client.modelIdentifier,
       )

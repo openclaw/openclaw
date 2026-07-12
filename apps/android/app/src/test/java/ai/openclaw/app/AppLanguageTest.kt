@@ -7,6 +7,7 @@ import ai.openclaw.app.i18n.resolveNativeText
 import ai.openclaw.app.i18n.verbatimText
 import ai.openclaw.app.node.NodePresenceAliveBeacon
 import ai.openclaw.app.ui.chat.contextMeterThinkingLabel
+import ai.openclaw.app.ui.skillWorkshopStatusLabel
 import android.os.Build
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.os.LocaleListCompat
@@ -136,10 +137,18 @@ class AppLanguageTest {
       setAppLanguage(AppLanguage.English)
       assertEquals("Mic off", retained.value)
       assertEquals("Mic off · raw", retainedComposite.value)
+      assertEquals("Pending", skillWorkshopStatusLabel("pending"))
 
       setAppLanguage(AppLanguage.French)
       assertEquals("Micro désactivé", retained.value)
       assertEquals("Micro désactivé · raw", retainedComposite.value)
+      assertEquals("En attente", skillWorkshopStatusLabel("pending"))
+      assertEquals("Retenu", skillWorkshopStatusLabel("quarantined"))
+      assertEquals("Retenu", skillWorkshopStatusLabel("stale"))
+      assertEquals("Appliqué", skillWorkshopStatusLabel("applied"))
+      assertEquals("Rejeté", skillWorkshopStatusLabel("rejected"))
+      assertEquals("Chargement", skillWorkshopStatusLabel("loading"))
+      assertEquals("future_status", skillWorkshopStatusLabel("future_status"))
       assertEquals("Élevé", contextMeterThinkingLabel("high"))
       assertEquals("adaptive", contextMeterThinkingLabel("adaptive"))
       val androidRelease =
@@ -149,7 +158,7 @@ class AppLanguageTest {
           .ifEmpty { "unknown" }
       assertEquals(
         "Android $androidRelease (SDK ${Build.VERSION.SDK_INT})",
-        NodePresenceAliveBeacon.androidPlatformLabel(),
+        NodePresenceAliveBeacon.androidPlatformMetadata(),
       )
       assertEquals("Connexion…", gatewayConnectionStatusForDisplay("Connecting…"))
       assertEquals(
