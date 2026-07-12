@@ -29,6 +29,7 @@ import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   buildGatewayReloadPlan,
   diffConfigPaths,
+  diffGatewayReloadPaths,
   type GatewayReloadPlan,
   listPluginInstallTimestampMetadataPaths,
   listPluginInstallWholeRecordPaths,
@@ -131,6 +132,29 @@ describe("diffConfigPaths", () => {
       "plugins.installs.lossless.resolvedAt",
     ]);
   });
+
+  it.each([
+    {
+      label: "added",
+      prev: {},
+      next: { mcp: { apps: { enabled: true } } },
+    },
+    {
+      label: "removed",
+      prev: { mcp: { apps: { enabled: true } } },
+      next: {},
+    },
+  ])(
+    "preserves the Apps restart boundary when the whole MCP config is $label",
+    ({ prev, next }) => {
+      const changedPaths = diffGatewayReloadPaths(prev, next);
+      const plan = buildGatewayReloadPlan(changedPaths);
+
+      expect(changedPaths).toEqual(["mcp", "mcp.apps"]);
+      expect(plan.restartGateway).toBe(true);
+      expect(plan.restartReasons).toContain("mcp.apps");
+    },
+  );
 });
 
 describe("buildGatewayReloadPlan", () => {
