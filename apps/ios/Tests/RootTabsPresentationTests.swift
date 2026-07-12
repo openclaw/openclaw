@@ -448,6 +448,15 @@ struct RootTabsPresentationTests {
         #expect(!embedded.ownsNavigationStack)
     }
 
+    @Test func `localized QR status matcher accepts positional placeholders`() {
+        #expect(SettingsProTab.localizedFormat(
+            "qr loaded. connecting to %1$@:%2$@...",
+            matches: "qr loaded. connecting to gateway.local:18789..."))
+        #expect(!SettingsProTab.localizedFormat(
+            "qr loaded. connecting to %1$@:%2$@...",
+            matches: "qr loaded. connecting to gateway.local..."))
+    }
+
     @Test func `settings sidebar route follows navigation top then direct base`() {
         #expect(RootTabs.visibleSettingsRoute(
             navigationPath: [.approvals],

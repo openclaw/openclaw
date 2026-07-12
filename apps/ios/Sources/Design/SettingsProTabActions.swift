@@ -1071,7 +1071,7 @@ extension SettingsProTab {
             || lower == checkingReachability
     }
 
-    private static func localizedFormat(_ format: String, matches value: String) -> Bool {
+    static func localizedFormat(_ format: String, matches value: String) -> Bool {
         guard let placeholder = try? NSRegularExpression(pattern: #"%(\d+\$)?@"#) else {
             return format == value
         }
