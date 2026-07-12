@@ -83,17 +83,19 @@ export function normalizeWhatsAppPayloadTextPreservingIndentation(
   return normalized.trim() ? normalized : "";
 }
 
-export function resolveWhatsAppOutboundMediaUrls(
+export function normalizeWhatsAppMediaUrls(mediaUrls: readonly string[]): string[] {
+  return uniqueStrings(mediaUrls.map((entry) => entry.trim()).filter(Boolean));
+}
+
+// The direct API accepts both fields as additive candidates, with mediaUrl first.
+// Keep that contract separate from channel ReplyPayload mediaUrls precedence.
+export function resolveAdditiveWhatsAppMediaUrls(
   payload: Pick<WhatsAppOutboundPayloadLike, "mediaUrl" | "mediaUrls">,
 ): string[] {
-  const primaryMediaUrl = payload.mediaUrl?.trim();
-  const mediaUrls = (payload.mediaUrls ? [...payload.mediaUrls] : [])
-    .map((entry) => entry.trim())
-    .filter((entry): entry is string => Boolean(entry));
-  const orderedMediaUrls = [primaryMediaUrl, ...mediaUrls].filter((entry): entry is string =>
-    Boolean(entry),
-  );
-  return uniqueStrings(orderedMediaUrls);
+  return normalizeWhatsAppMediaUrls([
+    ...(payload.mediaUrl ? [payload.mediaUrl] : []),
+    ...(payload.mediaUrls ?? []),
+  ]);
 }
 
 // Keep new WhatsApp outbound-media behavior in this helper so payload, gateway, and auto-reply paths stay aligned.
@@ -101,9 +103,12 @@ export function normalizeWhatsAppOutboundPayload<T extends WhatsAppOutboundPaylo
   payload: T,
   options?: {
     normalizeText?: (text: string | undefined) => string;
+    mediaUrls?: readonly string[];
   },
 ): NormalizedWhatsAppOutboundPayload<T> {
-  const mediaUrls = resolveWhatsAppOutboundMediaUrls(payload);
+  const mediaUrls = options?.mediaUrls
+    ? normalizeWhatsAppMediaUrls(options.mediaUrls)
+    : resolveAdditiveWhatsAppMediaUrls(payload);
   const normalizeText = options?.normalizeText ?? normalizeWhatsAppPayloadText;
   return {
     ...payload,

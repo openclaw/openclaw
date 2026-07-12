@@ -12,8 +12,9 @@ import {
   type ChannelOutboundAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { sendTextMediaPayload } from "openclaw/plugin-sdk/reply-payload";
+import { resolvePayloadMediaUrls, sendTextMediaPayload } from "openclaw/plugin-sdk/reply-payload";
 import {
+  normalizeWhatsAppMediaUrls,
   normalizeWhatsAppOutboundPayload,
   normalizeWhatsAppPayloadText,
 } from "./outbound-media-contract.js";
@@ -264,7 +265,11 @@ export function createWhatsAppOutboundBase({
       if (ctx.payload.isError === true) {
         return { channel: "whatsapp", messageId: "" };
       }
-      const payload = normalizeWhatsAppOutboundPayload(ctx.payload, { normalizeText });
+      const preferredMediaUrls = normalizeWhatsAppMediaUrls(ctx.payload.mediaUrls ?? []);
+      const payload = normalizeWhatsAppOutboundPayload(ctx.payload, {
+        normalizeText,
+        mediaUrls: resolvePayloadMediaUrls({ ...ctx.payload, mediaUrls: preferredMediaUrls }),
+      });
       if (!payload.text && !(payload.mediaUrl || payload.mediaUrls?.length)) {
         if (ctx.payload.interactive || ctx.payload.presentation || ctx.payload.channelData) {
           throw new Error(
