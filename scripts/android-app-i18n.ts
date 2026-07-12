@@ -228,8 +228,7 @@ export function findUnusedAndroidResourceKeys(
 ): string[] {
   return [...keys].filter(
     (key) =>
-      !referenceSource.includes(`R.string.${key}`) &&
-      !referenceSource.includes(`@string/${key}`),
+      !referenceSource.includes(`R.string.${key}`) && !referenceSource.includes(`@string/${key}`),
   );
 }
 
@@ -355,10 +354,7 @@ const ALLOWED_UI_LITERALS = new Map<string, ReadonlySet<string>>([
     "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
     new Set(["Chat", "Files", "Home", "Providers", "Sessions", "Settings", "Voice"]),
   ],
-  [
-    "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
-    new Set(["Off"]),
-  ],
+  ["apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt", new Set(["Off"])],
   [
     "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
     new Set([
