@@ -6203,7 +6203,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 326,
+      "line": 327,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMarkdown.kt",
       "source": "$index.",
       "surface": "android",
@@ -6211,7 +6211,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 729,
+      "line": 730,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMarkdown.kt",
       "source": "Image unavailable",
       "surface": "android",
