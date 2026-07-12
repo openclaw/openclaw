@@ -4,10 +4,7 @@ import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
 } from "./realtime-talk-shared.ts";
-import {
-  REALTIME_WEBRTC_OFFER_TIMEOUT_MS,
-  WebRtcSdpRealtimeTalkTransport,
-} from "./realtime-talk-webrtc.ts";
+import { WebRtcSdpRealtimeTalkTransport } from "./realtime-talk-webrtc.ts";
 
 let getUserMedia: ReturnType<typeof vi.fn>;
 
@@ -366,14 +363,60 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     expect(offerSignal?.aborted).toBe(false);
 
-    await vi.advanceTimersByTimeAsync(REALTIME_WEBRTC_OFFER_TIMEOUT_MS);
+    await vi.runAllTimersAsync();
 
     await expect(startResult).resolves.toMatchObject(
-      new Error(
-        `Realtime WebRTC offer request timed out after ${REALTIME_WEBRTC_OFFER_TIMEOUT_MS}ms`,
-      ),
+      new Error("Realtime WebRTC offer request timed out after 30000ms"),
     );
     expect(offerSignal?.aborted).toBe(true);
+  });
+
+  it("aborts a pending WebRTC SDP answer body read when stopped", async () => {
+    let offerSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      offerSignal = init?.signal ?? undefined;
+      return {
+        ok: true,
+        status: 200,
+        text: () =>
+          new Promise<string>((_, reject) => {
+            offerSignal?.addEventListener(
+              "abort",
+              () => reject(offerSignal?.reason ?? new Error("offer request aborted")),
+              { once: true },
+            );
+          }),
+      } as Response;
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const transport = createOpenAiTransport();
+
+    const startResult = transport.start();
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    transport.stop();
+
+    await expect(startResult).resolves.toBeUndefined();
+    expect(offerSignal?.aborted).toBe(true);
+  });
+
+  it("clears the WebRTC offer timeout after setup succeeds", async () => {
+    vi.useFakeTimers();
+    let offerSignal: AbortSignal | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+        offerSignal = init?.signal ?? undefined;
+        return new Response("answer-sdp");
+      }) as unknown as typeof fetch,
+    );
+    const transport = createOpenAiTransport();
+
+    await transport.start();
+    await vi.runAllTimersAsync();
+
+    expect(offerSignal?.aborted).toBe(false);
+    transport.stop();
   });
 
   it("surfaces realtime provider errors from the OpenAI data channel", async () => {

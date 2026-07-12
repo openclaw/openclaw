@@ -37,25 +37,12 @@ type ToolBuffer = {
 };
 
 const cancelledSetup = Symbol("cancelledSetup");
-export const REALTIME_WEBRTC_OFFER_TIMEOUT_MS = 30_000;
+const REALTIME_WEBRTC_OFFER_TIMEOUT_MS = 30_000;
 
-function createRealtimeWebRtcOfferTimeout(): {
-  signal: AbortSignal;
-  cleanup: () => void;
-} {
-  const controller = new AbortController();
-  const timer = globalThis.setTimeout(() => {
-    controller.abort(
-      new Error(
-        `Realtime WebRTC offer request timed out after ${REALTIME_WEBRTC_OFFER_TIMEOUT_MS}ms`,
-      ),
-    );
-  }, REALTIME_WEBRTC_OFFER_TIMEOUT_MS);
-  return {
-    signal: controller.signal,
-    cleanup: () => globalThis.clearTimeout(timer),
-  };
-}
+type PendingOfferRequest = {
+  controller: AbortController;
+  timeout: ReturnType<typeof globalThis.setTimeout>;
+};
 
 export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
   private peer: RTCPeerConnection | null = null;
@@ -68,6 +55,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
   private responseCreateInFlight = false;
   private responseCreatePending = false;
   private toolBuffers = new Map<string, ToolBuffer>();
+  private pendingOfferRequest: PendingOfferRequest | null = null;
   private readonly consultAbortControllers = new Set<AbortController>();
   private readonly emitTalkEvent: ReturnType<typeof createRealtimeTalkEventEmitter>;
 
@@ -165,7 +153,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     peer: RTCPeerConnection,
     offer: RTCSessionDescriptionInit,
   ): Promise<string | typeof cancelledSetup> {
-    const offerTimeout = createRealtimeWebRtcOfferTimeout();
+    const request = this.beginOfferRequest();
     try {
       const sdp = await this.awaitSetupStep(
         peer,
@@ -177,7 +165,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
             Authorization: `Bearer ${this.session.clientSecret}`,
             "Content-Type": "application/sdp",
           },
-          signal: offerTimeout.signal,
+          signal: request.controller.signal,
         }),
       );
       if (sdp === cancelledSetup) {
@@ -198,8 +186,44 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       }
       return answerSdp;
     } finally {
-      offerTimeout.cleanup();
+      this.finishOfferRequest(request);
     }
+  }
+
+  private beginOfferRequest(): PendingOfferRequest {
+    this.abortOfferRequest();
+    const controller = new AbortController();
+    const request = {
+      controller,
+      timeout: globalThis.setTimeout(() => {
+        controller.abort(
+          new Error(
+            `Realtime WebRTC offer request timed out after ${REALTIME_WEBRTC_OFFER_TIMEOUT_MS}ms`,
+          ),
+        );
+      }, REALTIME_WEBRTC_OFFER_TIMEOUT_MS),
+    };
+    this.pendingOfferRequest = request;
+    return request;
+  }
+
+  private finishOfferRequest(request: PendingOfferRequest): void {
+    globalThis.clearTimeout(request.timeout);
+    // A stopped transport may already have started a replacement request.
+    // Never let the old request's finally block detach the new lifecycle owner.
+    if (this.pendingOfferRequest === request) {
+      this.pendingOfferRequest = null;
+    }
+  }
+
+  private abortOfferRequest(): void {
+    const request = this.pendingOfferRequest;
+    if (!request) {
+      return;
+    }
+    this.pendingOfferRequest = null;
+    globalThis.clearTimeout(request.timeout);
+    request.controller.abort();
   }
 
   private isCurrentPeer(peer: RTCPeerConnection): boolean {
@@ -225,6 +249,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       this.emitTalkEvent({ type: "session.closed", final: true });
     }
     this.closed = true;
+    this.abortOfferRequest();
     this.channel?.close();
     this.channel = null;
     this.peer?.close();
