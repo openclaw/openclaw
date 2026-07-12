@@ -5,8 +5,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { clearAllBootstrapSnapshots } from "../agents/bootstrap-cache.js";
-import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
+import {
+  clearConfigCache,
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfig,
+} from "../config/config.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetAgentRunContextForTest } from "../infra/agent-events.js";
 import { clearGatewaySubagentRuntime } from "../plugins/runtime/index.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
@@ -176,40 +181,73 @@ describe("gateway e2e", () => {
     ({ createConfigIO } = await import("../config/config.js"));
   });
 
-  it("attaches hot reload for a direct gateway caller without a recovery override", async () => {
-    const { envSnapshot, tempHome } = await setupGatewayTempHome({
-      prefix: "openclaw-gw-direct-reload-",
-    });
-    const token = nextGatewayId("direct-reload-token");
-    const configPath = await createGatewayConfigPath(tempHome);
-    setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
-    await createConfigIO({ configPath }).writeConfigFile({
-      gateway: { auth: { mode: "token", token } },
-    });
-    const port = await getFreeGatewayPort();
-    const server = await startGatewayServer(port, {
-      bind: "loopback",
-      auth: { mode: "token", token },
-      controlUiEnabled: false,
-    });
-    const client = await connectGatewayClient({
-      url: `ws://127.0.0.1:${port}`,
-      token,
-      clientDisplayName: "vitest-direct-reload",
-    });
+  it.each(["generated", "explicit-override"] as const)(
+    "preserves %s auth across a safe direct gateway reload",
+    async (authSource) => {
+      const { envSnapshot, tempHome } = await setupGatewayTempHome({
+        prefix: "openclaw-gw-direct-reload-",
+      });
+      deleteTestEnvValue("OPENCLAW_GATEWAY_TOKEN");
+      const fileToken = nextGatewayId("direct-file-token");
+      const overrideToken = nextGatewayId("direct-override-token");
+      const initialConfig: OpenClawConfig = {
+        ...(authSource === "explicit-override"
+          ? { gateway: { auth: { mode: "token", token: fileToken } } }
+          : {}),
+        logging: { level: "info" },
+      };
+      const configPath = await createGatewayConfigPath(tempHome);
+      setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+      const configIO = createConfigIO({ configPath });
+      await configIO.writeConfigFile(initialConfig);
+      const port = await getFreeGatewayPort();
+      const server = await startGatewayServer(port, {
+        bind: "loopback",
+        ...(authSource === "explicit-override"
+          ? { auth: { mode: "token" as const, token: overrideToken } }
+          : {}),
+        controlUiEnabled: false,
+      });
+      const expectedToken =
+        authSource === "explicit-override"
+          ? overrideToken
+          : getRuntimeConfig().gateway?.auth?.token;
+      expect(typeof expectedToken).toBe("string");
+      const client = await connectGatewayClient({
+        url: `ws://127.0.0.1:${port}`,
+        token: expectedToken as string,
+        clientDisplayName: "vitest-direct-reload",
+      });
 
-    try {
-      const health = await client.request<{
-        configReload?: { hotReloadStatus?: string };
-      }>("health", { probe: true });
-      expect(health?.configReload?.hotReloadStatus).toBe("active");
-    } finally {
-      await disconnectGatewayClient(client);
-      await server.close({ reason: "direct reload test complete" });
-      await removeGatewayTempHome(tempHome);
-      envSnapshot.restore();
-    }
-  });
+      try {
+        const health = await client.request<{
+          configReload?: { hotReloadStatus?: string };
+        }>("health", { probe: true });
+        expect(health?.configReload?.hotReloadStatus).toBe("active");
+
+        await configIO.writeConfigFile({
+          ...initialConfig,
+          logging: { level: "debug" },
+        });
+        await expect
+          .poll(() => getRuntimeConfig().logging?.level, { timeout: 5_000, interval: 50 })
+          .toBe("debug");
+        expect(getRuntimeConfig().gateway?.auth?.token).toBe(expectedToken);
+
+        const reconnected = await connectGatewayClient({
+          url: `ws://127.0.0.1:${port}`,
+          token: expectedToken as string,
+          clientDisplayName: "vitest-direct-reload-reconnect",
+        });
+        await disconnectGatewayClient(reconnected);
+      } finally {
+        await disconnectGatewayClient(client);
+        await server.close({ reason: "direct reload test complete" });
+        await removeGatewayTempHome(tempHome);
+        envSnapshot.restore();
+      }
+    },
+  );
 
   it(
     "accepts a gateway agent request over ws and returns a run id",

@@ -136,6 +136,7 @@ import { broadcastPresenceSnapshot } from "./server/presence-events.js";
 import { createReadinessChecker } from "./server/readiness.js";
 import { loadGatewayTlsRuntime } from "./server/tls.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
+import { mergeGatewayAuthConfig, mergeGatewayTailscaleConfig } from "./startup-auth.js";
 import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-origins.js";
 import { createWorkerEnvironmentService } from "./worker-environments/service.js";
 import { createWorkerEnvironmentStore } from "./worker-environments/store.js";
@@ -652,6 +653,26 @@ export async function startGatewayServer(
   if (authBootstrap.generatedToken) {
     log.warn(formatRuntimeGatewayAuthTokenWarning());
   }
+  const reloadAuthOverride = authBootstrap.generatedToken
+    ? mergeGatewayAuthConfig(opts.auth, { token: authBootstrap.generatedToken })
+    : opts.auth;
+  const applyStartupGatewayOverrides = (config: OpenClawConfig): OpenClawConfig => {
+    if (!reloadAuthOverride && !opts.tailscale) {
+      return config;
+    }
+    return {
+      ...config,
+      gateway: {
+        ...config.gateway,
+        ...(reloadAuthOverride
+          ? { auth: mergeGatewayAuthConfig(config.gateway?.auth, reloadAuthOverride) }
+          : {}),
+        ...(opts.tailscale
+          ? { tailscale: mergeGatewayTailscaleConfig(config.gateway?.tailscale, opts.tailscale) }
+          : {}),
+      },
+    };
+  };
   const diagnosticsEnabled = isDiagnosticsEnabled(cfgAtStart);
   setDiagnosticsEnabledForProcess(diagnosticsEnabled);
   if (diagnosticsEnabled) {
@@ -1943,6 +1964,7 @@ export async function startGatewayServer(
       acceptTerminalConfig: terminalLaunchPolicy.acceptConfig,
       channelManager,
       activateRuntimeSecrets,
+      applyRuntimeConfigOverrides: applyStartupGatewayOverrides,
       resolveSharedGatewaySessionGenerationForConfig,
       sharedGatewaySessionGenerationState,
       clients,

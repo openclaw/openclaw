@@ -3278,6 +3278,150 @@ describe("gateway Gmail hot reload handlers", () => {
     await reloader.stop();
   });
 
+  it("rejects ownerless restart and fallible hot plans before side effects", async () => {
+    vi.useFakeTimers();
+    const initialConfig: OpenClawConfig = {
+      gateway: {
+        port: 18789,
+        reload: { debounceMs: 0 },
+        terminal: { enabled: true },
+      },
+      logging: { level: "info" },
+    };
+    const terminalPolicy = createTerminalLaunchPolicy(initialConfig);
+    const prepareTerminalConfig = vi.fn((plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => {
+      terminalPolicy.prepareConfig(nextConfig, { restartPending: plan.restartGateway });
+    });
+    const reconcileTerminalSessions = vi.fn();
+    const requestRecoveryRestart = vi.fn(() => ({ status: "failed" as const }));
+    const setState = vi.fn();
+    const promoteSnapshot = vi.fn(async () => true);
+    const logReload = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const writeListenerRef: { current: ((event: ConfigWriteNotification) => void) | null } = {
+      current: null,
+    };
+    const activateRuntimeSecrets = vi.fn(async (config: OpenClawConfig) => ({
+      sourceConfig: config,
+      config,
+      authStores: [],
+      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
+      warnings: [],
+      webTools: createEmptyRuntimeWebToolsMetadata(),
+    }));
+    const reloader = startManagedGatewayConfigReloader({
+      minimalTestGateway: false,
+      initialConfig,
+      initialCompareConfig: initialConfig,
+      initialInternalWriteHash: null,
+      watchPath: "/tmp/openclaw.json",
+      readSnapshot: vi.fn() as never,
+      promoteSnapshot: promoteSnapshot as never,
+      subscribeToWrites: ((listener: (event: ConfigWriteNotification) => void) => {
+        writeListenerRef.current = listener;
+        return () => {
+          writeListenerRef.current = null;
+        };
+      }) as never,
+      deps: {} as never,
+      broadcast: vi.fn(),
+      getState: () => ({
+        hooksConfig: {} as never,
+        hookClientIpConfig: {} as never,
+        heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() } as never,
+        cronState: {
+          cron: { start: vi.fn(async () => {}), stop: vi.fn() },
+          storePath: "/tmp/cron.json",
+          cronEnabled: false,
+        } as never,
+        channelHealthMonitor: null,
+      }),
+      setState,
+      startChannel: vi.fn(async () => {}),
+      stopChannel: vi.fn(async () => {}),
+      reloadPlugins: vi.fn(async () => ({
+        restartChannels: new Set<ChannelKind>(),
+        activeChannels: new Set<ChannelKind>(),
+      })),
+      logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      logChannels: { info: vi.fn(), error: vi.fn() },
+      logCron: { error: vi.fn() },
+      logReload,
+      channelManager: {} as never,
+      activateRuntimeSecrets: activateRuntimeSecrets as never,
+      resolveSharedGatewaySessionGenerationForConfig: () => undefined,
+      sharedGatewaySessionGenerationState: { current: undefined, required: null },
+      clients: [],
+      prepareTerminalConfig,
+      reconcileTerminalSessions,
+      commitTerminalConfig: terminalPolicy.commitConfig,
+      acceptTerminalConfig: terminalPolicy.acceptConfig,
+      requestRecoveryRestart,
+      restartRecoveryAvailable: false,
+    });
+    let revision = 0;
+    const writeConfig = (config: OpenClawConfig, hash: string) => {
+      const listener = writeListenerRef.current;
+      if (!listener) {
+        throw new Error("Expected config write listener to be registered");
+      }
+      revision += 1;
+      listener({
+        configPath: "/tmp/openclaw.json",
+        sourceConfig: config,
+        runtimeConfig: config,
+        persistedHash: hash,
+        revision,
+        fingerprint: `runtime-${hash}`,
+        sourceFingerprint: `source-${hash}`,
+        writtenAtMs: Date.now(),
+      });
+    };
+
+    try {
+      writeConfig(
+        {
+          ...initialConfig,
+          gateway: { ...initialConfig.gateway, port: 18790, terminal: { enabled: false } },
+        },
+        "restart-unsupported",
+      );
+      await vi.runAllTimersAsync();
+
+      expect(prepareTerminalConfig).not.toHaveBeenCalled();
+      expect(reconcileTerminalSessions).not.toHaveBeenCalled();
+      expect(requestRecoveryRestart).not.toHaveBeenCalled();
+      expect(terminalPolicy.isEnabled()).toBe(true);
+
+      writeConfig(
+        { ...initialConfig, gateway: { ...initialConfig.gateway, channelHealthCheckMinutes: 5 } },
+        "hot-unsupported",
+      );
+      await vi.runAllTimersAsync();
+
+      expect(prepareTerminalConfig).not.toHaveBeenCalled();
+      expect(activateRuntimeSecrets).not.toHaveBeenCalled();
+      expect(setState).not.toHaveBeenCalled();
+      expect(logReload.error).toHaveBeenCalledWith(
+        expect.stringContaining("managed gateway restart owner"),
+      );
+
+      const safeConfig: OpenClawConfig = {
+        ...initialConfig,
+        logging: { level: "debug" },
+      };
+      writeConfig(safeConfig, "safe-reload");
+      await vi.runAllTimersAsync();
+
+      expect(prepareTerminalConfig).toHaveBeenCalledOnce();
+      expect(reconcileTerminalSessions).toHaveBeenCalledOnce();
+      expect(promoteSnapshot).toHaveBeenCalledOnce();
+      expect(getActiveSecretsRuntimeSnapshot()?.config).toEqual(safeConfig);
+      expect(terminalPolicy.isEnabled()).toBe(true);
+    } finally {
+      await reloader.stop();
+    }
+  });
+
   it("retires terminal restrictions after restart secrets preflight rejects and config reverts", async () => {
     vi.useFakeTimers();
     const writeListenerRef: { current: ((event: ConfigWriteNotification) => void) | null } = {

@@ -182,6 +182,13 @@ export class GatewayHotReloadRecoveryError extends Error {
   }
 }
 
+class GatewayReloadRequiresRecoveryOwnerError extends Error {
+  constructor(surface: string) {
+    super(`config reload requires a managed gateway restart owner for ${surface}`);
+    this.name = "GatewayReloadRequiresRecoveryOwnerError";
+  }
+}
+
 class GatewayHotReloadStaleSecretsError extends Error {
   constructor() {
     super("runtime secrets changed while config hot reload was deferred");
@@ -259,6 +266,33 @@ function shouldRefreshContextWindowCache(plan: GatewayReloadPlan): boolean {
         path.startsWith("agents.defaults.workspace."),
     )
   );
+}
+
+function hasFalliblePostCommitWork(plan: GatewayReloadPlan): boolean {
+  return (
+    plan.restartCron ||
+    plan.restartHealthMonitor ||
+    plan.restartGmailWatcher ||
+    plan.reloadPlugins ||
+    plan.disposeMcpRuntimes ||
+    plan.restartChannels.size > 0 ||
+    shouldRefreshContextWindowCache(plan)
+  );
+}
+
+function assertReloadPlanHasRecoveryOwner(
+  plan: GatewayReloadPlan,
+  restartRecoveryAvailable: boolean | undefined,
+): void {
+  if (restartRecoveryAvailable !== false) {
+    return;
+  }
+  if (plan.restartGateway) {
+    throw new GatewayReloadRequiresRecoveryOwnerError("gateway restart");
+  }
+  if (hasFalliblePostCommitWork(plan)) {
+    throw new GatewayReloadRequiresRecoveryOwnerError("fallible hot reload");
+  }
 }
 
 async function disposeMcpRuntimesWithTimeout(params: {
@@ -353,6 +387,8 @@ type ManagedGatewayConfigReloaderParams = Omit<
   };
   channelManager: GatewayChannelManager;
   activateRuntimeSecrets: ActivateRuntimeSecrets;
+  /** Reapplies process-lifetime startup overrides before each candidate is prepared. */
+  applyRuntimeConfigOverrides?: (config: OpenClawConfig) => OpenClawConfig;
   resolveSharedGatewaySessionGenerationForConfig: (config: OpenClawConfig) => string | undefined;
   sharedGatewaySessionGenerationState: SharedGatewaySessionGenerationState;
   clients: Iterable<SharedGatewayAuthClient>;
@@ -491,6 +527,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     nextConfig: OpenClawConfig,
     publication?: GatewayHotReloadPublication,
   ): Promise<void> => {
+    assertReloadPlanHasRecoveryOwner(plan, params.restartRecoveryAvailable);
     const isTransactionCurrent = () => !restartRetryStopped && (publication?.isCurrent?.() ?? true);
     const state = params.getState();
     const nextState = { ...state };
@@ -1415,6 +1452,16 @@ export function startManagedGatewayConfigReloader(
     return { stop: async () => {} };
   }
 
+  const prepareRuntimeCandidate = (
+    runtimeConfig: OpenClawConfig,
+    sourceConfig: OpenClawConfig,
+  ): OpenClawConfig => {
+    const canonicalConfig = restoreCanonicalSecretRefs(runtimeConfig, sourceConfig);
+    return params.applyRuntimeConfigOverrides?.(canonicalConfig) ?? canonicalConfig;
+  };
+  const applyRuntimeConfigOverrides = (config: OpenClawConfig): OpenClawConfig =>
+    params.applyRuntimeConfigOverrides?.(config) ?? config;
+
   let stopped = false;
   let activeGmailRestartAbortController: GatewayGmailRestartAbortController | null = null;
   const abortActiveGmailRestart = () => {
@@ -1507,7 +1554,7 @@ export function startManagedGatewayConfigReloader(
         );
         const previousRequired = params.sharedGatewaySessionGenerationState.required;
         const prepared = await params.activateRuntimeSecrets(
-          restoreCanonicalSecretRefs(nextConfig, sourceConfig),
+          prepareRuntimeCandidate(nextConfig, sourceConfig),
           {
             reason: "restart-check",
             activate: false,
@@ -1554,7 +1601,7 @@ export function startManagedGatewayConfigReloader(
         debtConfig: sourceConfig,
         prepareRuntimeConfig: async () => {
           const prepared = await params.activateRuntimeSecrets(
-            restoreCanonicalSecretRefs(preparedRuntimeConfig, sourceConfig),
+            prepareRuntimeCandidate(preparedRuntimeConfig, sourceConfig),
             {
               reason: "restart-check",
               activate: false,
@@ -1608,7 +1655,10 @@ export function startManagedGatewayConfigReloader(
     promoteSnapshot: async (snapshot, _reason) => await params.promoteSnapshot(snapshot),
     subscribeToWrites: params.subscribeToWrites,
     onConfigCandidateObserved: pauseGatewayRestartForConfigCandidate,
-    onConfigChange: params.prepareTerminalConfig,
+    onConfigChange: (plan, nextConfig) => {
+      assertReloadPlanHasRecoveryOwner(plan, params.restartRecoveryAvailable);
+      params.prepareTerminalConfig(plan, applyRuntimeConfigOverrides(nextConfig));
+    },
     onConfigAccepted: async (nextConfig, transactionOwnership, sourceConfig) => {
       const acceptedRestart = acceptRestartConfig(sourceConfig);
       if (acceptedRestart.debt) {
@@ -1623,11 +1673,11 @@ export function startManagedGatewayConfigReloader(
         );
       }
       recordAcceptedRestartTarget({
-        runtimeConfig: nextConfig,
+        runtimeConfig: applyRuntimeConfigOverrides(nextConfig),
         sourceConfig,
         prepareRuntimeConfig: async () => {
           const prepared = await params.activateRuntimeSecrets(
-            restoreCanonicalSecretRefs(nextConfig, sourceConfig),
+            prepareRuntimeCandidate(nextConfig, sourceConfig),
             {
               reason: "restart-check",
               activate: false,
@@ -1651,7 +1701,7 @@ export function startManagedGatewayConfigReloader(
         }
         const previousSnapshotRevision = getActiveSecretsRuntimeSnapshotRevision();
         const prepared = await params.activateRuntimeSecrets(
-          restoreCanonicalSecretRefs(nextConfig, sourceConfig),
+          prepareRuntimeCandidate(nextConfig, sourceConfig),
           {
             reason: "reload",
             activate: false,
@@ -1698,7 +1748,7 @@ export function startManagedGatewayConfigReloader(
         );
         const previousSharedGatewaySessionGeneration = previousGenerationOwnership.generation;
         const prepared = await params.activateRuntimeSecrets(
-          restoreCanonicalSecretRefs(nextConfig, sourceConfig),
+          prepareRuntimeCandidate(nextConfig, sourceConfig),
           {
             reason: "reload",
             activate: false,
@@ -1725,7 +1775,7 @@ export function startManagedGatewayConfigReloader(
             sourceConfig,
             prepareRestartRuntimeConfig: async () => {
               const restartPrepared = await params.activateRuntimeSecrets(
-                restoreCanonicalSecretRefs(prepared.config, sourceConfig),
+                prepareRuntimeCandidate(prepared.config, sourceConfig),
                 {
                   reason: "restart-check",
                   activate: false,
