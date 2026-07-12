@@ -1,6 +1,7 @@
 package ai.openclaw.app
 
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.i18n.notifyNativeLocaleChanged
 import android.content.Context
 import android.content.res.Resources
 import androidx.appcompat.app.AppCompatDelegate
@@ -73,6 +74,7 @@ internal fun setAppLanguage(language: AppLanguage) {
   val locales = localesForAppLanguage(language)
   if (locales != AppCompatDelegate.getApplicationLocales()) {
     AppCompatDelegate.setApplicationLocales(locales)
+    notifyNativeLocaleChanged()
   }
 }
 

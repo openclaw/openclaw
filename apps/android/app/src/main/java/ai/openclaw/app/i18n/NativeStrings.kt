@@ -7,6 +7,68 @@ import android.os.LocaleList
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.res.stringResource
+import kotlinx.coroutines.ExperimentalForInheritanceCoroutinesApi
+import kotlinx.coroutines.flow.FlowCollector
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.update
+
+sealed interface NativeText {
+  data class Resource(
+    val source: String,
+    val formatArgs: List<Any>,
+  ) : NativeText
+
+  data class Verbatim(
+    val value: String,
+  ) : NativeText
+}
+
+private val nativeLocaleRevision = MutableStateFlow(0L)
+internal val nativeLocaleChanges: StateFlow<Long> = nativeLocaleRevision.asStateFlow()
+
+internal fun nativeText(
+  source: String,
+  vararg formatArgs: Any,
+): NativeText.Resource = NativeText.Resource(source = source, formatArgs = formatArgs.toList())
+
+internal fun verbatimText(value: String): NativeText = NativeText.Verbatim(value)
+
+internal fun NativeText.resolveNativeText(): String =
+  when (this) {
+    is NativeText.Resource -> nativeString(source, *formatArgs.toTypedArray())
+    is NativeText.Verbatim -> value
+  }
+
+internal fun notifyNativeLocaleChanged() {
+  nativeLocaleRevision.update { it + 1 }
+}
+
+@OptIn(ExperimentalForInheritanceCoroutinesApi::class)
+private class LocaleResolvingStateFlow<T, R>(
+  private val source: StateFlow<T>,
+  private val transform: (T) -> R,
+) : StateFlow<R> {
+  override val value: R
+    get() = transform(source.value)
+
+  override val replayCache: List<R>
+    get() = listOf(value)
+
+  override suspend fun collect(collector: FlowCollector<R>): Nothing {
+    combine(source, nativeLocaleRevision) { value, _ -> transform(value) }
+      .distinctUntilChanged()
+      .collect(collector)
+    error("locale-resolving state flow completed unexpectedly")
+  }
+}
+
+internal fun StateFlow<NativeText>.resolveNativeText(): StateFlow<String> = LocaleResolvingStateFlow(this, NativeText::resolveNativeText)
+
+internal fun StateFlow<NativeText?>.resolveOptionalNativeText(): StateFlow<String?> = LocaleResolvingStateFlow(this) { text -> text?.resolveNativeText() }
 
 // Both cached contexts are process-owned: install stores applicationContext,
 // and localizedContext is derived from it solely for the selected app locale.
