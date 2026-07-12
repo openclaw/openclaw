@@ -828,6 +828,27 @@ CREATE TABLE IF NOT EXISTS media_blobs (
 CREATE INDEX IF NOT EXISTS idx_media_blobs_created
   ON media_blobs(created_at);
 
+-- Durable, bounded snapshots for MCP App tool-result views. Transcripts retain
+-- only the opaque view_id; the untrusted HTML and lifecycle payload stay here.
+CREATE TABLE IF NOT EXISTS mcp_app_views (
+  view_id TEXT NOT NULL PRIMARY KEY,
+  server_name TEXT NOT NULL,
+  tool_name TEXT NOT NULL,
+  resource_uri TEXT NOT NULL,
+  mime_type TEXT NOT NULL,
+  html BLOB NOT NULL,
+  metadata_json TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0),
+  created_at_ms INTEGER NOT NULL,
+  expires_at_ms INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_mcp_app_views_expiry
+  ON mcp_app_views(expires_at_ms);
+
+CREATE INDEX IF NOT EXISTS idx_mcp_app_views_created
+  ON mcp_app_views(created_at_ms, view_id);
+
 CREATE TABLE IF NOT EXISTS skill_uploads (
   upload_id TEXT NOT NULL PRIMARY KEY,
   kind TEXT NOT NULL,

@@ -249,6 +249,76 @@ describe("createBundleMcpToolRuntime", () => {
     expect(runtime.diagnostics).toEqual(diagnostics);
   });
 
+  it("stores MCP App payloads outside tool details and returns an opaque view descriptor", async () => {
+    const payloads: unknown[] = [];
+    const base = makeToolRuntime({
+      tools: [
+        {
+          serverName: "diagrams",
+          safeServerName: "diagrams",
+          toolName: "create_view",
+          description: "Create a diagram",
+          inputSchema: { type: "object", properties: {} },
+          fallbackDescription: "Create a diagram",
+          ui: { resourceUri: "ui://diagrams/app.html" },
+        },
+      ],
+      serverName: "diagrams",
+      result: {
+        content: [{ type: "text", text: "rendered" }],
+        structuredContent: { status: "ready" },
+      },
+    });
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: {
+        ...base,
+        readResource: async () => ({
+          contents: [
+            {
+              uri: "ui://diagrams/app.html",
+              mimeType: "text/html;profile=mcp-app",
+              text: "<!doctype html><html><body>diagram</body></html>",
+            },
+          ],
+        }),
+      },
+      storeMcpAppView: (payload) => {
+        payloads.push(payload);
+        return {
+          viewId: "mcpview_0123456789ABCDEFGHJKMNPQRSTVWXYZ",
+          serverName: payload.serverName,
+          toolName: payload.toolName,
+          resourceUri: payload.resource.uri,
+        };
+      },
+    });
+
+    const result = await runtime.tools[0]!.execute(
+      "call-create-view",
+      { shape: "circle" },
+      undefined,
+      undefined,
+    );
+
+    expect(result.details).toMatchObject({
+      mcpApp: {
+        viewId: "mcpview_0123456789ABCDEFGHJKMNPQRSTVWXYZ",
+        serverName: "diagrams",
+        toolName: "create_view",
+        resourceUri: "ui://diagrams/app.html",
+      },
+    });
+    expect(JSON.stringify(result.details)).not.toContain("<!doctype html>");
+    expect(payloads).toEqual([
+      expect.objectContaining({
+        serverName: "diagrams",
+        toolName: "create_view",
+        toolInput: { shape: "circle" },
+        resource: expect.objectContaining({ html: expect.stringContaining("diagram") }),
+      }),
+    ]);
+  });
+
   it("exposes MCP resource and prompt utility tools when advertised", async () => {
     const base = makeToolRuntime({ tools: [], serverName: "knowledge" });
     const runtime = await materializeBundleMcpToolsForRun({

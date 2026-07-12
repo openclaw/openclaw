@@ -1,26 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { buildMcpAppSandboxUrl } from "../../pages/chat/components/mcp-app-frame.ts";
-import { extractMcpAppPreview } from "./mcp-app.ts";
+import {
+  buildMcpAppResourceUrl,
+  buildMcpAppSandboxUrl,
+} from "../../pages/chat/components/mcp-app-frame.ts";
+import { extractMcpAppPreview, resolveMcpAppPreviewPayload } from "./mcp-app.ts";
 import { extractToolCards } from "./tool-cards.ts";
 
 const appDetails = {
   mcpApp: {
+    viewId: "mcpview_0123456789ABCDEFGHJKMNPQRSTVWXYZ",
     serverName: "diagrams",
     toolName: "create_view",
-    resource: {
-      uri: "ui://diagrams/app.html",
-      mimeType: "text/html;profile=mcp-app",
-      html: "<!doctype html><html><body>app</body></html>",
-      csp: { connectDomains: ["https://esm.sh"] },
-      permissions: ["clipboardWrite"],
-      prefersBorder: true,
-    },
-    toolInput: { elements: "[persisted]" },
-    result: {
-      content: [{ type: "text", text: "rendered" }],
-      structuredContent: { elements: [] },
-      _meta: { source: "server" },
-    },
+    resourceUri: "ui://diagrams/app.html",
   },
 };
 
@@ -29,13 +20,46 @@ describe("extractMcpAppPreview", () => {
     const preview = extractMcpAppPreview(appDetails, { elements: "[]" });
     expect(preview).toMatchObject({
       kind: "mcp-app",
+      serverName: "diagrams",
       title: "create_view",
+      viewId: "mcpview_0123456789ABCDEFGHJKMNPQRSTVWXYZ",
       resourceUri: "ui://diagrams/app.html",
+    });
+  });
+
+  it("returns undefined without a valid opaque view id", () => {
+    expect(extractMcpAppPreview(undefined)).toBe(undefined);
+    expect(extractMcpAppPreview({})).toBe(undefined);
+    expect(extractMcpAppPreview({ mcpApp: { viewId: "guessable" } })).toBe(undefined);
+  });
+});
+
+describe("resolveMcpAppPreviewPayload", () => {
+  it("hydrates a descriptor from the bounded Gateway resource payload", () => {
+    const preview = extractMcpAppPreview(appDetails)!;
+    expect(
+      resolveMcpAppPreviewPayload(preview, {
+        serverName: "diagrams",
+        toolName: "create_view",
+        resource: {
+          uri: "ui://diagrams/app.html",
+          html: "<!doctype html><html><body>app</body></html>",
+          csp: { connectDomains: ["https://esm.sh"] },
+          permissions: ["clipboardWrite"],
+          prefersBorder: true,
+        },
+        toolInput: { elements: "[persisted]" },
+        result: {
+          content: [{ type: "text", text: "rendered" }],
+          structuredContent: { elements: [] },
+          _meta: { source: "server" },
+        },
+      }),
+    ).toMatchObject({
+      html: expect.stringContaining("app"),
       csp: { connectDomains: ["https://esm.sh"] },
       permissions: ["clipboardWrite"],
       prefersBorder: true,
-      // Persisted details input wins over call-site args so history reloads
-      // (where call and result are separate messages) keep the app input.
       toolInput: { elements: "[persisted]" },
       toolResult: {
         content: [{ type: "text", text: "rendered" }],
@@ -43,25 +67,35 @@ describe("extractMcpAppPreview", () => {
         _meta: { source: "server" },
       },
     });
-    expect(preview?.html).toContain("app");
   });
 
-  it("falls back to call-site args when details carry no input", () => {
-    const details = structuredClone(appDetails) as { mcpApp: Record<string, unknown> };
-    delete details.mcpApp.toolInput;
-    expect(extractMcpAppPreview(details, { elements: "[caller]" })?.toolInput).toEqual({
-      elements: "[caller]",
-    });
-  });
-
-  it("returns undefined without an html document", () => {
-    expect(extractMcpAppPreview(undefined)).toBe(undefined);
-    expect(extractMcpAppPreview({})).toBe(undefined);
-    expect(extractMcpAppPreview({ mcpApp: { resource: { html: "" } } })).toBe(undefined);
+  it("rejects a resource that does not match the descriptor", () => {
+    const preview = extractMcpAppPreview(appDetails)!;
+    expect(
+      resolveMcpAppPreviewPayload(preview, {
+        serverName: "other",
+        resource: { uri: "ui://diagrams/app.html", html: "<html></html>" },
+        result: {},
+      }),
+    ).toBeUndefined();
   });
 });
 
 describe("buildMcpAppSandboxUrl", () => {
+  it("builds a ticketed resource URL without embedding app data", () => {
+    const url = new URL(
+      buildMcpAppResourceUrl({
+        basePath: "/openclaw",
+        ticket: "signed.ticket",
+        viewId: "mcpview_0123456789ABCDEFGHJKMNPQRSTVWXYZ",
+      }),
+      "https://gateway.example",
+    );
+    expect(url.pathname).toBe("/openclaw/__openclaw__/mcp-app-resource");
+    expect(url.searchParams.get("ticket")).toBe("signed.ticket");
+    expect(url.searchParams.get("viewId")).toBe("mcpview_0123456789ABCDEFGHJKMNPQRSTVWXYZ");
+  });
+
   it("preserves the Control UI base path and encodes app CSP metadata", () => {
     const url = new URL(
       buildMcpAppSandboxUrl({

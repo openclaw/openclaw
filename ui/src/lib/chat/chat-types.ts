@@ -170,14 +170,20 @@ export type ToolCard = {
 
 /**
  * MCP App (ui://) preview extracted from a tool result's `details.mcpApp`.
- * The html document is untrusted MCP server output and must render through the
- * gateway's opaque-origin sandbox proxy.
+ * The opaque view ID resolves through the Gateway; app HTML never enters the
+ * transcript or the initial chat history payload.
  */
 export type McpAppToolPreview = {
   kind: "mcp-app";
+  serverName: string;
   title?: string;
-  html: string;
+  viewId: string;
   resourceUri?: string;
+};
+
+/** Untrusted view snapshot loaded from the Gateway immediately before render. */
+export type ResolvedMcpAppToolPreview = McpAppToolPreview & {
+  html: string;
   csp?: {
     connectDomains?: string[];
     resourceDomains?: string[];

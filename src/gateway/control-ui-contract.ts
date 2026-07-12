@@ -9,6 +9,9 @@ export const CONTROL_UI_BASE_PATH_ATTRIBUTE = "data-openclaw-control-ui-base-pat
 /** Ticketed route used by the MCP Apps sandbox proxy. */
 export const CONTROL_UI_MCP_APP_SANDBOX_PATH = "/__openclaw__/mcp-app-sandbox";
 
+/** Ticketed route used to resolve one durable MCP App view snapshot. */
+export const CONTROL_UI_MCP_APP_RESOURCE_PATH = "/__openclaw__/mcp-app-resource";
+
 /** Carries the process-scoped MCP Apps sandbox ticket into browser bootstrap. */
 export const CONTROL_UI_MCP_APP_SANDBOX_TICKET_ATTRIBUTE = "data-openclaw-mcp-app-sandbox-ticket";
 

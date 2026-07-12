@@ -1,7 +1,8 @@
 // Control UI tests cover MCP Apps under the Gateway's production CSP boundary.
-import { chromium, type Browser } from "playwright";
+import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  CONTROL_UI_MCP_APP_RESOURCE_PATH,
   CONTROL_UI_MCP_APP_SANDBOX_PATH,
   CONTROL_UI_MCP_APP_SANDBOX_TICKET_ATTRIBUTE,
 } from "../../../src/gateway/control-ui-contract.ts";
@@ -75,6 +76,58 @@ const appHtml = `<!doctype html>
 </body>
 </html>`;
 
+function createMcpAppHistoryMessages(): unknown[] {
+  return [
+    {
+      role: "assistant",
+      timestamp: Date.now(),
+      content: [
+        {
+          type: "toolCall",
+          name: "diagrams_create_view",
+          id: "call-1",
+          arguments: { shape: "circle" },
+        },
+      ],
+    },
+    {
+      role: "toolResult",
+      toolCallId: "call-1",
+      toolName: "diagrams_create_view",
+      timestamp: Date.now() + 1,
+      content: [{ type: "text", text: "rendered" }],
+      details: {
+        mcpApp: {
+          viewId: "mcpview_0123456789ABCDEFGHJKMNPQRSTVWXYZ",
+          serverName: "diagrams",
+          toolName: "diagrams_create_view",
+          resourceUri: "ui://diagrams/app.html",
+        },
+      },
+    },
+  ];
+}
+
+async function installTicketedControlUiPage(page: Page): Promise<void> {
+  await page.route(`${server.baseUrl}chat`, async (route) => {
+    const response = await route.fetch();
+    const body = (await response.text()).replace(
+      /<html\b/i,
+      `<html ${CONTROL_UI_MCP_APP_SANDBOX_TICKET_ATTRIBUTE}="${sandboxTicket}"`,
+    );
+    await route.fulfill({
+      body,
+      headers: {
+        ...response.headers(),
+        "content-security-policy": buildControlUiCspHeader({
+          inlineScriptHashes: computeInlineScriptHashes(body),
+        }),
+      },
+      response,
+    });
+  });
+}
+
 describeControlUiE2e("MCP App sandbox proxy", () => {
   beforeAll(async () => {
     if (!chromiumAvailable) {
@@ -93,43 +146,34 @@ describeControlUiE2e("MCP App sandbox proxy", () => {
     const context = await browser.newContext({ serviceWorkers: "block" });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
-      historyMessages: [
-        {
-          role: "assistant",
-          timestamp: Date.now(),
-          content: [
-            {
-              type: "toolCall",
-              name: "diagrams_create_view",
-              id: "call-1",
-              arguments: { shape: "circle" },
-            },
-          ],
-        },
-        {
-          role: "toolResult",
-          toolCallId: "call-1",
+      historyMessages: createMcpAppHistoryMessages(),
+    });
+    const resourceRoutePattern = `**${CONTROL_UI_MCP_APP_RESOURCE_PATH}?*`;
+    let resourceRequestCount = 0;
+    await page.route(resourceRoutePattern, async (route) => {
+      resourceRequestCount += 1;
+      const url = new URL(route.request().url());
+      expect(url.searchParams.get("ticket")).toBe(sandboxTicket);
+      expect(url.searchParams.get("viewId")).toBe("mcpview_0123456789ABCDEFGHJKMNPQRSTVWXYZ");
+      await route.fulfill({
+        contentType: "application/json; charset=utf-8",
+        body: JSON.stringify({
+          serverName: "diagrams",
           toolName: "diagrams_create_view",
-          timestamp: Date.now() + 1,
-          content: [{ type: "text", text: "rendered" }],
-          details: {
-            mcpApp: {
-              toolName: "diagrams_create_view",
-              toolInput: { shape: "circle" },
-              resource: {
-                uri: "ui://diagrams/app.html",
-                html: appHtml,
-                permissions: ["camera", "microphone", "geolocation", "clipboardWrite"],
-                prefersBorder: true,
-              },
-              result: {
-                content: [{ type: "text", text: "rendered" }],
-                structuredContent: { status: "ready" },
-              },
-            },
+          toolInput: { shape: "circle" },
+          resource: {
+            uri: "ui://diagrams/app.html",
+            mimeType: "text/html;profile=mcp-app",
+            html: appHtml,
+            permissions: ["camera", "microphone", "geolocation", "clipboardWrite"],
+            prefersBorder: true,
           },
-        },
-      ],
+          result: {
+            content: [{ type: "text", text: "rendered" }],
+            structuredContent: { status: "ready" },
+          },
+        }),
+      });
     });
     await page.route(`**${CONTROL_UI_MCP_APP_SANDBOX_PATH}?*`, async (route) => {
       const url = new URL(route.request().url());
@@ -145,23 +189,7 @@ describeControlUiE2e("MCP App sandbox proxy", () => {
         },
       });
     });
-    await page.route(`${server.baseUrl}chat`, async (route) => {
-      const response = await route.fetch();
-      const body = (await response.text()).replace(
-        /<html\b/i,
-        `<html ${CONTROL_UI_MCP_APP_SANDBOX_TICKET_ATTRIBUTE}="${sandboxTicket}"`,
-      );
-      await route.fulfill({
-        body,
-        headers: {
-          ...response.headers(),
-          "content-security-policy": buildControlUiCspHeader({
-            inlineScriptHashes: computeInlineScriptHashes(body),
-          }),
-        },
-        response,
-      });
-    });
+    await installTicketedControlUiPage(page);
 
     try {
       const response = await page.goto(`${server.baseUrl}chat`);
@@ -169,9 +197,7 @@ describeControlUiE2e("MCP App sandbox proxy", () => {
       await gateway.waitForRequest("chat.startup");
       const toolRow = page.locator(".chat-tool-msg-summary").last();
       await toolRow.waitFor({ state: "visible", timeout: 10_000 });
-      if ((await toolRow.getAttribute("aria-expanded")) !== "true") {
-        await toolRow.click();
-      }
+      expect(await toolRow.getAttribute("aria-expanded")).toBe("false");
       const outerFrame = page.locator(
         '.chat-tool-card__preview[data-kind="mcp-app"] > .chat-tool-card__preview-panel iframe',
       );
@@ -200,6 +226,43 @@ describeControlUiE2e("MCP App sandbox proxy", () => {
         timeout: 10_000,
       });
       await expect.poll(() => outerFrame.getAttribute("style")).toContain("height: 360px");
+
+      await outerFrame.evaluate((element) => element.setAttribute("data-e2e-instance", "stable"));
+      await gateway.emitChatFinal({ runId: "rerender", text: "rerender complete" });
+      await page.getByText("rerender complete").waitFor({ state: "visible", timeout: 10_000 });
+      await expect.poll(() => outerFrame.getAttribute("data-e2e-instance")).toBe("stable");
+      expect(resourceRequestCount).toBe(1);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("offers a page reload when the saved view cannot be resolved", async () => {
+    const context = await browser.newContext({ serviceWorkers: "block" });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      historyMessages: createMcpAppHistoryMessages(),
+    });
+    let resourceRequestCount = 0;
+    await page.route(`**${CONTROL_UI_MCP_APP_RESOURCE_PATH}?*`, async (route) => {
+      resourceRequestCount += 1;
+      await route.fulfill({ status: 404, contentType: "text/plain", body: "Not Found" });
+    });
+    await installTicketedControlUiPage(page);
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+      await page
+        .getByText("App preview unavailable. Reload this page to retry.")
+        .waitFor({ state: "visible", timeout: 10_000 });
+      await page.getByRole("button", { name: "Reload page" }).waitFor({
+        state: "visible",
+        timeout: 10_000,
+      });
+      await gateway.emitChatFinal({ runId: "rerender", text: "rerender complete" });
+      await page.getByText("rerender complete").waitFor({ state: "visible", timeout: 10_000 });
+      expect(resourceRequestCount).toBe(1);
     } finally {
       await context.close();
     }

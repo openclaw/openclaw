@@ -674,6 +674,19 @@ export interface ManagedOutgoingImageRecords {
   updated_at: string | null;
 }
 
+export interface McpAppViews {
+  created_at_ms: number;
+  expires_at_ms: number;
+  html: Uint8Array;
+  metadata_json: string;
+  mime_type: string;
+  resource_uri: string;
+  server_name: string;
+  size_bytes: number;
+  tool_name: string;
+  view_id: string;
+}
+
 export interface MediaBlobs {
   blob: Uint8Array;
   content_type: string | null;
@@ -1173,6 +1186,7 @@ export interface DB {
   installed_plugin_index: InstalledPluginIndex;
   macos_port_guardian_records: MacosPortGuardianRecords;
   managed_outgoing_image_records: ManagedOutgoingImageRecords;
+  mcp_app_views: McpAppViews;
   media_blobs: MediaBlobs;
   migration_runs: MigrationRuns;
   migration_sources: MigrationSources;

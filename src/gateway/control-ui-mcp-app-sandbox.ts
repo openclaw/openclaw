@@ -1,5 +1,7 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { loadMcpAppView } from "../agents/mcp-app-view-store.js";
+import type { McpAppViewPayload } from "../agents/mcp-apps.js";
 import { buildControlUiCspHeader } from "./control-ui-csp.js";
 import { respondNotFound } from "./control-ui-http-utils.js";
 
@@ -202,4 +204,39 @@ export function serveControlUiMcpAppSandboxProxy(
     return;
   }
   res.end(CONTROL_UI_MCP_APP_SANDBOX_PROXY_HTML);
+}
+
+/** Resolve one unguessable, unexpired MCP App view for the trusted host page. */
+export function serveControlUiMcpAppResource(
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+  loadView: (viewId: string) => McpAppViewPayload | undefined = loadMcpAppView,
+): void {
+  if (!verifyTicket(url.searchParams.get("ticket"))) {
+    applyRejectedRequestHeaders(res);
+    respondNotFound(res);
+    return;
+  }
+  const viewId = url.searchParams.get("viewId") ?? "";
+  const view = loadView(viewId);
+  if (!view) {
+    applyRejectedRequestHeaders(res);
+    respondNotFound(res);
+    return;
+  }
+  const body = JSON.stringify(view);
+  res.statusCode = 200;
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+  res.setHeader("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'");
+  if (req.method === "HEAD") {
+    res.end();
+    return;
+  }
+  res.end(body);
 }

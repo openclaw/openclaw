@@ -701,6 +701,16 @@ export function renderToolCard(
   const isError = outcome === "failed";
   const isRunning = outcome === "running";
   const icon = TOOL_ROW_ICONS[view.kind] ?? display.icon;
+  const collapsedMcpAppPreview =
+    !opts.expanded && card.preview?.kind === "mcp-app"
+      ? renderToolPreview(card.preview, "chat_tool", {
+          onOpenSidebar: opts.onOpenSidebar,
+          rawText: card.outputText,
+          canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
+          embedSandboxMode: opts.embedSandboxMode ?? "scripts",
+          allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
+        })
+      : nothing;
 
   return html`
     <div
@@ -732,6 +742,7 @@ export function renderToolCard(
             ></span>`
           : nothing}
       </button>
+      ${collapsedMcpAppPreview}
       ${opts.expanded
         ? html`
             <div class="chat-tool-msg-body">

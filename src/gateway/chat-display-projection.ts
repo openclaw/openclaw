@@ -91,15 +91,57 @@ function isToolResultHistoryBlockType(type: unknown): boolean {
   return normalized === "toolresult" || normalized === "tool_result";
 }
 
-function projectToolResultDiffDetails(
-  details: unknown,
-  maxChars: number,
-): { diff: string } | undefined {
-  const record = readRecord(details);
-  if (!record || typeof record.diff !== "string" || !record.diff.trim()) {
+const MCP_APP_VIEW_ID_PATTERN = /^mcpview_[A-Za-z0-9_-]{32}$/;
+const MCP_APP_DESCRIPTOR_NAME_MAX_CHARS = 256;
+const MCP_APP_DESCRIPTOR_URI_MAX_CHARS = 2_048;
+
+function projectMcpAppDescriptor(
+  details: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  const mcpApp = readRecord(details.mcpApp);
+  const viewId = typeof mcpApp?.viewId === "string" ? mcpApp.viewId : "";
+  const serverName = typeof mcpApp?.serverName === "string" ? mcpApp.serverName.trim() : "";
+  const toolName = typeof mcpApp?.toolName === "string" ? mcpApp.toolName.trim() : "";
+  if (
+    !MCP_APP_VIEW_ID_PATTERN.test(viewId) ||
+    !serverName ||
+    serverName.length > MCP_APP_DESCRIPTOR_NAME_MAX_CHARS ||
+    !toolName ||
+    toolName.length > MCP_APP_DESCRIPTOR_NAME_MAX_CHARS
+  ) {
     return undefined;
   }
-  return { diff: truncateChatHistoryText(record.diff, maxChars).text };
+  const resourceUri =
+    typeof mcpApp?.resourceUri === "string" &&
+    mcpApp.resourceUri.startsWith("ui://") &&
+    mcpApp.resourceUri.length <= MCP_APP_DESCRIPTOR_URI_MAX_CHARS
+      ? mcpApp.resourceUri
+      : undefined;
+  return {
+    viewId,
+    serverName,
+    toolName,
+    ...(resourceUri ? { resourceUri } : {}),
+  };
+}
+
+function projectToolResultDisplayDetails(
+  details: unknown,
+  maxChars: number,
+): Record<string, unknown> | undefined {
+  const record = readRecord(details);
+  if (!record) {
+    return undefined;
+  }
+  const projected: Record<string, unknown> = {};
+  if (typeof record.diff === "string" && record.diff.trim()) {
+    projected.diff = truncateChatHistoryText(record.diff, maxChars).text;
+  }
+  const mcpApp = projectMcpAppDescriptor(record);
+  if (mcpApp) {
+    projected.mcpApp = mcpApp;
+  }
+  return Object.keys(projected).length > 0 ? projected : undefined;
 }
 
 function messageHasToolResultShape(message: Record<string, unknown>): boolean {
@@ -319,7 +361,7 @@ function sanitizeChatHistoryContentBlock(
     opts?.preserveExactToolPayload === true || isToolHistoryBlockType(entry.type);
   const maxChars = opts?.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
   if (isToolResultHistoryBlockType(entry.type) && "details" in entry) {
-    const projectedDetails = projectToolResultDiffDetails(entry.details, maxChars);
+    const projectedDetails = projectToolResultDisplayDetails(entry.details, maxChars);
     if (projectedDetails) {
       entry.details = projectedDetails;
     } else {
@@ -543,7 +585,7 @@ function sanitizeChatHistoryMessage(
 
   if ("details" in entry) {
     const projectedDetails = messageHasToolResultShape(entry)
-      ? projectToolResultDiffDetails(entry.details, maxChars)
+      ? projectToolResultDisplayDetails(entry.details, maxChars)
       : undefined;
     if (projectedDetails) {
       entry.details = projectedDetails;

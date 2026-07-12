@@ -48,6 +48,7 @@ import {
   CONTROL_UI_BASE_PATH_ATTRIBUTE,
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
   CONTROL_UI_MCP_APP_SANDBOX_PATH,
+  CONTROL_UI_MCP_APP_RESOURCE_PATH,
   CONTROL_UI_MCP_APP_SANDBOX_TICKET_ATTRIBUTE,
   CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE,
   type ControlUiBootstrapConfig,
@@ -60,6 +61,7 @@ import {
 } from "./control-ui-http-utils.js";
 import {
   createControlUiMcpAppSandboxTicket,
+  serveControlUiMcpAppResource,
   serveControlUiMcpAppSandboxProxy,
 } from "./control-ui-mcp-app-sandbox.js";
 import { classifyControlUiRequest } from "./control-ui-routing.js";
@@ -1002,6 +1004,10 @@ export async function handleControlUiHttpRequest(
 
   if (pathname === `${basePath}${CONTROL_UI_MCP_APP_SANDBOX_PATH}`) {
     serveControlUiMcpAppSandboxProxy(req, res, url);
+    return true;
+  }
+  if (pathname === `${basePath}${CONTROL_UI_MCP_APP_RESOURCE_PATH}`) {
+    serveControlUiMcpAppResource(req, res, url);
     return true;
   }
 

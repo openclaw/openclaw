@@ -22,10 +22,14 @@ import { withEnvAsync } from "../test-utils/env.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
+  CONTROL_UI_MCP_APP_RESOURCE_PATH,
   CONTROL_UI_MCP_APP_SANDBOX_PATH,
   CONTROL_UI_MCP_APP_SANDBOX_TICKET_ATTRIBUTE,
 } from "./control-ui-contract.js";
-import { CONTROL_UI_MCP_APP_SANDBOX_PROXY_HTML } from "./control-ui-mcp-app-sandbox.js";
+import {
+  CONTROL_UI_MCP_APP_SANDBOX_PROXY_HTML,
+  serveControlUiMcpAppResource,
+} from "./control-ui-mcp-app-sandbox.js";
 import {
   handleControlUiAssistantMediaRequest,
   handleControlUiAvatarRequest,
@@ -1020,6 +1024,56 @@ describe("handleControlUiHttpRequest", () => {
           { root: { kind: "resolved", path: tmp } },
         );
         expectNotFoundResponse({ handled, res, end });
+      },
+    });
+  });
+
+  it("serves a ticketed MCP App view without caching or framing it", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const indexResponse = makeMockHttpResponse();
+        await handleControlUiHttpRequest(
+          { url: "/", method: "GET" } as IncomingMessage,
+          indexResponse.res,
+          { root: { kind: "resolved", path: tmp } },
+        );
+        const ticket = responseBody(indexResponse.end).match(
+          new RegExp(`${CONTROL_UI_MCP_APP_SANDBOX_TICKET_ATTRIBUTE}="([^"]+)"`),
+        )?.[1];
+        expect(ticket).toBeTruthy();
+
+        const { res, end, setHeader } = makeMockHttpResponse();
+        const viewId = "mcpview_0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+        serveControlUiMcpAppResource(
+          { method: "GET" } as IncomingMessage,
+          res,
+          new URL(
+            `${CONTROL_UI_MCP_APP_RESOURCE_PATH}?ticket=${encodeURIComponent(ticket ?? "")}&viewId=${viewId}`,
+            "http://localhost",
+          ),
+          (requestedViewId) =>
+            requestedViewId === viewId
+              ? {
+                  serverName: "diagrams",
+                  toolName: "create_view",
+                  resource: {
+                    uri: "ui://diagrams/app.html",
+                    mimeType: "text/html;profile=mcp-app",
+                    html: "<!doctype html><html><body>diagram</body></html>",
+                  },
+                  result: { structuredContent: { status: "ready" } },
+                }
+              : undefined,
+        );
+
+        expect(res.statusCode).toBe(200);
+        expect(responseJson(end)).toMatchObject({
+          serverName: "diagrams",
+          resource: { html: expect.stringContaining("diagram") },
+        });
+        expect(setHeader).toHaveBeenCalledWith("Cache-Control", "no-store");
+        expect(setHeader).toHaveBeenCalledWith("X-Frame-Options", "DENY");
+        expect(setHeader).toHaveBeenCalledWith("Cross-Origin-Resource-Policy", "same-origin");
       },
     });
   });

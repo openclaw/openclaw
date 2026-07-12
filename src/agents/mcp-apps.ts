@@ -44,8 +44,8 @@ export type McpAppResource = {
   prefersBorder?: boolean;
 };
 
-/** Tool-result payload surfaced to UI hosts under `details.mcpApp`. */
-export type McpAppToolDetails = {
+/** Full MCP App payload kept outside transcripts in bounded SQLite storage. */
+export type McpAppViewPayload = {
   serverName: string;
   toolName: string;
   resource: McpAppResource;
@@ -61,6 +61,14 @@ export type McpAppToolDetails = {
     structuredContent?: unknown;
     _meta?: unknown;
   };
+};
+
+/** Bounded tool-result descriptor surfaced to UI hosts under `details.mcpApp`. */
+export type McpAppToolDetails = {
+  viewId: string;
+  serverName: string;
+  toolName: string;
+  resourceUri?: string;
 };
 
 function normalizeStringList(raw: unknown): string[] | undefined {

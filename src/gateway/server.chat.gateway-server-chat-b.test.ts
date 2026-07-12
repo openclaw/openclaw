@@ -4075,6 +4075,47 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.history preserves only the bounded MCP App view descriptor", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          message: {
+            role: "toolResult",
+            toolCallId: "call-view",
+            toolName: "diagrams_create_view",
+            content: [{ type: "text", text: "rendered" }],
+            details: {
+              mcpApp: {
+                viewId: "mcpview_0123456789ABCDEFGHJKMNPQRSTVWXYZ",
+                serverName: "diagrams",
+                toolName: "create_view",
+                resourceUri: "ui://diagrams/app.html",
+                internal: "not for display",
+              },
+              internal: "not for display",
+            },
+            timestamp: 1,
+          },
+        }),
+      ]);
+
+      const messages = await fetchHistoryMessages(ws);
+      expect(messages).toHaveLength(1);
+      expect(messages[0]).toMatchObject({
+        details: {
+          mcpApp: {
+            viewId: "mcpview_0123456789ABCDEFGHJKMNPQRSTVWXYZ",
+            serverName: "diagrams",
+            toolName: "create_view",
+            resourceUri: "ui://diagrams/app.html",
+          },
+        },
+      });
+      expect(JSON.stringify(messages[0])).not.toContain("not for display");
+    });
+  });
+
   test("chat.history strips inline directives from displayed message text", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);

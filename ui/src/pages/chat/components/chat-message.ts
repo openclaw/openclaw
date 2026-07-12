@@ -733,6 +733,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
     const cards = groupedToolCards;
     const toolCount = cards.length || group.messages.length;
     const hasError = cards.some(isToolCardError) && group.turnSucceeded !== true;
+    const hasMcpAppPreview = cards.some((card) => card.preview?.kind === "mcp-app");
     // While a run is live, the newest still-running call names the group so
     // the collapsed header reads like a status line; afterwards it aggregates.
     const runningCard = opts.runActive
@@ -748,7 +749,8 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
           })),
         );
     const activityDisclosureId = `activity:${group.key}`;
-    const activityExpanded = opts.isToolMessageExpanded?.(activityDisclosureId) ?? hasError;
+    const activityExpanded =
+      opts.isToolMessageExpanded?.(activityDisclosureId) ?? (hasError || hasMcpAppPreview);
 
     return html`
       <div class="chat-group tool chat-group--activity">

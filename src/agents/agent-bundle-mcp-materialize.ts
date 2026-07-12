@@ -19,7 +19,8 @@ import type {
   McpToolCatalog,
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
-import { parseMcpAppResource, type McpAppToolDetails } from "./mcp-apps.js";
+import { storeMcpAppView } from "./mcp-app-view-store.js";
+import { parseMcpAppResource, type McpAppToolDetails, type McpAppViewPayload } from "./mcp-apps.js";
 import { mcpContentBlockToAgentContent } from "./mcp-content.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -85,6 +86,7 @@ async function resolveMcpAppDetails(params: {
   tool: McpCatalogTool;
   input: unknown;
   result: CallToolResult;
+  storeView: (payload: McpAppViewPayload) => McpAppToolDetails | undefined;
 }): Promise<McpAppToolDetails | undefined> {
   const resourceUri = params.tool.ui?.resourceUri;
   if (!resourceUri || params.result.isError === true || !params.runtime.readResource) {
@@ -98,7 +100,7 @@ async function resolveMcpAppDetails(params: {
       return undefined;
     }
     const resultMeta = params.result["_meta"];
-    return {
+    return params.storeView({
       serverName: params.tool.serverName,
       toolName: params.tool.toolName,
       resource: { ...resource, uri: resource.uri || resourceUri },
@@ -110,7 +112,7 @@ async function resolveMcpAppDetails(params: {
           : {}),
         ...(isRecord(resultMeta) ? { _meta: resultMeta } : {}),
       },
-    };
+    });
   } catch (error) {
     logWarn(
       `bundle-mcp: failed to load MCP app resource "${resourceUri}" from server "${params.tool.serverName}": ${String(error)}`,
@@ -387,6 +389,7 @@ export async function materializeBundleMcpToolsForRun(params: {
   runtime: SessionMcpRuntime;
   reservedToolNames?: Iterable<string>;
   disposeRuntime?: () => Promise<void>;
+  storeMcpAppView?: (payload: McpAppViewPayload) => McpAppToolDetails | undefined;
 }): Promise<BundleMcpToolRuntime> {
   let disposed = false;
   const releaseLease = params.runtime.acquireLease?.();
@@ -409,7 +412,13 @@ export async function materializeBundleMcpToolsForRun(params: {
         toolName: tool.toolName,
         result,
       });
-      const mcpApp = await resolveMcpAppDetails({ runtime: params.runtime, tool, input, result });
+      const mcpApp = await resolveMcpAppDetails({
+        runtime: params.runtime,
+        tool,
+        input,
+        result,
+        storeView: params.storeMcpAppView ?? storeMcpAppView,
+      });
       if (mcpApp) {
         const baseDetails = isRecord(agentResult.details) ? agentResult.details : {};
         agentResult.details = { ...baseDetails, mcpApp };

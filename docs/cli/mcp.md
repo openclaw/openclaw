@@ -829,9 +829,10 @@ OpenClaw's bundle MCP client declares the [MCP Apps extension](https://modelcont
 
 Behavior:
 
-- After a ui-bearing tool call succeeds, OpenClaw reads the app document (up to 5MB) and attaches it to the tool result for UI-capable surfaces. Every other surface receives the tool's normal text/structured result, so apps degrade gracefully everywhere.
+- After a ui-bearing tool call succeeds, OpenClaw reads the app document (up to 5MB) and stores the complete view payload in the shared state database. The transcript keeps only a bounded opaque view descriptor, so app HTML and tool payloads do not inflate `chat.history`. Every other surface receives the tool's normal text/structured result, so apps degrade gracefully everywhere.
 - Tools a server marks app-only (`_meta.ui.visibility` without `"model"`, including an explicitly empty list) are never exposed to the agent.
-- The Control UI renders the document inside the tool card through a gateway-served sandbox proxy. The outer frame has an opaque origin, the nested app frame receives the extension-required `allow-scripts allow-same-origin` sandbox, and the app-declared CSP (`_meta.ui.csp`) is enforced by the proxy response header.
+- The Control UI resolves the descriptor through a ticket-protected Gateway resource endpoint and renders the document inline under the tool summary, including while the tool disclosure itself is collapsed. The outer frame has an opaque origin, the nested app frame receives the extension-required `allow-scripts allow-same-origin` sandbox, and the app-declared CSP (`_meta.ui.csp`) is enforced by the proxy response header.
+- Stored views survive Gateway restarts and are removed by bounded retention: 30 days, 128 views, 256MiB total, and 8MiB per payload. Reloading an expired or evicted view shows an unavailable state instead of replaying app data from the transcript.
 - Phase 0 does not delegate requested camera, microphone, geolocation, or clipboard permissions to app frames.
 
 Plugins can attach MCP App servers declaratively with the `mcpServers` manifest field — see the [plugin manifest reference](/plugins/manifest).

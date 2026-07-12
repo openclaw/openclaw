@@ -5,14 +5,18 @@
  * bridge lands.
  */
 import { html, nothing } from "lit";
+import { guard } from "lit/directives/guard.js";
 import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
+import { until } from "lit/directives/until.js";
 import {
   CONTROL_UI_BASE_PATH_ATTRIBUTE,
+  CONTROL_UI_MCP_APP_RESOURCE_PATH,
   CONTROL_UI_MCP_APP_SANDBOX_PATH,
   CONTROL_UI_MCP_APP_SANDBOX_TICKET_ATTRIBUTE,
 } from "../../../../../src/gateway/control-ui-contract.js";
-import type { McpAppToolPreview } from "../../../lib/chat/chat-types.ts";
+import type { McpAppToolPreview, ResolvedMcpAppToolPreview } from "../../../lib/chat/chat-types.ts";
+import { resolveMcpAppPreviewPayload } from "../../../lib/chat/mcp-app.ts";
 
 const MCP_APPS_PROTOCOL_VERSION = "2026-01-26";
 const APP_FRAME_MIN_HEIGHT = 240;
@@ -31,7 +35,7 @@ type JsonRpcMessage = {
 };
 
 type McpAppHostState = {
-  preview: McpAppToolPreview;
+  preview: ResolvedMcpAppToolPreview;
   initialized: boolean;
   resourceSent: boolean;
 };
@@ -168,7 +172,7 @@ function installAppHostListener() {
 export function buildMcpAppSandboxUrl(params: {
   basePath: string;
   ticket: string;
-  csp?: McpAppToolPreview["csp"];
+  csp?: ResolvedMcpAppToolPreview["csp"];
 }): string {
   const search = new URLSearchParams({ ticket: params.ticket });
   if (params.csp) {
@@ -203,7 +207,16 @@ export function buildMcpAppSandboxUrl(params: {
   return `${params.basePath}${CONTROL_UI_MCP_APP_SANDBOX_PATH}?${search.toString()}`;
 }
 
-function resolveMcpAppSandboxUrl(preview: McpAppToolPreview): string | undefined {
+export function buildMcpAppResourceUrl(params: {
+  basePath: string;
+  ticket: string;
+  viewId: string;
+}): string {
+  const search = new URLSearchParams({ ticket: params.ticket, viewId: params.viewId });
+  return `${params.basePath}${CONTROL_UI_MCP_APP_RESOURCE_PATH}?${search.toString()}`;
+}
+
+function resolveMcpAppAccess(): { basePath: string; ticket: string } | undefined {
   if (typeof document === "undefined") {
     return undefined;
   }
@@ -212,14 +225,34 @@ function resolveMcpAppSandboxUrl(preview: McpAppToolPreview): string | undefined
   if (!ticket) {
     return undefined;
   }
-  return buildMcpAppSandboxUrl({
+  return {
     basePath: root.getAttribute(CONTROL_UI_BASE_PATH_ATTRIBUTE)?.trim() ?? "",
     ticket,
-    csp: preview.csp,
-  });
+  };
 }
 
-function registerAppFrame(preview: McpAppToolPreview) {
+function loadMcpAppView(
+  preview: McpAppToolPreview,
+  access: { basePath: string; ticket: string },
+): Promise<ResolvedMcpAppToolPreview | undefined> {
+  return fetch(
+    buildMcpAppResourceUrl({
+      basePath: access.basePath,
+      ticket: access.ticket,
+      viewId: preview.viewId,
+    }),
+    { cache: "no-store", credentials: "same-origin" },
+  )
+    .then(async (response) => {
+      if (!response.ok) {
+        return undefined;
+      }
+      return resolveMcpAppPreviewPayload(preview, await response.json());
+    })
+    .catch(() => undefined);
+}
+
+function registerAppFrame(preview: ResolvedMcpAppToolPreview) {
   // Registration must happen synchronously when the proxy element attaches so
   // its ready notification cannot race the host listener.
   let registered: HTMLIFrameElement | undefined;
@@ -242,15 +275,39 @@ function registerAppFrame(preview: McpAppToolPreview) {
   };
 }
 
-/** Renders an MCP App preview panel with its sandboxed host iframe. */
-export function renderMcpAppPreview(preview: McpAppToolPreview) {
-  if (!preview.html) {
-    return nothing;
-  }
-  const sandboxUrl = resolveMcpAppSandboxUrl(preview);
-  if (!sandboxUrl) {
-    return nothing;
-  }
+function renderMcpAppStatus(
+  preview: McpAppToolPreview,
+  message: string,
+  options: { reloadable?: boolean } = {},
+) {
+  return html`
+    <div class="chat-tool-card__preview" data-kind="mcp-app">
+      <div class="chat-tool-card__preview-header">
+        <span class="chat-tool-card__preview-label">${preview.title?.trim() || "App"}</span>
+        ${options.reloadable
+          ? html`
+              <button class="btn btn--sm" type="button" @click=${() => window.location.reload()}>
+                Reload page
+              </button>
+            `
+          : nothing}
+      </div>
+      <div class="chat-tool-card__preview-panel" data-side="mcp-app">
+        <div class="chat-tool-card__preview-empty">${message}</div>
+      </div>
+    </div>
+  `;
+}
+
+function renderResolvedMcpAppPreview(
+  preview: ResolvedMcpAppToolPreview,
+  access: { basePath: string; ticket: string },
+) {
+  const sandboxUrl = buildMcpAppSandboxUrl({
+    basePath: access.basePath,
+    ticket: access.ticket,
+    csp: preview.csp,
+  });
   return html`
     <div
       class="chat-tool-card__preview"
@@ -262,7 +319,7 @@ export function renderMcpAppPreview(preview: McpAppToolPreview) {
       </div>
       <div class="chat-tool-card__preview-panel" data-side="mcp-app">
         ${keyed(
-          `${preview.resourceUri ?? preview.html.length}:${sandboxUrl}`,
+          `${preview.viewId}:${sandboxUrl}`,
           html`
             <iframe
               class="chat-tool-card__preview-frame chat-tool-card__preview-frame--mcp-app"
@@ -278,4 +335,24 @@ export function renderMcpAppPreview(preview: McpAppToolPreview) {
       </div>
     </div>
   `;
+}
+
+/** Resolve and render an MCP App preview through the sandboxed host iframe. */
+export function renderMcpAppPreview(preview: McpAppToolPreview) {
+  const access = resolveMcpAppAccess();
+  if (!access) {
+    return nothing;
+  }
+  return guard([preview.viewId, access.basePath, access.ticket], () =>
+    until(
+      loadMcpAppView(preview, access).then((resolved) =>
+        resolved
+          ? renderResolvedMcpAppPreview(resolved, access)
+          : renderMcpAppStatus(preview, "App preview unavailable. Reload this page to retry.", {
+              reloadable: true,
+            }),
+      ),
+      renderMcpAppStatus(preview, "Loading app…"),
+    ),
+  );
 }
