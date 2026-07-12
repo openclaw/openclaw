@@ -7,7 +7,7 @@ import {
   migrateVoiceCallLegacyConfigInput,
   normalizeVoiceCallLegacyConfigInput,
   parseVoiceCallPluginConfig,
-} from "./config-compat.js";
+} from "./config-migration.js";
 
 describe("voice-call config compatibility", () => {
   it("maps deprecated provider and twilio.from fields into canonical config", () => {
@@ -28,7 +28,7 @@ describe("voice-call config compatibility", () => {
       streaming: {
         enabled: true,
         sttProvider: "openai",
-        openaiApiKey: "sk-test", // pragma: allowlist secret
+        openaiApiKey: "test",
         sttModel: "gpt-4o-transcribe",
         silenceDurationMs: 700,
         vadThreshold: 0.4,
@@ -54,7 +54,7 @@ describe("voice-call config compatibility", () => {
     expect(streaming?.enabled).toBe(true);
     expect(streaming?.provider).toBe("openai");
     expect(streaming?.providers?.openai).toEqual({
-      apiKey: "sk-test",
+      apiKey: "test",
       model: "gpt-4o-transcribe",
       silenceDurationMs: 700,
       vadThreshold: 0.4,
@@ -132,7 +132,7 @@ describe("voice-call config compatibility", () => {
       },
       streaming: {
         sttProvider: "openai",
-        openaiApiKey: "sk-test", // pragma: allowlist secret
+        openaiApiKey: "test",
       },
       realtime: {
         agentContext: {

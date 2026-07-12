@@ -740,7 +740,7 @@ describe("voice-call plugin", () => {
       streaming: {
         enabled: true,
         sttProvider: "openai",
-        openaiApiKey: "sk-test", // pragma: allowlist secret
+        openaiApiKey: "test",
       },
     });
     const handler = methods.get("voicecall.status") as
@@ -760,7 +760,7 @@ describe("voice-call plugin", () => {
     expect(runtimeConfig?.fromNumber).toBe("+15550001234");
     expect(runtimeConfig?.streaming?.enabled).toBe(true);
     expect(runtimeConfig?.streaming?.provider).toBe("openai");
-    expect(runtimeConfig?.streaming?.providers?.openai?.apiKey).toBe("sk-test");
+    expect(runtimeConfig?.streaming?.providers?.openai?.apiKey).toBe("test");
     expectWarningIncludes('Run "openclaw doctor --fix"');
   });
 

@@ -9,4 +9,4 @@ export {
   migrateVoiceCallLegacyConfigInput,
   normalizeVoiceCallLegacyConfigInput,
   parseVoiceCallPluginConfig,
-} from "./src/config-compat.js";
+} from "./src/config-migration.js";

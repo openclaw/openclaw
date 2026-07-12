@@ -1,4 +1,4 @@
-// Voice Call helper module supports config compat behavior.
+// Voice Call helper module supports setup-time config migration.
 import { asOptionalRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { VoiceCallConfig } from "./config.js";
 import { VoiceCallConfigSchema } from "./config.js";
@@ -149,7 +149,6 @@ export function migrateVoiceCallLegacyConfigInput(params: {
   const twilio = asObject(raw.twilio);
   const streaming = asObject(raw.streaming);
   const configPathPrefix = params.configPathPrefix ?? "plugins.entries.voice-call.config";
-  const issues = collectVoiceCallLegacyConfigIssues(raw);
 
   const legacyStreamingOpenAICompat: Record<string, unknown> = {};
   const streamingOpenAIApiKey = getString(streaming, "openaiApiKey");
@@ -261,7 +260,7 @@ export function migrateVoiceCallLegacyConfigInput(params: {
     changes.push(`Removed ${configPathPrefix}.realtime.agentContext.includeSystemPrompt.`);
   }
 
-  return { config, changes, issues };
+  return { config, changes, issues: collectVoiceCallLegacyConfigIssues(raw) };
 }
 
 /** Normalize legacy voice-call config input without returning migration metadata. */

@@ -17,7 +17,7 @@ import {
   formatVoiceCallLegacyConfigWarnings,
   normalizeVoiceCallLegacyConfigInput,
   parseVoiceCallPluginConfig,
-} from "./src/config-compat.js";
+} from "./src/config-migration.js";
 import {
   resolveVoiceCallConfig,
   validateProviderConfig,
