@@ -119,8 +119,8 @@ function parseSessionCorpusSourceRef(line: string): CorpusSourceRef | null {
     return null;
   }
   return {
-    agentId: match[1].trim(),
-    sessionPath: match[2].trim(),
+    agentId: match[1]!.trim(),
+    sessionPath: match[2]!.trim(),
     lineNumber: Math.floor(lineNumber),
   };
 }
@@ -250,7 +250,17 @@ async function findHeartbeatContaminatedCorpusLines(
       if (!source) {
         continue;
       }
-      const transcriptPath = path.join(workspaceRoot, "agents", source.agentId, source.sessionPath);
+      // Corpus references use logical session paths. File-backed sessions
+      // produce paths ending in .jsonl (e.g. "sessions/main/abc.jsonl").
+      // SQLite-backed sessions produce paths without .jsonl
+      // (e.g. "sessions/main/abc-123"). For SQLite logical paths, try
+      // appending .jsonl to find a migrated file; if none exists, the
+      // session is SQLite-only and was created after the heartbeat fix,
+      // so it cannot contain pre-fix contamination.
+      const hasJsonlExtension = source.sessionPath.toLowerCase().endsWith(".jsonl");
+      const transcriptPath = hasJsonlExtension
+        ? path.join(workspaceRoot, "agents", source.agentId, source.sessionPath)
+        : path.join(workspaceRoot, "agents", source.agentId, `${source.sessionPath}.jsonl`);
       let transcriptLines = transcriptCache.get(transcriptPath);
       if (!transcriptLines) {
         const transcriptContent = await fs.readFile(transcriptPath, "utf-8").catch(() => "");
@@ -333,7 +343,16 @@ async function clearScopedSessionIngestionState(params: {
     namespace: DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
     workspaceDir: params.workspaceDir,
   });
-  const nextSeenEntries = seenEntries.filter((entry) => !params.scopeKeys.has(entry.key));
+  const nextSeenEntries = seenEntries.filter((entry) => {
+    const entryScope =
+      typeof entry.value === "object" && entry.value !== null
+        ? (entry.value as { scope?: unknown }).scope
+        : undefined;
+    if (typeof entryScope === "string" && params.scopeKeys.has(entryScope)) {
+      return false;
+    }
+    return !params.scopeKeys.has(entry.key);
+  });
   if (nextSeenEntries.length !== seenEntries.length) {
     removed += seenEntries.length - nextSeenEntries.length;
     await writeMemoryCoreWorkspaceEntries({
