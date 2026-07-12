@@ -72,7 +72,6 @@ jobs:
           CALLER_WORKFLOW_SHA: ${{ github.workflow_sha }}
           EXPECTED_TRUSTED_WORKFLOW_SHA: ${{ inputs.expected_trusted_workflow_sha }}
           JOB_CONTEXT: ${{ toJSON(job) }}
-          TARGET_REF: ${{ inputs.target_ref }}
           TARGET_SHA: ${{ inputs.target_sha }}
           WORKFLOW_REF: ${{ github.workflow_ref }}
           WORKFLOW_SHA: ${{ github.workflow_sha }}
@@ -2057,7 +2056,10 @@ jobs:
           trap 'exit 143' TERM
           qa_model="mock-openai/gpt-5.6-luna"
           qa_alt_model="mock-openai/gpt-5.6-luna-alt"
-          if [[ "$TARGET_REF" == extended-stable/* ]]; then
+          candidate_telegram_qa="$CANDIDATE_ROOT/extensions/qa-lab/src/live-transports/telegram/telegram-live.runtime.ts"
+          if [[ -f "$candidate_telegram_qa" ]] &&
+            grep -Fq '"openai/gpt-5.5": {' "$candidate_telegram_qa" &&
+            ! grep -Fq '"openai/gpt-5.6-luna": {' "$candidate_telegram_qa"; then
             qa_model="mock-openai/gpt-5.5"
             qa_alt_model="mock-openai/gpt-5.5-alt"
           fi
