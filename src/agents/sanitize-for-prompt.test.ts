@@ -24,8 +24,12 @@ function hasLoneSurrogate(value: string): boolean {
 }
 
 describe("sanitizeForPromptLiteral (OC-19 hardening)", () => {
-  it("strips ASCII control chars (CR/LF/NUL/tab)", () => {
-    expect(sanitizeForPromptLiteral("/tmp/a\nb\rc\x00d\te")).toBe("/tmp/abcde");
+  it("strips ASCII control chars (CR/NUL) but preserves tabs and newlines", () => {
+    expect(sanitizeForPromptLiteral("/tmp/a\nb\rc\x00d\te")).toBe("/tmp/a\nbcd\te");
+  });
+
+  it("preserves tabs and newlines for code fidelity", () => {
+    expect(sanitizeForPromptLiteral("line1\nline2\tindented")).toBe("line1\nline2\tindented");
   });
 
   it("strips Unicode line/paragraph separators", () => {
