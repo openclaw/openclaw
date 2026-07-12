@@ -1,12 +1,18 @@
 // ACPX tests cover process reaper plugin behavior.
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { OPENCLAW_ACPX_LEASE_ID_ARG, OPENCLAW_GATEWAY_INSTANCE_ID_ARG } from "./process-lease.js";
+import {
+  OPENCLAW_ACPX_LEASE_ID_ARG,
+  OPENCLAW_ACPX_LEASE_ID_ENV,
+  OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
+  OPENCLAW_GATEWAY_INSTANCE_ID_ENV,
+} from "./process-lease.js";
 import {
   cleanupOpenClawOwnedAcpxProcessTree,
   isOpenClawLeaseAwareAcpxProcessCommand,
   isOpenClawOwnedAcpxProcessCommand,
   reapStaleOpenClawOwnedAcpxOrphans,
+  testing,
   type AcpxProcessInfo,
 } from "./process-reaper.js";
 
@@ -14,6 +20,7 @@ const WRAPPER_ROOT = "/tmp/openclaw-state/acpx";
 const CODEX_WRAPPER_COMMAND = `node ${WRAPPER_ROOT}/codex-acp-wrapper.mjs`;
 const CODEX_WRAPPER_COMMAND_WITH_LEASE = `${CODEX_WRAPPER_COMMAND} ${OPENCLAW_ACPX_LEASE_ID_ARG} lease-1 ${OPENCLAW_GATEWAY_INSTANCE_ID_ARG} gateway-1`;
 const CLAUDE_WRAPPER_COMMAND = `node ${WRAPPER_ROOT}/claude-agent-acp-wrapper.mjs`;
+const LEASE_ENV = `${OPENCLAW_ACPX_LEASE_ID_ENV}=lease-1 ${OPENCLAW_GATEWAY_INSTANCE_ID_ENV}=gateway-1`;
 const PLUGIN_DEPS_CODEX_COMMAND =
   "node /tmp/openclaw/plugin-runtime-deps/node_modules/@zed-industries/codex-acp/bin/codex-acp.js";
 const LOCAL_NODE_MODULES_CODEX_COMMAND = `node ${path.resolve(
@@ -52,6 +59,30 @@ function collectMatching<T, U>(
 }
 
 describe("process reaper", () => {
+  it("parses Windows process inventory without depending on environment output", () => {
+    expect(
+      testing.parseWindowsProcessList(
+        JSON.stringify([
+          {
+            ProcessId: 41,
+            ParentProcessId: 7,
+            CommandLine: '"C:\\Program Files\\node.exe" wrapper.mjs',
+            ExecutablePath: "C:\\Program Files\\node.exe",
+          },
+          {
+            ProcessId: 42,
+            ParentProcessId: 41,
+            CommandLine: null,
+            ExecutablePath: "C:\\Windows\\System32\\conhost.exe",
+          },
+        ]),
+      ),
+    ).toEqual([
+      { pid: 41, ppid: 7, command: '"C:\\Program Files\\node.exe" wrapper.mjs' },
+      { pid: 42, ppid: 41, command: "C:\\Windows\\System32\\conhost.exe" },
+    ]);
+  });
+
   it("recognizes generated Codex and Claude wrappers only under the configured root", () => {
     expect(
       isOpenClawOwnedAcpxProcessCommand({
@@ -161,6 +192,229 @@ describe("process reaper", () => {
     expect(killed[0]).toEqual({ pid: 112, signal: "SIGTERM" });
   });
 
+  it("kills reparented descendants that retain the ACPX lease environment", async () => {
+    const { deps, killed } = cleanupDeps([
+      {
+        pid: 114,
+        ppid: 1,
+        command: `claude -p --permission-mode bypassPermissions ${LEASE_ENV}`,
+      },
+    ]);
+
+    const result = await cleanupOpenClawOwnedAcpxProcessTree({
+      rootPid: 112,
+      rootCommand: CODEX_WRAPPER_COMMAND,
+      expectedLeaseId: "lease-1",
+      expectedGatewayInstanceId: "gateway-1",
+      wrapperRoot: WRAPPER_ROOT,
+      deps,
+    });
+
+    expect(result).toEqual({ inspectedPids: [114], terminatedPids: [114] });
+    expect(killed[0]).toEqual({ pid: 114, signal: "SIGTERM" });
+  });
+
+  it("combines the live wrapper tree with detached lease descendants", async () => {
+    const { deps, killed } = cleanupDeps([
+      { pid: 115, ppid: 1, command: `${CODEX_WRAPPER_COMMAND_WITH_LEASE} ${LEASE_ENV}` },
+      { pid: 116, ppid: 115, command: `node adapter.js ${LEASE_ENV}` },
+      { pid: 117, ppid: 1, command: `claude -p ${LEASE_ENV}` },
+    ]);
+
+    const result = await cleanupOpenClawOwnedAcpxProcessTree({
+      rootPid: 115,
+      rootCommand: CODEX_WRAPPER_COMMAND,
+      expectedLeaseId: "lease-1",
+      expectedGatewayInstanceId: "gateway-1",
+      wrapperRoot: WRAPPER_ROOT,
+      deps,
+    });
+
+    expect(result.inspectedPids).toEqual([115, 116, 117]);
+    expect(
+      collectMatching(
+        killed,
+        (entry) => entry.signal === "SIGTERM",
+        (entry) => entry.pid,
+      ),
+    ).toEqual([117, 116, 115]);
+  });
+
+  it("does not trust a lease marker from another gateway instance", async () => {
+    const { deps, killed } = cleanupDeps([
+      {
+        pid: 118,
+        ppid: 1,
+        command: `${CODEX_WRAPPER_COMMAND} ${OPENCLAW_ACPX_LEASE_ID_ENV}=lease-1 ${OPENCLAW_GATEWAY_INSTANCE_ID_ENV}=other-gateway`,
+      },
+    ]);
+
+    const result = await cleanupOpenClawOwnedAcpxProcessTree({
+      rootPid: 119,
+      rootCommand: CODEX_WRAPPER_COMMAND,
+      expectedLeaseId: "lease-1",
+      expectedGatewayInstanceId: "gateway-1",
+      wrapperRoot: WRAPPER_ROOT,
+      deps,
+    });
+
+    expect(result.skippedReason).toBe("missing-root");
+    expect(killed).toStrictEqual([]);
+  });
+
+  it("reports owned processes that survive SIGKILL", async () => {
+    const { deps: baseDeps } = cleanupDeps([
+      { pid: 120, ppid: 1, command: `${CODEX_WRAPPER_COMMAND_WITH_LEASE} ${LEASE_ENV}` },
+    ]);
+    const deps = { ...baseDeps, isProcessAlive: vi.fn(() => true) };
+
+    const result = await cleanupOpenClawOwnedAcpxProcessTree({
+      rootPid: 120,
+      rootCommand: CODEX_WRAPPER_COMMAND,
+      expectedLeaseId: "lease-1",
+      expectedGatewayInstanceId: "gateway-1",
+      wrapperRoot: WRAPPER_ROOT,
+      deps,
+    });
+
+    expect(result.survivingPids).toEqual([120]);
+  });
+
+  it("keeps a live PID in survivor verification when both signal calls fail", async () => {
+    const killed: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+    const result = await cleanupOpenClawOwnedAcpxProcessTree({
+      rootPid: 122,
+      rootCommand: CODEX_WRAPPER_COMMAND,
+      expectedLeaseId: "lease-1",
+      expectedGatewayInstanceId: "gateway-1",
+      wrapperRoot: WRAPPER_ROOT,
+      deps: {
+        listProcesses: vi.fn(async () => [
+          { pid: 122, ppid: 1, command: `${CODEX_WRAPPER_COMMAND_WITH_LEASE} ${LEASE_ENV}` },
+        ]),
+        killProcess: vi.fn((pid, signal) => {
+          killed.push({ pid, signal });
+          throw new Error("signal failed");
+        }),
+        isProcessAlive: vi.fn(() => true),
+        sleep: vi.fn(async () => {}),
+      },
+    });
+
+    expect(killed).toEqual([
+      { pid: 122, signal: "SIGTERM" },
+      { pid: 122, signal: "SIGKILL" },
+    ]);
+    expect(result.terminatedPids).toStrictEqual([]);
+    expect(result.survivingPids).toEqual([122]);
+  });
+
+  it("does not SIGKILL a PID whose lease identity changes during the TERM grace period", async () => {
+    const killed: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+    const ownedProcess = {
+      pid: 123,
+      ppid: 1,
+      command: `${CODEX_WRAPPER_COMMAND_WITH_LEASE} ${LEASE_ENV}`,
+    };
+    const reusedProcess = {
+      pid: 123,
+      ppid: 1,
+      command: "node unrelated-work.js",
+    };
+    let inventoryReads = 0;
+
+    const result = await cleanupOpenClawOwnedAcpxProcessTree({
+      rootPid: 123,
+      rootCommand: CODEX_WRAPPER_COMMAND,
+      expectedLeaseId: "lease-1",
+      expectedGatewayInstanceId: "gateway-1",
+      wrapperRoot: WRAPPER_ROOT,
+      deps: {
+        listProcesses: vi.fn(async () => {
+          inventoryReads += 1;
+          return inventoryReads === 1 ? [ownedProcess] : [reusedProcess];
+        }),
+        killProcess: vi.fn((pid, signal) => {
+          killed.push({ pid, signal });
+        }),
+        isProcessAlive: vi.fn(() => true),
+        sleep: vi.fn(async () => {}),
+      },
+    });
+
+    expect(killed).toEqual([{ pid: 123, signal: "SIGTERM" }]);
+    expect(result.terminatedPids).toEqual([123]);
+    expect(result.survivingPids ?? []).toStrictEqual([]);
+  });
+
+  it("revalidates a PPID-tree child without environment inventory before escalation", async () => {
+    const processes = [
+      { pid: 124, ppid: 1, command: CODEX_WRAPPER_COMMAND_WITH_LEASE },
+      { pid: 125, ppid: 124, command: "node adapter.js" },
+    ];
+    const alive = new Map([
+      [124, true],
+      [125, true],
+    ]);
+    const killed: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+
+    const result = await cleanupOpenClawOwnedAcpxProcessTree({
+      rootPid: 124,
+      rootCommand: CODEX_WRAPPER_COMMAND,
+      expectedLeaseId: "lease-1",
+      expectedGatewayInstanceId: "gateway-1",
+      wrapperRoot: WRAPPER_ROOT,
+      deps: {
+        listProcesses: vi.fn(async () => processes),
+        killProcess: vi.fn((pid, signal) => {
+          killed.push({ pid, signal });
+          if (signal === "SIGTERM" && pid === 124) {
+            alive.set(pid, false);
+          }
+          if (signal === "SIGKILL") {
+            alive.set(pid, false);
+          }
+        }),
+        isProcessAlive: vi.fn((pid) => alive.get(pid) ?? false),
+        sleep: vi.fn(async () => {}),
+      },
+    });
+
+    expect(killed).toContainEqual({ pid: 125, signal: "SIGKILL" });
+    expect(result.survivingPids ?? []).toStrictEqual([]);
+  });
+
+  it("reports a drained lease after SIGKILL removes a TERM-resistant process", async () => {
+    const killed: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+    let processAlive = true;
+    const result = await cleanupOpenClawOwnedAcpxProcessTree({
+      rootPid: 121,
+      rootCommand: CODEX_WRAPPER_COMMAND,
+      expectedLeaseId: "lease-1",
+      expectedGatewayInstanceId: "gateway-1",
+      wrapperRoot: WRAPPER_ROOT,
+      deps: {
+        listProcesses: vi.fn(async () => [
+          { pid: 121, ppid: 1, command: `${CODEX_WRAPPER_COMMAND_WITH_LEASE} ${LEASE_ENV}` },
+        ]),
+        killProcess: vi.fn((pid, signal) => {
+          killed.push({ pid, signal });
+          if (signal === "SIGKILL") {
+            processAlive = false;
+          }
+        }),
+        isProcessAlive: vi.fn(() => processAlive),
+        sleep: vi.fn(async () => {}),
+      },
+    });
+
+    expect(killed).toEqual([
+      { pid: 121, signal: "SIGTERM" },
+      { pid: 121, signal: "SIGKILL" },
+    ]);
+    expect(result.survivingPids ?? []).toStrictEqual([]);
+  });
+
   it("does not kill a reused same-root wrapper pid with a different lease identity", async () => {
     const { deps, killed } = cleanupDeps([
       {
@@ -207,7 +461,7 @@ describe("process reaper", () => {
     expect(result).toEqual({
       inspectedPids: [],
       terminatedPids: [],
-      skippedReason: "unverified-root",
+      skippedReason: "process-list-unavailable",
     });
     expect(killed).toStrictEqual([]);
   });
@@ -293,6 +547,25 @@ describe("process reaper", () => {
         (entry) => entry.pid,
       ),
     ).toEqual([402, 401, 400, 404, 403, 405]);
+  });
+
+  it("reports broad startup reaper survivors after escalation", async () => {
+    const processes = [{ pid: 410, ppid: 1, command: CODEX_WRAPPER_COMMAND }];
+    const result = await reapStaleOpenClawOwnedAcpxOrphans({
+      wrapperRoot: WRAPPER_ROOT,
+      deps: {
+        listProcesses: vi.fn(async () => processes),
+        killProcess: vi.fn(),
+        isProcessAlive: vi.fn(() => true),
+        sleep: vi.fn(async () => {}),
+      },
+    });
+
+    expect(result).toEqual({
+      inspectedPids: [410],
+      terminatedPids: [],
+      survivingPids: [410],
+    });
   });
 
   it("reaps plugin-local Codex ACP adapter orphans when the generated wrapper is already gone", async () => {

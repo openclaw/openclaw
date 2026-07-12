@@ -272,13 +272,19 @@ async function reapOpenAcpxProcessLeases(params: {
   gatewayInstanceId: string;
   leaseStore: AcpxProcessLeaseStore;
   deps?: AcpxProcessCleanupDeps;
-}): Promise<{ inspectedPids: number[]; terminatedPids: number[] }> {
+}): Promise<{ inspectedPids: number[]; terminatedPids: number[]; failedLeaseCount: number }> {
   const leases = await params.leaseStore.listOpen(params.gatewayInstanceId);
   const inspectedPids: number[] = [];
   const terminatedPids: number[] = [];
+  let failedLeaseCount = 0;
   const pendingLeaseRootResults = new Map<
     string,
-    { inspectedPids: number[]; terminatedPids: number[] }
+    {
+      inspectedPids: number[];
+      terminatedPids: number[];
+      survivingPids?: number[];
+      skippedReason?: "process-list-unavailable";
+    }
   >();
   for (const lease of leases) {
     if (lease.rootPid <= 0) {
@@ -293,10 +299,12 @@ async function reapOpenAcpxProcessLeases(params: {
         inspectedPids.push(...result.inspectedPids);
         terminatedPids.push(...result.terminatedPids);
       }
-      await params.leaseStore.markState(
-        lease.leaseId,
-        result.terminatedPids.length > 0 ? "closed" : "lost",
-      );
+      const pendingLeaseDrained =
+        !result.survivingPids?.length && result.skippedReason === undefined;
+      await params.leaseStore.markState(lease.leaseId, pendingLeaseDrained ? "closed" : "lost");
+      if (!pendingLeaseDrained) {
+        failedLeaseCount += 1;
+      }
       continue;
     }
     await params.leaseStore.markState(lease.leaseId, "closing");
@@ -309,12 +317,15 @@ async function reapOpenAcpxProcessLeases(params: {
     });
     inspectedPids.push(...result.inspectedPids);
     terminatedPids.push(...result.terminatedPids);
-    await params.leaseStore.markState(
-      lease.leaseId,
-      result.terminatedPids.length > 0 ? "closed" : "lost",
-    );
+    const drained =
+      !result.survivingPids?.length &&
+      (result.terminatedPids.length > 0 || result.skippedReason === "missing-root");
+    await params.leaseStore.markState(lease.leaseId, drained ? "closed" : "lost");
+    if (!drained) {
+      failedLeaseCount += 1;
+    }
   }
-  return { inspectedPids, terminatedPids };
+  return { inspectedPids, terminatedPids, failedLeaseCount };
 }
 
 /** Create the ACPX plugin service that owns runtime registration and cleanup. */
@@ -374,6 +385,11 @@ export function createAcpxRuntimeService(
       if (startupReap.terminatedPids.length > 0) {
         ctx.logger.info(
           `reaped ${startupReap.terminatedPids.length} stale OpenClaw-owned ACPX process${startupReap.terminatedPids.length === 1 ? "" : "es"}`,
+        );
+      }
+      if (startupReap.failedLeaseCount > 0) {
+        throw new Error(
+          `ACPX process containment failed to drain ${startupReap.failedLeaseCount} stale process lease(s) during startup`,
         );
       }
       warnOnIgnoredLegacyCompatibilityConfig({

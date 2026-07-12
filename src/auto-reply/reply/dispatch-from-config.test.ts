@@ -57,7 +57,7 @@ import { buildTestCtx } from "./test-ctx.js";
 type AbortResult = {
   handled: boolean;
   aborted: boolean;
-  rejectionReason?: "finalizing";
+  rejectionReason?: "containment-failed" | "finalizing";
   stoppedSubagents?: number;
 };
 type ResolveInboundConversationParams = Parameters<

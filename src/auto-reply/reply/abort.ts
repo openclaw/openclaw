@@ -140,8 +140,11 @@ export function abortSessionRunTargetWithOutcome(params: { key?: string; session
 
 export function formatAbortReplyText(
   stoppedSubagents?: number,
-  rejectionReason?: "finalizing",
+  rejectionReason?: "containment-failed" | "finalizing",
 ): string {
+  if (rejectionReason === "containment-failed") {
+    return "Abort was requested, but ACP process cleanup could not be verified. Check Gateway logs and stop the remaining owned process before continuing.";
+  }
   if (rejectionReason === "finalizing") {
     const base = "Agent reply is already finalizing and can no longer be aborted.";
     if (typeof stoppedSubagents !== "number" || stoppedSubagents <= 0) {
@@ -331,7 +334,7 @@ export async function tryFastAbortFromMessage(params: {
 }): Promise<{
   handled: boolean;
   aborted: boolean;
-  rejectionReason?: "finalizing";
+  rejectionReason?: "containment-failed" | "finalizing";
   stoppedSubagents?: number;
 }> {
   const { ctx, cfg } = params;
@@ -411,6 +414,7 @@ export async function tryFastAbortFromMessage(params: {
       abortTargetKeys.push(boundAcpTargetKey);
     }
     const acpManager = abortDeps.getAcpSessionManager();
+    let acpContainmentFailed = false;
     for (const acpTargetKey of abortTargetKeys.filter(isAcpSessionKey)) {
       const acpResolution = acpManager.resolveSession({
         cfg,
@@ -426,6 +430,7 @@ export async function tryFastAbortFromMessage(params: {
           reason: "fast-abort",
         });
       } catch (error) {
+        acpContainmentFailed = true;
         logVerbose(`abort: ACP cancel failed for ${acpTargetKey}: ${formatErrorMessage(error)}`);
       }
     }
@@ -478,6 +483,14 @@ export async function tryFastAbortFromMessage(params: {
       );
     }
     const { stopped } = stopSubagentsForRequester({ cfg, requesterSessionKey });
+    if (acpContainmentFailed) {
+      return {
+        handled: true,
+        aborted: false,
+        rejectionReason: "containment-failed",
+        stoppedSubagents: stopped,
+      };
+    }
     if (activeAbortRejected && !aborted) {
       return {
         handled: true,

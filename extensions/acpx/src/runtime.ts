@@ -1014,12 +1014,16 @@ export class AcpxRuntime implements AcpRuntime {
         wrapperRoot: lease.wrapperRoot,
         deps: this.processCleanupDeps,
       });
-      await this.processLeaseStore?.markState(
-        lease.leaseId,
-        result.terminatedPids.length > 0 || result.skippedReason === "missing-root"
-          ? "closed"
-          : "lost",
-      );
+      const cleanupDrained =
+        !result.survivingPids?.length &&
+        (result.terminatedPids.length > 0 || result.skippedReason === "missing-root");
+      await this.processLeaseStore?.markState(lease.leaseId, cleanupDrained ? "closed" : "lost");
+      if (!cleanupDrained) {
+        const detail = result.survivingPids?.length
+          ? `${result.survivingPids.length} owned process(es) survived`
+          : `cleanup was not verified (${result.skippedReason ?? "no owned process terminated"})`;
+        throw new AcpRuntimeError("ACP_TURN_FAILED", `ACPX process containment failed: ${detail}.`);
+      }
       return;
     }
 

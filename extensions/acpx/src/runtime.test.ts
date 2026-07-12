@@ -10,7 +10,12 @@ import {
   type AcpRuntimeEvent,
   type AcpRuntimeTurn,
 } from "../runtime-api.js";
-import { OPENCLAW_ACPX_LEASE_ID_ARG, OPENCLAW_GATEWAY_INSTANCE_ID_ARG } from "./process-lease.js";
+import {
+  OPENCLAW_ACPX_LEASE_ID_ARG,
+  OPENCLAW_ACPX_LEASE_ID_ENV,
+  OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
+  OPENCLAW_GATEWAY_INSTANCE_ID_ENV,
+} from "./process-lease.js";
 import { AcpxRuntime, testing, type AcpSessionStore } from "./runtime.js";
 
 type TestSessionStore = {
@@ -1663,6 +1668,70 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     ]);
     expect(leaseStore.store.markState).toHaveBeenCalledWith("lease-close", "closing");
     expect(leaseStore.store.markState).toHaveBeenLastCalledWith("lease-close", "closed");
+  });
+
+  it("fails close and marks the lease lost when owned descendants survive SIGKILL", async () => {
+    const leaseStore = makeLeaseStore();
+    leaseStore.leases.set("lease-close", {
+      leaseId: "lease-close",
+      gatewayInstanceId: "gateway-test",
+      sessionKey: "agent:codex:acp:binding:test",
+      wrapperRoot: "/tmp/openclaw/acpx",
+      wrapperPath: "/tmp/openclaw/acpx/codex-acp-wrapper.mjs",
+      rootPid: 950,
+      commandHash: "hash",
+      startedAt: 1,
+      state: "open",
+    });
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:codex:acp:binding:test",
+        agentCommand: CODEX_ACP_WRAPPER_COMMAND,
+        openclawLeaseId: "lease-close",
+        pid: 950,
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const leaseEnv = `${OPENCLAW_ACPX_LEASE_ID_ENV}=lease-close ${OPENCLAW_GATEWAY_INSTANCE_ID_ENV}=gateway-test`;
+    const { runtime, delegate } = makeRuntime(
+      baseStore,
+      {
+        openclawGatewayInstanceId: "gateway-test",
+        openclawProcessLeaseStore: leaseStore.store,
+        openclawWrapperRoot: "/tmp/openclaw/acpx",
+      },
+      {
+        openclawProcessCleanup: {
+          listProcesses: vi.fn(async () => [
+            {
+              pid: 950,
+              ppid: 1,
+              command: `${CODEX_ACP_WRAPPER_COMMAND_WITH_LEASE} ${leaseEnv}`,
+            },
+          ]),
+          killProcess: vi.fn(),
+          isProcessAlive: vi.fn(() => true),
+          sleep: vi.fn(async () => {}),
+        },
+      },
+    );
+    vi.spyOn(delegate, "close").mockResolvedValue(undefined);
+
+    await expect(
+      runtime.close({
+        handle: {
+          sessionKey: "agent:codex:acp:binding:test",
+          backend: "acpx",
+          runtimeSessionName: "agent:codex:acp:binding:test",
+        },
+        reason: "user-close",
+      }),
+    ).rejects.toThrow("ACPX process containment failed: 1 owned process(es) survived");
+
+    expect(leaseStore.store.markState.mock.calls).toEqual([
+      ["lease-close", "closing"],
+      ["lease-close", "lost"],
+    ]);
   });
 
   it("closes the current process lease when the saved lease id is stale", async () => {

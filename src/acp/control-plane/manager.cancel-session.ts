@@ -1,11 +1,14 @@
 /** Cancellation path for active ACP turns and idle runtime handles. */
 import type { AcpRuntime, AcpRuntimeHandle } from "@openclaw/acp-core/runtime/types";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { logVerbose } from "../../globals.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import {
   type AcpRuntimeError,
   toAcpRuntimeError,
   withAcpRuntimeErrorBoundary,
 } from "../runtime/errors.js";
+import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
 import type {
   ActiveTurnState,
   EnsureManagerRuntimeHandle,
@@ -24,15 +27,27 @@ export async function runManagerCancelSession(params: {
   withSessionActor: WithManagerSessionActor;
   resolveSession: ResolveManagerSession;
   ensureRuntimeHandle: EnsureManagerRuntimeHandle;
+  runtimeHandles: ManagerRuntimeHandleCache;
   setSessionState: SetManagerSessionState;
 }): Promise<void> {
   const actorKey = normalizeActorKey(params.sessionKey);
   const activeTurn = params.activeTurnBySession.get(actorKey);
   if (activeTurn) {
-    await cancelActiveTurn({
+    activeTurn.abortController.abort();
+    const closePromise = params.runtimeHandles.close({
+      sessionKey: params.sessionKey,
+      reason: params.reason ?? "turn-cancelled",
+      throwOnError: true,
+    });
+    void cancelActiveTurn({
       activeTurn,
       reason: params.reason,
+    }).catch((error: unknown) => {
+      logVerbose(
+        `acp-manager: protocol cancel failed while closing runtime for ${params.sessionKey}: ${formatErrorMessage(error)}`,
+      );
     });
+    await closePromise;
     return;
   }
 
@@ -48,11 +63,21 @@ export async function runManagerCancelSession(params: {
       meta: resolvedMeta,
     });
     try {
-      await cancelRuntimeHandle({
+      const closePromise = params.runtimeHandles.close({
+        sessionKey: params.sessionKey,
+        reason: params.reason ?? "session-cancelled",
+        throwOnError: true,
+      });
+      void cancelRuntimeHandle({
         runtime,
         handle,
         reason: params.reason,
+      }).catch((error: unknown) => {
+        logVerbose(
+          `acp-manager: protocol cancel failed while closing runtime for ${params.sessionKey}: ${formatErrorMessage(error)}`,
+        );
       });
+      await closePromise;
       await params.setSessionState({
         cfg: params.cfg,
         sessionKey: params.sessionKey,
@@ -76,7 +101,6 @@ async function cancelActiveTurn(params: {
   activeTurn: ActiveTurnState;
   reason?: string;
 }): Promise<void> {
-  params.activeTurn.abortController.abort();
   if (!params.activeTurn.cancelPromise) {
     params.activeTurn.cancelPromise = params.activeTurn.runtime.cancel({
       handle: params.activeTurn.handle,
