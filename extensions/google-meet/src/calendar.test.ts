@@ -51,12 +51,12 @@ describe("Google Calendar requests", () => {
 });
 
 describe("Google Meet calendar URL extraction", () => {
-  it("requires hangout links to match the runtime Meet URL contract", () => {
+  it("normalizes Calendar HTTP links before applying the runtime Meet URL contract", () => {
     expect(
       extractGoogleMeetUriFromCalendarEvent({
         hangoutLink: "http://meet.google.com/abc-defg-hij",
       }),
-    ).toBeUndefined();
+    ).toBe("https://meet.google.com/abc-defg-hij");
     expect(
       extractGoogleMeetUriFromCalendarEvent({
         hangoutLink: "https://example.com/abc-defg-hij",
@@ -74,23 +74,33 @@ describe("Google Meet calendar URL extraction", () => {
     ).toBeUndefined();
     expect(
       extractGoogleMeetUriFromCalendarEvent({
+        hangoutLink: "https://user@meet.google.com/abc-defg-hij",
+      }),
+    ).toBeUndefined();
+    expect(
+      extractGoogleMeetUriFromCalendarEvent({
+        hangoutLink: "https://meet.google.com:444/abc-defg-hij",
+      }),
+    ).toBeUndefined();
+    expect(
+      extractGoogleMeetUriFromCalendarEvent({
         hangoutLink: "https://meet.google.com/abc-defg-hij?authuser=0",
       }),
     ).toBe("https://meet.google.com/abc-defg-hij?authuser=0");
   });
 
-  it("ignores malformed conference entrypoints before selecting a valid one", () => {
+  it("ignores malformed conference entrypoints before selecting and upgrading a valid one", () => {
     expect(
       extractGoogleMeetUriFromCalendarEvent({
         conferenceData: {
           entryPoints: [
             {
               entryPointType: "video",
-              uri: "http://meet.google.com/abc-defg-hij",
+              uri: "https://example.com/abc-defg-hij",
             },
             {
               entryPointType: "video",
-              uri: "https://meet.google.com/abc-defg-hij",
+              uri: "http://meet.google.com/abc-defg-hij",
             },
           ],
         },
@@ -124,5 +134,10 @@ describe("Google Meet calendar URL extraction", () => {
         description: "Join https://meet.google.com/abc-defg-hij?authuser=0.",
       }),
     ).toBe("https://meet.google.com/abc-defg-hij?authuser=0");
+    expect(
+      extractGoogleMeetUriFromCalendarEvent({
+        description: "Join http://meet.google.com/abc-defg-hij.",
+      }),
+    ).toBe("https://meet.google.com/abc-defg-hij");
   });
 });

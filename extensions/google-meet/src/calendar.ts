@@ -71,7 +71,22 @@ function normalizeGoogleMeetCalendarUri(value: string | undefined): string | und
     return undefined;
   }
   try {
-    return normalizeMeetUrl(value);
+    const url = new URL(value);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      return undefined;
+    }
+    if (
+      url.hostname.toLowerCase() !== "meet.google.com" ||
+      url.port ||
+      url.username ||
+      url.password
+    ) {
+      return undefined;
+    }
+    // Calendar entry points may use HTTP. Upgrade before passing the URL to the
+    // stricter runtime boundary so browser and node-host navigation stay HTTPS-only.
+    url.protocol = "https:";
+    return normalizeMeetUrl(url.toString());
   } catch {
     return undefined;
   }
@@ -79,7 +94,7 @@ function normalizeGoogleMeetCalendarUri(value: string | undefined): string | und
 
 function extractGoogleMeetUriFromText(value: string | undefined): string | undefined {
   const match = value?.match(
-    /https:\/\/meet\.google\.com\/[a-z]{3}-[a-z]{4}-[a-z]{3}(?![a-z0-9-])(?:[/?#][^\s<>"')\]]*)?/i,
+    /https?:\/\/meet\.google\.com\/[a-z]{3}-[a-z]{4}-[a-z]{3}(?![a-z0-9-])(?:[/?#][^\s<>"')\]]*)?/i,
   );
   return normalizeGoogleMeetCalendarUri(match?.[0]?.replace(/[.,;:!]+$/, ""));
 }
