@@ -157,6 +157,27 @@ describe("senderIsOwner only reflects explicit owner authorization", () => {
     expect(auth.senderIsGlobalOwner).toBe(true);
   });
 
+  it("keeps channel/guild context ownership origin-scoped, not global (#104984)", () => {
+    // ctx.OwnerAllowFrom is channel/guild-derived (e.g. a Discord guild users
+    // list). It confers owner status on the origin surface but must NOT count
+    // as global cross-channel authority — only commands.ownerAllowFrom does.
+    const cfg = {
+      channels: { discord: {} },
+    } as OpenClawConfig;
+    const ctx = {
+      Provider: "discord",
+      Surface: "discord",
+      From: "discord:123",
+      SenderId: "123",
+      OwnerAllowFrom: ["123"],
+    } as MsgContext;
+
+    const auth = resolveCommandAuthorization({ ctx, cfg, commandAuthorized: true });
+
+    expect(auth.senderIsOwner).toBe(true);
+    expect(auth.senderIsGlobalOwner).toBe(false);
+  });
+
   it("leaves a non-owner as neither owner nor global owner (#104984)", () => {
     const cfg = {
       channels: { discord: { allowFrom: ["123"] } },
