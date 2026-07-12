@@ -565,6 +565,19 @@ class OpenClawShell extends OpenClawLightDomElement {
     context.theme.setMode(event.detail.mode, event.detail.element);
   };
 
+  private handleSettingsSearchQueryChange(nextQuery: string) {
+    this.settingsSearchQuery = nextQuery;
+    const runtimeConfig = this.context?.runtimeConfig;
+    if (!runtimeConfig || !nextQuery.trim()) {
+      return;
+    }
+    void runtimeConfig.ensureLoaded().then(() => {
+      if (this.context?.runtimeConfig === runtimeConfig) {
+        void runtimeConfig.ensureSchemaLoaded();
+      }
+    });
+  }
+
   private chatNavigationOptions(options?: ApplicationNavigationOptions) {
     if (options) {
       return options;
@@ -1043,14 +1056,8 @@ class OpenClawShell extends OpenClawLightDomElement {
                 onExit: () => this.exitSettings(),
                 onNavigate: (routeId, options) => this.navigate(routeId, options),
                 onPreload: (routeId) => context.preload(routeId),
-                onSearchQueryChange: (nextQuery) => {
-                  this.settingsSearchQuery = nextQuery;
-                  if (nextQuery.trim()) {
-                    void context.runtimeConfig
-                      .ensureLoaded()
-                      .then(() => context.runtimeConfig.ensureSchemaLoaded());
-                  }
-                },
+                onSearchQueryChange: (nextQuery) =>
+                  this.handleSettingsSearchQueryChange(nextQuery),
                 preloadTimers: this.settingsPreloadTimers,
               })
             : html`<openclaw-app-sidebar
