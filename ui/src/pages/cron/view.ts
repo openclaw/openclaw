@@ -721,9 +721,7 @@ function renderJobsTable(props: CronProps, hasAnyJobsFilters: boolean) {
 }
 
 function renderJobRow(job: CronJob, props: CronProps) {
-  const lastStatus = resolveCronJobLastRunStatus(job);
   const nextRunAtMs = job.state?.nextRunAtMs;
-  const lastRunAtMs = job.state?.lastRunAtMs;
   const hasNextRun = typeof nextRunAtMs === "number" && Number.isFinite(nextRunAtMs);
   const dotVariant = isCronJobActiveFailure(job)
     ? "cron-table__dot--error"
@@ -755,12 +753,7 @@ function renderJobRow(job: CronJob, props: CronProps) {
       <span class="cron-table__cell">
         ${hasNextRun ? formatRelativeTimestamp(nextRunAtMs) : t("common.na")}
       </span>
-      <span class="cron-table__cell cron-table__last">
-        ${renderLastRunChip(lastStatus)}
-        ${typeof lastRunAtMs === "number"
-          ? html`<span class="cron-table__last-time">${formatRelativeTimestamp(lastRunAtMs)}</span>`
-          : nothing}
-      </span>
+      <span class="cron-table__cell cron-table__last">${renderLastRunCell(job)}</span>
       <span
         class="cron-table__actions"
         @click=${(e: Event) => e.stopPropagation()}
@@ -772,17 +765,31 @@ function renderJobRow(job: CronJob, props: CronProps) {
   `;
 }
 
-function renderLastRunChip(status: ReturnType<typeof resolveCronJobLastRunStatus>) {
-  if (status === "ok") {
-    return html`<span class="chip chip-ok">${t("cron.runs.runStatusOk")}</span>`;
+function renderLastRunCell(job: CronJob) {
+  const status = resolveCronJobLastRunStatus(job);
+  const lastRunAtMs = job.state?.lastRunAtMs;
+  const rel =
+    typeof lastRunAtMs === "number" && Number.isFinite(lastRunAtMs)
+      ? formatRelativeTimestamp(lastRunAtMs)
+      : null;
+  if (status === "unknown" || !rel) {
+    return html`<span class="muted">${t("common.na")}</span>`;
   }
-  if (status === "error") {
-    return html`<span class="chip chip-danger">${t("cron.runs.runStatusError")}</span>`;
-  }
-  if (status === "skipped") {
-    return html`<span class="chip">${t("cron.runs.runStatusSkipped")}</span>`;
-  }
-  return html`<span class="muted">${t("common.na")}</span>`;
+  // Bare glyph + time reads calmer than a chip per row; the status word stays
+  // available to hover and assistive tech via the label.
+  const glyph =
+    status === "ok"
+      ? html`<span class="cron-last-glyph cron-last-glyph--ok">${icon("check")}</span>`
+      : status === "error"
+        ? html`<span class="cron-last-glyph cron-last-glyph--error">${icon("x")}</span>`
+        : html`<span class="cron-last-glyph">${icon("cornerDownRight")}</span>`;
+  const label = runStatusLabel(status);
+  return html`
+    <span class="cron-table__last-run" role="img" aria-label=${label} title=${label}>
+      ${glyph}
+      <span class="cron-table__last-time">${rel}</span>
+    </span>
+  `;
 }
 
 function renderJobMenu(props: CronProps, job: CronJob, opts: { rowActions: boolean }) {
@@ -871,15 +878,24 @@ function renderDetailView(props: CronProps, mode: CronPanelMode) {
       ${props.error ? html`<div class="cron-error-banner">${props.error}</div>` : nothing}
       ${showHistory
         ? html`<div class="cron-history card">${renderRunsSection(props)}</div>`
-        : renderEditor(props, mode, selectedJob)}
+        : renderEditor(props, mode)}
     </section>
   `;
 }
 
 function renderDetailHeader(props: CronProps, mode: CronPanelMode, selectedJob?: CronJob) {
   const title = mode === "job" ? (selectedJob?.name ?? props.form.name) : t("cron.detail.newTitle");
+  // Header describes the SAVED job (schedule + next run); the form's live
+  // summary describes unsaved edits, so the two never contradict each other.
+  const nextRunAtMs = selectedJob?.state?.nextRunAtMs;
+  const nextRunSuffix =
+    typeof nextRunAtMs === "number" && Number.isFinite(nextRunAtMs)
+      ? ` · ${t("cron.jobState.next")} ${formatRelativeTimestamp(nextRunAtMs)}`
+      : "";
   const subtitle =
-    mode === "job" && selectedJob ? formatCronSchedule(selectedJob) : t("cron.detail.newSubtitle");
+    mode === "job" && selectedJob
+      ? `${formatCronSchedule(selectedJob)}${nextRunSuffix}`
+      : t("cron.detail.newSubtitle");
   return html`
     <div class="cron-detail-header">
       <div class="cron-detail-header__copy">
@@ -955,7 +971,7 @@ function renderDetailTabs(props: CronProps) {
   `;
 }
 
-function renderEditor(props: CronProps, mode: CronPanelMode, selectedJob?: CronJob) {
+function renderEditor(props: CronProps, mode: CronPanelMode) {
   const payloadLocked = props.form.payloadLocked;
   const isAgentTurn = !payloadLocked && props.form.payloadKind === "agentTurn";
   const supportsAnnounce =
@@ -975,7 +991,7 @@ function renderEditor(props: CronProps, mode: CronPanelMode, selectedJob?: CronJ
     <div class="cron-editor">
       ${renderPromptCard(props, { payloadLocked, isAgentTurn })}
       <div class="cron-editor-grid">
-        ${renderGeneralCard(props)} ${renderScheduleCard(props, selectedJob)}
+        ${renderGeneralCard(props)} ${renderScheduleCard(props)}
         ${renderDeliveryCard(props, { supportsAnnounce, selectedDeliveryMode })}
       </div>
       ${renderAdvanced(props, {
@@ -1288,7 +1304,7 @@ function describeFormSchedule(form: CronFormState): string | null {
   return form.scheduleKind === "on-exit" ? t("cron.form.repeatOnExit") : null;
 }
 
-function renderScheduleCard(props: CronProps, selectedJob?: CronJob) {
+function renderScheduleCard(props: CronProps) {
   const form = props.form;
   const isOnExit = form.scheduleKind === "on-exit";
   // on-exit stays selectable only while it is the current value: jobs can
@@ -1300,8 +1316,6 @@ function renderScheduleCard(props: CronProps, selectedJob?: CronJob) {
     { value: "cron", label: t("cron.form.cronOption") },
   ];
   const summary = describeFormSchedule(form);
-  const nextRunAtMs = selectedJob?.state?.nextRunAtMs;
-  const hasNextRun = typeof nextRunAtMs === "number" && Number.isFinite(nextRunAtMs);
   return html`
     <section class="cron-editor-card card">
       <div class="cron-editor-card__title">${t("cron.detail.scheduleSection")}</div>
@@ -1418,18 +1432,7 @@ function renderScheduleCard(props: CronProps, selectedJob?: CronJob) {
           `
         : nothing}
       ${summary
-        ? html`
-            <div class="cron-schedule-summary">
-              ${icon("clock")}
-              <span>
-                ${summary}${hasNextRun
-                  ? html`<span class="muted">
-                      · ${t("cron.jobState.next")} ${formatRelativeTimestamp(nextRunAtMs)}
-                    </span>`
-                  : nothing}
-              </span>
-            </div>
-          `
+        ? html` <div class="cron-schedule-summary">${icon("clock")}<span>${summary}</span></div> `
         : nothing}
     </section>
   `;

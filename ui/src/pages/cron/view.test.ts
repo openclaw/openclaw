@@ -195,7 +195,12 @@ describe("cron view list pane", () => {
     expect(rows[1]?.classList.contains("cron-table__row--paused")).toBe(true);
     expect(rows[1]?.textContent).toContain("Paused");
     expect(rows[2]?.querySelector(".cron-table__dot--error")).not.toBeNull();
-    expect(rows[2]?.textContent).toContain("Error");
+    expect(rows[2]?.querySelector(".cron-last-glyph--error")).not.toBeNull();
+    expect(rows[2]?.querySelector(".cron-table__last-run")?.getAttribute("aria-label")).toBe(
+      "Error",
+    );
+    expect(rows[0]?.querySelector(".cron-last-glyph--ok")).toBeNull();
+    expect(rows[0]?.textContent).toContain("n/a");
 
     (rows[1] as HTMLElement).click();
     expect(onSelectJob).toHaveBeenCalledWith(paused);

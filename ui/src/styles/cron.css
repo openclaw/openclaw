@@ -327,13 +327,46 @@
 .cron-table__last {
   display: flex;
   align-items: center;
-  gap: 8px;
+}
+
+.cron-table__last-run {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.cron-last-glyph {
+  flex: 0 0 auto;
+  display: inline-flex;
+  color: var(--muted);
+}
+
+.cron-last-glyph svg {
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  stroke-width: 2.5;
+  fill: none;
+}
+
+.cron-last-glyph--ok {
+  color: var(--ok);
+}
+
+.cron-last-glyph--error {
+  color: var(--danger);
 }
 
 .cron-table__last-time {
-  color: var(--muted);
+  color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cron-table__row--paused .cron-table__last-time {
+  color: var(--muted);
 }
 
 .cron-table__actions {
@@ -670,6 +703,13 @@
   outline: none;
   box-shadow: none;
   border: 0;
+}
+
+/* The textarea is borderless, so the card itself carries the visible keyboard
+   focus indicator (required for a11y after suppressing the input outline). */
+.cron-prompt-card:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
 .cron-prompt-card__footer {
