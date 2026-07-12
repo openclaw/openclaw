@@ -323,12 +323,14 @@ function resolveSdkChatChannelMeta(id: string) {
       metaById: buildChatChannelMetaById(),
     };
   }
-  return expectDefined(cachedSdkChatChannelMeta.metaById[id], `chat channel metadata: ${id}`);
+  // Optional by design: createChannelPluginBase serves external plugin ids that
+  // are never in the bundled catalog; their meta comes entirely from params.meta.
+  return cachedSdkChatChannelMeta.metaById[id];
 }
 
 /** Resolve bundled chat channel metadata while respecting the active bundled-plugin directory. */
 export function getChatChannelMeta(id: ChatChannelId): ChannelMeta {
-  return resolveSdkChatChannelMeta(id);
+  return expectDefined(resolveSdkChatChannelMeta(id), `chat channel metadata: ${id}`);
 }
 
 /** Remove one of the known provider prefixes from a free-form target string. */
