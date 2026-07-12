@@ -45,6 +45,9 @@ const parseArgs = (args = process.argv.slice(2)): Args => {
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
+    if (arg === undefined) {
+      throw new Error(`Missing CLI argument at index ${i}`);
+    }
     if (arg === "--agent") {
       agentId = parseNonBlankArgValue(parseRequiredArgValue(args, i, "--agent"), "--agent");
       i += 1;

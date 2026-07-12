@@ -62,14 +62,16 @@ function readCreatedTableName(statement: string): string | null {
   const match = statement.match(
     /^CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+("[^"]+"|[A-Za-z_][A-Za-z0-9_]*)\b/iu,
   );
-  return match ? normalizeIdentifier(match[1]) : null;
+  const identifier = match?.[1];
+  return identifier === undefined ? null : normalizeIdentifier(identifier);
 }
 
 function readIndexedTableName(statement: string): string | null {
   const match = statement.match(
     /^CREATE\s+(?:UNIQUE\s+)?INDEX\s+IF\s+NOT\s+EXISTS\s+("[^"]+"|[A-Za-z_][A-Za-z0-9_]*)\s+ON\s+("[^"]+"|[A-Za-z_][A-Za-z0-9_]*)\b/isu,
   );
-  return match ? normalizeIdentifier(match[2]) : null;
+  const identifier = match?.[2];
+  return identifier === undefined ? null : normalizeIdentifier(identifier);
 }
 
 function isTargetSessionSchemaStatement(statement: string): boolean {

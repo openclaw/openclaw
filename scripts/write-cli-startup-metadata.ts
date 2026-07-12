@@ -354,17 +354,17 @@ async function mapWithConcurrency<T, R>(
 ): Promise<R[]> {
   const results: R[] = [];
   results.length = values.length;
-  let nextIndex = 0;
+  const entries = values.entries();
   const workerCount = Math.min(Math.max(1, limit), values.length);
   await Promise.all(
     Array.from({ length: workerCount }, async () => {
       for (;;) {
-        const index = nextIndex;
-        nextIndex += 1;
-        if (index >= values.length) {
+        const next = entries.next();
+        if (next.done) {
           return;
         }
-        results[index] = await run(values[index]);
+        const [index, value] = next.value;
+        results[index] = await run(value);
       }
     }),
   );

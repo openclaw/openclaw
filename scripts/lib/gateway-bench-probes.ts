@@ -98,9 +98,13 @@ export function readProcessTreeCpuMs(rootPid: number | undefined): number | null
     if (!match) {
       continue;
     }
-    const pid = Number(match[1]);
-    const ppid = Number(match[2]);
-    const cpuMs = parsePsCpuTimeMs(match[3]);
+    const [, rawPid, rawPpid, rawCpuTime] = match;
+    if (!rawPid || !rawPpid || !rawCpuTime) {
+      continue;
+    }
+    const pid = Number(rawPid);
+    const ppid = Number(rawPpid);
+    const cpuMs = parsePsCpuTimeMs(rawCpuTime);
     if (!Number.isInteger(pid) || !Number.isInteger(ppid) || cpuMs === null) {
       continue;
     }
@@ -153,10 +157,18 @@ function parsePsCpuTimeMs(raw: string): number | null {
     return null;
   }
   if (parts.length === 2) {
-    return Math.round((parts[0] * 60 + parts[1]) * 1000);
+    const [minutes, seconds] = parts;
+    if (minutes === undefined || seconds === undefined) {
+      return null;
+    }
+    return Math.round((minutes * 60 + seconds) * 1000);
   }
   if (parts.length === 3) {
-    return Math.round((parts[0] * 60 * 60 + parts[1] * 60 + parts[2]) * 1000);
+    const [hours, minutes, seconds] = parts;
+    if (hours === undefined || minutes === undefined || seconds === undefined) {
+      return null;
+    }
+    return Math.round((hours * 60 * 60 + minutes * 60 + seconds) * 1000);
   }
   return null;
 }

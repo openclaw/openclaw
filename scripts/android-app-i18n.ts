@@ -64,6 +64,9 @@ export async function checkAndroidAppI18n() {
     Promise.all(LOCALES.map(readStrings)),
   ]);
   const [base, ...translations] = localeStrings;
+  if (!base) {
+    throw new Error("Android English i18n resources are missing");
+  }
   const baseKeys = new Set(base.keys());
   const problems: Array<readonly [string, string[]]> = translations.flatMap((strings, index) => {
     const locale = NATIVE_I18N_LOCALES[index];

@@ -59,6 +59,9 @@ function parseArgs(args: string[]): Options {
 
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
+    if (arg === undefined) {
+      continue;
+    }
     if (arg === "--check-only") {
       options.checkOnly = true;
     } else if (arg === "--force") {

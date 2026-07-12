@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { translateNativeEntries } from "./control-ui-i18n.ts";
 
 type NativeI18nSurface = "android" | "apple";
@@ -211,18 +212,18 @@ function isAsciiAlphaNumeric(character: string): boolean {
 
 export function isConditionalBranchIdentifier(source: string): boolean {
   let index = 0;
-  while (index < source.length && isAsciiLowercaseLetter(source[index])) {
+  while (index < source.length && isAsciiLowercaseLetter(source.charAt(index))) {
     index += 1;
   }
 
   // Keep this scanner linear: PR-controlled native source passes through CI,
   // so a backtracking regex here can become a cheap native-i18n DoS trigger.
-  if (index === 0 || index >= source.length || !isAsciiUppercaseLetter(source[index])) {
+  if (index === 0 || index >= source.length || !isAsciiUppercaseLetter(source.charAt(index))) {
     return false;
   }
 
   for (index += 1; index < source.length; index += 1) {
-    if (!isAsciiAlphaNumeric(source[index])) {
+    if (!isAsciiAlphaNumeric(source.charAt(index))) {
       return false;
     }
   }
@@ -622,15 +623,18 @@ function identifierBefore(source: string, offset: number): string | null {
     cursor -= 1;
   }
   const end = cursor + 1;
-  while (cursor >= 0 && (isAsciiAlphaNumeric(source[cursor]) || source[cursor] === "_")) {
+  while (
+    cursor >= 0 &&
+    (isAsciiAlphaNumeric(source.charAt(cursor)) || source.charAt(cursor) === "_")
+  ) {
     cursor -= 1;
   }
   const start = cursor + 1;
   if (
     start === end ||
-    (!isAsciiLowercaseLetter(source[start]) &&
-      !isAsciiUppercaseLetter(source[start]) &&
-      source[start] !== "_")
+    (!isAsciiLowercaseLetter(source.charAt(start)) &&
+      !isAsciiUppercaseLetter(source.charAt(start)) &&
+      source.charAt(start) !== "_")
   ) {
     return null;
   }
@@ -739,18 +743,18 @@ function addCapturedLiteralCandidates(
 
 function skipWhitespaceAndBrace(source: string, offset: number): number {
   let cursor = offset;
-  while (cursor < source.length && /\s/u.test(source[cursor])) {
+  while (cursor < source.length && /\s/u.test(source.charAt(cursor))) {
     cursor += 1;
   }
-  if (source[cursor] === "{") {
+  if (source.charAt(cursor) === "{") {
     cursor += 1;
-    while (cursor < source.length && /\s/u.test(source[cursor])) {
+    while (cursor < source.length && /\s/u.test(source.charAt(cursor))) {
       cursor += 1;
     }
   }
-  if (source.startsWith("return", cursor) && !isAsciiAlphaNumeric(source[cursor + 6] ?? "")) {
+  if (source.startsWith("return", cursor) && !isAsciiAlphaNumeric(source.charAt(cursor + 6))) {
     cursor += 6;
-    while (cursor < source.length && /\s/u.test(source[cursor])) {
+    while (cursor < source.length && /\s/u.test(source.charAt(cursor))) {
       cursor += 1;
     }
   }
@@ -1179,17 +1183,17 @@ async function mapWithConcurrency<T, R>(
   run: (value: T) => Promise<R>,
 ): Promise<R[]> {
   const results = Array<R>(values.length);
-  let nextIndex = 0;
+  const entries = values.entries();
   const workerCount = Math.min(limit, values.length);
   await Promise.all(
     Array.from({ length: workerCount }, async () => {
       for (;;) {
-        const index = nextIndex;
-        nextIndex += 1;
-        if (index >= values.length) {
+        const next = entries.next();
+        if (next.done) {
           return;
         }
-        results[index] = await run(values[index]);
+        const [index, value] = next.value;
+        results[index] = await run(value);
       }
     }),
   );
@@ -1304,13 +1308,16 @@ function glossaryHash(glossary: readonly { source: string; target: string }[]): 
 function adjacentDuplicateWords(value: string, locale: string): string[] {
   const words = [...value.matchAll(/[\p{L}\p{M}\p{N}]+/gu)].map((match) => match[0]);
   const duplicates = new Set<string>();
-  for (let index = 1; index < words.length; index += 1) {
+  let previous = words[0];
+  for (const current of words.slice(1)) {
     if (
-      words[index - 1].normalize("NFKC").toLocaleLowerCase(locale) ===
-      words[index].normalize("NFKC").toLocaleLowerCase(locale)
+      previous !== undefined &&
+      previous.normalize("NFKC").toLocaleLowerCase(locale) ===
+        current.normalize("NFKC").toLocaleLowerCase(locale)
     ) {
-      duplicates.add(words[index]);
+      duplicates.add(current);
     }
+    previous = current;
   }
   return [...duplicates].toSorted(compareCodePoints);
 }
@@ -1443,8 +1450,8 @@ export function validateNativeLocaleArtifact(
     errors.push(`entry count must be ${inventory.length}, got ${rawEntries.length}`);
   }
   for (let index = 0; index < Math.min(entries.length, inventory.length); index += 1) {
-    const actual = entries[index];
-    const expected = inventory[index];
+    const actual = expectDefined(entries[index], `native locale artifact entry ${index}`);
+    const expected = expectDefined(inventory[index], `native locale inventory entry ${index}`);
     if (actual.id !== expected.id) {
       errors.push(
         `entries[${index}].id must be ${JSON.stringify(expected.id)}, got ${JSON.stringify(actual.id)}`,

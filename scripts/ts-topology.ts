@@ -88,6 +88,9 @@ function parseArgs(argv: string[]): CliOptions {
         options.report = (value as TopologyReportName | undefined) ?? options.report;
         break;
       case "--limit":
+        if (value === undefined) {
+          throw new Error("--limit requires a value");
+        }
         options.limit = parsePositiveInt(value, "--limit");
         break;
       case "--repo-root":

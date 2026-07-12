@@ -197,6 +197,9 @@ export async function checkAppleAppI18n() {
 export async function compileMacosLocalizations(outputDir: string) {
   await checkAppleAppI18n();
   const spec = CATALOGS[1];
+  if (!spec) {
+    throw new Error("macOS localization catalog spec is missing");
+  }
   const catalog = JSON.parse(await readFile(path.join(ROOT, spec.path), "utf8")) as Catalog;
   if (!catalog.strings) {
     throw new Error(`invalid Apple string catalog: ${spec.path}`);

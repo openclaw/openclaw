@@ -349,6 +349,9 @@ export function parseArgs(argv: string[]): ParsedArgs {
   const parsed: ParsedArgs = {};
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
+    if (token === undefined) {
+      continue;
+    }
     if (!token.startsWith("--")) {
       continue;
     }
@@ -4090,7 +4093,7 @@ function parseAgentPayloadTexts(stdout: string) {
       ...stdout.matchAll(
         /"(?:finalAssistantVisibleText|finalAssistantRawText|text)"\s*:\s*"([^"]*)"/gu,
       ),
-    ].map((match) => match[1]);
+    ].flatMap((match) => (match[1] === undefined ? [] : [match[1]]));
     return finalTextMatches.length > 0 ? finalTextMatches : stdout.trim() ? [stdout] : [];
   }
 }

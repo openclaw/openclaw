@@ -313,6 +313,9 @@ export function parsePluginNpmReleaseArgs(argv: string[]): ParsedPluginNpmReleas
   let npmDistTag: "extended-stable" | undefined;
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
+    if (arg === undefined) {
+      continue;
+    }
     if (arg !== "--npm-dist-tag") {
       baseArgs.push(arg);
       continue;

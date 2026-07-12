@@ -459,7 +459,8 @@ export function collectInstalledBundledRuntimeSidecarPaths(packageRoot: string):
   const installedExtensionIds = collectInstalledBundledExtensionIds(packageRoot);
   return PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS.filter((relativePath) => {
     const match = /^dist\/extensions\/([^/]+)\//u.exec(relativePath);
-    return match !== null && installedExtensionIds.has(match[1]);
+    const extensionId = match?.[1];
+    return extensionId !== undefined && installedExtensionIds.has(extensionId);
   });
 }
 
@@ -895,8 +896,9 @@ function collectExpectedBundledExtensionPackageIds(): ReadonlySet<string> {
   const ids = new Set<string>();
   for (const relativePath of listBundledPluginPackArtifacts()) {
     const match = /^dist\/extensions\/([^/]+)\/package\.json$/u.exec(relativePath);
-    if (match) {
-      ids.add(match[1]);
+    const extensionId = match?.[1];
+    if (extensionId !== undefined) {
+      ids.add(extensionId);
     }
   }
   return ids;

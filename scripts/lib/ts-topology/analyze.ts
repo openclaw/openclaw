@@ -32,6 +32,15 @@ function sortUnique(values: string[]) {
   values.sort((left, right) => left.localeCompare(right));
 }
 
+function compareFirstValue(left: readonly string[], right: readonly string[]): number {
+  const leftValue = left[0];
+  const rightValue = right[0];
+  if (leftValue === undefined) {
+    return rightValue === undefined ? 0 : 1;
+  }
+  return rightValue === undefined ? -1 : leftValue.localeCompare(rightValue);
+}
+
 function clampScore(value: number): number {
   return Math.max(0, Math.min(100, Math.round(value)));
 }
@@ -298,8 +307,8 @@ function finalizeRecords(records: TopologyRecord[]) {
       return byRefs;
     }
     return (
-      left.publicSpecifiers[0].localeCompare(right.publicSpecifiers[0]) ||
-      left.exportNames[0].localeCompare(right.exportNames[0])
+      compareFirstValue(left.publicSpecifiers, right.publicSpecifiers) ||
+      compareFirstValue(left.exportNames, right.exportNames)
     );
   });
 }

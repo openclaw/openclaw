@@ -246,7 +246,11 @@ async function resolvePrimaryWorktreeSiblingCodex(repoRoot: string): Promise<str
     return undefined;
   }
 
-  const gitDir = path.resolve(repoRoot, match[1].trim());
+  const gitDirValue = match[1];
+  if (!gitDirValue) {
+    return undefined;
+  }
+  const gitDir = path.resolve(repoRoot, gitDirValue.trim());
   const worktreeMarker = `${path.sep}.git${path.sep}worktrees${path.sep}`;
   const markerIndex = gitDir.indexOf(worktreeMarker);
   if (markerIndex < 0) {

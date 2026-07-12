@@ -1322,7 +1322,7 @@ function extractTranslationResult(message: AssistantMessage): string {
 function parseTranslationReply(raw: string): Record<string, unknown> {
   const trimmed = raw.trim();
   const fenced = /^```(?:json)?\s*\n([\s\S]*?)\n```\s*$/.exec(trimmed);
-  return JSON.parse(fenced ? fenced[1] : trimmed) as Record<string, unknown>;
+  return JSON.parse(fenced?.[1] ?? trimmed) as Record<string, unknown>;
 }
 
 export function parseTranslationBatchReply(
