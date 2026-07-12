@@ -13,7 +13,7 @@ export type WorkspaceFileReadResult = ReadResult & { canonicalPath: string };
 /** Shared preview cap: keeps file payloads comfortably under client WS limits. */
 export const WORKSPACE_PREVIEW_MAX_BYTES = 256 * 1024;
 
-const workspaceFileUpdateQueues = new Map<string, Promise<void>>();
+let workspaceFileUpdateQueue: Promise<void> = Promise.resolve();
 
 async function openWorkspaceRoot(rootDir: string): Promise<WorkspaceRoot | undefined> {
   try {
@@ -91,19 +91,12 @@ export type WorkspaceFileUpdateResult =
   | { status: "conflict"; currentHash: string }
   | { status: "unsafe" };
 
-function enqueueWorkspaceFileUpdate<T>(key: string, update: () => Promise<T>): Promise<T> {
-  const previous = workspaceFileUpdateQueues.get(key) ?? Promise.resolve();
-  const result = previous.then(update, update);
-  const settled = result.then(
+function enqueueWorkspaceFileUpdate<T>(update: () => Promise<T>): Promise<T> {
+  const result = workspaceFileUpdateQueue.then(update, update);
+  workspaceFileUpdateQueue = result.then(
     () => undefined,
     () => undefined,
   );
-  workspaceFileUpdateQueues.set(key, settled);
-  void settled.finally(() => {
-    if (workspaceFileUpdateQueues.get(key) === settled) {
-      workspaceFileUpdateQueues.delete(key);
-    }
-  });
   return result;
 }
 
@@ -117,10 +110,10 @@ export async function updateWorkspaceFile(
   if (!workspaceRoot) {
     return { status: "unsafe" };
   }
-  const queueKey = workspaceRoot.rootReal;
-  // Serialize by canonical root, not caller spelling. Case and Unicode aliases
-  // can name one physical file, so per-path queues could both accept one hash.
-  return await enqueueWorkspaceFileUpdate<WorkspaceFileUpdateResult>(queueKey, async () => {
+  // Serialize every low-frequency editor save. The same physical file can be
+  // exposed through path aliases or nested workspace roots, so narrower queue
+  // keys can let two routes accept one stale hash and overwrite each other.
+  return await enqueueWorkspaceFileUpdate<WorkspaceFileUpdateResult>(async () => {
     let current: ReadResult;
     try {
       current = await workspaceRoot.read(browserPath, {

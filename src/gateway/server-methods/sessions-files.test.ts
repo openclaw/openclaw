@@ -763,6 +763,27 @@ describe("sessions.files RPC handlers", () => {
     expect(results.map((result) => result.status).toSorted()).toEqual(["conflict", "updated"]);
   });
 
+  it("serializes concurrent saves across nested workspace roots", async () => {
+    const original = "export default {};\n";
+    const expectedHash = hashContent(original);
+    const results = await Promise.all([
+      updateWorkspaceFile(
+        workspaceRoot,
+        "ui/vite.config.ts",
+        "export default { outer: true };\n",
+        expectedHash,
+      ),
+      updateWorkspaceFile(
+        path.join(workspaceRoot, "ui"),
+        "vite.config.ts",
+        "export default { nested: true };\n",
+        expectedHash,
+      ),
+    ]);
+
+    expect(results.map((result) => result.status).toSorted()).toEqual(["conflict", "updated"]);
+  });
+
   it("rejects writes to nonexistent files", async () => {
     const error = expectError(
       await invokeSessionFilesHandler("sessions.files.set", {
