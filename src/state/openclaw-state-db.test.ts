@@ -1228,6 +1228,74 @@ describe("openclaw state database", () => {
     }
   });
 
+  it("rejects foreign-key violations before writable initialization", () => {
+    const stateDir = createTempStateDir();
+    const databasePath = createCanonicalAuditStateDatabase(stateDir);
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const { DatabaseSync } = requireNodeSqlite();
+    const corrupted = new DatabaseSync(databasePath);
+    try {
+      corrupted.exec("PRAGMA foreign_keys = OFF;");
+      corrupted.prepare("INSERT INTO task_delivery_state (task_id) VALUES (?)").run("missing-task");
+      expect(corrupted.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
+      expect(corrupted.prepare("PRAGMA integrity_check").get()).toEqual({
+        integrity_check: "ok",
+      });
+      expect(corrupted.prepare("PRAGMA foreign_key_check").get()).toEqual({
+        table: "task_delivery_state",
+        rowid: 1,
+        parent: "task_runs",
+        fkid: 0,
+      });
+    } finally {
+      corrupted.close();
+    }
+
+    const before = new DatabaseSync(databasePath, { readOnly: true });
+    let metadataBefore: unknown;
+    try {
+      metadataBefore = before
+        .prepare(
+          "SELECT schema_version, updated_at FROM schema_meta WHERE meta_key = 'primary' LIMIT 1",
+        )
+        .get();
+    } finally {
+      before.close();
+    }
+
+    const failure =
+      /foreign_key_check failed.*task_delivery_state row 1 references task_runs \(foreign key 0\)/iu;
+    expect(() => openOpenClawStateDatabase(options)).toThrow(failure);
+    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+      changes: [],
+      warnings: [expect.stringMatching(failure)],
+    });
+    const checkpointCallback = vi.fn();
+    expect(() =>
+      withOpenClawStateStartupMigrationCheckpointDatabase(checkpointCallback, options),
+    ).toThrow(failure);
+    expect(checkpointCallback).not.toHaveBeenCalled();
+
+    const after = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(
+        after
+          .prepare(
+            "SELECT schema_version, updated_at FROM schema_meta WHERE meta_key = 'primary' LIMIT 1",
+          )
+          .get(),
+      ).toEqual(metadataBefore);
+      expect(after.prepare("PRAGMA foreign_key_check").get()).toEqual({
+        table: "task_delivery_state",
+        rowid: 1,
+        parent: "task_runs",
+        fkid: 0,
+      });
+    } finally {
+      after.close();
+    }
+  });
+
   it.skipIf(process.platform === "win32")(
     "recovers a hot rollback journal before checking integrity",
     () => {

@@ -1450,6 +1450,84 @@ describe("openclaw agent database", () => {
     }
   });
 
+  it("rejects foreign-key violations before writable initialization", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const created = openOpenClawAgentDatabase({ agentId: "worker-1", env });
+    const databasePath = created.path;
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const corrupted = new DatabaseSync(databasePath);
+    try {
+      corrupted.exec("PRAGMA foreign_keys = OFF;");
+      corrupted
+        .prepare(
+          "INSERT INTO session_entries (session_key, session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
+        )
+        .run("orphan", "missing-session", "{}", 1);
+      expect(corrupted.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
+      expect(corrupted.prepare("PRAGMA integrity_check").get()).toEqual({
+        integrity_check: "ok",
+      });
+      expect(corrupted.prepare("PRAGMA foreign_key_check").get()).toEqual({
+        table: "session_entries",
+        rowid: 1,
+        parent: "sessions",
+        fkid: 0,
+      });
+    } finally {
+      corrupted.close();
+    }
+
+    const before = new DatabaseSync(databasePath, { readOnly: true });
+    let metadataBefore: unknown;
+    try {
+      metadataBefore = before
+        .prepare(
+          "SELECT schema_version, updated_at FROM schema_meta WHERE meta_key = 'primary' LIMIT 1",
+        )
+        .get();
+    } finally {
+      before.close();
+    }
+
+    const failure =
+      /foreign_key_check failed.*session_entries row 1 references sessions \(foreign key 0\)/iu;
+    expect(() => openOpenClawAgentDatabase({ agentId: "worker-1", env })).toThrow(failure);
+    const independentlyManaged = new DatabaseSync(databasePath);
+    try {
+      expect(() =>
+        ensureOpenClawAgentDatabaseSchema(independentlyManaged, {
+          agentId: "worker-1",
+          env,
+        }),
+      ).toThrow(failure);
+    } finally {
+      independentlyManaged.close();
+    }
+
+    const after = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(
+        after
+          .prepare(
+            "SELECT schema_version, updated_at FROM schema_meta WHERE meta_key = 'primary' LIMIT 1",
+          )
+          .get(),
+      ).toEqual(metadataBefore);
+      expect(after.prepare("PRAGMA foreign_key_check").get()).toEqual({
+        table: "session_entries",
+        rowid: 1,
+        parent: "sessions",
+        fkid: 0,
+      });
+    } finally {
+      after.close();
+    }
+  });
+
   it("refuses to open newer per-agent schema versions", () => {
     const stateDir = createTempStateDir();
     const databasePath = path.join(
