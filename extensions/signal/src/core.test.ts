@@ -616,6 +616,9 @@ describe("signal outbound", () => {
       },
       hasRepliedRef,
     });
+    if (!context) {
+      throw new Error("signal threading tool context unavailable");
+    }
 
     expect(context).toEqual({
       currentChannelId: "signal:+15550001111",
