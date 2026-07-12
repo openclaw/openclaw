@@ -4933,7 +4933,7 @@ export async function runEmbeddedAttempt(
             }
           }
         });
-        await finalSnapshotWrite.catch((err) => {
+        await finalSnapshotWrite.catch((err: unknown) => {
           log.warn(
             `run cleanup: stage=final-snapshot-lock-failed runId=${params.runId} sessionId=${params.sessionId} error=${formatErrorMessage(err)}`,
           );
