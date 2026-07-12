@@ -478,6 +478,20 @@ function listSqliteSnapshotEntries(
   const declaredStateAssetRoots = manifest.assets
     .filter((asset) => asset.kind === "state")
     .map((asset) => normalizeArchivePath(asset.archivePath, "Backup manifest state asset path"));
+  for (const root of declaredStateAssetRoots) {
+    const portableRoot = resolvePortableArchivePathKey(root);
+    for (const entry of entries) {
+      const isExactStateEntry = isArchivePathWithin(entry.normalized, root);
+      const isPortableStateEntry = isArchivePathWithin(
+        resolvePortableArchivePathKey(entry.normalized),
+        portableRoot,
+      );
+      if (isPortableStateEntry && !isExactStateEntry) {
+        throw new Error(`Backup contains a case-mangled state asset path: ${entry.normalized}`);
+      }
+    }
+  }
+
   const hasSqliteCandidate = entries.some((entry) =>
     declaredStateAssetRoots.some((root) => {
       if (!isArchivePathWithin(entry.normalized, root)) {

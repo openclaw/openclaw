@@ -446,6 +446,37 @@ describe("backupVerifyCommand", () => {
     );
   });
 
+  it("rejects case-mangled aliases of the state asset root", async () => {
+    const stateAssetArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw`;
+    const statePayloadArchivePath = `${stateAssetArchivePath}/payload.txt`;
+    const aliasSidecarArchivePath = `${TEST_ARCHIVE_ROOT}/PAYLOAD/posix/tmp/.openclaw/plugins/dedicated/custom.sqlite-wal`;
+
+    await withBrokenArchiveFixture(
+      {
+        tempPrefix: "openclaw-backup-state-root-case-alias-",
+        manifestAssetArchivePath: stateAssetArchivePath,
+        payloads: [
+          {
+            fileName: "payload.txt",
+            contents: "payload\n",
+            archivePath: statePayloadArchivePath,
+          },
+          {
+            fileName: "custom.sqlite-wal",
+            contents: "unverified transaction data",
+            archivePath: aliasSidecarArchivePath,
+          },
+        ],
+      },
+      async (archivePath) => {
+        const runtime = createBackupVerifyRuntime();
+        await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
+          /case-mangled state asset path.*PAYLOAD.*custom\.sqlite-wal/iu,
+        );
+      },
+    );
+  });
+
   it("rejects a truncated SQLite snapshot with a valid database header", async () => {
     const stateAssetArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw`;
     const sqliteArchivePath = `${stateAssetArchivePath}/plugins/dedicated/corrupt.sqlite`;
