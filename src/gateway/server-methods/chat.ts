@@ -175,7 +175,10 @@ import {
   type QueuedChatTurnMap,
 } from "../chat-queued-turns.js";
 import { stripEnvelopeFromMessage } from "../chat-sanitize.js";
-import { augmentChatHistoryWithCliSessionImports } from "../cli-session-history.js";
+import {
+  resolveClaudeCliBindingSessionId,
+  resolveChatHistoryWithCliSessionImports,
+} from "../cli-session-history.js";
 import { isSuppressedControlReplyText } from "../control-reply-text.js";
 import {
   isDashboardSessionTitleCandidate,
@@ -204,7 +207,6 @@ import {
   capArrayByJsonBytes,
   readRecentSessionMessagesWithStatsAsync,
   readSessionMessageByIdAsync,
-  readRecentSessionMessagesAsync,
   readSessionMessagesPageWithStatsAsync,
   readSessionMessagesAsync,
 } from "../session-transcript-readers.js";
@@ -294,9 +296,14 @@ type PreRegisteredAgentRun = {
 type ChatHistoryMethod = "chat.history" | "chat.startup";
 type ChatHistoryPage = {
   messages: unknown[];
-  offset?: number;
-  totalMessages?: number;
-  rawPageMessages?: number;
+  responseOffset?: number;
+  completeCliImport?: true;
+  pagination: {
+    offset: number;
+    totalMessages: number;
+    rawPageMessages: number;
+    exhausted?: true;
+  };
 };
 
 type ChatMetadataResult = {
@@ -2958,14 +2965,37 @@ function resolveChatHistoryNextOffset(params: {
   totalMessages: number;
   offset: number;
   rawPageMessages: number;
+  replayOldestRecord?: boolean;
 }): number {
   const oldestSeq = params.messages
     .map((message) => readChatHistoryMessageSeq(message))
     .find((seq): seq is number => typeof seq === "number");
   if (oldestSeq !== undefined) {
-    return Math.max(params.offset, params.totalMessages - oldestSeq + 1);
+    return Math.max(
+      params.offset,
+      params.totalMessages - oldestSeq + (params.replayOldestRecord ? 0 : 1),
+    );
   }
   return params.offset + params.rawPageMessages;
+}
+
+function shouldReplayOldestChatHistoryRecord(params: {
+  projected: unknown[];
+  bounded: unknown[];
+}): boolean {
+  const oldestSeq = params.bounded
+    .map((message) => readChatHistoryMessageSeq(message))
+    .find((seq): seq is number => typeof seq === "number");
+  if (oldestSeq === undefined) {
+    return false;
+  }
+  const projectedCount = params.projected.filter(
+    (message) => readChatHistoryMessageSeq(message) === oldestSeq,
+  ).length;
+  const boundedCount = params.bounded.filter(
+    (message) => readChatHistoryMessageSeq(message) === oldestSeq,
+  ).length;
+  return boundedCount < projectedCount;
 }
 
 function capOffsetChatHistoryProjectedMessages(messages: unknown[], max: number): unknown[] {
@@ -3043,6 +3073,7 @@ async function readChatHistoryPage(params: {
   maxHistoryBytes: number;
   effectiveMaxChars: number;
   offset: number | undefined;
+  ignoreCliSessionImports?: boolean;
 }): Promise<ChatHistoryPage> {
   const {
     entry,
@@ -3057,7 +3088,11 @@ async function readChatHistoryPage(params: {
     offset,
   } = params;
   if (!sessionId || !storePath) {
-    return { messages: [] };
+    return {
+      messages: [],
+      ...(offset !== undefined ? { responseOffset: offset } : {}),
+      pagination: { offset: offset ?? 0, totalMessages: 0, rawPageMessages: 0 },
+    };
   }
 
   const readScope = {
@@ -3067,7 +3102,12 @@ async function readChatHistoryPage(params: {
     sessionKey: canonicalKey,
     storePath,
   };
-  if (offset !== undefined) {
+  const cliSessionId = params.ignoreCliSessionImports
+    ? undefined
+    : resolveClaudeCliBindingSessionId(entry);
+  // Bound Claude history is imported as one complete snapshot. Keep every request
+  // on that path; local-only offset pages would silently drop the imported transcript.
+  if (offset !== undefined && !cliSessionId) {
     const rawHistoryWindow = resolveSessionHistoryTailReadOptions(max);
     const readPage =
       offset === 0
@@ -3108,8 +3148,14 @@ async function readChatHistoryPage(params: {
           );
     const rawPageMessages =
       offset === 0
-        ? readPage.messages.length
-        : Math.min(max, Math.max(0, readPage.totalMessages - offset));
+        ? Math.min(
+            rawHistoryWindow.maxMessages,
+            Math.max(readPage.messages.length, readPage.totalMessages > 0 ? 1 : 0),
+          )
+        : Math.min(
+            max,
+            Math.max(readPage.messages.length, readPage.totalMessages > offset ? 1 : 0),
+          );
     const rawMessages = localMessages;
     const recencyFilteredMessages = dropPreSessionStartAnnouncePairs(
       rawMessages,
@@ -3129,9 +3175,12 @@ async function readChatHistoryPage(params: {
     const normalized = augmentChatHistoryWithCanvasBlocks(windowed);
     return {
       messages: normalized,
-      offset,
-      totalMessages: readPage.totalMessages,
-      rawPageMessages,
+      responseOffset: offset,
+      pagination: {
+        offset,
+        totalMessages: readPage.totalMessages,
+        rawPageMessages,
+      },
     };
   }
 
@@ -3140,25 +3189,29 @@ async function readChatHistoryPage(params: {
     maxMessages: rawHistoryWindow.maxMessages + 1,
     maxLines: rawHistoryWindow.maxLines + 1,
   };
-  const localMessages = await readRecentSessionMessagesAsync(readScope, {
+  const readPage = await readRecentSessionMessagesWithStatsAsync(readScope, {
     ...localHistoryReadOptions,
     maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
     allowResetArchiveFallback: true,
   });
   const overreadContextMessage =
-    localMessages.length > rawHistoryWindow.maxMessages ? localMessages[0] : undefined;
+    readPage.messages.length > rawHistoryWindow.maxMessages ? readPage.messages[0] : undefined;
   const localMessagesWithBoundaryFilter = dropLocalHistoryOverreadContextMessage(
     dropPreSessionStartAnnouncePairs(
-      localMessages,
+      readPage.messages,
       typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
     ),
     overreadContextMessage,
   );
-  const rawMessages = augmentChatHistoryWithCliSessionImports({
+  const cliHistory = resolveChatHistoryWithCliSessionImports({
     entry,
     provider,
     localMessages: localMessagesWithBoundaryFilter,
   });
+  if (offset !== undefined && !cliHistory.imported) {
+    return readChatHistoryPage({ ...params, ignoreCliSessionImports: true });
+  }
+  const rawMessages = cliHistory.messages;
   // Drop subagent_announce pairs (user inter-session announce + adjacent
   // assistant) whose record timestamp predates the current session's
   // sessionStartedAt. Run after CLI history imports too, because those
@@ -3167,13 +3220,34 @@ async function readChatHistoryPage(params: {
     rawMessages,
     typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
   );
-  return {
-    messages: augmentChatHistoryWithCanvasBlocks(
-      projectRecentChatDisplayMessages(recencyFilteredMessages, {
+  const displayMessages = cliHistory.imported
+    ? projectChatDisplayMessages(recencyFilteredMessages, { maxChars: effectiveMaxChars })
+    : projectRecentChatDisplayMessages(recencyFilteredMessages, {
         maxChars: effectiveMaxChars,
         maxMessages: max,
-      }),
-    ),
+      });
+  return {
+    // Imported CLI transcripts are complete snapshots and intentionally ignore
+    // the requested local-tail count; offset paging cannot reconstruct imports.
+    messages: augmentChatHistoryWithCanvasBlocks(displayMessages),
+    ...(cliHistory.imported ? { completeCliImport: true as const } : {}),
+    pagination: cliHistory.imported
+      ? {
+          offset: 0,
+          totalMessages: recencyFilteredMessages.length,
+          rawPageMessages: recencyFilteredMessages.length,
+          exhausted: true,
+        }
+      : {
+          offset: 0,
+          totalMessages: readPage.totalMessages,
+          // The extra record supplies pair-filter context; it was not returned and
+          // must remain reachable by the next strictly-older page.
+          rawPageMessages: Math.min(
+            rawHistoryWindow.maxMessages,
+            Math.max(readPage.messages.length, readPage.totalMessages > 0 ? 1 : 0),
+          ),
+        },
   };
 }
 
@@ -3289,19 +3363,19 @@ async function handleChatHistoryRequest({
   });
   const capped = capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
   const bounded = enforceChatHistoryFinalBudget({ messages: capped, maxBytes: maxHistoryBytes });
-  const nextOffset =
-    historyPage.offset !== undefined && historyPage.totalMessages !== undefined
-      ? resolveChatHistoryNextOffset({
-          messages: bounded.messages,
-          totalMessages: historyPage.totalMessages,
-          offset: historyPage.offset,
-          rawPageMessages: historyPage.rawPageMessages ?? bounded.messages.length,
-        })
-      : undefined;
-  const hasMore =
-    nextOffset !== undefined && historyPage.totalMessages !== undefined
-      ? nextOffset < historyPage.totalMessages
-      : undefined;
+  const pagination = historyPage.pagination;
+  const candidateNextOffset = resolveChatHistoryNextOffset({
+    messages: bounded.messages,
+    totalMessages: pagination.totalMessages,
+    offset: pagination.offset,
+    rawPageMessages: pagination.rawPageMessages,
+    replayOldestRecord: shouldReplayOldestChatHistoryRecord({
+      projected: normalized,
+      bounded: bounded.messages,
+    }),
+  });
+  const hasMore = pagination.exhausted !== true && candidateNextOffset < pagination.totalMessages;
+  const nextOffset = hasMore ? candidateNextOffset : undefined;
   reportOmittedChatHistory({
     originalMessages: normalized,
     finalMessages: bounded.messages,
@@ -3385,11 +3459,12 @@ async function handleChatHistoryRequest({
     sessionKey,
     sessionId,
     messages: bounded.messages,
-    ...(historyPage.offset !== undefined ? { offset: historyPage.offset } : {}),
+    ...(historyPage.responseOffset !== undefined ? { offset: historyPage.responseOffset } : {}),
     ...(hasMore ? { nextOffset } : {}),
-    ...(hasMore !== undefined ? { hasMore } : {}),
-    ...(historyPage.totalMessages !== undefined
-      ? { totalMessages: historyPage.totalMessages }
+    hasMore,
+    totalMessages: pagination.totalMessages,
+    ...(historyPage.completeCliImport && bounded.messages.length === normalized.length
+      ? { completeSnapshot: true }
       : {}),
     defaults,
     sessionInfo,
