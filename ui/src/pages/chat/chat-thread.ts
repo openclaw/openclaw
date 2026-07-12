@@ -33,7 +33,11 @@ import {
   stripMessageDisplayMetadataText,
 } from "../../lib/chat/message-normalizer.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
-import { extractToolCardsCached, extractToolPreview } from "../../lib/chat/tool-cards.ts";
+import {
+  extractToolCardsCached,
+  extractToolPreview,
+  isToolCardError,
+} from "../../lib/chat/tool-cards.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import { getOrCreateSessionCacheValue } from "./session-cache.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
@@ -1428,6 +1432,147 @@ export function coalesceStreamRuns(
     result.push(item);
   }
   flush();
+  return result;
+}
+
+/** Collapsed rollup of a completed turn's intermediate work (tools, commentary). */
+export type WorkGroupRenderItem = {
+  kind: "work-group";
+  key: string;
+  groups: MessageGroup[];
+  durationMs: number | null;
+  hasError: boolean;
+};
+
+type TurnRenderItem = RenderChatItem | StreamRunRenderItem;
+
+function isTurnBoundaryGroup(item: TurnRenderItem): boolean {
+  if (item.kind !== "group") {
+    return false;
+  }
+  const role = item.role.toLowerCase();
+  // sessions_send projections start a new autonomous turn, same contract as
+  // annotateToolTurnOutcome; they are inputs, not work produced by this turn.
+  return role === "user" || (role === "assistant" && assistantGroupIsForwardedBoundary(item));
+}
+
+function isCollapsibleWorkGroup(item: TurnRenderItem): item is MessageGroup {
+  if (item.kind !== "group" || item.isStreaming) {
+    return false;
+  }
+  const role = item.role.toLowerCase();
+  return role === "tool" || (role === "assistant" && !assistantGroupIsForwardedBoundary(item));
+}
+
+function isFinalReplyGroup(item: TurnRenderItem): boolean {
+  return (
+    isCollapsibleWorkGroup(item) &&
+    item.role.toLowerCase() === "assistant" &&
+    assistantGroupHasReplyText(item)
+  );
+}
+
+function groupLastTimestamp(group: MessageGroup): number {
+  for (let index = group.messages.length - 1; index >= 0; index -= 1) {
+    const timestamp = rawMessageTimestamp(group.messages[index]?.message);
+    if (timestamp != null) {
+      return timestamp;
+    }
+  }
+  return group.timestamp;
+}
+
+function workGroupHasError(groups: MessageGroup[]): boolean {
+  return groups.some(
+    (group) =>
+      group.role.toLowerCase() === "tool" &&
+      group.turnSucceeded !== true &&
+      group.messages.some((entry) =>
+        extractToolCardsCached(entry.message, entry.key).some(isToolCardError),
+      ),
+  );
+}
+
+/**
+ * Once a turn is done, its intermediate work (tool groups and assistant
+ * commentary before the final reply) collapses behind one "Worked for X"
+ * disclosure so the thread reads final-output-first. Live turns stay fully
+ * expanded; the collapse itself is the done signal.
+ */
+export function collapseCompletedTurnWork(
+  items: TurnRenderItem[],
+  opts: { runWorking: boolean },
+): Array<TurnRenderItem | WorkGroupRenderItem> {
+  const turns: TurnRenderItem[][] = [];
+  let currentTurn: TurnRenderItem[] = [];
+  for (const item of items) {
+    if (isTurnBoundaryGroup(item) && currentTurn.length > 0) {
+      turns.push(currentTurn);
+      currentTurn = [];
+    }
+    currentTurn.push(item);
+  }
+  if (currentTurn.length > 0) {
+    turns.push(currentTurn);
+  }
+
+  const result: Array<TurnRenderItem | WorkGroupRenderItem> = [];
+  for (const [turnIndex, turn] of turns.entries()) {
+    // In-flight content (stream runs, streaming groups) marks the turn live.
+    // While the run works, the trailing turn also stays expanded so activity
+    // is watchable until the terminal rebuild collapses it.
+    const isLive =
+      (opts.runWorking && turnIndex === turns.length - 1) ||
+      turn.some(
+        (item) => item.kind === "stream-run" || (item.kind === "group" && item.isStreaming),
+      );
+    if (isLive) {
+      result.push(...turn);
+      continue;
+    }
+    let finalReplyIndex = -1;
+    for (let index = turn.length - 1; index >= 0; index -= 1) {
+      if (isFinalReplyGroup(turn[index])) {
+        finalReplyIndex = index;
+        break;
+      }
+    }
+    // A reply-less turn only collapses once the session is idle: mid-run it
+    // may still be the executing turn (e.g. behind a queued send).
+    if (finalReplyIndex === -1 && opts.runWorking) {
+      result.push(...turn);
+      continue;
+    }
+    const segmentEnd = finalReplyIndex === -1 ? turn.length - 1 : finalReplyIndex - 1;
+    let segmentStart = segmentEnd + 1;
+    while (segmentStart > 0 && isCollapsibleWorkGroup(turn[segmentStart - 1])) {
+      segmentStart -= 1;
+    }
+    const groups = turn.slice(segmentStart, segmentEnd + 1) as MessageGroup[];
+    if (groups.length === 0) {
+      result.push(...turn);
+      continue;
+    }
+    const boundary = turn[0];
+    const startTimestamp =
+      boundary.kind === "group" && isTurnBoundaryGroup(boundary)
+        ? boundary.timestamp
+        : groups[0].timestamp;
+    const endTimestamp =
+      finalReplyIndex >= 0
+        ? (turn[finalReplyIndex] as MessageGroup).timestamp
+        : groupLastTimestamp(groups[groups.length - 1]);
+    const durationMs = endTimestamp > startTimestamp ? endTimestamp - startTimestamp : null;
+    result.push(...turn.slice(0, segmentStart));
+    result.push({
+      kind: "work-group",
+      key: `work:${groups[0].key}`,
+      groups,
+      durationMs,
+      hasError: workGroupHasError(groups),
+    });
+    result.push(...turn.slice(segmentEnd + 1));
+  }
   return result;
 }
 
