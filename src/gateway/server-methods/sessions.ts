@@ -35,6 +35,7 @@ import {
   validateSessionsPreviewParams,
   validateSessionsResetParams,
   validateSessionsResolveParams,
+  validateSessionsSearchParams,
   validateSessionsSendParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
@@ -69,6 +70,7 @@ import {
   resolveSessionTranscriptRuntimeTarget,
   trimSessionTranscriptForManualCompact,
 } from "../../config/sessions/session-accessor.js";
+import { searchSessionTranscripts } from "../../config/sessions/session-transcript-search.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { disableCronJobsBoundToSession } from "../../cron/job-session-bindings.js";
 import {
@@ -842,6 +844,66 @@ async function handleSessionSend(params: {
   }
 }
 export const sessionsHandlers: GatewayRequestHandlers = {
+  "sessions.search": async ({ params, respond, context }) => {
+    if (!assertValidParams(params, validateSessionsSearchParams, "sessions.search", respond)) {
+      return;
+    }
+    const query = params.query.trim();
+    if (!query) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "query must not be empty"));
+      return;
+    }
+    const cfg = context.getRuntimeConfig();
+    if (params.agentId && !params.sessionKeys) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "agentId requires sessionKeys"),
+      );
+      return;
+    }
+    const requestedAgentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
+    const sessionKeys = params.sessionKeys?.map((sessionKey) =>
+      requestedAgentId
+        ? resolveStoredSessionKeyForAgentStore({ cfg, agentId: requestedAgentId, sessionKey })
+        : resolveSessionStoreKey({ cfg, sessionKey }),
+    );
+    const agentIds = new Set(
+      sessionKeys?.map((sessionKey) =>
+        requestedAgentId && (sessionKey === "global" || sessionKey === "unknown")
+          ? requestedAgentId
+          : resolveSessionStoreAgentId(cfg, sessionKey),
+      ),
+    );
+    if (
+      agentIds.size > 1 ||
+      (requestedAgentId && [...agentIds].some((agentId) => agentId !== requestedAgentId))
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "sessions.search supports one agent per call"),
+      );
+      return;
+    }
+    const agentId =
+      requestedAgentId ?? agentIds.values().next().value ?? resolveDefaultAgentId(cfg);
+    try {
+      const result = searchSessionTranscripts({
+        agentId,
+        query,
+        limit: params.limit,
+        ...(sessionKeys ? { sessionKeys } : {}),
+      });
+      respond(true, {
+        results: result.hits,
+        ...(result.indexing ? { indexing: true } : {}),
+        ...(result.truncated ? { truncated: true } : {}),
+      });
+    } catch (error) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
+    }
+  },
   "sessions.list": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateSessionsListParams, "sessions.list", respond)) {
       return;

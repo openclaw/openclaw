@@ -5,6 +5,7 @@ export const PROCESS_TOOL_DISPLAY_SUMMARY = "Inspect/control exec sessions.";
 export const CRON_TOOL_DISPLAY_SUMMARY = "Schedule reminders, cron, wake events.";
 export const SESSIONS_LIST_TOOL_DISPLAY_SUMMARY = "List visible sessions; filters/previews.";
 export const SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY = "Read sanitized session history.";
+export const SESSIONS_SEARCH_TOOL_DISPLAY_SUMMARY = "Search past session transcripts.";
 export const SESSIONS_SEND_TOOL_DISPLAY_SUMMARY = "Message session or configured agent.";
 export const SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY = "Spawn subagent or ACP session.";
 export const SESSIONS_SPAWN_SUBAGENT_TOOL_DISPLAY_SUMMARY = "Spawn subagent session.";
@@ -26,6 +27,14 @@ export function describeSessionsHistoryTool(): string {
   return [
     "Fetch sanitized history for visible session.",
     "Use before replying, debugging, resuming; supports limit, offset pagination, and tool-message inclusion.",
+  ].join(" ");
+}
+
+/** Describes the sessions_search tool for model-facing instructions. */
+export function describeSessionsSearchTool(): string {
+  return [
+    "Search your own past sessions for matching user and assistant text.",
+    "Follow up with sessions_history using a returned sessionKey for full context.",
   ].join(" ");
 }
 
