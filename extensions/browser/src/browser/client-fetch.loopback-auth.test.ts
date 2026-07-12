@@ -545,6 +545,28 @@ describe("fetchBrowserJson loopback auth", () => {
     );
   });
 
+  it("keeps malformed 2xx HTTP JSON as a service response error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response("not json", {
+            status: 200,
+            headers: { "Content-Type": "text/plain" },
+          }),
+      ),
+    );
+
+    const error = await expectThrownBrowserFetchError(
+      () => fetchBrowserJson<{ ok: boolean }>("http://127.0.0.1:18888/"),
+      {
+        contains: ["Browser control response was not valid JSON"],
+        omits: ["Can't reach the OpenClaw browser control service"],
+      },
+    );
+    expect(error).toMatchObject({ name: "BrowserServiceError", status: 200 });
+  });
+
   it("surfaces 429 from dispatcher path as rate-limit error", async () => {
     mocks.dispatch.mockResolvedValueOnce({
       status: 429,

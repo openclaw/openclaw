@@ -316,7 +316,15 @@ async function fetchHttpJson<T>(
       onOverflow: ({ maxBytes }) =>
         new BrowserServiceError(`Browser control response exceeded ${maxBytes} bytes`),
     });
-    return JSON.parse(new TextDecoder().decode(body)) as T;
+    try {
+      return JSON.parse(new TextDecoder().decode(body)) as T;
+    } catch {
+      throw new BrowserServiceError(
+        "Browser control response was not valid JSON",
+        undefined,
+        res.status,
+      );
+    }
   } finally {
     clearTimeout(t);
     await release?.();
