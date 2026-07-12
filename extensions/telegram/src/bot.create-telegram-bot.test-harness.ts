@@ -15,16 +15,17 @@ type GetRuntimeConfigFn =
 type GetSessionEntryFn = typeof import("openclaw/plugin-sdk/session-store-runtime").getSessionEntry;
 type ListSessionEntriesFn =
   typeof import("openclaw/plugin-sdk/session-store-runtime").listSessionEntries;
-type LoadSessionStoreFn =
-  typeof import("openclaw/plugin-sdk/session-store-runtime").loadSessionStore;
 type ResolveStorePathFn =
   typeof import("openclaw/plugin-sdk/session-store-runtime").resolveStorePath;
 type ReadSessionUpdatedAtFn =
   typeof import("openclaw/plugin-sdk/session-store-runtime").readSessionUpdatedAt;
-type SessionStore = ReturnType<LoadSessionStoreFn>;
+type SessionEntry = import("openclaw/plugin-sdk/session-store-runtime").SessionEntry;
+type SessionStore = Record<string, SessionEntry>;
+type LoadSessionStoreFn = (storePath?: string, opts?: unknown) => SessionStore;
 type TelegramBotRuntimeForTest = NonNullable<
   Parameters<typeof import("./bot.js").setTelegramBotRuntimeForTest>[0]
 >;
+type ResolveTelegramApprovalForTest = NonNullable<TelegramBotDeps["resolveApproval"]>;
 type DispatchReplyWithBufferedBlockDispatcherFn =
   typeof import("openclaw/plugin-sdk/reply-dispatch-runtime").dispatchReplyWithBufferedBlockDispatcher;
 type DispatchReplyWithBufferedBlockDispatcherResult = Awaited<
@@ -290,10 +291,30 @@ const systemEventsHoisted = vi.hoisted(() => ({
 }));
 export const enqueueSystemEventSpy: MockFn<TelegramBotDeps["enqueueSystemEvent"]> =
   systemEventsHoisted.enqueueSystemEventSpy;
-const execApprovalHoisted = vi.hoisted(() => ({
-  resolveExecApprovalSpy: vi.fn(async () => undefined),
-}));
-export const resolveExecApprovalSpy = execApprovalHoisted.resolveExecApprovalSpy;
+const execApprovalHoisted = vi.hoisted(
+  (): { resolveExecApprovalSpy: MockFn<ResolveTelegramApprovalForTest> } => ({
+    resolveExecApprovalSpy: vi.fn<ResolveTelegramApprovalForTest>(async () => ({
+      applied: true,
+      approval: {
+        id: "test-approval",
+        urlPath: "/approve/test-approval",
+        createdAtMs: 1,
+        expiresAtMs: 60_000,
+        resolvedAtMs: 2,
+        reason: "user",
+        status: "allowed",
+        decision: "allow-once",
+        presentation: {
+          kind: "exec",
+          commandText: "echo test",
+          allowedDecisions: ["allow-once", "deny"],
+        },
+      },
+    })),
+  }),
+);
+export const resolveExecApprovalSpy: MockFn<ResolveTelegramApprovalForTest> =
+  execApprovalHoisted.resolveExecApprovalSpy;
 
 const sentMessageCacheHoisted = vi.hoisted(() => ({
   wasSentByBot: vi.fn(() => false),
@@ -464,7 +485,6 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
   getRuntimeConfig,
   getSessionEntry: getSessionEntryMock,
   listSessionEntries: listSessionEntriesMock,
-  loadSessionStore: loadSessionStoreMock as TelegramBotDeps["loadSessionStore"],
   resolveStorePath: resolveStorePathMock,
   readSessionUpdatedAt: readSessionUpdatedAtMock,
   recordInboundSession: recordInboundSessionMock as TelegramBotDeps["recordInboundSession"],
@@ -485,9 +505,10 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
     listSkillCommandsForAgents as TelegramBotDeps["listSkillCommandsForAgents"],
   syncTelegramMenuCommands: syncTelegramMenuCommands as TelegramBotDeps["syncTelegramMenuCommands"],
   wasSentByBot: wasSentByBot as TelegramBotDeps["wasSentByBot"],
-  resolveExecApproval: resolveExecApprovalSpy as NonNullable<
-    TelegramBotDeps["resolveExecApproval"]
-  >,
+  resolveApproval: resolveExecApprovalSpy,
+  resolveLegacyApproval: async (params) => {
+    await resolveExecApprovalSpy(params);
+  },
 };
 
 vi.doMock("./bot.runtime.js", () => telegramBotRuntimeForTest);
@@ -616,7 +637,24 @@ beforeEach(() => {
     return undefined;
   });
   resolveExecApprovalSpy.mockReset();
-  resolveExecApprovalSpy.mockResolvedValue(undefined);
+  resolveExecApprovalSpy.mockResolvedValue({
+    applied: true,
+    approval: {
+      id: "test-approval",
+      urlPath: "/approve/test-approval",
+      createdAtMs: 1,
+      expiresAtMs: 60_000,
+      resolvedAtMs: 2,
+      reason: "user",
+      status: "allowed",
+      decision: "allow-once",
+      presentation: {
+        kind: "exec",
+        commandText: "echo test",
+        allowedDecisions: ["allow-once", "deny"],
+      },
+    },
+  });
   dispatchReplyWithBufferedBlockDispatcher.mockReset();
   dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
     async (params: DispatchReplyHarnessParams) =>

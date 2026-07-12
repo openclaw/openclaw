@@ -279,6 +279,46 @@ describe("tool-cards", () => {
     }
   });
 
+  it.each([
+    { name: "read", args: { path: "packages/app/src/read.ts" }, path: "packages/app/src/read.ts" },
+    {
+      name: "edit",
+      args: { file_path: "packages/app/src/edit.ts", oldText: "old", newText: "new" },
+      path: "packages/app/src/edit.ts",
+    },
+    {
+      name: "write",
+      args: { path: "packages/app/src/write.ts", content: "new" },
+      path: "packages/app/src/write.ts",
+    },
+  ])("opens the raw file path from an expanded $name card", ({ name, args, path }) => {
+    const container = document.createElement("div");
+    const onOpenWorkspaceFile = vi.fn();
+    render(
+      renderToolCard(
+        {
+          id: `msg:${name}:open`,
+          name,
+          args,
+          completed: true,
+        },
+        {
+          expanded: true,
+          onOpenWorkspaceFile,
+          onToggleExpanded: vi.fn(),
+        },
+      ),
+      container,
+    );
+
+    const pathButton = container.querySelector<HTMLButtonElement>(
+      '.chat-tool-card__detail-link[title="Open file"]',
+    );
+    expect(pathButton).toBeInstanceOf(HTMLButtonElement);
+    pathButton!.click();
+    expect(onOpenWorkspaceFile).toHaveBeenCalledWith({ path });
+  });
+
   it("keeps read offsets and limits visible in expanded args", () => {
     const container = document.createElement("div");
     render(

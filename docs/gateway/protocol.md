@@ -8,8 +8,8 @@ title: "Gateway protocol"
 ---
 
 The Gateway WS protocol is the single control plane and node transport for
-OpenClaw. Every client (CLI, web UI, macOS app, iOS/Android nodes, headless
-nodes) connects over WebSocket and declares a **role** and **scope** at
+OpenClaw. Operator and node clients (CLI, web UI, macOS app, iOS/Android nodes,
+headless nodes) connect over WebSocket and declare a **role** and **scope** at
 handshake time.
 
 ## Transport and framing
@@ -167,6 +167,22 @@ stale CLI/device pairing baselines blocking local backend work. Remote,
 browser-origin, node, and explicit device-token/device-identity clients still
 go through normal pairing and scope-upgrade checks.
 
+### Worker role and closed protocol
+
+Cloud workers use a dedicated loopback ingress through the gateway-owned,
+host-key-pinned SSH tunnel. It accepts only worker identity and never dispatches
+general auth, node events, operator RPCs, or plugin methods. A strict `connect`
+verifies a hash-at-rest, short-lived credential bound to the environment, bundle
+hash, owner epoch, RPC-set version, expiry, and one nullable session; it
+separately checks the current version and feature set. Success returns minimal
+`worker-hello-ok`; feature negotiation is independent of the general protocol
+version. Frames stay under 64 KiB. The closed allowlist contains
+`worker.heartbeat` and `worker.transcript.commit` for ordered semantic message batches. Transcript
+commits use owner-epoch fencing, a gateway-owned session binding, base-leaf
+compare-and-swap, and durable sequence replay; the gateway generates transcript
+entry and parent IDs through the normal session writer. Ownership and expiry are
+rechecked on each RPC.
+
 ### Client capabilities
 
 Operator clients may advertise optional capabilities in `connect.params.caps`:
@@ -229,6 +245,7 @@ Roles:
 
 - `operator`: control-plane client (CLI/UI/automation).
 - `node`: capability host (camera/screen/canvas/system.run).
+- `worker`: cloud execution host on the dedicated, closed worker protocol.
 
 Operator scopes (`src/gateway/operator-scopes.ts`), the full closed set:
 
@@ -537,7 +554,8 @@ methods. Treat this as feature discovery, not a full enumeration of
   </Accordion>
 
   <Accordion title="Approval families">
-    - `exec.approval.request`, `exec.approval.get`, `exec.approval.list`, and `exec.approval.resolve` cover one-shot exec approval requests plus pending approval lookup/replay.
+    - `approval.get` and `approval.resolve` are the kind-agnostic durable approval methods (scope `operator.approvals`). `approval.get` returns a sanitized pending or retained terminal projection with a stable `urlPath`; `approval.resolve` accepts the canonical approval id, an explicit `kind`, and a decision, applies first-answer-wins resolution, and always returns the recorded canonical result.
+    - `exec.approval.request`, `exec.approval.get`, `exec.approval.list`, and `exec.approval.resolve` cover one-shot exec approval requests plus pending approval lookup/replay. They are protocol-boundary adapters over the same durable approval registry.
     - `exec.approval.waitDecision` waits on one pending exec approval and returns the final decision (or `null` on timeout).
     - `exec.approvals.get` and `exec.approvals.set` manage gateway exec approval policy snapshots.
     - `exec.approvals.node.get` and `exec.approvals.node.set` manage node-local exec approval policy via node relay commands.
@@ -832,6 +850,10 @@ context.
   `provider/*` entries. Without an allowlist, the response uses explicit
   `models.providers.<provider>.models` entries, falling back to the full
   catalog only when no configured model rows exist.
+- `"provider-config"`: source-authored `models.providers.*.models` inventory,
+  independent of picker allowlists. Rows include public model capabilities and
+  route-aware availability, but omit provider endpoints, auth material, and
+  runtime request configuration.
 - `"all"`: full gateway catalog, bypassing `agents.defaults.models`. Use for
   diagnostics/discovery UIs, not normal model pickers.
 

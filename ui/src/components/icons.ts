@@ -18,6 +18,14 @@ export const icons = {
       <line x1="6" x2="6" y1="20" y2="16" />
     </svg>
   `,
+  coins: html`
+    <svg viewBox="0 0 24 24">
+      <circle cx="8" cy="8" r="6" />
+      <path d="M18.09 10.37A6 6 0 1 1 10.34 18" />
+      <path d="M7 6h1v4" />
+      <path d="m16.71 13.88.7.71-2.82 2.82" />
+    </svg>
+  `,
   activity: html`
     <svg viewBox="0 0 24 24">
       <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
@@ -236,6 +244,12 @@ export const icons = {
     <svg viewBox="0 0 24 24">
       <path d="m12 19-7-7 7-7" />
       <path d="M19 12H5" />
+    </svg>
+  `,
+  cornerDownLeft: html`
+    <svg viewBox="0 0 24 24">
+      <polyline points="9 10 4 15 9 20" />
+      <path d="M20 4v7a4 4 0 0 1-4 4H4" />
     </svg>
   `,
   cornerDownRight: html`

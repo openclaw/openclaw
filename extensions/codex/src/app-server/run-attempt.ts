@@ -51,7 +51,6 @@ import {
   resolveDiagnosticModelContentCapturePolicy,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
-import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   resolveCodexAppServerForModelProvider,
@@ -126,6 +125,8 @@ import {
   resolveCodexAppServerHomeDir,
   resolveCodexAppServerAuthProfileId,
   resolveCodexAppServerAuthProfileIdForAgent,
+  resolveCodexAppServerPreparedAuthHandoff,
+  resolveCodexAppServerPreparedApiKeyCacheKey,
 } from "./auth-bridge.js";
 import { resolveCodexBindingAppServerConnection } from "./binding-connection.js";
 import {
@@ -232,7 +233,6 @@ import { resolveCodexProviderWebSearchSupport } from "./provider-capabilities.js
 import { readCodexRateLimitsRevision, readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import { releaseCodexSandboxExecServerEnvironment } from "./sandbox-exec-server.js";
 import {
-  isCodexAppServerNativeAuthProfile,
   reclaimCurrentCodexSessionGeneration,
   sessionBindingIdentity,
   type CodexAppServerBindingIdentity,
@@ -251,6 +251,7 @@ import {
   buildTurnCollaborationMode,
   buildTurnStartParams,
   codexDynamicToolsFingerprint,
+  codexLegacyDynamicToolsFingerprint,
   resolveCodexAppServerThreadModelSelection,
   type CodexAppServerThreadLifecycleBinding,
   type CodexContextEngineThreadBootstrapProjection,
@@ -263,6 +264,7 @@ import {
 } from "./tool-progress-normalization.js";
 import {
   createCodexTrajectoryRecorder,
+  type CodexHostTrajectoryRecorder,
   normalizeCodexTrajectoryError,
   recordCodexTrajectoryCompletion,
   recordCodexTrajectoryContext,
@@ -594,36 +596,55 @@ export async function runCodexAppServerAttempt(
       agentDir,
       openClawSandboxActive: sandbox?.enabled === true,
     }).appServer;
-  const startupBindingAuthProfileId = startupBinding?.authProfileId;
   const initialStartupBindingHadInactiveThreadBootstrap =
     isInactiveThreadBootstrapBinding(startupBinding);
+  const preparedAuthRoute = usesSupervisionConnection
+    ? undefined
+    : params.runtimePlan?.auth.modelRoute;
   const startupAuthProfileCandidate = usesSupervisionConnection
     ? undefined
-    : (params.runtimePlan?.auth.forwardedAuthProfileId ??
-      params.authProfileId ??
-      startupBinding?.authProfileId ??
-      startupBindingAuthProfileId);
-  const startupAuthProfileId = usesSupervisionConnection
+    : preparedAuthRoute
+      ? params.runtimePlan?.auth.forwardedAuthProfileId
+      : (params.runtimePlan?.auth.forwardedAuthProfileId ??
+        params.authProfileId ??
+        startupBinding?.authProfileId);
+  const resolvedStartupAuthProfileId = usesSupervisionConnection
     ? undefined
-    : params.authProfileStore
-      ? resolveCodexAppServerAuthProfileId({
-          authProfileId: startupAuthProfileCandidate,
-          store: params.authProfileStore,
-          config: params.config,
-        })
-      : resolveCodexAppServerAuthProfileIdForAgent({
-          authProfileId: startupAuthProfileCandidate,
-          agentDir,
-          config: params.config,
-        });
-  const startupClientAuthProfileId = usesSupervisionConnection ? null : startupAuthProfileId;
-  const nativeAuthProfile =
-    isCodexAppServerNativeAuthProfile({
-      authProfileId: startupClientAuthProfileId ?? undefined,
-      authProfileStore: params.authProfileStore,
-      agentDir,
-      config: params.config,
-    }) || usesSupervisionConnection;
+    : preparedAuthRoute
+      ? startupAuthProfileCandidate
+      : params.authProfileStore
+        ? resolveCodexAppServerAuthProfileId({
+            authProfileId: startupAuthProfileCandidate,
+            store: params.authProfileStore,
+            config: params.config,
+          })
+        : resolveCodexAppServerAuthProfileIdForAgent({
+            authProfileId: startupAuthProfileCandidate,
+            agentDir,
+            config: params.config,
+          });
+  const authHandoff = usesSupervisionConnection
+    ? { authProfileId: undefined, nativeAuthProfile: true, preparedAuth: undefined }
+    : await resolveCodexAppServerPreparedAuthHandoff({
+        authRequirement: preparedAuthRoute?.authRequirement,
+        resolvedApiKey: params.resolvedApiKey,
+        authProfileId: resolvedStartupAuthProfileId,
+        authProfileStore: params.authProfileStore,
+        agentDir,
+        config: params.config,
+        subscriptionProfileRequiredError:
+          "Prepared Codex subscription route requires a forwarded OpenAI OAuth or token profile.",
+        subscriptionProfileUnusableError: "Prepared Codex subscription auth profile is unusable.",
+      });
+  const {
+    authProfileId: startupAuthProfileId,
+    nativeAuthProfile,
+    preparedAuth: startupPreparedAuth,
+  } = authHandoff;
+  const startupClientAuthProfileId =
+    usesSupervisionConnection || startupPreparedAuth?.kind === "api-key"
+      ? null
+      : startupAuthProfileId;
   const resolveReviewerPolicyContext = (binding: CodexAppServerThreadBinding | undefined) => {
     const nativeModelOwned = binding?.preserveNativeModel === true;
     // A supervised Codex branch owns its model. The outer OpenClaw default may
@@ -845,15 +866,19 @@ export async function runCodexAppServerAttempt(
   });
   const startupAuthAccountCacheKey = usesSupervisionConnection
     ? undefined
-    : await resolveCodexAppServerAuthAccountCacheKey({
-        authProfileId: startupAuthProfileId,
-        authProfileStore: attemptAuthProfileStore,
-        agentDir,
-        config: params.config,
-      });
+    : startupPreparedAuth?.kind === "api-key"
+      ? resolveCodexAppServerPreparedApiKeyCacheKey(startupPreparedAuth.apiKey)
+      : startupPreparedAuth?.kind === "profile"
+        ? startupPreparedAuth.snapshot?.secretFreeCacheKey
+        : await resolveCodexAppServerAuthAccountCacheKey({
+            authProfileId: startupAuthProfileId,
+            authProfileStore: attemptAuthProfileStore,
+            agentDir,
+            config: params.config,
+          });
   const startupEnvApiKeyCacheKey = usesSupervisionConnection
     ? undefined
-    : startupAuthProfileId
+    : startupPreparedAuth || startupAuthProfileId
       ? undefined
       : resolveCodexAppServerFallbackApiKeyCacheKey({
           startOptions: appServer.start,
@@ -888,6 +913,7 @@ export async function runCodexAppServerAttempt(
           clientFactory: attemptClientFactory,
           appServer,
           authProfileId: startupClientAuthProfileId,
+          preparedAuth: startupPreparedAuth,
           agentDir,
           config: params.config,
           modelProviderOverride: usesSupervisionConnection
@@ -1063,7 +1089,6 @@ export async function runCodexAppServerAttempt(
       allocateToolOutcomeOrdinal: allocateCodexToolOutcomeOrdinal,
     },
   });
-  const hadSessionFile = await pathExists(activeSessionFile);
   const activeTranscriptTarget = {
     agentId: sessionAgentId,
     sessionFile: activeSessionFile,
@@ -1074,6 +1099,7 @@ export async function runCodexAppServerAttempt(
     !activeContextEngine && initialStartupBindingHadInactiveThreadBootstrap
       ? []
       : ((await readMirroredSessionHistoryMessages(activeTranscriptTarget)) ?? []);
+  const hadSessionTranscriptState = historyMessages.length > 0;
   const hookContextWindowFields = {
     ...(effectiveContextWindowInfo?.tokens
       ? { contextTokenBudget: effectiveContextWindowInfo.tokens }
@@ -1114,11 +1140,12 @@ export async function runCodexAppServerAttempt(
     });
   if (activeContextEngine) {
     await bootstrapHarnessContextEngine({
-      hadSessionFile,
+      hadSessionFile: hadSessionTranscriptState,
       contextEngine: activeContextEngine,
       sessionId: activeSessionId,
       sessionKey: contextSessionKey,
       sessionFile: activeSessionFile,
+      sessionTarget: params.sessionTarget,
       runtimeContext: buildActiveContextEngineRuntimeContext(),
       contextEngineHostSupport: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
       providerId: effectiveRuntimeProviderId,
@@ -1231,6 +1258,7 @@ export async function runCodexAppServerAttempt(
           ),
           projection: contextEngineProjection,
           dynamicToolsFingerprint: codexDynamicToolsFingerprint(toolBridge.specs),
+          legacyDynamicToolsFingerprint: codexLegacyDynamicToolsFingerprint(toolBridge.specs),
         })
       : { project: true, reason: "per-turn-projection" };
     embeddedAgentLog.info("codex app-server context-engine projection decision", {
@@ -1582,12 +1610,20 @@ export async function runCodexAppServerAttempt(
     skillsPrompt: skillsCollaborationInstructions ? (params.skillsSnapshot?.prompt ?? "") : "",
     tools: toolBridge.availableSpecs,
   });
+  const hostTrajectoryRecorder = (
+    params as EmbeddedRunAttemptParams & {
+      trajectoryRecorder?: CodexHostTrajectoryRecorder | null;
+    }
+  ).trajectoryRecorder;
   const trajectoryRecorder = createCodexTrajectoryRecorder({
     attempt: params,
     cwd: effectiveCwd,
     developerInstructions: buildRenderedCodexDeveloperInstructions(),
     prompt: codexTurnPromptText,
+    trajectoryRecorder: hostTrajectoryRecorder,
+    trajectorySessionFile: params.trajectorySessionFile,
     tools: toolBridge.availableSpecs,
+    warn: (message, fields) => embeddedAgentLog.warn(message, fields),
   });
   let client: CodexAppServerClient;
   let thread: CodexAppServerThreadLifecycleBinding;
@@ -1761,6 +1797,7 @@ export async function runCodexAppServerAttempt(
       startupAuthProfileId: startupClientAuthProfileId,
       startupAuthBindingFingerprint: preparedAuthBinding?.fingerprint,
       ...(runtimeArtifactRequest ? { runtimeArtifactRequest } : {}),
+      startupPreparedAuth,
       startupAuthAccountCacheKey,
       startupEnvApiKeyCacheKey,
       agentDir,
@@ -3633,6 +3670,7 @@ export async function runCodexAppServerAttempt(
         sessionIdUsed: activeSessionId,
         sessionKey: contextSessionKey,
         sessionFile: activeSessionFile,
+        sessionTarget: params.sessionTarget,
         messagesSnapshot: finalMessages,
         prePromptMessageCount,
         tokenBudget: effectiveContextTokenBudget,
