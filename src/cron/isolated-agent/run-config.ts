@@ -60,9 +60,9 @@ export function buildCronAgentDefaultsConfig(params: {
   const { overrideModel, definedOverrides } = extractCronAgentDefaultsOverride(
     params.agentConfigOverride,
   );
-  // Sandbox and memory-search resolution already merge global defaults with per-agent
-  // overrides. Copying either partial object into defaults clobbers nested values and
-  // then double-applies the agent override in isolated cron runs.
+  // Keep nested configs owned by agent-aware resolvers out of this flattened snapshot.
+  // Copying a partial sandbox or memorySearch object into defaults destroys its global
+  // fields before the resolver can merge the selected agent's override.
   return mergeCronAgentModelOverride({
     defaults: Object.assign({}, params.defaults, definedOverrides),
     overrideModel,

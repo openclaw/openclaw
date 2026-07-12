@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MemorySearchConfig } from "../../config/types.tools.js";
 import { buildCronAgentDefaultsConfig } from "./run-config.js";
 
-describe("runCronIsolatedAgentTurn memory search config preserved", () => {
+describe("buildCronAgentDefaultsConfig memory search preservation", () => {
   it("keeps global memory search defaults when the agent override is partial", () => {
     const defaultMemorySearch = {
       enabled: true,
