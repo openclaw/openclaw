@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
+import type { RawData } from "ws";
 import {
   loadTranscriptEvents,
   persistSessionTranscriptTurn,
@@ -16,6 +17,7 @@ import {
   clearAgentRunContext,
   emitAgentEvent,
 } from "../infra/agent-events.js";
+import { rawDataToString } from "../infra/ws.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import * as transcriptEvents from "../sessions/transcript-events.js";
 import {
@@ -1361,6 +1363,146 @@ describe("session.message websocket events", () => {
     } finally {
       receiver.clear();
       clearAgentRunContext("local");
+      ws.close();
+    }
+  });
+
+  test("delivers a published worker prefix once when a buffered tail hits capacity", async () => {
+    const storePath = await createSessionStoreFile();
+    const sessionId = "sess-worker-capacity-prefix";
+    const sessionKey = "agent:main:worker-capacity-prefix";
+    await writeSessionStore({
+      entries: {
+        "worker-capacity-prefix": {
+          sessionId,
+          updatedAt: Date.now(),
+        },
+      },
+      storePath,
+    });
+    const config: OpenClawConfig = {
+      agents: { list: [{ id: "main", default: true }] },
+      session: { mainKey: "main", store: storePath },
+    };
+    const identity: WorkerConnectionIdentity = {
+      environmentId: "environment-capacity-prefix",
+      credentialHash: ["capacity", "prefix", "credential"].join("-"),
+      bundleHash: "c".repeat(64),
+      sessionId,
+      ownerEpoch: 5,
+      rpcSetVersion: 1,
+      protocolFeatures: ["worker-live-event-v1"],
+      credentialExpiresAtMs: Date.now() + 10_000,
+    };
+    const receiver = createWorkerLiveEventReceiver({
+      getConfig: () => config,
+      maxActiveRuns: 1,
+      startupBindings: [{ environmentId: identity.environmentId, runEpoch: 5, sessionId }],
+      startupOwners: new Map([[identity.environmentId, 5]]),
+    });
+    const prefix = {
+      event: { kind: "assistant" as const, payload: { text: "prefix", delta: "prefix" } },
+      lastAckedSeq: 0,
+      runEpoch: identity.ownerEpoch,
+      runId: "worker-capacity-prefix-a",
+      seq: 1,
+    };
+    const buffered = {
+      event: { kind: "assistant" as const, payload: { text: "buffered", delta: "buffered" } },
+      lastAckedSeq: 0,
+      runEpoch: identity.ownerEpoch,
+      runId: "worker-capacity-prefix-b",
+      seq: 2,
+    };
+    const ws = await harness.openWs();
+    const prefixChats: Record<string, unknown>[] = [];
+    const collectPrefixChats = (data: RawData) => {
+      const message = JSON.parse(rawDataToString(data)) as {
+        type?: string;
+        event?: string;
+        payload?: Record<string, unknown>;
+      };
+      if (
+        message.type === "event" &&
+        message.event === "chat" &&
+        message.payload?.runId === prefix.runId
+      ) {
+        prefixChats.push(message.payload);
+      }
+    };
+    ws.on("message", collectPrefixChats);
+    try {
+      await connectOk(ws, { scopes: ["operator.read"] });
+      const subscribeRes = await rpcReq(ws, "sessions.messages.subscribe", { key: sessionKey });
+      expect(subscribeRes.ok).toBe(true);
+
+      expect(receiver.apply({ identity, request: buffered })).toEqual({
+        ok: true,
+        result: { ackedSeq: 0 },
+      });
+      const prefixEvent = onceMessage(
+        ws,
+        ({ type, event, payload }) =>
+          type === "event" &&
+          event === "chat" &&
+          (payload as Record<string, unknown>).runId === prefix.runId,
+        5_000,
+      );
+      expect(receiver.apply({ identity, request: prefix })).toEqual({
+        ok: true,
+        result: { ackedSeq: 1 },
+      });
+      expectRecordFields((await prefixEvent).payload, {
+        deltaText: "prefix",
+        runId: prefix.runId,
+        sessionKey,
+        state: "delta",
+      });
+
+      const bufferedEvent = onceMessage(
+        ws,
+        ({ type, event, payload }) =>
+          type === "event" &&
+          event === "chat" &&
+          (payload as Record<string, unknown>).runId === buffered.runId,
+        5_000,
+      );
+      await expectNoMessageWithin({
+        watch: (timeoutMs) =>
+          onceMessage(
+            ws,
+            ({ type, event, payload }) =>
+              type === "event" &&
+              event === "chat" &&
+              (payload as Record<string, unknown>).runId === prefix.runId,
+            timeoutMs,
+          ),
+        action: () => {
+          expect(receiver.apply({ identity, request: { ...buffered, lastAckedSeq: 1 } })).toEqual({
+            ok: false,
+            details: { reason: "resync-required", ackedSeq: 0, expectedSeq: 1 },
+          });
+          expect(
+            receiver.apply({
+              identity,
+              request: { ...buffered, lastAckedSeq: 0, seq: 1 },
+            }),
+          ).toEqual({
+            ok: true,
+            result: { ackedSeq: 1 },
+          });
+        },
+      });
+      expectRecordFields((await bufferedEvent).payload, {
+        deltaText: "buffered",
+        runId: buffered.runId,
+        sessionKey,
+        state: "delta",
+      });
+      expect(prefixChats).toHaveLength(1);
+    } finally {
+      receiver.clear();
+      ws.off("message", collectPrefixChats);
       ws.close();
     }
   });
