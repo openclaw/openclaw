@@ -1,4 +1,5 @@
 // Resolves agent-specific config and workspace directories.
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -24,10 +25,59 @@ export class DuplicateAgentDirError extends Error {
   }
 }
 
+function swapAsciiCase(value: string): string {
+  return value.replace(/[A-Za-z]/g, (char) => {
+    const lower = char.toLowerCase();
+    return char === lower ? char.toUpperCase() : lower;
+  });
+}
+
+function sameFsObject(a: fs.Stats, b: fs.Stats): boolean {
+  return a.dev === b.dev && a.ino === b.ino;
+}
+
+/**
+ * Probe whether `value` lives on a case-insensitive volume.
+ * Walks to the closest existing parent so configured agentDirs need not exist yet.
+ * Mirrors the trusted-bin path probe so collision identity matches real FS semantics.
+ */
+function pathCaseInsensitive(value: string): boolean {
+  let candidate = value;
+  for (;;) {
+    const swapped = swapAsciiCase(candidate);
+    if (swapped !== candidate) {
+      try {
+        const original = fs.statSync(candidate);
+        try {
+          const alternate = fs.statSync(swapped);
+          return sameFsObject(original, alternate);
+        } catch {
+          // Alternate case path missing while original exists → case-sensitive volume.
+          return false;
+        }
+      } catch {
+        // Path may not exist yet; probe the closest existing parent.
+      }
+    }
+
+    const parent = path.dirname(candidate);
+    if (parent === candidate) {
+      // Unknown root: Windows volumes are case-insensitive by default; POSIX is not.
+      return process.platform === "win32";
+    }
+    candidate = parent;
+  }
+}
+
+/**
+ * Collision key for agentDir identity.
+ * Case-insensitive volumes (common macOS APFS / Windows NTFS) fold case so
+ * AgentA and agenta cannot share auth state under different spellings.
+ * Case-sensitive volumes keep distinct case paths as distinct agent dirs.
+ */
 function canonicalizeAgentDir(agentDir: string): string {
   const resolved = path.resolve(agentDir);
-  if (process.platform === "darwin" || process.platform === "win32") {
-    // Agent dirs collide case-insensitively on the common macOS/Windows filesystems.
+  if (pathCaseInsensitive(resolved)) {
     return normalizeLowercaseStringOrEmpty(resolved);
   }
   return resolved;
