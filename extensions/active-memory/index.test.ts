@@ -6436,6 +6436,30 @@ describe("active-memory plugin", () => {
     expect(config.circuitBreakerMaxTimeouts).toBe(1);
     expect(config.circuitBreakerCooldownMs).toBe(5000);
   });
+
+  it("bounds timeout circuit breaker growth by evicting oldest keys", () => {
+    testing.resetActiveRecallCacheForTests();
+    const cap = 1000;
+    const base = 1_000_000;
+    for (let i = 0; i < cap + 5; i += 1) {
+      testing.recordCircuitBreakerTimeout(`agent:model-${i}`, base + i);
+    }
+    expect(testing.getTimeoutCircuitBreakerSize()).toBe(cap);
+    expect(testing.getCircuitBreakerEntry("agent:model-0")).toBeUndefined();
+    expect(testing.getCircuitBreakerEntry("agent:model-4")).toBeUndefined();
+    expect(testing.getCircuitBreakerEntry(`agent:model-${cap + 4}`)?.consecutiveTimeouts).toBe(1);
+  });
+
+  it("purges cooldown-expired circuit breaker entries before inserting", () => {
+    testing.resetActiveRecallCacheForTests();
+    testing.recordCircuitBreakerTimeout("agent:old-a", 1_000_000);
+    testing.recordCircuitBreakerTimeout("agent:old-b", 1_000_000);
+    testing.recordCircuitBreakerTimeout("agent:fresh", 1_000_000 + 60_000);
+    expect(testing.getTimeoutCircuitBreakerSize()).toBe(1);
+    expect(testing.getCircuitBreakerEntry("agent:old-a")).toBeUndefined();
+    expect(testing.getCircuitBreakerEntry("agent:old-b")).toBeUndefined();
+    expect(testing.getCircuitBreakerEntry("agent:fresh")?.consecutiveTimeouts).toBe(1);
+  });
 });
 
 function toLintErrorObject(value: unknown, fallbackMessage: string): Error {

@@ -393,6 +393,38 @@ function buildCircuitBreakerKey(agentId: string, provider?: string, model?: stri
   return `${agentId}:${provider ?? "unknown"}/${model ?? "unknown"}`;
 }
 
+function purgeExpiredTimeoutCircuitBreakers(
+  nowMs: number,
+  cooldownMs = DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS,
+): void {
+  for (const [key, entry] of timeoutCircuitBreaker) {
+    if (nowMs - entry.lastTimeoutAt >= cooldownMs) {
+      timeoutCircuitBreaker.delete(key);
+    }
+  }
+}
+
+function evictOldestTimeoutCircuitBreakers(retainKey?: string): void {
+  while (timeoutCircuitBreaker.size >= DEFAULT_MAX_CACHE_ENTRIES) {
+    let victimKey: string | undefined;
+    let victimAt = Number.POSITIVE_INFINITY;
+    for (const [key, entry] of timeoutCircuitBreaker) {
+      if (key === retainKey) {
+        continue;
+      }
+      // Prefer older lastTimeoutAt; equal timestamps keep earlier Map insertion order.
+      if (entry.lastTimeoutAt < victimAt) {
+        victimAt = entry.lastTimeoutAt;
+        victimKey = key;
+      }
+    }
+    if (!victimKey) {
+      break;
+    }
+    timeoutCircuitBreaker.delete(victimKey);
+  }
+}
+
 function isCircuitBreakerOpen(key: string, maxTimeouts: number, cooldownMs: number): boolean {
   const entry = timeoutCircuitBreaker.get(key);
   if (!entry || entry.consecutiveTimeouts < maxTimeouts) {
@@ -406,14 +438,17 @@ function isCircuitBreakerOpen(key: string, maxTimeouts: number, cooldownMs: numb
   return true;
 }
 
-function recordCircuitBreakerTimeout(key: string): void {
+function recordCircuitBreakerTimeout(key: string, nowMs: number = Date.now()): void {
   const entry = timeoutCircuitBreaker.get(key);
   if (entry) {
     entry.consecutiveTimeouts++;
-    entry.lastTimeoutAt = Date.now();
-  } else {
-    timeoutCircuitBreaker.set(key, { consecutiveTimeouts: 1, lastTimeoutAt: Date.now() });
+    entry.lastTimeoutAt = nowMs;
+    purgeExpiredTimeoutCircuitBreakers(nowMs);
+    return;
   }
+  purgeExpiredTimeoutCircuitBreakers(nowMs);
+  evictOldestTimeoutCircuitBreakers();
+  timeoutCircuitBreaker.set(key, { consecutiveTimeouts: 1, lastTimeoutAt: nowMs });
 }
 
 function resetCircuitBreaker(key: string): void {
@@ -4174,8 +4209,12 @@ const testing = {
     timeoutPartialDataGraceMs = Math.max(0, Math.floor(value));
   },
   setCachedResult,
+  recordCircuitBreakerTimeout,
   getCircuitBreakerEntry(key: string) {
     return timeoutCircuitBreaker.get(key);
+  },
+  getTimeoutCircuitBreakerSize() {
+    return timeoutCircuitBreaker.size;
   },
 };
 
