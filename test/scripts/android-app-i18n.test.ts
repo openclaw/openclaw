@@ -53,6 +53,24 @@ describe("Android app i18n resources", () => {
     ).toBe("%2$s Anbieter, davon %1$s bereit");
   });
 
+  it("formats nested Kotlin interpolations as single Android arguments", () => {
+    expect(
+      renderAndroidResourceValue(
+        "${device.tokens.count { !it.revoked }}/${device.tokens.size} active tokens",
+        "${device.tokens.size} Token, ${device.tokens.count { !it.revoked }} aktiv",
+      ),
+    ).toBe("%2$s Token, %1$s aktiv");
+  });
+
+  it("balances braces inside nested interpolation strings", () => {
+    expect(
+      renderAndroidResourceValue(
+        '${if (connected) "{" else "}"} $count',
+        '$count · ${if (connected) "{" else "}"}',
+      ),
+    ).toBe("%2$s · %1$s");
+  });
+
   it("rejects repeated translation placeholders that do not match the source", () => {
     expect(() =>
       renderAndroidResourceValue("$item then $item", "$item, $item und noch einmal $item"),
