@@ -398,15 +398,15 @@ function extractEmbeddingInputTexts(input: unknown): string[] {
 function buildDeterministicEmbedding(text: string, dimensions = 16) {
   const values = Array.from({ length: dimensions }, () => 0);
   for (let index = 0; index < text.length; index += 1) {
-    values[index % dimensions] += text.charCodeAt(index) / 255;
+    const embeddingIndex = index % dimensions;
+    values[embeddingIndex] = (values[embeddingIndex] ?? 0) + text.charCodeAt(index) / 255;
   }
   const magnitude = Math.hypot(...values) || 1;
   return values.map((value) => Number((value / magnitude).toFixed(8)));
 }
 
 function extractLastUserText(input: ResponsesInputItem[]) {
-  for (let index = input.length - 1; index >= 0; index -= 1) {
-    const item = input[index];
+  for (const item of input.toReversed()) {
     if (item.role !== "user" || !Array.isArray(item.content)) {
       continue;
     }
@@ -419,16 +419,12 @@ function extractLastUserText(input: ResponsesInputItem[]) {
 }
 
 function findLastUserIndex(input: ResponsesInputItem[]) {
-  for (let index = input.length - 1; index >= 0; index -= 1) {
-    const item = input[index];
-    if (item.role !== "user" || !Array.isArray(item.content)) {
-      continue;
-    }
-    if (!isInternalRuntimeContextCarrierText(extractInputText(item.content))) {
-      return index;
-    }
-  }
-  return -1;
+  return input.findLastIndex(
+    (item) =>
+      item.role === "user" &&
+      Array.isArray(item.content) &&
+      !isInternalRuntimeContextCarrierText(extractInputText(item.content)),
+  );
 }
 
 function isInternalRuntimeContextCarrierText(text: string) {
@@ -530,19 +526,17 @@ function functionCallOutputIsStructuredError(item: ResponsesInputItem) {
 
 function extractToolOutput(input: ResponsesInputItem[]) {
   const lastUserIndex = findLastUserIndex(input);
-  for (let index = input.length - 1; index > lastUserIndex; index -= 1) {
-    const item = input[index];
+  for (const item of input.slice(lastUserIndex + 1).toReversed()) {
     const output = extractFunctionCallOutputText(item);
     if (output) {
       return output;
     }
   }
-  for (let index = input.length - 1; index >= 0; index -= 1) {
-    const item = input[index];
-    const output = extractFunctionCallOutputText(item);
+  for (const [candidateIndex, candidateItem] of Array.from(input.entries()).toReversed()) {
+    const output = extractFunctionCallOutputText(candidateItem);
     if (output) {
       const laterUserTexts = input
-        .slice(index + 1)
+        .slice(candidateIndex + 1)
         .filter((laterItem) => laterItem.role === "user" && Array.isArray(laterItem.content))
         .map((laterItem) => extractInputText(laterItem.content as unknown[]))
         .filter(Boolean);
@@ -560,19 +554,17 @@ function extractToolOutput(input: ResponsesInputItem[]) {
 
 function extractToolOutputStructuredError(input: ResponsesInputItem[]) {
   const lastUserIndex = findLastUserIndex(input);
-  for (let index = input.length - 1; index > lastUserIndex; index -= 1) {
-    const item = input[index];
+  for (const item of input.slice(lastUserIndex + 1).toReversed()) {
     const output = extractFunctionCallOutputText(item);
     if (output) {
       return functionCallOutputIsStructuredError(item);
     }
   }
-  for (let index = input.length - 1; index >= 0; index -= 1) {
-    const item = input[index];
-    const output = extractFunctionCallOutputText(item);
+  for (const [candidateIndex, candidateItem] of Array.from(input.entries()).toReversed()) {
+    const output = extractFunctionCallOutputText(candidateItem);
     if (output) {
       const laterUserTexts = input
-        .slice(index + 1)
+        .slice(candidateIndex + 1)
         .filter((laterItem) => laterItem.role === "user" && Array.isArray(laterItem.content))
         .map((laterItem) => extractInputText(laterItem.content as unknown[]))
         .filter(Boolean);
@@ -580,7 +572,7 @@ function extractToolOutputStructuredError(input: ResponsesInputItem[]) {
         laterUserTexts.length > 0 &&
         laterUserTexts.every((text) => isToolOutputContinuationText(text))
       ) {
-        return functionCallOutputIsStructuredError(item);
+        return functionCallOutputIsStructuredError(candidateItem);
       }
     }
   }
@@ -589,19 +581,17 @@ function extractToolOutputStructuredError(input: ResponsesInputItem[]) {
 
 function extractToolOutputCallId(input: ResponsesInputItem[]) {
   const lastUserIndex = findLastUserIndex(input);
-  for (let index = input.length - 1; index > lastUserIndex; index -= 1) {
-    const item = input[index];
+  for (const item of input.slice(lastUserIndex + 1).toReversed()) {
     const output = extractFunctionCallOutputText(item);
     if (output) {
       return extractFunctionCallOutputCallId(item);
     }
   }
-  for (let index = input.length - 1; index >= 0; index -= 1) {
-    const item = input[index];
-    const output = extractFunctionCallOutputText(item);
+  for (const [candidateIndex, candidateItem] of Array.from(input.entries()).toReversed()) {
+    const output = extractFunctionCallOutputText(candidateItem);
     if (output) {
       const laterUserTexts = input
-        .slice(index + 1)
+        .slice(candidateIndex + 1)
         .filter((laterItem) => laterItem.role === "user" && Array.isArray(laterItem.content))
         .map((laterItem) => extractInputText(laterItem.content as unknown[]))
         .filter(Boolean);
@@ -609,7 +599,7 @@ function extractToolOutputCallId(input: ResponsesInputItem[]) {
         laterUserTexts.length > 0 &&
         laterUserTexts.every((text) => isToolOutputContinuationText(text))
       ) {
-        return extractFunctionCallOutputCallId(item);
+        return extractFunctionCallOutputCallId(candidateItem);
       }
     }
   }
@@ -617,8 +607,7 @@ function extractToolOutputCallId(input: ResponsesInputItem[]) {
 }
 
 function extractLatestToolOutput(input: ResponsesInputItem[]) {
-  for (let index = input.length - 1; index >= 0; index -= 1) {
-    const item = input[index];
+  for (const item of input.toReversed()) {
     const output = extractFunctionCallOutputText(item);
     if (output) {
       return output;
@@ -635,13 +624,9 @@ function extractAllToolOutputText(input: ResponsesInputItem[]) {
 }
 
 function extractUserTextAfterLatestToolOutput(input: ResponsesInputItem[]) {
-  let latestToolOutputIndex = -1;
-  for (let index = input.length - 1; index >= 0; index -= 1) {
-    if (extractFunctionCallOutputText(input[index])) {
-      latestToolOutputIndex = index;
-      break;
-    }
-  }
+  const latestToolOutputIndex = input.findLastIndex((item) =>
+    Boolean(extractFunctionCallOutputText(item)),
+  );
   if (latestToolOutputIndex < 0) {
     return "";
   }
@@ -1998,10 +1983,11 @@ function buildAssistantEvents(specsOrText: MockAssistantMessageSpec[] | string):
           },
         ]
       : specsOrText;
-  const output = specs.map((spec) => buildAssistantOutputItem(spec));
+  const renderedSpecs = specs.map((spec) => ({ spec, item: buildAssistantOutputItem(spec) }));
+  const output = renderedSpecs.map(({ item }) => item);
   const events: StreamEvent[] = [];
 
-  for (const [outputIndex, spec] of specs.entries()) {
+  for (const [outputIndex, { spec, item }] of renderedSpecs.entries()) {
     events.push({
       type: "response.output_item.added",
       item: {
@@ -2033,7 +2019,7 @@ function buildAssistantEvents(specsOrText: MockAssistantMessageSpec[] | string):
     }
     events.push({
       type: "response.output_item.done",
-      item: output[outputIndex],
+      item,
     });
   }
 

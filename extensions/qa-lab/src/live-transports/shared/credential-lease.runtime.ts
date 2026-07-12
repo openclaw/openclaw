@@ -1,5 +1,6 @@
 // Qa Lab plugin module implements credential lease behavior.
 import { randomUUID } from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderTextResponse } from "openclaw/plugin-sdk/provider-http";
@@ -383,7 +384,8 @@ function computeAcquireBackoffMs(params: {
   if (params.retryAfterMs && params.retryAfterMs > 0) {
     return params.retryAfterMs;
   }
-  const base = RETRY_BACKOFF_MS[Math.min(RETRY_BACKOFF_MS.length - 1, params.attempt - 1)];
+  const backoffIndex = Math.max(0, Math.min(RETRY_BACKOFF_MS.length - 1, params.attempt - 1));
+  const base = expectDefined(RETRY_BACKOFF_MS[backoffIndex], "QA credential retry backoff");
   const jitter = 0.75 + params.randomImpl() * 0.5;
   return Math.max(100, Math.round(base * jitter));
 }

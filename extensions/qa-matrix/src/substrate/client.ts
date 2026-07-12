@@ -1,6 +1,7 @@
 // Qa Matrix plugin module implements client behavior.
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
+import { expectDefined } from "@openclaw/normalization-core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { uniqueStrings, uniqueValues } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -799,7 +800,7 @@ async function provisionMatrixQaTopology(params: {
 
   for (const room of params.spec.rooms) {
     const members = resolveTopologyMemberAccounts(params.accounts, room.members);
-    const creator = members[0];
+    const creator = expectDefined(members[0], "Matrix QA room creator");
     const invitees = members.slice(1);
     const creatorClient = createMatrixQaClient({
       accessToken: creator.account.accessToken,
