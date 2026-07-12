@@ -303,6 +303,89 @@ describe("durable wake delivery replay", () => {
     }
   });
 
+  it("repairs a terminal attempt with a pending wake after the old split-write crash boundary", async () => {
+    const { dbPath, store } = tempStore();
+    try {
+      const wake = createPendingWake(store, "terminal-split-repair", 100);
+      const first = await replayDurableWakeDeliveryAttempts({
+        store,
+        replayPassId: "pass:schedule-split",
+        now: 200,
+      });
+      const [scheduledAttempt] = first.attempts;
+      expect(scheduledAttempt).toMatchObject({
+        status: "pending",
+      });
+      expect(
+        store.claimWakeDeliveryAttempt({
+          deliveryAttemptId: scheduledAttempt!.deliveryAttemptId,
+          replayPassId: "pass:old-split",
+          claimTtlMs: 30_000,
+          now: 300,
+        }),
+      ).toMatchObject({ status: "attempted" });
+      expect(
+        store.updateWakeDeliveryAttempt({
+          deliveryAttemptId: scheduledAttempt!.deliveryAttemptId,
+          status: "delivered",
+          expectedClaimedBy: "pass:old-split",
+          evidence: { kind: "old_split_terminal_attempt" },
+          attemptedAt: 300,
+          deliveredAt: 300,
+          metadata: {
+            deliveryContract: "durable_wake_delivery_replay_v1",
+            replayPassId: "pass:old-split",
+          },
+          now: 300,
+        }),
+      ).toMatchObject({ status: "delivered" });
+      expect(store.getDurableWake(wake.wakeId)).toMatchObject({
+        status: "pending",
+        attemptCount: 1,
+      });
+      store.close();
+
+      const reopened = openDurableRuntimeSqliteStore({ path: dbPath });
+      try {
+        let hookCalls = 0;
+        const result = await replayDurableWakeDeliveryAttempts({
+          store: reopened,
+          replayPassId: "pass:repair-split",
+          now: 400,
+          deliveryHook: () => {
+            hookCalls += 1;
+            return { status: "failed" };
+          },
+        });
+
+        expect(result).toMatchObject({
+          scanned: 1,
+          recorded: 0,
+          deduped: 1,
+          delivered: 0,
+        });
+        expect(hookCalls).toBe(0);
+        expect(result.attempts).toEqual([
+          expect.objectContaining({
+            deliveryAttemptId: scheduledAttempt?.deliveryAttemptId,
+            status: "delivered",
+            deliveredAt: 300,
+            evidence: expect.objectContaining({ kind: "old_split_terminal_attempt" }),
+          }),
+        ]);
+        expect(reopened.getDurableWake(wake.wakeId)).toMatchObject({
+          status: "delivered",
+          attemptCount: 2,
+          lastAttemptAt: 300,
+        });
+      } finally {
+        reopened.close();
+      }
+    } finally {
+      fs.rmSync(path.dirname(dbPath), { recursive: true, force: true });
+    }
+  });
+
   it("keeps a slow in-flight delivery hook claim through ttl-expired competing replay", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
