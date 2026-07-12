@@ -26,6 +26,7 @@ import { withTempDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { registerActiveCronTaskRun, resetActiveCronTaskRunsForTests } from "./cron-task-cancel.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
+import { ensureTaskRuntimeStateReady } from "./runtime-internal.js";
 import {
   createTaskFlowForTask as createTaskFlowForTaskOrNull,
   createManagedTaskFlow as createManagedTaskFlowOrNull,
@@ -1315,6 +1316,36 @@ describe("task-registry", () => {
           endedAt: 300,
         })?.status,
       ).toBe("succeeded");
+    });
+  });
+
+  it("restores task-flow state before activating the task registry", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
+      const loadTaskSnapshot = vi.fn(() => ({
+        tasks: new Map<string, TaskRecord>(),
+        deliveryStates: new Map<string, TaskDeliveryState>(),
+      }));
+      configureTaskRegistryRuntime({
+        store: {
+          loadSnapshot: loadTaskSnapshot,
+          saveSnapshot: () => {},
+        },
+      });
+      configureTaskFlowRegistryRuntime({
+        store: {
+          loadSnapshot: () => {
+            throw new Error("SQLITE_CORRUPT: task-flow startup restore failed");
+          },
+          saveSnapshot: () => {},
+        },
+      });
+
+      expect(() => ensureTaskRuntimeStateReady()).toThrow(
+        "Task-flow registry restore failed: SQLITE_CORRUPT: task-flow startup restore failed",
+      );
+      expect(loadTaskSnapshot).not.toHaveBeenCalled();
     });
   });
 
