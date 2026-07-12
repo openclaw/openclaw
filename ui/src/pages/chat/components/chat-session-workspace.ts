@@ -5,7 +5,11 @@ import {
   type GatewayBrowserClient,
   type GatewayHelloOk,
 } from "../../../api/gateway.ts";
-import type { ArtifactDownloadResult, SessionWorkspaceListResult } from "../../../api/types.ts";
+import type {
+  ArtifactDownloadResult,
+  SessionWorkspaceGetResult,
+  SessionWorkspaceListResult,
+} from "../../../api/types.ts";
 import { hasOperatorAdminAccess } from "../../../app/operator-access.ts";
 import {
   normalizeChatWorkspaceDock,
