@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import type { Command } from "commander";
 import { addGatewayClientOptions, callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
 import {
+  migrateWorkspaceDoc,
   validateWorkspaceDoc,
   type WorkspaceBinding,
   type WorkspaceGrid,
@@ -426,7 +427,7 @@ export function registerWorkspaceCli(options: RegisterWorkspaceCliOptions): void
       .description("Replace the Workspaces layout")
       .requiredOption("--file <path>", "Workspace JSON file"),
   ).action(async (commandOptions: GatewayOptions & { file: string }) => {
-    const doc = validateWorkspaceDoc(JSON.parse(await fs.readFile(commandOptions.file, "utf8")));
+    const doc = migrateWorkspaceDoc(JSON.parse(await fs.readFile(commandOptions.file, "utf8"))).doc;
     const result = await callWorkspaceGateway("workspaces.replace", commandOptions, {
       doc,
     });

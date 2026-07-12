@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { jsonResult } from "openclaw/plugin-sdk/core";
 import type {
   AnyAgentTool,
@@ -17,7 +18,6 @@ import { scaffoldWorkspaceWidget } from "./scaffold.js";
 import {
   BUILTIN_WIDGET_KINDS,
   isWorkspaceActor,
-  validateWorkspaceDoc,
   type WorkspaceActor,
   type WorkspaceBinding,
   type WorkspaceGrid,
@@ -518,6 +518,8 @@ export function createWorkspaceTools(params: WorkspaceToolParams): AnyAgentTool[
             }
             changedTabSlug = slug;
             draft.tabs.push({
+              id: randomUUID(),
+              revision: 1,
               slug,
               title,
               ...(icon !== undefined ? { icon } : {}),
@@ -817,8 +819,7 @@ export function createWorkspaceTools(params: WorkspaceToolParams): AnyAgentTool[
       parameters: Type.Object({ doc: Type.Unknown() }, { additionalProperties: false }),
       execute: async (_toolCallId, rawParams) => {
         const record = readRecord(rawParams, ["doc"]);
-        const doc = validateWorkspaceDoc(record.doc);
-        const result = store.replace(doc, { actor });
+        const result = store.replace(record.doc, { actor });
         broadcastChange(broadcast, { doc: result.doc, actor });
         return jsonResult({ doc: result.doc, workspaceVersion: result.doc.workspaceVersion });
       },
