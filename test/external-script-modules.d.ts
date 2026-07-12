@@ -194,6 +194,7 @@ declare module "*openclaw-live-updater/scripts/update-main.mjs" {
     output: string,
     sinceMs: number,
     sourceRoot?: string | null,
+    managedSourceRoots?: string[] | null,
   ): Record<string, unknown>;
   export function prepareGatewaySuspension(
     checkout: string,

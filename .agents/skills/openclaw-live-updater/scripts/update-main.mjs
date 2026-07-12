@@ -1517,7 +1517,19 @@ function summarizeGatewayLogEntry(entry) {
   };
 }
 
-function isCurrentGatewayLogSource(source, sourceRoot) {
+function isPathWithinRoot(sourcePath, rootPath) {
+  const normalizedRoot = path.resolve(rootPath);
+  const normalizedSource = path.resolve(sourcePath);
+  return (
+    normalizedSource === normalizedRoot ||
+    normalizedSource.startsWith(`${normalizedRoot}${path.sep}`)
+  );
+}
+
+function isCurrentGatewayLogSource(source, sourceRoot, managedSourceRoots) {
+  if (managedSourceRoots === null) {
+    return true;
+  }
   if (!sourceRoot) {
     return true;
   }
@@ -1530,14 +1542,14 @@ function isCurrentGatewayLogSource(source, sourceRoot) {
   } catch {
     return true;
   }
-  const normalizedRoot = path.resolve(sourceRoot);
-  const normalizedSource = path.resolve(sourcePath);
   if (
-    normalizedSource === normalizedRoot ||
-    normalizedSource.startsWith(`${normalizedRoot}${path.sep}`)
+    isPathWithinRoot(sourcePath, sourceRoot) ||
+    managedSourceRoots.some((rootPath) => isPathWithinRoot(sourcePath, rootPath))
   ) {
     return true;
   }
+  const normalizedRoot = path.resolve(sourceRoot);
+  const normalizedSource = path.resolve(sourcePath);
   const checkoutRoot = path.dirname(normalizedRoot);
   let candidate = path.dirname(normalizedSource);
   while (candidate !== path.dirname(candidate)) {
@@ -1616,9 +1628,9 @@ function summarizeGatewayLogAudit(entries) {
   };
 }
 
-export function parseGatewayLogAudit(output, sinceMs, sourceRoot = null) {
+export function parseGatewayLogAudit(output, sinceMs, sourceRoot = null, managedSourceRoots = []) {
   const entries = parseGatewayLogEntries(output, sinceMs).filter((entry) =>
-    isCurrentGatewayLogSource(entry.source, sourceRoot),
+    isCurrentGatewayLogSource(entry.source, sourceRoot, managedSourceRoots),
   );
   return summarizeGatewayLogAudit(entries);
 }
@@ -1645,7 +1657,30 @@ function readFallbackGatewayLogs(sinceMs) {
   return contents.join("\n");
 }
 
-function defaultAuditGatewayLogs(checkout, sinceMs) {
+function readConfiguredPluginLoadPaths(checkout, deployment) {
+  try {
+    const output = execFileSync(
+      process.execPath,
+      ["openclaw.mjs", "config", "get", "plugins.load", "--json"],
+      {
+        cwd: checkout,
+        encoding: "utf8",
+        maxBuffer: 4 * 1024 * 1024,
+        env: {
+          ...process.env,
+          ...(deployment?.serviceEnvironment ?? {}),
+          ...(deployment?.configPath ? { OPENCLAW_CONFIG_PATH: deployment.configPath } : {}),
+        },
+      },
+    );
+    const paths = JSON.parse(output)?.paths;
+    return Array.isArray(paths) ? paths.filter((entry) => typeof entry === "string") : [];
+  } catch {
+    return null;
+  }
+}
+
+function defaultAuditGatewayLogs(checkout, sinceMs, deployment = null) {
   let output;
   try {
     output = execFileSync(
@@ -1669,7 +1704,12 @@ function defaultAuditGatewayLogs(checkout, sinceMs) {
       throw error;
     }
   }
-  const audit = parseGatewayLogAudit(output, sinceMs, path.join(realpathSync(checkout), "dist"));
+  const audit = parseGatewayLogAudit(
+    output,
+    sinceMs,
+    path.join(realpathSync(checkout), "dist"),
+    readConfiguredPluginLoadPaths(checkout, deployment),
+  );
   if (audit.errorCount > 0) {
     throw new UpdateInvariantError(
       "gateway_restart_log_errors",
@@ -1694,7 +1734,7 @@ function verifyAndAuditGateway({
   } catch (error) {
     verificationError = error;
   }
-  const audit = auditGatewayLogs(checkout, sinceMs);
+  const audit = auditGatewayLogs(checkout, sinceMs, deployment);
   if (verificationError) {
     throw verificationError;
   }

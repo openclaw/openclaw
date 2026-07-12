@@ -349,17 +349,44 @@ describe("openclaw live updater", () => {
           },
         }),
       },
+      {
+        type: "log",
+        time: "2026-07-11T08:00:06.000Z",
+        level: "error",
+        message: "configured foreign-checkout plugin failure",
+        raw: JSON.stringify({
+          "0": "configured foreign-checkout plugin failure",
+          time: "2026-07-11T08:00:06.000Z",
+          _meta: {
+            date: "2026-07-11T08:00:06.000Z",
+            logLevelName: "ERROR",
+            path: {
+              fullFilePath: path.join(foreignRoot, "extensions/configured/dist/logger.js"),
+            },
+          },
+        }),
+      },
     ]
       .map((entry) => JSON.stringify(entry))
       .join("\n");
 
     expect(
-      parseGatewayLogAudit(output, Date.parse("2026-07-11T08:00:02.000Z"), sourceRoot),
+      parseGatewayLogAudit(output, Date.parse("2026-07-11T08:00:02.000Z"), sourceRoot, [
+        path.join(foreignRoot, "extensions/configured"),
+      ]),
     ).toMatchObject({
-      entries: 2,
-      errorCount: 2,
-      errors: [{ message: "managed failure" }, { message: "installed plugin failure" }],
+      entries: 3,
+      errorCount: 3,
+      errors: [
+        { message: "managed failure" },
+        { message: "installed plugin failure" },
+        { message: "configured foreign-checkout plugin failure" },
+      ],
     });
+
+    expect(
+      parseGatewayLogAudit(output, Date.parse("2026-07-11T08:00:02.000Z"), sourceRoot, null),
+    ).toMatchObject({ entries: 4, errorCount: 4 });
   });
 
   test("retries bounded Gateway readiness after restart", () => {
