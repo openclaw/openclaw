@@ -579,14 +579,12 @@ describe("active-memory plugin", () => {
     vi.restoreAllMocks();
     testing.resetActiveRecallCacheForTests();
     if (stateDir) {
-      try {
-        await fs.rm(stateDir, { recursive: true, force: true });
-      } catch (error) {
-        // Windows may keep sqlite handles briefly open after plugin teardown.
-        if ((error as NodeJS.ErrnoException).code !== "EBUSY") {
-          throw error;
-        }
-      }
+      await fs.rm(stateDir, {
+        recursive: true,
+        force: true,
+        maxRetries: 3,
+        retryDelay: 50,
+      });
       stateDir = "";
     }
   });
@@ -6563,25 +6561,6 @@ describe("active-memory plugin", () => {
       );
 
     expect(redacted.some((line) => line.includes("circuit breaker open"))).toBe(true);
-
-    const proof = {
-      path: "before_prompt_build → recordCircuitBreakerTimeout(config.circuitBreakerCooldownMs)",
-      timeoutMs: CONFIGURED_TIMEOUT_MS,
-      circuitBreakerMaxTimeouts: 1,
-      circuitBreakerCooldownMs: 60_000,
-      distinctAgentsAttempted: agentIds.length,
-      distinctAgentsTimedOut: embeddedRuns,
-      breakerMapSize: sizeAfterDistinctTimeouts,
-      embeddedRuns,
-      skippedAdditionalRunOnOpenBreaker: true,
-      redactedPluginLogs: redacted.slice(-12),
-    };
-    await fs.writeFile(
-      path.join(process.cwd(), ".tmp-am-runtime-proof.json"),
-      `${JSON.stringify(proof, null, 2)}\n`,
-      "utf8",
-    );
-    expect(proof.breakerMapSize).toBe(proof.embeddedRuns);
   });
 });
 
