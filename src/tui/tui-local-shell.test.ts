@@ -31,14 +31,17 @@ function createShellHarness(params?: {
   env?: Record<string, string>;
   maxOutputChars?: number;
   getSessionScope?: () => { sessionKey: string; agentId?: string } | undefined;
-  injectBashExecution?: (result: {
-    command: string;
-    output: string;
-    exitCode?: number;
-    cancelled?: boolean;
-    truncated?: boolean;
-    excludeFromContext: boolean;
-  }) => Promise<{ ok: boolean; error?: string }>;
+  injectBashExecution?: (
+    result: {
+      command: string;
+      output: string;
+      exitCode?: number;
+      cancelled?: boolean;
+      truncated?: boolean;
+      excludeFromContext: boolean;
+    },
+    scope: { sessionKey: string; agentId?: string },
+  ) => Promise<{ ok: boolean; error?: string }>;
 }) {
   const messages: string[] = [];
   const chatLog = {
@@ -275,7 +278,9 @@ describe("createLocalShellRunner", () => {
     });
 
     const run = harness.runLocalShellLine("!echo hi");
-    harness.getLastSelector()?.onSelect?.({ value: "yes-share", label: "Yes, and share with the agent" });
+    harness
+      .getLastSelector()
+      ?.onSelect?.({ value: "yes-share", label: "Yes, and share with the agent" });
     await run;
 
     expect(injectBashExecution).toHaveBeenCalledTimes(1);
@@ -286,6 +291,7 @@ describe("createLocalShellRunner", () => {
         exitCode: 0,
         excludeFromContext: false,
       }),
+      { sessionKey: "main", agentId: "work" },
     );
   });
 
@@ -301,12 +307,15 @@ describe("createLocalShellRunner", () => {
     });
 
     const run = harness.runLocalShellLine("!!cat secrets.env");
-    harness.getLastSelector()?.onSelect?.({ value: "yes-share", label: "Yes, and share with the agent" });
+    harness
+      .getLastSelector()
+      ?.onSelect?.({ value: "yes-share", label: "Yes, and share with the agent" });
     await run;
 
     expect(injectBashExecution).toHaveBeenCalledTimes(1);
     expect(injectBashExecution).toHaveBeenCalledWith(
       expect.objectContaining({ command: "cat secrets.env", excludeFromContext: true }),
+      { sessionKey: "main" },
     );
   });
 
@@ -331,6 +340,71 @@ describe("createLocalShellRunner", () => {
     expect(harness.messages).toContain("[local] hi");
   });
 
+  it("re-prompts for consent per session instead of carrying approval across sessions", async () => {
+    let currentSession = "session-a";
+    const injectBashExecution = vi.fn(async () => ({ ok: true }));
+    const harness = createShellHarness({
+      spawnCommand: makeCompletingSpawn(
+        "hi",
+        0,
+      ) as unknown as typeof import("node:child_process").spawn,
+      getSessionScope: () => ({ sessionKey: currentSession }),
+      injectBashExecution,
+    });
+
+    const first = harness.runLocalShellLine("!echo one");
+    harness
+      .getLastSelector()
+      ?.onSelect?.({ value: "yes-share", label: "Yes, and share with the agent" });
+    await first;
+    expect(injectBashExecution).toHaveBeenCalledTimes(1);
+
+    // A different session must get its own prompt, and its own (here: local-only)
+    // answer must control persistence — session-a's share approval cannot leak.
+    currentSession = "session-b";
+    const second = harness.runLocalShellLine("!echo two");
+    expect(harness.createSelectorSpy).toHaveBeenCalledTimes(2);
+    harness.getLastSelector()?.onSelect?.({ value: "yes", label: "Yes, local only" });
+    await second;
+    expect(injectBashExecution).toHaveBeenCalledTimes(1);
+
+    // Returning to session-a reuses its stored answer without a third prompt.
+    currentSession = "session-a";
+    await harness.runLocalShellLine("!echo three");
+    expect(harness.createSelectorSpy).toHaveBeenCalledTimes(2);
+    expect(injectBashExecution).toHaveBeenCalledTimes(2);
+  });
+
+  it("persists to the session captured at command start, not the one current at completion", async () => {
+    const injectBashExecution = vi.fn(async () => ({ ok: true }));
+    // Scope flips to session-b immediately after the initial capture, modeling a
+    // `/session` switch while the command is still running.
+    const getSessionScope = vi
+      .fn()
+      .mockReturnValueOnce({ sessionKey: "session-a", agentId: "agent-a" })
+      .mockReturnValue({ sessionKey: "session-b", agentId: "agent-b" });
+    const harness = createShellHarness({
+      spawnCommand: makeCompletingSpawn(
+        "hi",
+        0,
+      ) as unknown as typeof import("node:child_process").spawn,
+      getSessionScope,
+      injectBashExecution,
+    });
+
+    const run = harness.runLocalShellLine("!echo hi");
+    harness
+      .getLastSelector()
+      ?.onSelect?.({ value: "yes-share", label: "Yes, and share with the agent" });
+    await run;
+
+    expect(injectBashExecution).toHaveBeenCalledTimes(1);
+    expect(injectBashExecution).toHaveBeenCalledWith(expect.anything(), {
+      sessionKey: "session-a",
+      agentId: "agent-a",
+    });
+  });
+
   it("does not persist when no session scope is available", async () => {
     const injectBashExecution = vi.fn(async () => ({ ok: true }));
     const harness = createShellHarness({
@@ -343,7 +417,9 @@ describe("createLocalShellRunner", () => {
     });
 
     const run = harness.runLocalShellLine("!echo hi");
-    harness.getLastSelector()?.onSelect?.({ value: "yes-share", label: "Yes, and share with the agent" });
+    harness
+      .getLastSelector()
+      ?.onSelect?.({ value: "yes-share", label: "Yes, and share with the agent" });
     await run;
 
     expect(injectBashExecution).not.toHaveBeenCalled();
@@ -361,7 +437,9 @@ describe("createLocalShellRunner", () => {
     });
 
     const run = harness.runLocalShellLine("!echo hi");
-    harness.getLastSelector()?.onSelect?.({ value: "yes-share", label: "Yes, and share with the agent" });
+    harness
+      .getLastSelector()
+      ?.onSelect?.({ value: "yes-share", label: "Yes, and share with the agent" });
     await run;
 
     expect(
@@ -388,7 +466,9 @@ describe("createLocalShellRunner", () => {
     });
 
     const run = harness.runLocalShellLine("!does-not-exist");
-    harness.getLastSelector()?.onSelect?.({ value: "yes-share", label: "Yes, and share with the agent" });
+    harness
+      .getLastSelector()
+      ?.onSelect?.({ value: "yes-share", label: "Yes, and share with the agent" });
     await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledTimes(1));
 
     emitter.emit("error", new Error("ENOENT"));

@@ -1441,13 +1441,16 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       sessionKey: state.currentSessionKey,
       agentId: state.currentAgentId,
     }),
-    injectBashExecution: async (result) => {
+    // The runner passes the scope captured at command submit time; reading
+    // state.currentSessionKey here instead would retarget a mid-command
+    // `/session` switch to the wrong session.
+    injectBashExecution: async (result, scope) => {
       if (!client.injectBashExecution) {
         return { ok: false, error: "backend does not support persisting local shell output" };
       }
       const response = await client.injectBashExecution({
-        sessionKey: state.currentSessionKey,
-        agentId: state.currentAgentId,
+        sessionKey: scope.sessionKey,
+        agentId: scope.agentId,
         command: result.command,
         output: result.output,
         exitCode: result.exitCode,

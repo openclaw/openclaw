@@ -14,6 +14,14 @@ type LocalShellExecutionResult = {
   excludeFromContext: boolean;
 };
 
+type LocalShellSessionScope = { sessionKey: string; agentId?: string };
+
+type LocalShellConsent = {
+  asked: boolean;
+  allowed: boolean;
+  share: boolean;
+};
+
 type LocalShellDeps = {
   chatLog: {
     addSystem: (line: string) => void;
@@ -35,35 +43,47 @@ type LocalShellDeps = {
   env?: NodeJS.ProcessEnv;
   maxOutputChars?: number;
   /** Session scope to persist the command result under. Omit to skip persistence entirely. */
-  getSessionScope?: () => { sessionKey: string; agentId?: string } | undefined;
+  getSessionScope?: () => LocalShellSessionScope | undefined;
   /** Persists the command+output to session history; only called after the user picks the
    * share option at the consent prompt. `!` sets excludeFromContext: false so the agent sees
-   * it on its next turn; `!!` sets it true so it stays in scrollback/history only. */
+   * it on its next turn; `!!` sets it true so it stays in scrollback/history only. The scope
+   * is the one captured when the command was submitted, never the currently viewed session. */
   injectBashExecution?: (
     result: LocalShellExecutionResult,
+    scope: LocalShellSessionScope,
   ) => Promise<{ ok: boolean; error?: string }>;
 };
 
 export function createLocalShellRunner(deps: LocalShellDeps) {
-  let localExecAsked = false;
-  let localExecAllowed = false;
-  // Sharing is opt-in per session: without it `!`/`!!` stay purely local (the
-  // shipped pre-persistence behavior) and no output reaches history or the model.
-  let persistAllowed = false;
+  // Consent is per session key, and sharing is opt-in: without the share
+  // answer `!`/`!!` stay purely local (the shipped pre-persistence behavior).
+  // Approval granted while one session is active must never silently carry
+  // into another session, so each key gets its own prompt and answer.
+  const consentBySession = new Map<string, LocalShellConsent>();
+  const consentFor = (scope: LocalShellSessionScope | undefined): LocalShellConsent => {
+    const key = scope?.sessionKey ?? "";
+    const existing = consentBySession.get(key);
+    if (existing) {
+      return existing;
+    }
+    const created: LocalShellConsent = { asked: false, allowed: false, share: false };
+    consentBySession.set(key, created);
+    return created;
+  };
   const createSelector = deps.createSelector ?? createSearchableSelectList;
   const spawnCommand = deps.spawnCommand ?? spawn;
   const getCwd = deps.getCwd ?? tryProcessCwd;
   const env = deps.env ?? process.env;
   const maxChars = deps.maxOutputChars ?? 40_000;
 
-  const ensureLocalExecAllowed = async (): Promise<boolean> => {
-    if (localExecAllowed) {
+  const ensureLocalExecAllowed = async (consent: LocalShellConsent): Promise<boolean> => {
+    if (consent.allowed) {
       return true;
     }
-    if (localExecAsked) {
+    if (consent.asked) {
       return false;
     }
-    localExecAsked = true;
+    consent.asked = true;
 
     return await new Promise<boolean>((resolve) => {
       deps.chatLog.addSystem("Allow local shell commands for this session?");
@@ -85,10 +105,10 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
       selector.onSelect = (item) => {
         deps.closeOverlay(overlayHandle);
         if (item.value === "yes" || item.value === "yes-share") {
-          localExecAllowed = true;
-          persistAllowed = item.value === "yes-share";
+          consent.allowed = true;
+          consent.share = item.value === "yes-share";
           deps.chatLog.addSystem(
-            persistAllowed
+            consent.share
               ? "local shell: enabled; output is saved to history and `!` output is shared with the agent"
               : "local shell: enabled for this session (local only)",
           );
@@ -121,13 +141,20 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
       return;
     }
 
-    if (localExecAsked && !localExecAllowed) {
+    // Bind consent and the persistence target to the session that was active
+    // when the command was submitted. A mid-command `/session` switch must not
+    // retarget the output: persisting into the newly selected session would
+    // hand this session's (possibly sensitive) output to the wrong agent.
+    const scope = deps.getSessionScope?.();
+    const consent = consentFor(scope);
+
+    if (consent.asked && !consent.allowed) {
       deps.chatLog.addSystem("local shell: not enabled for this session");
       deps.tui.requestRender();
       return;
     }
 
-    const allowed = await ensureLocalExecAllowed();
+    const allowed = await ensureLocalExecAllowed(consent);
     if (!allowed) {
       return;
     }
@@ -153,15 +180,17 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
     const persistResult = async (
       result: Omit<LocalShellExecutionResult, "command" | "excludeFromContext">,
     ) => {
-      const scope = deps.getSessionScope?.();
-      if (!persistAllowed || !scope || !deps.injectBashExecution) {
+      if (!consent.share || !scope || !deps.injectBashExecution) {
         return;
       }
-      const persisted = await deps.injectBashExecution({
-        ...result,
-        command: cmd,
-        excludeFromContext: isBangBang,
-      });
+      const persisted = await deps.injectBashExecution(
+        {
+          ...result,
+          command: cmd,
+          excludeFromContext: isBangBang,
+        },
+        scope,
+      );
       if (!persisted.ok) {
         deps.chatLog.addSystem(
           `[local] not saved to session history: ${persisted.error ?? "unknown error"}`,
