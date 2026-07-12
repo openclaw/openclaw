@@ -52,6 +52,19 @@ describe("resolveToolTitleRequest", () => {
 
     expect(first?.key).toBe(second?.key);
   });
+
+  it.each([
+    ["command", "bash", { command: `${"a".repeat(1_999)}😀tail` }, "a".repeat(1_999)],
+    ["string args", "mcp__linear__create_issue", `${"a".repeat(1_999)}😀tail`, "a".repeat(1_999)],
+    [
+      "serialized object args",
+      "mcp__linear__create_issue",
+      { value: `${"a".repeat(1_989)}😀tail` },
+      '{"value":"' + "a".repeat(1_989),
+    ],
+  ])("keeps bounded %s on a valid UTF-16 boundary", (_label, name, args, expected) => {
+    expect(resolveToolTitleRequest(name, args)?.input).toBe(expected);
+  });
 });
 
 describe("getToolCallTitle", () => {
@@ -86,6 +99,58 @@ describe("title fetch batching", () => {
     configureToolTitleFetcher({ client: null, sessionKey: null, onTitlesChanged: null });
     resetToolTitlesForTest();
     vi.useRealTimers();
+  });
+
+  it("notifies every pane that contributed rows to a title batch", async () => {
+    vi.useFakeTimers();
+    const client = {
+      request: vi.fn(async (_method: string, params: unknown) => {
+        const items = (params as { items: Array<{ id: string }> }).items;
+        return { titles: Object.fromEntries(items.map((item) => [item.id, "Titled"])) };
+      }),
+    } as unknown as GatewayBrowserClient;
+    const notifyA = vi.fn();
+    const notifyB = vi.fn();
+
+    // Two panes on the same session/agent enqueue into one batch.
+    configureToolTitleFetcher({
+      client,
+      sessionKey: "agent:a:main",
+      agentId: "a",
+      onTitlesChanged: notifyA,
+    });
+    getToolCallTitle("bash", { command: "pnpm run build --filter ui" });
+    configureToolTitleFetcher({
+      client,
+      sessionKey: "agent:a:main",
+      agentId: "a",
+      onTitlesChanged: notifyB,
+    });
+    getToolCallTitle("bash", { command: "pnpm test ui/src/pages/chat" });
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(notifyA).toHaveBeenCalled();
+    expect(notifyB).toHaveBeenCalled();
+  });
+
+  it("stops requesting for the session once the gateway reports titles disabled", async () => {
+    vi.useFakeTimers();
+    const request = vi.fn(async () => ({ titles: {}, disabled: true }));
+    const client = { request } as unknown as GatewayBrowserClient;
+
+    configureToolTitleFetcher({
+      client,
+      sessionKey: "agent:a:main",
+      agentId: "a",
+      onTitlesChanged: null,
+    });
+    getToolCallTitle("bash", { command: "pnpm run build --filter ui" });
+    await vi.advanceTimersByTimeAsync(1_000);
+    // A different eligible call after the disabled response must not schedule.
+    getToolCallTitle("bash", { command: "pnpm test ui/src/pages/chat" });
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(request).toHaveBeenCalledTimes(1);
   });
 
   it("sends queued items with the session and agent captured at schedule time", async () => {

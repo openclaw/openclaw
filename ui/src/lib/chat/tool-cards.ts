@@ -1,12 +1,15 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Control UI chat domain owns pure tool-card extraction rules.
-import { extractCanvasFromText } from "../../../../src/chat/canvas-render.js";
+import {
+  extractCanvasFromDetails,
+  extractCanvasFromText,
+} from "../../../../src/chat/canvas-render.js";
 import {
   isToolCallContentType,
   isToolResultContentType,
   resolveToolUseId,
 } from "../../../../src/chat/tool-content.js";
-import type { ToolCard } from "./chat-types.ts";
+import type { ToolCard, ToolCardOutcome } from "./chat-types.ts";
 import { extractTextCached } from "./message-extract.ts";
 import { isToolResultMessage } from "./message-normalizer.ts";
 
@@ -139,6 +142,22 @@ export function isToolCardError(card: ToolCard): boolean {
     return card.isError;
   }
   return isToolErrorOutput(card.outputText);
+}
+
+export function resolveToolCardOutcome(
+  card: ToolCard,
+  runActive: boolean | undefined,
+): ToolCardOutcome {
+  if (isToolCardError(card)) {
+    return "failed";
+  }
+  if (runActive === true && card.live === true && card.completed !== true) {
+    return "running";
+  }
+  if (card.completed === true || (card.live !== true && card.outputText !== undefined)) {
+    return "succeeded";
+  }
+  return "unknown";
 }
 
 export function extractToolPreview(
@@ -303,12 +322,13 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
       const callId = resolveToolCallId(item, m);
       const existing = findFirstUnmatchedCard(cards, cardId, name, fallbackMatchedCards);
       const text = extractToolText(item);
-      const preview = extractToolPreview(text, name);
-      const isError = readToolErrorFlag(item) ?? messageIsError;
       const details = item.details ?? m.details;
+      const preview = extractCanvasFromDetails(details) ?? extractToolPreview(text, name);
+      const isError = readToolErrorFlag(item) ?? messageIsError;
       if (existing) {
         fallbackMatchedCards.add(existing);
         existing.callId ??= callId;
+        existing.completed = true;
         existing.outputText = text;
         existing.preview = preview;
         if (details !== undefined) {
@@ -323,6 +343,7 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
         id: cardId,
         ...(callId ? { callId } : {}),
         name,
+        completed: true,
         outputText: text,
         ...(details !== undefined ? { details } : {}),
         messageId: transcriptMessageId,
@@ -351,11 +372,12 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
       id: resolveToolCardId({}, m, 0, prefix),
       ...(callId ? { callId } : {}),
       name,
+      completed: isToolResultMessage(message) || role === "tool" || role === "function",
       outputText: text,
       ...(m.details !== undefined ? { details: m.details } : {}),
       messageId: transcriptMessageId,
       ...(messageIsError !== undefined ? { isError: messageIsError } : {}),
-      preview: extractToolPreview(text, name),
+      preview: extractCanvasFromDetails(m.details) ?? extractToolPreview(text, name),
     });
   }
 

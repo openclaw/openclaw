@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { WorktreeSnapshotError } from "../../agents/worktrees/service.js";
 import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
 import { createWorktreesHandlers } from "./worktrees.js";
 
@@ -137,6 +138,20 @@ describe("worktrees gateway methods", () => {
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
     }
+  });
+
+  it("maps snapshot failures onto a structured removed=false result", async () => {
+    const service = {
+      remove: vi.fn(async () => {
+        throw new WorktreeSnapshotError("nested gitlink");
+      }),
+    };
+    const handlers = createWorktreesHandlers(service as never);
+    expect(await call(handlers, "worktrees.remove", { id: record.id })).toEqual([
+      true,
+      { removed: false, snapshotError: "nested gitlink" },
+      undefined,
+    ]);
   });
 
   it("rejects invalid parameters", async () => {

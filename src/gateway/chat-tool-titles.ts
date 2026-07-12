@@ -1,13 +1,15 @@
 /**
  * Cheap-model purpose titles for tool calls shown in the Control UI.
  *
- * Model selection is intentionally cheap-only: the configured utility model
- * when present, otherwise the OpenAI Luna fast tier — and the Luna default
- * applies only when the agent's primary model already routes to OpenAI, so
- * decorative titles never send tool arguments to a provider the session was
- * not already talking to. Titles never fall through to the (potentially
- * expensive) primary model — callers get an empty result and keep
- * deterministic labels.
+ * Model selection delegates to the canonical utility-model resolver and
+ * follows the platform-wide utilityModel contract: an explicit utilityModel
+ * is an operator decision and may name any provider (exactly like session
+ * titles, thread titles, and narration, which already send bounded session
+ * content there); the AUTO-derived small-model default stays on the session's
+ * own provider so no silent new egress destination appears; and an explicit
+ * empty utilityModel disables titles entirely. Titles never fall through to
+ * the (potentially expensive) primary model — callers get an empty result and
+ * keep deterministic labels.
  *
  * Generated titles cache in the per-agent SQLite database (`cache_entries`,
  * scope below) keyed by a digest of tool name + input, so reopening a session
@@ -15,16 +17,18 @@
  */
 import { createHash } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { resolveAgentConfig } from "../agents/agent-scope.js";
-import { isOpenAIProvider } from "../agents/openai-routing.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
+import { parseModelRef } from "../agents/model-selection-normalize.js";
 import {
   completeWithPreparedSimpleCompletionModel,
   prepareSimpleCompletionModelForAgent,
-  resolveSimpleCompletionSelectionForAgent,
 } from "../agents/simple-completion-runtime.js";
+import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { redactToolPayloadText } from "../logging/redact.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import {
   openOpenClawAgentDatabase,
@@ -32,7 +36,6 @@ import {
 } from "../state/openclaw-agent-db.js";
 
 const TOOL_TITLE_CACHE_SCOPE = "tool-call-titles";
-const LUNA_DEFAULT_MODEL_REF = "openai/gpt-5.6-luna";
 const TOOL_TITLES_MAX_ITEMS = 24;
 const TOOL_TITLE_INPUT_MAX_CHARS = 2_000;
 const TOOL_TITLE_MAX_CHARS = 72;
@@ -66,7 +69,12 @@ function normalizeItems(items: readonly ToolTitleRequestItem[]): ToolTitleReques
     }
     const id = item.id.trim();
     const name = item.name.trim();
-    const input = item.input.slice(0, TOOL_TITLE_INPUT_MAX_CHARS);
+    // Redact before anything downstream (cache key + model prompt): transcript
+    // args can carry raw tokens/signed URLs, and titles must not become a new
+    // secret egress path. Redaction runs on the full schema-bounded input and
+    // only then truncates — slicing first could bisect a secret so its
+    // fragment no longer matches any redaction pattern.
+    const input = truncateUtf16Safe(redactToolPayloadText(item.input), TOOL_TITLE_INPUT_MAX_CHARS);
     if (!id || !name || !input.trim() || seen.has(id)) {
       continue;
     }
@@ -192,36 +200,15 @@ function writeCachedTitles(agentId: string, entries: Map<string, string>): void 
   }
 }
 
-function hasConfiguredUtilityModel(cfg: OpenClawConfig, agentId: string): boolean {
-  return Boolean(
-    resolveAgentConfig(cfg, agentId)?.utilityModel?.trim() ||
-    cfg.agents?.defaults?.utilityModel?.trim(),
-  );
-}
-
-function agentPrimaryUsesOpenAI(cfg: OpenClawConfig, agentId: string): boolean {
-  const selection = resolveSimpleCompletionSelectionForAgent({ cfg, agentId });
-  return selection ? isOpenAIProvider(selection.provider) : false;
-}
-
 async function generateMissingTitles(params: {
   cfg: OpenClawConfig;
   agentId: string;
+  modelRef: string;
+  sessionAuthProfile?: string;
   items: ToolTitleRequestItem[];
 }): Promise<Map<string, string>> {
   const generated = new Map<string, string>();
   if (params.items.length === 0) {
-    return generated;
-  }
-  // Cheap-only selection: configured utility model, else the Luna fast tier.
-  // Egress contract: without an explicit utilityModel, the Luna default is
-  // allowed only when the agent already sends its turns to OpenAI. Tool args
-  // must not reach a new provider just for decorative titles.
-  const useUtility = hasConfiguredUtilityModel(params.cfg, params.agentId);
-  if (!useUtility && !agentPrimaryUsesOpenAI(params.cfg, params.agentId)) {
-    logVerbose(
-      "chat-tool-titles: skipping Luna default because the agent's primary provider is not OpenAI and no utilityModel is configured",
-    );
     return generated;
   }
   let prepared: Awaited<ReturnType<typeof prepareSimpleCompletionModelForAgent>>;
@@ -229,7 +216,10 @@ async function generateMissingTitles(params: {
     prepared = await prepareSimpleCompletionModelForAgent({
       cfg: params.cfg,
       agentId: params.agentId,
-      ...(useUtility ? { useUtilityModel: true } : { modelRef: LUNA_DEFAULT_MODEL_REF }),
+      modelRef: params.modelRef,
+      // Profile-isolated sessions must not leak their tool args through the
+      // agent/default credential; the session's auth profile wins.
+      preferredProfile: params.sessionAuthProfile,
       useAsyncModelResolution: true,
       allowMissingApiKeyModes: ["aws-sdk"],
     });
@@ -255,8 +245,10 @@ async function generateMissingTitles(params: {
           {
             role: "user",
             content: JSON.stringify({
-              items: params.items.map((item) => ({
-                id: item.id,
+              // Caller ids never reach the model: they are unbounded client
+              // input; local batch indexes are remapped on the way out.
+              items: params.items.map((item, index) => ({
+                id: String(index),
                 tool: item.name,
                 input: item.input,
               })),
@@ -283,12 +275,12 @@ async function generateMissingTitles(params: {
     if (!titles) {
       return generated;
     }
-    for (const item of params.items) {
-      const title = normalizeTitle(titles[item.id]);
+    params.items.forEach((item, index) => {
+      const title = normalizeTitle(titles[String(index)]);
       if (title) {
         generated.set(item.id, title);
       }
-    }
+    });
     return generated;
   } catch (err) {
     logVerbose(`chat-tool-titles: completion failed: ${String(err)}`);
@@ -302,12 +294,51 @@ async function generateMissingTitles(params: {
 export async function generateToolCallTitles(params: {
   cfg: OpenClawConfig;
   agentId: string;
+  /** Provider of the session's effective model (honors per-session overrides). */
+  sessionPrimaryProvider?: string;
+  /** Session auth-profile override; keeps the utility call on the session's credential. */
+  sessionAuthProfile?: string;
   items: readonly ToolTitleRequestItem[];
 }): Promise<Record<string, string>> {
   const items = normalizeItems(params.items);
   if (items.length === 0) {
     return {};
   }
+  // Canonical utility routing decides eligibility BEFORE cache reads: cached
+  // titles must not outlive a later `utilityModel: ""` opt-out while the
+  // controlUi toggle stays on. An explicit utilityModel is an operator
+  // decision and may be cross-provider (the documented utility-task contract
+  // shared with session/thread titles and narration); only the AUTO-derived
+  // default is pinned to the SESSION's effective provider (per-session model
+  // overrides included). Never the primary model itself.
+  const resolvedRef = resolveUtilityModelRefForAgent({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    primaryProvider: params.sessionPrimaryProvider,
+  });
+  if (!resolvedRef) {
+    logVerbose(
+      "chat-tool-titles: utility routing is disabled or has no derived small-model default; skipping titles",
+    );
+    return {};
+  }
+  // Preparation falls back to the agent primary when a modelRef cannot be
+  // parsed; a malformed explicit utilityModel (e.g. "openai/") must fail
+  // closed instead of billing the primary with tool arguments.
+  const strippedRef = splitTrailingAuthProfile(resolvedRef).model;
+  if (!parseModelRef(strippedRef, params.sessionPrimaryProvider?.trim() || DEFAULT_PROVIDER)) {
+    logVerbose(
+      `chat-tool-titles: utility model ref ${JSON.stringify(resolvedRef)} is malformed; skipping titles`,
+    );
+    return {};
+  }
+  // The resolved ref can carry the agent primary's trailing @profile, and an
+  // embedded profile outranks preferredProfile during preparation. Rewrite it
+  // so a profile-isolated session never bills or leaks through the agent's
+  // default credential.
+  const modelRef = params.sessionAuthProfile
+    ? `${strippedRef}@${params.sessionAuthProfile}`
+    : resolvedRef;
   const keysByItemId = new Map(items.map((item) => [item.id, cacheKeyFor(item)] as const));
   const titles = readCachedTitles(params.agentId, keysByItemId);
   const missing = items.filter((item) => !titles.has(item.id));
@@ -315,6 +346,8 @@ export async function generateToolCallTitles(params: {
     const generated = await generateMissingTitles({
       cfg: params.cfg,
       agentId: params.agentId,
+      modelRef,
+      sessionAuthProfile: params.sessionAuthProfile,
       items: missing,
     });
     if (generated.size > 0) {

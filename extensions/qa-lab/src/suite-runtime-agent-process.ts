@@ -173,8 +173,7 @@ function parseQaCliJsonOutput(text: string, args: readonly string[]) {
     // Some startup repair logs are emitted on stdout before command JSON.
     const lines = cleaned.split(/\r?\n/);
     const candidates: unknown[] = [];
-    for (let index = 0; index < lines.length; index += 1) {
-      const line = lines[index];
+    for (const [index, line] of lines.entries()) {
       const candidate = line.trimStart();
       if (candidate !== line || (!candidate.startsWith("{") && !candidate.startsWith("["))) {
         continue;
@@ -319,6 +318,7 @@ async function startAgentRun(
     threadId?: string;
     provider?: string;
     model?: string;
+    taskTracking?: boolean;
     timeoutMs?: number;
     attachments?: Array<{
       mimeType: string;
@@ -327,6 +327,28 @@ async function startAgentRun(
     }>;
   },
 ) {
+  if (params.taskTracking === false) {
+    const target = params.to ?? "dm:qa-operator";
+    const delivery = env.transport.buildAgentDelivery({ target });
+    const started = (await env.gateway.call(
+      "chat.send",
+      {
+        idempotencyKey: randomUUID(),
+        sessionKey: params.sessionKey,
+        message: params.message,
+        deliver: true,
+        originatingChannel: delivery.replyChannel,
+        originatingTo: delivery.replyTo,
+      },
+      {
+        timeoutMs: params.timeoutMs ?? 30_000,
+      },
+    )) as { runId?: string; status?: string };
+    if (!started.runId) {
+      throw new Error(`chat.send did not return a runId: ${JSON.stringify(started)}`);
+    }
+    return started;
+  }
   const target = params.to ?? "dm:qa-operator";
   const delivery = env.transport.buildAgentDelivery({ target });
   const started = (await env.gateway.call(

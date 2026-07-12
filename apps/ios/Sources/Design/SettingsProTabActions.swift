@@ -117,11 +117,11 @@ extension SettingsProTab {
     }
 
     func switchGateway(to entry: GatewaySettingsStore.GatewayRegistryEntry) async {
-        guard self.connectingGatewayID == nil else { return }
-        self.connectingGatewayID = entry.stableID
+        guard self.connectingGateway == nil else { return }
+        self.connectingGateway = .gateway(entry.id)
         self.setupStatusText = "Switching to \(entry.name)…"
         defer {
-            self.connectingGatewayID = nil
+            self.connectingGateway = nil
             self.refreshGatewayRegistry()
         }
         if let failure = await self.gatewayController.switchToGateway(stableID: entry.stableID) {
@@ -139,7 +139,7 @@ extension SettingsProTab {
             self.refreshGatewayRegistry()
             return
         }
-        if self.gatewayCredentialFieldStableID == entry.stableID {
+        if GatewayStableIdentifier.matches(self.gatewayCredentialFieldStableID, entry.stableID) {
             self.clearManualCredentialFields()
         }
         self.setupStatusText = "Forgot \(entry.name)."
@@ -261,9 +261,9 @@ extension SettingsProTab {
                 self.gatewayController.resumeAutoConnect(after: supersededSetupLease)
             }
         }
-        self.connectingGatewayID = gateway.id
+        self.connectingGateway = .gateway(gateway.id)
         defer {
-            self.connectingGatewayID = nil
+            self.connectingGateway = nil
             self.refreshGatewayRegistry()
         }
         self.manualGatewayEnabled = false
@@ -370,7 +370,7 @@ extension SettingsProTab {
         self.stagedGatewaySetupLink = nil
         self.pendingTargetSuppression.replace(owner: .qrScanner, lease: lease)
         self.scannerScanID = self.scannerResultHandoff.beginScan()
-        self.connectingGatewayID = nil
+        self.connectingGateway = nil
         self.setupStatusText = "Opening QR scanner..."
         self.showQRScanner = true
     }
@@ -466,23 +466,29 @@ extension SettingsProTab {
             self.setupStatusText = "Failed: invalid port"
             return
         }
-        self.connectingGatewayID = "manual"
+        self.connectingGateway = .manual
         self.manualGatewayEnabled = true
         defer {
-            self.connectingGatewayID = nil
+            self.connectingGateway = nil
             self.refreshGatewayRegistry()
         }
         let stableID = GatewayConnectionController.ManualAuthOverride.manualStableID(
             host: host,
             port: port)
         self.selectGatewayCredentialTarget(stableID, allowManualOverride: true)
-        if self.appModel.activeGatewayConnectConfig?.effectiveStableID == stableID,
-           self.appModel.activeGatewayConnectConfig?.nodeOptions.allowStoredDeviceAuth == true
+        if GatewayStableIdentifier.matches(
+            self.appModel.activeGatewayConnectConfig?.effectiveStableID,
+            stableID),
+            self.appModel.activeGatewayConnectConfig?.nodeOptions.allowStoredDeviceAuth == true
         {
             self.pendingManualAuthOverride = nil
         }
-        let fieldsMatchTarget = self.gatewayCredentialFieldStableID == stableID
-        let pendingOverride = self.pendingManualAuthOverride?.targetStableID == stableID
+        let fieldsMatchTarget = GatewayStableIdentifier.matches(
+            self.gatewayCredentialFieldStableID,
+            stableID)
+        let pendingOverride = GatewayStableIdentifier.matches(
+            self.pendingManualAuthOverride?.targetStableID,
+            stableID)
             ? self.pendingManualAuthOverride
             : nil
         let authOverride = GatewayConnectionController.ManualAuthOverride.currentManualInput(
@@ -541,10 +547,10 @@ extension SettingsProTab {
     }
 
     func beginGatewaySetupAttempt() -> UUID? {
-        guard self.connectingGatewayID == nil else { return nil }
+        guard self.connectingGateway == nil else { return nil }
         let attemptID = UUID()
         self.setupAttemptID = attemptID
-        self.connectingGatewayID = "setup-code"
+        self.connectingGateway = .setupCode
         return attemptID
     }
 
@@ -555,7 +561,7 @@ extension SettingsProTab {
 
     func invalidateGatewaySetupAttempt() {
         self.setupAttemptID = nil
-        self.connectingGatewayID = nil
+        self.connectingGateway = nil
     }
 
     func handleLocationModeChange(_ newValue: String) {
@@ -801,11 +807,11 @@ extension SettingsProTab {
 
     var gatewayCustomHeadersTargetStableID: String? {
         guard let stableID = self.gatewayCredentialTargetStableID else { return nil }
-        if self.currentManualGatewayStableID == stableID {
+        if GatewayStableIdentifier.matches(self.currentManualGatewayStableID, stableID) {
             return self.manualGatewayTLS ? stableID : nil
         }
         if let active = self.appModel.activeGatewayConnectConfig,
-           active.effectiveStableID == stableID
+           GatewayStableIdentifier.matches(active.effectiveStableID, stableID)
         {
             return active.url.scheme?.lowercased() == "wss" ? stableID : nil
         }
@@ -840,7 +846,9 @@ extension SettingsProTab {
             set: { value in
                 let previousStableID = self.currentManualGatewayStableID
                 self.manualGatewayHost = value
-                if previousStableID != self.currentManualGatewayStableID {
+                if GatewayStableIdentifier.key(previousStableID) !=
+                    GatewayStableIdentifier.key(self.currentManualGatewayStableID)
+                {
                     self.clearManualCredentialFields()
                 }
             })
@@ -926,7 +934,9 @@ extension SettingsProTab {
                 let filtered = newValue.filter(\.isNumber)
                 self.manualGatewayPortText = filtered
                 self.manualGatewayPort = Int(filtered) ?? 0
-                if previousStableID != self.currentManualGatewayStableID {
+                if GatewayStableIdentifier.key(previousStableID) !=
+                    GatewayStableIdentifier.key(self.currentManualGatewayStableID)
+                {
                     self.clearManualCredentialFields()
                 }
             })
@@ -941,7 +951,7 @@ extension SettingsProTab {
 
     private func selectGatewayCredentialTarget(_ stableID: String, allowManualOverride: Bool) {
         let instanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
-        if self.gatewayCredentialFieldStableID != stableID {
+        if !GatewayStableIdentifier.matches(self.gatewayCredentialFieldStableID, stableID) {
             let credentials = GatewaySettingsStore.loadGatewayCredentials(
                 instanceId: instanceId,
                 gatewayStableID: stableID)
@@ -961,9 +971,7 @@ extension SettingsProTab {
     }
 
     var manualPortIsValid: Bool {
-        if self.manualGatewayPortText.isEmpty {
-            return true
-        }
+        if self.manualGatewayPortText.isEmpty { return true }
         return self.manualGatewayPort >= 1 && self.manualGatewayPort <= 65535
     }
 
@@ -980,24 +988,16 @@ extension SettingsProTab {
         }
         let trimmedSetup = self.setupStatusText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let gatewayStatus = self.appModel.gatewayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let friendly = self.friendlyGatewayMessage(from: gatewayStatus) {
-            return friendly
-        }
-        if let friendly = self.friendlyGatewayMessage(from: trimmedSetup) {
-            return friendly
-        }
+        if let friendly = self.friendlyGatewayMessage(from: gatewayStatus) { return friendly }
+        if let friendly = self.friendlyGatewayMessage(from: trimmedSetup) { return friendly }
         if self.isTransientSetupStatus(trimmedSetup),
            !gatewayStatus.isEmpty,
            gatewayStatus != "Offline"
         {
             return gatewayStatus
         }
-        if !trimmedSetup.isEmpty {
-            return trimmedSetup
-        }
-        if gatewayStatus.isEmpty || gatewayStatus == "Offline" {
-            return nil
-        }
+        if !trimmedSetup.isEmpty { return trimmedSetup }
+        if gatewayStatus.isEmpty || gatewayStatus == "Offline" { return nil }
         return gatewayStatus
     }
 
@@ -1084,12 +1084,8 @@ extension SettingsProTab {
         let title = self.appModel.talkMode.gatewayTalkActiveModeTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         let subtitle = (self.appModel.talkMode.gatewayTalkActiveModeSubtitle ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        if title.isEmpty {
-            return "Not active"
-        }
-        if subtitle.isEmpty {
-            return title
-        }
+        if title.isEmpty { return "Not active" }
+        if subtitle.isEmpty { return title }
         return "\(title) • \(subtitle)"
     }
 
@@ -1101,12 +1097,8 @@ extension SettingsProTab {
 
     func gatewayDetailLines(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) -> [String] {
         var lines: [String] = []
-        if let lanHost = gateway.lanHost {
-            lines.append("LAN: \(lanHost)")
-        }
-        if let tailnet = gateway.tailnetDns {
-            lines.append("Tailnet: \(tailnet)")
-        }
+        if let lanHost = gateway.lanHost { lines.append("LAN: \(lanHost)") }
+        if let tailnet = gateway.tailnetDns { lines.append("Tailnet: \(tailnet)") }
         let gw = gateway.gatewayPort.map(String.init)
         let canvas = gateway.canvasPort.map(String.init)
         if gw != nil || canvas != nil {
@@ -1121,23 +1113,17 @@ extension SettingsProTab {
     }
 
     var gatewayStatusDetail: String {
-        if self.appModel.isAppleReviewDemoModeEnabled {
-            return "Apple Review demo mode"
-        }
+        if self.appModel.isAppleReviewDemoModeEnabled { return "Apple Review demo mode" }
         return self.gatewayConnected ? "Connected" : self.appModel.gatewayDisplayStatusText
     }
 
     var gatewayStatusValue: String {
-        if self.appModel.isAppleReviewDemoModeEnabled {
-            return "demo"
-        }
+        if self.appModel.isAppleReviewDemoModeEnabled { return "demo" }
         return self.gatewayConnected ? "online" : "offline"
     }
 
     var gatewayStatusColor: Color {
-        if self.appModel.isAppleReviewDemoModeEnabled {
-            return OpenClawBrand.accent
-        }
+        if self.appModel.isAppleReviewDemoModeEnabled { return OpenClawBrand.accent }
         return self.gatewayConnected ? OpenClawBrand.ok : .secondary
     }
 
@@ -1160,23 +1146,17 @@ extension SettingsProTab {
     }
 
     var gatewayTalkConfigDetail: String {
-        if self.appModel.isAppleReviewDemoModeEnabled {
-            return "Demo mode only"
-        }
+        if self.appModel.isAppleReviewDemoModeEnabled { return "Demo mode only" }
         return self.appModel.talkMode.gatewayTalkTransportLabel
     }
 
     var gatewayTalkConfigValue: String {
-        if self.appModel.isAppleReviewDemoModeEnabled {
-            return "demo"
-        }
+        if self.appModel.isAppleReviewDemoModeEnabled { return "demo" }
         return self.appModel.talkMode.gatewayTalkConfigLoaded ? "loaded" : "missing"
     }
 
     var gatewayTalkConfigColor: Color {
-        if self.appModel.isAppleReviewDemoModeEnabled {
-            return .secondary
-        }
+        if self.appModel.isAppleReviewDemoModeEnabled { return .secondary }
         return self.appModel.talkMode.gatewayTalkConfigLoaded ? OpenClawBrand.ok : .secondary
     }
 
@@ -1190,6 +1170,14 @@ extension SettingsProTab {
 
     var pendingApproval: NodeAppModel.ExecApprovalPrompt? {
         self.appModel.pendingExecApprovalPrompt
+    }
+
+    var pendingApprovalCount: Int {
+        self.appModel.pendingExecApprovalCount
+    }
+
+    var approvalWaitingText: String {
+        self.pendingApprovalCount == 1 ? "1 waiting" : "\(self.pendingApprovalCount) waiting"
     }
 
     var notificationsNeedAttention: Bool {
@@ -1217,28 +1205,16 @@ extension SettingsProTab {
     }
 
     var voiceDetail: String {
-        if self.talkEnabled, self.voiceWakeEnabled {
-            return "Talk + Wake"
-        }
-        if self.talkEnabled {
-            return "Talk on"
-        }
-        if self.voiceWakeEnabled {
-            return "Wake on"
-        }
+        if self.talkEnabled, self.voiceWakeEnabled { return "Talk + Wake" }
+        if self.talkEnabled { return "Talk on" }
+        if self.voiceWakeEnabled { return "Wake on" }
         return "Off"
     }
 
     var diagnosticsHealthValue: String {
-        if self.appModel.isAppleReviewDemoModeEnabled {
-            return "demo"
-        }
-        if self.gatewayConnected {
-            return "ready"
-        }
-        if self.gatewayController.gateways.isEmpty {
-            return "check"
-        }
+        if self.appModel.isAppleReviewDemoModeEnabled { return "demo" }
+        if self.gatewayConnected { return "ready" }
+        if self.gatewayController.gateways.isEmpty { return "check" }
         return "partial"
     }
 

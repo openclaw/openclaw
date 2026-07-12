@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../../agents/harness/hook-helpers.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
@@ -9,6 +10,7 @@ import {
   channelRouteCompactKey,
   channelRouteDedupeKey,
 } from "../../../plugin-sdk/channel-route.js";
+import { runWithGatewayIndependentRootWorkContinuation } from "../../../process/gateway-work-admission.js";
 import { defaultRuntime } from "../../../runtime.js";
 import {
   buildPersistedUserTurnMediaInputsFromFields,
@@ -155,6 +157,7 @@ export function resolveFollowupAuthorizationKey(run: FollowupRun["run"]): string
     run.execOverrides?.security ?? "",
     run.execOverrides?.ask ?? "",
     run.execOverrides?.node ?? "",
+    run.execOverrides?.nodeCwd ?? "",
     run.bashElevated?.enabled === true,
     run.bashElevated?.allowed === true,
     run.bashElevated?.defaultLevel ?? "",
@@ -186,6 +189,7 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
     execution.groupId ?? "",
     execution.groupChannel ?? "",
     execution.groupSpace ?? "",
+    execution.spawnedBy ?? "",
     execution.traceAuthorized === true,
     execution.elevatedLevel ?? "",
     provenance?.kind ?? "",
@@ -319,22 +323,10 @@ function buildCollectTranscriptPrompt(items: FollowupRun[]): string {
 }
 
 function resolveFollowupTranscriptTarget(source: FollowupRun) {
-  const sessionKey = normalizeOptionalString(source.run.sessionKey);
-  const storePath = sessionKey
-    ? resolveStorePath(source.run.config.session?.store, {
-        agentId: source.run.agentId,
-      })
-    : undefined;
-  if (!sessionKey || !storePath) {
-    return {
-      transcriptPath: source.run.sessionFile,
-      sessionId: source.run.sessionId,
-      agentId: source.run.agentId,
-      sessionKey: source.run.sessionId,
-      cwd: source.run.cwd ?? source.run.workspaceDir,
-      config: source.run.config,
-    };
-  }
+  const sessionKey = normalizeOptionalString(source.run.sessionKey) ?? source.run.sessionId;
+  const storePath = resolveStorePath(source.run.config.session?.store, {
+    agentId: source.run.agentId,
+  });
   const sessionEntry = loadSessionEntry({
     storePath,
     sessionKey,
@@ -634,7 +626,10 @@ function consumeQueueSummaryDelivery(
         (entry) => entry.sources.includes(source) || entry.sourceRefs.has(source),
       );
       if (elisionIndex >= 0) {
-        const entry = queue.summaryElisions[elisionIndex];
+        const entry = expectDefined(
+          queue.summaryElisions[elisionIndex],
+          "summary elisions entry at elision index",
+        );
         const elidedSourceIndex = entry.sources.indexOf(entry.sourceRefs.get(source) ?? source);
         entry.sources.splice(elidedSourceIndex, 1);
         entry.count = entry.sources.length;
@@ -669,7 +664,7 @@ function releaseQueueSummaryDeliveryForRetry(
 function dropAbortedQueueSummarySources(queue: FollowupQueueSummaryState): number {
   let dropped = 0;
   for (let index = queue.summarySources.length - 1; index >= 0; index -= 1) {
-    const source = queue.summarySources[index];
+    const source = expectDefined(queue.summarySources[index], "summary sources entry at index");
     if (!isFollowupRunAborted(source)) {
       continue;
     }
@@ -785,7 +780,7 @@ async function dropAbortedFollowups(
 ): Promise<number> {
   let dropped = 0;
   for (let index = items.length - 1; index >= 0; index -= 1) {
-    const item = items[index];
+    const item = expectDefined(items[index], "items entry at index");
     if (isFollowupRunAborted(item)) {
       await runFollowup(item);
       completeFollowupRunLifecycle(item);
@@ -989,7 +984,7 @@ async function drainElidedOverflowSummary(params: {
         )
       : [];
   for (let index = entry.sources.length - 1; index >= 0; index -= 1) {
-    const source = entry.sources[index];
+    const source = expectDefined(entry.sources[index], "sources entry at index");
     if (!isFollowupRunAborted(source)) {
       continue;
     }
@@ -1129,7 +1124,9 @@ export function scheduleFollowupDrain(
   // Cache callback only when a drain actually starts. Avoid keeping stale
   // callbacks around from finalize calls where no queue work is pending.
   rememberFollowupDrainCallback(key, effectiveRunFollowup);
-  void (async () => {
+  // Queue drains outlive their enqueue request across debounce and retries.
+  // Give the detached chain its own root so inherited request admission cannot go stale.
+  void runWithGatewayIndependentRootWorkContinuation(async () => {
     let retryDeferred = false;
     try {
       const collectState = { forceIndividualCollect: false };
@@ -1138,7 +1135,7 @@ export function scheduleFollowupDrain(
         if (queue.items.length === 0 && queue.droppedCount === 0) {
           break;
         }
-        await waitForQueueDebounce(queue);
+        await waitForQueueDebounce(queue, queue.abortController.signal);
         await dropAbortedFollowups(queue.items, effectiveRunFollowup);
         if (queue.items.length === 0 && queue.droppedCount === 0) {
           break;
@@ -1364,5 +1361,8 @@ export function scheduleFollowupDrain(
         scheduleFollowupDrain(key, effectiveRunFollowup);
       }
     }
-  })();
+  }).catch((err: unknown) => {
+    queue.draining = false;
+    defaultRuntime.error?.(`followup queue drain admission failed for ${key}: ${String(err)}`);
+  });
 }

@@ -2645,6 +2645,100 @@ describe("CodexAppServerEventProjector", () => {
     expect(toolResultContentItem.content).toBe("ok");
   });
 
+  it("preserves structured file-change diffs in mirrored transcript calls", async () => {
+    const projector = await createProjector();
+    const changes = [
+      {
+        path: "src/updated.ts",
+        kind: { type: "update", move_path: null },
+        diff: [
+          "--- a/src/updated.ts",
+          "+++ b/src/updated.ts",
+          "@@ -1 +1,2 @@",
+          "-old",
+          "+new",
+          "+another",
+          "",
+        ].join("\n"),
+      },
+      {
+        path: "src/created.ts",
+        kind: { type: "add" },
+        diff: "first\nsecond\n",
+      },
+      {
+        path: "src/deleted.ts",
+        kind: { type: "delete" },
+        diff: "removed\n",
+      },
+    ];
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "fileChange",
+          id: "patch-structured",
+          changes,
+          status: "completed",
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const assistant = requireRecord(result.messagesSnapshot[1], "assistant tool call message");
+    const assistantContent = requireArray(assistant.content, "assistant content");
+    const toolCall = requireRecord(assistantContent[0], "file-change tool call");
+    const expectedChanges = [
+      { ...changes[0], stat: { added: 2, removed: 1 } },
+      { ...changes[1], stat: { added: 2, removed: 0 } },
+      { ...changes[2], stat: { added: 0, removed: 1 } },
+    ];
+    expect(toolCall.name).toBe("apply_patch");
+    expect(toolCall.arguments).toEqual({ changes: expectedChanges });
+    expect(toolCall.input).toEqual({ changes: expectedChanges });
+  });
+
+  it("bounds mirrored file-change diffs without losing full stats", async () => {
+    const diff = [
+      "--- a/src/large.ts",
+      "+++ b/src/large.ts",
+      "@@ -1 +1,200 @@",
+      "-old",
+      ...Array.from({ length: 200 }, (_, index) => `+${index}-${"x".repeat(96)}`),
+      "",
+    ].join("\n");
+    const projector = await createProjector();
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "fileChange",
+          id: "patch-large",
+          changes: [{ path: "src/large.ts", kind: { type: "update" }, diff }],
+          status: "completed",
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const assistant = requireRecord(result.messagesSnapshot[1], "assistant tool call message");
+    const assistantContent = requireArray(assistant.content, "assistant content");
+    const toolCall = requireRecord(assistantContent[0], "file-change tool call");
+    const args = requireRecord(toolCall.arguments, "file-change arguments");
+    const projectedChanges = requireArray(args.changes, "projected file changes");
+    const projectedChange = requireRecord(projectedChanges[0], "projected file change");
+    const projectedDiff = projectedChange.diff;
+    expect(typeof projectedDiff).toBe("string");
+    if (typeof projectedDiff !== "string") {
+      throw new Error("Expected bounded file-change diff");
+    }
+    expect(projectedDiff.length).toBeLessThanOrEqual(12_000);
+    expect(projectedDiff.endsWith("\n")).toBe(true);
+    expect(diff.startsWith(projectedDiff)).toBe(true);
+    expect(projectedChange.diffTruncated).toBe(true);
+    expect(projectedChange.stat).toEqual({ added: 200, removed: 1 });
+  });
+
   it.each([
     ["cancelled", "cancelled"],
     [Object.assign(new Error("turn timed out"), { name: "TimeoutError" }), "timed_out"],
@@ -3581,6 +3675,44 @@ describe("CodexAppServerEventProjector", () => {
     expect(item.content).toContain("OpenClaw truncated Codex native tool output");
     expect(item.content).toContain("showing 10000");
   });
+
+  it.each([
+    { prefixLength: 7_999, delta: "😀tail", expectedChunk: "" },
+    { prefixLength: 7_998, delta: "x😀tail", expectedChunk: "x\n" },
+  ])(
+    "keeps streamed progress UTF-16 safe with $prefixLength chars already emitted",
+    async ({ prefixLength, delta, expectedChunk }) => {
+      const onToolResult = vi.fn();
+      const projector = await createProjector({
+        ...(await createParams()),
+        verboseLevel: "full",
+        onToolResult,
+      });
+
+      await projector.handleNotification(
+        forCurrentTurn("item/commandExecution/outputDelta", {
+          itemId: "cmd-progress-utf16",
+          delta: "a".repeat(prefixLength),
+        }),
+      );
+      onToolResult.mockClear();
+      await projector.handleNotification(
+        forCurrentTurn("item/commandExecution/outputDelta", {
+          itemId: "cmd-progress-utf16",
+          delta,
+        }),
+      );
+
+      expect(onToolResult).toHaveBeenCalledTimes(1);
+      expect(onToolResult).toHaveBeenCalledWith({
+        text: `🛠️ Bash\n\`\`\`txt\n${expectedChunk}...(truncated)...\n\`\`\``,
+      });
+      const text = (mockCallArg(onToolResult, 0, 0, "onToolResult") as { text?: string }).text;
+      expect(text).not.toMatch(
+        /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+      );
+    },
+  );
 
   it("freezes streamed raw prefix after UTF-16-safe truncation so full-output echoes stay suppressed", async () => {
     const projector = await createProjector();

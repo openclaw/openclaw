@@ -3,7 +3,12 @@
  * "Ran 13 commands, read 6 files, edited 9 files, created a file".
  */
 
-import { resolveToolCallKind, type ToolCallKind } from "./tool-call-view.ts";
+import { t } from "../../i18n/index.ts";
+import {
+  resolveToolCallKind,
+  resolveToolCallTargetPaths,
+  type ToolCallKind,
+} from "./tool-call-view.ts";
 
 export type ToolGroupSummaryInput = {
   name: string;
@@ -26,44 +31,31 @@ type GroupCounts = {
   failed: number;
 };
 
-function pathKeyFromArgs(args: unknown): string | null {
-  if (!args || typeof args !== "object" || Array.isArray(args)) {
-    return null;
-  }
-  const record = args as Record<string, unknown>;
-  for (const key of ["path", "file_path", "filePath", "notebook_path"]) {
-    const value = record[key];
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-  }
-  return null;
-}
-
 function countCard(counts: GroupCounts, card: ToolGroupSummaryInput): void {
   const kind: ToolCallKind = resolveToolCallKind(card.name, card.args);
-  const pathKey = pathKeyFromArgs(card.args);
+  const pathKeys = resolveToolCallTargetPaths(card.name, card.args);
+  const addPaths = (target: Set<string>) => {
+    for (const path of pathKeys) {
+      if (path.trim()) {
+        target.add(path.trim());
+      }
+    }
+  };
   switch (kind) {
     case "command":
       counts.commands += 1;
       break;
     case "read":
       counts.reads += 1;
-      if (pathKey) {
-        counts.readPaths.add(pathKey);
-      }
+      addPaths(counts.readPaths);
       break;
     case "edit":
       counts.edits += 1;
-      if (pathKey) {
-        counts.editPaths.add(pathKey);
-      }
+      addPaths(counts.editPaths);
       break;
     case "write":
       counts.writes += 1;
-      if (pathKey) {
-        counts.writePaths.add(pathKey);
-      }
+      addPaths(counts.writePaths);
       break;
     case "search":
       counts.searches += 1;
@@ -80,13 +72,12 @@ function countCard(counts: GroupCounts, card: ToolGroupSummaryInput): void {
   }
 }
 
-function plural(count: number, singular: string, pluralForm = `${singular}s`): string {
-  return count === 1 ? `a ${singular}` : `${count} ${pluralForm}`;
+function countLabel(count: number, oneKey: string, manyKey: string): string {
+  return t(count === 1 ? oneKey : manyKey, { count: String(count) });
 }
 
-function filesPhrase(calls: number, paths: Set<string>): string {
-  const files = paths.size > 0 ? paths.size : calls;
-  return plural(files, "file");
+function fileCount(calls: number, paths: Set<string>): number {
+  return paths.size > 0 ? paths.size : calls;
 }
 
 /**
@@ -114,36 +105,93 @@ export function summarizeToolGroup(cards: readonly ToolGroupSummaryInput[]): str
 
   const segments: string[] = [];
   if (counts.commands > 0) {
-    segments.push(`ran ${plural(counts.commands, "command")}`);
+    segments.push(
+      countLabel(
+        counts.commands,
+        "chat.toolCards.group.commandsOne",
+        "chat.toolCards.group.commandsMany",
+      ),
+    );
   }
   if (counts.reads > 0) {
-    segments.push(`read ${filesPhrase(counts.reads, counts.readPaths)}`);
+    segments.push(
+      countLabel(
+        fileCount(counts.reads, counts.readPaths),
+        "chat.toolCards.group.readsOne",
+        "chat.toolCards.group.readsMany",
+      ),
+    );
   }
   if (counts.edits > 0) {
-    segments.push(`edited ${filesPhrase(counts.edits, counts.editPaths)}`);
+    segments.push(
+      countLabel(
+        fileCount(counts.edits, counts.editPaths),
+        "chat.toolCards.group.editsOne",
+        "chat.toolCards.group.editsMany",
+      ),
+    );
   }
   if (counts.writes > 0) {
-    segments.push(`created ${filesPhrase(counts.writes, counts.writePaths)}`);
+    segments.push(
+      countLabel(
+        fileCount(counts.writes, counts.writePaths),
+        "chat.toolCards.group.writesOne",
+        "chat.toolCards.group.writesMany",
+      ),
+    );
   }
   if (counts.searches > 0) {
-    segments.push(counts.searches === 1 ? "ran a search" : `ran ${counts.searches} searches`);
+    segments.push(
+      countLabel(
+        counts.searches,
+        "chat.toolCards.group.searchesOne",
+        "chat.toolCards.group.searchesMany",
+      ),
+    );
   }
   if (counts.fetches > 0) {
-    segments.push(`fetched ${plural(counts.fetches, "page")}`);
+    segments.push(
+      countLabel(
+        counts.fetches,
+        "chat.toolCards.group.fetchesOne",
+        "chat.toolCards.group.fetchesMany",
+      ),
+    );
   }
   if (counts.others > 0) {
     const names = [...counts.otherNames].slice(0, 2).join(", ");
     segments.push(
       counts.otherNames.size <= 2 && names
-        ? `used ${names}${counts.others > counts.otherNames.size ? ` ×${counts.others}` : ""}`
-        : `used ${plural(counts.others, "tool")}`,
+        ? t(
+            counts.others > counts.otherNames.size
+              ? "chat.toolCards.group.namedToolRepeated"
+              : "chat.toolCards.group.namedTool",
+            { names, count: String(counts.others) },
+          )
+        : countLabel(
+            counts.others,
+            "chat.toolCards.group.otherOne",
+            "chat.toolCards.group.otherMany",
+          ),
     );
   }
 
   if (segments.length === 0) {
-    return `Ran ${plural(cards.length, "tool call")}`;
+    return countLabel(
+      cards.length,
+      "chat.toolCards.group.emptyOne",
+      "chat.toolCards.group.emptyMany",
+    );
   }
   const label = segments.join(", ");
   const capitalized = label.charAt(0).toUpperCase() + label.slice(1);
-  return counts.failed > 0 ? `${capitalized} · ${counts.failed} failed` : capitalized;
+  if (counts.failed === 0) {
+    return capitalized;
+  }
+  const failureLabel = countLabel(
+    counts.failed,
+    "chat.toolCards.group.failedOne",
+    "chat.toolCards.group.failedMany",
+  );
+  return `${capitalized} · ${failureLabel}`;
 }

@@ -90,8 +90,13 @@ const qaTestFileScenarioExecutionBaseSchema = z.object({
 });
 
 const qaTestFileScenarioExecutionSchema = z.discriminatedUnion("kind", [
-  qaTestFileScenarioExecutionBaseSchema.extend({ kind: z.literal("vitest") }),
-  qaTestFileScenarioExecutionBaseSchema.extend({ kind: z.literal("playwright") }),
+  qaTestFileScenarioExecutionBaseSchema.extend({
+    kind: z.literal("vitest"),
+  }),
+  qaTestFileScenarioExecutionBaseSchema.extend({
+    kind: z.literal("playwright"),
+    testNamePattern: z.string().trim().min(1).optional(),
+  }),
   qaTestFileScenarioExecutionBaseSchema.extend({
     kind: z.literal("script"),
     allowBlockedEvidence: z.boolean().optional(),
@@ -338,7 +343,6 @@ const qaScenarioPackFileSchema = z.object({
 export type QaScenarioExecution = z.infer<typeof qaScenarioExecutionSchema>;
 export type QaScenarioFlow = z.infer<typeof qaFlowSchema>;
 export type QaRuntimeParityTier = z.infer<typeof qaRuntimeParityTierSchema>;
-export type QaRuntimeParityUsage = z.infer<typeof qaRuntimeParityUsageSchema>;
 export type QaSeedScenario = z.infer<typeof qaSeedScenarioSchema>;
 export type QaSeedScenarioWithSource = QaSeedScenario & {
   sourcePath: string;

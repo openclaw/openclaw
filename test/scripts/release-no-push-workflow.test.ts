@@ -1,5 +1,14 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -10,6 +19,11 @@ const RELEASE_CHECKS = ".github/workflows/openclaw-release-checks.yml";
 const PACKAGE_ACCEPTANCE = ".github/workflows/package-acceptance.yml";
 const PLUGIN_PRERELEASE = ".github/workflows/plugin-prerelease.yml";
 const LIVE_E2E = ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml";
+const INSTALL_SMOKE = ".github/workflows/install-smoke.yml";
+const SHARED_IMAGE_PUBLISHER = ".github/workflows/openclaw-shared-image-publish-reusable.yml";
+const SCHEDULED_LIVE = ".github/workflows/openclaw-scheduled-live-checks.yml";
+const DOCKER_RELEASE = ".github/workflows/docker-release.yml";
+const UPDATE_MIGRATION = ".github/workflows/update-migration.yml";
 const PERFORMANCE = ".github/workflows/openclaw-performance.yml";
 const LIVE_BUILD = "scripts/test-live-build-docker.sh";
 const DOCKER_E2E_IMAGE_HELPER = "scripts/lib/docker-e2e-image.sh";
@@ -35,7 +49,7 @@ type WorkflowJob = {
   if?: string;
   needs?: string | string[];
   outputs?: Record<string, string>;
-  permissions?: Record<string, string>;
+  permissions?: PermissionMap;
   steps?: WorkflowStep[];
   uses?: string;
   with?: Record<string, boolean | number | string>;
@@ -44,11 +58,110 @@ type WorkflowJob = {
 type Workflow = {
   jobs?: Record<string, WorkflowJob>;
   on?: {
-    workflow_call?: { inputs?: Record<string, WorkflowInput> };
+    workflow_call?: {
+      inputs?: Record<string, WorkflowInput>;
+      outputs?: Record<string, { description?: string; value?: string }>;
+    };
     workflow_dispatch?: { inputs?: Record<string, WorkflowInput> };
   };
-  permissions?: Record<string, string>;
+  permissions?: PermissionMap;
 };
+
+type PermissionLevel = "none" | "read" | "write";
+type PermissionMap = "read-all" | "write-all" | Record<string, PermissionLevel>;
+
+const PERMISSION_RANK: Record<PermissionLevel, number> = { none: 0, read: 1, write: 2 };
+
+function permissionAt(
+  permissions: PermissionMap | undefined,
+  scope: string,
+  inherited: PermissionLevel,
+): PermissionLevel {
+  if (permissions === undefined) {
+    return inherited;
+  }
+  if (permissions === "read-all") {
+    return "read";
+  }
+  if (permissions === "write-all") {
+    return "write";
+  }
+  return permissions[scope] ?? "none";
+}
+
+function permissionScopes(...permissions: Array<PermissionMap | undefined>): string[] {
+  const scopes = new Set(["actions", "contents", "packages", "pull-requests"]);
+  for (const value of permissions) {
+    if (value && typeof value === "object") {
+      for (const scope of Object.keys(value)) {
+        scopes.add(scope);
+      }
+    }
+  }
+  return [...scopes].toSorted();
+}
+
+function reusablePermissionViolations(
+  callerPath: string,
+  callerJobName: string,
+  seen = new Set<string>(),
+): string[] {
+  const caller = readWorkflow(callerPath);
+  const callerJob = job(caller, callerJobName);
+  if (!callerJob.uses?.startsWith("./.github/workflows/")) {
+    throw new Error(`${callerPath}:${callerJobName} is not a local reusable-workflow call`);
+  }
+  const ceiling = callerJob.permissions ?? caller.permissions;
+  return workflowPermissionViolations(
+    callerJob.uses.slice(2),
+    Object.fromEntries(
+      permissionScopes(ceiling).map((scope) => [scope, permissionAt(ceiling, scope, "none")]),
+    ),
+    `${callerPath}:${callerJobName}`,
+    seen,
+  );
+}
+
+function workflowPermissionViolations(
+  workflowPath: string,
+  ceiling: Record<string, PermissionLevel>,
+  chain: string,
+  seen: Set<string>,
+): string[] {
+  const visitKey = `${chain}->${workflowPath}`;
+  if (seen.has(visitKey)) {
+    return [];
+  }
+  seen.add(visitKey);
+  const workflow = readWorkflow(workflowPath);
+  const violations: string[] = [];
+  for (const [jobName, workflowJob] of Object.entries(workflow.jobs ?? {})) {
+    const requested = workflowJob.permissions ?? workflow.permissions;
+    const scopes = permissionScopes(requested, ceiling);
+    const effective: Record<string, PermissionLevel> = {};
+    for (const scope of scopes) {
+      const cap = ceiling[scope] ?? "none";
+      const level = permissionAt(requested, scope, cap);
+      effective[scope] = level;
+      if (PERMISSION_RANK[level] > PERMISSION_RANK[cap]) {
+        violations.push(
+          `${chain} -> ${workflowPath}:${jobName} requests ${scope}:${level} above caller ${scope}:${cap}`,
+        );
+      }
+    }
+    if (workflowJob.uses?.startsWith("./.github/workflows/")) {
+      violations.push(
+        ...workflowPermissionViolations(
+          workflowJob.uses.slice(2),
+          effective,
+          `${chain} -> ${workflowPath}:${jobName}`,
+          seen,
+        ),
+      );
+    }
+  }
+  return violations;
+}
 
 function readWorkflow(path: string): Workflow {
   return parse(readFileSync(path, "utf8")) as Workflow;
@@ -71,10 +184,77 @@ function step(workflowJob: WorkflowJob, name: string): WorkflowStep {
 }
 
 function expectReadOnlyPackagePermission(workflowJob: WorkflowJob): void {
-  expect(workflowJob.permissions?.packages).toBe("read");
+  expect(permissionAt(workflowJob.permissions, "packages", "none")).toBe("read");
 }
 
 describe("release validation no-push transport", () => {
+  it("builds planned live images locally without entering pull fallback", () => {
+    const workflow = readWorkflow(LIVE_E2E);
+    for (const jobName of [
+      "validate_docker_e2e",
+      "validate_docker_lanes",
+      "validate_docker_openwebui",
+    ]) {
+      const job = workflow.jobs?.[jobName];
+      const runStep = job?.steps?.find((candidate) =>
+        candidate.run?.includes("test-live-build-docker.sh"),
+      );
+
+      expect(runStep?.run, jobName).toContain("OPENCLAW_SKIP_DOCKER_BUILD=0");
+      expect(runStep?.run, jobName).not.toContain("OPENCLAW_DOCKER_BUILD_ON_MISSING=1");
+    }
+  });
+
+  it("keeps every local reusable-workflow permission request within its caller ceiling", () => {
+    const readOnlyCalls = [
+      [PLUGIN_PRERELEASE, "plugin-prerelease-docker-suite"],
+      [RELEASE_CHECKS, "live_repo_e2e_release_checks"],
+      [RELEASE_CHECKS, "docker_e2e_release_checks"],
+      [RELEASE_CHECKS, "package_acceptance_release_checks"],
+      [RELEASE_CHECKS, "install_smoke_release_checks"],
+      [PACKAGE_ACCEPTANCE, "docker_acceptance"],
+      [PACKAGE_ACCEPTANCE, "docker_acceptance_registry"],
+      [INSTALL_SMOKE, "install_smoke"],
+      [SCHEDULED_LIVE, "live_and_openwebui_checks"],
+      [UPDATE_MIGRATION, "update_migration"],
+    ] as const;
+    for (const [workflowPath, jobName] of readOnlyCalls) {
+      const callerWorkflow = readWorkflow(workflowPath);
+      const caller = job(callerWorkflow, jobName);
+      const callerPermissions = caller.permissions ?? callerWorkflow.permissions;
+      expect(
+        permissionAt(callerPermissions, "packages", "none"),
+        `${workflowPath}:${jobName}`,
+      ).toBe("read");
+      expect(
+        reusablePermissionViolations(workflowPath, jobName),
+        `${workflowPath}:${jobName}`,
+      ).toEqual([]);
+    }
+  });
+
+  it("models conditional reusable jobs as permission requests before scheduling", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-permission-graph-"));
+    const fixture = join(root, "callee.yml");
+    try {
+      writeFileSync(
+        fixture,
+        `permissions:\n  packages: read\njobs:\n  safe:\n    runs-on: ubuntu-latest\n  skippedWriter:\n    if: false\n    runs-on: ubuntu-latest\n    permissions:\n      packages: write\n`,
+      );
+      const violations = workflowPermissionViolations(
+        fixture,
+        { actions: "none", contents: "none", packages: "read", "pull-requests": "none" },
+        "fixture:caller",
+        new Set(),
+      );
+      expect(violations).toEqual([
+        `fixture:caller -> ${fixture}:skippedWriter requests packages:write above caller packages:read`,
+      ]);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
   it("does not persist Git credentials in validation checkouts", () => {
     for (const workflowPath of [PLUGIN_PRERELEASE, RELEASE_CHECKS]) {
       const workflow = readWorkflow(workflowPath);
@@ -107,6 +287,7 @@ describe("release validation no-push transport", () => {
     const dockerAssets = job(full, "docker_runtime_assets_preflight");
     expect(step(dockerAssets, "Checkout target SHA").with?.["persist-credentials"]).toBe(false);
     expect(evidenceReuse.if).toContain("github.ref == 'refs/heads/main'");
+    expect(evidenceReuse.if).toContain("startsWith(github.ref, 'refs/heads/release-ci/')");
     expect(
       evidenceReuse.steps?.find(
         (candidate) => candidate.name === "Require trusted main workflow ref",
@@ -180,6 +361,7 @@ describe("release validation no-push transport", () => {
       shared_image_artifact_namespace: "release-live",
       shared_image_policy: "no-push-artifact",
     });
+    expect(live.with).not.toHaveProperty("allow_unreleased_changelog");
     expect(docker.with).toMatchObject({
       package_artifact_digest: "${{ needs.prepare_release_package.outputs.artifact_digest }}",
       package_artifact_id: "${{ needs.prepare_release_package.outputs.artifact_id }}",
@@ -194,6 +376,7 @@ describe("release validation no-push transport", () => {
       shared_image_artifact_namespace: "release-docker",
       shared_image_policy: "no-push-artifact",
     });
+    expect(docker.with).not.toHaveProperty("allow_unreleased_changelog");
     expect(acceptance.with).toMatchObject({
       artifact_digest: "${{ needs.prepare_release_package.outputs.artifact_digest }}",
       artifact_id: "${{ needs.prepare_release_package.outputs.artifact_id }}",
@@ -209,14 +392,14 @@ describe("release validation no-push transport", () => {
 
     const standardAcceptance = job(packageAcceptance, "docker_acceptance");
     const registryAcceptance = job(packageAcceptance, "docker_acceptance_registry");
-    expect(packageAcceptance.permissions?.packages).toBe("read");
+    expect(permissionAt(packageAcceptance.permissions, "packages", "none")).toBe("read");
     expect(packageAcceptance.on?.workflow_dispatch?.inputs?.shared_image_policy).toMatchObject({
-      default: "allow-push",
-      options: ["allow-push", "existing-only", "no-push-artifact"],
+      default: "no-push-artifact",
+      options: ["existing-only", "no-push-artifact"],
       type: "choice",
     });
     expect(packageAcceptance.on?.workflow_call?.inputs?.shared_image_policy).toMatchObject({
-      default: "allow-push",
+      default: "no-push-artifact",
       type: "string",
     });
     expect(standardAcceptance.with?.shared_image_policy).toBe("${{ inputs.shared_image_policy }}");
@@ -234,10 +417,12 @@ describe("release validation no-push transport", () => {
       package_source_sha: "${{ needs.resolve_package.outputs.package_source_sha }}",
       package_version: "${{ needs.resolve_package.outputs.package_version }}",
     });
+    expect(standardAcceptance.with).not.toHaveProperty("allow_unreleased_changelog");
+    expect(registryAcceptance.with).not.toHaveProperty("allow_unreleased_changelog");
     expect(standardAcceptance.if).toContain("shared_image_policy == 'no-push-artifact'");
     expectReadOnlyPackagePermission(standardAcceptance);
-    expect(registryAcceptance.if).toContain("shared_image_policy != 'no-push-artifact'");
-    expect(registryAcceptance.permissions?.packages).toBe("write");
+    expect(registryAcceptance.if).toContain("shared_image_policy == 'existing-only'");
+    expectReadOnlyPackagePermission(registryAcceptance);
 
     const pluginDocker = job(pluginPrerelease, "plugin-prerelease-docker-suite");
     expectReadOnlyPackagePermission(pluginDocker);
@@ -260,10 +445,10 @@ describe("release validation no-push transport", () => {
     const dispatchPolicy = workflow.on?.workflow_dispatch?.inputs?.shared_image_policy;
     const callPolicy = workflow.on?.workflow_call?.inputs?.shared_image_policy;
     expect(dispatchPolicy).toMatchObject({
-      default: "allow-push",
-      options: ["allow-push", "existing-only", "no-push-artifact"],
+      default: "no-push-artifact",
+      options: ["existing-only", "no-push-artifact"],
     });
-    expect(callPolicy).toMatchObject({ default: "allow-push", type: "string" });
+    expect(callPolicy).toMatchObject({ default: "no-push-artifact", type: "string" });
 
     const validation = job(workflow, "validate_selected_ref");
     expect(validation.outputs?.workflow_repository).toBe(
@@ -292,28 +477,24 @@ describe("release validation no-push transport", () => {
 
     const dockerProducer = job(workflow, "prepare_docker_e2e_image");
     const liveProducer = job(workflow, "prepare_live_test_image");
-    const dockerPublisher = job(workflow, "push_docker_e2e_images");
-    const livePublisher = job(workflow, "push_live_test_image");
-    expect(workflow.permissions?.actions).toBe("read");
-    expect(workflow.permissions?.packages).toBe("read");
+    expect(permissionAt(workflow.permissions, "actions", "none")).toBe("read");
+    expect(permissionAt(workflow.permissions, "packages", "none")).toBe("read");
     expectReadOnlyPackagePermission(dockerProducer);
     expectReadOnlyPackagePermission(liveProducer);
-    expect(dockerPublisher.permissions?.packages).toBe("write");
-    expect(livePublisher.permissions?.packages).toBe("write");
-    expect(dockerPublisher.if).toContain("shared_image_policy == 'allow-push'");
-    expect(livePublisher.if).toContain("shared_image_policy == 'allow-push'");
-    expect(job(workflow, "docker_e2e_image_ready").permissions?.packages).toBeUndefined();
-    expect(job(workflow, "live_test_image_ready").permissions?.packages).toBeUndefined();
+    expect(workflow.jobs?.push_docker_e2e_images).toBeUndefined();
+    expect(workflow.jobs?.push_live_test_image).toBeUndefined();
+    expect(
+      permissionAt(job(workflow, "docker_e2e_image_ready").permissions, "packages", "none"),
+    ).toBe("none");
+    expect(
+      permissionAt(job(workflow, "live_test_image_ready").permissions, "packages", "none"),
+    ).toBe("none");
     const packageWriters = Object.entries(workflow.jobs ?? {}).filter(
-      ([, workflowJob]) => workflowJob.permissions?.packages === "write",
+      ([, workflowJob]) => permissionAt(workflowJob.permissions, "packages", "none") === "write",
     );
-    expect(packageWriters.map(([name]) => name).sort()).toEqual([
-      "push_docker_e2e_images",
-      "push_live_test_image",
-    ]);
-    for (const [, workflowJob] of packageWriters) {
-      expect(workflowJob.if).toContain("shared_image_policy == 'allow-push'");
-    }
+    expect(packageWriters).toEqual([]);
+    expect(workflow.on?.workflow_call?.outputs?.publication_manifest).toBeUndefined();
+    expect(workflow.jobs?.collect_shared_image_publication).toBeUndefined();
     const validateSelectedRef = step(
       job(workflow, "validate_selected_ref"),
       "Validate selected ref",
@@ -419,7 +600,11 @@ describe("release validation no-push transport", () => {
       const build = step(dockerProducer, name);
       expect(build.if).toContain("shared_image_policy == 'no-push-artifact'");
       expect(build.run).toContain("--load");
+      expect(build.run).toContain("--sbom=false");
+      expect(build.run).toContain("--provenance=false");
       expect(build.run).not.toContain("--push");
+      expect(build.run).not.toContain("--sbom=true");
+      expect(build.run).not.toContain("--provenance=mode=max");
     }
     const packDockerArtifact = step(dockerProducer, "Pack Docker E2E image artifact");
     expect(packDockerArtifact.env?.PACKAGE_SHA256).toBe("${{ steps.package.outputs.sha256 }}");
@@ -492,16 +677,18 @@ describe("release validation no-push transport", () => {
     });
     expect(step(liveProducer, "Build shared live-test image").with).toMatchObject({
       load: true,
+      provenance: false,
       push: false,
+      sbom: false,
     });
     const dockerLoginCondition = step(dockerProducer, "Log in to GHCR").if;
-    expect(dockerLoginCondition).toContain("shared_image_policy == 'allow-push'");
     expect(dockerLoginCondition).toContain("shared_image_policy == 'existing-only'");
+    expect(dockerLoginCondition).not.toContain("allow-push");
     expect(step(liveProducer, "Log in to GHCR").if).toContain(
       "shared_image_policy != 'no-push-artifact'",
     );
     expect(step(dockerProducer, "Check existing shared Docker E2E images").if).toContain(
-      "shared_image_policy == 'allow-push'",
+      "shared_image_policy == 'existing-only'",
     );
     expect(step(liveProducer, "Check existing shared live-test image").if).toContain(
       "shared_image_policy != 'no-push-artifact'",
@@ -512,19 +699,7 @@ describe("release validation no-push transport", () => {
         .filter((candidate) => candidate.run?.includes("--push"))
         .map((candidate) => ({ candidate, jobName })),
     );
-    expect(shellPushSteps.map(({ candidate }) => candidate.name).sort()).toEqual([
-      "Build and push bare Docker E2E image",
-      "Build and push functional Docker E2E image",
-    ]);
-    for (const { jobName } of shellPushSteps) {
-      expect(jobName).toBe("push_docker_e2e_images");
-    }
-    expect(step(livePublisher, "Build and push shared live-test image").with?.push).toBe(true);
-    expect(step(dockerPublisher, "Download OpenClaw Docker E2E package").with).toMatchObject({
-      "artifact-ids": "${{ needs.prepare_docker_e2e_image.outputs.package_artifact_id }}",
-      "github-token": "${{ github.token }}",
-      "run-id": "${{ needs.prepare_docker_e2e_image.outputs.package_artifact_run_id }}",
-    });
+    expect(shellPushSteps).toEqual([]);
 
     for (const name of [
       "validate_docker_e2e",
@@ -645,6 +820,58 @@ describe("release validation no-push transport", () => {
     expect(requireLocalIndex).toBeGreaterThanOrEqual(0);
     expect(pullIndex).toBeGreaterThan(requireLocalIndex);
     expect(liveBuild).toContain("Required local live-test image not found");
+  });
+
+  it("keeps Docker-save validation artifacts unreachable from package writers", () => {
+    const liveWorkflow = readWorkflow(LIVE_E2E);
+    const scheduled = readWorkflow(SCHEDULED_LIVE);
+    expect(existsSync(SHARED_IMAGE_PUBLISHER)).toBe(false);
+    expect(liveWorkflow.on?.workflow_call?.outputs?.publication_manifest).toBeUndefined();
+    expect(liveWorkflow.jobs?.collect_shared_image_publication).toBeUndefined();
+    expect(scheduled.jobs?.publish_shared_images).toBeUndefined();
+
+    const scheduledWriters = Object.entries(scheduled.jobs ?? {})
+      .filter(
+        ([, workflowJob]) => permissionAt(workflowJob.permissions, "packages", "none") === "write",
+      )
+      .map(([name]) => name);
+    expect(scheduledWriters).toEqual([]);
+
+    const publisherCallers = readdirSync(".github/workflows")
+      .filter((name) => name.endsWith(".yml") || name.endsWith(".yaml"))
+      .filter((name) =>
+        readFileSync(join(".github/workflows", name), "utf8").includes(
+          "openclaw-shared-image-publish-reusable.yml",
+        ),
+      );
+    expect(publisherCallers).toEqual([]);
+    expect(JSON.stringify(liveWorkflow.jobs)).not.toContain("docker image push");
+    expect(JSON.stringify(scheduled.jobs)).not.toContain("docker image push");
+
+    const scheduledValidation = job(scheduled, "live_and_openwebui_checks");
+    expect(permissionAt(scheduled.permissions, "packages", "none")).toBe("read");
+    expectReadOnlyPackagePermission(scheduledValidation);
+    expect(scheduledValidation.with).toMatchObject({
+      allow_unreleased_changelog: true,
+      shared_image_artifact_namespace: "scheduled-live",
+      shared_image_policy: "no-push-artifact",
+    });
+
+    const dockerRelease = readWorkflow(DOCKER_RELEASE);
+    const attestedBuilds = Object.values(dockerRelease.jobs ?? {}).flatMap((workflowJob) =>
+      (workflowJob.steps ?? []).filter(
+        (candidate) =>
+          candidate.uses?.startsWith("docker/build-push-action@") && candidate.with?.push === true,
+      ),
+    );
+    expect(attestedBuilds).toHaveLength(4);
+    for (const build of attestedBuilds) {
+      expect(build.with).toMatchObject({
+        provenance: "mode=max",
+        push: true,
+        sbom: true,
+      });
+    }
   });
 
   it("keeps performance evidence artifact-only when dispatched by Full Release", () => {

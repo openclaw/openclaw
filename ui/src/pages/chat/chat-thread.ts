@@ -4,6 +4,7 @@ import {
   isToolResultContentType,
   resolveToolUseId,
 } from "../../../../src/chat/tool-content.js";
+import { t } from "../../i18n/index.ts";
 import type {
   ChatItem,
   MessageGroup,
@@ -39,6 +40,8 @@ import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
 export type BuildChatItemsProps = {
   sessionKey: string;
+  /** Invalidates cached display copy when the active UI language changes. */
+  locale?: string;
   messages: unknown[];
   toolMessages: unknown[];
   streamSegments: ChatStreamSegment[];
@@ -46,6 +49,10 @@ export type BuildChatItemsProps = {
   streamStartedAt: number | null;
   queue?: ChatQueueItem[];
   showToolCalls: boolean;
+  /** True while the agent is visibly working (isChatRunWorking). */
+  runWorking?: boolean;
+  /** True while chat history is loading (initial load or background reload). */
+  loading?: boolean;
   searchOpen?: boolean;
   searchQuery?: string;
   historyRenderLimit?: number;
@@ -315,13 +322,13 @@ function mergeToolCallResultPair(callItem: ChatItem, resultItem: ChatItem): Chat
     resultItem.message,
     `${resultItem.key}:activity-result`,
   );
-  if (callCards.length !== 1 || resultCards.length !== 1) {
+  if (callCards.length === 0 || resultCards.length === 0) {
     return null;
   }
-  const [callCard] = callCards;
-  const [resultCard] = resultCards;
-  const resultName = resultCard.name === "tool" ? callCard.name : resultCard.name;
   const rawResultContent = Array.isArray(resultMessage.content) ? resultMessage.content : [];
+  if (rawResultContent.some((block) => isToolCallContentType(asRecord(block)?.type))) {
+    return null;
+  }
   const resultOnlyContent = rawResultContent.filter(
     (block) => !isToolCallContentType(asRecord(block)?.type),
   );
@@ -329,14 +336,30 @@ function mergeToolCallResultPair(callItem: ChatItem, resultItem: ChatItem): Chat
     isToolResultContentType(asRecord(block)?.type),
   );
   const hasToolResult =
-    hasToolResultBlock || resultCard.outputText !== undefined || resultCard.isError !== undefined;
-  if (
-    !callCard.callId ||
-    callCard.callId !== resultCard.callId ||
-    !hasToolResult ||
-    normalizeLowercaseStringOrEmpty(callCard.name) !== normalizeLowercaseStringOrEmpty(resultName)
-  ) {
+    hasToolResultBlock ||
+    resultCards.some((card) => card.outputText !== undefined || card.isError !== undefined);
+  if (!hasToolResult) {
     return null;
+  }
+
+  const unresolvedCallIds = unresolvedToolCallIds(callItem);
+  const matchedResults = new Map<string, { resultCard: ToolCard; resultName: string }>();
+  for (const resultCard of resultCards) {
+    const callId = resultCard.callId;
+    if (!callId || !unresolvedCallIds.has(callId) || matchedResults.has(callId)) {
+      return null;
+    }
+    const callCard = callCards.find((card) => card.callId === callId);
+    if (!callCard) {
+      return null;
+    }
+    const resultName = resultCard.name === "tool" ? callCard.name : resultCard.name;
+    if (
+      normalizeLowercaseStringOrEmpty(callCard.name) !== normalizeLowercaseStringOrEmpty(resultName)
+    ) {
+      return null;
+    }
+    matchedResults.set(callId, { resultCard, resultName });
   }
 
   const preservedResultContent = resultOnlyContent.filter(
@@ -352,41 +375,105 @@ function mergeToolCallResultPair(callItem: ChatItem, resultItem: ChatItem): Chat
         if (!record || !isToolResultContentType(record.type)) {
           return block;
         }
+        const callId = resolveToolBlockId(record, resultMessage);
+        const matched = callId ? matchedResults.get(callId) : undefined;
+        if (!matched) {
+          return block;
+        }
         const stamped: Record<string, unknown> = Object.assign({}, record);
-        stamped.id = resolveToolUseId(record) ?? resultCard.callId;
+        stamped.id = callId;
         stamped.name =
-          typeof record.name === "string" && record.name.trim() ? record.name : resultName;
+          typeof record.name === "string" && record.name.trim() ? record.name : matched.resultName;
         if (record.details === undefined && resultMessage.details !== undefined) {
           stamped.details = resultMessage.details;
         }
+        if (
+          record.isError === undefined &&
+          record.is_error === undefined &&
+          matched.resultCard.isError !== undefined
+        ) {
+          stamped.isError = matched.resultCard.isError;
+        }
         return stamped;
       })
-    : [
-        {
-          type: "tool_result",
-          id: resultCard.callId,
-          name: resultName,
-          text: resultCard.outputText ?? "",
-          ...(resultCard.details !== undefined ? { details: resultCard.details } : {}),
-          ...(resultCard.isError !== undefined ? { isError: resultCard.isError } : {}),
-        },
-        ...preservedResultContent,
-      ];
-  const resultError = resultMessage.isError ?? resultMessage.is_error;
+    : (() => {
+        const [matched] = matchedResults.values();
+        if (!matched) {
+          return preservedResultContent;
+        }
+        return [
+          {
+            type: "tool_result",
+            id: matched.resultCard.callId,
+            name: matched.resultName,
+            text: matched.resultCard.outputText ?? "",
+            ...(matched.resultCard.details !== undefined
+              ? { details: matched.resultCard.details }
+              : {}),
+            ...(matched.resultCard.isError !== undefined
+              ? { isError: matched.resultCard.isError }
+              : {}),
+          },
+          ...preservedResultContent,
+        ];
+      })();
   return {
     ...callItem,
     message: {
       ...callMessage,
       content: [...callMessage.content, ...resultContent],
-      ...(typeof resultError === "boolean" ? { isError: resultError } : {}),
     },
   };
 }
 
-// Parallel tool calls interleave in transcripts (call, call, result, result),
-// so a result must pair with any still-open call in the current tool run, not
-// only the immediately previous item. Non-tool items end the window.
-const TOOL_CALL_MERGE_WINDOW = 16;
+function resolveMessageToolUseId(message: Record<string, unknown>): string | undefined {
+  for (const field of ["tool_call_id", "toolCallId", "tool_use_id", "toolUseId"] as const) {
+    const value = message[field];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
+
+function resolveToolBlockId(
+  block: Record<string, unknown>,
+  message: Record<string, unknown>,
+): string | undefined {
+  return resolveToolUseId(block) ?? resolveMessageToolUseId(message);
+}
+
+function unresolvedToolCallIds(item: ChatItem): Set<string> {
+  const unresolved = new Set<string>();
+  if (item.kind !== "message") {
+    return unresolved;
+  }
+  const message = asRecord(item.message);
+  if (
+    !message ||
+    typeof message.role !== "string" ||
+    message.role.toLowerCase() !== "assistant" ||
+    !Array.isArray(message.content)
+  ) {
+    return unresolved;
+  }
+  for (const block of message.content) {
+    const record = asRecord(block);
+    if (!record) {
+      continue;
+    }
+    const callId = resolveToolBlockId(record, message);
+    if (!callId) {
+      continue;
+    }
+    if (isToolCallContentType(record.type)) {
+      unresolved.add(callId);
+    } else if (isToolResultContentType(record.type)) {
+      unresolved.delete(callId);
+    }
+  }
+  return unresolved;
+}
 
 function isToolTimelineItem(item: ChatItem): boolean {
   if (item.kind !== "message") {
@@ -396,32 +483,132 @@ function isToolTimelineItem(item: ChatItem): boolean {
   return normalized ? normalizeRoleForGrouping(normalized.role) === "tool" : false;
 }
 
-function coalesceToolActivityMessages(items: ChatItem[]): ChatItem[] {
-  const coalesced: ChatItem[] = [];
-  // Indexes into `coalesced` of assistant tool-call items that have no result yet.
-  let openCallIndexes: number[] = [];
-  for (const item of items) {
-    let merged: ChatItem | null = null;
-    let mergedAt = -1;
-    for (let i = openCallIndexes.length - 1; i >= 0; i--) {
-      const callIndex = openCallIndexes[i];
-      const candidate = mergeToolCallResultPair(coalesced[callIndex], item);
-      if (candidate) {
-        merged = candidate;
-        mergedAt = i;
-        break;
+function splitBundledToolResultItems(item: ChatItem): ChatItem[] {
+  if (item.kind !== "message") {
+    return [item];
+  }
+  const message = asRecord(item.message);
+  if (!message || !Array.isArray(message.content) || message.content.length < 2) {
+    return [item];
+  }
+  const blocksByCallId = new Map<string, unknown[]>();
+  for (const block of message.content) {
+    const record = asRecord(block);
+    if (!record || !isToolResultContentType(record.type)) {
+      return [item];
+    }
+    const callId = resolveToolBlockId(record, message);
+    if (!callId) {
+      return [item];
+    }
+    const blocks = blocksByCallId.get(callId) ?? [];
+    blocks.push(block);
+    blocksByCallId.set(callId, blocks);
+  }
+  if (blocksByCallId.size < 2) {
+    return [item];
+  }
+  return Array.from(blocksByCallId.values(), (content, index) => ({
+    ...item,
+    key: `${item.key}:result:${index}`,
+    message: { ...message, content },
+  }));
+}
+
+function resolveToolResultCallId(item: ChatItem): string | undefined {
+  if (item.kind !== "message") {
+    return undefined;
+  }
+  const message = asRecord(item.message);
+  if (!message) {
+    return undefined;
+  }
+  const content = Array.isArray(message.content) ? message.content : [];
+  if (content.some((block) => isToolCallContentType(asRecord(block)?.type))) {
+    return undefined;
+  }
+  const resultIds = new Set<string>();
+  for (const block of content) {
+    const record = asRecord(block);
+    if (record && isToolResultContentType(record.type)) {
+      const callId = resolveToolBlockId(record, message);
+      if (callId) {
+        resultIds.add(callId);
       }
     }
-    if (merged && mergedAt >= 0) {
-      coalesced[openCallIndexes[mergedAt]] = merged;
-      openCallIndexes.splice(mergedAt, 1);
+  }
+  if (resultIds.size > 1) {
+    return undefined;
+  }
+  return resultIds.values().next().value ?? resolveMessageToolUseId(message);
+}
+
+function refreshOpenCallIds(
+  openCallIndexes: Map<string, number>,
+  coalesced: ChatItem[],
+  callIndex: number,
+) {
+  for (const [callId, index] of openCallIndexes) {
+    if (index === callIndex) {
+      openCallIndexes.delete(callId);
+    }
+  }
+  const item = coalesced[callIndex];
+  if (!item) {
+    return;
+  }
+  for (const callId of unresolvedToolCallIds(item)) {
+    openCallIndexes.set(callId, callIndex);
+  }
+}
+
+function coalesceToolActivityMessages(items: ChatItem[]): ChatItem[] {
+  const coalesced: ChatItem[] = [];
+  // Parallel calls can outnumber any fixed lookback window, so each unresolved
+  // call id owns its current transcript item until a non-tool boundary.
+  const openCallIndexes = new Map<string, number>();
+  for (const item of items) {
+    const resultItems = splitBundledToolResultItems(item);
+    const unmatchedResultItems: ChatItem[] = [];
+    let mergedResult = false;
+    for (const resultItem of resultItems) {
+      const callId = resolveToolResultCallId(resultItem);
+      const callIndex = callId ? openCallIndexes.get(callId) : undefined;
+      const callItem = callIndex === undefined ? undefined : coalesced[callIndex];
+      const merged =
+        callIndex === undefined || !callItem ? null : mergeToolCallResultPair(callItem, resultItem);
+      if (!merged || callIndex === undefined) {
+        unmatchedResultItems.push(resultItem);
+        continue;
+      }
+      coalesced[callIndex] = merged;
+      refreshOpenCallIds(openCallIndexes, coalesced, callIndex);
+      mergedResult = true;
+    }
+    if (mergedResult) {
+      for (const unmatched of unmatchedResultItems) {
+        coalesced.push(unmatched);
+      }
       continue;
     }
+
+    const unresolvedCallIds = unresolvedToolCallIds(item);
+    if (unresolvedCallIds.size === 1) {
+      const callId = unresolvedCallIds.values().next().value;
+      const previousIndex = callId ? openCallIndexes.get(callId) : undefined;
+      const previous = previousIndex === undefined ? undefined : coalesced[previousIndex];
+      if (previousIndex !== undefined && previous && unresolvedToolCallIds(previous).size === 1) {
+        coalesced[previousIndex] = item;
+        refreshOpenCallIds(openCallIndexes, coalesced, previousIndex);
+        continue;
+      }
+    }
+
     coalesced.push(item);
-    if (isOpenToolCallItem(item)) {
-      openCallIndexes.push(coalesced.length - 1);
-      if (openCallIndexes.length > TOOL_CALL_MERGE_WINDOW) {
-        openCallIndexes.shift();
+    if (unresolvedCallIds.size > 0) {
+      const callIndex = coalesced.length - 1;
+      for (const callId of unresolvedCallIds) {
+        openCallIndexes.set(callId, callIndex);
       }
       continue;
     }
@@ -430,25 +617,9 @@ function coalesceToolActivityMessages(items: ChatItem[]): ChatItem[] {
       continue;
     }
     // Any other content (user text, assistant reply, dividers) closes the run.
-    openCallIndexes = [];
+    openCallIndexes.clear();
   }
   return coalesced;
-}
-
-function isOpenToolCallItem(item: ChatItem): boolean {
-  if (item.kind !== "message") {
-    return false;
-  }
-  const message = asRecord(item.message);
-  if (!message || typeof message.role !== "string" || message.role.toLowerCase() !== "assistant") {
-    return false;
-  }
-  if (!Array.isArray(message.content)) {
-    return false;
-  }
-  const hasCall = message.content.some((block) => isToolCallContentType(asRecord(block)?.type));
-  const hasResult = message.content.some((block) => isToolResultContentType(asRecord(block)?.type));
-  return hasCall && !hasResult;
 }
 
 function assistantGroupHasReplyText(group: MessageGroup): boolean {
@@ -468,7 +639,7 @@ function annotateToolTurnOutcome(
   let sawAssistantReply = false;
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index];
-    if (item.kind !== "group") {
+    if (!item || item.kind !== "group") {
       continue;
     }
     const role = item.role.toLowerCase();
@@ -691,6 +862,7 @@ function shouldRenderQueuedSendInThread(item: ChatQueueItem): boolean {
   }
   return (
     item.sendState === "waiting-model" ||
+    item.sendState === "waiting-idle" ||
     item.sendState === "sending" ||
     item.sendState === "waiting-reconnect"
   );
@@ -980,12 +1152,11 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
           typeof marker.id === "string"
             ? `divider:compaction:${marker.id}`
             : `divider:compaction:${normalized.timestamp}:${i}`,
-        label: "Compacted history",
-        description:
-          "The compacted transcript is preserved as a checkpoint. Open session checkpoints to branch or restore from that compacted view.",
+        label: t("chat.compaction.label"),
+        description: t("chat.compaction.description"),
         action: {
           kind: "session-checkpoints",
-          label: "Open checkpoints",
+          label: t("chat.compaction.openCheckpoints"),
         },
         timestamp: normalized.timestamp ?? Date.now(),
       });
@@ -1074,6 +1245,9 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   for (let i = 0; i < maxLen; i++) {
     if (i < indexedSegments.length) {
       const segment = indexedSegments[i];
+      if (!segment) {
+        continue;
+      }
       const text = sanitizeStreamText(segment.text);
       const usesAccumulatedText = streamSegmentUsesAccumulatedText(segment);
       const visibleText = usesAccumulatedText
@@ -1138,11 +1312,30 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     }
   }
 
+  // Working spark contract: whenever the agent works with nothing visibly
+  // streaming (pre-first-token, or a queued send in flight), the thread shows
+  // the reading indicator where the reply will materialize. Streaming text
+  // and running tool rows take over as the signal once content flows.
+  // A visible running tool row already signals active work, so the spark is
+  // suppressed rather than stacked under it; hidden tool calls keep the spark.
+  const hasVisibleRunningTool =
+    props.showToolCalls &&
+    tools.some((message) => {
+      const record = asRecord(message);
+      return (
+        record?.["__openclawToolStreamLive"] === true &&
+        record["__openclawToolStreamResultReceived"] !== true
+      );
+    });
+  // The initial-load skeleton owns the empty thread; a background reload with
+  // content still visible keeps the spark (it is the only working signal).
+  const initialHistoryLoad = props.loading === true && items.length === 0;
   const hasPendingResponse =
     props.stream === null &&
-    queuedSends.some(
-      (item) => item.sendState === "sending" && shouldRenderQueuedSendInThread(item),
-    );
+    ((props.runWorking === true && !hasVisibleRunningTool && !initialHistoryLoad) ||
+      queuedSends.some(
+        (item) => item.sendState === "sending" && shouldRenderQueuedSendInThread(item),
+      ));
   if (hasPendingResponse) {
     items.push({
       kind: "reading-indicator",
@@ -1180,6 +1373,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
 function sameChatItemsInput(previous: BuildChatItemsProps, next: BuildChatItemsProps): boolean {
   return (
     previous.sessionKey === next.sessionKey &&
+    previous.locale === next.locale &&
     previous.messages === next.messages &&
     previous.toolMessages === next.toolMessages &&
     previous.streamSegments === next.streamSegments &&
@@ -1187,6 +1381,8 @@ function sameChatItemsInput(previous: BuildChatItemsProps, next: BuildChatItemsP
     previous.streamStartedAt === next.streamStartedAt &&
     previous.queue === next.queue &&
     previous.showToolCalls === next.showToolCalls &&
+    previous.runWorking === next.runWorking &&
+    previous.loading === next.loading &&
     previous.searchOpen === next.searchOpen &&
     previous.searchQuery === next.searchQuery &&
     previous.historyRenderLimit === next.historyRenderLimit

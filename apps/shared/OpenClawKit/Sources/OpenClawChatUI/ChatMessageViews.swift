@@ -324,8 +324,7 @@ private struct ChatMessageBody: View {
             if self.showsAssistantTrace, !self.toolCalls.isEmpty {
                 ForEach(self.toolCalls.indices, id: \.self) { idx in
                     ToolCallCard(
-                        content: self.toolCalls[idx],
-                        isUser: self.isUser)
+                        content: self.toolCalls[idx])
                 }
             }
 
@@ -464,12 +463,8 @@ private struct ChatMessageBody: View {
     }
 
     private var bubbleBorderWidth: CGFloat {
-        if self.isUser {
-            return 0.5
-        }
-        if self.style == .onboarding {
-            return 0.8
-        }
+        if self.isUser { return 0.5 }
+        if self.style == .onboarding { return 0.8 }
         return 1
     }
 
@@ -540,7 +535,6 @@ private struct AttachmentRow: View {
 
 private struct ToolCallCard: View {
     let content: OpenClawChatMessageContent
-    let isUser: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {

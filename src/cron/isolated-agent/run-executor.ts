@@ -11,6 +11,7 @@ import { wrapUntrustedPromptDataBlock } from "../../agents/sanitize-for-prompt.j
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import type { CliSessionBinding } from "../../config/sessions.js";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
@@ -43,7 +44,6 @@ import {
   resolveBootstrapWarningSignaturesSeen,
   resolveCandidateThinkingLevel,
   resolveCronAgentLane,
-  resolveSessionTranscriptPath,
   runCliAgent,
   runWithModelFallback,
 } from "./run-execution.runtime.js";
@@ -200,6 +200,7 @@ export function createCronPromptExecutor(params: {
   agentDir: string;
   agentSessionKey: string;
   runSessionKey: string;
+  usesDetachedRunSession?: boolean;
   workspaceDir: string;
   lane?: string;
   resolvedVerboseLevel: VerboseLevel;
@@ -240,7 +241,11 @@ export function createCronPromptExecutor(params: {
 }) {
   const sessionFile =
     params.cronSession.sessionEntry.sessionFile?.trim() ||
-    resolveSessionTranscriptPath(params.cronSession.sessionEntry.sessionId, params.agentId);
+    formatSqliteSessionFileMarker({
+      agentId: params.agentId,
+      sessionId: params.cronSession.sessionEntry.sessionId,
+      storePath: params.cronSession.storePath,
+    });
   // Fallback for callers that bypass prepareCronRunContext before persisting retries.
   if (!params.cronSession.sessionEntry.sessionFile?.trim()) {
     params.cronSession.sessionEntry.sessionFile = sessionFile;
@@ -277,6 +282,8 @@ export function createCronPromptExecutor(params: {
     resolveFallbackCronSourceDeliveryPlan(params.job, params.resolvedDelivery);
   const sourceReplyDeliveryMode = sourceDelivery.sourceReplyDeliveryMode;
   const messageChannel = sourceDelivery.target.channel ?? params.resolvedDelivery.channel;
+  // Cron prompts may intentionally have nothing to report; both runners must agree on silence.
+  const allowEmptyAssistantReplyAsSilent = true;
   const deliveryTargetRuntimeContext = buildCronDeliveryTargetRuntimeContext({
     resolvedDeliveryOk: params.resolvedDeliveryOk,
     messageToolPromptEnabled: params.messageToolPromptEnabled,
@@ -300,10 +307,11 @@ export function createCronPromptExecutor(params: {
         : createUserTurnTranscriptRecorder({
             input: { text: promptText },
             target: {
-              transcriptPath: sessionFile,
               sessionId: params.cronSession.sessionEntry.sessionId,
               agentId: params.agentId,
               sessionKey: params.runSessionKey,
+              sessionEntry: params.cronSession.sessionEntry,
+              storePath: params.cronSession.storePath,
               cwd: params.workspaceDir,
               config: params.cfgWithAgentDefaults,
             },
@@ -414,18 +422,20 @@ export function createCronPromptExecutor(params: {
             agentId: params.agentId,
             trigger: "cron",
             jobId: params.job.id,
-            cleanupCliLiveSessionOnRunEnd: params.job.sessionTarget === "isolated",
+            cleanupCliLiveSessionOnRunEnd: params.usesDetachedRunSession === true,
             sessionFile,
             workspaceDir: params.workspaceDir,
             config: params.cfgWithAgentDefaults,
             prompt: modelPrompt,
             transcriptPrompt: deliveryTargetRuntimeContext ? promptText : undefined,
+            modelProvider: providerOverride,
             provider: executionProvider,
             model: modelOverride,
             thinkLevel: candidateThinkLevel,
             timeoutMs: params.timeoutMs,
             runId: params.cronSession.sessionEntry.sessionId,
             lane: resolveCronAgentLane(params.lane),
+            allowEmptyAssistantReplyAsSilent,
             cliSessionId: cliSessionBinding?.sessionId,
             cliSessionBinding: guardedCliSessionBinding,
             skillsSnapshot: params.skillsSnapshot,
@@ -481,7 +491,7 @@ export function createCronPromptExecutor(params: {
           agentId: params.agentId,
           trigger: "cron",
           jobId: params.job.id,
-          cleanupBundleMcpOnRunEnd: params.job.sessionTarget === "isolated",
+          cleanupBundleMcpOnRunEnd: params.usesDetachedRunSession === true,
           allowGatewaySubagentBinding: true,
           messageChannel,
           agentAccountId: params.resolvedDelivery.accountId,
@@ -540,6 +550,7 @@ export function createCronPromptExecutor(params: {
             : undefined,
           sourceReplyDeliveryMode,
           runId: params.cronSession.sessionEntry.sessionId,
+          allowEmptyAssistantReplyAsSilent,
           requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
           disableMessageTool: !sourceDelivery.messageTool.enabled,
           forceMessageTool: sourceDelivery.messageTool.force,
@@ -593,6 +604,7 @@ export async function executeCronRun(params: {
   agentDir: string;
   agentSessionKey: string;
   runSessionKey: string;
+  usesDetachedRunSession?: boolean;
   workspaceDir: string;
   lane?: string;
   resolvedDelivery: {
@@ -660,6 +672,7 @@ export async function executeCronRun(params: {
     agentDir: params.agentDir,
     agentSessionKey: params.agentSessionKey,
     runSessionKey: params.runSessionKey,
+    usesDetachedRunSession: params.usesDetachedRunSession,
     workspaceDir: params.workspaceDir,
     lane: params.lane,
     resolvedVerboseLevel,

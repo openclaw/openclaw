@@ -54,7 +54,7 @@ export const ChatToolTitlesParamsSchema = Type.Object(
     items: Type.Array(
       Type.Object(
         {
-          id: NonEmptyString,
+          id: Type.String({ minLength: 1, maxLength: 64 }),
           name: Type.String({ minLength: 1, maxLength: 200 }),
           input: Type.String({ minLength: 1, maxLength: 4_000 }),
         },
@@ -66,10 +66,15 @@ export const ChatToolTitlesParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
-/** Titles keyed by the caller-provided item id; missing ids mean no title. */
+/**
+ * Titles keyed by the caller-provided item id; missing ids mean no title.
+ * `disabled: true` tells clients the gateway has tool titles switched off so
+ * they stop requesting for the rest of the session.
+ */
 export const ChatToolTitlesResultSchema = Type.Object(
   {
     titles: Type.Record(Type.String(), Type.String()),
+    disabled: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );
@@ -230,3 +235,13 @@ export const ChatEventSchema = Type.Union([
   ChatAbortedEventSchema,
   ChatErrorEventSchema,
 ]);
+
+// Wire types derive directly from local schema consts so public d.ts graphs never
+// pull in the ProtocolSchemas registry.
+export type ChatMetadataParams = Static<typeof ChatMetadataParamsSchema>;
+export type ChatToolTitlesParams = Static<typeof ChatToolTitlesParamsSchema>;
+export type LogsTailParams = Static<typeof LogsTailParamsSchema>;
+export type LogsTailResult = Static<typeof LogsTailResultSchema>;
+export type ChatAbortParams = Static<typeof ChatAbortParamsSchema>;
+export type ChatInjectParams = Static<typeof ChatInjectParamsSchema>;
+export type ChatEvent = Static<typeof ChatEventSchema>;

@@ -476,9 +476,7 @@ final class TalkModeManager: NSObject {
     func updateMainSessionKey(_ sessionKey: String?) -> Bool {
         let trimmed = (sessionKey ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
-        if trimmed == self.mainSessionKey {
-            return false
-        }
+        if trimmed == self.mainSessionKey { return false }
         let shouldRestartTalk = self.isEnabled &&
             (self.hasRealtimeOwnerOrStart || self.hasContinuousTalkOwner)
         if let captureId = self.activePTTCaptureId {
@@ -837,9 +835,7 @@ final class TalkModeManager: NSObject {
     func resumeAfterBackground(wasKeptActive: Bool = false) {
         self.foregroundPushToTalkAllowed = true
         self.foregroundAudioCaptureAllowed = true
-        if wasKeptActive, self.hasContinuousTalkOwner {
-            return
-        }
+        if wasKeptActive, self.hasContinuousTalkOwner { return }
         guard self.isEnabled else { return }
         Task { @MainActor [weak self] in
             await self?.start()
@@ -1486,9 +1482,7 @@ final class TalkModeManager: NSObject {
     private func restartRecognitionAfterError(expectedGeneration: UInt64) async {
         guard self.canRestartNativeRecognition(expectedGeneration: expectedGeneration) else { return }
         // Avoid thrashing the audio engine if it’s already running.
-        if self.recognitionTask != nil, self.audioEngine.isRunning {
-            return
-        }
+        if self.recognitionTask != nil, self.audioEngine.isRunning { return }
         try? await Task.sleep(nanoseconds: 250_000_000)
         guard self.canRestartNativeRecognition(expectedGeneration: expectedGeneration) else { return }
         do {
@@ -1625,9 +1619,7 @@ final class TalkModeManager: NSObject {
             guard !transcript.isEmpty else { return }
             let lastActivity = [lastHeard, lastAudioActivity].compactMap(\.self).max()
             guard let lastActivity else { return }
-            if Date().timeIntervalSince(lastActivity) < self.silenceWindow {
-                return
-            }
+            if Date().timeIntervalSince(lastActivity) < self.silenceWindow { return }
             await self.processTranscript(transcript, restartAfter: true)
             return
         }
@@ -1641,9 +1633,7 @@ final class TalkModeManager: NSObject {
         guard !transcript.isEmpty else { return }
         let lastActivity = [lastHeard, lastAudioActivity].compactMap(\.self).max()
         guard let lastActivity else { return }
-        if Date().timeIntervalSince(lastActivity) < self.silenceWindow {
-            return
-        }
+        if Date().timeIntervalSince(lastActivity) < self.silenceWindow { return }
         if let pttCaptureId {
             _ = self.endPushToTalk(captureId: pttCaptureId)
         } else {
@@ -2416,9 +2406,7 @@ final class TalkModeManager: NSObject {
             guard let content = msg["content"] as? [[String: Any]] else { continue }
             let text = content.compactMap { $0["text"] as? String }.joined(separator: "\n")
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty {
-                return trimmed
-            }
+            if !trimmed.isEmpty { return trimmed }
         }
         return nil
     }
@@ -3463,9 +3451,7 @@ extension TalkModeManager {
         let trimmed = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         let normalized = trimmed.lowercased()
-        if let mapped = voiceAliases[normalized] {
-            return mapped
-        }
+        if let mapped = voiceAliases[normalized] { return mapped }
         if self.voiceAliases.values.contains(where: { $0.caseInsensitiveCompare(trimmed) == .orderedSame }) {
             return trimmed
         }
@@ -3484,14 +3470,10 @@ extension TalkModeManager {
             if Self.isLikelyVoiceId(trimmed) {
                 return trimmed
             }
-            if let resolved = resolveVoiceAlias(trimmed) {
-                return resolved
-            }
+            if let resolved = resolveVoiceAlias(trimmed) { return resolved }
             self.logger.warning("unknown voice alias \(trimmed, privacy: .public)")
         }
-        if let fallbackVoiceId {
-            return fallbackVoiceId
-        }
+        if let fallbackVoiceId { return fallbackVoiceId }
 
         do {
             let voices = try await ElevenLabsTTSClient(apiKey: apiKey).listVoices()
@@ -3527,9 +3509,7 @@ extension TalkModeManager {
         guard !trimmed.isEmpty else { return nil }
         guard trimmed != Self.redactedConfigSentinel else { return nil }
         // Config values may be env placeholders (for example `${ELEVENLABS_API_KEY}`).
-        if trimmed.hasPrefix("${"), trimmed.hasSuffix("}") {
-            return nil
-        }
+        if trimmed.hasPrefix("${"), trimmed.hasSuffix("}") { return nil }
         return trimmed
     }
 
@@ -4096,7 +4076,6 @@ private final class AudioTapDiagnostics: @unchecked Sendable {
     private var lastLoggedAt = Date.distantPast
     private var lastLevelEmitAt = Date.distantPast
     private var maxRmsWindow: Float = 0
-    private var lastRms: Float = 0
 
     init(label: String, onLevel: (@Sendable (Float) -> Void)? = nil) {
         self.label = label
@@ -4127,14 +4106,9 @@ private final class AudioTapDiagnostics: @unchecked Sendable {
 
         let resolvedRms = Float(TalkAudioLevel.rms(buffer: buffer))
         self.lock.lock()
-        self.lastRms = resolvedRms
-        if resolvedRms > self.maxRmsWindow {
-            self.maxRmsWindow = resolvedRms
-        }
+        if resolvedRms > self.maxRmsWindow { self.maxRmsWindow = resolvedRms }
         let maxRms = self.maxRmsWindow
-        if shouldLog {
-            self.maxRmsWindow = 0
-        }
+        if shouldLog { self.maxRmsWindow = 0 }
         self.lock.unlock()
 
         if shouldEmitLevel, let onLevel {

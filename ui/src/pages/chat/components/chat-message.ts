@@ -39,7 +39,7 @@ import {
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
 import { resolveUiHourCycleOptions } from "../../../lib/format.ts";
-import { formatCompactTokenCount } from "../../../lib/format.ts";
+import { formatCompactTokenCount, formatTimeAgo } from "../../../lib/format.ts";
 import "../../../components/tooltip.ts";
 import { getMediaFileExtension } from "../../../lib/media-file-extension.ts";
 import { openExternalUrlSafe } from "../../../lib/open-external-url.ts";
@@ -94,8 +94,8 @@ export function formatChatTimestampForDisplay(timestamp: number): ChatTimestampD
   const date = new Date(timestamp);
   if (!Number.isFinite(date.getTime())) {
     return {
-      label: "Unknown date",
-      title: "Unknown date",
+      label: t("chat.messages.unknownDate"),
+      title: t("chat.messages.unknownDate"),
       dateTime: "",
     };
   }
@@ -109,6 +109,7 @@ export function formatChatTimestampForDisplay(timestamp: number): ChatTimestampD
       year: "numeric",
       hour: "numeric",
       minute: "2-digit",
+      timeZoneName: "short",
     }),
     title: date.toLocaleString([], {
       ...hourCycle,
@@ -125,17 +126,46 @@ export function formatChatTimestampForDisplay(timestamp: number): ChatTimestampD
   };
 }
 
+const CHAT_RELATIVE_TIMESTAMP_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const CHAT_RELATIVE_TIMESTAMP_FUTURE_SKEW_MS = 2 * 60 * 1000;
+
+/** Footer label: relative for recent messages, compact date beyond a week. */
+export function formatChatRelativeTimestampLabel(timestamp: number, nowMs = Date.now()): string {
+  const date = new Date(timestamp);
+  if (!Number.isFinite(date.getTime())) {
+    return t("chat.messages.unknownDate");
+  }
+  const ageMs = nowMs - date.getTime();
+  // Derive from ageMs so the injected clock stays the single time source.
+  // Slightly-future (clock-skewed) messages clamp to "just now"; anything
+  // further out falls through to the compact date instead of lying forever.
+  if (
+    ageMs >= -CHAT_RELATIVE_TIMESTAMP_FUTURE_SKEW_MS &&
+    ageMs < CHAT_RELATIVE_TIMESTAMP_MAX_AGE_MS
+  ) {
+    return formatTimeAgo(Math.max(0, ageMs));
+  }
+  return date.toLocaleDateString([], {
+    month: "short",
+    day: "numeric",
+    ...(date.getFullYear() === new Date(nowMs).getFullYear() ? {} : { year: "numeric" }),
+  });
+}
+
+// Footer times read relative ("5m ago"); the absolute timestamp lives in the
+// tooltip, or in the msg-meta popover when usage metadata makes the
+// timestamp interactive (a nested tooltip would fight the popover).
 function renderChatTimestamp(timestamp: number, interactive = false) {
   const display = formatChatTimestampForDisplay(timestamp);
-  return html`
-    <time
-      class="chat-group-timestamp"
-      datetime=${display.dateTime}
-      title=${interactive ? nothing : display.title}
-    >
-      ${display.label}
+  const timeEl = html`
+    <time class="chat-group-timestamp" datetime=${display.dateTime} aria-live="off">
+      ${formatChatRelativeTimestampLabel(timestamp)}
     </time>
   `;
+  if (interactive) {
+    return timeEl;
+  }
+  return html`<openclaw-tooltip content=${display.label}>${timeEl}</openclaw-tooltip>`;
 }
 
 function resolveMessageMetaDetails(target: EventTarget | null): HTMLDetailsElement | null {
@@ -550,10 +580,11 @@ type StreamGroupOptions = {
 };
 
 function renderReadingIndicatorBubble() {
+  // Working claw: the brand pincer rests slightly open where the reply will
+  // materialize and pinches once per cycle (same gesture as the favicon
+  // mascot snap). aria-hidden; the composer sr-only run-status announces.
   return html`
-    <div class="chat-bubble chat-reading-indicator" aria-hidden="true">
-      <span class="chat-reading-indicator__dots"> <span></span><span></span><span></span> </span>
-    </div>
+    <div class="chat-bubble chat-reading-indicator" aria-hidden="true">${icons.claw}</div>
   `;
 }
 
@@ -589,8 +620,10 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
         ${footerStartedAt !== null
           ? html`
               <div class="chat-group-footer">
-                <span class="chat-sender-name">${name}</span>
-                ${renderChatTimestamp(footerStartedAt)}
+                <div class="chat-group-footer__meta">
+                  <span class="chat-sender-name">${name}</span>
+                  ${renderChatTimestamp(footerStartedAt)}
+                </div>
               </div>
             `
           : nothing}
@@ -601,6 +634,7 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
 
 type RenderMessageGroupOptions = {
   onOpenSidebar?: (content: SidebarContent) => void;
+  onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
   sessionKey?: string;
   agentId?: string;
   showReasoning: boolean;
@@ -639,6 +673,7 @@ function buildGroupedMessageRenderOptions(
     isStreaming: group.isStreaming && index === group.messages.length - 1,
     sessionKey: opts.sessionKey,
     agentId: opts.agentId,
+    onOpenWorkspaceFile: opts.onOpenWorkspaceFile,
     duplicateCount: item.duplicateCount ?? 1,
     showReasoning: opts.showReasoning,
     showToolCalls: opts.showToolCalls ?? true,
@@ -692,8 +727,13 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
     return nothing;
   }
 
-  if (normalizedRole === "tool" && group.messages.length > 1) {
-    const cards = group.messages.flatMap((item) => extractToolCardsCached(item.message, item.key));
+  const groupedToolCards =
+    normalizedRole === "tool"
+      ? group.messages.flatMap((item) => extractToolCardsCached(item.message, item.key))
+      : [];
+
+  if (normalizedRole === "tool" && (group.messages.length > 1 || groupedToolCards.length > 1)) {
+    const cards = groupedToolCards;
     const toolCount = cards.length || group.messages.length;
     const hasError = cards.some(isToolCardError) && group.turnSucceeded !== true;
     // While a run is live, the newest still-running call names the group so
@@ -702,12 +742,12 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
       ? cards.findLast((card) => isRunningToolCard(card, opts.runActive))
       : undefined;
     const groupSummaryLabel = runningCard
-      ? `${resolveToolRowText(runningCard)}…`
+      ? `${resolveToolRowText(runningCard, opts.runActive)}…`
       : summarizeToolGroup(
           cards.map((card) => ({
             name: card.name,
             args: card.args,
-            isError: isToolCardError(card) && group.turnSucceeded !== true,
+            isError: isToolCardError(card),
           })),
         );
     const activityDisclosureId = `activity:${group.key}`;
@@ -737,7 +777,12 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
               type="button"
               aria-expanded=${String(activityExpanded)}
               aria-label=${hasError
-                ? `Activity: ${toolCount} tool${toolCount === 1 ? "" : "s"}, includes errors.`
+                ? t(
+                    toolCount === 1
+                      ? "chat.toolCards.group.activityErrorOne"
+                      : "chat.toolCards.group.activityErrorMany",
+                    { count: String(toolCount) },
+                  )
                 : nothing}
               @click=${(event: MouseEvent) => {
                 if (shouldToggleSelectableDisclosure(event)) {
@@ -746,9 +791,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
               }}
             >
               <span class="chat-activity-group__icon">${hasError ? icons.x : icons.activity}</span>
-              <span
-                class="chat-activity-group__label"
-                title=${`${toolCount} tool call${toolCount === 1 ? "" : "s"}`}
+              <span class="chat-activity-group__label" title=${groupSummaryLabel}
                 >${groupSummaryLabel}</span
               >
               <span
@@ -773,7 +816,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
               : nothing}
           </div>
           <div class="chat-group-footer">
-            <span class="chat-sender-name">Activity</span>
+            <span class="chat-sender-name">${t("chat.messages.activity")}</span>
             ${renderChatTimestamp(group.timestamp)}
             ${opts.onDelete ? renderDeleteButton(opts.onDelete, "right") : nothing}
           </div>
@@ -967,6 +1010,8 @@ function renderMessageMeta(timestamp: number, meta: GroupMeta | null) {
   }
 
   const display = formatChatTimestampForDisplay(timestamp);
+  // Absolute time leads the popover; the summary label itself stays relative.
+  parts.unshift(html`<span class="msg-meta__time">${display.label}</span>`);
 
   return html`
     <details
@@ -1073,10 +1118,10 @@ function placeDeleteConfirmPopover(
 function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
   return html`
     <span class="chat-delete-wrap">
-      <openclaw-tooltip content="Delete">
+      <openclaw-tooltip .content=${t("common.delete")}>
         <button
           class="chat-group-delete"
-          aria-label="Delete message"
+          aria-label=${t("chat.messages.deleteMessage")}
           @click=${(e: Event) => {
             if (shouldSkipDeleteConfirm()) {
               onDelete();
@@ -1707,7 +1752,9 @@ function renderAssistantAttachments(
                       >${availability.status === "checking" ? "Checking..." : "Unavailable"}</span
                     >`
                   : attachment.isVoiceNote
-                    ? html`<span class="chat-assistant-attachment-badge">Voice note</span>`
+                    ? html`<span class="chat-assistant-attachment-badge"
+                        >${t("chat.messages.voiceNote")}</span
+                      >`
                     : nothing}
               </div>
               ${attachmentUrl
@@ -1784,9 +1831,9 @@ function renderInlineToolCards(
     sessionKey?: string;
     agentId?: string;
     onOpenSidebar?: (content: SidebarContent) => void;
+    onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
     isToolExpanded?: (toolCardId: string) => boolean;
     onToggleToolExpanded?: (toolCardId: string) => void;
-    turnSucceeded?: boolean;
     runActive?: boolean;
     canvasPluginSurfaceUrl?: string | null;
     embedSandboxMode?: EmbedSandboxMode;
@@ -1798,7 +1845,6 @@ function renderInlineToolCards(
       ${toolCards.map((card, index) =>
         renderToolCard(card, {
           expanded: opts.isToolExpanded?.(`${opts.messageKey}:toolcard:${index}`) ?? false,
-          turnSucceeded: opts.turnSucceeded,
           runActive: opts.runActive,
           onToggleExpanded: opts.onToggleToolExpanded
             ? () => opts.onToggleToolExpanded?.(`${opts.messageKey}:toolcard:${index}`)
@@ -1806,6 +1852,7 @@ function renderInlineToolCards(
           sessionKey: opts.sessionKey,
           agentId: opts.agentId,
           onOpenSidebar: opts.onOpenSidebar,
+          onOpenWorkspaceFile: opts.onOpenWorkspaceFile,
           canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
           embedSandboxMode: opts.embedSandboxMode ?? "scripts",
           allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
@@ -1873,11 +1920,11 @@ function renderExpandButton(
   },
 ) {
   return html`
-    <openclaw-tooltip content="Open in canvas">
+    <openclaw-tooltip .content=${t("chat.messages.openInCanvas")}>
       <button
         class="btn btn--xs chat-expand-btn"
         type="button"
-        aria-label="Open in canvas"
+        aria-label=${t("chat.messages.openInCanvas")}
         @click=${() =>
           onOpenSidebar({
             kind: "markdown",
@@ -2000,6 +2047,7 @@ function renderGroupedMessage(
     onAssistantAttachmentLoaded?: () => void;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
+    onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
   },
   onOpenSidebar?: (content: SidebarContent) => void,
 ) {
@@ -2102,10 +2150,10 @@ function renderGroupedMessage(
         : `${toolNames.slice(0, 2).join(", ")} +${toolNames.length - 2} more`;
   const toolPreview = markdown ? (formatCollapsedToolPreviewText(markdown) ?? "") : "";
   const toolMessageLabelRaw = toolMessageHasError
-    ? "Tool error"
+    ? t("chat.toolCards.toolError")
     : singleToolDisplay && !markdown && !hasImages
       ? singleToolDisplay.label
-      : "Tool output";
+      : t("chat.toolCards.toolOutput");
   const toolMessageLabel =
     formatCollapsedToolSummaryText(toolMessageLabelRaw) ?? toolMessageLabelRaw;
   const toolSummaryLabel = formatDistinctCollapsedToolSummaryText(
@@ -2121,6 +2169,7 @@ function renderGroupedMessage(
             rawText: block.rawText ?? null,
             canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
             embedSandboxMode: opts.embedSandboxMode ?? "scripts",
+            sessionKey: opts.sessionKey,
           })}
           ${block.rawText ? renderRawOutputToggle(block.rawText) : nothing}`,
         )}`
@@ -2153,9 +2202,9 @@ function renderGroupedMessage(
           sessionKey: opts.sessionKey,
           agentId: opts.agentId,
           onOpenSidebar,
+          onOpenWorkspaceFile: opts.onOpenWorkspaceFile,
           isToolExpanded: opts.isToolExpanded,
           onToggleToolExpanded: opts.onToggleToolExpanded,
-          turnSucceeded: opts.turnSucceeded,
           runActive: opts.runActive,
           canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
           embedSandboxMode: opts.embedSandboxMode ?? "scripts",
@@ -2251,15 +2300,17 @@ function renderGroupedMessage(
                               opts.canvasPluginSurfaceUrl,
                               opts.embedSandboxMode ?? "scripts",
                               opts.allowExternalEmbedUrls ?? false,
+                              opts.runActive,
+                              opts.onOpenWorkspaceFile,
                             )
                           : renderInlineToolCards(toolCards, {
                               messageKey,
                               sessionKey: opts.sessionKey,
                               agentId: opts.agentId,
                               onOpenSidebar,
+                              onOpenWorkspaceFile: opts.onOpenWorkspaceFile,
                               isToolExpanded: opts.isToolExpanded,
                               onToggleToolExpanded: opts.onToggleToolExpanded,
-                              turnSucceeded: opts.turnSucceeded,
                               runActive: opts.runActive,
                               canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
                               embedSandboxMode: opts.embedSandboxMode ?? "scripts",
@@ -2305,9 +2356,9 @@ function renderGroupedMessage(
                   sessionKey: opts.sessionKey,
                   agentId: opts.agentId,
                   onOpenSidebar,
+                  onOpenWorkspaceFile: opts.onOpenWorkspaceFile,
                   isToolExpanded: opts.isToolExpanded,
                   onToggleToolExpanded: opts.onToggleToolExpanded,
-                  turnSucceeded: opts.turnSucceeded,
                   runActive: opts.runActive,
                   canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
                   embedSandboxMode: opts.embedSandboxMode ?? "scripts",

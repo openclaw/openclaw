@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import { request } from "node:http";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -183,7 +184,7 @@ function formatModeErrorList(modes: readonly string[]): string {
     return "";
   }
   if (quoted.length === 1) {
-    return quoted[0];
+    return expectDefined(quoted[0], "quoted entry at 0");
   }
   if (quoted.length === 2) {
     return `${quoted[0]} or ${quoted[1]}`;
@@ -200,28 +201,6 @@ function shouldBlockGatewayBindWithoutExplicitAuth(params: {
     !isLoopbackHost(params.bindHost) &&
     !params.hasSharedSecret &&
     params.resolvedAuthMode !== "trusted-proxy"
-  );
-}
-
-async function maybeLogPendingControlUiBuild(cfg: OpenClawConfig): Promise<void> {
-  if (cfg.gateway?.controlUi?.enabled === false) {
-    return;
-  }
-  if (toOptionString(cfg.gateway?.controlUi?.root)) {
-    return;
-  }
-  const { resolveControlUiRootSync } = await import("../../infra/control-ui-assets.js");
-  if (
-    resolveControlUiRootSync({
-      moduleUrl: import.meta.url,
-      argv1: process.argv[1],
-      cwd: process.cwd(),
-    })
-  ) {
-    return;
-  }
-  gatewayLog.info(
-    "Control UI assets are missing; first startup may spend a few seconds building them before the gateway binds. `pnpm gateway:watch` does not rebuild Control UI assets, so rerun `pnpm ui:build` after UI changes or use `pnpm ui:dev` while developing the Control UI. For a full local dist, run `pnpm build && pnpm ui:build`.",
   );
 }
 
@@ -709,9 +688,6 @@ export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunR
     process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV] = String(process.pid);
   }
   await hooks.refreshManagedProxy?.(cfg.proxy);
-  void maybeLogPendingControlUiBuild(cfg).catch((err: unknown) => {
-    gatewayLog.warn(`Control UI asset check failed: ${String(err)}`);
-  });
   const portOverride = parsePort(opts.port);
   if (opts.port !== undefined && portOverride === null) {
     defaultRuntime.error(formatInvalidPortOption("--port"));
@@ -757,7 +733,8 @@ export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunR
         sigtermTimeoutMs: 700,
       });
       if (killed.length === 0) {
-        gatewayLog.info(`force: no listeners on port ${port}`);
+        // Nothing was freed; keep the no-op out of normal startup output.
+        gatewayLog.debug(`force: no listeners on port ${port}`);
       } else {
         for (const proc of killed) {
           gatewayLog.info(

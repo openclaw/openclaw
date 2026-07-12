@@ -56,11 +56,25 @@ disappears after reload.
 
 ## Surface behavior
 
-| Surface           | Behavior                                                                                                                                                |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| TUI               | Rendered inline in the chat log, visibly distinct from a normal reply, dismissible with `Enter` or `Esc`.                                               |
-| External channels | Delivered as a clearly labeled one-off reply (Telegram, WhatsApp, Discord have no local ephemeral overlay).                                             |
-| Control UI / web  | Gateway emits `chat.side_result` correctly and it is excluded from `chat.history`, but Control UI has no consumer yet to render it live in the browser. |
+| Surface           | Behavior                                                                                                                                                                                                                                                                            |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| TUI               | Rendered inline in the chat log, visibly distinct from a normal reply, dismissible with `Enter` or `Esc`.                                                                                                                                                                           |
+| External channels | Delivered as a clearly labeled one-off reply (Telegram, WhatsApp, Discord have no local ephemeral overlay).                                                                                                                                                                         |
+| Control UI / web  | Rendered as a floating "Side chat" panel pinned to the thread. Answers accumulate as turns and a "Follow up" input asks the next side question. Close (`Esc` or the X) keeps the conversation and reopens on the next answer; the trash button discards it and stops a pending run. |
+
+## Selection popup (Control UI)
+
+Highlighting text inside a chat message in the Control UI opens a small
+selection popup with two actions:
+
+- **More details** immediately sends an implicit `/btw` question asking the
+  model to explain the highlighted text in the context of the current
+  session. The answer arrives in the floating side chat panel.
+- **Ask in side chat** pre-fills the composer with a `/btw` draft quoting the
+  highlighted text so you can type your own question about it.
+
+Both actions follow normal `/btw` semantics: the question and answer stay out
+of session history and the main run is left untouched.
 
 ## When to use it
 

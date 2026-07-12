@@ -10,7 +10,6 @@ struct MenuContent: View {
     @Bindable var state: AppState
     let updater: UpdaterProviding?
     @Bindable private var updateStatus: UpdateStatus
-    private let gatewayManager = GatewayProcessManager.shared
     private let healthStore = HealthStore.shared
     private let heartbeatStore = HeartbeatStore.shared
     private let controlChannel = ControlChannel.shared
@@ -36,7 +35,7 @@ struct MenuContent: View {
     private var execApprovalModeBinding: Binding<ExecApprovalQuickMode> {
         Binding(
             get: { self.state.execApprovalMode },
-            set: { self.state.execApprovalMode = $0 })
+            set: { self.state.updateExecApprovalMode($0) })
     }
 
     var body: some View {
@@ -82,12 +81,34 @@ struct MenuContent: View {
             Toggle(isOn: self.$cameraEnabled) {
                 Label("Allow Camera", systemImage: "camera")
             }
-            Picker(selection: self.execApprovalModeBinding) {
-                ForEach(ExecApprovalQuickMode.allCases) { mode in
-                    Text(mode.title).tag(mode)
+            switch self.state.execApprovalPolicyLoadState {
+            case .available:
+                Picker(selection: self.execApprovalModeBinding) {
+                    ForEach(ExecApprovalQuickMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                } label: {
+                    Label("Exec Approvals", systemImage: "terminal")
                 }
-            } label: {
-                Label("Exec Approvals", systemImage: "terminal")
+            case .loading:
+                Label("Loading Exec Approvals…", systemImage: "terminal")
+                    .foregroundStyle(.secondary)
+            case .unavailable:
+                Button {
+                    self.state.retryExecApprovalModeRead()
+                } label: {
+                    Label("Retry Exec Approvals", systemImage: "arrow.clockwise")
+                }
+            }
+            if let error = self.state.execApprovalLoadError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+            if let error = self.state.execApprovalMutationError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
             }
             Toggle(isOn: Binding(get: { self.state.canvasEnabled }, set: { self.state.canvasEnabled = $0 })) {
                 Label("Allow Canvas", systemImage: "rectangle.and.pencil.and.ellipsis")

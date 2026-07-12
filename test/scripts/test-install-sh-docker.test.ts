@@ -33,7 +33,8 @@ const NONROOT_RUNNER_PATH = "scripts/docker/install-sh-nonroot/run.sh";
 const BUN_GLOBAL_SMOKE_PATH = "scripts/e2e/bun-global-install-smoke.sh";
 const BUN_GLOBAL_ASSERTIONS_PATH = "scripts/e2e/lib/bun-global-install/assertions.mjs";
 const DOCKER_E2E_PACKAGE_HELPER_PATH = "scripts/lib/docker-e2e-package.sh";
-const INSTALL_SMOKE_WORKFLOW_PATH = ".github/workflows/install-smoke.yml";
+const INSTALL_SMOKE_WORKFLOW_PATH = ".github/workflows/install-smoke-reusable.yml";
+const INSTALL_SMOKE_WRAPPER_PATH = ".github/workflows/install-smoke.yml";
 const RELEASE_CHECKS_WORKFLOW_PATH = ".github/workflows/openclaw-release-checks.yml";
 const LIVE_E2E_WORKFLOW_PATH = ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml";
 const tempDirs = createTempDirTracker();
@@ -871,6 +872,12 @@ printf 'status=%s\\n' "$status"
     const script = readFileSync(SCRIPT_PATH, "utf8");
 
     expect(script).toContain('node "$HARNESS_ROOT/scripts/package-openclaw-for-docker.mjs"');
+    expect(script).toContain("--allow-unreleased-changelog");
+    expect(script).toContain("OPENCLAW_INSTALL_SMOKE_ALLOW_UNRELEASED_CHANGELOG");
+    expect(script).toContain(
+      'if [[ "${OPENCLAW_INSTALL_SMOKE_ALLOW_UNRELEASED_CHANGELOG:-true}" == "true" ]]',
+    );
+    expect(script).toContain("package_args+=(--allow-unreleased-changelog)");
     expect(script).toContain('--source-dir "$ROOT_DIR"');
     expect(script).toContain('--pack-json "$pack_json_file"');
     expect(script).toContain("--skip-build");
@@ -1170,6 +1177,12 @@ describe("bun global install smoke", () => {
     const packageHelper = readFileSync(DOCKER_E2E_PACKAGE_HELPER_PATH, "utf8");
 
     expect(script).toContain("node scripts/package-openclaw-for-docker.mjs");
+    expect(script).toContain("--allow-unreleased-changelog");
+    expect(script).toContain("OPENCLAW_BUN_GLOBAL_SMOKE_ALLOW_UNRELEASED_CHANGELOG");
+    expect(script).toContain(
+      'if [[ "${OPENCLAW_BUN_GLOBAL_SMOKE_ALLOW_UNRELEASED_CHANGELOG:-true}" == "true" ]]',
+    );
+    expect(script).toContain("package_args+=(--allow-unreleased-changelog)");
     expect(script).toContain("--skip-build");
     expect(script).toContain("--output-name openclaw-current.tgz");
     expect(script).not.toContain("npm pack --ignore-scripts --json --pack-destination");
@@ -1470,12 +1483,20 @@ chmod +x "$BUN_INSTALL/bin/openclaw"
 
   it("gates workflow Bun install smoke to scheduled and release-check runs", () => {
     const workflow = readFileSync(INSTALL_SMOKE_WORKFLOW_PATH, "utf8");
+    const wrapper = readFileSync(INSTALL_SMOKE_WRAPPER_PATH, "utf8");
     const releaseChecks = readFileSync(RELEASE_CHECKS_WORKFLOW_PATH, "utf8");
 
     expect(workflow).not.toContain("pull_request:");
     expect(workflow).not.toContain("branches: [main]");
     expect(workflow).toContain("workflow_call:");
-    expect(workflow).toContain('cron: "17 3 * * *"');
+    expect(workflow).not.toContain("workflow_dispatch:");
+    expect(workflow).not.toContain("schedule:");
+    expect(wrapper).toContain('cron: "17 3 * * *"');
+    expect(wrapper).toContain("workflow_dispatch:");
+    expect(wrapper).toContain("uses: ./.github/workflows/install-smoke-reusable.yml");
+    expect(wrapper).toContain(
+      "github.event_name == 'schedule' || inputs.run_bun_global_install_smoke",
+    );
     expect(workflow).toContain("run_bun_global_install_smoke:");
     expect(workflow).toContain(
       "if: needs.preflight.outputs.run_full_install_smoke == 'true' && needs.preflight.outputs.run_bun_global_install_smoke == 'true'",
@@ -1489,20 +1510,17 @@ chmod +x "$BUN_INSTALL/bin/openclaw"
     expect(workflow).toContain(
       "OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE: ${{ needs.root_dockerfile_image.outputs.image_ref }}",
     );
-    expect(workflow).toContain(
-      "github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'",
-    );
-    expect(workflow).toContain(
-      "format('{0}-{1}-{2}', github.workflow, github.event_name, github.run_id)",
-    );
-    expect(workflow).toContain("cancel-in-progress: ${{ github.event_name != 'workflow_call' }}");
+    expect(workflow).toContain("group: ${{ github.workflow }}-workflow-call-${{ github.run_id }}");
+    expect(workflow).toContain("cancel-in-progress: false");
     expect(workflow).not.toContain(
       "github.event_name == 'workflow_call' || github.event_name == 'push'",
     );
     expect(workflow).not.toContain("github.event_name == 'pull_request'");
     expect(workflow).not.toContain("node scripts/ci-changed-scope.mjs");
     expect(workflow).toContain("OPENCLAW_CI_WORKFLOW_BUN_GLOBAL_INSTALL_SMOKE");
-    expect(workflow).toContain('if [ "$event_name" = "schedule" ]; then');
+    expect(workflow).toContain('run_bun_global_install_smoke="$workflow_bun_global_install_smoke"');
+    expect(workflow).not.toContain("OPENCLAW_CI_EVENT_NAME");
+    expect(workflow).not.toContain('if [ "$event_name"');
     expect(workflow).toContain('echo "run_bun_global_install_smoke=$run_bun_global_install_smoke"');
     expect(workflow).toContain("run_fast_install_smoke=true");
     expect(workflow).toContain("run_full_install_smoke=true");
@@ -1511,7 +1529,9 @@ chmod +x "$BUN_INSTALL/bin/openclaw"
     expect(workflow).toContain("run_fast_install_smoke");
     expect(workflow).toContain("run_full_install_smoke");
     expect(workflow).toContain("timeout --kill-after=30s 45m docker buildx build");
-    expect(workflow).toContain('timeout --kill-after=30s 600s docker pull "$IMAGE_REF"');
+    expect(workflow).not.toContain('docker pull "$IMAGE_REF"');
+    expect(workflow).not.toContain("packages: write");
+    expect(workflow).not.toContain("--push");
     expect(workflow).not.toContain('timeout 300s docker pull "$IMAGE_REF"');
     expect(workflow.match(/timeout --kill-after=30s 20m docker run --rm/g)?.length).toBe(6);
     expect(workflow).not.toMatch(/(^|\n)\s+docker run --rm --entrypoint sh/u);
@@ -1535,7 +1555,7 @@ chmod +x "$BUN_INSTALL/bin/openclaw"
     expect(workflow).not.toContain("type=gha");
     expect(workflow).toContain('OPENCLAW_INSTALL_SMOKE_SKIP_NPM_GLOBAL: "1"');
     expect(releaseChecks).toContain("install_smoke_release_checks:");
-    expect(releaseChecks).toContain("uses: ./.github/workflows/install-smoke.yml");
+    expect(releaseChecks).toContain("uses: ./.github/workflows/install-smoke-reusable.yml");
     expect(releaseChecks).toContain("run_bun_global_install_smoke: true");
   });
 
@@ -1568,6 +1588,7 @@ chmod +x "$BUN_INSTALL/bin/openclaw"
       "./.github/actions/setup-node-env",
     );
     expect(step("Run installer docker tests").env).toMatchObject({
+      OPENCLAW_INSTALL_SMOKE_ALLOW_UNRELEASED_CHANGELOG: "${{ inputs.allow_unreleased_changelog }}",
       OPENCLAW_INSTALL_SMOKE_SOURCE_DIR: "${{ github.workspace }}/candidate",
     });
     expect(step("Run installer docker tests").run).toBe("bash scripts/test-install-sh-docker.sh");

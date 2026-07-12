@@ -3,7 +3,10 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  OPENCLAW_STATE_SCHEMA_VERSION,
+} from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import {
@@ -26,13 +29,67 @@ describe("startup migration checkpoint", () => {
     };
 
     expect(readStartupMigrationVersion(env)).toBeNull();
-    expect(needsStartupMigrationCheckpoint({ env, version: "2026.7.1" })).toBe(true);
+    expect(
+      needsStartupMigrationCheckpoint({
+        env,
+        version: "2026.7.1",
+        buildIdentity: "2026-07-11T00:00:00.000Z",
+      }),
+    ).toBe(true);
 
-    recordSuccessfulStartupMigrations({ env, version: "2026.7.1", nowMs: 1234 });
+    recordSuccessfulStartupMigrations({
+      env,
+      version: "2026.7.1",
+      buildIdentity: "2026-07-11T00:00:00.000Z",
+      nowMs: 1234,
+    });
 
     expect(readStartupMigrationVersion(env)).toBe("2026.7.1");
-    expect(needsStartupMigrationCheckpoint({ env, version: "2026.7.1" })).toBe(false);
-    expect(needsStartupMigrationCheckpoint({ env, version: "2026.7.2" })).toBe(true);
+    expect(
+      needsStartupMigrationCheckpoint({
+        env,
+        version: "2026.7.1",
+        buildIdentity: "2026-07-11T00:00:00.000Z",
+      }),
+    ).toBe(false);
+    expect(
+      needsStartupMigrationCheckpoint({
+        env,
+        version: "2026.7.1",
+        buildIdentity: "2026-07-11T00:01:00.000Z",
+      }),
+    ).toBe(true);
+    expect(
+      needsStartupMigrationCheckpoint({
+        env,
+        version: "2026.7.2",
+        buildIdentity: "2026-07-11T00:00:00.000Z",
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps the fast path disabled without immutable build provenance", () => {
+    const env = {
+      OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-"),
+    };
+
+    recordSuccessfulStartupMigrations({
+      env,
+      version: "2026.7.1",
+      buildIdentity: null,
+      nowMs: 1234,
+    });
+
+    expect(needsStartupMigrationCheckpoint({ env, version: "2026.7.1", buildIdentity: null })).toBe(
+      true,
+    );
+    expect(
+      needsStartupMigrationCheckpoint({
+        env,
+        version: "2026.7.1",
+        buildIdentity: "2026-07-11T00:00:00.000Z",
+      }),
+    ).toBe(true);
   });
 
   it("serializes startup migrations with an expiring shared-state lease", () => {
@@ -118,11 +175,11 @@ describe("startup migration checkpoint", () => {
     const dbPath = resolveOpenClawStateSqlitePath(env);
     mkdirSync(path.dirname(dbPath), { recursive: true });
     const db = new sqlite.DatabaseSync(dbPath);
-    db.exec("PRAGMA user_version = 2;");
+    db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};`);
     db.close();
 
     expect(() => acquireStartupMigrationLease({ env, nowMs: 1000, owner: "first" })).toThrow(
-      "newer schema version 2",
+      `newer schema version ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`,
     );
 
     const verify = new sqlite.DatabaseSync(dbPath, { readOnly: true });

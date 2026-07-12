@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 /**
  * Shared queue overflow, debounce, and collection helpers.
  *
@@ -135,23 +136,23 @@ export function applyQueueDropPolicy<T>(params: {
   // Only mutate the queue when enough victims exist so a partial drop cannot
   // admit overflow when the queue is full of in-flight/protected work.
   const victimIndices: number[] = [];
-  for (
-    let index = 0;
-    index < params.queue.items.length && victimIndices.length < dropCount;
-    index += 1
-  ) {
-    const item = params.queue.items[index];
+  for (const [index, item] of params.queue.items.entries()) {
     if (params.inFlight?.has(item) || params.isProtected?.(item) === true) {
       continue;
     }
     victimIndices.push(index);
+    if (victimIndices.length === dropCount) {
+      break;
+    }
   }
   if (victimIndices.length < dropCount) {
     return false;
   }
   const dropped: T[] = [];
   for (let i = victimIndices.length - 1; i >= 0; i -= 1) {
-    dropped.unshift(...params.queue.items.splice(victimIndices[i], 1));
+    dropped.unshift(
+      ...params.queue.items.splice(expectDefined(victimIndices[i], "victim indices entry at i"), 1),
+    );
   }
   params.onDrop?.(dropped);
   if (params.queue.dropPolicy === "summarize") {
@@ -169,10 +170,13 @@ export function applyQueueDropPolicy<T>(params: {
 }
 
 /** Wait until the queue has been quiet for its debounce window. */
-export function waitForQueueDebounce(queue: {
-  debounceMs: number;
-  lastEnqueuedAt: number;
-}): Promise<void> {
+export function waitForQueueDebounce(
+  queue: {
+    debounceMs: number;
+    lastEnqueuedAt: number;
+  },
+  abortSignal?: AbortSignal,
+): Promise<void> {
   if (process.env.OPENCLAW_TEST_FAST === "1") {
     // Tests use this escape hatch so debounce logic does not slow deterministic queue specs.
     return Promise.resolve();
@@ -181,15 +185,36 @@ export function waitForQueueDebounce(queue: {
   if (debounceMs <= 0) {
     return Promise.resolve();
   }
+  if (abortSignal?.aborted) {
+    return Promise.resolve();
+  }
   return new Promise<void>((resolve) => {
-    const check = () => {
-      const since = Date.now() - queue.lastEnqueuedAt;
-      if (since >= debounceMs) {
-        resolve();
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = () => {
+      if (settled) {
         return;
       }
-      setTimeout(check, debounceMs - since);
+      settled = true;
+      if (timer !== undefined) {
+        clearTimeout(timer);
+      }
+      abortSignal?.removeEventListener("abort", finish);
+      resolve();
     };
+    const check = () => {
+      if (abortSignal?.aborted) {
+        finish();
+        return;
+      }
+      const since = Date.now() - queue.lastEnqueuedAt;
+      if (since >= debounceMs) {
+        finish();
+        return;
+      }
+      timer = setTimeout(check, debounceMs - since);
+    };
+    abortSignal?.addEventListener("abort", finish, { once: true });
     check();
   });
 }

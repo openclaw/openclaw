@@ -10,20 +10,26 @@ import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.chat.ChatThinkingLevelOption
+import ai.openclaw.app.chat.ChatThinkingLevelSelection
 import ai.openclaw.app.chat.MessageSpeechPhase
 import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.chat.VoiceNoteRecorderState
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
 import ai.openclaw.app.ui.copyGatewayDiagnosticsReport
+import ai.openclaw.app.ui.design.AgentAvatarSource
+import ai.openclaw.app.ui.design.ClawAgentAvatar
 import ai.openclaw.app.ui.design.ClawListItem
 import ai.openclaw.app.ui.design.ClawLoadingState
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawPrimaryButton
 import ai.openclaw.app.ui.design.ClawSecondaryButton
+import ai.openclaw.app.ui.design.ClawSegmentedControl
 import ai.openclaw.app.ui.design.ClawStatus
 import ai.openclaw.app.ui.design.ClawStatusPill
 import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.design.OpenClawMascot
+import ai.openclaw.app.ui.design.agentAvatarSource
 import ai.openclaw.app.ui.gatewayDiagnosticsEndpoint
 import ai.openclaw.app.ui.gatewayStatusForDisplay
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -61,6 +67,8 @@ import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.HourglassEmpty
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Refresh
@@ -98,6 +106,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -147,11 +157,13 @@ fun ChatScreen(
   val gatewayDefaultAgentId by viewModel.gatewayDefaultAgentId.collectAsState()
   val gatewayAgents by viewModel.gatewayAgents.collectAsState()
   val thinkingLevel by viewModel.chatThinkingLevel.collectAsState()
+  val thinkingLevelSelection by viewModel.chatThinkingLevelSelection.collectAsState()
   val streamingAssistantText by viewModel.chatStreamingAssistantText.collectAsState()
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
   val sessions by viewModel.chatSessions.collectAsState()
   val chatCommands by viewModel.chatCommands.collectAsState()
   val chatDraft by viewModel.chatDraft.collectAsState()
+  val chatShareDraft by viewModel.chatShareDraft.collectAsState()
   val pendingAssistantAutoSend by viewModel.pendingAssistantAutoSend.collectAsState()
   val assistantAutoSendInFlight by viewModel.assistantAutoSendInFlight.collectAsState()
   val remoteAddress by viewModel.remoteAddress.collectAsState()
@@ -169,7 +181,11 @@ fun ChatScreen(
   val micCooldown by viewModel.micCooldown.collectAsState()
   val talkModeEnabled by viewModel.talkModeEnabled.collectAsState()
   val talkModeListening by viewModel.talkModeListening.collectAsState()
-  val thinkingSupported = thinkingSupportedForSelection(selectedModelRef, modelCatalog)
+  val thinkingSupported =
+    chatThinkingSupported(
+      selection = thinkingLevelSelection,
+      fallbackSupported = thinkingSupportedForSelection(selectedModelRef, modelCatalog),
+    )
   val contextUsage = resolveChatContextUsage(sessionKey = sessionKey, mainSessionKey = mainSessionKey, sessions = sessions)
   val gatewayAddress = gatewayDiagnosticsEndpoint(remoteAddress = remoteAddress, manualHost = manualHost, manualPort = manualPort, manualTls = manualTls)
   val gatewayProblemMessage = gatewayConnectionDisplay.problem?.message?.takeIf { it.isNotBlank() }
@@ -179,6 +195,8 @@ fun ChatScreen(
   val activeAgentId = selectedChatAgentId(mainSessionKey, gatewayDefaultAgentId)
   val workspaceGit = gatewayAgents.firstOrNull { it.id == sessionAgentId }?.workspaceGit == true
   val context = LocalContext.current
+  val lifecycleOwner = LocalLifecycleOwner.current
+  val lifecycleState by lifecycleOwner.lifecycle.currentStateFlow.collectAsState()
   val resolver = context.contentResolver
   val scope = rememberCoroutineScope()
   val attachments = remember { mutableStateListOf<PendingAttachment>() }
@@ -251,10 +269,51 @@ fun ChatScreen(
   }
 
   var input by rememberSaveable { mutableStateOf("") }
+  var shareImportNotice by rememberSaveable { mutableStateOf<String?>(null) }
 
   LaunchedEffect(chatDraft) {
     input = mergeChatDraft(chatDraft, input) ?: return@LaunchedEffect
     viewModel.clearChatDraft()
+  }
+
+  LaunchedEffect(chatShareDraft?.id, lifecycleState) {
+    if (!lifecycleState.isAtLeast(Lifecycle.State.RESUMED)) return@LaunchedEffect
+    val share = chatShareDraft ?: return@LaunchedEffect
+    viewModel.withChatShareDraftLease(share.id) {
+      val attachmentSnapshot = attachments.toList()
+      val staged =
+        withContext(Dispatchers.IO) {
+          stageChatShareDraft(share, currentAttachments = attachmentSnapshot) { uri ->
+            loadSizedImageAttachment(resolver, uri)
+          }
+        }
+      val merged =
+        mergeStagedChatShare(
+          staged = staged,
+          currentInput = input,
+          currentAttachments = attachments,
+        )
+      if (!canCommitStagedChatShare(stagedId = share.id, currentHead = viewModel.chatShareDraft.value)) {
+        return@withChatShareDraftLease
+      }
+      // A non-resumed Activity must not acknowledge into its hidden composer; the next visible
+      // Activity keeps the process-owned head and retries the complete import instead.
+      if (!lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+        return@withChatShareDraftLease
+      }
+      // Keep the head pending through both mutations: Send stays gated until text and images
+      // have been merged together, and disposal before this point leaves the head for retry.
+      input = merged.input
+      attachments.clear()
+      attachments.addAll(merged.attachments)
+      shareImportNotice =
+        if (merged.failedImageCount + merged.droppedImageCount > 0) {
+          "Some shared images were omitted or could not be added."
+        } else {
+          null
+        }
+      viewModel.acknowledgeChatShareDraft(share.id)
+    }
   }
 
   LaunchedEffect(gatewayConnectionDisplay.isConnected) {
@@ -339,6 +398,7 @@ fun ChatScreen(
           items = outboxItems,
           sessionKey = sessionKey,
           mainSessionKey = mainSessionKey,
+          messages = messages,
         ),
       onRetryOutbox = viewModel::retryChatOutboxCommand,
       onDeleteOutbox = viewModel::deleteChatOutboxCommand,
@@ -354,6 +414,7 @@ fun ChatScreen(
       onValueChange = { input = it },
       attachments = attachments,
       thinkingLevel = thinkingLevel,
+      thinkingOptions = thinkingLevelSelection.options,
       thinkingSupported = thinkingSupported,
       contextUsage = contextUsage,
       selectedModelLabel = selectedModelLabel,
@@ -362,6 +423,9 @@ fun ChatScreen(
       gatewayOffline = gatewayOffline,
       offlineStatus = offlineStatus,
       pendingRunCount = pendingRunCount,
+      shareStaging = chatShareDraft != null,
+      shareImportNotice = shareImportNotice,
+      onDismissShareImportNotice = { shareImportNotice = null },
       commands = chatCommands,
       onThinkingLevelChange = viewModel::setChatThinkingLevel,
       onOpenModelPicker = { showModelPicker = true },
@@ -386,8 +450,11 @@ fun ChatScreen(
       },
       onAbort = viewModel::abortChat,
       onSend = {
+        // Re-read the ViewModel so a stale click callback cannot beat StateFlow recomposition.
+        if (viewModel.chatShareDraft.value != null) return@ChatComposer
         val message = input.trim()
         if (message.isEmpty() && attachments.isEmpty()) return@ChatComposer
+        shareImportNotice = null
         val outgoing = attachments.map(PendingAttachment::toOutgoingAttachment)
         val pendingAttachments = attachments.toList()
         input = ""
@@ -435,6 +502,7 @@ private fun ChatAgentSelector(
     agents.forEach { agent ->
       ChatSessionChip(
         text = chatAgentChipText(agent),
+        avatarSource = agentAvatarSource(agent),
         active = agent.id == activeAgentId,
         onClick = { onSelectAgent(agent.id) },
       )
@@ -513,6 +581,7 @@ private fun ChatSessionSwitcher(
 @Composable
 private fun ChatSessionChip(
   text: String,
+  avatarSource: AgentAvatarSource? = null,
   active: Boolean,
   onClick: () -> Unit,
 ) {
@@ -524,13 +593,25 @@ private fun ChatSessionChip(
     contentColor = ClawTheme.colors.text,
     border = BorderStroke(1.dp, if (active) ClawTheme.colors.borderStrong else ClawTheme.colors.border.copy(alpha = 0.7f)),
   ) {
-    Text(
-      text = text,
-      modifier = Modifier.padding(horizontal = 11.dp, vertical = 7.dp),
-      style = ClawTheme.type.caption,
-      maxLines = 1,
-      overflow = TextOverflow.Ellipsis,
-    )
+    Row(
+      modifier =
+        Modifier.padding(
+          horizontal = if (avatarSource == null) 11.dp else 8.dp,
+          vertical = if (avatarSource == null) 7.dp else 5.dp,
+        ),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+      if (avatarSource != null) {
+        ClawAgentAvatar(source = avatarSource, size = 20.dp) {}
+      }
+      Text(
+        text = text,
+        style = ClawTheme.type.caption,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+      )
+    }
   }
 }
 
@@ -969,6 +1050,11 @@ private fun ChatBubble(
             when {
               part.type == "text" -> ChatText(text = part.text.orEmpty(), textColor = ClawTheme.colors.text, isStreaming = live)
               part.isAudioAttachment() -> VoiceNoteMessageRow(durationMs = part.durationMs)
+              part.type == "image" ->
+                ChatBase64Image(
+                  base64 = checkNotNull(part.base64),
+                  mimeType = part.mimeType,
+                )
               else -> Text(text = part.fileName ?: "Attachment", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
             }
           }
@@ -1096,6 +1182,7 @@ private fun ChatComposer(
   onValueChange: (String) -> Unit,
   attachments: List<PendingAttachment>,
   thinkingLevel: String,
+  thinkingOptions: List<ChatThinkingLevelOption>,
   thinkingSupported: Boolean,
   contextUsage: ChatContextUsage,
   selectedModelLabel: String,
@@ -1104,6 +1191,9 @@ private fun ChatComposer(
   gatewayOffline: Boolean,
   offlineStatus: String,
   pendingRunCount: Int,
+  shareStaging: Boolean,
+  shareImportNotice: String?,
+  onDismissShareImportNotice: () -> Unit,
   commands: List<ChatCommandEntry>,
   onThinkingLevelChange: (String) -> Unit,
   onOpenModelPicker: () -> Unit,
@@ -1126,17 +1216,39 @@ private fun ChatComposer(
     remember(value, commands) {
       matchingSlashCommands(input = value, commands = commands)
     }
+  var thinkingSelectorExpanded by rememberSaveable { mutableStateOf(false) }
+  LaunchedEffect(thinkingSupported) {
+    if (!thinkingSupported) thinkingSelectorExpanded = false
+  }
+
+  // Offline sends queue durably too (text, images, and voice notes), so the gate is identical
+  // to the connected one; admission errors keep the draft when the durable queue refuses it.
   val sendEnabled =
-    voiceNoteState !is VoiceNoteRecorderState.Recording &&
-      voiceNoteState !is VoiceNoteRecorderState.Preparing &&
-      pendingRunCount == 0 &&
-      if (healthOk) {
-        value.trim().isNotEmpty() || attachments.isNotEmpty()
-      } else {
-        value.trim().isNotEmpty() && attachments.isEmpty()
-      }
+    chatComposerSendEnabled(
+      voiceNoteState = voiceNoteState,
+      pendingRunCount = pendingRunCount,
+      hasContent = value.trim().isNotEmpty() || attachments.isNotEmpty(),
+      shareStaging = shareStaging,
+    )
 
   Column(modifier = Modifier.fillMaxWidth().imePadding(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    if (shareImportNotice != null) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+      ) {
+        Text(
+          text = shareImportNotice,
+          style = ClawTheme.type.caption,
+          color = ClawTheme.colors.warning,
+          modifier = Modifier.weight(1f),
+        )
+        IconButton(onClick = onDismissShareImportNotice, modifier = Modifier.size(32.dp)) {
+          Icon(Icons.Default.Close, contentDescription = "Dismiss shared-image warning")
+        }
+      }
+    }
     if (attachments.isNotEmpty()) {
       AttachmentStrip(attachments = attachments, onRemoveAttachment = onRemoveAttachment)
     }
@@ -1155,8 +1267,20 @@ private fun ChatComposer(
       ChatContextMeter(
         thinkingLevel = thinkingLevel,
         thinkingSupported = thinkingSupported,
+        expanded = thinkingSelectorExpanded,
         contextUsage = contextUsage,
-        onClick = { onThinkingLevelChange(nextThinkingValue(thinkingLevel)) },
+        onClick = { thinkingSelectorExpanded = !thinkingSelectorExpanded },
+      )
+    }
+
+    if (thinkingSelectorExpanded && thinkingSupported) {
+      ChatThinkingLevelSelector(
+        options = thinkingOptions,
+        selectedId = thinkingLevel,
+        onSelect = { selectedId ->
+          onThinkingLevelChange(selectedId)
+          thinkingSelectorExpanded = false
+        },
       )
     }
 
@@ -1192,7 +1316,6 @@ private fun ChatComposer(
         )
       }
       SendButton(
-        // Offline, only text sends are enabled: they queue durably (text-only v1).
         enabled = sendEnabled,
         onClick = onSend,
       )
@@ -1227,6 +1350,37 @@ private fun ChatComposer(
           }
         }
       }
+    }
+  }
+}
+
+@Composable
+private fun ChatThinkingLevelSelector(
+  options: List<ChatThinkingLevelOption>,
+  selectedId: String,
+  onSelect: (String) -> Unit,
+) {
+  val rows = remember(options) { chatThinkingOptionRows(options) }
+  val normalizedSelected = selectedId.trim().lowercase(Locale.US)
+  val selectedLabel =
+    options
+      .firstOrNull { it.id.trim().lowercase(Locale.US) == normalizedSelected }
+      ?.let(::chatThinkingOptionLabel)
+      .orEmpty()
+  Column(
+    modifier = Modifier.fillMaxWidth(),
+    verticalArrangement = Arrangement.spacedBy(4.dp),
+  ) {
+    rows.forEach { row ->
+      val labels = row.map(::chatThinkingOptionLabel)
+      ClawSegmentedControl(
+        options = labels,
+        selected = selectedLabel,
+        onSelect = { selected ->
+          row.firstOrNull { chatThinkingOptionLabel(it) == selected }?.let { onSelect(it.id) }
+        },
+        modifier = Modifier.fillMaxWidth(),
+      )
     }
   }
 }
@@ -1454,6 +1608,7 @@ private fun ChatOfflineNotice(
 private fun ChatContextMeter(
   thinkingLevel: String,
   thinkingSupported: Boolean,
+  expanded: Boolean,
   contextUsage: ChatContextUsage,
   onClick: () -> Unit,
 ) {
@@ -1477,7 +1632,12 @@ private fun ChatContextMeter(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
       ) {
         if (thinkingSupported) {
-          Icon(imageVector = Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(13.dp), tint = ClawTheme.colors.textSubtle)
+          Icon(
+            imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+            contentDescription = if (expanded) "Close thinking level selector" else "Open thinking level selector",
+            modifier = Modifier.size(13.dp),
+            tint = ClawTheme.colors.textSubtle,
+          )
         }
         Text(
           text = contextMeterLabel(contextUsage, thinkingLevel, thinkingSupported),
@@ -1740,15 +1900,6 @@ internal fun userFacingChatError(
   }
 }
 
-/** Cycles through context budget presets from the compact composer control. */
-private fun nextThinkingValue(value: String): String =
-  when (value.lowercase(Locale.US)) {
-    "off" -> "low"
-    "low" -> "medium"
-    "medium" -> "high"
-    else -> "off"
-  }
-
 internal fun contextMeterWidth(usage: ChatContextUsage): Float? {
   if (usage.totalTokensFresh == false) return null
   val total = usage.totalTokens?.takeIf { it >= 0L } ?: return null
@@ -1765,12 +1916,28 @@ internal fun contextMeterLabel(
   return if (thinkingSupported) "$contextLabel · ${contextMeterThinkingLabel(thinkingLevel)}" else contextLabel
 }
 
-internal fun contextMeterThinkingLabel(value: String): String =
-  when (value.lowercase(Locale.US)) {
-    "low" -> "low"
-    "medium" -> "medium"
-    "high" -> "high"
-    else -> "off"
+internal fun contextMeterThinkingLabel(value: String): String = value.trim().lowercase(Locale.US).ifEmpty { "off" }
+
+internal fun chatThinkingSupported(
+  selection: ChatThinkingLevelSelection,
+  fallbackSupported: Boolean,
+): Boolean =
+  if (selection.isGatewayProvided) {
+    selection.options.any { it.id.trim().lowercase(Locale.US) != "off" }
+  } else {
+    fallbackSupported
   }
+
+internal fun chatThinkingOptionRows(options: List<ChatThinkingLevelOption>): List<List<ChatThinkingLevelOption>> {
+  if (options.isEmpty()) return emptyList()
+  if (options.size <= 4) return listOf(options)
+  return options.chunked((options.size + 1) / 2)
+}
+
+internal fun chatThinkingOptionLabel(option: ChatThinkingLevelOption): String =
+  option.label
+    .trim()
+    .ifEmpty { option.id.trim() }
+    .replaceFirstChar { it.uppercase() }
 
 private fun formatChatTimestamp(timestampMs: Long): String = DateFormat.getTimeInstance(DateFormat.SHORT, Locale.getDefault()).format(Date(timestampMs))
