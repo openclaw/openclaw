@@ -9,14 +9,22 @@ export function findConflictMarkerLines(content: string): number[];
 export function listTrackedFiles(cwd?: string): string[];
 /**
  * Scans files for merge conflict markers, skipping binary content and
- * oversized files to avoid unbounded memory use.
+ * reading each file in bounded chunks to avoid unbounded memory use.
  */
 export function findConflictMarkersInFiles(
   filePaths: string[],
-  readFile?: (filePath: string) => Buffer | string,
   statSync?: (filePath: string) => { size: number },
   warn?: (message: string) => void,
   maxScanBytes?: number,
+  openSync?: (filePath: string, flags: string) => number,
+  readSync?: (
+    fd: number,
+    buffer: Buffer,
+    offset: number,
+    length: number,
+    position: number,
+  ) => number,
+  closeSync?: (fd: number) => void,
 ): {
   filePath: string;
   lines: number[];

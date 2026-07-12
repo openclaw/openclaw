@@ -63,35 +63,51 @@ describe("check-no-conflict-markers", () => {
     ]);
   });
 
-  it("skips files larger than the scan byte limit", () => {
+  it("finds conflict markers in files larger than the scan byte limit", () => {
     const rootDir = createTempDir("openclaw-conflict-markers-");
     const largeFile = path.join(rootDir, "large-generated.txt");
-    const smallFile = path.join(rootDir, "conflict.txt");
 
-    // Use a small limit for fast tests; the production limit is 50 MiB.
+    // Use a small chunk size for fast tests; the production limit is 50 MiB.
     const maxScanBytes = 1024;
+    const markerLine = ">>>>>>> branch";
+    const filler = "a".repeat(maxScanBytes);
+    // The marker starts one byte after the first chunk boundary so the second
+    // chunk is required to detect it.
+    fs.writeFileSync(largeFile, `${filler}\n${markerLine}\n`);
 
-    fs.writeFileSync(largeFile, "a".repeat(maxScanBytes + 1));
-    fs.writeFileSync(smallFile, "<<<<<<< HEAD\nconflict\n>>>>>>> main\n");
+    const violations = findConflictMarkersInFiles([largeFile], fs.statSync, () => {}, maxScanBytes);
 
-    const warnings: string[] = [];
+    expect(violations).toEqual([
+      {
+        filePath: largeFile,
+        lines: [2],
+      },
+    ]);
+  });
+
+  it("finds conflict markers that cross a chunk boundary", () => {
+    const rootDir = createTempDir("openclaw-conflict-markers-");
+    const crossBoundaryFile = path.join(rootDir, "cross-boundary.txt");
+
+    // Split "<<<<<<< HEAD" so the first seven characters end the first chunk
+    // and the rest begins the second chunk.
+    const maxScanBytes = 7;
+    const content = "<<<<<<< HEAD\nleft\n=======\nright\n>>>>>>> branch\n";
+    fs.writeFileSync(crossBoundaryFile, content);
+
     const violations = findConflictMarkersInFiles(
-      [largeFile, smallFile],
-      fs.readFileSync,
+      [crossBoundaryFile],
       fs.statSync,
-      (msg) => warnings.push(String(msg)),
+      () => {},
       maxScanBytes,
     );
 
     expect(violations).toEqual([
       {
-        filePath: smallFile,
-        lines: [1, 3],
+        filePath: crossBoundaryFile,
+        lines: [1, 3, 5],
       },
     ]);
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain("skipping oversized file");
-    expect(warnings[0]).toContain(largeFile);
   });
 
   it("finds conflict markers in tracked script files", () => {

@@ -17,6 +17,15 @@ function isBinaryBuffer(buffer) {
   return buffer.includes(0);
 }
 
+function isConflictMarkerLine(line) {
+  return (
+    line.startsWith("<<<<<<< ") ||
+    line.startsWith("||||||| ") ||
+    line === "=======" ||
+    line.startsWith(">>>>>>> ")
+  );
+}
+
 /**
  * Returns one-based line numbers containing merge conflict markers.
  */
@@ -24,12 +33,7 @@ export function findConflictMarkerLines(content) {
   const lines = content.split(/\r?\n/u);
   const matches = [];
   for (const [index, line] of lines.entries()) {
-    if (
-      line.startsWith("<<<<<<< ") ||
-      line.startsWith("||||||| ") ||
-      line === "=======" ||
-      line.startsWith(">>>>>>> ")
-    ) {
+    if (isConflictMarkerLine(line)) {
       matches.push(index + 1);
     }
   }
@@ -51,49 +55,113 @@ export function listTrackedFiles(cwd = process.cwd()) {
 }
 
 /**
+ * Scans a single file for merge conflict markers using bounded memory.
+ * The file is read in chunks of at most `maxScanBytes`, so the total memory
+ * use stays bounded even for files much larger than the chunk size.
+ */
+function findConflictMarkersInFileByChunks(
+  filePath,
+  statSync,
+  openSync,
+  readSync,
+  closeSync,
+  maxScanBytes,
+) {
+  let stats;
+  try {
+    stats = statSync(filePath);
+  } catch {
+    return null;
+  }
+  if (stats.size === 0) {
+    return null;
+  }
+
+  const fd = openSync(filePath, "r");
+  try {
+    const buffer = Buffer.alloc(maxScanBytes);
+    let bytesRead = readSync(fd, buffer, 0, maxScanBytes, 0);
+    if (bytesRead === 0) {
+      return null;
+    }
+
+    // Treat files containing null bytes as binary and skip them. The binary
+    // check only needs the first chunk because null bytes are not valid text.
+    if (isBinaryBuffer(buffer.subarray(0, bytesRead))) {
+      return null;
+    }
+
+    const violations = [];
+    let offset = 0;
+    let leftover = "";
+    let lineNumber = 0;
+
+    const processText = (text) => {
+      const combined = leftover + text;
+      const lines = combined.split(/\r?\n/u);
+      // If the text does not end with a newline, the last segment is an
+      // incomplete line that must be carried into the next chunk. This keeps
+      // conflict markers that cross a chunk boundary intact when checked.
+      const endsWithNewline = /\r?\n$/u.test(combined);
+      leftover = endsWithNewline ? "" : lines.pop();
+      for (const line of lines) {
+        lineNumber += 1;
+        if (isConflictMarkerLine(line)) {
+          violations.push(lineNumber);
+        }
+      }
+    };
+
+    processText(buffer.toString("utf8", 0, bytesRead));
+    offset += bytesRead;
+
+    while (true) {
+      bytesRead = readSync(fd, buffer, 0, maxScanBytes, offset);
+      if (bytesRead === 0) {
+        break;
+      }
+      processText(buffer.toString("utf8", 0, bytesRead));
+      offset += bytesRead;
+    }
+
+    if (leftover) {
+      lineNumber += 1;
+      if (isConflictMarkerLine(leftover)) {
+        violations.push(lineNumber);
+      }
+    }
+
+    return violations.length > 0 ? { filePath, lines: violations } : null;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
  * Scans files for merge conflict markers, skipping binary content and
- * oversized files to avoid unbounded memory use.
+ * reading each file in bounded chunks to avoid unbounded memory use.
  */
 export function findConflictMarkersInFiles(
   filePaths,
-  readFile = fs.readFileSync,
   statSync = fs.statSync,
   warn = console.warn,
   maxScanBytes = MAX_CONFLICT_MARKER_SCAN_BYTES,
+  openSync = fs.openSync,
+  readSync = fs.readSync,
+  closeSync = fs.closeSync,
 ) {
   const violations = [];
   for (const filePath of filePaths) {
-    let stats;
-    try {
-      stats = statSync(filePath);
-    } catch {
-      continue;
-    }
-    if (stats.size > maxScanBytes) {
-      warn(
-        `[check-no-conflict-markers] skipping oversized file: ${filePath} (${stats.size} bytes)`,
-      );
-      continue;
-    }
-
-    let content;
-    try {
-      content = readFile(filePath);
-    } catch {
-      continue;
-    }
-    if (!Buffer.isBuffer(content)) {
-      content = Buffer.from(String(content));
-    }
-    if (isBinaryBuffer(content)) {
-      continue;
-    }
-    const lines = findConflictMarkerLines(content.toString("utf8"));
-    if (lines.length > 0) {
-      violations.push({
-        filePath,
-        lines,
-      });
+    const result = findConflictMarkersInFileByChunks(
+      filePath,
+      statSync,
+      openSync,
+      readSync,
+      closeSync,
+      maxScanBytes,
+    );
+    if (result) {
+      violations.push(result);
     }
   }
   return violations;
