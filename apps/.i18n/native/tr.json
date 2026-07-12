@@ -694,6 +694,71 @@
       "translated": "Skills yüklenemedi."
     },
     {
+      "id": "native.android.2306ae67e02f03e2",
+      "source": "Connect the gateway to update skills.",
+      "translated": "Connect the gateway to update skills."
+    },
+    {
+      "id": "native.android.346d801b434ed54e",
+      "source": "This gateway connection needs operator.admin to update skills.",
+      "translated": "This gateway connection needs operator.admin to update skills."
+    },
+    {
+      "id": "native.android.5c217169593f9ec4",
+      "source": "Could not disable skill.",
+      "translated": "Skill devre dışı bırakılamadı."
+    },
+    {
+      "id": "native.android.7cb940fd556fa850",
+      "source": "Could not enable skill.",
+      "translated": "Skill etkinleştirilemedi."
+    },
+    {
+      "id": "native.android.bf2cff15c08664b1",
+      "source": "Connect the gateway to search ClawHub skills.",
+      "translated": "ClawHub Skills'ı aramak için Gateway'e bağlanın."
+    },
+    {
+      "id": "native.android.55c752347d7bfe7b",
+      "source": "Could not search ClawHub skills.",
+      "translated": "ClawHub Skills aranamadı."
+    },
+    {
+      "id": "native.android.06bb559130390ab4",
+      "source": "Connect the gateway to inspect ClawHub skills.",
+      "translated": "ClawHub Skills'ı incelemek için Gateway'e bağlanın."
+    },
+    {
+      "id": "native.android.57c31cd4bd7c5146",
+      "source": "ClawHub did not return an installable version for ${skill.slug}.",
+      "translated": "ClawHub, ${skill.slug} için yüklenebilir bir sürüm döndürmedi."
+    },
+    {
+      "id": "native.android.ecf82b1ac9d18307",
+      "source": "Could not load ClawHub details for ${skill.slug}.",
+      "translated": "${skill.slug} için ClawHub ayrıntıları yüklenemedi."
+    },
+    {
+      "id": "native.android.4154579c8cb1c995",
+      "source": "Connect the gateway to install ClawHub skills.",
+      "translated": "ClawHub Skills'ı yüklemek için Gateway'e bağlanın."
+    },
+    {
+      "id": "native.android.7855f19374e6e747",
+      "source": "This gateway connection needs operator.admin to install ClawHub skills.",
+      "translated": "Bu Gateway bağlantısının ClawHub Skills'ı yükleyebilmesi için operator.admin yetkisi gerekir."
+    },
+    {
+      "id": "native.android.468b886c0b50dd1c",
+      "source": "Installed $slug.",
+      "translated": "$slug yüklendi."
+    },
+    {
+      "id": "native.android.dd89b658efc5d083",
+      "source": "Could not install ${slug} from ClawHub.",
+      "translated": "${slug}, ClawHub'dan yüklenemedi."
+    },
+    {
       "id": "native.android.0786911a50b87f4a",
       "source": "Connect the gateway to load Skill Workshop proposals.",
       "translated": "Skill Workshop önerilerini yüklemek için Gateway'e bağlanın."
@@ -987,6 +1052,16 @@
       "id": "native.android.1e4171b934bcfc63",
       "source": "Photos",
       "translated": "Fotoğraflar"
+    },
+    {
+      "id": "native.android.600d42f662b49f09",
+      "source": "The Gateway evaluated a different ClawHub release. Review the skill again before installing.",
+      "translated": "Gateway farklı bir ClawHub sürümünü değerlendirdi. Yüklemeden önce skill'i tekrar inceleyin."
+    },
+    {
+      "id": "native.android.64871eb6744363db",
+      "source": "The result for $slug is unknown. Reconnect, refresh Skills, then retry; the Gateway safely joins a matching install that is still running.",
+      "translated": "$slug için sonuç bilinmiyor. Yeniden bağlanın, Skills'i yenileyin ve tekrar deneyin; Gateway, hâlâ devam eden eşleşen bir yüklemeye güvenli bir şekilde katılır."
     },
     {
       "id": "native.android.875e63350d705dec",
@@ -6024,9 +6099,9 @@
       "translated": "Skills"
     },
     {
-      "id": "native.android.73a666b0a4a0e617",
-      "source": "Installed capabilities available to OpenClaw.",
-      "translated": "OpenClaw'ın kullanabileceği yüklü yetenekler."
+      "id": "native.android.d8a2361917591397",
+      "source": "Manage installed skills and add trusted releases from ClawHub.",
+      "translated": "Yüklü skill'leri yönetin ve ClawHub'dan güvenilir sürümler ekleyin."
     },
     {
       "id": "native.android.8d8bafb716f856dd",
@@ -6044,6 +6119,11 @@
       "translated": "Yenileniyor"
     },
     {
+      "id": "native.android.c6d0b8c171da5e69",
+      "source": "Skill changes require operator.admin. Reconnect with an admin-capable gateway token.",
+      "translated": "Skill değişiklikleri operator.admin gerektirir. Yönetici yetkisine sahip bir Gateway token'ı ile yeniden bağlanın."
+    },
+    {
       "id": "native.android.73f15da5b2ffdf3c",
       "source": "Connect the gateway to load skills.",
       "translated": "Skills'i yüklemek için Gateway'i bağlayın."
@@ -6059,9 +6139,14 @@
       "translated": "Gateway'e yüklenen Skills burada görünür."
     },
     {
-      "id": "native.android.81d900273232ce39",
-      "source": "Inspect installed skill capability and setup state.",
-      "translated": "Yüklü skill yeteneğini ve kurulum durumunu inceleyin."
+      "id": "native.android.193fa2086c682510",
+      "source": "No installed skills match this search.",
+      "translated": "Bu aramayla eşleşen yüklü skill yok."
+    },
+    {
+      "id": "native.android.cf0bc487b537dd04",
+      "source": "Inspect and manage installed skill state.",
+      "translated": "Yüklü skill durumunu inceleyin ve yönetin."
     },
     {
       "id": "native.android.92e94c3027f3e5ce",
@@ -6072,6 +6157,36 @@
       "id": "native.android.3866fe91a977b21a",
       "source": "Missing",
       "translated": "Eksik"
+    },
+    {
+      "id": "native.android.944e0db270dbef5c",
+      "source": "Installed skills",
+      "translated": "Yüklü skill'ler"
+    },
+    {
+      "id": "native.android.47ee8c52e754f17d",
+      "source": "${visibleCount}/${totalCount}",
+      "translated": "${visibleCount}/${totalCount}"
+    },
+    {
+      "id": "native.android.8748f97cadea1632",
+      "source": "Search installed skills",
+      "translated": "Yüklü skill'lerde ara"
+    },
+    {
+      "id": "native.android.e7aa097ca1a41857",
+      "source": "Gateway switch",
+      "translated": "Gateway anahtarı"
+    },
+    {
+      "id": "native.android.b37f4ed946baddb5",
+      "source": "Disabled for all agents.",
+      "translated": "Tüm aracılar için devre dışı."
+    },
+    {
+      "id": "native.android.fd25021f8a754b8b",
+      "source": "Enabled for eligible agents.",
+      "translated": "Uygun aracılar için etkin."
     },
     {
       "id": "native.android.28e324e5ddfa47b8",
@@ -6114,6 +6229,91 @@
       "translated": "Skill ayrıntısını aç"
     },
     {
+      "id": "native.android.b8f2fcd78ea247d5",
+      "source": "Find on ClawHub",
+      "translated": "ClawHub'da bul"
+    },
+    {
+      "id": "native.android.51728d0754b4e72b",
+      "source": "Search registry metadata. The Gateway verifies trust again before any download.",
+      "translated": "Kayıt defteri meta verilerinde arama yapın. Gateway, herhangi bir indirmeden önce güveni tekrar doğrular."
+    },
+    {
+      "id": "native.android.c0ae6db636e9b766",
+      "source": "Search ClawHub",
+      "translated": "ClawHub'da ara"
+    },
+    {
+      "id": "native.android.0f030fcf6f4626f2",
+      "source": "Search",
+      "translated": "Ara"
+    },
+    {
+      "id": "native.android.d7ce0165b8af0803",
+      "source": "Searching",
+      "translated": "Aranıyor"
+    },
+    {
+      "id": "native.android.559e047666ce63f8",
+      "source": "Dismiss",
+      "translated": "Kapat"
+    },
+    {
+      "id": "native.android.0c00aa53506c3cd3",
+      "source": "Acknowledge Gateway warning and install",
+      "translated": "Gateway uyarısını kabul et ve yükle"
+    },
+    {
+      "id": "native.android.cc0b71a70901e723",
+      "source": "Version $it",
+      "translated": "Version $it"
+    },
+    {
+      "id": "native.android.4c85b5d888652e61",
+      "source": "Installing",
+      "translated": "Installing"
+    },
+    {
+      "id": "native.android.58e92f6f7ee9a870",
+      "source": "Loading",
+      "translated": "Loading"
+    },
+    {
+      "id": "native.android.e63592576acd892e",
+      "source": "Review",
+      "translated": "Review"
+    },
+    {
+      "id": "native.android.9be29ded6a7097bf",
+      "source": "Review ClawHub skill",
+      "translated": "ClawHub becerisini incele"
+    },
+    {
+      "id": "native.android.43d6a41fe9988e8b",
+      "source": "Version",
+      "translated": "Sürüm"
+    },
+    {
+      "id": "native.android.71b746307f24c526",
+      "source": "Publisher",
+      "translated": "Yayıncı"
+    },
+    {
+      "id": "native.android.d3da485c52921b9b",
+      "source": "The Gateway will verify this exact release with ClawHub before download. If the release needs explicit risk acknowledgement, Android will show the Gateway warning before retrying.",
+      "translated": "Gateway, indirmeden önce bu sürümün aynısını ClawHub ile doğrulayacaktır. Sürüm için açıkça risk kabulü gerekiyorsa Android, yeniden denemeden önce Gateway uyarısını gösterecektir."
+    },
+    {
+      "id": "native.android.e9a00012aa173335",
+      "source": "Verify and install",
+      "translated": "Doğrula ve yükle"
+    },
+    {
+      "id": "native.android.268a3461947b22d3",
+      "source": "Cancel",
+      "translated": "İptal"
+    },
+    {
       "id": "native.android.815c8dab8db8a6c1",
       "source": "Off",
       "translated": "Kapalı"
@@ -6139,19 +6339,29 @@
       "translated": "Engellendi"
     },
     {
+      "id": "native.android.a30361b1cecbd677",
+      "source": "Not available to this agent",
+      "translated": "Not available to this agent"
+    },
+    {
       "id": "native.android.76249053ea991da2",
       "source": "Needs setup",
       "translated": "Kurulum gerekiyor"
     },
     {
-      "id": "native.android.995e36dd75b0bfc9",
-      "source": "This skill is disabled on the gateway. Android shows detail only; enable or configure it from desktop or CLI.",
-      "translated": "Bu beceri Gateway'de devre dışı bırakılmıştır. Android yalnızca ayrıntıları gösterir; beceriyi masaüstünden veya CLI üzerinden etkinleştirin ya da yapılandırın."
+      "id": "native.android.897cd727907f3bab",
+      "source": "This skill is disabled on the gateway. Enable it here when the current connection has operator.admin.",
+      "translated": "This skill is disabled on the gateway. Enable it here when the current connection has operator.admin."
     },
     {
-      "id": "native.android.bf6aa08312d8e760",
-      "source": "This skill is blocked by the gateway allowlist. Android can inspect it, but allowlist changes stay on desktop or CLI.",
-      "translated": "Bu beceri, Gateway izin listesi tarafından engellenmiştir. Android üzerinden incelenebilir ancak izin listesi değişiklikleri yalnızca masaüstünden veya CLI üzerinden yapılabilir."
+      "id": "native.android.9c942aba65c09b84",
+      "source": "This skill is blocked by the gateway allowlist. Allowlist changes stay on desktop or CLI.",
+      "translated": "This skill is blocked by the gateway allowlist. Allowlist changes stay on desktop or CLI."
+    },
+    {
+      "id": "native.android.a30dea20e935158a",
+      "source": "This skill is installed but not available to the current agent. Agent filters stay on desktop or CLI.",
+      "translated": "This skill is installed but not available to the current agent. Agent filters stay on desktop or CLI."
     },
     {
       "id": "native.android.95aa7173d663453f",
@@ -6159,9 +6369,9 @@
       "translated": "Bu beceri yüklü ancak şu anda çalıştırılmaya uygun değil. Yapılandırma değişiklikleri için masaüstünü veya CLI'ı kullanın."
     },
     {
-      "id": "native.android.03541aea29d7a7f2",
-      "source": "Ready on this gateway. Android detail is read-only; install, update, and configuration changes stay on desktop or CLI.",
-      "translated": "Bu Gateway'de hazır. Android'deki ayrıntılar salt okunurdur; yükleme, güncelleme ve yapılandırma değişiklikleri yalnızca masaüstünden veya CLI üzerinden yapılabilir."
+      "id": "native.android.5d931c33b02138fe",
+      "source": "Ready on this gateway. Android can enable or disable it globally; setup and configuration stay on desktop or CLI.",
+      "translated": "Ready on this gateway. Android can enable or disable it globally; setup and configuration stay on desktop or CLI."
     },
     {
       "id": "native.android.ab1f2758d6297a24",

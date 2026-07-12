@@ -694,6 +694,71 @@
       "translated": "Impossible de charger les Skills."
     },
     {
+      "id": "native.android.2306ae67e02f03e2",
+      "source": "Connect the gateway to update skills.",
+      "translated": "Connect the gateway to update skills."
+    },
+    {
+      "id": "native.android.346d801b434ed54e",
+      "source": "This gateway connection needs operator.admin to update skills.",
+      "translated": "This gateway connection needs operator.admin to update skills."
+    },
+    {
+      "id": "native.android.5c217169593f9ec4",
+      "source": "Could not disable skill.",
+      "translated": "Impossible de désactiver la compétence."
+    },
+    {
+      "id": "native.android.7cb940fd556fa850",
+      "source": "Could not enable skill.",
+      "translated": "Impossible d’activer la compétence."
+    },
+    {
+      "id": "native.android.bf2cff15c08664b1",
+      "source": "Connect the gateway to search ClawHub skills.",
+      "translated": "Connectez le Gateway pour rechercher des Skills ClawHub."
+    },
+    {
+      "id": "native.android.55c752347d7bfe7b",
+      "source": "Could not search ClawHub skills.",
+      "translated": "Impossible de rechercher les Skills ClawHub."
+    },
+    {
+      "id": "native.android.06bb559130390ab4",
+      "source": "Connect the gateway to inspect ClawHub skills.",
+      "translated": "Connectez le Gateway pour examiner les Skills ClawHub."
+    },
+    {
+      "id": "native.android.57c31cd4bd7c5146",
+      "source": "ClawHub did not return an installable version for ${skill.slug}.",
+      "translated": "ClawHub n’a renvoyé aucune version installable pour ${skill.slug}."
+    },
+    {
+      "id": "native.android.ecf82b1ac9d18307",
+      "source": "Could not load ClawHub details for ${skill.slug}.",
+      "translated": "Impossible de charger les détails ClawHub pour ${skill.slug}."
+    },
+    {
+      "id": "native.android.4154579c8cb1c995",
+      "source": "Connect the gateway to install ClawHub skills.",
+      "translated": "Connectez le Gateway pour installer des Skills ClawHub."
+    },
+    {
+      "id": "native.android.7855f19374e6e747",
+      "source": "This gateway connection needs operator.admin to install ClawHub skills.",
+      "translated": "Cette connexion au Gateway nécessite operator.admin pour installer des Skills ClawHub."
+    },
+    {
+      "id": "native.android.468b886c0b50dd1c",
+      "source": "Installed $slug.",
+      "translated": "$slug a été installé."
+    },
+    {
+      "id": "native.android.dd89b658efc5d083",
+      "source": "Could not install ${slug} from ClawHub.",
+      "translated": "Impossible d’installer ${slug} depuis ClawHub."
+    },
+    {
       "id": "native.android.0786911a50b87f4a",
       "source": "Connect the gateway to load Skill Workshop proposals.",
       "translated": "Connectez le Gateway pour charger les propositions de Skill Workshop."
@@ -987,6 +1052,16 @@
       "id": "native.android.1e4171b934bcfc63",
       "source": "Photos",
       "translated": "Photos"
+    },
+    {
+      "id": "native.android.600d42f662b49f09",
+      "source": "The Gateway evaluated a different ClawHub release. Review the skill again before installing.",
+      "translated": "Le Gateway a évalué une autre version de ClawHub. Examinez à nouveau la compétence avant de l’installer."
+    },
+    {
+      "id": "native.android.64871eb6744363db",
+      "source": "The result for $slug is unknown. Reconnect, refresh Skills, then retry; the Gateway safely joins a matching install that is still running.",
+      "translated": "Le résultat pour $slug est inconnu. Reconnectez-vous, actualisez Skills, puis réessayez ; le Gateway rejoint en toute sécurité une installation correspondante toujours en cours."
     },
     {
       "id": "native.android.875e63350d705dec",
@@ -6024,9 +6099,9 @@
       "translated": "Skills"
     },
     {
-      "id": "native.android.73a666b0a4a0e617",
-      "source": "Installed capabilities available to OpenClaw.",
-      "translated": "Fonctionnalités installées disponibles pour OpenClaw."
+      "id": "native.android.d8a2361917591397",
+      "source": "Manage installed skills and add trusted releases from ClawHub.",
+      "translated": "Gérez les compétences installées et ajoutez des versions fiables depuis ClawHub."
     },
     {
       "id": "native.android.8d8bafb716f856dd",
@@ -6044,6 +6119,11 @@
       "translated": "Actualisation"
     },
     {
+      "id": "native.android.c6d0b8c171da5e69",
+      "source": "Skill changes require operator.admin. Reconnect with an admin-capable gateway token.",
+      "translated": "Les modifications de compétences nécessitent operator.admin. Reconnectez-vous avec un jeton de Gateway disposant des droits d’administration."
+    },
+    {
       "id": "native.android.73f15da5b2ffdf3c",
       "source": "Connect the gateway to load skills.",
       "translated": "Connectez la Gateway pour charger les Skills."
@@ -6059,9 +6139,14 @@
       "translated": "Les Skills installés sur la Gateway apparaîtront ici."
     },
     {
-      "id": "native.android.81d900273232ce39",
-      "source": "Inspect installed skill capability and setup state.",
-      "translated": "Inspectez la fonctionnalité de skill installée et l’état de la configuration."
+      "id": "native.android.193fa2086c682510",
+      "source": "No installed skills match this search.",
+      "translated": "Aucune compétence installée ne correspond à cette recherche."
+    },
+    {
+      "id": "native.android.cf0bc487b537dd04",
+      "source": "Inspect and manage installed skill state.",
+      "translated": "Consultez et gérez l’état des compétences installées."
     },
     {
       "id": "native.android.92e94c3027f3e5ce",
@@ -6072,6 +6157,36 @@
       "id": "native.android.3866fe91a977b21a",
       "source": "Missing",
       "translated": "Manquant"
+    },
+    {
+      "id": "native.android.944e0db270dbef5c",
+      "source": "Installed skills",
+      "translated": "Compétences installées"
+    },
+    {
+      "id": "native.android.47ee8c52e754f17d",
+      "source": "${visibleCount}/${totalCount}",
+      "translated": "${visibleCount}/${totalCount}"
+    },
+    {
+      "id": "native.android.8748f97cadea1632",
+      "source": "Search installed skills",
+      "translated": "Rechercher dans les compétences installées"
+    },
+    {
+      "id": "native.android.e7aa097ca1a41857",
+      "source": "Gateway switch",
+      "translated": "Commutateur du Gateway"
+    },
+    {
+      "id": "native.android.b37f4ed946baddb5",
+      "source": "Disabled for all agents.",
+      "translated": "Désactivée pour tous les agents."
+    },
+    {
+      "id": "native.android.fd25021f8a754b8b",
+      "source": "Enabled for eligible agents.",
+      "translated": "Activée pour les agents éligibles."
     },
     {
       "id": "native.android.28e324e5ddfa47b8",
@@ -6114,6 +6229,91 @@
       "translated": "Ouvrir les détails du Skill"
     },
     {
+      "id": "native.android.b8f2fcd78ea247d5",
+      "source": "Find on ClawHub",
+      "translated": "Rechercher sur ClawHub"
+    },
+    {
+      "id": "native.android.51728d0754b4e72b",
+      "source": "Search registry metadata. The Gateway verifies trust again before any download.",
+      "translated": "Recherchez dans les métadonnées du registre. Le Gateway vérifie à nouveau la fiabilité avant tout téléchargement."
+    },
+    {
+      "id": "native.android.c0ae6db636e9b766",
+      "source": "Search ClawHub",
+      "translated": "Rechercher sur ClawHub"
+    },
+    {
+      "id": "native.android.0f030fcf6f4626f2",
+      "source": "Search",
+      "translated": "Rechercher"
+    },
+    {
+      "id": "native.android.d7ce0165b8af0803",
+      "source": "Searching",
+      "translated": "Recherche en cours"
+    },
+    {
+      "id": "native.android.559e047666ce63f8",
+      "source": "Dismiss",
+      "translated": "Fermer"
+    },
+    {
+      "id": "native.android.0c00aa53506c3cd3",
+      "source": "Acknowledge Gateway warning and install",
+      "translated": "Accepter l’avertissement du Gateway et installer"
+    },
+    {
+      "id": "native.android.cc0b71a70901e723",
+      "source": "Version $it",
+      "translated": "Version $it"
+    },
+    {
+      "id": "native.android.4c85b5d888652e61",
+      "source": "Installing",
+      "translated": "Installing"
+    },
+    {
+      "id": "native.android.58e92f6f7ee9a870",
+      "source": "Loading",
+      "translated": "Loading"
+    },
+    {
+      "id": "native.android.e63592576acd892e",
+      "source": "Review",
+      "translated": "Review"
+    },
+    {
+      "id": "native.android.9be29ded6a7097bf",
+      "source": "Review ClawHub skill",
+      "translated": "Examiner la skill ClawHub"
+    },
+    {
+      "id": "native.android.43d6a41fe9988e8b",
+      "source": "Version",
+      "translated": "Version"
+    },
+    {
+      "id": "native.android.71b746307f24c526",
+      "source": "Publisher",
+      "translated": "Éditeur"
+    },
+    {
+      "id": "native.android.d3da485c52921b9b",
+      "source": "The Gateway will verify this exact release with ClawHub before download. If the release needs explicit risk acknowledgement, Android will show the Gateway warning before retrying.",
+      "translated": "Le Gateway vérifiera cette version exacte auprès de ClawHub avant le téléchargement. Si la version nécessite une acceptation explicite des risques, Android affichera l’avertissement du Gateway avant de réessayer."
+    },
+    {
+      "id": "native.android.e9a00012aa173335",
+      "source": "Verify and install",
+      "translated": "Vérifier et installer"
+    },
+    {
+      "id": "native.android.268a3461947b22d3",
+      "source": "Cancel",
+      "translated": "Annuler"
+    },
+    {
       "id": "native.android.815c8dab8db8a6c1",
       "source": "Off",
       "translated": "Désactivé"
@@ -6139,19 +6339,29 @@
       "translated": "Bloqué"
     },
     {
+      "id": "native.android.a30361b1cecbd677",
+      "source": "Not available to this agent",
+      "translated": "Not available to this agent"
+    },
+    {
       "id": "native.android.76249053ea991da2",
       "source": "Needs setup",
       "translated": "Configuration requise"
     },
     {
-      "id": "native.android.995e36dd75b0bfc9",
-      "source": "This skill is disabled on the gateway. Android shows detail only; enable or configure it from desktop or CLI.",
-      "translated": "Cette compétence est désactivée sur le Gateway. Android affiche uniquement les détails ; activez-la ou configurez-la depuis l’application de bureau ou la CLI."
+      "id": "native.android.897cd727907f3bab",
+      "source": "This skill is disabled on the gateway. Enable it here when the current connection has operator.admin.",
+      "translated": "This skill is disabled on the gateway. Enable it here when the current connection has operator.admin."
     },
     {
-      "id": "native.android.bf6aa08312d8e760",
-      "source": "This skill is blocked by the gateway allowlist. Android can inspect it, but allowlist changes stay on desktop or CLI.",
-      "translated": "Cette compétence est bloquée par la liste d’autorisation du Gateway. Android permet de l’examiner, mais les modifications de la liste d’autorisation s’effectuent depuis l’application de bureau ou la CLI."
+      "id": "native.android.9c942aba65c09b84",
+      "source": "This skill is blocked by the gateway allowlist. Allowlist changes stay on desktop or CLI.",
+      "translated": "This skill is blocked by the gateway allowlist. Allowlist changes stay on desktop or CLI."
+    },
+    {
+      "id": "native.android.a30dea20e935158a",
+      "source": "This skill is installed but not available to the current agent. Agent filters stay on desktop or CLI.",
+      "translated": "This skill is installed but not available to the current agent. Agent filters stay on desktop or CLI."
     },
     {
       "id": "native.android.95aa7173d663453f",
@@ -6159,9 +6369,9 @@
       "translated": "Cette compétence est installée, mais ne peut pas être exécutée actuellement. Utilisez l’application de bureau ou la CLI pour modifier sa configuration."
     },
     {
-      "id": "native.android.03541aea29d7a7f2",
-      "source": "Ready on this gateway. Android detail is read-only; install, update, and configuration changes stay on desktop or CLI.",
-      "translated": "Prête sur ce Gateway. Les détails sont en lecture seule sur Android ; les installations, mises à jour et modifications de configuration s’effectuent depuis l’application de bureau ou la CLI."
+      "id": "native.android.5d931c33b02138fe",
+      "source": "Ready on this gateway. Android can enable or disable it globally; setup and configuration stay on desktop or CLI.",
+      "translated": "Ready on this gateway. Android can enable or disable it globally; setup and configuration stay on desktop or CLI."
     },
     {
       "id": "native.android.ab1f2758d6297a24",

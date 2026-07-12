@@ -1,7 +1,7 @@
 // Control UI tests cover the full-page new-session draft and its folder browser
 // against a mocked Gateway: sidebar entry, fs.listDir browsing, and the final
 // sessions.create payload.
-import { chromium, type Browser } from "playwright";
+import { chromium, type Browser, type Locator, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
@@ -9,6 +9,7 @@ import {
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
   type ControlUiE2eServer,
+  type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
@@ -23,6 +24,96 @@ const TARGET_REPO = "/tmp/target-repo";
 const NODE_HOME = "/Users/peter";
 const NODE_PICKED = "/Users/peter/Projects";
 const NODE_UNC = "\\\\server\\share\\repo";
+
+function installRepositorySwitchGateway(page: Page, sessionKey: string) {
+  return installMockGateway(page, {
+    workspaceGit: true,
+    methodResponses: {
+      "agents.list": {
+        agents: [
+          {
+            id: "main",
+            identity: { name: "Main" },
+            name: "Main",
+            workspace: SOURCE_REPO,
+            workspaceGit: true,
+          },
+        ],
+        defaultId: "main",
+        mainKey: "main",
+        scope: "agent",
+      },
+      "fs.listDir": {
+        cases: [
+          {
+            match: { path: SOURCE_REPO },
+            response: {
+              path: SOURCE_REPO,
+              parent: "/tmp",
+              home: "/home/peter",
+              entries: [],
+            },
+          },
+        ],
+      },
+      "worktrees.branches": {
+        cases: [
+          {
+            match: { repoRoot: SOURCE_REPO },
+            response: {
+              branches: [{ kind: "local", name: "alpha" }],
+              headBranch: "alpha",
+              repoRoot: SOURCE_REPO,
+            },
+          },
+          {
+            match: { repoRoot: TARGET_REPO },
+            response: {
+              branches: [
+                { kind: "local", name: "main" },
+                { kind: "local", name: "feature-choice" },
+              ],
+              headBranch: "main",
+              repoRoot: TARGET_REPO,
+            },
+          },
+        ],
+      },
+      "sessions.create": { key: sessionKey },
+    },
+  });
+}
+
+async function deferTargetRepositorySelection(
+  page: Page,
+  gateway: MockGatewayControls,
+): Promise<Locator> {
+  await page.goto(`${server.baseUrl}new`);
+  await gateway.waitForRequest("worktrees.branches");
+
+  const whereSelect = page.locator(
+    ".new-session-page__select:not(.new-session-page__select--folder)",
+  );
+  await whereSelect.locator("summary").click();
+  await page.getByRole("menuitemradio", { name: "Worktree" }).click();
+  const baseInput = page.getByLabel("Base branch");
+  await expect.poll(() => baseInput.inputValue()).toBe("alpha");
+  const requestsBeforeSwitch = (await gateway.getRequests("worktrees.branches")).length;
+
+  await gateway.deferNext("worktrees.branches");
+  const folderSelect = page.locator(".new-session-page__select--folder");
+  await folderSelect.locator("summary").click();
+  await page
+    .locator(".new-session-page__browser-list")
+    .getByRole("button", { name: "Gateway" })
+    .click();
+  await page.locator("input.new-session-page__browser-path").fill(TARGET_REPO);
+  await page.getByRole("button", { name: "Use this folder" }).click();
+  await expect
+    .poll(async () => (await gateway.getRequests("worktrees.branches")).length)
+    .toBe(requestsBeforeSwitch + 1);
+  return baseInput;
+}
 
 let browser: Browser;
 let server: ControlUiE2eServer;
@@ -183,85 +274,10 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      workspaceGit: true,
-      methodResponses: {
-        "agents.list": {
-          agents: [
-            {
-              id: "main",
-              identity: { name: "Main" },
-              name: "Main",
-              workspace: SOURCE_REPO,
-              workspaceGit: true,
-            },
-          ],
-          defaultId: "main",
-          mainKey: "main",
-          scope: "agent",
-        },
-        "fs.listDir": {
-          cases: [
-            {
-              match: { path: SOURCE_REPO },
-              response: {
-                path: SOURCE_REPO,
-                parent: "/tmp",
-                home: "/home/peter",
-                entries: [],
-              },
-            },
-          ],
-        },
-        "worktrees.branches": {
-          cases: [
-            {
-              match: { repoRoot: SOURCE_REPO },
-              response: {
-                branches: [{ kind: "local", name: "alpha" }],
-                headBranch: "alpha",
-                repoRoot: SOURCE_REPO,
-              },
-            },
-            {
-              match: { repoRoot: TARGET_REPO },
-              response: {
-                branches: [{ kind: "local", name: "main" }],
-                headBranch: "main",
-                repoRoot: TARGET_REPO,
-              },
-            },
-          ],
-        },
-        "sessions.create": { key: "agent:main:repo-switch" },
-      },
-    });
+    const gateway = await installRepositorySwitchGateway(page, "agent:main:repo-switch");
 
     try {
-      await page.goto(`${server.baseUrl}new`);
-      await gateway.waitForRequest("worktrees.branches");
-
-      const whereSelect = page.locator(
-        ".new-session-page__select:not(.new-session-page__select--folder)",
-      );
-      await whereSelect.locator("summary").click();
-      await page.getByRole("menuitemradio", { name: "Worktree" }).click();
-      const baseInput = page.getByLabel("Base branch");
-      await expect.poll(() => baseInput.inputValue()).toBe("alpha");
-      const branchRequestsBeforeSwitch = (await gateway.getRequests("worktrees.branches")).length;
-
-      await gateway.deferNext("worktrees.branches");
-      const folderSelect = page.locator(".new-session-page__select--folder");
-      await folderSelect.locator("summary").click();
-      await page
-        .locator(".new-session-page__browser-list")
-        .getByRole("button", { name: "Gateway" })
-        .click();
-      await page.locator("input.new-session-page__browser-path").fill(TARGET_REPO);
-      await page.getByRole("button", { name: "Use this folder" }).click();
-      await expect
-        .poll(async () => (await gateway.getRequests("worktrees.branches")).length)
-        .toBe(branchRequestsBeforeSwitch + 1);
+      const baseInput = await deferTargetRepositorySelection(page, gateway);
 
       expect(await baseInput.inputValue()).toBe("");
       expect(await baseInput.getAttribute("placeholder")).toBe("Loading…");
@@ -275,6 +291,38 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       });
       expect(create.params).not.toHaveProperty("worktreeBaseRef");
       await gateway.resolveDeferred("worktrees.branches");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("preserves a manually entered worktree base when branch discovery resolves", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installRepositorySwitchGateway(page, "agent:main:manual-base");
+
+    try {
+      const baseInput = await deferTargetRepositorySelection(page, gateway);
+      await page
+        .locator(".new-session-page__select:not(.new-session-page__select--folder) summary")
+        .click();
+      await baseInput.fill("feature-choice");
+      await gateway.resolveDeferred("worktrees.branches");
+      await expect.poll(() => baseInput.getAttribute("placeholder")).not.toBe("Loading…");
+      expect(await baseInput.inputValue()).toBe("feature-choice");
+
+      await page.locator(".new-session-page__message").fill("use my selected base");
+      await page.getByRole("button", { name: "Start session" }).click();
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).toMatchObject({
+        cwd: TARGET_REPO,
+        worktree: true,
+        worktreeBaseRef: "feature-choice",
+      });
     } finally {
       await context.close();
     }
