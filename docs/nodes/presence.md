@@ -110,13 +110,13 @@ connection can still participate in fallback delivery.
 
 ## Troubleshooting
 
-| Symptom | Check |
-| --- | --- |
-| No row is marked `active` | Confirm a native macOS node is connected and `openclaw nodes describe --node <id>` shows `permissions.accessibility: true`. |
-| The wrong Mac remains active | Use that Mac physically, wait for the coalescing window, then rerun `openclaw nodes status`. Synthetic computer-control actions do not count. |
-| Last-input data disappears | Check whether the Mac disconnected, its node session was replaced, or Accessibility was revoked. Each condition intentionally clears activity. |
-| The alert appears on several Macs | Primary delivery was unavailable or failed, so the delayed fallback ran. Verify that the active Mac is connected, allows notifications, and exposes `system.notify`. |
-| The agent does not mention the active Mac | Start a new turn after activity changes. The runtime hint is stable and compact; use the `nodes` tool for exact current metadata. |
+| Symptom                                   | Check                                                                                                                                                                |
+| ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No row is marked `active`                 | Confirm a native macOS node is connected and `openclaw nodes describe --node <id>` shows `permissions.accessibility: true`.                                          |
+| The wrong Mac remains active              | Use that Mac physically, wait for the coalescing window, then rerun `openclaw nodes status`. Synthetic computer-control actions do not count.                        |
+| Last-input data disappears                | Check whether the Mac disconnected, its node session was replaced, or Accessibility was revoked. Each condition intentionally clears activity.                       |
+| The alert appears on several Macs         | Primary delivery was unavailable or failed, so the delayed fallback ran. Verify that the active Mac is connected, allows notifications, and exposes `system.notify`. |
+| The agent does not mention the active Mac | Start a new turn after activity changes. The runtime hint is stable and compact; use the `nodes` tool for exact current metadata.                                    |
 
 For TCC recovery, see [macOS permissions](/platforms/mac/permissions). For node
 connection and command failures, see [Node troubleshooting](/nodes/troubleshooting).
