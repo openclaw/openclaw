@@ -42,8 +42,9 @@ struct VoiceWakeWordsSettingsView: View {
                     .font(OpenClawType.captionSemiBold)
             } footer: {
                 Text(
-                    "OpenClaw reacts when any trigger appears in a transcription. "
-                        + "Keep them short to avoid false positives.")
+                    String(
+                        localized:
+                        "OpenClaw reacts when any trigger appears in a transcription. Keep them short to avoid false positives."))
                     .font(OpenClawType.caption)
             }
         }

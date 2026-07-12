@@ -364,8 +364,9 @@ struct SettingsProTab: View {
                 }
                 } message: {
                     Text(
-                        "This removes saved credentials, device access, TLS trust, " +
-                            "and cached chats for this gateway.")
+                        String(
+                            localized:
+                            "This removes saved credentials, device access, TLS trust, and cached chats for this gateway."))
                         .font(OpenClawType.subhead)
                 }
     }
