@@ -590,8 +590,9 @@ async function runCliAgentInternal(params: RunCliAgentParams): Promise<EmbeddedA
 
 /** Runs an already-prepared CLI agent context through hooks and execution. */
 export async function runPreparedCliAgent(
-  context: PreparedCliRunContext,
+  initialContext: PreparedCliRunContext,
 ): Promise<EmbeddedAgentRunResult> {
+  let context = initialContext;
   const { executePreparedCliRun } = await import("./cli-runner/execute.runtime.js");
   const { params } = context;
   const sessionBindingDisabled = context.preparedBackend.backend.sessionMode === "none";
@@ -995,8 +996,10 @@ export async function runPreparedCliAgent(
     bindingFlushOk?: boolean;
     assistantTranscriptOwned?: boolean;
     usedHistoryPrompt: boolean;
+    /** Post-hook assistant text when llm_output modified the response. */
+    effectiveAssistantText?: string;
   }): EmbeddedAgentRunResult => {
-    const text = resultParams.output.text?.trim();
+    const text = resultParams.effectiveAssistantText ?? resultParams.output.text?.trim();
     const rawText = resultParams.output.rawText?.trim();
     const sourceReplyMirror = resolveCliSourceReplyMirror(resultParams.output);
     const finalAssistantVisibleText = sourceReplyMirror.delivered
@@ -1248,6 +1251,7 @@ export async function runPreparedCliAgent(
           bindingFlushOk,
           assistantTranscriptOwned,
           usedHistoryPrompt,
+          effectiveAssistantText: assistantText,
         });
       } catch (error) {
         throw attachCliMessagingDeliveryEvidence(error, output);
@@ -1333,6 +1337,14 @@ export async function runPreparedCliAgent(
     if (llmInputHookResult?.block) {
       const reason = llmInputHookResult.blockReason ?? "Blocked by llm_input plugin hook";
       return buildBlockedBeforeAgentRunResult(reason);
+    }
+    // Apply prompt/systemPrompt overrides from llm_input hook to the
+    // prepared context so the CLI backend receives the modified values.
+    if (llmInputHookResult?.prompt !== undefined) {
+      context = { ...context, params: { ...context.params, prompt: llmInputHookResult.prompt } };
+    }
+    if (llmInputHookResult?.systemPrompt !== undefined) {
+      context = { ...context, systemPrompt: llmInputHookResult.systemPrompt };
     }
     const reusableCliSessionId = resolveReusableCliSessionId(context.reusableCliSession);
     try {

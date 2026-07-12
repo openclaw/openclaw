@@ -3745,7 +3745,7 @@ async function runEmbeddedAgentInternal(
                   sessionFile: activeSessionFile,
                   provider,
                   model: model.id,
-                  contextTokens: ctxInfo.tokens,
+                  contextTokens: contextTokenBudget,
                   usageAccumulator,
                   lastRunPromptUsage,
                   lastAssistant: sessionLastAssistant,
