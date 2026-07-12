@@ -17,6 +17,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -37,6 +38,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -56,6 +58,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
@@ -127,8 +130,9 @@ private fun WorkspaceDirectoryScreen(
   var loading by remember(path) { mutableStateOf(false) }
   var loadingMore by remember(path) { mutableStateOf(false) }
   var errorText by remember(path) { mutableStateOf<String?>(null) }
+  var refreshNonce by remember(path) { mutableIntStateOf(0) }
 
-  LaunchedEffect(path, isConnected) {
+  LaunchedEffect(path, isConnected, refreshNonce) {
     if (!isConnected) {
       errorText = "Connect the gateway to browse workspace files."
       return@LaunchedEffect
@@ -162,12 +166,33 @@ private fun WorkspaceDirectoryScreen(
           horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
           ClawPlainIconButton(icon = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", onClick = onBack)
-          Text(
-            text = if (path.isEmpty()) "Files" else path.substringAfterLast('/'),
-            style = ClawTheme.type.display.copy(fontSize = 24.sp, lineHeight = 28.sp),
-            color = ClawTheme.colors.text,
-            modifier = Modifier.weight(1f),
-          )
+          Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            Text(
+              text = if (path.isEmpty()) "Files" else path.substringAfterLast('/'),
+              style = ClawTheme.type.display.copy(fontSize = 24.sp, lineHeight = 28.sp),
+              color = ClawTheme.colors.text,
+            )
+            if (path.isNotEmpty()) {
+              Text(
+                text = path,
+                style = ClawTheme.type.caption,
+                color = ClawTheme.colors.textMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+              )
+            }
+          }
+          if (loading) {
+            Box(modifier = Modifier.size(ClawTheme.spacing.touchTarget), contentAlignment = Alignment.Center) {
+              CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+            }
+          } else if (isConnected) {
+            ClawPlainIconButton(
+              icon = Icons.Outlined.Refresh,
+              contentDescription = "Refresh",
+              onClick = { refreshNonce += 1 },
+            )
+          }
         }
       }
 

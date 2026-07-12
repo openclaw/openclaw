@@ -5539,7 +5539,15 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 176,
+      "line": 192,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/WorkspaceFilesScreen.kt",
+      "source": "Refresh",
+      "surface": "android",
+      "id": "native.android.066337249b9d9d30"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 201,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/WorkspaceFilesScreen.kt",
       "source": "Files unavailable",
       "surface": "android",
@@ -5547,7 +5555,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 182,
+      "line": 207,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/WorkspaceFilesScreen.kt",
       "source": "Empty folder",
       "surface": "android",
@@ -5555,7 +5563,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 182,
+      "line": 207,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/WorkspaceFilesScreen.kt",
       "source": "This folder has no files yet.",
       "surface": "android",
@@ -5563,7 +5571,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 212,
+      "line": 237,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/WorkspaceFilesScreen.kt",
       "source": "Could not load this folder.",
       "surface": "android",
@@ -5571,7 +5579,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 221,
+      "line": 246,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/WorkspaceFilesScreen.kt",
       "source": "Load more",
       "surface": "android",
@@ -5579,7 +5587,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 223,
+      "line": 248,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/WorkspaceFilesScreen.kt",
       "source": "${entries.size} of $totalEntries",
       "surface": "android",
@@ -5587,7 +5595,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 316,
+      "line": 341,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/WorkspaceFilesScreen.kt",
       "source": "Back",
       "surface": "android",
@@ -5595,7 +5603,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 327,
+      "line": 352,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/WorkspaceFilesScreen.kt",
       "source": "Share file",
       "surface": "android",
@@ -5603,7 +5611,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 358,
+      "line": 383,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/WorkspaceFilesScreen.kt",
       "source": "No preview",
       "surface": "android",
@@ -5611,7 +5619,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 358,
+      "line": 383,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/WorkspaceFilesScreen.kt",
       "source": "This image could not be decoded.",
       "surface": "android",
