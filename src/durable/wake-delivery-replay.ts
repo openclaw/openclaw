@@ -121,6 +121,85 @@ function updateWakeOutcome(params: {
   }
 }
 
+/**
+ * Crash recovery contract for the delivery boundary:
+ * - pending means the durable attempt was recorded before any delivery side effect;
+ *   replay may safely reclaim the same attempt id and call the hook.
+ * - attempted means the hook crossed its delivery side-effect boundary but did not
+ *   record a terminal outcome before the process stopped; replay must pass the
+ *   same attempt id back to the hook so the delivery implementation can confirm
+ *   or complete idempotently instead of silently dropping the wake.
+ * - delivered/failed/unknown are terminal ledger outcomes and remain deduped.
+ */
+function isReclaimableAttempt(attempt: DurableWakeDeliveryAttempt): boolean {
+  return attempt.status === "pending" || attempt.status === "attempted";
+}
+
+async function applyDeliveryHook(params: {
+  store: DurableRuntimeStore;
+  wake: DurableWake;
+  attempt: DurableWakeDeliveryAttempt;
+  deliveryHook: DurableWakeDeliveryHook;
+  replayPassId: string;
+  now?: number;
+}): Promise<DurableWakeDeliveryAttempt> {
+  try {
+    const hookResult = await params.deliveryHook({
+      wake: params.wake,
+      attempt: params.attempt,
+    });
+    const outcomeAt = params.now ?? Date.now();
+    const attempt =
+      params.store.updateWakeDeliveryAttempt({
+        deliveryAttemptId: params.attempt.deliveryAttemptId,
+        status: hookResult.status,
+        ...(hookResult.evidence ? { evidence: hookResult.evidence } : {}),
+        ...(hookResult.error ? { error: hookResult.error } : {}),
+        ...timestampForStatus(hookResult.status, outcomeAt),
+        metadata: {
+          deliveryContract: "durable_wake_delivery_replay_v1",
+          replayPassId: params.replayPassId,
+        },
+        now: outcomeAt,
+      }) ?? params.attempt;
+    updateWakeOutcome({
+      store: params.store,
+      wake: params.wake,
+      status: hookResult.status,
+      ...(hookResult.error ? { error: hookResult.error } : {}),
+      now: outcomeAt,
+    });
+    return attempt;
+  } catch (err) {
+    const failedAt = params.now ?? Date.now();
+    const error = err instanceof Error ? err.message : String(err);
+    const attempt =
+      params.store.updateWakeDeliveryAttempt({
+        deliveryAttemptId: params.attempt.deliveryAttemptId,
+        status: "failed",
+        evidence: {
+          kind: "wake_delivery_hook_error",
+        },
+        error,
+        attemptedAt: failedAt,
+        failedAt,
+        metadata: {
+          deliveryContract: "durable_wake_delivery_replay_v1",
+          replayPassId: params.replayPassId,
+        },
+        now: failedAt,
+      }) ?? params.attempt;
+    updateWakeOutcome({
+      store: params.store,
+      wake: params.wake,
+      status: "failed",
+      error,
+      now: failedAt,
+    });
+    return attempt;
+  }
+}
+
 export async function replayDurableWakeDeliveryAttempts(params: {
   store: DurableRuntimeStore;
   replayPassId?: string;
@@ -154,86 +233,48 @@ export async function replayDurableWakeDeliveryAttempts(params: {
       dedupeKey,
       limit: 1,
     })[0];
-    if (existing) {
+    if (existing && !isReclaimableAttempt(existing)) {
       result.deduped += 1;
       result.attempts.push(existing);
       continue;
     }
 
-    let attempt = params.store.recordWakeDeliveryAttempt({
-      wakeId: wake.wakeId,
-      dedupeKey,
-      replayPassId,
-      ...(wake.targetKind ? { targetKind: wake.targetKind } : {}),
-      ...(wake.targetRef ? { targetRef: wake.targetRef } : {}),
-      routeKind: route.routeKind,
-      routeRef: route.routeRef,
-      status: "pending",
-      evidence: {
-        kind: "wake_delivery_scheduled",
+    let attempt =
+      existing ??
+      params.store.recordWakeDeliveryAttempt({
         wakeId: wake.wakeId,
-        wakeReason: wake.reason,
-        targetResolutionStatus: wake.targetResolutionStatus,
-      },
-      metadata: {
-        deliveryContract: "durable_wake_delivery_replay_v1",
+        dedupeKey,
         replayPassId,
-      },
-      now,
-    });
-    result.recorded += 1;
+        ...(wake.targetKind ? { targetKind: wake.targetKind } : {}),
+        ...(wake.targetRef ? { targetRef: wake.targetRef } : {}),
+        routeKind: route.routeKind,
+        routeRef: route.routeRef,
+        status: "pending",
+        evidence: {
+          kind: "wake_delivery_scheduled",
+          wakeId: wake.wakeId,
+          wakeReason: wake.reason,
+          targetResolutionStatus: wake.targetResolutionStatus,
+        },
+        metadata: {
+          deliveryContract: "durable_wake_delivery_replay_v1",
+          replayPassId,
+        },
+        now,
+      });
+    if (!existing) {
+      result.recorded += 1;
+    }
 
     if (params.deliveryHook) {
-      try {
-        const hookResult = await params.deliveryHook({ wake, attempt });
-        const outcomeAt = params.now ?? Date.now();
-        attempt =
-          params.store.updateWakeDeliveryAttempt({
-            deliveryAttemptId: attempt.deliveryAttemptId,
-            status: hookResult.status,
-            ...(hookResult.evidence ? { evidence: hookResult.evidence } : {}),
-            ...(hookResult.error ? { error: hookResult.error } : {}),
-            ...timestampForStatus(hookResult.status, outcomeAt),
-            metadata: {
-              deliveryContract: "durable_wake_delivery_replay_v1",
-              replayPassId,
-            },
-            now: outcomeAt,
-          }) ?? attempt;
-        updateWakeOutcome({
-          store: params.store,
-          wake,
-          status: hookResult.status,
-          ...(hookResult.error ? { error: hookResult.error } : {}),
-          now: outcomeAt,
-        });
-      } catch (err) {
-        const failedAt = params.now ?? Date.now();
-        const error = err instanceof Error ? err.message : String(err);
-        attempt =
-          params.store.updateWakeDeliveryAttempt({
-            deliveryAttemptId: attempt.deliveryAttemptId,
-            status: "failed",
-            evidence: {
-              kind: "wake_delivery_hook_error",
-            },
-            error,
-            attemptedAt: failedAt,
-            failedAt,
-            metadata: {
-              deliveryContract: "durable_wake_delivery_replay_v1",
-              replayPassId,
-            },
-            now: failedAt,
-          }) ?? attempt;
-        updateWakeOutcome({
-          store: params.store,
-          wake,
-          status: "failed",
-          error,
-          now: failedAt,
-        });
-      }
+      attempt = await applyDeliveryHook({
+        store: params.store,
+        wake,
+        attempt,
+        deliveryHook: params.deliveryHook,
+        replayPassId,
+        now: params.now,
+      });
     }
 
     if (attempt.status === "delivered") {
