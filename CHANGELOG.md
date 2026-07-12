@@ -36,6 +36,7 @@ Docs: https://docs.openclaw.ai
 - **LINE directive templates:** suppress confirms and buttons with blank required fields or unlabeled actions while preserving valid titleless buttons and surrounding reply text. (#105520) Thanks @edenfunf.
 - **SQLite maintenance schema validation:** reject current-version global and agent databases with missing or drifted canonical tables, constraints, indexes, triggers, or table options before compaction, while accepting supported additive-migration layouts.
 - **Matrix bootstrap diagnostics:** preserve complete UTF-8 code points in bounded stdout and stderr tails so crypto dependency failures do not show replacement characters at retention boundaries. (#105475) Thanks @qingminlong.
+- **OpenAI retry cleanup:** detach abort listeners after successful ChatGPT-authenticated retry waits so repeated transient failures do not retain promise closures for the lifetime of an agent run. (#105422, #105519) Thanks @wuqxuan.
 - **iOS Watch relay commands:** allow paired iPhone nodes to advertise and invoke `watch.status` and `watch.notify` through the default Gateway policy while preserving the direct watchOS node's fixed minimal command surface.
 - **Swabble status config:** honor the global `--config` path when reading service status instead of silently using the default configuration.
 - **Gradium TTS credential egress:** reject non-HTTPS, foreign-host, and hostname-lookalike base URLs before dispatching API keys, and pin guarded transport to Gradium's documented API hostname. (#101280) Thanks @zhangguiping-xydt.

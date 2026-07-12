@@ -4,6 +4,7 @@ import { zstdDecompressSync } from "node:zlib";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
+import { sleepWithAbort } from "../internal/retry-sleep.js";
 import type { Context, Model } from "../types.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 import {
@@ -11,7 +12,6 @@ import {
   extractOpenAICodexAccountId,
   parseSSEForTest,
   resetOpenAICodexWebSocketDebugStats,
-  sleepForTest,
   streamSimpleOpenAICodexResponses,
   streamOpenAICodexResponses,
 } from "./openai-chatgpt-responses.js";
@@ -80,7 +80,7 @@ function completedSseResponse(responseId = "resp_test"): Response {
   });
 }
 
-describe("sleepForTest abort listener lifecycle", () => {
+describe("sleepWithAbort listener lifecycle", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -90,9 +90,9 @@ describe("sleepForTest abort listener lifecycle", () => {
     const addSpy = vi.spyOn(controller.signal, "addEventListener");
     const removeSpy = vi.spyOn(controller.signal, "removeEventListener");
 
-    await sleepForTest(5, controller.signal);
+    await sleepWithAbort(5, controller.signal);
 
-    expect(addSpy).toHaveBeenCalledWith("abort", expect.any(Function));
+    expect(addSpy).toHaveBeenCalledWith("abort", expect.any(Function), { once: true });
     const onAbort = addSpy.mock.calls.find((call) => call[0] === "abort")?.[1];
     expect(onAbort).toEqual(expect.any(Function));
     expect(removeSpy).toHaveBeenCalledWith("abort", onAbort);
@@ -103,9 +103,9 @@ describe("sleepForTest abort listener lifecycle", () => {
     const addSpy = vi.spyOn(controller.signal, "addEventListener");
     const removeSpy = vi.spyOn(controller.signal, "removeEventListener");
 
-    await sleepForTest(1, controller.signal);
-    await sleepForTest(1, controller.signal);
-    await sleepForTest(1, controller.signal);
+    await sleepWithAbort(1, controller.signal);
+    await sleepWithAbort(1, controller.signal);
+    await sleepWithAbort(1, controller.signal);
 
     const abortAdds = addSpy.mock.calls.filter((call) => call[0] === "abort");
     const abortRemoves = removeSpy.mock.calls.filter((call) => call[0] === "abort");
@@ -118,19 +118,21 @@ describe("sleepForTest abort listener lifecycle", () => {
 
   it("rejects when the signal aborts during the wait and cleans up the timeout", async () => {
     const controller = new AbortController();
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
     const removeSpy = vi.spyOn(controller.signal, "removeEventListener");
-    const pending = sleepForTest(60_000, controller.signal);
+    const pending = sleepWithAbort(60_000, controller.signal);
     queueMicrotask(() => {
       controller.abort();
     });
     await expect(pending).rejects.toThrow("Request was aborted");
+    expect(clearTimeoutSpy).toHaveBeenCalledOnce();
     expect(removeSpy).toHaveBeenCalledWith("abort", expect.any(Function));
   });
 
   it("rejects immediately when the signal is already aborted", async () => {
     const controller = new AbortController();
     controller.abort();
-    await expect(sleepForTest(5, controller.signal)).rejects.toThrow("Request was aborted");
+    await expect(sleepWithAbort(5, controller.signal)).rejects.toThrow("Request was aborted");
   });
 });
 

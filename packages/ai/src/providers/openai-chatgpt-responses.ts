@@ -33,6 +33,7 @@ import {
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
 import { parseRetryAfterHttpDateMs } from "../internal/retry-after.js";
+import { sleepWithAbort } from "../internal/retry-sleep.js";
 import { registerSessionResourceCleanup } from "../session-resources.js";
 import type {
   Api,
@@ -141,37 +142,6 @@ function isRetryableError(status: number, errorText: string): boolean {
   return /rate.?limit|overloaded|service.?unavailable|upstream.?connect|connection.?refused/i.test(
     errorText,
   );
-}
-
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(new Error("Request was aborted"));
-      return;
-    }
-    // Named listener so both timeout completion and abort can unregister it.
-    // Leaving the listener on a long-lived signal after successful waits leaks
-    // the closure (timeout/reject) on every retry sleep.
-    let settled = false;
-    const onAbort = () => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timeout);
-      signal?.removeEventListener("abort", onAbort);
-      reject(new Error("Request was aborted"));
-    };
-    const timeout = setTimeout(() => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      signal?.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    signal?.addEventListener("abort", onAbort);
-  });
 }
 
 function resolveRequestTimeoutMs(options?: OpenAICodexResponsesOptions): number | undefined {
@@ -454,7 +424,7 @@ export const streamOpenAICodexResponses: StreamFunction<
               }
             }
 
-            await sleep(delayMs, activeSignal);
+            await sleepWithAbort(delayMs, activeSignal);
             continue;
           }
 
@@ -489,7 +459,7 @@ export const streamOpenAICodexResponses: StreamFunction<
           // Network errors are retryable
           if (attempt < MAX_RETRIES && !lastError.message.includes("usage limit")) {
             const delayMs = BASE_DELAY_MS * 2 ** attempt;
-            await sleep(delayMs, activeSignal);
+            await sleepWithAbort(delayMs, activeSignal);
             continue;
           }
           throw lastError;
@@ -898,9 +868,6 @@ async function* parseSSE(response: Response): AsyncGenerator<Record<string, unkn
 // Test-only re-export of the bounded SSE parser. Mirrors
 // `parseAnthropicSseBodyForTest` / `iterateSseMessagesForTest` patterns.
 export const parseSSEForTest = parseSSE;
-
-// Test-only re-export of the retry sleep helper (abort-listener lifecycle).
-export const sleepForTest = sleep;
 
 // ============================================================================
 // WebSocket Parsing
