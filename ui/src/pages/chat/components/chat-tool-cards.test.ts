@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { nothing, render } from "lit";
+import { html, nothing, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../markdown.ts", async (importOriginal) => await importOriginal());
@@ -686,10 +686,9 @@ describe("tool-cards", () => {
   });
 
   it("keeps the MCP App iframe mounted while tool details expand", async () => {
+    const credential = "fixture";
     const container = document.createElement("div");
     document.body.append(container);
-    const root = document.documentElement;
-    const previousTicket = root.getAttribute("data-openclaw-mcp-app-sandbox-ticket");
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -703,8 +702,6 @@ describe("tool-cards", () => {
         },
       }),
     } as Response);
-    root.setAttribute("data-openclaw-mcp-app-sandbox-ticket", "test-ticket");
-
     try {
       const card = {
         id: "msg:mcp-app:1",
@@ -717,14 +714,28 @@ describe("tool-cards", () => {
           viewId: "mcpview_0123456789ABCDEFGHJKMNPQRSTVWXYZ",
         },
       };
-      render(renderToolCard(card, { expanded: false, onToggleExpanded: vi.fn() }), container);
+      render(
+        renderToolCard(card, {
+          credential,
+          expanded: false,
+          onToggleExpanded: vi.fn(),
+        }),
+        container,
+      );
 
       await vi.waitFor(() => {
         expect(container.querySelector(".chat-tool-card__preview-frame--mcp-app")).not.toBeNull();
       });
       const iframe = container.querySelector(".chat-tool-card__preview-frame--mcp-app");
 
-      render(renderToolCard(card, { expanded: true, onToggleExpanded: vi.fn() }), container);
+      render(
+        renderToolCard(card, {
+          credential,
+          expanded: true,
+          onToggleExpanded: vi.fn(),
+        }),
+        container,
+      );
 
       expect(container.querySelector(".chat-tool-card__preview-frame--mcp-app")).toBe(iframe);
       expect(container.querySelector(".chat-tool-card__raw-toggle")).not.toBeNull();
@@ -733,19 +744,13 @@ describe("tool-cards", () => {
       render(nothing, container);
       container.remove();
       fetchMock.mockRestore();
-      if (previousTicket === null) {
-        root.removeAttribute("data-openclaw-mcp-app-sandbox-ticket");
-      } else {
-        root.setAttribute("data-openclaw-mcp-app-sandbox-ticket", previousTicket);
-      }
     }
   });
 
-  it("hydrates MCP Apps near the viewport and releases them offscreen", async () => {
+  it("hydrates MCP Apps near the viewport and preserves activated state offscreen", async () => {
+    const credential = "fixture";
     const container = document.createElement("div");
     document.body.append(container);
-    const root = document.documentElement;
-    const previousTicket = root.getAttribute("data-openclaw-mcp-app-sandbox-ticket");
     let observerCallback: IntersectionObserverCallback | undefined;
     let observedElement: Element | undefined;
     const observer = {
@@ -779,8 +784,6 @@ describe("tool-cards", () => {
         result: { structuredContent: { status: "ready" } },
       }),
     } as Response);
-    root.setAttribute("data-openclaw-mcp-app-sandbox-ticket", "test-ticket");
-
     try {
       render(
         renderToolCard(
@@ -795,7 +798,7 @@ describe("tool-cards", () => {
               viewId: "mcpview_0123456789ABCDEFGHJKMNPQRSTVWXYZ",
             },
           },
-          { expanded: true, onToggleExpanded: vi.fn() },
+          { credential, expanded: true, onToggleExpanded: vi.fn() },
         ),
         container,
       );
@@ -812,25 +815,227 @@ describe("tool-cards", () => {
         expect(container.querySelector(".chat-tool-card__preview-frame--mcp-app")).not.toBeNull();
       });
       expect(fetchMock).toHaveBeenCalledOnce();
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ headers: { Authorization: `Bearer ${credential}` } }),
+      );
+      const iframe = container.querySelector(".chat-tool-card__preview-frame--mcp-app");
 
       observerCallback?.(
         [{ isIntersecting: false, target: observedElement } as IntersectionObserverEntry],
         observer,
       );
       await vi.waitFor(() => {
-        expect(container.querySelector(".chat-tool-card__preview-frame--mcp-app")).toBeNull();
+        expect(container.querySelector(".chat-tool-card__preview-frame--mcp-app")).toBe(iframe);
       });
-      expect(container.textContent).toContain("App preview paused to save resources.");
+      expect(fetchMock).toHaveBeenCalledOnce();
     } finally {
       render(nothing, container);
       container.remove();
       fetchMock.mockRestore();
       vi.unstubAllGlobals();
-      if (previousTicket === null) {
-        root.removeAttribute("data-openclaw-mcp-app-sandbox-ticket");
-      } else {
-        root.setAttribute("data-openclaw-mcp-app-sandbox-ticket", previousTicket);
+    }
+  });
+
+  it("retries an unresolved MCP App when its credential changes", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    let observerCallback: IntersectionObserverCallback | undefined;
+    let observedElement: Element | undefined;
+    const observer = {
+      root: null,
+      rootMargin: "600px 0px",
+      thresholds: [0],
+      disconnect: vi.fn(),
+      observe: vi.fn((element: Element) => {
+        observedElement = element;
+      }),
+      takeRecords: vi.fn(() => []),
+      unobserve: vi.fn(),
+    } satisfies IntersectionObserver;
+    class TestIntersectionObserver {
+      constructor(callback: IntersectionObserverCallback) {
+        observerCallback = callback;
+        return observer;
       }
+    }
+    vi.stubGlobal("IntersectionObserver", TestIntersectionObserver);
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce({ ok: false } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          serverName: "diagrams",
+          toolName: "diagrams_create_view",
+          resource: {
+            uri: "ui://diagrams/app.html",
+            mimeType: "text/html;profile=mcp-app",
+            html: "<!doctype html><html><body>diagram</body></html>",
+          },
+          result: { structuredContent: { status: "ready" } },
+        }),
+      } as Response);
+    const card = {
+      id: "msg:mcp-app:credential-retry",
+      name: "diagrams_create_view",
+      outputText: "rendered",
+      preview: {
+        kind: "mcp-app" as const,
+        serverName: "diagrams",
+        title: "Diagram",
+        viewId: "mcpview_0123456789ABCDEFGHJKMNPQRSTVWXYZ",
+      },
+    };
+
+    try {
+      render(
+        renderToolCard(card, {
+          credential: "stale",
+          expanded: true,
+          onToggleExpanded: vi.fn(),
+        }),
+        container,
+      );
+      await Promise.resolve();
+      observerCallback?.(
+        [{ isIntersecting: true, target: observedElement } as IntersectionObserverEntry],
+        observer,
+      );
+      await vi.waitFor(() => {
+        expect(container.textContent).toContain("App preview unavailable.");
+      });
+
+      render(
+        renderToolCard(card, {
+          credential: "rotated",
+          expanded: true,
+          onToggleExpanded: vi.fn(),
+        }),
+        container,
+      );
+      await vi.waitFor(() => {
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        expect(container.querySelector(".chat-tool-card__preview-frame--mcp-app")).not.toBeNull();
+      });
+      expect(fetchMock.mock.calls[1]?.[1]).toEqual(
+        expect.objectContaining({ headers: { Authorization: "Bearer rotated" } }),
+      );
+    } finally {
+      render(nothing, container);
+      container.remove();
+      fetchMock.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("bounds retained MCP App frames by pausing the least recent preview", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const observerRecords: Array<{
+      callback: IntersectionObserverCallback;
+      observer: IntersectionObserver;
+      target?: Element;
+    }> = [];
+    class TestIntersectionObserver {
+      constructor(callback: IntersectionObserverCallback) {
+        const record: (typeof observerRecords)[number] = {
+          callback,
+          observer: undefined as unknown as IntersectionObserver,
+        };
+        const observer = {
+          root: null,
+          rootMargin: "600px 0px",
+          thresholds: [0],
+          disconnect: vi.fn(),
+          observe: vi.fn((element: Element) => {
+            record.target = element;
+          }),
+          takeRecords: vi.fn(() => []),
+          unobserve: vi.fn(),
+        } satisfies IntersectionObserver;
+        record.observer = observer;
+        observerRecords.push(record);
+        return observer;
+      }
+    }
+    vi.stubGlobal("IntersectionObserver", TestIntersectionObserver);
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        serverName: "diagrams",
+        toolName: "diagrams_create_view",
+        resource: {
+          uri: "ui://diagrams/app.html",
+          mimeType: "text/html;profile=mcp-app",
+          html: "<!doctype html><html><body>diagram</body></html>",
+        },
+        result: { structuredContent: { status: "ready" } },
+      }),
+    } as Response);
+    const viewIds = Array.from(
+      { length: 9 },
+      (_, index) => `mcpview_0123456789ABCDEFGHJKMNPQRSTVWXY${index + 1}`,
+    );
+
+    try {
+      render(
+        html`${viewIds.map((viewId, index) =>
+          renderToolCard(
+            {
+              id: `msg:mcp-app:retained-${index}`,
+              name: "diagrams_create_view",
+              outputText: "rendered",
+              preview: {
+                kind: "mcp-app",
+                serverName: "diagrams",
+                title: `Diagram ${index + 1}`,
+                viewId,
+              },
+            },
+            { credential: "fixture", expanded: true, onToggleExpanded: vi.fn() },
+          ),
+        )}`,
+        container,
+      );
+      await vi.waitFor(() => {
+        expect(observerRecords).toHaveLength(viewIds.length);
+      });
+      for (const [index, record] of observerRecords.entries()) {
+        record.callback(
+          [{ isIntersecting: true, target: record.target } as IntersectionObserverEntry],
+          record.observer,
+        );
+        await vi.waitFor(() => {
+          expect(fetchMock).toHaveBeenCalledTimes(index + 1);
+        });
+        record.callback(
+          [{ isIntersecting: false, target: record.target } as IntersectionObserverEntry],
+          record.observer,
+        );
+      }
+      await vi.waitFor(() => {
+        expect(container.querySelectorAll(".chat-tool-card__preview-frame--mcp-app")).toHaveLength(
+          8,
+        );
+      });
+      const previews = container.querySelectorAll("openclaw-mcp-app-preview");
+      expect(previews[0]?.querySelector(".chat-tool-card__preview-frame--mcp-app")).toBeNull();
+      expect(previews[0]?.textContent).toContain("App preview paused to save resources.");
+      previews[0]?.querySelector<HTMLButtonElement>("button")?.click();
+      await vi.waitFor(() => {
+        expect(
+          previews[0]?.querySelector(".chat-tool-card__preview-frame--mcp-app"),
+        ).not.toBeNull();
+        expect(container.querySelectorAll(".chat-tool-card__preview-frame--mcp-app")).toHaveLength(
+          8,
+        );
+      });
+    } finally {
+      render(nothing, container);
+      container.remove();
+      fetchMock.mockRestore();
+      vi.unstubAllGlobals();
     }
   });
 

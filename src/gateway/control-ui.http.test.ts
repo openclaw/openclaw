@@ -24,8 +24,6 @@ import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
   CONTROL_UI_MCP_APP_RESOURCE_PATH,
   CONTROL_UI_MCP_APP_SANDBOX_PATH,
-  CONTROL_UI_MCP_APP_SANDBOX_TICKET_ATTRIBUTE,
-  CONTROL_UI_MCP_APP_TICKET_HEADER,
 } from "./control-ui-contract.js";
 import {
   CONTROL_UI_MCP_APP_SANDBOX_PROXY_HTML,
@@ -951,11 +949,7 @@ describe("handleControlUiHttpRequest", () => {
         );
         expect(handled).toBe(true);
         const body = responseBody(end);
-        expect(body).toMatch(
-          new RegExp(
-            `^<html ${CONTROL_UI_MCP_APP_SANDBOX_TICKET_ATTRIBUTE}="[^"]+" data-openclaw-terminal-enabled="false"`,
-          ),
-        );
+        expect(body).toMatch(/^<html data-openclaw-terminal-enabled="false"/);
         expect(body).not.toContain("<script");
       },
     });
@@ -964,25 +958,6 @@ describe("handleControlUiHttpRequest", () => {
   it("serves the fixed MCP App sandbox proxy without putting a ticket in its URL", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
-        const indexResponse = makeMockHttpResponse();
-        await handleControlUiHttpRequest(
-          { url: "/", method: "GET" } as IncomingMessage,
-          indexResponse.res,
-          { root: { kind: "resolved", path: tmp } },
-        );
-        const ticket = responseBody(indexResponse.end).match(
-          new RegExp(`${CONTROL_UI_MCP_APP_SANDBOX_TICKET_ATTRIBUTE}="([^"]+)"`),
-        )?.[1];
-        expect(ticket).toBeTruthy();
-        const ticketPayload = JSON.parse(
-          Buffer.from(ticket?.split(".")[0] ?? "", "base64url").toString("utf8"),
-        ) as Record<string, unknown>;
-        expect(ticketPayload).toMatchObject({
-          scope: "mcp-app-sandbox",
-          nonce: expect.stringMatching(/^[A-Za-z0-9_-]{22}$/),
-        });
-        expect(ticketPayload).not.toHaveProperty("exp");
-
         const csp = encodeURIComponent(
           JSON.stringify({
             connectDomains: [
@@ -1027,27 +1002,13 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
-  it("serves a header-ticketed MCP App view without caching or framing it", async () => {
+  it("serves an authorized MCP App view without caching or framing it", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
-        const indexResponse = makeMockHttpResponse();
-        await handleControlUiHttpRequest(
-          { url: "/", method: "GET" } as IncomingMessage,
-          indexResponse.res,
-          { root: { kind: "resolved", path: tmp } },
-        );
-        const ticket = responseBody(indexResponse.end).match(
-          new RegExp(`${CONTROL_UI_MCP_APP_SANDBOX_TICKET_ATTRIBUTE}="([^"]+)"`),
-        )?.[1];
-        expect(ticket).toBeTruthy();
-
         const { res, end, setHeader } = makeMockHttpResponse();
         const viewId = "mcpview_0123456789ABCDEFGHJKMNPQRSTVWXYZ";
         serveControlUiMcpAppResource(
-          {
-            method: "GET",
-            headers: { [CONTROL_UI_MCP_APP_TICKET_HEADER]: ticket },
-          } as IncomingMessage,
+          { method: "GET" } as IncomingMessage,
           res,
           new URL(`${CONTROL_UI_MCP_APP_RESOURCE_PATH}?viewId=${viewId}`, "http://localhost"),
           (requestedViewId) =>
@@ -1077,17 +1038,40 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
-  it("rejects an MCP App resource ticket supplied only in the URL", () => {
+  it("rejects unauthenticated MCP App resource requests before view lookup", async () => {
+    const auth = { mode: "token", token: "fixture", allowTailscale: false } as const;
     const { res, end } = makeMockHttpResponse();
-    serveControlUiMcpAppResource(
-      { method: "GET" } as IncomingMessage,
+    const handled = await handleControlUiHttpRequest(
+      {
+        headers: {},
+        method: "GET",
+        url: `${CONTROL_UI_MCP_APP_RESOURCE_PATH}?viewId=mcpview_0123456789ABCDEFGHJKMNPQRSTVWXYZ`,
+      } as IncomingMessage,
       res,
-      new URL(
-        `${CONTROL_UI_MCP_APP_RESOURCE_PATH}?ticket=logged-ticket&viewId=mcpview_0123456789ABCDEFGHJKMNPQRSTVWXYZ`,
-        "http://localhost",
-      ),
+      {
+        auth,
+      },
     );
-    expectNotFoundResponse({ handled: true, res, end });
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(401);
+    expect(responseBody(end)).toContain("Unauthorized");
+  });
+
+  it("accepts authenticated MCP App resource requests before view lookup", async () => {
+    const auth = { mode: "token", token: "fixture", allowTailscale: false } as const;
+    const { res, end } = makeMockHttpResponse();
+    const handled = await handleControlUiHttpRequest(
+      {
+        headers: { authorization: `Bearer ${auth.token}` },
+        method: "GET",
+        url: `${CONTROL_UI_MCP_APP_RESOURCE_PATH}?viewId=mcpview_0123456789ABCDEFGHJKMNPQRSTVWXYZ`,
+      } as IncomingMessage,
+      res,
+      {
+        auth,
+      },
+    );
+    expectNotFoundResponse({ handled, res, end });
   });
 
   it("rewrites public asset hrefs in index.html when Control UI uses a configured base path (#94157)", async () => {

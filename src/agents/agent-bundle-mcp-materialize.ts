@@ -89,12 +89,13 @@ async function resolveMcpAppDetails(params: {
   storeView: (payload: McpAppViewPayload) => McpAppToolDetails | undefined;
 }): Promise<McpAppToolDetails | undefined> {
   const resourceUri = params.tool.ui?.resourceUri;
-  if (!resourceUri || params.result.isError === true || !params.runtime.readResource) {
+  const readResource = params.runtime.readResourceBestEffort ?? params.runtime.readResource;
+  if (!resourceUri || params.result.isError === true || !readResource) {
     return undefined;
   }
   try {
     params.runtime.markUsed();
-    const readResult = await params.runtime.readResource(params.tool.serverName, resourceUri);
+    const readResult = await readResource(params.tool.serverName, resourceUri);
     const resource = parseMcpAppResource(readResult);
     if (!resource) {
       return undefined;

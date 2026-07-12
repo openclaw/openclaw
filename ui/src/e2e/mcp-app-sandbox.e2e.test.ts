@@ -4,8 +4,6 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   CONTROL_UI_MCP_APP_RESOURCE_PATH,
   CONTROL_UI_MCP_APP_SANDBOX_PATH,
-  CONTROL_UI_MCP_APP_SANDBOX_TICKET_ATTRIBUTE,
-  CONTROL_UI_MCP_APP_TICKET_HEADER,
 } from "../../../src/gateway/control-ui-contract.ts";
 import {
   buildControlUiCspHeader,
@@ -28,7 +26,7 @@ const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
-const sandboxTicket = "e2e.signed-ticket";
+const E2E_AUTHORIZATION = "Bearer e2e-device-token";
 
 let browser: Browser;
 let server: ControlUiE2eServer;
@@ -109,13 +107,10 @@ function createMcpAppHistoryMessages(): unknown[] {
   ];
 }
 
-async function installTicketedControlUiPage(page: Page): Promise<void> {
+async function installProductionCsp(page: Page): Promise<void> {
   await page.route(`${server.baseUrl}chat`, async (route) => {
     const response = await route.fetch();
-    const body = (await response.text()).replace(
-      /<html\b/i,
-      `<html ${CONTROL_UI_MCP_APP_SANDBOX_TICKET_ATTRIBUTE}="${sandboxTicket}"`,
-    );
+    const body = await response.text();
     await route.fulfill({
       body,
       headers: {
@@ -155,7 +150,7 @@ describeControlUiE2e("MCP App sandbox proxy", () => {
       resourceRequestCount += 1;
       const url = new URL(route.request().url());
       expect(url.searchParams.get("ticket")).toBeNull();
-      expect(route.request().headers()[CONTROL_UI_MCP_APP_TICKET_HEADER]).toBe(sandboxTicket);
+      expect(route.request().headers().authorization).toBe(E2E_AUTHORIZATION);
       expect(url.searchParams.get("viewId")).toBe("mcpview_0123456789ABCDEFGHJKMNPQRSTVWXYZ");
       await route.fulfill({
         contentType: "application/json; charset=utf-8",
@@ -193,7 +188,7 @@ describeControlUiE2e("MCP App sandbox proxy", () => {
         },
       });
     });
-    await installTicketedControlUiPage(page);
+    await installProductionCsp(page);
 
     try {
       const response = await page.goto(`${server.baseUrl}chat`);
@@ -261,7 +256,7 @@ describeControlUiE2e("MCP App sandbox proxy", () => {
       resourceRequestCount += 1;
       await route.fulfill({ status: 404, contentType: "text/plain", body: "Not Found" });
     });
-    await installTicketedControlUiPage(page);
+    await installProductionCsp(page);
 
     try {
       await page.goto(`${server.baseUrl}chat`);

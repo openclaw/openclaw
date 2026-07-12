@@ -84,6 +84,8 @@ export type SessionMcpRuntime = {
   callTool: (serverName: string, toolName: string, input: unknown) => Promise<CallToolResult>;
   listResources?: (serverName: string) => Promise<unknown>;
   readResource?: (serverName: string, uri: string) => Promise<unknown>;
+  /** Reads additive app content without changing tool/utility circuit-breaker state. */
+  readResourceBestEffort?: (serverName: string, uri: string) => Promise<unknown>;
   listPrompts?: (serverName: string) => Promise<unknown>;
   getPrompt?: (serverName: string, name: string, args?: Record<string, string>) => Promise<unknown>;
   dispose: () => Promise<void>;

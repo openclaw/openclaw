@@ -12,8 +12,6 @@ import {
   CONTROL_UI_BASE_PATH_ATTRIBUTE,
   CONTROL_UI_MCP_APP_RESOURCE_PATH,
   CONTROL_UI_MCP_APP_SANDBOX_PATH,
-  CONTROL_UI_MCP_APP_SANDBOX_TICKET_ATTRIBUTE,
-  CONTROL_UI_MCP_APP_TICKET_HEADER,
 } from "../../../../../src/gateway/control-ui-contract.js";
 import type { McpAppToolPreview, ResolvedMcpAppToolPreview } from "../../../lib/chat/chat-types.ts";
 import { resolveMcpAppPreviewPayload } from "../../../lib/chat/mcp-app.ts";
@@ -24,6 +22,7 @@ const APP_FRAME_MIN_HEIGHT = 240;
 const APP_FRAME_MAX_HEIGHT = 1200;
 const APP_FRAME_DEFAULT_HEIGHT = 480;
 const APP_FRAME_VIEWPORT_MARGIN = "600px 0px";
+const APP_FRAME_RETAINED_MAX = 8;
 const APP_CSP_MAX_TOTAL_DOMAINS = 32;
 const APP_CSP_MAX_ORIGIN_CHARS = 256;
 const APP_CSP_ORIGIN_PATTERN =
@@ -43,7 +42,7 @@ type McpAppHostState = {
   resourceSent: boolean;
 };
 
-type McpAppAccess = { basePath: string; ticket: string };
+type McpAppAccess = { basePath: string; credential: string };
 
 // Frames register on load; state is keyed by the iframe element so multiple
 // app cards in one chat cannot cross-talk. Entries drop with the DOM nodes.
@@ -218,18 +217,14 @@ export function buildMcpAppResourceUrl(params: { basePath: string; viewId: strin
   return `${params.basePath}${CONTROL_UI_MCP_APP_RESOURCE_PATH}?${search.toString()}`;
 }
 
-function resolveMcpAppAccess(): { basePath: string; ticket: string } | undefined {
+function resolveMcpAppAccess(credential?: string | null): McpAppAccess | undefined {
   if (typeof document === "undefined") {
     return undefined;
   }
   const root = document.documentElement;
-  const ticket = root.getAttribute(CONTROL_UI_MCP_APP_SANDBOX_TICKET_ATTRIBUTE)?.trim();
-  if (!ticket) {
-    return undefined;
-  }
   return {
     basePath: root.getAttribute(CONTROL_UI_BASE_PATH_ATTRIBUTE)?.trim() ?? "",
-    ticket,
+    credential: credential?.trim() ?? "",
   };
 }
 
@@ -246,7 +241,7 @@ function loadMcpAppView(
     {
       cache: "no-store",
       credentials: "same-origin",
-      headers: { [CONTROL_UI_MCP_APP_TICKET_HEADER]: access.ticket },
+      ...(access.credential ? { headers: { Authorization: `Bearer ${access.credential}` } } : {}),
       signal,
     },
   )
@@ -345,6 +340,8 @@ function renderResolvedMcpAppPreview(preview: ResolvedMcpAppToolPreview, access:
 }
 
 class McpAppPreviewElement extends OpenClawLightDomElement {
+  private static readonly retained = new Set<McpAppPreviewElement>();
+
   @property({ attribute: false }) preview?: McpAppToolPreview;
   @property({ attribute: false }) access?: McpAppAccess;
   @state() private active = false;
@@ -352,13 +349,17 @@ class McpAppPreviewElement extends OpenClawLightDomElement {
   @state() private resolved?: ResolvedMcpAppToolPreview;
 
   private intersecting = false;
+  private retentionPaused = false;
   private observer?: IntersectionObserver;
   private loadController?: AbortController;
   private resourceKey = "";
+  private credentialKey = "";
 
   override connectedCallback() {
     super.connectedCallback();
     this.style.display = "block";
+    this.addEventListener("focusin", this.handleInteraction);
+    this.addEventListener("pointerdown", this.handleInteraction);
     if (typeof IntersectionObserver !== "function") {
       this.intersecting = true;
       this.activate();
@@ -372,9 +373,10 @@ class McpAppPreviewElement extends OpenClawLightDomElement {
         }
         this.intersecting = entry.isIntersecting;
         if (entry.isIntersecting) {
+          this.retentionPaused = false;
           this.activate();
         } else {
-          this.deactivate();
+          this.retentionPaused = false;
         }
       },
       { rootMargin: APP_FRAME_VIEWPORT_MARGIN },
@@ -383,6 +385,8 @@ class McpAppPreviewElement extends OpenClawLightDomElement {
   }
 
   override disconnectedCallback() {
+    this.removeEventListener("focusin", this.handleInteraction);
+    this.removeEventListener("pointerdown", this.handleInteraction);
     this.observer?.disconnect();
     this.observer = undefined;
     this.deactivate();
@@ -391,16 +395,49 @@ class McpAppPreviewElement extends OpenClawLightDomElement {
 
   override updated() {
     const nextResourceKey =
-      this.preview && this.access
-        ? `${this.preview.viewId}:${this.access.basePath}:${this.access.ticket}`
-        : "";
-    if (this.resourceKey && nextResourceKey !== this.resourceKey) {
+      this.preview && this.access ? `${this.preview.viewId}:${this.access.basePath}` : "";
+    const nextCredentialKey = this.access?.credential ?? "";
+    const resourceChanged = Boolean(this.resourceKey && nextResourceKey !== this.resourceKey);
+    const unresolvedCredentialChanged = Boolean(
+      this.resourceKey === nextResourceKey &&
+      this.credentialKey !== nextCredentialKey &&
+      !this.resolved,
+    );
+    if (resourceChanged || unresolvedCredentialChanged) {
       this.deactivate();
     }
     this.resourceKey = nextResourceKey;
-    if (this.intersecting && !this.active) {
+    this.credentialKey = nextCredentialKey;
+    if (this.intersecting && !this.retentionPaused && !this.active) {
       this.activate();
     }
+  }
+
+  private readonly handleInteraction = () => {
+    if (this.active && this.resolved) {
+      this.retain();
+    } else if (this.retentionPaused) {
+      this.activate();
+    }
+  };
+
+  private retain() {
+    const retained = McpAppPreviewElement.retained;
+    retained.delete(this);
+    retained.add(this);
+    while (retained.size > APP_FRAME_RETAINED_MAX) {
+      const candidates = [...retained].filter((candidate) => candidate !== this);
+      const candidate = candidates.find((entry) => !entry.intersecting) ?? candidates[0];
+      if (!candidate) {
+        break;
+      }
+      candidate.pauseForRetention();
+    }
+  }
+
+  private pauseForRetention() {
+    this.retentionPaused = true;
+    this.deactivate();
   }
 
   private readonly activate = () => {
@@ -410,10 +447,12 @@ class McpAppPreviewElement extends OpenClawLightDomElement {
     const preview = this.preview;
     const access = this.access;
     const controller = new AbortController();
+    this.retentionPaused = false;
     this.loadController?.abort();
     this.loadController = controller;
     this.active = true;
     this.failed = false;
+    this.retain();
     void loadMcpAppView(preview, access, controller.signal).then((resolved) => {
       if (this.loadController !== controller || controller.signal.aborted) {
         return;
@@ -421,10 +460,14 @@ class McpAppPreviewElement extends OpenClawLightDomElement {
       this.loadController = undefined;
       this.resolved = resolved;
       this.failed = !resolved;
+      if (!resolved) {
+        McpAppPreviewElement.retained.delete(this);
+      }
     });
   };
 
   private deactivate() {
+    McpAppPreviewElement.retained.delete(this);
     this.loadController?.abort();
     this.loadController = undefined;
     this.active = false;
@@ -460,8 +503,8 @@ if (typeof customElements !== "undefined" && !customElements.get("openclaw-mcp-a
 }
 
 /** Resolve and render an MCP App preview through the sandboxed host iframe. */
-export function renderMcpAppPreview(preview: McpAppToolPreview) {
-  const access = resolveMcpAppAccess();
+export function renderMcpAppPreview(preview: McpAppToolPreview, credential?: string | null) {
+  const access = resolveMcpAppAccess(credential);
   if (!access) {
     return nothing;
   }

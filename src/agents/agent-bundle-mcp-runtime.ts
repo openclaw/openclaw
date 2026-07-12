@@ -859,6 +859,12 @@ export function createSessionMcpRuntime(params: {
           await session.client.readResource({ uri }, { timeout: session.requestTimeoutMs }),
       );
     },
+    async readResourceBestEffort(serverName, uri) {
+      failIfDisposed();
+      await getCatalog();
+      const session = requireConnectedSession(serverName);
+      return await session.client.readResource({ uri }, { timeout: session.requestTimeoutMs });
+    },
     async listPrompts(serverName) {
       failIfDisposed();
       await getCatalog();

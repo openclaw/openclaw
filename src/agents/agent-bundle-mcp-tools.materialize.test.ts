@@ -272,7 +272,7 @@ describe("createBundleMcpToolRuntime", () => {
     const runtime = await materializeBundleMcpToolsForRun({
       runtime: {
         ...base,
-        readResource: async () => ({
+        readResourceBestEffort: async () => ({
           contents: [
             {
               uri: "ui://diagrams/app.html",

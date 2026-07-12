@@ -9,14 +9,8 @@ export const CONTROL_UI_BASE_PATH_ATTRIBUTE = "data-openclaw-control-ui-base-pat
 /** Route used by the fixed MCP Apps sandbox proxy document. */
 export const CONTROL_UI_MCP_APP_SANDBOX_PATH = "/__openclaw__/mcp-app-sandbox";
 
-/** Ticketed route used to resolve one durable MCP App view snapshot. */
+/** Authenticated route used to resolve one durable MCP App view snapshot. */
 export const CONTROL_UI_MCP_APP_RESOURCE_PATH = "/__openclaw__/mcp-app-resource";
-
-/** Carries the process-scoped MCP Apps resource ticket into browser bootstrap. */
-export const CONTROL_UI_MCP_APP_SANDBOX_TICKET_ATTRIBUTE = "data-openclaw-mcp-app-sandbox-ticket";
-
-/** Carries the MCP Apps resource ticket outside access-logged request URLs. */
-export const CONTROL_UI_MCP_APP_TICKET_HEADER = "x-openclaw-mcp-app-ticket";
 
 /** Marks whether the served document CSP permits the terminal WASM runtime. */
 export const CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE = "data-openclaw-terminal-enabled";

@@ -1,17 +1,11 @@
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { loadMcpAppView } from "../agents/mcp-app-view-store.js";
 import type { McpAppViewPayload } from "../agents/mcp-apps.js";
-import { CONTROL_UI_MCP_APP_TICKET_HEADER } from "./control-ui-contract.js";
 import { buildControlUiCspHeader } from "./control-ui-csp.js";
 import { respondNotFound } from "./control-ui-http-utils.js";
 
-const TICKET_SCOPE = "mcp-app-sandbox";
 const MAX_CSP_DOMAINS = 64;
 const MAX_CSP_ORIGIN_CHARS = 512;
-// Page capabilities remain valid for this process lifetime; restart rotates the
-// signing secret and invalidates every open page without a separate token store.
-const ticketSecret = randomBytes(32);
 
 export type ControlUiMcpAppCsp = {
   connectDomains?: string[];
@@ -133,55 +127,6 @@ export function buildControlUiMcpAppSandboxCspHeader(csp: ControlUiMcpAppCsp): s
   ].join("; ");
 }
 
-export function createControlUiMcpAppSandboxTicket(): string {
-  const payload = Buffer.from(
-    JSON.stringify({
-      scope: TICKET_SCOPE,
-      nonce: randomBytes(16).toString("base64url"),
-    }),
-  ).toString("base64url");
-  const signature = createHmac("sha256", ticketSecret).update(payload).digest("base64url");
-  return `${payload}.${signature}`;
-}
-
-function verifyTicket(ticket: string | null): boolean {
-  if (!ticket) {
-    return false;
-  }
-  const [payload, signature, extra] = ticket.split(".");
-  if (!payload || !signature || extra) {
-    return false;
-  }
-  const expected = createHmac("sha256", ticketSecret).update(payload).digest();
-  let actual: Buffer;
-  try {
-    actual = Buffer.from(signature, "base64url");
-  } catch {
-    return false;
-  }
-  if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
-    return false;
-  }
-  try {
-    const parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as {
-      scope?: unknown;
-      nonce?: unknown;
-    };
-    return (
-      parsed.scope === TICKET_SCOPE &&
-      typeof parsed.nonce === "string" &&
-      /^[A-Za-z0-9_-]{22}$/.test(parsed.nonce)
-    );
-  } catch {
-    return false;
-  }
-}
-
-function readTicketHeader(req: IncomingMessage): string | null {
-  const value = req.headers?.[CONTROL_UI_MCP_APP_TICKET_HEADER];
-  return typeof value === "string" ? value : null;
-}
-
 function applyRejectedRequestHeaders(res: ServerResponse): void {
   res.setHeader("X-Frame-Options", "DENY");
   res.setHeader("Content-Security-Policy", buildControlUiCspHeader());
@@ -209,18 +154,13 @@ export function serveControlUiMcpAppSandboxProxy(
   res.end(CONTROL_UI_MCP_APP_SANDBOX_PROXY_HTML);
 }
 
-/** Resolve one unguessable, unexpired MCP App view for the trusted host page. */
+/** Resolve one unguessable, unexpired MCP App view after route-level authentication. */
 export function serveControlUiMcpAppResource(
   req: IncomingMessage,
   res: ServerResponse,
   url: URL,
   loadView: (viewId: string) => McpAppViewPayload | undefined = loadMcpAppView,
 ): void {
-  if (!verifyTicket(readTicketHeader(req))) {
-    applyRejectedRequestHeaders(res);
-    respondNotFound(res);
-    return;
-  }
   const viewId = url.searchParams.get("viewId") ?? "";
   const view = loadView(viewId);
   if (!view) {

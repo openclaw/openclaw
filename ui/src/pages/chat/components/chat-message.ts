@@ -1837,6 +1837,7 @@ function renderInlineToolCards(
     canvasPluginSurfaceUrl?: string | null;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
+    credential?: string | null;
   },
 ) {
   return html`
@@ -1855,6 +1856,7 @@ function renderInlineToolCards(
           canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
           embedSandboxMode: opts.embedSandboxMode ?? "scripts",
           allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
+          credential: opts.credential,
         }),
       )}
     </div>
@@ -2207,6 +2209,7 @@ function renderGroupedMessage(
           canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
           embedSandboxMode: opts.embedSandboxMode ?? "scripts",
           allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
+          credential: opts.assistantAttachmentAuthToken,
         })}
         ${duplicateCount > 1
           ? html`<div
@@ -2300,6 +2303,7 @@ function renderGroupedMessage(
                               opts.allowExternalEmbedUrls ?? false,
                               opts.runActive,
                               opts.onOpenWorkspaceFile,
+                              opts.assistantAttachmentAuthToken,
                             )
                           : renderInlineToolCards(toolCards, {
                               messageKey,
@@ -2313,6 +2317,7 @@ function renderGroupedMessage(
                               canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
                               embedSandboxMode: opts.embedSandboxMode ?? "scripts",
                               allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
+                              credential: opts.assistantAttachmentAuthToken,
                             })
                         : nothing}
                     </div>
@@ -2361,6 +2366,7 @@ function renderGroupedMessage(
                   canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
                   embedSandboxMode: opts.embedSandboxMode ?? "scripts",
                   allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
+                  credential: opts.assistantAttachmentAuthToken,
                 })
               : nothing}
           `}

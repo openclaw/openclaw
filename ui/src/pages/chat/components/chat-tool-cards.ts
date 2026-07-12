@@ -237,6 +237,7 @@ export function renderToolPreview(
     canvasPluginSurfaceUrl?: string | null;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
+    credential?: string | null;
   },
 ) {
   if (!preview) {
@@ -244,7 +245,7 @@ export function renderToolPreview(
   }
   if (preview.kind === "mcp-app") {
     // App previews render inside the tool card that produced them.
-    return surface === "chat_tool" ? renderMcpAppPreview(preview) : nothing;
+    return surface === "chat_tool" ? renderMcpAppPreview(preview, options?.credential) : nothing;
   }
   if (preview.kind !== "canvas" || surface === "chat_tool") {
     return nothing;
@@ -727,6 +728,7 @@ export function renderToolCard(
     canvasPluginSurfaceUrl?: string | null;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
+    credential?: string | null;
   },
 ) {
   const view = resolveToolCallView({ name: card.name, args: card.args, details: card.details });
@@ -743,6 +745,7 @@ export function renderToolCard(
           canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
           embedSandboxMode: opts.embedSandboxMode ?? "scripts",
           allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
+          credential: opts.credential,
         })
       : nothing;
 
@@ -789,6 +792,7 @@ export function renderToolCard(
                 opts.allowExternalEmbedUrls ?? false,
                 opts.runActive,
                 opts.onOpenWorkspaceFile,
+                opts.credential,
               )}
             </div>
           `
@@ -806,6 +810,7 @@ export function renderExpandedToolCardContent(
   allowExternalEmbedUrls = false,
   runActive?: boolean,
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void,
+  credential?: string | null,
 ) {
   const view = resolveToolCallView({ name: card.name, args: card.args, details: card.details });
   const display = resolveToolDisplay({ name: card.name, args: card.args });
@@ -843,6 +848,7 @@ export function renderExpandedToolCardContent(
           canvasPluginSurfaceUrl,
           embedSandboxMode,
           allowExternalEmbedUrls,
+          credential,
         })
       : nothing;
   const sidebarAction = canOpenSidebar
