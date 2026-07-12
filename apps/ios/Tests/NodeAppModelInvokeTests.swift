@@ -4715,7 +4715,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
     @Test @MainActor func `watch app snapshot preserves gateway connection progress`() async throws {
         let watchService = MockWatchMessagingService()
         let appModel = NodeAppModel(watchMessagingService: watchService)
-        appModel.gatewayStatusText = "Connecting…"
+        appModel.setGatewayConnectionProgress(reconnecting: false)
 
         watchService.emitAppSnapshotRequest(
             WatchAppSnapshotRequestEvent(

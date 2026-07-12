@@ -361,7 +361,12 @@ final class NodeAppModel {
     let screen: ScreenController
     private let camera: any CameraServicing
     private let screenRecorder: any ScreenRecordingServicing
-    var gatewayStatusText: String = "Offline"
+    private var watchGatewayConnectionStatus: OpenClawWatchAppStatusCode?
+    var gatewayStatusText: String = "Offline" {
+        didSet {
+            self.watchGatewayConnectionStatus = nil
+        }
+    }
     var nodeStatusText: String = "Offline"
     var operatorStatusText: String = "Offline"
     private(set) var isAppleReviewDemoModeEnabled: Bool = false
@@ -1918,7 +1923,7 @@ final class NodeAppModel {
                     guard !self.isLocalGatewayFixtureEnabled else { return }
                     self.setOperatorConnected(false)
                     self.gatewayConnected = false
-                    self.gatewayStatusText = "Reconnecting…"
+                    self.setGatewayConnectionProgress(reconnecting: true)
                     self.talkMode.updateGatewayConnected(false)
                 }
             })
@@ -3563,7 +3568,7 @@ extension NodeAppModel {
         guard !self.isLocalGatewayFixtureEnabled else { return }
         setOperatorConnected(false)
         self.gatewayConnected = false
-        self.gatewayStatusText = "Reconnecting…"
+        self.setGatewayConnectionProgress(reconnecting: true)
         self.talkMode.updateGatewayConnected(false)
         self.applyGatewayConnectConfig(
             cfg,
@@ -3641,7 +3646,7 @@ extension NodeAppModel {
 extension NodeAppModel {
     func resumeGatewayAfterTargetReview(_ config: GatewayConnectConfig) {
         let generation = self.beginGatewayConnectAttempt()
-        self.gatewayStatusText = "Connecting…"
+        self.setGatewayConnectionProgress(reconnecting: false)
         // Reapply the exact suspended route only after teardown; a newer target invalidates the generation.
         Task { [weak self] in
             guard let self else { return }
@@ -4418,7 +4423,7 @@ extension NodeAppModel {
                   generation: context.routeGeneration,
                   stableID: context.stableID)
         else { return }
-        self.gatewayStatusText = (attempt == 0) ? "Connecting…" : "Reconnecting…"
+        self.setGatewayConnectionProgress(reconnecting: attempt != 0)
         self.gatewayServerName = nil
         self.gatewayRemoteAddress = nil
         LiveActivityManager.shared.showConnecting(
@@ -6048,19 +6053,23 @@ extension NodeAppModel {
         if let problem = self.lastGatewayProblem {
             return Self.makeWatchGatewayProblemStatus(problem)
         }
+        if let watchGatewayConnectionStatus {
+            return OpenClawWatchAppStatus(code: watchGatewayConnectionStatus)
+        }
         let statusText = self.gatewayStatusText == "Connected"
             ? self.operatorStatusText
             : self.gatewayStatusText
-        switch statusText {
-        case "Connecting…":
-            return OpenClawWatchAppStatus(code: .gatewayConnecting)
-        case "Reconnecting…":
-            return OpenClawWatchAppStatus(code: .gatewayReconnecting)
-        case "Offline":
+        if statusText == "Offline" {
             return OpenClawWatchAppStatus(code: .gatewayOffline)
-        default:
-            return OpenClawWatchAppStatus(code: .legacy, verbatim: statusText)
         }
+        return OpenClawWatchAppStatus(code: .legacy, verbatim: statusText)
+    }
+
+    func setGatewayConnectionProgress(reconnecting: Bool) {
+        self.gatewayStatusText = reconnecting ? "Reconnecting…" : "Connecting…"
+        self.watchGatewayConnectionStatus = reconnecting
+            ? .gatewayReconnecting
+            : .gatewayConnecting
     }
 
     private static func makeWatchGatewayProblemStatus(
@@ -9460,7 +9469,7 @@ extension NodeAppModel {
             }
             self.setOperatorConnected(false)
             self.gatewayConnected = false
-            self.gatewayStatusText = "Reconnecting…"
+            self.setGatewayConnectionProgress(reconnecting: true)
             self.talkMode.updateGatewayConnected(false)
             self.applyGatewayConnectConfig(cfg, expectedGeneration: generation)
             appliedReconnect = true

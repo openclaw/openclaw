@@ -3761,6 +3761,16 @@ extension TalkModeManager {
             String(localized: "Waiting for realtime…")
         case "Ready":
             String(localized: "Ready")
+        case "Reconnecting":
+            String(localized: "Reconnecting")
+        case "Reconnecting…":
+            String(localized: "Reconnecting…")
+        case "Realtime failed before connecting":
+            String(localized: "Realtime failed before connecting")
+        case "Realtime disconnected":
+            String(localized: "Realtime disconnected")
+        case "OpenClaw unavailable":
+            String(localized: "OpenClaw unavailable")
         default:
             status
         }
