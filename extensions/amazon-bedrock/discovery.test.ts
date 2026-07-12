@@ -458,6 +458,39 @@ describe("bedrock discovery", () => {
     expect(sendMock).toHaveBeenCalledTimes(4);
   });
 
+  it("aborts stalled Bedrock model discovery requests", async () => {
+    vi.useFakeTimers();
+    const abortSignals: AbortSignal[] = [];
+    try {
+      sendMock.mockImplementation((_command: unknown, options?: { abortSignal?: AbortSignal }) => {
+        const signal = options?.abortSignal;
+        if (!signal) {
+          throw new Error("expected Bedrock discovery abort signal");
+        }
+        abortSignals.push(signal);
+        return new Promise((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => {
+              reject(signal.reason instanceof Error ? signal.reason : new Error("aborted"));
+            },
+            { once: true },
+          );
+        });
+      });
+
+      const discovery = discoverBedrockModels({ region: "us-east-1", clientFactory });
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      await expect(discovery).resolves.toEqual([]);
+      expect(sendMock).toHaveBeenCalledTimes(2);
+      expect(abortSignals).toHaveLength(2);
+      expect(abortSignals.every((signal) => signal.aborted)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("resolves the Bedrock config apiKey from AWS auth env vars", () => {
     expect(
       resolveBedrockConfigApiKey({

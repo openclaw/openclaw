@@ -38,6 +38,7 @@ const log = createSubsystemLogger("bedrock-discovery");
 const DEFAULT_REFRESH_INTERVAL_SECONDS = 3600;
 const DEFAULT_CONTEXT_WINDOW = 32_000;
 const DEFAULT_MAX_TOKENS = 4096;
+const BEDROCK_DISCOVERY_REQUEST_TIMEOUT_MS = 30_000;
 
 // ---------------------------------------------------------------------------
 // Known model context windows (Bedrock API does not expose token limits)
@@ -253,6 +254,29 @@ let hasLoggedBedrockError = false;
 // Helper utilities
 // ---------------------------------------------------------------------------
 
+function createBedrockDiscoveryTimeoutError(operation: string): Error {
+  const error = new Error(`${operation} timed out after ${BEDROCK_DISCOVERY_REQUEST_TIMEOUT_MS}ms`);
+  error.name = "TimeoutError";
+  return error;
+}
+
+async function sendBedrockDiscoveryCommand<T>(
+  client: BedrockClient,
+  command: unknown,
+  operation: string,
+): Promise<T> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => {
+    controller.abort(createBedrockDiscoveryTimeoutError(operation));
+  }, BEDROCK_DISCOVERY_REQUEST_TIMEOUT_MS);
+  timeout.unref?.();
+  try {
+    return (await client.send(command as never, { abortSignal: controller.signal })) as T;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function normalizeProviderFilter(filter?: string[]): string[] {
   if (!filter || filter.length === 0) {
     return [];
@@ -425,8 +449,10 @@ async function fetchInferenceProfileSummaries(
     const profiles: InferenceProfileSummary[] = [];
     let nextToken: string | undefined;
     do {
-      const response: ListInferenceProfilesCommandOutput = await client.send(
+      const response = await sendBedrockDiscoveryCommand<ListInferenceProfilesCommandOutput>(
+        client,
         createListInferenceProfilesCommand({ nextToken }) as never,
+        "Bedrock ListInferenceProfiles",
       );
       for (const summary of response.inferenceProfileSummaries ?? []) {
         profiles.push(summary);
@@ -586,13 +612,16 @@ export async function discoverBedrockModels(params: {
     // Both API calls are independent, but we need the foundation model data
     // to resolve inference profile capabilities — so we fetch in parallel,
     // then build the lookup map before processing profiles.
-    const [rawFoundationResponse, profileSummaries] = await Promise.all([
-      client.send(sdk.createListFoundationModelsCommand() as never),
+    const [foundationResponse, profileSummaries] = await Promise.all([
+      sendBedrockDiscoveryCommand<ListFoundationModelsCommandOutput>(
+        client,
+        sdk.createListFoundationModelsCommand() as never,
+        "Bedrock ListFoundationModels",
+      ),
       fetchInferenceProfileSummaries(client, (input) =>
         sdk.createListInferenceProfilesCommand(input),
       ),
     ]);
-    const foundationResponse = rawFoundationResponse as ListFoundationModelsCommandOutput;
 
     const discovered: ModelDefinitionConfig[] = [];
     const seenIds = new Set<string>();
