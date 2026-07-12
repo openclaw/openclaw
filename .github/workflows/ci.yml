@@ -1604,18 +1604,9 @@ jobs:
                 ' "$1"
               }
               if has_package_script "deadcode:dependencies" &&
-                has_package_script "deadcode:unused-files" &&
-                has_package_script "deadcode:exports"; then
+                has_package_script "deadcode:unused-files"; then
                 pnpm deadcode:dependencies
                 pnpm deadcode:unused-files
-                pnpm deadcode:exports
-              elif [[ "$HISTORICAL_TARGET" == "true" ]] &&
-                has_package_script "deadcode:dependencies" &&
-                has_package_script "deadcode:unused-files" &&
-                has_package_script "deadcode:report:ci:ts-unused"; then
-                pnpm deadcode:dependencies
-                pnpm deadcode:unused-files
-                pnpm deadcode:report:ci:ts-unused
               elif [[ "$HISTORICAL_TARGET" == "true" ]] && has_package_script "deadcode:ci"; then
                 pnpm deadcode:ci
               else

@@ -1746,17 +1746,13 @@ describe("ci workflow guards", () => {
     expect(preflightGuards).toContain("pnpm deps:patches:check");
   });
 
-  it("uses the target-owned deadcode contract for current and frozen checkouts", () => {
+  it("uses stable deadcode checks for current and frozen checkouts", () => {
     const modern = runDependencyCheckFixture({
       historicalTarget: false,
       scripts: ["deadcode:dependencies", "deadcode:unused-files", "deadcode:exports"],
     });
     expect(modern.status, modern.output).toBe(0);
-    expect(modern.calls).toEqual([
-      "deadcode:dependencies",
-      "deadcode:unused-files",
-      "deadcode:exports",
-    ]);
+    expect(modern.calls).toEqual(["deadcode:dependencies", "deadcode:unused-files"]);
 
     const frozen = runDependencyCheckFixture({
       historicalTarget: true,
@@ -1768,15 +1764,18 @@ describe("ci workflow guards", () => {
       ],
     });
     expect(frozen.status, frozen.output).toBe(0);
-    expect(frozen.calls).toEqual([
-      "deadcode:dependencies",
-      "deadcode:unused-files",
-      "deadcode:report:ci:ts-unused",
-    ]);
+    expect(frozen.calls).toEqual(["deadcode:dependencies", "deadcode:unused-files"]);
+
+    const legacy = runDependencyCheckFixture({
+      historicalTarget: true,
+      scripts: ["deadcode:ci"],
+    });
+    expect(legacy.status, legacy.output).toBe(0);
+    expect(legacy.calls).toEqual(["deadcode:ci"]);
 
     const incompleteCurrent = runDependencyCheckFixture({
       historicalTarget: false,
-      scripts: ["deadcode:dependencies", "deadcode:unused-files"],
+      scripts: ["deadcode:dependencies"],
     });
     expect(incompleteCurrent.status).toBe(1);
     expect(incompleteCurrent.calls).toEqual([]);
@@ -2066,8 +2065,9 @@ describe("ci workflow guards", () => {
     );
     expect(checkShard.run).toContain("pnpm tsgo:scripts");
     expect(checkShard.run).toContain('elif [[ "$HISTORICAL_TARGET" != "true" ]]');
-    expect(checkShard.run).toContain('has_package_script "deadcode:exports"');
-    expect(checkShard.run).toContain('has_package_script "deadcode:report:ci:ts-unused"');
+    expect(checkShard.run).toContain('has_package_script "deadcode:dependencies"');
+    expect(checkShard.run).toContain('has_package_script "deadcode:unused-files"');
+    expect(checkShard.run).not.toContain('has_package_script "deadcode:exports"');
     expect(checkShard.run).toContain(
       'elif [[ "$HISTORICAL_TARGET" == "true" ]] && has_package_script "deadcode:ci"',
     );
