@@ -759,7 +759,7 @@ export function renderChatThread(props: ChatThreadProps) {
     queue: props.queue,
     showToolCalls: props.showToolCalls,
     runWorking: Boolean(props.runWorking),
-    loading: Boolean(props.loading),
+    loading: props.loading,
     searchOpen: state.searchOpen,
     searchQuery: state.searchQuery,
     historyRenderLimit,

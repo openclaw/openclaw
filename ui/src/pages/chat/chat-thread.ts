@@ -1315,8 +1315,8 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     tools.some((message) => {
       const record = asRecord(message);
       return (
-        record?.__openclawToolStreamLive === true &&
-        record.__openclawToolStreamResultReceived !== true
+        record?.["__openclawToolStreamLive"] === true &&
+        record["__openclawToolStreamResultReceived"] !== true
       );
     });
   // The initial-load skeleton owns the empty thread; a background reload with
