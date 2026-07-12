@@ -37,6 +37,21 @@ describe("isRetryableAssistantError", () => {
     expect(isRetryableAssistantError(errorMessage("Monthly usage limit reached"))).toBe(false);
   });
 
+  it.each([
+    "model gpt-5.5-preview-0429 not found",
+    "Image dimensions 1504x1504 exceed the maximum allowed size",
+    "invalid api key sk-example502value",
+  ])("does not retry permanent errors with status-code substrings: %s", (text) => {
+    expect(isRetryableAssistantError(errorMessage(text))).toBe(false);
+  });
+
+  it.each([
+    "429 You exceeded your daily request limit. Please try again in 24 hours.",
+    "rate limit reached for requests. Retry after 6h.",
+  ])("does not retry rate limits that outlast session backoff: %s", (text) => {
+    expect(isRetryableAssistantError(errorMessage(text))).toBe(false);
+  });
+
   it("retries transient billing-service failures", () => {
     expect(
       isRetryableAssistantError(
