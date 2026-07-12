@@ -1542,6 +1542,10 @@ function isCurrentGatewayLogSource(source, sourceRoot, managedSourceRoots) {
   } catch {
     return true;
   }
+  const sourceFilePath = sourcePath.replace(/:\d+(?::\d+)?$/u, "");
+  if (sourceFilePath !== sourcePath && !existsSync(sourcePath) && existsSync(sourceFilePath)) {
+    sourcePath = sourceFilePath;
+  }
   if (
     isPathWithinRoot(sourcePath, sourceRoot) ||
     managedSourceRoots.some((rootPath) => isPathWithinRoot(sourcePath, rootPath))
@@ -1675,7 +1679,14 @@ function readConfiguredPluginLoadPaths(checkout, deployment) {
     );
     const paths = JSON.parse(output)?.paths;
     return Array.isArray(paths) ? paths.filter((entry) => typeof entry === "string") : [];
-  } catch {
+  } catch (error) {
+    const errorOutput = [error?.stdout, error?.stderr, error?.message]
+      .filter((entry) => typeof entry === "string" || Buffer.isBuffer(entry))
+      .map((entry) => String(entry))
+      .join("\n");
+    if (errorOutput.includes("Config path not found: plugins.load")) {
+      return [];
+    }
     return null;
   }
 }

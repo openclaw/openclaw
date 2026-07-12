@@ -308,6 +308,8 @@ describe("openclaw live updater", () => {
     const foreignRoot = path.join(root, "worktree/openclaw");
     mkdirSync(path.join(foreignRoot, ".git"), { recursive: true });
     writeFileSync(path.join(foreignRoot, "package.json"), '{"name":"openclaw"}\n');
+    const configuredPluginFile = path.join(foreignRoot, "configured-plugin.ts");
+    writeFileSync(configuredPluginFile, "export default {};\n");
     const output = [
       {
         type: "log",
@@ -366,6 +368,21 @@ describe("openclaw live updater", () => {
           },
         }),
       },
+      {
+        type: "log",
+        time: "2026-07-11T08:00:07.000Z",
+        level: "error",
+        message: "configured standalone plugin failure",
+        raw: JSON.stringify({
+          "0": "configured standalone plugin failure",
+          time: "2026-07-11T08:00:07.000Z",
+          _meta: {
+            date: "2026-07-11T08:00:07.000Z",
+            logLevelName: "ERROR",
+            path: { fullFilePath: `${configuredPluginFile}:12:3` },
+          },
+        }),
+      },
     ]
       .map((entry) => JSON.stringify(entry))
       .join("\n");
@@ -373,20 +390,22 @@ describe("openclaw live updater", () => {
     expect(
       parseGatewayLogAudit(output, Date.parse("2026-07-11T08:00:02.000Z"), sourceRoot, [
         path.join(foreignRoot, "extensions/configured"),
+        configuredPluginFile,
       ]),
     ).toMatchObject({
-      entries: 3,
-      errorCount: 3,
+      entries: 4,
+      errorCount: 4,
       errors: [
         { message: "managed failure" },
         { message: "installed plugin failure" },
         { message: "configured foreign-checkout plugin failure" },
+        { message: "configured standalone plugin failure" },
       ],
     });
 
     expect(
       parseGatewayLogAudit(output, Date.parse("2026-07-11T08:00:02.000Z"), sourceRoot, null),
-    ).toMatchObject({ entries: 4, errorCount: 4 });
+    ).toMatchObject({ entries: 5, errorCount: 5 });
   });
 
   test("retries bounded Gateway readiness after restart", () => {
