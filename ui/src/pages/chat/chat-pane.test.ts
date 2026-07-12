@@ -48,6 +48,7 @@ type TestChatPane = HTMLElement & {
   loadCatalogSession: (key: CatalogSessionKey, older: boolean) => Promise<boolean>;
   loadOlderMessages: () => Promise<void>;
   hasOlderMessages: () => boolean;
+  catalogCursor: string | undefined;
 };
 
 const suggestion: TaskSuggestion = {
@@ -410,6 +411,33 @@ describe("chat pane catalog session lifecycle", () => {
     const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
 
     expect(pane.catalogItemMessage({ type: "other" }, 0)).toBeNull();
+  });
+
+  it("exhausts pagination when an older read does not advance the cursor", async () => {
+    const readPage: SessionsCatalogReadResult = {
+      hostId: "gateway:local",
+      threadId: "thread-1",
+      items: [{ id: "u1", type: "userMessage", text: "hi" }],
+      // Same cursor the request was made with: a stale provider that would loop.
+      nextCursor: "cursor-1",
+    };
+    const client = {
+      request: vi.fn(async () => readPage),
+    } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const key = "catalog:claude:gateway%3Alocal:thread-1";
+    state.sessionKey = key;
+    pane.sessionKey = key;
+    pane.catalogCursor = "cursor-1";
+
+    const progressed = await pane.loadCatalogSession(
+      { catalogId: "claude", hostId: "gateway:local", threadId: "thread-1" },
+      true,
+    );
+
+    expect(progressed).toBe(false);
+    // Cursor cleared → hasOlderMessages() is false, so the observer will not refire.
+    expect(pane.catalogCursor).toBeUndefined();
   });
 
   it("re-arms a failed older-page load only after another user scroll", () => {

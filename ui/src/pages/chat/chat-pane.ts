@@ -817,6 +817,7 @@ class ChatPane extends OpenClawLightDomElement {
           cursor = nextCursor;
         }
       }
+      const requestedOlderCursor = older ? this.catalogCursor : undefined;
       const page = await client.request<SessionsCatalogReadResult>("sessions.catalog.read", {
         catalogId: key.catalogId,
         hostId: key.hostId,
@@ -832,16 +833,21 @@ class ChatPane extends OpenClawLightDomElement {
         .map((item, index) => this.catalogItemMessage(item, index))
         .filter((message) => message !== null);
       const nextMessages = older ? this.prependUniqueCatalogMessages(messages) : messages;
+      const grew = nextMessages.length > this.catalogMessages.length;
+      // Exhaust pagination when an older read makes no forward progress — no next
+      // cursor, a cursor that does not advance, or no newly rendered messages
+      // (empty/filtered/all-duplicate page). Otherwise the re-armed observer would
+      // re-issue the identical request in an unbounded loop against a stale provider.
+      const olderExhausted =
+        older && (!page.nextCursor || page.nextCursor === requestedOlderCursor || !grew);
       this.pendingHistoryAnchor =
-        older && nextMessages.length > this.catalogMessages.length
-          ? this.currentHistoryAnchor(state.sessionKey)
-          : null;
+        older && grew ? this.currentHistoryAnchor(state.sessionKey) : null;
       this.catalogMessages = nextMessages;
-      this.catalogCursor = page.nextCursor;
+      this.catalogCursor = olderExhausted ? undefined : page.nextCursor;
       const currentState = this.state ?? state;
       currentState.lastError = null;
       scheduleChatScroll(currentState, !older);
-      return true;
+      return older ? !olderExhausted : true;
     } catch (error) {
       if (isCurrent()) {
         (this.state ?? state).lastError = error instanceof Error ? error.message : String(error);
