@@ -577,6 +577,9 @@ import WatchKit
             if merged.chatItems == nil {
                 merged.chatItems = self.appSnapshot?.chatItems
             }
+            if merged.chatStatusCode == nil {
+                merged.chatStatusCode = self.appSnapshot?.chatStatusCode
+            }
             if merged.chatStatusText == nil {
                 merged.chatStatusText = self.appSnapshot?.chatStatusText
             }

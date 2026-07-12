@@ -276,6 +276,12 @@ public struct OpenClawWatchChatCompletionMessage: Codable, Sendable, Equatable {
     }
 }
 
+public enum OpenClawWatchChatStatusCode: String, Codable, Sendable, Equatable {
+    case connectIPhone = "connectIPhone"
+    case noMessages = "noMessages"
+    case unavailable
+}
+
 public struct OpenClawWatchAppSnapshotMessage: Codable, Sendable, Equatable {
     public var type: OpenClawWatchPayloadType
     public var gatewayStatusText: String
@@ -291,6 +297,7 @@ public struct OpenClawWatchAppSnapshotMessage: Codable, Sendable, Equatable {
     public var talkSpeaking: Bool
     public var pendingApprovalCount: Int
     public var chatItems: [OpenClawWatchChatItem]?
+    public var chatStatusCode: OpenClawWatchChatStatusCode?
     public var chatStatusText: String?
     public var sentAtMs: Int64?
     public var snapshotId: String?
@@ -309,6 +316,7 @@ public struct OpenClawWatchAppSnapshotMessage: Codable, Sendable, Equatable {
         talkSpeaking: Bool,
         pendingApprovalCount: Int,
         chatItems: [OpenClawWatchChatItem]? = nil,
+        chatStatusCode: OpenClawWatchChatStatusCode? = nil,
         chatStatusText: String? = nil,
         sentAtMs: Int64? = nil,
         snapshotId: String? = nil)
@@ -327,6 +335,7 @@ public struct OpenClawWatchAppSnapshotMessage: Codable, Sendable, Equatable {
         self.talkSpeaking = talkSpeaking
         self.pendingApprovalCount = pendingApprovalCount
         self.chatItems = chatItems
+        self.chatStatusCode = chatStatusCode
         self.chatStatusText = chatStatusText
         self.sentAtMs = sentAtMs
         self.snapshotId = snapshotId

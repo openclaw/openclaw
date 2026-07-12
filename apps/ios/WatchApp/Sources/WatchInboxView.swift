@@ -541,6 +541,16 @@ private struct WatchControlSurfaceView: View {
     }
 
     private var chatStatusText: String {
+        if let statusCode = store.appSnapshot?.chatStatusCode {
+            return switch statusCode {
+            case .connectIPhone:
+                String(localized: "Connect iPhone chat to read messages")
+            case .noMessages:
+                String(localized: "No chat messages yet")
+            case .unavailable:
+                String(localized: "Chat unavailable")
+            }
+        }
         if let status = store.appSnapshot?.chatStatusText, !status.isEmpty {
             return status
         }

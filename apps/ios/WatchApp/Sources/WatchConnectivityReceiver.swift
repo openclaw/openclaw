@@ -561,6 +561,8 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
         let sentAtMs = (payload["sentAtMs"] as? NSNumber)?.int64Value
         let snapshotId = (payload["snapshotId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let chatItems = (payload["chatItems"] as? [Any])?.compactMap(Self.parseChatItem)
+        let chatStatusCode = (payload["chatStatusCode"] as? String)
+            .flatMap(OpenClawWatchChatStatusCode.init(rawValue:))
         let chatStatusText = (payload["chatStatusText"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return WatchAppSnapshotMessage(
@@ -577,6 +579,7 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
             talkSpeaking: Self.boolValue(payload["talkSpeaking"]),
             pendingApprovalCount: max(0, pendingApprovalCount),
             chatItems: chatItems,
+            chatStatusCode: chatStatusCode,
             chatStatusText: chatStatusText?.isEmpty == false ? chatStatusText : nil,
             sentAtMs: sentAtMs,
             snapshotId: snapshotId)

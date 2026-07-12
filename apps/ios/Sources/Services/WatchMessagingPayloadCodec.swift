@@ -236,6 +236,9 @@ enum WatchMessagingPayloadCodec {
                 return encoded
             }
         }
+        if let chatStatusCode = message.chatStatusCode {
+            payload["chatStatusCode"] = chatStatusCode.rawValue
+        }
         if let chatStatusText = nonEmpty(message.chatStatusText) {
             payload["chatStatusText"] = chatStatusText
         }

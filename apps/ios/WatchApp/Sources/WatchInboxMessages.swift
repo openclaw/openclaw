@@ -83,6 +83,7 @@ struct WatchAppSnapshotMessage: Codable, Equatable {
     var talkSpeaking: Bool
     var pendingApprovalCount: Int
     var chatItems: [WatchChatItem]?
+    var chatStatusCode: OpenClawWatchChatStatusCode?
     var chatStatusText: String?
     var sentAtMs: Int64?
     var snapshotId: String?

@@ -22,7 +22,7 @@ private struct GatewayRelayIdentityResponse: Decodable {
 
 private struct WatchChatPreview {
     var items: [OpenClawWatchChatItem]
-    var statusText: String?
+    var statusCode: OpenClawWatchChatStatusCode?
 }
 
 private struct WatchChatMetadataEnvelope: Decodable {
@@ -5853,7 +5853,7 @@ extension NodeAppModel {
                 guard self.isOperatorGatewayConnected else {
                     return WatchChatPreview(
                         items: [],
-                        statusText: String(localized: "Connect iPhone chat to read messages"))
+                        statusCode: .connectIPhone)
                 }
                 payload = try await IOSGatewayChatTransport(gateway: self.operatorSession)
                     .requestHistory(sessionKey: self.chatSessionKey)
@@ -5862,12 +5862,12 @@ extension NodeAppModel {
             let items = Self.makeWatchChatItems(from: payload.messages ?? [])
             return WatchChatPreview(
                 items: items,
-                statusText: items.isEmpty ? "No chat messages yet" : nil)
+                statusCode: items.isEmpty ? .noMessages : nil)
         } catch {
             GatewayDiagnostics.log("watch app snapshot: chat preview failed error=\(error.localizedDescription)")
             return WatchChatPreview(
                 items: [],
-                statusText: String(localized: "Chat unavailable"))
+                statusCode: .unavailable)
         }
     }
 
@@ -6032,7 +6032,7 @@ extension NodeAppModel {
             talkSpeaking: self.talkMode.isSpeaking,
             pendingApprovalCount: self.watchExecApprovalPromptsByID.count,
             chatItems: chatPreview?.items,
-            chatStatusText: chatPreview?.statusText,
+            chatStatusCode: chatPreview?.statusCode,
             sentAtMs: Int64(Date().timeIntervalSince1970 * 1000),
             snapshotId: UUID().uuidString)
     }

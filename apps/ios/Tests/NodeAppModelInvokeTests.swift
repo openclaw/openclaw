@@ -6708,6 +6708,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 talkListening: false,
                 talkSpeaking: false,
                 pendingApprovalCount: 1,
+                chatStatusCode: .connectIPhone,
                 snapshotId: "app-a"))
         let approvalPayload = WatchMessagingPayloadCodec.encodeExecApprovalSnapshotPayload(
             OpenClawWatchExecApprovalSnapshotMessage(
@@ -6735,6 +6736,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let nestedApprovals = try #require(
             combined[OpenClawWatchPayloadType.execApprovalSnapshot.rawValue] as? [String: Any])
         #expect(nestedApp["gatewayStableID"] as? String == "gateway-a")
+        #expect(nestedApp["chatStatusCode"] as? String == "connectIPhone")
         #expect(nestedApp["snapshotId"] as? String == "app-a")
         #expect(nestedApprovals["snapshotId"] as? String == "approval-a")
         #expect(nestedApprovals["gatewayStableID"] as? String == "gateway-a")

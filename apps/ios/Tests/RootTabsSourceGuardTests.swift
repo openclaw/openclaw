@@ -1005,6 +1005,7 @@ extension RootTabsSourceGuardTests {
             from: matchingOwnerGuard,
             to: "self.appSnapshot = merged")
         #expect(ownerMatchedMerge.contains("merged.chatItems = self.appSnapshot?.chatItems"))
+        #expect(ownerMatchedMerge.contains("merged.chatStatusCode = self.appSnapshot?.chatStatusCode"))
         #expect(ownerMatchedMerge.contains("merged.chatStatusText = self.appSnapshot?.chatStatusText"))
     }
 
