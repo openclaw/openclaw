@@ -10,6 +10,7 @@ import { LitElement, css, html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { createRef, ref } from "lit/directives/ref.js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
+import { I18nController, t } from "../i18n/index.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
 
 type McpAppViewPayload = {
@@ -134,9 +135,10 @@ export class McpAppView extends LitElement {
   @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) viewId = "";
   @property({ type: Number }) height = 600;
-  @property() override title = "MCP App";
+  @property() override title = "";
   @state() private error: string | null = null;
 
+  protected readonly i18nController = new I18nController(this);
   private readonly mount = createRef<HTMLDivElement>();
   private bridge: AppBridge | null = null;
   private iframe: HTMLIFrameElement | null = null;
@@ -152,6 +154,9 @@ export class McpAppView extends LitElement {
   }
 
   override updated() {
+    if (this.iframe) {
+      this.iframe.title = this.title || t("mcpApp.title");
+    }
     const nextKey = `${this.sessionKey}\0${this.viewId}`;
     const nextClient = this.context?.gateway.snapshot.client ?? null;
     if (nextKey !== this.setupKey || nextClient !== this.setupClient) {
@@ -207,7 +212,7 @@ export class McpAppView extends LitElement {
         return;
       }
       const iframe = document.createElement("iframe");
-      iframe.title = this.title;
+      iframe.title = this.title || t("mcpApp.title");
       iframe.referrerPolicy = "no-referrer";
       iframe.style.height = `${this.height}px`;
       // The proxy listener is a dedicated origin that never serves host data,
@@ -321,7 +326,9 @@ export class McpAppView extends LitElement {
 
   override render() {
     return html`<div ${ref(this.mount)} class="mount"></div>
-      ${this.error ? html`<div class="error">MCP App unavailable: ${this.error}</div>` : nothing}`;
+      ${this.error
+        ? html`<div class="error">${t("mcpApp.unavailable", { error: this.error })}</div>`
+        : nothing}`;
   }
 }
 
