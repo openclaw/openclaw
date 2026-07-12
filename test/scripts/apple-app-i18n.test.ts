@@ -44,13 +44,18 @@ describe("Apple app i18n catalogs", () => {
     ]) {
       const entry = catalog.strings[key];
       expect(entry, key).toBeDefined();
+      const localizedValues: string[] = [];
       for (const locale of ["en", ...APPLE_I18N_LOCALES]) {
         const unit = entry?.localizations?.[locale]?.stringUnit;
         expect(unit?.value, `${key}:${locale}`).toBeTruthy();
-        if (locale !== "en" && unit?.state !== "translated") {
-          expect(unit?.value, `${key}:${locale}`).not.toBe(key);
+        if (locale !== "en" && unit?.value) {
+          localizedValues.push(unit.value);
         }
       }
+      expect(
+        localizedValues.some((value) => value !== key),
+        key,
+      ).toBe(true);
     }
   });
 
