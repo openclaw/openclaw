@@ -21643,6 +21643,14 @@
     },
     {
       "kind": "ui-localized-call",
+      "line": 625,
+      "path": "apps/ios/Sources/RootTabs.swift",
+      "source": "Show Sidebar",
+      "surface": "apple",
+      "id": "native.apple.20f4753fc51c5341"
+    },
+    {
+      "kind": "ui-localized-call",
       "line": 636,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Back to %@",

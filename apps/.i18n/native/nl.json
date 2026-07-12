@@ -13529,6 +13529,11 @@
       "translated": "Cron Jobs"
     },
     {
+      "id": "native.apple.20f4753fc51c5341",
+      "source": "Show Sidebar",
+      "translated": "Toon navigatiekolom"
+    },
+    {
       "id": "native.apple.bb0ea6d61a32c7c2",
       "source": "Back to %@",
       "translated": "Terug naar %@"
