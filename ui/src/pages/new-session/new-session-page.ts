@@ -495,9 +495,14 @@ class NewSessionPage extends OpenClawLightDomElement {
   /** "Use this folder" applies exactly what the head input shows. The draft
       syncs to every listed directory, covers hosts that cannot list
       (fs.listDir missing/failing), and an edited path always wins over a
-      stale listing. */
+      stale listing. A cleared input applies "" — the host's default
+      directory (workspace on the Gateway, home on a node) — matching the
+      clearable folder textbox this browser replaced. Null disables Use. */
   private usableBrowserPath(): string | null {
     const draft = this.browserPathDraft.trim();
+    if (draft.length === 0) {
+      return "";
+    }
     return isAbsolutePath(draft) ? draft : null;
   }
 
@@ -522,6 +527,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     // Clear the previous directory immediately: keeping it clickable while the
     // request is in flight would let "Use this folder" apply the stale path.
     this.browserListing = null;
+    const draftAtRequest = this.browserPathDraft;
     void client
       .request<FsListDirResult>("fs.listDir", {
         ...(path ? { path } : {}),
@@ -532,7 +538,9 @@ class NewSessionPage extends OpenClawLightDomElement {
           return;
         }
         this.browserListing = result ?? null;
-        if (result?.path) {
+        // Sync the head input to the listed directory unless the user typed
+        // while this request was in flight; their edit wins.
+        if (result?.path && this.browserPathDraft === draftAtRequest) {
           this.browserPathDraft = result.path;
         }
       })
@@ -684,10 +692,10 @@ class NewSessionPage extends OpenClawLightDomElement {
           <button
             type="button"
             class="new-session-page__browser-use"
-            ?disabled=${!target || !this.usableBrowserPath()}
+            ?disabled=${!target || this.usableBrowserPath() === null}
             @click=${() => {
               const path = this.usableBrowserPath();
-              if (target && path) {
+              if (target && path !== null) {
                 this.applyFolder(path, target.nodeId);
                 this.closeBrowser();
               }

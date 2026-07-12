@@ -314,6 +314,27 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         .poll(() => folderSelect.locator(".new-session-page__trigger-label").textContent())
         .toBe("Projects");
 
+      // Clearing the path applies the node's default directory (empty folder),
+      // the state the replaced clearable folder textbox could express.
+      await folderSelect.locator("summary").click();
+      await roots.getByRole("button", { name: "MacBook" }).click();
+      await expect.poll(() => pathInput.inputValue()).toBe(NODE_PICKED);
+      await pathInput.fill("");
+      await page.getByRole("button", { name: "Use this folder" }).click();
+      await expect
+        .poll(() => folderSelect.locator(".new-session-page__trigger-label").textContent())
+        .toBe("Agent workspace");
+      await expect.poll(() => whereLabel.textContent()).toBe("MacBook");
+
+      // Browse back to the custom folder for the final create assertion.
+      await folderSelect.locator("summary").click();
+      await roots.getByRole("button", { name: "MacBook" }).click();
+      await roots.getByRole("button", { name: "Projects" }).click();
+      await page.getByRole("button", { name: "Use this folder" }).click();
+      await expect
+        .poll(() => folderSelect.locator(".new-session-page__trigger-label").textContent())
+        .toBe("Projects");
+
       await page.locator(".new-session-page__message").fill("inspect the remote checkout");
       await page.getByRole("button", { name: "Start session" }).click();
       const createRequest = await gateway.waitForRequest("sessions.create");
