@@ -120,6 +120,41 @@ function readCodexBinding(sessionId, sessionKey) {
   }
 }
 
+function readSessionEntry(sessionId) {
+  const dbPath = path.join(stateDir(), "agents", "main", "agent", "openclaw-agent.sqlite");
+  if (!fs.existsSync(dbPath)) {
+    throw new Error(`missing agent session database: ${dbPath}`);
+  }
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+  try {
+    const row = db
+      .prepare(
+        `SELECT se.session_key, se.entry_json, s.agent_harness_id
+           FROM sessions AS s
+           INNER JOIN session_entries AS se ON se.session_id = s.session_id
+          WHERE s.session_id = ?
+          ORDER BY se.updated_at DESC, se.session_key
+          LIMIT 1`,
+      )
+      .get(sessionId);
+    if (!row || typeof row.session_key !== "string" || typeof row.entry_json !== "string") {
+      throw new Error(`missing session store entry for ${sessionId}`);
+    }
+    const entry = JSON.parse(row.entry_json);
+    return {
+      entry: {
+        ...entry,
+        agentHarnessId:
+          typeof row.agent_harness_id === "string" ? row.agent_harness_id : entry.agentHarnessId,
+        sessionId,
+      },
+      sessionKey: row.session_key,
+    };
+  } finally {
+    db.close();
+  }
+}
+
 function configure() {
   const modelRef = process.argv[3] || "codex/gpt-5.4";
   const state = stateDir();
@@ -442,16 +477,7 @@ function assertAgentTurn() {
     );
   }
 
-  const sessionsDir = path.join(stateDir(), "agents", "main", "sessions");
-  const storePath = path.join(sessionsDir, "sessions.json");
-  const store = readJson(storePath);
-  const sessionMatch = Object.entries(store).find(
-    ([, candidate]) => candidate?.sessionId === sessionId,
-  );
-  if (!sessionMatch) {
-    throw new Error(`missing session store entry for ${sessionId}: ${JSON.stringify(store)}`);
-  }
-  const [sessionKey, entry] = sessionMatch;
+  const { entry, sessionKey } = readSessionEntry(sessionId);
   if (entry.agentHarnessId !== "codex") {
     throw new Error(`expected codex harness in session entry, got ${entry.agentHarnessId}`);
   }

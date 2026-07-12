@@ -46,6 +46,7 @@ func TestTranslationPromptUsesSharedContractAndLocaleOverlayForEverySupportedLoc
 				"Preserve HTML/MDX tag names, attribute names, nesting, and structural attribute values exactly",
 				"Fenced text, transcript, output, and documentation examples are an exception to the preceding block rule",
 				"Translate user-visible prose inside string-valued component attributes such as “title”, “label”, “description”, and “placeholder”",
+				"Keep product names in English: OpenClaw, Raspberry Pi, WhatsApp, Telegram, Discord, iMessage, Slack, Microsoft Teams, Google Chat, Signal, Render",
 				"Locale rules:",
 			} {
 				if !strings.Contains(prompt, want) {

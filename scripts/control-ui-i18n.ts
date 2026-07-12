@@ -12,6 +12,7 @@ import {
   compareStringArrays,
   createControlUiLocaleSyncPlan,
   flattenTranslations,
+  resolveLocaleMetaProvenance,
   type GlossaryEntry,
   type LocaleEntry,
   type LocaleMeta,
@@ -1317,6 +1318,24 @@ function parseTranslationReply(raw: string): Record<string, unknown> {
   return JSON.parse(fenced ? fenced[1] : trimmed) as Record<string, unknown>;
 }
 
+export function parseTranslationBatchReply(
+  raw: string,
+  items: readonly TranslationBatchItem[],
+  locale: string,
+): Map<string, string> {
+  const parsed = parseTranslationReply(raw);
+  const translated = new Map<string, string>();
+  for (const item of items) {
+    const value = parsed[item.key];
+    if (typeof value !== "string" || !value.trim()) {
+      throw new Error(`missing translation for ${item.key}`);
+    }
+    translated.set(item.key, value);
+  }
+  assertPlaceholderParity(new Map(items.map((item) => [item.key, item.text])), translated, locale);
+  return translated;
+}
+
 async function translateBatch(
   clientAccess: ClientAccess,
   items: readonly TranslationBatchItem[],
@@ -1334,15 +1353,7 @@ async function translateBatch(
       const raw = await (
         await clientAccess.getClient()
       ).prompt(buildBatchPrompt(items), attemptLabel);
-      const parsed = parseTranslationReply(raw);
-      const translated = new Map<string, string>();
-      for (const item of items) {
-        const value = parsed[item.key];
-        if (typeof value !== "string" || !value.trim()) {
-          throw new Error(`missing translation for ${item.key}`);
-        }
-        translated.set(item.key, value);
-      }
+      const translated = parseTranslationBatchReply(raw, items, context.locale);
       logProgress(`${attemptLabel}: done (${formatDuration(Date.now() - startedAt)})`);
       return translated;
     } catch (error) {
@@ -1528,16 +1539,18 @@ async function syncLocale(
   // legitimately stay identical to English. Track fallback keys from actual
   // fallback decisions and previous fallback metadata instead.
 
-  const nextProvider = allowTranslate
-    ? resolveConfiguredProvider()
-    : (previousMeta?.provider ?? "");
-  const nextModel = allowTranslate ? resolveConfiguredModel() : (previousMeta?.model ?? "");
+  const provenance = resolveLocaleMetaProvenance({
+    didTranslate: allowTranslate && plan.pending.length > 0,
+    model: allowTranslate ? resolveConfiguredModel() : "",
+    previousMeta,
+    provider: allowTranslate ? resolveConfiguredProvider() : "",
+  });
   const artifacts = plan.render({
     defaultGlossary: DEFAULT_GLOSSARY,
     generatedAt: new Date().toISOString(),
     glossary,
-    model: nextModel,
-    provider: nextProvider,
+    model: provenance.model,
+    provider: provenance.provider,
     workflow: CONTROL_UI_I18N_WORKFLOW,
   });
   assertPlaceholderParity(sourceFlat, artifacts.nextFlat, entry.locale);

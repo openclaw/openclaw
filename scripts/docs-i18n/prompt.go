@@ -143,7 +143,7 @@ Rules:
 
 - Glossary terms are mandatory under the label precedence rules above. When a source term matches a glossary entry, use its target exactly, including headings, link labels, and short UI-style labels.
 - If a glossary target is identical to the source text, preserve that term exactly as written.
-- Keep product names in English: OpenClaw, Raspberry Pi, WhatsApp, Telegram, Discord, iMessage, Slack, Microsoft Teams, Google Chat, Signal.
+- Keep product names in English: OpenClaw, Raspberry Pi, WhatsApp, Telegram, Discord, iMessage, Slack, Microsoft Teams, Google Chat, Signal, Render.
 - Never output an empty response; if unsure, return the source text unchanged.
 
 %s
