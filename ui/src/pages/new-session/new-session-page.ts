@@ -159,9 +159,14 @@ class NewSessionPage extends OpenClawLightDomElement {
     });
   };
 
-  /** ArrowUp/Down wrap through the menu's items; Home/End jump to the edges. */
+  /** ArrowUp/Down wrap through the menu's items; Home/End jump to the edges.
+      Text fields keep native caret/datalist behavior for these keys. */
   private readonly handleMenuKeydown = (event: KeyboardEvent) => {
     if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+      return;
+    }
+    const origin = event.target as HTMLElement;
+    if (origin instanceof HTMLInputElement || origin instanceof HTMLTextAreaElement) {
       return;
     }
     const items = [
