@@ -9,7 +9,7 @@ import {
   deleteRegistryWorktree,
   findRegistryWorktreeByPath,
   getRegistryWorktree,
-  insertRegistryWorktree,
+  insertRegistryWorktreeIfPathFree,
   listRegistryWorktrees,
   updateRegistryWorktree,
 } from "./registry.js";
@@ -788,7 +788,7 @@ describe("ManagedWorktreeService", () => {
       now: () => {
         if (!raced) {
           raced = true;
-          insertRegistryWorktree(env, winner);
+          insertRegistryWorktreeIfPathFree(env, winner);
         }
         return now;
       },
@@ -819,7 +819,7 @@ describe("ManagedWorktreeService", () => {
       now: () => {
         if (!raced) {
           raced = true;
-          insertRegistryWorktree(env, winner);
+          insertRegistryWorktreeIfPathFree(env, winner);
         }
         return now;
       },
@@ -886,7 +886,7 @@ describe("ManagedWorktreeService", () => {
       now: () => {
         if (!raced) {
           raced = true;
-          insertRegistryWorktree(env, winner);
+          insertRegistryWorktreeIfPathFree(env, winner);
         }
         return now;
       },

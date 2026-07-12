@@ -8,7 +8,6 @@ import {
   findRegistryWorktreeByPath,
   findLiveRegistryWorktreeByPath,
   getRegistryWorktree,
-  insertRegistryWorktree,
   insertRegistryWorktreeIfPathFree,
   listRegistryWorktrees,
   updateRegistryWorktree,
@@ -45,8 +44,8 @@ describe("managed worktree registry", () => {
       createdAt: 10,
       lastActiveAt: 10,
     };
-    insertRegistryWorktree(env, record);
-    insertRegistryWorktree(env, {
+    expect(insertRegistryWorktreeIfPathFree(env, record)).toBe(true);
+    insertRegistryWorktreeIfPathFree(env, {
       ...record,
       id: "second",
       name: "task-2",

@@ -1573,7 +1573,6 @@ describe("openclaw state database", () => {
     }
   }, 60_000);
 
-
   it("backfills worktree readiness as ready for pre-column rows", () => {
     const stateDir = createTempStateDir();
     const database = openOpenClawStateDatabase({

@@ -139,16 +139,6 @@ export function findRegistryWorktreeByPath(
   return row ? rowToRecord(row) : undefined;
 }
 
-export function insertRegistryWorktree(
-  env: NodeJS.ProcessEnv,
-  record: ManagedWorktreeRecord,
-): void {
-  const db = dbFor(env);
-  runOpenClawStateWriteTransaction(() => {
-    executeSqliteQuerySync(db, kyselyFor(db).insertInto("worktrees").values(recordToRow(record)));
-  });
-}
-
 /**
  * Atomically claims a worktree path: inserts the record only while no live row
  * (removed_at IS NULL) exists for that path, as one INSERT ... SELECT ... WHERE NOT EXISTS
