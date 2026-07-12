@@ -906,7 +906,7 @@ extension MacNodeRuntime {
 
         let executionCommit = ExecApprovalExecutionCommit.build(
             context: evaluation,
-            executionCommand: command,
+            executionCommand: executionCommand,
             effectiveSecurity: security,
             approvalSource: approvalSource,
             explicitlyApproved: approvedByAsk,

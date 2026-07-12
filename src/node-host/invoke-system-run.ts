@@ -356,10 +356,21 @@ function resolveCurrentSystemRunConfigDenylist(
 function buildSystemRunDenylistBinding(
   phase: SystemRunPolicyPhase,
   getConfig: () => OpenClawConfig,
+  execArgv?: readonly string[],
 ): ExecDenylistAuthorizationBinding {
+  // Screen the ACTUAL dispatch argv too: the resolved execution plan can pin
+  // absolute executable paths that the pre-approval command text/segments do
+  // not carry, and a STOP rule written against the resolved path must still
+  // revoke the pending authority. Only added when analysis succeeded so the
+  // conservative fail-closed path (!analysisOk && segments.length === 0) is
+  // never weakened by a synthetic segment.
+  const segments =
+    phase.analysisOk && execArgv && execArgv.length > 0
+      ? [...phase.segments, { argv: [...execArgv] }]
+      : phase.segments;
   return {
     command: phase.commandText,
-    segments: phase.segments,
+    segments,
     analysisOk: phase.analysisOk,
     configDenylist: phase.denylistConfigEntries,
     resolveCurrentConfigDenylist: () =>
@@ -1065,7 +1076,7 @@ async function executeSystemRunPhase(
 
   const useMacAppExec = opts.preferMacAppExecHost;
   const getCurrentRuntimeConfig = await resolveRuntimeConfigAccessor(opts);
-  const denylistBinding = buildSystemRunDenylistBinding(phase, getCurrentRuntimeConfig);
+  const denylistBinding = buildSystemRunDenylistBinding(phase, getCurrentRuntimeConfig, execArgv);
   if (useMacAppExec) {
     try {
       assertCurrentDenylistAuthorization({

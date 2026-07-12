@@ -988,7 +988,7 @@ private enum ExecHostExecutor {
 
         let executionCommit = ExecApprovalExecutionCommit.build(
             context: context,
-            executionCommand: validatedRequest.command,
+            executionCommand: executionCommand,
             effectiveSecurity: security,
             approvalSource: approvalSource,
             explicitlyApproved: explicitlyApproved,

@@ -610,9 +610,26 @@ export async function processGatewayAllowlist(
   // this command BEFORE the approval wait. The commit re-reads the approvals
   // file under lock and unions it with this config layer, rejecting dispatch if
   // an operator added/tightened a matching STOP rule while approval was pending.
+  // Also screen the enforced dispatch command texts: allowlist enforcement can
+  // rewrite the command onto resolved absolute executable paths that the
+  // original command text/segments do not carry, and a STOP rule written
+  // against the resolved path must still revoke the pending authority. Both
+  // candidates are computed before the approval wait and only exist when
+  // analysis succeeded, so the conservative fail-closed path
+  // (!analysisOk && segments.length === 0) is never weakened.
+  const enforcedDispatchCommandTexts = [enforcedCommand, fallbackEnforcedCommand].filter(
+    (text): text is string => typeof text === "string" && text.trim().length > 0,
+  );
+  const denylistScreenedSegments =
+    enforcedDispatchCommandTexts.length > 0
+      ? [
+          ...allowlistEval.segments,
+          ...enforcedDispatchCommandTexts.map((raw) => ({ argv: [], raw })),
+        ]
+      : allowlistEval.segments;
   const denylistAuthorizationBinding: ExecApprovalUsageAuthorization["denylistBinding"] = {
     command: params.command,
-    segments: allowlistEval.segments,
+    segments: denylistScreenedSegments,
     analysisOk,
     configDenylist: params.execConfigDenylist ?? [],
     ...(params.resolveCurrentExecConfigDenylist
