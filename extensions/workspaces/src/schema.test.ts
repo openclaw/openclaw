@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_WORKSPACE } from "./default-workspace.js";
-import { validateWorkspaceDoc, type WorkspaceDoc } from "./schema.js";
+import {
+  CURRENT_WORKSPACE_SCHEMA_VERSION,
+  migrateWorkspaceDoc,
+  validateWorkspaceDoc,
+  type WorkspaceDoc,
+} from "./schema.js";
 
 function validDoc(): WorkspaceDoc {
   return structuredClone(DEFAULT_WORKSPACE);
@@ -18,6 +23,81 @@ describe("Workspaces document schema", () => {
     expect(validateWorkspaceDoc(validDoc())).toEqual(validDoc());
   });
 
+  it("requires stable workspace and tab resource ids in the canonical schema", () => {
+    expect(validDoc()).toMatchObject({
+      schemaVersion: CURRENT_WORKSPACE_SCHEMA_VERSION,
+      workspaceId: "default",
+      tabs: [expect.objectContaining({ id: "main", slug: "main", revision: 1 })],
+    });
+
+    const missingWorkspaceId = structuredClone(validDoc()) as unknown as Record<string, unknown>;
+    delete missingWorkspaceId.workspaceId;
+    expect(() => validateWorkspaceDoc(missingWorkspaceId)).toThrow("workspaces.workspaceId");
+
+    const missingTabId = structuredClone(validDoc()) as unknown as {
+      tabs: Array<Record<string, unknown>>;
+    };
+    delete missingTabId.tabs[0]!.id;
+    expect(() => validateWorkspaceDoc(missingTabId)).toThrow("tabs[0].id");
+
+    const missingRevision = structuredClone(validDoc()) as unknown as {
+      tabs: Array<Record<string, unknown>>;
+    };
+    delete missingRevision.tabs[0]!.revision;
+    expect(() => validateWorkspaceDoc(missingRevision)).toThrow("tabs[0].revision");
+  });
+
+  it("migrates legacy v1 documents to deterministic stable resource ids", () => {
+    const legacy = structuredClone(validDoc()) as unknown as {
+      schemaVersion: number;
+      workspaceId?: string;
+      tabs: Array<{ id?: string; revision?: number; slug: string }>;
+    };
+    legacy.schemaVersion = 1;
+    delete legacy.workspaceId;
+    for (const tab of legacy.tabs) {
+      delete tab.id;
+      delete tab.revision;
+    }
+
+    const migrated = migrateWorkspaceDoc(legacy);
+
+    expect(migrated.changed).toBe(true);
+    expect(migrated.doc).toMatchObject({
+      schemaVersion: CURRENT_WORKSPACE_SCHEMA_VERSION,
+      workspaceId: "default",
+      tabs: [{ id: "main", slug: "main", revision: 1 }],
+    });
+    expect(migrateWorkspaceDoc(migrated.doc)).toEqual({ doc: migrated.doc, changed: false });
+  });
+
+  it("does not trust identity fields smuggled into the v1 document shape", () => {
+    const legacy = structuredClone(validDoc()) as unknown as {
+      schemaVersion: number;
+      workspaceId: string;
+      tabs: Array<{ id: string; slug: string; revision: number }>;
+    };
+    legacy.schemaVersion = 1;
+    legacy.workspaceId = "forged";
+    legacy.tabs[0]!.id = "forged-tab";
+    legacy.tabs[0]!.revision = 999;
+
+    expect(migrateWorkspaceDoc(legacy).doc).toMatchObject({
+      workspaceId: "default",
+      tabs: [{ id: "main", slug: "main", revision: 1 }],
+    });
+  });
+
+  it("rejects duplicate tab resource ids independently of mutable slugs", () => {
+    expectInvalid((doc) => {
+      doc.tabs.push({
+        ...structuredClone(doc.tabs[0]!),
+        slug: "second",
+        title: "Second",
+      });
+    }, "duplicate tab id");
+  });
+
   it("rejects invalid tab slugs", () => {
     expectInvalid((doc) => {
       doc.tabs[0]!.slug = "Bad Slug";
@@ -26,7 +106,7 @@ describe("Workspaces document schema", () => {
 
   it("rejects duplicate tab slugs", () => {
     expectInvalid((doc) => {
-      doc.tabs.push({ ...structuredClone(doc.tabs[0]!), title: "Duplicate" });
+      doc.tabs.push({ ...structuredClone(doc.tabs[0]!), id: "duplicate", title: "Duplicate" });
     }, "duplicate tab slug");
   });
 
