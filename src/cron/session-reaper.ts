@@ -124,6 +124,7 @@ export async function sweepCronRunSessions(params: {
     }
   } catch (err) {
     params.log.warn({ err: String(err) }, "cron-reaper: failed to sweep session store");
+    lastSweepAtMsByStore.set(storePath, now);
     return { swept: false, pruned: 0 };
   }
 
