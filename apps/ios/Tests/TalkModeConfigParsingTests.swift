@@ -408,6 +408,20 @@ struct TalkModeManagerTests {
         #expect(manager.watchPresentation == .phase)
     }
 
+    @Test func `WebRTC progress remains semantic on the watch`() {
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+
+        manager._test_handleRealtimeRelayStatus("Connecting")
+        #expect(manager.phase == .connecting)
+        #expect(manager.watchPresentation == .phase)
+
+        for status in ["Asking OpenClaw", "Still asking OpenClaw", "Updating OpenClaw"] {
+            manager._test_handleRealtimeRelayStatus(status)
+            #expect(manager.phase == .thinking)
+            #expect(manager.watchPresentation == .phase)
+        }
+    }
+
     @Test func `relay close restarts enabled continuous realtime`() {
         let manager = TalkModeManager(allowSimulatorCapture: true)
         manager._test_prepareEnabledRealtimeSessionForClose()

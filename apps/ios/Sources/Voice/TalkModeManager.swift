@@ -3705,11 +3705,11 @@ extension TalkModeManager {
         switch status {
         case "Listening", "Listening (Realtime)":
             .listening
-        case "Thinking", "Thinking…":
+        case "Thinking", "Thinking…", "Asking OpenClaw", "Still asking OpenClaw", "Updating OpenClaw":
             .thinking
         case "Speaking", "Speaking…":
             .speaking
-        case "Connecting realtime…", "Waiting for realtime…", "Reconnecting", "Reconnecting…":
+        case "Connecting", "Connecting realtime…", "Waiting for realtime…", "Reconnecting", "Reconnecting…":
             .connecting
         default:
             .idle
@@ -3719,6 +3719,7 @@ extension TalkModeManager {
     private static func watchPresentation(forRealtimeStatus status: String) -> TalkWatchPresentation {
         switch status {
         case "Listening", "Listening (Realtime)", "Thinking", "Thinking…", "Speaking", "Speaking…",
+             "Asking OpenClaw", "Still asking OpenClaw", "Updating OpenClaw", "Connecting",
              "Connecting realtime…", "Waiting for realtime…", "Ready", "Reconnecting", "Reconnecting…":
             .phase
         case "Realtime failed before connecting":
@@ -3742,10 +3743,18 @@ extension TalkModeManager {
             String(localized: "Thinking")
         case "Thinking…":
             String(localized: "Thinking…")
+        case "Asking OpenClaw":
+            String(localized: "Asking OpenClaw")
+        case "Still asking OpenClaw":
+            String(localized: "Still asking OpenClaw")
+        case "Updating OpenClaw":
+            String(localized: "Updating OpenClaw")
         case "Speaking":
             String(localized: "Speaking")
         case "Speaking…":
             String(localized: "Speaking…")
+        case "Connecting":
+            String(localized: "Connecting")
         case "Connecting realtime…":
             String(localized: "Connecting realtime…")
         case "Waiting for realtime…":
