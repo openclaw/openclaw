@@ -194,7 +194,7 @@ export async function mintAgentRuntimeIdentityToken(params: {
 /** Validate a presented agent runtime token and return the internal caller identity. */
 export async function verifyAgentRuntimeIdentityToken(
   value: string | null | undefined,
-  nowMs: number = Date.now(),
+  nowMs?: number,
 ): Promise<AgentRuntimeIdentity | undefined> {
   const token = value?.trim();
   if (!token) {
@@ -204,12 +204,12 @@ export async function verifyAgentRuntimeIdentityToken(
   if (!payloadPart || !signature || extra.length > 0) {
     return undefined;
   }
-  const payload = decodePayload(payloadPart, nowMs);
-  if (!payload) {
-    return undefined;
-  }
   const sharedSecret = await readSharedAgentRuntimeIdentitySecret();
   if (!sharedSecret || !signatureMatches(signature, signPayload(sharedSecret, payloadPart))) {
+    return undefined;
+  }
+  const payload = decodePayload(payloadPart, nowMs ?? Date.now());
+  if (!payload) {
     return undefined;
   }
   return {

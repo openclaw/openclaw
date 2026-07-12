@@ -165,4 +165,27 @@ describe("agent runtime identity token", () => {
       })),
     );
   });
+
+  it("rechecks message action expiry after waiting for an approvals update", async () => {
+    useTempHome();
+    const runtimeToken = await importRuntimeTokenModule();
+    const { updateExecApprovals } = await import("../infra/exec-approvals.js");
+    const token = await runtimeToken.mintAgentRuntimeIdentityToken({
+      agentId: "main",
+      sessionKey: "session-1",
+      messageActionContext: { expiresAtMs: 5000 },
+    });
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(4000);
+    let verification!: ReturnType<typeof runtimeToken.verifyAgentRuntimeIdentityToken>;
+
+    await updateExecApprovals({
+      update: () => {
+        verification = runtimeToken.verifyAgentRuntimeIdentityToken(token);
+        nowSpy.mockReturnValue(5000);
+        return null;
+      },
+    });
+
+    await expect(verification).resolves.toBeUndefined();
+  });
 });
