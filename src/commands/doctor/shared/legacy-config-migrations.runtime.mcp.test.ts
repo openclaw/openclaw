@@ -9,7 +9,11 @@ describe("mcp.servers.disabled->enabled migration", () => {
 
   it("migrates disabled: true to enabled: false", () => {
     const changes: string[] = [];
-    const raw = {
+    const raw: {
+      mcp: {
+        servers: Record<string, { disabled?: boolean; enabled?: boolean; command?: string }>;
+      };
+    } = {
       mcp: {
         servers: {
           myServer: {
@@ -34,7 +38,11 @@ describe("mcp.servers.disabled->enabled migration", () => {
 
   it("removes disabled: false as a no-op (server enabled by default)", () => {
     const changes: string[] = [];
-    const raw = {
+    const raw: {
+      mcp: {
+        servers: Record<string, { disabled?: boolean; enabled?: boolean; command?: string }>;
+      };
+    } = {
       mcp: {
         servers: {
           myServer: {
@@ -58,7 +66,11 @@ describe("mcp.servers.disabled->enabled migration", () => {
 
   it("preserves explicit enabled: true when disabled is also present", () => {
     const changes: string[] = [];
-    const raw = {
+    const raw: {
+      mcp: {
+        servers: Record<string, { disabled?: boolean; enabled?: boolean; command?: string }>;
+      };
+    } = {
       mcp: {
         servers: {
           myServer: {
@@ -83,7 +95,11 @@ describe("mcp.servers.disabled->enabled migration", () => {
 
   it("preserves explicit enabled: false when disabled is also present", () => {
     const changes: string[] = [];
-    const raw = {
+    const raw: {
+      mcp: {
+        servers: Record<string, { disabled?: boolean; enabled?: boolean; command?: string }>;
+      };
+    } = {
       mcp: {
         servers: {
           myServer: {
@@ -106,7 +122,11 @@ describe("mcp.servers.disabled->enabled migration", () => {
 
   it("handles multiple servers with mixed states", () => {
     const changes: string[] = [];
-    const raw = {
+    const raw: {
+      mcp: {
+        servers: Record<string, { disabled?: boolean; enabled?: boolean; command?: string }>;
+      };
+    } = {
       mcp: {
         servers: {
           serverA: { disabled: true, command: "a" },
