@@ -109,26 +109,20 @@ export const tasksHandlers: GatewayRequestHandlers = {
     }
     const statusFilter = normalizeTaskStatusFilter(params.status);
     const limit = Math.min(params.limit ?? DEFAULT_TASKS_LIST_LIMIT, MAX_TASKS_LIST_LIMIT);
-    // The ledger view pages by last activity so an old long-running task that
-    // just finished still surfaces on the first page instead of hiding behind
-    // newer-created records. Start from a cloned insertion-order snapshot so
-    // this sort does not first pay for the registry's discarded createdAt sort.
-    const filtered = listTaskRecordsUnsorted()
-      .filter((task) => {
-        if (statusFilter && !statusFilter.has(task.status)) {
-          return false;
-        }
-        return (
-          taskMatchesAgent(task, params.agentId) && taskMatchesSession(task, params.sessionKey)
-        );
-      })
-      .toSorted((left, right) => {
-        const updatedDiff = taskUpdatedAt(right) - taskUpdatedAt(left);
-        if (updatedDiff !== 0) {
-          return updatedDiff;
-        }
-        return left.taskId < right.taskId ? -1 : left.taskId > right.taskId ? 1 : 0;
-      });
+    // Filter during snapshot iteration so records that will be discarded by
+    // status, agent, or session matching are never cloned in the first place.
+    const filtered = listTaskRecordsUnsorted((task) => {
+      if (statusFilter && !statusFilter.has(task.status)) {
+        return false;
+      }
+      return taskMatchesAgent(task, params.agentId) && taskMatchesSession(task, params.sessionKey);
+    }).toSorted((left, right) => {
+      const updatedDiff = taskUpdatedAt(right) - taskUpdatedAt(left);
+      if (updatedDiff !== 0) {
+        return updatedDiff;
+      }
+      return left.taskId < right.taskId ? -1 : left.taskId > right.taskId ? 1 : 0;
+    });
     const page = filtered.slice(cursor, cursor + limit);
     const nextOffset = cursor + page.length;
     respond(true, {
