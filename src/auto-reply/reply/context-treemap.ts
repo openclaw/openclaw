@@ -4,6 +4,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import zlib from "node:zlib";
 import { expectDefined } from "@openclaw/normalization-core";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { estimateTokensFromChars } from "../../utils/cjk-chars.js";
@@ -132,7 +133,7 @@ function sanitizeLabel(value: string): string {
     .toUpperCase();
 }
 
-function truncateLabel(value: string, maxChars: number): string {
+export function truncateLabel(value: string, maxChars: number): string {
   if (maxChars <= 0) {
     return "";
   }
@@ -140,9 +141,9 @@ function truncateLabel(value: string, maxChars: number): string {
     return value;
   }
   if (maxChars <= 2) {
-    return value.slice(0, maxChars);
+    return truncateUtf16Safe(value, maxChars);
   }
-  return value.slice(0, maxChars - 1);
+  return truncateUtf16Safe(value, maxChars - 1);
 }
 
 function layoutBinary<T extends { value: number }>(rawItems: T[], rect: Rect): PositionedItem<T>[] {
