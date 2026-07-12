@@ -7,16 +7,22 @@ function getMigration() {
   const m = LEGACY_CONFIG_MIGRATIONS_RUNTIME_SESSION.find(
     (candidate) => candidate.id === "session.maintenance.resetArchiveRetention-zero",
   );
-  if (!m) throw new Error("migration not found");
+  if (!m) {
+    throw new Error("migration not found");
+  }
   return m;
 }
 
 function getRule(id: string) {
   const rules = getMigration().legacyRules;
-  if (!rules) throw new Error("legacyRules missing");
+  if (!rules) {
+    throw new Error("legacyRules missing");
+  }
   // Two rules share the same path; distinguish by matching the message prefix.
   const found = rules.find((candidate) => candidate.message.includes(id));
-  if (!found) throw new Error(`rule not found: ${id}`);
+  if (!found) {
+    throw new Error(`rule not found: ${id}`);
+  }
   return found;
 }
 
@@ -64,7 +70,6 @@ describe("session.maintenance zero-duration migration", () => {
 
     it("detects numeric zero", () => {
       expect(pruneAfterRule.match?.({ pruneAfter: 0 }, {} as Record<string, unknown>)).toBe(true);
-      expect(pruneAfterRule.match?.({ pruneAfter: 0.0 }, {} as Record<string, unknown>)).toBe(true);
     });
 
     it("does not match positive durations", () => {

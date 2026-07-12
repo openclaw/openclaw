@@ -137,7 +137,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SESSION: LegacyConfigMigrationSpec
           continue;
         }
         delete maintenance[key];
-        const label = typeof val === "number" ? String(val) : val;
+        const label = String(val);
         const restoreMsg =
           key === "pruneAfter"
             ? "30d session-pruning default applies"
