@@ -1,5 +1,6 @@
 import {
   loadTranscriptEvents,
+  publishTranscriptUpdate,
   replaceTranscriptEvents,
 } from "../../config/sessions/session-accessor.js";
 import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
@@ -12,7 +13,6 @@ import type {
   TranscriptRewriteResult,
 } from "../../context-engine/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { getRawSessionAppendMessage } from "../session-raw-append-message.js";
 import {
@@ -104,15 +104,11 @@ async function rewriteSqliteRuntimeTranscript(params: {
     },
     nextEvents,
   );
-  emitSessionTranscriptUpdate({
-    sessionFile: params.target.sessionFile,
+  await publishTranscriptUpdate({
     sessionKey: params.target.sessionKey,
     agentId: params.target.agentId,
-    target: {
-      agentId: params.target.agentId,
-      sessionId: params.target.sessionId,
-      sessionKey: params.target.sessionKey,
-    },
+    sessionId: params.target.sessionId,
+    storePath: marker.storePath,
   });
   return {
     changed: true,
@@ -552,15 +548,10 @@ export async function rewriteTranscriptEntriesInRuntimeTranscript(params: {
         state,
         appendedEntries: result.appendedEntries,
       });
-      emitSessionTranscriptUpdate({
-        sessionFile: target.sessionFile,
+      await publishTranscriptUpdate({
         sessionKey: target.sessionKey,
         agentId: target.agentId,
-        target: {
-          agentId: target.agentId,
-          sessionId: target.sessionId,
-          sessionKey: target.sessionKey,
-        },
+        sessionId: target.sessionId,
       });
       log.info(
         `[transcript-rewrite] rewrote ${result.rewrittenEntries} entr` +
