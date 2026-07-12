@@ -108,6 +108,19 @@ function decodeXml(value: string): string {
 export function renderAndroidResourceValue(source: string, translated: string): string {
   let rendered = translated;
   const sourceTokens = [...source.matchAll(INTERPOLATION_RE)].map((match) => match[0]);
+  const translatedTokens = [...translated.matchAll(INTERPOLATION_RE)].map((match) => match[0]);
+  const tokenCounts = (tokens: readonly string[]) => {
+    const counts = new Map<string, number>();
+    for (const token of tokens) {
+      counts.set(token, (counts.get(token) ?? 0) + 1);
+    }
+    return [...counts].toSorted(([left], [right]) => compareText(left, right));
+  };
+  if (JSON.stringify(tokenCounts(sourceTokens)) !== JSON.stringify(tokenCounts(translatedTokens))) {
+    throw new Error(
+      `Android translation changed interpolation placeholders: ${JSON.stringify(source)} -> ${JSON.stringify(translated)}`,
+    );
+  }
   if (sourceTokens.length > 0) {
     rendered = rendered.replaceAll("%", "%%");
     const sourceIndices = new Map<string, number[]>();
@@ -241,12 +254,25 @@ async function readToolDisplaySources(): Promise<Set<string>> {
 const DIRECT_UI_LITERAL_PATTERNS = [
   /\bText\s*\(\s*(?:text\s*=\s*)?"((?:\\.|[^"\\])+)"/gu,
   /\b(?:ClawPrimaryButton|ClawSecondaryButton|ClawDangerButton|ClawLinkButton)\s*\([^)]*?\btext\s*=\s*"((?:\\.|[^"\\])+)"/gsu,
-  /\b(?:title|subtitle|body|text|label|statusText|confirmLabel|dismissLabel|contentDescription|placeholder)\s*=\s*"((?:\\.|[^"\\])+)"/gu,
+  /\b(?:title|subtitle|body|text|label|statusText|confirmLabel|dismissLabel|contentDescription|placeholder|onClickLabel)\s*=\s*"((?:\\.|[^"\\])+)"/gu,
+  /\b(?:title|subtitle|body|text|label|statusText|confirmLabel|dismissLabel|contentDescription|placeholder|onClickLabel)\s*=\s*[^,\n]*\?:\s*"((?:\\.|[^"\\])+)"/gu,
   /\b(?:_[A-Za-z0-9_]*(?:ErrorText|StatusText)|errorText|statusText)(?:\.value)?\s*=\s*"((?:\\.|[^"\\])+)"/gu,
   /\bSettingsMetric\s*\(\s*"((?:\\.|[^"\\])+)"/gu,
   /\bToast\.makeText\s*\([^,]+,\s*"((?:\\.|[^"\\])+)"/gu,
   /\bset(?:Title|Message|PositiveButton|NegativeButton|NeutralButton)\s*\(\s*"((?:\\.|[^"\\])+)"/gu,
+  /\bnativeString(?:Resource)?\([^)]*\)\s*\+\s*"((?:\\.|[^"\\])+)"/gsu,
 ] as const;
+const UI_STRING_HELPER_NAME_RE =
+  /(?:description|detail|error|label|message|nextRun|notice|status|subtitle|summary|text|title)$/iu;
+const UI_STRING_FUNCTION_RE =
+  /\bfun\s+([A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)\s*:\s*String\s*(=|\{)/gu;
+const UI_STRING_PROPERTY_RE =
+  /\bval\s+(?:[A-Za-z_][A-Za-z0-9_]*\.)?([A-Za-z_][A-Za-z0-9_]*)\s*:\s*String\s*(?:\n\s*)?get\(\)\s*=\s*/gu;
+const UI_BRANCH_LITERAL_RE = /(?:->|return|\?:)\s*"((?:\\.|[^"\\])+)"/gu;
+const UI_IF_BRANCH_LITERAL_RE = /(?:\bif\s*\([^)]*\)|\belse)\s*\{\s*"((?:\\.|[^"\\])+)"/gu;
+const UI_MODEL_STRING_NAME_RE =
+  /^(?:contentDescription|errorText|helperText|onClickLabel|statusText)$/u;
+const KOTLIN_STRING_LITERAL_RE = /"((?:\\.|[^"\\])+)"/gu;
 
 // These literals are either technical data or immutable source tokens localized at a typed render edge.
 const ALLOWED_UI_LITERALS = new Map<string, ReadonlySet<string>>([
@@ -256,17 +282,26 @@ const ALLOWED_UI_LITERALS = new Map<string, ReadonlySet<string>>([
       "0 = exact",
       "Cron expression, e.g. 0 9 * * *",
       "D",
+      "Google Chat",
       "ID",
       "ISO time, e.g. 2026-07-09T09:30:00Z",
+      "LOG",
+      "O",
       "OC",
+      "OK",
       "OPENCLAW",
+      "OpenClaw",
+      "U",
       "e.g. America/New_York",
       "current-step-alpha",
       "gateway-progress",
+      "iMessage",
       "main, isolated, current, or session:<id>",
+      "n/a",
       "openclaw gateway",
       "openclaw qr",
       "PTT_BUSY: previous push-to-talk turn is still finishing",
+      "WhatsApp",
     ]),
   ],
   [
@@ -300,10 +335,19 @@ const ALLOWED_UI_LITERALS = new Map<string, ReadonlySet<string>>([
       "Use this phone",
     ]),
   ],
+  [
+    "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillWorkshopSettingsScreen.kt",
+    new Set(["all", "applied", "held", "pending", "rejected"]),
+  ],
+  [
+    "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatCommandControls.kt",
+    new Set(["/$name", "help"]),
+  ],
 ]);
 
 function isAllowedUiLiteral(repoPath: string, source: string): boolean {
   return (
+    source.trim().length === 0 ||
     ALLOWED_UI_LITERALS.get("*")?.has(source) === true ||
     ALLOWED_UI_LITERALS.get(repoPath)?.has(source) === true
   );
@@ -327,6 +371,274 @@ function shouldScanUiLiterals(repoPath: string): boolean {
   );
 }
 
+function findClosingDelimiter(
+  source: string,
+  openingOffset: number,
+  opening: string,
+  closing: string,
+): number | null {
+  let depth = 0;
+  let quoted = false;
+  let escaped = false;
+  for (let index = openingOffset; index < source.length; index += 1) {
+    const character = source[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (quoted && character === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (character === '"') {
+      quoted = !quoted;
+      continue;
+    }
+    if (quoted) continue;
+    if (character === opening) {
+      depth += 1;
+    } else if (character === closing) {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return null;
+}
+
+function expressionEnd(source: string, expressionStart: number): number {
+  const cursor = source.slice(expressionStart).search(/\S/u);
+  if (cursor < 0) return source.length;
+  const start = expressionStart + cursor;
+  let quoted = false;
+  let escaped = false;
+  let lineStart = start;
+  const depths = { "(": 0, "[": 0, "{": 0 };
+  const closingToOpening = { ")": "(", "]": "[", "}": "{" } as const;
+  for (let index = start; index < source.length; index += 1) {
+    const character = source[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (quoted && character === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (character === '"') {
+      quoted = !quoted;
+      continue;
+    }
+    if (quoted) continue;
+    if (character === "(" || character === "[" || character === "{") {
+      depths[character] += 1;
+      continue;
+    }
+    if (character === ")" || character === "]" || character === "}") {
+      depths[closingToOpening[character]] -= 1;
+      continue;
+    }
+    if (character !== "\n" || !Object.values(depths).every((depth) => depth === 0)) {
+      continue;
+    }
+    const line = source.slice(lineStart, index).trimEnd();
+    const nextLine =
+      source
+        .slice(index + 1)
+        .match(/^[^\S\n]*([^\n]*)/u)?.[1]
+        ?.trimStart() ?? "";
+    const continues =
+      line.length === 0 ||
+      /(?:\?:|[+*/%&|=.,([{])$/u.test(line) ||
+      /^(?:else\b|\?:|[+*/%&|.])/u.test(nextLine);
+    if (!continues) return index;
+    lineStart = index + 1;
+  }
+  return source.length;
+}
+
+function splitTopLevelSegments(
+  source: string,
+  start: number,
+  end: number,
+  options: { trackTypeArguments?: boolean } = {},
+): Array<{ end: number; start: number; value: string }> {
+  const segments: Array<{ end: number; start: number; value: string }> = [];
+  let segmentStart = start;
+  let quoted = false;
+  let escaped = false;
+  let typeArgumentDepth = 0;
+  let inDefaultValue = false;
+  const depths = { "(": 0, "[": 0, "{": 0 };
+  const closingToOpening = { ")": "(", "]": "[", "}": "{" } as const;
+  for (let index = start; index < end; index += 1) {
+    const character = source[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (quoted && character === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (character === '"') {
+      quoted = !quoted;
+      continue;
+    }
+    if (quoted) continue;
+    if (options.trackTypeArguments && !inDefaultValue && character === "<") {
+      typeArgumentDepth += 1;
+      continue;
+    }
+    if (options.trackTypeArguments && character === ">" && typeArgumentDepth > 0) {
+      typeArgumentDepth -= 1;
+      continue;
+    }
+    if (character === "(" || character === "[" || character === "{") {
+      depths[character] += 1;
+      continue;
+    }
+    if (character === ")" || character === "]" || character === "}") {
+      depths[closingToOpening[character]] -= 1;
+      continue;
+    }
+    if (
+      options.trackTypeArguments &&
+      character === "=" &&
+      typeArgumentDepth === 0 &&
+      Object.values(depths).every((depth) => depth === 0)
+    ) {
+      inDefaultValue = true;
+      continue;
+    }
+    if (
+      character === "," &&
+      typeArgumentDepth === 0 &&
+      Object.values(depths).every((depth) => depth === 0)
+    ) {
+      segments.push({ end: index, start: segmentStart, value: source.slice(segmentStart, index) });
+      segmentStart = index + 1;
+      inDefaultValue = false;
+    }
+  }
+  segments.push({ end, start: segmentStart, value: source.slice(segmentStart, end) });
+  return segments;
+}
+
+function isLocalizedLiteral(expression: string, literalOffset: number): boolean {
+  return /\bnativeString(?:Resource)?\(\s*$/u.test(expression.slice(0, literalOffset));
+}
+
+function isComparisonLiteral(expression: string, literalOffset: number): boolean {
+  return /(?:==|!=)\s*$/u.test(expression.slice(0, literalOffset));
+}
+
+function collectHelperLiteralFindings(source: string, repoPath: string): AndroidUiLiteralFinding[] {
+  const findings: AndroidUiLiteralFinding[] = [];
+  const collectRange = (name: string, start: number, end: number) => {
+    if (!UI_STRING_HELPER_NAME_RE.test(name)) return;
+    const body = source.slice(start, end);
+    const direct = body.match(/^\s*"((?:\\.|[^"\\])+)"/u);
+    const matches = [
+      ...(direct ? [direct] : []),
+      ...body.matchAll(UI_BRANCH_LITERAL_RE),
+      ...body.matchAll(UI_IF_BRANCH_LITERAL_RE),
+    ];
+    for (const match of matches) {
+      const literal = match[1];
+      if (!literal) continue;
+      const literalOffset = body.indexOf(`"${literal}"`, match.index ?? 0);
+      findings.push({
+        line: lineNumber(source, start + Math.max(0, literalOffset)),
+        path: repoPath,
+        source: decodeKotlinLiteral(literal),
+      });
+    }
+  };
+  for (const match of source.matchAll(UI_STRING_FUNCTION_RE)) {
+    const name = match[1];
+    const bodyKind = match[2];
+    if (!name || !bodyKind) continue;
+    const bodyStart = (match.index ?? 0) + match[0].length;
+    if (bodyKind === "{") {
+      const openingBrace = bodyStart - 1;
+      const closingBrace = findClosingDelimiter(source, openingBrace, "{", "}");
+      if (closingBrace !== null) collectRange(name, bodyStart, closingBrace);
+    } else {
+      collectRange(name, bodyStart, expressionEnd(source, bodyStart));
+    }
+  }
+  for (const match of source.matchAll(UI_STRING_PROPERTY_RE)) {
+    const name = match[1];
+    if (!name) continue;
+    const bodyStart = (match.index ?? 0) + match[0].length;
+    collectRange(name, bodyStart, expressionEnd(source, bodyStart));
+  }
+  return findings;
+}
+
+function collectTypedModelLiteralFindings(
+  source: string,
+  repoPath: string,
+): AndroidUiLiteralFinding[] {
+  const findings: AndroidUiLiteralFinding[] = [];
+  const classPattern = /\b(?:data\s+class|class)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/gu;
+  for (const declaration of source.matchAll(classPattern)) {
+    const className = declaration[1];
+    if (!className) continue;
+    const openingParen = (declaration.index ?? 0) + declaration[0].lastIndexOf("(");
+    const closingParen = findClosingDelimiter(source, openingParen, "(", ")");
+    if (closingParen === null) continue;
+    const parameters = splitTopLevelSegments(source, openingParen + 1, closingParen, {
+      trackTypeArguments: true,
+    });
+    const userFacingParameters = new Map<string, number>();
+    parameters.forEach((parameter, index) => {
+      const field = parameter.value.match(
+        /\bval\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*String\??(?=\s*(?:=|$))/u,
+      )?.[1];
+      if (field && UI_MODEL_STRING_NAME_RE.test(field)) userFacingParameters.set(field, index);
+    });
+    if (userFacingParameters.size === 0) continue;
+    const callPattern = new RegExp(`\\b${className}\\s*\\(`, "gu");
+    for (const call of source.matchAll(callPattern)) {
+      const callOpening = (call.index ?? 0) + call[0].lastIndexOf("(");
+      if (callOpening === openingParen) continue;
+      const callClosing = findClosingDelimiter(source, callOpening, "(", ")");
+      if (callClosing === null) continue;
+      const argumentsList = splitTopLevelSegments(source, callOpening + 1, callClosing);
+      const namedArguments = new Map<string, (typeof argumentsList)[number]>();
+      let positionalArgumentCount = argumentsList.length;
+      argumentsList.forEach((argument, index) => {
+        const name = argument.value.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=(?!=)/u)?.[1];
+        if (!name) return;
+        namedArguments.set(name, argument);
+        positionalArgumentCount = Math.min(positionalArgumentCount, index);
+      });
+      for (const [field, parameterIndex] of userFacingParameters) {
+        const argument =
+          namedArguments.get(field) ??
+          (parameterIndex < positionalArgumentCount ? argumentsList[parameterIndex] : undefined);
+        if (!argument) continue;
+        for (const literal of argument.value.matchAll(KOTLIN_STRING_LITERAL_RE)) {
+          if (
+            !literal[1] ||
+            isLocalizedLiteral(argument.value, literal.index ?? 0) ||
+            isComparisonLiteral(argument.value, literal.index ?? 0)
+          ) {
+            continue;
+          }
+          findings.push({
+            line: lineNumber(source, argument.start + (literal.index ?? 0)),
+            path: repoPath,
+            source: decodeKotlinLiteral(literal[1]),
+          });
+        }
+      }
+    }
+  }
+  return findings;
+}
+
 export function findUnlocalizedAndroidUiLiterals(
   source: string,
   repoPath: string,
@@ -340,8 +652,6 @@ export function findUnlocalizedAndroidUiLiterals(
       if (!literal) continue;
       const matchText = match[0] ?? "";
       if (
-        matchText.includes("nativeStringResource(") ||
-        matchText.includes("nativeString(") ||
         isAllowedUiLiteral(repoPath, decodeKotlinLiteral(literal)) ||
         literal.startsWith("http") ||
         literal.startsWith("content://")
@@ -354,6 +664,14 @@ export function findUnlocalizedAndroidUiLiterals(
         path: repoPath,
         source: decodeKotlinLiteral(literal),
       };
+      findings.set(`${finding.line}\u0000${finding.source}`, finding);
+    }
+  }
+  for (const finding of [
+    ...collectHelperLiteralFindings(source, repoPath),
+    ...collectTypedModelLiteralFindings(source, repoPath),
+  ]) {
+    if (!isAllowedUiLiteral(repoPath, finding.source)) {
       findings.set(`${finding.line}\u0000${finding.source}`, finding);
     }
   }
