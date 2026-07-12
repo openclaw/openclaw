@@ -218,6 +218,10 @@ const logHealth = log.child("health");
 const logCron = log.child("cron");
 const logReload = log.child("reload");
 const logHooks = log.child("hooks");
+
+// Direct/embedded gateways have no run-loop signal handler. Keep hot reload
+// active, but fail closed when a change requires a process restart.
+const rejectUnavailableGatewayRestart: GatewayRestartEmitter = () => ({ status: "failed" });
 const logPlugins = log.child("plugins");
 const logWsControl = log.child("ws");
 const logSecrets = log.child("secrets");
@@ -528,7 +532,7 @@ export type GatewayServerOptions = {
    * reparsing openclaw.json during server startup.
    */
   startupConfigSnapshotRead?: ReadConfigFileSnapshotWithPluginMetadataResult;
-  /** Internal run-loop recovery seam. Embedded servers omit it and do not hot reload. */
+  /** Restart request override; direct servers fail closed on restart-required reloads. */
   hotReloadRecovery?: GatewayRestartEmitter;
 };
 
@@ -1883,68 +1887,68 @@ export async function startGatewayServer(
     activateScheduledServicesWhenReady();
 
     const { startManagedGatewayConfigReloader } = await import("./server-reload-handlers.js");
-    if (opts.hotReloadRecovery) {
-      runtimeState.configReloader = startManagedGatewayConfigReloader({
-        minimalTestGateway,
-        initialConfig: cfgAtStart,
-        initialCompareConfig: startupLastGoodSnapshot.sourceConfig,
-        initialInternalWriteHash: startupInternalWriteHash,
-        watchPath: configSnapshot.path,
-        readSnapshot: readConfigFileSnapshot,
-        promoteSnapshot: promoteConfigSnapshotToLastKnownGood,
-        subscribeToWrites: registerConfigWriteListener,
-        deps,
-        broadcast,
-        getState: () => ({
-          hooksConfig: runtimeState.hooksConfig,
-          hookClientIpConfig: runtimeState.hookClientIpConfig,
-          heartbeatRunner: runtimeState.heartbeatRunner,
-          cronState: runtimeState.cronState,
-          channelHealthMonitor: runtimeState.channelHealthMonitor,
-        }),
-        setState: (nextState) => {
-          const cronStateChanged = nextState.cronState !== runtimeState.cronState;
-          runtimeState.hooksConfig = nextState.hooksConfig;
-          runtimeState.hookClientIpConfig = nextState.hookClientIpConfig;
-          runtimeState.heartbeatRunner = nextState.heartbeatRunner;
-          runtimeState.cronState = nextState.cronState;
-          deps.cron = runtimeState.cronState.cron;
-          runtimeState.channelHealthMonitor = nextState.channelHealthMonitor;
-          if (cronStateChanged) {
-            gatewayCronStartHandled = true;
-          }
-        },
-        startChannel,
-        stopChannel,
-        getChannelAutostartSuppression: channelManager.getAutostartSuppression,
-        stopPostReadySidecars: stopRegisteredPostReadySidecars,
-        reloadPlugins: reloadAttachedGatewayPlugins,
-        logHooks,
-        logChannels,
-        logCron,
-        logReload,
-        cronReconciliation,
-        onCronRestart: () => {
+    const requestRecoveryRestart = opts.hotReloadRecovery ?? rejectUnavailableGatewayRestart;
+    runtimeState.configReloader = startManagedGatewayConfigReloader({
+      minimalTestGateway,
+      initialConfig: cfgAtStart,
+      initialCompareConfig: startupLastGoodSnapshot.sourceConfig,
+      initialInternalWriteHash: startupInternalWriteHash,
+      watchPath: configSnapshot.path,
+      readSnapshot: readConfigFileSnapshot,
+      promoteSnapshot: promoteConfigSnapshotToLastKnownGood,
+      subscribeToWrites: registerConfigWriteListener,
+      deps,
+      broadcast,
+      getState: () => ({
+        hooksConfig: runtimeState.hooksConfig,
+        hookClientIpConfig: runtimeState.hookClientIpConfig,
+        heartbeatRunner: runtimeState.heartbeatRunner,
+        cronState: runtimeState.cronState,
+        channelHealthMonitor: runtimeState.channelHealthMonitor,
+      }),
+      setState: (nextState) => {
+        const cronStateChanged = nextState.cronState !== runtimeState.cronState;
+        runtimeState.hooksConfig = nextState.hooksConfig;
+        runtimeState.hookClientIpConfig = nextState.hookClientIpConfig;
+        runtimeState.heartbeatRunner = nextState.heartbeatRunner;
+        runtimeState.cronState = nextState.cronState;
+        deps.cron = runtimeState.cronState.cron;
+        runtimeState.channelHealthMonitor = nextState.channelHealthMonitor;
+        if (cronStateChanged) {
           gatewayCronStartHandled = true;
-        },
-        prepareTerminalConfig: (plan, nextConfig) => {
-          terminalLaunchPolicy.prepareConfig(nextConfig, { restartPending: plan.restartGateway });
-        },
-        reconcileTerminalSessions: () => {
-          terminalSessions.closeDisallowedAgents(
-            (agentId) => terminalLaunchPolicy.resolve(agentId).ok,
-          );
-        },
-        commitTerminalConfig: terminalLaunchPolicy.commitConfig,
-        acceptTerminalConfig: terminalLaunchPolicy.acceptConfig,
-        channelManager,
-        activateRuntimeSecrets,
-        resolveSharedGatewaySessionGenerationForConfig,
-        sharedGatewaySessionGenerationState,
-        clients,
-        requestRecoveryRestart: opts.hotReloadRecovery,
-      });
-    }
+        }
+      },
+      startChannel,
+      stopChannel,
+      getChannelAutostartSuppression: channelManager.getAutostartSuppression,
+      stopPostReadySidecars: stopRegisteredPostReadySidecars,
+      reloadPlugins: reloadAttachedGatewayPlugins,
+      logHooks,
+      logChannels,
+      logCron,
+      logReload,
+      cronReconciliation,
+      onCronRestart: () => {
+        gatewayCronStartHandled = true;
+      },
+      prepareTerminalConfig: (plan, nextConfig) => {
+        terminalLaunchPolicy.prepareConfig(nextConfig, { restartPending: plan.restartGateway });
+      },
+      reconcileTerminalSessions: () => {
+        terminalSessions.closeDisallowedAgents(
+          (agentId) => terminalLaunchPolicy.resolve(agentId).ok,
+        );
+      },
+      commitTerminalConfig: terminalLaunchPolicy.commitConfig,
+      acceptTerminalConfig: terminalLaunchPolicy.acceptConfig,
+      channelManager,
+      activateRuntimeSecrets,
+      resolveSharedGatewaySessionGenerationForConfig,
+      sharedGatewaySessionGenerationState,
+      clients,
+      requestRecoveryRestart,
+      restartRecoveryAvailable: opts.hotReloadRecovery !== undefined,
+    });
     await promoteConfigSnapshotToLastKnownGood(startupLastGoodSnapshot).catch((err: unknown) => {
       log.warn(`gateway: failed to promote config last-known-good backup: ${String(err)}`);
     });

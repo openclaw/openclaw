@@ -333,6 +333,7 @@ type GatewayReloadHandlerParams = {
   clearGmailRestartAbortController?: (controller: GatewayGmailRestartAbortController) => void;
   onCronRestart?: () => void;
   requestRecoveryRestart?: GatewayRestartEmitter;
+  restartRecoveryAvailable?: boolean;
 };
 
 type ManagedGatewayConfigReloaderParams = Omit<
@@ -590,6 +591,20 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         await commit();
       }
     };
+    const settleRecoveryRestart = (
+      restartTransaction: GatewayRestartTransactionResult,
+      surface: string,
+    ) => {
+      if (
+        restartTransaction.status === "recovery-pending" &&
+        params.restartRecoveryAvailable === false
+      ) {
+        restartTransaction.settle("rejected");
+        throw new GatewayHotReloadRecoveryError(surface);
+      }
+      restartTransaction.settle("committed");
+      recoveryRestartScheduled = true;
+    };
     const scheduleRecoveryRestart = (surface: string, err?: unknown) => {
       const detail = err === undefined ? "" : `: ${formatErrorMessage(err)}`;
       if (restartRetryStopped) {
@@ -612,8 +627,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             debtConfig: target.sourceConfig,
             prepareRuntimeConfig: target.prepareRuntimeConfig,
           });
-          restartTransaction.settle("committed");
-          recoveryRestartScheduled = true;
+          settleRecoveryRestart(restartTransaction, surface);
           return;
         }
         deferGatewayRestartDebt(recoveryPlan, nextConfig, {
@@ -642,10 +656,9 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
               : {}),
           },
         );
-        restartTransaction.settle("committed");
+        settleRecoveryRestart(restartTransaction, surface);
         // Immediate emission failure already owns a lifecycle retry. The runtime
         // is committed, so keep this transaction accepted while that retry runs.
-        recoveryRestartScheduled = true;
       } catch (restartError) {
         params.logReload.warn(
           `failed to schedule post-commit gateway restart: ${formatErrorMessage(restartError)}`,
@@ -1186,6 +1199,12 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       : plan.changedPaths.join(", ");
     const restartReason = `config reload: ${reasons}`;
 
+    if (params.restartRecoveryAvailable === false) {
+      params.logReload.warn(
+        "gateway restart recovery unavailable; restart-required reload rejected",
+      );
+      return false;
+    }
     if (!params.requestRecoveryRestart) {
       params.logReload.warn("gateway restart recovery handler unavailable; restart skipped");
       return false;
@@ -1269,6 +1288,10 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             if (requestGeneration !== restartRequestGeneration || !failedEmission) {
               return;
             }
+            if (params.restartRecoveryAvailable === false) {
+              params.logReload.warn("gateway restart recovery unavailable; retry skipped");
+              return;
+            }
             params.logReload.warn("gateway restart recovery emission failed; retrying");
             scheduleRestartEmissionRetry({
               ...failedEmission,
@@ -1326,11 +1349,13 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
     if (emitResult.status === "failed") {
       params.logReload.warn("gateway restart recovery emission failed");
-      scheduleRestartEmissionRetry({
-        reason: restartReason,
-        requestGeneration,
-        prepareForEmit,
-      });
+      if (params.restartRecoveryAvailable !== false) {
+        scheduleRestartEmissionRetry({
+          reason: restartReason,
+          requestGeneration,
+          prepareForEmit,
+        });
+      }
       return false;
     }
     if (emitResult.status === "coalesced") {
@@ -1438,6 +1463,9 @@ export function startManagedGatewayConfigReloader(
     ...(params.onCronRestart ? { onCronRestart: params.onCronRestart } : {}),
     ...(params.requestRecoveryRestart
       ? { requestRecoveryRestart: params.requestRecoveryRestart }
+      : {}),
+    ...(params.restartRecoveryAvailable !== undefined
+      ? { restartRecoveryAvailable: params.restartRecoveryAvailable }
       : {}),
     createHealthMonitor: (config) =>
       startGatewayChannelHealthMonitor({
