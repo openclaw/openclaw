@@ -3467,9 +3467,12 @@ export const id: TranslationMap = {
       refresh: "Muat ulang",
       refreshing: "Menyegarkan...",
       paused: "Dijeda",
+      tasksTab: "Otomatisasi",
+      activityTab: "Riwayat proses",
     },
     suggestions: {
       title: "Ide otomasi",
+      add: "Tambah",
       schedules: {
         weekdayMornings: "Hari kerja pukul 9:00 AM",
         everyMorning: "Setiap hari pukul 8:00 AM",
@@ -3518,16 +3521,18 @@ export const id: TranslationMap = {
     stats: {
       scheduler: "Penjadwal",
       tasks: "Tugas",
+      failing: "Gagal",
       nextWake: "Bangun berikutnya",
     },
     detail: {
       newTitle: "Tugas terjadwal baru",
       newSubtitle: "Jelaskan apa yang harus dilakukan OpenClaw, lalu pilih kapan ia berjalan.",
-      overviewTitle: "Aktivitas terbaru",
-      overviewSubtitle: "Proses terbaru di semua tugas terjadwal.",
+      back: "Semua otomatisasi",
+      settingsTab: "Pengaturan",
       historyTitle: "Riwayat proses",
       detailsSection: "Detail",
       frequencySection: "Frekuensi",
+      active: "Aktif",
       paused: "Dijeda",
     },
     actions: {
@@ -3564,6 +3569,8 @@ export const id: TranslationMap = {
       allStatuses: "Semua status",
       allDelivery: "Semua pengiriman",
       noMatching: "Tidak ada proses yang cocok.",
+      emptyTitle: "Belum ada eksekusi",
+      emptyHint: "Eksekusi akan muncul di sini setelah otomatisasi dipicu.",
       loadMore: "Muat lebih banyak proses",
       runStatusOk: "OK",
       runStatusError: "Kesalahan",

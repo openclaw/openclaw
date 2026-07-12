@@ -3432,9 +3432,12 @@ export const hi: TranslationMap = {
       refresh: "रिफ्रेश करें",
       refreshing: "रीफ़्रेश हो रहा है...",
       paused: "रोका गया",
+      tasksTab: "ऑटोमेशन",
+      activityTab: "रन इतिहास",
     },
     suggestions: {
       title: "ऑटोमेशन के विचार",
+      add: "जोड़ें",
       schedules: {
         weekdayMornings: "सप्ताह के दिन सुबह 9:00 बजे",
         everyMorning: "प्रतिदिन सुबह 8:00 बजे",
@@ -3483,16 +3486,18 @@ export const hi: TranslationMap = {
     stats: {
       scheduler: "शेड्यूलर",
       tasks: "कार्य",
+      failing: "विफल",
       nextWake: "अगला वेक",
     },
     detail: {
       newTitle: "नया शेड्यूल किया गया कार्य",
       newSubtitle: "बताएं कि OpenClaw को क्या करना चाहिए, फिर चुनें कि यह कब चले।",
-      overviewTitle: "हाल की गतिविधि",
-      overviewSubtitle: "सभी शेड्यूल किए गए कार्यों के नवीनतम रन।",
+      back: "सभी ऑटोमेशन",
+      settingsTab: "सेटिंग्स",
       historyTitle: "रन इतिहास",
       detailsSection: "विवरण",
       frequencySection: "आवृत्ति",
+      active: "सक्रिय",
       paused: "रुका हुआ",
     },
     actions: {
@@ -3529,6 +3534,8 @@ export const hi: TranslationMap = {
       allStatuses: "सभी स्थितियाँ",
       allDelivery: "सभी डिलीवरी",
       noMatching: "कोई मेल खाते रन नहीं।",
+      emptyTitle: "अभी तक कोई रन नहीं",
+      emptyHint: "ऑटोमेशन के सक्रिय होने पर रन यहाँ दिखाई देंगे।",
       loadMore: "और रन लोड करें",
       runStatusOk: "ठीक",
       runStatusError: "त्रुटि",

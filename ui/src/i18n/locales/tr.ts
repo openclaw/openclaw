@@ -3485,9 +3485,12 @@ export const tr: TranslationMap = {
       refresh: "Yenile",
       refreshing: "Yenileniyor...",
       paused: "Duraklatıldı",
+      tasksTab: "Otomasyonlar",
+      activityTab: "Çalıştırma geçmişi",
     },
     suggestions: {
       title: "Otomasyon fikirleri",
+      add: "Ekle",
       schedules: {
         weekdayMornings: "Hafta içi 09:00",
         everyMorning: "Her gün 08:00",
@@ -3536,17 +3539,19 @@ export const tr: TranslationMap = {
     stats: {
       scheduler: "Zamanlayıcı",
       tasks: "Görevler",
+      failing: "Başarısız",
       nextWake: "Sonraki uyanma",
     },
     detail: {
       newTitle: "Yeni zamanlanmış görev",
       newSubtitle:
         "OpenClaw'ın ne yapması gerektiğini açıklayın, ardından ne zaman çalışacağını seçin.",
-      overviewTitle: "Son etkinlik",
-      overviewSubtitle: "Tüm zamanlanmış görevlerdeki en son çalıştırmalar.",
+      back: "Tüm otomasyonlar",
+      settingsTab: "Ayarlar",
       historyTitle: "Çalıştırma geçmişi",
       detailsSection: "Ayrıntılar",
       frequencySection: "Sıklık",
+      active: "Etkin",
       paused: "Duraklatıldı",
     },
     actions: {
@@ -3583,6 +3588,8 @@ export const tr: TranslationMap = {
       allStatuses: "Tüm durumlar",
       allDelivery: "Tüm teslimatlar",
       noMatching: "Eşleşen çalıştırma yok.",
+      emptyTitle: "Henüz çalıştırma yok",
+      emptyHint: "Bir otomasyon tetiklendiğinde çalıştırmalar burada görünür.",
       loadMore: "Daha fazla çalıştırma yükle",
       runStatusOk: "Tamam",
       runStatusError: "Hata",
