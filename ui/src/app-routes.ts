@@ -79,6 +79,8 @@ export async function startApplicationRouter(
   context: ApplicationContext<RouteId>,
 ): Promise<void> {
   const location = history.location();
+  // Unknown paths (including retired routes like /overview) land on chat, so
+  // removed pages need no legacy aliases for stale bookmarks or history.
   if (routeIdFromPath(location.pathname, basePath) === null) {
     history.replace({
       ...location,
