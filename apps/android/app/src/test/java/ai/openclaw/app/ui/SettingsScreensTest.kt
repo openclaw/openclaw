@@ -1,8 +1,12 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.GatewayConnectionProblem
+import ai.openclaw.app.GatewayExecApprovalSummary
 import ai.openclaw.app.GatewayNodeCapabilityApproval
+import ai.openclaw.app.GatewayUsageProviderSummary
+import ai.openclaw.app.GatewayUsageWindowSummary
 import ai.openclaw.app.LocationMode
+import ai.openclaw.app.i18n.verbatimText
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -27,6 +31,17 @@ class SettingsScreensTest {
     assertEquals("Play", androidDistributionChannel("play"))
     assertEquals("Third-party", androidDistributionChannel("thirdParty"))
     assertEquals("Unknown", androidDistributionChannel(""))
+    assertEquals("enterpriseInternal", androidDistributionChannel("enterpriseInternal"))
+  }
+
+  @Test
+  fun aboutAndPermissionFallbacksLocalizeOnlyControlledLabels() {
+    assertEquals("Website", aboutLinkTitle("Website"))
+    assertEquals("Docs", aboutLinkTitle("Docs"))
+    assertEquals("GitHub", aboutLinkTitle("GitHub"))
+    assertEquals("Custom", aboutLinkTitle("Custom"))
+    assertEquals("Allow all the time", resolvedBackgroundPermissionLabel("  "))
+    assertEquals("Android system label", resolvedBackgroundPermissionLabel(" Android system label "))
   }
 
   @Test
@@ -186,6 +201,64 @@ class SettingsScreensTest {
       ),
       execApprovalActions(listOf("allow-once", "allow-always", "deny")),
     )
+  }
+
+  @Test
+  fun approvalPresentationLocalizesControlledCopyAndPreservesGatewayValues() {
+    val approval =
+      GatewayExecApprovalSummary(
+        id = "approval-1",
+        commandText = verbatimText("echo ok"),
+        commandPreview = "echo",
+        warningText = null,
+        allowedDecisions = listOf("allow-once"),
+        host = "node",
+        nodeId = "node-123456",
+        agentId = "agent-123456",
+        createdAtMs = 0,
+        expiresAtMs = 3_660_000,
+      )
+
+    assertEquals(
+      "Node node-123 · Agent agent-12 · Waiting 1h · Expires 1m",
+      execApprovalMetadata(approval, nowMs = 3_600_000),
+    )
+    assertEquals(
+      "ssh.EXAMPLE",
+      execApprovalMetadata(
+        approval.copy(host = "ssh.EXAMPLE", nodeId = null, agentId = null, createdAtMs = null, expiresAtMs = null),
+        nowMs = 0,
+      ),
+    )
+    assertEquals("soon", formatApprovalDuration(0))
+    assertEquals("Action Request", approvalActionName(""))
+  }
+
+  @Test
+  fun usageAndCronSummariesLocalizeOnlyControlledWords() {
+    val provider =
+      GatewayUsageProviderSummary(
+        displayName = "Provider",
+        plan = "Team Plan",
+        error = null,
+        windows =
+          listOf(
+            GatewayUsageWindowSummary(
+              label = "Custom Window",
+              usedPercent = 25.0,
+              resetAtMs = null,
+            ),
+          ),
+      )
+
+    assertEquals("Team Plan · 75% left Custom Window", usageProviderSubtitle(provider))
+    assertEquals("provider error", usageProviderSubtitle(provider.copy(error = "provider error")))
+    assertEquals("Never", formatUsageUpdated(updatedAtMs = null, nowMs = 60_000))
+    assertEquals("Now", formatUsageUpdated(updatedAtMs = 59_999, nowMs = 60_000))
+    assertEquals("None", formatCronWake(timeMs = null, nowMs = 60_000))
+    assertEquals("Due", formatCronWake(timeMs = 60_000, nowMs = 60_000))
+    assertEquals("Soon", formatCronWake(timeMs = 60_001, nowMs = 60_000))
+    assertEquals("None", formatCronTimestamp(null))
   }
 
   @Test

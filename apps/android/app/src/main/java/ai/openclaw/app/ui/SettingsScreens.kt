@@ -1024,12 +1024,11 @@ private fun PhoneCapabilitiesScreen(
   var showBackgroundLocationExplanation by rememberSaveable { mutableStateOf(false) }
   var showInstalledAppsDisclosure by rememberSaveable { mutableStateOf(false) }
   var pendingPreciseLocation by rememberSaveable { mutableStateOf(false) }
-  val backgroundPermissionLabel =
+  val platformBackgroundPermissionLabel =
     remember(context) {
-      context.packageManager.backgroundPermissionOptionLabel.toString().trim().ifEmpty {
-        "Allow all the time"
-      }
+      context.packageManager.backgroundPermissionOptionLabel.toString()
     }
+  val backgroundPermissionLabel = resolvedBackgroundPermissionLabel(platformBackgroundPermissionLabel)
   val cameraPermissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
       viewModel.setCameraEnabled(granted)
@@ -1814,7 +1813,7 @@ private fun AboutLinksPanel() {
   val uriHandler = LocalUriHandler.current
   ClawListPanel(items = aboutLinks) { link ->
     ClawListItem(
-      title = link.title,
+      title = aboutLinkTitle(link.title),
       subtitle = link.subtitle,
       onClick = { uriHandler.openUri(link.url) },
       trailing = {
@@ -1894,10 +1893,19 @@ private fun LicenseListRow(
 internal fun androidDistributionChannel(flavor: String = BuildConfig.FLAVOR): String =
   when (flavor.trim()) {
     "play" -> "Play"
-    "thirdParty" -> "Third-party"
-    "" -> "Unknown"
+    "thirdParty" -> nativeString("Third-party")
+    "" -> nativeString("Unknown")
     else -> flavor.trim()
   }
+
+internal fun aboutLinkTitle(title: String): String =
+  when (title) {
+    "Website" -> nativeString("Website")
+    "Docs" -> nativeString("Docs")
+    else -> title
+  }
+
+internal fun resolvedBackgroundPermissionLabel(platformLabel: String): String = platformLabel.trim().ifEmpty { nativeString("Allow all the time") }
 
 internal fun gatewaySettingsSetupResetConfirmationText(): String =
   nativeString(
@@ -2089,9 +2097,9 @@ internal data class ExecApprovalAction(
 internal fun execApprovalActions(allowedDecisions: List<String>): List<ExecApprovalAction> =
   allowedDecisions.mapNotNull { decision ->
     when (decision) {
-      "allow-once" -> ExecApprovalAction(decision, "Allow Once")
-      "allow-always" -> ExecApprovalAction(decision, "Allow Always")
-      "deny" -> ExecApprovalAction(decision, "Deny")
+      "allow-once" -> ExecApprovalAction(decision, nativeString("Allow Once"))
+      "allow-always" -> ExecApprovalAction(decision, nativeString("Allow Always"))
+      "deny" -> ExecApprovalAction(decision, nativeString("Deny"))
       else -> null
     }
   }
@@ -2234,7 +2242,7 @@ private fun CronJobDetailPanel(
         SettingsMetric(nativeString("Description"), job.description.ifBlank { nativeString("None") }),
         SettingsMetric(nativeString("Schedule Detail"), job.scheduleDetail.resolveNativeTextResource()),
         SettingsMetric(nativeString("Session Target"), job.sessionTarget),
-        SettingsMetric(nativeString("Wake Mode"), job.wakeMode),
+        SettingsMetric(nativeString("Wake Mode"), cronWakeModeLabel(job.wakeMode)),
         SettingsMetric(nativeString("Delete After Run"), if (job.deleteAfterRun) nativeString("Yes") else nativeString("No")),
         SettingsMetric(nativeString("Payload"), job.payloadLabel.resolveNativeTextResource()),
         SettingsMetric(nativeString("Delivery"), job.deliveryLabel.resolveNativeTextResource()),
@@ -2367,7 +2375,7 @@ private fun defaultAgentName(
 ): String {
   val defaultId = defaultAgentId?.trim().orEmpty()
   val agent = agents.firstOrNull { it.id == defaultId } ?: agents.firstOrNull()
-  return agent?.name?.takeIf { it.isNotBlank() } ?: agent?.id ?: "None"
+  return agent?.name?.takeIf { it.isNotBlank() } ?: agent?.id ?: nativeString("None")
 }
 
 /**
@@ -2391,7 +2399,7 @@ private fun agentBadge(agent: GatewayAgentSummary): String {
 /**
  * Normalizes tool-call names into readable approval action labels.
  */
-private fun approvalActionName(name: String): String {
+internal fun approvalActionName(name: String): String {
   val cleaned =
     name
       .replace('.', ' ')
@@ -2402,7 +2410,7 @@ private fun approvalActionName(name: String): String {
     .split(' ')
     .filter { it.isNotBlank() }
     .joinToString(" ") { word -> word.replaceFirstChar { it.uppercaseChar() } }
-    .ifBlank { "Action Request" }
+    .ifBlank { nativeString("Action Request") }
 }
 
 /** Builds approval row age/error copy without exposing raw tool arguments. */
@@ -2416,25 +2424,43 @@ private fun approvalSubtitle(
   return if (minutes < 1) nativeString("Waiting for review") else nativeString("Waiting \${minutes}m", minutes)
 }
 
-private fun execApprovalMetadata(approval: GatewayExecApprovalSummary): String {
+internal fun execApprovalMetadata(
+  approval: GatewayExecApprovalSummary,
+  nowMs: Long = System.currentTimeMillis(),
+): String {
   val target =
     when {
-      approval.host == "node" && approval.nodeId != null -> "Node ${approval.nodeId.take(8)}"
-      approval.host != null -> approval.host.replaceFirstChar { it.uppercaseChar() }
+      approval.host == "node" && approval.nodeId != null -> {
+        val nodeId = approval.nodeId.take(8)
+        nativeString("Node \${nodeId}", nodeId)
+      }
+      approval.host != null -> approval.host
       else -> nativeString("Gateway")
     }
-  val agent = approval.agentId?.let { "Agent ${it.take(8)}" }
-  val age = approval.createdAtMs?.let { "Waiting ${formatApprovalDuration(System.currentTimeMillis() - it)}" }
-  val expires = approval.expiresAtMs?.let { "Expires ${formatApprovalDuration(it - System.currentTimeMillis())}" }
+  val agent =
+    approval.agentId?.let {
+      val agentId = it.take(8)
+      nativeString("Agent \${agentId}", agentId)
+    }
+  val age =
+    approval.createdAtMs?.let {
+      val duration = formatApprovalDuration(nowMs - it)
+      nativeString("Waiting \${duration}", duration)
+    }
+  val expires =
+    approval.expiresAtMs?.let {
+      val duration = formatApprovalDuration(it - nowMs)
+      nativeString("Expires \${duration}", duration)
+    }
   return listOfNotNull(target, agent, age, expires).joinToString(" · ")
 }
 
-private fun formatApprovalDuration(deltaMs: Long): String {
+internal fun formatApprovalDuration(deltaMs: Long): String {
   val safeDelta = deltaMs.coerceAtLeast(0L)
   val minutes = safeDelta / 60_000L
   val hours = minutes / 60L
   return when {
-    minutes < 1 -> "soon"
+    minutes < 1 -> nativeString("soon")
     hours < 1 -> "${minutes}m"
     else -> "${hours}h"
   }
@@ -2450,10 +2476,14 @@ private fun cronJobSubtitle(job: GatewayCronJobSummary): String =
   )
 
 /** Summarizes a provider plan and most-used quota window for usage rows. */
-private fun usageProviderSubtitle(provider: GatewayUsageProviderSummary): String {
+internal fun usageProviderSubtitle(provider: GatewayUsageProviderSummary): String {
   provider.error?.let { return it }
   val window = provider.windows.maxByOrNull { it.usedPercent }
-  val quota = window?.let { "${(100.0 - it.usedPercent).coerceIn(0.0, 100.0).toInt()}% left ${it.label}" }
+  val quota =
+    window?.let {
+      val remaining = (100.0 - it.usedPercent).coerceIn(0.0, 100.0).toInt()
+      nativeString("\${remaining}% left \${label}", remaining, it.label)
+    }
   return listOfNotNull(provider.plan, quota).joinToString(" · ").ifBlank {
     nativeString("No limits reported")
   }
@@ -2462,13 +2492,16 @@ private fun usageProviderSubtitle(provider: GatewayUsageProviderSummary): String
 /**
  * Converts usage timestamps into short relative labels for metric panels.
  */
-private fun formatUsageUpdated(updatedAtMs: Long?): String {
-  val updated = updatedAtMs ?: return "Never"
-  val deltaMs = (System.currentTimeMillis() - updated).coerceAtLeast(0L)
+internal fun formatUsageUpdated(
+  updatedAtMs: Long?,
+  nowMs: Long = System.currentTimeMillis(),
+): String {
+  val updated = updatedAtMs ?: return nativeString("Never")
+  val deltaMs = (nowMs - updated).coerceAtLeast(0L)
   val minutes = deltaMs / 60_000L
   val hours = minutes / 60L
   return when {
-    minutes < 1 -> "Now"
+    minutes < 1 -> nativeString("Now")
     hours < 1 -> "${minutes}m"
     hours < 24 -> "${hours}h"
     else -> "${hours / 24L}d"
@@ -2573,10 +2606,13 @@ private fun notificationAppBadge(label: String): String {
 /**
  * Converts cron wake times into short relative labels for scheduled-work rows.
  */
-private fun formatCronWake(timeMs: Long?): String {
-  val target = timeMs ?: return "None"
-  val deltaMs = target - System.currentTimeMillis()
-  if (deltaMs <= 0) return "Due"
+internal fun formatCronWake(
+  timeMs: Long?,
+  nowMs: Long = System.currentTimeMillis(),
+): String {
+  val target = timeMs ?: return nativeString("None")
+  val deltaMs = target - nowMs
+  if (deltaMs <= 0) return nativeString("Due")
   val minutes = deltaMs / 60_000L
   val hours = minutes / 60L
   val days = hours / 24L
@@ -2584,12 +2620,12 @@ private fun formatCronWake(timeMs: Long?): String {
     days > 0 -> "${days}d"
     hours > 0 -> "${hours}h"
     minutes > 0 -> "${minutes}m"
-    else -> "Soon"
+    else -> nativeString("Soon")
   }
 }
 
-private fun formatCronTimestamp(timeMs: Long?): String {
-  val value = timeMs ?: return "None"
+internal fun formatCronTimestamp(timeMs: Long?): String {
+  val value = timeMs ?: return nativeString("None")
   return DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(value))
 }
 
