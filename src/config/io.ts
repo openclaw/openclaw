@@ -2518,9 +2518,25 @@ export function createConfigIO(
       outputConfig,
       options.lastTouchedVersionOverride,
     );
-    const json = JSON.stringify(stampedOutputConfig, null, 2).trimEnd().concat("\n");
+    // JSON5.stringify produces human-readable output with unquoted keys and
+    // trailing commas, reducing formatting churn. Original JSON5 comments are
+    // not preserved through the parse-modify-stringify roundtrip.
+    const json = JSON5.stringify(stampedOutputConfig, null, 2).trimEnd().concat("\n");
     const nextHash = hashConfigRaw(json);
     const previousHash = resolveConfigSnapshotHash(snapshot);
+    // Warn when the original config has JSON5 comments that will be lost through
+    // the parse-modify-stringify roundtrip. JSON5.stringify produces valid JSON5
+    // (supports future comments), but existing comments are not preserved.
+    if (
+      typeof snapshot.raw === "string" &&
+      !options.skipOutputLogs &&
+      /^\s*\/\/|^\s*\/\*/m.test(snapshot.raw)
+    ) {
+      deps.logger?.warn?.(
+        `Config write will strip JSON5 comments from ${configPath}. ` +
+          "Use a separate tool to re-add documentation comments after modifications.",
+      );
+    }
     const changedPathCount = changedPaths?.size;
     const previousBytes =
       typeof snapshot.raw === "string" ? Buffer.byteLength(snapshot.raw, "utf-8") : null;
