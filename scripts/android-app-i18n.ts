@@ -250,9 +250,13 @@ function collectExplicitRuntimeSources(
   const sources = new Set<string>();
   const callPattern = /\bnativeString(?:Resource)?\(\s*"((?:\\.|[^"\\])+)"/gu;
   for (const file of sourceFiles) {
-    if (file.path.endsWith("/i18n/NativeStringResources.kt")) continue;
+    if (file.path.endsWith("/i18n/NativeStringResources.kt")) {
+      continue;
+    }
     for (const match of file.source.matchAll(callPattern)) {
-      if (match[1]) sources.add(decodeKotlinLiteral(match[1]));
+      if (match[1]) {
+        sources.add(decodeKotlinLiteral(match[1]));
+      }
     }
   }
   return sources;
@@ -260,10 +264,14 @@ function collectExplicitRuntimeSources(
 
 function collectToolDisplaySources(value: unknown, sources = new Set<string>()): Set<string> {
   if (Array.isArray(value)) {
-    for (const item of value) collectToolDisplaySources(item, sources);
+    for (const item of value) {
+      collectToolDisplaySources(item, sources);
+    }
     return sources;
   }
-  if (value === null || typeof value !== "object") return sources;
+  if (value === null || typeof value !== "object") {
+    return sources;
+  }
   for (const [key, item] of Object.entries(value)) {
     if ((key === "title" || key === "label") && typeof item === "string") {
       sources.add(item);
@@ -385,10 +393,18 @@ function isAllowedUiLiteral(repoPath: string, source: string): boolean {
 }
 
 function shouldScanUiLiterals(repoPath: string): boolean {
-  if (repoPath.endsWith("/i18n/NativeStringResources.kt")) return false;
-  if (repoPath.endsWith("/AndroidScreenshotFixture.kt")) return false;
-  if (repoPath.endsWith("/ui/design/ClawComponents.kt")) return false;
-  if (repoPath.endsWith("/ui/design/OpenClawMascot.kt")) return false;
+  if (repoPath.endsWith("/i18n/NativeStringResources.kt")) {
+    return false;
+  }
+  if (repoPath.endsWith("/AndroidScreenshotFixture.kt")) {
+    return false;
+  }
+  if (repoPath.endsWith("/ui/design/ClawComponents.kt")) {
+    return false;
+  }
+  if (repoPath.endsWith("/ui/design/OpenClawMascot.kt")) {
+    return false;
+  }
   return (
     repoPath.includes("/ui/") ||
     repoPath.endsWith("/MainActivity.kt") ||
@@ -425,12 +441,16 @@ function findClosingDelimiter(
       quoted = !quoted;
       continue;
     }
-    if (quoted) continue;
+    if (quoted) {
+      continue;
+    }
     if (character === opening) {
       depth += 1;
     } else if (character === closing) {
       depth -= 1;
-      if (depth === 0) return index;
+      if (depth === 0) {
+        return index;
+      }
     }
   }
   return null;
@@ -438,7 +458,9 @@ function findClosingDelimiter(
 
 function expressionEnd(source: string, expressionStart: number): number {
   const cursor = source.slice(expressionStart).search(/\S/u);
-  if (cursor < 0) return source.length;
+  if (cursor < 0) {
+    return source.length;
+  }
   const start = expressionStart + cursor;
   let quoted = false;
   let escaped = false;
@@ -459,7 +481,9 @@ function expressionEnd(source: string, expressionStart: number): number {
       quoted = !quoted;
       continue;
     }
-    if (quoted) continue;
+    if (quoted) {
+      continue;
+    }
     if (character === "(" || character === "[" || character === "{") {
       depths[character] += 1;
       continue;
@@ -481,7 +505,9 @@ function expressionEnd(source: string, expressionStart: number): number {
       line.length === 0 ||
       /(?:\?:|[+*/%&|=.,([{])$/u.test(line) ||
       /^(?:else\b|\?:|[+*/%&|.])/u.test(nextLine);
-    if (!continues) return index;
+    if (!continues) {
+      return index;
+    }
     lineStart = index + 1;
   }
   return source.length;
@@ -515,7 +541,9 @@ function splitTopLevelSegments(
       quoted = !quoted;
       continue;
     }
-    if (quoted) continue;
+    if (quoted) {
+      continue;
+    }
     if (options.trackTypeArguments && !inDefaultValue && character === "<") {
       typeArgumentDepth += 1;
       continue;
@@ -566,7 +594,9 @@ function isComparisonLiteral(expression: string, literalOffset: number): boolean
 function collectHelperLiteralFindings(source: string, repoPath: string): AndroidUiLiteralFinding[] {
   const findings: AndroidUiLiteralFinding[] = [];
   const collectRange = (name: string, start: number, end: number) => {
-    if (!UI_STRING_HELPER_NAME_RE.test(name)) return;
+    if (!UI_STRING_HELPER_NAME_RE.test(name)) {
+      return;
+    }
     const body = source.slice(start, end);
     const direct = body.match(/^\s*"((?:\\.|[^"\\])+)"/u);
     const matches = [
@@ -576,7 +606,9 @@ function collectHelperLiteralFindings(source: string, repoPath: string): Android
     ];
     for (const match of matches) {
       const literal = match[1];
-      if (!literal) continue;
+      if (!literal) {
+        continue;
+      }
       const literalOffset = body.indexOf(`"${literal}"`, match.index ?? 0);
       findings.push({
         line: lineNumber(source, start + Math.max(0, literalOffset)),
@@ -588,19 +620,25 @@ function collectHelperLiteralFindings(source: string, repoPath: string): Android
   for (const match of source.matchAll(UI_STRING_FUNCTION_RE)) {
     const name = match[1];
     const bodyKind = match[2];
-    if (!name || !bodyKind) continue;
+    if (!name || !bodyKind) {
+      continue;
+    }
     const bodyStart = (match.index ?? 0) + match[0].length;
     if (bodyKind === "{") {
       const openingBrace = bodyStart - 1;
       const closingBrace = findClosingDelimiter(source, openingBrace, "{", "}");
-      if (closingBrace !== null) collectRange(name, bodyStart, closingBrace);
+      if (closingBrace !== null) {
+        collectRange(name, bodyStart, closingBrace);
+      }
     } else {
       collectRange(name, bodyStart, expressionEnd(source, bodyStart));
     }
   }
   for (const match of source.matchAll(UI_STRING_PROPERTY_RE)) {
     const name = match[1];
-    if (!name) continue;
+    if (!name) {
+      continue;
+    }
     const bodyStart = (match.index ?? 0) + match[0].length;
     collectRange(name, bodyStart, expressionEnd(source, bodyStart));
   }
@@ -615,10 +653,14 @@ function collectTypedModelLiteralFindings(
   const classPattern = /\b(?:data\s+class|class)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/gu;
   for (const declaration of source.matchAll(classPattern)) {
     const className = declaration[1];
-    if (!className) continue;
+    if (!className) {
+      continue;
+    }
     const openingParen = (declaration.index ?? 0) + declaration[0].lastIndexOf("(");
     const closingParen = findClosingDelimiter(source, openingParen, "(", ")");
-    if (closingParen === null) continue;
+    if (closingParen === null) {
+      continue;
+    }
     const parameters = splitTopLevelSegments(source, openingParen + 1, closingParen, {
       trackTypeArguments: true,
     });
@@ -632,19 +674,27 @@ function collectTypedModelLiteralFindings(
         userFacingParameters.set(field, index);
       }
     });
-    if (userFacingParameters.size === 0) continue;
+    if (userFacingParameters.size === 0) {
+      continue;
+    }
     const callPattern = new RegExp(`\\b${className}\\s*\\(`, "gu");
     for (const call of source.matchAll(callPattern)) {
       const callOpening = (call.index ?? 0) + call[0].lastIndexOf("(");
-      if (callOpening === openingParen) continue;
+      if (callOpening === openingParen) {
+        continue;
+      }
       const callClosing = findClosingDelimiter(source, callOpening, "(", ")");
-      if (callClosing === null) continue;
+      if (callClosing === null) {
+        continue;
+      }
       const argumentsList = splitTopLevelSegments(source, callOpening + 1, callClosing);
       const namedArguments = new Map<string, (typeof argumentsList)[number]>();
       let positionalArgumentCount = argumentsList.length;
       argumentsList.forEach((argument, index) => {
         const name = argument.value.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=(?!=)/u)?.[1];
-        if (!name) return;
+        if (!name) {
+          return;
+        }
         namedArguments.set(name, argument);
         positionalArgumentCount = Math.min(positionalArgumentCount, index);
       });
@@ -652,7 +702,9 @@ function collectTypedModelLiteralFindings(
         const argument =
           namedArguments.get(field) ??
           (parameterIndex < positionalArgumentCount ? argumentsList[parameterIndex] : undefined);
-        if (!argument) continue;
+        if (!argument) {
+          continue;
+        }
         for (const literal of argument.value.matchAll(KOTLIN_STRING_LITERAL_RE)) {
           if (
             !literal[1] ||
@@ -677,13 +729,17 @@ export function findUnlocalizedAndroidUiLiterals(
   source: string,
   repoPath: string,
 ): AndroidUiLiteralFinding[] {
-  if (!shouldScanUiLiterals(repoPath)) return [];
+  if (!shouldScanUiLiterals(repoPath)) {
+    return [];
+  }
   const findings = new Map<string, AndroidUiLiteralFinding>();
   for (const pattern of DIRECT_UI_LITERAL_PATTERNS) {
     pattern.lastIndex = 0;
     for (const match of source.matchAll(pattern)) {
       const literal = match[1];
-      if (!literal) continue;
+      if (!literal) {
+        continue;
+      }
       const matchText = match[0] ?? "";
       if (
         isAllowedUiLiteral(repoPath, decodeKotlinLiteral(literal)) ||
@@ -836,10 +892,14 @@ async function buildCatalog(): Promise<GeneratedCatalog> {
     entriesBySource.set(entry.source, group);
   }
   for (const source of collectExplicitRuntimeSources(sourceFiles)) {
-    if (!entriesBySource.has(source)) entriesBySource.set(source, []);
+    if (!entriesBySource.has(source)) {
+      entriesBySource.set(source, []);
+    }
   }
   for (const source of toolDisplaySources) {
-    if (!entriesBySource.has(source)) entriesBySource.set(source, []);
+    if (!entriesBySource.has(source)) {
+      entriesBySource.set(source, []);
+    }
   }
   const sourceToKey = new Map<string, string>();
   for (const source of entriesBySource.keys()) {
@@ -858,7 +918,9 @@ async function buildCatalog(): Promise<GeneratedCatalog> {
     const generated = new Map<string, { source: string; value: string }>();
     for (const source of entriesBySource.keys()) {
       const key = sourceToKey.get(source);
-      if (!key || !key.startsWith(MANAGED_PREFIX)) continue;
+      if (!key || !key.startsWith(MANAGED_PREFIX)) {
+        continue;
+      }
       const translations = artifactTranslationsBySource.get(source) ?? [];
       const selected = selectDeterministicTranslation(translations);
       const unique = [...new Set(translations)].toSorted(compareText);
@@ -880,7 +942,9 @@ async function buildCatalog(): Promise<GeneratedCatalog> {
   }
   const generatedBase = new Map<string, { source: string; value: string }>();
   for (const [source, key] of sourceToKey) {
-    if (!key.startsWith(MANAGED_PREFIX)) continue;
+    if (!key.startsWith(MANAGED_PREFIX)) {
+      continue;
+    }
     generatedBase.set(key, {
       source,
       value: source,
@@ -932,7 +996,9 @@ export async function syncAndroidAppI18n(options: { check?: boolean } = {}) {
   const drift: string[] = [];
   for (const [filePath, expected] of catalog.resources) {
     const current = await readFile(filePath, "utf8").catch(() => "");
-    if (current === expected) continue;
+    if (current === expected) {
+      continue;
+    }
     drift.push(path.relative(ROOT, filePath).split(path.sep).join("/"));
     if (!options.check) {
       await writeFile(filePath, expected);
@@ -982,7 +1048,9 @@ export async function checkAndroidAppI18n() {
     const keys = new Set(strings.keys());
     const placeholderMismatches = [...base].flatMap(([key, sourceEntry]) => {
       const translatedEntry = strings.get(key);
-      if (!translatedEntry) return [];
+      if (!translatedEntry) {
+        return [];
+      }
       const expected = [...sourceEntry.rawValue.matchAll(FORMAT_RE)]
         .map((match) => match[0])
         .toSorted();
