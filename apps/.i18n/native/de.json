@@ -12724,6 +12724,11 @@
       "translated": "OpenClaw kann Bewegungsdaten verwenden, um gerätebewusste Interaktionen und Automatisierungen zu unterstützen."
     },
     {
+      "id": "native.apple.c86f7ba5b3762eb7",
+      "source": "After you enable Health Summaries, OpenClaw reads steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
+      "translated": "Nachdem du Gesundheitszusammenfassungen aktiviert hast, liest OpenClaw Schritte, Schlaf, Ruhepuls und Trainings, um angeforderte aggregierte Daten mit deinem konfigurierten KI-Anbieter zu teilen."
+    },
+    {
       "id": "native.apple.40ed4259ec869f1b",
       "source": "OpenClaw lets your assistant read photos you allow and lets you choose photos to share.",
       "translated": "OpenClaw ermöglicht deinem Assistenten, von dir erlaubte Fotos zu lesen, und lässt dich Fotos zum Teilen auswählen."
@@ -13714,6 +13719,11 @@
       "translated": "Erlaubt"
     },
     {
+      "id": "native.apple.7b551f40d1a6148c",
+      "source": "Enabled",
+      "translated": "Aktiviert"
+    },
+    {
       "id": "native.apple.94208c3068dae5b9",
       "source": "Limited",
       "translated": "Eingeschränkt"
@@ -13779,6 +13789,11 @@
       "translated": "Erinnerungen auflisten, hinzufügen und abschließen."
     },
     {
+      "id": "native.apple.33df187e4402065a",
+      "source": "Health Summaries",
+      "translated": "Gesundheitszusammenfassungen"
+    },
+    {
       "id": "native.apple.bb572eab08269809",
       "source": "Privacy & Access",
       "translated": "Datenschutz & Zugriff"
@@ -13817,6 +13832,31 @@
       "id": "native.apple.3cb9ed2ae352f95c",
       "source": "Open Settings",
       "translated": "Einstellungen öffnen"
+    },
+    {
+      "id": "native.apple.3f902cdb4d4e9176",
+      "source": "Health data is unavailable on this device.",
+      "translated": "Gesundheitsdaten sind auf diesem Gerät nicht verfügbar."
+    },
+    {
+      "id": "native.apple.33316ec020810816",
+      "source": "Shares only requested step, sleep, resting heart rate, and workout aggregates through your Gateway with your configured AI provider. Results may remain in chat history.",
+      "translated": "Teilt nur angeforderte aggregierte Daten zu Schritten, Schlaf, Ruhepuls und Trainings über dein Gateway mit deinem konfigurierten KI-Anbieter. Ergebnisse können im Chatverlauf verbleiben."
+    },
+    {
+      "id": "native.apple.53fb25cb6e6aae6e",
+      "source": "Off by default. Enabling lets requested aggregates leave this iPhone through your Gateway and configured AI provider.",
+      "translated": "Standardmäßig deaktiviert. Durch Aktivieren können angeforderte aggregierte Daten dieses iPhone über dein Gateway und den konfigurierten KI-Anbieter verlassen."
+    },
+    {
+      "id": "native.apple.6c2be9b001fb95b0",
+      "source": "Disable",
+      "translated": "Deaktivieren"
+    },
+    {
+      "id": "native.apple.9eab20fbad55a0a9",
+      "source": "Enable & Share Summaries",
+      "translated": "Zusammenfassungen aktivieren und teilen"
     },
     {
       "id": "native.apple.d9f9a74e25431256",
@@ -17864,16 +17904,6 @@
       "translated": "Nutzung"
     },
     {
-      "id": "native.apple.386595fa18585dbb",
-      "source": "approvalSource requires matching systemRunPlan",
-      "translated": "approvalSource erfordert einen passenden systemRunPlan"
-    },
-    {
-      "id": "native.apple.014ff905cecd753b",
-      "source": "explicit approval requires matching systemRunPlan",
-      "translated": "Eine explizite Genehmigung erfordert einen passenden systemRunPlan"
-    },
-    {
       "id": "native.apple.7eb0a88b8274ced8",
       "source": "Node pairing approved",
       "translated": "Node-Kopplung genehmigt"
@@ -18479,19 +18509,24 @@
       "translated": "Vorbereitung läuft"
     },
     {
-      "id": "native.apple.183aee003b44ede6",
-      "source": "OpenClaw is setting up its background service on this Mac. This usually takes under a minute — no Terminal, no administrator password.",
-      "translated": "OpenClaw richtet seinen Hintergrunddienst auf diesem Mac ein. Das dauert normalerweise weniger als eine Minute — kein Terminal, kein Administratorpasswort."
-    },
-    {
       "id": "native.apple.d0b8cf59f852b3d0",
       "source": "Install OpenClaw",
       "translated": "OpenClaw installieren"
     },
     {
+      "id": "native.apple.0b0fc42b8827e01f",
+      "source": "Prepare the Mac node",
+      "translated": "Mac-Knoten vorbereiten"
+    },
+    {
       "id": "native.apple.0112e18fa97e7c0c",
       "source": "Start the background service",
       "translated": "Hintergrunddienst starten"
+    },
+    {
+      "id": "native.apple.9230c2a15ba6da94",
+      "source": "Runs inside the app and uses its macOS permissions.",
+      "translated": "Wird innerhalb der App ausgeführt und nutzt deren macOS-Berechtigungen."
     },
     {
       "id": "native.apple.d1f9f278b55fe9b0",
@@ -18502,6 +18537,11 @@
       "id": "native.apple.0357f1eea66db068",
       "source": "Ready for the next step",
       "translated": "Bereit für den nächsten Schritt"
+    },
+    {
+      "id": "native.apple.b4ba6f183309593d",
+      "source": "Once ready, this Mac connects to your selected Gateway.",
+      "translated": "Sobald dieser Mac bereit ist, verbindet er sich mit dem ausgewählten Gateway."
     },
     {
       "id": "native.apple.9f58badc863cbf2b",

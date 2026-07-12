@@ -12724,6 +12724,11 @@
       "translated": "OpenClaw 可能会使用运动数据来支持设备感知的交互和自动化。"
     },
     {
+      "id": "native.apple.c86f7ba5b3762eb7",
+      "source": "After you enable Health Summaries, OpenClaw reads steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
+      "translated": "启用健康摘要后，OpenClaw 会读取步数、睡眠、静息心率和体能训练，以便与您配置的 AI 提供商共享请求的汇总数据。"
+    },
+    {
       "id": "native.apple.40ed4259ec869f1b",
       "source": "OpenClaw lets your assistant read photos you allow and lets you choose photos to share.",
       "translated": "OpenClaw 允许你的助手读取你允许的照片，并允许你选择要分享的照片。"
@@ -13714,6 +13719,11 @@
       "translated": "已允许"
     },
     {
+      "id": "native.apple.7b551f40d1a6148c",
+      "source": "Enabled",
+      "translated": "已启用"
+    },
+    {
       "id": "native.apple.94208c3068dae5b9",
       "source": "Limited",
       "translated": "受限"
@@ -13779,6 +13789,11 @@
       "translated": "列出、添加和完成提醒事项。"
     },
     {
+      "id": "native.apple.33df187e4402065a",
+      "source": "Health Summaries",
+      "translated": "健康摘要"
+    },
+    {
       "id": "native.apple.bb572eab08269809",
       "source": "Privacy & Access",
       "translated": "隐私与访问权限"
@@ -13817,6 +13832,31 @@
       "id": "native.apple.3cb9ed2ae352f95c",
       "source": "Open Settings",
       "translated": "打开设置"
+    },
+    {
+      "id": "native.apple.3f902cdb4d4e9176",
+      "source": "Health data is unavailable on this device.",
+      "translated": "此设备无法使用健康数据。"
+    },
+    {
+      "id": "native.apple.33316ec020810816",
+      "source": "Shares only requested step, sleep, resting heart rate, and workout aggregates through your Gateway with your configured AI provider. Results may remain in chat history.",
+      "translated": "仅通过您的 Gateway 与已配置的 AI 提供商共享请求的步数、睡眠、静息心率和体能训练汇总数据。结果可能会保留在聊天记录中。"
+    },
+    {
+      "id": "native.apple.53fb25cb6e6aae6e",
+      "source": "Off by default. Enabling lets requested aggregates leave this iPhone through your Gateway and configured AI provider.",
+      "translated": "默认关闭。启用后，请求的汇总数据可通过您的 Gateway 和已配置的 AI 提供商离开此 iPhone。"
+    },
+    {
+      "id": "native.apple.6c2be9b001fb95b0",
+      "source": "Disable",
+      "translated": "停用"
+    },
+    {
+      "id": "native.apple.9eab20fbad55a0a9",
+      "source": "Enable & Share Summaries",
+      "translated": "启用并共享摘要"
     },
     {
       "id": "native.apple.d9f9a74e25431256",
@@ -17864,16 +17904,6 @@
       "translated": "用量"
     },
     {
-      "id": "native.apple.386595fa18585dbb",
-      "source": "approvalSource requires matching systemRunPlan",
-      "translated": "approvalSource requires matching systemRunPlan"
-    },
-    {
-      "id": "native.apple.014ff905cecd753b",
-      "source": "explicit approval requires matching systemRunPlan",
-      "translated": "explicit approval requires matching systemRunPlan"
-    },
-    {
       "id": "native.apple.7eb0a88b8274ced8",
       "source": "Node pairing approved",
       "translated": "节点配对已批准"
@@ -18479,19 +18509,24 @@
       "translated": "正在准备"
     },
     {
-      "id": "native.apple.183aee003b44ede6",
-      "source": "OpenClaw is setting up its background service on this Mac. This usually takes under a minute — no Terminal, no administrator password.",
-      "translated": "OpenClaw 正在此 Mac 上设置其后台服务。这通常不到一分钟 — 无需 Terminal，也无需管理员密码。"
-    },
-    {
       "id": "native.apple.d0b8cf59f852b3d0",
       "source": "Install OpenClaw",
       "translated": "安装 OpenClaw"
     },
     {
+      "id": "native.apple.0b0fc42b8827e01f",
+      "source": "Prepare the Mac node",
+      "translated": "准备 Mac 节点"
+    },
+    {
       "id": "native.apple.0112e18fa97e7c0c",
       "source": "Start the background service",
       "translated": "启动后台服务"
+    },
+    {
+      "id": "native.apple.9230c2a15ba6da94",
+      "source": "Runs inside the app and uses its macOS permissions.",
+      "translated": "在应用内运行，并使用其 macOS 权限。"
     },
     {
       "id": "native.apple.d1f9f278b55fe9b0",
@@ -18502,6 +18537,11 @@
       "id": "native.apple.0357f1eea66db068",
       "source": "Ready for the next step",
       "translated": "已准备好进行下一步"
+    },
+    {
+      "id": "native.apple.b4ba6f183309593d",
+      "source": "Once ready, this Mac connects to your selected Gateway.",
+      "translated": "准备就绪后，此 Mac 将连接到你选择的 Gateway。"
     },
     {
       "id": "native.apple.9f58badc863cbf2b",
