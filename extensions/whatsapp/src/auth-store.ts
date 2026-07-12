@@ -97,12 +97,8 @@ export type WhatsAppWebCredsPayload = {
 };
 
 function parseWebCredsPayload(raw: string): WhatsAppWebCredsPayload | null {
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    return parsed && typeof parsed === "object" ? (parsed as WhatsAppWebCredsPayload) : null;
-  } catch {
-    return null;
-  }
+  const parsed = safeParseJson<unknown>(raw);
+  return parsed !== null && typeof parsed === "object" ? (parsed as WhatsAppWebCredsPayload) : null;
 }
 
 function hasUsableWebIdentity(payload: WhatsAppWebCredsPayload): boolean {
