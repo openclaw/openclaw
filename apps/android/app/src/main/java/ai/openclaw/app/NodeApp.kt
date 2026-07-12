@@ -4,6 +4,7 @@ import ai.openclaw.app.chat.ChatCacheDatabase
 import ai.openclaw.app.chat.RoomChatCommandOutbox
 import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
+import ai.openclaw.app.i18n.NativeStringResources
 import android.app.Application
 import android.os.StrictMode
 import androidx.room.withTransaction
@@ -102,6 +103,7 @@ class NodeApp : Application() {
 
   override fun onCreate() {
     super.onCreate()
+    NativeStringResources.install(this)
     if (BuildConfig.DEBUG) {
       StrictMode.setThreadPolicy(
         StrictMode.ThreadPolicy
