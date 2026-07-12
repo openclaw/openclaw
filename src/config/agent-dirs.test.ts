@@ -77,6 +77,30 @@ describe("resolveEffectiveAgentDir via findDuplicateAgentDirs", () => {
     });
   });
 
+  it("probes missing agent dirs without creating them", async () => {
+    await withTempDir({ prefix: "openclaw-agent-dirs-missing-" }, async (root) => {
+      await fs.writeFile(path.join(root, "VolumeProbe"), "probe");
+      const upper = path.join(root, "FutureState");
+      const lower = path.join(root, "futurestate");
+      const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+      try {
+        const dupes = findDuplicateAgentDirs({
+          agents: {
+            list: [
+              { id: "upper", agentDir: upper },
+              { id: "lower", agentDir: lower },
+            ],
+          },
+        });
+        expect(dupes).toHaveLength(0);
+        await expect(fs.stat(upper)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(fs.stat(lower)).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        platformSpy.mockRestore();
+      }
+    });
+  });
+
   it("rejects agent dirs that alias the same directory through a symlink", async () => {
     if (process.platform === "win32") {
       return;

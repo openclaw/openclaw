@@ -50,12 +50,9 @@ function realpathAgentDir(agentDir: string): string {
 
 function canonicalizeAgentDir(agentDir: string): string {
   const resolved = realpathAgentDir(agentDir);
-  if (process.platform === "darwin" || process.platform === "win32") {
-    // Case semantics belong to the target volume, not the host OS. Probing the
-    // nearest existing parent also covers configured directories not created yet.
-    return isPathCaseInsensitive(resolved) ? normalizeLowercaseStringOrEmpty(resolved) : resolved;
-  }
-  return resolved;
+  // Case semantics belong to the target volume, not the host OS. Probing the
+  // nearest existing parent also covers configured directories not created yet.
+  return isPathCaseInsensitive(resolved) ? normalizeLowercaseStringOrEmpty(resolved) : resolved;
 }
 
 function collectReferencedAgentIds(cfg: OpenClawConfig): string[] {
