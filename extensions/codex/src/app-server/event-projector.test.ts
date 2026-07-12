@@ -895,14 +895,16 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.currentAttemptAssistant).toBeUndefined();
   });
 
-  it("does not treat app-server interrupted status as a user cancellation by itself", async () => {
+  it("marks the result as aborted when the turn was interrupted", async () => {
     const projector = await createProjector();
 
     await projector.handleNotification(turnWithStatus("interrupted"));
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    expect(result.aborted).toBe(false);
+    // An interrupted turn was stopped before natural completion; the result
+    // carries the abort flag so the run outcome reflects the real terminal reason.
+    expect(result.aborted).toBe(true);
     expect(result.externalAbort).toBe(false);
     expect(result.timedOut).toBe(false);
     expect(result.promptError).toBeNull();
@@ -934,7 +936,10 @@ describe("CodexAppServerEventProjector", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    expect(result.aborted).toBe(false);
+    // An interrupted turn that produced completed tool output is still
+    // aborted — the turn didn't finish naturally — but preserves the tool
+    // meta for downstream consumers (e.g. the no-visible-answer guard).
+    expect(result.aborted).toBe(true);
     expect(result.assistantTexts).toEqual([]);
     expect(result.toolMetas).toEqual([
       expect.objectContaining({ toolName: "bash", meta: expect.stringContaining("workspace") }),
@@ -995,6 +1000,60 @@ describe("CodexAppServerEventProjector", () => {
     const result = projector.buildResult(buildEmptyToolTelemetry());
     expect(result.aborted).toBe(true);
     expect(result.assistantTexts).toEqual([]);
+  });
+
+  it("does not promote synthesized missing-tool-result to run error for interrupted turn with in-progress command", async () => {
+    const projector = await createProjector();
+
+    // Start a command execution that never completes before the turn ends.
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-in-progress",
+          command: "/bin/bash -lc 'sleep 999'",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "inProgress",
+          commandActions: [],
+        },
+      }),
+    );
+
+    // Turn ends interrupted while the command is still running.
+    // The item snapshot includes the still-in-progress command.
+    await projector.handleNotification(
+      turnWithStatus("interrupted", [
+        {
+          type: "commandExecution",
+          id: "cmd-in-progress",
+          command: "/bin/bash -lc 'sleep 999'",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "inProgress",
+          commandActions: [],
+          aggregatedOutput: "partial output\n",
+        },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    // The turn was interrupted — the run is aborted, not errored.
+    expect(result.aborted).toBe(true);
+    // promptError must not carry the synthesized missing-tool-result string.
+    // The abort flag already carries the authoritative terminal reason.
+    expect(result.promptError).toBeNull();
+    expect(result.promptErrorSource).toBeNull();
+    // The partial tool output meta is preserved for downstream guards.
+    expect(result.toolMetas).toEqual([
+      expect.objectContaining({
+        toolName: "bash",
+        meta: expect.stringContaining("workspace"),
+      }),
+    ]);
   });
 
   it("does not fail a completed reply after a retryable app-server error notification", async () => {
