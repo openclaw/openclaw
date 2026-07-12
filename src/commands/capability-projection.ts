@@ -21,6 +21,7 @@ import {
   type CapabilityProjectionReport,
   type CollectionError,
   type EvidenceRecord,
+  type ToolFact,
 } from "./capability-projection-model.js";
 import { publishCapabilityProjectionPair } from "./capability-projection-render.js";
 import {
