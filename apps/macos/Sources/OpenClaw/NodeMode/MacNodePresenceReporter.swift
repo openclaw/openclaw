@@ -102,7 +102,7 @@ extension MacNodePresenceReporter {
         lastSentActiveAtMs: Int64?,
         saturated: Bool = false) -> Bool
     {
-        let delivery = if let lastSentAtMs, let lastSentActiveAtMs {
+        let delivery: DeliveryState? = if let lastSentAtMs, let lastSentActiveAtMs {
             DeliveryState(sentAtMs: lastSentAtMs, lastActiveAtMs: lastSentActiveAtMs)
         } else {
             nil
