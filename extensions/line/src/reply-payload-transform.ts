@@ -133,39 +133,42 @@ export function parseLineDirectives(payload: ReplyPayload): ReplyPayload {
       const bodyText = expectDefined(parts[1], "buttons text field");
       const actionsStr = expectDefined(parts[2], "buttons actions field");
 
-      const actions = actionsStr.split(",").map((actionStr) => {
-        const trimmed = actionStr.trim();
-        const colonIndex = (() => {
-          const index = trimmed.indexOf(":");
-          if (index === -1) {
-            return -1;
+      const actions = actionsStr
+        .split(",")
+        .map((actionStr) => {
+          const trimmed = actionStr.trim();
+          const colonIndex = (() => {
+            const index = trimmed.indexOf(":");
+            if (index === -1) {
+              return -1;
+            }
+            const lower = normalizeLowercaseStringOrEmpty(trimmed);
+            if (lower.startsWith("http://") || lower.startsWith("https://")) {
+              return -1;
+            }
+            return index;
+          })();
+
+          let label: string;
+          let data: string;
+
+          if (colonIndex === -1) {
+            label = trimmed;
+            data = trimmed;
+          } else {
+            label = trimmed.slice(0, colonIndex).trim();
+            data = trimmed.slice(colonIndex + 1).trim();
           }
-          const lower = normalizeLowercaseStringOrEmpty(trimmed);
-          if (lower.startsWith("http://") || lower.startsWith("https://")) {
-            return -1;
+
+          if (data.startsWith("http://") || data.startsWith("https://")) {
+            return { type: "uri" as const, label, uri: data };
           }
-          return index;
-        })();
-
-        let label: string;
-        let data: string;
-
-        if (colonIndex === -1) {
-          label = trimmed;
-          data = trimmed;
-        } else {
-          label = trimmed.slice(0, colonIndex).trim();
-          data = trimmed.slice(colonIndex + 1).trim();
-        }
-
-        if (data.startsWith("http://") || data.startsWith("https://")) {
-          return { type: "uri" as const, label, uri: data };
-        }
-        if (data.includes("=")) {
-          return { type: "postback" as const, label, data };
-        }
-        return { type: "message" as const, label, data: data || label };
-      });
+          if (data.includes("=")) {
+            return { type: "postback" as const, label, data };
+          }
+          return { type: "message" as const, label, data: data || label };
+        })
+        .filter((action) => action.label);
 
       // LINE accepts an omitted title but rejects an explicit empty title and requires text.
       // Omit the optional field so a valid text-only button template still reaches the user.

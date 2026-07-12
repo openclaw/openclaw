@@ -260,6 +260,16 @@ describe("parseLineDirectives", () => {
       noTemplate("[[buttons: Menu |  | Opt1:d1]]");
     });
 
+    it("drops blank actions and requires at least one labeled action", () => {
+      noTemplate("[[buttons: Menu | Choose | :d1]]");
+      expect(
+        getLineData(parseLineDirectives({ text: "[[buttons: Menu | Choose | :d1, Opt2:d2]]" }))
+          .templateMessage,
+      ).toMatchObject({
+        actions: [{ label: "Opt2", data: "d2" }],
+      });
+    });
+
     it("still builds confirm/buttons when all required fields are present", () => {
       expect(
         getLineData(parseLineDirectives({ text: "[[confirm: Delete? | Yes | No]]" }))

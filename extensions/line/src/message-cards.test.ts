@@ -56,6 +56,11 @@ describe("createButtonTemplate", () => {
     expect(template.template).not.toHaveProperty("title");
   });
 
+  it("uses the titleless 160-character text limit for an empty title", () => {
+    const template = createButtonTemplate("", "x".repeat(160), [messageAction("OK")]);
+    expect(template.template).toMatchObject({ text: "x".repeat(160) });
+  });
+
   it("limits actions to 4", () => {
     const actions = Array.from({ length: 6 }, (_, i) => messageAction(`Button ${i}`));
     const template = createButtonTemplate("Title", "Text", actions);
