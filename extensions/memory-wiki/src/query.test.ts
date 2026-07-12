@@ -288,10 +288,12 @@ describe("searchMemoryWiki", () => {
       let filePath: string;
       if (typeof file === "string") {
         filePath = file;
+      } else if (file instanceof URL) {
+        filePath = file.pathname;
       } else if (Buffer.isBuffer(file)) {
         filePath = file.toString("utf8");
       } else {
-        filePath = file.pathname;
+        return originalReadFile(file, encoding as BufferEncoding);
       }
       if (!filePath.includes(`${path.sep}sources${path.sep}page-`)) {
         return originalReadFile(file, encoding as BufferEncoding);
