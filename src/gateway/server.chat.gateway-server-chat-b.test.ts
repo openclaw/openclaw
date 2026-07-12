@@ -13,6 +13,7 @@ import { appendTranscriptEvent, loadSessionEntry } from "../config/sessions/sess
 import { invalidateSessionStoreCache } from "../config/sessions/store-cache.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
+import { onDiagnosticEvent, type DiagnosticPayloadLargeEvent } from "../infra/diagnostic-events.js";
 import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
 import { createDeferred } from "../test-utils/deferred.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
@@ -3448,65 +3449,32 @@ describe("gateway server chat", () => {
         }>(ws, "chat.history", { sessionKey: "main", limit: 100 });
         expect(history.ok).toBe(true);
         const messages = history.payload?.messages ?? [];
-        expect(messages).toHaveLength(100);
-        expect(JSON.stringify(messages)).toContain("imported message 6");
-        expect(JSON.stringify(messages)).toContain("imported message 105");
-        expect(history.payload?.hasMore).toBe(true);
-        expect(history.payload?.nextOffset).toBe(100);
-        expect(history.payload?.totalMessages).toBe(107);
-        expect(history.payload?.completeSnapshot).toBeUndefined();
-
-        const older = await rpcReq<{
-          messages?: Array<{
-            role?: string;
-            content?: string;
-            provider?: string;
-            __openclaw?: { id?: string };
-          }>;
-          hasMore?: boolean;
-          nextOffset?: number;
-          totalMessages?: number;
-          completeSnapshot?: boolean;
-        }>(ws, "chat.history", {
-          sessionKey: "main",
-          limit: 100,
-          offset: history.payload?.nextOffset,
-        });
-        expect(older.ok).toBe(true);
-        const olderMessages = older.payload?.messages ?? [];
-        expect(olderMessages).toHaveLength(7);
-        const userMessage = expectDefined(olderMessages[0], "oldest imported user message");
+        expect(messages).toHaveLength(107);
+        const userMessage = expectDefined(messages[0], "oldest imported user message") as {
+          role?: string;
+          content?: string;
+        };
         expect(userMessage.role).toBe("user");
         expect(userMessage.content).toBe("hi");
         const assistantMessage = expectDefined(
-          olderMessages[1],
+          messages[1],
           "oldest imported assistant message",
-        );
+        ) as { role?: string; provider?: string };
         expect(assistantMessage.role).toBe("assistant");
         expect(assistantMessage.provider).toBe("claude-cli");
-        expect(older.payload?.hasMore).toBe(false);
-        expect(older.payload?.nextOffset).toBeUndefined();
-        expect(older.payload?.totalMessages).toBe(107);
-        expect(older.payload?.completeSnapshot).toBeUndefined();
-        expect(
-          new Set([...messages, ...olderMessages].map((message) => message["__openclaw"]?.id)).size,
-        ).toBe(107);
-
-        const complete = await rpcReq<{
-          messages?: unknown[];
-          hasMore?: boolean;
-          completeSnapshot?: boolean;
-        }>(ws, "chat.history", { sessionKey: "main", limit: 200 });
-        expect(complete.payload?.messages).toHaveLength(107);
-        expect(complete.payload?.hasMore).toBe(false);
-        expect(complete.payload?.completeSnapshot).toBe(true);
+        expect(JSON.stringify(messages)).toContain("imported message 105");
+        expect(history.payload?.hasMore).toBe(false);
+        expect(history.payload?.nextOffset).toBeUndefined();
+        expect(history.payload?.totalMessages).toBe(107);
+        expect(history.payload?.completeSnapshot).toBe(true);
+        expect(new Set(messages.map((message) => message["__openclaw"]?.id)).size).toBe(107);
       } finally {
         homeEnvSnapshot.restore();
       }
     });
   });
 
-  test("chat.history pages byte-truncated claude-cli imports to the oldest record", async () => {
+  test("chat.history marks byte-truncated claude-cli snapshots as incomplete", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);
       const sessionDir = await createSessionDir();
@@ -3547,43 +3515,19 @@ describe("gateway server chat", () => {
           },
         });
 
-        const deliveredIds: string[] = [];
-        let offset: number | undefined;
-        let firstPageLength: number | undefined;
-        for (;;) {
-          const history = await rpcReq<{
-            messages?: Array<{ __openclaw?: { id?: string } }>;
-            hasMore?: boolean;
-            nextOffset?: number;
-            totalMessages?: number;
-            completeSnapshot?: boolean;
-          }>(ws, "chat.history", {
-            sessionKey: "main",
-            limit: 20,
-            ...(offset !== undefined ? { offset } : {}),
-          });
-          expect(history.ok).toBe(true);
-          expect(history.payload?.totalMessages).toBe(14);
-          expect(history.payload?.completeSnapshot).toBeUndefined();
-          const page = history.payload?.messages ?? [];
-          firstPageLength ??= page.length;
-          deliveredIds.push(
-            ...page.map((message) =>
-              expectDefined(message["__openclaw"]?.id, "imported history identity"),
-            ),
-          );
-          if (!history.payload?.hasMore) {
-            expect(history.payload?.nextOffset).toBeUndefined();
-            break;
-          }
-          const nextOffset = expectDefined(history.payload.nextOffset, "next history offset");
-          expect(nextOffset).toBeGreaterThan(offset ?? 0);
-          offset = nextOffset;
-        }
-        expect(firstPageLength).toBeLessThan(14);
-        expect(new Set(deliveredIds)).toEqual(
-          new Set(Array.from({ length: 14 }, (_, index) => `byte-page-${index + 1}`)),
-        );
+        const history = await rpcReq<{
+          messages?: unknown[];
+          hasMore?: boolean;
+          nextOffset?: number;
+          totalMessages?: number;
+          completeSnapshot?: boolean;
+        }>(ws, "chat.history", { sessionKey: "main", limit: 20 });
+        expect(history.ok).toBe(true);
+        expect(history.payload?.messages?.length).toBeLessThan(14);
+        expect(history.payload?.totalMessages).toBe(14);
+        expect(history.payload?.hasMore).toBe(false);
+        expect(history.payload?.nextOffset).toBeUndefined();
+        expect(history.payload?.completeSnapshot).toBeUndefined();
 
         setMaxChatHistoryMessagesBytesForTest();
         const complete = await rpcReq<{
@@ -3656,36 +3600,26 @@ describe("gateway server chat", () => {
           sessionId,
         );
 
-        const deliveredIdentities = new Set<string>();
-        let offset: number | undefined;
-        for (;;) {
-          const history = await rpcReq<{
-            messages?: Array<{ __openclaw?: { id?: string; seq?: number } }>;
-            hasMore?: boolean;
-            nextOffset?: number;
-            totalMessages?: number;
-          }>(ws, "chat.history", {
-            sessionKey: "main",
-            limit: 2,
-            ...(offset !== undefined ? { offset } : {}),
-          });
-          expect(history.ok).toBe(true);
-          expect(history.payload?.totalMessages).toBe(72);
-          for (const message of history.payload?.messages ?? []) {
+        const history = await rpcReq<{
+          messages?: Array<{ __openclaw?: { id?: string; seq?: number } }>;
+          hasMore?: boolean;
+          nextOffset?: number;
+          totalMessages?: number;
+          completeSnapshot?: boolean;
+        }>(ws, "chat.history", { sessionKey: "main", limit: 2 });
+        expect(history.ok).toBe(true);
+        expect(history.payload?.totalMessages).toBe(72);
+        expect(history.payload?.hasMore).toBe(false);
+        expect(history.payload?.nextOffset).toBeUndefined();
+        expect(history.payload?.completeSnapshot).toBe(true);
+        const deliveredIdentities = new Set(
+          (history.payload?.messages ?? []).map((message) => {
             const metadata = expectDefined(message["__openclaw"], "history metadata");
-            deliveredIdentities.add(
-              metadata.seq !== undefined
-                ? `seq:${metadata.seq}`
-                : `id:${expectDefined(metadata.id, "history id")}`,
-            );
-          }
-          if (!history.payload?.hasMore) {
-            break;
-          }
-          const nextOffset = expectDefined(history.payload.nextOffset, "next history offset");
-          expect(nextOffset).toBeGreaterThan(offset ?? 0);
-          offset = nextOffset;
-        }
+            return metadata.seq !== undefined
+              ? `seq:${metadata.seq}`
+              : `id:${expectDefined(metadata.id, "history id")}`;
+          }),
+        );
         expect(deliveredIdentities.size).toBe(72);
         expect(deliveredIdentities).toContain("id:import-prefix-user");
         expect(deliveredIdentities).toContain("id:import-prefix-assistant");
@@ -5280,6 +5214,96 @@ describe("gateway server chat", () => {
       expect(firstPage.payload?.nextOffset).toBe(2);
       expect(firstPage.payload?.hasMore).toBe(true);
       expect(firstPage.payload?.totalMessages).toBe(3);
+    });
+  });
+
+  test("chat.history advances past a replay boundary that cannot fit all projected siblings", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({
+        ws,
+        createSessionDir,
+        historyMaxBytes: 1_200,
+      });
+      const captured: DiagnosticPayloadLargeEvent[] = [];
+      const unsubscribe = onDiagnosticEvent((event) => {
+        if (event.type === "payload.large" && event.surface === "gateway.chat.history") {
+          captured.push(event);
+        }
+      });
+      try {
+        await writeMainSessionTranscript(sessionDir, [
+          JSON.stringify({
+            message: {
+              role: "user",
+              content: [{ type: "text", text: "reachable older message" }],
+              timestamp: Date.now(),
+            },
+          }),
+          JSON.stringify({
+            message: {
+              role: "assistant",
+              content: Array.from({ length: 4 }, (_, index) => ({
+                type: "toolcall",
+                name: "message",
+                arguments: {
+                  action: "send",
+                  message: `projected sibling ${index + 1} ${"x".repeat(700)}`,
+                },
+              })),
+              timestamp: Date.now() + 1,
+            },
+          }),
+          JSON.stringify({
+            message: {
+              role: "assistant",
+              toolName: "message",
+              result: { ok: true },
+              content: [{ type: "text", text: "NO_REPLY" }],
+              timestamp: Date.now() + 2,
+            },
+          }),
+        ]);
+
+        type HistoryPage = {
+          messages?: Array<{ __openclaw?: { seq?: number } }>;
+          nextOffset?: number;
+          hasMore?: boolean;
+        };
+        const firstPage = await rpcReq<HistoryPage>(ws, "chat.history", {
+          sessionKey: "main",
+          limit: 2,
+          offset: 0,
+        });
+        expect(firstPage.ok).toBe(true);
+        expect(firstPage.payload?.messages?.map(readOpenClawSeq)).toEqual([3]);
+        expect(firstPage.payload?.hasMore).toBe(true);
+        expect(firstPage.payload?.nextOffset).toBeGreaterThan(0);
+        expect(captured.some((event) => event.action === "truncated" && event.count > 0)).toBe(
+          true,
+        );
+
+        let offset = expectDefined(firstPage.payload?.nextOffset, "second page offset");
+        const olderMessages: unknown[] = [];
+        for (let pageIndex = 0; pageIndex < 3; pageIndex += 1) {
+          const page = await rpcReq<HistoryPage>(ws, "chat.history", {
+            sessionKey: "main",
+            limit: 2,
+            offset,
+          });
+          expect(page.ok).toBe(true);
+          olderMessages.push(...(page.payload?.messages ?? []));
+          const nextOffset = page.payload?.nextOffset;
+          if (nextOffset === undefined) {
+            expect(page.payload?.hasMore).toBe(false);
+            break;
+          }
+          expect(nextOffset).toBeGreaterThan(offset);
+          offset = nextOffset;
+        }
+        expect(JSON.stringify(olderMessages)).toContain("reachable older message");
+      } finally {
+        unsubscribe();
+      }
     });
   });
 

@@ -294,15 +294,10 @@ type PreRegisteredAgentRun = {
 };
 
 type ChatHistoryMethod = "chat.history" | "chat.startup";
-type ChatHistoryMergedRecordCursor = {
-  identity: string;
-  nextOffset: number;
-};
 type ChatHistoryPage = {
   messages: unknown[];
   responseOffset?: number;
   completeCliImport?: true;
-  mergedRecordCursors?: ChatHistoryMergedRecordCursor[];
   pagination: {
     offset: number;
     totalMessages: number;
@@ -2965,16 +2960,6 @@ function readChatHistoryMessageSeq(message: unknown): number | undefined {
   return typeof seq === "number" && Number.isSafeInteger(seq) && seq > 0 ? seq : undefined;
 }
 
-function readChatHistoryMessageIdentity(message: unknown): string | undefined {
-  const metadata = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]);
-  const seq = metadata?.seq;
-  if (typeof seq === "number" && Number.isSafeInteger(seq) && seq > 0) {
-    return `seq:${seq}`;
-  }
-  const id = metadata?.id;
-  return typeof id === "string" && id.length > 0 ? `id:${id}` : undefined;
-}
-
 function resolveChatHistoryNextOffset(params: {
   messages: unknown[];
   totalMessages: number;
@@ -2986,10 +2971,14 @@ function resolveChatHistoryNextOffset(params: {
     .map((message) => readChatHistoryMessageSeq(message))
     .find((seq): seq is number => typeof seq === "number");
   if (oldestSeq !== undefined) {
-    return Math.max(
-      params.offset,
-      params.totalMessages - oldestSeq + (params.replayOldestRecord ? 0 : 1),
-    );
+    const recordOffset = params.totalMessages - oldestSeq + 1;
+    const replayOffset = recordOffset - 1;
+    if (params.replayOldestRecord && replayOffset > params.offset) {
+      return replayOffset;
+    }
+    // A replay cursor that does not advance strands every older record. Skip
+    // the pathological projected siblings and continue with the next record.
+    return Math.max(params.offset + 1, recordOffset);
   }
   return params.offset + params.rawPageMessages;
 }
@@ -3011,38 +3000,6 @@ function shouldReplayOldestChatHistoryRecord(params: {
     (message) => readChatHistoryMessageSeq(message) === oldestSeq,
   ).length;
   return boundedCount < projectedCount;
-}
-
-function resolveMergedChatHistoryNextOffset(params: {
-  projected: unknown[];
-  bounded: unknown[];
-  cursors: ChatHistoryMergedRecordCursor[];
-  offset: number;
-  rawPageMessages: number;
-}): number {
-  const cursorByIdentity = new Map(
-    params.cursors.map((cursor) => [cursor.identity, cursor.nextOffset] as const),
-  );
-  const oldestIdentity = params.bounded
-    .map((message) => readChatHistoryMessageIdentity(message))
-    .find(
-      (identity): identity is string => identity !== undefined && cursorByIdentity.has(identity),
-    );
-  if (oldestIdentity === undefined) {
-    if (params.projected.length > 0 && params.bounded.length > 0) {
-      // A metadata-free unavailable sentinel represents only the newest raw record.
-      return params.offset + 1;
-    }
-    return params.offset + params.rawPageMessages;
-  }
-  const projectedCount = params.projected.filter(
-    (message) => readChatHistoryMessageIdentity(message) === oldestIdentity,
-  ).length;
-  const boundedCount = params.bounded.filter(
-    (message) => readChatHistoryMessageIdentity(message) === oldestIdentity,
-  ).length;
-  const nextOffset = expectDefined(cursorByIdentity.get(oldestIdentity), "merged history cursor");
-  return Math.max(params.offset, nextOffset - (boundedCount < projectedCount ? 1 : 0));
 }
 
 function capOffsetChatHistoryProjectedMessages(messages: unknown[], max: number): unknown[] {
@@ -3152,8 +3109,9 @@ async function readChatHistoryPage(params: {
   const cliSessionId = params.ignoreCliSessionImports
     ? undefined
     : resolveClaudeCliBindingSessionId(entry);
-  // Keep bound Claude history on the merged path; local-only offset pages would
-  // silently drop imported records.
+  // Bound snapshots are terminal by contract, so offset requests return the same
+  // full snapshot. Paging oversized imports needs an opaque snapshot cursor and
+  // is deferred to a follow-up issue.
   if (offset !== undefined && !cliSessionId) {
     const rawHistoryWindow = resolveSessionHistoryTailReadOptions(max);
     const readPage =
@@ -3281,28 +3239,17 @@ async function readChatHistoryPage(params: {
       completeCliHistory.messages,
       typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
     );
-    const mergedOffset = Math.min(offset ?? 0, mergedMessages.length);
-    const pageEnd = mergedMessages.length - mergedOffset;
-    const pageStart = Math.max(0, pageEnd - max);
-    const rawPage = mergedMessages.slice(pageStart, pageEnd);
-    const displayMessages = projectChatDisplayMessages(rawPage, {
+    const displayMessages = projectChatDisplayMessages(mergedMessages, {
       maxChars: effectiveMaxChars,
-    });
-    const mergedRecordCursors = rawPage.flatMap((message, index) => {
-      const identity = readChatHistoryMessageIdentity(message);
-      return identity === undefined
-        ? []
-        : [{ identity, nextOffset: mergedMessages.length - (pageStart + index) }];
     });
     return {
       messages: augmentChatHistoryWithCanvasBlocks(displayMessages),
-      ...(offset !== undefined ? { responseOffset: offset } : {}),
-      ...(mergedOffset === 0 && pageStart === 0 ? { completeCliImport: true as const } : {}),
-      mergedRecordCursors,
+      completeCliImport: true,
       pagination: {
-        offset: mergedOffset,
+        offset: 0,
         totalMessages: mergedMessages.length,
-        rawPageMessages: rawPage.length,
+        rawPageMessages: mergedMessages.length,
+        exhausted: true,
       },
     };
   }
@@ -3452,24 +3399,16 @@ async function handleChatHistoryRequest({
     bounded.messages.length === capped.length &&
     bounded.messages.every((message, index) => message === capped[index]);
   const pagination = historyPage.pagination;
-  const candidateNextOffset = historyPage.mergedRecordCursors
-    ? resolveMergedChatHistoryNextOffset({
-        projected: normalized,
-        bounded: bounded.messages,
-        cursors: historyPage.mergedRecordCursors,
-        offset: pagination.offset,
-        rawPageMessages: pagination.rawPageMessages,
-      })
-    : resolveChatHistoryNextOffset({
-        messages: bounded.messages,
-        totalMessages: pagination.totalMessages,
-        offset: pagination.offset,
-        rawPageMessages: pagination.rawPageMessages,
-        replayOldestRecord: shouldReplayOldestChatHistoryRecord({
-          projected: normalized,
-          bounded: bounded.messages,
-        }),
-      });
+  const candidateNextOffset = resolveChatHistoryNextOffset({
+    messages: bounded.messages,
+    totalMessages: pagination.totalMessages,
+    offset: pagination.offset,
+    rawPageMessages: pagination.rawPageMessages,
+    replayOldestRecord: shouldReplayOldestChatHistoryRecord({
+      projected: normalized,
+      bounded: bounded.messages,
+    }),
+  });
   const hasMore = pagination.exhausted !== true && candidateNextOffset < pagination.totalMessages;
   const nextOffset = hasMore ? candidateNextOffset : undefined;
   reportOmittedChatHistory({
