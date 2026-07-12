@@ -1,11 +1,8 @@
 // Control UI tests cover sessions behavior.
+import { existsSync } from "node:fs";
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
-import {
-  canRunPlaywrightChromium,
-  resolvePlaywrightChromiumExecutablePath,
-} from "../../test-helpers/control-ui-e2e.ts";
 
 const VIEWPORTS = [
   [375, 812],
@@ -14,10 +11,7 @@ const VIEWPORTS = [
   [1440, 900],
 ] as const;
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const describeBrowserLayout = canRunPlaywrightChromium(chromiumExecutablePath)
-  ? describe
-  : describe.skip;
+const describeBrowserLayout = existsSync(chromium.executablePath()) ? describe : describe.skip;
 
 let browser: Browser;
 
@@ -166,7 +160,7 @@ async function openFixture(width: number, height: number): Promise<Page> {
 
 describeBrowserLayout("sessions responsive browser layout", () => {
   beforeAll(async () => {
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
+    browser = await chromium.launch({ headless: true });
   });
 
   afterAll(async () => {

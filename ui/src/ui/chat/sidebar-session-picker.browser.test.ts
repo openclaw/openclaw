@@ -1,16 +1,10 @@
 // Control UI tests cover sidebar session picker layering and interaction.
+import { existsSync } from "node:fs";
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
-import {
-  canRunPlaywrightChromium,
-  resolvePlaywrightChromiumExecutablePath,
-} from "../../test-helpers/control-ui-e2e.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const describeBrowserLayout = canRunPlaywrightChromium(chromiumExecutablePath)
-  ? describe
-  : describe.skip;
+const describeBrowserLayout = existsSync(chromium.executablePath()) ? describe : describe.skip;
 
 let browser: Browser;
 
@@ -232,7 +226,7 @@ async function expectNoHorizontalOverflow(page: Page) {
 }
 
 beforeAll(async () => {
-  browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
+  browser = await chromium.launch({ headless: true });
 });
 
 afterAll(async () => {
