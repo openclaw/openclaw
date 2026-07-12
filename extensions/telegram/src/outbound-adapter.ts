@@ -184,13 +184,23 @@ export async function sendTelegramPayloadMessages(params: {
   };
   if (payload.location) {
     if (
-      text.trim() ||
       mediaUrls.length > 0 ||
       reactionEmoji ||
       payload.audioAsVoice === true ||
       payload.videoAsNote === true
     ) {
-      throw new Error("Telegram location sends cannot be combined with text, media, or reactions.");
+      throw new Error("Telegram location sends cannot be combined with media or reactions.");
+    }
+    if (text.trim()) {
+      // Cross-context policy can add a required origin marker to an otherwise
+      // standalone location. Persist it as a separate send without stealing
+      // the location's native reply, quote, or buttons.
+      await params.send(params.to, text, {
+        ...params.baseOpts,
+        replyToMessageId: undefined,
+        replyToIdSource: undefined,
+        replyToMode: undefined,
+      });
     }
     return await params.sendLocation(params.to, payload.location, {
       ...params.baseOpts,

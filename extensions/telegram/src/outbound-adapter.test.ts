@@ -859,18 +859,51 @@ describe("telegramOutbound", () => {
     });
   });
 
-  it("rejects mixed Telegram location and text payloads", async () => {
-    await expect(
-      telegramOutbound.sendPayload!({
-        cfg: {} as never,
-        to: "12345",
-        text: "caption",
-        payload: {
-          text: "caption",
-          location: { latitude: 1, longitude: 2 },
-        },
+  it("sends cross-context location markers before the native location", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({
+      messageId: "tg-marker",
+      chatId: "12345",
+    });
+    sendLocationTelegramMock.mockResolvedValueOnce({
+      messageId: "tg-location",
+      chatId: "12345",
+    });
+    const location = { latitude: 1, longitude: 2 };
+
+    const result = await telegramOutbound.sendPayload!({
+      cfg: {} as never,
+      to: "12345",
+      text: "[from telegram:origin] ",
+      payload: {
+        text: "[from telegram:origin] ",
+        location,
+        channelData: { telegram: { quoteText: "quoted location" } },
+      },
+      replyToId: "41",
+    });
+
+    expect(sendMessageTelegramMock).toHaveBeenCalledWith(
+      "12345",
+      "[from telegram:origin] ",
+      expect.objectContaining({
+        replyToMessageId: undefined,
+        replyToIdSource: undefined,
+        replyToMode: undefined,
       }),
-    ).rejects.toThrow(/cannot be combined/i);
+    );
+    expect(sendLocationTelegramMock).toHaveBeenCalledWith(
+      "12345",
+      location,
+      expect.objectContaining({
+        quoteText: "quoted location",
+        replyToMessageId: 41,
+      }),
+    );
+    expect(result).toEqual({
+      channel: "telegram",
+      messageId: "tg-location",
+      chatId: "12345",
+    });
   });
 
   it("backs declared durable final capabilities with delivery proofs", async () => {
