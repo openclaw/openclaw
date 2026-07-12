@@ -6501,6 +6501,10 @@ describe("active-memory plugin", () => {
       circuitBreakerCooldownMs: 60_000,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
+    const beforePromptBuild = hooks.before_prompt_build;
+    if (typeof beforePromptBuild !== "function") {
+      throw new Error("before_prompt_build not registered");
+    }
     runEmbeddedAgent.mockImplementation(
       async (params: { abortSignal?: AbortSignal }) => await waitForAbort(params.abortSignal),
     );
@@ -6511,7 +6515,7 @@ describe("active-memory plugin", () => {
         sessionId: `s-${agentId}`,
         updatedAt: 0,
       };
-      await hooks.before_prompt_build(
+      await beforePromptBuild(
         { prompt: `proof timeout ${agentId}`, messages: [] },
         {
           agentId,
@@ -6538,7 +6542,7 @@ describe("active-memory plugin", () => {
     expect(probeAgent).toBeTruthy();
     const probeSession = `agent:${probeAgent}:proof`;
     const callsBeforeSkip = runEmbeddedAgent.mock.calls.length;
-    await hooks.before_prompt_build(
+    await beforePromptBuild(
       { prompt: "proof breaker skip", messages: [] },
       {
         agentId: probeAgent,
@@ -6549,7 +6553,7 @@ describe("active-memory plugin", () => {
     );
     expect(runEmbeddedAgent.mock.calls.length).toBe(callsBeforeSkip);
 
-    const infoLines = vi
+    const infoLines: string[] = vi
       .mocked(api.logger.info)
       .mock.calls.map((call: unknown[]) => String(call[0]));
     const redacted = infoLines
