@@ -69,6 +69,18 @@ describe("sessions.diff parsers", () => {
     expect(byPath.get("new.txt")).toEqual({ additions: 0, deletions: 0, binary: false });
   });
 
+  it("rejects partial-integer numstat fields instead of silently truncating", () => {
+    // "10abc" should not be parsed as 10 by parseInt — it must yield 0.
+    // Format: added\tdeleted\tpath\0
+    const byPath = parseNumstatZ("10abc\t5\tpartial.txt\u0000");
+    expect(byPath.get("partial.txt")).toEqual({ additions: 0, deletions: 5, binary: false });
+  });
+
+  it("treats zero additions and deletions correctly without the || 0 fallback", () => {
+    const byPath = parseNumstatZ("0\t0\tzero.txt\u0000");
+    expect(byPath.get("zero.txt")).toEqual({ additions: 0, deletions: 0, binary: false });
+  });
+
   it("splits multi-file patches and keys deleted files by old path", () => {
     const patch = [
       "diff --git a/kept.txt b/kept.txt",

@@ -77,6 +77,15 @@ export function parseNameStatusZ(text: string): NameStatusEntry[] {
   return entries;
 }
 
+/** Parses a git numstat field, rejecting partial-integer input like "10abc". */
+function parseNumstatField(raw: string): number {
+  if (!/^\d+$/.test(raw)) {
+    return 0;
+  }
+  const value = Number(raw);
+  return Number.isSafeInteger(value) ? value : 0;
+}
+
 /** Parses `git diff --numstat -z -M`; rename entries put paths in follow-up tokens. */
 export function parseNumstatZ(text: string): Map<string, NumstatEntry> {
   const tokens = text.split("\0");
@@ -92,8 +101,8 @@ export function parseNumstatZ(text: string): Map<string, NumstatEntry> {
     }
     const binary = added === "-";
     const entry: NumstatEntry = {
-      additions: binary ? 0 : Number.parseInt(added, 10) || 0,
-      deletions: binary ? 0 : Number.parseInt(deleted, 10) || 0,
+      additions: binary ? 0 : parseNumstatField(added),
+      deletions: binary ? 0 : parseNumstatField(deleted),
       binary,
     };
     if (inlinePath) {
