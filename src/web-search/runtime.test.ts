@@ -266,6 +266,49 @@ describe("web search runtime", () => {
     );
   });
 
+  it("does not fall back to another provider after parent cancellation", async () => {
+    const controller = new AbortController();
+    const firstExecute = vi.fn(
+      async (_args: Record<string, unknown>, _context?: { signal?: AbortSignal }) => {
+        controller.abort();
+        throw controller.signal.reason;
+      },
+    );
+    const fallbackExecute = vi.fn(async () => ({ ok: true }));
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
+      createCustomSearchProvider({
+        credentialPath: "",
+        createTool: () => ({
+          description: "first",
+          parameters: {},
+          execute: firstExecute,
+        }),
+      }),
+      createCustomSearchProvider({
+        pluginId: "fallback-search",
+        id: "fallback",
+        credentialPath: "",
+        autoDetectOrder: 2,
+        getConfiguredCredentialValue: () => "configured",
+        createTool: () => ({
+          description: "fallback",
+          parameters: {},
+          execute: fallbackExecute,
+        }),
+      }),
+    ]);
+
+    await expect(
+      runWebSearch({
+        config: createCustomSearchConfig("custom-config-key"),
+        args: { query: "abort fallback" },
+        signal: controller.signal,
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(firstExecute).toHaveBeenCalledOnce();
+    expect(fallbackExecute).not.toHaveBeenCalled();
+  });
+
   it("auto-detects a provider from canonical plugin-owned credentials", async () => {
     const provider = createCustomSearchProvider();
     resolveRuntimeWebSearchProvidersMock.mockReturnValue([provider]);
