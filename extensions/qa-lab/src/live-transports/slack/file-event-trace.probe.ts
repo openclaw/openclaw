@@ -149,7 +149,9 @@ try {
     const nested = asRecord(event?.message);
     const eventText = typeof event?.text === "string" ? event.text : "";
     const nestedText = typeof nested?.text === "string" ? nested.text : "";
-    const matchesApiUpload = eventText.includes(marker) || nestedText.includes(marker);
+    const matchesApiUpload =
+      event?.channel === targetChannelId &&
+      (eventText.includes(marker) || nestedText.includes(marker) || isFileEvent(event, nested));
     const matchesBrowserUpload = event?.channel === targetChannelId && isFileEvent(event, nested);
     if (
       event?.type === "message" &&
@@ -193,8 +195,8 @@ try {
       channel_id: credential.channelId,
       initial_comment: marker,
       file_uploads: [
-        { content: "alpha\n", filename: "qa-finalization-a.txt" },
-        { content: "beta\n", filename: "qa-finalization-b.txt" },
+        { file: Buffer.alloc(5 * 1024 * 1024, "a"), filename: "qa-finalization-a.pdf" },
+        { file: Buffer.alloc(5 * 1024 * 1024, "b"), filename: "qa-finalization-b.pdf" },
       ],
     })) as { files?: Array<{ id?: string }> };
     uploadedFileIds = (upload.files ?? []).flatMap((file) => (file.id ? [file.id] : []));
@@ -218,7 +220,10 @@ try {
         source: "real Slack Socket Mode event stream",
         teamIdHash,
         encryptedWorkspaceLocator,
-        uploadMethod: traceMode === "browser" ? "Slack web client" : "WebClient.filesUploadV2",
+        uploadMethod:
+          traceMode === "browser"
+            ? "Slack web client"
+            : "WebClient.filesUploadV2 hosted PDF buffers",
         fileUploadCount: traceMode === "browser" ? null : 2,
         eventCount: trace.length,
         trace,
