@@ -2474,7 +2474,13 @@ describe("sendMessageTelegram", () => {
     await sendLocationTelegram(
       chatId,
       { latitude: 48.858844, longitude: 2.294351, accuracy: 12 },
-      { cfg: TELEGRAM_TEST_CFG, token: "tok", api },
+      {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        api,
+        replyToMessageId: 77,
+        quoteText: "quoted location",
+      },
     );
     await sendLocationTelegram(
       chatId,
@@ -2491,7 +2497,13 @@ describe("sendMessageTelegram", () => {
       chatId,
       48.858844,
       2.294351,
-      expect.objectContaining({ horizontal_accuracy: 12 }),
+      expect.objectContaining({
+        horizontal_accuracy: 12,
+        reply_parameters: expect.objectContaining({
+          message_id: 77,
+          quote: "quoted location",
+        }),
+      }),
     );
     expect(sendVenue).toHaveBeenCalledWith(
       chatId,

@@ -195,6 +195,7 @@ export async function sendTelegramPayloadMessages(params: {
     return await params.sendLocation(params.to, payload.location, {
       ...params.baseOpts,
       buttons,
+      quoteText,
     });
   }
   if (payload.videoAsNote === true && mediaUrls.length !== 1) {

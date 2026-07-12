@@ -35,6 +35,17 @@ describe("provider location helpers", () => {
     ).toThrow(`${field} is not supported`);
   });
 
+  it.each([
+    ["name", 123],
+    ["name", "   "],
+    ["address", false],
+    ["address", ""],
+  ])("rejects malformed outbound %s text", (field, value) => {
+    expect(() => normalizeOutboundLocation({ latitude: 1, longitude: 2, [field]: value })).toThrow(
+      `${field} must be a non-empty string`,
+    );
+  });
+
   it("formats pin locations with accuracy", () => {
     const text = formatLocationText({
       latitude: 48.858844,

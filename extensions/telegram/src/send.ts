@@ -180,6 +180,7 @@ type TelegramLocationSendOpts = Pick<
   | "replyToMessageId"
   | "messageThreadId"
   | "buttons"
+  | "quoteText"
   | "silent"
   | "onDeliveryResult"
 >;
@@ -1637,6 +1638,8 @@ async function sendLocationTelegramWithContext(
       chatType: target.chatType,
     }),
     replyToMessageId: opts.replyToMessageId,
+    replyQuoteText: opts.quoteText,
+    useReplyIdAsQuoteSource: true,
   });
   const replyMarkup = buildInlineKeyboard(opts.buttons);
   const commonParams = {

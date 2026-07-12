@@ -832,14 +832,24 @@ describe("telegramOutbound", () => {
       cfg: {} as never,
       to: "12345",
       text: "",
-      payload: { location },
+      payload: {
+        location,
+        channelData: { telegram: { quoteText: "quoted location" } },
+      },
       accountId: "ops",
+      replyToId: "41",
     });
 
     expect(sendLocationTelegramMock).toHaveBeenCalledWith(
       "12345",
       location,
-      expect.objectContaining({ cfg: {}, accountId: "ops", buttons: undefined }),
+      expect.objectContaining({
+        cfg: {},
+        accountId: "ops",
+        buttons: undefined,
+        quoteText: "quoted location",
+        replyToMessageId: 41,
+      }),
     );
     expect(sendMessageTelegramMock).not.toHaveBeenCalled();
     expect(result).toEqual({

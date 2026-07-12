@@ -19,8 +19,14 @@ export type OutboundLocation = Pick<
   "latitude" | "longitude" | "accuracy" | "name" | "address"
 >;
 
-function readOptionalLocationText(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+function readOptionalLocationText(value: unknown, label: string): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error(`${label} must be a non-empty string.`);
+  }
+  return value.trim();
 }
 
 /** Normalize a portable location payload at an outbound/plugin boundary. */
@@ -65,8 +71,8 @@ export function normalizeOutboundLocation(
       throw new Error(`${label}.${unsupportedField} is not supported for outbound locations.`);
     }
   }
-  const name = readOptionalLocationText(raw.name);
-  const address = readOptionalLocationText(raw.address);
+  const name = readOptionalLocationText(raw.name, `${label}.name`);
+  const address = readOptionalLocationText(raw.address, `${label}.address`);
   return {
     latitude,
     longitude,
