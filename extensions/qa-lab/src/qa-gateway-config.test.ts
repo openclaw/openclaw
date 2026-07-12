@@ -101,6 +101,14 @@ describe("buildQaGatewayConfig", () => {
     expect(cfg.plugins?.entries?.["memory-core"]).toEqual({ enabled: true });
     expect(cfg.plugins?.entries?.["qa-channel"]).toEqual({ enabled: true });
     expect(cfg.plugins?.entries?.openai).toBeUndefined();
+    expect(cfg.agents?.defaults?.memorySearch).toMatchObject({
+      provider: "openai",
+      model: "text-embedding-3-small",
+      remote: {
+        baseUrl: "http://127.0.0.1:44080/v1",
+        apiKey: "test",
+      },
+    });
     expect(cfg.gateway?.reload?.deferralTimeoutMs).toBe(1_000);
     expect(cfg.tools?.profile).toBe("coding");
     expect(cfg.agents?.list?.[0]?.tools?.profile).toBe("coding");
@@ -254,6 +262,7 @@ describe("buildQaGatewayConfig", () => {
     expect(getModelFallbacks(cfg.agents?.defaults?.model)).toBeUndefined();
     expect(getModelFallbacks(cfg.agents?.list?.[0]?.model)).toBeUndefined();
     expect(cfg.models).toBeUndefined();
+    expect(cfg.agents?.defaults?.memorySearch?.remote).toBeUndefined();
     expect(cfg.plugins?.allow).toEqual(["acpx", "memory-core", "qa-lab", "openai", "qa-channel"]);
     expect(cfg.plugins?.entries?.openai).toEqual({ enabled: true });
     expect(cfg.agents?.defaults?.models?.["openai/gpt-5.6-luna"]).toEqual({

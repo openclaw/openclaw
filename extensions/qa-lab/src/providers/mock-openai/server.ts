@@ -2036,6 +2036,27 @@ function buildAssistantEvents(specsOrText: MockAssistantMessageSpec[] | string):
   return events;
 }
 
+function buildCompactionEvents(): StreamEvent[] {
+  const item = {
+    type: "compaction",
+    id: "cmp_mock_1",
+    encrypted_content: "qa-mock-compaction",
+  };
+  return [
+    { type: "response.output_item.added", item },
+    { type: "response.output_item.done", item },
+    {
+      type: "response.completed",
+      response: {
+        id: "resp_mock_compaction",
+        status: "completed",
+        output: [item],
+        usage: { input_tokens: 64, output_tokens: 16, total_tokens: 80 },
+      },
+    },
+  ];
+}
+
 function buildReasoningOnlyEvents(summaryText: string, id: string): StreamEvent[] {
   const reasoningItem = {
     type: "reasoning",
@@ -2144,6 +2165,9 @@ async function buildResponsesPayload(
     typeof body.model === "string" ? body.model : undefined,
   );
   const input = Array.isArray(body.input) ? (body.input as ResponsesInputItem[]) : [];
+  if (input.some((item) => item.type === "compaction_trigger")) {
+    return buildCompactionEvents();
+  }
   const prompt = extractLastUserText(input);
   const toolOutput = extractToolOutput(input);
   const allInputText = extractAllRequestTexts(input, body);

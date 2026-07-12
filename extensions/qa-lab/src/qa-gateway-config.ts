@@ -212,6 +212,16 @@ export function buildQaGatewayConfig(params: {
           : {}),
         ...(params.thinkingDefault ? { thinkingDefault: params.thinkingDefault } : {}),
         memorySearch: {
+          ...(providerMode === "mock-openai"
+            ? {
+                provider: "openai",
+                model: "text-embedding-3-small",
+                remote: {
+                  baseUrl: providerBaseUrl,
+                  apiKey: "test",
+                },
+              }
+            : {}),
           sync: {
             watch: true,
             watchDebounceMs: 25,

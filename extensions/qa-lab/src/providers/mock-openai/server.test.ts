@@ -233,6 +233,26 @@ function explicitSessionsSpawnPrompt(token: string) {
 }
 
 describe("qa mock openai server", () => {
+  it("returns the encrypted compaction item requested by Codex", async () => {
+    const server = await startMockServer();
+    const body = {
+      model: "gpt-5.5",
+      input: [{ type: "compaction_trigger" }],
+      stream: false,
+    };
+
+    const payload = await expectResponsesJson<Record<string, unknown>>(server, body);
+    expect(outputItem(payload)).toEqual({
+      type: "compaction",
+      id: "cmp_mock_1",
+      encrypted_content: "qa-mock-compaction",
+    });
+
+    const streamed = await expectResponsesText(server, { ...body, stream: true });
+    expect(streamed).toContain('"type":"response.output_item.done"');
+    expect(streamed).toContain('"type":"compaction"');
+  });
+
   it("keeps cursor reads correct when retained debug requests rotate", async () => {
     const server = await startMockServer();
     const debugRequestLimit = 2_000;

@@ -221,12 +221,40 @@ describe("runtime parity", () => {
     });
 
     expect(resolved).toEqual([
-      {
+      expect.objectContaining({
         tool: "image_generate",
         argsHash: "same-args",
-        resultHash: "async-started",
-      },
+      }),
     ]);
+    expect(resolved[0]?.errorClass).toBeUndefined();
+  });
+
+  it("accepts a fresh scenario MEDIA result for terminal image tools", () => {
+    const resolved = __testing.resolveRuntimeParityToolCalls({
+      mockToolCalls: [
+        {
+          tool: "image_generate",
+          argsHash: "same-args",
+          resultHash: "missing",
+          errorClass: "tool-result-missing",
+        },
+      ],
+      transcriptToolCalls: [],
+      scenarioEvidence: "MEDIA:/tmp/qa-image.png",
+    });
+    const codexResult = __testing.resolveRuntimeParityToolCalls({
+      mockToolCalls: [
+        {
+          tool: "image_generate",
+          argsHash: "same-args",
+          resultHash: "runtime-specific-path",
+        },
+      ],
+      transcriptToolCalls: [],
+    });
+
+    expect(resolved).toEqual(codexResult);
+    expect(resolved[0]?.errorClass).toBeUndefined();
   });
 
   it("scopes process-global mock requests to the parent session prompt", () => {

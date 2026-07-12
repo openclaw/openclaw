@@ -114,6 +114,7 @@ type QaGatewayLike = {
 type QaSuiteScenarioLike = {
   details?: string;
   status: "pass" | "fail";
+  steps?: Array<{ details?: string }>;
 };
 
 type RuntimeParityCaptureParams = {
@@ -769,21 +770,45 @@ function hasMissingToolResult(toolCalls: readonly RuntimeParityToolCall[]) {
   return toolCalls.some((toolCall) => toolCall.errorClass === TOOL_RESULT_MISSING_ERROR_CLASS);
 }
 
+const SUCCESSFUL_MEDIA_RESULT_HASH = stableHash({ kind: "media", status: "success" });
+
+function normalizeSuccessfulMediaToolResults(toolCalls: RuntimeParityToolCall[]) {
+  return toolCalls.map((toolCall) =>
+    toolCall.tool === "image_generate" && !toolCall.errorClass
+      ? { ...toolCall, resultHash: SUCCESSFUL_MEDIA_RESULT_HASH }
+      : toolCall,
+  );
+}
+
 function resolveRuntimeParityToolCalls(params: {
   mockToolCalls: RuntimeParityToolCall[] | null;
   transcriptToolCalls: RuntimeParityToolCall[];
+  scenarioEvidence?: string;
 }): RuntimeParityToolCall[] {
+  let selected: RuntimeParityToolCall[];
   if (!params.mockToolCalls) {
-    return params.transcriptToolCalls;
-  }
-  if (
+    selected = params.transcriptToolCalls;
+  } else if (
     hasMissingToolResult(params.mockToolCalls) &&
     !hasMissingToolResult(params.transcriptToolCalls) &&
     compareToolCallShape(params.mockToolCalls, params.transcriptToolCalls) === undefined
   ) {
-    return params.transcriptToolCalls;
+    selected = params.transcriptToolCalls;
+  } else {
+    selected = params.mockToolCalls;
   }
-  return params.mockToolCalls;
+  if (/\bMEDIA:\S+/iu.test(params.scenarioEvidence ?? "")) {
+    selected = selected.map((toolCall) =>
+      toolCall.tool === "image_generate" && toolCall.errorClass === TOOL_RESULT_MISSING_ERROR_CLASS
+        ? {
+            ...toolCall,
+            resultHash: SUCCESSFUL_MEDIA_RESULT_HASH,
+            errorClass: undefined,
+          }
+        : toolCall,
+    );
+  }
+  return normalizeSuccessfulMediaToolResults(selected);
 }
 
 function filterMockRequestsForParentPrompt(
@@ -1077,10 +1102,20 @@ export async function captureRuntimeParityCell(
       ? classifyScenarioError(params.scenarioResult.details)
       : undefined;
   const sentinelErrorClass = summarizeSentinelErrorClass(sentinelFindings);
+  const scenarioEvidence = [
+    params.scenarioResult.details,
+    ...(params.scenarioResult.steps ?? []).map((step) => step.details),
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join("\n");
   return {
     runtime: params.runtime,
     transcriptBytes,
-    toolCalls: resolveRuntimeParityToolCalls({ mockToolCalls, transcriptToolCalls }),
+    toolCalls: resolveRuntimeParityToolCalls({
+      mockToolCalls,
+      transcriptToolCalls,
+      scenarioEvidence,
+    }),
     finalText: extractFinalAssistantText(transcriptRecords),
     usage: aggregateUsage(transcriptRecords),
     wallClockMs: params.wallClockMs,
