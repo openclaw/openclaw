@@ -490,14 +490,32 @@ const defaultFleetContainerCommandExecutor: FleetContainerCommandExecutor = asyn
   return normalized;
 };
 
-// Line-buffered so a secret can never straddle an emitted chunk boundary;
-// unterminated lines flush at 64 KiB, far larger than any redacted value.
+// Line-buffered so a secret can never straddle an emitted chunk boundary
+// (secrets are single-line by the environment-file contract); unterminated
+// lines flush at 64 KiB while retaining any partial secret prefix in-buffer.
 const STREAM_REDACT_FLUSH_BYTES = 64 * 1024;
+
+// Longest suffix of `text` that is a proper prefix of any secret. Retaining it
+// across a forced flush guarantees no complete secret is ever split between
+// two emitted chunks, and emitted text can never grow into a match later.
+function secretPrefixSuffixLength(text: string, redactValues: readonly string[]): number {
+  let longest = 0;
+  for (const value of redactValues) {
+    const max = Math.min(value.length - 1, text.length);
+    for (let length = max; length > longest; length -= 1) {
+      if (value.startsWith(text.slice(text.length - length))) {
+        longest = length;
+        break;
+      }
+    }
+  }
+  return longest;
+}
 
 function createRedactingStreamWriter(
   target: NodeJS.WriteStream,
   redactValues: readonly string[],
-): { write: (chunk: Buffer) => void; flush: () => void } {
+): { write: (chunk: Buffer) => boolean; flush: () => void } {
   const decoder = new StringDecoder("utf8");
   let pending = "";
   const redact = (text: string): string => {
@@ -509,23 +527,29 @@ function createRedactingStreamWriter(
     }
     return redacted;
   };
-  const emit = (text: string): void => {
-    if (text) {
-      target.write(redact(text));
+  // Returns the raw target.write() backpressure signal so callers can pause
+  // the child stream instead of buffering a noisy follow stream without bound.
+  const emit = (text: string): boolean => {
+    if (!text) {
+      return true;
     }
+    return target.write(redact(text));
   };
   return {
     write: (chunk) => {
+      let writable = true;
       pending += decoder.write(chunk);
       const lastNewline = pending.lastIndexOf("\n");
       if (lastNewline >= 0) {
-        emit(pending.slice(0, lastNewline + 1));
+        writable = emit(pending.slice(0, lastNewline + 1)) && writable;
         pending = pending.slice(lastNewline + 1);
       }
       if (pending.length >= STREAM_REDACT_FLUSH_BYTES) {
-        emit(pending);
-        pending = "";
+        const keep = secretPrefixSuffixLength(pending, redactValues);
+        writable = emit(pending.slice(0, pending.length - keep)) && writable;
+        pending = keep > 0 ? pending.slice(pending.length - keep) : "";
       }
+      return writable;
     },
     flush: () => {
       emit(pending + decoder.end());
@@ -556,8 +580,22 @@ const defaultFleetContainerStreamExecutor: FleetContainerStreamExecutor = (
       child.kill("SIGTERM");
     };
     process.stdout.once("error", onTargetError);
-    child.stdout?.on("data", stdout.write);
-    child.stderr?.on("data", stderr.write);
+    // Honor target backpressure: pause the child stream while the terminal or
+    // pipe drains so a noisy follow stream cannot buffer without bound.
+    const pipeWithBackpressure = (
+      source: typeof child.stdout,
+      targetStream: NodeJS.WriteStream,
+      writer: ReturnType<typeof createRedactingStreamWriter>,
+    ): void => {
+      source?.on("data", (chunk: Buffer) => {
+        if (!writer.write(chunk)) {
+          source.pause();
+          targetStream.once("drain", () => source.resume());
+        }
+      });
+    };
+    pipeWithBackpressure(child.stdout, process.stdout, stdout);
+    pipeWithBackpressure(child.stderr, process.stderr, stderr);
     child.once("error", reject);
     child.once("close", (code, signal) => {
       stdout.flush();

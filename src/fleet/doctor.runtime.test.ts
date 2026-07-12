@@ -66,7 +66,7 @@ function runtimeMock(
     pull: vi.fn(async () => undefined),
     createNetwork: vi.fn(async () => undefined),
     removeNetwork: vi.fn(async () => undefined),
-    logs: vi.fn(async () => ({ stdout: "", stderr: "" })),
+    logs: vi.fn(async () => undefined),
     start: vi.fn(async () => undefined),
     stop: vi.fn(async () => undefined),
     restart: vi.fn(async () => undefined),

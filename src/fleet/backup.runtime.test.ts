@@ -3,7 +3,7 @@ import path from "node:path";
 import * as tar from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
-import { backupFleetCell, restoreFleetCell } from "./backup.runtime.js";
+import { backupFleetCell, resolveRestoreOwner, restoreFleetCell } from "./backup.runtime.js";
 import { cellAuthSecretDir, cellOwnerId } from "./cell-profile.js";
 import type { FleetContainerInspectResult, FleetContainerRuntime } from "./containers.runtime.js";
 import type { FleetCellRecord } from "./registry.js";
@@ -61,7 +61,7 @@ function containerMock(current = inspection()) {
     pull: vi.fn(async () => undefined),
     createNetwork: vi.fn(async () => undefined),
     removeNetwork: vi.fn(async () => undefined),
-    logs: vi.fn(async () => ({ stdout: "", stderr: "" })),
+    logs: vi.fn(async () => undefined),
     start: vi.fn(async () => undefined),
     stop: vi.fn(async () => undefined),
     restart: vi.fn(async () => undefined),
@@ -472,6 +472,28 @@ describe("fleet restore runtime", () => {
     expect(message).toMatch(/replacement container was stopped/iu);
     expect(containers.stop).toHaveBeenCalledTimes(2);
   });
+
+  it.each([
+    ["non-root invoker", { uid: 501, gid: 20 }, undefined, undefined],
+    ["root with image-default user", { uid: 0, gid: 0 }, undefined, { uid: 1000, gid: 1000 }],
+    [
+      "root with explicit non-root mapping",
+      { uid: 0, gid: 0 },
+      { mode: "numeric", uid: 1001, gid: 1002 } as const,
+      { uid: 1001, gid: 1002 },
+    ],
+    [
+      "root with rootless uid-0 mapping",
+      { uid: 0, gid: 0 },
+      { mode: "numeric", uid: 0, gid: 0 } as const,
+      undefined,
+    ],
+  ])(
+    "derives the restore ownership repair for %s",
+    (_label, hostIdentity, containerUser, expected) => {
+      expect(resolveRestoreOwner(hostIdentity, containerUser)).toEqual(expected);
+    },
+  );
 
   it("preserves replaced and extracted trees when replacement run fails", async () => {
     const archive = await createArchive();

@@ -422,6 +422,24 @@ function restoreEntryKind(entry: Stats | tar.ReadEntry): "file" | "directory" | 
   return entry.type === "File" ? "file" : entry.type === "Directory" ? "directory" : "other";
 }
 
+// Extraction runs as the invoking user, so a root-invoked restore must repair
+// ownership for whichever identity the cell container actually runs as: the
+// explicit non-root user mapping when one exists, else the image default
+// (uid 1000). Rootless mappings (uid 0) keep root ownership, which the user
+// namespace translates to the daemon user.
+export function resolveRestoreOwner(
+  hostIdentity: HostIdentity | undefined,
+  containerUser: CellContainerProfile["containerUser"],
+): { uid: number; gid: number } | undefined {
+  if (hostIdentity?.uid !== 0) {
+    return undefined;
+  }
+  if (!containerUser) {
+    return { uid: 1000, gid: 1000 };
+  }
+  return containerUser.uid > 0 ? { uid: containerUser.uid, gid: containerUser.gid } : undefined;
+}
+
 // Lease liveness during this walk comes from withFleetCellOperation's interval
 // heartbeat (60s, well under the 5-minute TTL); per-entry checkpoints would add
 // a SQLite write per file for a stall-only risk the v1 lease design accepts.
@@ -621,8 +639,7 @@ export async function restoreFleetCell(params: {
       hostIdentity: params.hostIdentity,
       user: inspection.user,
     });
-    const imageOwner =
-      params.hostIdentity?.uid === 0 && !containerUser ? { uid: 1000, gid: 1000 } : undefined;
+    const imageOwner = resolveRestoreOwner(params.hostIdentity, containerUser);
     // Build and validate the replacement profile before any destructive step so a
     // drifted-but-managed container (bad provenance label, invalid inspected limits)
     // fails preflight instead of after the old container and state are gone.

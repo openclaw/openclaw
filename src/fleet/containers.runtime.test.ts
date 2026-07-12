@@ -520,6 +520,19 @@ describe("fleet container runtime", () => {
     expect(output).not.toContain("gw-secret-token");
   });
 
+  it("never splits a secret across a forced long-line flush", () => {
+    const written: string[] = [];
+    const target = { write: (text: string) => written.push(text) } as unknown as NodeJS.WriteStream;
+    const writer = containersTestApi.createRedactingStreamWriter(target, ["gw-secret-token"]);
+    // An unterminated line ending exactly in a secret prefix at the flush point.
+    writer.write(Buffer.from(`${"x".repeat(64 * 1024)}gw-sec`));
+    writer.write(Buffer.from("ret-token trailing"));
+    writer.flush();
+    const output = written.join("");
+    expect(output).toContain("<redacted> trailing");
+    expect(output).not.toContain("gw-secret-token");
+  });
+
   it("parses hardened inspect fields and Docker network internal state", async () => {
     const executor = vi.fn<FleetContainerCommandExecutor>(async (_runtime, args) =>
       args[0] === "network"
