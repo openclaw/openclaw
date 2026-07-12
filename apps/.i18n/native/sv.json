@@ -12899,16 +12899,6 @@
       "translated": "Åtgärd krävs"
     },
     {
-      "id": "native.apple.b0d9c1ba8ef7ec19",
-      "source": "Connecting…",
-      "translated": "Ansluter…"
-    },
-    {
-      "id": "native.apple.bd98e19b49309284",
-      "source": "Reconnecting…",
-      "translated": "Ansluter igen…"
-    },
-    {
       "id": "native.apple.6504753f3621269e",
       "source": "Connecting...",
       "translated": "Ansluter..."
@@ -12932,6 +12922,16 @@
       "id": "native.apple.4a98b3a346be2662",
       "source": "No chat messages yet",
       "translated": "Inga chattmeddelanden än"
+    },
+    {
+      "id": "native.apple.b0d9c1ba8ef7ec19",
+      "source": "Connecting…",
+      "translated": "Ansluter…"
+    },
+    {
+      "id": "native.apple.bd98e19b49309284",
+      "source": "Reconnecting…",
+      "translated": "Ansluter igen…"
     },
     {
       "id": "native.apple.0b1eff808df04e2b",
@@ -13964,11 +13964,6 @@
       "translated": "Behörigheten för %@ nekades"
     },
     {
-      "id": "native.apple.bc63dbcb225d81cb",
-      "source": "Reconnecting",
-      "translated": "Återansluter"
-    },
-    {
       "id": "native.apple.c797a09cef8f5be5",
       "source": "Gateway relay ready",
       "translated": "Gateway-reläet är klart"
@@ -14079,21 +14074,6 @@
       "translated": "Gateway-standard"
     },
     {
-      "id": "native.apple.bd65682a00615345",
-      "source": "Realtime failed before connecting",
-      "translated": "Realtidsanslutningen misslyckades före anslutning"
-    },
-    {
-      "id": "native.apple.f3cfe789550ebfa8",
-      "source": "Realtime disconnected",
-      "translated": "Realtidsanslutningen kopplades från"
-    },
-    {
-      "id": "native.apple.deb282fd61fd2de3",
-      "source": "OpenClaw unavailable",
-      "translated": "OpenClaw är inte tillgängligt"
-    },
-    {
       "id": "native.apple.21357c0b806135e9",
       "source": "Listening (Realtime)",
       "translated": "Lyssnar (realtid)"
@@ -14152,6 +14132,31 @@
       "id": "native.apple.5839cdb826c12c71",
       "source": "Ready",
       "translated": "Klar"
+    },
+    {
+      "id": "native.apple.bc63dbcb225d81cb",
+      "source": "Reconnecting",
+      "translated": "Återansluter"
+    },
+    {
+      "id": "native.apple.1fbe3b3a2c51fb29",
+      "source": "Reconnecting…",
+      "translated": "Återansluter…"
+    },
+    {
+      "id": "native.apple.bd65682a00615345",
+      "source": "Realtime failed before connecting",
+      "translated": "Realtidsanslutningen misslyckades före anslutning"
+    },
+    {
+      "id": "native.apple.f3cfe789550ebfa8",
+      "source": "Realtime disconnected",
+      "translated": "Realtidsanslutningen kopplades från"
+    },
+    {
+      "id": "native.apple.deb282fd61fd2de3",
+      "source": "OpenClaw unavailable",
+      "translated": "OpenClaw är inte tillgängligt"
     },
     {
       "id": "native.apple.794c5c98f3a4238d",

@@ -20619,7 +20619,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3759,
+      "line": 3764,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Approval needed",
       "surface": "apple",
@@ -20627,31 +20627,15 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3760,
+      "line": 3765,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Action required",
       "surface": "apple",
       "id": "native.apple.0d030e96f7738497"
     },
     {
-      "kind": "conditional-branch",
-      "line": 4421,
-      "path": "apps/ios/Sources/Model/NodeAppModel.swift",
-      "source": "Connecting…",
-      "surface": "apple",
-      "id": "native.apple.b0d9c1ba8ef7ec19"
-    },
-    {
-      "kind": "conditional-branch",
-      "line": 4421,
-      "path": "apps/ios/Sources/Model/NodeAppModel.swift",
-      "source": "Reconnecting…",
-      "surface": "apple",
-      "id": "native.apple.bd98e19b49309284"
-    },
-    {
       "kind": "ui-localized-call",
-      "line": 4426,
+      "line": 4431,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Connecting...",
       "surface": "apple",
@@ -20659,7 +20643,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4427,
+      "line": 4432,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Reconnecting...",
       "surface": "apple",
@@ -20667,7 +20651,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 4746,
+      "line": 4751,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Connected",
       "surface": "apple",
@@ -20675,7 +20659,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 4746,
+      "line": 4751,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Offline",
       "surface": "apple",
@@ -20683,7 +20667,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 5865,
+      "line": 5870,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "No chat messages yet",
       "surface": "apple",
@@ -20691,7 +20675,23 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 8345,
+      "line": 6069,
+      "path": "apps/ios/Sources/Model/NodeAppModel.swift",
+      "source": "Connecting…",
+      "surface": "apple",
+      "id": "native.apple.b0d9c1ba8ef7ec19"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 6069,
+      "path": "apps/ios/Sources/Model/NodeAppModel.swift",
+      "source": "Reconnecting…",
+      "surface": "apple",
+      "id": "native.apple.bd98e19b49309284"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 8354,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Approval",
       "surface": "apple",
@@ -20699,7 +20699,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 8345,
+      "line": 8354,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "This approval was already",
       "surface": "apple",
@@ -20707,7 +20707,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 8351,
+      "line": 8360,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "This approval was already set to Always Allow.",
       "surface": "apple",
@@ -20715,7 +20715,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 8352,
+      "line": 8361,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Approval set to Always Allow.",
       "surface": "apple",
@@ -20723,7 +20723,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 9656,
+      "line": 9665,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "\\(urlText.prefix(500))…",
       "surface": "apple",
@@ -22339,14 +22339,6 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 470,
-      "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
-      "source": "Reconnecting",
-      "surface": "apple",
-      "id": "native.apple.bc63dbcb225d81cb"
-    },
-    {
-      "kind": "ui-localized-call",
       "line": 579,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Gateway relay ready",
@@ -22523,30 +22515,6 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3726,
-      "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
-      "source": "Realtime failed before connecting",
-      "surface": "apple",
-      "id": "native.apple.bd65682a00615345"
-    },
-    {
-      "kind": "ui-localized-call",
-      "line": 3728,
-      "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
-      "source": "Realtime disconnected",
-      "surface": "apple",
-      "id": "native.apple.f3cfe789550ebfa8"
-    },
-    {
-      "kind": "ui-localized-call",
-      "line": 3730,
-      "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
-      "source": "OpenClaw unavailable",
-      "surface": "apple",
-      "id": "native.apple.deb282fd61fd2de3"
-    },
-    {
-      "kind": "ui-localized-call",
       "line": 3741,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Listening (Realtime)",
@@ -22643,7 +22611,47 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3805,
+      "line": 3765,
+      "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
+      "source": "Reconnecting",
+      "surface": "apple",
+      "id": "native.apple.bc63dbcb225d81cb"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 3767,
+      "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
+      "source": "Reconnecting…",
+      "surface": "apple",
+      "id": "native.apple.1fbe3b3a2c51fb29"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 3769,
+      "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
+      "source": "Realtime failed before connecting",
+      "surface": "apple",
+      "id": "native.apple.bd65682a00615345"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 3771,
+      "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
+      "source": "Realtime disconnected",
+      "surface": "apple",
+      "id": "native.apple.f3cfe789550ebfa8"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 3773,
+      "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
+      "source": "OpenClaw unavailable",
+      "surface": "apple",
+      "id": "native.apple.deb282fd61fd2de3"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 3815,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Listening",
       "surface": "apple",
@@ -22651,7 +22659,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4071,
+      "line": 4081,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Gateway Relay",
       "surface": "apple",
@@ -22659,7 +22667,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4073,
+      "line": 4083,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Native WebRTC",
       "surface": "apple",
@@ -22667,7 +22675,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4074,
+      "line": 4084,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Native",
       "surface": "apple",
@@ -22675,7 +22683,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4135,
+      "line": 4145,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Gateway permission required",
       "surface": "apple",
@@ -22683,7 +22691,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4158,
+      "line": 4168,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Not loaded",
       "surface": "apple",
@@ -22691,7 +22699,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4176,
+      "line": 4186,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Approval requested",
       "surface": "apple",
@@ -22699,7 +22707,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4624,
+      "line": 4634,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Listening (PTT)",
       "surface": "apple",

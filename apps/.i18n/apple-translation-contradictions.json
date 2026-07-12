@@ -5352,6 +5352,14 @@
       ]
     },
     {
+      "locale": "hi",
+      "source": "Reconnecting…",
+      "translations": [
+        "फिर से कनेक्ट किया जा रहा है…",
+        "फिर से कनेक्ट हो रहा है…"
+      ]
+    },
+    {
       "locale": "id",
       "source": "Reconnecting…",
       "translations": [
@@ -5373,6 +5381,14 @@
       "translations": [
         "다시 연결 중…",
         "재연결 중…"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Reconnecting…",
+      "translations": [
+        "Opnieuw verbinden…",
+        "Opnieuw verbinding maken…"
       ]
     },
     {

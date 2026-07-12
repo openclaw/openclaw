@@ -12899,16 +12899,6 @@
       "translated": "Wymagane działanie"
     },
     {
-      "id": "native.apple.b0d9c1ba8ef7ec19",
-      "source": "Connecting…",
-      "translated": "Łączenie…"
-    },
-    {
-      "id": "native.apple.bd98e19b49309284",
-      "source": "Reconnecting…",
-      "translated": "Ponowne łączenie…"
-    },
-    {
       "id": "native.apple.6504753f3621269e",
       "source": "Connecting...",
       "translated": "Łączenie..."
@@ -12932,6 +12922,16 @@
       "id": "native.apple.4a98b3a346be2662",
       "source": "No chat messages yet",
       "translated": "Brak wiadomości na czacie"
+    },
+    {
+      "id": "native.apple.b0d9c1ba8ef7ec19",
+      "source": "Connecting…",
+      "translated": "Łączenie…"
+    },
+    {
+      "id": "native.apple.bd98e19b49309284",
+      "source": "Reconnecting…",
+      "translated": "Ponowne łączenie…"
     },
     {
       "id": "native.apple.0b1eff808df04e2b",
@@ -13964,11 +13964,6 @@
       "translated": "Odmówiono uprawnienia: %@"
     },
     {
-      "id": "native.apple.bc63dbcb225d81cb",
-      "source": "Reconnecting",
-      "translated": "Ponowne łączenie"
-    },
-    {
       "id": "native.apple.c797a09cef8f5be5",
       "source": "Gateway relay ready",
       "translated": "Przekaźnik Gateway jest gotowy"
@@ -14079,21 +14074,6 @@
       "translated": "Domyślne Gateway"
     },
     {
-      "id": "native.apple.bd65682a00615345",
-      "source": "Realtime failed before connecting",
-      "translated": "Połączenie w czasie rzeczywistym nie powiodło się przed nawiązaniem"
-    },
-    {
-      "id": "native.apple.f3cfe789550ebfa8",
-      "source": "Realtime disconnected",
-      "translated": "Połączenie w czasie rzeczywistym zostało przerwane"
-    },
-    {
-      "id": "native.apple.deb282fd61fd2de3",
-      "source": "OpenClaw unavailable",
-      "translated": "OpenClaw jest niedostępny"
-    },
-    {
       "id": "native.apple.21357c0b806135e9",
       "source": "Listening (Realtime)",
       "translated": "Nasłuchiwanie (w czasie rzeczywistym)"
@@ -14152,6 +14132,31 @@
       "id": "native.apple.5839cdb826c12c71",
       "source": "Ready",
       "translated": "Gotowe"
+    },
+    {
+      "id": "native.apple.bc63dbcb225d81cb",
+      "source": "Reconnecting",
+      "translated": "Ponowne łączenie"
+    },
+    {
+      "id": "native.apple.1fbe3b3a2c51fb29",
+      "source": "Reconnecting…",
+      "translated": "Ponowne łączenie…"
+    },
+    {
+      "id": "native.apple.bd65682a00615345",
+      "source": "Realtime failed before connecting",
+      "translated": "Połączenie w czasie rzeczywistym nie powiodło się przed nawiązaniem"
+    },
+    {
+      "id": "native.apple.f3cfe789550ebfa8",
+      "source": "Realtime disconnected",
+      "translated": "Połączenie w czasie rzeczywistym zostało przerwane"
+    },
+    {
+      "id": "native.apple.deb282fd61fd2de3",
+      "source": "OpenClaw unavailable",
+      "translated": "OpenClaw jest niedostępny"
     },
     {
       "id": "native.apple.794c5c98f3a4238d",
