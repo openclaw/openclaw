@@ -1597,12 +1597,30 @@ jobs:
               fi
               ;;
             dependencies)
-              if pnpm run --silent 2>/dev/null | grep -q '^  deadcode:dependencies$'; then
+              has_package_script() {
+                node -e '
+                  const scripts = require("./package.json").scripts ?? {};
+                  process.exit(Object.hasOwn(scripts, process.argv[1]) ? 0 : 1);
+                ' "$1"
+              }
+              if has_package_script "deadcode:dependencies" &&
+                has_package_script "deadcode:unused-files" &&
+                has_package_script "deadcode:exports"; then
                 pnpm deadcode:dependencies
                 pnpm deadcode:unused-files
                 pnpm deadcode:exports
-              else
+              elif [[ "$HISTORICAL_TARGET" == "true" ]] &&
+                has_package_script "deadcode:dependencies" &&
+                has_package_script "deadcode:unused-files" &&
+                has_package_script "deadcode:report:ci:ts-unused"; then
+                pnpm deadcode:dependencies
+                pnpm deadcode:unused-files
+                pnpm deadcode:report:ci:ts-unused
+              elif [[ "$HISTORICAL_TARGET" == "true" ]] && has_package_script "deadcode:ci"; then
                 pnpm deadcode:ci
+              else
+                echo "Target does not provide a supported deadcode check." >&2
+                exit 1
               fi
               ;;
             test-types)
