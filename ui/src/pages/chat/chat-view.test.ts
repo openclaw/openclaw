@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -325,7 +326,9 @@ function createChatHeaderState(
             }
           }
           currentModelProvider =
-            matchingProviders.length === 1 ? matchingProviders[0] : currentModelProvider;
+            matchingProviders.length === 1
+              ? expectDefined(matchingProviders[0], "single matching model provider")
+              : currentModelProvider;
         }
       }
       return { ok: true, key: "main" };
@@ -548,6 +551,10 @@ function requireElement(container: Element, selector: string, label: string): El
     throw new Error(`expected ${label}`);
   }
   return element;
+}
+
+function itemAt<T>(items: ArrayLike<T>, index: number, label: string): T {
+  return expectDefined(items[index], `${label} ${index}`);
 }
 
 function getTalkSelectOptionValues(container: Element, name: string): string[] {
@@ -1172,7 +1179,7 @@ describe("chat history render window", () => {
     );
     expect(frameCallbacks).toHaveLength(1);
 
-    frameCallbacks[0](0);
+    itemAt(frameCallbacks, 0, "history growth frame")(0);
 
     expect(onRequestUpdate).toHaveBeenCalledTimes(1);
     expect(onScrollToBottom).toHaveBeenCalledTimes(1);
@@ -3112,15 +3119,15 @@ describe("chat slash menu accessibility", () => {
   });
 
   it("does not apply a stale submitted draft replay to another session", () => {
-    const drafts: Record<string, string> = {
+    const drafts = {
       "stale-replay-a": "",
       "stale-replay-b": "",
     };
-    const onDraftChange = vi.fn((sessionKey: string, next: string) => {
+    const onDraftChange = vi.fn((sessionKey: keyof typeof drafts, next: string) => {
       drafts[sessionKey] = next;
     });
     const container = document.createElement("div");
-    const renderSession = (sessionKey: string) => {
+    const renderSession = (sessionKey: keyof typeof drafts) => {
       render(
         renderChat(
           createChatProps({
@@ -3162,15 +3169,15 @@ describe("chat slash menu accessibility", () => {
   });
 
   it("does not overwrite an intervening session draft with a delayed stale replay", () => {
-    const drafts: Record<string, string> = {
+    const drafts = {
       "delayed-replay-a": "",
       "delayed-replay-b": "",
     };
-    const onDraftChange = vi.fn((sessionKey: string, next: string) => {
+    const onDraftChange = vi.fn((sessionKey: keyof typeof drafts, next: string) => {
       drafts[sessionKey] = next;
     });
     const container = document.createElement("div");
-    const renderSession = (sessionKey: string) => {
+    const renderSession = (sessionKey: keyof typeof drafts) => {
       render(
         renderChat(
           createChatProps({
@@ -3504,7 +3511,9 @@ describe("chat attachment picker", () => {
     expect(attachments[0]?.fileName).toBe("pasted-image.png");
     expect(attachments[0]?.mimeType).toBe("image/png");
     expect(attachments[0]?.sizeBytes).toBe(3);
-    expect(getChatAttachmentDataUrl(attachments[0])).toBe(`data:image/png;base64,${base64}`);
+    expect(getChatAttachmentDataUrl(itemAt(attachments, 0, "pasted attachment"))).toBe(
+      `data:image/png;base64,${base64}`,
+    );
   });
 
   it("opens the scoped file input from the attachment menu", () => {
@@ -3593,7 +3602,9 @@ describe("chat attachment picker", () => {
     });
 
     const nextAttachments = requireFirstAttachmentsChange(onAttachmentsChange);
-    expect(getChatAttachmentDataUrl(nextAttachments[0])).toMatch(/^data:application\/pdf;base64,/);
+    expect(getChatAttachmentDataUrl(itemAt(nextAttachments, 0, "file attachment"))).toMatch(
+      /^data:application\/pdf;base64,/,
+    );
     const preview = renderChatView({ attachments: nextAttachments });
     expect(preview.querySelectorAll(".chat-attachment-thumb--file")).toHaveLength(1);
     expect(preview.querySelector(".chat-attachment-file__name")?.textContent).toBe("brief.pdf");
@@ -3642,13 +3653,17 @@ describe("chat queue", () => {
 
     const steerButtons = container.querySelectorAll<HTMLButtonElement>(".chat-queue__steer");
     expect(steerButtons).toHaveLength(2);
-    expect(steerButtons[0].textContent?.trim()).toBe("Steer");
+    expect(itemAt(steerButtons, 0, "queue steer button").textContent?.trim()).toBe("Steer");
     expect(container.querySelector(".chat-queue__badge")?.textContent?.trim()).toBe("Steered");
 
-    steerButtons[0].dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    itemAt(steerButtons, 0, "queue steer button").dispatchEvent(
+      new MouseEvent("click", { bubbles: true }),
+    );
 
     expect(onQueueSteer).toHaveBeenCalledWith("queued-1");
-    steerButtons[1].dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    itemAt(steerButtons, 1, "queue steer button").dispatchEvent(
+      new MouseEvent("click", { bubbles: true }),
+    );
     expect(onQueueSteer).toHaveBeenCalledWith("waiting-idle-1");
 
     const inactiveContainer = renderQueue({
@@ -3878,7 +3893,7 @@ describe("chat welcome", () => {
       rows.map((row) => row.querySelector(".agent-chat__recent-name")?.textContent?.trim()),
     ).toEqual(["Newer chat", "Older chat"]);
 
-    rows[0].click();
+    itemAt(rows, 0, "recent session row").click();
     expect(opened).toEqual(["agent:main:dashboard:newer"]);
   });
 
@@ -4874,11 +4889,12 @@ describe("chat model controls", () => {
         },
       ],
     });
-    const session = state.sessionsResult!.sessions[0];
+    const sessionsResult = expectDefined(state.sessionsResult, "non-reasoning model sessions");
+    const session = expectDefined(sessionsResult.sessions[0], "non-reasoning model session");
     state.sessionsResult = {
-      ...state.sessionsResult!,
+      ...sessionsResult,
       defaults: {
-        ...state.sessionsResult!.defaults,
+        ...sessionsResult.defaults,
         thinkingLevels: [{ id: "off", label: "off" }],
       },
       sessions: [
@@ -5003,7 +5019,11 @@ describe("right-click Reply", () => {
     menu!.querySelector("button")!.click();
 
     expect(onSetReply).toHaveBeenCalledTimes(1);
-    const target = onSetReply.mock.calls[0][0];
+    const target = itemAt(
+      itemAt(onSetReply.mock.calls, 0, "reply callback call"),
+      0,
+      "reply target",
+    );
     expect(target.messageId).toBe("msg-stable-1");
     expect(target.text).toBe("hello world");
     expect(target.senderLabel).toBe("User");
@@ -5024,7 +5044,12 @@ describe("right-click Reply", () => {
     bubble.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
     document.querySelector<HTMLButtonElement>(".chat-reply-context-menu button")!.click();
 
-    expect(onSetReply.mock.calls[0][0].text).toBe("x".repeat(499));
+    const target = itemAt(
+      itemAt(onSetReply.mock.calls, 0, "reply callback call"),
+      0,
+      "reply target",
+    );
+    expect(target.text).toBe("x".repeat(499));
   });
 
   it("keeps the native context menu when Reply is unavailable", () => {

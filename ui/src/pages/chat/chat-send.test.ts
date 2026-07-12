@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
@@ -2592,9 +2593,9 @@ describe("handleSendChat", () => {
 
     const send = handleSendChat(host);
     await Promise.resolve();
-    const queuedId = host.chatQueue[0]?.id;
-    expect(queuedId).toEqual(expect.any(String));
-    removeQueuedMessage(host, queuedId);
+    const queued = expectDefined(host.chatQueue[0], "queued pending send");
+    expect(queued.id).toEqual(expect.any(String));
+    removeQueuedMessage(host, queued.id);
 
     switchUpdate.resolve(false);
     await send;
