@@ -1,9 +1,4 @@
 // WhatsApp plugin module implements outbound retry behavior.
-import {
-  collectErrorGraphCandidates,
-  extractErrorCode,
-  formatErrorMessage,
-} from "openclaw/plugin-sdk/error-runtime";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import { formatError } from "./session-errors.js";
 import { isWhatsAppSocketOperationTimeoutError } from "./socket-timing.js";
@@ -15,30 +10,17 @@ const WHATSAPP_RETRYABLE_OUTBOUND_ERROR_PATTERN = /closed|reset|timed\s*out|disc
 
 class WhatsAppOutboundRetryError extends Error {
   constructor(readonly original: unknown) {
-    super(formatErrorMessage(original), { cause: original });
+    super(formatError(original), { cause: original });
   }
-}
-
-function collectWhatsAppOutboundErrorCandidates(error: unknown): unknown[] {
-  return collectErrorGraphCandidates(error, (current) => [
-    current.cause,
-    current.error,
-    (current.lastDisconnect as { error?: unknown } | undefined)?.error,
-  ]);
 }
 
 function isRetryableWhatsAppOutboundError(error: unknown): boolean {
-  const candidates = collectWhatsAppOutboundErrorCandidates(error);
-  // A local socket timeout may have delivered the message. Retrying any
-  // wrapper around it could duplicate an already accepted outbound message.
-  if (candidates.some(isWhatsAppSocketOperationTimeoutError)) {
+  // Outbound sends surface direct failures; inspecting wrappers or causes can
+  // replay a non-idempotent send. A direct local timeout may have delivered it.
+  if (isWhatsAppSocketOperationTimeoutError(error)) {
     return false;
   }
-  return candidates.some((candidate) => {
-    const code = extractErrorCode(candidate);
-    const message = formatErrorMessage(candidate);
-    return WHATSAPP_RETRYABLE_OUTBOUND_ERROR_PATTERN.test(`${code ?? ""} ${message}`);
-  });
+  return WHATSAPP_RETRYABLE_OUTBOUND_ERROR_PATTERN.test(formatError(error));
 }
 
 type WhatsAppOutboundRetryInfo = {

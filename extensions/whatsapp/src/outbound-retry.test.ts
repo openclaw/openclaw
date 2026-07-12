@@ -16,25 +16,29 @@ async function runWithFakeTimers<T>(run: () => Promise<T>): Promise<T> {
 }
 
 describe("sendWhatsAppOutboundWithRetry", () => {
+  it.each([new Error("connection closed"), { code: "ECONNRESET" }])(
+    "retries a directly retryable error",
+    async (error) => {
+      const send = vi
+        .fn<() => Promise<string>>()
+        .mockRejectedValueOnce(error)
+        .mockResolvedValue("ok");
+
+      await expect(runWithFakeTimers(() => sendWhatsAppOutboundWithRetry({ send }))).resolves.toBe(
+        "ok",
+      );
+
+      expect(send).toHaveBeenCalledTimes(2);
+    },
+  );
+
   it.each([
-    new Error("connection closed"),
-    { error: { code: "ECONNRESET" } },
-    new Error("request failed", { cause: new Error("socket disconnected") }),
-  ])("retries a retryable error graph", async (error) => {
-    const send = vi
-      .fn<() => Promise<string>>()
-      .mockRejectedValueOnce(error)
-      .mockResolvedValue("ok");
-
-    await expect(runWithFakeTimers(() => sendWhatsAppOutboundWithRetry({ send }))).resolves.toBe(
-      "ok",
-    );
-
-    expect(send).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not retry a non-retryable error", async () => {
-    const error = new Error("invalid recipient");
+    { name: "a non-retryable direct error", error: new Error("invalid recipient") },
+    {
+      name: "a retryable signal only in the cause",
+      error: new Error("request failed", { cause: new Error("socket disconnected") }),
+    },
+  ])("does not retry $name", async ({ error }) => {
     const send = vi.fn<() => Promise<string>>().mockRejectedValue(error);
     const onRetry = vi.fn();
 
@@ -47,37 +51,28 @@ describe("sendWhatsAppOutboundWithRetry", () => {
     expect(onRetry).not.toHaveBeenCalled();
   });
 
-  it.each([
-    (timeout: WhatsAppSocketOperationTimeoutError) => timeout,
-    (timeout: WhatsAppSocketOperationTimeoutError) => ({ error: timeout }),
-    (timeout: WhatsAppSocketOperationTimeoutError) => ({
-      lastDisconnect: { error: timeout },
-    }),
-  ])("does not retry an unknown-delivery socket timeout", async (wrap) => {
+  it("does not retry a direct unknown-delivery socket timeout", async () => {
     const timeout = new WhatsAppSocketOperationTimeoutError("sendMessage", 60_000);
-    const error = wrap(timeout);
-    const send = vi.fn<() => Promise<string>>().mockRejectedValue(error);
+    const send = vi.fn<() => Promise<string>>().mockRejectedValue(timeout);
     const onRetry = vi.fn();
 
     const failure = await sendWhatsAppOutboundWithRetry({ send, onRetry }).catch(
       (caught: unknown) => caught,
     );
 
-    expect(failure).toBe(error);
+    expect(failure).toBe(timeout);
     expect(send).toHaveBeenCalledOnce();
     expect(onRetry).not.toHaveBeenCalled();
   });
 
   it("preserves attempts, delays, callback fields, and terminal error identity", async () => {
     const firstError = {
-      error: {
-        output: {
+      output: {
+        statusCode: 503,
+        payload: {
           statusCode: 503,
-          payload: {
-            statusCode: 503,
-            error: "Service Unavailable",
-            message: "connection closed",
-          },
+          error: "Service Unavailable",
+          message: "connection closed",
         },
       },
     };
