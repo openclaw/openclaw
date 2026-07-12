@@ -30,6 +30,7 @@ import {
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
 } from "../config/sessions/sqlite-marker.js";
+import { resolveSessionStoreEntry as resolveSessionStoreEntryFromStore } from "../config/sessions/store-entry.js";
 import { normalizeResolvedMaintenanceConfigInput } from "../config/sessions/store-maintenance.js";
 import type { ResolvedSessionMaintenanceConfigInput } from "../config/sessions/store.js";
 import type { AmbientTranscriptWatermark, SessionEntry } from "../config/sessions/types.js";
@@ -312,12 +313,12 @@ export function resolveSessionFilePath(
 }
 
 /**
- * @deprecated Use the target-aware session accessor APIs.
+ * Resolves the configured session store path.
  *
  * Beta.5 resolves a configured path with an agent id, then passes only the
  * path to loadSessionStore/updateSessionStore. Its shipped callers either
  * consume the selection synchronously or dedupe by path, so retaining the
- * latest selection preserves that bounded contract.
+ * latest selection preserves that bounded compatibility contract.
  */
 export function resolveStorePath(
   store?: string,
@@ -328,6 +329,19 @@ export function resolveStorePath(
     legacyStoreAgentIds.set(path.resolve(storePath), options.agentId);
   }
   return storePath;
+}
+
+/**
+ * @deprecated Use getSessionEntry with a storage-neutral session identity.
+ *
+ * Official plugins released with v2026.7.1-beta.5 import this whole-store
+ * lookup helper. Keep it through 2026-10-12 with the other beta.5 bridge.
+ */
+export function resolveSessionStoreEntry(params: {
+  store: Record<string, SessionEntry>;
+  sessionKey: string;
+}) {
+  return resolveSessionStoreEntryFromStore(params);
 }
 
 /** Loads one session entry by agent/session identity. */
@@ -496,7 +510,6 @@ export async function cleanupSessionLifecycleArtifacts(
   });
 }
 
-export { resolveSessionStoreEntry } from "../config/sessions/store-entry.js";
 export {
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,

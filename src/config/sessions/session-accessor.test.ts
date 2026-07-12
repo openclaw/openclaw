@@ -20,6 +20,7 @@ import {
   loadSessionEntry,
   loadTranscriptEvents,
   markSessionAbortTarget,
+  onSessionIdentityMutation,
   openSessionEntryReadView,
   patchSessionEntry,
   patchSessionEntryTarget,
@@ -29,6 +30,7 @@ import {
   readSessionUpdatedAt,
   recordInboundSessionMeta,
   replaceSessionEntry,
+  resetSessionEntryLifecycle,
   resolveSessionEntryAccessTarget,
   resolveSessionEntryCandidateTarget,
   resolveSessionTranscriptReadTarget,
@@ -348,6 +350,8 @@ describe("session accessor seam", () => {
       },
     );
 
+    const notify = vi.fn();
+    const unsubscribe = onSessionIdentityMutation(notify);
     const patched = await patchSessionEntryTarget(
       {
         storePath,
@@ -364,7 +368,6 @@ describe("session accessor seam", () => {
         };
       },
     );
-
     expect(patched).toMatchObject({
       label: "patched",
       sessionId: "legacy-session",
@@ -377,6 +380,27 @@ describe("session accessor seam", () => {
           sessionId: "legacy-session",
         }),
       },
+    ]);
+    const sessionKey = "agent:main:other";
+    const scope = { sessionKey, storePath };
+    await replaceSessionEntry(scope, { sessionId: "created", updatedAt: 10 });
+    await patchSessionEntry(scope, () => ({ label: "same identity" }));
+    await replaceSessionEntry(scope, { sessionId: "replaced", updatedAt: 20 });
+    const target = { canonicalKey: sessionKey, storeKeys: [sessionKey] };
+    await resetSessionEntryLifecycle({
+      buildNextEntry: () => ({ sessionId: "reset", updatedAt: 30 }),
+      storePath,
+      target,
+    });
+    await deleteSessionEntryLifecycle({ archiveTranscript: false, storePath, target });
+    unsubscribe();
+
+    expect(notify.mock.calls.map(([event]) => event.kind)).toEqual([
+      "move",
+      "create",
+      "replace",
+      "reset",
+      "delete",
     ]);
   });
 
@@ -1637,12 +1661,19 @@ describe("session accessor seam", () => {
       },
     ]);
 
+    const notify = vi.fn();
+    const unsubscribe = onSessionIdentityMutation(notify);
     const result = await applySessionEntryLifecycleMutation({
       storePath,
       removals: [{ expectedSessionId: scope.sessionId, sessionKey: scope.sessionKey }],
     });
+    unsubscribe();
 
     expect(result.removedEntries).toBe(1);
+    expect(notify).toHaveBeenCalledWith({
+      kind: "delete",
+      previous: { sessionId: scope.sessionId, sessionKeys: [scope.sessionKey] },
+    });
     expect(result.archivedTranscriptDirectories).toEqual([]);
     expect(loadSessionEntry(scope)).toBeUndefined();
     await expect(loadTranscriptEvents(scope)).resolves.toEqual([]);

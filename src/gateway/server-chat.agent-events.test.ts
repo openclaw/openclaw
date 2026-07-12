@@ -8,7 +8,14 @@ import {
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "../agents/internal-runtime-context.js";
 import { formatChannelProgressDraftLine } from "../channels/streaming.js";
-import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
+import {
+  claimAgentRunContext,
+  emitAgentEventForOwner,
+  onAgentRuntimeEvent,
+  registerAgentRunContext,
+  releaseAgentRunContext,
+  resetAgentRunContextForTest,
+} from "../infra/agent-events.js";
 
 const persistGatewaySessionLifecycleEventMock = vi.fn();
 const logErrorMock = vi.fn();
@@ -4160,9 +4167,11 @@ describe("agent event handler", () => {
   });
 
   it("sends non-control-UI-visible live chat only to exact session message subscribers", () => {
+    vi.useFakeTimers();
     const { broadcast, broadcastToConnIds, nodeSendToSession, sessionMessageSubscribers, handler } =
       createHarness({
         resolveSessionKeyForRun: () => "session-hidden",
+        lifecycleErrorRetryGraceMs: 1,
       });
     sessionMessageSubscribers.subscribe("conn-selected", "session-hidden");
     sessionMessageSubscribers.subscribe("conn-other", "session-other");
@@ -4183,20 +4192,61 @@ describe("agent event handler", () => {
 
     expect(chatBroadcastCalls(broadcast)).toHaveLength(0);
     expect(nodeSendToSession).not.toHaveBeenCalled();
-    expect(requireMockArg(broadcastToConnIds, 0, 0, "hidden chat delta event")).toBe("chat");
-    expect(requireMockArg(broadcastToConnIds, 0, 2, "hidden chat delta recipients")).toEqual(
-      new Set(["conn-selected"]),
-    );
-    expect(requireMockArg(broadcastToConnIds, 1, 0, "hidden chat final event")).toBe("chat");
-    const finalPayload = requireMockPayload(broadcastToConnIds, 1, 1, "hidden chat final payload");
+    const chatCalls = broadcastToConnIds.mock.calls.filter(([event]) => event === "chat");
+    expect(chatCalls).toHaveLength(2);
+    expect(chatCalls[0]?.[2]).toEqual(new Set(["conn-selected"]));
+    expectPayloadFields(chatCalls[0]?.[1], {
+      runId: "run-hidden",
+      sessionKey: "session-hidden",
+      state: "delta",
+    });
+    const finalPayload = requireRecord(chatCalls[1]?.[1], "hidden chat final payload");
     expectPayloadFields(finalPayload, {
       runId: "run-hidden",
       sessionKey: "session-hidden",
       state: "final",
     });
-    expect(requireMockArg(broadcastToConnIds, 1, 2, "hidden chat final recipients")).toEqual(
-      new Set(["conn-selected"]),
+    expect(chatCalls[1]?.[2]).toEqual(new Set(["conn-selected"]));
+
+    const streams = ["tool", "thinking", "approval"] as const;
+    const streamCallStart = broadcastToConnIds.mock.calls.length;
+    for (const [index, stream] of streams.entries()) {
+      handler({
+        runId: "run-hidden",
+        seq: index + 3,
+        stream,
+        ts: Date.now(),
+        data: { phase: "start", delta: "Inspecting", name: "read" },
+      });
+    }
+    expect(
+      broadcastToConnIds.mock.calls
+        .slice(streamCallStart)
+        .map(([event, payload, recipients]) => [
+          event,
+          requireRecord(payload, "event").stream,
+          recipients,
+        ]),
+    ).toEqual(streams.map((stream) => ["agent", stream, new Set(["conn-selected"])]));
+
+    broadcastToConnIds.mockClear();
+    const claimId = claimAgentRunContext(
+      "revoked",
+      { isControlUiVisible: false, sessionKey: "session-hidden" },
+      { exclusive: true, trackOwner: true },
+    )!;
+    const stop = onAgentRuntimeEvent(handler);
+    emitAgentEventForOwner(
+      { runId: "revoked", stream: "lifecycle", data: { phase: "error", error: "retry" } },
+      claimId,
     );
+    stop();
+    expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
+    const persisted = persistGatewaySessionLifecycleEventMock.mock.calls.length;
+    releaseAgentRunContext("revoked", claimId);
+    vi.advanceTimersByTime(1);
+    expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
+    expect(persistGatewaySessionLifecycleEventMock).toHaveBeenCalledTimes(persisted);
   });
 
   it("mirrors commentary-phase assistant events only to exact session message subscribers", () => {
