@@ -1976,6 +1976,22 @@ export async function runEmbeddedAttempt(
       conversationCapabilityProfile: runtimeCapabilityProfile,
       warn: (message) => log.warn(message),
     });
+    if (bundleMcpRuntime?.restrictAppTools) {
+      const runtimeAllowedAppTools = applyEmbeddedAttemptToolsAllow(
+        bundleMcpRuntime.appTools ?? bundleMcpRuntime.tools,
+        effectiveToolsAllow,
+        { toolMeta: (tool) => getPluginToolMeta(tool) },
+      );
+      const allowedAppTools = applyFinalEffectiveToolPolicy({
+        bundledTools: runtimeAllowedAppTools,
+        config: params.config,
+        conversationCapabilityProfile: runtimeCapabilityProfile,
+        warn: (message) => log.warn(message),
+      });
+      // The view outlives this attempt. Capture policy against the complete MCP
+      // catalog now, including App-only tools that never enter the model surface.
+      bundleMcpRuntime.restrictAppTools(allowedAppTools);
+    }
     const normalizedBundledTools =
       filteredBundledTools.length > 0
         ? normalizeAgentRuntimeTools({
