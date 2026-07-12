@@ -38,6 +38,9 @@
   min-height: 0;
 }
 
+/* Replaces the old .content--skill-workshop > .skill-workshop rule: the board
+   nests inside the hub tabpanel now, and dropping min-height: 0 at either
+   level would let tall boards grow the page instead of scrolling internally. */
 .sw-hub-panel > .skill-workshop {
   flex: 1 1 auto;
   min-height: 0;
