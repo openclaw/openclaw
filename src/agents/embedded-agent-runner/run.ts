@@ -2095,8 +2095,6 @@ async function runEmbeddedAgentInternal(
         }
       };
       let lastRetryFailoverReason: FailoverReason | null = null;
-      let reasoningOnlyRetryInstruction: string | null = null;
-      let emptyResponseRetryInstruction: string | null = null;
       let compactionContinuationRetryInstruction: string | null = null;
       let nextAttemptPromptOverride: string | null = null;
       let rateLimitProfileRotations = 0;
@@ -2157,9 +2155,9 @@ async function runEmbeddedAgentInternal(
         adoptActiveSessionId(resolvedTarget.sessionId);
       };
       let suppressNextUserMessagePersistence = params.suppressNextUserMessagePersistence ?? false;
-      // The embedded agent owns JSONL persistence; this marker lets same-content retry paths
-      // (overflow compaction, before_agent_finalize revision, reasoning-only/missing-assistant/
-      // empty-response continuations) avoid replaying the same inbound user message twice.
+      // Same-prompt retries may reuse the user leaf only after its write is confirmed.
+      let currentUserMessagePersisted = suppressNextUserMessagePersistence;
+      // Compaction continuation also needs to know whether the current inbound turn is durable.
       let lastPersistedCurrentMessageId: string | number | undefined;
       const onUserMessagePersisted: RunEmbeddedAgentParams["onUserMessagePersisted"] = (
         message,
@@ -2169,9 +2167,7 @@ async function runEmbeddedAgentInternal(
         };
         const blockedBeforeAgentRun = messageMetadata["__openclaw"]?.beforeAgentRunBlocked;
         const markCurrentUserMessagePersisted = () => {
-          // Once this turn is in the transcript, every later attempt must reuse it.
-          // Re-appending on any retry path would duplicate the same user message.
-          suppressNextUserMessagePersistence = true;
+          currentUserMessagePersisted = true;
           if (params.currentMessageId !== undefined) {
             lastPersistedCurrentMessageId = params.currentMessageId;
           }
@@ -2542,17 +2538,9 @@ async function runEmbeddedAgentInternal(
               prompt: params.prompt,
             });
           nextAttemptPromptOverride = null;
-          const promptAdditions = [
-            reasoningOnlyRetryInstruction,
-            emptyResponseRetryInstruction,
-            compactionContinuationRetryInstruction,
-          ].filter(
-            (value): value is string => typeof value === "string" && value.trim().length > 0,
-          );
-          const prompt =
-            promptAdditions.length > 0
-              ? `${basePrompt}\n\n${promptAdditions.join("\n\n")}`
-              : basePrompt;
+          const prompt = compactionContinuationRetryInstruction
+            ? `${basePrompt}\n\n${compactionContinuationRetryInstruction}`
+            : basePrompt;
           const resolvedStreamApiKey = resolveAttemptDispatchApiKey({
             apiKeyInfo,
             runtimeAuthState,
@@ -4550,7 +4538,9 @@ async function runEmbeddedAgentInternal(
             reasoningOnlyRetryAttempts < maxReasoningOnlyRetryAttempts
           ) {
             reasoningOnlyRetryAttempts += 1;
-            reasoningOnlyRetryInstruction = nextReasoningOnlyRetryInstruction;
+            // The assistant leaf is already durable, so persist a new user boundary.
+            nextAttemptPromptOverride = nextReasoningOnlyRetryInstruction;
+            suppressNextUserMessagePersistence = false;
             log.warn(
               `reasoning-only assistant turn detected: runId=${params.runId} sessionId=${params.sessionId} ` +
                 `provider=${activeErrorContext.provider}/${activeErrorContext.model} — retrying ${reasoningOnlyRetryAttempts}/${maxReasoningOnlyRetryAttempts} ` +
@@ -4573,6 +4563,8 @@ async function runEmbeddedAgentInternal(
             missingAssistantRetryAttempts < MAX_MISSING_ASSISTANT_RETRIES
           ) {
             missingAssistantRetryAttempts += 1;
+            // Same-prompt retries reuse the canonical user leaf only when it was written.
+            suppressNextUserMessagePersistence = currentUserMessagePersisted;
             log.warn(
               `missing assistant terminal message detected: runId=${params.runId} sessionId=${params.sessionId} ` +
                 `provider=${activeErrorContext.provider}/${activeErrorContext.model} — retrying ${missingAssistantRetryAttempts}/${MAX_MISSING_ASSISTANT_RETRIES} with same prompt`,
@@ -4585,7 +4577,9 @@ async function runEmbeddedAgentInternal(
             emptyResponseRetryAttempts < maxEmptyResponseRetryAttempts
           ) {
             emptyResponseRetryAttempts += 1;
-            emptyResponseRetryInstruction = nextEmptyResponseRetryInstruction;
+            // The assistant leaf is already durable, so persist a new user boundary.
+            nextAttemptPromptOverride = nextEmptyResponseRetryInstruction;
+            suppressNextUserMessagePersistence = false;
             log.warn(
               `empty response detected: runId=${params.runId} sessionId=${params.sessionId} ` +
                 `provider=${activeErrorContext.provider}/${activeErrorContext.model} — retrying ${emptyResponseRetryAttempts}/${maxEmptyResponseRetryAttempts} ` +
@@ -4814,8 +4808,6 @@ async function runEmbeddedAgentInternal(
               beforeAgentFinalizeRevisionReason,
             );
             suppressNextUserMessagePersistence = true;
-            reasoningOnlyRetryInstruction = null;
-            emptyResponseRetryInstruction = null;
             compactionContinuationRetryInstruction = null;
             log.warn(
               `before_agent_finalize requested one more pass: ` +

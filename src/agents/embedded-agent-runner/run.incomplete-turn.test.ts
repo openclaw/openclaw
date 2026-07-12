@@ -859,8 +859,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     const secondCall = runAttemptCall(1);
-    expect(secondCall.prompt).toContain(REASONING_ONLY_RETRY_INSTRUCTION);
-    expect(secondCall.suppressNextUserMessagePersistence).toBe(true);
+    expect(secondCall.prompt).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
+    expect(secondCall.suppressNextUserMessagePersistence).toBe(false);
     expectWarnMessageWith("reasoning-only assistant turn detected");
   });
 
@@ -1118,8 +1118,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     const secondCall = runAttemptCall(1);
-    expect(secondCall.prompt).toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
-    expect(secondCall.suppressNextUserMessagePersistence).toBe(true);
+    expect(secondCall.prompt).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+    expect(secondCall.suppressNextUserMessagePersistence).toBe(false);
     expectWarnMessageWith("empty response detected");
   });
 
