@@ -140,6 +140,23 @@ type MattermostThreadBackfillFetcher = (
   options: { limit: number; signal?: AbortSignal },
 ) => Promise<MattermostPost[]>;
 
+// Cap the per-thread backfill marker map so it cannot outgrow the 1000-key
+// `channelHistories` window it accompanies; an evicted thread simply
+// re-backfills on its next cold inbound turn.
+const MAX_THREAD_BACKFILL_MARKERS = 1000;
+
+// Evict oldest marker keys (Map insertion order = LRU) once the map exceeds the
+// cap. Kept local to the plugin so core history internals stay untouched.
+function evictOldThreadBackfillMarkers(markers: Map<string, string>): void {
+  while (markers.size > MAX_THREAD_BACKFILL_MARKERS) {
+    const oldestKey = markers.keys().next().value;
+    if (oldestKey === undefined) {
+      break;
+    }
+    markers.delete(oldestKey);
+  }
+}
+
 export async function backfillMattermostThreadHistoryForMonitor(params: {
   client: MattermostClient;
   post: MattermostPost;
@@ -150,6 +167,7 @@ export async function backfillMattermostThreadHistoryForMonitor(params: {
   historyLimit: number;
   channelHistories: Map<string, HistoryEntry[]>;
   threadBackfillMarkers: Map<string, string>;
+  threadBackfillInFlight: Map<string, Promise<void>>;
   fetchThreadPosts?: MattermostThreadBackfillFetcher;
   timeoutMs?: number;
 }): Promise<void> {
@@ -163,6 +181,7 @@ export async function backfillMattermostThreadHistoryForMonitor(params: {
     historyLimit,
     channelHistories,
     threadBackfillMarkers,
+    threadBackfillInFlight,
     fetchThreadPosts = fetchMattermostThreadPosts,
     timeoutMs = 10_000,
   } = params;
@@ -174,30 +193,52 @@ export async function backfillMattermostThreadHistoryForMonitor(params: {
   // This bounds marker memory and lookup cost to the number of live threads,
   // instead of accumulating a `${historyKey}:${session}` entry for every session
   // rotation and scanning the whole process-lifetime set on each candidate.
+  // Writes refresh LRU order and stay under the local 1000-key cap so the marker
+  // map cannot outgrow the `channelHistories` window it accompanies.
+  const setMarker = (session: string): void => {
+    threadBackfillMarkers.delete(historyKey);
+    threadBackfillMarkers.set(historyKey, session);
+    evictOldThreadBackfillMarkers(threadBackfillMarkers);
+  };
+
   const currentMarker = threadBackfillMarkers.get(historyKey);
   if (currentMarker === baseSessionKey) {
+    // Same-session marker already set. If a first cold turn is still fetching
+    // (zero-debounce inbound bursts overlap on the awaited network boundary),
+    // await that one bounded request so this turn reads the recovered window
+    // instead of replying without prior context. No in-flight entry means the
+    // fetch already completed, returned empty, timed out, or failed, and the
+    // completed marker intentionally suppresses a retry.
+    const inFlight = threadBackfillInFlight.get(historyKey);
+    if (inFlight) {
+      await inFlight.catch(() => {});
+    }
     return;
   }
   // Adopt the earlier pending marker once the stored session id appears, so a
   // same-session follow-up does not refetch while a later real session rotation
   // still can.
   if (adoptBackfillSessionKey && currentMarker === adoptBackfillSessionKey) {
-    threadBackfillMarkers.set(historyKey, baseSessionKey);
+    setMarker(baseSessionKey);
     return;
   }
   const hasPriorBackfillForThread = currentMarker !== undefined;
 
   const existing = channelHistories.get(historyKey);
   if (existing && existing.length > 0 && !hasPriorBackfillForThread) {
-    threadBackfillMarkers.set(historyKey, baseSessionKey);
+    setMarker(baseSessionKey);
     return;
   }
 
-  try {
+  // Set the completed-attempt marker before awaiting so overlapping same-session
+  // turns take the branch above and await this one operation. Publish the
+  // in-flight promise so those turns can wait for the recovered window; clear it
+  // in `finally` so the marker alone governs no-retry afterwards.
+  setMarker(baseSessionKey);
+  const recovery = (async () => {
     const abort = new AbortController();
     const timeoutId = setTimeout(() => abort.abort(), timeoutMs);
     try {
-      threadBackfillMarkers.set(historyKey, baseSessionKey);
       // Request one extra post so the window still fills after we drop the
       // triggering post below when it is among the newest entries.
       const threadPosts = await fetchThreadPosts(client, threadRootId, {
@@ -227,8 +268,18 @@ export async function backfillMattermostThreadHistoryForMonitor(params: {
     } finally {
       clearTimeout(timeoutId);
     }
+  })();
+  threadBackfillInFlight.set(historyKey, recovery);
+  try {
+    await recovery;
   } catch {
     // Best-effort: server fetch failure or timeout should not block inbound dispatch.
+  } finally {
+    // Drop the in-flight handle once settled; the completed marker then governs
+    // no-retry, and only this owner clears its own operation.
+    if (threadBackfillInFlight.get(historyKey) === recovery) {
+      threadBackfillInFlight.delete(historyKey);
+    }
   }
 }
 
@@ -683,6 +734,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   // re-triggering an unnecessary server fetch (kernel.ts:577 clears pending group
   // history after a successful dispatch).
   const threadBackfillMarkers = new Map<string, string>();
+  // In-flight cold-recovery fetches keyed by thread history key, so overlapping
+  // same-session turns await one bounded request instead of replying without the
+  // recovered window. Cleared when the owning fetch settles.
+  const threadBackfillInFlight = new Map<string, Promise<void>>();
   const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
   const dmPolicy = account.config.dmPolicy ?? "pairing";
   const { groupPolicy, providerMissingFallbackApplied } =
@@ -1413,6 +1468,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           historyLimit,
           channelHistories,
           threadBackfillMarkers,
+          threadBackfillInFlight,
         });
 
         core.channel.activity.record({
