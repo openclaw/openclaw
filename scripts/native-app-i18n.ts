@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { expectDefined } from "@openclaw/normalization-core";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { translateNativeEntries } from "./control-ui-i18n.ts";
 
 type NativeI18nSurface = "android" | "apple";
@@ -752,7 +752,7 @@ function skipWhitespaceAndBrace(source: string, offset: number): number {
       cursor += 1;
     }
   }
-  if (source.startsWith("return", cursor) && !isAsciiAlphaNumeric(source.charAt(cursor + 6))) {
+  if (source.startsWith("return", cursor) && !isAsciiAlphaNumeric(source[cursor + 6] ?? "")) {
     cursor += 6;
     while (cursor < source.length && /\s/u.test(source.charAt(cursor))) {
       cursor += 1;
@@ -1183,17 +1183,19 @@ async function mapWithConcurrency<T, R>(
   run: (value: T) => Promise<R>,
 ): Promise<R[]> {
   const results = Array<R>(values.length);
-  const entries = values.entries();
+  let nextIndex = 0;
   const workerCount = Math.min(limit, values.length);
   await Promise.all(
     Array.from({ length: workerCount }, async () => {
       for (;;) {
-        const next = entries.next();
-        if (next.done) {
+        const index = nextIndex;
+        nextIndex += 1;
+        if (index >= values.length) {
           return;
         }
-        const [index, value] = next.value;
-        results[index] = await run(value);
+        results[index] = await run(
+          expectDefined(values[index], `native i18n concurrency input at index ${index}`),
+        );
       }
     }),
   );
@@ -1308,16 +1310,17 @@ function glossaryHash(glossary: readonly { source: string; target: string }[]): 
 function adjacentDuplicateWords(value: string, locale: string): string[] {
   const words = [...value.matchAll(/[\p{L}\p{M}\p{N}]+/gu)].map((match) => match[0]);
   const duplicates = new Set<string>();
-  let previous = words[0];
-  for (const current of words.slice(1)) {
+  for (let index = 1; index < words.length; index += 1) {
     if (
-      previous !== undefined &&
-      previous.normalize("NFKC").toLocaleLowerCase(locale) ===
-        current.normalize("NFKC").toLocaleLowerCase(locale)
+      expectDefined(words[index - 1], `native i18n word before index ${index}`)
+        .normalize("NFKC")
+        .toLocaleLowerCase(locale) ===
+      expectDefined(words[index], `native i18n word at index ${index}`)
+        .normalize("NFKC")
+        .toLocaleLowerCase(locale)
     ) {
-      duplicates.add(current);
+      duplicates.add(expectDefined(words[index], `duplicate native i18n word at index ${index}`));
     }
-    previous = current;
   }
   return [...duplicates].toSorted(compareCodePoints);
 }
@@ -1450,8 +1453,8 @@ export function validateNativeLocaleArtifact(
     errors.push(`entry count must be ${inventory.length}, got ${rawEntries.length}`);
   }
   for (let index = 0; index < Math.min(entries.length, inventory.length); index += 1) {
-    const actual = expectDefined(entries[index], `native locale artifact entry ${index}`);
-    const expected = expectDefined(inventory[index], `native locale inventory entry ${index}`);
+    const actual = expectDefined(entries[index], `native locale entry at index ${index}`);
+    const expected = expectDefined(inventory[index], `native inventory entry at index ${index}`);
     if (actual.id !== expected.id) {
       errors.push(
         `entries[${index}].id must be ${JSON.stringify(expected.id)}, got ${JSON.stringify(actual.id)}`,

@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import type { RootHelpRenderOptions } from "../src/cli/program/root-help.js";
 import type { OpenClawConfig } from "../src/config/config.js";
 import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
@@ -354,17 +355,19 @@ async function mapWithConcurrency<T, R>(
 ): Promise<R[]> {
   const results: R[] = [];
   results.length = values.length;
-  const entries = values.entries();
+  let nextIndex = 0;
   const workerCount = Math.min(Math.max(1, limit), values.length);
   await Promise.all(
     Array.from({ length: workerCount }, async () => {
       for (;;) {
-        const next = entries.next();
-        if (next.done) {
+        const index = nextIndex;
+        nextIndex += 1;
+        if (index >= values.length) {
           return;
         }
-        const [index, value] = next.value;
-        results[index] = await run(value);
+        results[index] = await run(
+          expectDefined(values[index], `CLI metadata concurrency input at index ${index}`),
+        );
       }
     }),
   );

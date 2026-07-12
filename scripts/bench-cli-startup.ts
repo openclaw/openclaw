@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { expectDefined } from "@openclaw/normalization-core";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
 
 type CommandCase = {
@@ -484,10 +484,7 @@ function parseRepeatableFlag(flag: string): string[] {
 function validateCliArgs(argv: readonly string[] = process.argv.slice(2)): void {
   const seenSingleValueFlags = new Set<string>();
   for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (arg === undefined) {
-      throw new Error(`Missing CLI argument at index ${index}`);
-    }
+    const arg = expectDefined(argv[index], `CLI benchmark argument at index ${index}`);
     if (VALUE_FLAGS.has(arg)) {
       if (arg !== "--case") {
         if (seenSingleValueFlags.has(arg)) {
@@ -580,12 +577,12 @@ function median(values: number[]): number {
   const mid = Math.floor(sorted.length / 2);
   if (sorted.length % 2 === 0) {
     return (
-      (expectDefined(sorted[mid - 1], "lower CLI startup median sample") +
-        expectDefined(sorted[mid], "upper CLI startup median sample")) /
+      (expectDefined(sorted[mid - 1], "lower middle CLI benchmark sample") +
+        expectDefined(sorted[mid], "upper middle CLI benchmark sample")) /
       2
     );
   }
-  return expectDefined(sorted[mid], "CLI startup median sample");
+  return expectDefined(sorted[mid], "middle CLI benchmark sample");
 }
 
 function percentile(values: number[], p: number): number {

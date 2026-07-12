@@ -24,6 +24,7 @@ import {
   win32 as pathWin32,
 } from "node:path";
 import { pathToFileURL } from "node:url";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { formatErrorMessage } from "../src/infra/errors.ts";
 import { ALWAYS_ALLOWED_RUNTIME_DIR_NAMES } from "../src/plugin-sdk/facade-activation-contract.ts";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-paths.ts";
@@ -459,8 +460,10 @@ export function collectInstalledBundledRuntimeSidecarPaths(packageRoot: string):
   const installedExtensionIds = collectInstalledBundledExtensionIds(packageRoot);
   return PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS.filter((relativePath) => {
     const match = /^dist\/extensions\/([^/]+)\//u.exec(relativePath);
-    const extensionId = match?.[1];
-    return extensionId !== undefined && installedExtensionIds.has(extensionId);
+    return (
+      match !== null &&
+      installedExtensionIds.has(expectDefined(match[1], "bundled runtime extension id"))
+    );
   });
 }
 
@@ -896,9 +899,8 @@ function collectExpectedBundledExtensionPackageIds(): ReadonlySet<string> {
   const ids = new Set<string>();
   for (const relativePath of listBundledPluginPackArtifacts()) {
     const match = /^dist\/extensions\/([^/]+)\/package\.json$/u.exec(relativePath);
-    const extensionId = match?.[1];
-    if (extensionId !== undefined) {
-      ids.add(extensionId);
+    if (match) {
+      ids.add(expectDefined(match[1], "bundled package extension id"));
     }
   }
   return ids;

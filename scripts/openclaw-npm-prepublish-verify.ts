@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { expectDefined } from "@openclaw/normalization-core";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { formatErrorMessage } from "../src/infra/errors.ts";
 import { type NpmVerifyCommandInvocation, runNpmVerifyCommand } from "./lib/npm-verify-exec.ts";
 import { runInstalledWorkspaceBootstrapSmoke } from "./lib/workspace-bootstrap-smoke.mjs";
@@ -99,10 +99,6 @@ function main(argv = process.argv.slice(2)): void {
     let binaryInvocation: NpmVerifyCommandInvocation;
     let packageRoot: string;
     if (usesPreparedLocalDependencyInstall(args.dependencyTarballPaths.length)) {
-      const dependencyTarballPath = expectDefined(
-        args.dependencyTarballPaths[0],
-        "single prepared npm dependency tarball",
-      );
       mkdirSync(prefixDir, { recursive: true });
       writeFileSync(
         join(prefixDir, "package.json"),
@@ -110,7 +106,11 @@ function main(argv = process.argv.slice(2)): void {
           {
             private: true,
             dependencies: {
-              "@openclaw/ai": pathToFileURL(realpathSync(dependencyTarballPath)).href,
+              "@openclaw/ai": pathToFileURL(
+                realpathSync(
+                  expectDefined(args.dependencyTarballPaths[0], "prepared dependency tarball"),
+                ),
+              ).href,
               openclaw: pathToFileURL(realpathSync(args.tarballPath)).href,
             },
           },

@@ -2,6 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { request } from "node:http";
 import { createServer } from "node:net";
+import { expectDefined } from "../../packages/normalization-core/src/expect.js";
 
 export async function getFreePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -98,13 +99,9 @@ export function readProcessTreeCpuMs(rootPid: number | undefined): number | null
     if (!match) {
       continue;
     }
-    const [, rawPid, rawPpid, rawCpuTime] = match;
-    if (!rawPid || !rawPpid || !rawCpuTime) {
-      continue;
-    }
-    const pid = Number(rawPid);
-    const ppid = Number(rawPpid);
-    const cpuMs = parsePsCpuTimeMs(rawCpuTime);
+    const pid = Number(expectDefined(match[1], "process id from ps output"));
+    const ppid = Number(expectDefined(match[2], "parent process id from ps output"));
+    const cpuMs = parsePsCpuTimeMs(expectDefined(match[3], "CPU time from ps output"));
     if (!Number.isInteger(pid) || !Number.isInteger(ppid) || cpuMs === null) {
       continue;
     }
@@ -158,17 +155,20 @@ function parsePsCpuTimeMs(raw: string): number | null {
   }
   if (parts.length === 2) {
     const [minutes, seconds] = parts;
-    if (minutes === undefined || seconds === undefined) {
-      return null;
-    }
-    return Math.round((minutes * 60 + seconds) * 1000);
+    return Math.round(
+      (expectDefined(minutes, "process CPU minutes") * 60 +
+        expectDefined(seconds, "process CPU seconds")) *
+        1000,
+    );
   }
   if (parts.length === 3) {
     const [hours, minutes, seconds] = parts;
-    if (hours === undefined || minutes === undefined || seconds === undefined) {
-      return null;
-    }
-    return Math.round((hours * 60 * 60 + minutes * 60 + seconds) * 1000);
+    return Math.round(
+      (expectDefined(hours, "process CPU hours") * 60 * 60 +
+        expectDefined(minutes, "process CPU minutes") * 60 +
+        expectDefined(seconds, "process CPU seconds")) *
+        1000,
+    );
   }
   return null;
 }

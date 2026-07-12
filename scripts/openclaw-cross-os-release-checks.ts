@@ -350,7 +350,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     if (token === undefined) {
-      continue;
+      throw new Error(`Missing cross-OS release argument at index ${index}`);
     }
     if (!token.startsWith("--")) {
       continue;
@@ -4084,9 +4084,9 @@ function parseAgentPayloadTexts(stdout: string) {
       : Array.isArray(payload?.result?.payloads)
         ? payload.result.payloads
         : [];
-    const payloadTexts = Array.isArray(entries)
-      ? entries.flatMap((entry) => (typeof entry?.text === "string" ? [entry.text] : []))
-      : [];
+    const payloadTexts = entries.flatMap((entry) =>
+      typeof entry?.text === "string" ? [entry.text] : [],
+    );
     return [...directTexts, ...payloadTexts];
   } catch {
     const finalTextMatches = [

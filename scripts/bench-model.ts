@@ -1,7 +1,7 @@
 // Bench Model script supports OpenClaw repository automation.
 import { pathToFileURL } from "node:url";
-import { expectDefined } from "@openclaw/normalization-core";
 import { completeSimple, type Model } from "openclaw/plugin-sdk/llm";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
 
 type Usage = {
@@ -113,12 +113,12 @@ function median(values: number[]): number {
   const mid = Math.floor(sorted.length / 2);
   if (sorted.length % 2 === 0) {
     return Math.round(
-      (expectDefined(sorted[mid - 1], "lower model benchmark median sample") +
-        expectDefined(sorted[mid], "upper model benchmark median sample")) /
+      (expectDefined(sorted[mid - 1], "lower middle model benchmark sample") +
+        expectDefined(sorted[mid], "upper middle model benchmark sample")) /
         2,
     );
   }
-  return expectDefined(sorted[mid], "model benchmark median sample");
+  return expectDefined(sorted[mid], "middle model benchmark sample");
 }
 
 async function runModel(opts: {

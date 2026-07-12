@@ -1,6 +1,7 @@
 // Analyze script supports OpenClaw repository automation.
 import path from "node:path";
 import ts from "typescript";
+import { expectDefined } from "../../../packages/normalization-core/src/expect.js";
 import {
   canonicalSymbolInfo,
   countIdentifierUsages,
@@ -30,15 +31,6 @@ function pushUnique(values: string[], next: string | null | undefined) {
 
 function sortUnique(values: string[]) {
   values.sort((left, right) => left.localeCompare(right));
-}
-
-function compareFirstValue(left: readonly string[], right: readonly string[]): number {
-  const leftValue = left[0];
-  const rightValue = right[0];
-  if (leftValue === undefined) {
-    return rightValue === undefined ? 0 : 1;
-  }
-  return rightValue === undefined ? -1 : leftValue.localeCompare(rightValue);
 }
 
 function clampScore(value: number): number {
@@ -307,8 +299,12 @@ function finalizeRecords(records: TopologyRecord[]) {
       return byRefs;
     }
     return (
-      compareFirstValue(left.publicSpecifiers, right.publicSpecifiers) ||
-      compareFirstValue(left.exportNames, right.exportNames)
+      expectDefined(left.publicSpecifiers[0], "left topology public specifier").localeCompare(
+        expectDefined(right.publicSpecifiers[0], "right topology public specifier"),
+      ) ||
+      expectDefined(left.exportNames[0], "left topology export name").localeCompare(
+        expectDefined(right.exportNames[0], "right topology export name"),
+      )
     );
   });
 }

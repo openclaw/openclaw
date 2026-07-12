@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
-import { expectDefined } from "@openclaw/normalization-core";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
 import { delay, stopChild } from "./lib/gateway-bench-child.ts";
 import {
@@ -353,8 +353,8 @@ function median(values: number[]): number {
   const middle = Math.floor(sorted.length / 2);
   if (sorted.length % 2 === 0) {
     return (
-      (expectDefined(sorted[middle - 1], "lower gateway startup median sample") +
-        expectDefined(sorted[middle], "upper gateway startup median sample")) /
+      (expectDefined(sorted[middle - 1], "lower middle gateway startup sample") +
+        expectDefined(sorted[middle], "upper middle gateway startup sample")) /
       2
     );
   }
@@ -699,10 +699,10 @@ function sanitizedEnv(
 function collectStartupTrace(line: string, startupTrace: Record<string, number>): void {
   const phaseMatch = /startup trace: ([^ ]+) ([0-9.]+)ms total=([0-9.]+)ms(?: (.*))?/u.exec(line);
   if (phaseMatch) {
-    const phase = expectDefined(phaseMatch[1], "startup trace phase");
-    startupTrace[phase] = Number(expectDefined(phaseMatch[2], "startup trace phase duration"));
+    const phase = expectDefined(phaseMatch[1], "gateway startup trace phase name");
+    startupTrace[phase] = Number(expectDefined(phaseMatch[2], `${phase} startup duration`));
     startupTrace[`${phase}.total`] = Number(
-      expectDefined(phaseMatch[3], "startup trace phase total duration"),
+      expectDefined(phaseMatch[3], `${phase} total startup duration`),
     );
     for (const metric of parseStartupTraceMetrics(phaseMatch[4] ?? "")) {
       startupTrace[`${phase}.${metric.key}`] = metric.value;
@@ -713,10 +713,9 @@ function collectStartupTrace(line: string, startupTrace: Record<string, number>)
   if (!detailMatch) {
     return;
   }
-  const phase = expectDefined(detailMatch[1], "startup trace detail phase");
-  for (const metric of parseStartupTraceMetrics(
-    expectDefined(detailMatch[2], "startup trace detail metrics"),
-  )) {
+  const phase = expectDefined(detailMatch[1], "gateway startup detail phase name");
+  const detail = expectDefined(detailMatch[2], `${phase} startup detail metrics`);
+  for (const metric of parseStartupTraceMetrics(detail)) {
     startupTrace[`${phase}.${metric.key}`] = metric.value;
   }
 }
@@ -738,8 +737,8 @@ function parseStartupTraceMetrics(raw: string): Array<{ key: string; value: numb
     if (!metricMatch) {
       continue;
     }
-    const key = expectDefined(metricMatch[1], "startup trace metric key");
-    const value = Number(expectDefined(metricMatch[2], `startup trace metric ${key} value`));
+    const key = expectDefined(metricMatch[1], "gateway startup trace metric key");
+    const value = Number(expectDefined(metricMatch[2], `${key} startup trace metric value`));
     if (
       !Number.isFinite(value) ||
       (key !== "eventLoopMax" &&

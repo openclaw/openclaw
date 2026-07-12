@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
-import { expectDefined } from "@openclaw/normalization-core";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { writeGatewayRestartIntentSync } from "../src/infra/restart.js";
 import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
 import { delay, stopChild, type StopChildResult } from "./lib/gateway-bench-child.ts";
@@ -414,8 +414,8 @@ function median(values: number[]): number {
   const middle = Math.floor(sorted.length / 2);
   if (sorted.length % 2 === 0) {
     return (
-      (expectDefined(sorted[middle - 1], "lower gateway restart median sample") +
-        expectDefined(sorted[middle], "upper gateway restart median sample")) /
+      (expectDefined(sorted[middle - 1], "lower middle gateway restart sample") +
+        expectDefined(sorted[middle], "upper middle gateway restart sample")) /
       2
     );
   }
@@ -516,7 +516,7 @@ function slope(values: Array<number | null>): number | null {
     return null;
   }
   const first = expectDefined(points[0], "first gateway restart slope point");
-  const last = expectDefined(points.at(-1), "last gateway restart slope point");
+  const last = expectDefined(points[points.length - 1], "last gateway restart slope point");
   const denominator = Math.max(1, last.index - first.index);
   return (last.value - first.value) / denominator;
 }
@@ -915,11 +915,9 @@ function collectTraceLine(
     "u",
   ).exec(line);
   if (phaseMatch) {
-    const phase = expectDefined(phaseMatch[1], `${prefix} phase`);
+    const phase = expectDefined(phaseMatch[1], `${prefix} phase name`);
     trace[phase] = Number(expectDefined(phaseMatch[2], `${prefix} phase duration`));
-    trace[`${phase}.total`] = Number(
-      expectDefined(phaseMatch[3], `${prefix} phase total duration`),
-    );
+    trace[`${phase}.total`] = Number(expectDefined(phaseMatch[3], `${prefix} total duration`));
     for (const metric of parseTraceMetrics(phaseMatch[4] ?? "")) {
       trace[`${phase}.${metric.key}`] = metric.value;
     }
@@ -929,10 +927,9 @@ function collectTraceLine(
   if (!detailMatch) {
     return false;
   }
-  const phase = expectDefined(detailMatch[1], `${prefix} detail phase`);
-  for (const metric of parseTraceMetrics(
-    expectDefined(detailMatch[2], `${prefix} detail metrics`),
-  )) {
+  const phase = expectDefined(detailMatch[1], `${prefix} detail phase name`);
+  const metrics = expectDefined(detailMatch[2], `${prefix} detail metrics`);
+  for (const metric of parseTraceMetrics(metrics)) {
     trace[`${phase}.${metric.key}`] = metric.value;
   }
   return true;
@@ -945,8 +942,8 @@ function parseTraceMetrics(raw: string): Array<{ key: string; value: number }> {
     if (!metricMatch) {
       continue;
     }
-    const key = expectDefined(metricMatch[1], "restart trace metric key");
-    const value = Number(expectDefined(metricMatch[2], `restart trace metric ${key} value`));
+    const key = expectDefined(metricMatch[1], "gateway restart trace metric key");
+    const value = Number(expectDefined(metricMatch[2], `gateway restart ${key} metric value`));
     if (!Number.isFinite(value)) {
       continue;
     }
