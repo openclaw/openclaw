@@ -134,64 +134,11 @@ describeControlUiE2e("Control UI chat file links", () => {
   });
 
   it("previews text and browser-safe images while falling back for BMP", async () => {
-    const pngBase64 =
-      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
-    const openPreview = async (params: {
-      filePath: string;
-      response: Record<string, unknown>;
-      screenshot: string;
-      verify: (page: Page) => Promise<void>;
-    }) => {
-      const context = await browser.newContext({
-        recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } },
-        viewport: { height: 900, width: 1280 },
-      });
-      try {
-        const page = await context.newPage();
-        page.setDefaultTimeout(15_000);
-        const requestPath = `/workspace/${params.filePath}`;
-        const gateway = await installMockGateway(page, {
-          methodResponses: {
-            "sessions.files.get": {
-              cases: [{ match: { path: requestPath }, response: params.response }],
-            },
-            "sessions.files.list": {
-              browser: {
-                entries: [
-                  {
-                    kind: "file",
-                    name: params.filePath,
-                    path: params.filePath,
-                  },
-                ],
-                path: "",
-              },
-              files: [],
-              root: "/workspace",
-              sessionKey: "main",
-            },
-          },
-        });
-        await page.goto(`${server.baseUrl}chat`);
-        await page.locator(".chat-workspace-toggle").click();
-        await page.getByRole("button", { name: "Collapse session workspace" }).waitFor();
-        const fileRow = page
-          .locator(".chat-workspace-rail__browser .chat-workspace-rail__file")
-          .filter({ hasText: params.filePath });
-        await fileRow.locator(".chat-workspace-rail__file-open").click();
-        await params.verify(page);
-        await page.screenshot({ path: path.join(artifactDir, params.screenshot) });
-        expect((await gateway.getRequests("sessions.files.get"))[0]?.params).toMatchObject({
-          path: requestPath,
-        });
-      } finally {
-        await context.close();
-      }
-    };
-
-    await openPreview({
-      filePath: "notes.txt",
-      response: {
+    const png = fs.readFileSync(path.resolve(process.cwd(), "ui/public/apple-touch-icon.png"));
+    expect(png.byteLength).toBeLessThan(256 * 1024);
+    const pngBase64 = png.toString("base64");
+    const responses = {
+      "/workspace/notes.txt": {
         root: "/workspace",
         sessionKey: "main",
         file: {
@@ -208,17 +155,7 @@ describeControlUiE2e("Control UI chat file links", () => {
           workspacePath: "notes.txt",
         },
       },
-      screenshot: "04-text-preview.png",
-      verify: async (page) => {
-        await page.locator(".sidebar-file-view").waitFor({ state: "visible" });
-        expect(await page.locator(".cm-content").textContent()).toContain(
-          "Exact-head workspace preview proof.",
-        );
-      },
-    });
-    await openPreview({
-      filePath: "logo.png",
-      response: {
+      "/workspace/openclaw-5920-bytes.png": {
         root: "/workspace",
         sessionKey: "main",
         file: {
@@ -227,44 +164,104 @@ describeControlUiE2e("Control UI chat file links", () => {
           kind: "read",
           mimeType: "image/png",
           missing: false,
-          name: "logo.png",
-          path: "logo.png",
+          name: "openclaw-5920-bytes.png",
+          path: "openclaw-5920-bytes.png",
           previewKind: "image",
-          size: 70,
-          workspacePath: "logo.png",
+          size: png.byteLength,
+          workspacePath: "openclaw-5920-bytes.png",
         },
       },
-      screenshot: "05-png-preview.png",
-      verify: async (page) => {
-        const image = page.locator('.chat-tool-card__preview[data-kind="image"] img');
-        await image.waitFor({ state: "visible" });
-        expect(await image.getAttribute("src")).toBe(`data:image/png;base64,${pngBase64}`);
-      },
-    });
-    await openPreview({
-      filePath: "legacy.bmp",
-      response: {
+      "/workspace/unsupported-binary.bmp": {
         root: "/workspace",
         sessionKey: "main",
         file: {
           kind: "read",
           mimeType: "image/bmp",
           missing: false,
-          name: "legacy.bmp",
-          path: "legacy.bmp",
+          name: "unsupported-binary.bmp",
+          path: "unsupported-binary.bmp",
           previewKind: "unsupported",
           size: 4096,
-          workspacePath: "legacy.bmp",
+          workspacePath: "unsupported-binary.bmp",
         },
       },
-      screenshot: "06-bmp-fallback.png",
-      verify: async (page) => {
-        const fallback = page.locator(".sidebar-markdown-shell");
-        await fallback.waitFor({ state: "visible" });
-        const fallbackText = await fallback.textContent();
-        expect(fallbackText).toContain("This file is not previewable inline.");
-        expect(fallbackText).toContain("image/bmp");
-      },
+    } satisfies Record<string, Record<string, unknown>>;
+    const context = await browser.newContext({
+      recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } },
+      viewport: { height: 900, width: 1280 },
     });
+    try {
+      const page = await context.newPage();
+      page.setDefaultTimeout(15_000);
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "sessions.files.get": {
+            cases: Object.entries(responses).map(([requestPath, response]) => ({
+              match: { path: requestPath },
+              response,
+            })),
+          },
+          "sessions.files.list": {
+            browser: {
+              entries: Object.keys(responses).map((requestPath) => {
+                const filePath = requestPath.slice("/workspace/".length);
+                return { kind: "file", name: filePath, path: filePath };
+              }),
+              path: "",
+            },
+            files: [],
+            root: "/workspace",
+            sessionKey: "main",
+          },
+        },
+      });
+      const openPreview = async (filePath: string) => {
+        const fileRow = page
+          .locator(".chat-workspace-rail__browser .chat-workspace-rail__file")
+          .filter({ hasText: filePath });
+        await fileRow.locator(".chat-workspace-rail__file-open").click();
+      };
+      const closePreview = async () => {
+        await page.getByRole("button", { name: "Close detail panel" }).click();
+        await page.locator(".sidebar-panel").waitFor({ state: "hidden" });
+      };
+
+      await page.goto(`${server.baseUrl}chat`);
+      await page.locator(".chat-workspace-toggle").click();
+      await page.getByRole("button", { name: "Collapse session workspace" }).waitFor();
+
+      await openPreview("notes.txt");
+      await page.locator(".sidebar-file-view").waitFor({ state: "visible" });
+      expect(await page.locator(".cm-content").textContent()).toContain(
+        "Exact-head workspace preview proof.",
+      );
+      await page.screenshot({ path: path.join(artifactDir, "04-text-preview.png") });
+      await closePreview();
+
+      await openPreview("openclaw-5920-bytes.png");
+      const image = page.locator('.chat-tool-card__preview[data-kind="image"] img');
+      await image.waitFor({ state: "visible" });
+      expect(await image.getAttribute("src")).toBe(`data:image/png;base64,${pngBase64}`);
+      await page.screenshot({ path: path.join(artifactDir, "05-png-preview.png") });
+      await closePreview();
+
+      await openPreview("unsupported-binary.bmp");
+      const fallback = page.locator(".sidebar-markdown-shell");
+      await fallback.waitFor({ state: "visible" });
+      const fallbackText = await fallback.textContent();
+      expect(fallbackText).toContain("This file is not previewable inline.");
+      expect(fallbackText).toContain("image/bmp");
+      await page.screenshot({ path: path.join(artifactDir, "06-bmp-fallback.png") });
+
+      expect(
+        (await gateway.getRequests("sessions.files.get")).map((request) => request.params),
+      ).toEqual([
+        { path: "/workspace/notes.txt", sessionKey: "main" },
+        { path: "/workspace/openclaw-5920-bytes.png", sessionKey: "main" },
+        { path: "/workspace/unsupported-binary.bmp", sessionKey: "main" },
+      ]);
+    } finally {
+      await context.close();
+    }
   });
 });

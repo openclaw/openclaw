@@ -318,7 +318,7 @@ struct AgentWorkspaceFilePreview: View {
     }
 
     private func isImage(_ file: AgentsWorkspaceFile) -> Bool {
-        file.encoding == .base64 && file.mimetype.hasPrefix("image/")
+        (file.encoding.value as? String) == "base64" && file.mimetype.hasPrefix("image/")
     }
 
     private func decodedImage(_ file: AgentsWorkspaceFile) -> UIImage? {

@@ -67,11 +67,6 @@ public enum NodePresenceAliveReason: String, Codable, Sendable {
     case connect = "connect"
 }
 
-public enum WorkspaceFileContentEncoding: String, Codable, Sendable {
-    case utf8 = "utf8"
-    case base64 = "base64"
-}
-
 public enum SessionFileKind: String, Codable, Sendable {
     case modified = "modified"
     case read = "read"
@@ -3577,7 +3572,7 @@ public struct SessionFileEntry: Codable, Sendable {
     public let size: Int?
     public let updatedatms: Int?
     public let mimetype: String?
-    public let contentencoding: WorkspaceFileContentEncoding?
+    public let contentencoding: AnyCodable?
     public let previewkind: SessionFilePreviewKind?
     public let content: String?
     public let hash: String?
@@ -3591,7 +3586,7 @@ public struct SessionFileEntry: Codable, Sendable {
         size: Int? = nil,
         updatedatms: Int? = nil,
         mimetype: String? = nil,
-        contentencoding: WorkspaceFileContentEncoding? = nil,
+        contentencoding: AnyCodable? = nil,
         previewkind: SessionFilePreviewKind? = nil,
         content: String? = nil,
         hash: String? = nil)
@@ -7608,7 +7603,7 @@ public struct AgentsWorkspaceFile: Codable, Sendable {
     public let size: Int
     public let updatedatms: Int
     public let mimetype: String
-    public let encoding: WorkspaceFileContentEncoding
+    public let encoding: AnyCodable
     public let content: String
 
     public init(
@@ -7617,7 +7612,7 @@ public struct AgentsWorkspaceFile: Codable, Sendable {
         size: Int,
         updatedatms: Int,
         mimetype: String,
-        encoding: WorkspaceFileContentEncoding,
+        encoding: AnyCodable,
         content: String)
     {
         self.path = path
