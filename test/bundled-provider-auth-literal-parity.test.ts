@@ -3,15 +3,15 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { createNonExitingRuntime } from "../runtime.js";
-import { createCapturedPluginRegistration } from "../test-utils/plugin-registration.js";
-import { listBundledPluginMetadata } from "./bundled-plugin-metadata.js";
-import type { PluginManifestProviderAuthChoice } from "./manifest.js";
+import { createNonExitingRuntime } from "../src/runtime.js";
+import { createCapturedPluginRegistration } from "../src/test-utils/plugin-registration.js";
+import { listBundledPluginMetadata } from "../src/plugins/bundled-plugin-metadata.js";
+import type { PluginManifestProviderAuthChoice } from "../src/plugins/manifest.js";
 import type {
   ProviderAuthMethod,
   ProviderPlugin,
   ProviderResolveNonInteractiveApiKeyParams,
-} from "./types.js";
+} from "../src/plugins/types.js";
 
 const PARITY_TIMEOUT_MS = 120_000;
 const SENTINEL_API_KEY = "parity-sentinel-api-key";
@@ -70,11 +70,10 @@ function listParityCases(): ParityCase[] {
 async function loadPluginRegister(
   pluginId: string,
 ): Promise<(api: ReturnType<typeof createCapturedPluginRegistration>["api"]) => void> {
-  // Dynamic import keeps this file out of the unit-fast lane: loading built
-  // plugin dists pulls large module graphs into the shared worker cache and
-  // breaks co-resident vi.mock-based unit tests (observed with memory-host-sdk).
+  // Keep built plugin dists out of the shared worker until this suite runs;
+  // eager loading breaks co-resident vi.mock-based tests (observed with memory-host-sdk).
   const { loadBundledPluginPublicSurface, resolveBundledPluginPublicModulePath } =
-    await import("../test-utils/bundled-plugin-public-surface.js");
+    await import("../src/test-utils/bundled-plugin-public-surface.js");
   // Resolve first so unknown plugin ids fail with a clear path error before import.
   resolveBundledPluginPublicModulePath({
     pluginId,
