@@ -13,7 +13,6 @@ import {
 } from "../../auth-profiles.js";
 import { formatAuthProfileFailureMessage } from "../../auth-profiles/failure-copy.js";
 import type { GeeRuntimeProviderAuthPolicy } from "../../gee-runtime-prepared-facts.js";
-import { GEE_RUNTIME_CREDENTIAL_REF_MARKER } from "../../model-auth-markers.js";
 import {
   classifyFailoverReason,
   isFailoverErrorMessage,
@@ -174,20 +173,15 @@ export function createEmbeddedRunAuthController(params: {
         rawError: message,
       });
     }
-    clearRuntimeAuthRefreshTimer();
-    const runtimeModel = params.getRuntimeModel();
-    params.setApiKeyInfo({
-      apiKey: GEE_RUNTIME_CREDENTIAL_REF_MARKER,
-      mode: "api-key",
-      source: `gee-runtime-credential-ref:${policy.credentialRefs.join(",")}`,
+    const message = `Gee-owned runtime auth for endpoints "${endpoints}" requires host credential resolution before provider egress.`;
+    throw new FailoverError(message, {
+      reason: "auth",
+      provider: params.getProvider(),
+      model: params.getModelId(),
+      status: resolveFailoverStatus("auth"),
+      code: "gee_runtime_auth_resolution_required",
+      rawError: message,
     });
-    params.authStorage.setRuntimeApiKey(runtimeModel.provider, GEE_RUNTIME_CREDENTIAL_REF_MARKER);
-    params.setRuntimeAuthState(null);
-    params.setLastProfileId(undefined);
-    params.log.debug(
-      `Using Gee-owned provider/auth policy for ${runtimeModel.provider}; credential refs stay host-owned.`,
-    );
-    return true;
   };
 
   const refreshRuntimeAuth = async (reason: string): Promise<void> => {

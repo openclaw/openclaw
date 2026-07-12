@@ -4,7 +4,6 @@ import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import { FailoverError, describeFailoverError, isFailoverError } from "../../failover-error.js";
 import type { GeeRuntimeProviderAuthPolicy } from "../../gee-runtime-prepared-facts.js";
-import { GEE_RUNTIME_CREDENTIAL_REF_MARKER } from "../../model-auth-markers.js";
 import type { RuntimeAuthState } from "./helpers.js";
 
 const mocks = vi.hoisted(() => ({
@@ -178,7 +177,7 @@ describe("createEmbeddedRunAuthController", () => {
     mocks.getApiKeyForModel.mockReset();
   });
 
-  it("uses Gee-owned auth policy without resolving standalone profiles", async () => {
+  it("fails closed for Gee-owned auth policy until host credential resolution is available", async () => {
     const harness = createMutableAuthControllerHarness();
     const setRuntimeApiKey = vi.fn<(provider: string, apiKey: string) => void>();
 
@@ -191,21 +190,27 @@ describe("createEmbeddedRunAuthController", () => {
       geeRuntimeProviderAuthPolicy: createGeeRuntimeProviderAuthPolicy(),
     });
 
-    await controller.initializeAuthProfile();
+    let thrown: unknown;
+    try {
+      await controller.initializeAuthProfile();
+    } catch (err) {
+      thrown = err;
+    }
 
+    expect(isFailoverError(thrown)).toBe(true);
+    expect(describeFailoverError(thrown)).toMatchObject({
+      message: expect.stringContaining("requires host credential resolution before provider egress"),
+      reason: "auth",
+      status: 401,
+      code: "gee_runtime_auth_resolution_required",
+      provider: "custom-openai",
+      model: "test-model",
+      rawError: expect.stringContaining("requires host credential resolution before provider egress"),
+    });
     expect(mocks.getApiKeyForModel).not.toHaveBeenCalled();
     expect(mocks.prepareProviderRuntimeAuth).not.toHaveBeenCalled();
-    expect(setRuntimeApiKey).toHaveBeenCalledWith(
-      "custom-openai",
-      GEE_RUNTIME_CREDENTIAL_REF_MARKER,
-    );
-    expect(harness.apiKeyInfo).toEqual({
-      apiKey: GEE_RUNTIME_CREDENTIAL_REF_MARKER,
-      mode: "api-key",
-      source: "gee-runtime-credential-ref:gee-credential-main",
-    });
-    expect(harness.lastProfileId).toBeUndefined();
-    expect(harness.runtimeAuthState).toBeNull();
+    expect(setRuntimeApiKey).not.toHaveBeenCalled();
+    expect(harness.apiKeyInfo).toBeNull();
   });
 
   it("fails closed when Gee-owned auth policy is not eligible", async () => {
@@ -254,7 +259,9 @@ describe("createEmbeddedRunAuthController", () => {
       geeRuntimeProviderAuthPolicy: createGeeRuntimeProviderAuthPolicy(),
     });
 
-    await controller.initializeAuthProfile();
+    await expect(controller.initializeAuthProfile()).rejects.toMatchObject({
+      code: "gee_runtime_auth_resolution_required",
+    });
     harness.runtimeAuthState = {
       generation: 1,
       sourceApiKey: "standalone-source-key",

@@ -32,9 +32,21 @@ export function resolveGeeRuntimeToolPolicy(
     return undefined;
   }
 
+  const entries = Object.entries(preparedFacts);
+  if (entries.length > 1) {
+    const endpointIds = entries.map(([endpointId]) => endpointId).toSorted((left, right) =>
+      left.localeCompare(right),
+    );
+    throw new Error(
+      `Gee-hosted OpenClaw tool policy requires exactly one active endpoint; received endpoints "${endpointIds.join(
+        '", "',
+      )}".`,
+    );
+  }
+
   const endpointIds: string[] = [];
   const allowedToolIds = new Set<string>();
-  for (const [endpointId, rawFact] of Object.entries(preparedFacts)) {
+  for (const [endpointId, rawFact] of entries) {
     const fact = readGeeRuntimePreparedFact(rawFact, endpointId);
     const envelope = readRequiredRecord(fact.envelope, endpointId, "envelope");
     const tools = readRequiredRecord(envelope.tools, endpointId, "envelope.tools");

@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { resolveGeeRuntimeProviderAuthPolicy } from "./gee-runtime-prepared-facts.js";
+import {
+  resolveGeeRuntimeProviderAuthPolicy,
+  resolveGeeRuntimeToolPolicy,
+} from "./gee-runtime-prepared-facts.js";
 
 function createPreparedFact(params: {
   endpointId?: string;
@@ -23,6 +26,11 @@ function createPreparedFact(params: {
         auth: {
           credentialRef: params.credentialRef ?? "gee-credential-main",
           eligibility: params.eligibility ?? "ok",
+        },
+        tools: {
+          capabilityPlanId: "gee-capability-main",
+          allowedToolIds: ["video_generate"],
+          policy: "gee-authorized",
         },
       },
     },
@@ -59,5 +67,25 @@ describe("resolveGeeRuntimeProviderAuthPolicy", () => {
         ...createPreparedFact({ endpointId: "slack:geeclaw", eligibility: "expired" }),
       }),
     ).toThrow(/conflicting auth eligibility states/);
+  });
+});
+
+describe("resolveGeeRuntimeToolPolicy", () => {
+  it("extracts tool policy for exactly one active endpoint", () => {
+    expect(resolveGeeRuntimeToolPolicy(createPreparedFact({}))).toEqual({
+      allowedToolIds: ["video_generate"],
+      endpointIds: ["telegram:geeclaw"],
+    });
+  });
+
+  it("fails closed instead of unioning tool policies across endpoints", () => {
+    expect(() =>
+      resolveGeeRuntimeToolPolicy({
+        ...createPreparedFact({ endpointId: "telegram:geeclaw" }),
+        ...createPreparedFact({ endpointId: "slack:geeclaw" }),
+      }),
+    ).toThrow(
+      'Gee-hosted OpenClaw tool policy requires exactly one active endpoint; received endpoints "slack:geeclaw", "telegram:geeclaw".',
+    );
   });
 });
