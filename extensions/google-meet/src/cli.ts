@@ -634,6 +634,17 @@ function writeRecoverCurrentTabResult(
   }
 }
 
+function writeLeaveResult(sessionId: string, result: { browserLeft?: boolean }): void {
+  if (result.browserLeft === false) {
+    writeStdoutLine(
+      "left %s, but the browser participant may still be in the call; check session notes",
+      sessionId,
+    );
+    return;
+  }
+  writeStdoutLine("left %s", sessionId);
+}
+
 function resolveMeetingInput(config: GoogleMeetConfig, value?: string): string {
   const meeting = value?.trim() || config.defaults.meeting;
   if (!meeting) {
@@ -2328,11 +2339,11 @@ export function registerGoogleMeetCli(params: {
         payload: { sessionId },
       });
       if (delegated.ok) {
-        const result = delegated.payload as { found?: boolean };
+        const result = delegated.payload as { found?: boolean; browserLeft?: boolean };
         if (!result.found) {
           throw new Error("session not found");
         }
-        writeStdoutLine("left %s", sessionId);
+        writeLeaveResult(sessionId, result);
         return;
       }
       const rt = await params.ensureRuntime();
@@ -2340,7 +2351,7 @@ export function registerGoogleMeetCli(params: {
       if (!result.found) {
         throw new Error("session not found");
       }
-      writeStdoutLine("left %s", sessionId);
+      writeLeaveResult(sessionId, result);
     });
 
   root
