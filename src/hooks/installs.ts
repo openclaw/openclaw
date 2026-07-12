@@ -23,7 +23,7 @@ export function recordHookInstall(cfg: OpenClawConfig, update: HookInstallUpdate
     hooks: {
       ...cfg.hooks,
       internal: {
-        ...expectDefined(cfg.hooks?.internal, "internal hook configuration"),
+        ...cfg.hooks?.internal,
         installs: {
           ...installs,
           [hookId]: expectDefined(installs[hookId], "installs entry at hook id"),

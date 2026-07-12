@@ -706,7 +706,7 @@ function copySelectedModelMetadata(params: {
     params.target.agents = {
       ...params.target.agents,
       defaults: {
-        ...expectDefined(params.target.agents?.defaults, "agent defaults"),
+        ...params.target.agents?.defaults,
         models: {
           ...params.target.agents?.defaults?.models,
           [params.modelRef]: structuredClone(
@@ -739,7 +739,7 @@ function copySelectedModelMetadata(params: {
     return;
   }
   targetAgent.models = {
-    ...expectDefined(targetAgent.models, "agent models"),
+    ...targetAgent.models,
     [params.modelRef]: structuredClone(
       expectDefined(preparedAgent.models[params.modelRef], "models entry at params.model ref"),
     ),
@@ -798,7 +798,7 @@ function projectManualInferenceConfig(params: {
       throw new Error(`Prepared provider config missing for ${providerConfigKey}`);
     }
     config.models = {
-      ...expectDefined(config.models, "configured models"),
+      ...config.models,
       providers: {
         ...config.models?.providers,
         [providerConfigKey]: structuredClone(preparedProvider),
