@@ -343,4 +343,16 @@ describe("worker inference provider runtime", () => {
       expect(await runtime.executor(params(request(ref), emit))).toEqual(MODEL_ERROR);
     }
   });
+
+  it("preserves adaptive provider policy while lowering the core stream effort", async () => {
+    const runtime = setup();
+    const inferenceRequest = request();
+    inferenceRequest.options.reasoning = "adaptive";
+
+    expect(await runtime.executor(params(inferenceRequest, vi.fn()))).toMatchObject({
+      type: "done",
+    });
+    expect(runtime.applyStreamPolicy.mock.calls[0]?.[5]).toBe("adaptive");
+    expect(runtime.stream.mock.calls[0]?.[2]).toMatchObject({ reasoning: "high" });
+  });
 });

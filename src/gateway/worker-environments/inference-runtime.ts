@@ -17,6 +17,7 @@ import { applyExtraParamsToAgent } from "../../agents/embedded-agent-runner/extr
 import { resolveModelAsync } from "../../agents/embedded-agent-runner/model.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "../../agents/embedded-agent-runner/run/attempt.model-diagnostic-events.js";
 import { resolveEmbeddedAgentStreamFn } from "../../agents/embedded-agent-runner/stream-resolution.js";
+import { mapThinkingLevel } from "../../agents/embedded-agent-runner/utils.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
@@ -212,7 +213,7 @@ function buildStreamOptions(params: {
   return {
     ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
     ...(options.maxTokens !== undefined ? { maxTokens: options.maxTokens } : {}),
-    ...(options.reasoning !== undefined ? { reasoning: options.reasoning } : {}),
+    ...(options.reasoning !== undefined ? { reasoning: mapThinkingLevel(options.reasoning) } : {}),
     ...(options.thinkingBudgets ? { thinkingBudgets: { ...options.thinkingBudgets } } : {}),
     signal: params.signal,
     sessionId: params.request.sessionId,

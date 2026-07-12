@@ -250,6 +250,7 @@ const WorkerInferenceReasoningSchema = Type.Union([
   Type.Literal("medium"),
   Type.Literal("high"),
   Type.Literal("xhigh"),
+  Type.Literal("adaptive"),
   Type.Literal("max"),
 ]);
 
@@ -495,7 +496,7 @@ export type WorkerInferenceContext = {
 export type WorkerInferenceOptions = {
   temperature?: number;
   maxTokens?: number;
-  reasoning?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+  reasoning?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | "max";
   thinkingBudgets?: WorkerInferenceThinkingBudgets;
 };
 export type WorkerInferenceStartParams = WorkerInferenceIdentity & {

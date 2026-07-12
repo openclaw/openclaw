@@ -346,6 +346,12 @@ describe("worker protocol schemas", () => {
   });
 
   it("accepts only a model reference and constrained inference options", () => {
+    expect(
+      validateWorkerInferenceStartParams({
+        ...inferenceStart,
+        options: { ...inferenceStart.options, reasoning: "adaptive" },
+      }),
+    ).toBe(true);
     const route = { baseUrl: "https://invalid.example", headers: { "x-route": "override" } };
     for (const candidate of [
       { ...inferenceStart, model: { provider: "p", id: "m", ...route } },
