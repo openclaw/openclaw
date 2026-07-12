@@ -331,16 +331,19 @@ describe("runCliTurnCompactionLifecycle", () => {
     const storePath = path.join(tmpDir, "sessions-configured-budget.json");
     await writeSessionFile({ sessionFile, sessionId });
 
-    const sessionStore: Record<string, SessionEntry> = {
-      [sessionKey]: {
-        sessionId,
-        updatedAt: 1,
-        sessionFile,
-        totalTokens: 90_000,
-        totalTokensFresh: true,
-      },
+    const sessionEntry: SessionEntry = {
+      sessionId,
+      updatedAt: 1,
+      sessionFile,
+      totalTokens: 90_000,
+      totalTokensFresh: true,
     };
-    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await persistSessionEntry({
+      sessionKey,
+      storePath,
+      entry: sessionEntry,
+    });
 
     await updateSessionStoreAfterAgentRun({
       cfg,

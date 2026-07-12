@@ -519,7 +519,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           updatedAt: 1,
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await seedSessionStore(storePath, sessionStore);
 
       await updateSessionStoreAfterAgentRun({
         cfg,
@@ -543,7 +543,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       });
 
       expect(sessionStore[sessionKey]?.contextTokens).toBe(100_000);
-      expect(loadSessionStore(storePath)[sessionKey]?.contextTokens).toBe(100_000);
+      expect(loadPersistedSessionEntry(storePath, sessionKey)?.contextTokens).toBe(100_000);
     });
   });
 
