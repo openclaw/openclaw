@@ -30,6 +30,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Control UI usage refresh:** preserve pending session rows while the background usage cache refreshes, preventing cold or stale caches from failing the Usage page.
 - **SQLite maintenance schema validation:** reject current-version global and agent databases with missing or drifted canonical tables, constraints, indexes, triggers, or table options before compaction, while accepting supported additive-migration layouts.
 - **iOS Watch relay commands:** allow paired iPhone nodes to advertise and invoke `watch.status` and `watch.notify` through the default Gateway policy while preserving the direct watchOS node's fixed minimal command surface.
 - **Swabble status config:** honor the global `--config` path when reading service status instead of silently using the default configuration.
