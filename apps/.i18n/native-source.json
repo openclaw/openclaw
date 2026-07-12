@@ -13035,7 +13035,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 512,
+      "line": 516,
       "path": "apps/ios/Sources/Design/AgentProDreamingDestination.swift",
       "source": "promoted %@",
       "surface": "apple",
@@ -13043,7 +13043,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 515,
+      "line": 519,
       "path": "apps/ios/Sources/Design/AgentProDreamingDestination.swift",
       "source": "recalled %@",
       "surface": "apple",
@@ -13051,7 +13051,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 517,
+      "line": 521,
       "path": "apps/ios/Sources/Design/AgentProDreamingDestination.swift",
       "source": "^[\\(recallCount) recall](inflect: true)",
       "surface": "apple",
@@ -13059,7 +13059,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 519,
+      "line": 523,
       "path": "apps/ios/Sources/Design/AgentProDreamingDestination.swift",
       "source": "%@ grounded",
       "surface": "apple",
@@ -13067,7 +13067,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 528,
+      "line": 532,
       "path": "apps/ios/Sources/Design/AgentProDreamingDestination.swift",
       "source": "Next cycle %@",
       "surface": "apple",
@@ -13075,7 +13075,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 532,
+      "line": 536,
       "path": "apps/ios/Sources/Design/AgentProDreamingDestination.swift",
       "source": "Managed cron is installed.",
       "surface": "apple",
@@ -13083,7 +13083,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 534,
+      "line": 538,
       "path": "apps/ios/Sources/Design/AgentProDreamingDestination.swift",
       "source": "Managed cron is not installed.",
       "surface": "apple",
@@ -13091,7 +13091,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 538,
+      "line": 542,
       "path": "apps/ios/Sources/Design/AgentProDreamingDestination.swift",
       "source": "off",
       "surface": "apple",
@@ -13099,7 +13099,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 540,
+      "line": 544,
       "path": "apps/ios/Sources/Design/AgentProDreamingDestination.swift",
       "source": "scheduled",
       "surface": "apple",
@@ -13107,7 +13107,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 541,
+      "line": 545,
       "path": "apps/ios/Sources/Design/AgentProDreamingDestination.swift",
       "source": "setup",
       "surface": "apple",
@@ -13115,7 +13115,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 546,
+      "line": 550,
       "path": "apps/ios/Sources/Design/AgentProDreamingDestination.swift",
       "source": "No update timestamp",
       "surface": "apple",
@@ -13123,7 +13123,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 549,
+      "line": 553,
       "path": "apps/ios/Sources/Design/AgentProDreamingDestination.swift",
       "source": "Updated %@",
       "surface": "apple",
@@ -13131,7 +13131,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 583,
+      "line": 587,
       "path": "apps/ios/Sources/Design/AgentProDreamingDestination.swift",
       "source": "%@ written",
       "surface": "apple",
@@ -13139,7 +13139,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 586,
+      "line": 590,
       "path": "apps/ios/Sources/Design/AgentProDreamingDestination.swift",
       "source": "%@ replaced",
       "surface": "apple",
@@ -13147,7 +13147,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 589,
+      "line": 593,
       "path": "apps/ios/Sources/Design/AgentProDreamingDestination.swift",
       "source": "%@ removed",
       "surface": "apple",
@@ -13155,7 +13155,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 593,
+      "line": 597,
       "path": "apps/ios/Sources/Design/AgentProDreamingDestination.swift",
       "source": "artifacts repaired",
       "surface": "apple",
@@ -13163,7 +13163,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 594,
+      "line": 598,
       "path": "apps/ios/Sources/Design/AgentProDreamingDestination.swift",
       "source": "no repair needed",
       "surface": "apple",
@@ -13171,7 +13171,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 598,
+      "line": 602,
       "path": "apps/ios/Sources/Design/AgentProDreamingDestination.swift",
       "source": "%@ complete.",
       "surface": "apple",
@@ -13179,7 +13179,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 608,
+      "line": 612,
       "path": "apps/ios/Sources/Design/AgentProDreamingDestination.swift",
       "source": "Light",
       "surface": "apple",
@@ -13187,7 +13187,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 609,
+      "line": 613,
       "path": "apps/ios/Sources/Design/AgentProDreamingDestination.swift",
       "source": "Deep",
       "surface": "apple",
@@ -13195,7 +13195,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 610,
+      "line": 614,
       "path": "apps/ios/Sources/Design/AgentProDreamingDestination.swift",
       "source": "REM",
       "surface": "apple",
@@ -13203,7 +13203,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 680,
+      "line": 684,
       "path": "apps/ios/Sources/Design/AgentProDreamingDestination.swift",
       "source": "\\(index)",
       "surface": "apple",
@@ -13211,7 +13211,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 682,
+      "line": 686,
       "path": "apps/ios/Sources/Design/AgentProDreamingDestination.swift",
       "source": "No diary prose for this day.",
       "surface": "apple",
