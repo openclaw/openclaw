@@ -142,7 +142,11 @@ class AppLanguageTest {
       assertEquals("Micro désactivé · raw", retainedComposite.value)
       assertEquals("Élevé", contextMeterThinkingLabel("high"))
       assertEquals("adaptive", contextMeterThinkingLabel("adaptive"))
-      val androidRelease = Build.VERSION.RELEASE?.trim().orEmpty().ifEmpty { "unknown" }
+      val androidRelease =
+        Build.VERSION.RELEASE
+          ?.trim()
+          .orEmpty()
+          .ifEmpty { "unknown" }
       assertEquals(
         "Android $androidRelease (SDK ${Build.VERSION.SDK_INT})",
         NodePresenceAliveBeacon.androidPlatformLabel(),
