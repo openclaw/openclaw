@@ -1268,18 +1268,13 @@ function renderDetailsRows(
 
 function renderFrequencyRows(props: CronProps) {
   const form = props.form;
-  if (form.scheduleKind === "on-exit") {
-    return html`
-      ${renderRow({
-        label: t("cron.form.repeat"),
-        help: t("cron.form.onExitHelp"),
-        control: html`<input .value=${t("cron.form.repeatOnExit")} readonly />`,
-      })}
-    `;
-  }
+  const isOnExit = form.scheduleKind === "on-exit";
   return html`
     ${renderRow({
       label: t("cron.form.repeat"),
+      // on-exit stays selectable only while it is the current value: jobs can
+      // convert to an editable schedule, but never back to a watched command.
+      help: isOnExit ? t("cron.form.onExitHelp") : undefined,
       control: html`
         <select
           id="cron-schedule-kind"
@@ -1289,6 +1284,9 @@ function renderFrequencyRows(props: CronProps) {
               scheduleKind: (e.target as HTMLSelectElement).value as CronFormState["scheduleKind"],
             })}
         >
+          ${isOnExit
+            ? html`<option value="on-exit">${t("cron.form.repeatOnExit")}</option>`
+            : nothing}
           <option value="every">${t("cron.form.repeatInterval")}</option>
           <option value="at">${t("cron.form.repeatOnce")}</option>
           <option value="cron">${t("cron.form.repeatCron")}</option>

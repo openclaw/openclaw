@@ -355,10 +355,19 @@ describe("cron view editor", () => {
       createOpen: true,
       form: { ...DEFAULT_CRON_FORM, scheduleKind: "on-exit" },
     });
-    expect(onExitContainer.querySelector("#cron-schedule-kind")).toBeNull();
-    // The read-only kind is a property-bound input value, not text content.
-    const onExitInputs = Array.from(onExitContainer.querySelectorAll("input"));
-    expect(onExitInputs.some((input) => input.value === "On exit")).toBe(true);
+    // on-exit jobs keep the Repeat select so they can convert to an editable
+    // schedule; the on-exit option only exists while it is the current value.
+    const onExitSelect = onExitContainer.querySelector("#cron-schedule-kind") as HTMLSelectElement;
+    expect(onExitSelect).not.toBeNull();
+    const optionValues = Array.from(onExitSelect.querySelectorAll("option")).map(
+      (option) => option.value,
+    );
+    expect(optionValues).toEqual(["on-exit", "every", "at", "cron"]);
+    expect(
+      (everyContainer.querySelector("#cron-schedule-kind") as HTMLSelectElement).querySelector(
+        'option[value="on-exit"]',
+      ),
+    ).toBeNull();
   });
 
   it("renders supported delivery options and normalizes stale announce selection", () => {

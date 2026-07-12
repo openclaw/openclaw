@@ -1134,14 +1134,19 @@ export async function loadCronRuns(
       query: state.cronRunsQuery.trim() || undefined,
       sortDir: state.cronRunsSortDir,
     });
+    // A slower response for a previously selected job (or one arriving after
+    // the pane switched back to all-scope) must not overwrite the current run
+    // pane; callers claim cronRunsJobId/scope before awaiting.
+    const staleJobResponse =
+      scope === "job" && (state.cronRunsScope !== "job" || state.cronRunsJobId !== activeJobId);
+    if (staleJobResponse) {
+      return "skipped";
+    }
     const entries = Array.isArray(res.entries) ? res.entries : [];
     state.cronRuns =
       append && (scope === "all" || state.cronRunsJobId === activeJobId)
         ? [...state.cronRuns, ...entries]
         : entries;
-    if (scope === "job") {
-      state.cronRunsJobId = activeJobId ?? null;
-    }
     const meta = normalizeCronPageMeta({
       totalRaw: res.total,
       offsetRaw: res.offset,

@@ -248,6 +248,10 @@ class CronPage extends OpenClawLightDomElement {
     this.requestCronUpdate();
     void this.runCronTask(async (cronState) => {
       updateCronRunsFilter(cronState, { cronRunsScope: "job" });
+      // Claim the run pane before awaiting: loadCronRuns drops responses whose
+      // job no longer matches, so a slower earlier selection cannot overwrite
+      // this task's history.
+      cronState.cronRunsJobId = job.id;
       await loadCronRuns(cronState, job.id);
     });
   }
@@ -296,6 +300,13 @@ class CronPage extends OpenClawLightDomElement {
         return;
       }
       cronState.cronCreateOpen = false;
+      // Creating from a selected task drops back to overview; recent activity
+      // must cover all tasks again, not the previously selected job.
+      if (cronState.cronRunsScope === "job") {
+        updateCronRunsFilter(cronState, { cronRunsScope: "all" });
+        cronState.cronRunsJobId = null;
+        await loadCronRuns(cronState, null);
+      }
     });
   }
 
