@@ -70,6 +70,7 @@ export function createMessageHandlerDeps(
   const deps: MSTeamsMessageHandlerDeps = {
     cfg,
     runtime: { error: vi.fn() } as unknown as RuntimeEnv,
+    accountId: "default",
     appId: "test-app",
     app: {} as MSTeamsMessageHandlerDeps["app"],
     tokenProvider: {

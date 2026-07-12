@@ -14,14 +14,16 @@ import {
 function createMemorySsoTokenStore(): MSTeamsSsoTokenStore {
   const tokens = new Map<string, MSTeamsSsoStoredToken>();
   return {
-    async get({ connectionName, userId }) {
-      return tokens.get(makeMSTeamsSsoTokenStoreKey(connectionName, userId)) ?? null;
+    async get({ accountId, connectionName, userId }) {
+      return tokens.get(makeMSTeamsSsoTokenStoreKey(connectionName, userId, accountId)) ?? null;
     },
     async save(token) {
-      tokens.set(makeMSTeamsSsoTokenStoreKey(token.connectionName, token.userId), { ...token });
+      tokens.set(makeMSTeamsSsoTokenStoreKey(token.connectionName, token.userId, token.accountId), {
+        ...token,
+      });
     },
-    async remove({ connectionName, userId }) {
-      return tokens.delete(makeMSTeamsSsoTokenStoreKey(connectionName, userId));
+    async remove({ accountId, connectionName, userId }) {
+      return tokens.delete(makeMSTeamsSsoTokenStoreKey(connectionName, userId, accountId));
     },
   };
 }

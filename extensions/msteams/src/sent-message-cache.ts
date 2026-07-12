@@ -34,33 +34,61 @@ const sentMessages = createPersistentDedupeCache<MSTeamsSentMessageRecord>({
   },
 });
 
-function makeKey(conversationId: string, messageId: string): string {
-  return `${conversationId}:${messageId}`;
+type MSTeamsSentMessageScope = {
+  accountId?: string | null;
+};
+
+function normalizeSentMessageAccountId(accountId?: string | null): string {
+  const trimmed = accountId?.trim();
+  return trimmed ? trimmed : "default";
 }
 
-export function recordMSTeamsSentMessage(conversationId: string, messageId: string): void {
+function makeKey(
+  conversationId: string,
+  messageId: string,
+  options?: MSTeamsSentMessageScope,
+): string {
+  return `${normalizeSentMessageAccountId(options?.accountId)}:${conversationId}:${messageId}`;
+}
+
+export function recordMSTeamsSentMessage(
+  conversationId: string,
+  messageId: string,
+  options?: MSTeamsSentMessageScope,
+): void {
   if (!conversationId || !messageId) {
     return;
   }
   const sentAt = Date.now();
-  void sentMessages.register(makeKey(conversationId, messageId), { sentAt }, { at: sentAt });
+  void sentMessages.register(
+    makeKey(conversationId, messageId, options),
+    { sentAt },
+    {
+      at: sentAt,
+    },
+  );
 }
 
-export function wasMSTeamsMessageSent(conversationId: string, messageId: string): boolean {
+export function wasMSTeamsMessageSent(
+  conversationId: string,
+  messageId: string,
+  options?: MSTeamsSentMessageScope,
+): boolean {
   if (!conversationId || !messageId) {
     return false;
   }
-  return sentMessages.peek(makeKey(conversationId, messageId));
+  return sentMessages.peek(makeKey(conversationId, messageId, options));
 }
 
 export async function wasMSTeamsMessageSentWithPersistence(params: {
   conversationId: string;
   messageId: string;
+  accountId?: string | null;
 }): Promise<boolean> {
   if (!params.conversationId || !params.messageId) {
     return false;
   }
-  return await sentMessages.lookup(makeKey(params.conversationId, params.messageId));
+  return await sentMessages.lookup(makeKey(params.conversationId, params.messageId, params));
 }
 
 export function clearMSTeamsSentMessageCache(): void {

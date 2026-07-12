@@ -1,6 +1,8 @@
 // Msteams plugin module implements token behavior.
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { isFutureDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { privateFileStoreSync } from "openclaw/plugin-sdk/security-runtime";
 import type { MSTeamsConfig } from "../runtime-api.js";
@@ -36,13 +38,16 @@ export type MSTeamsCredentials = MSTeamsSecretCredentials | MSTeamsFederatedCred
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-function resolveAuthType(cfg?: MSTeamsConfig): "secret" | "federated" {
+function resolveAuthType(
+  cfg?: MSTeamsConfig,
+  options?: { allowEnvFallback?: boolean },
+): "secret" | "federated" {
   const fromCfg = cfg?.authType;
   if (fromCfg === "secret" || fromCfg === "federated") {
     return fromCfg;
   }
 
-  const fromEnv = process.env.MSTEAMS_AUTH_TYPE;
+  const fromEnv = options?.allowEnvFallback === false ? undefined : process.env.MSTEAMS_AUTH_TYPE;
   if (fromEnv === "federated") {
     return "federated";
   }
@@ -82,16 +87,21 @@ export function hasConfiguredMSTeamsCredentials(cfg?: MSTeamsConfig): boolean {
 
 // ── resolveMSTeamsCredentials ─────────────────────────────────────────────
 
-export function resolveMSTeamsCredentials(cfg?: MSTeamsConfig): MSTeamsCredentials | undefined {
-  const authType = resolveAuthType(cfg);
+export function resolveMSTeamsCredentials(
+  cfg?: MSTeamsConfig,
+  options?: { allowEnvFallback?: boolean; pathPrefix?: string },
+): MSTeamsCredentials | undefined {
+  const allowEnvFallback = options?.allowEnvFallback ?? true;
+  const pathPrefix = options?.pathPrefix ?? "channels.msteams";
+  const authType = resolveAuthType(cfg, { allowEnvFallback });
 
   const appId =
     normalizeSecretInputString(cfg?.appId) ||
-    normalizeSecretInputString(process.env.MSTEAMS_APP_ID);
+    (allowEnvFallback ? normalizeSecretInputString(process.env.MSTEAMS_APP_ID) : undefined);
 
   const tenantId =
     normalizeSecretInputString(cfg?.tenantId) ||
-    normalizeSecretInputString(process.env.MSTEAMS_TENANT_ID);
+    (allowEnvFallback ? normalizeSecretInputString(process.env.MSTEAMS_TENANT_ID) : undefined);
 
   if (!appId || !tenantId) {
     return undefined;
@@ -99,16 +109,23 @@ export function resolveMSTeamsCredentials(cfg?: MSTeamsConfig): MSTeamsCredentia
 
   if (authType === "federated") {
     const certificatePath =
-      cfg?.certificatePath || process.env.MSTEAMS_CERTIFICATE_PATH || undefined;
+      cfg?.certificatePath ||
+      (allowEnvFallback ? process.env.MSTEAMS_CERTIFICATE_PATH : undefined) ||
+      undefined;
 
     const certificateThumbprint =
-      cfg?.certificateThumbprint || process.env.MSTEAMS_CERTIFICATE_THUMBPRINT || undefined;
+      cfg?.certificateThumbprint ||
+      (allowEnvFallback ? process.env.MSTEAMS_CERTIFICATE_THUMBPRINT : undefined) ||
+      undefined;
 
     const useManagedIdentity =
-      cfg?.useManagedIdentity ?? process.env.MSTEAMS_USE_MANAGED_IDENTITY === "true";
+      cfg?.useManagedIdentity ??
+      (allowEnvFallback ? process.env.MSTEAMS_USE_MANAGED_IDENTITY === "true" : false);
 
     const managedIdentityClientId =
-      cfg?.managedIdentityClientId || process.env.MSTEAMS_MANAGED_IDENTITY_CLIENT_ID || undefined;
+      cfg?.managedIdentityClientId ||
+      (allowEnvFallback ? process.env.MSTEAMS_MANAGED_IDENTITY_CLIENT_ID : undefined) ||
+      undefined;
 
     // At least one federated mechanism must be configured.
     if (!certificatePath && !useManagedIdentity) {
@@ -130,8 +147,9 @@ export function resolveMSTeamsCredentials(cfg?: MSTeamsConfig): MSTeamsCredentia
   const appPassword =
     normalizeResolvedSecretInputString({
       value: cfg?.appPassword,
-      path: "channels.msteams.appPassword",
-    }) || normalizeSecretInputString(process.env.MSTEAMS_APP_PASSWORD);
+      path: `${pathPrefix}.appPassword`,
+    }) ||
+    (allowEnvFallback ? normalizeSecretInputString(process.env.MSTEAMS_APP_PASSWORD) : undefined);
 
   if (!appPassword) {
     return undefined;
@@ -146,21 +164,43 @@ export function resolveMSTeamsCredentials(cfg?: MSTeamsConfig): MSTeamsCredentia
 
 const DELEGATED_TOKEN_FILENAME = "msteams-delegated.json";
 
-function resolveDelegatedTokenPath(): string {
-  return resolveMSTeamsStorePath({ filename: DELEGATED_TOKEN_FILENAME });
+function normalizeDelegatedTokenAccountId(accountId?: string | null): string {
+  const trimmed = accountId?.trim();
+  return trimmed || DEFAULT_ACCOUNT_ID;
 }
 
-export function loadDelegatedTokens(): MSTeamsDelegatedTokens | undefined {
+function accountScopedDelegatedTokenFilename(accountId?: string | null): string {
+  const normalized = normalizeDelegatedTokenAccountId(accountId);
+  if (normalized === DEFAULT_ACCOUNT_ID) {
+    return DELEGATED_TOKEN_FILENAME;
+  }
+  if (/^[A-Za-z0-9_.-]+$/.test(normalized)) {
+    return `msteams-delegated.${normalized}.json`;
+  }
+  const digest = createHash("sha256").update(normalized).digest("hex").slice(0, 16);
+  return `msteams-delegated.${digest}.json`;
+}
+
+function resolveDelegatedTokenPath(accountId?: string | null): string {
+  return resolveMSTeamsStorePath({ filename: accountScopedDelegatedTokenFilename(accountId) });
+}
+
+export function loadDelegatedTokens(params?: {
+  accountId?: string | null;
+}): MSTeamsDelegatedTokens | undefined {
   try {
-    const content = readFileSync(resolveDelegatedTokenPath(), "utf8");
+    const content = readFileSync(resolveDelegatedTokenPath(params?.accountId), "utf8");
     return JSON.parse(content) as MSTeamsDelegatedTokens;
   } catch {
     return undefined;
   }
 }
 
-export function saveDelegatedTokens(tokens: MSTeamsDelegatedTokens): void {
-  const tokenPath = resolveDelegatedTokenPath();
+export function saveDelegatedTokens(
+  tokens: MSTeamsDelegatedTokens,
+  params?: { accountId?: string | null },
+): void {
+  const tokenPath = resolveDelegatedTokenPath(params?.accountId);
   privateFileStoreSync(dirname(tokenPath)).writeJson(basename(tokenPath), tokens);
 }
 
@@ -168,8 +208,9 @@ export async function resolveDelegatedAccessToken(params: {
   tenantId: string;
   clientId: string;
   clientSecret: string;
+  accountId?: string | null;
 }): Promise<string | undefined> {
-  const tokens = loadDelegatedTokens();
+  const tokens = loadDelegatedTokens({ accountId: params.accountId });
   if (!tokens) {
     return undefined;
   }
@@ -188,7 +229,7 @@ export async function resolveDelegatedAccessToken(params: {
       refreshToken: tokens.refreshToken,
       scopes: tokens.scopes,
     });
-    saveDelegatedTokens(refreshed);
+    saveDelegatedTokens(refreshed, { accountId: params.accountId });
     return refreshed.accessToken;
   } catch {
     return undefined;
