@@ -954,7 +954,8 @@ async function buildCatalog(): Promise<GeneratedCatalog> {
     readAndroidSource(),
     readToolDisplaySources(),
   ]);
-  const [baseStrings, ...translatedStrings] = localeStrings;
+  const baseStrings = expectDefined(localeStrings[0], "English Android string resources");
+  const translatedStrings = localeStrings.slice(1);
   const manualBase = [...baseStrings.values()].filter(
     (entry) => !entry.key.startsWith(MANAGED_PREFIX),
   );
