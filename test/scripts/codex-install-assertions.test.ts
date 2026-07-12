@@ -171,6 +171,55 @@ function writeCodexBindingStateSqlite(params: {
   }
 }
 
+function writeSessionStoreSqlite(params: {
+  stateDir: string;
+  sessionFile: string;
+  sessionId: string;
+  sessionKey: string;
+}) {
+  const dbPath = path.join(params.stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+  mkdirSync(path.dirname(dbPath), { recursive: true });
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.exec(`
+      CREATE TABLE sessions (
+        session_id TEXT NOT NULL PRIMARY KEY,
+        session_key TEXT NOT NULL,
+        agent_harness_id TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE session_entries (
+        session_key TEXT NOT NULL PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        entry_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+    `);
+    const now = Date.now();
+    db.prepare(
+      `INSERT INTO sessions (
+         session_id, session_key, agent_harness_id, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?)`,
+    ).run(params.sessionId, params.sessionKey, "codex", now, now);
+    db.prepare(
+      `INSERT INTO session_entries (session_key, session_id, entry_json, updated_at)
+       VALUES (?, ?, ?, ?)`,
+    ).run(
+      params.sessionKey,
+      params.sessionId,
+      JSON.stringify({
+        sessionId: params.sessionId,
+        sessionFile: params.sessionFile,
+        agentHarnessId: "codex",
+      }),
+      now,
+    );
+  } finally {
+    db.close();
+  }
+}
+
 function createCodexNpmPluginLiveFixture(root: string, storedSessionId?: string) {
   const stateDir = path.join(root, "state");
   const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
@@ -184,13 +233,13 @@ function createCodexNpmPluginLiveFixture(root: string, storedSessionId?: string)
     payloads: [{ text: marker }],
     meta: { executionTrace: { winnerProvider: "codex" } },
   });
-  writeJson(path.join(sessionsDir, "sessions.json"), {
-    [sessionKey]: {
-      sessionId,
-      sessionFile,
-      agentHarnessId: "codex",
-    },
+  writeSessionStoreSqlite({
+    stateDir,
+    sessionFile,
+    sessionId,
+    sessionKey,
   });
+  mkdirSync(sessionsDir, { recursive: true });
   writeFileSync(sessionFile, '{"type":"session"}\n', "utf8");
   writeJson(path.join(stateDir, "agents", "main", "codex-home", "sessions", "native.jsonl"), {
     threadId,
@@ -286,7 +335,7 @@ describe("Codex install helpers", () => {
     expect(result.stderr).toBe("");
   });
 
-  it("accepts the SQLite-backed Codex binding in the npm live assertion", () => {
+  it("accepts SQLite-backed session and Codex binding state in the npm live assertion", () => {
     const root = makeTempDir(tempDirs, "openclaw-codex-npm-live-");
     const fixture = createCodexNpmPluginLiveFixture(root);
 

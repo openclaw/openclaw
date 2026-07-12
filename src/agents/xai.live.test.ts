@@ -22,6 +22,7 @@ const XAI_COMPLETE_LIVE_TIMEOUT_MS = 90_000;
 const XAI_WEB_SEARCH_LIVE_TIMEOUT_SECONDS = 60;
 
 const describeLive = LIVE && XAI_KEY ? describe : describe.skip;
+const XAI_REASONING_OUTPUT_TOKENS = 1_024;
 
 type AssistantLikeMessage = {
   content: Array<{
@@ -103,12 +104,18 @@ async function runXaiLiveCase(label: string, run: () => Promise<void>): Promise<
 }
 
 async function collectDoneMessage(
-  stream: AsyncIterable<{ type: string; message?: AssistantLikeMessage }>,
+  stream: AsyncIterable<{
+    type: string;
+    message?: AssistantLikeMessage;
+    error?: { errorMessage?: string };
+  }>,
 ): Promise<AssistantLikeMessage> {
   let doneMessage: AssistantLikeMessage | undefined;
   for await (const event of stream) {
     if (event.type === "done") {
       doneMessage = event.message;
+    } else if (event.type === "error") {
+      throw new Error(event.error?.errorMessage ?? "xAI stream failed without error details");
     }
   }
   return requireLiveValue(doneMessage, "done message");
@@ -128,11 +135,15 @@ describeLive("xai live", () => {
             },
             {
               apiKey: XAI_KEY,
-              maxTokens: 64,
+              maxTokens: XAI_REASONING_OUTPUT_TOKENS,
+              reasoning: "low",
             },
           );
 
-          expect(extractNonEmptyAssistantText(res.content).length).toBeGreaterThan(0);
+          expect(
+            extractNonEmptyAssistantText(res.content).length,
+            res.errorMessage,
+          ).toBeGreaterThan(0);
         });
       },
       XAI_COMPLETE_LIVE_TIMEOUT_MS,
@@ -155,7 +166,7 @@ describeLive("xai live", () => {
         let capturedPayload: Record<string, unknown> | undefined;
         const streamOptions = {
           apiKey: XAI_KEY,
-          maxTokens: 128,
+          maxTokens: XAI_REASONING_OUTPUT_TOKENS,
           reasoning: "low",
           toolChoice: { type: "function", name: "noop" },
           onPayload: (payload: unknown) => {
@@ -177,7 +188,11 @@ describeLive("xai live", () => {
         );
 
         const doneMessage = await collectDoneMessage(
-          stream as AsyncIterable<{ type: string; message?: AssistantLikeMessage }>,
+          stream as AsyncIterable<{
+            type: string;
+            message?: AssistantLikeMessage;
+            error?: { errorMessage?: string };
+          }>,
         );
         const content = requireLiveValue(doneMessage.content, "done message content");
         expect(Array.isArray(content)).toBe(true);

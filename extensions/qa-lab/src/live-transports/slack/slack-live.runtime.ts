@@ -29,6 +29,7 @@ import {
   normalizeQaProviderMode,
   type QaProviderModeInput,
 } from "../../run-config.js";
+import type { RuntimeId } from "../../runtime-parity.js";
 import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
@@ -261,6 +262,7 @@ type SlackQaScenarioDefinition = LiveTransportScenarioDefinition<SlackQaScenario
   buildRun: (sutUserId: string) => SlackQaScenarioRun;
   configOverrides?: SlackQaConfigOverrides;
   defaultEnabled?: boolean;
+  forcedRuntime?: RuntimeId;
 };
 
 type SlackQaGatewayHarness = Awaited<ReturnType<typeof startQaLiveLaneGateway>>;
@@ -744,6 +746,7 @@ const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
       },
       codexApproval: true,
     },
+    forcedRuntime: "codex",
     buildRun: () => ({
       approvalKind: "plugin",
       appServerMethod: "item/commandExecution/requestApproval",
@@ -764,6 +767,7 @@ const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
       },
       codexApproval: true,
     },
+    forcedRuntime: "codex",
     buildRun: () => ({
       approvalKind: "plugin",
       appServerMethod: "item/fileChange/requestApproval",
@@ -3011,6 +3015,7 @@ export async function runSlackQaLive(params: {
             primaryModel,
             alternateModel,
             fastMode: params.fastMode,
+            forcedRuntime: scenario.forcedRuntime,
             controlUiEnabled: false,
             mutateConfig: (cfg) =>
               buildSlackQaConfig(cfg, {
