@@ -318,17 +318,9 @@ class ChatController internal constructor(
                   .asStringOrNull()
                   ?.trim()
                   ?.takeIf { it.isNotEmpty() }
-              if (existingSession == null) {
-                val createParams =
-                  buildJsonObject {
-                    put("key", JsonPrimitive(mainSession.key))
-                    put("agentId", JsonPrimitive(resolveAgentIdForSessionKey(mainSession.key)))
-                    put("label", JsonPrimitive(mainSession.label))
-                  }
-                requestGatewayBound(requestScope.gatewayId, "sessions.create", createParams.toString())
-              } else if (existingLabel == null) {
-                // An existing unlabeled session owns upgrade history already. Patch metadata instead
-                // of replaying create lifecycle behavior against that live session.
+              if (existingLabel == null) {
+                // Label-only sessions.patch is operator.write-scoped and atomically upserts the row,
+                // avoiding the concurrent-session identity race in sessions.create.
                 val patchParams =
                   buildJsonObject {
                     put("key", JsonPrimitive(mainSession.key))

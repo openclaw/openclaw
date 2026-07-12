@@ -40,12 +40,12 @@ class ChatControllerReconnectRestoreTest {
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
-  fun connectedRefreshCreatesDeviceSessionBeforeLoadingHistory() =
+  fun connectedRefreshUpsertsDeviceSessionBeforeLoadingHistory() =
     runTest {
       val sessionKey = "agent:main:node-device"
       val gateway = ScriptedGateway(json)
       gateway.respondWith("sessions.describe", """{"session":null}""")
-      gateway.respondWith("sessions.create", """{"ok":true,"key":"$sessionKey"}""")
+      gateway.respondWith("sessions.patch", """{"ok":true,"key":"$sessionKey"}""")
       gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
       val controller = newScopedController(gateway)
 
@@ -57,16 +57,15 @@ class ChatControllerReconnectRestoreTest {
       runCurrent()
 
       val describeIndex = gateway.calls.indexOfFirst { it.method == "sessions.describe" }
-      val createIndex = gateway.calls.indexOfFirst { it.method == "sessions.create" }
+      val patchIndex = gateway.calls.indexOfFirst { it.method == "sessions.patch" }
       val historyIndex = gateway.calls.indexOfFirst { it.method == "chat.history" }
       assertTrue(describeIndex >= 0)
-      assertTrue(createIndex > describeIndex)
-      assertTrue(historyIndex > createIndex)
+      assertTrue(patchIndex > describeIndex)
+      assertTrue(historyIndex > patchIndex)
       assertEquals(sessionKey, controller.sessionKey.value)
-      val createParams = json.parseToJsonElement(gateway.calls[createIndex].paramsJson.orEmpty()).jsonObject
-      assertEquals(sessionKey, createParams["key"]?.jsonPrimitive?.content)
-      assertEquals("main", createParams["agentId"]?.jsonPrimitive?.content)
-      assertEquals("OpenClaw App · Pixel · device", createParams["label"]?.jsonPrimitive?.content)
+      val patchParams = json.parseToJsonElement(gateway.calls[patchIndex].paramsJson.orEmpty()).jsonObject
+      assertEquals(sessionKey, patchParams["key"]?.jsonPrimitive?.content)
+      assertEquals("OpenClaw App · Pixel · device", patchParams["label"]?.jsonPrimitive?.content)
     }
 
   @Test
@@ -76,7 +75,7 @@ class ChatControllerReconnectRestoreTest {
       val sessionKey = "agent:main:node-device"
       val gateway = ScriptedGateway(json)
       gateway.respondWith("sessions.describe", """{"session":null}""")
-      gateway.respond("sessions.create") { error("create unavailable") }
+      gateway.respond("sessions.patch") { error("patch unavailable") }
       gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
       val controller = newScopedController(gateway)
 
@@ -84,7 +83,7 @@ class ChatControllerReconnectRestoreTest {
       controller.onGatewayConnected(MainSessionBinding(sessionKey, "OpenClaw App · Pixel · device"))
       runCurrent()
 
-      assertEquals(1, gateway.callCount("sessions.create"))
+      assertEquals(1, gateway.callCount("sessions.patch"))
       assertEquals(1, gateway.callCount("chat.history"))
       assertEquals(sessionKey, controller.sessionKey.value)
       assertNull(controller.errorText.value)
@@ -158,7 +157,7 @@ class ChatControllerReconnectRestoreTest {
         storedLabel?.let { """{"session":{"key":"$sessionKey","label":"$it"}}""" }
           ?: """{"session":null}"""
       }
-      gateway.respond("sessions.create") { paramsJson ->
+      gateway.respond("sessions.patch") { paramsJson ->
         storedLabel =
           json
             .parseToJsonElement(paramsJson.orEmpty())
@@ -178,7 +177,7 @@ class ChatControllerReconnectRestoreTest {
       controller.onGatewayConnected(binding)
       runCurrent()
 
-      assertEquals(1, gateway.callCount("sessions.create"))
+      assertEquals(1, gateway.callCount("sessions.patch"))
       assertEquals(2, gateway.callCount("sessions.describe"))
       assertEquals(2, gateway.callCount("chat.history"))
 
@@ -186,7 +185,7 @@ class ChatControllerReconnectRestoreTest {
       controller.onGatewayConnected(binding.copy(label = "OpenClaw App · Renamed · device"))
       runCurrent()
 
-      assertEquals(1, gateway.callCount("sessions.create"))
+      assertEquals(1, gateway.callCount("sessions.patch"))
       assertEquals(3, gateway.callCount("sessions.describe"))
       assertEquals(3, gateway.callCount("chat.history"))
       assertEquals("My Android session", storedLabel)
@@ -207,7 +206,7 @@ class ChatControllerReconnectRestoreTest {
             ?.content
         if (key == "agent:first:node-device") firstDescribe.await() else """{"session":null}"""
       }
-      gateway.respond("sessions.create") { paramsJson ->
+      gateway.respond("sessions.patch") { paramsJson ->
         val key =
           json
             .parseToJsonElement(paramsJson.orEmpty())
@@ -227,17 +226,32 @@ class ChatControllerReconnectRestoreTest {
       controller.refresh()
       runCurrent()
 
-      assertEquals(0, gateway.callCount("chat.history"))
-      firstDescribe.complete("""{"session":null}""")
-      runCurrent()
-
-      val createIndex = gateway.calls.indexOfLast { it.method == "sessions.create" }
+      val patchCalls = gateway.calls.withIndex().filter { it.value.method == "sessions.patch" }
+      val patchIndex = patchCalls.single().index
       val historyCalls = gateway.calls.withIndex().filter { it.value.method == "chat.history" }
-      assertTrue(createIndex >= 0)
+      val patchParams =
+        patchCalls
+          .single()
+          .value
+          .paramsJson
+          .orEmpty()
+      val patchedKey =
+        json
+          .parseToJsonElement(patchParams)
+          .jsonObject["key"]
+          ?.jsonPrimitive
+          ?.content
+      assertEquals("agent:second:node-device", patchedKey)
       assertTrue(historyCalls.isNotEmpty())
-      assertTrue(historyCalls.all { it.index > createIndex })
+      assertTrue(historyCalls.all { it.index > patchIndex })
       assertTrue(historyCalls.all { gateway.sessionKeyOf(it.value.paramsJson) == "agent:second:node-device" })
       assertEquals("agent:second:node-device", controller.sessionKey.value)
+
+      // The cancelled response must remain inert even if its server-side work completes later.
+      firstDescribe.complete("""{"session":null}""")
+      runCurrent()
+      assertEquals(1, gateway.callCount("sessions.patch"))
+      assertTrue(gateway.calls.none { it.method == "chat.history" && gateway.sessionKeyOf(it.paramsJson) == "agent:first:node-device" })
     }
 
   @Test
@@ -313,7 +327,7 @@ class ChatControllerReconnectRestoreTest {
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
-  fun reconnectRecreatesSessionDeletedWhileDisconnected() =
+  fun reconnectUpsertsSessionDeletedWhileDisconnected() =
     runTest {
       val sessionKey = "agent:main:node-device"
       val gateway = ScriptedGateway(json)
@@ -325,7 +339,7 @@ class ChatControllerReconnectRestoreTest {
           """{"session":null}"""
         }
       }
-      gateway.respond("sessions.create") {
+      gateway.respond("sessions.patch") {
         sessionExists = true
         """{"ok":true,"key":"$sessionKey"}"""
       }
@@ -342,7 +356,7 @@ class ChatControllerReconnectRestoreTest {
       runCurrent()
 
       assertEquals(2, gateway.callCount("sessions.describe"))
-      assertEquals(2, gateway.callCount("sessions.create"))
+      assertEquals(2, gateway.callCount("sessions.patch"))
     }
 
   @Test
