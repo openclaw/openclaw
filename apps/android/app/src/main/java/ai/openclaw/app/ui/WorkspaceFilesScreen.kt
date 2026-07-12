@@ -115,6 +115,11 @@ internal fun WorkspaceFilesScreen(
   }
 }
 
+internal fun isWorkspaceDirectoryRequestInFlight(
+  loading: Boolean,
+  loadingMore: Boolean,
+): Boolean = loading || loadingMore
+
 @Composable
 private fun WorkspaceDirectoryScreen(
   viewModel: MainViewModel,
@@ -131,6 +136,7 @@ private fun WorkspaceDirectoryScreen(
   var loadingMore by remember(path) { mutableStateOf(false) }
   var errorText by remember(path) { mutableStateOf<String?>(null) }
   var refreshNonce by remember(path) { mutableIntStateOf(0) }
+  val requestInFlight = isWorkspaceDirectoryRequestInFlight(loading, loadingMore)
 
   LaunchedEffect(path, isConnected, refreshNonce) {
     if (!isConnected) {
@@ -182,7 +188,7 @@ private fun WorkspaceDirectoryScreen(
               )
             }
           }
-          if (loading) {
+          if (requestInFlight) {
             Box(modifier = Modifier.size(ClawTheme.spacing.touchTarget), contentAlignment = Alignment.Center) {
               CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
             }
@@ -190,7 +196,12 @@ private fun WorkspaceDirectoryScreen(
             ClawPlainIconButton(
               icon = Icons.Outlined.Refresh,
               contentDescription = "Refresh",
-              onClick = { refreshNonce += 1 },
+              onClick = {
+                if (!isWorkspaceDirectoryRequestInFlight(loading, loadingMore)) {
+                  loading = true
+                  refreshNonce += 1
+                }
+              },
             )
           }
         }
@@ -225,7 +236,8 @@ private fun WorkspaceDirectoryScreen(
               Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(ClawTheme.radii.row))
-                .clickable(enabled = !loadingMore) {
+                .clickable(enabled = !requestInFlight) {
+                  if (isWorkspaceDirectoryRequestInFlight(loading, loadingMore)) return@clickable
                   loadingMore = true
                   scope.launch {
                     try {
