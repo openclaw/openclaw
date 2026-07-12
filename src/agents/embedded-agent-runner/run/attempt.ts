@@ -4818,130 +4818,127 @@ export async function runEmbeddedAttempt(
         log.debug(
           `run cleanup: stage=final-snapshot-lock-wait runId=${params.runId} sessionId=${params.sessionId}`,
         );
-        try {
-          await sessionLockController.withSessionWriteLock(async () => {
-            log.debug(
-              `run cleanup: stage=final-snapshot-lock-acquired runId=${params.runId} sessionId=${params.sessionId}`,
-            );
-            // Check if ANY compaction occurred during the entire attempt (prompt + retry).
-            // Using a cumulative count (> 0) instead of a delta check avoids missing
-            // compactions that complete during activeSession.prompt() before the delta
-            // baseline is sampled.
-            compactionOccurredThisAttempt = getCompactionCount() > 0;
-            // Append cache-TTL timestamp AFTER prompt + compaction retry completes.
-            // Previously this was before the prompt, which caused a custom entry to be
-            // inserted between compaction and the next prompt — breaking the
-            // prepareCompaction() guard that checks the last entry type, leading to
-            // double-compaction. See: https://github.com/openclaw/openclaw/issues/9282
-            // Skip when timed out during compaction — session state may be inconsistent.
-            // Also skip when compaction ran this attempt — appending a custom entry
-            // after compaction would break the guard again. See: #28491
-            appendAttemptCacheTtlIfNeeded({
-              sessionManager: activeSessionManager,
-              timedOutDuringCompaction,
-              compactionOccurredThisAttempt,
-              config: params.config,
-              provider: params.provider,
-              modelId: params.modelId,
-              modelApi: params.model.api,
-              isCacheTtlEligibleProvider,
-            });
-
-            // If timeout occurred during compaction, use pre-compaction snapshot when available
-            // (compaction restructures messages but does not add user/assistant turns).
-            const snapshotSelection = selectCompactionTimeoutSnapshot({
-              timedOutDuringCompaction,
-              preCompactionSnapshot,
-              preCompactionSessionId,
-              currentSnapshot: activeSession.messages.slice(),
-              currentSessionId: activeSession.sessionId,
-            });
-            if (timedOutDuringCompaction) {
-              if (!isProbeSession) {
-                log.warn(
-                  `using ${snapshotSelection.source} snapshot: timed out during compaction runId=${params.runId} sessionId=${params.sessionId}`,
-                );
-              }
-            }
-            messagesSnapshot = projectToolSearchTargetTranscriptMessages(
-              snapshotSelection.messagesSnapshot,
-              toolSearchTargetTranscriptProjections,
-            );
-            sessionIdUsed = snapshotSelection.sessionIdUsed;
-
-            lastAssistant = messagesSnapshot
-              .slice()
-              .toReversed()
-              .find((message): message is AssistantMessage => message.role === "assistant");
-            currentAttemptAssistant = findCurrentAttemptAssistantMessage({
-              messagesSnapshot,
-              prePromptMessageCount,
-            });
-            attemptUsage = getUsageTotals();
-            cacheBreak = cacheObservabilityEnabled
-              ? completePromptCacheObservation({
-                  sessionId: params.sessionId,
-                  promptCacheKey: params.promptCacheKey,
-                  sessionKey: params.sessionKey,
-                  usage: attemptUsage,
-                })
-              : null;
-            lastCallUsage = normalizeUsage(currentAttemptAssistant?.usage);
-            const promptCacheObservation =
-              cacheObservabilityEnabled &&
-              (cacheBreak ||
-                promptCacheChangesForTurn ||
-                typeof attemptUsage?.cacheRead === "number")
-                ? {
-                    broke: Boolean(cacheBreak),
-                    ...(typeof cacheBreak?.previousCacheRead === "number"
-                      ? { previousCacheRead: cacheBreak.previousCacheRead }
-                      : {}),
-                    ...(typeof cacheBreak?.cacheRead === "number"
-                      ? { cacheRead: cacheBreak.cacheRead }
-                      : typeof attemptUsage?.cacheRead === "number"
-                        ? { cacheRead: attemptUsage.cacheRead }
-                        : {}),
-                    changes: cacheBreak?.changes ?? promptCacheChangesForTurn,
-                  }
-                : undefined;
-            const fallbackLastCacheTouchAt = readLastCacheTtlTimestamp(activeSessionManager, {
-              provider: params.provider,
-              modelId: params.modelId,
-            });
-            promptCache = buildContextEnginePromptCacheInfo({
-              retention: effectivePromptCacheRetention,
-              lastCallUsage,
-              observation: promptCacheObservation,
-              lastCacheTouchAt: resolvePromptCacheTouchTimestamp({
-                lastCallUsage,
-                assistantTimestamp: currentAttemptAssistant?.timestamp,
-                fallbackLastCacheTouchAt,
-              }),
-            });
-
-            if (promptError && promptErrorSource === "prompt" && !compactionOccurredThisAttempt) {
-              try {
-                activeSessionManager.appendCustomEntry("openclaw:prompt-error", {
-                  timestamp: Date.now(),
-                  runId: params.runId,
-                  sessionId: params.sessionId,
-                  provider: params.provider,
-                  model: params.modelId,
-                  api: params.model.api,
-                  error: formatErrorMessage(promptError),
-                });
-              } catch (entryErr) {
-                log.warn(`failed to persist prompt error entry: ${String(entryErr)}`);
-              }
-            }
+        const finalSnapshotWrite = sessionLockController.withSessionWriteLock(async () => {
+          log.debug(
+            `run cleanup: stage=final-snapshot-lock-acquired runId=${params.runId} sessionId=${params.sessionId}`,
+          );
+          // Check if ANY compaction occurred during the entire attempt (prompt + retry).
+          // Using a cumulative count (> 0) instead of a delta check avoids missing
+          // compactions that complete during activeSession.prompt() before the delta
+          // baseline is sampled.
+          compactionOccurredThisAttempt = getCompactionCount() > 0;
+          // Append cache-TTL timestamp AFTER prompt + compaction retry completes.
+          // Previously this was before the prompt, which caused a custom entry to be
+          // inserted between compaction and the next prompt — breaking the
+          // prepareCompaction() guard that checks the last entry type, leading to
+          // double-compaction. See: https://github.com/openclaw/openclaw/issues/9282
+          // Skip when timed out during compaction — session state may be inconsistent.
+          // Also skip when compaction ran this attempt — appending a custom entry
+          // after compaction would break the guard again. See: #28491
+          appendAttemptCacheTtlIfNeeded({
+            sessionManager: activeSessionManager,
+            timedOutDuringCompaction,
+            compactionOccurredThisAttempt,
+            config: params.config,
+            provider: params.provider,
+            modelId: params.modelId,
+            modelApi: params.model.api,
+            isCacheTtlEligibleProvider,
           });
-        } catch (err) {
+
+          // If timeout occurred during compaction, use pre-compaction snapshot when available
+          // (compaction restructures messages but does not add user/assistant turns).
+          const snapshotSelection = selectCompactionTimeoutSnapshot({
+            timedOutDuringCompaction,
+            preCompactionSnapshot,
+            preCompactionSessionId,
+            currentSnapshot: activeSession.messages.slice(),
+            currentSessionId: activeSession.sessionId,
+          });
+          if (timedOutDuringCompaction) {
+            if (!isProbeSession) {
+              log.warn(
+                `using ${snapshotSelection.source} snapshot: timed out during compaction runId=${params.runId} sessionId=${params.sessionId}`,
+              );
+            }
+          }
+          messagesSnapshot = projectToolSearchTargetTranscriptMessages(
+            snapshotSelection.messagesSnapshot,
+            toolSearchTargetTranscriptProjections,
+          );
+          sessionIdUsed = snapshotSelection.sessionIdUsed;
+
+          lastAssistant = messagesSnapshot
+            .slice()
+            .toReversed()
+            .find((message): message is AssistantMessage => message.role === "assistant");
+          currentAttemptAssistant = findCurrentAttemptAssistantMessage({
+            messagesSnapshot,
+            prePromptMessageCount,
+          });
+          attemptUsage = getUsageTotals();
+          cacheBreak = cacheObservabilityEnabled
+            ? completePromptCacheObservation({
+                sessionId: params.sessionId,
+                promptCacheKey: params.promptCacheKey,
+                sessionKey: params.sessionKey,
+                usage: attemptUsage,
+              })
+            : null;
+          lastCallUsage = normalizeUsage(currentAttemptAssistant?.usage);
+          const promptCacheObservation =
+            cacheObservabilityEnabled &&
+            (cacheBreak || promptCacheChangesForTurn || typeof attemptUsage?.cacheRead === "number")
+              ? {
+                  broke: Boolean(cacheBreak),
+                  ...(typeof cacheBreak?.previousCacheRead === "number"
+                    ? { previousCacheRead: cacheBreak.previousCacheRead }
+                    : {}),
+                  ...(typeof cacheBreak?.cacheRead === "number"
+                    ? { cacheRead: cacheBreak.cacheRead }
+                    : typeof attemptUsage?.cacheRead === "number"
+                      ? { cacheRead: attemptUsage.cacheRead }
+                      : {}),
+                  changes: cacheBreak?.changes ?? promptCacheChangesForTurn,
+                }
+              : undefined;
+          const fallbackLastCacheTouchAt = readLastCacheTtlTimestamp(activeSessionManager, {
+            provider: params.provider,
+            modelId: params.modelId,
+          });
+          promptCache = buildContextEnginePromptCacheInfo({
+            retention: effectivePromptCacheRetention,
+            lastCallUsage,
+            observation: promptCacheObservation,
+            lastCacheTouchAt: resolvePromptCacheTouchTimestamp({
+              lastCallUsage,
+              assistantTimestamp: currentAttemptAssistant?.timestamp,
+              fallbackLastCacheTouchAt,
+            }),
+          });
+
+          if (promptError && promptErrorSource === "prompt" && !compactionOccurredThisAttempt) {
+            try {
+              activeSessionManager.appendCustomEntry("openclaw:prompt-error", {
+                timestamp: Date.now(),
+                runId: params.runId,
+                sessionId: params.sessionId,
+                provider: params.provider,
+                model: params.modelId,
+                api: params.model.api,
+                error: formatErrorMessage(promptError),
+              });
+            } catch (entryErr) {
+              log.warn(`failed to persist prompt error entry: ${String(entryErr)}`);
+            }
+          }
+        });
+        await finalSnapshotWrite.catch((err) => {
           log.warn(
             `run cleanup: stage=final-snapshot-lock-failed runId=${params.runId} sessionId=${params.sessionId} error=${formatErrorMessage(err)}`,
           );
           throw err;
-        }
+        });
 
         // Let the active context engine run its post-turn lifecycle. These hooks
         // may call runtime LLM capabilities, so only their transcript rewrite
