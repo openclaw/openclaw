@@ -2096,6 +2096,7 @@ async function runEmbeddedAgentInternal(
       };
       let lastRetryFailoverReason: FailoverReason | null = null;
       let compactionContinuationRetryInstruction: string | null = null;
+      let incompleteTurnContinuationPrompt: string | null = null;
       let nextAttemptPromptOverride: string | null = null;
       let rateLimitProfileRotations = 0;
       let timeoutCompactionAttempts = 0;
@@ -2156,7 +2157,7 @@ async function runEmbeddedAgentInternal(
       };
       let suppressNextUserMessagePersistence = params.suppressNextUserMessagePersistence ?? false;
       // Same-prompt retries may reuse the user leaf only after its write is confirmed.
-      let currentUserMessagePersisted = suppressNextUserMessagePersistence;
+      let activePromptPersisted = suppressNextUserMessagePersistence;
       // Compaction continuation also needs to know whether the current inbound turn is durable.
       let lastPersistedCurrentMessageId: string | number | undefined;
       const onUserMessagePersisted: RunEmbeddedAgentParams["onUserMessagePersisted"] = (
@@ -2167,7 +2168,7 @@ async function runEmbeddedAgentInternal(
         };
         const blockedBeforeAgentRun = messageMetadata["__openclaw"]?.beforeAgentRunBlocked;
         const markCurrentUserMessagePersisted = () => {
-          currentUserMessagePersisted = true;
+          activePromptPersisted = true;
           if (params.currentMessageId !== undefined) {
             lastPersistedCurrentMessageId = params.currentMessageId;
           }
@@ -2532,6 +2533,7 @@ async function runEmbeddedAgentInternal(
 
           const basePrompt =
             nextAttemptPromptOverride ??
+            incompleteTurnContinuationPrompt ??
             resolveEmbeddedAttemptBasePrompt({
               nativeModelOwned,
               provider,
@@ -2725,6 +2727,7 @@ async function runEmbeddedAgentInternal(
             prompt,
             transcriptPrompt: params.transcriptPrompt,
             userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+            skipPreparedUserTurnMessage: incompleteTurnContinuationPrompt !== null,
             currentInboundEventKind: params.currentInboundEventKind,
             currentInboundContext: params.currentInboundContext,
             images: params.images,
@@ -2890,6 +2893,7 @@ async function runEmbeddedAgentInternal(
           }
           const attempt = normalizeEmbeddedRunAttemptResult(rawAttempt);
           await waitForCurrentUserMessagePersistence();
+          suppressNextUserMessagePersistence = activePromptPersisted;
           if (attemptCancellationRequested) {
             throwIfAborted();
             throw createAgentRunDirectAbortError();
@@ -4539,7 +4543,8 @@ async function runEmbeddedAgentInternal(
           ) {
             reasoningOnlyRetryAttempts += 1;
             // The assistant leaf is already durable, so persist a new user boundary.
-            nextAttemptPromptOverride = nextReasoningOnlyRetryInstruction;
+            incompleteTurnContinuationPrompt = nextReasoningOnlyRetryInstruction;
+            activePromptPersisted = false;
             suppressNextUserMessagePersistence = false;
             log.warn(
               `reasoning-only assistant turn detected: runId=${params.runId} sessionId=${params.sessionId} ` +
@@ -4564,7 +4569,7 @@ async function runEmbeddedAgentInternal(
           ) {
             missingAssistantRetryAttempts += 1;
             // Same-prompt retries reuse the canonical user leaf only when it was written.
-            suppressNextUserMessagePersistence = currentUserMessagePersisted;
+            suppressNextUserMessagePersistence = activePromptPersisted;
             log.warn(
               `missing assistant terminal message detected: runId=${params.runId} sessionId=${params.sessionId} ` +
                 `provider=${activeErrorContext.provider}/${activeErrorContext.model} — retrying ${missingAssistantRetryAttempts}/${MAX_MISSING_ASSISTANT_RETRIES} with same prompt`,
@@ -4578,7 +4583,8 @@ async function runEmbeddedAgentInternal(
           ) {
             emptyResponseRetryAttempts += 1;
             // The assistant leaf is already durable, so persist a new user boundary.
-            nextAttemptPromptOverride = nextEmptyResponseRetryInstruction;
+            incompleteTurnContinuationPrompt = nextEmptyResponseRetryInstruction;
+            activePromptPersisted = false;
             suppressNextUserMessagePersistence = false;
             log.warn(
               `empty response detected: runId=${params.runId} sessionId=${params.sessionId} ` +

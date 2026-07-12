@@ -80,6 +80,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   function runAttemptCall(index: number): {
     prompt?: string;
     suppressNextUserMessagePersistence?: boolean;
+    skipPreparedUserTurnMessage?: boolean;
   } {
     // Continuation prompt assertions read the exact prompt passed to the runner
     // attempt rather than derived result metadata.
@@ -87,7 +88,11 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     if (!call) {
       throw new Error(`Expected run embedded attempt call ${index}`);
     }
-    return call[0] as { prompt?: string; suppressNextUserMessagePersistence?: boolean };
+    return call[0] as {
+      prompt?: string;
+      suppressNextUserMessagePersistence?: boolean;
+      skipPreparedUserTurnMessage?: boolean;
+    };
   }
 
   function markUserMessagePersisted(attemptParams: unknown): void {
@@ -861,6 +866,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     const secondCall = runAttemptCall(1);
     expect(secondCall.prompt).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
     expect(secondCall.suppressNextUserMessagePersistence).toBe(false);
+    expect(secondCall.skipPreparedUserTurnMessage).toBe(true);
     expectWarnMessageWith("reasoning-only assistant turn detected");
   });
 
@@ -901,6 +907,58 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.payloads).toEqual([{ text: "NO_REPLY" }]);
     expect(result.meta.terminalReplyKind).toBe("silent-empty");
     expect(result.meta.livenessState).toBe("working");
+  });
+
+  it("replays an unpersisted reasoning continuation across a missing-assistant retry", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
+      markUserMessagePersisted(attemptParams);
+      return makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal reasoning",
+              thinkingSignature: JSON.stringify({ id: "rs_retry_boundary", type: "reasoning" }),
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      });
+    });
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: undefined,
+        currentAttemptAssistant: undefined,
+      }),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({ assistantTexts: ["Visible answer."] }),
+    );
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-reasoning-continuation-missing-assistant",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
+    expect(runAttemptCall(1)).toMatchObject({
+      prompt: REASONING_ONLY_RETRY_INSTRUCTION,
+      skipPreparedUserTurnMessage: true,
+      suppressNextUserMessagePersistence: false,
+    });
+    expect(runAttemptCall(2)).toMatchObject({
+      prompt: REASONING_ONLY_RETRY_INSTRUCTION,
+      skipPreparedUserTurnMessage: true,
+      suppressNextUserMessagePersistence: false,
+    });
   });
 
   it("does not retry or warn on reasoning-only turns when a messaging tool already delivered", async () => {
@@ -1120,6 +1178,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     const secondCall = runAttemptCall(1);
     expect(secondCall.prompt).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
     expect(secondCall.suppressNextUserMessagePersistence).toBe(false);
+    expect(secondCall.skipPreparedUserTurnMessage).toBe(true);
     expectWarnMessageWith("empty response detected");
   });
 

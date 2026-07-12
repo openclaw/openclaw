@@ -2603,7 +2603,9 @@ export async function runEmbeddedAttempt(
         params.model.api === "openai-chatgpt-responses";
 
       await prewarmSessionFile(params.sessionFile);
-      const preparedUserTurnMessage = await params.userTurnTranscriptRecorder?.resolveMessage();
+      const preparedUserTurnMessage = params.skipPreparedUserTurnMessage
+        ? undefined
+        : await params.userTurnTranscriptRecorder?.resolveMessage();
       sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {
         agentId: sessionAgentId,
         sessionKey: params.sessionKey,
