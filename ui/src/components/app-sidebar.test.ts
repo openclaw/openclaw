@@ -234,7 +234,7 @@ afterEach(() => {
 });
 
 describe("AppSidebar update card wiring", () => {
-  it("renders the update card first in the footer and forwards its action", async () => {
+  it("renders the update card in the footer after the attention slot and forwards its action", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
     const onUpdate = vi.fn();
@@ -247,8 +247,10 @@ describe("AppSidebar update card wiring", () => {
     await sidebar.updateComplete;
 
     const footer = sidebar.querySelector(".sidebar-shell__footer");
-    const card = footer?.firstElementChild;
-    expect(card?.localName).toBe("openclaw-sidebar-update-card");
+    // Attention chips (when present) stack above the update card.
+    expect(footer?.firstElementChild?.localName).toBe("openclaw-sidebar-attention");
+    const card = footer?.querySelector("openclaw-sidebar-update-card");
+    expect(card).not.toBeNull();
     card?.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
     expect(onUpdate).toHaveBeenCalledOnce();
   });
