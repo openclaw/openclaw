@@ -2648,12 +2648,12 @@ describe("skills-clawhub", () => {
     });
   });
 
-  it("clamps skill search limit to the configured maximum", async () => {
+  it("forwards skill search limit without cap to ClawHub", async () => {
     searchClawHubSkillsMock.mockResolvedValueOnce([]);
     await searchSkillsFromClawHub({ limit: 999_999 });
     expect(searchClawHubSkillsMock).toHaveBeenCalledWith({
       query: "*",
-      limit: 100,
+      limit: 999_999,
       baseUrl: undefined,
     });
   });
@@ -2668,12 +2668,12 @@ describe("skills-clawhub", () => {
     });
   });
 
-  it("omits fractional skill search limits below 1 after truncation", async () => {
+  it("truncates fractional skill search limits", async () => {
     searchClawHubSkillsMock.mockResolvedValueOnce([]);
     await searchSkillsFromClawHub({ limit: 0.5 });
     expect(searchClawHubSkillsMock).toHaveBeenCalledWith({
       query: "*",
-      limit: undefined,
+      limit: 0,
       baseUrl: undefined,
     });
   });
