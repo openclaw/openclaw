@@ -126,6 +126,37 @@ function extractInjectedScript(html: string): string {
   return match[1];
 }
 
+type MockLiveReloadSocket = {
+  onclose?: (event: { code: number; reason: string }) => void;
+  onerror?: (event: Error) => void;
+  onmessage?: (event: { data?: string }) => void;
+};
+
+function runInjectedScript(WebSocket: (this: MockLiveReloadSocket) => void) {
+  const consoleError = vi.fn();
+  const runtime: Record<string, unknown> = {
+    URLSearchParams,
+    WebSocket,
+    console: { error: consoleError },
+    encodeURIComponent,
+    location: {
+      host: "control.example",
+      protocol: "https:",
+      reload: vi.fn(),
+      search: "",
+    },
+  };
+  runtime.window = runtime;
+  runtime.self = runtime;
+  runtime.globalThis = runtime;
+  vm.createContext(runtime);
+  vm.runInContext(
+    extractInjectedScript(injectCanvasLiveReload("<html><body>Hello</body></html>")),
+    runtime,
+  );
+  return consoleError;
+}
+
 describe("canvas host", () => {
   const quietRuntime = {
     ...defaultRuntime,
@@ -204,130 +235,52 @@ describe("canvas host", () => {
   });
 
   it("reports websocket initialization errors instead of swallowing them silently", () => {
-    const html = injectCanvasLiveReload("<html><body>Hello</body></html>");
-    const script = extractInjectedScript(html);
-    const consoleError = vi.fn();
-    const dispatchEvent = vi.fn();
-    const documentElementAttributes = new Map<string, string>();
-    const document = {
-      documentElement: {
-        setAttribute(name: string, value: string) {
-          documentElementAttributes.set(name, value);
-        },
-      },
-    };
     function ThrowingWebSocket(): never {
       throw new TypeError("constructor failed");
     }
-    class TestCustomEvent {
-      readonly type: string;
-      readonly detail: unknown;
-
-      constructor(type: string, init?: { detail?: unknown }) {
-        this.type = type;
-        this.detail = init?.detail;
-      }
-    }
-    const runtime: Record<string, unknown> = {
-      URLSearchParams,
-      WebSocket: ThrowingWebSocket,
-      CustomEvent: TestCustomEvent,
-      console: { error: consoleError },
-      document,
-      dispatchEvent,
-      encodeURIComponent,
-      location: {
-        host: "control.example",
-        protocol: "https:",
-        reload: vi.fn(),
-        search: "",
-      },
-    };
-    runtime.window = runtime;
-    runtime.self = runtime;
-    runtime.globalThis = runtime;
-
-    vm.createContext(runtime);
-    vm.runInContext(script, runtime);
+    const consoleError = runInjectedScript(ThrowingWebSocket);
 
     expect(consoleError).toHaveBeenCalledTimes(1);
-    expect(consoleError.mock.calls[0]?.[0]).toBe("OpenClaw canvas live reload unavailable:");
-    expect(documentElementAttributes.get("data-openclaw-live-reload")).toBe("error");
-    expect(documentElementAttributes.get("data-openclaw-live-reload-error")).toBe(
-      "constructor failed",
+    expect(consoleError).toHaveBeenCalledWith(
+      "OpenClaw canvas live reload unavailable:",
+      expect.objectContaining({ message: "constructor failed" }),
     );
-    expect(dispatchEvent).toHaveBeenCalledTimes(1);
-    expect(dispatchEvent.mock.calls[0]?.[0]).toMatchObject({
-      detail: { message: "constructor failed" },
-      type: "openclaw:canvas-live-reload-error",
-    });
   });
 
   it("reports asynchronous websocket connection errors once", () => {
-    const html = injectCanvasLiveReload("<html><body>Hello</body></html>");
-    const script = extractInjectedScript(html);
-    const consoleError = vi.fn();
-    const dispatchEvent = vi.fn();
-    const documentElementAttributes = new Map<string, string>();
-    const document = {
-      documentElement: {
-        setAttribute(name: string, value: string) {
-          documentElementAttributes.set(name, value);
-        },
-      },
-    };
-    type MockSocket = {
-      onclose?: (event: { code: number; reason: string }) => void;
-      onerror?: (event: Error) => void;
-      onmessage?: (event: { data?: string }) => void;
-    };
-    const sockets: MockSocket[] = [];
-    function CapturingWebSocket(this: MockSocket): void {
+    const sockets: MockLiveReloadSocket[] = [];
+    function CapturingWebSocket(this: MockLiveReloadSocket): void {
       sockets.push(this);
     }
-    class TestCustomEvent {
-      readonly type: string;
-      readonly detail: unknown;
-
-      constructor(type: string, init?: { detail?: unknown }) {
-        this.type = type;
-        this.detail = init?.detail;
-      }
-    }
-    const runtime: Record<string, unknown> = {
-      URLSearchParams,
-      WebSocket: CapturingWebSocket,
-      CustomEvent: TestCustomEvent,
-      console: { error: consoleError },
-      document,
-      dispatchEvent,
-      encodeURIComponent,
-      location: {
-        host: "control.example",
-        protocol: "https:",
-        reload: vi.fn(),
-        search: "",
-      },
-    };
-    runtime.window = runtime;
-    runtime.self = runtime;
-    runtime.globalThis = runtime;
-
-    vm.createContext(runtime);
-    vm.runInContext(script, runtime);
+    const consoleError = runInjectedScript(CapturingWebSocket);
 
     expect(sockets).toHaveLength(1);
     sockets[0]?.onerror?.(new Error("connect failed"));
     sockets[0]?.onclose?.({ code: 1006, reason: "abnormal closure" });
 
     expect(consoleError).toHaveBeenCalledTimes(1);
-    expect(documentElementAttributes.get("data-openclaw-live-reload")).toBe("error");
-    expect(documentElementAttributes.get("data-openclaw-live-reload-error")).toBe("connect failed");
-    expect(dispatchEvent).toHaveBeenCalledTimes(1);
-    expect(dispatchEvent.mock.calls[0]?.[0]).toMatchObject({
-      detail: { message: "connect failed" },
-      type: "openclaw:canvas-live-reload-error",
+  });
+
+  it("does not report a normal close after connecting", () => {
+    const sockets: MockLiveReloadSocket[] = [];
+    const consoleError = runInjectedScript(function (this: MockLiveReloadSocket) {
+      sockets.push(this);
     });
+
+    sockets[0]?.onclose?.({ code: 1001, reason: "page closed" });
+
+    expect(consoleError).not.toHaveBeenCalled();
+  });
+
+  it("reports an abnormal close without a preceding error event", () => {
+    const sockets: MockLiveReloadSocket[] = [];
+    const consoleError = runInjectedScript(function (this: MockLiveReloadSocket) {
+      sockets.push(this);
+    });
+
+    sockets[0]?.onclose?.({ code: 1011, reason: "server error" });
+
+    expect(consoleError).toHaveBeenCalledTimes(1);
   });
 
   it("creates a default index.html when missing", async () => {
