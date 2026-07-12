@@ -233,26 +233,6 @@ function explicitSessionsSpawnPrompt(token: string) {
 }
 
 describe("qa mock openai server", () => {
-  it("returns the encrypted compaction item requested by Codex", async () => {
-    const server = await startMockServer();
-    const body = {
-      model: "gpt-5.5",
-      input: [{ type: "compaction_trigger" }],
-      stream: false,
-    };
-
-    const payload = await expectResponsesJson<Record<string, unknown>>(server, body);
-    expect(outputItem(payload)).toEqual({
-      type: "compaction",
-      id: "cmp_mock_1",
-      encrypted_content: "qa-mock-compaction",
-    });
-
-    const streamed = await expectResponsesText(server, { ...body, stream: true });
-    expect(streamed).toContain('"type":"response.output_item.done"');
-    expect(streamed).toContain('"type":"compaction"');
-  });
-
   it("keeps cursor reads correct when retained debug requests rotate", async () => {
     const server = await startMockServer();
     const debugRequestLimit = 2_000;
@@ -4813,6 +4793,43 @@ describe("qa mock openai server", () => {
 
     expect(response.status).toBe(200);
     expect(outputText(await response.json())).toContain("model switch handoff confirmed");
+  });
+
+  it("returns the Codex remote-compaction-v2 response shape", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        input: [
+          {
+            role: "user",
+            content: [{ type: "input_text", text: "Retained context." }],
+          },
+          { type: "compaction_trigger" },
+        ],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).toContain('"type":"response.output_item.done"');
+    expect(body).toContain('"type":"compaction"');
+    expect(body).toContain('"encrypted_content":"QA_MOCK_REMOTE_COMPACTION_SUMMARY"');
+    expect(body).toContain('"type":"response.completed"');
+    const debugResponse = await fetch(`${server.baseUrl}/debug/requests`);
+    expect(debugResponse.status).toBe(200);
+    expect(await debugResponse.json()).toEqual([]);
   });
 
   it("returns NO_REPLY for unmentioned group chatter", async () => {

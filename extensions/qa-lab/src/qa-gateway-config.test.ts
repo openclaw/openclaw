@@ -88,6 +88,14 @@ describe("buildQaGatewayConfig", () => {
     expect(cfg.models?.providers?.openai?.request).toEqual({ allowPrivateNetwork: true });
     expect(cfg.models?.providers?.anthropic?.baseUrl).toBe("http://127.0.0.1:44080");
     expect(cfg.models?.providers?.anthropic?.request).toEqual({ allowPrivateNetwork: true });
+    expect(cfg.agents?.defaults?.memorySearch).toMatchObject({
+      provider: "openai",
+      model: "text-embedding-3-small",
+      remote: {
+        baseUrl: "http://127.0.0.1:44080/v1",
+        apiKey: "test",
+      },
+    });
     expect(cfg.plugins?.allow).toEqual(["acpx", "memory-core", "qa-lab", "qa-channel"]);
     expectQaLabPluginEnabled(cfg);
     expect(cfg.plugins?.slots?.memory).toBe("memory-core");
@@ -101,14 +109,6 @@ describe("buildQaGatewayConfig", () => {
     expect(cfg.plugins?.entries?.["memory-core"]).toEqual({ enabled: true });
     expect(cfg.plugins?.entries?.["qa-channel"]).toEqual({ enabled: true });
     expect(cfg.plugins?.entries?.openai).toBeUndefined();
-    expect(cfg.agents?.defaults?.memorySearch).toMatchObject({
-      provider: "openai",
-      model: "text-embedding-3-small",
-      remote: {
-        baseUrl: "http://127.0.0.1:44080/v1",
-        apiKey: "test",
-      },
-    });
     expect(cfg.gateway?.reload?.deferralTimeoutMs).toBe(1_000);
     expect(cfg.tools?.profile).toBe("coding");
     expect(cfg.agents?.list?.[0]?.tools?.profile).toBe("coding");
@@ -309,6 +309,10 @@ describe("buildQaGatewayConfig", () => {
     expect(cfg.models?.mode).toBe("merge");
     expect(cfg.models?.providers?.openai?.baseUrl).toBe("https://api.openai.com/v1");
     expect(cfg.models?.providers?.openai?.request).toBeUndefined();
+    expect(cfg.agents?.defaults?.memorySearch?.remote).toEqual({
+      baseUrl: "http://127.0.0.1:44080/v1",
+      apiKey: "test",
+    });
     expect(cfg.models?.providers?.openai?.models.map((model) => model.id)).toContain(
       "gpt-5.6-luna-alt",
     );
