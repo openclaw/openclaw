@@ -82,20 +82,24 @@ const AMBIGUOUS_RUNTIME_INTERPOLATIONS = [
   {
     label: "interpolated localized resource",
     pattern:
-      /(?:\bString\s*\(\s*localized:|\bAttributedString\s*\(\s*localized:|\bLocalizedStringResource\s*\(|(?:\b[A-Za-z_]\w*)?\.localized(?:Format)?\s*\()\s*"(?:\\.|[^"\\])*\\\(/gu,
+      /(?:\bString\s*\(\s*localized:|\bAttributedString\s*\(\s*localized:|\bLocalizedStringResource\s*\(|(?:\b[A-Za-z_]\w*)?\.localized(?:Format)?\s*\()\s*"((?:\\.|[^"\\])*)"/gu,
+    allowsInflection: true,
   },
   {
     label: "interpolated SwiftUI text literal",
-    pattern: /\b(?:Text|Label|Button|Link|Section)\s*\(\s*"(?:\\.|[^"\\])*\\\(/gu,
+    pattern: /\b(?:Text|Label|Button|Link|Section)\s*\(\s*"((?:\\.|[^"\\])*)"/gu,
+    allowsInflection: false,
   },
   {
     label: "interpolated SwiftUI modifier literal",
     pattern:
-      /\.(?:accessibilityLabel|accessibilityHint|alert|confirmationDialog|help|navigationTitle)\s*\(\s*"(?:\\.|[^"\\])*\\\(/gu,
+      /\.(?:accessibilityLabel|accessibilityHint|alert|confirmationDialog|help|navigationTitle)\s*\(\s*"((?:\\.|[^"\\])*)"/gu,
+    allowsInflection: false,
   },
   {
     label: "interpolated accessibility model literal",
-    pattern: /\baccessibilityLabel\s*:\s*"(?:\\.|[^"\\])*\\\(/gu,
+    pattern: /\baccessibilityLabel\s*:\s*"((?:\\.|[^"\\])*)"/gu,
+    allowsInflection: false,
   },
 ] as const;
 const APPLE_LOCALE_DIRECTORIES: Record<string, string> = {
@@ -602,10 +606,15 @@ async function validateRuntimeInterpolationPaths(): Promise<void> {
   const violations: string[] = [];
   for (const file of files) {
     const source = await readFile(file, "utf8");
-    for (const { label, pattern } of AMBIGUOUS_RUNTIME_INTERPOLATIONS) {
+    for (const { label, pattern, allowsInflection } of AMBIGUOUS_RUNTIME_INTERPOLATIONS) {
       pattern.lastIndex = 0;
-      if (pattern.test(source)) {
+      for (const match of source.matchAll(pattern)) {
+        const literal = match[1] ?? "";
+        if (!literal.includes("\\(") || (allowsInflection && isInflectedCountSource(literal))) {
+          continue;
+        }
         violations.push(`${path.relative(ROOT, file)}: ${label}`);
+        break;
       }
     }
   }
