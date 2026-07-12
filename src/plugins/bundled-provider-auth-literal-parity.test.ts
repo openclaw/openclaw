@@ -1,0 +1,196 @@
+// Keeps manifest providerAuthChoices literals aligned with registered provider.auth methods.
+import { describe, expect, it } from "vitest";
+import { createNonExitingRuntime } from "../runtime.js";
+import {
+  loadBundledPluginPublicSurface,
+  resolveBundledPluginPublicModulePath,
+} from "../test-utils/bundled-plugin-public-surface.js";
+import { createCapturedPluginRegistration } from "../test-utils/plugin-registration.js";
+import { listBundledPluginMetadata } from "./bundled-plugin-metadata.js";
+import type { PluginManifestProviderAuthChoice } from "./manifest.js";
+import type {
+  ProviderAuthMethod,
+  ProviderPlugin,
+  ProviderResolveNonInteractiveApiKeyParams,
+} from "./types.js";
+
+const PARITY_TIMEOUT_MS = 120_000;
+const SENTINEL_API_KEY = "parity-sentinel-api-key";
+
+type ApiKeyStyleChoice = PluginManifestProviderAuthChoice & {
+  optionKey: string;
+  cliFlag: string;
+};
+
+type ParityCase = {
+  pluginId: string;
+  providerId: string;
+  methodId: string;
+  optionKey: string;
+  cliFlag: string;
+  setupEnvVars: readonly string[];
+};
+
+type PluginEntryModule = {
+  default?: {
+    id?: string;
+    register?: (api: ReturnType<typeof createCapturedPluginRegistration>["api"]) => void;
+  };
+  register?: (api: ReturnType<typeof createCapturedPluginRegistration>["api"]) => void;
+};
+
+function isApiKeyStyleChoice(
+  choice: PluginManifestProviderAuthChoice,
+): choice is ApiKeyStyleChoice {
+  return Boolean(choice.optionKey?.trim() && choice.cliFlag?.trim());
+}
+
+function listParityCases(): ParityCase[] {
+  return listBundledPluginMetadata({ includeChannelConfigs: false }).flatMap((plugin) => {
+    const choices = plugin.manifest.providerAuthChoices ?? [];
+    if (choices.length === 0) {
+      return [];
+    }
+    const setupEnvByProvider = new Map(
+      (plugin.manifest.setup?.providers ?? []).map((entry) => [
+        entry.id,
+        entry.envVars ?? ([] as readonly string[]),
+      ]),
+    );
+    return choices.filter(isApiKeyStyleChoice).map((choice) => ({
+      pluginId: plugin.manifest.id,
+      providerId: choice.provider,
+      methodId: choice.method,
+      optionKey: choice.optionKey,
+      cliFlag: choice.cliFlag,
+      setupEnvVars: setupEnvByProvider.get(choice.provider) ?? [],
+    }));
+  });
+}
+
+async function loadPluginRegister(
+  pluginId: string,
+): Promise<(api: ReturnType<typeof createCapturedPluginRegistration>["api"]) => void> {
+  // Resolve first so unknown plugin ids fail with a clear path error before import.
+  resolveBundledPluginPublicModulePath({
+    pluginId,
+    artifactBasename: "index.js",
+  });
+  const mod = await loadBundledPluginPublicSurface<PluginEntryModule>({
+    pluginId,
+    artifactBasename: "index.js",
+  });
+  const register = mod.default?.register ?? mod.register;
+  if (!register) {
+    throw new Error(`bundled plugin ${pluginId} has no register() entry`);
+  }
+  return register;
+}
+
+function findRegisteredProvider(
+  providers: readonly ProviderPlugin[],
+  providerId: string,
+): ProviderPlugin | undefined {
+  return providers.find(
+    (provider) => provider.id === providerId || provider.hookAliases?.includes(providerId) === true,
+  );
+}
+
+async function probeRuntimeAuthLiterals(params: {
+  method: ProviderAuthMethod;
+  optionKey: string;
+}): Promise<ProviderResolveNonInteractiveApiKeyParams | undefined> {
+  if (!params.method.runNonInteractive) {
+    return undefined;
+  }
+  let captured: ProviderResolveNonInteractiveApiKeyParams | undefined;
+  try {
+    await params.method.runNonInteractive({
+      authChoice: "parity",
+      config: {},
+      baseConfig: {},
+      opts: { [params.optionKey]: SENTINEL_API_KEY },
+      runtime: createNonExitingRuntime(),
+      resolveApiKey: async (resolveParams) => {
+        if (!captured) {
+          captured = resolveParams;
+        }
+        return null;
+      },
+      toApiKeyCredential: () => null,
+    });
+  } catch {
+    // Some methods throw when credentials are incomplete; captured params still count.
+  }
+  return captured;
+}
+
+const parityCases = listParityCases().toSorted((left, right) => {
+  const pluginOrder = left.pluginId.localeCompare(right.pluginId);
+  if (pluginOrder !== 0) {
+    return pluginOrder;
+  }
+  const providerOrder = left.providerId.localeCompare(right.providerId);
+  if (providerOrder !== 0) {
+    return providerOrder;
+  }
+  return left.methodId.localeCompare(right.methodId);
+});
+
+describe("bundled provider manifest↔runtime auth literal parity", () => {
+  it("discovers api-key-style providerAuthChoices from bundled plugins", () => {
+    expect(parityCases.length).toBeGreaterThan(0);
+    expect(new Set(parityCases.map((entry) => entry.pluginId)).size).toBeGreaterThan(10);
+  });
+
+  it.each(parityCases)(
+    "$pluginId $providerId/$methodId optionKey=$optionKey",
+    { timeout: PARITY_TIMEOUT_MS },
+    async (parityCase) => {
+      const register = await loadPluginRegister(parityCase.pluginId);
+      const captured = createCapturedPluginRegistration({
+        id: parityCase.pluginId,
+        name: parityCase.pluginId,
+        source: `bundled:${parityCase.pluginId}`,
+      });
+      register(captured.api);
+
+      const provider = findRegisteredProvider(captured.providers, parityCase.providerId);
+      if (!provider) {
+        // Capability-only plugins (video/image onboard flags) declare CLI keys in
+        // the manifest without a text ProviderPlugin.auth surface to compare.
+        return;
+      }
+
+      const method = provider.auth.find((entry) => entry.id === parityCase.methodId);
+      expect(
+        method,
+        `${parityCase.pluginId} runtime auth missing method ${parityCase.methodId}`,
+      ).toBeDefined();
+      if (!method) {
+        return;
+      }
+
+      // methodId (manifest `method`) ↔ runtime auth id
+      expect(method.id).toBe(parityCase.methodId);
+
+      const probed = await probeRuntimeAuthLiterals({
+        method,
+        optionKey: parityCase.optionKey,
+      });
+      if (!probed) {
+        return;
+      }
+
+      // cliFlag ↔ flagName; optionKey proven when opts[optionKey] becomes flagValue
+      expect(probed.flagName).toBe(parityCase.cliFlag);
+      expect(probed.flagValue).toBe(SENTINEL_API_KEY);
+
+      // envVar ↔ setup.providers[].envVars and/or provider.envVars
+      const knownEnvVars = new Set([...parityCase.setupEnvVars, ...(provider.envVars ?? [])]);
+      if (knownEnvVars.size > 0) {
+        expect(knownEnvVars.has(probed.envVar)).toBe(true);
+      }
+    },
+  );
+});
