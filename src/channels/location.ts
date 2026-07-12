@@ -13,15 +13,21 @@ export type NormalizedLocation = {
   caption?: string;
 };
 
+/** Portable outbound location fields supported by channel send adapters. */
+export type OutboundLocation = Pick<
+  NormalizedLocation,
+  "latitude" | "longitude" | "accuracy" | "name" | "address"
+>;
+
 function readOptionalLocationText(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 /** Normalize a portable location payload at an outbound/plugin boundary. */
-export function normalizeLocation(
+export function normalizeOutboundLocation(
   value: unknown,
   label = "location",
-): NormalizedLocation | undefined {
+): OutboundLocation | undefined {
   if (value == null) {
     return undefined;
   }
@@ -54,26 +60,19 @@ export function normalizeLocation(
   ) {
     throw new Error(`${label}.accuracy must be a finite number between 0 and 1500.`);
   }
-  const source = raw.source;
-  if (source !== undefined && source !== "pin" && source !== "place" && source !== "live") {
-    throw new Error(`${label}.source must be pin, place, or live.`);
-  }
-  const isLive = raw.isLive;
-  if (isLive !== undefined && typeof isLive !== "boolean") {
-    throw new Error(`${label}.isLive must be a boolean.`);
+  for (const unsupportedField of ["source", "isLive", "caption"] as const) {
+    if (raw[unsupportedField] !== undefined) {
+      throw new Error(`${label}.${unsupportedField} is not supported for outbound locations.`);
+    }
   }
   const name = readOptionalLocationText(raw.name);
   const address = readOptionalLocationText(raw.address);
-  const caption = readOptionalLocationText(raw.caption);
   return {
     latitude,
     longitude,
     ...(accuracy !== undefined ? { accuracy } : {}),
     ...(name ? { name } : {}),
     ...(address ? { address } : {}),
-    ...(isLive !== undefined ? { isLive } : {}),
-    ...(source !== undefined ? { source } : {}),
-    ...(caption ? { caption } : {}),
   };
 }
 

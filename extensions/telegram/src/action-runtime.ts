@@ -11,6 +11,7 @@ import {
   resolvePollMaxSelections,
   resolveReactionMessageId,
 } from "openclaw/plugin-sdk/channel-actions";
+import { normalizeOutboundLocation } from "openclaw/plugin-sdk/channel-inbound";
 import {
   buildOutboundSessionContext,
   sendDurableMessageBatch,
@@ -36,7 +37,6 @@ import {
   resolveTelegramTargetChatType,
 } from "./inline-buttons.js";
 import { resolveTelegramInteractiveTextFallback } from "./interactive-fallback.js";
-import { normalizeTelegramOutboundLocation } from "./normalize.js";
 import { resolveTelegramPollVisibility } from "./poll-visibility.js";
 import { resolveTelegramReactionLevel } from "./reaction-level.js";
 import {
@@ -457,7 +457,7 @@ export async function handleTelegramAction(
     const to = normalizeTelegramOutboundTarget(readStringParam(params, "to", { required: true }));
     const mediaUrls = readTelegramSendMediaUrls(params);
     const firstMediaUrl = mediaUrls[0];
-    const location = normalizeTelegramOutboundLocation(params.location);
+    const location = normalizeOutboundLocation(params.location);
     const presentation = normalizeMessagePresentation(params.presentation);
     const buttons = resolveTelegramButtonsFromParams(params, presentation);
     const content = readTelegramSendContent({

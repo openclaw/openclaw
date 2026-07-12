@@ -2,7 +2,7 @@
 // outbound-supported reply payload fields.
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyPayload as InternalReplyPayload } from "../../auto-reply/reply-payload.js";
-import { normalizeLocation } from "../../channels/location.js";
+import { normalizeOutboundLocation } from "../../channels/location.js";
 
 /**
  * Outbound-facing subset of reply payload fields accepted from loose producers.
@@ -45,7 +45,7 @@ export function normalizeOutboundReplyPayload(
   const channelData = readObjectValue(payload.channelData) as OutboundReplyPayload["channelData"];
   const sensitiveMedia = payload.sensitiveMedia === true ? true : undefined;
   const replyToId = readStringValue(payload.replyToId);
-  const location = normalizeLocation(payload.location);
+  const location = normalizeOutboundLocation(payload.location);
   const videoAsNote = payload.videoAsNote === true ? true : undefined;
   return {
     text,

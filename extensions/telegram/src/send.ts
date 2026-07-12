@@ -3,7 +3,11 @@ import * as grammy from "grammy";
 import { type ApiClientOptions, Bot, HttpError } from "grammy";
 import type { ReactionType, ReactionTypeEmoji } from "grammy/types";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
-import { formatLocationText, type NormalizedLocation } from "openclaw/plugin-sdk/channel-location";
+import {
+  formatLocationText,
+  normalizeOutboundLocation,
+  type OutboundLocation,
+} from "openclaw/plugin-sdk/channel-inbound";
 import {
   createMessageReceiptFromOutboundResults,
   type MessageReceipt,
@@ -40,7 +44,6 @@ import {
   isTelegramRateLimitError,
   isTelegramServerError,
 } from "./network-errors.js";
-import { normalizeTelegramOutboundLocation } from "./normalize.js";
 import {
   recordOutboundMessageForPromptContext,
   type TelegramOutboundPromptContextMessage as TelegramMessageLike,
@@ -1590,7 +1593,7 @@ async function sendMessageTelegramWithContext(
 /** Send a standalone location pin or named venue through Telegram's native payload. */
 export async function sendLocationTelegram(
   to: string,
-  input: NormalizedLocation,
+  input: OutboundLocation,
   opts: TelegramLocationSendOpts,
 ): Promise<TelegramSendResult> {
   const context = resolveTelegramApiContext(opts);
@@ -1602,11 +1605,11 @@ export async function sendLocationTelegram(
 
 async function sendLocationTelegramWithContext(
   to: string,
-  input: NormalizedLocation,
+  input: OutboundLocation,
   opts: TelegramLocationSendOpts,
   context: TelegramApiContext,
 ): Promise<TelegramSendResult> {
-  const location = normalizeTelegramOutboundLocation(input);
+  const location = normalizeOutboundLocation(input);
   if (!location) {
     throw new Error("Telegram location is required.");
   }

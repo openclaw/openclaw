@@ -358,6 +358,17 @@ describe("normalizeOutboundReplyPayload", () => {
     });
   });
 
+  it.each(["source", "isLive", "caption"])(
+    "rejects unsupported outbound location %s semantics from loose payloads",
+    (field) => {
+      expect(() =>
+        normalizeOutboundReplyPayload({
+          location: { latitude: 1, longitude: 2, [field]: "unsupported" },
+        }),
+      ).toThrow(`${field} is not supported`);
+    },
+  );
+
   it("keeps the normalized deliverer from forwarding trustedLocalMedia", async () => {
     const handler = vi.fn(async () => {});
     const deliver = createNormalizedOutboundDeliverer(handler);

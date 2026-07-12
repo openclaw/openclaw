@@ -19,7 +19,7 @@ import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { resolveResponsePrefixTemplate } from "../../auto-reply/reply/response-prefix-template.js";
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
-import { normalizeLocation } from "../../channels/location.js";
+import { normalizeOutboundLocation } from "../../channels/location.js";
 import {
   normalizeConversationReadInvocationOrigin,
   type ConversationReadInvocationOrigin,
@@ -944,7 +944,7 @@ async function buildSendPayloadParts(params: {
     Boolean(mediaHint) || mediaUrlHints.length > 0 || attachmentMediaHints.length > 0;
   const hasPresentation = hasMessagePresentationBlocks(actionParams.presentation);
   const hasInteractive = hasInteractiveReplyBlocks(actionParams.interactive);
-  const location = normalizeLocation(actionParams.location);
+  const location = normalizeOutboundLocation(actionParams.location);
   const caption = readStringParam(actionParams, "caption", { allowEmpty: true }) ?? "";
   let message =
     readStringParam(actionParams, "message", {

@@ -282,9 +282,6 @@ type AgentRuntimeReplyPayloadLocation = {
   accuracy?: number;
   name?: string;
   address?: string;
-  isLive?: boolean;
-  source?: "pin" | "place" | "live";
-  caption?: string;
 };
 
 /** Portable reply payload emitted by agent runtimes before channel rendering. */
