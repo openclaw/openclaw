@@ -1,5 +1,6 @@
 // Draft stream control tests cover pause, resume, and cancellation handling for channel drafts.
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../shared/deferred.js";
 import {
   clearFinalizableDraftMessage,
   createFinalizableDraftLifecycle,
@@ -99,7 +100,7 @@ describe("draft-stream-controls", () => {
 
   it("clearFinalizableDraftMessage preserves a replacement id while delete is in flight", async () => {
     let messageId: string | undefined = "preview-old";
-    const pendingDelete = Promise.withResolvers<void>();
+    const pendingDelete = createDeferred<void>();
     const deleteMessage = vi.fn(() => pendingDelete.promise);
 
     const clearPromise = clearFinalizableDraftMessage({
