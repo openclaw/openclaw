@@ -117,6 +117,7 @@ describe("OpenClaw performance workflow", () => {
   it("requires the shared Kova report gate before tolerating partial verdicts", () => {
     const runKova = findStep("Run Kova");
 
+    expect(runKova.run).toContain("! -name '*.summary.json'");
     expect(runKova.run).toContain(
       'node "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-report-gate.mjs" "$report_json"',
     );

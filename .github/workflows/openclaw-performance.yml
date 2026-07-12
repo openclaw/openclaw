@@ -337,7 +337,7 @@ jobs:
           status=${PIPESTATUS[0]}
           set -e
 
-          report_json="$(find "$REPORT_DIR" -maxdepth 1 -type f -name '*.json' -print | sort | tail -n 1)"
+          report_json="$(find "$REPORT_DIR" -maxdepth 1 -type f -name '*.json' ! -name '*.summary.json' -print | sort | tail -n 1)"
           if [[ -z "$report_json" ]]; then
             echo "Kova did not write a JSON report." >&2
             exit 1
