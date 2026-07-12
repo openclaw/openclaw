@@ -1349,6 +1349,28 @@ describe("task-registry", () => {
     });
   });
 
+  it("propagates task registry restore failures through the runtime gate", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
+      configureTaskFlowRegistryRuntime({
+        store: createInMemoryTaskFlowRegistryStore(),
+      });
+      configureTaskRegistryRuntime({
+        store: {
+          loadSnapshot: () => {
+            throw new Error("SQLITE_IOERR: task startup restore failed");
+          },
+          saveSnapshot: () => {},
+        },
+      });
+
+      expect(() => ensureTaskRuntimeStateReady()).toThrow(
+        "Task registry restore failed: SQLITE_IOERR: task startup restore failed",
+      );
+    });
+  });
+
   it("reports task update success and retries when task-mirrored flow sync persistence fails", async () => {
     await withTaskRegistryTempDir(async () => {
       vi.useFakeTimers();
