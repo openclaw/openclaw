@@ -1,121 +1,372 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { expectDefined } from "../packages/normalization-core/src/expect.js";
-import { NATIVE_I18N_LOCALES } from "./native-app-i18n.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
-const REQUIRED_LOCALES = ["en", ...NATIVE_I18N_LOCALES];
+// Keep this script independent from the translation client loaded by native-app-i18n.
+// Artifact locale assertions below make drift fail instead of silently dropping a language.
+export const APPLE_I18N_LOCALES = [
+  "zh-CN",
+  "zh-TW",
+  "pt-BR",
+  "de",
+  "es",
+  "ja-JP",
+  "ko",
+  "fr",
+  "hi",
+  "ar",
+  "it",
+  "tr",
+  "uk",
+  "id",
+  "pl",
+  "th",
+  "vi",
+  "nl",
+  "fa",
+  "ru",
+  "sv",
+] as const;
+const REQUIRED_LOCALES = ["en", ...APPLE_I18N_LOCALES];
 const FORMAT_RE = /%(?:\d+\$)?[@a-z]/giu;
+const IOS_CATALOG_PATH = "apps/ios/Resources/Localizable.xcstrings";
+const NATIVE_SOURCE_PATH = "apps/.i18n/native-source.json";
+const NATIVE_TRANSLATIONS_DIR = "apps/.i18n/native";
+const IOS_SOURCE_PREFIXES = [
+  "apps/ios/",
+  "apps/shared/OpenClawKit/Sources/OpenClawChatUI/",
+] as const;
+const IOS_CATALOG_KINDS = new Set([
+  "conditional-branch",
+  "ui-call",
+  "ui-call-concatenated",
+  "ui-call-multiline",
+  "ui-localized-call",
+  "ui-localized-call-multiline",
+  "ui-modifier",
+  "ui-named-argument",
+  "ui-named-argument-concatenated",
+  "ui-named-argument-multiline",
+]);
+const IOS_CATALOG_EXCLUSIONS = new Set([
+  // Product names and preview-only single-character fixtures are intentionally verbatim.
+  "OpenClaw",
+  "z",
+]);
+const IOS_INFO_PLIST_TARGETS = [
+  {
+    outputRoot: "apps/ios/Sources",
+    sourcePath: "apps/ios/Sources/Info.plist",
+  },
+  {
+    outputRoot: "apps/ios/WatchApp",
+    sourcePath: "apps/ios/WatchApp/Info.plist",
+  },
+] as const;
+const EXPLICIT_LOCALIZED_CALL =
+  /(?:\bString\s*\(\s*localized:|\bLocalizedStringResource\s*\(|(?:\b[A-Za-z_]\w*)?\.localized\s*\()\s*"((?:\\.|[^"\\])*)"/gu;
+const AMBIGUOUS_RUNTIME_INTERPOLATIONS = [
+  {
+    label: "interpolated String(localized:) key",
+    pattern: /\bString\s*\(\s*localized:\s*"(?:\\.|[^"\\])*\\\(/gu,
+  },
+  {
+    label: "interpolated SwiftUI text literal",
+    pattern: /\b(?:Text|Label|Button|Link|Section)\s*\(\s*"(?:\\.|[^"\\])*\\\(/gu,
+  },
+  {
+    label: "interpolated SwiftUI modifier literal",
+    pattern:
+      /\.(?:accessibilityLabel|accessibilityHint|navigationTitle)\s*\(\s*"(?:\\.|[^"\\])*\\\(/gu,
+  },
+] as const;
 const APPLE_LOCALE_DIRECTORIES: Record<string, string> = {
   "ja-JP": "ja",
   "zh-CN": "zh-Hans",
   "zh-TW": "zh-Hant",
 };
-const LOCALIZED_WRAPPER_CONTRACTS: Record<string, string[]> = {
+const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
+  "apps/ios/Sources/Design/OpenClawProComponents.swift": [
+    "enum OpenClawTextValue: ExpressibleByStringLiteral",
+    "struct ProSectionHeader: View {\n    let title: OpenClawTextValue",
+    "struct OpenClawNoticeBanner: View {\n    let icon: String\n    let title: OpenClawTextValue\n    let message: OpenClawTextValue",
+    "struct OpenClawAdaptiveHeaderRow<Leading: View, Accessory: View>: View {\n    let title: OpenClawTextValue\n    let subtitle: OpenClawTextValue?",
+    "struct OpenClawStatusBadge: View {\n    @Environment(\\.colorScheme) private var colorScheme\n    let label: OpenClawTextValue",
+    "struct ProMetricTile: View {\n    @Environment(\\.colorScheme) private var colorScheme\n    let title: OpenClawTextValue",
+    "struct ProPanelHeader: View {\n    let title: OpenClawTextValue",
+    "struct ProStatusRow: View {\n    let icon: String\n    let title: OpenClawTextValue\n    let detail: OpenClawTextValue",
+  ],
+  "apps/ios/Sources/Design/SettingsProTabSupport.swift": [
+    "struct SettingsDetailRow: View {\n    let label: LocalizedStringKey\n    let value: OpenClawTextValue",
+    "init(_ label: LocalizedStringKey, value: OpenClawTextValue)",
+    "self.value.text",
+    "struct SettingsApprovalItem: Identifiable {\n    let id: String\n    let icon: String\n    let title: OpenClawTextValue\n    let detail: OpenClawTextValue\n    let priority: OpenClawTextValue",
+    "self.item.title.text",
+    "self.item.detail.text",
+    "self.item.priority.text",
+  ],
+  "apps/ios/Sources/Design/SettingsChannelsDestination.swift": [
+    "Text(verbatim: self.summaryDetail)",
+    "Text(verbatim: self.entry.label)",
+    "Text(verbatim: self.entry.detailText)",
+    "Text(verbatim: account.displayName)",
+    "Text(verbatim: account.detailText)",
+  ],
+  "apps/ios/Sources/Design/SettingsProTabActions.swift": [
+    "func detailStatusCard(\n        icon: String,\n        title: OpenClawTextValue,\n        detail: OpenClawTextValue,\n        value: OpenClawTextValue",
+    "func diagnosticCheckRow(\n        icon: String,\n        title: OpenClawTextValue,\n        detail: OpenClawTextValue,\n        value: OpenClawTextValue",
+    "pendingApproval.commandPreview.map(OpenClawTextValue.verbatim)",
+    'format: String(localized: "Agent: %@")',
+  ],
+  "apps/ios/Sources/Design/SettingsProTabSections.swift": [
+    "func settingsListRow(\n        icon: String,\n        iconColor: Color,\n        title: LocalizedStringKey",
+    "func aboutLinkRow(\n        title: LocalizedStringKey",
+    "func toggleCard(title: LocalizedStringKey",
+    "func gatewaySecureField(\n        _ placeholder: LocalizedStringKey",
+    "func settingsToggle(\n        _ title: LocalizedStringKey",
+    ".accessibilityLabel(Text(placeholder))",
+    ".accessibilityLabel(Text(title))",
+  ],
+  "apps/ios/Sources/Gateway/GatewayConnectionController+Capabilities.swift": [
+    'String(localized: "Secure connection is required for this host.")',
+    'String(localized: "Use only on a trusted private network.")',
+  ],
+  "apps/ios/Sources/Gateway/ExecApprovalPromptDialog.swift": [
+    "private struct ExecApprovalPromptMetadataRow: View {\n    let label: LocalizedStringKey",
+    'format: String(localized: "about %@ minutes")',
+    'format: String(localized: "about %@ hours")',
+  ],
+  "apps/ios/Sources/Voice/TalkGatewayPermissionState.swift": [
+    'String(format: String(localized: "Missing %@"), scope)',
+    'String(localized: "Requesting approval")',
+  ],
+  "apps/ios/Sources/Voice/TalkModeManager.swift": [
+    'format: String(localized: "Speech error: %@")',
+    'format: String(localized: "Speak failed: %@")',
+    'self.statusText = String(localized: "Listening (PTT)")',
+  ],
+  "apps/ios/Sources/Voice/VoiceWakeManager.swift": [
+    'format: String(localized: "Recognizer error: %@")',
+    'self.statusText = String(localized: "Triggered")',
+  ],
+  "apps/ios/Sources/Design/AgentProTab+Overview.swift": [
+    "subtitle: .verbatim(self.agentTotalText)",
+    'format: String(localized: "%@ agents total")',
+    "func agentMenuRow(\n        icon: String,\n        title: OpenClawTextValue,\n        detail: OpenClawTextValue",
+    "func metricTile(\n        icon: String,\n        title: OpenClawTextValue,\n        value: String,\n        detail: OpenClawTextValue",
+  ],
+  "apps/ios/Sources/Design/AgentProNodesDestination.swift": [
+    "private func nodeDetailRow(_ title: OpenClawTextValue, value: String?)",
+    "private func nodeListCard(title: OpenClawTextValue, values: [String])",
+    "private func detailMetric(label: OpenClawTextValue, value: String)",
+    "title: OpenClawTextValue,\n        detail: OpenClawTextValue",
+  ],
+  "apps/ios/Sources/Design/CommandCenterSupport.swift": [
+    "Text(verbatim: self.item.title)",
+    "Text(verbatim: self.item.trailing)",
+    "Text(verbatim: self.item.detail)",
+    "struct CommandEmptyStateRow: View {\n    let icon: String\n    let title: OpenClawTextValue\n    let detail: OpenClawTextValue",
+    "private func actionButton(\n        _ title: LocalizedStringKey",
+  ],
+  "apps/ios/Sources/Design/IPadSkillWorkshopScreen.swift": [
+    'format: String(localized: "No proposals in %@")',
+  ],
+  "apps/ios/Sources/Design/IPadWorkboardScreen.swift": [
+    'format: String(localized: "No cards in %@")',
+    'format: String(localized: "Move to %@")',
+  ],
   "apps/ios/Sources/Gateway/GatewayQuickSetupSheet.swift": [
     "fullRowToggle(_ title: LocalizedStringKey",
+    "private struct GatewayQuickSetupStatusRow: View {\n    let title: LocalizedStringKey\n    let value: String",
+    "Text(LocalizedStringKey(availability.actionTitle))",
+    "Text(verbatim: self.message)",
+  ],
+  "apps/ios/Sources/Gateway/GatewayProblemView.swift": [
+    "Text(LocalizedStringKey(self.problem.title))",
+    "Text(LocalizedStringKey(self.problem.message))",
+    "Text(LocalizedStringKey(primaryActionTitle))",
+  ],
+  "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift": [
+    "Label(LocalizedStringKey(title), systemImage: icon)",
+    "OpenClawStatusBadge(label: .localized(status)",
+    "Text(LocalizedStringKey(detail))",
+    "Text(LocalizedStringKey(actionTitle))",
+  ],
+  "apps/ios/Sources/LiveActivity/LiveActivityManager.swift": [
+    'String(localized: "Connecting...")',
+    'String(localized: "Disconnected")',
   ],
   "apps/ios/WatchApp/Sources/WatchInboxView.swift": [
-    "private struct WatchPrimaryLabel: View {\n    let title: LocalizedStringKey",
-    "private struct WatchSecondaryLabel: View {\n    let title: LocalizedStringKey",
-    "private struct WatchSecondaryButton: View {\n    let title: LocalizedStringKey",
+    "enum WatchTextValue: ExpressibleByStringLiteral",
+    "private struct WatchFaceHeader: View {\n    let section: WatchTextValue\n    let title: WatchTextValue\n    let subtitle: WatchTextValue",
+    "private struct WatchHeroCard: View {\n    let label: WatchTextValue\n    let title: WatchTextValue\n    let subtitle: WatchTextValue",
+    "private struct WatchStackCard: View {\n    let label: WatchTextValue\n    let title: WatchTextValue\n    let subtitle: WatchTextValue",
     "private struct WatchDecisionButton: View {\n    let title: LocalizedStringKey",
+    'format: String(localized: "Expires in %@")',
+    'String(localized: "Pending review")',
+    'String(localized: "Review command below")',
+    "title: .verbatim(record.approval.commandPreview",
+  ],
+  "apps/ios/WatchApp/Sources/WatchDirectNode.swift": [
+    'private(set) var statusText = String(\n        localized: "Use iPhone Settings to enable direct connection.")',
+    'format: String(localized: "Direct connection failed: %@")',
+  ],
+  "apps/ios/WatchApp/Sources/WatchInboxStore.swift": [
+    'format: String(localized: "Sending %@…")',
+    'format: String(localized: "%@: sent")',
+    'format: String(localized: "%@: queued")',
+  ],
+};
+const RAW_LOCALIZATION_BYPASSES: Record<string, readonly string[]> = {
+  "apps/ios/Sources/Design/SettingsProTabSections.swift": [
+    "func settingsListRow(\n        icon: String,\n        iconColor: Color,\n        title: String",
+    "func aboutLinkRow(title: String",
+    "func toggleCard(title: String",
+    "func gatewaySecureField(_ placeholder: String",
+    "func settingsToggle(\n        _ title: String",
+  ],
+  "apps/ios/Sources/Gateway/GatewayConnectionController+Capabilities.swift": [
+    'helperText: "Secure connection is required for this host."',
+    'helperText: "Use only on a trusted private network."',
+  ],
+  "apps/ios/Sources/Gateway/ExecApprovalPromptDialog.swift": [
+    "private struct ExecApprovalPromptMetadataRow: View {\n    let label: String",
+    'return "under a minute"',
+    'return "about 1 minute"',
+  ],
+  "apps/ios/Sources/Voice/TalkModeManager.swift": [
+    'self.statusText = "',
+    'streamingOwner.terminalStatus = "',
+  ],
+  "apps/ios/Sources/Voice/VoiceWakeManager.swift": ['self.statusText = "'],
+  "apps/ios/Sources/Design/SettingsProTabSupport.swift": [
+    "struct SettingsDetailRow: View {\n    let label: LocalizedStringKey\n    let value: String",
+    "init(_ label: LocalizedStringKey, value: String)",
+    "Text(self.value)",
+    "Text(self.item.title)",
+    "Text(self.item.detail)",
+    "Text(self.item.priority)",
+  ],
+  "apps/ios/Sources/Design/SettingsChannelsDestination.swift": [
+    "Text(self.summaryDetail)",
+    "Text(self.entry.label)",
+    "Text(self.entry.detailText)",
+    "Text(account.displayName)",
+    "Text(account.detailText)",
+  ],
+  "apps/ios/Sources/Design/AgentProTab+Overview.swift": [
+    'subtitle: .verbatim("\\(self.sortedAgents.count) total")',
+    "func agentMenuRow(\n        icon: String,\n        title: String",
+    "func metricTile(\n        icon: String,\n        title: String",
+  ],
+  "apps/ios/Sources/Design/AgentProNodesDestination.swift": [
+    "private func nodeDetailRow(_ title: String",
+    "private func nodeListCard(title: String",
+    "private func detailMetric(label: String",
+    "private func emptyRow(icon: String, title: String",
+  ],
+  "apps/ios/Sources/Design/CommandCenterSupport.swift": [
+    "Text(self.item.title)",
+    "Text(self.item.trailing)",
+    "Text(self.item.detail)",
+    "struct CommandEmptyStateRow: View {\n    let icon: String\n    let title: String",
+    "private func actionButton(\n        _ title: String",
+  ],
+  "apps/ios/Sources/Design/IPadSkillWorkshopScreen.swift": [
+    '"No \\(IPadSkillWorkshopScreen.proposalLaneLabel(self.status).lowercased()) proposals"',
+  ],
+  "apps/ios/Sources/Design/IPadWorkboardScreen.swift": [
+    '"No \\(IPadWorkboardDefaults.label(for: self.status).lowercased()) cards"',
+    'Text("Move to \\(IPadWorkboardDefaults.label(for: status))")',
+  ],
+  "apps/ios/Sources/Design/SettingsProTabActions.swift": [
+    "func detailStatusCard(\n        icon: String,\n        title: String",
+    "func diagnosticCheckRow(\n        icon: String,\n        title: String",
+  ],
+  "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift": [
+    "Label(title, systemImage: icon)",
+    "Text(detail)",
+    "Text(actionTitle)",
+  ],
+  "apps/ios/WatchApp/Sources/WatchInboxView.swift": [
+    'parts.append("Expires in \\(expiresText)")',
+    'return "Expires in <1m"',
+    'return "Expires in \\(deltaSeconds / 60)m"',
+    'return "Pending review"',
+    'return "Review command below"',
+    'return "Stop speaking"',
+    'return "Cancel voice turn"',
+    'return "Start voice turn"',
+  ],
+  "apps/ios/WatchApp/Sources/WatchDirectNode.swift": [
+    'private(set) var statusText = "',
+    'self.statusText = "',
+  ],
+  "apps/ios/WatchApp/Sources/WatchInboxStore.swift": [
+    'self.appSnapshotStatusText = "',
+    'self.appCommandStatusText = "',
+    'self.execApprovals[index].statusText = "',
+    'self.replyStatusText = "',
   ],
 };
 
-type AppleCatalogSpec = {
-  path: string;
-  coverage: Record<string, readonly string[]>;
+const MACOS_CATALOG = {
+  path: "apps/macos/Sources/OpenClaw/Resources/Localizable.xcstrings",
+  coverage: {
+    "apps/macos/Sources/OpenClaw/ChannelsSettings+ChannelSections.swift": [
+      "Logout",
+      "Refresh",
+      "Save",
+    ],
+    "apps/macos/Sources/OpenClaw/CronSettings+Rows.swift": ["Run now"],
+  },
+} as const;
+
+type StringUnit = {
+  state?: string;
+  value?: string;
 };
 
-const CATALOGS: readonly AppleCatalogSpec[] = [
-  {
-    path: "apps/ios/Resources/Localizable.xcstrings",
-    coverage: {
-      "apps/ios/ShareExtension/ShareComposeView.swift": [
-        "Add a message, then tap Send.",
-        "Cancel",
-        "Preparing share…",
-        "Send to OpenClaw",
-        "Sending to OpenClaw gateway…",
-        "Sent to OpenClaw.",
-      ],
-      "apps/ios/ShareExtension/ShareViewController.swift": [
-        "Invalid saved gateway URL.",
-        "Message is empty.",
-        "OpenClaw is not connected to a gateway yet.",
-        "Send failed: %@",
-        "The shared image could not be prepared.",
-      ],
-      "apps/ios/Sources/Design/SettingsChannelsDestination.swift": ["Logout"],
-      "apps/ios/Sources/Design/ChatProTab.swift": [
-        "Check OpenClaw status",
-        "Help me start a realtime voice session from this phone.",
-        "Help me start voice chat",
-        "Show me which phone controls and device capabilities are available right now.",
-        "Summarize the current OpenClaw status and tell me what needs attention.",
-        "What can I control here?",
-        "What would you like to work on?",
-      ],
-      "apps/ios/Sources/Gateway/GatewayProblemView.swift": ["Done"],
-      "apps/ios/Sources/Gateway/GatewayQuickSetupSheet.swift": [
-        "Close",
-        "Connect",
-        "Connect a nearby Gateway",
-        "Connecting…",
-        "Don't show this again",
-        "Looking for a Gateway",
-        "Not now",
-        "Quick Setup",
-      ],
-      "apps/ios/Sources/Gateway/GatewayTrustPromptAlert.swift": [
-        "Cancel",
-        "First-time TLS connection.\n\nVerify this SHA-256 fingerprint out-of-band before trusting:\n%@",
-        "Trust and connect",
-        "Trust this gateway?",
-      ],
-      "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift": ["Go to Chat"],
-      "apps/ios/Sources/RootTabs.swift": ["Agent", "Chat", "Control", "Settings", "Talk"],
-      "apps/ios/WatchApp/Sources/WatchInboxView.swift": [
-        "Allow Once",
-        "Chat",
-        "Continue on iPhone",
-        "Deny",
-        "Message OpenClaw",
-        "No chat synced",
-        "Open all approvals",
-        "Refresh",
-        "Review again",
-        "Talk to Claw",
-        "Tap the message pill below to start from your watch.",
-        "You",
-      ],
-      "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift": ["Writing"],
-    },
-  },
-  {
-    path: "apps/macos/Sources/OpenClaw/Resources/Localizable.xcstrings",
-    coverage: {
-      "apps/macos/Sources/OpenClaw/ChannelsSettings+ChannelSections.swift": [
-        "Logout",
-        "Refresh",
-        "Save",
-      ],
-      "apps/macos/Sources/OpenClaw/CronSettings+Rows.swift": ["Run now"],
-    },
-  },
-];
+type CatalogEntry = {
+  localizations?: Record<string, { stringUnit?: StringUnit }>;
+};
 
 type Catalog = {
   sourceLanguage?: string;
-  strings?: Record<
-    string,
-    {
-      localizations?: Record<string, { stringUnit?: { state?: string; value?: string } }>;
-    }
-  >;
+  strings?: Record<string, CatalogEntry>;
+};
+
+type NativeSourceEntry = {
+  id: string;
+  kind: string;
+  line: number;
+  path: string;
+  source: string;
+  surface: string;
+};
+
+type NativeSourceArtifact = {
+  entries: NativeSourceEntry[];
+  version: number;
+};
+
+type NativeTranslationArtifact = {
+  entries: Array<{ id: string; source: string; translated: string }>;
+  locale: string;
+  version: number;
+};
+
+export type AppleTranslationContradiction = {
+  locale: string;
+  source: string;
+  translations: string[];
+};
+
+export type AppleCatalogBuild = {
+  catalog: Catalog;
+  contradictions: AppleTranslationContradiction[];
 };
 
 function formatTokens(value: string): string[] {
@@ -126,8 +377,344 @@ function stringsLiteral(value: string): string {
   return JSON.stringify(value);
 }
 
-export async function checkAppleAppI18n() {
+function serializeCatalog(catalog: Catalog): string {
+  return `${JSON.stringify(catalog, null, 2)}\n`;
+}
+
+function decodeXml(value: string): string {
+  return value
+    .replaceAll("&quot;", '"')
+    .replaceAll("&apos;", "'")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&amp;", "&");
+}
+
+function parseInfoPlistStrings(source: string): Array<{ key: string; source: string }> {
+  return [...source.matchAll(/<key>([^<]+)<\/key>\s*<string>([\s\S]*?)<\/string>/gu)]
+    .map((match) => ({
+      key: decodeXml(match[1] ?? ""),
+      source: decodeXml(match[2] ?? ""),
+    }))
+    .filter(
+      (entry) => entry.key === "CFBundleDisplayName" || entry.key.endsWith("UsageDescription"),
+    );
+}
+
+function parseStringsFile(source: string): Map<string, string> {
+  const values = new Map<string, string>();
+  for (const match of source.matchAll(/^\s*("(?:\\.|[^"\\])*")\s*=\s*("(?:\\.|[^"\\])*");/gmu)) {
+    values.set(JSON.parse(match[1] ?? '""') as string, JSON.parse(match[2] ?? '""') as string);
+  }
+  return values;
+}
+
+async function readOptionalFile(filePath: string): Promise<string | null> {
+  try {
+    return await readFile(filePath, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+}
+
+function isIosCatalogEntry(entry: NativeSourceEntry): boolean {
+  return (
+    entry.surface === "apple" &&
+    IOS_SOURCE_PREFIXES.some((prefix) => entry.path.startsWith(prefix)) &&
+    IOS_CATALOG_KINDS.has(entry.kind) &&
+    !entry.source.includes("\\(") &&
+    !IOS_CATALOG_EXCLUSIONS.has(entry.source)
+  );
+}
+
+function chooseTranslation(source: string, translations: readonly string[]): string {
+  const counts = new Map<string, number>();
+  for (const translation of translations) {
+    counts.set(translation, (counts.get(translation) ?? 0) + 1);
+  }
+  return (
+    [...counts].toSorted(([leftValue, leftCount], [rightValue, rightCount]) => {
+      const sourcePenalty = Number(leftValue === source) - Number(rightValue === source);
+      return sourcePenalty || rightCount - leftCount || leftValue.localeCompare(rightValue, "en");
+    })[0]?.[0] ?? source
+  );
+}
+
+export function buildIosCatalog(
+  existingCatalog: Catalog,
+  nativeSource: NativeSourceArtifact,
+  translations: readonly NativeTranslationArtifact[],
+  explicitSources: readonly string[] = [],
+): AppleCatalogBuild {
+  const iosEntries = nativeSource.entries.filter(isIosCatalogEntry);
+  const sources = [
+    ...new Set([...iosEntries.map((entry) => entry.source), ...explicitSources]),
+  ].toSorted((left, right) => left.localeCompare(right, "en"));
+  const appleIdsBySource = new Map<string, Set<string>>();
+  for (const entry of iosEntries) {
+    const ids = appleIdsBySource.get(entry.source) ?? new Set<string>();
+    ids.add(entry.id);
+    appleIdsBySource.set(entry.source, ids);
+  }
+  const existingStrings = existingCatalog.strings ?? {};
+  const translationsByLocale = new Map(
+    translations.map((artifact) => {
+      const bySource = new Map<string, string[]>();
+      for (const entry of artifact.entries) {
+        if (!sources.includes(entry.source)) {
+          continue;
+        }
+        const appleIds = appleIdsBySource.get(entry.source);
+        if (appleIds && !appleIds.has(entry.id)) {
+          continue;
+        }
+        const values = bySource.get(entry.source) ?? [];
+        values.push(entry.translated);
+        bySource.set(entry.source, values);
+      }
+      return [artifact.locale, bySource] as const;
+    }),
+  );
+  const contradictions: AppleTranslationContradiction[] = [];
+  const strings: Record<string, CatalogEntry> = {};
+
+  for (const source of sources) {
+    const existing = existingStrings[source];
+    const localizations: NonNullable<CatalogEntry["localizations"]> = {};
+    for (const locale of REQUIRED_LOCALES) {
+      const candidates = translationsByLocale.get(locale)?.get(source) ?? [];
+      const distinct = [...new Set(candidates)].toSorted((left, right) =>
+        left.localeCompare(right, "en"),
+      );
+      if (distinct.length > 1) {
+        contradictions.push({ locale, source, translations: distinct });
+      }
+      const existingUnit = existing?.localizations?.[locale]?.stringUnit;
+      if (
+        existingUnit?.value &&
+        (existingUnit.state === "translated" || existingUnit.value !== source)
+      ) {
+        localizations[locale] = { stringUnit: { ...existingUnit } };
+        continue;
+      }
+      if (locale === "en") {
+        localizations.en = {
+          stringUnit: {
+            state: "translated",
+            value: source,
+          },
+        };
+        continue;
+      }
+      const value = chooseTranslation(source, candidates);
+      localizations[locale] = {
+        stringUnit: {
+          state: value === source ? "new" : "translated",
+          value,
+        },
+      };
+    }
+    strings[source] = { localizations };
+  }
+
+  return {
+    catalog: {
+      sourceLanguage: "en",
+      strings,
+    },
+    contradictions: contradictions.toSorted(
+      (left, right) =>
+        left.source.localeCompare(right.source, "en") ||
+        left.locale.localeCompare(right.locale, "en"),
+    ),
+  };
+}
+
+async function listSwiftFiles(directory: string): Promise<string[]> {
+  const entries = await readdir(directory, { withFileTypes: true });
+  const nested = await Promise.all(
+    entries.map(async (entry) => {
+      const entryPath = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        return listSwiftFiles(entryPath);
+      }
+      return entry.isFile() && entry.name.endsWith(".swift") ? [entryPath] : [];
+    }),
+  );
+  return nested.flat();
+}
+
+function decodeSwiftStringLiteral(value: string): string {
+  const jsonCompatible = value.replace(/\\u\{([0-9a-f]+)\}/giu, (_, hex: string) =>
+    String.fromCodePoint(Number.parseInt(hex, 16)),
+  );
+  return JSON.parse(`"${jsonCompatible}"`) as string;
+}
+
+async function discoverExplicitLocalizedSources(): Promise<string[]> {
+  const roots = IOS_SOURCE_PREFIXES.map((prefix) => path.join(ROOT, prefix));
+  const files = (await Promise.all(roots.map(listSwiftFiles))).flat();
+  const sources = new Set<string>();
+  for (const file of files) {
+    const source = await readFile(file, "utf8");
+    for (const match of source.matchAll(EXPLICIT_LOCALIZED_CALL)) {
+      const value = match[1];
+      if (value && !value.includes("\\(")) {
+        sources.add(decodeSwiftStringLiteral(value));
+      }
+    }
+  }
+  return [...sources];
+}
+
+async function validateRuntimeInterpolationPaths(): Promise<void> {
+  const roots = IOS_SOURCE_PREFIXES.map((prefix) => path.join(ROOT, prefix));
+  const files = (await Promise.all(roots.map(listSwiftFiles))).flat();
+  const violations: string[] = [];
+  for (const file of files) {
+    const source = await readFile(file, "utf8");
+    for (const { label, pattern } of AMBIGUOUS_RUNTIME_INTERPOLATIONS) {
+      pattern.lastIndex = 0;
+      if (pattern.test(source)) {
+        violations.push(`${path.relative(ROOT, file)}: ${label}`);
+      }
+    }
+  }
+  if (violations.length) {
+    throw new Error(
+      `Apple i18n runtime interpolation bypasses generated catalog coverage:\n${violations.join("\n")}`,
+    );
+  }
+}
+
+async function readNativeTranslations(): Promise<NativeTranslationArtifact[]> {
+  return Promise.all(
+    APPLE_I18N_LOCALES.map(async (locale) => {
+      const artifact = JSON.parse(
+        await readFile(path.join(ROOT, NATIVE_TRANSLATIONS_DIR, `${locale}.json`), "utf8"),
+      ) as NativeTranslationArtifact;
+      if (artifact.locale !== locale) {
+        throw new Error(
+          `native Apple translation artifact ${locale} declares locale ${artifact.locale}`,
+        );
+      }
+      return artifact;
+    }),
+  );
+}
+
+async function readIosCatalogBuild(): Promise<AppleCatalogBuild> {
+  const existingCatalog = JSON.parse(
+    await readFile(path.join(ROOT, IOS_CATALOG_PATH), "utf8"),
+  ) as Catalog;
+  const nativeSource = JSON.parse(
+    await readFile(path.join(ROOT, NATIVE_SOURCE_PATH), "utf8"),
+  ) as NativeSourceArtifact;
+  const translations = await readNativeTranslations();
+  return buildIosCatalog(
+    existingCatalog,
+    nativeSource,
+    translations,
+    await discoverExplicitLocalizedSources(),
+  );
+}
+
+function validateCatalog(pathName: string, catalog: Catalog): number {
+  if (catalog.sourceLanguage !== "en" || !catalog.strings) {
+    throw new Error(`invalid Apple string catalog: ${pathName}`);
+  }
   let checked = 0;
+  for (const [key, entry] of Object.entries(catalog.strings)) {
+    const sourceTokens = formatTokens(key);
+    for (const locale of REQUIRED_LOCALES) {
+      const unit = entry.localizations?.[locale]?.stringUnit;
+      const value = unit?.value?.trim();
+      if (!value || (locale === "en" && unit?.state !== "translated")) {
+        throw new Error(
+          `Apple catalog ${pathName} is missing ${locale} for ${JSON.stringify(key)}`,
+        );
+      }
+      if (formatTokens(value).join("\u0000") !== sourceTokens.join("\u0000")) {
+        throw new Error(
+          `Apple catalog ${pathName} has placeholder drift in ${locale} for ${JSON.stringify(key)}`,
+        );
+      }
+    }
+    checked += 1;
+  }
+  return checked;
+}
+
+async function syncIosInfoPlist(write: boolean): Promise<number> {
+  const translations = await readNativeTranslations();
+  let checked = 0;
+  for (const target of IOS_INFO_PLIST_TARGETS) {
+    const sourceEntries = parseInfoPlistStrings(
+      await readFile(path.join(ROOT, target.sourcePath), "utf8"),
+    );
+    for (const locale of APPLE_I18N_LOCALES) {
+      const localeDir = APPLE_LOCALE_DIRECTORIES[locale] ?? locale;
+      const outputPath = path.join(
+        ROOT,
+        target.outputRoot,
+        `${localeDir}.lproj`,
+        "InfoPlist.strings",
+      );
+      const existingSource = await readOptionalFile(outputPath);
+      const existing = parseStringsFile(existingSource ?? "");
+      const artifact = translations.find((candidate) => candidate.locale === locale);
+      const lines = sourceEntries.map(({ key, source }) => {
+        if (key === "CFBundleDisplayName") {
+          return `${stringsLiteral(key)} = ${stringsLiteral("OpenClaw")};`;
+        }
+        const candidates =
+          artifact?.entries
+            .filter((entry) => entry.source === source)
+            .map((entry) => entry.translated) ?? [];
+        const existingValue = existing.get(key);
+        const value =
+          existingValue && existingValue !== source
+            ? existingValue
+            : chooseTranslation(source, candidates);
+        return `${stringsLiteral(key)} = ${stringsLiteral(value)};`;
+      });
+      const expected = `${lines.join("\n")}\n`;
+      if (existingSource !== expected) {
+        if (!write) {
+          throw new Error(
+            `Apple InfoPlist localization ${path.relative(ROOT, outputPath)} is stale; run apple-app-i18n.ts sync-ios --write`,
+          );
+        }
+        await mkdir(path.dirname(outputPath), { recursive: true });
+        await writeFile(outputPath, expected, "utf8");
+      }
+      checked += 1;
+    }
+  }
+  return checked;
+}
+
+export async function syncIosCatalog(write: boolean): Promise<AppleCatalogBuild> {
+  const build = await readIosCatalogBuild();
+  const catalogPath = path.join(ROOT, IOS_CATALOG_PATH);
+  const expected = serializeCatalog(build.catalog);
+  const actual = await readFile(catalogPath, "utf8");
+  if (actual !== expected) {
+    if (!write) {
+      throw new Error(
+        `Apple catalog ${IOS_CATALOG_PATH} is stale; run apple-app-i18n.ts sync-ios --write`,
+      );
+    }
+    await writeFile(catalogPath, expected, "utf8");
+  }
+  return build;
+}
+
+export async function checkAppleAppI18n() {
+  await validateRuntimeInterpolationPaths();
   for (const [sourcePath, contracts] of Object.entries(LOCALIZED_WRAPPER_CONTRACTS)) {
     const source = await readFile(path.join(ROOT, sourcePath), "utf8");
     const missing = contracts.filter((contract) => !source.includes(contract));
@@ -137,70 +724,67 @@ export async function checkAppleAppI18n() {
       );
     }
   }
-  for (const spec of CATALOGS) {
-    const catalogPath = path.join(ROOT, spec.path);
-    const catalog = JSON.parse(await readFile(catalogPath, "utf8")) as Catalog;
-    if (catalog.sourceLanguage !== "en" || !catalog.strings) {
-      throw new Error(`invalid Apple string catalog: ${spec.path}`);
-    }
-
-    const expectedKeys = new Set(Object.values(spec.coverage).flat());
-    const actualKeys = new Set(Object.keys(catalog.strings));
-    const missingKeys = [...expectedKeys].filter((key) => !actualKeys.has(key));
-    const extraKeys = [...actualKeys].filter((key) => !expectedKeys.has(key));
-    if (missingKeys.length || extraKeys.length) {
+  for (const [sourcePath, bypasses] of Object.entries(RAW_LOCALIZATION_BYPASSES)) {
+    const source = await readFile(path.join(ROOT, sourcePath), "utf8");
+    const present = bypasses.filter((bypass) => source.includes(bypass));
+    if (present.length) {
       throw new Error(
-        [
-          `Apple catalog ${spec.path} does not match its phased source coverage.`,
-          `missing=${missingKeys.join(",") || "none"}`,
-          `extra=${extraKeys.join(",") || "none"}`,
-        ].join("\n"),
+        `Apple i18n runtime path ${sourcePath} contains raw app-owned strings: ${present.join(", ")}`,
       );
     }
+  }
 
-    for (const [sourcePath, keys] of Object.entries(spec.coverage)) {
-      const source = await readFile(path.join(ROOT, sourcePath), "utf8");
-      const absent = keys.filter((key) => {
-        const escapedKey = JSON.stringify(key).slice(1, -1);
-        return !source.includes(key) && !source.includes(escapedKey);
-      });
-      if (absent.length) {
-        throw new Error(
-          `Apple i18n coverage ${sourcePath} no longer contains: ${absent.join(", ")}`,
-        );
-      }
-    }
+  const iosBuild = await syncIosCatalog(false);
+  const iosKeys = validateCatalog(IOS_CATALOG_PATH, iosBuild.catalog);
+  const infoPlistFiles = await syncIosInfoPlist(false);
 
-    for (const [key, entry] of Object.entries(catalog.strings)) {
-      const sourceTokens = formatTokens(key);
-      for (const locale of REQUIRED_LOCALES) {
-        const unit = entry.localizations?.[locale]?.stringUnit;
-        const value = unit?.value?.trim();
-        if (!value || (locale === "en" && unit?.state !== "translated")) {
-          throw new Error(
-            `Apple catalog ${spec.path} is missing ${locale} for ${JSON.stringify(key)}`,
-          );
-        }
-        if (formatTokens(value).join("\u0000") !== sourceTokens.join("\u0000")) {
-          throw new Error(
-            `Apple catalog ${spec.path} has placeholder drift in ${locale} for ${JSON.stringify(key)}`,
-          );
-        }
-      }
-      checked += 1;
+  const macosCatalog = JSON.parse(
+    await readFile(path.join(ROOT, MACOS_CATALOG.path), "utf8"),
+  ) as Catalog;
+  if (!macosCatalog.strings) {
+    throw new Error(`invalid Apple string catalog: ${MACOS_CATALOG.path}`);
+  }
+  const expectedMacosKeys = new Set(Object.values(MACOS_CATALOG.coverage).flat());
+  const actualMacosKeys = new Set(Object.keys(macosCatalog.strings));
+  const missingMacosKeys = [...expectedMacosKeys].filter((key) => !actualMacosKeys.has(key));
+  const extraMacosKeys = [...actualMacosKeys].filter((key) => !expectedMacosKeys.has(key));
+  if (missingMacosKeys.length || extraMacosKeys.length) {
+    throw new Error(
+      [
+        `Apple catalog ${MACOS_CATALOG.path} does not match its phased source coverage.`,
+        `missing=${missingMacosKeys.join(",") || "none"}`,
+        `extra=${extraMacosKeys.join(",") || "none"}`,
+      ].join("\n"),
+    );
+  }
+  for (const [sourcePath, keys] of Object.entries(MACOS_CATALOG.coverage)) {
+    const source = await readFile(path.join(ROOT, sourcePath), "utf8");
+    const absent = keys.filter((key) => !source.includes(key));
+    if (absent.length) {
+      throw new Error(`Apple i18n coverage ${sourcePath} no longer contains: ${absent.join(", ")}`);
     }
   }
+  const macosKeys = validateCatalog(MACOS_CATALOG.path, macosCatalog);
+
   process.stdout.write(
-    `apple-app-i18n: catalogs=${CATALOGS.length} keys=${checked} locales=${NATIVE_I18N_LOCALES.join(",")}\n`,
+    [
+      `apple-app-i18n: iosKeys=${iosKeys}`,
+      `macosKeys=${macosKeys}`,
+      `infoPlistFiles=${infoPlistFiles}`,
+      `translationContradictions=${iosBuild.contradictions.length}`,
+      `locales=${APPLE_I18N_LOCALES.join(",")}`,
+      "\n",
+    ].join(" "),
   );
 }
 
 export async function compileMacosLocalizations(outputDir: string) {
   await checkAppleAppI18n();
-  const spec = expectDefined(CATALOGS[1], "macOS localization catalog specification");
-  const catalog = JSON.parse(await readFile(path.join(ROOT, spec.path), "utf8")) as Catalog;
+  const catalog = JSON.parse(
+    await readFile(path.join(ROOT, MACOS_CATALOG.path), "utf8"),
+  ) as Catalog;
   if (!catalog.strings) {
-    throw new Error(`invalid Apple string catalog: ${spec.path}`);
+    throw new Error(`invalid Apple string catalog: ${MACOS_CATALOG.path}`);
   }
 
   for (const locale of REQUIRED_LOCALES) {
@@ -212,7 +796,7 @@ export async function compileMacosLocalizations(outputDir: string) {
         const value = entry.localizations?.[locale]?.stringUnit?.value;
         if (!value) {
           throw new Error(
-            `Apple catalog ${spec.path} is missing ${locale} for ${JSON.stringify(key)}`,
+            `Apple catalog ${MACOS_CATALOG.path} is missing ${locale} for ${JSON.stringify(key)}`,
           );
         }
         return `${stringsLiteral(key)} = ${stringsLiteral(value)};`;
@@ -226,11 +810,17 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   const [command, flag, value] = process.argv.slice(2);
   if (command === "check") {
     await checkAppleAppI18n();
+  } else if (command === "sync-ios" && flag === "--write") {
+    const build = await syncIosCatalog(true);
+    const infoPlistFiles = await syncIosInfoPlist(true);
+    process.stdout.write(
+      `apple-app-i18n: synced iOS catalog and ${infoPlistFiles} InfoPlist files; contradictions=${build.contradictions.length}\n`,
+    );
   } else if (command === "compile-macos" && flag === "--output" && value) {
     await compileMacosLocalizations(path.resolve(value));
   } else {
     throw new Error(
-      "usage: node --import tsx scripts/apple-app-i18n.ts check|compile-macos --output <dir>",
+      "usage: node --import tsx scripts/apple-app-i18n.ts check|sync-ios --write|compile-macos --output <dir>",
     );
   }
 }

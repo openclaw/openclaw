@@ -2,14 +2,19 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { checkAppleAppI18n, compileMacosLocalizations } from "../../scripts/apple-app-i18n.ts";
+import {
+  APPLE_I18N_LOCALES,
+  buildIosCatalog,
+  checkAppleAppI18n,
+  compileMacosLocalizations,
+} from "../../scripts/apple-app-i18n.ts";
 
 describe("Apple app i18n catalogs", () => {
-  it("keeps phased source coverage complete for every native locale", async () => {
+  it("keeps generated runtime coverage complete for every native locale", async () => {
     await expect(checkAppleAppI18n()).resolves.toBeUndefined();
   });
 
-  it("does not mark English setup fallbacks as completed translations", async () => {
+  it("ships translated runtime keys for iOS, watchOS, and explicit localized calls", async () => {
     const catalog = JSON.parse(
       await readFile("apps/ios/Resources/Localizable.xcstrings", "utf8"),
     ) as {
@@ -19,12 +24,176 @@ describe("Apple app i18n catalogs", () => {
       >;
     };
 
-    expect(
-      catalog.strings["Connect a nearby Gateway"]?.localizations?.de?.stringUnit,
-    ).toMatchObject({
+    for (const key of [
+      "%@ agents total",
+      "%@ approvals waiting",
+      "Approval needed",
+      "Agent: %@",
+      "Connect a nearby Gateway",
+      "Direct mode supports device info, status, and notifications. Chat, Talk, and approvals still use the iPhone.",
+      "Expires in %@",
+      "Location Services are off in iOS Settings.",
+      "Message Routing",
+      "No cards in %@",
+      "No proposals in %@",
+      "Pending review",
+      "Secure connection is required for this host.",
+      "TLS required",
+      "Use only on a trusted private network.",
+    ]) {
+      const entry = catalog.strings[key];
+      expect(entry, key).toBeDefined();
+      for (const locale of ["en", ...APPLE_I18N_LOCALES]) {
+        expect(entry?.localizations?.[locale]?.stringUnit?.value, `${key}:${locale}`).toBeTruthy();
+      }
+    }
+  });
+
+  it("selects duplicate-source translations deterministically while preserving shipped translations", () => {
+    const build = buildIosCatalog(
+      {
+        sourceLanguage: "en",
+        strings: {
+          "Connect now": {
+            localizations: {
+              de: { stringUnit: { state: "translated", value: "Jetzt verbinden" } },
+            },
+          },
+        },
+      },
+      {
+        version: 1,
+        entries: [
+          {
+            id: "native.apple.a",
+            kind: "ui-call",
+            line: 1,
+            path: "apps/ios/Sources/Example.swift",
+            source: "Connect now",
+            surface: "apple",
+          },
+          {
+            id: "native.apple.b",
+            kind: "ui-call",
+            line: 2,
+            path: "apps/ios/Sources/Other.swift",
+            source: "Connect now",
+            surface: "apple",
+          },
+          {
+            id: "native.apple.c",
+            kind: "ui-call",
+            line: 3,
+            path: "apps/ios/WatchApp/Sources/Example.swift",
+            source: "Connect now",
+            surface: "apple",
+          },
+        ],
+      },
+      [
+        {
+          version: 1,
+          locale: "fr",
+          entries: [
+            { id: "native.apple.a", source: "Connect now", translated: "Se connecter" },
+            { id: "native.apple.b", source: "Connect now", translated: "Connexion" },
+            { id: "native.apple.c", source: "Connect now", translated: "Se connecter" },
+          ],
+        },
+      ],
+    );
+
+    expect(build.catalog.strings?.["Connect now"]?.localizations?.de?.stringUnit?.value).toBe(
+      "Jetzt verbinden",
+    );
+    expect(build.catalog.strings?.["Connect now"]?.localizations?.fr?.stringUnit?.value).toBe(
+      "Se connecter",
+    );
+    expect(build.catalog.strings?.["Connect now"]?.localizations?.es?.stringUnit).toEqual({
       state: "new",
-      value: "Connect a nearby Gateway",
+      value: "Connect now",
     });
+    expect(build.contradictions).toEqual([
+      {
+        locale: "fr",
+        source: "Connect now",
+        translations: ["Connexion", "Se connecter"],
+      },
+    ]);
+  });
+
+  it("keeps custom component text on explicit localized or verbatim paths", async () => {
+    const design = await readFile("apps/ios/Sources/Design/OpenClawProComponents.swift", "utf8");
+    const agentOverview = await readFile(
+      "apps/ios/Sources/Design/AgentProTab+Overview.swift",
+      "utf8",
+    );
+    const settingsActions = await readFile(
+      "apps/ios/Sources/Design/SettingsProTabActions.swift",
+      "utf8",
+    );
+    const settingsSections = await readFile(
+      "apps/ios/Sources/Design/SettingsProTabSections.swift",
+      "utf8",
+    );
+    const gatewayCapabilities = await readFile(
+      "apps/ios/Sources/Gateway/GatewayConnectionController+Capabilities.swift",
+      "utf8",
+    );
+    const talkMode = await readFile("apps/ios/Sources/Voice/TalkModeManager.swift", "utf8");
+    const voiceWake = await readFile("apps/ios/Sources/Voice/VoiceWakeManager.swift", "utf8");
+    const settings = await readFile("apps/ios/Sources/Design/SettingsProTabSupport.swift", "utf8");
+    const watch = await readFile("apps/ios/WatchApp/Sources/WatchInboxView.swift", "utf8");
+    const watchDirect = await readFile("apps/ios/WatchApp/Sources/WatchDirectNode.swift", "utf8");
+
+    expect(design).toContain(
+      "struct ProStatusRow: View {\n    let icon: String\n    let title: OpenClawTextValue\n    let detail: OpenClawTextValue",
+    );
+    expect(design).not.toContain(
+      "struct ProStatusRow: View {\n    let icon: String\n    let title: String",
+    );
+    expect(watch).toContain(
+      "private struct WatchHeroCard: View {\n    let label: WatchTextValue\n    let title: WatchTextValue\n    let subtitle: WatchTextValue",
+    );
+    expect(watch).toContain("title: .verbatim(record.approval.commandPreview");
+    expect(settings).toContain(
+      "let title: OpenClawTextValue\n    let detail: OpenClawTextValue\n    let priority: OpenClawTextValue",
+    );
+    expect(settings).toContain(
+      "struct SettingsDetailRow: View {\n    let label: LocalizedStringKey\n    let value: OpenClawTextValue",
+    );
+    expect(settings).toContain("self.value.text");
+    expect(settings).not.toContain("Text(self.item.title)");
+    expect(agentOverview).toContain(
+      "func metricTile(\n        icon: String,\n        title: OpenClawTextValue,\n        value: String,\n        detail: OpenClawTextValue",
+    );
+    expect(settingsActions).toContain(
+      "func diagnosticCheckRow(\n        icon: String,\n        title: OpenClawTextValue,\n        detail: OpenClawTextValue,\n        value: OpenClawTextValue",
+    );
+    expect(settingsSections).toContain("func settingsToggle(\n        _ title: LocalizedStringKey");
+    expect(settingsSections).toContain(
+      "func gatewaySecureField(\n        _ placeholder: LocalizedStringKey",
+    );
+    expect(gatewayCapabilities).toContain(
+      'String(localized: "Secure connection is required for this host.")',
+    );
+    expect(talkMode).not.toContain('self.statusText = "');
+    expect(voiceWake).not.toContain('self.statusText = "');
+    expect(watch).toContain('format: String(localized: "Expires in %@")');
+    expect(watch).not.toContain('parts.append("Expires in \\(expiresText)")');
+    expect(watchDirect).not.toContain('self.statusText = "');
+  });
+
+  it("generates iOS and watchOS InfoPlist localizations", async () => {
+    const french = await readFile("apps/ios/Sources/fr.lproj/InfoPlist.strings", "utf8");
+    const watchChinese = await readFile(
+      "apps/ios/WatchApp/zh-Hans.lproj/InfoPlist.strings",
+      "utf8",
+    );
+
+    expect(french).toContain('"NSCameraUsageDescription" = ');
+    expect(french).toContain('"NSMicrophoneUsageDescription" = ');
+    expect(watchChinese).toContain('"NSLocalNetworkUsageDescription" = ');
   });
 
   it("compiles macOS catalogs into app-bundle localization directories", async () => {
