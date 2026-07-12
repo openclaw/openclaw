@@ -22,6 +22,7 @@ final class ShareViewController: UIViewController {
     private struct ExtractedShareContent {
         var payload: SharedContentPayload
         var attachments: [LoadedAttachment]
+        var attachmentSummary: ShareAttachmentSummary
         var attachmentError: ShareImageProcessor.ProcessError?
     }
 
@@ -70,9 +71,18 @@ final class ShareViewController: UIViewController {
         self.composeView.setDraft(message)
         self.composeView.setAttachmentPreviews(extracted.attachments.map(\.preview))
         self.composeView.focusDraft()
-        if let attachmentError = extracted.attachmentError {
-            ShareGatewayRelaySettings.saveLastEvent("Share blocked: image processing failed.")
-            self.composeView.apply(.blocked(self.imageProcessingErrorMessage(attachmentError)))
+        if let blockReason = ShareAttachmentBlockReason.resolve(
+            hasImageProcessingError: extracted.attachmentError != nil,
+            summary: extracted.attachmentSummary)
+        {
+            switch blockReason {
+            case .imageProcessingFailed:
+                ShareGatewayRelaySettings.saveLastEvent("Share blocked: image processing failed.")
+                self.composeView.apply(.blocked(self.imageProcessingErrorMessage()))
+            case let .omitted(message):
+                ShareGatewayRelaySettings.saveLastEvent("Share blocked: attachment(s) omitted.")
+                self.composeView.apply(.blocked(message))
+            }
         } else if message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             self.composeView.apply(.ready)
             ShareGatewayRelaySettings.saveLastEvent("Share ready: waiting for message input.")
@@ -88,8 +98,8 @@ final class ShareViewController: UIViewController {
     }
 
     private func sendCurrentDraft() async {
-        if let attachmentError = self.attachmentError {
-            self.composeView.apply(.blocked(self.imageProcessingErrorMessage(attachmentError)))
+        if self.attachmentError != nil {
+            self.composeView.apply(.blocked(self.imageProcessingErrorMessage()))
             return
         }
         let trimmed = self.composeView.draftText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -282,6 +292,7 @@ final class ShareViewController: UIViewController {
             return ExtractedShareContent(
                 payload: SharedContentPayload(title: nil, url: nil, text: nil),
                 attachments: [],
+                attachmentSummary: ShareAttachmentSummary(),
                 attachmentError: nil)
         }
 
@@ -290,6 +301,7 @@ final class ShareViewController: UIViewController {
         var sharedText: String?
         var attributedContentText: String?
         var attachments: [LoadedAttachment] = []
+        var attachmentSummary = ShareAttachmentSummary()
         var attachmentError: ShareImageProcessor.ProcessError?
         let maxImageAttachments = 3
 
@@ -311,6 +323,7 @@ final class ShareViewController: UIViewController {
                 }
 
                 if provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
+                    attachmentSummary.selectedImageCount += 1
                     if attachments.count < maxImageAttachments, attachmentError == nil {
                         do {
                             let attachment = try await self.loadImageAttachment(
@@ -323,9 +336,19 @@ final class ShareViewController: UIViewController {
                             attachmentError = .encodeFailed
                         }
                     }
+                } else if provider.hasItemConformingToTypeIdentifier(UTType.movie.identifier) {
+                    attachmentSummary.videoCount += 1
+                } else if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                    attachmentSummary.fileCount += 1
+                } else if !provider.hasItemConformingToTypeIdentifier(UTType.url.identifier),
+                          !provider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier),
+                          !provider.hasItemConformingToTypeIdentifier(UTType.text.identifier)
+                {
+                    attachmentSummary.unknownCount += 1
                 }
             }
         }
+        attachmentSummary.acceptedImageCount = attachments.count
 
         // Share hosts often mirror provider text in attributedContentText.
         // Preserve distinct content as the historical title, but do not duplicate provider data.
@@ -336,6 +359,7 @@ final class ShareViewController: UIViewController {
         return ExtractedShareContent(
             payload: SharedContentPayload(title: title ?? supplementalTitle, url: sharedURL, text: sharedText),
             attachments: attachments,
+            attachmentSummary: attachmentSummary,
             attachmentError: attachmentError)
     }
 
@@ -361,7 +385,7 @@ final class ShareViewController: UIViewController {
             preview: self.boundedPreview(from: image))
     }
 
-    private func imageProcessingErrorMessage(_: ShareImageProcessor.ProcessError) -> String {
+    private func imageProcessingErrorMessage() -> String {
         NSLocalizedString(
             "The shared image could not be prepared.",
             comment: "Share extension image processing failure")
