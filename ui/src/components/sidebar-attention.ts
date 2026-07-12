@@ -23,6 +23,9 @@ const CRON_OVERDUE_GRACE_MS = 300_000;
 // Reloads are connection-scoped; a visibility change only refetches after the
 // snapshot is older than this, so tab switches stay free of request bursts.
 const VISIBILITY_REFRESH_MIN_AGE_MS = 60_000;
+// Always-visible windows (the macOS app) never fire visibilitychange, so a
+// slow lifecycle-owned interval keeps the chips from going permanently stale.
+const IDLE_REFRESH_INTERVAL_MS = 10 * 60_000;
 
 export type SidebarAttentionItem = {
   severity: "error" | "warning";
@@ -103,6 +106,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
 
   private loadedClient: GatewayBrowserClient | null = null;
   private loadedAtMs = 0;
+  private idleRefreshTimer: ReturnType<typeof globalThis.setInterval> | null = null;
 
   private readonly subscriptions = new SubscriptionsController(this).effect(
     () => this.context?.gateway,
@@ -112,7 +116,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     },
   );
 
-  private readonly handleVisibilityChange = () => {
+  private readonly refreshIfStale = () => {
     if (document.visibilityState !== "visible") {
       return;
     }
@@ -125,11 +129,16 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
 
   override connectedCallback() {
     super.connectedCallback();
-    document.addEventListener("visibilitychange", this.handleVisibilityChange);
+    document.addEventListener("visibilitychange", this.refreshIfStale);
+    this.idleRefreshTimer = globalThis.setInterval(this.refreshIfStale, IDLE_REFRESH_INTERVAL_MS);
   }
 
   override disconnectedCallback() {
-    document.removeEventListener("visibilitychange", this.handleVisibilityChange);
+    document.removeEventListener("visibilitychange", this.refreshIfStale);
+    if (this.idleRefreshTimer !== null) {
+      globalThis.clearInterval(this.idleRefreshTimer);
+      this.idleRefreshTimer = null;
+    }
     this.subscriptions.clear();
     this.loadedClient = null;
     super.disconnectedCallback();
