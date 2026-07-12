@@ -43,6 +43,15 @@ type GroupSessionScope = "group" | "group_sender" | "group_topic" | "group_topic
 
 type FeishuLogger = (...args: unknown[]) => void;
 
+type MergeForwardSubMessage = {
+  message_id?: string;
+  msg_type?: string;
+  body?: { content?: string };
+  sender?: { id?: string };
+  upper_message_id?: string;
+  create_time?: string;
+};
+
 type ResolvedFeishuGroupSession = {
   peerId: string;
   parentPeer: { kind: "group"; id: string } | null;
@@ -250,19 +259,19 @@ function formatSubMessageContent(content: string, contentType: string): string {
   }
 }
 
+function isMergeForwardSubMessage(item: unknown): item is MergeForwardSubMessage {
+  if (!item || typeof item !== "object" || Array.isArray(item)) {
+    return false;
+  }
+  return Boolean((item as { upper_message_id?: unknown }).upper_message_id);
+}
+
 export function parseMergeForwardContent(params: { content: string; log?: FeishuLogger }): string {
   const { content, log } = params;
   const maxMessages = 50;
   log?.("feishu: parsing merge_forward sub-messages from API response");
 
-  let items: Array<{
-    message_id?: string;
-    msg_type?: string;
-    body?: { content?: string };
-    sender?: { id?: string };
-    upper_message_id?: string;
-    create_time?: string;
-  }>;
+  let items: unknown;
   try {
     items = JSON.parse(content);
   } catch {
@@ -272,7 +281,7 @@ export function parseMergeForwardContent(params: { content: string; log?: Feishu
   if (!Array.isArray(items) || items.length === 0) {
     return "[Merged and Forwarded Message - no sub-messages]";
   }
-  const subMessages = items.filter((item) => item.upper_message_id);
+  const subMessages = items.filter(isMergeForwardSubMessage);
   if (subMessages.length === 0) {
     return "[Merged and Forwarded Message - no sub-messages found]";
   }

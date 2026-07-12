@@ -3030,6 +3030,28 @@ describe("handleFeishuMessage command authorization", () => {
     );
   });
 
+  it("skips malformed merge_forward API items while keeping valid sub-messages", () => {
+    const content = JSON.stringify([
+      null,
+      "not an item",
+      ["nested"],
+      {
+        message_id: "container",
+        msg_type: "merge_forward",
+        body: { content: JSON.stringify({ text: "Merged and Forwarded Message" }) },
+      },
+      {
+        message_id: "valid",
+        upper_message_id: "container",
+        msg_type: "text",
+        body: { content: JSON.stringify({ text: "valid" }) },
+        create_time: "1000",
+      },
+    ]);
+
+    expect(parseMergeForwardContent({ content })).toBe("[Merged and Forwarded Messages]\n- valid");
+  });
+
   it("falls back when merge_forward API returns no sub-messages", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
     mockCreateFeishuClient.mockReturnValue({
