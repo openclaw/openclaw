@@ -432,6 +432,9 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   const stopped = new Promise<void>((resolve) => {
     resolveStopped = resolve;
   });
+  // A pending Promise alone does not keep Node alive. Pairing pauses can close
+  // the last socket, so retain a handle until a signal finishes the foreground host.
+  const lifetimeInterval = setInterval(() => {}, 1_000_000);
   const removeSignalHandlers = () => {
     process.off("SIGINT", onSigint);
     process.off("SIGTERM", onSigterm);
@@ -442,6 +445,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     }
     stopping = true;
     removeSignalHandlers();
+    clearInterval(lifetimeInterval);
     client.stop();
     await closeMcpRuntime();
     process.exitCode = exitCode;
@@ -463,13 +467,27 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       return manager;
     },
   );
-  const readiness = await readinessPromise;
+  let readiness;
+  try {
+    readiness = await readinessPromise;
+  } catch (error) {
+    if (stopping) {
+      await stopped;
+      return;
+    }
+    removeSignalHandlers();
+    clearInterval(lifetimeInterval);
+    client.stop();
+    await closeMcpRuntime();
+    throw error;
+  }
   if (!readiness.ready) {
     if (stopping) {
       await stopped;
       return;
     }
     removeSignalHandlers();
+    clearInterval(lifetimeInterval);
     client.stop();
     await closeMcpRuntime();
     throw new Error("node host gateway event loop readiness timeout");
