@@ -26,8 +26,8 @@ describe("Android app i18n resources", () => {
   it("counts Kotlin and XML resource references", () => {
     expect(
       findUnusedAndroidResourceKeys(
-        ["kotlin_only", "manifest_only", "unused"],
-        'R.string.kotlin_only android:label="@string/manifest_only"',
+        ["kotlin_only", "manifest_only", "values_only", "unused"],
+        'R.string.kotlin_only android:label="@string/manifest_only" <string name="alias">@string/values_only</string>',
       ),
     ).toEqual(["unused"]);
   });

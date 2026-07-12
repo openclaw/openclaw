@@ -7,9 +7,9 @@ import { NATIVE_I18N_LOCALES } from "./native-app-i18n.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
-const ANDROID_ROOT = path.join(ROOT, "apps", "android", "app", "src", "main");
-const RESOURCE_ROOT = path.join(ANDROID_ROOT, "res");
-const SOURCE_ROOT = path.join(ANDROID_ROOT, "java");
+const ANDROID_MAIN_ROOT = path.join(ROOT, "apps", "android", "app", "src", "main");
+const RESOURCE_ROOT = path.join(ANDROID_MAIN_ROOT, "res");
+const SOURCE_ROOT = path.join(ANDROID_MAIN_ROOT, "java");
 const INVENTORY_PATH = path.join(ROOT, "apps", ".i18n", "native-source.json");
 const ARTIFACT_ROOT = path.join(ROOT, "apps", ".i18n", "native");
 const TOOL_DISPLAY_PATH = path.join(
@@ -205,15 +205,13 @@ async function readAndroidSource(
   return sources;
 }
 
-async function readAndroidResourceReferences(root = ANDROID_ROOT): Promise<string> {
+async function readAndroidResourceReferences(root = ANDROID_MAIN_ROOT): Promise<string> {
   const entries = await readdir(root, { withFileTypes: true });
   const sources: string[] = [];
   for (const entry of entries) {
     const fullPath = path.join(root, entry.name);
     if (entry.isDirectory()) {
-      if (fullPath.startsWith(`${RESOURCE_ROOT}${path.sep}values`)) {
-        continue;
-      }
+      // This walk is confined to app/src/main, so Gradle build output is never eligible.
       sources.push(await readAndroidResourceReferences(fullPath));
       continue;
     }
