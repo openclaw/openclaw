@@ -438,11 +438,13 @@ async function loadExtensionSourceTransformModule(
             ...buildPluginLoaderJitiOptions({}),
             // Bun binaries need virtual modules because extension SDK files are
             // bundled into the executable rather than present on disk.
-            tryNative: false,
             virtualModules: VIRTUAL_MODULES,
           }
         : buildPluginLoaderJitiOptions(getExtensionLoaderAliases())),
       moduleCache: false,
+      // The explicit native fast path already declined this entry; retrying through jiti can
+      // overlap its ESM evaluation. Source-transform fallback must stay transform-only.
+      tryNative: false,
     });
   }
 
