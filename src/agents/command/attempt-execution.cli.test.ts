@@ -360,6 +360,7 @@ describe("CLI attempt execution", () => {
     body: string;
     runId: string;
     cwd?: string;
+    opts?: Partial<Parameters<typeof runAgentAttempt>[0]["opts"]>;
   }) {
     await runAgentAttempt({
       providerOverride: "claude-cli",
@@ -378,7 +379,7 @@ describe("CLI attempt execution", () => {
       resolvedThinkLevel: "medium",
       timeoutMs: 1_000,
       runId: params.runId,
-      opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
+      opts: (params.opts ?? {}) as Parameters<typeof runAgentAttempt>[0]["opts"],
       runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
       spawnedBy: undefined,
       messageChannel: undefined,
@@ -392,6 +393,30 @@ describe("CLI attempt execution", () => {
       sessionHasHistory: false,
     });
   }
+
+  it("carries a server-owned Teams subject into CLI harness runs unchanged", async () => {
+    const sessionKey = "agent:main:direct:teams-cli";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-teams-cli",
+      updatedAt: Date.now(),
+    };
+    const authorizationSubject = {
+      principal: { issuer: "core", subject: "agent:main", kind: "service" as const },
+      domain: { id: "domain-1" },
+      delegation: { id: "delegation-1", assignmentId: "assignment-1" },
+    };
+
+    await runClaudeCliAttempt({
+      sessionKey,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      body: "use the shared workspace",
+      runId: "run-teams-cli",
+      opts: { authorizationSubject },
+    });
+
+    expect(firstRunCliAgentArg().authorizationSubject).toBe(authorizationSubject);
+  });
 
   async function writeClaudeCliAssistantTranscript(cliSessionId: string) {
     // Claude stores resumable sessions under a workspace-derived project dir,
