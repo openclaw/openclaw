@@ -3112,7 +3112,7 @@ class ChatController internal constructor(
             label = option.label.trim().takeIf { it.isNotEmpty() } ?: id,
           )
         }.distinctBy { it.id }
-        .ifEmpty { listOf(ChatThinkingLevelOption(id = "off", label = nativeString("Off"))) }
+        .ifEmpty { listOf(ChatThinkingLevelOption(id = "off", label = "Off")) }
     _thinkingLevelSelection.value =
       ChatThinkingLevelSelection(
         options = options,
