@@ -1894,7 +1894,7 @@ describe("ci workflow guards", () => {
     expect(uiInstall.run).toContain("node scripts/ensure-playwright-chromium.mjs");
     expect(uiInstall.run).not.toContain("OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM");
     expect(uiTest.run).toContain('if [[ "$COMPATIBILITY_TARGET" == "true" ]]');
-    expect(uiTest.run).toContain("pnpm --dir ui test --testTimeout=30000");
+    expect(uiTest.run).toContain("pnpm --dir ui test --testTimeout=30000 --isolate");
     expect(uiTest.run).not.toContain("--retry");
     expect(uiTest.run).toContain("pnpm --dir ui test");
   });
@@ -1912,6 +1912,34 @@ describe("ci workflow guards", () => {
     );
     expect(buildArtifactSteps.some((step: WorkflowStep) => step.run === "pnpm ui:build")).toBe(
       false,
+    );
+  });
+
+  it("keeps Control UI locale parity advisory until release CI", () => {
+    const workflow = readCiWorkflow();
+    const workflowSource = readFileSync(".github/workflows/ci.yml", "utf8");
+    const buildArtifactSteps = workflow.jobs["build-artifacts"].steps;
+    const localeJob = workflow.jobs["control-ui-i18n"];
+    const localeStep = localeJob.steps.find(
+      (step: WorkflowStep) => step.name === "Check Control UI locale parity",
+    );
+
+    expect(buildArtifactSteps).not.toContainEqual(
+      expect.objectContaining({ run: "pnpm ui:i18n:check" }),
+    );
+    expect(JSON.parse(readFileSync("package.json", "utf8")).scripts["test:ui"]).not.toContain(
+      "ui:i18n:check",
+    );
+    expect(workflowSource.match(/pnpm ui:i18n:check/gu)).toHaveLength(1);
+    expect(readFileSync("ui/src/i18n/test/translate.test.ts", "utf8")).not.toContain(
+      "keeps shipped locales structurally aligned with English",
+    );
+    expect(localeJob.needs).toEqual(["preflight"]);
+    expect(localeJob.if).toBe("needs.preflight.outputs.run_control_ui_i18n == 'true'");
+    expect(localeJob["continue-on-error"]).toBe("${{ github.event_name != 'workflow_dispatch' }}");
+    expect(localeStep.run).toBe("pnpm ui:i18n:check");
+    expect(readFileSync(".github/workflows/full-release-validation.yml", "utf8")).toContain(
+      'dispatch_and_wait ci.yml "$dispatch_run_name"',
     );
   });
 
@@ -2077,6 +2105,7 @@ describe("ci workflow guards", () => {
       "pnpm-store-warmup",
       "build-artifacts",
       "checks-ui",
+      "control-ui-i18n",
       "checks-fast-core",
       "checks-fast-plugin-contracts-shard",
       "checks-fast-channel-contracts-shard",
@@ -2646,6 +2675,15 @@ describe("ci workflow guards", () => {
     expect(smokeProfileJob["runs-on"]).toContain("blacksmith-16vcpu-ubuntu-2404");
     expect(smokeRunStep.run).toContain("createQaSmokeCiPart");
     expect(smokeRunStep.run).toContain("createQaSmokeCiMatrix");
+    expect(smokeRunStep.run).toContain("readQaScenarioPack");
+    expect(smokeRunStep.run).toContain("scenarioIdsByKind");
+    const compatibilityScenarioBlock = smokeRunStep.run.match(
+      /const compatibilityScenarioIds = new Set\(\[([\s\S]*?)\]\);/u,
+    )?.[1];
+    expect(compatibilityScenarioBlock?.match(/^\s+"[^"]+",$/gmu)).toHaveLength(12);
+    expect(compatibilityScenarioBlock).toContain('"control-ui-chat-flow-playwright"');
+    expect(compatibilityScenarioBlock).toContain('"gateway-smoke"');
+    expect(compatibilityScenarioBlock).toContain('"matrix-restart-resume"');
     expect(smokeRunStep.run).toContain("No QA smoke runs assigned");
     expect(smokeRunStep.run).toContain("node openclaw.mjs qa run");
     expect(smokeRunStep.run).not.toContain("pnpm openclaw qa run");

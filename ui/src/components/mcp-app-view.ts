@@ -18,7 +18,7 @@ type McpAppViewPayload = {
   sandboxPort: number;
   sandboxOrigin?: string;
   html: string;
-  csp?: Record<string, unknown>;
+  csp?: HostSandboxCsp;
   toolInput: unknown;
   toolResult: unknown;
 };
@@ -26,6 +26,8 @@ type McpAppViewPayload = {
 type HostContext = NonNullable<
   NonNullable<ConstructorParameters<typeof AppBridge>[3]>["hostContext"]
 >;
+type HostCapabilities = ConstructorParameters<typeof AppBridge>[2];
+type HostSandboxCsp = NonNullable<NonNullable<HostCapabilities["sandbox"]>["csp"]>;
 
 function hostContext(element: Element | undefined, height: number): HostContext {
   const rect = element?.getBoundingClientRect();
@@ -46,6 +48,15 @@ function hostContext(element: Element | undefined, height: number): HostContext 
       hover: window.matchMedia?.("(hover: hover)").matches,
     },
     safeAreaInsets: { top: 0, right: 0, bottom: 0, left: 0 },
+  };
+}
+
+export function buildMcpAppHostCapabilities(csp?: HostSandboxCsp): HostCapabilities {
+  return {
+    openLinks: {},
+    serverResources: {},
+    serverTools: {},
+    sandbox: { csp: csp ?? {} },
   };
 }
 
@@ -252,7 +263,7 @@ export class McpAppView extends LitElement {
       const bridge = new OpenClawAppBridge(
         null,
         { name: "OpenClaw", version: "1.0.0" },
-        { openLinks: {}, serverResources: {}, serverTools: {} },
+        buildMcpAppHostCapabilities(payload.csp),
         { hostContext: hostContext(mount, this.height) },
       );
       bridge.oncalltool = async (params) =>

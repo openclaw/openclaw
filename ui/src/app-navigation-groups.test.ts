@@ -10,8 +10,8 @@ import {
 } from "./app-navigation.ts";
 
 describe("sidebar pinned routes", () => {
-  it("pins only Automations by default so sessions stay the sidebar's core content", () => {
-    expect(DEFAULT_SIDEBAR_PINNED_ROUTES).toEqual(["cron"]);
+  it("keeps operational destinations visible by default", () => {
+    expect(DEFAULT_SIDEBAR_PINNED_ROUTES).toEqual(["usage", "cron", "plugins"]);
   });
 
   it("drops the retired overview route from persisted pins", () => {

@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   appendBoundedProcessOutput,
+  buildBatchPrompt,
   parseTranslationBatchReply,
   runProcess,
   shouldReuseExistingTranslation,
@@ -75,6 +76,22 @@ describe("control-ui-i18n process runner", () => {
         "ar",
       ),
     ).toEqual(new Map([["configView.viewPendingChange", "Pending change ({count})"]]));
+  });
+
+  it("feeds the exact validation failure back into a retry prompt", () => {
+    const items = [
+      {
+        cacheKey: "cache-key",
+        key: "configView.viewPendingChange",
+        text: "View pending change ({count})",
+        textHash: "text-hash",
+      },
+    ];
+    const validationError = "ar:configView.viewPendingChange expected {count} got {}";
+
+    expect(buildBatchPrompt(items, validationError)).toContain(
+      `failed validation. Correct that exact failure in the new response:\n${validationError}`,
+    );
   });
 
   it("ships no recorded English fallbacks", () => {

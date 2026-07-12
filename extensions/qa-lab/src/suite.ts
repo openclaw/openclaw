@@ -1419,7 +1419,9 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
         (scenario): scenario is QaSuiteScenarioResult => scenario !== undefined,
       );
       const completedScenarioDefinitions = completedScenarioResults.flatMap((scenario, index) =>
-        scenario === undefined ? [] : [selectedScenarios[index]],
+        scenario === undefined || selectedScenarios[index] === undefined
+          ? []
+          : [selectedScenarios[index]],
       );
       if (partialScenarios.length === 0) {
         return;
@@ -1852,15 +1854,16 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
       });
     }
 
+    const runtimeParityScenario = scenarios[0];
     const runtimeParityCell =
       params?.captureRuntimeParityCell &&
       params.forcedRuntime &&
       selectedScenarios.length === 1 &&
-      scenarios.length > 0
+      runtimeParityScenario
         ? await captureRuntimeParityCell({
             runtime: params.forcedRuntime,
             gateway: activeGateway,
-            scenarioResult: scenarios[0],
+            scenarioResult: runtimeParityScenario,
             wallClockMs: Math.max(1, Date.now() - startedAt.getTime()),
             mockBaseUrl: activeMock?.baseUrl,
           })
