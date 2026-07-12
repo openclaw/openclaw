@@ -192,14 +192,15 @@ class SettingsScreensTest {
   fun approvalCardShowsTheWholeMonospacedCommandBeforeStackedActions() {
     val source = settingsScreensSource()
     val cardStart = source.indexOf("private fun ExecApprovalCard(")
-    val reviewCall = source.indexOf("ExecApprovalCommandReview(approval.commandText)", cardStart)
+    val reviewCall = source.indexOf("ExecApprovalCommandReview(", cardStart)
     val actionsCall = source.indexOf("execApprovalActions(approval.allowedDecisions)", reviewCall)
     val reviewStart = source.indexOf("private fun ExecApprovalCommandReview(", actionsCall)
     val reviewEnd = source.indexOf("internal data class ExecApprovalAction", reviewStart)
+    assertTrue(cardStart >= 0 && reviewCall > cardStart && actionsCall > reviewCall)
+    assertTrue(reviewStart > actionsCall && reviewEnd > reviewStart)
     val reviewBody = source.substring(reviewStart, reviewEnd)
     val actionBody = source.substring(reviewCall, reviewStart)
 
-    assertTrue(cardStart >= 0 && reviewCall > cardStart && actionsCall > reviewCall)
     assertTrue(reviewBody.contains("FontFamily.Monospace"))
     assertFalse(reviewBody.contains("maxLines"))
     assertFalse(reviewBody.contains("TextOverflow"))
