@@ -1199,6 +1199,100 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
       expect(deltas).toEqual([]);
     });
 
+    it("buffers JSON split before the shape key so no prefix is leaked", async () => {
+      // First chunk ends before the "name" key — `{"na` — so
+      // looksLikeJsonToolCall is false on the initial fragment.
+      // The normalizer must still buffer the candidate, not leak
+      // the prefix as visible text, and wait for the complete shape.
+      const raw = '{"name":"read","arguments":{"path":"/tmp"}}';
+      // Split right after the opening brace + quote: `{"na`
+      const split = 4;
+      const events = await normalize([
+        textDelta(raw.slice(0, split), raw.slice(0, split)),
+        textDelta(raw.slice(split), raw),
+      ]);
+
+      const deltas = textDeltas(events);
+      expect(deltas).toEqual([]);
+    });
+
+    it("buffers JSON split inside the shape key so no prefix is leaked", async () => {
+      // First chunk ends inside the "name" key — `{"name` — so
+      // the quoted key is incomplete.  The normalizer must buffer
+      // the partial JSON and not leak it as visible text.
+      const raw = '{"name":"read","arguments":{"path":"/tmp"}}';
+      // Split inside the key: `{"name`
+      const split = 6;
+      const events = await normalize([
+        textDelta(raw.slice(0, split), raw.slice(0, split)),
+        textDelta(raw.slice(split), raw),
+      ]);
+
+      const deltas = textDeltas(events);
+      expect(deltas).toEqual([]);
+    });
+
+    it("buffers JSON split before shape key with multi-chunk completion", async () => {
+      // Three chunks: first ends before key (`{"na`), second
+      // completes the object, third is an empty text_end.  No
+      // raw JSON must leak as text_delta at any point.
+      const raw = '{"name":"read","arguments":{"path":"/tmp"}}';
+      const split1 = 4; // `{"na`
+      const split2 = Math.floor(raw.length / 2);
+      const events = await normalize([
+        textDelta(raw.slice(0, split1), raw.slice(0, split1)),
+        textDelta(raw.slice(split1, split2), raw.slice(0, split2)),
+        textDelta(raw.slice(split2), raw),
+      ]);
+
+      const deltas = textDeltas(events);
+      expect(deltas).toEqual([]);
+    });
+
+    it("promotes JSON split before shape key at terminal done without raw leak", async () => {
+      // The full flow: split chunks + terminal done.  The promoted
+      // tool call must execute without any raw JSON text_delta leak.
+      const raw = '{"name":"read","arguments":{"path":"/tmp"}}';
+      const split = 4; // `{"na`
+      const promotedMessage = {
+        role: "assistant",
+        content: [{ type: "toolCall", name: "read", arguments: { path: "/tmp" } }],
+        stopReason: "toolUse",
+      };
+      async function* source() {
+        yield textDelta(raw.slice(0, split), raw.slice(0, split));
+        yield textDelta(raw.slice(split), raw);
+        yield {
+          type: "done",
+          reason: "stop",
+          message: { role: "assistant", content: textContent(raw), stopReason: "stop" },
+        };
+      }
+      const events: Record<string, unknown>[] = [];
+      for await (const event of normalizePlainTextToolCallStreamEvents(source(), {
+        matcher,
+        createPromotedToolCallEvents: () => [],
+        normalizeTerminalMessage: () => ({
+          kind: "promoted",
+          message: promotedMessage,
+          sourceToProjectedContentIndex: new Map(),
+        }),
+      })) {
+        events.push(event as Record<string, unknown>);
+      }
+
+      const deltaTexts = textDeltas(events);
+      const rawJsonLeaked = deltaTexts.some(
+        (d) => typeof d === "string" && d.includes('"path":"/tmp"'),
+      );
+      expect(rawJsonLeaked).toBe(false);
+      expect(events.at(-1)).toMatchObject({
+        type: "done",
+        reason: "toolUse",
+        message: promotedMessage,
+      });
+    });
+
     it("buffers a complete bare JSON tool-call object in one chunk", async () => {
       const raw = '{"name":"read","arguments":{"path":"/tmp"}}';
       const events = await normalize([textDelta(raw, raw)]);

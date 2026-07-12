@@ -454,12 +454,12 @@ function findPotentialCallStart(
     }
     const start = skipLineIndentation(text, index);
     // Bare JSON tool-call objects: bracket/XML/Harmony scanners don't
-    // recognize a line-start `{`, so we must capture them here.  Shape
-    // heuristic avoids buffering ordinary JSON prose like {"status":"ok"}.
-    // When the heuristic fires for a non-tool-call JSON object (e.g.
-    // {"name":"read","status":"ok"}), classifyPending validates and
-    // replays it as a false-positive — at most one extra classify cycle.
-    if (text[start] === "{" && looksLikeJsonToolCall(text.slice(start))) {
+    // recognize a line-start `{`, so we must capture them here.  Accept
+    // any line-start `{` even when the shape key is not yet visible in
+    // the current fragment (e.g. first chunk is `{"na`).  classifyPending
+    // keeps buffering until the JSON completes, then validates the shape
+    // or replays as a false positive — at most one extra classify cycle.
+    if (text[start] === "{") {
       return index;
     }
     const scan = scanPlainTextToolCall(text, start, {
@@ -794,37 +794,47 @@ function classifyPending(
   // as a valid tool call the normalizer keeps it for terminal promotion;
   // a non-tool-call shape is replayed as a false-positive so ordinary
   // JSON prose is never dropped.
+  //
+  // Shape-key detection is deferred until the JSON object completes so
+  // that stream chunks split before or inside a quoted key (e.g. `{"na`)
+  // are buffered rather than leaked as visible text.  Incomplete JSON is
+  // held until the next chunk arrives or the buffer exceeds the size cap.
   const jsonStart = skipLineIndentation(view.text, 0);
-  if (view.text[jsonStart] === "{" && looksLikeJsonToolCall(view.text.slice(jsonStart))) {
+  if (view.text[jsonStart] === "{") {
     const json = scanJsonObject(view.text, jsonStart);
     if (json.kind === "prefix") {
       return pending.bufferBytes > MAX_PAYLOAD_BYTES
         ? { kind: "false-positive" }
         : { kind: "incomplete" };
     }
-    const blocks = parseJsonToolCallBlocksAt(view.text, jsonStart);
-    if (blocks !== null && blocks.length > 0) {
-      const afterJson = skipWhitespace(view.text, json.end);
-      if (afterJson < view.text.length) {
-        // Trailing text after a complete JSON tool call.  The normalizer
-        // may duplicate the buffer when a suppress→candidate transition
-        // re-appends the same chunk; treat the stronger leading match as
-        // authoritative instead of yielding the trailing copy as text.
-        const trailingJsonStart = skipLineIndentation(view.text, afterJson);
-        if (
-          view.text[trailingJsonStart] === "{" &&
-          parseJsonToolCallBlocksAt(view.text, trailingJsonStart) !== null
-        ) {
-          return { kind: "complete" };
+    // Complete JSON object — validate shape before trying to parse blocks.
+    // looksLikeJsonToolCall is the cheap pre-filter; parseJsonToolCallBlocksAt
+    // does the full structural validation including argument presence.
+    if (looksLikeJsonToolCall(view.text.slice(jsonStart))) {
+      const blocks = parseJsonToolCallBlocksAt(view.text, jsonStart);
+      if (blocks !== null && blocks.length > 0) {
+        const afterJson = skipWhitespace(view.text, json.end);
+        if (afterJson < view.text.length) {
+          // Trailing text after a complete JSON tool call.  The normalizer
+          // may duplicate the buffer when a suppress→candidate transition
+          // re-appends the same chunk; treat the stronger leading match as
+          // authoritative instead of yielding the trailing copy as text.
+          const trailingJsonStart = skipLineIndentation(view.text, afterJson);
+          if (
+            view.text[trailingJsonStart] === "{" &&
+            parseJsonToolCallBlocksAt(view.text, trailingJsonStart) !== null
+          ) {
+            return { kind: "complete" };
+          }
+          return { kind: "stripped", text: view.text.slice(afterJson) };
         }
-        return { kind: "stripped", text: view.text.slice(afterJson) };
+        if (jsonStart > 0) {
+          return { kind: "stripped", text: view.text.slice(0, jsonStart) };
+        }
+        return { kind: "complete" };
       }
-      if (jsonStart > 0) {
-        return { kind: "stripped", text: view.text.slice(0, jsonStart) };
-      }
-      return { kind: "complete" };
     }
-    // Complete JSON that does not parse as a tool call — replay as text.
+    // Complete JSON that is not a recognized tool call — replay as text.
     return { kind: "false-positive" };
   }
 
