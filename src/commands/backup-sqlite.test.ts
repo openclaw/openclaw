@@ -6,8 +6,10 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.generated.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.generated.js";
 import {
   backupSqliteCreateCommand,
   backupSqliteListCommand,
@@ -37,26 +39,45 @@ function createGlobalDatabase(databasePath: string): void {
     database.exec(`
       PRAGMA journal_mode = WAL;
       PRAGMA wal_autocheckpoint = 0;
+      ${OPENCLAW_STATE_SCHEMA_SQL}
       PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};
-      CREATE TABLE schema_meta (
-        meta_key TEXT PRIMARY KEY,
-        role TEXT NOT NULL,
-        schema_version INTEGER NOT NULL
-      );
-      INSERT INTO schema_meta VALUES ('primary', 'global', ${OPENCLAW_STATE_SCHEMA_VERSION});
-      CREATE TABLE delivery_queue_entries (
-        id TEXT PRIMARY KEY,
-        payload TEXT NOT NULL
-      );
-      INSERT INTO delivery_queue_entries VALUES ('queued', 'do-not-restore');
       CREATE TABLE durable_entries (
         id INTEGER PRIMARY KEY,
         value TEXT NOT NULL
       );
-      INSERT INTO durable_entries (value) VALUES ('checkpointed');
-      PRAGMA wal_checkpoint(TRUNCATE);
-      INSERT INTO durable_entries (value) VALUES ('committed-in-wal');
     `);
+    database
+      .prepare(
+        `
+          INSERT INTO schema_meta (
+            meta_key,
+            role,
+            schema_version,
+            agent_id,
+            app_version,
+            created_at,
+            updated_at
+          ) VALUES ('primary', 'global', ?, NULL, NULL, 1, 1)
+        `,
+      )
+      .run(OPENCLAW_STATE_SCHEMA_VERSION);
+    database
+      .prepare(
+        `
+          INSERT INTO delivery_queue_entries (
+            queue_name,
+            id,
+            status,
+            entry_json,
+            enqueued_at,
+            updated_at
+          ) VALUES ('delivery', 'queued', 'pending', ?, 1, 1)
+        `,
+      )
+      .run('{"payload":"do-not-restore"}');
+    database.prepare("INSERT INTO durable_entries (value) VALUES (?)").run("checkpointed");
+    database.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+    database.prepare("INSERT INTO durable_entries (value) VALUES (?)").run("committed-in-wal");
   } finally {
     database.close();
   }
@@ -67,20 +88,27 @@ function createAgentDatabase(databasePath: string, agentId: string): void {
   const database = new sqlite.DatabaseSync(databasePath);
   try {
     database.exec(`
+      ${OPENCLAW_AGENT_SCHEMA_SQL}
       PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};
-      CREATE TABLE schema_meta (
-        meta_key TEXT PRIMARY KEY,
-        role TEXT NOT NULL,
-        schema_version INTEGER NOT NULL,
-        agent_id TEXT
-      );
       CREATE TABLE durable_entries (
         id INTEGER PRIMARY KEY,
         value TEXT NOT NULL
       );
     `);
     database
-      .prepare("INSERT INTO schema_meta VALUES ('primary', 'agent', ?, ?)")
+      .prepare(
+        `
+          INSERT INTO schema_meta (
+            meta_key,
+            role,
+            schema_version,
+            agent_id,
+            app_version,
+            created_at,
+            updated_at
+          ) VALUES ('primary', 'agent', ?, ?, NULL, 1, 1)
+        `,
+      )
       .run(OPENCLAW_AGENT_SCHEMA_VERSION, agentId);
     database.prepare("INSERT INTO durable_entries (value) VALUES (?)").run("agent-state");
   } finally {

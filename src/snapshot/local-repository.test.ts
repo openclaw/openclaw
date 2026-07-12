@@ -4,7 +4,9 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.generated.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.generated.js";
 import { createLocalSqliteSnapshotProvider } from "./local-repository.js";
 import { hashSnapshotArtifact, parseSnapshotManifest, readSnapshotManifest } from "./manifest.js";
 import {
@@ -55,19 +57,38 @@ function createGlobalDatabase(databasePath: string): void {
   const database = new sqlite.DatabaseSync(databasePath);
   try {
     database.exec(`
+      ${OPENCLAW_STATE_SCHEMA_SQL}
       PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};
-      CREATE TABLE schema_meta (
-        meta_key TEXT PRIMARY KEY,
-        role TEXT NOT NULL,
-        schema_version INTEGER NOT NULL
-      );
-      INSERT INTO schema_meta VALUES ('primary', 'global', ${OPENCLAW_STATE_SCHEMA_VERSION});
-      CREATE TABLE delivery_queue_entries (
-        id TEXT PRIMARY KEY,
-        payload TEXT NOT NULL
-      );
-      INSERT INTO delivery_queue_entries VALUES ('queued', 'do-not-restore');
     `);
+    database
+      .prepare(
+        `
+          INSERT INTO schema_meta (
+            meta_key,
+            role,
+            schema_version,
+            agent_id,
+            app_version,
+            created_at,
+            updated_at
+          ) VALUES ('primary', 'global', ?, NULL, NULL, 1, 1)
+        `,
+      )
+      .run(OPENCLAW_STATE_SCHEMA_VERSION);
+    database
+      .prepare(
+        `
+          INSERT INTO delivery_queue_entries (
+            queue_name,
+            id,
+            status,
+            entry_json,
+            enqueued_at,
+            updated_at
+          ) VALUES ('delivery', 'queued', 'pending', ?, 1, 1)
+        `,
+      )
+      .run('{"payload":"do-not-restore"}');
   } finally {
     database.close();
   }
@@ -78,16 +99,23 @@ function createAgentDatabase(databasePath: string, agentId: string): void {
   const database = new sqlite.DatabaseSync(databasePath);
   try {
     database.exec(`
+      ${OPENCLAW_AGENT_SCHEMA_SQL}
       PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};
-      CREATE TABLE schema_meta (
-        meta_key TEXT PRIMARY KEY,
-        role TEXT NOT NULL,
-        schema_version INTEGER NOT NULL,
-        agent_id TEXT
-      );
     `);
     database
-      .prepare("INSERT INTO schema_meta VALUES ('primary', 'agent', ?, ?)")
+      .prepare(
+        `
+          INSERT INTO schema_meta (
+            meta_key,
+            role,
+            schema_version,
+            agent_id,
+            app_version,
+            created_at,
+            updated_at
+          ) VALUES ('primary', 'agent', ?, ?, NULL, 1, 1)
+        `,
+      )
       .run(OPENCLAW_AGENT_SCHEMA_VERSION, agentId);
   } finally {
     database.close();
