@@ -310,4 +310,37 @@ describe("WorktreesPage lifecycle", () => {
     await vi.waitFor(() => expect(page.createBranches).toEqual(["main"]));
     expect(page.createBaseRef).toBe("main");
   });
+
+  it("ignores a stale branch failure after a newer request succeeds", async () => {
+    const firstBranches = deferred<unknown>();
+    let branchRequests = 0;
+    const request = vi.fn((method: string) => {
+      if (method === "worktrees.branches") {
+        branchRequests += 1;
+        return branchRequests === 1
+          ? firstBranches.promise
+          : Promise.resolve({ branches: [{ name: "main" }], headBranch: "main" });
+      }
+      return Promise.resolve({ worktrees: [] });
+    });
+    const page = document.createElement("openclaw-worktrees-page") as WorktreesPageTestElement;
+    page.context = contextWithGateway(
+      gatewayWithClient({ request } as unknown as GatewayBrowserClient),
+    );
+    page.createRepoRoot = "/tmp/repo";
+    document.body.append(page);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("worktrees.list", {}));
+
+    page.loadCreateBranches();
+    page.loadCreateBranches();
+    await vi.waitFor(() => expect(page.createBranches).toEqual(["main"]));
+    expect(page.createBaseRef).toBe("main");
+
+    firstBranches.reject(new Error("stale branch failure"));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(page.createBranches).toEqual(["main"]);
+    expect(page.createBaseRef).toBe("main");
+  });
 });

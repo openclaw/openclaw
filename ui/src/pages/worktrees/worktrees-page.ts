@@ -51,6 +51,7 @@ class WorktreesPage extends OpenClawLightDomElement {
   private gatewaySource?: ApplicationContext["gateway"];
   private hasBoundGateway = false;
   private loadGeneration = 0;
+  private branchesGeneration = 0;
   private operationEpoch = 0;
   private readonly subscriptions = new SubscriptionsController(this).effect(
     () => this.context?.gateway,
@@ -259,6 +260,7 @@ class WorktreesPage extends OpenClawLightDomElement {
   }
 
   private loadCreateBranches() {
+    const generation = ++this.branchesGeneration;
     const scope = this.captureOperationScope();
     const repoRoot = this.createRepoRoot.trim();
     if (!scope || !repoRoot) {
@@ -268,7 +270,8 @@ class WorktreesPage extends OpenClawLightDomElement {
     void scope.client
       .request<WorktreeBranchesResult>("worktrees.branches", { repoRoot })
       .then((result) => {
-        if (this.isOperationScopeCurrent(scope) && repoRoot === this.createRepoRoot.trim()) {
+        // Only the latest picker request owns branch state, including after same-path retries.
+        if (generation === this.branchesGeneration && this.isOperationScopeCurrent(scope)) {
           this.createBranches = result.branches.map((branch) => branch.name);
           if (!this.createBaseRef) {
             this.createBaseRef = result.defaultBranch ?? result.headBranch ?? "";
@@ -276,7 +279,7 @@ class WorktreesPage extends OpenClawLightDomElement {
         }
       })
       .catch(() => {
-        if (this.isOperationScopeCurrent(scope)) {
+        if (generation === this.branchesGeneration && this.isOperationScopeCurrent(scope)) {
           this.createBranches = [];
         }
       });
