@@ -3,7 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../../infra/kysely-sync.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -627,6 +631,24 @@ describe("channel ingress queue", () => {
       });
     });
 
+    it("applies listPending limits after excluding corrupt payloads", async () => {
+      await withTempState(async (stateDir) => {
+        const queue = createChannelIngressQueue<{ text: string }>({
+          channelId: "test",
+          accountId: "account",
+          stateDir,
+        });
+        insertCorruptRow(stateDir, '["test","account"]', "bad-first", {
+          payload_json: "{corrupt",
+        });
+        await queue.enqueue("good-second", { text: "visible" }, { receivedAt: 300 });
+
+        const pending = await queue.listPending({ limit: 1 });
+
+        expect(pending.map((record) => record.id)).toEqual(["good-second"]);
+      });
+    });
+
     it("skips corrupt metadata_json in listPending", async () => {
       await withTempState(async (stateDir) => {
         const queue = createChannelIngressQueue<{ text: string }, { source: string }>({
@@ -735,6 +757,41 @@ describe("channel ingress queue", () => {
         const claimed = await queue.claimNext();
         expect(claimed).not.toBeNull();
         expect(claimed!.id).toBe("good-1");
+
+        const database = openOpenClawStateDatabase({ env: createStateDirEnv(stateDir) });
+        const failed = executeSqliteQueryTakeFirstSync(
+          database.db,
+          getNodeSqliteKysely<ChannelIngressTestDatabase>(database.db)
+            .selectFrom("channel_ingress_events")
+            .select(["status", "failed_reason", "payload_json"])
+            .where("queue_name", "=", '["test","account"]')
+            .where("event_id", "=", "bad-claim"),
+        );
+        expect(failed).toEqual({
+          status: "failed",
+          failed_reason: "corrupt_payload",
+          payload_json: "null",
+        });
+      });
+    });
+
+    it("makes durable progress when a corrupt prefix fills the claim scan limit", async () => {
+      await withTempState(async (stateDir) => {
+        const queue = createChannelIngressQueue<{ text: string }>({
+          channelId: "test",
+          accountId: "account",
+          stateDir,
+        });
+        insertCorruptRow(stateDir, '["test","account"]', "bad-first", {
+          payload_json: "{corrupt",
+        });
+        await queue.enqueue("good-second", { text: "claimable" }, { receivedAt: 300 });
+
+        await expect(queue.claimNext({ scanLimit: 1 })).resolves.toBeNull();
+        await expect(queue.claimNext({ scanLimit: 1 })).resolves.toMatchObject({
+          id: "good-second",
+          payload: { text: "claimable" },
+        });
       });
     });
 
@@ -759,6 +816,17 @@ describe("channel ingress queue", () => {
         const goodClaim = await queue.claim("good-1");
         expect(goodClaim).not.toBeNull();
         expect(goodClaim!.payload.text).toBe("hello");
+
+        const database = openOpenClawStateDatabase({ env: createStateDirEnv(stateDir) });
+        const failed = executeSqliteQueryTakeFirstSync(
+          database.db,
+          getNodeSqliteKysely<ChannelIngressTestDatabase>(database.db)
+            .selectFrom("channel_ingress_events")
+            .select(["status", "failed_reason"])
+            .where("queue_name", "=", '["test","account"]')
+            .where("event_id", "=", "bad-direct"),
+        );
+        expect(failed).toEqual({ status: "failed", failed_reason: "corrupt_payload" });
       });
     });
 
@@ -805,12 +873,15 @@ describe("channel ingress queue", () => {
           db,
           getNodeSqliteKysely<ChannelIngressTestDatabase>(db)
             .selectFrom("channel_ingress_events")
-            .select(["status", "failed_reason"])
+            .select(["status", "failed_reason", "payload_json", "claim_token", "claimed_at"])
             .where("queue_name", "=", '["test","account"]')
             .where("event_id", "=", "dup-bad"),
         ).rows[0];
         expect(row?.status).toBe("failed");
         expect(row?.failed_reason).toBe("corrupt_payload");
+        expect(row?.payload_json).toBe("null");
+        expect(row?.claim_token).toBeNull();
+        expect(row?.claimed_at).toBeNull();
       });
     });
 
@@ -844,12 +915,16 @@ describe("channel ingress queue", () => {
           db,
           getNodeSqliteKysely<ChannelIngressTestDatabase>(db)
             .selectFrom("channel_ingress_events")
-            .select(["status", "failed_reason"])
+            .select(["status", "failed_reason", "payload_json", "claim_token", "claimed_at"])
             .where("queue_name", "=", '["test","account"]')
             .where("event_id", "=", "stale-bad"),
         ).rows[0];
         expect(row?.status).toBe("failed");
         expect(row?.failed_reason).toBe("corrupt_payload");
+        expect(row?.payload_json).toBe("null");
+        expect(row?.claim_token).toBeNull();
+        expect(row?.claimed_at).toBeNull();
+        await expect(queue.recoverStaleClaims({ staleMs: Date.now() - oldTime })).resolves.toBe(0);
       });
     });
   });
