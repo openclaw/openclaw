@@ -2391,8 +2391,13 @@ jobs:
           NODE
           chmod 0600 "$redactor_script"
 
-          mapfile -t gateway_logs < <(
-            sudo find "$RUNTIME_ROOT/tmp" -xdev -type f -name 'openclaw-*.log' -print | sort
+          # The live suite can launch more than eight gateways. Keep the newest
+          # bounded tails instead of failing diagnostics after a successful lane.
+          mapfile -d '' -t gateway_logs < <(
+            sudo find "$RUNTIME_ROOT/tmp" -xdev -type f -name 'openclaw-*.log' -printf '%T@\t%p\0' |
+              sort -z -nr |
+              sed -z -n '1,8p' |
+              cut -z -f2-
           )
           ((${#gateway_logs[@]} <= 8))
           if [[ "$RUN_LANE_OUTCOME" != "success" ]]; then
