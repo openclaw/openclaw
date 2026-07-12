@@ -177,8 +177,9 @@ function stripTrailingUntrustedContextSuffix(lines: string[]): string[] {
 
 function stripActiveMemoryPromptPrefixBlocks(lines: string[]): string[] {
   const result: string[] = [];
+  let index = 0;
 
-  for (let index = 0; index < lines.length; index += 1) {
+  while (index < lines.length) {
     const line = lines.at(index);
     if (line === undefined) {
       break;
@@ -195,15 +196,18 @@ function stripActiveMemoryPromptPrefixBlocks(lines: string[]): string[] {
         }
       }
       if (closeIndex !== -1) {
+        // Skip past the close tag and any trailing blank separators.
         index = closeIndex;
         while (index + 1 < lines.length && lines[index + 1]?.trim() === "") {
           index += 1;
         }
+        index += 1;
         continue;
       }
     }
 
     result.push(line);
+    index += 1;
   }
 
   return result;
