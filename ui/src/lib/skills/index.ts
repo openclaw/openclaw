@@ -493,8 +493,8 @@ export async function saveSkillApiKey(state: SkillsState, skillKey: string) {
     state,
     skillKey,
     async (client) => {
-      const apiKey = state.skillEdits[skillKey] ?? "";
-      await client.request("skills.update", { skillKey, apiKey });
+      const editValue = state.skillEdits[skillKey] ?? "";
+      await client.request("skills.update", { skillKey, apiKey: editValue });
       return {
         kind: "success",
         message: `API key saved — stored in openclaw.json (skills.entries.${skillKey})`,
