@@ -26,6 +26,15 @@ describe("resolveSessionDisplayName", () => {
     expect(resolveSessionDisplayName("agent:main:imessage:direct:+4912")).toBe("iMessage · +4912");
   });
 
+  it("does not split UTF-16 surrogate pairs when shortening peer ids", () => {
+    const name = resolveSessionDisplayName("agent:main:telegram:direct:12345😀67890");
+    expect(() => encodeURIComponent(name)).not.toThrow();
+    expect(name).toContain("Telegram · …");
+    expect(name).not.toMatch(
+      /[\uD800-\uDFFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/,
+    );
+  });
+
   it("falls back to a friendly name for dashboard sessions instead of the uuid key", () => {
     expect(
       resolveSessionDisplayName("agent:main:dashboard:0f9d5c1e-6d0f-4c9a-9d84-1c2f3a4b5c6d"),
