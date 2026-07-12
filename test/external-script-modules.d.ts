@@ -139,6 +139,7 @@ declare module "*openclaw-changelog-update/scripts/verify-release-notes.mjs" {
 declare module "*openclaw-live-updater/scripts/update-main.mjs" {
   type GatewayDeployment = Record<string, unknown> & {
     entrypoint: string;
+    workingDirectory?: string | null;
   };
   type UpdateResult = Record<string, unknown> & {
     actions: Record<string, unknown>;

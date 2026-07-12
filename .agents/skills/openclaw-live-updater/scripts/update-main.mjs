@@ -788,6 +788,8 @@ function readManagedGatewayLaunchAgent(checkout) {
   const label = plist?.Label;
   const programArguments = plist?.ProgramArguments;
   const environmentVariables = plist?.EnvironmentVariables;
+  const workingDirectory =
+    typeof plist?.WorkingDirectory === "string" ? plist.WorkingDirectory : null;
   const serviceEnvironment = Object.fromEntries(
     Object.entries(environmentVariables ?? {}).filter((entry) => typeof entry[1] === "string"),
   );
@@ -832,6 +834,7 @@ function readManagedGatewayLaunchAgent(checkout) {
     runtime: gatewayCommand.runtime,
     serviceEnvironment,
     stateDir: gatewayCommand.stateDir,
+    workingDirectory,
     wrapperPath: gatewayCommand.wrapperPath,
   };
 }
@@ -1005,7 +1008,7 @@ export function parseLaunchctlArguments(output) {
     : [];
 }
 
-function runBuiltGatewayCli(checkout, args, deployment) {
+function runBuiltGatewayCli(checkout, args, deployment, options = {}) {
   const observedDeployment = deployment ?? readManagedGatewayLaunchAgent(checkout);
   const sourceEntrypoint = path.join(checkout, "dist/index.js");
   let managedDeployment = observedDeployment;
@@ -1033,6 +1036,7 @@ function runBuiltGatewayCli(checkout, args, deployment) {
     port,
     runtime,
     serviceEnvironment = {},
+    workingDirectory,
     wrapperPath,
   } = managedDeployment;
   const baseEnv = { ...process.env };
@@ -1093,10 +1097,10 @@ function runBuiltGatewayCli(checkout, args, deployment) {
           ]
         : [...invocationPrefix, ...args];
     return execFileSync(executable, callArgs, {
-      cwd: path.dirname(path.dirname(entrypoint)),
+      cwd: workingDirectory ?? path.dirname(path.dirname(entrypoint)),
       encoding: "utf8",
       env,
-      stdio: ["ignore", "pipe", "inherit"],
+      stdio: ["ignore", "pipe", options.stderr ?? "inherit"],
     });
   } finally {
     rmSync(overlayPath, { force: true });
@@ -1662,20 +1666,15 @@ function readFallbackGatewayLogs(sinceMs) {
 }
 
 function readConfiguredPluginLoadPaths(checkout, deployment) {
+  if (deployment && !deployment.workingDirectory) {
+    return null;
+  }
   try {
-    const output = execFileSync(
-      process.execPath,
-      ["openclaw.mjs", "config", "get", "plugins.load", "--json"],
-      {
-        cwd: checkout,
-        encoding: "utf8",
-        maxBuffer: 4 * 1024 * 1024,
-        env: {
-          ...process.env,
-          ...(deployment?.serviceEnvironment ?? {}),
-          ...(deployment?.configPath ? { OPENCLAW_CONFIG_PATH: deployment.configPath } : {}),
-        },
-      },
+    const output = runBuiltGatewayCli(
+      checkout,
+      ["config", "get", "plugins.load", "--json"],
+      deployment,
+      { stderr: "pipe" },
     );
     const paths = JSON.parse(output)?.paths;
     return Array.isArray(paths) ? paths.filter((entry) => typeof entry === "string") : [];
