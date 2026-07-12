@@ -163,6 +163,7 @@ export async function searchMemoryCorpusSupplements(params: {
   agentSessionKey?: string;
   sandboxed?: boolean;
   corpus?: "memory" | "wiki" | "all" | "sessions";
+  signal?: AbortSignal;
 }): Promise<MemoryCorpusSearchResult[]> {
   if (params.corpus === "memory" || params.corpus === "sessions") {
     return [];

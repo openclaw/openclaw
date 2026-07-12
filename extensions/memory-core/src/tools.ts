@@ -724,6 +724,7 @@ export function createMemorySearchTool(options: {
                         agentSessionKey: options.agentSessionKey,
                         sandboxed: options.sandboxed,
                         corpus: requestedCorpus,
+                        signal: deadlineSignal,
                       }),
                   )
                 : [];

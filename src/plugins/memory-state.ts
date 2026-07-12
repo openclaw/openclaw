@@ -54,6 +54,8 @@ export type MemoryCorpusSupplement = {
     agentId?: string;
     agentSessionKey?: string;
     sandboxed?: boolean;
+    /** Caller deadline. Implementations should stop starting new file I/O when aborted and may return partial results. */
+    signal?: AbortSignal;
   }): Promise<MemoryCorpusSearchResult[]>;
   get(params: {
     lookup: string;

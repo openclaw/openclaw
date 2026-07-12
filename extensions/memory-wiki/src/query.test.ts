@@ -7,7 +7,12 @@ import type { OpenClawConfig } from "../api.js";
 import { compileMemoryWikiVault } from "./compile.js";
 import type { MemoryWikiPluginConfig } from "./config.js";
 import { renderWikiMarkdown } from "./markdown.js";
-import { getMemoryWikiPage, isSessionMemoryPath, searchMemoryWiki } from "./query.js";
+import {
+  getMemoryWikiPage,
+  isSessionMemoryPath,
+  readQueryableWikiPages,
+  searchMemoryWiki,
+} from "./query.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const {
@@ -207,6 +212,115 @@ describe("searchMemoryWiki", () => {
     expect(results[0]?.corpus).toBe("wiki");
     expect(results[0]?.path).toBe("sources/alpha.md");
     expect(getActiveMemorySearchManagerMock).not.toHaveBeenCalled();
+  });
+
+  it("skips full-vault fallback when exhaustiveFallback is false (#104719)", async () => {
+    const { rootDir, config } = await createQueryVault({
+      initialize: true,
+    });
+    await fs.writeFile(
+      path.join(rootDir, "sources", "alpha.md"),
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", id: "source.alpha", title: "Alpha Source" },
+        body: "# Alpha Source\n\nalpha body text\n",
+      }),
+      "utf8",
+    );
+
+    // Without a digest, normal search scans the vault; supplement path must not.
+    const supplementResults = await searchMemoryWiki({
+      config,
+      query: "alpha",
+      exhaustiveFallback: false,
+    });
+    const directResults = await searchMemoryWiki({ config, query: "alpha" });
+
+    expect(supplementResults).toEqual([]);
+    expect(directResults).toHaveLength(1);
+    expect(directResults[0]?.path).toBe("sources/alpha.md");
+  });
+
+  it("returns early when the deadline signal is already aborted (#104719)", async () => {
+    const { rootDir, config } = await createQueryVault({
+      initialize: true,
+    });
+    await fs.writeFile(
+      path.join(rootDir, "sources", "alpha.md"),
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", id: "source.alpha", title: "Alpha Source" },
+        body: "# Alpha Source\n\nalpha body text\n",
+      }),
+      "utf8",
+    );
+
+    const results = await searchMemoryWiki({
+      config,
+      query: "alpha",
+      signal: AbortSignal.abort(),
+    });
+
+    expect(results).toEqual([]);
+  });
+
+  it("reads wiki pages with bounded concurrency and stops claiming after abort (#104719)", async () => {
+    const { rootDir } = await createQueryVault({ initialize: true });
+    const pageCount = 24;
+    for (let i = 0; i < pageCount; i += 1) {
+      await fs.writeFile(
+        path.join(rootDir, "sources", `page-${String(i).padStart(2, "0")}.md`),
+        renderWikiMarkdown({
+          frontmatter: {
+            pageType: "source",
+            id: `source.page${i}`,
+            title: `Page ${i}`,
+          },
+          body: `# Page ${i}\n\nbody ${i}\n`,
+        }),
+        "utf8",
+      );
+    }
+
+    let running = 0;
+    let peak = 0;
+    let started = 0;
+    const originalReadFile = fs.readFile.bind(fs);
+    const readFileSpy = vi.spyOn(fs, "readFile").mockImplementation(async (file, encoding) => {
+      let filePath: string;
+      if (typeof file === "string") {
+        filePath = file;
+      } else if (file instanceof URL) {
+        filePath = file.pathname;
+      } else if (Buffer.isBuffer(file)) {
+        filePath = file.toString("utf8");
+      } else {
+        return originalReadFile(file, encoding as BufferEncoding);
+      }
+      if (!filePath.includes(`${path.sep}sources${path.sep}page-`)) {
+        return originalReadFile(file, encoding as BufferEncoding);
+      }
+      started += 1;
+      running += 1;
+      peak = Math.max(peak, running);
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 25);
+      });
+      running -= 1;
+      return originalReadFile(file, encoding as BufferEncoding);
+    });
+
+    const controller = new AbortController();
+    const readPromise = readQueryableWikiPages(rootDir, controller.signal);
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 10);
+    });
+    controller.abort();
+    const pages = await readPromise;
+    readFileSpy.mockRestore();
+
+    expect(peak).toBeGreaterThan(1);
+    expect(peak).toBeLessThanOrEqual(16);
+    expect(started).toBeLessThan(pageCount);
+    expect(pages.length).toBeLessThan(pageCount);
   });
 
   it("skips malformed pages while searching the rest of the vault (#96125)", async () => {

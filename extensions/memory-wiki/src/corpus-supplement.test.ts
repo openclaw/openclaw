@@ -72,6 +72,8 @@ describe("memory-wiki corpus supplement", () => {
       maxResults: 4,
       searchBackend: "local",
       searchCorpus: "wiki",
+      signal: undefined,
+      exhaustiveFallback: false,
     });
     expect(queryMocks.getMemoryWikiPage).toHaveBeenCalledWith({
       config: expect.objectContaining({
@@ -90,6 +92,33 @@ describe("memory-wiki corpus supplement", () => {
       searchBackend: "local",
       searchCorpus: "wiki",
     });
+  });
+
+  it("forwards deadline signal and disables exhaustive fallback for supplement search (#104719)", async () => {
+    const resolveConfig = vi.fn<MemoryWikiConfigResolver>((agentId, currentAppConfig) =>
+      resolveMemoryWikiAgentConfig({ config, appConfig: currentAppConfig, agentId }),
+    );
+    const supplement = createWikiCorpusSupplement({
+      resolveConfig,
+      getAppConfig: () => appConfig,
+    });
+    const signal = AbortSignal.abort();
+
+    await supplement.search({
+      query: "deadline",
+      maxResults: 2,
+      agentId: "support",
+      signal,
+    });
+
+    expect(queryMocks.searchMemoryWiki).toHaveBeenCalledWith(
+      expect.objectContaining({
+        signal,
+        exhaustiveFallback: false,
+        query: "deadline",
+        maxResults: 2,
+      }),
+    );
   });
 
   it("fails closed before querying when multi-agent context is missing", async () => {
