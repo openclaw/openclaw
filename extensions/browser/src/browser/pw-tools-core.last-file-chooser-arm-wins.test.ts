@@ -117,7 +117,9 @@ describe("pw-tools-core", () => {
     const waitForSelector = vi.fn(async () => {});
     const waitForURL = vi.fn(async () => {});
     const waitForLoadState = vi.fn(async () => {});
-    const waitForFunction = vi.fn(async () => {});
+    const waitForFunction = vi.fn(
+      async (_predicate: unknown, _state: unknown, _options: unknown) => {},
+    );
     const waitForTimeout = vi.fn(async () => {});
     const documentHandle = { dispose: vi.fn(async () => {}) };
 

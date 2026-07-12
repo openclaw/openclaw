@@ -2270,7 +2270,7 @@ export async function withChromeMcpDocument<T>(
             ),
           );
         } catch (error) {
-          rethrowChromeMcpDocumentError(error);
+          return rethrowChromeMcpDocumentError(error);
         }
       },
     });
