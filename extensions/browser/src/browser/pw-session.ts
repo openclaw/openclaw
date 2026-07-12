@@ -913,6 +913,16 @@ function clearRoleRefs(state: PageState): void {
   state.roleRefsTargetGeneration = undefined;
 }
 
+function currentTargetRoleRefsMode(
+  state: PageState,
+): NonNullable<PageState["roleRefsMode"]> | undefined {
+  if (!state.roleRefsTargetKey) {
+    return undefined;
+  }
+  const cached = roleRefsByTarget.get(state.roleRefsTargetKey);
+  return cached && cached.generation === state.roleRefsTargetGeneration ? cached.mode : undefined;
+}
+
 /** Restore cached role refs onto a newly resolved page. */
 export function restoreRoleRefsForTarget(opts: {
   cdpUrl: string;
@@ -1074,12 +1084,8 @@ export function ensurePageState(page: Page): PageState {
           state.roleRefsAriaInvalidBeforeGeneration = roleRefsCacheGeneration;
         }
       }
-      const cached = state.roleRefsTargetKey
-        ? roleRefsByTarget.get(state.roleRefsTargetKey)
-        : undefined;
-      const cachedMode =
-        cached?.generation === state.roleRefsTargetGeneration ? cached.mode : undefined;
-      const pageWideAriaRefs = state.roleRefsMode === "aria" || cachedMode === "aria";
+      const pageWideAriaRefs =
+        state.roleRefsMode === "aria" || currentTargetRoleRefsMode(state) === "aria";
       if (isMainFrame || pageWideAriaRefs || frame === state.roleRefsFrame) {
         // Replacement Page objects restore from this target cache, so local
         // clearing alone could resurrect refs from the previous document.
@@ -1094,12 +1100,8 @@ export function ensurePageState(page: Page): PageState {
           state.roleRefsAriaInvalidBeforeGeneration = roleRefsCacheGeneration;
         }
       }
-      const cached = state.roleRefsTargetKey
-        ? roleRefsByTarget.get(state.roleRefsTargetKey)
-        : undefined;
-      const cachedMode =
-        cached?.generation === state.roleRefsTargetGeneration ? cached.mode : undefined;
-      const pageWideAriaRefs = state.roleRefsMode === "aria" || cachedMode === "aria";
+      const pageWideAriaRefs =
+        state.roleRefsMode === "aria" || currentTargetRoleRefsMode(state) === "aria";
       if (pageWideAriaRefs || frame === state.roleRefsFrame) {
         clearRoleRefs(state);
       }
