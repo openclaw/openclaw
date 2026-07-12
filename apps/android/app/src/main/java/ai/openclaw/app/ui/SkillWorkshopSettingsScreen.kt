@@ -4,6 +4,7 @@ import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.GatewaySkillWorkshopProposal
 import ai.openclaw.app.GatewaySkillWorkshopSummary
 import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawPrimaryButton
 import ai.openclaw.app.ui.design.ClawSecondaryButton
@@ -124,21 +125,21 @@ internal fun SkillWorkshopSettingsScreen(
   }
 
   SettingsDetailFrame(
-    title = "Skill Workshop",
-    subtitle = "Review generated skill proposals before they become live skills.",
+    title = nativeString("Skill Workshop"),
+    subtitle = nativeString("Review generated skill proposals before they become live skills."),
     icon = Icons.Default.Settings,
     onBack = onBack,
   ) {
     SettingsMetricPanel(
       rows =
         listOf(
-          SettingsMetric("Pending", visibleProposals.count { it.status == "pending" }.toString()),
+          SettingsMetric(nativeString("Pending"), visibleProposals.count { it.status == "pending" }.toString()),
           SettingsMetric(
-            "Held",
+            nativeString("Held"),
             visibleProposals.count { skillWorkshopStatusMatchesFilter(it.status, "held") }.toString(),
           ),
-          SettingsMetric("Applied", visibleProposals.count { it.status == "applied" }.toString()),
-          SettingsMetric("Rejected", visibleProposals.count { it.status == "rejected" }.toString()),
+          SettingsMetric(nativeString("Applied"), visibleProposals.count { it.status == "applied" }.toString()),
+          SettingsMetric(nativeString("Rejected"), visibleProposals.count { it.status == "rejected" }.toString()),
         ),
     )
 
@@ -180,13 +181,13 @@ internal fun SkillWorkshopSettingsScreen(
     when {
       !isConnected ->
         SkillWorkshopEmptyPanel(
-          title = "Gateway offline",
-          detail = "Connect to a Gateway to load Skill Workshop proposals.",
+          title = nativeString("Gateway offline"),
+          detail = nativeString("Connect to a Gateway to load Skill Workshop proposals."),
         )
       filteredProposals.isEmpty() ->
         SkillWorkshopEmptyPanel(
-          title = "No proposals",
-          detail = "Matching proposals will appear here after agents create reusable skill drafts.",
+          title = nativeString("No proposals"),
+          detail = nativeString("Matching proposals will appear here after agents create reusable skill drafts."),
         )
       else -> {
         SkillWorkshopProposalList(
@@ -262,21 +263,21 @@ private fun SkillWorkshopActionConfirmDialog(
 ) {
   AlertDialog(
     onDismissRequest = onDismiss,
-    title = { Text("${action.action.label} proposal?") },
+    title = { Text(nativeString("\${action.action.label} proposal?", action.action.label)) },
     text = {
       Text(
         text =
-          "This will ${action.action.label.lowercase()} \"${action.title}\" and refresh Skill Workshop state from the gateway.",
+          nativeString("This will \${action.action.label.lowercase()} \"\${action.title}\" and refresh Skill Workshop state from the gateway.", action.action.label.lowercase(), action.title),
       )
     },
     confirmButton = {
       TextButton(onClick = onConfirm) {
-        Text(action.action.label)
+        Text(nativeString(action.action.label))
       }
     },
     dismissButton = {
       TextButton(onClick = onDismiss) {
-        Text("Cancel")
+        Text(nativeString("Cancel"))
       }
     },
   )
@@ -311,21 +312,21 @@ private fun SkillWorkshopControls(
           modifier = Modifier.weight(1f),
         )
         ClawSecondaryButton(
-          text = if (refreshing) "Refreshing" else "Refresh",
+          text = if (refreshing) nativeString("Refreshing") else nativeString("Refresh"),
           onClick = onRefresh,
           enabled = isConnected && !refreshing,
           icon = Icons.Default.Refresh,
         )
       }
       ClawSegmentedControl(
-        options = skillWorkshopFilterLabels,
+        options = skillWorkshopFilterLabels.map(::nativeString),
         selected = skillWorkshopFilterLabel(statusFilter),
         onSelect = { label -> onStatusFilterChange(skillWorkshopFilterFromLabel(label)) },
       )
       ClawTextField(
         value = query,
         onValueChange = onQueryChange,
-        placeholder = "Search proposals",
+        placeholder = nativeString("Search proposals"),
       )
     }
   }
@@ -356,7 +357,7 @@ private fun SkillWorkshopAgentMenu(
     )
     DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
       DropdownMenuItem(
-        text = { Text("Default agent") },
+        text = { Text(nativeString("Default agent")) },
         onClick = {
           expanded = false
           onAgentChange("")
@@ -441,7 +442,7 @@ private fun SkillWorkshopProposalRow(
       }
     }
     ClawSecondaryButton(
-      text = if (selected) "Selected" else "Open",
+      text = if (selected) nativeString("Selected") else nativeString("Open"),
       onClick = onClick,
       modifier = Modifier.fillMaxWidth(),
       enabled = !selected,
@@ -492,9 +493,9 @@ private fun SkillWorkshopProposalDetail(
       SettingsMetricPanel(
         rows =
           listOf(
-            SettingsMetric("Kind", proposal.kind),
-            SettingsMetric("Updated", skillWorkshopDateLabel(proposal.updatedAt)),
-            SettingsMetric("Support Files", proposal.supportFiles.size.toString()),
+            SettingsMetric(nativeString("Kind"), proposal.kind),
+            SettingsMetric(nativeString("Updated"), skillWorkshopDateLabel(proposal.updatedAt)),
+            SettingsMetric(nativeString("Support Files"), proposal.supportFiles.size.toString()),
           ),
       )
       Text(
@@ -504,7 +505,7 @@ private fun SkillWorkshopProposalDetail(
       )
       if (!operatorAdminScopeAvailable) {
         Text(
-          text = "Apply, reject, and quarantine require operator.admin scope. Reconnect with shared gateway auth or approve an operator.admin device scope upgrade to enable lifecycle actions.",
+          text = nativeString("Apply, reject, and quarantine require operator.admin scope. Reconnect with shared gateway auth or approve an operator.admin device scope upgrade to enable lifecycle actions."),
           style = ClawTheme.type.caption,
           color = ClawTheme.colors.warning,
         )
@@ -525,17 +526,17 @@ private fun SkillWorkshopProposalDetail(
         modifier =
           Modifier
             .fillMaxWidth()
-            .semantics { contentDescription = "Skill Workshop inspect and apply actions" },
+            .semantics { contentDescription = nativeString("Skill Workshop inspect and apply actions") },
         horizontalArrangement = Arrangement.spacedBy(8.dp),
       ) {
         ClawSecondaryButton(
-          text = if (inspecting) "Inspecting" else "Inspect",
+          text = if (inspecting) nativeString("Inspecting") else nativeString("Inspect"),
           onClick = onInspect,
           enabled = isConnected && !inspecting && !mutating,
           modifier = Modifier.weight(1f),
         )
         ClawPrimaryButton(
-          text = if (mutating) "Working" else "Apply",
+          text = if (mutating) nativeString("Working") else nativeString("Apply"),
           onClick = onApply,
           enabled =
             skillWorkshopProposalActionEnabled(
@@ -551,11 +552,11 @@ private fun SkillWorkshopProposalDetail(
         modifier =
           Modifier
             .fillMaxWidth()
-            .semantics { contentDescription = "Skill Workshop reject and quarantine actions" },
+            .semantics { contentDescription = nativeString("Skill Workshop reject and quarantine actions") },
         horizontalArrangement = Arrangement.spacedBy(8.dp),
       ) {
         ClawSecondaryButton(
-          text = "Reject",
+          text = nativeString("Reject"),
           onClick = onReject,
           enabled =
             skillWorkshopProposalActionEnabled(
@@ -567,7 +568,7 @@ private fun SkillWorkshopProposalDetail(
           modifier = Modifier.weight(1f),
         )
         ClawSecondaryButton(
-          text = "Quarantine",
+          text = nativeString("Quarantine"),
           onClick = onQuarantine,
           enabled =
             skillWorkshopProposalActionEnabled(
@@ -645,19 +646,19 @@ internal fun skillWorkshopProposalActionEnabled(
 
 private fun skillWorkshopFilterLabel(filter: String): String =
   when (filter) {
-    "pending" -> "Pending"
-    "held" -> "Held"
-    "applied" -> "Applied"
-    "rejected" -> "Rejected"
-    else -> "All"
+    "pending" -> nativeString("Pending")
+    "held" -> nativeString("Held")
+    "applied" -> nativeString("Applied")
+    "rejected" -> nativeString("Rejected")
+    else -> nativeString("All")
   }
 
 private fun skillWorkshopFilterFromLabel(label: String): String =
   when (label) {
-    "Pending" -> "pending"
-    "Held" -> "held"
-    "Applied" -> "applied"
-    "Rejected" -> "rejected"
+    nativeString("Pending") -> "pending"
+    nativeString("Held") -> "held"
+    nativeString("Applied") -> "applied"
+    nativeString("Rejected") -> "rejected"
     else -> "all"
   }
 
@@ -673,9 +674,9 @@ private fun skillWorkshopAgentLabel(
   val defaultId = defaultAgentId?.trim().orEmpty()
   if (defaultId.isNotEmpty()) {
     return agents.firstOrNull { it.id == defaultId }?.name?.takeIf { it.isNotBlank() }
-      ?: "Default agent"
+      ?: nativeString("Default agent")
   }
-  return "Default agent"
+  return nativeString("Default agent")
 }
 
 private fun skillWorkshopStatusPill(status: String): ClawStatus =

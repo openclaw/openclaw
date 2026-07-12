@@ -7,6 +7,7 @@ import ai.openclaw.app.GatewayNodesDevicesSummary
 import ai.openclaw.app.GatewayPairedDeviceSummary
 import ai.openclaw.app.GatewayPendingDeviceSummary
 import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawDetailRow
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawSecondaryButton
@@ -52,23 +53,23 @@ internal fun NodesDevicesSettingsScreen(
   }
 
   SettingsDetailFrame(
-    title = "Nodes & Devices",
-    subtitle = "Live nodes, paired phones, and pending device requests.",
+    title = nativeString("Nodes & Devices"),
+    subtitle = nativeString("Live nodes, paired phones, and pending device requests."),
     icon = Icons.Default.Cloud,
     onBack = onBack,
   ) {
     SettingsMetricPanel(
       rows =
         listOf(
-          SettingsMetric("Nodes", summary.nodes.size.toString()),
-          SettingsMetric("Online", summary.nodes.count { it.connected }.toString()),
-          SettingsMetric("Devices", if (summary.devicePairingAvailable) summary.pairedDevices.size.toString() else "Admin"),
-          SettingsMetric("Pending", summary.pendingDevices.size.toString()),
+          SettingsMetric(nativeString("Nodes"), summary.nodes.size.toString()),
+          SettingsMetric(nativeString("Online"), summary.nodes.count { it.connected }.toString()),
+          SettingsMetric(nativeString("Devices"), if (summary.devicePairingAvailable) summary.pairedDevices.size.toString() else nativeString("Admin")),
+          SettingsMetric(nativeString("Pending"), summary.pendingDevices.size.toString()),
         ),
     )
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
       ClawSecondaryButton(
-        text = if (refreshing) "Refreshing" else "Refresh",
+        text = if (refreshing) nativeString("Refreshing") else nativeString("Refresh"),
         onClick = viewModel::refreshNodesDevices,
         enabled = isConnected && !refreshing,
         modifier = Modifier.weight(1f),
@@ -82,13 +83,13 @@ internal fun NodesDevicesSettingsScreen(
     when {
       !isConnected ->
         ClawPanel {
-          Text(text = "Connect the gateway to load nodes and paired devices.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+          Text(text = nativeString("Connect the gateway to load nodes and paired devices."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
         }
       summary.isEmpty() ->
         ClawPanel {
           Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(text = "No nodes or paired devices.", style = ClawTheme.type.section, color = ClawTheme.colors.text)
-            Text(text = "Linked phones and node hosts will appear here after pairing.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+            Text(text = nativeString("No nodes or paired devices."), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+            Text(text = nativeString("Linked phones and node hosts will appear here after pairing."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
           }
         }
       else -> NodesDevicesPanel(summary = summary)
@@ -108,8 +109,8 @@ private fun NodesDevicesPanel(summary: GatewayNodesDevicesSummary) {
     if (approvalCommands.isNotEmpty()) {
       ClawPanel {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-          Text(text = "Node approval required", style = ClawTheme.type.section, color = ClawTheme.colors.text)
-          Text(text = "Run on the Gateway host:", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+          Text(text = nativeString("Node approval required"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+          Text(text = nativeString("Run on the Gateway host:"), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
           approvalCommands.forEach { (label, command) ->
             Text(text = label, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
             SelectionContainer {
@@ -124,7 +125,7 @@ private fun NodesDevicesPanel(summary: GatewayNodesDevicesSummary) {
       }
     }
     if (summary.pendingDevices.isNotEmpty()) {
-      NodesSection(title = "Pending Requests") {
+      NodesSection(title = nativeString("Pending Requests")) {
         summary.pendingDevices.forEachIndexed { index, device ->
           PendingDeviceRow(device = device)
           if (index != summary.pendingDevices.lastIndex) {
@@ -134,7 +135,7 @@ private fun NodesDevicesPanel(summary: GatewayNodesDevicesSummary) {
       }
     }
     if (summary.nodes.isNotEmpty()) {
-      NodesSection(title = "Nodes") {
+      NodesSection(title = nativeString("Nodes")) {
         summary.nodes.forEachIndexed { index, node ->
           NodeRow(node = node)
           if (index != summary.nodes.lastIndex) {
@@ -144,7 +145,7 @@ private fun NodesDevicesPanel(summary: GatewayNodesDevicesSummary) {
       }
     }
     if (summary.pairedDevices.isNotEmpty()) {
-      NodesSection(title = "Paired Devices") {
+      NodesSection(title = nativeString("Paired Devices")) {
         summary.pairedDevices.forEachIndexed { index, device ->
           PairedDeviceRow(device = device)
           if (index != summary.pairedDevices.lastIndex) {
@@ -191,9 +192,9 @@ private fun NodeRow(node: GatewayNodeSummary) {
 private fun PendingDeviceRow(device: GatewayPendingDeviceSummary) {
   DeviceListRow(
     badge = nodeBadge(device.displayName ?: device.deviceId),
-    title = device.displayName ?: "New device",
+    title = device.displayName ?: nativeString("New device"),
     subtitle = pendingDeviceSubtitle(device),
-    statusText = if (device.repair) "Repair" else "Review",
+    statusText = if (device.repair) nativeString("Repair") else nativeString("Review"),
     status = ClawStatus.Warning,
   )
 }
@@ -202,7 +203,7 @@ private fun PendingDeviceRow(device: GatewayPendingDeviceSummary) {
 private fun PairedDeviceRow(device: GatewayPairedDeviceSummary) {
   DeviceListRow(
     badge = nodeBadge(device.displayName ?: device.deviceId),
-    title = device.displayName ?: "Paired device",
+    title = device.displayName ?: nativeString("Paired device"),
     subtitle = pairedDeviceSubtitle(device),
     statusText = pairedDeviceStatusText(device.tokens),
     status = pairedDeviceStatus(device.tokens),
@@ -231,7 +232,7 @@ private fun GatewayNodesDevicesSummary.isEmpty(): Boolean = nodes.isEmpty() && p
 private fun nodeSubtitle(node: GatewayNodeSummary): String {
   val kind = node.deviceFamily ?: "Node host"
   val version = node.version?.let { "OpenClaw $it" }
-  val status = if (node.paired) "Paired" else "Unpaired"
+  val status = if (node.paired) nativeString("Paired") else nativeString("Unpaired")
   val approval = nodeApprovalSubtitle(node.approvalState)
   val commands =
     node.commands
@@ -243,10 +244,10 @@ private fun nodeSubtitle(node: GatewayNodeSummary): String {
 
 private fun nodeStatusText(node: GatewayNodeSummary): String =
   when (node.approvalState) {
-    GatewayNodeApprovalState.PendingApproval -> "Needs approval"
-    GatewayNodeApprovalState.PendingReapproval -> "Needs reapproval"
-    GatewayNodeApprovalState.Unapproved -> "Unapproved"
-    else -> if (node.connected) "Online" else "Offline"
+    GatewayNodeApprovalState.PendingApproval -> nativeString("Needs approval")
+    GatewayNodeApprovalState.PendingReapproval -> nativeString("Needs reapproval")
+    GatewayNodeApprovalState.Unapproved -> nativeString("Unapproved")
+    else -> if (node.connected) nativeString("Online") else nativeString("Offline")
   }
 
 private fun nodeStatus(node: GatewayNodeSummary): ClawStatus =
@@ -263,38 +264,44 @@ private fun nodeStatus(node: GatewayNodeSummary): ClawStatus =
 
 private fun nodeApprovalSubtitle(approvalState: GatewayNodeApprovalState): String? =
   when (approvalState) {
-    GatewayNodeApprovalState.Approved -> "Approved"
-    GatewayNodeApprovalState.PendingApproval -> "Capability approval pending"
-    GatewayNodeApprovalState.PendingReapproval -> "Capability reapproval pending"
-    GatewayNodeApprovalState.Unapproved -> "Capability unapproved"
+    GatewayNodeApprovalState.Approved -> nativeString("Approved")
+    GatewayNodeApprovalState.PendingApproval -> nativeString("Capability approval pending")
+    GatewayNodeApprovalState.PendingReapproval -> nativeString("Capability reapproval pending")
+    GatewayNodeApprovalState.Unapproved -> nativeString("Capability unapproved")
     GatewayNodeApprovalState.Loading,
     GatewayNodeApprovalState.Unsupported,
     -> null
   }
 
 internal fun devicePairingAdminUnavailableText(): String =
-  "This gateway sign-in can list connected nodes, but it cannot approve new phone pairing. " +
-    "Pair new phones from a gateway admin session. Node capability approval is separate and still uses nodes approve <request id>."
+  nativeString(
+    "This gateway sign-in can list connected nodes, but it cannot approve new phone pairing. Pair new phones from a gateway admin session. Node capability approval is separate and still uses nodes approve <request id>.",
+  )
 
 private fun pendingDeviceSubtitle(device: GatewayPendingDeviceSummary): String {
   val roles = formatDeviceList(device.roles, "role")
   val scopes = formatDeviceList(device.scopes, "scope")
-  val requested = device.requestedAtMs?.let { "requested ${relativeDeviceTime(it)}" }
+  val requested = device.requestedAtMs?.let { nativeString("requested \${relativeDeviceTime(it)}", relativeDeviceTime(it)) }
   return listOfNotNull(roles, scopes, requested, device.remoteIp).joinToString(" · ")
 }
 
 private fun pairedDeviceSubtitle(device: GatewayPairedDeviceSummary): String {
   val roles = formatDeviceList(device.roles, "role")
   val scopes = formatDeviceList(device.scopes, "scope")
-  val tokens = "${device.tokens.count { !it.revoked }}/${device.tokens.size} active tokens"
+  val tokens =
+    nativeString(
+      "\${device.tokens.count { !it.revoked }}/\${device.tokens.size} active tokens",
+      device.tokens.count { !it.revoked },
+      device.tokens.size,
+    )
   return listOfNotNull(roles, scopes, tokens, device.remoteIp).joinToString(" · ")
 }
 
 private fun pairedDeviceStatusText(tokens: List<GatewayDeviceTokenSummary>): String =
   when {
-    tokens.isEmpty() -> "Paired"
-    tokens.any { !it.revoked } -> "Active"
-    else -> "Needs Token"
+    tokens.isEmpty() -> nativeString("Paired")
+    tokens.any { !it.revoked } -> nativeString("Active")
+    else -> nativeString("Needs Token")
   }
 
 private fun pairedDeviceStatus(tokens: List<GatewayDeviceTokenSummary>): ClawStatus =
