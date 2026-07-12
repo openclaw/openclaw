@@ -602,8 +602,7 @@ internal class MicCaptureManager(
     sendQueuedIfIdle()
   }
 
-  private fun queuedWaitingStatus(): String =
-    nativeString("\${queuedMessageCount()} queued · waiting for gateway", queuedMessageCount())
+  private fun queuedWaitingStatus(): String = nativeString("\${queuedMessageCount()} queued · waiting for gateway", queuedMessageCount())
 
   private fun appendConversation(
     role: VoiceConversationRole,

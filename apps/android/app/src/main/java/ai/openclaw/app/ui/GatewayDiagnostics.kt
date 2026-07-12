@@ -4,8 +4,8 @@ import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.GatewayNodeApprovalState
 import ai.openclaw.app.GatewayNodeCapabilityApproval
-import ai.openclaw.app.gatewayConnectionStatusForDisplay
 import ai.openclaw.app.gateway.normalizeGatewayApprovalRequestId
+import ai.openclaw.app.gatewayConnectionStatusForDisplay
 import ai.openclaw.app.i18n.nativeString
 import android.content.ClipData
 import android.content.ClipboardManager
