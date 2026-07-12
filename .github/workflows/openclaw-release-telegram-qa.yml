@@ -1498,13 +1498,11 @@ jobs:
             local config_path="${1:?}"
             local config_id diagnostics_dir diagnostics_real proof_bytes proof_path proof_tmp
             umask 077
-            config_id="$(printf '%s' "$config_path" | sha256sum | awk '{print $1}')"
             diagnostics_dir="${EVIDENCE_ROOT}/trusted-runtime-diagnostics"
             install -d -o "$RUNNER_UID" -g "$RUNNER_GID" -m 0700 "$diagnostics_dir"
             [[ ! -L "$diagnostics_dir" ]]
             diagnostics_real="$(realpath -e "$diagnostics_dir")"
             [[ "$diagnostics_real" == "$diagnostics_dir" ]]
-            proof_path="${diagnostics_dir}/gateway-model-config-${config_id}.json"
             proof_tmp="${RUNTIME_ROOT}/gateway-model-config-${BASHPID}.json"
 
             # Capture only bounded routing identifiers before the QA suite removes its temp config.
@@ -1552,6 +1550,10 @@ jobs:
             ' "$config_path" >"$proof_tmp"
             proof_bytes="$(stat -c '%s' "$proof_tmp")"
             ((proof_bytes > 0 && proof_bytes <= 65536))
+            # Content addressing deduplicates credential-specific temp configs
+            # that project to the same bounded routing proof.
+            config_id="$(sha256sum "$proof_tmp" | awk '{print $1}')"
+            proof_path="${diagnostics_dir}/gateway-model-config-${config_id}.json"
             chown "$RUNNER_UID:$RUNNER_GID" "$proof_tmp"
             chmod 0600 "$proof_tmp"
             mv -f "$proof_tmp" "$proof_path"
