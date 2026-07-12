@@ -615,7 +615,6 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
         resolveProviderHttpRequestConfig({
           baseUrl: resolveXaiVideoBaseUrl(req),
           defaultBaseUrl: DEFAULT_XAI_VIDEO_BASE_URL,
-          allowPrivateNetwork: false,
           defaultHeaders: {
             Authorization: `Bearer ${auth.apiKey}`,
             "Content-Type": "application/json",

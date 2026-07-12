@@ -426,6 +426,9 @@ describe("xai video generation provider", () => {
         request: requestPolicy,
       }),
     );
+    expect(resolveProviderHttpRequestConfigMock.mock.calls[0]?.[0]).not.toHaveProperty(
+      "allowPrivateNetwork",
+    );
     const submitRequest = requirePostJsonCall();
     expect(submitRequest.allowPrivateNetwork).toBe(true);
     expect(submitRequest.dispatcherPolicy).toBe(dispatcherPolicy);
@@ -448,6 +451,11 @@ describe("xai video generation provider", () => {
       ssrfPolicy: { allowPrivateNetwork: true },
       dispatcherPolicy,
     });
+    const downloadInit = fetchWithTimeoutGuardedMock.mock.calls[1]?.[1] as
+      | { headers?: Headers; method?: string }
+      | undefined;
+    expect(downloadInit?.method).toBe("GET");
+    expect(downloadInit?.headers).toBeUndefined();
   });
 
   it("rejects generated video downloads that exceed the configured media cap", async () => {
