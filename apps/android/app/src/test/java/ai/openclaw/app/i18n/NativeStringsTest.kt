@@ -2,6 +2,7 @@ package ai.openclaw.app.i18n
 
 import android.content.Context
 import android.content.res.Configuration
+import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.os.ConfigurationCompat
 import androidx.core.os.LocaleListCompat
 import kotlinx.coroutines.CompletableDeferred
@@ -70,20 +71,21 @@ class NativeStringsTest {
   }
 
   @Test
-  fun configurationLocaleRefreshesPersistedAppLocale() {
+  fun configurationLocaleUsesLiveAppCompatLocaleBeforeStorage() {
     val app = RuntimeEnvironment.getApplication()
-    persistAppLocales(app, "fr")
+    persistAppLocales(app, "en")
     try {
       NativeStringResources.install(app)
-      assertEquals("Micro désactivé", nativeString("Mic off"))
+      assertEquals("Mic off", nativeString("Mic off"))
 
-      persistAppLocales(app, "de")
+      AppCompatDelegate.setApplicationLocales(LocaleListCompat.forLanguageTags("fr"))
       val configuration = Configuration(app.resources.configuration)
       ConfigurationCompat.setLocales(configuration, LocaleListCompat.forLanguageTags("en"))
       NativeStringResources.setConfigurationLocales(configuration)
 
-      assertEquals("Mikrofon aus", nativeString("Mic off"))
+      assertEquals("Micro désactivé", nativeString("Mic off"))
     } finally {
+      AppCompatDelegate.setApplicationLocales(LocaleListCompat.getEmptyLocaleList())
       app.deleteFile(APP_LOCALES_FILE)
       NativeStringResources.setApplicationLocales(LocaleListCompat.getEmptyLocaleList())
     }

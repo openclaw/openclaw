@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.res.Configuration
 import android.os.Build
 import android.util.Xml
+import androidx.appcompat.app.AppCompatDelegate
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.res.stringResource
 import androidx.core.app.LocaleManagerCompat
@@ -135,7 +136,13 @@ internal object NativeStringResources {
   fun install(context: Context) {
     val appContext = context.applicationContext
     applicationContext = appContext
-    val requestedLocales = appContext.requestedApplicationLocales()
+    val liveLocales =
+      if (Build.VERSION.SDK_INT >= 33) {
+        LocaleManagerCompat.getApplicationLocales(appContext)
+      } else {
+        AppCompatDelegate.getApplicationLocales()
+      }
+    val requestedLocales = liveLocales.takeUnless { it.isEmpty } ?: appContext.readStoredAppLocales()
     applicationLocaleMode =
       if (requestedLocales.isEmpty) {
         ApplicationLocaleMode.System(ConfigurationCompat.getLocales(appContext.resources.configuration))
@@ -162,14 +169,19 @@ internal object NativeStringResources {
 
   @Synchronized
   fun setConfigurationLocales(configuration: Configuration) {
-    val requestedLocales =
-      applicationContext?.requestedApplicationLocales()
-        ?: LocaleListCompat.getEmptyLocaleList()
+    val previousMode = applicationLocaleMode
+    val context = applicationContext
+    val liveLocales =
+      when {
+        context == null -> LocaleListCompat.getEmptyLocaleList()
+        Build.VERSION.SDK_INT >= 33 -> LocaleManagerCompat.getApplicationLocales(context)
+        else -> AppCompatDelegate.getApplicationLocales()
+      }
     applicationLocaleMode =
-      if (requestedLocales.isEmpty) {
-        ApplicationLocaleMode.System(ConfigurationCompat.getLocales(configuration))
-      } else {
-        ApplicationLocaleMode.Pinned(requestedLocales)
+      when {
+        !liveLocales.isEmpty -> ApplicationLocaleMode.Pinned(liveLocales)
+        Build.VERSION.SDK_INT < 33 && previousMode is ApplicationLocaleMode.Pinned -> previousMode
+        else -> ApplicationLocaleMode.System(ConfigurationCompat.getLocales(configuration))
       }
     localizedContext = null
   }
@@ -210,12 +222,6 @@ private fun Context.localizedContext(locales: LocaleListCompat): Context =
     ConfigurationCompat.setLocales(configuration, locales)
     createConfigurationContext(configuration)
   }
-
-private fun Context.requestedApplicationLocales(): LocaleListCompat =
-  LocaleManagerCompat
-    .getApplicationLocales(this)
-    .takeUnless { it.isEmpty }
-    ?: readStoredAppLocales()
 
 private fun Context.readStoredAppLocales(): LocaleListCompat {
   if (Build.VERSION.SDK_INT >= 33) return LocaleListCompat.getEmptyLocaleList()
