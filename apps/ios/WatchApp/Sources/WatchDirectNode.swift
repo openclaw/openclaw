@@ -59,7 +59,11 @@ final class WatchDirectNode {
         let detail: String
 
         var errorDescription: String? {
-            self.detail.isEmpty ? "Gateway HTTP error (\(self.status))" : self.detail
+            self.detail.isEmpty
+                ? String(
+                    format: String(localized: "Gateway HTTP error (%@)"),
+                    self.status.formatted())
+                : self.detail
         }
     }
 
@@ -85,7 +89,8 @@ final class WatchDirectNode {
 
     private(set) var isEnabled: Bool
     private(set) var isConnected = false
-    private(set) var statusText = "Use iPhone Settings to enable direct connection."
+    private(set) var statusText = String(
+        localized: "Use iPhone Settings to enable direct connection.")
     private(set) var endpointText: String?
 
     var isConfigured: Bool {
@@ -112,7 +117,9 @@ final class WatchDirectNode {
         }
         self.endpointText = self.configuration.map(Self.endpointText)
         if self.configuration != nil {
-            self.statusText = self.isEnabled ? "Ready to connect" : "Direct connection is off"
+            self.statusText = self.isEnabled
+                ? String(localized: "Ready to connect")
+                : String(localized: "Direct connection is off")
         }
     }
 
@@ -121,7 +128,8 @@ final class WatchDirectNode {
         let oldestAcceptedMs = nowMs - Self.maximumSetupAgeMs
         let newestAcceptedMs = nowMs + Self.maximumSetupClockSkewMs
         guard (oldestAcceptedMs...newestAcceptedMs).contains(sentAtMs) else {
-            self.statusText = "Ignored an expired direct connection setup. Send setup again from iPhone."
+            self.statusText = String(
+                localized: "Ignored an expired direct connection setup. Send setup again from iPhone.")
             return
         }
         let newestInstalledSetupMs = configuration?.setupSentAtMs ?? 0
@@ -133,7 +141,8 @@ final class WatchDirectNode {
               link.password == nil,
               let secureEndpoint = link.connectionEndpoints.first(where: \.tls)
         else {
-            self.statusText = "Direct mode requires a trusted HTTPS Gateway endpoint."
+            self.statusText = String(
+                localized: "Direct mode requires a trusted HTTPS Gateway endpoint.")
             return
         }
         let secureEndpoints = link.connectionEndpoints.filter(\.tls)
@@ -151,7 +160,7 @@ final class WatchDirectNode {
             gatewayID: Self.gatewayID(for: secureLink),
             setupSentAtMs: sentAtMs)
         guard Self.saveConfiguration(configuration) else {
-            self.statusText = "Could not save direct connection securely."
+            self.statusText = String(localized: "Could not save direct connection securely.")
             return
         }
         if let previousConfiguration,
@@ -168,7 +177,7 @@ final class WatchDirectNode {
         self.disconnectActiveSession()
         self.configuration = configuration
         self.endpointText = Self.endpointText(configuration)
-        self.statusText = "Setup received. Connecting…"
+        self.statusText = String(localized: "Setup received. Connecting…")
         self.setEnabled(true)
     }
 
@@ -184,8 +193,8 @@ final class WatchDirectNode {
             self.connectTask = nil
             self.isConnected = false
             self.statusText = self.isConfigured
-                ? "Direct connection is off"
-                : "Use iPhone Settings to enable direct connection."
+                ? String(localized: "Direct connection is off")
+                : String(localized: "Use iPhone Settings to enable direct connection.")
         }
     }
 
@@ -213,7 +222,7 @@ final class WatchDirectNode {
         self.connectTask = nil
         self.isConnected = false
         if self.isEnabled, self.isConfigured {
-            self.statusText = "Reconnects when OpenClaw is active"
+            self.statusText = String(localized: "Reconnects when OpenClaw is active")
         }
     }
 
@@ -266,8 +275,10 @@ final class WatchDirectNode {
             }
             guard self.isCurrentConnection(generation, configuration: configuration) else { return }
             self.statusText = lastError.map {
-                "Direct connection failed: \($0.localizedDescription)"
-            } ?? "No usable Gateway endpoint"
+                String(
+                    format: String(localized: "Direct connection failed: %@"),
+                    $0.localizedDescription)
+            } ?? String(localized: "No usable Gateway endpoint")
             do {
                 try await Task.sleep(for: .seconds(3))
             } catch {
@@ -283,7 +294,7 @@ final class WatchDirectNode {
         generation: Int) async throws
     {
         try self.requireCurrentConnection(generation, configuration: configuration)
-        self.statusText = "Connecting directly…"
+        self.statusText = String(localized: "Connecting directly…")
         guard let identity = DeviceIdentityStore.loadOrCreatePersisted(profile: .primary) else {
             throw HTTPError(status: 0, detail: "Could not save the watch device identity")
         }
@@ -344,7 +355,7 @@ final class WatchDirectNode {
         self.activeSession = session
         defer { releaseActiveSession(session) }
         self.isConnected = true
-        self.statusText = "Connected directly"
+        self.statusText = String(localized: "Connected directly")
         while self.isCurrentConnection(generation, configuration: configuration) {
             let pollData = try await request(
                 baseURL: baseURL,

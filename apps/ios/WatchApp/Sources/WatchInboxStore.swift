@@ -254,22 +254,26 @@ import WatchKit
     }
 
     var gatewaySummaryText: String {
-        guard let appSnapshot else { return "Waiting for iPhone" }
-        return appSnapshot.gatewayConnected ? "Connected" : appSnapshot.gatewayStatusText
+        guard let appSnapshot else { return String(localized: "Waiting for iPhone") }
+        return appSnapshot.gatewayConnected
+            ? String(localized: "Connected")
+            : appSnapshot.gatewayStatusText
     }
 
     var talkSummaryText: String {
-        guard let appSnapshot else { return "Not synced" }
+        guard let appSnapshot else { return String(localized: "Not synced") }
         if appSnapshot.talkListening {
-            return "Listening"
+            return String(localized: "Listening")
         }
         if appSnapshot.talkSpeaking {
-            return "Speaking"
+            return String(localized: "Speaking")
         }
         if appSnapshot.talkEnabled {
-            return appSnapshot.talkStatusText.isEmpty ? "Ready" : appSnapshot.talkStatusText
+            return appSnapshot.talkStatusText.isEmpty
+                ? String(localized: "Ready")
+                : appSnapshot.talkStatusText
         }
-        return "Off"
+        return String(localized: "Off")
     }
 
     func beginExecApprovalReviewLoading() {
@@ -278,7 +282,7 @@ import WatchKit
             return
         }
         self.isExecApprovalReviewLoading = true
-        self.execApprovalReviewStatusText = "Loading approval from iPhone…"
+        self.execApprovalReviewStatusText = String(localized: "Loading approval from iPhone…")
         self.execApprovalReviewStatusAt = Date()
     }
 
@@ -398,7 +402,7 @@ import WatchKit
         Task {
             await self.postLocalNotification(
                 identifier: notificationIdentifier,
-                title: "Exec approval required",
+                title: String(localized: "Exec approval required"),
                 body: message.approval.commandPreview ?? message.approval.commandText,
                 risk: message.approval.risk?.rawValue,
                 stillCurrent: {
@@ -504,7 +508,7 @@ import WatchKit
             _ = self.recordExecApprovalTerminal(
                 approvalId: record.approvalID,
                 gatewayStableID: record.approval.gatewayStableID,
-                outcomeText: "Approval resolved elsewhere",
+                outcomeText: String(localized: "Approval resolved elsewhere"),
                 authoritativeOutcome: false)
             return false
         }
@@ -606,17 +610,19 @@ import WatchKit
     }
 
     func markAppSnapshotRequestStarted() {
-        self.appSnapshotStatusText = "Refreshing from iPhone…"
+        self.appSnapshotStatusText = String(localized: "Refreshing from iPhone…")
         self.persistState()
     }
 
     func markAppSnapshotRequestResult(_ result: WatchReplySendResult) {
         if let errorMessage = result.errorMessage, !errorMessage.isEmpty {
-            self.appSnapshotStatusText = "Refresh failed: \(errorMessage)"
+            self.appSnapshotStatusText = String(
+                format: String(localized: "Refresh failed: %@"),
+                errorMessage)
         } else if result.deliveredImmediately {
-            self.appSnapshotStatusText = "Refresh requested"
+            self.appSnapshotStatusText = String(localized: "Refresh requested")
         } else if result.queuedForDelivery {
-            self.appSnapshotStatusText = "Refresh queued"
+            self.appSnapshotStatusText = String(localized: "Refresh queued")
         } else {
             self.appSnapshotStatusText = nil
         }
@@ -639,25 +645,33 @@ import WatchKit
     }
 
     func markAppCommandSending(_ command: WatchAppCommand) {
-        self.appCommandStatusText = "Sending \(Self.commandLabel(command))…"
+        self.appCommandStatusText = String(
+            format: String(localized: "Sending %@…"),
+            Self.commandLabel(command))
         self.persistState()
     }
 
     func markAppCommandBlocked(_ command: WatchAppCommand, reason: String) {
-        self.appCommandStatusText = "\(Self.commandLabel(command)): \(reason)"
+        self.appCommandStatusText = String(
+            format: String(localized: "%@: %@"),
+            Self.commandLabel(command),
+            reason)
         self.persistState()
     }
 
     func markAppCommandResult(_ result: WatchReplySendResult, command: WatchAppCommand) {
         let label = Self.commandLabel(command)
         if let errorMessage = result.errorMessage, !errorMessage.isEmpty {
-            self.appCommandStatusText = "\(label) failed: \(errorMessage)"
+            self.appCommandStatusText = String(
+                format: String(localized: "%@ failed: %@"),
+                label,
+                errorMessage)
         } else if result.deliveredImmediately {
-            self.appCommandStatusText = "\(label): sent"
+            self.appCommandStatusText = String(format: String(localized: "%@: sent"), label)
         } else if result.queuedForDelivery {
-            self.appCommandStatusText = "\(label): queued"
+            self.appCommandStatusText = String(format: String(localized: "%@: queued"), label)
         } else {
-            self.appCommandStatusText = "\(label): sent"
+            self.appCommandStatusText = String(format: String(localized: "%@: sent"), label)
         }
         self.persistState()
     }
@@ -675,11 +689,11 @@ extension WatchInboxStore {
         } else {
             switch message.decision {
             case .allowOnce:
-                "Allowed once"
+                String(localized: "Allowed once")
             case .deny:
-                "Denied"
+                String(localized: "Denied")
             case nil:
-                "Approval resolved"
+                String(localized: "Approval resolved")
             }
         }
         let terminalOutcomeText = self.recordExecApprovalTerminal(
@@ -697,15 +711,15 @@ extension WatchInboxStore {
         guard self.routeGatewayPayload(.execApprovalExpired(message: message)) else { return }
         let statusText = switch message.reason {
         case .expired:
-            "Approval expired"
+            String(localized: "Approval expired")
         case .notFound:
-            "Approval no longer available"
+            String(localized: "Approval no longer available")
         case .resolved:
-            "Approval resolved elsewhere"
+            String(localized: "Approval resolved elsewhere")
         case .replaced:
-            "Approval replaced"
+            String(localized: "Approval replaced")
         case .unavailable:
-            "Approval unavailable"
+            String(localized: "Approval unavailable")
         }
         let terminalOutcomeText = self.recordExecApprovalTerminal(
             approvalId: message.approvalId,
@@ -773,7 +787,9 @@ extension WatchInboxStore {
         self.execApprovals[index].isResolving = true
         self.execApprovals[index].pendingDecision = decision
         self.execApprovals[index].activeResolutionAttemptID = attemptID
-        self.execApprovals[index].statusText = "Sending \(Self.decisionLabel(decision))…"
+        self.execApprovals[index].statusText = String(
+            format: String(localized: "Sending %@…"),
+            Self.decisionLabel(decision))
         self.execApprovals[index].statusAt = Date()
         self.persistState()
         return attemptID
@@ -802,16 +818,21 @@ extension WatchInboxStore {
         switch result.delivery {
         case .delivered:
             self.execApprovals[index].isResolving = true
-            self.execApprovals[index].statusText = "\(Self.decisionLabel(decision)): sent"
+            self.execApprovals[index].statusText = String(
+                format: String(localized: "%@: sent"),
+                Self.decisionLabel(decision))
         case .queued:
             self.execApprovals[index].isResolving = true
-            self.execApprovals[index].statusText = "\(Self.decisionLabel(decision)): queued"
+            self.execApprovals[index].statusText = String(
+                format: String(localized: "%@: queued"),
+                Self.decisionLabel(decision))
         case .notSent:
             // Only a definitive pre-dispatch failure unlocks locally. Uncertain sends stay
             // frozen until a canonical retry reset or terminal event arrives.
             self.execApprovals[index].isResolving = false
             self.execApprovals[index].activeResolutionAttemptID = nil
-            self.execApprovals[index].statusText = "Couldn't reach iPhone. Tap to retry."
+            self.execApprovals[index].statusText = String(
+                localized: "Couldn't reach iPhone. Tap to retry.")
         }
         self.execApprovals[index].pendingDecision = result.delivery == .notSent ? nil : decision
         self.execApprovals[index].statusAt = Date()
@@ -1478,7 +1499,9 @@ extension WatchInboxStore {
 
     func markReplySending(actionLabel: String) {
         self.isReplySending = true
-        self.replyStatusText = "Sending \(actionLabel)…"
+        self.replyStatusText = String(
+            format: String(localized: "Sending %@…"),
+            actionLabel)
         self.replyStatusAt = Date()
         self.persistState()
     }
@@ -1486,13 +1509,21 @@ extension WatchInboxStore {
     func markReplyResult(_ result: WatchReplySendResult, actionLabel: String) {
         self.isReplySending = false
         if let errorMessage = result.errorMessage, !errorMessage.isEmpty {
-            self.replyStatusText = "Failed: \(errorMessage)"
+            self.replyStatusText = String(
+                format: String(localized: "Failed: %@"),
+                errorMessage)
         } else if result.deliveredImmediately {
-            self.replyStatusText = "\(actionLabel): sent"
+            self.replyStatusText = String(
+                format: String(localized: "%@: sent"),
+                actionLabel)
         } else if result.queuedForDelivery {
-            self.replyStatusText = "\(actionLabel): queued"
+            self.replyStatusText = String(
+                format: String(localized: "%@: queued"),
+                actionLabel)
         } else {
-            self.replyStatusText = "\(actionLabel): sent"
+            self.replyStatusText = String(
+                format: String(localized: "%@: sent"),
+                actionLabel)
         }
         self.replyStatusAt = Date()
         self.persistState()
@@ -1529,24 +1560,24 @@ extension WatchInboxStore {
     private static func decisionLabel(_ decision: WatchExecApprovalDecision) -> String {
         switch decision {
         case .allowOnce:
-            "Allow Once"
+            String(localized: "Allow Once")
         case .deny:
-            "Deny"
+            String(localized: "Deny")
         }
     }
 
     private static func commandLabel(_ command: WatchAppCommand) -> String {
         switch command {
         case .refresh:
-            "Refresh"
+            String(localized: "Refresh")
         case .openChat:
-            "Open Chat"
+            String(localized: "Open Chat")
         case .sendChat:
-            "Chat"
+            String(localized: "Chat")
         case .startTalk:
-            "Start Talk"
+            String(localized: "Start Talk")
         case .stopTalk:
-            "Stop Talk"
+            String(localized: "Stop Talk")
         }
     }
 
