@@ -470,6 +470,7 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
         }
         guard let approvalId = WatchApprovalID.exact(payload["approvalId"] as? String) else { return nil }
         let decision = Self.parseExecApprovalDecision(payload["decision"])
+        let outcome = WatchExecApprovalResolvedMessage.parseTransportOutcome(payload["outcome"])
         let gatewayStableID = WatchGatewayID.exact(payload["gatewayStableID"] as? String)
         let resolvedAtMs = (payload["resolvedAtMs"] as? NSNumber)?.int64Value
         let source = (payload["source"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -479,6 +480,7 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
             approvalId: approvalId,
             gatewayStableID: gatewayStableID,
             decision: decision,
+            outcome: outcome,
             resolvedAtMs: resolvedAtMs,
             source: source,
             outcomeText: outcomeText?.isEmpty == false ? outcomeText : nil)

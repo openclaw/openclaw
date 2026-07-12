@@ -33,6 +33,11 @@ struct WatchExecApprovalResolvedMessage: Codable, Equatable {
     var resolvedAtMs: Int64?
     var source: String?
     var outcomeText: String?
+
+    static func parseTransportOutcome(_ value: Any?) -> WatchExecApprovalTransportOutcome? {
+        guard let rawValue = value as? String else { return nil }
+        return WatchExecApprovalTransportOutcome(rawValue: rawValue)
+    }
 }
 
 struct WatchExecApprovalExpiredMessage: Codable, Equatable {

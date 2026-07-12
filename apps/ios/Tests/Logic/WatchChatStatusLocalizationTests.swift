@@ -129,8 +129,9 @@ struct WatchChatStatusLocalizationTests {
     }
 
     @Test func `semantic approval outcomes win before legacy decision fallbacks`() {
+        let parsedOutcome = WatchExecApprovalResolvedMessage.parseTransportOutcome("allowedAlways")
         let allowedAlways = WatchExecApprovalOutcome.resolved(
-            outcome: .allowedAlways,
+            outcome: parsedOutcome,
             legacyText: "Approval denied.",
             decision: .deny,
             source: "another-reviewer")
@@ -148,6 +149,7 @@ struct WatchChatStatusLocalizationTests {
         #expect(allowedAlways.code == .allowedAlways)
         #expect(deniedElsewhere.code == .denied)
         #expect(unknownElsewhere.code == .resolvedElsewhere)
+        #expect(WatchExecApprovalResolvedMessage.parseTransportOutcome("future") == nil)
     }
 
     @Test func `gateway presentation localizes key and keeps backend override verbatim`() {

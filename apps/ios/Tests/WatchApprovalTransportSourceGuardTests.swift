@@ -157,6 +157,18 @@ struct WatchApprovalTransportSourceGuardTests {
         #expect(!parser.contains("?? []"))
     }
 
+    @Test func `watch preserves semantic approval outcomes through receiver parsing`() throws {
+        let receiverSource = try Self.readWatchSource("WatchConnectivityReceiver.swift")
+        let parser = try Self.extract(
+            receiverSource,
+            from: "private static func parseExecApprovalResolvedPayload(",
+            to: "private static func parseExecApprovalExpiredPayload(")
+
+        #expect(parser.contains(
+            "WatchExecApprovalResolvedMessage.parseTransportOutcome(payload[\"outcome\"])"))
+        #expect(parser.contains("outcome: outcome"))
+    }
+
     @Test func `watch reuses exact compound identifier policy`() throws {
         let receiverSource = try Self.readWatchSource("WatchConnectivityReceiver.swift")
         let storeSource = try Self.readWatchSource("WatchInboxStore.swift")
