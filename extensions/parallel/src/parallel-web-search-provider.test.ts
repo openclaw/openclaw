@@ -598,7 +598,7 @@ describe("parallel web search provider", () => {
     });
 
     expect(endpointMockState.calls).toHaveLength(1);
-    const [call] = endpointMockState.calls;
+    const call = expectDefined(endpointMockState.calls[0], "Parallel search endpoint call");
     const headers = (call.init.headers ?? {}) as Record<string, string>;
     expect(headers["x-api-key"]).toBe("parallel-custom-ref-key");
     expect(headers["x-api-key"]).not.toBe("parallel-env-fallback");
