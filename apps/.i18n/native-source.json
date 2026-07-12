@@ -20357,13 +20357,21 @@
       "kind": "plist-string",
       "line": 74,
       "path": "apps/ios/Sources/Info.plist",
+      "source": "After you enable Health Summaries, OpenClaw reads steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
+      "surface": "apple",
+      "id": "native.apple.c86f7ba5b3762eb7"
+    },
+    {
+      "kind": "plist-string",
+      "line": 76,
+      "path": "apps/ios/Sources/Info.plist",
       "source": "OpenClaw lets your assistant read photos you allow and lets you choose photos to share.",
       "surface": "apple",
       "id": "native.apple.40ed4259ec869f1b"
     },
     {
       "kind": "plist-string",
-      "line": 76,
+      "line": 78,
       "path": "apps/ios/Sources/Info.plist",
       "source": "OpenClaw uses your reminders to list, add, and complete tasks when you enable reminders access.",
       "surface": "apple",
@@ -20371,7 +20379,7 @@
     },
     {
       "kind": "plist-string",
-      "line": 78,
+      "line": 80,
       "path": "apps/ios/Sources/Info.plist",
       "source": "OpenClaw uses on-device speech recognition for talk mode and voice wake.",
       "surface": "apple",
@@ -20643,7 +20651,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3765,
+      "line": 3787,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Approval needed",
       "surface": "apple",
@@ -20651,7 +20659,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3766,
+      "line": 3788,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Action required",
       "surface": "apple",
@@ -20659,7 +20667,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4432,
+      "line": 4454,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Connecting...",
       "surface": "apple",
@@ -20667,7 +20675,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4433,
+      "line": 4455,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Reconnecting...",
       "surface": "apple",
@@ -20675,7 +20683,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 4752,
+      "line": 4774,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Connected",
       "surface": "apple",
@@ -20683,7 +20691,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 4752,
+      "line": 4774,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Offline",
       "surface": "apple",
@@ -20691,7 +20699,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 5898,
+      "line": 5920,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "No chat messages yet",
       "surface": "apple",
@@ -20699,7 +20707,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 6097,
+      "line": 6119,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Connecting…",
       "surface": "apple",
@@ -20707,7 +20715,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 6097,
+      "line": 6119,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Reconnecting…",
       "surface": "apple",
@@ -20715,7 +20723,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 8382,
+      "line": 8404,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Approval",
       "surface": "apple",
@@ -20723,7 +20731,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 8382,
+      "line": 8404,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "This approval was already",
       "surface": "apple",
@@ -20731,7 +20739,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 8388,
+      "line": 8410,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "This approval was already set to Always Allow.",
       "surface": "apple",
@@ -20739,7 +20747,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 8389,
+      "line": 8411,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Approval set to Always Allow.",
       "surface": "apple",
@@ -20747,7 +20755,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 9693,
+      "line": 9715,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "\\(urlText.prefix(500))…",
       "surface": "apple",
@@ -21923,7 +21931,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 17,
+      "line": 18,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Add-Only",
       "surface": "apple",
@@ -21931,7 +21939,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 18,
+      "line": 19,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Allowed",
       "surface": "apple",
@@ -21939,7 +21947,15 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 19,
+      "line": 20,
+      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
+      "source": "Enabled",
+      "surface": "apple",
+      "id": "native.apple.7b551f40d1a6148c"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 21,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Limited",
       "surface": "apple",
@@ -21947,7 +21963,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 20,
+      "line": 22,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Not Allowed",
       "surface": "apple",
@@ -21955,7 +21971,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 21,
+      "line": 23,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Not Set",
       "surface": "apple",
@@ -21963,7 +21979,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 22,
+      "line": 24,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Unknown",
       "surface": "apple",
@@ -21971,7 +21987,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 51,
+      "line": 55,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Contacts",
       "surface": "apple",
@@ -21979,7 +21995,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 54,
+      "line": 58,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Search and add contacts from the assistant.",
       "surface": "apple",
@@ -21987,7 +22003,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 60,
+      "line": 64,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Photos",
       "surface": "apple",
@@ -21995,7 +22011,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 69,
+      "line": 73,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Calendar (Add Events)",
       "surface": "apple",
@@ -22003,7 +22019,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 72,
+      "line": 76,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Add events with least privilege.",
       "surface": "apple",
@@ -22011,7 +22027,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 78,
+      "line": 82,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Calendar (View Events)",
       "surface": "apple",
@@ -22019,7 +22035,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 81,
+      "line": 85,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "List and read calendar events.",
       "surface": "apple",
@@ -22027,7 +22043,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 87,
+      "line": 91,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Reminders",
       "surface": "apple",
@@ -22035,15 +22051,23 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 90,
+      "line": 94,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "List, add, and complete reminders.",
       "surface": "apple",
       "id": "native.apple.d6fd5e9f85b0e298"
     },
     {
+      "kind": "ui-named-argument",
+      "line": 100,
+      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
+      "source": "Health Summaries",
+      "surface": "apple",
+      "id": "native.apple.33df187e4402065a"
+    },
+    {
       "kind": "ui-call",
-      "line": 94,
+      "line": 113,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Privacy & Access",
       "surface": "apple",
@@ -22051,7 +22075,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 185,
+      "line": 204,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Read photos you select for the assistant.",
       "surface": "apple",
@@ -22059,7 +22083,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 186,
+      "line": 205,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Read recent photos for the assistant.",
       "surface": "apple",
@@ -22067,7 +22091,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 194,
+      "line": 213,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Manage Access",
       "surface": "apple",
@@ -22075,7 +22099,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 301,
+      "line": 320,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Request Full Access",
       "surface": "apple",
@@ -22083,7 +22107,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 348,
+      "line": 367,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Request Access",
       "surface": "apple",
@@ -22091,7 +22115,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 350,
+      "line": 369,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Upgrade to Full Access",
       "surface": "apple",
@@ -22099,11 +22123,51 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 352,
+      "line": 371,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Open Settings",
       "surface": "apple",
       "id": "native.apple.3cb9ed2ae352f95c"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 404,
+      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
+      "source": "Health data is unavailable on this device.",
+      "surface": "apple",
+      "id": "native.apple.3f902cdb4d4e9176"
+    },
+    {
+      "kind": "ui-localized-call-multiline",
+      "line": 408,
+      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
+      "source": "Shares only requested step, sleep, resting heart rate, and workout aggregates through your Gateway with your configured AI provider. Results may remain in chat history.",
+      "surface": "apple",
+      "id": "native.apple.33316ec020810816"
+    },
+    {
+      "kind": "ui-localized-call-multiline",
+      "line": 414,
+      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
+      "source": "Off by default. Enabling lets requested aggregates leave this iPhone through your Gateway and configured AI provider.",
+      "surface": "apple",
+      "id": "native.apple.53fb25cb6e6aae6e"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 423,
+      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
+      "source": "Disable",
+      "surface": "apple",
+      "id": "native.apple.6c2be9b001fb95b0"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 424,
+      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
+      "source": "Enable & Share Summaries",
+      "surface": "apple",
+      "id": "native.apple.9eab20fbad55a0a9"
     },
     {
       "kind": "ui-call",

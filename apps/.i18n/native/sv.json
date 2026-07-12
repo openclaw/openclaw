@@ -12724,6 +12724,11 @@
       "translated": "OpenClaw kan använda rörelsedata för att stödja enhetsmedvetna interaktioner och automatiseringar."
     },
     {
+      "id": "native.apple.c86f7ba5b3762eb7",
+      "source": "After you enable Health Summaries, OpenClaw reads steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
+      "translated": "När du har aktiverat Hälsosammanfattningar läser OpenClaw steg, sömn, vilopuls och träningspass för att dela begärda sammanställda data med din konfigurerade AI-leverantör."
+    },
+    {
       "id": "native.apple.40ed4259ec869f1b",
       "source": "OpenClaw lets your assistant read photos you allow and lets you choose photos to share.",
       "translated": "OpenClaw låter din assistent läsa foton du tillåter och låter dig välja foton att dela."
@@ -13714,6 +13719,11 @@
       "translated": "Tillåtet"
     },
     {
+      "id": "native.apple.7b551f40d1a6148c",
+      "source": "Enabled",
+      "translated": "Aktiverat"
+    },
+    {
       "id": "native.apple.94208c3068dae5b9",
       "source": "Limited",
       "translated": "Begränsad"
@@ -13779,6 +13789,11 @@
       "translated": "Lista, lägg till och slutför påminnelser."
     },
     {
+      "id": "native.apple.33df187e4402065a",
+      "source": "Health Summaries",
+      "translated": "Hälsosammanfattningar"
+    },
+    {
       "id": "native.apple.bb572eab08269809",
       "source": "Privacy & Access",
       "translated": "Integritet och åtkomst"
@@ -13817,6 +13832,31 @@
       "id": "native.apple.3cb9ed2ae352f95c",
       "source": "Open Settings",
       "translated": "Öppna inställningar"
+    },
+    {
+      "id": "native.apple.3f902cdb4d4e9176",
+      "source": "Health data is unavailable on this device.",
+      "translated": "Hälsodata är inte tillgängliga på den här enheten."
+    },
+    {
+      "id": "native.apple.33316ec020810816",
+      "source": "Shares only requested step, sleep, resting heart rate, and workout aggregates through your Gateway with your configured AI provider. Results may remain in chat history.",
+      "translated": "Delar endast begärda sammanställda data om steg, sömn, vilopuls och träningspass via din Gateway med din konfigurerade AI-leverantör. Resultat kan finnas kvar i chatthistoriken."
+    },
+    {
+      "id": "native.apple.53fb25cb6e6aae6e",
+      "source": "Off by default. Enabling lets requested aggregates leave this iPhone through your Gateway and configured AI provider.",
+      "translated": "Av som standard. När funktionen aktiveras kan begärda sammanställda data lämna denna iPhone via din Gateway och konfigurerade AI-leverantör."
+    },
+    {
+      "id": "native.apple.6c2be9b001fb95b0",
+      "source": "Disable",
+      "translated": "Inaktivera"
+    },
+    {
+      "id": "native.apple.9eab20fbad55a0a9",
+      "source": "Enable & Share Summaries",
+      "translated": "Aktivera och dela sammanfattningar"
     },
     {
       "id": "native.apple.d9f9a74e25431256",

@@ -12724,6 +12724,11 @@
       "translated": "OpenClaw, cihaza duyarlı etkileşimleri ve otomasyonları desteklemek için hareket verilerini kullanabilir."
     },
     {
+      "id": "native.apple.c86f7ba5b3762eb7",
+      "source": "After you enable Health Summaries, OpenClaw reads steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
+      "translated": "Sağlık Özetleri'ni etkinleştirdikten sonra OpenClaw, istenen toplu verileri yapılandırdığınız yapay zeka sağlayıcısıyla paylaşmak için adımları, uykuyu, dinlenme kalp atış hızını ve antrenmanları okur."
+    },
+    {
       "id": "native.apple.40ed4259ec869f1b",
       "source": "OpenClaw lets your assistant read photos you allow and lets you choose photos to share.",
       "translated": "OpenClaw, asistanınızın izin verdiğiniz fotoğrafları okumasını sağlar ve paylaşılacak fotoğrafları seçmenize olanak tanır."
@@ -13714,6 +13719,11 @@
       "translated": "İzin Verildi"
     },
     {
+      "id": "native.apple.7b551f40d1a6148c",
+      "source": "Enabled",
+      "translated": "Etkin"
+    },
+    {
       "id": "native.apple.94208c3068dae5b9",
       "source": "Limited",
       "translated": "Sınırlı"
@@ -13779,6 +13789,11 @@
       "translated": "Anımsatıcıları listeleyin, ekleyin ve tamamlayın."
     },
     {
+      "id": "native.apple.33df187e4402065a",
+      "source": "Health Summaries",
+      "translated": "Sağlık Özetleri"
+    },
+    {
       "id": "native.apple.bb572eab08269809",
       "source": "Privacy & Access",
       "translated": "Gizlilik ve Erişim"
@@ -13817,6 +13832,31 @@
       "id": "native.apple.3cb9ed2ae352f95c",
       "source": "Open Settings",
       "translated": "Ayarları Aç"
+    },
+    {
+      "id": "native.apple.3f902cdb4d4e9176",
+      "source": "Health data is unavailable on this device.",
+      "translated": "Sağlık verileri bu aygıtta kullanılamıyor."
+    },
+    {
+      "id": "native.apple.33316ec020810816",
+      "source": "Shares only requested step, sleep, resting heart rate, and workout aggregates through your Gateway with your configured AI provider. Results may remain in chat history.",
+      "translated": "Yalnızca istenen adım, uyku, dinlenme kalp atış hızı ve antrenman toplu verilerini Gateway üzerinden yapılandırdığınız yapay zeka sağlayıcısıyla paylaşır. Sonuçlar sohbet geçmişinde kalabilir."
+    },
+    {
+      "id": "native.apple.53fb25cb6e6aae6e",
+      "source": "Off by default. Enabling lets requested aggregates leave this iPhone through your Gateway and configured AI provider.",
+      "translated": "Varsayılan olarak kapalıdır. Etkinleştirme, istenen toplu verilerin Gateway ve yapılandırdığınız yapay zeka sağlayıcısı üzerinden bu iPhone'dan çıkmasına izin verir."
+    },
+    {
+      "id": "native.apple.6c2be9b001fb95b0",
+      "source": "Disable",
+      "translated": "Devre dışı bırak"
+    },
+    {
+      "id": "native.apple.9eab20fbad55a0a9",
+      "source": "Enable & Share Summaries",
+      "translated": "Özetleri etkinleştir ve paylaş"
     },
     {
       "id": "native.apple.d9f9a74e25431256",
