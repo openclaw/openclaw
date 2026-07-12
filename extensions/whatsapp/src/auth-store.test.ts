@@ -16,6 +16,7 @@ import {
   readWebAuthState,
   readWebSelfId,
   readWebSelfIdentity,
+  prepareWebAuthForLogin,
   restoreCredsFromBackupIfNeeded,
   webAuthExists,
   WhatsAppAuthUnstableError,
@@ -180,9 +181,10 @@ describe("auth-store", () => {
         throw guardError;
       });
       await expect(
-        clearStalePhoneCodePairingAuthIfNeeded({
+        prepareWebAuthForLogin({
           authDir,
           isLegacyAuthDir: false,
+          mode: "preserve-linked",
           runtime,
           beforeCredentialPersistence,
         }),
@@ -190,9 +192,10 @@ describe("auth-store", () => {
       expect(beforeCredentialPersistence).toHaveBeenCalledOnce();
       expect(fsSync.existsSync(authDir)).toBe(true);
       await expect(
-        clearStalePhoneCodePairingAuthIfNeeded({
+        prepareWebAuthForLogin({
           authDir,
           isLegacyAuthDir: false,
+          mode: "preserve-linked",
           runtime,
         }),
       ).resolves.toBe("cleared");
@@ -209,12 +212,70 @@ describe("auth-store", () => {
     );
 
     await expect(
-      clearStalePhoneCodePairingAuthIfNeeded({
+      prepareWebAuthForLogin({
         authDir,
         isLegacyAuthDir: false,
+        mode: "preserve-linked",
       }),
-    ).resolves.toBe("stale-not-cleared");
+    ).resolves.toBe("not-cleared");
     expect(fsSync.existsSync(credsPath)).toBe(true);
+  });
+
+  it("clears linked credentials when login explicitly requests fresh auth", async () => {
+    await withOwnedOAuthAuthDir("openclaw-wa-auth-force-fresh", async (authDir) => {
+      fsSync.writeFileSync(
+        path.join(authDir, "creds.json"),
+        JSON.stringify(createCompletedPhoneCodeCreds({ registered: true })),
+        "utf-8",
+      );
+
+      await expect(
+        prepareWebAuthForLogin({
+          authDir,
+          isLegacyAuthDir: false,
+          mode: "clear-existing",
+        }),
+      ).resolves.toBe("cleared");
+      expect(fsSync.existsSync(authDir)).toBe(false);
+    });
+  });
+
+  it("reports linked credentials that fresh login cannot clear from a custom auth dir", async () => {
+    const authDir = createTempAuthDir("openclaw-wa-auth-force-fresh-external");
+    const credsPath = path.join(authDir, "creds.json");
+    try {
+      fsSync.writeFileSync(
+        credsPath,
+        JSON.stringify(createCompletedPhoneCodeCreds({ registered: true })),
+        "utf-8",
+      );
+
+      await expect(
+        prepareWebAuthForLogin({
+          authDir,
+          isLegacyAuthDir: false,
+          mode: "clear-existing",
+        }),
+      ).resolves.toBe("not-cleared");
+      expect(fsSync.existsSync(credsPath)).toBe(true);
+    } finally {
+      fsSync.rmSync(authDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports fresh login ready when no credentials exist", async () => {
+    const authDir = createTempAuthDir("openclaw-wa-auth-force-fresh-absent");
+    try {
+      await expect(
+        prepareWebAuthForLogin({
+          authDir,
+          isLegacyAuthDir: false,
+          mode: "clear-existing",
+        }),
+      ).resolves.toBe("not-needed");
+    } finally {
+      fsSync.rmSync(authDir, { recursive: true, force: true });
+    }
   });
 
   it("treats completed phone-code pairing creds as linked", async () => {
@@ -242,9 +303,10 @@ describe("auth-store", () => {
       });
 
       await expect(
-        clearStalePhoneCodePairingAuthIfNeeded({
+        prepareWebAuthForLogin({
           authDir,
           isLegacyAuthDir: false,
+          mode: "preserve-linked",
         }),
       ).resolves.toBe("not-needed");
       expect(fsSync.existsSync(credsPath)).toBe(true);
@@ -274,9 +336,10 @@ describe("auth-store", () => {
 
       try {
         await expect(
-          clearStalePhoneCodePairingAuthIfNeeded({
+          prepareWebAuthForLogin({
             authDir,
             isLegacyAuthDir: false,
+            mode: "preserve-linked",
           }),
         ).resolves.toBe("cleared");
         await waitForCredsSaveQueue(authDir);
@@ -294,9 +357,10 @@ describe("auth-store", () => {
       hoisted.waitForCredsSaveQueueWithTimeout.mockResolvedValueOnce("timed_out");
 
       await expect(
-        clearStalePhoneCodePairingAuthIfNeeded({
+        prepareWebAuthForLogin({
           authDir,
           isLegacyAuthDir: false,
+          mode: "preserve-linked",
         }),
       ).resolves.toBe("unstable");
       expect(fsSync.existsSync(credsPath)).toBe(true);

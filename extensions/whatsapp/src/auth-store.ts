@@ -38,11 +38,12 @@ export const WHATSAPP_AUTH_UNSTABLE_CODE = "whatsapp-auth-unstable";
 const authStoreLogger = getChildLogger({ module: "web-auth-store" });
 const emptyWebSelfId = () => ({ e164: null, jid: null, lid: null }) as const;
 export type WhatsAppWebAuthState = "linked" | "not-linked" | "unstable";
-export type WhatsAppStalePhoneCodePairingAuthCleanupResult =
+export type WhatsAppLoginAuthPreparationResult =
   | "not-needed"
   | "cleared"
-  | "stale-not-cleared"
+  | "not-cleared"
   | "unstable";
+type WhatsAppWebAuthClearResult = Exclude<WhatsAppLoginAuthPreparationResult, "unstable">;
 
 export class WhatsAppAuthUnstableError extends Error {
   readonly code = WHATSAPP_AUTH_UNSTABLE_CODE;
@@ -295,35 +296,35 @@ async function clearBaileysAuthFiles(
   );
 }
 
-export async function clearStalePhoneCodePairingAuthIfNeeded(params: {
+export async function prepareWebAuthForLogin(params: {
   authDir: string;
   isLegacyAuthDir: boolean;
+  mode: "preserve-linked" | "clear-existing";
   runtime?: RuntimeEnv;
   beforeCredentialPersistence?: () => Promise<void>;
-}): Promise<WhatsAppStalePhoneCodePairingAuthCleanupResult> {
+}): Promise<WhatsAppLoginAuthPreparationResult> {
   const resolvedAuthDir = resolveUserPath(params.authDir);
-  const barrierResult = await waitForWebAuthBarrier(
-    resolvedAuthDir,
-    "clearStalePhoneCodePairingAuthIfNeeded",
-  );
+  const barrierResult = await waitForWebAuthBarrier(resolvedAuthDir, "prepareWebAuthForLogin");
   if (barrierResult === "timed_out") {
     return "unstable";
   }
   return await runInCredsSaveQueue(resolvedAuthDir, async () => {
-    // Baileys pair-success completes this state through creds.update before its
-    // restart; key-store writes begin after open, when these creds are no longer partial.
-    // Queueing this mutation prevents that completion save from being deleted.
-    const raw = await readWebCredsJsonRaw(resolveWebCredsPath(resolvedAuthDir));
-    if (!raw || !isPartialPhoneCodePairingCredsRaw(raw)) {
-      return "not-needed";
+    // Fresh relinks and logged-out recovery must prove the directory was cleared.
+    // Ordinary login preserves linked auth but removes incomplete phone-code state.
+    if (params.mode === "preserve-linked") {
+      // Baileys pair-success completes this state through creds.update before its
+      // restart; queueing the re-read prevents that completion save from being deleted.
+      const raw = await readWebCredsJsonRaw(resolveWebCredsPath(resolvedAuthDir));
+      if (!raw || !isPartialPhoneCodePairingCredsRaw(raw)) {
+        return "not-needed";
+      }
     }
-    const cleared = await clearWebAuthFiles({
+    return await clearWebAuthFiles({
       authDir: resolvedAuthDir,
       isLegacyAuthDir: params.isLegacyAuthDir,
       runtime: params.runtime ?? defaultRuntime,
       beforeCredentialPersistence: params.beforeCredentialPersistence,
     });
-    return cleared ? "cleared" : "stale-not-cleared";
   });
 }
 
@@ -409,17 +410,17 @@ async function clearWebAuthFiles(params: {
   isLegacyAuthDir: boolean;
   runtime: RuntimeEnv;
   beforeCredentialPersistence?: () => Promise<void>;
-}): Promise<boolean> {
+}): Promise<WhatsAppWebAuthClearResult> {
   if (!(await shouldClearOnLogout(params.authDir, params.isLegacyAuthDir))) {
     params.runtime.log(info("No WhatsApp Web session found; nothing to delete."));
-    return false;
+    return "not-needed";
   }
   if (params.isLegacyAuthDir) {
     if (!(await isLegacyWebAuthDir(params.authDir))) {
       params.runtime.log(
         info("Skipped WhatsApp Web credential cleanup outside the managed legacy auth directory."),
       );
-      return false;
+      return "not-cleared";
     }
     await clearBaileysAuthFiles(params.authDir, params.beforeCredentialPersistence);
   } else {
@@ -433,16 +434,16 @@ async function clearWebAuthFiles(params: {
           "Skipped WhatsApp Web credential cleanup because the auth directory crosses a symlink boundary.",
         ),
       );
-      return false;
+      return "not-cleared";
     } else {
       params.runtime.log(
         info("Skipped WhatsApp Web credential cleanup outside the managed auth directory."),
       );
-      return false;
+      return "not-cleared";
     }
   }
   params.runtime.log(success("Cleared WhatsApp Web credentials."));
-  return true;
+  return "cleared";
 }
 
 export async function logoutWeb(params: {
@@ -459,12 +460,13 @@ export async function logoutWeb(params: {
       info("WhatsApp auth state is still stabilizing; clearing cached credentials anyway."),
     );
   }
-  return await clearWebAuthFiles({
+  const result = await clearWebAuthFiles({
     authDir: resolvedAuthDir,
     isLegacyAuthDir: Boolean(params.isLegacyAuthDir),
     runtime,
     beforeCredentialPersistence: params.beforeCredentialPersistence,
   });
+  return result === "cleared";
 }
 
 function parseWebSelfIdentity(raw: string, authDir: string): WhatsAppSelfIdentity {

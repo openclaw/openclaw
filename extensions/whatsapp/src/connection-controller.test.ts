@@ -14,7 +14,7 @@ import { enqueueCredsSave, writeCredsJsonAtomically } from "./creds-persistence.
 import { createAcceptedWhatsAppSendResult } from "./inbound/send-result.test-helper.js";
 import {
   createWaSocket,
-  logoutWeb,
+  prepareWebAuthForLogin,
   readWebAuthExistsForDecision,
   waitForCredsSaveQueueWithTimeout,
   waitForWaConnection,
@@ -27,7 +27,7 @@ vi.mock("./session.js", async () => {
     ...actual,
     createWaSocket: vi.fn(),
     waitForWaConnection: vi.fn(),
-    logoutWeb: vi.fn(async () => true),
+    prepareWebAuthForLogin: vi.fn(async () => "cleared" as const),
     readWebAuthExistsForDecision: vi.fn(async () => ({ outcome: "stable" as const, exists: true })),
     waitForCredsSaveQueueWithTimeout: vi.fn(async () => "drained" as const),
   };
@@ -60,7 +60,7 @@ vi.mock("./connection-owner.js", () => ({
 
 const createWaSocketMock = vi.mocked(createWaSocket);
 const waitForWaConnectionMock = vi.mocked(waitForWaConnection);
-const logoutWebMock = vi.mocked(logoutWeb);
+const prepareWebAuthForLoginMock = vi.mocked(prepareWebAuthForLogin);
 const readWebAuthExistsForDecisionMock = vi.mocked(readWebAuthExistsForDecision);
 const waitForCredsSaveQueueWithTimeoutMock = vi.mocked(waitForCredsSaveQueueWithTimeout);
 const registerChannelRuntimeContextMock = runtimeContextMocks.register;
@@ -310,7 +310,7 @@ describe("WhatsAppConnectionController", () => {
       const harness = createLoginResultHarness();
       const error = { output: { statusCode: status } };
       if (status === 401) {
-        logoutWebMock.mockResolvedValueOnce(cleared);
+        prepareWebAuthForLoginMock.mockResolvedValueOnce(cleared ? "cleared" : exists ? "not-cleared" : "not-needed");
       }
       if (!cleared) {
         readWebAuthExistsForDecisionMock.mockResolvedValueOnce({ outcome: "stable", exists });
@@ -327,7 +327,7 @@ describe("WhatsAppConnectionController", () => {
       expect(harness.initialSock.end).toHaveBeenCalledOnce();
       expect(createWaSocketMock).toHaveBeenCalledTimes(waits - 1);
       expect(waitForConnection).toHaveBeenCalledTimes(waits);
-      expect(logoutWebMock).toHaveBeenCalledTimes(status === 401 ? 1 : 0);
+      expect(prepareWebAuthForLoginMock).toHaveBeenCalledTimes(status === 401 ? 1 : 0);
       if (outcome === "connected") {
         expect(result).toEqual({ outcome, restarted: true, sock: harness.replacementSock });
         expectLoginWaits(waitForConnection, harness.initialSock, harness.replacementSock);
@@ -359,6 +359,39 @@ describe("WhatsAppConnectionController", () => {
       });
     },
   );
+
+  it("preserves credential persistence guards on a replacement login socket", async () => {
+    const harness = createLoginResultHarness();
+    const restartError = { output: { statusCode: DisconnectReason.restartRequired } };
+    const waitForConnection = vi
+      .fn()
+      .mockRejectedValueOnce(restartError)
+      .mockResolvedValueOnce(undefined);
+    const createSocket = createWaSocketMock.mockResolvedValue(harness.replacementSock as never);
+    const beforeCredentialPersistence = vi.fn(async () => {});
+    const onCredentialPersistenceError = vi.fn();
+    const onCredentialPersistenceTask = vi.fn();
+    const waitForCredentialPersistence = vi.fn(async () => {});
+
+    const result = await harness.run({
+      waitForConnection,
+      beforeCredentialPersistence,
+      onCredentialPersistenceError,
+      onCredentialPersistenceTask,
+      waitForCredentialPersistence,
+    });
+
+    expect(result.outcome).toBe("connected");
+    expect(createSocket).toHaveBeenCalledWith(false, false, {
+      authDir: loginAuthDir,
+      onQr: undefined,
+      beforeCredentialPersistence,
+      onCredentialPersistenceError,
+      onCredentialPersistenceTask,
+    });
+    expect(waitForCredentialPersistence).toHaveBeenCalledOnce();
+  });
+
 
   it("aborts an indefinite login wait when guarded credential persistence fails", async () => {
     const guardError = new Error("verified inference route changed");

@@ -20,7 +20,7 @@ import {
   createWaSocket,
   formatError,
   getStatusCode,
-  logoutWeb,
+  prepareWebAuthForLogin,
   readWebAuthExistsForDecision,
   waitForCredsSaveQueueWithTimeout,
   waitForWaConnection,
@@ -274,9 +274,11 @@ export async function waitForWhatsAppLoginResult(params: {
 
   while (true) {
     try {
-      await params.prepareLoginSocket?.(currentSock, { reason: prepareReason });
       await waitForLoginSocket({
-        wait: async () => await wait(currentSock, { timeout: "none" }),
+        wait: async () => {
+          await params.prepareLoginSocket?.(currentSock, { reason: prepareReason });
+          await wait(currentSock, { timeout: "none" });
+        },
         credentialPersistenceFailure: params.credentialPersistenceFailure,
       });
       await params.waitForCredentialPersistence?.();
@@ -329,28 +331,26 @@ export async function waitForWhatsAppLoginResult(params: {
           };
         }
         closeWaSocket(currentSock);
-        const cleared = await logoutWeb({
+        const preparation = await prepareWebAuthForLogin({
           authDir: params.authDir,
           isLegacyAuthDir: params.isLegacyAuthDir,
+          mode: "clear-existing",
           runtime: params.runtime,
           beforeCredentialPersistence: params.beforeCredentialPersistence,
         });
-        if (!cleared) {
-          const existingAuth = await readWebAuthExistsForDecision(params.authDir);
-          if (existingAuth.outcome === "unstable") {
-            return {
-              outcome: "failed",
-              message: WHATSAPP_LOGIN_AUTH_UNSTABLE_MESSAGE,
-              error: new WhatsAppAuthUnstableError(WHATSAPP_LOGIN_AUTH_UNSTABLE_MESSAGE),
-            };
-          }
-          if (existingAuth.exists) {
-            return {
-              outcome: "failed",
-              message: WHATSAPP_LOGIN_AUTH_NOT_CLEARED_MESSAGE,
-              error: err,
-            };
-          }
+        if (preparation === "unstable") {
+          return {
+            outcome: "failed",
+            message: WHATSAPP_LOGIN_AUTH_UNSTABLE_MESSAGE,
+            error: new WhatsAppAuthUnstableError(WHATSAPP_LOGIN_AUTH_UNSTABLE_MESSAGE),
+          };
+        }
+        if (preparation === "not-cleared") {
+          return {
+            outcome: "failed",
+            message: WHATSAPP_LOGIN_AUTH_NOT_CLEARED_MESSAGE,
+            error: err,
+          };
         }
         restartedStatuses.add(LOGGED_OUT_STATUS);
         prepareReason = "logged-out";

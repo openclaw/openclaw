@@ -23,7 +23,7 @@ import { renderQrPngDataUrl } from "./qr-image.js";
 import {
   createWaSocket,
   formatError,
-  logoutWeb,
+  prepareWebAuthForLogin,
   readWebAuthExistsForDecision,
   readWebSelfId,
   WHATSAPP_AUTH_UNSTABLE_CODE,
