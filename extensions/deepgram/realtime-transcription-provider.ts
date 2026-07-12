@@ -95,19 +95,21 @@ function normalizeDeepgramRealtimeBaseUrl(value?: string): string {
     return DEFAULT_DEEPGRAM_AUDIO_BASE_URL;
   }
   // Callers pass the result straight into `new URL(...)`. Reject an explicit
-  // malformed or non-HTTP(S) endpoint here (fail fast) instead of silently
+  // malformed or unrecognized endpoint here (fail fast) instead of silently
   // retargeting to the default or letting a downstream `new URL(...)` throw an
-  // opaque TypeError. Errors must not echo the raw value: it may embed userinfo
-  // or credential-bearing query params.
+  // opaque TypeError. Accept direct ws(s):// overrides — the released provider
+  // passes them through unchanged to the WebSocket URL builder. Errors must not
+  // echo the raw value: it may embed userinfo or credential-bearing query params.
   let parsed: URL;
   try {
     parsed = new URL(resolved);
   } catch {
     throw new Error("Invalid Deepgram baseUrl: value is not a valid URL");
   }
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+  const { protocol } = parsed;
+  if (protocol !== "http:" && protocol !== "https:" && protocol !== "ws:" && protocol !== "wss:") {
     throw new Error(
-      `Invalid Deepgram baseUrl: unsupported scheme "${parsed.protocol}" (expected http or https)`,
+      `Invalid Deepgram baseUrl: unsupported scheme "${protocol}" (expected http, https, ws, or wss)`,
     );
   }
   return resolved;
@@ -115,7 +117,10 @@ function normalizeDeepgramRealtimeBaseUrl(value?: string): string {
 
 function toDeepgramRealtimeWsUrl(config: DeepgramRealtimeTranscriptionSessionConfig): string {
   const url = new URL(normalizeDeepgramRealtimeBaseUrl(config.baseUrl));
-  url.protocol = url.protocol === "http:" ? "ws:" : "wss:";
+  // Preserve direct ws:/wss: overrides; map http(s): to their WebSocket equivalents.
+  if (url.protocol !== "ws:" && url.protocol !== "wss:") {
+    url.protocol = url.protocol === "http:" ? "ws:" : "wss:";
+  }
   url.pathname = `${url.pathname.replace(/\/+$/, "")}/listen`;
   url.searchParams.set("model", config.model);
   url.searchParams.set("encoding", config.encoding);

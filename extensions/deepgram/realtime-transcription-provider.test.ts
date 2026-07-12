@@ -94,7 +94,49 @@ describe("normalizeDeepgramRealtimeBaseUrl", () => {
     );
   });
 
-  it("rejects a parseable but unsupported (non-HTTP(S)) scheme", () => {
+  it("accepts a direct wss:// endpoint — released behavior preserved", () => {
+    // v2026.6.11 passed wss:// overrides straight through; validate must not reject them.
+    expect(testing.normalizeDeepgramRealtimeBaseUrl("wss://api.deepgram.com/v1")).toBe(
+      "wss://api.deepgram.com/v1",
+    );
+  });
+
+  it("accepts a direct ws:// endpoint", () => {
+    expect(testing.normalizeDeepgramRealtimeBaseUrl("ws://internal.proxy:8080/dg")).toBe(
+      "ws://internal.proxy:8080/dg",
+    );
+  });
+
+  it("preserves custom path on a wss:// override through the URL builder", () => {
+    const url = testing.toDeepgramRealtimeWsUrl({
+      apiKey: "dg-key",
+      baseUrl: "wss://proxy.example.com/deepgram/v1",
+      model: "nova-3",
+      providerConfig: {},
+      sampleRate: 8000,
+      encoding: "mulaw",
+      interimResults: true,
+      endpointingMs: 800,
+    });
+    // Protocol preserved; /listen appended to the custom path.
+    expect(url).toMatch(/^wss:\/\/proxy\.example\.com\/deepgram\/v1\/listen\?/);
+  });
+
+  it("preserves custom port on a wss:// override through the URL builder", () => {
+    const url = testing.toDeepgramRealtimeWsUrl({
+      apiKey: "dg-key",
+      baseUrl: "wss://proxy.example.com:9090",
+      model: "nova-3",
+      providerConfig: {},
+      sampleRate: 8000,
+      encoding: "mulaw",
+      interimResults: true,
+      endpointingMs: 800,
+    });
+    expect(url).toMatch(/^wss:\/\/proxy\.example\.com:9090\/listen\?/);
+  });
+
+  it("rejects a parseable but unsupported (non-WebSocket non-HTTP) scheme", () => {
     expect(() => testing.normalizeDeepgramRealtimeBaseUrl("ftp://files.example.com")).toThrow(
       /unsupported scheme/,
     );
