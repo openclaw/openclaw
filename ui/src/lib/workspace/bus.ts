@@ -1,6 +1,6 @@
 /** Parent-owned, in-memory pub/sub for custom widgets in one Workspaces view. */
 
-export type WorkspaceWidgetBusConnection = {
+type WorkspaceWidgetBusConnection = {
   publish: (channel: string, payload: unknown) => number;
   subscribe: (channel: string, deliver: (channel: string, payload: unknown) => void) => () => void;
   dispose: () => void;

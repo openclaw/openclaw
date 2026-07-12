@@ -359,17 +359,22 @@ describe("attachWidgetBridge parent-brokered pub/sub", () => {
     const filter = connected({ id: "filter", tabSlug: "a", bus });
     const chart = connected({ id: "chart", tabSlug: "a", bus });
     const otherTab = connected({ id: "other", tabSlug: "b", bus });
-    chart.childPort.postMessage({ v: 1, type: "workspace:subscribe", channel: "selection" });
-    otherTab.childPort.postMessage({ v: 1, type: "workspace:subscribe", channel: "selection" });
+    chart.childPort.postMessage({ v: 1, type: "workspace:subscribe", channel: "selection" }, []);
+    otherTab.childPort.postMessage({ v: 1, type: "workspace:subscribe", channel: "selection" }, []);
     // MessagePorts are ordered individually, not across distinct ports. Let both
     // subscriptions reach the parent before publishing from the third port.
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    filter.childPort.postMessage({
-      v: 1,
-      type: "workspace:publish",
-      channel: "selection",
-      payload: { region: "eu" },
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
     });
+    filter.childPort.postMessage(
+      {
+        v: 1,
+        type: "workspace:publish",
+        channel: "selection",
+        payload: { region: "eu" },
+      },
+      [],
+    );
 
     await vi.waitFor(() => expect(chart.posts).toHaveLength(1));
     expect(chart.posts[0]).toEqual({
@@ -391,19 +396,26 @@ describe("attachWidgetBridge parent-brokered pub/sub", () => {
     const bus = createWorkspaceWidgetBus();
     const publisher = connected({ id: "publisher", tabSlug: "removed", bus });
     const subscriber = connected({ id: "subscriber", tabSlug: "removed", bus });
-    subscriber.childPort.postMessage({ v: 1, type: "workspace:subscribe", channel: "updates" });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    subscriber.childPort.postMessage({ v: 1, type: "workspace:subscribe", channel: "updates" }, []);
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
 
     subscriber.detach();
-    publisher.childPort.postMessage({
-      v: 1,
-      type: "workspace:publish",
-      channel: "updates",
-      payload: 1,
-    });
+    publisher.childPort.postMessage(
+      {
+        v: 1,
+        type: "workspace:publish",
+        channel: "updates",
+        payload: 1,
+      },
+      [],
+    );
     bus.retainTabs(new Set());
     bus.dispose();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
 
     expect(subscriber.posts).toHaveLength(0);
     publisher.detach();

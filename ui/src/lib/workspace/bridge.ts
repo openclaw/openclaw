@@ -50,7 +50,7 @@ export type WidgetOutboundMessage =
   | { v: 1; type: "workspace:message"; channel: string; payload: unknown }
   | { v: 1; type: "workspace:error"; requestId?: string; code: WidgetErrorCode; message: string };
 
-export type WidgetBusBridge = {
+type WidgetBusBridge = {
   publish: (channel: string, payload: unknown) => void;
   subscribe: (channel: string, deliver: (channel: string, payload: unknown) => void) => () => void;
 };
@@ -124,6 +124,7 @@ function getPromptRateState(widgetName: string): PromptRateState {
 /** Test-only: reset all persisted rate-limit budgets. */
 export function resetPromptRateStatesForTest(): void {
   promptRateStates.clear();
+  busRateStates.clear();
 }
 
 type BusRateState = { timestamps: number[] };
@@ -136,11 +137,6 @@ function getBusRateState(widgetName: string): BusRateState {
     busRateStates.set(widgetName, state);
   }
   return state;
-}
-
-/** Test-only: reset all persisted pub/sub rate-limit budgets. */
-export function resetBusRateStatesForTest(): void {
-  busRateStates.clear();
 }
 
 function isStrictJsonValue(root: unknown): boolean {

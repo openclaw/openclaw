@@ -2,10 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createWidgetBridge,
   isWellFormedInbound,
-  resetBusRateStatesForTest,
   resetPromptRateStatesForTest,
   type WidgetBridgeDeps,
-  type WidgetBusBridge,
   type WidgetErrorCode,
   type WidgetOutboundMessage,
 } from "./bridge.ts";
@@ -14,7 +12,6 @@ import type { WidgetManifestView } from "./types.ts";
 beforeEach(() => {
   // Rate-limit state is module-level (keyed by widget name); reset between tests.
   resetPromptRateStatesForTest();
-  resetBusRateStatesForTest();
 });
 
 function manifest(overrides?: Partial<WidgetManifestView>): WidgetManifestView {
@@ -245,7 +242,7 @@ describe("pub/sub capability + limits + cleanup", () => {
   function fakeBus() {
     const published: Array<{ channel: string; payload: unknown }> = [];
     const subscriptions = new Map<string, (channel: string, payload: unknown) => void>();
-    const bus: WidgetBusBridge = {
+    const bus: NonNullable<WidgetBridgeDeps["bus"]> = {
       publish: (channel, payload) => published.push({ channel, payload }),
       subscribe: (channel, deliver) => {
         subscriptions.set(channel, deliver);
