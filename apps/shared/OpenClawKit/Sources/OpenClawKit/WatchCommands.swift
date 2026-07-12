@@ -277,8 +277,8 @@ public struct OpenClawWatchChatCompletionMessage: Codable, Sendable, Equatable {
 }
 
 public enum OpenClawWatchChatStatusCode: String, Codable, Sendable, Equatable {
-    case connectIPhone = "connectIPhone"
-    case noMessages = "noMessages"
+    case connectIPhone
+    case noMessages
     case unavailable
 }
 
