@@ -58,16 +58,16 @@ function normalizeTrimmedStringRecord(value: unknown): Record<string, string> | 
   if (!isRecord(value)) {
     return undefined;
   }
+  // Drop invalid keys/values only; one bad entry must not erase the whole env map.
   const entries: Array<[string, string]> = [];
   for (const [rawKey, rawValue] of Object.entries(value)) {
     const key = normalizeOptionalString(rawKey);
-    const val = typeof rawValue === "string" ? rawValue : undefined;
-    if (!key || val === undefined) {
-      return undefined;
+    if (!key || typeof rawValue !== "string") {
+      continue;
     }
-    entries.push([key, val]);
+    entries.push([key, rawValue]);
   }
-  return Object.fromEntries(entries);
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 
 function normalizeCommandArgv(value: unknown): string[] | undefined {

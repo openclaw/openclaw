@@ -462,6 +462,43 @@ describe("normalizeCronJobCreate", () => {
     expect(validateCronAddParams(normalized)).toBe(true);
   });
 
+  it("keeps valid command env entries when a sibling value is non-string", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "command env filter",
+      schedule: { kind: "every", everyMs: 60_000 },
+      payload: {
+        kind: "command",
+        argv: ["sh", "-lc", "echo ok"],
+        env: { FOO: "bar", DEBUG: true, COUNT: 1 },
+      },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.payload).toMatchObject({
+      kind: "command",
+      env: { FOO: "bar" },
+    });
+    expect((normalized.payload as { env?: Record<string, string> }).env).toEqual({ FOO: "bar" });
+    expect(validateCronAddParams(normalized)).toBe(true);
+  });
+
+  it("drops command env when every entry is non-string", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "command env all invalid",
+      schedule: { kind: "every", everyMs: 60_000 },
+      payload: {
+        kind: "command",
+        argv: ["sh", "-lc", "echo ok"],
+        env: { DEBUG: true, COUNT: 1 },
+      },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.payload).toEqual({
+      kind: "command",
+      argv: ["sh", "-lc", "echo ok"],
+    });
+    expect(validateCronAddParams(normalized)).toBe(true);
+  });
+
   it("preserves command argv argument bytes", () => {
     const normalized = normalizeCronJobCreate({
       name: "command exact argv",
