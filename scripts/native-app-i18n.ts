@@ -87,14 +87,14 @@ const SOURCE_ROOTS: Record<NativeI18nSurface, string[]> = {
 
 const ANDROID_EXTENSIONS = new Set([".kt", ".kts"]);
 const APPLE_EXTENSIONS = new Set([".swift", ".plist"]);
-const NATIVE_FORMAT_RE = /%(?:\d+\$)?[@a-z]/giu;
+const NATIVE_FORMAT_RE = /%(?:%|(?:\d+\$)?[@a-z])/giu;
 const NATIVE_SOURCE_READ_CONCURRENCY = 32;
 const APPLE_UI_MULTILINE_CALLS =
   /(?:Text|Label|Button|TextField|SecureField|Picker|Section|LabeledContent|Toggle|Menu|ShareLink|Link|TextEditor|ProgressView|Gauge|DisclosureGroup|ControlGroup|DatePicker|Stepper)\s*\(\s*"""([\s\S]*?)"""/gu;
 const APPLE_LOCALIZED_STRING_CALLS =
-  /\b(?:String\s*\(\s*localized:|LocalizedString(?:Key|Resource)\s*\()\s*"((?:\\.|[^"\\])*)"/gu;
+  /(?:\bString\s*\(\s*localized:|\bAttributedString\s*\(\s*localized:|\bLocalizedString(?:Key|Resource)\s*\(|(?:\b[A-Za-z_]\w*)?\.localized(?:Format)?\s*\()\s*"((?:\\.|[^"\\])*)"/gu;
 const APPLE_LOCALIZED_STRING_MULTILINE_CALLS =
-  /\b(?:String\s*\(\s*localized:|LocalizedString(?:Key|Resource)\s*\()\s*"""([\s\S]*?)"""/gu;
+  /\b(?:String\s*\(\s*localized:|AttributedString\s*\(\s*localized:|LocalizedString(?:Key|Resource)\s*\()\s*"""([\s\S]*?)"""/gu;
 const APPLE_CALL_START = /\b([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*/gu;
 const APPLE_MODIFIER_CALLS =
   /\.(?:navigationTitle|accessibilityLabel|accessibilityHint|help|alert|confirmationDialog)\s*\(\s*"((?:\\.|[^"\\])*)"/gu;
@@ -129,6 +129,7 @@ const ANDROID_BUILTIN_UI_CALLS = new Set([
   "LazyRow",
   "nativeString",
   "nativeStringResource",
+  "nativeText",
   "OutlinedButton",
   "OutlinedTextField",
   "RadioButton",
@@ -148,7 +149,8 @@ const APPLE_SWITCH_BRANCH_START = /(?:\bcase\b[^:\n]+|\bdefault)\s*:\s*(?:return
 const ANDROID_STRING_FUNCTION =
   /\bfun\s+([A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)\s*:\s*String\s*(=|\{)/gu;
 const ANDROID_WHEN_BRANCH_START = /(?:[^\n{}]+|\belse)\s*->\s*/gu;
-const ANDROID_RESOURCE_STRINGS = /<string\b[^>]*>([\s\S]*?)<\/string>/gu;
+const ANDROID_RESOURCE_STRINGS = /<string\b([^>]*)>([\s\S]*?)<\/string>/gu;
+const ANDROID_RESOURCE_NAME = /\bname\s*=\s*"([^"]+)"/u;
 const ANDROID_RESOURCE_COLLECTIONS =
   /<(?:string-array|plurals)\b[^>]*>([\s\S]*?)<\/(?:string-array|plurals)>/gu;
 const ANDROID_RESOURCE_ITEMS = /<item\b[^>]*>([\s\S]*?)<\/item>/gu;
@@ -185,6 +187,7 @@ const APPLE_PLIST_STRINGS = /<string>([\s\S]*?)<\/string>/gu;
 const GENERATED_PATH_RE = /(?:^|[\\/])(?:build|\.gradle|\.build|DerivedData)(?:$|[\\/])/u;
 const EXCLUDED_PATH_RE = /(?:^|[\\/])(?:Tests?|UITests?|test|Preview(?:s)?)(?:$|[\\/])/u;
 const EXCLUDED_FILE_RE = /(?:Tests?|UITests?|Previews?|Testing)\.(?:swift|kt|kts)$/u;
+const GENERATED_FILE_RE = /(?:^|[\\/])NativeStringResources\.kt$/u;
 const BUILD_SETTING_RE = /\$\([A-Za-z0-9_.-]+\)/gu;
 const NATIVE_I18N_LOCALE_SET = new Set<string>(NATIVE_I18N_LOCALES);
 const ANDROID_LANGUAGE_PICKER_PATH =
@@ -1033,12 +1036,16 @@ export function extractNativeI18nCandidates(
   }
   if (surface === "android" && /\/res\/values\/[^/]+\.xml$/u.test(repoPath)) {
     for (const match of source.matchAll(ANDROID_RESOURCE_STRINGS)) {
-      if (match[1]) {
+      const resourceName = match[1]?.match(ANDROID_RESOURCE_NAME)?.[1];
+      if (resourceName?.startsWith("native_")) {
+        continue;
+      }
+      if (match[2]) {
         addCandidate(
           entries,
           surface,
           repoPath,
-          match[1],
+          match[2],
           "resource-string",
           lineNumber(source, match.index ?? 0),
         );
@@ -1104,7 +1111,8 @@ async function walkFiles(root: string, surface: NativeI18nSurface): Promise<stri
       const allowed = surface === "apple" ? APPLE_EXTENSIONS : ANDROID_EXTENSIONS;
       return entry.isFile() &&
         (allowed.has(extension) || isAndroidValuesXml) &&
-        !EXCLUDED_FILE_RE.test(entry.name)
+        !EXCLUDED_FILE_RE.test(entry.name) &&
+        !GENERATED_FILE_RE.test(fullPath)
         ? [fullPath]
         : [];
     }),
@@ -1542,14 +1550,17 @@ export async function syncNativeLocale(
     // The first refresh creates the locale artifact.
   }
   const previousById = new Map(previous.entries.map((entry) => [entry.id, entry]));
+  const reusableById = new Map(
+    entries.map((entry) => {
+      const exact = previousById.get(entry.id);
+      const translated =
+        exact?.source === entry.source && exact.translated.trim() ? exact.translated : undefined;
+      return [entry.id, translated] as const;
+    }),
+  );
   const glossaryChanged = previous.glossaryHash !== currentGlossaryHash;
   const pending = entries
-    .filter((entry) => {
-      const current = previousById.get(entry.id);
-      return (
-        glossaryChanged || !current || current.source !== entry.source || !current.translated.trim()
-      );
-    })
+    .filter((entry) => glossaryChanged || !reusableById.get(entry.id))
     .map((entry) => ({
       id: entry.id,
       source: entry.source,
@@ -1565,8 +1576,7 @@ export async function syncNativeLocale(
     entries: entries.map((entry) => ({
       id: entry.id,
       source: entry.source,
-      translated:
-        translated.get(entry.id) ?? previousById.get(entry.id)?.translated ?? entry.source,
+      translated: translated.get(entry.id) ?? reusableById.get(entry.id) ?? entry.source,
     })),
   };
   try {

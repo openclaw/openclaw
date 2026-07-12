@@ -554,6 +554,12 @@ function requireElement(container: Element, selector: string, label: string): El
   return element;
 }
 
+function createDragEvent(type: string, types = ["Files"]): Event {
+  const event = new Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "dataTransfer", { value: { types } });
+  return event;
+}
+
 function itemAt<T>(items: ArrayLike<T>, index: number, label: string): T {
   return expectDefined(items[index], `${label} ${index}`);
 }
@@ -3527,6 +3533,38 @@ describe("chat slash menu accessibility", () => {
 });
 
 describe("chat attachment picker", () => {
+  it("highlights only the chat pane receiving a file drag", () => {
+    const first = renderChatView();
+    const second = renderChatView();
+    const firstChat = requireElement(first, "section.card.chat", "first chat drop target");
+    const secondChat = requireElement(second, "section.card.chat", "second chat drop target");
+
+    secondChat.dispatchEvent(createDragEvent("dragenter"));
+
+    expect(firstChat.hasAttribute("data-attachment-drop-active")).toBe(false);
+    expect(secondChat.hasAttribute("data-attachment-drop-active")).toBe(true);
+
+    secondChat.dispatchEvent(createDragEvent("dragleave"));
+
+    expect(secondChat.hasAttribute("data-attachment-drop-active")).toBe(false);
+  });
+
+  it("keeps the file drop overlay stable across nested drag targets", () => {
+    const container = renderChatView();
+    const chat = requireElement(container, "section.card.chat", "chat drop target");
+
+    chat.dispatchEvent(createDragEvent("dragenter"));
+    chat.dispatchEvent(createDragEvent("dragenter"));
+    chat.dispatchEvent(createDragEvent("dragleave"));
+    expect(chat.hasAttribute("data-attachment-drop-active")).toBe(true);
+
+    chat.dispatchEvent(createDragEvent("dragleave"));
+    expect(chat.hasAttribute("data-attachment-drop-active")).toBe(false);
+
+    chat.dispatchEvent(createDragEvent("dragenter", ["application/x-openclaw-session"]));
+    expect(chat.hasAttribute("data-attachment-drop-active")).toBe(false);
+  });
+
   it("turns large pasted plain text into a compact attachment", async () => {
     const onAttachmentsChange = vi.fn();
     const container = renderChatView({
@@ -3557,7 +3595,9 @@ describe("chat attachment picker", () => {
       expect(attachments[0]?.fileName).toMatch(/^pasted-text-\d+\.txt$/u);
       expect(attachments[0]?.mimeType).toBe("text/plain");
       expect(attachments[0]?.sizeBytes).toBe(new Blob([pastedText]).size);
-      expect(getChatAttachmentDataUrl(attachments[0])).toMatch(/^data:text\/plain;base64,/u);
+      expect(
+        getChatAttachmentDataUrl(expectDefined(attachments[0], "attachments[0] test invariant")),
+      ).toMatch(/^data:text\/plain;base64,/u);
     });
   });
 
@@ -3701,7 +3741,9 @@ describe("chat attachment picker", () => {
         configurable: true,
         value: `data:application/pdf;base64,${btoa("%PDF-1.4\n")}`,
       });
-      readers[0].dispatchEvent(new ProgressEvent("load"));
+      expectDefined(readers[0], "readers[0] test invariant").dispatchEvent(
+        new ProgressEvent("load"),
+      );
 
       await vi.waitFor(() => expect(attachments).toHaveLength(2));
       expect(attachments.map((attachment) => attachment.fileName)).toEqual([
@@ -3845,16 +3887,22 @@ describe("chat attachment picker", () => {
     await vi.waitFor(() => {
       expect(onAttachmentsChange).toHaveBeenCalled();
     });
-    const [attachment] = requireFirstAttachmentsChange(onAttachmentsChange);
+    const attachment = expectDefined(
+      requireFirstAttachmentsChange(onAttachmentsChange)[0],
+      "pasted attachment",
+    );
     const onDraftChange = vi.fn();
     const onShowAttachmentsChange = vi.fn();
-    const preview = renderChatView({
-      attachments: [attachment],
-      draft: "intro",
-      getDraft: () => "intro",
-      onAttachmentsChange: onShowAttachmentsChange,
-      onDraftChange,
-    });
+    const preview = expectDefined(
+      renderChatView({
+        attachments: [attachment],
+        draft: "intro",
+        getDraft: () => "intro",
+        onAttachmentsChange: onShowAttachmentsChange,
+        onDraftChange,
+      }),
+      'renderChatView({ attachments: [attachment], draft: "intro", getDraft:... test invariant',
+    );
     const showButton = requireElement(
       preview,
       '[aria-label="Restore"]',
@@ -3865,7 +3913,9 @@ describe("chat attachment picker", () => {
 
     expect(onShowAttachmentsChange).toHaveBeenCalledWith([]);
     expect(onDraftChange).toHaveBeenCalledWith(`intro\n\n${pastedText}`);
-    expect(getChatAttachmentDataUrl(attachment)).toBeNull();
+    expect(
+      getChatAttachmentDataUrl(expectDefined(attachment, "attachment test invariant")),
+    ).toBeNull();
   });
 
   it("converts pasted data image text into an attachment", () => {

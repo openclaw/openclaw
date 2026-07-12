@@ -1,4 +1,5 @@
 // Signal tests cover event handler.mention gating plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { buildDispatchInboundCaptureMock } from "openclaw/plugin-sdk/channel-contract-testing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
@@ -42,10 +43,12 @@ const [
   { createBaseSignalEventHandlerDeps, createSignalReceiveEvent },
   { createSignalEventHandler },
   { renderSignalMentions },
+  { clearSignalReplyAuthorsForTest, resolveSignalReplyContextWithPersistence },
 ] = await Promise.all([
   import("./event-handler.test-harness.js"),
   import("./event-handler.js"),
   import("./mentions.js"),
+  import("../reply-authors.js"),
 ]);
 
 type GroupEventOpts = {
@@ -117,12 +120,13 @@ async function expectSkippedGroupHistory(opts: GroupEventOpts, expectedBody: str
   expect(capturedCtx).toBeUndefined();
   const entries = getGroupHistoryEntries(groupHistories);
   expect(entries).toHaveLength(1);
-  expect(entries[0].body).toBe(expectedBody);
+  expect(expectDefined(entries[0], "Signal group history entry").body).toBe(expectedBody);
 }
 
 describe("signal mention gating", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     capturedCtx = undefined;
+    await clearSignalReplyAuthorsForTest();
   });
 
   it("drops group messages without mention when requireMention is configured", async () => {
@@ -177,8 +181,37 @@ describe("signal mention gating", () => {
     expect(capturedCtx).toBeUndefined();
     const entries = getGroupHistoryEntries(groupHistories);
     expect(entries).toHaveLength(1);
-    expect(entries[0].sender).toBe("Alice");
-    expect(entries[0].body).toBe("hello from alice");
+    const entry = expectDefined(entries[0], "Signal group history entry");
+    expect(entry.sender).toBe("Alice");
+    expect(entry.body).toBe("hello from alice");
+  });
+
+  it("records edited target reply authors for skipped group messages", async () => {
+    const { handler } = createMentionGatedHistoryHandler();
+
+    await handler(
+      createSignalReceiveEvent({
+        timestamp: 1700000000999,
+        editMessage: {
+          targetSentTimestamp: 1700000000000,
+          dataMessage: {
+            timestamp: 1700000000999,
+            message: "edited without mention",
+            attachments: [],
+            groupInfo: { groupId: "g1", groupName: "Test Group" },
+          },
+        },
+      }),
+    );
+
+    expect(capturedCtx).toBeUndefined();
+    await expect(
+      resolveSignalReplyContextWithPersistence({
+        accountId: "default",
+        to: "group:g1",
+        replyToId: "1700000000000",
+      }),
+    ).resolves.toEqual({ author: "+15550001111", body: "edited without mention" });
   });
 
   it("records attachment placeholder in pending history for skipped attachment-only group messages", async () => {
@@ -209,7 +242,7 @@ describe("signal mention gating", () => {
     expect(capturedCtx).toBeUndefined();
     const entries = getGroupHistoryEntries(groupHistories);
     expect(entries).toHaveLength(1);
-    expect(entries[0].body).toBe("<media:audio>");
+    expect(expectDefined(entries[0], "Signal audio history entry").body).toBe("<media:audio>");
   });
 
   it("summarizes multiple skipped attachments with stable file count wording", async () => {
@@ -236,7 +269,9 @@ describe("signal mention gating", () => {
     expect(capturedCtx).toBeUndefined();
     const entries = getGroupHistoryEntries(groupHistories);
     expect(entries).toHaveLength(1);
-    expect(entries[0].body).toBe("[2 files attached]");
+    expect(expectDefined(entries[0], "Signal attachment history entry").body).toBe(
+      "[2 files attached]",
+    );
   });
 
   it("records quote text in pending history for skipped quote-only group messages", async () => {

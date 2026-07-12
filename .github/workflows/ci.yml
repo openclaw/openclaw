@@ -1208,7 +1208,7 @@ jobs:
           } else if (typeof smokePlan.createQaSmokeCiMatrix === "function") {
             // Legacy planners select the entire profile and can mix long-lived
             // execution kinds. Reuse the current bounded smoke contract and
-            // isolate each kind so frozen targets cannot pin a profile part.
+            // isolate each scenario so one invocation cannot pin a profile part.
             const compatibilityScenarioIds = new Set([
               "control-ui-chat-flow-playwright",
               "crestodian-ring-zero-setup",
@@ -1236,28 +1236,24 @@ jobs:
             const legacyRuns = smokePlan
               .createQaSmokeCiMatrix()
               .include.filter((_, index) => index % 2 === partIndex);
-            runs = legacyRuns.flatMap((run) => {
-              const scenarioIdsByKind = new Map();
-              for (const scenarioId of run.scenario_ids) {
+            runs = legacyRuns.flatMap((run) =>
+              run.scenario_ids.flatMap((scenarioId) => {
                 if (!compatibilityScenarioIds.has(scenarioId)) {
-                  continue;
+                  return [];
                 }
                 const kind = scenarioKindById.get(scenarioId);
                 if (!kind) {
                   throw new Error(`legacy QA smoke scenario not found: ${scenarioId}`);
                 }
-                const scenarioIds = scenarioIdsByKind.get(kind) ?? [];
-                scenarioIds.push(scenarioId);
-                scenarioIdsByKind.set(kind, scenarioIds);
-              }
-              return [...scenarioIdsByKind.entries()]
-                .toSorted(([left], [right]) => left.localeCompare(right))
-                .map(([kind, scenarioIds]) => ({
-                  ...run,
-                  slug: `${run.slug}-${kind}`,
-                  scenario_ids: scenarioIds,
-                }));
-            });
+                return [
+                  {
+                    ...run,
+                    slug: `${run.slug}-${kind}-${scenarioId}`,
+                    scenario_ids: [scenarioId],
+                  },
+                ];
+              }),
+            );
           } else {
             throw new Error("QA smoke plan does not expose a supported CI planner.");
           }

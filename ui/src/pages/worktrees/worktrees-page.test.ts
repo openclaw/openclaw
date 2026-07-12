@@ -16,6 +16,7 @@ type WorktreesPageTestElement = HTMLElement & {
   createBranches: string[];
   updateComplete: Promise<boolean>;
   requestUpdate: () => void;
+  load: () => Promise<void>;
   loadCreateBranches: () => void;
   createWorktree: () => Promise<void>;
   removeWorktree: (record: WorktreeRecord) => Promise<void>;
@@ -106,6 +107,56 @@ afterEach(() => {
 });
 
 describe("WorktreesPage lifecycle", () => {
+  it("serializes list refreshes and row mutations", async () => {
+    const record = worktree();
+    const removedRecord = {
+      ...record,
+      removedAt: 2,
+      snapshotRef: "refs/openclaw/worktree-snapshots/test",
+    };
+    const pendingList = deferred<{ worktrees: WorktreeRecord[] }>();
+    let listRequests = 0;
+    const request = vi.fn((method: string) => {
+      if (method === "worktrees.list") {
+        listRequests += 1;
+        if (listRequests === 1) {
+          return Promise.resolve({ worktrees: [record] });
+        }
+        return listRequests === 2
+          ? pendingList.promise
+          : Promise.resolve({ worktrees: [removedRecord] });
+      }
+      return Promise.resolve({ removed: true });
+    });
+    const page = document.createElement("openclaw-worktrees-page") as WorktreesPageTestElement;
+    page.context = contextWithGateway(
+      gatewayWithClient({ request } as unknown as GatewayBrowserClient),
+    );
+    document.body.append(page);
+    await vi.waitFor(() => expect(page.records).toEqual([record]));
+    await vi.waitFor(() => expect(page.loading).toBe(false));
+
+    const refreshing = page.load();
+    await vi.waitFor(() => expect(listRequests).toBe(2));
+    await page.updateComplete;
+
+    const deleteButton = page.querySelector<HTMLButtonElement>("button.danger");
+    expect(deleteButton?.disabled).toBe(true);
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    await page.removeWorktree(record);
+    expect(confirm).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalledWith("worktrees.remove", { id: record.id });
+
+    pendingList.resolve({ worktrees: [record] });
+    await refreshing;
+
+    await page.removeWorktree(record);
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledWith("worktrees.remove", { id: record.id });
+    expect(listRequests).toBe(3);
+    expect(page.records).toEqual([removedRecord]);
+  });
+
   it("clears stale records when a null-client gateway source is replaced", async () => {
     const page = document.createElement("openclaw-worktrees-page") as WorktreesPageTestElement;
     page.records = [
@@ -308,6 +359,39 @@ describe("WorktreesPage lifecycle", () => {
     page.loadCreateBranches();
 
     await vi.waitFor(() => expect(page.createBranches).toEqual(["main"]));
+    expect(page.createBaseRef).toBe("main");
+  });
+
+  it("ignores a stale branch failure after a newer request succeeds", async () => {
+    const firstBranches = deferred<unknown>();
+    let branchRequests = 0;
+    const request = vi.fn((method: string) => {
+      if (method === "worktrees.branches") {
+        branchRequests += 1;
+        return branchRequests === 1
+          ? firstBranches.promise
+          : Promise.resolve({ branches: [{ name: "main" }], headBranch: "main" });
+      }
+      return Promise.resolve({ worktrees: [] });
+    });
+    const page = document.createElement("openclaw-worktrees-page") as WorktreesPageTestElement;
+    page.context = contextWithGateway(
+      gatewayWithClient({ request } as unknown as GatewayBrowserClient),
+    );
+    page.createRepoRoot = "/tmp/repo";
+    document.body.append(page);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("worktrees.list", {}));
+
+    page.loadCreateBranches();
+    page.loadCreateBranches();
+    await vi.waitFor(() => expect(page.createBranches).toEqual(["main"]));
+    expect(page.createBaseRef).toBe("main");
+
+    firstBranches.reject(new Error("stale branch failure"));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(page.createBranches).toEqual(["main"]);
     expect(page.createBaseRef).toBe("main");
   });
 });

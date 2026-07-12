@@ -51,6 +51,7 @@ class WorktreesPage extends OpenClawLightDomElement {
   private gatewaySource?: ApplicationContext["gateway"];
   private hasBoundGateway = false;
   private loadGeneration = 0;
+  private branchesGeneration = 0;
   private operationEpoch = 0;
   private readonly subscriptions = new SubscriptionsController(this).effect(
     () => this.context?.gateway,
@@ -137,9 +138,15 @@ class WorktreesPage extends OpenClawLightDomElement {
     );
   }
 
+  // Reads and writes share one page-level lane. Otherwise a stale list can
+  // overwrite a completed mutation, while busyId can only represent one row.
+  private get operationPending(): boolean {
+    return this.loading || this.busyId !== null || this.creating;
+  }
+
   private async load() {
     const client = this.client;
-    if (!client || !this.gatewayConnected || this.loading) {
+    if (!client || !this.gatewayConnected || this.operationPending) {
       return;
     }
     const generation = ++this.loadGeneration;
@@ -163,7 +170,11 @@ class WorktreesPage extends OpenClawLightDomElement {
 
   private async removeWorktree(record: WorktreeRecord) {
     const scope = this.captureOperationScope();
-    if (!scope || !window.confirm(t("worktrees.confirmDelete", { name: record.name }))) {
+    if (
+      !scope ||
+      this.operationPending ||
+      !window.confirm(t("worktrees.confirmDelete", { name: record.name }))
+    ) {
       return;
     }
     // Both attempts belong to one Gateway epoch. A force retry must never jump
@@ -208,7 +219,7 @@ class WorktreesPage extends OpenClawLightDomElement {
 
   private async restore(record: WorktreeRecord) {
     const scope = this.captureOperationScope();
-    if (!scope) {
+    if (!scope || this.operationPending) {
       return;
     }
     this.busyId = record.id;
@@ -229,7 +240,7 @@ class WorktreesPage extends OpenClawLightDomElement {
 
   private async gc() {
     const scope = this.captureOperationScope();
-    if (!scope) {
+    if (!scope || this.operationPending) {
       return;
     }
     this.loading = true;
@@ -259,6 +270,7 @@ class WorktreesPage extends OpenClawLightDomElement {
   }
 
   private loadCreateBranches() {
+    const generation = ++this.branchesGeneration;
     const scope = this.captureOperationScope();
     const repoRoot = this.createRepoRoot.trim();
     if (!scope || !repoRoot) {
@@ -268,7 +280,8 @@ class WorktreesPage extends OpenClawLightDomElement {
     void scope.client
       .request<WorktreeBranchesResult>("worktrees.branches", { repoRoot })
       .then((result) => {
-        if (this.isOperationScopeCurrent(scope) && repoRoot === this.createRepoRoot.trim()) {
+        // Only the latest picker request owns branch state, including after same-path retries.
+        if (generation === this.branchesGeneration && this.isOperationScopeCurrent(scope)) {
           this.createBranches = result.branches.map((branch) => branch.name);
           if (!this.createBaseRef) {
             this.createBaseRef = result.defaultBranch ?? result.headBranch ?? "";
@@ -276,7 +289,7 @@ class WorktreesPage extends OpenClawLightDomElement {
         }
       })
       .catch(() => {
-        if (this.isOperationScopeCurrent(scope)) {
+        if (generation === this.branchesGeneration && this.isOperationScopeCurrent(scope)) {
           this.createBranches = [];
         }
       });
@@ -285,7 +298,7 @@ class WorktreesPage extends OpenClawLightDomElement {
   private async createWorktree() {
     const scope = this.captureOperationScope();
     const repoRoot = this.createRepoRoot.trim();
-    if (!scope || !repoRoot || this.creating) {
+    if (!scope || !repoRoot || this.operationPending) {
       return;
     }
     this.creating = true;
@@ -368,7 +381,7 @@ class WorktreesPage extends OpenClawLightDomElement {
         </label>
         <button
           class="btn btn--sm"
-          ?disabled=${this.creating || !this.createRepoRoot.trim()}
+          ?disabled=${this.operationPending || !this.createRepoRoot.trim()}
           @click=${() => void this.createWorktree()}
         >
           ${this.creating ? t("common.loading") : t("common.create")}
@@ -389,7 +402,7 @@ class WorktreesPage extends OpenClawLightDomElement {
             <button class="btn" @click=${() => this.toggleCreate()}>
               ${t("worktrees.newWorktree")}
             </button>
-            <button class="btn" ?disabled=${this.loading} @click=${() => void this.gc()}>
+            <button class="btn" ?disabled=${this.operationPending} @click=${() => void this.gc()}>
               ${this.loading ? t("common.loading") : t("worktrees.cleanNow")}
             </button>
           </div>
@@ -423,14 +436,14 @@ class WorktreesPage extends OpenClawLightDomElement {
                       ${record.removedAt
                         ? html`<button
                             class="btn btn--sm"
-                            ?disabled=${this.busyId === record.id}
+                            ?disabled=${this.operationPending}
                             @click=${() => void this.restore(record)}
                           >
                             ${t("worktrees.restore")}
                           </button>`
                         : html`<button
                             class="btn btn--sm danger"
-                            ?disabled=${this.busyId === record.id}
+                            ?disabled=${this.operationPending}
                             @click=${() => void this.removeWorktree(record)}
                           >
                             ${t("common.delete")}

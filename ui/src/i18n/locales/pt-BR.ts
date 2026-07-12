@@ -3028,6 +3028,8 @@ export const pt_BR: TranslationMap = {
     },
     pullRequests: {
       linkLabel: "Pull request nº {number}: {title}",
+      createPr: "Criar PR",
+      createPrLabel: "Criar uma pull request para {branch}",
       dismiss: "Dispensar pull request nº {number}",
       open: "Aberto",
       draft: "Rascunho",
