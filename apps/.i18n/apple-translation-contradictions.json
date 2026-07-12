@@ -2567,11 +2567,27 @@
       ]
     },
     {
+      "locale": "ar",
+      "source": "Enabled",
+      "translations": [
+        "مفعّل",
+        "مُمكّن"
+      ]
+    },
+    {
       "locale": "es",
       "source": "Enabled",
       "translations": [
         "Activado",
         "Habilitado"
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "Enabled",
+      "translations": [
+        "चालू",
+        "सक्षम"
       ]
     },
     {
@@ -2583,11 +2599,35 @@
       ]
     },
     {
+      "locale": "pl",
+      "source": "Enabled",
+      "translations": [
+        "Włączone",
+        "Włączono"
+      ]
+    },
+    {
       "locale": "pt-BR",
       "source": "Enabled",
       "translations": [
         "Ativado",
         "Habilitado"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Enabled",
+      "translations": [
+        "Aktiverad",
+        "Aktiverat"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Enabled",
+      "translations": [
+        "เปิดใช้งานแล้ว",
+        "เปิดใช้แล้ว"
       ]
     },
     {
