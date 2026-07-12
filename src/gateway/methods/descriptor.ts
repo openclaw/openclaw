@@ -49,6 +49,7 @@ export type GatewayMethodRegistryView = {
   listMethods: () => string[];
   listAdvertisedMethods: () => string[];
   getScope: (name: string) => GatewayMethodScope | undefined;
+  getOwner: (name: string) => GatewayMethodOwner | undefined;
   getAccessPolicy: (name: string) => GatewayMethodAccessPolicy | undefined;
   isStartupUnavailable: (name: string) => boolean;
   isControlPlaneWrite: (name: string) => boolean;

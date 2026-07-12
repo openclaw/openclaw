@@ -12,7 +12,10 @@ import {
   isGatewayRestartDraining,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
-import { getGatewayClientAuthorizationDomain } from "./authorization/client-domain.js";
+import {
+  getGatewayClientAuthorizationDelegation,
+  getGatewayClientAuthorizationDomain,
+} from "./authorization/client-domain.js";
 import { authorizeGatewayAccess } from "./authorization/kernel.js";
 import { withGatewayAuthorizationContext } from "./authorization/request-context.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "./control-plane-audit.js";
@@ -866,6 +869,7 @@ export async function handleGatewayRequest(
     policy: methodRegistry.getAccessPolicy(req.method),
     principal: client?.principal,
     domain: getGatewayClientAuthorizationDomain(client),
+    delegation: getGatewayClientAuthorizationDelegation(client),
     method: req.method,
     params: req.params,
     getConfig: context.getRuntimeConfig,
@@ -981,8 +985,16 @@ export async function handleGatewayRequest(
   // subagent methods (e.g. context engine tools spawning sub-agents
   // during tool execution) can dispatch back into the gateway.
   // The scope also carries caller identity into plugin-owned gateway methods.
+  const methodOwner = methodRegistry.getOwner(req.method);
+  const requestAuthorizationContext = access.security
+    ? Object.freeze({
+        ...access.security,
+        requestId: req.id,
+        ...(methodOwner?.kind === "plugin" ? { pluginId: methodOwner.pluginId } : {}),
+      })
+    : undefined;
   const invokeWithRequestScope = async () =>
-    await withGatewayAuthorizationContext(access.security, () =>
+    await withGatewayAuthorizationContext(requestAuthorizationContext, () =>
       withPluginRuntimeGatewayRequestScope({ context, client, isWebchatConnect }, invokeHandler),
     );
   if (!rootWorkAdmission) {

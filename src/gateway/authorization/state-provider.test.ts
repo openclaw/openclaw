@@ -6,6 +6,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import type { GatewayAuthorizationRequest, GatewayResourceRef } from "./contracts.js";
+import { createAuthorizationDelegation, revokeAuthorizationDelegation } from "./delegations.js";
 import { createStateGatewayAuthorizationRuntime } from "./state-provider.js";
 import {
   addIsolationDomainMember,
@@ -28,6 +29,10 @@ const member = {
 const recipient = {
   id: "principal-recipient",
   principal: { issuer: "trusted-proxy", subject: "recipient@example.com", kind: "human" },
+} as const;
+const agent = {
+  id: "principal-agent",
+  principal: { issuer: "core", subject: "agent:main", kind: "service" },
 } as const;
 const workspace: GatewayResourceRef = {
   namespace: "workspaces",
@@ -81,6 +86,73 @@ afterAll(() => {
 });
 
 describe("state-backed gateway authorization", () => {
+  it("requires and returns the exact active delegation for a service principal", async () => {
+    const database = createDatabase();
+    const domainId = seedDomain({ database, resource: workspace });
+    putAuthorizationPrincipal({ ...agent, database });
+    addIsolationDomainMember({
+      domainId,
+      principalId: agent.id,
+      addedByPrincipalId: owner.id,
+      database,
+    });
+    createAuthorizationDelegation({
+      id: "delegation-1",
+      assignmentId: "assignment-1",
+      domainId,
+      agentPrincipalId: agent.id,
+      sponsorPrincipalId: owner.id,
+      createdByPrincipalId: owner.id,
+      database,
+    });
+    grantAuthorizationPermission({
+      domainId,
+      principalId: agent.id,
+      resource: workspace,
+      permission: "workspaces.workspace.read",
+      grantedByPrincipalId: owner.id,
+      database,
+    });
+    const request = {
+      principal: agent.principal,
+      delegation: { id: "delegation-1", assignmentId: "assignment-1" },
+      method: "workspaces.get",
+      permission: "workspaces.workspace.read",
+      resources: [workspace],
+    } as const;
+
+    await expect(isolatedAuthorize(database)(request)).resolves.toEqual({
+      allowed: true,
+      principalId: agent.id,
+      domain: { id: domainId },
+      delegation: {
+        id: "delegation-1",
+        assignmentId: "assignment-1",
+        sponsorPrincipalId: owner.id,
+      },
+    });
+    await expect(
+      isolatedAuthorize(database)({ ...request, delegation: undefined }),
+    ).resolves.toEqual({ allowed: false, reason: "forbidden" });
+    await expect(
+      isolatedAuthorize(database)({
+        ...request,
+        delegation: { id: "delegation-1", assignmentId: "wrong-assignment" },
+      }),
+    ).resolves.toEqual({ allowed: false, reason: "forbidden" });
+
+    revokeAuthorizationDelegation({
+      domainId,
+      delegationId: "delegation-1",
+      revokedByPrincipalId: owner.id,
+      database,
+    });
+    await expect(isolatedAuthorize(database)(request)).resolves.toEqual({
+      allowed: false,
+      reason: "forbidden",
+    });
+  });
+
   it("rejects an unmapped server-issued principal", async () => {
     const database = createDatabase();
     seedDomain({ database, resource: workspace });

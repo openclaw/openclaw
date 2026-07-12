@@ -25,6 +25,7 @@ import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretRef } from "../config/types.secrets.js";
+import type { GatewayMethodAccessPolicy } from "../gateway/authorization/contracts.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hook-types.js";
@@ -145,6 +146,7 @@ import type {
 } from "./provider-thinking.types.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type { SessionCatalogProvider } from "./session-catalog.js";
+import type { OpenClawPluginTeamsApi } from "./teams-types.js";
 import type {
   OpenClawPluginHookOptions,
   OpenClawPluginToolFactory,
@@ -173,6 +175,11 @@ export type {
   OpenClawPluginToolOptions,
 } from "./tool-types.js";
 export type { AnyAgentTool } from "../agents/tools/common.js";
+export type {
+  OpenClawPluginTeamsApi,
+  OpenClawPluginTeamsRequestContext,
+  OpenClawPluginTeamsResourceRef,
+} from "./teams-types.js";
 export type { AgentHarness } from "../agents/harness/types.js";
 export type {
   AgentToolResultMiddleware,
@@ -2744,6 +2751,12 @@ export type OpenClawPluginLifecycleApi = {
   registerRuntimeLifecycle: (lifecycle: PluginRuntimeLifecycleRegistration) => void;
 };
 
+/** Resource policy declared by a plugin method; plugins cannot mark methods core-public. */
+export type OpenClawPluginGatewayMethodAccessPolicy = Extract<
+  GatewayMethodAccessPolicy,
+  { kind: "resource" }
+>;
+
 /** Main registration API injected into native plugin entry files. */
 export type OpenClawPluginApi = {
   id: string;
@@ -2774,6 +2787,8 @@ export type OpenClawPluginApi = {
   runContext: OpenClawPluginRunContextApi;
   /** Grouped facade for plugin-owned lifecycle cleanup hooks. */
   lifecycle: OpenClawPluginLifecycleApi;
+  /** Host-bound multi-tenant identity and resource capabilities. */
+  teams: OpenClawPluginTeamsApi;
   registerTool: (
     tool: AnyAgentTool | OpenClawPluginToolFactory,
     opts?: OpenClawPluginToolOptions,
@@ -2798,7 +2813,7 @@ export type OpenClawPluginApi = {
   registerGatewayMethod: (
     method: string,
     handler: GatewayRequestHandler,
-    opts?: { scope?: OperatorScope },
+    opts?: { scope?: OperatorScope; access?: OpenClawPluginGatewayMethodAccessPolicy },
   ) => void;
   /** Register a read-only external-session catalog with optional native adoption actions. */
   registerSessionCatalog: (provider: SessionCatalogProvider) => void;

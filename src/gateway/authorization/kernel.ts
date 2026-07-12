@@ -45,6 +45,7 @@ export async function authorizeGatewayAccess(_input: {
   policy?: GatewayMethodAccessPolicy;
   principal?: GatewayPrincipal;
   domain?: IsolationDomainRef;
+  delegation?: { id: string; assignmentId: string };
   method: string;
   params: unknown;
   getConfig: () => OpenClawConfig;
@@ -92,34 +93,83 @@ export async function authorizeGatewayAccess(_input: {
     return { allowed: false, reason: "unbound-resource" };
   }
 
+  // Plugin policy objects are mutable JavaScript. Snapshot the exact proof before
+  // awaiting the provider so the decision and request context cannot diverge.
+  const permission = _input.policy.permission;
+  const delegation = _input.delegation
+    ? Object.freeze({
+        id: _input.delegation.id,
+        assignmentId: _input.delegation.assignmentId,
+      })
+    : undefined;
+  if (
+    delegation &&
+    (!isNonEmptyString(delegation.id) || !isNonEmptyString(delegation.assignmentId))
+  ) {
+    return { allowed: false, reason: "indeterminate" };
+  }
+  const authorizedResources = Object.freeze(
+    resources.map((resource) =>
+      Object.freeze({
+        namespace: resource.namespace,
+        type: resource.type,
+        id: resource.id,
+      }),
+    ),
+  );
+
   try {
     const decision = await _input.runtime.authorize({
       principal: _input.principal,
       domain: _input.domain,
+      ...(delegation ? { delegation } : {}),
       method: _input.method,
-      permission: _input.policy.permission,
-      resources,
+      permission,
+      resources: authorizedResources,
     });
-    if (decision.allowed === false) {
-      return isGatewayRbacDenialReason(decision.reason)
-        ? decision
+    const allowed = (decision as { allowed?: unknown }).allowed;
+    if (allowed === false) {
+      const denied = decision as Extract<typeof decision, { allowed: false }>;
+      return isGatewayRbacDenialReason(denied.reason)
+        ? denied
         : { allowed: false, reason: "indeterminate" };
     }
-    if (decision.allowed !== true) {
+    if (allowed !== true) {
       return { allowed: false, reason: "indeterminate" };
     }
+    const allowedDecision = decision as Extract<typeof decision, { allowed: true }>;
     if (
-      !isNonEmptyString(decision.principalId) ||
-      !isNonEmptyString(decision.domain.id) ||
-      decision.domain.id !== _input.domain.id
+      !isNonEmptyString(allowedDecision.principalId) ||
+      !isNonEmptyString(allowedDecision.domain.id) ||
+      allowedDecision.domain.id !== _input.domain.id
     ) {
+      return { allowed: false, reason: "indeterminate" };
+    }
+    if (_input.principal.kind === "service") {
+      if (
+        !delegation ||
+        !allowedDecision.delegation ||
+        allowedDecision.delegation.id !== delegation.id ||
+        allowedDecision.delegation.assignmentId !== delegation.assignmentId ||
+        !isNonEmptyString(allowedDecision.delegation.sponsorPrincipalId)
+      ) {
+        return { allowed: false, reason: "indeterminate" };
+      }
+    } else if (allowedDecision.delegation) {
       return { allowed: false, reason: "indeterminate" };
     }
     return {
       allowed: true,
       security: Object.freeze({
-        principalId: decision.principalId,
-        domain: Object.freeze({ id: decision.domain.id }),
+        principalId: allowedDecision.principalId,
+        principalKind: _input.principal.kind,
+        domain: Object.freeze({ id: allowedDecision.domain.id }),
+        method: _input.method,
+        permission,
+        resources: authorizedResources,
+        ...(allowedDecision.delegation
+          ? { delegation: Object.freeze({ ...allowedDecision.delegation }) }
+          : {}),
       }),
     };
   } catch {

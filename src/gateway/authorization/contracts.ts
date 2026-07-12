@@ -3,9 +3,24 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 export type IsolationDomainRef = Readonly<{ id: string }>;
 
+export type GatewayDelegationRef = Readonly<{
+  id: string;
+  assignmentId: string;
+}>;
+
+export type GatewayValidatedDelegation = GatewayDelegationRef &
+  Readonly<{ sponsorPrincipalId: string }>;
+
 export type GatewayAuthorizationContext = Readonly<{
   principalId: string;
+  principalKind: GatewayPrincipal["kind"];
   domain: IsolationDomainRef;
+  method: string;
+  permission: string;
+  resources: readonly GatewayResourceRef[];
+  pluginId?: string;
+  requestId?: string;
+  delegation?: GatewayValidatedDelegation;
 }>;
 
 export type GatewayResourceRef = Readonly<{
@@ -33,6 +48,7 @@ export type GatewayMethodAccessPolicy =
 export type GatewayAuthorizationRequest = Readonly<{
   principal: GatewayPrincipal;
   domain: IsolationDomainRef;
+  delegation?: GatewayDelegationRef;
   method: string;
   permission: string;
   resources: readonly GatewayResourceRef[];
@@ -50,6 +66,7 @@ export type GatewayRbacDecision =
       allowed: true;
       principalId: string;
       domain: IsolationDomainRef;
+      delegation?: GatewayValidatedDelegation;
     }>
   | Readonly<{
       allowed: false;
