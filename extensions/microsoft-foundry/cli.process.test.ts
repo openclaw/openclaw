@@ -1,9 +1,9 @@
 // Microsoft Foundry tests cover real local az substitute process behavior.
 import type { ChildProcess } from "node:child_process";
 import { once } from "node:events";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const spawnedChildren = vi.hoisted(() => [] as ChildProcess[]);
@@ -23,17 +23,11 @@ vi.mock("node:child_process", async () => {
 import { azLoginDeviceCodeWithOptions } from "./cli.js";
 
 const originalPath = process.env.PATH;
-const tempDirs: string[] = [];
 
-function makeTempDir(prefix: string): string {
-  // openclaw-temp-dir: allow extension proof tests cannot import root test helpers.
-  const dir = mkdtempSync(path.join(tmpdir(), prefix));
-  tempDirs.push(dir);
-  return dir;
-}
-
-function installFakeAzExecutable(options?: { ignoreSigterm?: boolean; pidFile?: string }): void {
-  const binDir = makeTempDir("openclaw-foundry-az-");
+function installFakeAzExecutable(
+  binDir: string,
+  options?: { ignoreSigterm?: boolean; pidFile?: string },
+): void {
   const scriptPath = path.join(binDir, "fake-az.mjs");
   const sigtermHandler = options?.ignoreSigterm
     ? "process.on('SIGTERM', () => {});"
@@ -126,9 +120,6 @@ afterEach(() => {
     }
   }
   spawnedChildren.splice(0);
-  for (const dir of tempDirs.splice(0)) {
-    rmSync(dir, { force: true, recursive: true });
-  }
   vi.restoreAllMocks();
 });
 
@@ -136,88 +127,92 @@ describe.skipIf(process.platform === "win32")(
   "azLoginDeviceCodeWithOptions real process stream errors",
   () => {
     it("waits for a real spawned az substitute to close after a forced stdout stream error", async () => {
-      installFakeAzExecutable();
-      const loginPromise = azLoginDeviceCodeWithOptions({
-        tenantId: "tenant-1",
-        allowNoSubscriptions: true,
-      });
-      const child = requireSpawnedChild();
-      await waitForChildReady(child);
-      const childPid = child.pid;
-      expect(childPid).toEqual(expect.any(Number));
-      const killSpy = spyProcessKillThrough();
-      let closeSeen = false;
-      let settledBeforeClose = false;
-      child.on("close", () => {
-        closeSeen = true;
-      });
-      loginPromise.catch(() => {
-        if (!closeSeen) {
-          settledBeforeClose = true;
-        }
-      });
+      await withTempDir("openclaw-foundry-az-", async (binDir) => {
+        installFakeAzExecutable(binDir);
+        const loginPromise = azLoginDeviceCodeWithOptions({
+          tenantId: "tenant-1",
+          allowNoSubscriptions: true,
+        });
+        const child = requireSpawnedChild();
+        await waitForChildReady(child);
+        const childPid = child.pid;
+        expect(childPid).toEqual(expect.any(Number));
+        const killSpy = spyProcessKillThrough();
+        let closeSeen = false;
+        let settledBeforeClose = false;
+        child.on("close", () => {
+          closeSeen = true;
+        });
+        loginPromise.catch(() => {
+          if (!closeSeen) {
+            settledBeforeClose = true;
+          }
+        });
 
-      child.stdout?.destroy(new Error("EPIPE from real child stdout"));
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      child.stderr?.destroy(new Error("duplicate stderr EPIPE"));
+        child.stdout?.destroy(new Error("EPIPE from real child stdout"));
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        child.stderr?.destroy(new Error("duplicate stderr EPIPE"));
 
-      await expect(loginPromise).rejects.toThrow(
-        "az login stdout stream failed: EPIPE from real child stdout",
-      );
-      expect(closeSeen).toBe(true);
-      expect(settledBeforeClose).toBe(false);
-      expect(
-        killSpy.mock.calls.filter(([pid, signal]) => pid === -childPid! && signal === "SIGTERM"),
-      ).toHaveLength(1);
-      console.info(
-        `[proof] local az substitute pid=${
-          child.pid ?? "unknown"
-        } forced stdout stream error contained; close observed before rejection`,
-      );
+        await expect(loginPromise).rejects.toThrow(
+          "az login stdout stream failed: EPIPE from real child stdout",
+        );
+        expect(closeSeen).toBe(true);
+        expect(settledBeforeClose).toBe(false);
+        expect(
+          killSpy.mock.calls.filter(([pid, signal]) => pid === -childPid! && signal === "SIGTERM"),
+        ).toHaveLength(1);
+        console.info(
+          `[proof] local az substitute pid=${
+            child.pid ?? "unknown"
+          } forced stdout stream error contained; close observed before rejection`,
+        );
+      });
     });
 
     it("escalates when the real spawned az substitute ignores stream-error SIGTERM", async () => {
-      installFakeAzExecutable({ ignoreSigterm: true });
-      const loginPromise = azLoginDeviceCodeWithOptions({
-        tenantId: "tenant-1",
-        allowNoSubscriptions: true,
-      });
-      const child = requireSpawnedChild();
-      await waitForChildReady(child);
-      const childPid = child.pid;
-      expect(childPid).toEqual(expect.any(Number));
-      const killSpy = spyProcessKillThrough();
-      let closeSeen = false;
-      let settledBeforeClose = false;
-      child.on("close", () => {
-        closeSeen = true;
-      });
-      loginPromise.catch(() => {
-        if (!closeSeen) {
-          settledBeforeClose = true;
-        }
-      });
+      await withTempDir("openclaw-foundry-az-", async (binDir) => {
+        installFakeAzExecutable(binDir, { ignoreSigterm: true });
+        const loginPromise = azLoginDeviceCodeWithOptions({
+          tenantId: "tenant-1",
+          allowNoSubscriptions: true,
+        });
+        const child = requireSpawnedChild();
+        await waitForChildReady(child);
+        const childPid = child.pid;
+        expect(childPid).toEqual(expect.any(Number));
+        const killSpy = spyProcessKillThrough();
+        let closeSeen = false;
+        let settledBeforeClose = false;
+        child.on("close", () => {
+          closeSeen = true;
+        });
+        loginPromise.catch(() => {
+          if (!closeSeen) {
+            settledBeforeClose = true;
+          }
+        });
 
-      child.stdout?.destroy(new Error("EPIPE from stubborn child stdout"));
+        child.stdout?.destroy(new Error("EPIPE from stubborn child stdout"));
 
-      await expect(loginPromise).rejects.toThrow(
-        "az login stdout stream failed: EPIPE from stubborn child stdout",
-      );
-      expect(closeSeen).toBe(true);
-      expect(settledBeforeClose).toBe(false);
-      expect(
-        killSpy.mock.calls.filter(([pid, signal]) => pid === -childPid! && signal === "SIGTERM"),
-      ).toHaveLength(1);
-      expect(
-        killSpy.mock.calls.filter(([pid, signal]) => pid === -childPid! && signal === "SIGKILL"),
-      ).toHaveLength(1);
-      console.info(
-        `[proof] local az substitute pid=${
-          child.pid ?? "unknown"
-        } ignored SIGTERM; SIGKILL escalation closed child before rejection`,
-      );
+        await expect(loginPromise).rejects.toThrow(
+          "az login stdout stream failed: EPIPE from stubborn child stdout",
+        );
+        expect(closeSeen).toBe(true);
+        expect(settledBeforeClose).toBe(false);
+        expect(
+          killSpy.mock.calls.filter(([pid, signal]) => pid === -childPid! && signal === "SIGTERM"),
+        ).toHaveLength(1);
+        expect(
+          killSpy.mock.calls.filter(([pid, signal]) => pid === -childPid! && signal === "SIGKILL"),
+        ).toHaveLength(1);
+        console.info(
+          `[proof] local az substitute pid=${
+            child.pid ?? "unknown"
+          } ignored SIGTERM; SIGKILL escalation closed child before rejection`,
+        );
+      });
     });
   },
 );
@@ -226,33 +221,35 @@ describe.skipIf(process.platform !== "win32")(
   "azLoginDeviceCodeWithOptions Windows shell-wrapper stream errors",
   () => {
     it("waits for the shell-launched az descendant to exit before rejection", async () => {
-      const pidFile = path.join(makeTempDir("openclaw-foundry-az-pid-"), "pid");
-      installFakeAzExecutable({ ignoreSigterm: true, pidFile });
-      const loginPromise = azLoginDeviceCodeWithOptions({
-        tenantId: "tenant-1",
-        allowNoSubscriptions: true,
-      });
-      const child = requireSpawnedChild();
-      await waitForChildReady(child);
-      const descendantPid = Number(readFileSync(pidFile, "utf8"));
-      if (!Number.isInteger(descendantPid) || descendantPid <= 0) {
-        throw new Error(
-          `Expected a valid fake az descendant pid, received ${String(descendantPid)}`,
+      await withTempDir("openclaw-foundry-az-", async (binDir) => {
+        const pidFile = path.join(binDir, "pid");
+        installFakeAzExecutable(binDir, { ignoreSigterm: true, pidFile });
+        const loginPromise = azLoginDeviceCodeWithOptions({
+          tenantId: "tenant-1",
+          allowNoSubscriptions: true,
+        });
+        const child = requireSpawnedChild();
+        await waitForChildReady(child);
+        const descendantPid = Number(readFileSync(pidFile, "utf8"));
+        if (!Number.isInteger(descendantPid) || descendantPid <= 0) {
+          throw new Error(
+            `Expected a valid fake az descendant pid, received ${String(descendantPid)}`,
+          );
+        }
+
+        child.stdout?.destroy(new Error("EPIPE from Windows shell wrapper stdout"));
+
+        await expect(loginPromise).rejects.toThrow(
+          "az login stdout stream failed: EPIPE from Windows shell wrapper stdout",
         );
-      }
-
-      child.stdout?.destroy(new Error("EPIPE from Windows shell wrapper stdout"));
-
-      await expect(loginPromise).rejects.toThrow(
-        "az login stdout stream failed: EPIPE from Windows shell wrapper stdout",
-      );
-      await waitForProcessExit(descendantPid);
-      expect(isProcessAlive(descendantPid)).toBe(false);
-      console.info(
-        `[proof] Windows shell wrapper pid=${
-          child.pid ?? "unknown"
-        } descendant pid=${descendantPid} exited before stream-error rejection`,
-      );
+        await waitForProcessExit(descendantPid);
+        expect(isProcessAlive(descendantPid)).toBe(false);
+        console.info(
+          `[proof] Windows shell wrapper pid=${
+            child.pid ?? "unknown"
+          } descendant pid=${descendantPid} exited before stream-error rejection`,
+        );
+      });
     });
   },
 );
