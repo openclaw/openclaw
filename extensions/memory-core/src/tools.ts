@@ -51,6 +51,9 @@ type ActiveMemoryManagerContext = Extract<MemoryManagerContext, { manager: unkno
 type QmdRuntimeDebug = NonNullable<MemorySearchRuntimeDebug["qmd"]>;
 
 const MEMORY_SEARCH_TOOL_TIMEOUT_MS = 15_000;
+// Soft-abort before the hard deadline so abort-aware supplement/wiki I/O can
+// return partial results and win the race instead of the stable timeout error.
+const MEMORY_SEARCH_DEADLINE_PARTIAL_BUDGET_MS = 1_000;
 const MEMORY_SEARCH_TOOL_COOLDOWN_MS = 60_000;
 
 const memorySearchToolCooldowns = new Map<string, { until: number; error: string }>();
@@ -133,38 +136,64 @@ async function runMemorySearchToolWithDeadline<T>(params: {
 }): Promise<{ status: "ok"; value: T } | { status: "unavailable"; error: string }> {
   const timeoutError = () =>
     new Error(`memory_search timed out after ${Math.round(params.timeoutMs / 1000)}s`);
-  // Abort the losing task when the deadline fires so in-flight embedding work
-  // is cancelled instead of retrying orphaned for minutes after the tool
-  // already returned "timed out" to the agent.
+  // Soft-abort leaves a short budget for abort-aware wiki/supplement work to
+  // settle partial results before the hard timeout commits. Hard timeout still
+  // wins for non-cooperative hung work; abort rejections keep the stable
+  // timeout message instead of provider-wrapped abort noise.
   const controller = new AbortController();
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeoutPromise = new Promise<"timeout">((resolve) => {
-    timer = setTimeout(() => {
-      // Resolve before aborting: abort listeners run synchronously and an
-      // abort-aware search could reject the task first, replacing the stable
-      // timeout result with a provider-wrapped abort error.
-      resolve("timeout");
+  const softMs = Math.max(0, params.timeoutMs - MEMORY_SEARCH_DEADLINE_PARTIAL_BUDGET_MS);
+  const softTimer = setTimeout(() => {
+    if (!controller.signal.aborted) {
       controller.abort(timeoutError());
+    }
+  }, softMs);
+  softTimer.unref?.();
+  let hardTimer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<"timeout">((resolve) => {
+    hardTimer = setTimeout(() => {
+      if (!controller.signal.aborted) {
+        controller.abort(timeoutError());
+      }
+      resolve("timeout");
     }, params.timeoutMs);
-    timer.unref?.();
+    hardTimer.unref?.();
   });
   const task = params.run(controller.signal);
   task.catch(() => undefined);
 
   try {
-    const result = await Promise.race([task, timeoutPromise]);
-    if (result === "timeout") {
+    const raced = await Promise.race([
+      task.then(
+        (value) => ({ kind: "ok" as const, value }),
+        (error) => ({ kind: "error" as const, error }),
+      ),
+      timeoutPromise.then(() => ({ kind: "timeout" as const })),
+    ]);
+    if (raced.kind === "ok") {
+      return { status: "ok", value: raced.value };
+    }
+    // Prefer the stable timeout copy when the soft/hard deadline aborted the
+    // run (including abort-aware providers that reject on signal). Real errors
+    // before the deadline still surface their message.
+    if (raced.kind === "timeout" || controller.signal.aborted) {
       return {
         status: "unavailable",
         error: timeoutError().message,
       };
     }
-    return { status: "ok", value: result as T };
+    return { status: "unavailable", error: formatErrorMessage(raced.error) };
   } catch (error) {
+    if (controller.signal.aborted) {
+      return {
+        status: "unavailable",
+        error: timeoutError().message,
+      };
+    }
     return { status: "unavailable", error: formatErrorMessage(error) };
   } finally {
-    if (timer) {
-      clearTimeout(timer);
+    clearTimeout(softTimer);
+    if (hardTimer) {
+      clearTimeout(hardTimer);
     }
   }
 }

@@ -453,6 +453,55 @@ describe("memory tools", () => {
     },
   );
 
+  it("returns partial wiki hits when the supplement settles after the soft deadline (#104719)", async () => {
+    // Soft deadline aborts before the hard 15s timeout so abort-aware supplements
+    // can deliver completed-partial results instead of only the timeout error.
+    vi.useFakeTimers();
+    try {
+      registerMemoryCorpusSupplement("memory-wiki", {
+        search: async ({ signal }) => {
+          await new Promise<void>((resolve) => {
+            if (signal?.aborted) {
+              resolve();
+              return;
+            }
+            signal?.addEventListener("abort", () => resolve(), { once: true });
+          });
+          return [
+            {
+              corpus: "wiki" as const,
+              path: "entities/partial-deadline.md",
+              title: "Partial Deadline",
+              kind: "entity",
+              score: 4,
+              snippet: "partial wiki hit after soft deadline",
+            },
+          ];
+        },
+        get: async () => null,
+      });
+
+      const tool = createMemorySearchToolOrThrow();
+      const resultPromise = tool.execute("call_wiki_soft_deadline_partial", {
+        query: "partial",
+        corpus: "wiki",
+      });
+      await vi.advanceTimersByTimeAsync(15_000);
+      const result = await resultPromise;
+      const details = result.details as {
+        results?: Array<{ corpus: string; path: string }>;
+        error?: string;
+      };
+
+      expect(details.error).toBeUndefined();
+      expect(details.results?.map((entry) => [entry.corpus, entry.path])).toEqual([
+        ["wiki", "entities/partial-deadline.md"],
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("includes memory results in corpus=all even when wiki scores are numerically higher (#77337)", async () => {
     // Wiki uses integer point scores (up to ~100+); memory uses cosine similarity (0-1).
     // Raw-score sort would starve memory hits when maxResults <= number of wiki hits.

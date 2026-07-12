@@ -240,25 +240,53 @@ function mergeWikiSearchCorpusResults(params: {
   return sortWikiSearchResults(selected).slice(0, params.maxResults);
 }
 
-async function listWikiMarkdownFiles(rootDir: string): Promise<string[]> {
-  const files = (
-    await Promise.all(
-      QUERY_DIRS.map(async (relativeDir) => {
-        const dirPath = path.join(rootDir, relativeDir);
-        const entries = await fs
-          .readdir(dirPath, { withFileTypes: true, recursive: true })
-          .catch(() => []);
-        return entries
-          .filter(
-            (entry) => entry.isFile() && entry.name.endsWith(".md") && entry.name !== "index.md",
-          )
-          .map((entry) => {
-            const absPath = path.join(entry.parentPath ?? dirPath, entry.name);
-            return path.relative(rootDir, absPath).split(path.sep).join("/");
-          });
-      }),
-    )
-  ).flat();
+/** Walk one vault subdir with abort checks between entries (not one recursive readdir). */
+async function collectWikiMarkdownFilesFromDir(params: {
+  rootDir: string;
+  dirPath: string;
+  files: string[];
+  signal?: AbortSignal;
+}): Promise<void> {
+  if (params.signal?.aborted) {
+    return;
+  }
+  const entries = await fs.readdir(params.dirPath, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (params.signal?.aborted) {
+      return;
+    }
+    const absolutePath = path.join(params.dirPath, entry.name);
+    if (entry.isDirectory()) {
+      await collectWikiMarkdownFilesFromDir({
+        rootDir: params.rootDir,
+        dirPath: absolutePath,
+        files: params.files,
+        signal: params.signal,
+      });
+      continue;
+    }
+    if (entry.isFile() && entry.name.endsWith(".md") && entry.name !== "index.md") {
+      params.files.push(path.relative(params.rootDir, absolutePath).split(path.sep).join("/"));
+    }
+  }
+}
+
+async function listWikiMarkdownFiles(rootDir: string, signal?: AbortSignal): Promise<string[]> {
+  if (signal?.aborted) {
+    return [];
+  }
+  const files: string[] = [];
+  for (const relativeDir of QUERY_DIRS) {
+    if (signal?.aborted) {
+      break;
+    }
+    await collectWikiMarkdownFilesFromDir({
+      rootDir,
+      dirPath: path.join(rootDir, relativeDir),
+      files,
+      signal,
+    });
+  }
   return files.toSorted((left, right) => left.localeCompare(right));
 }
 
@@ -269,7 +297,7 @@ export async function readQueryableWikiPages(
   if (signal?.aborted) {
     return [];
   }
-  const files = await listWikiMarkdownFiles(rootDir);
+  const files = await listWikiMarkdownFiles(rootDir, signal);
   return readQueryableWikiPagesByPaths(rootDir, files, signal);
 }
 
@@ -1467,7 +1495,10 @@ async function searchWikiCorpus(params: {
     return results;
   }
 
-  const remainingPaths = (await listWikiMarkdownFiles(params.rootDir)).filter(
+  if (params.signal?.aborted) {
+    return results;
+  }
+  const remainingPaths = (await listWikiMarkdownFiles(params.rootDir, params.signal)).filter(
     (relativePath) => !seenPaths.has(relativePath),
   );
   const remainingPages = await readQueryableWikiPagesByPaths(

@@ -376,6 +376,51 @@ describe("searchMemoryWiki", () => {
     }
   });
 
+  it("stops vault directory enumeration after abort (#104719)", async () => {
+    // Recursive readdir could finish the whole tree after cancel; walk with
+    // per-entry checks so enumeration itself is deadline-aware.
+    const { rootDir } = await createQueryVault({ initialize: true });
+    const nestCount = 40;
+    for (let i = 0; i < nestCount; i += 1) {
+      const dir = path.join(rootDir, "sources", `enum-nest-${String(i).padStart(2, "0")}`);
+      await fs.mkdir(dir, { recursive: true });
+      await fs.writeFile(
+        path.join(dir, "page.md"),
+        renderWikiMarkdown({
+          frontmatter: {
+            pageType: "source",
+            id: `source.enum-nest-${i}`,
+            title: `Enum Nest ${i}`,
+          },
+          body: `# Enum Nest ${i}\n\nenum pad ${i}\n`,
+        }),
+        "utf8",
+      );
+    }
+
+    const controller = new AbortController();
+    let readdirCalls = 0;
+    const originalReaddir = fs.readdir.bind(fs);
+    const readdirSpy = vi
+      .spyOn(fs, "readdir")
+      .mockImplementation(async (...args: Parameters<typeof fs.readdir>) => {
+        readdirCalls += 1;
+        // Abort after the walk has entered a few nested source dirs.
+        if (readdirCalls >= 8) {
+          controller.abort();
+        }
+        return await originalReaddir(...args);
+      });
+    try {
+      const pages = await readQueryableWikiPages(rootDir, controller.signal);
+      expect(pages.length).toBeLessThan(nestCount);
+      // Enumeration must stop scheduling further directory reads after abort.
+      expect(readdirCalls).toBeLessThan(nestCount + 10);
+    } finally {
+      readdirSpy.mockRestore();
+    }
+  });
+
   it("skips malformed pages while searching the rest of the vault (#96125)", async () => {
     const { rootDir, config } = await createQueryVault({ initialize: true });
     await fs.writeFile(
