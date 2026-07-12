@@ -446,6 +446,8 @@ export const SessionsMessagesSubscribeParamsSchema = Type.Object(
   {
     key: NonEmptyString,
     agentId: Type.Optional(NonEmptyString),
+    /** Opt in to sanitized durable approval events for this session and its descendants. */
+    includeApprovals: Type.Optional(Type.Literal(true)),
   },
   { additionalProperties: false },
 );
