@@ -292,9 +292,11 @@ class PluginsPage extends OpenClawLightDomElement {
       return;
     }
     // Honor ?tab= even when the loader snapshot is stale; the tab choice is
-    // navigation intent, not catalog data.
-    if (data.initialTab && data.initialTab !== this.activeTab) {
-      this.changeTab(data.initialTab);
+    // navigation intent, not catalog data. A bare URL means Installed so
+    // history back/forward always restores the tab the URL describes.
+    const urlTab = data.initialTab ?? "installed";
+    if (urlTab !== this.activeTab) {
+      this.changeTab(urlTab);
     }
     const snapshot = this.context.gateway.snapshot;
     if (data.gateway !== this.context.gateway || data.gatewaySnapshot !== snapshot) {
