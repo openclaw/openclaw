@@ -165,7 +165,7 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
   "apps/ios/Sources/Voice/TalkModeManager.swift": [
     'format: String(localized: "Speech error: %@")',
     'format: String(localized: "Speak failed: %@")',
-    'self.statusText = String(localized: "Listening (PTT)")',
+    'self.setStatus(String(localized: "Listening (PTT)"), phase: .listening)',
   ],
   "apps/ios/Sources/Voice/VoiceWakeManager.swift": [
     'format: String(localized: "Recognizer error: %@")',
@@ -216,7 +216,7 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
   ],
   "apps/ios/Sources/LiveActivity/LiveActivityManager.swift": [
     'String(localized: "Connecting...")',
-    'String(localized: "Disconnected")',
+    "status: .disconnected",
   ],
   "apps/ios/WatchApp/Sources/WatchInboxView.swift": [
     "enum WatchTextValue: ExpressibleByStringLiteral",
@@ -234,9 +234,9 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
     'format: String(localized: "Direct connection failed: %@")',
   ],
   "apps/ios/WatchApp/Sources/WatchInboxStore.swift": [
-    'format: String(localized: "Sending %@…")',
-    'format: String(localized: "%@: sent")',
-    'format: String(localized: "%@: queued")',
+    "WatchAppCommandStatus(command: command, code: .sending)",
+    "WatchAppCommandStatus(command: command, code: .sent)",
+    "WatchAppCommandStatus(command: command, code: .queued)",
   ],
 };
 const RAW_LOCALIZATION_BYPASSES: Record<string, readonly string[]> = {
