@@ -30,12 +30,12 @@ const queriesPath = path.join(outDir, "queries.jsonl");
 const DEFAULT_QUERIES = [
   "Reply with exactly: query-1-ok",
   "What is 17 + 25? Reply with the number only.",
-  "Name one primary color. One word only.",
+  "Use the exec tool to run `echo perf-tool-test` and reply with the stdout only.",
   "Is water wet? Reply yes or no only.",
-  "Reply with exactly: query-5-pong",
+  "Use the read tool on package.json in the workspace and reply with the value of the name field only.",
   "What is the capital of France? One word only.",
   "Reply with exactly: query-7-ready",
-  "How many days are in a week? Reply with digit only.",
+  "Use exec to run `date +%Y` and reply with the year number only.",
   "Reply with exactly: query-9-done",
   "What is 8 times 7? Reply with the number only.",
 ];
@@ -115,7 +115,10 @@ async function main() {
 
   const queries = DEFAULT_QUERIES.slice(0, count);
   console.error(`Starting dev gateway on :${gatewayPort} for ${queries.length} queries...`);
-  const gateway = spawn("pnpm", ["openclaw", "gateway", "run"], {
+  // Use openclaw.mjs (dist/entry.js) so concurrent gateway+agent invocations do not
+  // race through scripts/run-node.mjs rebuilds when the git tree is dirty.
+  const openclawBin = path.join(repoRoot, "openclaw.mjs");
+  const gateway = spawn(process.execPath, [openclawBin, "gateway", "run"], {
     cwd: repoRoot,
     env,
     stdio: ["ignore", "pipe", "pipe"],
@@ -143,9 +146,9 @@ async function main() {
       console.error(query);
       const started = Date.now();
       const agent = spawnSync(
-        "pnpm",
+        process.execPath,
         [
-          "openclaw",
+          openclawBin,
           "agent",
           "--session-key",
           sessionKey,
