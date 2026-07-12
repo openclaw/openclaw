@@ -742,11 +742,7 @@ describe("Slack native command argument menus", () => {
 
     // The /reportexternal command (140 choices) should fall back to static_select
     // instead of external_select since options registration failed
-    const handler = requireHandler(
-      testHarness.commands,
-      "/reportexternal",
-      "/reportexternal",
-    );
+    const handler = requireHandler(testHarness.commands, "/reportexternal", "/reportexternal");
     const respond = vi.fn().mockResolvedValue(undefined);
     const ack = vi.fn().mockResolvedValue(undefined);
     await handler({
