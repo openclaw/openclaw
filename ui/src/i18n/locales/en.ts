@@ -3001,6 +3001,8 @@ export const en: TranslationMap = {
     },
     pullRequests: {
       linkLabel: "Pull request #{number}: {title}",
+      createPr: "Create PR",
+      createPrLabel: "Create a pull request for {branch}",
       dismiss: "Dismiss pull request #{number}",
       open: "Open",
       draft: "Draft",

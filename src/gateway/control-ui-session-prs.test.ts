@@ -1,3 +1,8 @@
+import { execFile } from "node:child_process";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   loadControlUiSessionPullRequests,
@@ -144,6 +149,13 @@ describe("loadControlUiSessionPullRequests", () => {
           checksUrl: "https://github.com/openclaw/openclaw/pull/103469/checks",
         },
       ],
+      branch: {
+        owner: "openclaw",
+        repo: "openclaw",
+        branch: context.branch,
+        createUrl:
+          "https://github.com/openclaw/openclaw/pull/new/claude/browser-tabs-tighter-header",
+      },
       rateLimited: false,
     });
   });
@@ -330,5 +342,134 @@ describe("loadControlUiSessionPullRequests", () => {
     );
     expect(result).toEqual({ pullRequests: [], rateLimited: false });
     expect(fetchImpl.mock.calls).toHaveLength(0);
+  });
+
+  it("keeps branch metadata when the very first GitHub fetch is rate limited", async () => {
+    // The pre-PR row's rate-limit warning depends on this: with no cached
+    // chips, the local-git branch payload is all the UI has left to render.
+    const fetchImpl = routedFetch([
+      {
+        match: "/pulls?head=",
+        response: () =>
+          new Response(JSON.stringify({ message: "rate limited" }), {
+            status: 403,
+            headers: { "Content-Type": "application/json", "x-ratelimit-remaining": "0" },
+          }),
+      },
+    ]);
+
+    const result = await loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main" },
+      { fetchImpl, resolveGitContext },
+    );
+
+    expect(result).toEqual({
+      pullRequests: [],
+      branch: {
+        owner: "openclaw",
+        repo: "openclaw",
+        branch: context.branch,
+        createUrl:
+          "https://github.com/openclaw/openclaw/pull/new/claude/browser-tabs-tighter-header",
+      },
+      rateLimited: true,
+    });
+  });
+
+  it("escapes create-PR URL segments while keeping branch slashes", async () => {
+    const fetchImpl = routedFetch([
+      { match: "/pulls?head=", response: () => githubJson([]) },
+      // Empty PR lists trigger the fork-parent probe; answer "not a fork".
+      { match: "/repos/openclaw/openclaw", response: () => githubJson({ fork: false }) },
+    ]);
+    const result = await loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main" },
+      {
+        fetchImpl,
+        resolveGitContext: async () => ({ ...context, branch: "claude/fix #1" }),
+      },
+    );
+    expect(result.branch?.createUrl).toBe(
+      "https://github.com/openclaw/openclaw/pull/new/claude/fix%20%231",
+    );
+  });
+});
+
+describe("session branch diff stats", () => {
+  const execFileAsync = promisify(execFile);
+  let root: string;
+
+  const git = (...args: string[]) =>
+    execFileAsync("git", ["-c", "user.email=test@openclaw.ai", "-c", "user.name=Test", ...args], {
+      cwd: root,
+    });
+
+  beforeEach(async () => {
+    resetControlUiSessionPullRequestCacheForTests();
+    root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-prs-")));
+  });
+
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("counts committed and uncommitted changes vs the origin default merge base", async () => {
+    await git("init", "--initial-branch=main", ".");
+    await fs.writeFile(path.join(root, "a.txt"), "one\ntwo\n");
+    await git("add", "a.txt");
+    await git("commit", "-m", "base");
+    // Stand in for the remote default branch without a real remote.
+    await git("update-ref", "refs/remotes/origin/main", "HEAD");
+    await git("checkout", "-b", "feature");
+    await fs.writeFile(path.join(root, "a.txt"), "one\nthree\n");
+    await fs.writeFile(path.join(root, "b.txt"), "committed\n");
+    await git("add", "a.txt", "b.txt");
+    await git("commit", "-m", "feature work");
+    // Uncommitted work counts too: the row sizes the PR the push would open.
+    await fs.appendFile(path.join(root, "b.txt"), "pending\n");
+
+    const fetchImpl = routedFetch([
+      { match: "/pulls?head=", response: () => githubJson([]) },
+      { match: "/repos/openclaw/openclaw", response: () => githubJson({ fork: false }) },
+    ]);
+    const result = await loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main" },
+      {
+        fetchImpl,
+        resolveGitContext: async () => ({ ...context, root, defaultBranch: "main" }),
+      },
+    );
+
+    expect(result.branch).toEqual({
+      owner: "openclaw",
+      repo: "openclaw",
+      branch: context.branch,
+      additions: 3,
+      deletions: 1,
+      createUrl: "https://github.com/openclaw/openclaw/pull/new/claude/browser-tabs-tighter-header",
+    });
+  });
+
+  it("reports a zero diff for a branch with no changes", async () => {
+    await git("init", "--initial-branch=main", ".");
+    await fs.writeFile(path.join(root, "a.txt"), "one\n");
+    await git("add", "a.txt");
+    await git("commit", "-m", "base");
+    await git("update-ref", "refs/remotes/origin/main", "HEAD");
+    await git("checkout", "-b", "feature");
+
+    const fetchImpl = routedFetch([
+      { match: "/pulls?head=", response: () => githubJson([]) },
+      { match: "/repos/openclaw/openclaw", response: () => githubJson({ fork: false }) },
+    ]);
+    const result = await loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main" },
+      {
+        fetchImpl,
+        resolveGitContext: async () => ({ ...context, root, defaultBranch: "main" }),
+      },
+    );
+
+    expect(result.branch).toMatchObject({ additions: 0, deletions: 0 });
   });
 });

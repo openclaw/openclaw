@@ -5,6 +5,7 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent
 import { runGit } from "../agents/worktrees/git.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import type {
+  ControlUiSessionBranch,
   ControlUiSessionPullRequest,
   ControlUiSessionPullRequests,
 } from "./control-ui-contract.js";
@@ -37,6 +38,10 @@ export type SessionPullRequestGitContext = {
   owner: string;
   repo: string;
   branch: string;
+  /** Checkout root for local diff stats; absent for stubbed test contexts. */
+  root?: string;
+  /** Remote default branch when origin/HEAD is resolvable. */
+  defaultBranch?: string;
 };
 
 type PullListItem = {
@@ -160,10 +165,71 @@ export async function resolveSessionPullRequestGitContext(
     return null;
   }
   const defaultRef = await gitOutput(root, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]);
-  if (defaultRef?.replace(/^origin\//, "") === branch) {
+  const defaultBranch = defaultRef?.replace(/^origin\//, "");
+  if (defaultBranch === branch) {
     return null;
   }
-  return { ...remote, branch };
+  return { ...remote, branch, root, ...(defaultBranch ? { defaultBranch } : {}) };
+}
+
+// git push's own "create a pull request" hint URL; GitHub resolves the base
+// branch (including fork -> parent) so no API call is needed to build it.
+function branchCreateUrl(context: SessionPullRequestGitContext): string {
+  const owner = encodeURIComponent(context.owner);
+  const repo = encodeURIComponent(context.repo);
+  const branch = context.branch.split("/").map(encodeURIComponent).join("/");
+  return `https://github.com/${owner}/${repo}/pull/new/${branch}`;
+}
+
+const SHORTSTAT_INSERTIONS = /(\d+) insertion/;
+const SHORTSTAT_DELETIONS = /(\d+) deletion/;
+
+/**
+ * Working-tree diff counts vs the merge base with the remote default branch:
+ * the size the PR would have if the current work were committed and pushed.
+ */
+async function loadBranchDiffStats(
+  root: string,
+  defaultBranch: string,
+): Promise<{ additions: number; deletions: number } | null> {
+  const mergeBase = await gitOutput(root, [
+    "merge-base",
+    `refs/remotes/origin/${defaultBranch}`,
+    "HEAD",
+  ]);
+  if (!mergeBase) {
+    return null;
+  }
+  try {
+    const result = await runGit(root, ["diff", "--shortstat", mergeBase]);
+    if (result.code !== 0) {
+      return null;
+    }
+    // Empty output means an empty diff, not a failure.
+    const summary = result.stdout.trim();
+    return {
+      additions: Number(SHORTSTAT_INSERTIONS.exec(summary)?.[1] ?? 0),
+      deletions: Number(SHORTSTAT_DELETIONS.exec(summary)?.[1] ?? 0),
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function resolveSessionBranch(
+  context: SessionPullRequestGitContext,
+): Promise<ControlUiSessionBranch> {
+  const stats =
+    context.root && context.defaultBranch
+      ? await loadBranchDiffStats(context.root, context.defaultBranch)
+      : null;
+  return {
+    owner: context.owner,
+    repo: context.repo,
+    branch: context.branch,
+    createUrl: branchCreateUrl(context),
+    ...(stats ?? {}),
+  };
 }
 
 function derivePullState(value: Record<string, unknown>): ControlUiSessionPullRequest["state"] {
@@ -414,6 +480,20 @@ export async function loadControlUiSessionPullRequests(
   if (!context) {
     return { pullRequests: [], rateLimited: false };
   }
+  // Branch metadata is local git only, so it stays fresh per request (the
+  // working-tree diff moves while the agent works) and keeps the pre-PR row
+  // alive when GitHub is rate limited; only the GitHub fetch is cached.
+  const [branch, snapshot] = await Promise.all([
+    resolveSessionBranch(context),
+    cachedBranchPullRequests(context, deps),
+  ]);
+  return { ...snapshot, branch };
+}
+
+function cachedBranchPullRequests(
+  context: SessionPullRequestGitContext,
+  deps: LoadSessionPullRequestDeps,
+): Promise<ControlUiSessionPullRequests> {
   const key = `${context.owner.toLowerCase()}/${context.repo.toLowerCase()}#${context.branch}`;
   const cached = branchCache.get(key);
   if (cached && cached.expiresAt > Date.now()) {
