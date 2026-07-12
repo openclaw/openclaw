@@ -47,7 +47,9 @@ if (!customElements.get(PROVIDER_ELEMENT_NAME)) {
 }
 
 type SidebarLifecycleState = HTMLElement & {
+  basePath: string;
   connected: boolean;
+  onNavigate: (routeId: RouteId) => void;
   sessionCatalogs: SessionCatalog[];
   sessionRowsByAgent: Record<string, SessionsListResult["sessions"]>;
   sessionCreatedOrder: Map<string, number>;
@@ -930,6 +932,21 @@ describe("AppSidebar lobster outcome wiring", () => {
 });
 
 describe("AppSidebar logo stand-in wiring", () => {
+  it("opens the canonical new-session start screen from the brand", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    const onNavigate = vi.fn();
+    sidebar.basePath = "/apps/openclaw";
+    sidebar.onNavigate = onNavigate;
+    await sidebar.updateComplete;
+
+    const brand = sidebar.querySelector<HTMLAnchorElement>(".sidebar-brand__identity");
+    expect(brand?.getAttribute("href")).toBe("/apps/openclaw/new");
+    expect(brand?.getAttribute("aria-label")).toBe("New session");
+    brand?.click();
+    expect(onNavigate).toHaveBeenCalledWith("new-session");
+  });
+
   it("swaps the brand mark while the pet's logo visit is in, leaving, then out", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
