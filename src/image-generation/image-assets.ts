@@ -1,5 +1,5 @@
 /** Converts image provider base64/data-url payloads into generated or source image assets. */
-import { canonicalizeBase64 } from "@openclaw/media-core/base64";
+import { canonicalizeBase64, estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -141,10 +141,16 @@ export function generatedImageAssetFromBase64(params: {
   defaultMimeType?: string;
   fileNamePrefix?: string;
   sniffMimeType?: boolean;
+  maxBytes?: number;
 }): GeneratedImageAsset | undefined {
+  const maxBytes = params.maxBytes ?? MAX_IMAGE_BYTES;
   const base64 = normalizeOptionalString(params.base64);
   const canonicalBase64 = base64 ? canonicalizeBase64(base64) : undefined;
   if (!canonicalBase64) {
+    return undefined;
+  }
+  const estimatedSize = estimateBase64DecodedBytes(canonicalBase64);
+  if (estimatedSize > maxBytes) {
     return undefined;
   }
   const buffer = Buffer.from(canonicalBase64, "base64");

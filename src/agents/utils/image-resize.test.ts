@@ -183,4 +183,16 @@ describe("image resize utility", () => {
       hints: [],
     });
   });
+
+  it("rejects oversized base64 before decoding without probing", async () => {
+    const oversizedBase64 = "A".repeat(200);
+
+    const resized = await resizeImage(
+      { type: "image", data: oversizedBase64, mimeType: "image/png" },
+      { maxWidth: 100, maxHeight: 100, maxBytes: 10 },
+    );
+
+    expect(resized).toBeNull();
+    expect(mocks.probe).not.toHaveBeenCalled();
+  });
 });

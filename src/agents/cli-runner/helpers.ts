@@ -7,6 +7,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
+import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { extensionForMime } from "@openclaw/media-core/mime";
 import {
@@ -405,7 +406,9 @@ async function writeCliImages(params: {
   backend: CliBackendConfig;
   workspaceDir: string;
   images: ImageContent[];
+  maxBytes?: number;
 }): Promise<{ paths: string[]; cleanup: () => Promise<void> }> {
+  const maxBytes = params.maxBytes ?? MAX_IMAGE_BYTES;
   const imageRoot = resolveCliImageRoot({
     backend: params.backend,
     workspaceDir: params.workspaceDir,
@@ -416,6 +419,12 @@ async function writeCliImages(params: {
   const paths: string[] = [];
   for (const image of params.images) {
     const fileName = path.basename(resolveCliImagePath(image));
+    const estimatedSize = estimateBase64DecodedBytes(image.data);
+    if (estimatedSize > maxBytes) {
+      throw new Error(
+        `CLI runner image exceeds size limit: ${estimatedSize} bytes > ${maxBytes} bytes`,
+      );
+    }
     const buffer = Buffer.from(image.data, "base64");
     await store.writeText(fileName, buffer);
     paths.push(store.path(fileName));
@@ -459,6 +468,7 @@ export async function prepareCliPromptImagePayload(params: {
   workspaceDir: string;
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
+  maxBytes?: number;
 }): Promise<{
   prompt: string;
   imagePaths?: string[];
@@ -487,6 +497,7 @@ export async function prepareCliPromptImagePayload(params: {
     backend: params.backend,
     workspaceDir: params.workspaceDir,
     images: resolvedImages,
+    maxBytes: params.maxBytes,
   });
   const imagePaths = imagePayload.paths;
   if (

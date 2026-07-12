@@ -1,4 +1,5 @@
 // Validates and normalizes provider asset attachments for music generation.
+import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { maxBytesForKind } from "@openclaw/media-core/constants";
 import { extensionForMime } from "@openclaw/media-core/mime";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -83,7 +84,13 @@ export function generatedMusicAssetFromBase64(params: {
   mimeType: string;
   index?: number;
   fileName?: string;
-}): GeneratedMusicAsset {
+  maxBytes?: number;
+}): GeneratedMusicAsset | undefined {
+  const maxBytes = params.maxBytes ?? maxBytesForKind("audio");
+  const estimatedSize = estimateBase64DecodedBytes(params.base64);
+  if (estimatedSize > maxBytes) {
+    return undefined;
+  }
   const ext = extensionForMime(params.mimeType)?.replace(/^\./u, "") || "mp3";
   return {
     buffer: Buffer.from(params.base64, "base64"),
