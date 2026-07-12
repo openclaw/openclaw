@@ -88,6 +88,7 @@ function createRecordingStream(recorder: WireRecorder, fault?: StreamWriteFault)
       applyFault("stream.update", { text });
       recorder.recordWireCall({ method: "stream.update", payload: { text } });
     },
+    clearText(): void {},
     async close(): Promise<unknown> {
       applyFault("stream.close");
       recorder.recordWireCall({ method: "stream.close", result: { id: "stream-final" } });

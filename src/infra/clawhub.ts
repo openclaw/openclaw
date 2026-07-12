@@ -9,6 +9,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { retryClawHubRead } from "./clawhub-retry.js";
 import { sha256Base64, sha256Hex as digestSha256Hex } from "./crypto-digest.js";
 import { readResponseTextSnippet, readResponseWithLimit } from "./http-body.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
@@ -423,6 +424,7 @@ type ClawHubRequestParams = {
   search?: Record<string, string | undefined>;
   fetchImpl?: FetchLike;
   skipAuth?: boolean;
+  retryTransientReads?: boolean;
   headers?: Record<string, string>;
 };
 
@@ -697,12 +699,12 @@ async function clawhubRequest(
     ? undefined
     : normalizeOptionalString(params.token) || (await resolveClawHubAuthToken());
   const timeoutMs = resolveClawHubRequestTimeoutMs(params.timeoutMs);
-  const controller = new AbortController();
-  const timeout = setTimeout(
-    () => controller.abort(new Error(`ClawHub request timed out after ${timeoutMs}ms`)),
-    timeoutMs,
-  );
-  try {
+  const request = async () => {
+    const controller = new AbortController();
+    const timeout = setTimeout(
+      () => controller.abort(new Error(`ClawHub request timed out after ${timeoutMs}ms`)),
+      timeoutMs,
+    );
     const headers = {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(params.json === undefined ? {} : { "Content-Type": "application/json" }),
@@ -718,11 +720,24 @@ async function clawhubRequest(
     if (params.json !== undefined) {
       init.body = JSON.stringify(params.json);
     }
-    const response = await (params.fetchImpl ?? fetch)(url, init);
-    return { response, url, hasToken: Boolean(token) };
-  } finally {
-    clearTimeout(timeout);
+    try {
+      const response = await (params.fetchImpl ?? fetch)(url, init);
+      return { response, url, hasToken: Boolean(token) };
+    } finally {
+      clearTimeout(timeout);
+    }
+  };
+
+  // A write may have committed before its response failed, so only replay
+  // idempotent reads across transient ClawHub transport failures.
+  if ((params.method ?? "GET") !== "GET" || params.retryTransientReads === false) {
+    return await request();
   }
+  return await retryClawHubRead(request, {
+    disposeRetry: async ({ response }) => {
+      await response.body?.cancel().catch(() => undefined);
+    },
+  });
 }
 
 async function readErrorBody(response: Response, timeoutMs?: number): Promise<string> {
@@ -1953,6 +1968,9 @@ export async function fetchClawHubPromotionsFeed(
     path: "/api/v1/feeds/promotions",
     timeoutMs: params.timeoutMs,
     fetchImpl: params.fetchImpl,
+    // This passive refresh runs inline from interactive commands. Its cache
+    // cadence owns retries; shared backoff would turn the 2.5s cap into ~24s.
+    retryTransientReads: false,
     // Public CDN-served snapshot; an Authorization header would only
     // fragment edge caches.
     skipAuth: true,

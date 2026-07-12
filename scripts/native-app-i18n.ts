@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { translateNativeEntries } from "./control-ui-i18n.ts";
 
 type NativeI18nSurface = "android" | "apple";
@@ -128,6 +129,7 @@ const ANDROID_BUILTIN_UI_CALLS = new Set([
   "LazyRow",
   "nativeString",
   "nativeStringResource",
+  "nativeText",
   "OutlinedButton",
   "OutlinedTextField",
   "RadioButton",
@@ -147,7 +149,8 @@ const APPLE_SWITCH_BRANCH_START = /(?:\bcase\b[^:\n]+|\bdefault)\s*:\s*(?:return
 const ANDROID_STRING_FUNCTION =
   /\bfun\s+([A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)\s*:\s*String\s*(=|\{)/gu;
 const ANDROID_WHEN_BRANCH_START = /(?:[^\n{}]+|\belse)\s*->\s*/gu;
-const ANDROID_RESOURCE_STRINGS = /<string\b[^>]*>([\s\S]*?)<\/string>/gu;
+const ANDROID_RESOURCE_STRINGS = /<string\b([^>]*)>([\s\S]*?)<\/string>/gu;
+const ANDROID_RESOURCE_NAME = /\bname\s*=\s*"([^"]+)"/u;
 const ANDROID_RESOURCE_COLLECTIONS =
   /<(?:string-array|plurals)\b[^>]*>([\s\S]*?)<\/(?:string-array|plurals)>/gu;
 const ANDROID_RESOURCE_ITEMS = /<item\b[^>]*>([\s\S]*?)<\/item>/gu;
@@ -184,6 +187,7 @@ const APPLE_PLIST_STRINGS = /<string>([\s\S]*?)<\/string>/gu;
 const GENERATED_PATH_RE = /(?:^|[\\/])(?:build|\.gradle|\.build|DerivedData)(?:$|[\\/])/u;
 const EXCLUDED_PATH_RE = /(?:^|[\\/])(?:Tests?|UITests?|test|Preview(?:s)?)(?:$|[\\/])/u;
 const EXCLUDED_FILE_RE = /(?:Tests?|UITests?|Previews?|Testing)\.(?:swift|kt|kts)$/u;
+const GENERATED_FILE_RE = /(?:^|[\\/])NativeStringResources\.kt$/u;
 const BUILD_SETTING_RE = /\$\([A-Za-z0-9_.-]+\)/gu;
 const NATIVE_I18N_LOCALE_SET = new Set<string>(NATIVE_I18N_LOCALES);
 const ANDROID_LANGUAGE_PICKER_PATH =
@@ -211,18 +215,18 @@ function isAsciiAlphaNumeric(character: string): boolean {
 
 export function isConditionalBranchIdentifier(source: string): boolean {
   let index = 0;
-  while (index < source.length && isAsciiLowercaseLetter(source[index])) {
+  while (index < source.length && isAsciiLowercaseLetter(source.charAt(index))) {
     index += 1;
   }
 
   // Keep this scanner linear: PR-controlled native source passes through CI,
   // so a backtracking regex here can become a cheap native-i18n DoS trigger.
-  if (index === 0 || index >= source.length || !isAsciiUppercaseLetter(source[index])) {
+  if (index === 0 || index >= source.length || !isAsciiUppercaseLetter(source.charAt(index))) {
     return false;
   }
 
   for (index += 1; index < source.length; index += 1) {
-    if (!isAsciiAlphaNumeric(source[index])) {
+    if (!isAsciiAlphaNumeric(source.charAt(index))) {
       return false;
     }
   }
@@ -622,15 +626,18 @@ function identifierBefore(source: string, offset: number): string | null {
     cursor -= 1;
   }
   const end = cursor + 1;
-  while (cursor >= 0 && (isAsciiAlphaNumeric(source[cursor]) || source[cursor] === "_")) {
+  while (
+    cursor >= 0 &&
+    (isAsciiAlphaNumeric(source.charAt(cursor)) || source.charAt(cursor) === "_")
+  ) {
     cursor -= 1;
   }
   const start = cursor + 1;
   if (
     start === end ||
-    (!isAsciiLowercaseLetter(source[start]) &&
-      !isAsciiUppercaseLetter(source[start]) &&
-      source[start] !== "_")
+    (!isAsciiLowercaseLetter(source.charAt(start)) &&
+      !isAsciiUppercaseLetter(source.charAt(start)) &&
+      source.charAt(start) !== "_")
   ) {
     return null;
   }
@@ -739,18 +746,18 @@ function addCapturedLiteralCandidates(
 
 function skipWhitespaceAndBrace(source: string, offset: number): number {
   let cursor = offset;
-  while (cursor < source.length && /\s/u.test(source[cursor])) {
+  while (cursor < source.length && /\s/u.test(source.charAt(cursor))) {
     cursor += 1;
   }
-  if (source[cursor] === "{") {
+  if (source.charAt(cursor) === "{") {
     cursor += 1;
-    while (cursor < source.length && /\s/u.test(source[cursor])) {
+    while (cursor < source.length && /\s/u.test(source.charAt(cursor))) {
       cursor += 1;
     }
   }
   if (source.startsWith("return", cursor) && !isAsciiAlphaNumeric(source[cursor + 6] ?? "")) {
     cursor += 6;
-    while (cursor < source.length && /\s/u.test(source[cursor])) {
+    while (cursor < source.length && /\s/u.test(source.charAt(cursor))) {
       cursor += 1;
     }
   }
@@ -1029,12 +1036,16 @@ export function extractNativeI18nCandidates(
   }
   if (surface === "android" && /\/res\/values\/[^/]+\.xml$/u.test(repoPath)) {
     for (const match of source.matchAll(ANDROID_RESOURCE_STRINGS)) {
-      if (match[1]) {
+      const resourceName = match[1]?.match(ANDROID_RESOURCE_NAME)?.[1];
+      if (resourceName?.startsWith("native_")) {
+        continue;
+      }
+      if (match[2]) {
         addCandidate(
           entries,
           surface,
           repoPath,
-          match[1],
+          match[2],
           "resource-string",
           lineNumber(source, match.index ?? 0),
         );
@@ -1100,7 +1111,8 @@ async function walkFiles(root: string, surface: NativeI18nSurface): Promise<stri
       const allowed = surface === "apple" ? APPLE_EXTENSIONS : ANDROID_EXTENSIONS;
       return entry.isFile() &&
         (allowed.has(extension) || isAndroidValuesXml) &&
-        !EXCLUDED_FILE_RE.test(entry.name)
+        !EXCLUDED_FILE_RE.test(entry.name) &&
+        !GENERATED_FILE_RE.test(fullPath)
         ? [fullPath]
         : [];
     }),
@@ -1189,7 +1201,9 @@ async function mapWithConcurrency<T, R>(
         if (index >= values.length) {
           return;
         }
-        results[index] = await run(values[index]);
+        results[index] = await run(
+          expectDefined(values[index], `native i18n concurrency input at index ${index}`),
+        );
       }
     }),
   );
@@ -1306,10 +1320,14 @@ function adjacentDuplicateWords(value: string, locale: string): string[] {
   const duplicates = new Set<string>();
   for (let index = 1; index < words.length; index += 1) {
     if (
-      words[index - 1].normalize("NFKC").toLocaleLowerCase(locale) ===
-      words[index].normalize("NFKC").toLocaleLowerCase(locale)
+      expectDefined(words[index - 1], `native i18n word before index ${index}`)
+        .normalize("NFKC")
+        .toLocaleLowerCase(locale) ===
+      expectDefined(words[index], `native i18n word at index ${index}`)
+        .normalize("NFKC")
+        .toLocaleLowerCase(locale)
     ) {
-      duplicates.add(words[index]);
+      duplicates.add(expectDefined(words[index], `duplicate native i18n word at index ${index}`));
     }
   }
   return [...duplicates].toSorted(compareCodePoints);
@@ -1443,8 +1461,8 @@ export function validateNativeLocaleArtifact(
     errors.push(`entry count must be ${inventory.length}, got ${rawEntries.length}`);
   }
   for (let index = 0; index < Math.min(entries.length, inventory.length); index += 1) {
-    const actual = entries[index];
-    const expected = inventory[index];
+    const actual = expectDefined(entries[index], `native locale entry at index ${index}`);
+    const expected = expectDefined(inventory[index], `native inventory entry at index ${index}`);
     if (actual.id !== expected.id) {
       errors.push(
         `entries[${index}].id must be ${JSON.stringify(expected.id)}, got ${JSON.stringify(actual.id)}`,

@@ -8,6 +8,7 @@ import { closeQaHttpServer } from "../../bus-server.js";
 import { QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY } from "../../qa-web-search-provider.js";
 import { parseQaDebugRequestCursor } from "../shared/debug-request-cursor.js";
 import { writeJson } from "../shared/http-json.js";
+import { listMockOpenAiServerModelIds } from "../shared/mock-model-config.js";
 
 type ResponsesInputItem = Record<string, unknown>;
 
@@ -398,15 +399,15 @@ function extractEmbeddingInputTexts(input: unknown): string[] {
 function buildDeterministicEmbedding(text: string, dimensions = 16) {
   const values = Array.from({ length: dimensions }, () => 0);
   for (let index = 0; index < text.length; index += 1) {
-    values[index % dimensions] += text.charCodeAt(index) / 255;
+    const embeddingIndex = index % dimensions;
+    values[embeddingIndex] = (values[embeddingIndex] ?? 0) + text.charCodeAt(index) / 255;
   }
   const magnitude = Math.hypot(...values) || 1;
   return values.map((value) => Number((value / magnitude).toFixed(8)));
 }
 
 function extractLastUserText(input: ResponsesInputItem[]) {
-  for (let index = input.length - 1; index >= 0; index -= 1) {
-    const item = input[index];
+  for (const item of input.toReversed()) {
     if (item.role !== "user" || !Array.isArray(item.content)) {
       continue;
     }
@@ -419,16 +420,12 @@ function extractLastUserText(input: ResponsesInputItem[]) {
 }
 
 function findLastUserIndex(input: ResponsesInputItem[]) {
-  for (let index = input.length - 1; index >= 0; index -= 1) {
-    const item = input[index];
-    if (item.role !== "user" || !Array.isArray(item.content)) {
-      continue;
-    }
-    if (!isInternalRuntimeContextCarrierText(extractInputText(item.content))) {
-      return index;
-    }
-  }
-  return -1;
+  return input.findLastIndex(
+    (item) =>
+      item.role === "user" &&
+      Array.isArray(item.content) &&
+      !isInternalRuntimeContextCarrierText(extractInputText(item.content)),
+  );
 }
 
 function isInternalRuntimeContextCarrierText(text: string) {
@@ -530,19 +527,17 @@ function functionCallOutputIsStructuredError(item: ResponsesInputItem) {
 
 function extractToolOutput(input: ResponsesInputItem[]) {
   const lastUserIndex = findLastUserIndex(input);
-  for (let index = input.length - 1; index > lastUserIndex; index -= 1) {
-    const item = input[index];
+  for (const item of input.slice(lastUserIndex + 1).toReversed()) {
     const output = extractFunctionCallOutputText(item);
     if (output) {
       return output;
     }
   }
-  for (let index = input.length - 1; index >= 0; index -= 1) {
-    const item = input[index];
-    const output = extractFunctionCallOutputText(item);
+  for (const [candidateIndex, candidateItem] of Array.from(input.entries()).toReversed()) {
+    const output = extractFunctionCallOutputText(candidateItem);
     if (output) {
       const laterUserTexts = input
-        .slice(index + 1)
+        .slice(candidateIndex + 1)
         .filter((laterItem) => laterItem.role === "user" && Array.isArray(laterItem.content))
         .map((laterItem) => extractInputText(laterItem.content as unknown[]))
         .filter(Boolean);
@@ -560,19 +555,17 @@ function extractToolOutput(input: ResponsesInputItem[]) {
 
 function extractToolOutputStructuredError(input: ResponsesInputItem[]) {
   const lastUserIndex = findLastUserIndex(input);
-  for (let index = input.length - 1; index > lastUserIndex; index -= 1) {
-    const item = input[index];
+  for (const item of input.slice(lastUserIndex + 1).toReversed()) {
     const output = extractFunctionCallOutputText(item);
     if (output) {
       return functionCallOutputIsStructuredError(item);
     }
   }
-  for (let index = input.length - 1; index >= 0; index -= 1) {
-    const item = input[index];
-    const output = extractFunctionCallOutputText(item);
+  for (const [candidateIndex, candidateItem] of Array.from(input.entries()).toReversed()) {
+    const output = extractFunctionCallOutputText(candidateItem);
     if (output) {
       const laterUserTexts = input
-        .slice(index + 1)
+        .slice(candidateIndex + 1)
         .filter((laterItem) => laterItem.role === "user" && Array.isArray(laterItem.content))
         .map((laterItem) => extractInputText(laterItem.content as unknown[]))
         .filter(Boolean);
@@ -580,7 +573,7 @@ function extractToolOutputStructuredError(input: ResponsesInputItem[]) {
         laterUserTexts.length > 0 &&
         laterUserTexts.every((text) => isToolOutputContinuationText(text))
       ) {
-        return functionCallOutputIsStructuredError(item);
+        return functionCallOutputIsStructuredError(candidateItem);
       }
     }
   }
@@ -589,19 +582,17 @@ function extractToolOutputStructuredError(input: ResponsesInputItem[]) {
 
 function extractToolOutputCallId(input: ResponsesInputItem[]) {
   const lastUserIndex = findLastUserIndex(input);
-  for (let index = input.length - 1; index > lastUserIndex; index -= 1) {
-    const item = input[index];
+  for (const item of input.slice(lastUserIndex + 1).toReversed()) {
     const output = extractFunctionCallOutputText(item);
     if (output) {
       return extractFunctionCallOutputCallId(item);
     }
   }
-  for (let index = input.length - 1; index >= 0; index -= 1) {
-    const item = input[index];
-    const output = extractFunctionCallOutputText(item);
+  for (const [candidateIndex, candidateItem] of Array.from(input.entries()).toReversed()) {
+    const output = extractFunctionCallOutputText(candidateItem);
     if (output) {
       const laterUserTexts = input
-        .slice(index + 1)
+        .slice(candidateIndex + 1)
         .filter((laterItem) => laterItem.role === "user" && Array.isArray(laterItem.content))
         .map((laterItem) => extractInputText(laterItem.content as unknown[]))
         .filter(Boolean);
@@ -609,7 +600,7 @@ function extractToolOutputCallId(input: ResponsesInputItem[]) {
         laterUserTexts.length > 0 &&
         laterUserTexts.every((text) => isToolOutputContinuationText(text))
       ) {
-        return extractFunctionCallOutputCallId(item);
+        return extractFunctionCallOutputCallId(candidateItem);
       }
     }
   }
@@ -617,8 +608,7 @@ function extractToolOutputCallId(input: ResponsesInputItem[]) {
 }
 
 function extractLatestToolOutput(input: ResponsesInputItem[]) {
-  for (let index = input.length - 1; index >= 0; index -= 1) {
-    const item = input[index];
+  for (const item of input.toReversed()) {
     const output = extractFunctionCallOutputText(item);
     if (output) {
       return output;
@@ -635,13 +625,9 @@ function extractAllToolOutputText(input: ResponsesInputItem[]) {
 }
 
 function extractUserTextAfterLatestToolOutput(input: ResponsesInputItem[]) {
-  let latestToolOutputIndex = -1;
-  for (let index = input.length - 1; index >= 0; index -= 1) {
-    if (extractFunctionCallOutputText(input[index])) {
-      latestToolOutputIndex = index;
-      break;
-    }
-  }
+  const latestToolOutputIndex = input.findLastIndex((item) =>
+    Boolean(extractFunctionCallOutputText(item)),
+  );
   if (latestToolOutputIndex < 0) {
     return "";
   }
@@ -1998,10 +1984,11 @@ function buildAssistantEvents(specsOrText: MockAssistantMessageSpec[] | string):
           },
         ]
       : specsOrText;
-  const output = specs.map((spec) => buildAssistantOutputItem(spec));
+  const renderedSpecs = specs.map((spec) => ({ spec, item: buildAssistantOutputItem(spec) }));
+  const output = renderedSpecs.map(({ item }) => item);
   const events: StreamEvent[] = [];
 
-  for (const [outputIndex, spec] of specs.entries()) {
+  for (const [outputIndex, { spec, item }] of renderedSpecs.entries()) {
     events.push({
       type: "response.output_item.added",
       item: {
@@ -2033,7 +2020,7 @@ function buildAssistantEvents(specsOrText: MockAssistantMessageSpec[] | string):
     }
     events.push({
       type: "response.output_item.done",
-      item: output[outputIndex],
+      item,
     });
   }
 
@@ -2690,6 +2677,47 @@ async function buildResponsesPayload(
         : `QA-TELEGRAM-CURRENT-SESSION-BAD ${sessionKey || "missing-session-key"}`,
     );
   }
+  // Scenario workflow beats broad marker fallback: system context can contain unrelated exact-reply directives.
+  if (/dreaming shadow trial report check/i.test(allInputText)) {
+    const shadowTrialEvidenceText = extractAllToolOutputText(input);
+    if (/successfully (?:wrote|created|updated|replaced)/i.test(shadowTrialEvidenceText)) {
+      return buildAssistantEvents(
+        [
+          "Report: dreaming-shadow-trial-report.md",
+          "Promotion action: report-only",
+          "DREAMING-SHADOW-TRIAL-OK",
+        ].join("\n"),
+      );
+    }
+    if (
+      !shadowTrialEvidenceText ||
+      (!shadowTrialEvidenceText.includes("# Dreaming shadow trial brief") &&
+        !shadowTrialEvidenceText.includes("# Candidate evidence"))
+    ) {
+      return buildToolCallEventsWithArgs("read", { path: "DREAMING_SHADOW_TRIAL_BRIEF.md" });
+    }
+    if (
+      shadowTrialEvidenceText.includes("# Dreaming shadow trial brief") &&
+      shadowTrialEvidenceText.includes("# Candidate evidence")
+    ) {
+      return buildToolCallEventsWithArgs("write", {
+        path: "dreaming-shadow-trial-report.md",
+        content: [
+          "Candidate: The user prefers release reports that include exact verification commands and remaining risk.",
+          "Trial prompt: Prepare a release readiness reply for a local OpenClaw QA change.",
+          "Baseline outcome: mentions tests passed but omits the exact command and remaining risk.",
+          "Candidate outcome: includes the exact verification command and calls out the remaining review risk.",
+          "Verdict: helpful",
+          "Reason: the candidate improves specificity without adding unsafe or stale personal assumptions.",
+          "Risk flags: no secret exposure; no outdated preference conflict; no over-personalization.",
+          "Promotion action: report-only",
+        ].join("\n"),
+      });
+    }
+    if (shadowTrialEvidenceText.includes("# Dreaming shadow trial brief")) {
+      return buildToolCallEventsWithArgs("read", { path: "DREAMING_CANDIDATE_EVIDENCE.md" });
+    }
+  }
   if (/\bmarker\b/i.test(allInputText) && promptExactReplyDirective) {
     return buildAssistantEvents(promptExactReplyDirective);
   }
@@ -2754,46 +2782,6 @@ async function buildResponsesPayload(
     }
     if (/release-handoff\.md/i.test(toolOutput)) {
       return buildAssistantEvents("RELEASE-AUDIT-COMPLETE");
-    }
-  }
-  if (/dreaming shadow trial report check/i.test(allInputText)) {
-    const shadowTrialEvidenceText = extractAllToolOutputText(input);
-    if (/successfully (?:wrote|created|updated|replaced)/i.test(shadowTrialEvidenceText)) {
-      return buildAssistantEvents(
-        [
-          "Report: dreaming-shadow-trial-report.md",
-          "Promotion action: report-only",
-          "DREAMING-SHADOW-TRIAL-OK",
-        ].join("\n"),
-      );
-    }
-    if (
-      !shadowTrialEvidenceText ||
-      (!shadowTrialEvidenceText.includes("# Dreaming shadow trial brief") &&
-        !shadowTrialEvidenceText.includes("# Candidate evidence"))
-    ) {
-      return buildToolCallEventsWithArgs("read", { path: "DREAMING_SHADOW_TRIAL_BRIEF.md" });
-    }
-    if (
-      shadowTrialEvidenceText.includes("# Dreaming shadow trial brief") &&
-      shadowTrialEvidenceText.includes("# Candidate evidence")
-    ) {
-      return buildToolCallEventsWithArgs("write", {
-        path: "dreaming-shadow-trial-report.md",
-        content: [
-          "Candidate: The user prefers release reports that include exact verification commands and remaining risk.",
-          "Trial prompt: Prepare a release readiness reply for a local OpenClaw QA change.",
-          "Baseline outcome: mentions tests passed but omits the exact command and remaining risk.",
-          "Candidate outcome: includes the exact verification command and calls out the remaining review risk.",
-          "Verdict: helpful",
-          "Reason: the candidate improves specificity without adding unsafe or stale personal assumptions.",
-          "Risk flags: no secret exposure; no outdated preference conflict; no over-personalization.",
-          "Promotion action: report-only",
-        ].join("\n"),
-      });
-    }
-    if (shadowTrialEvidenceText.includes("# Dreaming shadow trial brief")) {
-      return buildToolCallEventsWithArgs("read", { path: "DREAMING_CANDIDATE_EVIDENCE.md" });
     }
   }
   if (/personal share-safe diagnostics check/i.test(allInputText)) {
@@ -3778,6 +3766,7 @@ export async function startQaMockOpenAiServer(params?: {
   host?: string;
   port?: number;
   finalOnlyMarkerPauseMs?: number;
+  modelRefs?: readonly string[];
 }) {
   const host = params?.host ?? "127.0.0.1";
   const finalOnlyMarkerPauseMs = params?.finalOnlyMarkerPauseMs ?? 1_500;
@@ -3810,15 +3799,10 @@ export async function startQaMockOpenAiServer(params?: {
       }
       if (req.method === "GET" && url.pathname === "/v1/models") {
         writeJson(res, 200, {
-          data: [
-            { id: "gpt-5.6-luna", object: "model" },
-            { id: "gpt-5.6-luna-alt", object: "model" },
-            { id: "gpt-image-1", object: "model" },
-            { id: "gpt-4o-transcribe", object: "model" },
-            { id: "text-embedding-3-small", object: "model" },
-            { id: "claude-opus-4-8", object: "model" },
-            { id: "claude-sonnet-4-6", object: "model" },
-          ],
+          data: listMockOpenAiServerModelIds(params?.modelRefs).map((id) => ({
+            id,
+            object: "model",
+          })),
         });
         return;
       }

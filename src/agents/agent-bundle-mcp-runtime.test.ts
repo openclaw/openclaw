@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -62,6 +63,7 @@ async function writeListToolsMcpServer(params: {
   callToolIsError?: boolean;
   callToolJsonRpcError?: boolean;
   resourceListJsonRpcError?: boolean;
+  resourceReadJsonRpcError?: boolean;
 }): Promise<void> {
   await writeExecutable(
     params.filePath,
@@ -90,6 +92,7 @@ const tools = ${JSON.stringify(
 const callToolIsError = ${params.callToolIsError === true};
 const callToolJsonRpcError = ${params.callToolJsonRpcError === true};
 const resourceListJsonRpcError = ${params.resourceListJsonRpcError === true};
+const resourceReadJsonRpcError = ${params.resourceReadJsonRpcError === true};
 
 let buffer = "";
 let listCount = 0;
@@ -200,6 +203,22 @@ function handle(message) {
       jsonrpc: "2.0",
       id: message.id,
       result: { resources: [] },
+    });
+    return;
+  }
+  if (message.method === "resources/read") {
+    if (resourceReadJsonRpcError) {
+      send({
+        jsonrpc: "2.0",
+        id: message.id,
+        error: { code: -32000, message: "resource read failed" },
+      });
+      return;
+    }
+    send({
+      jsonrpc: "2.0",
+      id: message.id,
+      result: { contents: [{ uri: message.params?.uri, text: "resource ok" }] },
     });
   }
 }
@@ -1637,6 +1656,48 @@ process.on("SIGINT", shutdown);`,
     }
   });
 
+  it("does not pause tools after optional preview read failures", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-preview-failure-"));
+    const serverPath = path.join(tempDir, "preview-failure.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      capabilities: { tools: {}, resources: {} },
+      resourceReadJsonRpcError: true,
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-preview-failure",
+      sessionKey: "agent:test:session-preview-failure",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            failing: { command: process.execPath, args: [serverPath] },
+          },
+        },
+      },
+    });
+
+    try {
+      if (!runtime.readResource) {
+        throw new Error("Expected test runtime to expose resource utilities");
+      }
+      for (let index = 0; index < 3; index += 1) {
+        await expect(
+          runtime.readResource("failing", "ui://demo/app", { failureBackoff: "ignore" }),
+        ).rejects.toThrow("resource read failed");
+      }
+      await expect(runtime.callTool("failing", "slow_tool", {})).resolves.toMatchObject({
+        isError: false,
+      });
+    } finally {
+      await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("reuses repeated materialization and recreates after explicit disposal", async () => {
     const created: SessionMcpRuntime[] = [];
     const disposed: string[] = [];
@@ -1834,7 +1895,7 @@ process.on("SIGINT", shutdown);`,
       },
     });
     const toolsA = await materializeBundleMcpToolsForRun({ runtime: runtimeA });
-    const resultA = await toolsA.tools[0].execute(
+    const resultA = await expectDefined(toolsA.tools[0], "toolsA.tools[0] test invariant").execute(
       "call-configured-probe-a",
       {},
       undefined,
@@ -1860,7 +1921,7 @@ process.on("SIGINT", shutdown);`,
       },
     });
     const toolsB = await materializeBundleMcpToolsForRun({ runtime: runtimeB });
-    const resultB = await toolsB.tools[0].execute(
+    const resultB = await expectDefined(toolsB.tools[0], "toolsB.tools[0] test invariant").execute(
       "call-configured-probe-b",
       {},
       undefined,

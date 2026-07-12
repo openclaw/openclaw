@@ -778,6 +778,17 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain("package_integrity=${PACKAGE_INTEGRITY_RESULT}");
   });
 
+  it("keeps ref packaging independent of workflow-checkout dependencies", () => {
+    const workflow = readFileSync(PACKAGE_ACCEPTANCE_WORKFLOW, "utf8");
+    const resolveJob = workflow.slice(
+      workflow.indexOf("  resolve_package:"),
+      workflow.indexOf("  package_integrity:"),
+    );
+
+    expect(resolveJob).toContain("scripts/resolve-openclaw-package-candidate.mjs");
+    expect(resolveJob).not.toContain("pnpm install");
+  });
+
   it("offers bounded product profiles and can run Telegram against the resolved artifact", () => {
     const workflow = readFileSync(PACKAGE_ACCEPTANCE_WORKFLOW, "utf8");
     const npmTelegramWorkflow = readFileSync(NPM_TELEGRAM_WORKFLOW, "utf8");
@@ -2099,7 +2110,7 @@ describe("package artifact reuse", () => {
       ["run_live_discord", "Upload Discord QA artifacts", "always()"],
       ["run_live_whatsapp", "Upload WhatsApp QA artifacts", "always()"],
       ["run_live_slack", "Upload Slack QA artifacts", "always()"],
-    ];
+    ] as const;
 
     for (const [jobName, stepName, uploadCondition] of cases) {
       const uploadStep = workflowStep(workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, jobName), stepName);
@@ -2130,7 +2141,7 @@ describe("package artifact reuse", () => {
       ["qa_live_discord_release_checks", "Upload Discord QA artifacts"],
       ["qa_live_whatsapp_release_checks", "Upload WhatsApp QA artifacts"],
       ["qa_live_slack_release_checks", "Upload Slack QA artifacts"],
-    ];
+    ] as const;
 
     for (const [jobName, stepName] of cases) {
       const uploadStep = workflowStep(workflowJob(RELEASE_CHECKS_WORKFLOW, jobName), stepName);

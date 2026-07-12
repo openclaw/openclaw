@@ -35,6 +35,7 @@ import {
   validateSessionsPreviewParams,
   validateSessionsResetParams,
   validateSessionsResolveParams,
+  validateSessionsSearchParams,
   validateSessionsSendParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
@@ -69,6 +70,7 @@ import {
   resolveSessionTranscriptRuntimeTarget,
   trimSessionTranscriptForManualCompact,
 } from "../../config/sessions/session-accessor.js";
+import { searchSessionTranscripts } from "../../config/sessions/session-transcript-search.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { disableCronJobsBoundToSession } from "../../cron/job-session-bindings.js";
 import {
@@ -94,7 +96,8 @@ import {
   recordSessionCompacted,
 } from "../../sessions/session-state-events.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
-import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { canReviewOperatorApproval } from "../operator-approval-authorization.js";
+import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../operator-scopes.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
 import {
   createFileBackedCompactionCheckpointStore,
@@ -842,6 +845,66 @@ async function handleSessionSend(params: {
   }
 }
 export const sessionsHandlers: GatewayRequestHandlers = {
+  "sessions.search": async ({ params, respond, context }) => {
+    if (!assertValidParams(params, validateSessionsSearchParams, "sessions.search", respond)) {
+      return;
+    }
+    const query = params.query.trim();
+    if (!query) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "query must not be empty"));
+      return;
+    }
+    const cfg = context.getRuntimeConfig();
+    if (params.agentId && !params.sessionKeys) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "agentId requires sessionKeys"),
+      );
+      return;
+    }
+    const requestedAgentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
+    const sessionKeys = params.sessionKeys?.map((sessionKey) =>
+      requestedAgentId
+        ? resolveStoredSessionKeyForAgentStore({ cfg, agentId: requestedAgentId, sessionKey })
+        : resolveSessionStoreKey({ cfg, sessionKey }),
+    );
+    const agentIds = new Set(
+      sessionKeys?.map((sessionKey) =>
+        requestedAgentId && (sessionKey === "global" || sessionKey === "unknown")
+          ? requestedAgentId
+          : resolveSessionStoreAgentId(cfg, sessionKey),
+      ),
+    );
+    if (
+      agentIds.size > 1 ||
+      (requestedAgentId && [...agentIds].some((agentId) => agentId !== requestedAgentId))
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "sessions.search supports one agent per call"),
+      );
+      return;
+    }
+    const agentId =
+      requestedAgentId ?? agentIds.values().next().value ?? resolveDefaultAgentId(cfg);
+    try {
+      const result = searchSessionTranscripts({
+        agentId,
+        query,
+        limit: params.limit,
+        ...(sessionKeys ? { sessionKeys } : {}),
+      });
+      respond(true, {
+        results: result.hits,
+        ...(result.indexing ? { indexing: true } : {}),
+        ...(result.truncated ? { truncated: true } : {}),
+      });
+    } catch (error) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
+    }
+  },
   "sessions.list": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateSessionsListParams, "sessions.list", respond)) {
       return;
@@ -1009,6 +1072,17 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     if (!key) {
       return;
     }
+    if (p.includeApprovals === true && !canReviewOperatorApproval(client)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `sessions.messages.subscribe includeApprovals requires a paired device and gateway scope: ${APPROVALS_SCOPE}`,
+        ),
+      );
+      return;
+    }
     const cfg = context.getRuntimeConfig();
     const requestedAgent = resolveRequestedGlobalAgentId(cfg, key, p.agentId);
     if (!requestedAgent.ok) {
@@ -1023,8 +1097,52 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       defaultAgentId: resolveDefaultAgentId(cfg),
     });
     if (connId) {
-      context.subscribeSessionMessageEvents(connId, subscriptionKey);
-      respond(true, { subscribed: true, key: canonicalKey }, undefined);
+      let approvalReplay;
+      if (p.includeApprovals === true) {
+        // Subscribe before the authoritative snapshot so a transition cannot
+        // land between replay and live delivery. Clients reconcile by id.
+        const rollbackSubscription = context.subscribeSessionMessageEvents(
+          connId,
+          subscriptionKey,
+          { includeApprovals: true },
+        );
+        try {
+          approvalReplay = context.listSessionPendingApprovals?.(subscriptionKey, client);
+        } catch (error) {
+          rollbackSubscription?.();
+          context.logGateway.error(`session approval replay failed: ${String(error)}`);
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.UNAVAILABLE, "session approval replay unavailable"),
+          );
+          return;
+        }
+        if (!approvalReplay) {
+          rollbackSubscription?.();
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.UNAVAILABLE, "session approval replay unavailable"),
+          );
+          return;
+        }
+      } else {
+        context.subscribeSessionMessageEvents(connId, subscriptionKey);
+      }
+      respond(
+        true,
+        {
+          subscribed: true,
+          key: canonicalKey,
+          ...(p.includeApprovals === true
+            ? {
+                approvalReplay,
+              }
+            : {}),
+        },
+        undefined,
+      );
       return;
     }
     respond(true, { subscribed: false, key: canonicalKey }, undefined);
@@ -1272,19 +1390,35 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const cfg = context.getRuntimeConfig();
     const initialMessage = resolveOptionalInitialSessionMessage(p);
     const requestedCwd = normalizeOptionalString(p.cwd);
-    if (requestedCwd && p.worktree !== true) {
+    const requestedExecNode = normalizeOptionalString(p.execNode);
+    if (requestedCwd && p.worktree !== true && !requestedExecNode) {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "sessions.create cwd requires worktree=true"),
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "sessions.create cwd requires worktree=true or execNode",
+        ),
       );
       return;
     }
-    if (requestedCwd && !path.isAbsolute(requestedCwd)) {
+    const cwdIsAbsolute =
+      !requestedCwd ||
+      path.isAbsolute(requestedCwd) ||
+      Boolean(requestedExecNode && path.win32.isAbsolute(requestedCwd));
+    if (!cwdIsAbsolute) {
       respond(
         false,
         undefined,
         errorShape(ErrorCodes.INVALID_REQUEST, "sessions.create cwd must be absolute"),
+      );
+      return;
+    }
+    if (requestedExecNode && p.worktree === true) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "sessions.create worktree cannot target execNode"),
       );
       return;
     }
@@ -1301,10 +1435,10 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const requestedExecNode = normalizeOptionalString(p.execNode);
     let sessionKey = p.key;
     let sessionAgentId = p.agentId;
     let sessionWorktree: Awaited<ReturnType<typeof managedWorktrees.create>> | undefined;
+    const sessionExecCwd = requestedExecNode ? requestedCwd : undefined;
     let sessionCwd: string | undefined;
     let sessionSourceRoot: string | undefined;
     let provisionedSessionWorktree = false;
@@ -1460,6 +1594,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           }
         : undefined,
       execNode: requestedExecNode,
+      execCwd: sessionExecCwd,
+      clearExecBinding: !requestedExecNode,
       // A plain New Chat that resets an existing session must not inherit its prior worktree cwd.
       clearSpawnedCwd: p.worktree !== true,
       fork: p.fork,

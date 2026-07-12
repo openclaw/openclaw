@@ -856,6 +856,12 @@ describe("google-meet plugin", () => {
       "https://meet.google.com/abc-defg-hij",
     );
     expect(() => normalizeMeetUrl("https://example.com/abc-defg-hij")).toThrow("meet.google.com");
+    expect(() => normalizeMeetUrl("https://user@meet.google.com/abc-defg-hij")).toThrow(
+      "meet.google.com",
+    );
+    expect(() => normalizeMeetUrl("https://meet.google.com:444/abc-defg-hij")).toThrow(
+      "meet.google.com",
+    );
   });
 
   it("advertises only the googlemeet CLI descriptor", () => {
@@ -974,6 +980,7 @@ describe("google-meet plugin", () => {
       "join",
       "create",
       "status",
+      "transcript",
       "setup_status",
       "resolve_space",
       "preflight",
@@ -2623,9 +2630,27 @@ describe("google-meet plugin", () => {
     tabUrlAfterJoin?: string;
     leaveClicked?: boolean;
     leaveConfirmationRequired?: boolean;
+    nonFinalTranscriptGate?: Promise<void>;
+    onNonFinalTranscriptRead?: () => void;
+    transcript?: {
+      droppedLines?: number;
+      epoch?: string;
+      lines: Array<{ at?: string; speaker?: string; text: string }>;
+    };
+    finalTranscript?: {
+      droppedLines?: number;
+      epoch?: string;
+      lines: Array<{ at?: string; speaker?: string; text: string }>;
+    };
+    transcriptSequence?: Array<{
+      droppedLines?: number;
+      epoch?: string;
+      lines: Array<{ at?: string; speaker?: string; text: string }>;
+    }>;
   }) {
     let joined = false;
     let leaveStep = 0;
+    let transcriptReadIndex = 0;
     let openedTabUrl = options?.reused ? "https://meet.google.com/abc-defg-hij?hl=en" : undefined;
     const callGatewayFromCli = vi.fn(
       async (
@@ -2670,6 +2695,30 @@ describe("google-meet plugin", () => {
           return { ok: true };
         }
         if (request.path === "/act") {
+          if (String(request.body?.fn).includes("state = window.__openclawMeetCaptions")) {
+            const finalizing = String(request.body?.fn).includes("if (true &&");
+            if (!finalizing) {
+              options?.onNonFinalTranscriptRead?.();
+              await options?.nonFinalTranscriptGate;
+            }
+            const transcript = finalizing
+              ? (options?.finalTranscript ?? options?.transcript)
+              : options?.transcript;
+            const sequencedTranscript =
+              options?.transcriptSequence?.[
+                Math.min(transcriptReadIndex, options.transcriptSequence.length - 1)
+              ];
+            transcriptReadIndex += 1;
+            const responseTranscript = sequencedTranscript ?? transcript;
+            return {
+              result: JSON.stringify({
+                urlMatched: options?.tabUrlAfterJoin?.includes("/abc-defg-hij") !== false,
+                droppedLines: responseTranscript?.droppedLines ?? 0,
+                epoch: responseTranscript?.epoch,
+                lines: responseTranscript?.lines ?? [],
+              }),
+            };
+          }
           if (String(request.body?.fn).includes("leaveAction")) {
             const currentUrl = options?.tabUrlAfterJoin ?? openedTabUrl;
             const urlMatched = currentUrl?.includes("/abc-defg-hij") === true;
@@ -2718,6 +2767,223 @@ describe("google-meet plugin", () => {
     chromeTransportTesting.setDepsForTest({ callGatewayFromCli });
     return callGatewayFromCli;
   }
+
+  it("reads and snapshots the bounded transcript from the exact tracked tab", async () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    try {
+      const callGatewayFromCli = mockLocalMeetBrowserRequestWithTabState({
+        transcript: {
+          droppedLines: 2,
+          lines: [
+            { at: "2026-07-12T06:00:00.000Z", speaker: "Alice", text: "third line" },
+            { at: "2026-07-12T06:00:01.000Z", speaker: "Bob", text: "fourth line" },
+          ],
+        },
+      });
+      const { methods } = setup({ defaultMode: "transcribe", defaultTransport: "chrome" });
+      const joined = (await invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.join", {
+        url: "https://meet.google.com/abc-defg-hij",
+      })) as { session: { id: string } };
+
+      const beforeRead = callGatewayFromCli.mock.calls.length;
+      const transcript = (await invokeGoogleMeetGatewayMethodForTest(
+        methods,
+        "googlemeet.transcript",
+        { sessionId: joined.session.id, sinceIndex: 3 },
+      )) as {
+        droppedLines: number;
+        startIndex: number;
+        nextIndex: number;
+        lines: Array<{ text: string }>;
+      };
+      expect(transcript).toMatchObject({ droppedLines: 2, startIndex: 3, nextIndex: 4 });
+      expect(transcript.lines.map((line) => line.text)).toEqual(["fourth line"]);
+      const readCalls = callGatewayFromCli.mock.calls.slice(beforeRead);
+      expect(readCalls).toHaveLength(1);
+      expect(requireRecord(readCalls[0]?.[2], "transcript request")).toMatchObject({
+        method: "POST",
+        path: "/act",
+        body: { targetId: "local-meet-tab" },
+      });
+
+      await invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.leave", {
+        sessionId: joined.session.id,
+      });
+      const afterLeave = (await invokeGoogleMeetGatewayMethodForTest(
+        methods,
+        "googlemeet.transcript",
+        { sessionId: joined.session.id },
+      )) as { lines: Array<{ text: string }> };
+      expect(afterLeave.lines.map((line) => line.text)).toEqual(["third line", "fourth line"]);
+
+      await expect(
+        invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.transcript", {
+          sessionId: joined.session.id,
+          sinceIndex: 1.5,
+        }),
+      ).rejects.toThrow("sinceIndex must be a non-negative safe integer");
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+    }
+  });
+
+  it("refuses to read a tracked tab after it navigates away from the meeting", async () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    try {
+      mockLocalMeetBrowserRequestWithTabState({
+        tabUrlAfterJoin: "https://meet.google.com/lookup/unrelated",
+        transcript: { lines: [{ text: "must not leak" }] },
+      });
+      const { methods } = setup({ defaultMode: "transcribe", defaultTransport: "chrome" });
+      const joined = (await invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.join", {
+        url: "https://meet.google.com/abc-defg-hij",
+      })) as { session: { id: string } };
+
+      await expect(
+        invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.transcript", {
+          sessionId: joined.session.id,
+        }),
+      ).rejects.toThrow("tracked Meet tab no longer shows this session's meeting URL");
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+    }
+  });
+
+  it("keeps the cursor monotonic when the Meet page transcript epoch resets", async () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    try {
+      mockLocalMeetBrowserRequestWithTabState({
+        transcriptSequence: [
+          { epoch: "page-1", lines: [{ text: "before reload" }] },
+          { epoch: "page-2", lines: [{ text: "after reload" }] },
+          { epoch: "page-2", lines: [{ text: "after reload" }] },
+        ],
+      });
+      const { methods } = setup({ defaultMode: "transcribe", defaultTransport: "chrome" });
+      const joined = (await invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.join", {
+        url: "https://meet.google.com/abc-defg-hij",
+      })) as { session: { id: string } };
+
+      const first = (await invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.transcript", {
+        sessionId: joined.session.id,
+      })) as { nextIndex: number; lines: Array<{ text: string }> };
+      const second = (await invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.transcript", {
+        sessionId: joined.session.id,
+        sinceIndex: first.nextIndex,
+      })) as { nextIndex: number; lines: Array<{ text: string }> };
+      expect(first).toMatchObject({ nextIndex: 1, lines: [{ text: "before reload" }] });
+      expect(second).toMatchObject({ nextIndex: 2, lines: [{ text: "after reload" }] });
+
+      await invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.leave", {
+        sessionId: joined.session.id,
+      });
+      const ended = (await invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.transcript", {
+        sessionId: joined.session.id,
+      })) as { lines: Array<{ text: string }> };
+      expect(ended.lines.map((line) => line.text)).toEqual(["before reload", "after reload"]);
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+    }
+  });
+
+  it("does not let a late active read replace the finalized leave snapshot", async () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    let releaseRead: (() => void) | undefined;
+    let markReadStarted: (() => void) | undefined;
+    const readGate = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    const readStarted = new Promise<void>((resolve) => {
+      markReadStarted = resolve;
+    });
+    let activeReads = 0;
+    try {
+      const callGatewayFromCli = mockLocalMeetBrowserRequestWithTabState({
+        transcript: { lines: [{ text: "partial" }] },
+        finalTranscript: { lines: [{ text: "partial" }, { text: "complete caption" }] },
+        nonFinalTranscriptGate: readGate,
+        onNonFinalTranscriptRead: () => {
+          activeReads += 1;
+          markReadStarted?.();
+        },
+      });
+      const { methods } = setup({ defaultMode: "transcribe", defaultTransport: "chrome" });
+      const joined = (await invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.join", {
+        url: "https://meet.google.com/abc-defg-hij",
+      })) as { session: { id: string } };
+
+      const lateRead = invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.transcript", {
+        sessionId: joined.session.id,
+      });
+      await readStarted;
+      const secondRead = invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.transcript", {
+        sessionId: joined.session.id,
+      });
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
+      expect(activeReads).toBe(1);
+      const leaving = invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.leave", {
+        sessionId: joined.session.id,
+      });
+      const repeatedLeave = invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.leave", {
+        sessionId: joined.session.id,
+      });
+      releaseRead?.();
+      await Promise.allSettled([lateRead, secondRead, leaving, repeatedLeave]);
+      const finalCaptures = callGatewayFromCli.mock.calls.filter((call) => {
+        const request = call[2] as { body?: { fn?: string } };
+        const script = String(request.body?.fn);
+        return (
+          script.includes("state = window.__openclawMeetCaptions") && script.includes("if (true &&")
+        );
+      });
+      expect(finalCaptures).toHaveLength(1);
+      const result = (await invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.transcript", {
+        sessionId: joined.session.id,
+      })) as { lines: Array<{ text: string }> };
+      expect(result.lines.map((line) => line.text)).toEqual(["partial", "complete caption"]);
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+    }
+  });
+
+  it("retains only the four most recently ended transcripts", async () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    try {
+      mockLocalMeetBrowserRequestWithTabState({
+        transcript: { lines: [{ text: "retained line" }] },
+      });
+      const { methods } = setup({ defaultMode: "transcribe", defaultTransport: "chrome" });
+      const sessionIds: string[] = [];
+      for (let index = 0; index < 5; index += 1) {
+        const joined = (await invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.join", {
+          url: "https://meet.google.com/abc-defg-hij",
+        })) as { session: { id: string } };
+        sessionIds.push(joined.session.id);
+        await invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.leave", {
+          sessionId: joined.session.id,
+        });
+      }
+
+      const oldest = (await invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.transcript", {
+        sessionId: sessionIds[0],
+      })) as { evicted?: boolean; lines: unknown[] };
+      const next = (await invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.transcript", {
+        sessionId: sessionIds[1],
+      })) as { evicted?: boolean; lines: unknown[] };
+      expect(oldest).toMatchObject({ evicted: true, lines: [] });
+      expect(next.evicted).toBeUndefined();
+      expect(next.lines).toHaveLength(1);
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+    }
+  });
 
   it("leaves the Meet call in the browser when a chrome session leaves", async () => {
     const originalPlatform = process.platform;
@@ -3450,6 +3716,7 @@ describe("google-meet plugin", () => {
       Date,
       JSON,
       String,
+      crypto: { randomUUID: () => "caption-epoch" },
       document,
       location: {
         href: "https://meet.google.com/abc-defg-hij",
@@ -3464,6 +3731,7 @@ describe("google-meet plugin", () => {
       `(${chromeTransportTesting.meetStatusScriptForTest({
         allowMicrophone: false,
         autoJoin: false,
+        captionSessionId: "session-1",
         captureCaptions: true,
         guestName: "OpenClaw Agent",
       })})`,
@@ -3486,6 +3754,165 @@ describe("google-meet plugin", () => {
     expect(second.captionsEnabledAttempted).toBe(true);
     expect(stateAfterSecond.enabledAttempted).toBe(true);
     expect(captionButton.click).toHaveBeenCalledTimes(1);
+  });
+
+  it("coalesces progressive captions and ignores end phrases while still in call", async () => {
+    const leaveButton = {
+      disabled: false,
+      innerText: "",
+      textContent: "",
+      click: vi.fn(),
+      getAttribute: vi.fn((name: string) => (name === "aria-label" ? "Leave call" : null)),
+    };
+    const page = { caption: "Alice\nmeeting ended", visible: true };
+    const makeRegion = () => ({
+      get innerText() {
+        return page.caption;
+      },
+      get textContent() {
+        return page.caption;
+      },
+    });
+    let region = makeRegion();
+    const windowState: Record<string, unknown> = {};
+    const disconnectObserver = vi.fn();
+    const clearCaptionTimer = vi.fn();
+    let settleCaption: (() => void) | undefined;
+    const randomUUID = vi
+      .fn()
+      .mockReturnValueOnce("epoch-1")
+      .mockReturnValueOnce("epoch-2")
+      .mockReturnValueOnce("epoch-3");
+    const document = {
+      body: { innerText: "meeting ended", textContent: "meeting ended" },
+      title: "Meet",
+      querySelector: vi.fn((selector: string) =>
+        selector.includes("aria-live") && page.visible ? region : null,
+      ),
+      querySelectorAll: vi.fn((selector: string) => {
+        if (selector === "button") {
+          return [leaveButton];
+        }
+        if (selector === "input") {
+          return [];
+        }
+        if (selector.includes("aria-live")) {
+          return page.visible ? [region] : [];
+        }
+        return [];
+      }),
+    };
+    const context = createContext({
+      Date,
+      JSON,
+      clearTimeout: clearCaptionTimer,
+      setTimeout: (callback: () => void) => {
+        settleCaption = callback;
+        return 1;
+      },
+      String,
+      URL,
+      crypto: { randomUUID },
+      document,
+      location: { href: "https://meet.google.com/abc-defg-hij", hostname: "meet.google.com" },
+      MutationObserver: class {
+        observe = vi.fn();
+        disconnect = disconnectObserver;
+      },
+      window: windowState,
+    });
+    const inspect = new Script(
+      `(${chromeTransportTesting.meetStatusScriptForTest({
+        allowMicrophone: false,
+        autoJoin: false,
+        captionSessionId: "session-1",
+        captureCaptions: true,
+        guestName: "OpenClaw Agent",
+      })})`,
+    ).runInContext(context) as () => string | Promise<string>;
+
+    const first = JSON.parse(await inspect()) as { leaveReason?: string };
+    expect(first.leaveReason).toBeUndefined();
+    page.caption = "Alice\nmeeting ended after the recap";
+    await inspect();
+    const state = windowState["__openclawMeetCaptions"] as {
+      epoch: string;
+      lines: Array<{ text: string }>;
+      visible: Array<{ text: string }>;
+    };
+    expect(state.lines).toEqual([]);
+    expect(state.visible.map((line) => line.text)).toEqual(["meeting ended after the recap"]);
+    region = makeRegion();
+    await inspect();
+    expect(state.visible).toHaveLength(1);
+
+    page.visible = false;
+    await inspect();
+    page.visible = true;
+    await inspect();
+    expect(clearCaptionTimer).toHaveBeenCalledWith(1);
+    expect(state.lines).toEqual([]);
+
+    page.visible = false;
+    await inspect();
+    settleCaption?.();
+    page.visible = true;
+    await inspect();
+    expect(state.lines.map((line) => line.text)).toEqual(["meeting ended after the recap"]);
+    expect(state.visible.map((line) => line.text)).toEqual(["meeting ended after the recap"]);
+    const readTranscript = (sessionId: string, finalize: boolean) =>
+      new Script(
+        `(${chromeTransportTesting.meetTranscriptScriptForTest(
+          "https://meet.google.com/abc-defg-hij",
+          sessionId,
+          finalize,
+        )})`,
+      ).runInContext(context) as () => string;
+    const beforeFinalize = JSON.parse(readTranscript("session-1", false)()) as { lines: unknown[] };
+    expect(beforeFinalize.lines).toHaveLength(1);
+    const afterFinalize = JSON.parse(readTranscript("session-1", true)()) as { lines: unknown[] };
+    expect(afterFinalize.lines).toHaveLength(2);
+
+    delete windowState["__openclawMeetCaptions"];
+    await inspect();
+    const reloadedState = windowState["__openclawMeetCaptions"] as { epoch: string };
+    expect(reloadedState.epoch).not.toBe(state.epoch);
+
+    const inspectNextSession = new Script(
+      `(${chromeTransportTesting.meetStatusScriptForTest({
+        allowMicrophone: false,
+        autoJoin: false,
+        captionSessionId: "session-2",
+        captureCaptions: true,
+        guestName: "OpenClaw Agent",
+      })})`,
+    ).runInContext(context) as () => string | Promise<string>;
+    await inspectNextSession();
+    const nextState = windowState["__openclawMeetCaptions"] as {
+      droppedLines: number;
+      epoch: string;
+      sessionId?: string;
+      lines: Array<{ text: string }>;
+      visible: Array<{ text: string }>;
+    };
+    expect(nextState.sessionId).toBe("session-2");
+    expect(nextState.epoch).not.toBe(state.epoch);
+    expect(nextState.lines).toEqual([]);
+    expect(nextState.visible.map((line) => line.text)).toEqual(["meeting ended after the recap"]);
+    expect(disconnectObserver).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(readTranscript("session-1", false)())).toMatchObject({
+      sessionMatched: false,
+    });
+
+    nextState.lines = Array.from({ length: 2_000 }, (_, index) => ({ text: `line-${index}` }));
+    nextState.visible = [];
+    page.caption = "Alice\nline-2000";
+    await inspectNextSession();
+    readTranscript("session-2", true)();
+    expect(nextState.lines).toHaveLength(2_000);
+    expect(nextState.lines[0]?.text).toBe("line-1");
+    expect(nextState.lines.at(-1)?.text).toBe("line-2000");
+    expect(nextState.droppedLines).toBe(1);
   });
 
   it("reports in-call Meet audio permission problems from button labels", async () => {

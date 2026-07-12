@@ -197,7 +197,6 @@ describe("qa scenario catalog", () => {
     expect(scenarios.map((scenario) => scenario.id).toSorted()).toEqual([
       "kitchen-sink-live-openai",
       "matrix-post-restart-room-continue",
-      "matrix-restart-replay-dedupe",
       "matrix-restart-resume",
       "slack-restart-resume",
       "subagent-stale-child-links",
@@ -209,6 +208,15 @@ describe("qa scenario catalog", () => {
         .filter((scenario) => scenario.execution.suiteIsolation !== "isolated")
         .map((scenario) => scenario.id),
     ).toEqual([]);
+  });
+
+  it("uses only graceful gateway restart for Matrix replay dedupe", () => {
+    const scenario = requireFlowScenario(readQaScenarioById("matrix-restart-replay-dedupe"));
+
+    expect(flowContainsCall(scenario.execution.flow, "env.gateway.restart")).toBe(true);
+    expect(flowContainsCall(scenario.execution.flow, "env.gateway.restartAfterStateMutation")).toBe(
+      false,
+    );
   });
 
   it("loads scenario-declared gateway runtime options from YAML", () => {
@@ -431,6 +439,7 @@ describe("qa scenario catalog", () => {
       "webchat-direct-reply-routing",
       "long-context-progress-watchdog",
       "gateway-restart-inflight-run",
+      "gateway-restart-multi-live",
       "streaming-final-integrity",
     ];
 
@@ -448,6 +457,9 @@ describe("qa scenario catalog", () => {
     );
     const gatewayRestartFlow = readQaScenarioById("gateway-restart-inflight-run").execution.flow;
     const gatewayRestartContract = JSON.stringify(gatewayRestartFlow);
+    expect(
+      JSON.stringify(readQaScenarioById("gateway-restart-inflight-run").gatewayConfigPatch),
+    ).toContain('"alsoAllow":["qa_restart_wait","qa_restart_unsafe_probe"]');
     expect(gatewayRestartContract).toContain("plannedToolName === 'wait'");
     expect(gatewayRestartContract).toContain("lastAssistantToolNames?.includes('wait')");
     expect(gatewayRestartContract).toContain('"taskTracking":false');
@@ -457,6 +469,22 @@ describe("qa scenario catalog", () => {
     expect(gatewayRestartContract).toContain("dispatching restart-safe recovery");
     expect(gatewayRestartContract).toContain("[OpenClaw heartbeat poll]");
     expect(gatewayRestartContract).toContain("liveTurnTimeoutMs(env, 180000)");
+    expect(gatewayRestartContract).toContain("dmScope: 'per-channel-peer'");
+    const liveMultiRestart = readQaScenarioById("gateway-restart-multi-live");
+    const liveMultiRestartContract = JSON.stringify(liveMultiRestart.execution.flow);
+    expect(JSON.stringify(liveMultiRestart.gatewayConfigPatch)).toContain(
+      '"alsoAllow":["qa_restart_wait","qa_restart_unsafe_probe"]',
+    );
+    expect(liveMultiRestartContract).toContain("assistantToolCallCounts.exec");
+    expect(liveMultiRestartContract).toContain("checkpoint");
+    expect(liveMultiRestartContract).toContain("restarts=3");
+    expect(liveMultiRestartContract).toContain("dmScope: 'per-channel-peer'");
+    expect(liveMultiRestartContract).toContain("dispatching restart-safe recovery");
+    expect(readQaScenarioExecutionConfig("gateway-restart-multi-live")).toMatchObject({
+      requiredProviderMode: "live-frontier",
+      requiredProvider: "openai",
+      requiredModel: "gpt-5.4",
+    });
     const longContextFlow = JSON.stringify(
       readQaScenarioById("long-context-progress-watchdog").execution.flow,
     );

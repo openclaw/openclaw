@@ -224,13 +224,14 @@ The command:
    process and retry if the checkpoint is busy.
 4. Sets `auto_vacuum` to `INCREMENTAL`, runs a full `VACUUM`, and checkpoints
    again.
-5. Runs both `quick_check` and `integrity_check`, then reapplies owner-only
-   permissions to the database and SQLite sidecar files.
+5. Runs `quick_check`, `integrity_check`, and `foreign_key_check`, then
+   reapplies owner-only permissions to the database and SQLite sidecar files.
 
 JSON output reports the database and WAL sizes, freelist pages, page size, and
-`auto_vacuum` value before and after compaction, plus reclaimed bytes and both
-verification results. SQLite reports `auto_vacuum` as `0` for none, `1` for
-full, and `2` for incremental.
+`auto_vacuum` value before and after compaction, plus reclaimed bytes and the
+`quick_check` and `integrity_check` results. `foreign_key_check` is enforced
+fail-closed and has no separate success field. SQLite reports `auto_vacuum` as
+`0` for none, `1` for full, and `2` for incremental.
 
 Compaction fails without mutation when the schema is old, newer than the
 running OpenClaw build, or belongs to an agent database. Run
@@ -290,8 +291,10 @@ SQLite deletes reclaim pages inside the database first; they do not necessarily
 shrink the database file immediately. After deleting or archiving large
 transcripts, run `openclaw doctor --session-sqlite compact --session-sqlite-all-agents`
 to checkpoint WAL files, run `VACUUM`, and report before/after database and WAL
-sizes. This is explicit doctor maintenance so normal Gateway writes do not pause
-for background vacuum work.
+sizes. Compaction requires a regular file with the current agent schema, the
+selected agent's durable owner metadata, and no open handle in the doctor
+process. This is explicit offline maintenance: stop the Gateway first so normal
+writes cannot race the checkpoint or `VACUUM`.
 
 Each import writes a manifest under
 `~/.openclaw/session-sqlite-migration-runs/` before moving transcript artifacts
@@ -307,11 +310,19 @@ manifest's archived artifacts, validates the affected targets, refreshes the
 sanitized `.failure.md` and `.failure.json` reports, and prepares a GitHub issue
 body that avoids transcript contents, raw environment, secrets, and unbounded
 config. When no failed migration manifest exists but a selected agent SQLite
-database is corrupt or not a database, recovery preserves the DB, WAL, and SHM
-files by renaming them with a `.corrupt-<timestamp>` suffix so the next startup
-can create a fresh database. With `--github-issue --yes`, doctor uses the GitHub
-CLI to create the issue in `openclaw/openclaw`; without confirmation it writes
-the local support report and prints a prefilled issue URL.
+database is corrupt, not a database, or has journal sidecars without a main
+database, recovery copies the complete file set to a temporary inspection
+directory. SQLite can roll back a valid hot journal in that disposable copy
+before `quick_check`, `integrity_check`, and `foreign_key_check` run, while the
+original forensic files remain untouched. Failed integrity checks or orphaned
+sidecars preserve the DB, WAL, SHM, and rollback-journal files by renaming the
+whole discovered set with one `.corrupt-<timestamp>` suffix. A caught rename
+failure rolls already-moved files back before reporting failure, so a
+recoverable file set is not silently split. Stop the Gateway before recovery;
+copying or renaming an actively changing SQLite file set is unsafe and behaves
+differently across operating systems. With `--github-issue --yes`, doctor uses
+the GitHub CLI to create the issue in `openclaw/openclaw`; without confirmation
+it writes the local support report and prints a prefilled issue URL.
 
 `restore` remains the lower-level undo operation. It uses manifest
 `sourcePath -> archivePath` records, moves archived artifacts back only when the

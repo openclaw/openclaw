@@ -133,6 +133,10 @@ describe("Slack live QA runtime helpers", () => {
     expect(testing.findScenario().map((scenario) => scenario.id)).not.toContain(
       "slack-table-invalid-blocks-fallback",
     );
+    expect(testing.findScenario(["slack-codex-approval-exec-native"])[0]?.forcedRuntime).toBe(
+      "codex",
+    );
+    expect(testing.findScenario(["slack-canary"])[0]?.forcedRuntime).toBeUndefined();
   });
 
   it("accepts only Codex harness providers for Codex approval scenarios", () => {

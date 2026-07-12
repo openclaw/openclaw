@@ -208,8 +208,12 @@ function toRequestSnapshots(entries: JournalEntry[]): AimockRequestSnapshot[] {
     if (snapshot.toolOutputCallId && pendingPlannedIndexes.length > 0) {
       const plannedIndex = pendingPlannedIndexes.shift();
       if (plannedIndex !== undefined) {
+        const plannedSnapshot = snapshots[plannedIndex];
+        if (!plannedSnapshot) {
+          continue;
+        }
         snapshots[plannedIndex] = {
-          ...snapshots[plannedIndex],
+          ...plannedSnapshot,
           plannedToolCallId: snapshot.toolOutputCallId,
         };
       }

@@ -28,7 +28,10 @@ vi.mock("../tool-display.ts", () => ({
   },
 }));
 
-import { resolveMcpAppSandboxUrl } from "../../../components/mcp-app-view.ts";
+import {
+  buildMcpAppHostCapabilities,
+  resolveMcpAppSandboxUrl,
+} from "../../../components/mcp-app-view.ts";
 import { t } from "../../../i18n/index.ts";
 import {
   formatDistinctCollapsedToolSummaryText,
@@ -66,6 +69,15 @@ function pointerClick(element: Element) {
 }
 
 describe("tool-cards", () => {
+  it("advertises the CSP actually applied to MCP Apps", () => {
+    expect(
+      buildMcpAppHostCapabilities({ connectDomains: ["https://api.example.com"] }),
+    ).toMatchObject({
+      sandbox: { csp: { connectDomains: ["https://api.example.com"] } },
+    });
+    expect(buildMcpAppHostCapabilities()).toMatchObject({ sandbox: { csp: {} } });
+  });
+
   it("accepts only the dedicated-origin MCP App sandbox endpoint", () => {
     expect(
       resolveMcpAppSandboxUrl(
