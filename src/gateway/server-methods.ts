@@ -14,9 +14,12 @@ import {
 import {
   getGatewayClientAuthorizationDelegation,
   getGatewayClientAuthorizationDomain,
+  getGatewayClientTeamsSession,
 } from "./authorization/client-domain.js";
 import { authorizeGatewayAccess } from "./authorization/kernel.js";
 import { withGatewayAuthorizationContext } from "./authorization/request-context.js";
+import { createStateGatewayAuthorizationRuntime } from "./authorization/state-provider.js";
+import { resolveTeamsSessionById } from "./authorization/teams-identity.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "./control-plane-audit.js";
 import { consumeControlPlaneWriteBudget } from "./control-plane-rate-limit.js";
 import {
@@ -317,10 +320,14 @@ function authorizeGatewayMethod(
     return errorShape(ErrorCodes.INVALID_REQUEST, `unauthorized role: ${roleRaw}`);
   }
   const scopes = client.connect.scopes ?? [];
-  if (!isRoleAuthorizedForMethod(role, method)) {
+  const accessPolicy = methodRegistry.getAccessPolicy(method);
+  if (!isRoleAuthorizedForMethod(role, method, accessPolicy)) {
     return errorShape(ErrorCodes.INVALID_REQUEST, `unauthorized role: ${role}`);
   }
   if (role === "node") {
+    return null;
+  }
+  if (role === "member") {
     return null;
   }
   if (scopes.includes(ADMIN_SCOPE)) {
@@ -850,6 +857,29 @@ export async function handleGatewayRequest(
     opts.methodRegistry?.getHandler(req.method) !== undefined
       ? opts.methodRegistry
       : createRequestGatewayMethodRegistry(opts.extraHandlers);
+  const role = parseGatewayRole(client?.connect.role ?? "operator");
+  const domain = getGatewayClientAuthorizationDomain(client);
+  if (role === "member") {
+    const binding = getGatewayClientTeamsSession(client);
+    const session = binding ? resolveTeamsSessionById({ id: binding.id }) : undefined;
+    const principal = client?.principal;
+    if (
+      !binding ||
+      !session ||
+      !domain ||
+      principal?.kind !== "human" ||
+      session.id !== binding.id ||
+      session.principalId !== binding.principalId ||
+      session.domainId !== binding.domainId ||
+      domain.id !== binding.domainId ||
+      session.principal.issuer !== principal.issuer ||
+      session.principal.subject !== principal.subject ||
+      session.principal.kind !== principal.kind
+    ) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "authentication required"));
+      return;
+    }
+  }
   const authError = authorizeGatewayMethod(req.method, client, req.params, methodRegistry);
   if (authError) {
     respond(false, undefined, authError);
@@ -864,11 +894,19 @@ export async function handleGatewayRequest(
     );
     return;
   }
+  const principalKind = client?.principal?.kind;
+  const requiresStateAuthorization =
+    role === "member" ||
+    (domain !== undefined && (principalKind === "human" || principalKind === "service"));
+  const authorizationRuntime =
+    requiresStateAuthorization && context.authorization.mode === "legacy"
+      ? createStateGatewayAuthorizationRuntime()
+      : context.authorization;
   const access = await authorizeGatewayAccess({
-    runtime: context.authorization,
+    runtime: authorizationRuntime,
     policy: methodRegistry.getAccessPolicy(req.method),
     principal: client?.principal,
-    domain: getGatewayClientAuthorizationDomain(client),
+    domain,
     delegation: getGatewayClientAuthorizationDelegation(client),
     method: req.method,
     params: req.params,

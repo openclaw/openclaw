@@ -118,6 +118,11 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
     description: "Inspect durable background tasks and TaskFlow state",
     hasSubcommands: true,
   },
+  {
+    name: "teams",
+    description: "Manage local Teams authorization",
+    hasSubcommands: true,
+  },
 ] as const satisfies ReadonlyArray<CoreCliCommandDescriptor>);
 
 /** Static root-command descriptors for the core CLI surface. */

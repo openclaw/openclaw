@@ -293,12 +293,14 @@ export function prepareAuthorizationResourceRetirement(input: {
   idempotencyKey: string;
   domainId: string;
   resource: GatewayResourceRef;
+  parent?: GatewayResourceRef;
   actorPrincipalId: string;
 }): PreparedAuthorizationResourceOperation {
   const operationScope = requiredIdentifier(input.operationScope, "authorization operation scope");
   const idempotencyKey = requiredIdentifier(input.idempotencyKey, "authorization idempotency key");
   const domainId = requiredIdentifier(input.domainId, "isolation domain id");
   const resource = normalizeResource(input.resource);
+  const parent = input.parent ? normalizeResource(input.parent) : undefined;
   const actorPrincipalId = requiredIdentifier(input.actorPrincipalId, "actor principal id");
   return runOpenClawStateWriteTransaction(({ db }) => {
     const kysely = getNodeSqliteKysely<AuthorizationResourceDatabase>(db);
@@ -319,9 +321,9 @@ export function prepareAuthorizationResourceRetirement(input: {
         existing.resource_type === resource.type &&
         existing.resource_id === resource.id &&
         existing.actor_principal_id === actorPrincipalId &&
-        existing.parent_namespace === null &&
-        existing.parent_resource_type === null &&
-        existing.parent_resource_id === null &&
+        existing.parent_namespace === (parent?.namespace ?? null) &&
+        existing.parent_resource_type === (parent?.type ?? null) &&
+        existing.parent_resource_id === (parent?.id ?? null) &&
         existing.delegation_id === null &&
         existing.assignment_id === null;
       if (!matches) {
@@ -333,7 +335,12 @@ export function prepareAuthorizationResourceRetirement(input: {
       db,
       kysely
         .selectFrom("authorization_resources")
-        .select("owner_principal_id")
+        .select([
+          "owner_principal_id",
+          "parent_namespace",
+          "parent_resource_type",
+          "parent_resource_id",
+        ])
         .where("domain_id", "=", domainId)
         .where("namespace", "=", resource.namespace)
         .where("resource_type", "=", resource.type)
@@ -342,6 +349,14 @@ export function prepareAuthorizationResourceRetirement(input: {
     );
     if (!owner) {
       throw new Error("authorization resource must be active for retirement");
+    }
+    if (
+      parent &&
+      (owner.parent_namespace !== parent.namespace ||
+        owner.parent_resource_type !== parent.type ||
+        owner.parent_resource_id !== parent.id)
+    ) {
+      throw new Error("authorization resource retirement parent does not match");
     }
     const actor = executeSqliteQueryTakeFirstSync(
       db,
@@ -377,9 +392,9 @@ export function prepareAuthorizationResourceRetirement(input: {
         namespace: resource.namespace,
         resource_type: resource.type,
         resource_id: resource.id,
-        parent_namespace: null,
-        parent_resource_type: null,
-        parent_resource_id: null,
+        parent_namespace: parent?.namespace ?? null,
+        parent_resource_type: parent?.type ?? null,
+        parent_resource_id: parent?.id ?? null,
         actor_principal_id: actorPrincipalId,
         owner_principal_id: owner.owner_principal_id,
         delegation_id: null,
@@ -465,6 +480,31 @@ export function replayAuthorizationResourceOperation(input: {
         database: input.database,
       });
     } else if (operation.operation_type === "retire") {
+      if (
+        operation.parent_namespace &&
+        operation.parent_resource_type &&
+        operation.parent_resource_id
+      ) {
+        const current = executeSqliteQueryTakeFirstSync(
+          db,
+          kysely
+            .selectFrom("authorization_resources")
+            .select(["parent_namespace", "parent_resource_type", "parent_resource_id"])
+            .where("domain_id", "=", operation.domain_id)
+            .where("namespace", "=", operation.namespace)
+            .where("resource_type", "=", operation.resource_type)
+            .where("resource_id", "=", operation.resource_id)
+            .where("retired_at", "is", null),
+        );
+        if (
+          !current ||
+          current.parent_namespace !== operation.parent_namespace ||
+          current.parent_resource_type !== operation.parent_resource_type ||
+          current.parent_resource_id !== operation.parent_resource_id
+        ) {
+          throw new Error("authorization resource retirement parent changed before replay");
+        }
+      }
       retireAuthorizationResource({
         domainId: operation.domain_id,
         resource,
@@ -486,6 +526,32 @@ export function replayAuthorizationResourceOperation(input: {
     );
     return { operationId, state: "applied" };
   }, input.database);
+}
+
+export function listAuthorizationResourceChildren(input: {
+  database?: OpenClawStateDatabaseOptions;
+  domainId: string;
+  parent: GatewayResourceRef;
+  type?: string;
+}): readonly GatewayResourceRef[] {
+  const domainId = requiredIdentifier(input.domainId, "isolation domain id");
+  const parent = normalizeResource(input.parent);
+  const type = input.type ? requiredIdentifier(input.type, "resource child type") : undefined;
+  const { db } = openOpenClawStateDatabase(input.database);
+  let query = getNodeSqliteKysely<AuthorizationResourceDatabase>(db)
+    .selectFrom("authorization_resources")
+    .select(["namespace", "resource_type", "resource_id"])
+    .where("domain_id", "=", domainId)
+    .where("parent_namespace", "=", parent.namespace)
+    .where("parent_resource_type", "=", parent.type)
+    .where("parent_resource_id", "=", parent.id)
+    .where("retired_at", "is", null);
+  if (type) {
+    query = query.where("resource_type", "=", type);
+  }
+  return executeSqliteQuerySync(db, query.orderBy("resource_id", "asc")).rows.map((row) =>
+    Object.freeze({ namespace: row.namespace, type: row.resource_type, id: row.resource_id }),
+  );
 }
 
 /** Host-only replay path: plugin scope is loader-bound and the persisted operation resolves domain. */
@@ -538,4 +604,48 @@ export function getAuthorizationResourceOwner(input: {
       .where("retired_at", "is", null),
   );
   return row ? { principalId: row.owner_principal_id } : undefined;
+}
+
+/** Returns the active resource's canonical parent, null for a root, or undefined if unbound. */
+export function getAuthorizationResourceParent(input: {
+  database?: OpenClawStateDatabaseOptions;
+  domainId: string;
+  resource: GatewayResourceRef;
+}): GatewayResourceRef | null | undefined {
+  const domainId = requiredIdentifier(input.domainId, "isolation domain id");
+  const resource = normalizeResource(input.resource);
+  const { db } = openOpenClawStateDatabase(input.database);
+  const row = executeSqliteQueryTakeFirstSync(
+    db,
+    getNodeSqliteKysely<AuthorizationResourceDatabase>(db)
+      .selectFrom("authorization_resources")
+      .select(["parent_namespace", "parent_resource_type", "parent_resource_id"])
+      .where("domain_id", "=", domainId)
+      .where("namespace", "=", resource.namespace)
+      .where("resource_type", "=", resource.type)
+      .where("resource_id", "=", resource.id)
+      .where("retired_at", "is", null),
+  );
+  if (!row) {
+    return undefined;
+  }
+  if (
+    row.parent_namespace === null &&
+    row.parent_resource_type === null &&
+    row.parent_resource_id === null
+  ) {
+    return null;
+  }
+  if (
+    row.parent_namespace === null ||
+    row.parent_resource_type === null ||
+    row.parent_resource_id === null
+  ) {
+    throw new Error("authorization resource has an invalid partial parent binding");
+  }
+  return Object.freeze({
+    namespace: row.parent_namespace,
+    type: row.parent_resource_type,
+    id: row.parent_resource_id,
+  });
 }

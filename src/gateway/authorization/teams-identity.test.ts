@@ -16,6 +16,7 @@ import {
   createTeamsSession,
   listTeamsSessions,
   resolveTeamsSession,
+  resolveTeamsSessionById,
   revokeTeamsSession,
 } from "./teams-identity.js";
 
@@ -175,6 +176,7 @@ describe("Teams sessions", () => {
     });
     expect(Object.keys(created.session)).not.toContain("tokenDigest");
     expect(resolveTeamsSession({ token: created.token, database })).toEqual(created.session);
+    expect(resolveTeamsSessionById({ id: created.session.id, database })).toEqual(created.session);
     expect(resolveTeamsSession({ token: `${created.token}x`, database })).toBeUndefined();
 
     const listed = listTeamsSessions({ accountId: "account-1", database });
@@ -217,6 +219,9 @@ describe("Teams sessions", () => {
     });
     expect(resolveTeamsSession({ token: created.token, now: 69_999, database })).toBeDefined();
     expect(resolveTeamsSession({ token: created.token, now: 70_000, database })).toBeUndefined();
+    expect(
+      resolveTeamsSessionById({ id: created.session.id, now: 70_000, database }),
+    ).toBeUndefined();
 
     const active = createTeamsSession({
       accountId: "account-1",
@@ -232,6 +237,9 @@ describe("Teams sessions", () => {
       database,
     });
     expect(resolveTeamsSession({ token: active.token, now: 30_001, database })).toBeUndefined();
+    expect(
+      resolveTeamsSessionById({ id: active.session.id, now: 30_001, database }),
+    ).toBeUndefined();
 
     const { db } = openOpenClawStateDatabase(database);
     expect(() =>
@@ -281,5 +289,6 @@ describe("Teams sessions", () => {
       database,
     });
     expect(resolveTeamsSession({ token: created.token, database })).toBeUndefined();
+    expect(resolveTeamsSessionById({ id: created.session.id, database })).toBeUndefined();
   });
 });

@@ -40,6 +40,8 @@ function canonicalizePluginAccessPolicy(params: {
     kind === "resource"
       ? (params.access as { resolveResources?: unknown }).resolveResources
       : undefined;
+  const member: unknown =
+    kind === "resource" ? (params.access as { member?: unknown }).member : undefined;
   if (kind !== "resource") {
     throw new Error(`plugin gateway method access must be resource-scoped: ${params.method}`);
   }
@@ -54,6 +56,7 @@ function canonicalizePluginAccessPolicy(params: {
   ) => Promise<readonly GatewayResourceRef[]> | readonly GatewayResourceRef[];
   return Object.freeze({
     kind: "resource" as const,
+    ...(member === true ? { member: true } : {}),
     permission: permission.trim(),
     resolveResources: async (input: GatewayResourceResolutionInput) => {
       const resources = await resolveResources(input);
