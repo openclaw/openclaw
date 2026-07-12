@@ -8,14 +8,13 @@ import androidx.appcompat.app.AppCompatDelegate
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.res.stringResource
 
+// Both cached contexts are process-owned: install stores applicationContext,
+// and localizedContext is derived from it solely for the selected app locale.
+@SuppressLint("StaticFieldLeak")
 internal object NativeStringResources {
-  // Both cached contexts are process-owned: install stores applicationContext,
-  // and localizedContext is derived from it solely for the selected app locale.
-  @SuppressLint("StaticFieldLeak")
   @Volatile
   private var applicationContext: Context? = null
 
-  @SuppressLint("StaticFieldLeak")
   @Volatile
   private var localizedContext: Context? = null
 
