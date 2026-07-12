@@ -29,7 +29,7 @@ struct ExactOpaqueIdentifierKey: Hashable, Sendable {
                 [0x25, hexDigits[Int(byte >> 4)], hexDigits[Int(byte & 0x0F)]]
             }
         }
-        return String(decoding: encoded, as: UTF8.self)
+        return String(encoded.map { Character(UnicodeScalar($0)) })
     }
 }
 
