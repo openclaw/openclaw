@@ -40,7 +40,6 @@ export async function fetchPluralKitMessageInfo(params: {
   config?: DiscordPluralKitConfig;
   fetcher?: typeof fetch;
   signal?: AbortSignal;
-  timeoutMs?: number;
 }): Promise<PluralKitMessageInfo | null> {
   if (!params.config?.enabled) {
     return null;
@@ -53,14 +52,15 @@ export async function fetchPluralKitMessageInfo(params: {
   if (params.config.token?.trim()) {
     headers.Authorization = params.config.token.trim();
   }
+  const url = `${PLURALKIT_API_BASE}/messages/${params.messageId}`;
   const timeout = buildTimeoutAbortSignal({
     signal: params.signal,
-    timeoutMs: params.timeoutMs ?? PLURALKIT_LOOKUP_TIMEOUT_MS,
+    timeoutMs: PLURALKIT_LOOKUP_TIMEOUT_MS,
     operation: "discord.pluralkit.lookup",
-    url: `${PLURALKIT_API_BASE}/messages/${params.messageId}`,
+    url,
   });
   try {
-    const res = await fetchImpl(`${PLURALKIT_API_BASE}/messages/${params.messageId}`, {
+    const res = await fetchImpl(url, {
       headers,
       signal: timeout.signal,
     });
@@ -76,6 +76,8 @@ export async function fetchPluralKitMessageInfo(params: {
     }
     return await readProviderJsonResponse<PluralKitMessageInfo>(res, "PluralKit message");
   } finally {
+    // Keep the deadline active through bounded error and JSON body reads; header-only
+    // coverage would leave a stalled response stream holding the inbound preflight.
     timeout.cleanup();
   }
 }

@@ -117,7 +117,6 @@ describe("fetchPluralKitMessageInfo", () => {
         messageId: "slow-body",
         config: { enabled: true },
         fetcher,
-        timeoutMs: 25,
       });
 
       await vi.advanceTimersByTimeAsync(0);
@@ -125,12 +124,36 @@ describe("fetchPluralKitMessageInfo", () => {
       expect(observedSignal?.aborted).toBe(false);
       const lookupRejection = expect(lookupPromise).rejects.toThrow(/timed out|abort/i);
 
-      await vi.advanceTimersByTimeAsync(25);
+      await vi.advanceTimersByTimeAsync(10_000);
       await lookupRejection;
       expect(observedSignal?.aborted).toBe(true);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("relays parent cancellation to the PluralKit request", async () => {
+    const parent = new AbortController();
+    let observedSignal: AbortSignal | undefined;
+    const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
+      observedSignal = init?.signal ?? undefined;
+      return await new Promise<Response>((_resolve, reject) => {
+        observedSignal?.addEventListener("abort", () => reject(observedSignal?.reason), {
+          once: true,
+        });
+      });
+    });
+
+    const lookupPromise = fetchPluralKitMessageInfo({
+      messageId: "cancelled",
+      config: { enabled: true },
+      fetcher,
+      signal: parent.signal,
+    });
+    parent.abort(new Error("preflight stopped"));
+
+    await expect(lookupPromise).rejects.toThrow("preflight stopped");
+    expect(observedSignal?.aborted).toBe(true);
   });
 
   it("bounds PluralKit API error bodies without using response.text()", async () => {
