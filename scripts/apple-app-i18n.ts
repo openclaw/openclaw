@@ -30,16 +30,18 @@ export const APPLE_I18N_LOCALES = [
   "sv",
 ] as const;
 const REQUIRED_LOCALES = ["en", ...APPLE_I18N_LOCALES];
-const FORMAT_RE = /%(?:\d+\$)?(?:lld|ld|[@a-z])/giu;
+const FORMAT_RE = /%(?:%|(?:\d+\$)?(?:lld|ld|[@a-z]))/giu;
 const INFLECTED_COUNT_INTERPOLATION_RE = /\\\([A-Za-z_][A-Za-z0-9_]*\)/gu;
 const INFLECTED_COUNT_INTERPOLATION_EXACT_RE = /^\\\([A-Za-z_][A-Za-z0-9_]*\)$/u;
 const INFLECTED_COUNT_MARKER = "](inflect: true)";
 const IOS_CATALOG_PATH = "apps/ios/Resources/Localizable.xcstrings";
+const IOS_CONTRADICTIONS_PATH = "apps/.i18n/apple-translation-contradictions.json";
 const NATIVE_SOURCE_PATH = "apps/.i18n/native-source.json";
 const NATIVE_TRANSLATIONS_DIR = "apps/.i18n/native";
 const IOS_SOURCE_PREFIXES = [
   "apps/ios/",
   "apps/shared/OpenClawKit/Sources/OpenClawChatUI/",
+  "apps/shared/OpenClawKit/Sources/OpenClawKit/",
 ] as const;
 const IOS_CATALOG_KINDS = new Set([
   "conditional-branch",
@@ -67,13 +69,20 @@ const IOS_INFO_PLIST_TARGETS = [
     outputRoot: "apps/ios/WatchApp",
     sourcePath: "apps/ios/WatchApp/Info.plist",
   },
+  {
+    outputRoot: "apps/ios/ShareExtension",
+    sourcePath: "apps/ios/ShareExtension/Info.plist",
+  },
+  {
+    outputRoot: "apps/ios/ActivityWidget",
+    sourcePath: "apps/ios/ActivityWidget/Info.plist",
+  },
 ] as const;
-const EXPLICIT_LOCALIZED_CALL =
-  /(?:\bString\s*\(\s*localized:|\bAttributedString\s*\(\s*localized:|\bLocalizedStringResource\s*\(|(?:\b[A-Za-z_]\w*)?\.localized\s*\()\s*"((?:\\.|[^"\\])*)"/gu;
 const AMBIGUOUS_RUNTIME_INTERPOLATIONS = [
   {
-    label: "interpolated String(localized:) key",
-    pattern: /\bString\s*\(\s*localized:\s*"(?:\\.|[^"\\])*\\\(/gu,
+    label: "interpolated localized resource",
+    pattern:
+      /(?:\bString\s*\(\s*localized:|\bAttributedString\s*\(\s*localized:|\bLocalizedStringResource\s*\(|(?:\b[A-Za-z_]\w*)?\.localized(?:Format)?\s*\()\s*"(?:\\.|[^"\\])*\\\(/gu,
   },
   {
     label: "interpolated SwiftUI text literal",
@@ -82,7 +91,11 @@ const AMBIGUOUS_RUNTIME_INTERPOLATIONS = [
   {
     label: "interpolated SwiftUI modifier literal",
     pattern:
-      /\.(?:accessibilityLabel|accessibilityHint|navigationTitle)\s*\(\s*"(?:\\.|[^"\\])*\\\(/gu,
+      /\.(?:accessibilityLabel|accessibilityHint|alert|confirmationDialog|help|navigationTitle)\s*\(\s*"(?:\\.|[^"\\])*\\\(/gu,
+  },
+  {
+    label: "interpolated accessibility model literal",
+    pattern: /\baccessibilityLabel\s*:\s*"(?:\\.|[^"\\])*\\\(/gu,
   },
 ] as const;
 const APPLE_LOCALE_DIRECTORIES: Record<string, string> = {
@@ -187,9 +200,9 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
     "Text(verbatim: self.message)",
   ],
   "apps/ios/Sources/Gateway/GatewayProblemView.swift": [
-    "Text(LocalizedStringKey(self.problem.title))",
-    "Text(LocalizedStringKey(self.problem.message))",
-    "Text(LocalizedStringKey(primaryActionTitle))",
+    "title: .verbatim(self.problem.localizedTitle)",
+    "message: .verbatim(self.problem.localizedMessage)",
+    "Text(verbatim: primaryActionTitle)",
   ],
   "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift": [
     "Label(LocalizedStringKey(title), systemImage: icon)",
@@ -385,6 +398,10 @@ function serializeCatalog(catalog: Catalog): string {
   return `${JSON.stringify(catalog, null, 2)}\n`;
 }
 
+function serializeContradictions(contradictions: AppleTranslationContradiction[]): string {
+  return `${JSON.stringify({ version: 1, contradictions }, null, 2)}\n`;
+}
+
 function decodeXml(value: string): string {
   return value
     .replaceAll("&quot;", '"')
@@ -472,15 +489,14 @@ export function buildIosCatalog(
   existingCatalog: Catalog,
   nativeSource: NativeSourceArtifact,
   translations: readonly NativeTranslationArtifact[],
-  explicitSources: readonly string[] = [],
 ): AppleCatalogBuild {
   const iosEntries = nativeSource.entries.filter(isIosCatalogEntry);
   const catalogEntries = iosEntries.map(
     (entry) => [entry, appleCatalogValue(entry.source)] as const,
   );
-  const sources = [
-    ...new Set([...catalogEntries.map(([, source]) => source), ...explicitSources]),
-  ].toSorted((left, right) => left.localeCompare(right, "en"));
+  const sources = [...new Set(catalogEntries.map(([, source]) => source))].toSorted((left, right) =>
+    left.localeCompare(right, "en"),
+  );
   const appleIdsBySource = new Map<string, Set<string>>();
   for (const [entry, source] of catalogEntries) {
     const ids = appleIdsBySource.get(source) ?? new Set<string>();
@@ -522,10 +538,7 @@ export function buildIosCatalog(
         contradictions.push({ locale, source, translations: distinct });
       }
       const existingUnit = existing?.localizations?.[locale]?.stringUnit;
-      if (
-        existingUnit?.value &&
-        (existingUnit.state === "translated" || existingUnit.value !== source)
-      ) {
+      if (existingUnit?.value && existingUnit.state === "translated") {
         localizations[locale] = { stringUnit: { ...existingUnit } };
         continue;
       }
@@ -541,7 +554,7 @@ export function buildIosCatalog(
       const value = chooseTranslation(source, candidates);
       localizations[locale] = {
         stringUnit: {
-          state: value === source ? "new" : "translated",
+          state: "new",
           value,
         },
       };
@@ -567,6 +580,12 @@ async function listSwiftFiles(directory: string): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true });
   const nested = await Promise.all(
     entries.map(async (entry) => {
+      if (
+        entry.isDirectory() &&
+        /^(?:\.build|build|DerivedData|Previews?|Tests?|UITests?)$/u.test(entry.name)
+      ) {
+        return [];
+      }
       const entryPath = path.join(directory, entry.name);
       if (entry.isDirectory()) {
         return listSwiftFiles(entryPath);
@@ -575,29 +594,6 @@ async function listSwiftFiles(directory: string): Promise<string[]> {
     }),
   );
   return nested.flat();
-}
-
-function decodeSwiftStringLiteral(value: string): string {
-  const jsonCompatible = value.replace(/\\u\{([0-9a-f]+)\}/giu, (_, hex: string) =>
-    String.fromCodePoint(Number.parseInt(hex, 16)),
-  );
-  return JSON.parse(`"${jsonCompatible}"`) as string;
-}
-
-async function discoverExplicitLocalizedSources(): Promise<string[]> {
-  const roots = IOS_SOURCE_PREFIXES.map((prefix) => path.join(ROOT, prefix));
-  const files = (await Promise.all(roots.map(listSwiftFiles))).flat();
-  const sources = new Set<string>();
-  for (const file of files) {
-    const source = await readFile(file, "utf8");
-    for (const match of source.matchAll(EXPLICIT_LOCALIZED_CALL)) {
-      const value = match[1];
-      if (value && !value.includes("\\(")) {
-        sources.add(decodeSwiftStringLiteral(value));
-      }
-    }
-  }
-  return [...sources];
 }
 
 async function validateRuntimeInterpolationPaths(): Promise<void> {
@@ -621,6 +617,20 @@ async function validateRuntimeInterpolationPaths(): Promise<void> {
 }
 
 async function readNativeTranslations(): Promise<NativeTranslationArtifact[]> {
+  const expectedFiles = APPLE_I18N_LOCALES.map((locale) => `${locale}.json`).toSorted();
+  const actualFiles = (
+    await readdir(path.join(ROOT, NATIVE_TRANSLATIONS_DIR), {
+      withFileTypes: true,
+    })
+  )
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+    .map((entry) => entry.name)
+    .toSorted();
+  if (JSON.stringify(actualFiles) !== JSON.stringify(expectedFiles)) {
+    throw new Error(
+      `Apple/native locale parity drift: expected ${JSON.stringify(expectedFiles)}, got ${JSON.stringify(actualFiles)}`,
+    );
+  }
   return Promise.all(
     APPLE_I18N_LOCALES.map(async (locale) => {
       const artifact = JSON.parse(
@@ -644,12 +654,7 @@ async function readIosCatalogBuild(): Promise<AppleCatalogBuild> {
     await readFile(path.join(ROOT, NATIVE_SOURCE_PATH), "utf8"),
   ) as NativeSourceArtifact;
   const translations = await readNativeTranslations();
-  return buildIosCatalog(
-    existingCatalog,
-    nativeSource,
-    translations,
-    await discoverExplicitLocalizedSources(),
-  );
+  return buildIosCatalog(existingCatalog, nativeSource, translations);
 }
 
 function validateCatalog(pathName: string, catalog: Catalog): number {
@@ -665,6 +670,15 @@ function validateCatalog(pathName: string, catalog: Catalog): number {
       if (!value || (locale === "en" && unit?.state !== "translated")) {
         throw new Error(
           `Apple catalog ${pathName} is missing ${locale} for ${JSON.stringify(key)}`,
+        );
+      }
+      if (
+        locale !== "en" &&
+        unit?.state !== "translated" &&
+        (unit?.state !== "new" || value === key)
+      ) {
+        throw new Error(
+          `Apple catalog ${pathName} has untranslated ${locale} copy for ${JSON.stringify(key)}`,
         );
       }
       if (formatTokens(value).join("\u0000") !== sourceTokens.join("\u0000")) {
@@ -698,7 +712,7 @@ async function syncIosInfoPlist(write: boolean): Promise<number> {
       const artifact = translations.find((candidate) => candidate.locale === locale);
       const lines = sourceEntries.map(({ key, source }) => {
         if (key === "CFBundleDisplayName") {
-          return `${stringsLiteral(key)} = ${stringsLiteral("OpenClaw")};`;
+          return `${stringsLiteral(key)} = ${stringsLiteral(source)};`;
         }
         const candidates =
           artifact?.entries
@@ -739,6 +753,17 @@ export async function syncIosCatalog(write: boolean): Promise<AppleCatalogBuild>
       );
     }
     await writeFile(catalogPath, expected, "utf8");
+  }
+  const contradictionsPath = path.join(ROOT, IOS_CONTRADICTIONS_PATH);
+  const expectedContradictions = serializeContradictions(build.contradictions);
+  const actualContradictions = await readOptionalFile(contradictionsPath);
+  if (actualContradictions !== expectedContradictions) {
+    if (!write) {
+      throw new Error(
+        `Apple contradiction report ${IOS_CONTRADICTIONS_PATH} is stale; run apple-app-i18n.ts sync-ios --write`,
+      );
+    }
+    await writeFile(contradictionsPath, expectedContradictions, "utf8");
   }
   return build;
 }

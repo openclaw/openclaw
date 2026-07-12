@@ -655,6 +655,32 @@ describe("native app i18n inventory", () => {
       expect(await readFile(artifactPath, "utf8")).toBe(firstContents);
       expect((await stat(artifactPath)).mtimeMs).toBe(firstModifiedAt);
 
+      const movedEntries = entries.map((entry, index) => ({
+        ...entry,
+        id: `${entry.id}.moved`,
+        line: index + 20,
+      }));
+      const moved = await syncNativeLocale("sv", movedEntries, {
+        glossary: [],
+        translationsDir,
+        translate: async () => {
+          throw new Error("source-stable ID churn must reuse translation memory");
+        },
+      });
+      expect(moved).toEqual({ changed: true, translated: 0 });
+      const movedArtifact = JSON.parse(await readFile(artifactPath, "utf8")) as {
+        entries: Array<{ id: string; source: string; translated: string }>;
+      };
+      expect(movedArtifact.entries.map((entry) => entry.id)).toEqual(
+        movedEntries.map((entry) => entry.id),
+      );
+      expect(movedArtifact.entries.map((entry) => entry.translated)).toEqual([
+        "Hej",
+        "Begärans-ID: \\(requestId)",
+        "${apps.size} totalt, ${visibleApps.size} visas",
+        "Av \\(total) behörigheter har \\(granted) beviljats",
+      ]);
+
       const refreshed = await syncNativeLocale("sv", entries, {
         glossary: [{ source: "Request", target: "Begäran" }],
         translationsDir,
@@ -701,6 +727,17 @@ describe("native app i18n inventory", () => {
           surface: "apple",
         },
         translated: "Sändningen misslyckades",
+      },
+      {
+        entry: {
+          id: "native.apple.percent",
+          kind: "ui-call",
+          line: 1,
+          path: "apps/ios/example.swift",
+          source: "Context %@%% used",
+          surface: "apple",
+        },
+        translated: "Kontext %@ används",
       },
     ] satisfies Array<{ entry: NativeI18nEntry; translated: string }>;
 

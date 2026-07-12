@@ -87,12 +87,12 @@ const SOURCE_ROOTS: Record<NativeI18nSurface, string[]> = {
 
 const ANDROID_EXTENSIONS = new Set([".kt", ".kts"]);
 const APPLE_EXTENSIONS = new Set([".swift", ".plist"]);
-const NATIVE_FORMAT_RE = /%(?:\d+\$)?[@a-z]/giu;
+const NATIVE_FORMAT_RE = /%(?:%|(?:\d+\$)?[@a-z])/giu;
 const NATIVE_SOURCE_READ_CONCURRENCY = 32;
 const APPLE_UI_MULTILINE_CALLS =
   /(?:Text|Label|Button|TextField|SecureField|Picker|Section|LabeledContent|Toggle|Menu|ShareLink|Link|TextEditor|ProgressView|Gauge|DisclosureGroup|ControlGroup|DatePicker|Stepper)\s*\(\s*"""([\s\S]*?)"""/gu;
 const APPLE_LOCALIZED_STRING_CALLS =
-  /\b(?:String\s*\(\s*localized:|AttributedString\s*\(\s*localized:|LocalizedString(?:Key|Resource)\s*\()\s*"((?:\\.|[^"\\])*)"/gu;
+  /(?:\bString\s*\(\s*localized:|\bAttributedString\s*\(\s*localized:|\bLocalizedString(?:Key|Resource)\s*\(|(?:\b[A-Za-z_]\w*)?\.localized(?:Format)?\s*\()\s*"((?:\\.|[^"\\])*)"/gu;
 const APPLE_LOCALIZED_STRING_MULTILINE_CALLS =
   /\b(?:String\s*\(\s*localized:|AttributedString\s*\(\s*localized:|LocalizedString(?:Key|Resource)\s*\()\s*"""([\s\S]*?)"""/gu;
 const APPLE_CALL_START = /\b([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*/gu;
@@ -1526,6 +1526,23 @@ export async function checkNativeLocaleArtifacts(
   );
 }
 
+function choosePreviousTranslation(
+  source: string,
+  entries: readonly { translated: string }[],
+): string | undefined {
+  const counts = new Map<string, number>();
+  for (const entry of entries) {
+    if (!entry.translated.trim()) {
+      continue;
+    }
+    counts.set(entry.translated, (counts.get(entry.translated) ?? 0) + 1);
+  }
+  return [...counts].toSorted(([leftValue, leftCount], [rightValue, rightCount]) => {
+    const sourcePenalty = Number(leftValue === source) - Number(rightValue === source);
+    return sourcePenalty || rightCount - leftCount || compareCodePoints(leftValue, rightValue);
+  })[0]?.[0];
+}
+
 export async function syncNativeLocale(
   locale: string,
   entries: NativeI18nEntry[],
@@ -1550,14 +1567,28 @@ export async function syncNativeLocale(
     // The first refresh creates the locale artifact.
   }
   const previousById = new Map(previous.entries.map((entry) => [entry.id, entry]));
+  const previousBySource = new Map<
+    string,
+    Array<{ id: string; source: string; translated: string }>
+  >();
+  for (const entry of previous.entries) {
+    const candidates = previousBySource.get(entry.source) ?? [];
+    candidates.push(entry);
+    previousBySource.set(entry.source, candidates);
+  }
+  const reusableById = new Map(
+    entries.map((entry) => {
+      const exact = previousById.get(entry.id);
+      const translated =
+        exact?.source === entry.source && exact.translated.trim()
+          ? exact.translated
+          : choosePreviousTranslation(entry.source, previousBySource.get(entry.source) ?? []);
+      return [entry.id, translated] as const;
+    }),
+  );
   const glossaryChanged = previous.glossaryHash !== currentGlossaryHash;
   const pending = entries
-    .filter((entry) => {
-      const current = previousById.get(entry.id);
-      return (
-        glossaryChanged || !current || current.source !== entry.source || !current.translated.trim()
-      );
-    })
+    .filter((entry) => glossaryChanged || !reusableById.get(entry.id))
     .map((entry) => ({
       id: entry.id,
       source: entry.source,
@@ -1573,8 +1604,7 @@ export async function syncNativeLocale(
     entries: entries.map((entry) => ({
       id: entry.id,
       source: entry.source,
-      translated:
-        translated.get(entry.id) ?? previousById.get(entry.id)?.translated ?? entry.source,
+      translated: translated.get(entry.id) ?? reusableById.get(entry.id) ?? entry.source,
     })),
   };
   try {

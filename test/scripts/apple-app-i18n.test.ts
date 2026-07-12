@@ -8,6 +8,7 @@ import {
   checkAppleAppI18n,
   compileMacosLocalizations,
 } from "../../scripts/apple-app-i18n.ts";
+import { NATIVE_I18N_LOCALES } from "../../scripts/native-app-i18n.ts";
 
 describe("Apple app i18n catalogs", () => {
   it("keeps generated runtime coverage complete for every native locale", async () => {
@@ -44,9 +45,17 @@ describe("Apple app i18n catalogs", () => {
       const entry = catalog.strings[key];
       expect(entry, key).toBeDefined();
       for (const locale of ["en", ...APPLE_I18N_LOCALES]) {
-        expect(entry?.localizations?.[locale]?.stringUnit?.value, `${key}:${locale}`).toBeTruthy();
+        const unit = entry?.localizations?.[locale]?.stringUnit;
+        expect(unit?.value, `${key}:${locale}`).toBeTruthy();
+        if (locale !== "en" && unit?.state !== "translated") {
+          expect(unit?.value, `${key}:${locale}`).not.toBe(key);
+        }
       }
     }
+  });
+
+  it("keeps the Apple and native shipped locale sets identical", () => {
+    expect(APPLE_I18N_LOCALES).toEqual(NATIVE_I18N_LOCALES);
   });
 
   it("selects duplicate-source translations deterministically while preserving shipped translations", () => {
@@ -110,6 +119,9 @@ describe("Apple app i18n catalogs", () => {
     expect(build.catalog.strings?.["Connect now"]?.localizations?.fr?.stringUnit?.value).toBe(
       "Se connecter",
     );
+    expect(build.catalog.strings?.["Connect now"]?.localizations?.fr?.stringUnit?.state).toBe(
+      "new",
+    );
     expect(build.catalog.strings?.["Connect now"]?.localizations?.es?.stringUnit).toEqual({
       state: "new",
       value: "Connect now",
@@ -121,6 +133,42 @@ describe("Apple app i18n catalogs", () => {
         translations: ["Connexion", "Se connecter"],
       },
     ]);
+
+    const refreshed = buildIosCatalog(
+      build.catalog,
+      {
+        version: 1,
+        entries: [
+          {
+            id: "native.apple.a",
+            kind: "ui-call",
+            line: 1,
+            path: "apps/ios/Sources/Example.swift",
+            source: "Connect now",
+            surface: "apple",
+          },
+        ],
+      },
+      [
+        {
+          version: 1,
+          locale: "de",
+          entries: [{ id: "native.apple.a", source: "Connect now", translated: "Neu verbinden" }],
+        },
+        {
+          version: 1,
+          locale: "fr",
+          entries: [{ id: "native.apple.a", source: "Connect now", translated: "Connectez-vous" }],
+        },
+      ],
+    );
+    expect(refreshed.catalog.strings?.["Connect now"]?.localizations?.de?.stringUnit?.value).toBe(
+      "Jetzt verbinden",
+    );
+    expect(refreshed.catalog.strings?.["Connect now"]?.localizations?.fr?.stringUnit).toEqual({
+      state: "new",
+      value: "Connectez-vous",
+    });
   });
 
   it("converts inflected Swift count resources into typed catalog placeholders", () => {
@@ -219,16 +267,26 @@ describe("Apple app i18n catalogs", () => {
     expect(watchDirect).not.toContain('self.statusText = "');
   });
 
-  it("generates iOS and watchOS InfoPlist localizations", async () => {
+  it("generates InfoPlist localizations for every shipped iOS target", async () => {
     const french = await readFile("apps/ios/Sources/fr.lproj/InfoPlist.strings", "utf8");
     const watchChinese = await readFile(
       "apps/ios/WatchApp/zh-Hans.lproj/InfoPlist.strings",
+      "utf8",
+    );
+    const shareGerman = await readFile(
+      "apps/ios/ShareExtension/de.lproj/InfoPlist.strings",
+      "utf8",
+    );
+    const activityJapanese = await readFile(
+      "apps/ios/ActivityWidget/ja.lproj/InfoPlist.strings",
       "utf8",
     );
 
     expect(french).toContain('"NSCameraUsageDescription" = ');
     expect(french).toContain('"NSMicrophoneUsageDescription" = ');
     expect(watchChinese).toContain('"NSLocalNetworkUsageDescription" = ');
+    expect(shareGerman).toContain('"CFBundleDisplayName" = "OpenClaw Share";');
+    expect(activityJapanese).toContain('"CFBundleDisplayName" = "OpenClaw Activity";');
   });
 
   it("compiles macOS catalogs into app-bundle localization directories", async () => {
