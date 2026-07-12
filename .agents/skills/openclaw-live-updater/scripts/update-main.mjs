@@ -17,6 +17,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 import { detectChangedScope } from "../../../../scripts/ci-changed-scope.mjs";
 import { isDirectRunUrl } from "../../../../scripts/lib/direct-run.mjs";
 import {
@@ -1516,13 +1517,61 @@ function summarizeGatewayLogEntry(entry) {
   };
 }
 
-export function parseGatewayLogAudit(output, sinceMs) {
-  const entries = output
+function isCurrentGatewayLogSource(source, sourceRoot) {
+  if (!sourceRoot) {
+    return true;
+  }
+  if (typeof source !== "string" || source.length === 0) {
+    return true;
+  }
+  let sourcePath;
+  try {
+    sourcePath = source.startsWith("file:") ? fileURLToPath(source) : source;
+  } catch {
+    return true;
+  }
+  const normalizedRoot = path.resolve(sourceRoot);
+  const normalizedSource = path.resolve(sourcePath);
+  if (
+    normalizedSource === normalizedRoot ||
+    normalizedSource.startsWith(`${normalizedRoot}${path.sep}`)
+  ) {
+    return true;
+  }
+  const checkoutRoot = path.dirname(normalizedRoot);
+  let candidate = path.dirname(normalizedSource);
+  while (candidate !== path.dirname(candidate)) {
+    const packagePath = path.join(candidate, "package.json");
+    const gitPath = path.join(candidate, ".git");
+    if (existsSync(packagePath) && existsSync(gitPath)) {
+      try {
+        if (JSON.parse(readFileSync(packagePath, "utf8")).name === "openclaw") {
+          return candidate === checkoutRoot;
+        }
+      } catch {
+        return true;
+      }
+    }
+    candidate = path.dirname(candidate);
+  }
+  return true;
+}
+
+function parseGatewayLogEntries(output, sinceMs) {
+  return output
     .split("\n")
     .filter(Boolean)
     .flatMap((line) => {
       try {
         const raw = JSON.parse(line);
+        let sourceRecord = raw;
+        if (raw.type === "log" && typeof raw.raw === "string") {
+          try {
+            sourceRecord = JSON.parse(raw.raw);
+          } catch {
+            sourceRecord = raw;
+          }
+        }
         const rawLevel = raw.type === "log" ? raw.level : raw._meta?.logLevelName;
         const level = String(rawLevel ?? "").toLowerCase();
         const time = raw.time ?? raw._meta?.date;
@@ -1544,12 +1593,16 @@ export function parseGatewayLogAudit(output, sinceMs) {
             level,
             subsystem,
             message: raw.message ?? raw["1"] ?? raw["0"] ?? "",
+            source: sourceRecord._meta?.path?.fullFilePath ?? null,
           },
         ];
       } catch {
         return [];
       }
     });
+}
+
+function summarizeGatewayLogAudit(entries) {
   const errors = entries
     .filter((entry) => entry.level === "error" || entry.level === "fatal")
     .map(summarizeGatewayLogEntry);
@@ -1561,6 +1614,13 @@ export function parseGatewayLogAudit(output, sinceMs) {
     errors: errors.slice(0, 20),
     warnings: warnings.slice(0, 20),
   };
+}
+
+export function parseGatewayLogAudit(output, sinceMs, sourceRoot = null) {
+  const entries = parseGatewayLogEntries(output, sinceMs).filter((entry) =>
+    isCurrentGatewayLogSource(entry.source, sourceRoot),
+  );
+  return summarizeGatewayLogAudit(entries);
 }
 
 function localDateKey(date) {
@@ -1609,7 +1669,7 @@ function defaultAuditGatewayLogs(checkout, sinceMs) {
       throw error;
     }
   }
-  const audit = parseGatewayLogAudit(output, sinceMs);
+  const audit = parseGatewayLogAudit(output, sinceMs, path.join(realpathSync(checkout), "dist"));
   if (audit.errorCount > 0) {
     throw new UpdateInvariantError(
       "gateway_restart_log_errors",

@@ -14,7 +14,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, test } from "vitest";
 import {
   acquireMaintenanceLock,
@@ -252,6 +252,116 @@ describe("openclaw live updater", () => {
     });
   });
 
+  test("ignores restart-window logs emitted by a foreign OpenClaw checkout", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-log-attribution-"));
+    const sourceRoot = path.join(root, "managed/openclaw/dist");
+    const foreignRoot = path.join(root, "worktree/openclaw");
+    mkdirSync(path.join(foreignRoot, ".git"), { recursive: true });
+    writeFileSync(path.join(foreignRoot, "package.json"), '{"name":"openclaw"}\n');
+    const output = [
+      {
+        "0": '{"subsystem":"gateway"}',
+        "1": "managed warning",
+        time: "2026-07-11T08:00:03.000Z",
+        _meta: {
+          date: "2026-07-11T08:00:03.000Z",
+          logLevelName: "WARN",
+          path: { fullFilePath: `${sourceRoot}/subsystem-current.js` },
+        },
+      },
+      {
+        "0": "[tools] browser failed",
+        time: "2026-07-11T08:00:04.000Z",
+        _meta: {
+          date: "2026-07-11T08:00:04.000Z",
+          logLevelName: "ERROR",
+          path: {
+            fullFilePath: pathToFileURL(path.join(foreignRoot, "dist/console-foreign.js")).href,
+          },
+        },
+      },
+    ]
+      .map((entry) => JSON.stringify(entry))
+      .join("\n");
+
+    expect(
+      parseGatewayLogAudit(output, Date.parse("2026-07-11T08:00:02.000Z"), sourceRoot),
+    ).toEqual({
+      entries: 1,
+      errorCount: 0,
+      warningCount: 1,
+      errors: [],
+      warnings: [
+        {
+          time: "2026-07-11T08:00:03.000Z",
+          level: "warn",
+          subsystem: "gateway",
+          message: "managed warning",
+        },
+      ],
+    });
+  });
+
+  test("scopes embedded RPC records without dropping unattributed errors", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-rpc-log-attribution-"));
+    const sourceRoot = path.join(root, "managed/openclaw/dist");
+    const foreignRoot = path.join(root, "worktree/openclaw");
+    mkdirSync(path.join(foreignRoot, ".git"), { recursive: true });
+    writeFileSync(path.join(foreignRoot, "package.json"), '{"name":"openclaw"}\n');
+    const output = [
+      {
+        type: "log",
+        time: "2026-07-11T08:00:03.000Z",
+        level: "error",
+        message: "managed failure",
+      },
+      {
+        type: "log",
+        time: "2026-07-11T08:00:04.000Z",
+        level: "error",
+        message: "foreign failure",
+        raw: JSON.stringify({
+          "0": "foreign failure",
+          time: "2026-07-11T08:00:04.000Z",
+          _meta: {
+            date: "2026-07-11T08:00:04.000Z",
+            logLevelName: "ERROR",
+            path: {
+              fullFilePath: pathToFileURL(path.join(foreignRoot, "dist/console-foreign.js")).href,
+            },
+          },
+        }),
+      },
+      {
+        type: "log",
+        time: "2026-07-11T08:00:05.000Z",
+        level: "error",
+        message: "installed plugin failure",
+        raw: JSON.stringify({
+          "0": "installed plugin failure",
+          time: "2026-07-11T08:00:05.000Z",
+          _meta: {
+            date: "2026-07-11T08:00:05.000Z",
+            logLevelName: "ERROR",
+            path: {
+              fullFilePath: path.join(root, "extensions/example/dist/logger.js"),
+            },
+          },
+        }),
+      },
+    ]
+      .map((entry) => JSON.stringify(entry))
+      .join("\n");
+
+    expect(
+      parseGatewayLogAudit(output, Date.parse("2026-07-11T08:00:02.000Z"), sourceRoot),
+    ).toMatchObject({
+      entries: 2,
+      errorCount: 2,
+      errors: [{ message: "managed failure" }, { message: "installed plugin failure" }],
+    });
+  });
+
   test("retries bounded Gateway readiness after restart", () => {
     const { mirror } = makeFixture();
     writeBuild(mirror);
@@ -367,6 +477,8 @@ describe("openclaw live updater", () => {
     git(runtimeRoot, "clone", origin, snapshot);
     git(snapshot, "remote", "set-url", "origin", "https://github.com/openclaw/openclaw.git");
     git(snapshot, "checkout", "--detach", head);
+    chmodSync(path.join(snapshot, ".git/HEAD"), 0o600);
+    chmodSync(path.join(snapshot, ".git/config"), 0o600);
     writeBuild(snapshot);
     const entrypoint = path.join(snapshot, "dist/index.js");
 
