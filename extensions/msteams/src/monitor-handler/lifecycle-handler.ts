@@ -88,17 +88,8 @@ function isBotRemovedFromConversation(context: MSTeamsTurnContext): boolean {
   );
 }
 
-function matchesSessionKey(params: {
-  sessionKey: string;
-  routeSessionKey: string;
-  includeChannelThreads: boolean;
-}): boolean {
-  const sessionKey = params.sessionKey.toLowerCase();
-  const routeSessionKey = params.routeSessionKey.toLowerCase();
-  return (
-    sessionKey === routeSessionKey ||
-    (params.includeChannelThreads && sessionKey.startsWith(`${routeSessionKey}:thread:`))
-  );
+function matchesSessionKey(params: { sessionKey: string; routeSessionKey: string }): boolean {
+  return params.sessionKey.toLowerCase() === params.routeSessionKey.toLowerCase();
 }
 
 type MSTeamsResetCandidateEntry = {
@@ -254,7 +245,6 @@ export async function rotateMSTeamsSessions(params: {
   deps: MSTeamsMessageHandlerDeps;
   routeSessionKey: string;
   agentId: string;
-  includeChannelThreads: boolean;
 }): Promise<number> {
   const storePath = resolveStorePath(params.deps.cfg.session?.store, {
     agentId: params.agentId,
@@ -267,7 +257,6 @@ export async function rotateMSTeamsSessions(params: {
       !matchesSessionKey({
         sessionKey,
         routeSessionKey: params.routeSessionKey,
-        includeChannelThreads: params.includeChannelThreads,
       }) ||
       !needsMSTeamsLifecycleRotation(entry)
     ) {
@@ -401,7 +390,6 @@ export async function handleMSTeamsDmConversationBoundary(params: {
     deps: params.deps,
     routeSessionKey: params.routeSessionKey,
     agentId: params.agentId,
-    includeChannelThreads: false,
   });
 
   params.deps.log.info("msteams dm conversation boundary handled", {
@@ -436,10 +424,6 @@ export async function handleMSTeamsLifecycleRemove(
   }
 
   const conversationType = getConversationType(context);
-  if (isInstallAdd && conversationType !== "personal") {
-    return { handled: false, reason, conversationRemoved: false, sessionsReset: 0 };
-  }
-
   let conversationRemoved = false;
   if (!isInstallAdd) {
     try {
@@ -450,6 +434,14 @@ export async function handleMSTeamsLifecycleRemove(
         error: formatUnknownError(err),
       });
     }
+  }
+  if (conversationType !== "personal") {
+    return {
+      handled: !isInstallAdd,
+      reason,
+      conversationRemoved,
+      sessionsReset: 0,
+    };
   }
 
   const senderId = getSenderId(context);
@@ -463,24 +455,17 @@ export async function handleMSTeamsLifecycleRemove(
   }
 
   const core = getMSTeamsRuntime();
-  const peer =
-    conversationType === "personal"
-      ? { kind: "direct" as const, id: senderId }
-      : conversationType === "channel"
-        ? { kind: "channel" as const, id: conversationId }
-        : { kind: "group" as const, id: conversationId };
   const route = core.channel.routing.resolveAgentRoute({
     cfg: deps.cfg,
     channel: "msteams",
     teamId: getTeamId(context),
-    peer,
+    peer: { kind: "direct", id: senderId },
   });
 
   const sessionsReset = await rotateMSTeamsSessions({
     deps,
     routeSessionKey: route.sessionKey,
     agentId: route.agentId,
-    includeChannelThreads: conversationType === "channel",
   });
 
   if (isInstallAdd && sessionsReset === 0) {

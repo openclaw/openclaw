@@ -570,7 +570,7 @@ describe("handleMSTeamsLifecycleRemove", () => {
     expect(store["msteams:channel:19:team-channel@thread.tacv2"].updatedAt).toBe(1_000);
   });
 
-  it("rotates a channel removal base session and channel thread sessions", async () => {
+  it("does not treat channel removal events as personal-session boundaries", async () => {
     const channelId = "19:team-channel@thread.tacv2";
     const baseKey = `msteams:channel:${channelId}`;
     const threadKey = `${baseKey}:thread:root-message`;
@@ -601,17 +601,17 @@ describe("handleMSTeamsLifecycleRemove", () => {
       deps,
     );
 
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       handled: true,
       reason: "bot-members-removed",
       conversationRemoved: true,
-      sessionsReset: 2,
+      sessionsReset: 0,
     });
     expect(remove).toHaveBeenCalledWith(channelId);
-    expect(store[baseKey].updatedAt).toBe(0);
-    expect(store[baseKey].sessionId).not.toBe("base");
-    expect(store[threadKey].updatedAt).toBe(0);
-    expect(store[threadKey].sessionId).not.toBe("thread");
+    expect(store[baseKey].updatedAt).toBe(1_000);
+    expect(store[baseKey].sessionId).toBe("base");
+    expect(store[threadKey].updatedAt).toBe(2_000);
+    expect(store[threadKey].sessionId).toBe("thread");
     expect(store[unrelatedKey].updatedAt).toBe(3_000);
   });
 
