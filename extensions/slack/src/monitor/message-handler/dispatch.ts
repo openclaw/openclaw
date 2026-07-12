@@ -695,7 +695,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   // chat.update cannot preserve custom authorship. Use native streaming when
   // possible; otherwise keep identity intact with one final postMessage.
   const shouldUseDraftStream =
-    !prepared.eventScope &&
     !hasSlackCustomIdentity &&
     shouldInitializeSlackDraftStream({
       previewStreamingEnabled,
@@ -1492,6 +1491,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         cfg,
         token: ctx.botToken,
         accountId: account.accountId,
+        ...(prepared.eventScope ? { eventScope: prepared.eventScope } : {}),
         identity: slackIdentity,
         ...(slackMessageMetadata ? { metadata: slackMessageMetadata } : {}),
         maxChars: Math.min(ctx.textLimit, SLACK_TEXT_LIMIT),

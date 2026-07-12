@@ -3352,6 +3352,56 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(draftStream.update).toHaveBeenCalledTimes(updateCount);
   });
 
+  it("uses the enterprise event client for Slack commentary drafts", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedSlackStreamingMode = "progress";
+    mockedSlackDraftMode = "status_final";
+    mockedDispatchSequence = [];
+    mockedReplyOptionEvents = [
+      {
+        kind: "item",
+        itemKind: "preamble",
+        itemId: "preamble-1",
+        progressText: "Checking the Enterprise event path",
+      },
+      {
+        kind: "item",
+        itemKind: "preamble",
+        itemId: "preamble-2",
+        progressText: "Using the scoped listener client",
+      },
+    ];
+    const eventClient = {
+      chat: { postMessage: postMessageMock, update: chatUpdateMock },
+    };
+    const eventScope = {
+      apiAppId: "A_TEST",
+      enterpriseId: "E_TEST",
+      isEnterpriseInstall: true as const,
+      teamId: "T_ENTERPRISE",
+      client: eventClient,
+    };
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: {
+          enterpriseOrgInstall: true,
+          streaming: {
+            mode: "progress",
+            progress: { label: false, commentary: true, toolProgress: false, maxLines: 1 },
+          },
+        },
+        eventScope,
+      }),
+    );
+
+    expect(createSlackDraftStreamMock).toHaveBeenCalledWith(
+      expect.objectContaining({ eventScope }),
+    );
+    expect(draftStream.update).toHaveBeenLastCalledWith("• Using the scoped listener client");
+  });
+
   it("preserves legacy Slack preambles when commentary is omitted", async () => {
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
