@@ -1521,9 +1521,17 @@ function summarizeGatewayLogEntry(entry) {
   };
 }
 
+function canonicalizeExistingPath(filePath) {
+  try {
+    return realpathSync(filePath);
+  } catch {
+    return path.resolve(filePath);
+  }
+}
+
 function isPathWithinRoot(sourcePath, rootPath) {
-  const normalizedRoot = path.resolve(rootPath);
-  const normalizedSource = path.resolve(sourcePath);
+  const normalizedRoot = canonicalizeExistingPath(rootPath);
+  const normalizedSource = canonicalizeExistingPath(sourcePath);
   return (
     normalizedSource === normalizedRoot ||
     normalizedSource.startsWith(`${normalizedRoot}${path.sep}`)
@@ -1556,8 +1564,8 @@ function isCurrentGatewayLogSource(source, sourceRoot, managedSourceRoots) {
   ) {
     return true;
   }
-  const normalizedRoot = path.resolve(sourceRoot);
-  const normalizedSource = path.resolve(sourcePath);
+  const normalizedRoot = canonicalizeExistingPath(sourceRoot);
+  const normalizedSource = canonicalizeExistingPath(sourcePath);
   const checkoutRoot = path.dirname(normalizedRoot);
   let candidate = path.dirname(normalizedSource);
   while (candidate !== path.dirname(candidate)) {

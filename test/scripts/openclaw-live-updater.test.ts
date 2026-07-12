@@ -304,6 +304,36 @@ describe("openclaw live updater", () => {
     });
   });
 
+  test("keeps managed restart logs when the deployment root is symlinked", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-log-symlink-attribution-"));
+    const releaseRoot = path.join(root, "releases/abc");
+    const releaseDist = path.join(releaseRoot, "dist");
+    const linkedRoot = path.join(root, "current");
+    mkdirSync(releaseDist, { recursive: true });
+    mkdirSync(path.join(releaseRoot, ".git"));
+    writeFileSync(path.join(releaseRoot, "package.json"), '{"name":"openclaw"}\n');
+    const sourceFile = path.join(releaseDist, "console-managed.js");
+    writeFileSync(sourceFile, "export {};\n");
+    symlinkSync(releaseRoot, linkedRoot);
+    const output = JSON.stringify({
+      "0": "managed failure",
+      time: "2026-07-11T08:00:03.000Z",
+      _meta: {
+        date: "2026-07-11T08:00:03.000Z",
+        logLevelName: "ERROR",
+        path: { fullFilePath: sourceFile },
+      },
+    });
+
+    expect(
+      parseGatewayLogAudit(
+        output,
+        Date.parse("2026-07-11T08:00:02.000Z"),
+        path.join(linkedRoot, "dist"),
+      ),
+    ).toMatchObject({ entries: 1, errorCount: 1 });
+  });
+
   test("scopes embedded RPC records without dropping unattributed errors", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-rpc-log-attribution-"));
     const sourceRoot = path.join(root, "managed/openclaw/dist");
