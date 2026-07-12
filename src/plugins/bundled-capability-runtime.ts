@@ -13,6 +13,7 @@ import { resolveOpenClawDevSourceRoot } from "./dev-source-root.js";
 import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import type { PluginManifestContracts } from "./manifest.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
 import {
   createPluginModuleLoaderCache,
@@ -130,6 +131,18 @@ function resolvePluginModuleExport(moduleExport: unknown): {
   return {};
 }
 
+function uniqueIds(ids: readonly string[] | undefined): string[] {
+  return [...new Set(ids ?? [])];
+}
+
+function appendUniqueIds(target: string[], ids: readonly string[]): void {
+  for (const id of ids) {
+    if (!target.includes(id)) {
+      target.push(id);
+    }
+  }
+}
+
 function createCapabilityPluginRecord(params: {
   id: string;
   name?: string;
@@ -138,6 +151,7 @@ function createCapabilityPluginRecord(params: {
   source: string;
   rootDir?: string;
   workspaceDir?: string;
+  contracts?: PluginManifestContracts;
 }): PluginRecord {
   return {
     id: params.id,
@@ -155,19 +169,19 @@ function createCapabilityPluginRecord(params: {
     channelIds: [],
     cliBackendIds: [],
     providerIds: [],
-    embeddingProviderIds: [],
-    speechProviderIds: [],
-    realtimeTranscriptionProviderIds: [],
-    realtimeVoiceProviderIds: [],
-    mediaUnderstandingProviderIds: [],
-    transcriptSourceProviderIds: [],
-    imageGenerationProviderIds: [],
-    videoGenerationProviderIds: [],
-    musicGenerationProviderIds: [],
-    webFetchProviderIds: [],
-    webSearchProviderIds: [],
-    migrationProviderIds: [],
-    memoryEmbeddingProviderIds: [],
+    embeddingProviderIds: uniqueIds(params.contracts?.embeddingProviders),
+    speechProviderIds: uniqueIds(params.contracts?.speechProviders),
+    realtimeTranscriptionProviderIds: uniqueIds(params.contracts?.realtimeTranscriptionProviders),
+    realtimeVoiceProviderIds: uniqueIds(params.contracts?.realtimeVoiceProviders),
+    mediaUnderstandingProviderIds: uniqueIds(params.contracts?.mediaUnderstandingProviders),
+    transcriptSourceProviderIds: uniqueIds(params.contracts?.transcriptSourceProviders),
+    imageGenerationProviderIds: uniqueIds(params.contracts?.imageGenerationProviders),
+    videoGenerationProviderIds: uniqueIds(params.contracts?.videoGenerationProviders),
+    musicGenerationProviderIds: uniqueIds(params.contracts?.musicGenerationProviders),
+    webFetchProviderIds: uniqueIds(params.contracts?.webFetchProviders),
+    webSearchProviderIds: uniqueIds(params.contracts?.webSearchProviders),
+    migrationProviderIds: uniqueIds(params.contracts?.migrationProviders),
+    memoryEmbeddingProviderIds: uniqueIds(params.contracts?.memoryEmbeddingProviders),
     agentHarnessIds: [],
     cliCommands: [],
     services: [],
@@ -176,6 +190,7 @@ function createCapabilityPluginRecord(params: {
     httpRoutes: 0,
     hookCount: 0,
     configSchema: true,
+    contracts: params.contracts,
   };
 }
 
@@ -280,6 +295,7 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
           : candidate.source,
       rootDir: candidate.rootDir,
       workspaceDir: candidate.workspaceDir,
+      contracts: manifest.contracts,
     });
 
     const opened = openRootFileSync({
@@ -321,39 +337,74 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
     try {
       const captured = createCapturedPluginRegistration();
       register(captured.api);
-      record.cliBackendIds.push(...captured.cliBackends.map((entry) => entry.id));
-      record.providerIds.push(...captured.providers.map((entry) => entry.id));
-      record.embeddingProviderIds.push(...captured.embeddingProviders.map((entry) => entry.id));
-      record.speechProviderIds.push(...captured.speechProviders.map((entry) => entry.id));
-      record.realtimeTranscriptionProviderIds.push(
-        ...captured.realtimeTranscriptionProviders.map((entry) => entry.id),
+      appendUniqueIds(
+        record.cliBackendIds,
+        captured.cliBackends.map((entry) => entry.id),
       );
-      record.realtimeVoiceProviderIds.push(
-        ...captured.realtimeVoiceProviders.map((entry) => entry.id),
+      appendUniqueIds(
+        record.providerIds,
+        captured.providers.map((entry) => entry.id),
       );
-      record.mediaUnderstandingProviderIds.push(
-        ...captured.mediaUnderstandingProviders.map((entry) => entry.id),
+      appendUniqueIds(
+        record.embeddingProviderIds,
+        captured.embeddingProviders.map((entry) => entry.id),
       );
-      record.transcriptSourceProviderIds.push(
-        ...captured.transcriptSourceProviders.map((entry) => entry.id),
+      appendUniqueIds(
+        record.speechProviderIds,
+        captured.speechProviders.map((entry) => entry.id),
       );
-      record.imageGenerationProviderIds.push(
-        ...captured.imageGenerationProviders.map((entry) => entry.id),
+      appendUniqueIds(
+        record.realtimeTranscriptionProviderIds,
+        captured.realtimeTranscriptionProviders.map((entry) => entry.id),
       );
-      record.videoGenerationProviderIds.push(
-        ...captured.videoGenerationProviders.map((entry) => entry.id),
+      appendUniqueIds(
+        record.realtimeVoiceProviderIds,
+        captured.realtimeVoiceProviders.map((entry) => entry.id),
       );
-      record.musicGenerationProviderIds.push(
-        ...captured.musicGenerationProviders.map((entry) => entry.id),
+      appendUniqueIds(
+        record.mediaUnderstandingProviderIds,
+        captured.mediaUnderstandingProviders.map((entry) => entry.id),
       );
-      record.webFetchProviderIds.push(...captured.webFetchProviders.map((entry) => entry.id));
-      record.webSearchProviderIds.push(...captured.webSearchProviders.map((entry) => entry.id));
-      record.migrationProviderIds.push(...captured.migrationProviders.map((entry) => entry.id));
-      record.memoryEmbeddingProviderIds.push(
-        ...captured.memoryEmbeddingProviders.map((entry) => entry.id),
+      appendUniqueIds(
+        record.transcriptSourceProviderIds,
+        captured.transcriptSourceProviders.map((entry) => entry.id),
       );
-      record.agentHarnessIds.push(...captured.agentHarnesses.map((entry) => entry.id));
-      record.toolNames.push(...captured.tools.map((entry) => entry.name));
+      appendUniqueIds(
+        record.imageGenerationProviderIds,
+        captured.imageGenerationProviders.map((entry) => entry.id),
+      );
+      appendUniqueIds(
+        record.videoGenerationProviderIds,
+        captured.videoGenerationProviders.map((entry) => entry.id),
+      );
+      appendUniqueIds(
+        record.musicGenerationProviderIds,
+        captured.musicGenerationProviders.map((entry) => entry.id),
+      );
+      appendUniqueIds(
+        record.webFetchProviderIds,
+        captured.webFetchProviders.map((entry) => entry.id),
+      );
+      appendUniqueIds(
+        record.webSearchProviderIds,
+        captured.webSearchProviders.map((entry) => entry.id),
+      );
+      appendUniqueIds(
+        record.migrationProviderIds,
+        captured.migrationProviders.map((entry) => entry.id),
+      );
+      appendUniqueIds(
+        record.memoryEmbeddingProviderIds,
+        captured.memoryEmbeddingProviders.map((entry) => entry.id),
+      );
+      appendUniqueIds(
+        record.agentHarnessIds,
+        captured.agentHarnesses.map((entry) => entry.id),
+      );
+      appendUniqueIds(
+        record.toolNames,
+        captured.tools.map((entry) => entry.name),
+      );
 
       registry.cliBackends.push(
         ...captured.cliBackends.map((backend) => ({
