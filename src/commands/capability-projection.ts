@@ -481,20 +481,27 @@ export async function capabilityProjectionCommand(
     opts.outputDir ?? path.join(resolvedOutputRoot, "reports", "capability-projection"),
   );
   const generatedAt = new Date().toISOString();
-  const report = buildCapabilityProjectionReport({
-    generatedAt,
-    host: defaultCapabilityProjectionHost({
-      instanceDir: resolveStateDir(process.env),
-      workspaceDir,
-    }),
-    openclawVersion: VERSION,
-    agentId: targetAgentId,
-    sessionKey,
-    evidenceWindow,
-    selection,
-    trajectory,
-    evidence,
-  });
+  let report: CapabilityProjectionReport;
+  try {
+    report = buildCapabilityProjectionReport({
+      generatedAt,
+      host: defaultCapabilityProjectionHost({
+        instanceDir: resolveStateDir(process.env),
+        workspaceDir,
+      }),
+      openclawVersion: VERSION,
+      agentId: targetAgentId,
+      sessionKey,
+      evidenceWindow,
+      selection,
+      trajectory,
+      evidence,
+    });
+  } catch {
+    runtime.error("Capability projection evidence failed semantic validation.");
+    runtime.exit(1);
+    return;
+  }
   try {
     const published = await publishCapabilityProjectionPair({
       report,

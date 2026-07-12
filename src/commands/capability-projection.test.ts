@@ -985,6 +985,43 @@ describe("collector and publication safety", () => {
     expect(runtime.error).toHaveBeenCalledWith(
       "Capability projection --agent conflicts with the canonical session owner.",
     );
+    vi.clearAllMocks();
+    await fs.writeFile(
+      evidenceFile,
+      JSON.stringify([
+        {
+          id: "reserved",
+          rank: 1,
+          kind: "context_compiled",
+          source: "sanitized fixture",
+          observedAt: now,
+          periodRelation: "exact_turn",
+          status: "collected",
+          fields: {
+            sessionId: "s",
+            sessionKey,
+            runId,
+            sequence: 1,
+            toolNames: ["memory_get"],
+          },
+          redactionApplied: true,
+        },
+      ]),
+    );
+    await capabilityProjectionCommand(
+      {
+        sessionKey,
+        runId,
+        windowStart: "2026-07-12T15:59:00Z",
+        windowEnd: "2026-07-12T16:01:00Z",
+        evidenceFile,
+        outputRoot: dir,
+      },
+      runtime,
+    );
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Capability projection evidence failed semantic validation.",
+    );
   });
 
   it("has a closed evidence schema with no arbitrary evidence fields", () => {
