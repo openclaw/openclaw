@@ -785,7 +785,6 @@ describe("createBackupArchive", () => {
         await fs.mkdir(extractDir, { recursive: true });
         const sqlite = requireNodeSqlite();
         const db = new sqlite.DatabaseSync(dbPath);
-        db.function("plugin_double", { deterministic: true }, (value) => Number(value) * 2);
         db.exec(`
           PRAGMA journal_mode = WAL;
           PRAGMA wal_autocheckpoint = 0;
@@ -800,8 +799,6 @@ describe("createBackupArchive", () => {
           CREATE TABLE delivery_queue_entries (
             id TEXT PRIMARY KEY
           );
-          CREATE INDEX backup_markers_double
-            ON backup_markers(plugin_double(transaction_id));
           INSERT INTO backup_meta (id, last_seq) VALUES (1, 0);
           INSERT INTO delivery_queue_entries (id) VALUES ('must-stay');
           PRAGMA wal_checkpoint(TRUNCATE);
@@ -839,11 +836,6 @@ describe("createBackupArchive", () => {
             readOnly: true,
           });
           try {
-            archivedDb.function(
-              "plugin_double",
-              { deterministic: true },
-              (value) => Number(value) * 2,
-            );
             expect(archivedDb.prepare("PRAGMA integrity_check").get()).toEqual({
               integrity_check: "ok",
             });
@@ -865,6 +857,90 @@ describe("createBackupArchive", () => {
           }
         } finally {
           db.close();
+        }
+      },
+    );
+  });
+
+  it("fails closed when a plugin SQLite schema cannot be compacted safely", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-plugin-capability-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputDir = state.path("backups");
+        const dbPath = state.statePath("plugins", "dedicated", "custom.sqlite");
+        await fs.mkdir(path.dirname(dbPath), { recursive: true });
+        await fs.mkdir(outputDir, { recursive: true });
+        const sqlite = requireNodeSqlite();
+        const db = new sqlite.DatabaseSync(dbPath);
+        db.function("plugin_double", { deterministic: true }, (value) => Number(value) * 2);
+        db.exec(`
+          CREATE TABLE records (value INTEGER NOT NULL);
+          INSERT INTO records (value) VALUES (1), (2);
+          CREATE INDEX records_double ON records(plugin_double(value));
+        `);
+        db.close();
+
+        await expect(
+          createBackupArchive({
+            output: outputDir,
+            includeWorkspace: false,
+            nowMs: Date.UTC(2026, 4, 9, 8, 33, 0),
+          }),
+        ).rejects.toThrow(/cannot be compacted safely.*custom\.sqlite/iu);
+      },
+    );
+  });
+
+  it("scrubs deleted plugin SQLite bytes from archive snapshots", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-plugin-deleted-bytes-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputDir = state.path("backups");
+        const extractDir = state.path("extract");
+        const dbPath = state.statePath("plugins", "dedicated", "deleted.sqlite");
+        const deletedValue = `deleted-plugin-secret-${"x".repeat(256)}`;
+        await fs.mkdir(path.dirname(dbPath), { recursive: true });
+        await fs.mkdir(outputDir, { recursive: true });
+        await fs.mkdir(extractDir, { recursive: true });
+        const sqlite = requireNodeSqlite();
+        const db = new sqlite.DatabaseSync(dbPath);
+        db.exec("PRAGMA secure_delete = OFF; CREATE TABLE records (value TEXT NOT NULL);");
+        const insert = db.prepare("INSERT INTO records (value) VALUES (?)");
+        insert.run("survivor");
+        insert.run(deletedValue);
+        db.prepare("DELETE FROM records WHERE value = ?").run(deletedValue);
+        db.close();
+
+        expect((await fs.readFile(dbPath)).includes(deletedValue)).toBe(true);
+        const result = await createBackupArchive({
+          output: outputDir,
+          includeWorkspace: false,
+          nowMs: Date.UTC(2026, 4, 9, 8, 34, 0),
+        });
+        const entries = await listArchiveEntries(result.archivePath);
+        const archivedDbEntry = entries.find((entry) =>
+          entry.endsWith("/state/plugins/dedicated/deleted.sqlite"),
+        );
+        expect(archivedDbEntry).toBeDefined();
+
+        await tar.x({ file: result.archivePath, gzip: true, cwd: extractDir });
+        const archivedPath = path.join(extractDir, archivedDbEntry!);
+        expect((await fs.readFile(archivedPath)).includes(deletedValue)).toBe(false);
+        const archivedDb = new sqlite.DatabaseSync(archivedPath, { readOnly: true });
+        try {
+          expect(archivedDb.prepare("SELECT value FROM records").all()).toEqual([
+            { value: "survivor" },
+          ]);
+        } finally {
+          archivedDb.close();
         }
       },
     );

@@ -373,6 +373,25 @@ function findDuplicateNormalizedEntryPath(
   return undefined;
 }
 
+function resolvePortableArchivePathKey(value: string): string {
+  return value.normalize("NFC").toLowerCase();
+}
+
+function findPortableArchiveEntryPathCollision(
+  entries: Array<{ normalized: string }>,
+): { first: string; second: string } | undefined {
+  const seen = new Map<string, string>();
+  for (const entry of entries) {
+    const key = resolvePortableArchivePathKey(entry.normalized);
+    const first = seen.get(key);
+    if (first && first !== entry.normalized) {
+      return { first, second: entry.normalized };
+    }
+    seen.set(key, entry.normalized);
+  }
+  return undefined;
+}
+
 function isRegularArchiveFile(entryType: string | undefined): boolean {
   return entryType === "File" || entryType === "OldFile" || entryType === "ContiguousFile";
 }
@@ -408,27 +427,48 @@ function resolveCanonicalStateAssetRoot(manifest: BackupManifest): string | unde
 }
 
 function isSqliteSnapshotRelativePath(relativePath: string): boolean {
-  if (!relativePath.endsWith(".sqlite")) {
+  const portablePath = resolvePortableArchivePathKey(relativePath);
+  if (!portablePath.endsWith(".sqlite")) {
     return false;
   }
   if (resolveExpectedSqliteRoleFromRelativePath(relativePath)) {
     return true;
   }
   return (
-    !relativePath.split("/").includes("node_modules") &&
+    !portablePath.split("/").includes("node_modules") &&
     !SQLITE_BACKUP_REINDEX_TRANSIENT_PATTERN.test(relativePath) &&
-    !SQLITE_BACKUP_EXCLUDED_SUFFIXES.some((suffix) => relativePath.endsWith(suffix))
+    !SQLITE_BACKUP_EXCLUDED_SUFFIXES.some((suffix) => portablePath.endsWith(suffix))
   );
 }
 
 function resolveSqliteSnapshotSidecarDatabasePath(relativePath: string): string | undefined {
+  const portablePath = resolvePortableArchivePathKey(relativePath);
   for (const suffix of SQLITE_SNAPSHOT_SIDECAR_SUFFIXES) {
-    if (relativePath.endsWith(suffix)) {
+    if (portablePath.endsWith(suffix)) {
       const databasePath = relativePath.slice(0, -suffix.length);
       return isSqliteSnapshotRelativePath(databasePath) ? databasePath : undefined;
     }
   }
   return undefined;
+}
+
+function assertCanonicalSqlitePathCasing(relativePath: string, archivePath: string): void {
+  const segments = relativePath.split("/");
+  const portablePath = resolvePortableArchivePathKey(relativePath);
+  const isGlobalAlias =
+    portablePath === "state/openclaw.sqlite" && relativePath !== "state/openclaw.sqlite";
+  const isAgentAlias =
+    segments.length === 4 &&
+    segments[0]?.toLowerCase() === "agents" &&
+    Boolean(segments[1]) &&
+    segments[2]?.toLowerCase() === "agent" &&
+    segments[3]?.toLowerCase() === "openclaw-agent.sqlite" &&
+    (segments[0] !== "agents" ||
+      segments[2] !== "agent" ||
+      segments[3] !== "openclaw-agent.sqlite");
+  if (isGlobalAlias || isAgentAlias) {
+    throw new Error(`Backup contains a case-mangled canonical SQLite path: ${archivePath}`);
+  }
 }
 
 function listSqliteSnapshotEntries(
@@ -464,6 +504,7 @@ function listSqliteSnapshotEntries(
       continue;
     }
     const relativePath = path.posix.relative(stateAssetRoot, entry.normalized);
+    assertCanonicalSqlitePathCasing(relativePath, entry.normalized);
     if (resolveSqliteSnapshotSidecarDatabasePath(relativePath)) {
       throw new Error(`Backup contains a SQLite snapshot sidecar: ${entry.normalized}`);
     }
@@ -746,6 +787,12 @@ export async function backupVerifyCommand(
   const duplicateEntryPath = findDuplicateNormalizedEntryPath(entries);
   if (duplicateEntryPath) {
     throw new Error(`Archive contains duplicate entry path: ${duplicateEntryPath}`);
+  }
+  const portablePathCollision = findPortableArchiveEntryPathCollision(entries);
+  if (portablePathCollision) {
+    throw new Error(
+      `Archive contains a portable path collision: ${portablePathCollision.first} and ${portablePathCollision.second}`,
+    );
   }
   const manifestEntryPath = manifestMatches[0]?.raw;
   if (!manifestEntryPath) {

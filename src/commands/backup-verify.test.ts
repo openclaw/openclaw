@@ -370,9 +370,51 @@ describe("backupVerifyCommand", () => {
     );
   });
 
-  it("rejects SQLite sidecars that could change restored snapshot contents", async () => {
+  it.each(["-wal", "-WAL"])(
+    "rejects SQLite sidecars that could change restored snapshot contents (%s)",
+    async (sidecarSuffix) => {
+      const stateAssetArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw`;
+      const sqliteArchivePath = `${stateAssetArchivePath}/state/openclaw.sqlite`;
+      const sqlitePayload = await createSqlitePayload((database) => {
+        database.exec(`
+        CREATE TABLE schema_meta (
+          meta_key TEXT NOT NULL PRIMARY KEY,
+          role TEXT NOT NULL
+        );
+        INSERT INTO schema_meta (meta_key, role) VALUES ('primary', 'global');
+      `);
+      });
+
+      await withBrokenArchiveFixture(
+        {
+          tempPrefix: "openclaw-backup-sqlite-sidecar-",
+          manifestAssetArchivePath: stateAssetArchivePath,
+          payloads: [
+            {
+              fileName: "openclaw.sqlite",
+              contents: sqlitePayload,
+              archivePath: sqliteArchivePath,
+            },
+            {
+              fileName: "openclaw.sqlite-wal",
+              contents: "unverified transaction data",
+              archivePath: `${sqliteArchivePath}${sidecarSuffix}`,
+            },
+          ],
+        },
+        async (archivePath) => {
+          const runtime = createBackupVerifyRuntime();
+          await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
+            /contains a SQLite snapshot sidecar.*openclaw\.sqlite-wal/iu,
+          );
+        },
+      );
+    },
+  );
+
+  it("rejects case-mangled canonical SQLite paths", async () => {
     const stateAssetArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw`;
-    const sqliteArchivePath = `${stateAssetArchivePath}/state/openclaw.sqlite`;
+    const sqliteArchivePath = `${stateAssetArchivePath}/State/OpenClaw.SQLITE`;
     const sqlitePayload = await createSqlitePayload((database) => {
       database.exec(`
         CREATE TABLE schema_meta (
@@ -385,7 +427,7 @@ describe("backupVerifyCommand", () => {
 
     await withBrokenArchiveFixture(
       {
-        tempPrefix: "openclaw-backup-sqlite-sidecar-",
+        tempPrefix: "openclaw-backup-sqlite-case-alias-",
         manifestAssetArchivePath: stateAssetArchivePath,
         payloads: [
           {
@@ -393,17 +435,12 @@ describe("backupVerifyCommand", () => {
             contents: sqlitePayload,
             archivePath: sqliteArchivePath,
           },
-          {
-            fileName: "openclaw.sqlite-wal",
-            contents: "unverified transaction data",
-            archivePath: `${sqliteArchivePath}-wal`,
-          },
         ],
       },
       async (archivePath) => {
         const runtime = createBackupVerifyRuntime();
         await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
-          /contains a SQLite snapshot sidecar.*openclaw\.sqlite-wal/iu,
+          /case-mangled canonical SQLite path.*State\/OpenClaw\.SQLITE/u,
         );
       },
     );
@@ -960,6 +997,18 @@ describe("backupVerifyCommand", () => {
           { fileName: "payload-b.txt", contents: "payload-b\n", archivePath: payloadArchivePath },
         ],
         error: /duplicate entry path/i,
+      },
+      {
+        tempPrefix: "openclaw-backup-portable-path-collision-",
+        payloads: [
+          { fileName: "payload-a.txt", contents: "payload-a\n", archivePath: payloadArchivePath },
+          {
+            fileName: "payload-b.txt",
+            contents: "payload-b\n",
+            archivePath: payloadArchivePath.toUpperCase(),
+          },
+        ],
+        error: /portable path collision/i,
       },
     ]) {
       await withBrokenArchiveFixture(

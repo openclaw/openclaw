@@ -1346,9 +1346,8 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   Runtime tests no longer create invalid or empty `runs.json` fixtures to prove
   registry behavior; they seed/read SQLite rows directly.
 - Backup stages the state directory before archiving, copies non-database files,
-  snapshots canonical databases with `VACUUM INTO` and dedicated plugin
-  databases with SQLite's online backup API, omits live WAL/SHM sidecars,
-  records snapshot metadata in the archive manifest, and records
+  snapshots databases with `VACUUM INTO`, omits live WAL/SHM sidecars, records
+  snapshot metadata in the archive manifest, and records
   completed backup runs in SQLite with the archive manifest. `openclaw backup
 create` validates the written archive by default; `--no-verify` is the
   explicit fast path.
@@ -1865,8 +1864,9 @@ SQLite-native:
 
 1. Stop long-running write activity or enter a short backup barrier.
 2. For every global and agent database, run a checkpoint.
-3. Snapshot canonical databases with `VACUUM INTO` and dedicated plugin
-   databases with SQLite backup semantics into a temporary backup directory.
+3. Snapshot databases with `VACUUM INTO` into a temporary backup directory.
+   Plugin schemas that require owner-defined SQLite capabilities fail closed
+   until the owner provides a safe snapshot contract.
 4. Archive the database snapshots, config file, credentials directory, selected
    workspaces, and a manifest.
 5. Verify every SQLite snapshot's file shape, then open canonical OpenClaw
@@ -1987,9 +1987,9 @@ payload.
      lifetime and cancellation behavior are boring.
 
 8. Backup integration.
-   - Teach backup to snapshot global and agent databases with `VACUUM INTO`,
-     and dedicated plugin databases with SQLite's online backup API. Done for
-     discovered `*.sqlite` files under the state asset.
+   - Teach backup to snapshot global, agent, and plugin databases with
+     `VACUUM INTO`. Done for discovered `*.sqlite` files under the state asset;
+     plugin schemas requiring unavailable owner capabilities fail closed.
    - Add backup verification for canonical SQLite integrity and schema identity,
      plus generic file-shape validation for dedicated plugin snapshots. Done for
      backup creation and default archive verification.
