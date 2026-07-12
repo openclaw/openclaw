@@ -1,4 +1,6 @@
 // Terminal Core module implements table behavior.
+
+import { splitAnsiSegments } from "./ansi-sequences.js";
 import { splitGraphemes, truncateToVisibleWidth, visibleWidth } from "./ansi.js";
 import { displayString } from "./display-string.js";
 
@@ -69,6 +71,296 @@ function padCell(text: string, width: number, align: Align): string {
   return `${content}${repeat(" ", pad)}`;
 }
 
+const ESC = "\u001b";
+const C1_CSI = "\u009b";
+const C1_OSC = "\u009d";
+const C1_ST = "\u009c";
+const BEL = "\u0007";
+
+type AnsiToken = { kind: "ansi"; value: string; width: number } | { kind: "char"; value: string };
+type SgrCategory =
+  | "background"
+  | "blink"
+  | "conceal"
+  | "font"
+  | "foreground"
+  | "frame"
+  | "ideogram"
+  | "intensity"
+  | "inverse"
+  | "italic"
+  | "overline"
+  | "proportional"
+  | "script"
+  | "strike"
+  | "underline"
+  | "underlineColor";
+
+const SGR_CATEGORY_ORDER: readonly SgrCategory[] = [
+  "font",
+  "intensity",
+  "italic",
+  "underline",
+  "underlineColor",
+  "blink",
+  "inverse",
+  "conceal",
+  "strike",
+  "proportional",
+  "frame",
+  "overline",
+  "ideogram",
+  "script",
+  "foreground",
+  "background",
+];
+
+const SGR_RESET_CATEGORIES = new Map<number, SgrCategory>([
+  [10, "font"],
+  [22, "intensity"],
+  [23, "italic"],
+  [24, "underline"],
+  [25, "blink"],
+  [27, "inverse"],
+  [28, "conceal"],
+  [29, "strike"],
+  [39, "foreground"],
+  [49, "background"],
+  [50, "proportional"],
+  [54, "frame"],
+  [55, "overline"],
+  [59, "underlineColor"],
+  [65, "ideogram"],
+  [75, "script"],
+]);
+
+const SGR_CATEGORY_RESETS = new Map<SgrCategory, number>([
+  ["font", 10],
+  ["intensity", 22],
+  ["italic", 23],
+  ["underline", 24],
+  ["blink", 25],
+  ["inverse", 27],
+  ["conceal", 28],
+  ["strike", 29],
+  ["foreground", 39],
+  ["background", 49],
+  ["proportional", 50],
+  ["frame", 54],
+  ["overline", 55],
+  ["underlineColor", 59],
+  ["ideogram", 65],
+  ["script", 75],
+]);
+
+function simpleSgrCategory(param: number): SgrCategory | undefined {
+  if (param === 1 || param === 2) {
+    return "intensity";
+  }
+  if (param >= 11 && param <= 19) {
+    return "font";
+  }
+  if (param === 3 || param === 20) {
+    return "italic";
+  }
+  if (param === 4 || param === 21) {
+    return "underline";
+  }
+  if (param === 5 || param === 6) {
+    return "blink";
+  }
+  if (param === 7) {
+    return "inverse";
+  }
+  if (param === 8) {
+    return "conceal";
+  }
+  if (param === 9) {
+    return "strike";
+  }
+  if (param === 26) {
+    return "proportional";
+  }
+  if ((param >= 30 && param <= 37) || (param >= 90 && param <= 97)) {
+    return "foreground";
+  }
+  if ((param >= 40 && param <= 47) || (param >= 100 && param <= 107)) {
+    return "background";
+  }
+  if (param === 51 || param === 52) {
+    return "frame";
+  }
+  if (param === 53) {
+    return "overline";
+  }
+  if (param >= 60 && param <= 64) {
+    return "ideogram";
+  }
+  if (param === 73 || param === 74) {
+    return "script";
+  }
+  return undefined;
+}
+
+function extendedSgrCategory(param: number): SgrCategory | undefined {
+  if (param === 38) {
+    return "foreground";
+  }
+  if (param === 48) {
+    return "background";
+  }
+  return param === 58 ? "underlineColor" : undefined;
+}
+
+function parseSgrSequence(value: string): { introducer: string; parameters: string } | undefined {
+  let introducer: string;
+  if (value.startsWith(`${ESC}[`) && value.endsWith("m")) {
+    introducer = `${ESC}[`;
+  } else if (value.startsWith(C1_CSI) && value.endsWith("m")) {
+    introducer = C1_CSI;
+  } else {
+    return undefined;
+  }
+  const parameters = Array.from(value.slice(introducer.length, -1))
+    .filter((character) => {
+      const code = character.charCodeAt(0);
+      return code > 0x1f && code !== 0x7f;
+    })
+    .join("");
+  const hasOnlySgrParameters = Array.from(parameters).every(
+    (character) => (character >= "0" && character <= "9") || character === ";" || character === ":",
+  );
+  if (!hasOnlySgrParameters) {
+    return undefined;
+  }
+  return { introducer, parameters };
+}
+
+function sgrSequence(introducer: string, parameters: string): string {
+  return `${introducer}${parameters}m`;
+}
+
+function applySgrSequence(active: Map<SgrCategory, string>, value: string): void {
+  const sequence = parseSgrSequence(value);
+  if (!sequence) {
+    return;
+  }
+
+  const fields = sequence.parameters === "" ? ["0"] : sequence.parameters.split(";");
+  for (let index = 0; index < fields.length; index += 1) {
+    const field = fields[index] ?? "";
+    if (field.includes(":")) {
+      const param = Number(field.slice(0, field.indexOf(":")));
+      const category = extendedSgrCategory(param) ?? simpleSgrCategory(param);
+      if (category) {
+        active.set(category, sgrSequence(sequence.introducer, field));
+      }
+      continue;
+    }
+
+    const param = field === "" ? 0 : Number(field);
+    if (!Number.isInteger(param)) {
+      continue;
+    }
+    if (param === 0) {
+      active.clear();
+      continue;
+    }
+    const resetCategory = SGR_RESET_CATEGORIES.get(param);
+    if (resetCategory) {
+      active.delete(resetCategory);
+      continue;
+    }
+
+    const extendedCategory = extendedSgrCategory(param);
+    if (extendedCategory) {
+      const mode = Number(fields[index + 1]);
+      const operandCount = mode === 2 ? 3 : mode === 5 ? 1 : undefined;
+      const lastOperandIndex = operandCount === undefined ? -1 : index + 1 + operandCount;
+      if (lastOperandIndex < index || lastOperandIndex >= fields.length) {
+        break;
+      }
+      const parameters = fields.slice(index, lastOperandIndex + 1).join(";");
+      active.set(extendedCategory, sgrSequence(sequence.introducer, parameters));
+      index = lastOperandIndex;
+      continue;
+    }
+
+    const category = simpleSgrCategory(param);
+    if (category) {
+      active.set(category, sgrSequence(sequence.introducer, String(param)));
+    }
+  }
+}
+
+type ActiveSgr = { close: string; open: string };
+
+function activeSgrAfter(tokens: readonly AnsiToken[]): ActiveSgr[] {
+  const active = new Map<SgrCategory, string>();
+  for (const token of tokens) {
+    if (token.kind === "ansi") {
+      applySgrSequence(active, token.value);
+    }
+  }
+  return SGR_CATEGORY_ORDER.flatMap((category) => {
+    const open = active.get(category);
+    const parsed = open ? parseSgrSequence(open) : undefined;
+    const reset = SGR_CATEGORY_RESETS.get(category);
+    return open && parsed && reset !== undefined
+      ? [{ close: sgrSequence(parsed.introducer, String(reset)), open }]
+      : [];
+  });
+}
+
+type Osc8Link = { params: string; uri: string };
+
+function parseOsc8Sequence(value: string): Osc8Link | undefined {
+  let payloadStart: number;
+  if (value.startsWith(`${ESC}]`)) {
+    payloadStart = 2;
+  } else if (value.startsWith(C1_OSC)) {
+    payloadStart = 1;
+  } else {
+    return undefined;
+  }
+
+  let terminatorLength: number;
+  if (value.endsWith(`${ESC}\\`)) {
+    terminatorLength = 2;
+  } else if (value.endsWith(BEL) || value.endsWith(C1_ST)) {
+    terminatorLength = 1;
+  } else {
+    return undefined;
+  }
+
+  const payload = value.slice(payloadStart, -terminatorLength);
+  if (!payload.startsWith("8;")) {
+    return undefined;
+  }
+  const uriSeparator = payload.indexOf(";", 2);
+  if (uriSeparator < 0) {
+    return undefined;
+  }
+  return {
+    params: payload.slice(2, uriSeparator),
+    uri: payload.slice(uriSeparator + 1),
+  };
+}
+
+function activeOsc8After(tokens: readonly AnsiToken[]): Osc8Link | undefined {
+  let active: Osc8Link | undefined;
+  for (const token of tokens) {
+    if (token.kind !== "ansi") {
+      continue;
+    }
+    const link = parseOsc8Sequence(token.value);
+    if (link) {
+      active = link.uri === "" ? undefined : link;
+    }
+  }
+  return active;
+}
+
 function wrapLine(text: string, width: number): string[] {
   if (width <= 0) {
     return [text];
@@ -77,146 +369,24 @@ function wrapLine(text: string, width: number): string[] {
   // ANSI-aware wrapping: never split inside ANSI SGR/OSC-8 sequences.
   // Table cells are padded and bordered per physical line, so wrapped lines
   // must not leak styling into padding while the next continuation keeps it.
-  const ESC = "\u001b";
-  const C1_CSI = "\u009b";
-  const C1_OSC = "\u009d";
-  const BEL = "\u0007";
-  const C1_ST = "\u009c";
-  const SGR_RESET = `${ESC}[0m`;
-
-  // Find the end of an OSC-8 sequence starting at `start` (index after the
-  // "8;;" prefix). ST may be ESC \, BEL, or C1 ST.
-  const findOsc8End = (start: number): number => {
-    for (let k = start; k < text.length; k += 1) {
-      const ch = text[k];
-      if (ch === ESC && text[k + 1] === "\\") {
-        return k + 2;
-      }
-      if (ch === BEL || ch === C1_ST) {
-        return k + 1;
-      }
-    }
-    return -1;
-  };
-
-  type Token = { kind: "ansi" | "char"; value: string };
-  const tokens: Token[] = [];
-  for (let i = 0; i < text.length;) {
-    const ch0 = text[i];
-    const isEsc = ch0 === ESC;
-    const isC1Csi = ch0 === C1_CSI;
-
-    // SGR: ESC [ ... m  or  C1 CSI ... m
-    if ((isEsc || isC1Csi) && (!isEsc || text[i + 1] === "[")) {
-      const paramStart = isEsc ? i + 2 : i + 1;
-      let j = paramStart;
-      while (j < text.length) {
-        const ch = text[j];
-        if (ch === "m") {
-          break;
-        }
-        if (ch && ch >= "0" && ch <= "9") {
-          j += 1;
-          continue;
-        }
-        if (ch === ";") {
-          j += 1;
-          continue;
-        }
-        break;
-      }
-      if (text[j] === "m") {
-        tokens.push({ kind: "ansi", value: text.slice(i, j + 1) });
-        i = j + 1;
-        continue;
-      }
-    }
-
-    // OSC-8 link open/close: ESC ] 8 ; ; ... ST  or  C1 OSC 8 ; ; ... ST
-    // ST can be ESC \, BEL, or C1 ST.
-    if (
-      (isEsc && text[i + 1] === "]" && text.slice(i + 2, i + 5) === "8;;") ||
-      (ch0 === C1_OSC && text.slice(i + 1, i + 4) === "8;;")
-    ) {
-      const payloadStart = isEsc ? i + 5 : i + 4;
-      const end = findOsc8End(payloadStart);
-      if (end >= 0) {
-        tokens.push({ kind: "ansi", value: text.slice(i, end) });
-        i = end;
-        continue;
-      }
-    }
-
-    // Find the next potential ANSI introducer (ESC, C1 CSI, or C1 OSC).
-    const nextEsc = text.indexOf(ESC, i);
-    const nextC1Csi = text.indexOf(C1_CSI, i);
-    const nextC1Osc = text.indexOf(C1_OSC, i);
-    let nextSpecial = text.length;
-    if (nextEsc >= 0) {
-      nextSpecial = Math.min(nextSpecial, nextEsc);
-    }
-    if (nextC1Csi >= 0) {
-      nextSpecial = Math.min(nextSpecial, nextC1Csi);
-    }
-    if (nextC1Osc >= 0) {
-      nextSpecial = Math.min(nextSpecial, nextC1Osc);
-    }
-
-    if (nextSpecial === i) {
-      // Consume unsupported escape bytes as plain characters so wrapping
-      // cannot stall on unknown ANSI/control sequences.
-      tokens.push({ kind: "char", value: text[i] ?? "" });
-      i += 1;
+  const tokens: AnsiToken[] = [];
+  for (const segment of splitAnsiSegments(text)) {
+    if (segment.kind === "ansi") {
+      tokens.push({
+        kind: "ansi",
+        value: segment.value,
+        width: visibleWidth(segment.controls.join("")),
+      });
       continue;
     }
-    const plainChunk = text.slice(i, nextSpecial);
-    for (const grapheme of splitGraphemes(plainChunk)) {
+    for (const grapheme of splitGraphemes(segment.value)) {
       tokens.push({ kind: "char", value: grapheme });
     }
-    i = nextSpecial;
   }
 
-  const firstCharIndex = tokens.findIndex((t) => t.kind === "char");
-  if (firstCharIndex < 0) {
+  if (!tokens.some((token) => token.kind === "char")) {
     return [text];
   }
-  let lastCharIndex = -1;
-  for (let i = tokens.length - 1; i >= 0; i -= 1) {
-    if (tokens[i]?.kind === "char") {
-      lastCharIndex = i;
-      break;
-    }
-  }
-  // OSC-8 token predicate: matches ESC ] 8 ;; or C1 OSC 8 ;; introducers
-  // (both openers with a target and closers with empty params).
-  const isOsc8Token = (value: string): boolean =>
-    value.startsWith(`${ESC}]8;;`) || value.startsWith(`${C1_OSC}8;;`);
-
-  const leadingAnsiTokens = tokens.slice(0, firstCharIndex).filter((t) => t.kind === "ansi");
-  const trailingAnsiTokens = tokens.slice(lastCharIndex + 1).filter((t) => t.kind === "ansi");
-  // SGR styling that brackets the cell is reapplied to every wrapped line.
-  // OSC-8 openers are deliberately excluded: a leading hyperlink opener must be
-  // carried as initial state into the wrap state machine so it closes at its
-  // matching closer, instead of being prepended to every continuation line and
-  // reopening the link onto trailing plain text and padding (e.g. `${link} after`
-  // wrapping would otherwise leave "after" + padding inside an unclosed link).
-  const prefixAnsi = leadingAnsiTokens
-    .filter((t) => !isOsc8Token(t.value))
-    .map((t) => t.value)
-    .join("");
-  const suffixAnsi = trailingAnsiTokens
-    .filter((t) => !isOsc8Token(t.value))
-    .map((t) => t.value)
-    .join("");
-  const leadingOsc8Tokens = leadingAnsiTokens.filter((t) => isOsc8Token(t.value));
-  const trailingOsc8Tokens = trailingAnsiTokens.filter((t) => isOsc8Token(t.value));
-  // Seed leading OSC-8 openers and append trailing closers so flushAt's
-  // close/reopen logic owns hyperlink state end to end across wrap boundaries.
-  const coreTokens = [
-    ...leadingOsc8Tokens,
-    ...tokens.slice(firstCharIndex, lastCharIndex + 1),
-    ...trailingOsc8Tokens,
-  ];
 
   const lines: string[] = [];
   const isBreakChar = (ch: string) =>
@@ -224,196 +394,17 @@ function wrapLine(text: string, width: number): string[] {
   const isSpaceChar = (ch: string) => ch === " " || ch === "\t";
   let skipNextLf = false;
 
-  const buf: Token[] = [];
+  const buf: AnsiToken[] = [];
   let bufVisible = 0;
   let lastBreakIndex: number | null = null;
 
-  const bufToString = (slice?: Token[]) => (slice ?? buf).map((t) => t.value).join("");
+  const bufToString = (slice?: AnsiToken[]) => (slice ?? buf).map((t) => t.value).join("");
 
-  const bufVisibleWidth = (slice: Token[]) =>
-    slice.reduce((acc, t) => acc + (t.kind === "char" ? visibleWidth(t.value) : 0), 0);
-
-  const parseSgrParams = (value: string): number[] | null => {
-    const isEscSgr = value.startsWith(`${ESC}[`) && value.endsWith("m");
-    const isC1Sgr = value.startsWith(C1_CSI) && value.endsWith("m");
-    if (!isEscSgr && !isC1Sgr) {
-      return null;
-    }
-    const prefixLen = isEscSgr ? 2 : 1;
-    const raw = value.slice(prefixLen, -1);
-    if (!raw) {
-      return [0];
-    }
-    const params = raw.split(";").map((part) => (part === "" ? 0 : Number(part)));
-    return params.every((param) => Number.isInteger(param)) ? params : null;
-  };
-
-  // Returns the OSC-8 hyperlink params, or empty string for a close sequence,
-  // or undefined if the token is not an OSC-8 sequence. params excludes the
-  // surrounding introducer, "8;;" prefix, and string terminator.
-  const parseOsc8Params = (value: string): string | undefined => {
-    const escPrefix = `${ESC}]8;;`;
-    const c1Prefix = `${C1_OSC}8;;`;
-    let prefix: string;
-    let stLength: number;
-    if (value.startsWith(escPrefix)) {
-      prefix = escPrefix;
-      stLength = value.endsWith(`${ESC}\\`) ? 2 : 1;
-    } else if (value.startsWith(c1Prefix)) {
-      prefix = c1Prefix;
-      if (value.endsWith(C1_ST)) {
-        stLength = 1;
-      } else if (value.endsWith(`${ESC}\\`)) {
-        stLength = 2;
-      } else {
-        stLength = 1;
-      }
-    } else {
-      return undefined;
-    }
-    return value.slice(prefix.length, value.length - stLength);
-  };
-
-  const activeSgrAfter = (tokensValue: Token[]) => {
-    type SgrCategory =
-      | "background"
-      | "blink"
-      | "conceal"
-      | "foreground"
-      | "intensity"
-      | "inverse"
-      | "italic"
-      | "strike"
-      | "underline";
-    const active: Array<{ value: string; categories: Set<SgrCategory> }> = [];
-    const resetCategoriesFor = (params: number[]) => {
-      const categories = new Set<SgrCategory>();
-      for (const param of params) {
-        if (param === 22) {
-          categories.add("intensity");
-        } else if (param === 23) {
-          categories.add("italic");
-        } else if (param === 24) {
-          categories.add("underline");
-        } else if (param === 25) {
-          categories.add("blink");
-        } else if (param === 27) {
-          categories.add("inverse");
-        } else if (param === 28) {
-          categories.add("conceal");
-        } else if (param === 29) {
-          categories.add("strike");
-        } else if (param === 39) {
-          categories.add("foreground");
-        } else if (param === 49) {
-          categories.add("background");
-        }
-      }
-      return categories;
-    };
-    const activeCategoriesFor = (params: number[]) => {
-      const categories = new Set<SgrCategory>();
-      for (let i = 0; i < params.length; i += 1) {
-        const param = params[i] ?? 0;
-        if (param === 1 || param === 2) {
-          categories.add("intensity");
-        } else if (param === 3) {
-          categories.add("italic");
-        } else if (param === 4) {
-          categories.add("underline");
-        } else if (param === 5 || param === 6) {
-          categories.add("blink");
-        } else if (param === 7) {
-          categories.add("inverse");
-        } else if (param === 8) {
-          categories.add("conceal");
-        } else if (param === 9) {
-          categories.add("strike");
-        } else if ((param >= 30 && param <= 37) || (param >= 90 && param <= 97)) {
-          categories.add("foreground");
-        } else if (param === 38) {
-          categories.add("foreground");
-          if (params[i + 1] === 2) {
-            i += 4;
-          } else if (params[i + 1] === 5) {
-            i += 2;
-          }
-        } else if ((param >= 40 && param <= 47) || (param >= 100 && param <= 107)) {
-          categories.add("background");
-        } else if (param === 48) {
-          categories.add("background");
-          if (params[i + 1] === 2) {
-            i += 4;
-          } else if (params[i + 1] === 5) {
-            i += 2;
-          }
-        }
-      }
-      return categories;
-    };
-    const intersects = (left: Set<SgrCategory>, right: Set<SgrCategory>) => {
-      for (const value of left) {
-        if (right.has(value)) {
-          return true;
-        }
-      }
-      return false;
-    };
-    for (const token of tokensValue) {
-      if (token.kind !== "ansi") {
-        continue;
-      }
-      const params = parseSgrParams(token.value);
-      if (!params) {
-        continue;
-      }
-      if (params.includes(0)) {
-        active.length = 0;
-      }
-      const resetCategories = resetCategoriesFor(params);
-      if (resetCategories.size > 0) {
-        for (let i = active.length - 1; i >= 0; i -= 1) {
-          const entry = active[i];
-          if (entry && intersects(entry.categories, resetCategories)) {
-            active.splice(i, 1);
-          }
-        }
-      }
-      const activeCategories = activeCategoriesFor(params);
-      if (activeCategories.size > 0) {
-        for (let i = active.length - 1; i >= 0; i -= 1) {
-          const entry = active[i];
-          if (entry && intersects(entry.categories, activeCategories)) {
-            active.splice(i, 1);
-          }
-        }
-        active.push({ value: token.value, categories: activeCategories });
-      }
-    }
-    return active.map((entry) => entry.value).join("");
-  };
-
-  // Track the active OSC-8 hyperlink params after a sequence of tokens.
-  // Returns undefined when no link is open, or the params string when a link
-  // opener has been seen without a matching close.
-  const activeOsc8After = (tokensValue: Token[]): string | undefined => {
-    let activeParams: string | undefined;
-    for (const token of tokensValue) {
-      if (token.kind !== "ansi") {
-        continue;
-      }
-      const params = parseOsc8Params(token.value);
-      if (params === undefined) {
-        continue;
-      }
-      if (params === "") {
-        activeParams = undefined;
-      } else {
-        activeParams = params;
-      }
-    }
-    return activeParams;
-  };
+  const bufVisibleWidth = (slice: AnsiToken[]) =>
+    slice.reduce(
+      (acc, token) => acc + (token.kind === "char" ? visibleWidth(token.value) : token.width),
+      0,
+    );
 
   const pushLine = (value: string) => {
     const cleaned = value.replace(/\s+$/, "");
@@ -423,7 +414,7 @@ function wrapLine(text: string, width: number): string[] {
     lines.push(cleaned);
   };
 
-  const trimLeadingSpaces = (tokensLocal: Token[]) => {
+  const trimLeadingSpaces = (tokensLocal: AnsiToken[]) => {
     while (true) {
       const firstCharIndexLocal = tokensLocal.findIndex((token) => token.kind === "char");
       if (firstCharIndexLocal < 0) {
@@ -443,19 +434,19 @@ function wrapLine(text: string, width: number): string[] {
     }
     const left = breakAt == null || breakAt <= 0 ? buf : buf.slice(0, breakAt);
     const activeSgr = activeSgrAfter(left);
-    const activeOsc8Params = activeOsc8After(left);
-    const closeOsc8 = activeOsc8Params !== undefined ? `${ESC}]8;;${BEL}` : "";
-    const openOsc8 = activeOsc8Params !== undefined ? `${ESC}]8;;${activeOsc8Params}${BEL}` : "";
-    const sgrReset = activeSgr ? SGR_RESET : "";
+    const activeOsc8 = activeOsc8After(left);
+    const closeOsc8 = activeOsc8 ? `${ESC}]8;;${BEL}` : "";
+    const openOsc8 = activeOsc8 ? `${ESC}]8;${activeOsc8.params};${activeOsc8.uri}${BEL}` : "";
+    const closeSgr = activeSgr.map((state) => state.close).join("");
 
     if (breakAt == null || breakAt <= 0) {
-      pushLine(`${bufToString()}${closeOsc8}${sgrReset}`);
+      pushLine(`${bufToString()}${closeOsc8}${closeSgr}`);
       buf.length = 0;
       if (openOsc8) {
-        buf.push({ kind: "ansi", value: openOsc8 });
+        buf.push({ kind: "ansi", value: openOsc8, width: 0 });
       }
-      if (activeSgr) {
-        buf.push({ kind: "ansi", value: activeSgr });
+      for (const state of activeSgr) {
+        buf.push({ kind: "ansi", value: state.open, width: 0 });
       }
       bufVisible = 0;
       lastBreakIndex = null;
@@ -463,13 +454,19 @@ function wrapLine(text: string, width: number): string[] {
     }
 
     const rest = buf.slice(breakAt);
-    pushLine(`${bufToString(left)}${closeOsc8}${sgrReset}`);
+    pushLine(`${bufToString(left)}${closeOsc8}${closeSgr}`);
     trimLeadingSpaces(rest);
     if (openOsc8) {
-      rest.unshift({ kind: "ansi", value: openOsc8 });
+      rest.unshift({ kind: "ansi", value: openOsc8, width: 0 });
     }
-    if (activeSgr) {
-      rest.unshift({ kind: "ansi", value: activeSgr });
+    if (activeSgr.length > 0) {
+      rest.unshift(
+        ...activeSgr.map((state) => ({
+          kind: "ansi" as const,
+          value: state.open,
+          width: 0,
+        })),
+      );
     }
 
     buf.length = 0;
@@ -478,9 +475,21 @@ function wrapLine(text: string, width: number): string[] {
     lastBreakIndex = null;
   };
 
-  for (const token of coreTokens) {
+  const makeRoomFor = (tokenWidth: number) => {
+    if (bufVisible + tokenWidth <= width || bufVisible === 0) {
+      return;
+    }
+    flushAt(lastBreakIndex);
+    if (bufVisible + tokenWidth > width && bufVisible > 0) {
+      flushAt(null);
+    }
+  };
+
+  for (const token of tokens) {
     if (token.kind === "ansi") {
+      makeRoomFor(token.width);
       buf.push(token);
+      bufVisible += token.width;
       continue;
     }
 
@@ -499,9 +508,7 @@ function wrapLine(text: string, width: number): string[] {
       continue;
     }
     const charWidth = visibleWidth(ch);
-    if (bufVisible + charWidth > width && bufVisible > 0) {
-      flushAt(lastBreakIndex);
-    }
+    makeRoomFor(charWidth);
     if (bufVisible === 0 && isSpaceChar(ch)) {
       continue;
     }
@@ -514,18 +521,7 @@ function wrapLine(text: string, width: number): string[] {
   }
 
   flushAt(buf.length);
-  if (!lines.length) {
-    return [""];
-  }
-  if (!prefixAnsi && !suffixAnsi) {
-    return lines;
-  }
-  return lines.map((line) => {
-    if (!line) {
-      return line;
-    }
-    return `${prefixAnsi}${line}${suffixAnsi}`;
-  });
+  return lines.length > 0 ? lines : [""];
 }
 
 function normalizeWidth(n: number | undefined): number | undefined {
