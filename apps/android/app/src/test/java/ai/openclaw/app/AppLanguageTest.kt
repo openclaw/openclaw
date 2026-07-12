@@ -1,8 +1,10 @@
 package ai.openclaw.app
 
 import ai.openclaw.app.i18n.NativeStringResources
+import ai.openclaw.app.i18n.joinedNativeText
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveNativeText
+import ai.openclaw.app.i18n.verbatimText
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.os.LocaleListCompat
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -119,13 +121,22 @@ class AppLanguageTest {
     val activity = Robolectric.buildActivity(LocaleTestActivity::class.java).setup()
     NativeStringResources.install(activity.get())
     val retained = MutableStateFlow(nativeText("Mic off")).resolveNativeText()
+    val retainedComposite =
+      MutableStateFlow(
+        joinedNativeText(
+          separator = " · ",
+          parts = listOf(nativeText("Mic off"), verbatimText("raw")),
+        ),
+      ).resolveNativeText()
     val previous = currentAppLanguage()
     try {
       setAppLanguage(AppLanguage.English)
       assertEquals("Mic off", retained.value)
+      assertEquals("Mic off · raw", retainedComposite.value)
 
       setAppLanguage(AppLanguage.French)
       assertEquals("Micro désactivé", retained.value)
+      assertEquals("Micro désactivé · raw", retainedComposite.value)
       assertEquals("Connexion…", gatewayConnectionStatusForDisplay("Connecting…"))
       assertEquals(
         "Impossible de charger les approbations.",

@@ -34,6 +34,7 @@ import ai.openclaw.app.gatewayTalkSetupStatusText
 import ai.openclaw.app.hasPhotoReadPermission
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.resolveNativeText
+import ai.openclaw.app.i18n.resolveNativeTextResource
 import ai.openclaw.app.isReady
 import ai.openclaw.app.loadAndroidLicenseNotices
 import ai.openclaw.app.locationModeAfterBackgroundSettings
@@ -456,7 +457,7 @@ private fun CronJobDetailSettingsScreen(
         }
       errorText != null ->
         ClawPanel {
-          Text(text = errorText, style = ClawTheme.type.body, color = ClawTheme.colors.warning)
+          Text(text = errorText.resolveNativeTextResource(), style = ClawTheme.type.body, color = ClawTheme.colors.warning)
         }
       current == null ->
         ClawPanel {
@@ -2221,7 +2222,7 @@ private fun CronJobDetailPanel(
     rows =
       listOf(
         SettingsMetric(nativeString("Status"), if (job.enabled) nativeString("Enabled") else nativeString("Off")),
-        SettingsMetric(nativeString("Schedule"), job.scheduleLabel),
+        SettingsMetric(nativeString("Schedule"), job.scheduleLabel.resolveNativeTextResource()),
         SettingsMetric(nativeString("Next Wake"), formatCronWake(job.nextRunAtMs)),
         SettingsMetric(nativeString("Last Run"), formatCronTimestamp(job.lastRunAtMs)),
       ),
@@ -2231,13 +2232,13 @@ private fun CronJobDetailPanel(
       listOf(
         SettingsMetric("ID", job.id, copyable = true),
         SettingsMetric(nativeString("Description"), job.description.ifBlank { nativeString("None") }),
-        SettingsMetric(nativeString("Schedule Detail"), job.scheduleDetail),
+        SettingsMetric(nativeString("Schedule Detail"), job.scheduleDetail.resolveNativeTextResource()),
         SettingsMetric(nativeString("Session Target"), job.sessionTarget),
         SettingsMetric(nativeString("Wake Mode"), job.wakeMode),
         SettingsMetric(nativeString("Delete After Run"), if (job.deleteAfterRun) nativeString("Yes") else nativeString("No")),
-        SettingsMetric(nativeString("Payload"), job.payloadLabel),
-        SettingsMetric(nativeString("Delivery"), job.deliveryLabel),
-        SettingsMetric(nativeString("Failure Alert"), job.failureAlertLabel),
+        SettingsMetric(nativeString("Payload"), job.payloadLabel.resolveNativeTextResource()),
+        SettingsMetric(nativeString("Delivery"), job.deliveryLabel.resolveNativeTextResource()),
+        SettingsMetric(nativeString("Failure Alert"), job.failureAlertLabel.resolveNativeTextResource()),
         SettingsMetric(nativeString("Created"), formatCronTimestamp(job.createdAtMs)),
         SettingsMetric(nativeString("Updated"), formatCronTimestamp(job.updatedAtMs)),
         SettingsMetric(nativeString("Running Since"), formatCronTimestamp(job.runningAtMs)),

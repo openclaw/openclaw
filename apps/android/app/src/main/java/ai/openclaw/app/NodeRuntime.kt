@@ -2121,7 +2121,7 @@ class NodeRuntime private constructor(
     cronJobDetailRequestGuard.publishIfCurrent(detailRequest) {
       _cronJobDetailState.value =
         detail?.let(GatewayCronJobDetailState::Loaded)
-          ?: GatewayCronJobDetailState.Error(detailRequest.id, "Gateway returned an invalid cron job.")
+          ?: GatewayCronJobDetailState.Error(detailRequest.id, nativeText("Gateway returned an invalid cron job."))
     }
     publishScreenshotCronHistory(historyRequest)
   }
@@ -4211,7 +4211,7 @@ class NodeRuntime private constructor(
     val gatewayScope = captureGatewayDataScope() ?: return
     if (!operatorConnected) {
       cronJobDetailRequestGuard.publishIfCurrent(request) {
-        _cronJobDetailState.value = GatewayCronJobDetailState.Error(request.id, nativeString("Connect the gateway to inspect cron jobs."))
+        _cronJobDetailState.value = GatewayCronJobDetailState.Error(request.id, nativeText("Connect the gateway to inspect cron jobs."))
       }
       return
     }
@@ -4221,11 +4221,11 @@ class NodeRuntime private constructor(
       cronJobDetailRequestGuard.publishIfCurrent(request) {
         _cronJobDetailState.value =
           parseGatewayCronJobDetail(root)?.let(GatewayCronJobDetailState::Loaded)
-            ?: GatewayCronJobDetailState.Error(request.id, nativeString("Gateway returned an invalid cron job."))
+            ?: GatewayCronJobDetailState.Error(request.id, nativeText("Gateway returned an invalid cron job."))
       }
     } catch (_: Throwable) {
       cronJobDetailRequestGuard.publishIfCurrent(request) {
-        _cronJobDetailState.value = GatewayCronJobDetailState.Error(request.id, nativeString("Could not load cron job."))
+        _cronJobDetailState.value = GatewayCronJobDetailState.Error(request.id, nativeText("Could not load cron job."))
       }
     }
   }

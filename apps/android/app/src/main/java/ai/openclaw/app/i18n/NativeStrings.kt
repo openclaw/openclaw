@@ -25,6 +25,11 @@ sealed interface NativeText {
   data class Verbatim(
     val value: String,
   ) : NativeText
+
+  data class Composite(
+    val parts: List<NativeText>,
+    val separator: String,
+  ) : NativeText
 }
 
 private val nativeLocaleRevision = MutableStateFlow(0L)
@@ -37,11 +42,39 @@ internal fun nativeText(
 
 internal fun verbatimText(value: String): NativeText = NativeText.Verbatim(value)
 
+internal fun joinedNativeText(
+  separator: String,
+  parts: List<NativeText>,
+): NativeText = NativeText.Composite(parts = parts, separator = separator)
+
 internal fun NativeText.resolveNativeText(): String =
   when (this) {
-    is NativeText.Resource -> nativeString(source, *formatArgs.toTypedArray())
+    is NativeText.Resource -> nativeString(source, *formatArgs.map(::resolveNativeFormatArg).toTypedArray())
     is NativeText.Verbatim -> value
+    is NativeText.Composite -> parts.joinToString(separator, transform = NativeText::resolveNativeText)
   }
+
+@Composable
+internal fun NativeText.resolveNativeTextResource(): String =
+  when (this) {
+    is NativeText.Resource -> {
+      val resolvedArgs = mutableListOf<Any>()
+      for (formatArg in formatArgs) {
+        resolvedArgs += if (formatArg is NativeText) formatArg.resolveNativeTextResource() else formatArg
+      }
+      nativeStringResource(source, *resolvedArgs.toTypedArray())
+    }
+    is NativeText.Verbatim -> value
+    is NativeText.Composite -> {
+      val resolvedParts = mutableListOf<String>()
+      for (part in parts) {
+        resolvedParts += part.resolveNativeTextResource()
+      }
+      resolvedParts.joinToString(separator)
+    }
+  }
+
+private fun resolveNativeFormatArg(value: Any): Any = if (value is NativeText) value.resolveNativeText() else value
 
 internal fun notifyNativeLocaleChanged() {
   nativeLocaleRevision.update { it + 1 }
