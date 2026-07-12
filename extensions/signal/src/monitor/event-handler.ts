@@ -43,7 +43,10 @@ import {
 } from "openclaw/plugin-sdk/hook-runtime";
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
-import { resolveBatchedReplyThreadingPolicy } from "openclaw/plugin-sdk/reply-reference";
+import {
+  resolveBatchedReplyThreadingPolicy,
+  resolveImplicitCurrentMessageReplyAllowance,
+} from "openclaw/plugin-sdk/reply-reference";
 import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
 import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runtime";
 import { settleReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
@@ -306,12 +309,13 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             limit: deps.historyLimit,
           })
         : undefined;
+    const replyToMode = resolveSignalReplyToMode({
+      cfg: deps.cfg,
+      accountId: deps.accountId,
+      chatType: entry.isGroup ? "group" : "direct",
+    });
     const replyThreading = resolveBatchedReplyThreadingPolicy(
-      resolveSignalReplyToMode({
-        cfg: deps.cfg,
-        accountId: deps.accountId,
-        chatType: entry.isGroup ? "group" : "direct",
-      }),
+      replyToMode,
       entry.isBatched === true,
     );
     const media =
@@ -513,7 +517,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       replyToId: ctxPayload.ReplyToId,
       author: entry.senderRecipient,
       body: entry.nativeReplyBody ?? entry.bodyText,
-      allowImplicitCurrentMessage: replyThreading?.implicitCurrentMessage !== "deny",
+      allowImplicitCurrentMessage:
+        replyToMode !== "off" &&
+        resolveImplicitCurrentMessageReplyAllowance(replyToMode, replyThreading),
       state: { hasReplied: false },
     };
     const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
