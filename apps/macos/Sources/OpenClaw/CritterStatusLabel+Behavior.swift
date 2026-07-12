@@ -180,8 +180,12 @@ extension CritterStatusLabel {
     private func celebrate() {
         self.celebrating = true
         self.wiggleLegs()
+        // Tick acts as a generation guard: a newer celebration must not be
+        // cleared early by an older flash's expiry task.
+        let generation = self.sendCelebrationTick
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 900_000_000)
+            guard self.sendCelebrationTick == generation else { return }
             self.celebrating = false
         }
     }

@@ -268,12 +268,14 @@ enum CritterIconRenderer {
                     x: center.x,
                     y: center.y + (options.happyEyes ? -radius * 0.4 : radius * 0.55))
                 let path = CGMutablePath()
+                // Counterclockwise sweeps the short arc in this y-up context:
+                // top half for "∩", bottom half for "⌣".
                 path.addArc(
                     center: arcCenter,
                     radius: radius,
                     startAngle: options.happyEyes ? .pi * 0.12 : .pi * 1.12,
                     endAngle: options.happyEyes ? .pi * 0.88 : .pi * 1.88,
-                    clockwise: options.happyEyes)
+                    clockwise: false)
                 ctx.addPath(path)
             }
             ctx.replacePathWithStrokedPath()
