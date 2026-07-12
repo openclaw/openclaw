@@ -354,8 +354,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       : configSelectionFromSearch(this.pageId, globalThis.location?.search ?? "");
     this.selections = { ...this.selections, [this.pageId]: selection };
     const targetBlockId =
-      this.routeData?.targetBlockId ??
-      configTargetIdFromHash(globalThis.location?.hash ?? "");
+      this.routeData?.targetBlockId ?? configTargetIdFromHash(globalThis.location?.hash ?? "");
     this.pendingRouteTargetId = targetBlockId;
     if (this.pageId !== "config") {
       return;

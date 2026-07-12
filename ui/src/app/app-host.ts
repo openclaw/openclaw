@@ -1056,8 +1056,7 @@ class OpenClawShell extends OpenClawLightDomElement {
                 onExit: () => this.exitSettings(),
                 onNavigate: (routeId, options) => this.navigate(routeId, options),
                 onPreload: (routeId) => context.preload(routeId),
-                onSearchQueryChange: (nextQuery) =>
-                  this.handleSettingsSearchQueryChange(nextQuery),
+                onSearchQueryChange: (nextQuery) => this.handleSettingsSearchQueryChange(nextQuery),
                 preloadTimers: this.settingsPreloadTimers,
               })
             : html`<openclaw-app-sidebar
