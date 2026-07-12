@@ -51,8 +51,8 @@ describe("tavily abort signal proof", () => {
     }
 
     const startedAt = Date.now();
-    let errorType: string;
-    let errorMessage: string;
+    let errorType = "unknown";
+    let errorMessage = "unknown";
     try {
       await tool.execute({ query: "openclaw test" }, { signal: controller.signal });
       throw new Error("Expected execute() to reject with aborted signal");
@@ -107,8 +107,8 @@ describe("tavily abort signal proof", () => {
     await expect(searchPromise).rejects.toThrow();
     const elapsed = Date.now() - startedAt;
 
-    let errorType: string;
-    let errorMessage: string;
+    let errorType = "unknown";
+    let errorMessage = "unknown";
     try {
       await searchPromise;
     } catch (err) {
