@@ -68,11 +68,13 @@ function normalizeProbeApi(providerConfig: ModelProviderConfig): PreflightApi | 
 }
 
 function isPrivateIpv4Host(host: string): boolean {
-  if (!/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
+  const octetRe = /^(0|[1-9]\d{0,2})$/;
+  const parts = host.split(".");
+  if (parts.length !== 4 || !parts.every((part) => octetRe.test(part))) {
     return false;
   }
-  const octets = host.split(".").map((part) => Number.parseInt(part, 10));
-  if (octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+  const octets = parts.map((part) => Number.parseInt(part, 10));
+  if (octets.some((part) => part < 0 || part > 255)) {
     return false;
   }
   const [a, b] = octets;
