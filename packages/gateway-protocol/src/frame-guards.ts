@@ -34,6 +34,10 @@ function isGatewayErrorShape(value: unknown): boolean {
   return value.retryAfterMs === undefined || isNonNegativeInteger(value.retryAfterMs);
 }
 
+function isGatewayResponseMeta(value: unknown): boolean {
+  return isRecord(value) && value.replayed === true && Object.keys(value).length === 1;
+}
+
 // These lightweight guards validate dispatch-critical envelope fields without
 // compiling the full schemas or rejecting additive payload fields.
 export function isGatewayEventFrame(value: unknown): value is EventFrame {
@@ -52,5 +56,8 @@ export function isGatewayResponseFrame(value: unknown): value is ResponseFrame {
   ) {
     return false;
   }
-  return value.error === undefined || isGatewayErrorShape(value.error);
+  return (
+    (value.error === undefined || isGatewayErrorShape(value.error)) &&
+    (value.meta === undefined || isGatewayResponseMeta(value.meta))
+  );
 }

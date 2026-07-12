@@ -32,7 +32,10 @@ export {
   respondUnavailableOnNodeInvokeError,
   safeParseJson,
 } from "../gateway/server-methods/nodes.helpers.js";
-export type { GatewayRequestHandlers } from "../gateway/server-methods/types.js";
+export type {
+  PluginGatewayRequestHandlers as GatewayRequestHandlers,
+  PluginGatewayRequestHandlerOptions as GatewayRequestHandlerOptions,
+} from "../gateway/server-methods/types.js";
 export { ensureGatewayStartupAuth } from "../gateway/startup-auth.js";
 export { resolveGatewayAuth } from "../gateway/auth.js";
 export { rawDataToString } from "../infra/ws.js";
@@ -44,4 +47,3 @@ export {
 } from "../gateway/operator-approvals-client.js";
 export { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/schema/error-codes.js";
 export type { EventFrame } from "../../packages/gateway-protocol/src/schema/frames.js";
-export type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";

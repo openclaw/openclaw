@@ -9,8 +9,10 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import type { RawData, WebSocket } from "ws";
 import {
+  GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
+  hasGatewayClientCap,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
 import {
   buildPairingConnectCloseReason,
@@ -31,6 +33,7 @@ import {
   MIN_NODE_PROTOCOL_VERSION,
   MIN_PROBE_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
+  type ResponseFrameMeta,
   validateConnectParams,
   validateRequestFrame,
 } from "../../../../packages/gateway-protocol/src/index.js";
@@ -2688,16 +2691,30 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         ok: boolean,
         payload?: unknown,
         error?: ErrorShape,
-        meta?: Record<string, unknown>,
+        logMeta?: Record<string, unknown>,
+        wireMeta?: ResponseFrameMeta,
       ) => {
-        send({ type: "res", id: req.id, ok, payload, error });
+        const negotiatedWireMeta = hasGatewayClientCap(
+          client.connect.caps,
+          GATEWAY_CLIENT_CAPS.RESPONSE_REPLAY,
+        )
+          ? wireMeta
+          : undefined;
+        send({
+          type: "res",
+          id: req.id,
+          ok,
+          payload,
+          error,
+          ...(negotiatedWireMeta ? { meta: negotiatedWireMeta } : {}),
+        });
         const unauthorizedRoleError = isUnauthorizedRoleError(error);
-        let logMeta = meta;
+        let responseLogMeta = logMeta;
         if (unauthorizedRoleError) {
           const unauthorizedDecision = unauthorizedFloodGuard.registerUnauthorized();
           if (unauthorizedDecision.suppressedSinceLastLog > 0) {
-            logMeta = {
-              ...logMeta,
+            responseLogMeta = {
+              ...responseLogMeta,
               suppressedUnauthorizedResponses: unauthorizedDecision.suppressedSinceLastLog,
             };
           }
@@ -2711,8 +2728,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             });
             queueMicrotask(() => close(1008, "repeated unauthorized calls"));
           }
-          logMeta = {
-            ...logMeta,
+          responseLogMeta = {
+            ...responseLogMeta,
             unauthorizedCount: unauthorizedDecision.count,
           };
         } else {
@@ -2725,7 +2742,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           method: req.method,
           errorCode: error?.code,
           errorMessage: error?.message,
-          ...logMeta,
+          ...responseLogMeta,
         });
       };
 

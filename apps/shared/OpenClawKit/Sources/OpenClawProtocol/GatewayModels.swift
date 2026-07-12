@@ -299,25 +299,42 @@ public struct RequestFrame: Codable, Sendable {
     }
 }
 
+public struct ResponseFrameMeta: Codable, Sendable {
+    public let replayed: Bool
+
+    public init(
+        replayed: Bool)
+    {
+        self.replayed = replayed
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case replayed
+    }
+}
+
 public struct ResponseFrame: Codable, Sendable {
     public let type: String
     public let id: String
     public let ok: Bool
     public let payload: AnyCodable?
     public let error: ErrorShape?
+    public let meta: ResponseFrameMeta?
 
     public init(
         type: String,
         id: String,
         ok: Bool,
         payload: AnyCodable? = nil,
-        error: ErrorShape? = nil)
+        error: ErrorShape? = nil,
+        meta: ResponseFrameMeta? = nil)
     {
         self.type = type
         self.id = id
         self.ok = ok
         self.payload = payload
         self.error = error
+        self.meta = meta
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -326,6 +343,7 @@ public struct ResponseFrame: Codable, Sendable {
         case ok
         case payload
         case error
+        case meta
     }
 }
 

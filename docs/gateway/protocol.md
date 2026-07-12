@@ -27,7 +27,7 @@ handshake time.
 Frame shapes:
 
 - Request: `{type:"req", id, method, params}`
-- Response: `{type:"res", id, ok, payload|error}`
+- Response: `{type:"res", id, ok, payload|error, meta?}`
 - Event: `{type:"event", event, payload, seq?, stateVersion?}`
 
 Side-effecting methods require idempotency keys (see schema).
@@ -189,8 +189,32 @@ Operator clients may advertise optional capabilities in `connect.params.caps`:
 
 - `tool-events`: accepts structured tool lifecycle events.
 - `inline-widgets`: can render hosted inline widget tool results.
+- `response-replay`: accepts typed replay metadata on response frames.
 
 Client capabilities describe the connected client, not authorization. Agent tools may declare required capabilities; the Gateway omits those tools unless every requirement appears in the originating client's `caps`. Channel-originated runs have no Gateway client capabilities, so capability-gated tools are unavailable even when tool policy explicitly allows them.
+
+#### Response replay metadata
+
+Clients that advertise `response-replay` may receive the following metadata on
+an idempotent `chat.send` replay:
+
+```json
+{
+  "type": "res",
+  "id": "…",
+  "ok": false,
+  "error": { "code": "UNAVAILABLE", "message": "…", "retryable": true },
+  "meta": { "replayed": true }
+}
+```
+
+`replayed: true` means this request did not start a new agent run because its
+idempotency key already identified cached, queued, or in-flight work. A retrying
+client can use this signal to stop resubmitting the same key after receiving a
+stored retryable error. The metadata is a closed JSON-only object and is
+separate from internal responder log metadata; run identifiers remain in method
+payloads. Clients that do not advertise `response-replay` never receive the
+field, preserving compatibility with strict older response-frame schemas.
 
 ### Node connect example
 

@@ -93,6 +93,7 @@ describe("chat.send error broadcast", () => {
       { runId: "test-cached-routing", status: "started" },
       undefined,
       { cached: true },
+      { replayed: true },
     );
   });
 

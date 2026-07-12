@@ -2,6 +2,7 @@
 import type { IncomingMessage } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
+import { GATEWAY_CLIENT_CAPS } from "../../../../packages/gateway-protocol/src/client-info.js";
 import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
 import type { HealthSummary } from "../../../commands/health.types.js";
 import {
@@ -123,6 +124,7 @@ type ConnectedTestClient = {
     };
     role: "operator";
     scopes: string[];
+    caps: string[];
   };
   connId: string;
   usesSharedGatewayAuth: false;
@@ -135,6 +137,7 @@ function createConnectedTestClient(params: {
   connId: string;
   invalidated?: boolean;
   invalidatedReason?: string;
+  caps?: string[];
 }): ConnectedTestClient {
   return {
     invalidated: params.invalidated ?? false,
@@ -148,6 +151,7 @@ function createConnectedTestClient(params: {
       },
       role: "operator",
       scopes: [],
+      caps: params.caps ?? [],
     },
     connId: params.connId,
     usesSharedGatewayAuth: false,
@@ -260,6 +264,7 @@ function attachGatewayHarness(options: {
   return {
     advanceHandshakePhase,
     socketSend,
+    send,
     sendRequest: (id: string, method: string, params: Record<string, unknown> = {}) => {
       sendMessage(
         JSON.stringify({
@@ -285,6 +290,70 @@ function attachGatewayHarness(options: {
     },
   };
 }
+
+describe("attachGatewayWsMessageHandler response replay metadata", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("sends typed wire metadata to opted-in clients without exposing log metadata", async () => {
+    const client = createConnectedTestClient({
+      connId: "conn-response-replay",
+      caps: [GATEWAY_CLIENT_CAPS.RESPONSE_REPLAY],
+    });
+    vi.mocked(handleGatewayRequest).mockImplementation(async (opts) => {
+      opts.respond(
+        false,
+        undefined,
+        { code: "UNAVAILABLE", message: "cached failure", retryable: true },
+        { cached: true, runId: "log-only-run", channel: "log-only-channel" },
+        { replayed: true },
+      );
+    });
+    const harness = attachGatewayHarness({
+      connId: "conn-response-replay",
+      connectNonce: "nonce-response-replay",
+      client,
+    });
+
+    harness.sendRequest("request-replay", "chat.send");
+
+    await vi.waitFor(() => {
+      expect(harness.send).toHaveBeenCalledWith({
+        type: "res",
+        id: "request-replay",
+        ok: false,
+        payload: undefined,
+        error: { code: "UNAVAILABLE", message: "cached failure", retryable: true },
+        meta: { replayed: true },
+      });
+    });
+  });
+
+  it("omits wire metadata for clients that did not negotiate the capability", async () => {
+    const client = createConnectedTestClient({ connId: "conn-legacy-response" });
+    vi.mocked(handleGatewayRequest).mockImplementation(async (opts) => {
+      opts.respond(true, { status: "ok" }, undefined, { cached: true }, { replayed: true });
+    });
+    const harness = attachGatewayHarness({
+      connId: "conn-legacy-response",
+      connectNonce: "nonce-legacy-response",
+      client,
+    });
+
+    harness.sendRequest("request-legacy", "chat.send");
+
+    await vi.waitFor(() => {
+      expect(harness.send).toHaveBeenCalledWith({
+        type: "res",
+        id: "request-legacy",
+        ok: true,
+        payload: { status: "ok" },
+        error: undefined,
+      });
+    });
+  });
+});
 
 describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
   beforeEach(() => {
