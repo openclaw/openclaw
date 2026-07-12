@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   appendTranscriptMessage,
   loadSessionEntry,
@@ -51,6 +52,7 @@ const POLL_MS = 20;
 const WAIT_TIMEOUT_MS = 10_000;
 const SESSION_KEY = "agent:main:main";
 const AGENT_ID = "main";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function waitForFile(filePath: string): Promise<void> {
   const deadline = Date.now() + WAIT_TIMEOUT_MS;
@@ -334,7 +336,7 @@ describe("session accessor cross-process concurrency", () => {
   }, 15_000);
 
   it("rejects a transcript rewrite after another process commits an append", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-rewrite-"));
+    const tempDir = tempDirs.make("openclaw-transcript-rewrite-");
     const sessionAccessorUrl = pathToFileURL(
       path.resolve("src/config/sessions/session-accessor.ts"),
     ).href;
@@ -432,7 +434,7 @@ describe("session accessor cross-process concurrency", () => {
   }, 15_000);
 
   it("preserves locked replaceEvents without a prior readEvents call", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-replace-"));
+    const tempDir = tempDirs.make("openclaw-transcript-replace-");
     const storePath = path.join(tempDir, "sessions.json");
     const sessionId = "replace-without-read";
     const scope = {
@@ -464,7 +466,7 @@ describe("session accessor cross-process concurrency", () => {
   });
 
   it("refreshes a read snapshot after an append in the same locked callback", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-self-append-"));
+    const tempDir = tempDirs.make("openclaw-transcript-self-append-");
     const storePath = path.join(tempDir, "sessions.json");
     const sessionId = "rewrite-after-own-append";
     const scope = {

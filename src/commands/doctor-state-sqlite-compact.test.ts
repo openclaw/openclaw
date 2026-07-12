@@ -1,8 +1,8 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
   closeOpenClawStateDatabase,
@@ -15,15 +15,19 @@ import {
   runDoctorStateSqliteCompact,
 } from "./doctor-state-sqlite-compact.js";
 
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+  afterEach(() => {
+    closeOpenClawStateDatabase();
+    cleanup();
+  });
+});
 type CompletedStateSqliteCompactReport = Extract<
   DoctorStateSqliteCompactReport,
   { skipped: false }
 >;
 
 function createStateEnv(): NodeJS.ProcessEnv {
-  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-state-compact-"));
-  tempDirs.push(stateDir);
+  const stateDir = tempDirs.make("openclaw-state-compact-");
   return { ...process.env, OPENCLAW_STATE_DIR: stateDir };
 }
 
@@ -95,13 +99,6 @@ function expectOwnerOnlySqlitePermissions(sqlitePath: string): void {
     }
   }
 }
-
-afterEach(() => {
-  closeOpenClawStateDatabase();
-  for (const tempDir of tempDirs.splice(0)) {
-    fs.rmSync(tempDir, { force: true, recursive: true });
-  }
-});
 
 describe("runDoctorStateSqliteCompact", () => {
   it("reports a missing canonical database as skipped", () => {

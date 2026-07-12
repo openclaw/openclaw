@@ -6,11 +6,13 @@ import type { DatabaseSync } from "node:sqlite";
 import { gzipSync } from "node:zlib";
 import * as tar from "tar";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { buildBackupArchiveRoot } from "./backup-shared.js";
 import { backupVerifyCommand, testApi } from "./backup-verify.js";
 
 const TEST_ARCHIVE_ROOT = "2026-03-09T00-00-00.000Z-openclaw-backup";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const createBackupVerifyRuntime = () => ({
   log: vi.fn(),
@@ -172,7 +174,7 @@ async function withBrokenArchiveFixture(
 }
 
 async function createSqlitePayload(setup: (database: DatabaseSync) => void): Promise<Buffer> {
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-verify-sqlite-db-"));
+  const tempDir = tempDirs.make("openclaw-backup-verify-sqlite-db-");
   const databasePath = path.join(tempDir, "snapshot.sqlite");
   try {
     const sqlite = requireNodeSqlite();
@@ -292,9 +294,7 @@ describe("backupVerifyCommand", () => {
         ],
       },
       async (archivePath) => {
-        const verificationTempRoot = await fs.mkdtemp(
-          path.join(os.tmpdir(), "openclaw-backup-verify-cleanup-"),
-        );
+        const verificationTempRoot = tempDirs.make("openclaw-backup-verify-cleanup-");
         const tmpdirSpy = vi.spyOn(os, "tmpdir").mockReturnValue(verificationTempRoot);
         try {
           const runtime = createBackupVerifyRuntime();

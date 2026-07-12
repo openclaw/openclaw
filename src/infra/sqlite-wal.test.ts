@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import {
@@ -12,6 +13,8 @@ import {
   configureSqliteConnectionPragmas,
   configureSqliteWalMaintenance,
 } from "./sqlite-wal.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createMockDb(): DatabaseSync {
   return {
@@ -534,7 +537,7 @@ describe("sqlite WAL maintenance", () => {
   });
 
   it("detects a checkpoint blocked by another connection's reader", () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-checkpoint-busy-"));
+    const tempDir = tempDirs.make("openclaw-sqlite-checkpoint-busy-");
     const databasePath = path.join(tempDir, "state.sqlite");
     const { DatabaseSync } = requireNodeSqlite();
     const writer = new DatabaseSync(databasePath);
