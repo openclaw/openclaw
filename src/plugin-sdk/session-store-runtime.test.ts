@@ -1,11 +1,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
 } from "../config/sessions/session-accessor.js";
+import * as jsonFiles from "../infra/json-files.js";
+import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import {
   cleanupSessionLifecycleArtifacts,
   deleteSessionEntry,
@@ -18,6 +20,8 @@ import {
   resolveSessionStoreEntry,
   resolveSessionStoreBackupPaths,
   resolveStorePath,
+  resetSessionEntryLifecycle,
+  saveSessionStore,
   updateSessionStore,
   updateSessionStoreEntry,
   upsertSessionEntry,
@@ -556,6 +560,92 @@ describe("session-store-runtime compatibility surface", () => {
     expect(getSessionEntry({ sessionKey: staleSessionKey, storePath })).toMatchObject({
       sessionId: "session-stale",
     });
+  });
+
+  it("resets a session through the lifecycle owner and archives the old transcript", async () => {
+    const sessionKey = "agent:main:main";
+    const oldTranscriptPath = path.join(tempDir, "old-session.jsonl");
+    fs.writeFileSync(oldTranscriptPath, '{"type":"session","id":"old-session"}\n', "utf-8");
+    await upsertSessionEntry({
+      sessionKey,
+      storePath,
+      entry: {
+        label: "Dale",
+        sessionFile: oldTranscriptPath,
+        sessionId: "old-session",
+        updatedAt: 10,
+      },
+    });
+
+    const result = await resetSessionEntryLifecycle({
+      expectedSessionId: "old-session",
+      expectedUpdatedAt: 10,
+      sessionKey,
+      storePath,
+      update: (entry) => ({
+        label: entry.label,
+        updatedAt: 0,
+      }),
+    });
+
+    expect(result).toMatchObject({
+      label: "Dale",
+      updatedAt: 0,
+    });
+    expect(result?.sessionId).not.toBe("old-session");
+    expect(result?.sessionFile).toContain(`${result?.sessionId}.jsonl`);
+    expect(fs.existsSync(oldTranscriptPath)).toBe(false);
+    expect(fs.existsSync(result?.sessionFile ?? "")).toBe(true);
+    expect(fs.readFileSync(result?.sessionFile ?? "", "utf-8")).toContain(
+      `"id":"${result?.sessionId}"`,
+    );
+    expect(
+      fs.readdirSync(tempDir).filter((file) => file.startsWith("old-session.jsonl.reset.")),
+    ).toHaveLength(1);
+  });
+
+  it("interrupts active work before lifecycle reset rotation", async () => {
+    const sessionKey = "agent:main:main";
+    const oldTranscriptPath = path.join(tempDir, "active-old-session.jsonl");
+    fs.writeFileSync(oldTranscriptPath, '{"type":"session","id":"active-old-session"}\n', "utf-8");
+    await upsertSessionEntry({
+      sessionKey,
+      storePath,
+      entry: {
+        sessionFile: oldTranscriptPath,
+        sessionId: "active-old-session",
+        updatedAt: 10,
+      },
+    });
+
+    let interrupted = false;
+    let releaseAdmission = () => {};
+    const admission = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: [sessionKey, "active-old-session"],
+      assertAllowed: () => {},
+      onInterrupt: () => {
+        interrupted = true;
+        releaseAdmission();
+      },
+    });
+    releaseAdmission = admission.release;
+
+    try {
+      const result = await resetSessionEntryLifecycle({
+        expectedSessionId: "active-old-session",
+        expectedUpdatedAt: 10,
+        sessionKey,
+        storePath,
+        update: () => ({ updatedAt: 0 }),
+      });
+
+      expect(interrupted).toBe(true);
+      expect(result).toMatchObject({ updatedAt: 0 });
+      expect(result?.sessionId).not.toBe("active-old-session");
+    } finally {
+      admission.release();
+    }
   });
 
   it("accepts pre-model-run maintenance configs through entry patches", async () => {

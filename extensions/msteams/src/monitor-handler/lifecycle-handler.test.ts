@@ -9,9 +9,9 @@ import type { MSTeamsTurnContext } from "../sdk-types.js";
 
 const hoisted = vi.hoisted(() => {
   const listSessionEntries = vi.fn();
-  const patchSessionEntry = vi.fn();
+  const resetSessionEntryLifecycle = vi.fn();
   const resolveStorePath = vi.fn(() => "/tmp/openclaw-msteams-sessions.json");
-  return { listSessionEntries, patchSessionEntry, resolveStorePath };
+  return { listSessionEntries, resetSessionEntryLifecycle, resolveStorePath };
 });
 
 vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
@@ -21,7 +21,7 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
   return {
     ...actual,
     listSessionEntries: hoisted.listSessionEntries,
-    patchSessionEntry: hoisted.patchSessionEntry,
+    resetSessionEntryLifecycle: hoisted.resetSessionEntryLifecycle,
     resolveStorePath: hoisted.resolveStorePath,
   };
 });
@@ -45,21 +45,38 @@ function setupStore(store: Record<string, SessionEntry>) {
   hoisted.listSessionEntries.mockImplementation(() =>
     Object.entries(store).map(([sessionKey, entry]) => ({ sessionKey, entry })),
   );
-  hoisted.patchSessionEntry.mockImplementation(
+  hoisted.resetSessionEntryLifecycle.mockImplementation(
     async (params: {
+      expectedSessionId?: string;
+      expectedUpdatedAt?: number;
       sessionKey: string;
-      update: (entry: SessionEntry) => Partial<SessionEntry> | null;
+      update: (
+        entry: SessionEntry,
+        context: { nextSessionFile: string; nextSessionId: string },
+      ) => Partial<SessionEntry> | null;
     }) => {
       const entry = store[params.sessionKey];
       if (!entry) {
         return null;
       }
-      const next = params.update({ ...entry });
-      if (!next) {
-        return entry;
+      if (
+        (params.expectedSessionId !== undefined && entry.sessionId !== params.expectedSessionId) ||
+        (params.expectedUpdatedAt !== undefined && entry.updatedAt !== params.expectedUpdatedAt)
+      ) {
+        return null;
       }
-      store[params.sessionKey] = next as SessionEntry;
-      return next;
+      const nextSessionId = `${entry.sessionId ?? "session"}-rotated`;
+      const nextSessionFile = `/tmp/openclaw/agents/dale/sessions/${nextSessionId}.jsonl`;
+      const next = params.update({ ...entry }, { nextSessionFile, nextSessionId });
+      if (!next) {
+        return null;
+      }
+      store[params.sessionKey] = {
+        ...next,
+        sessionFile: nextSessionFile,
+        sessionId: nextSessionId,
+      } as SessionEntry;
+      return store[params.sessionKey];
     },
   );
 }
@@ -93,7 +110,7 @@ describe("handleMSTeamsLifecycleRemove", () => {
   beforeEach(() => {
     installMSTeamsTestRuntime();
     hoisted.listSessionEntries.mockReset();
-    hoisted.patchSessionEntry.mockReset();
+    hoisted.resetSessionEntryLifecycle.mockReset();
     hoisted.resolveStorePath.mockClear();
     hoisted.resolveStorePath.mockReturnValue("/tmp/openclaw-msteams-sessions.json");
   });
@@ -201,7 +218,9 @@ describe("handleMSTeamsLifecycleRemove", () => {
     expect(store["msteams:direct:user-aad"].lastTo).toBeUndefined();
     expect(store["msteams:direct:user-aad"].lastAccountId).toBeUndefined();
     expect(store["msteams:direct:user-aad"].origin).toBeUndefined();
-    expect(store["msteams:direct:user-aad"].sessionFile).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].sessionFile).toBe(
+      "/tmp/openclaw/agents/dale/sessions/old-session-rotated.jsonl",
+    );
     expect(store["msteams:direct:user-aad"].sessionStartedAt).toBeUndefined();
     expect(store["msteams:direct:user-aad"].status).toBeUndefined();
     expect(store["msteams:direct:user-aad"].startedAt).toBeUndefined();

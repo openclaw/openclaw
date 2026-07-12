@@ -1,8 +1,7 @@
 // Msteams plugin module handles app lifecycle session boundaries.
-import { randomUUID } from "node:crypto";
 import {
   listSessionEntries,
-  patchSessionEntry,
+  resetSessionEntryLifecycle,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -215,9 +214,10 @@ function copyResetPreservedSelection<T extends MSTeamsResetCandidateEntry>(
 
 function createMSTeamsLifecycleResetEntry<T extends MSTeamsResetCandidateEntry>(
   entry: T,
+  nextSessionId: string,
 ): Partial<T> {
   const next: Partial<T> = {
-    sessionId: randomUUID(),
+    sessionId: nextSessionId,
     updatedAt: 0,
   } as Partial<T>;
 
@@ -274,20 +274,19 @@ export async function rotateMSTeamsSessions(params: {
       continue;
     }
 
-    let resetEntry = false;
-    await patchSessionEntry({
+    const resetEntry = await resetSessionEntryLifecycle({
       storePath,
       sessionKey,
-      replaceEntry: true,
-      update: (current) => {
+      expectedSessionId: entry.sessionId,
+      expectedUpdatedAt: entry.updatedAt,
+      update: (current, { nextSessionId }) => {
         if (current.updatedAt !== entry.updatedAt || current.sessionId !== entry.sessionId) {
           return null;
         }
         if (!needsMSTeamsLifecycleRotation(current)) {
           return null;
         }
-        resetEntry = true;
-        return createMSTeamsLifecycleResetEntry(current);
+        return createMSTeamsLifecycleResetEntry(current, nextSessionId);
       },
     });
     if (resetEntry) {

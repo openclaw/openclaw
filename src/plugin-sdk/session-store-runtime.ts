@@ -1,5 +1,6 @@
 // Narrow session-store helpers for channel hot paths.
 
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -8,8 +9,12 @@ import {
   updateAmbientTranscriptWatermark,
   type AmbientTranscriptWatermarkScope,
 } from "../config/sessions/ambient-transcript-watermark.js";
-import { resolveStorePath as resolveSessionStorePath } from "../config/sessions/paths.js";
-import { resolveSessionFilePath as resolveLegacySessionFilePath } from "../config/sessions/paths.js";
+import {
+  resolveSessionFilePath,
+  resolveSessionFilePath as resolveLegacySessionFilePath,
+  resolveSessionFilePathOptions,
+  resolveStorePath as resolveSessionStorePath,
+} from "../config/sessions/paths.js";
 import {
   applySessionStoreProjection as applyAccessorSessionStoreProjection,
   cleanupSessionLifecycleArtifacts as cleanupAccessorSessionLifecycleArtifacts,
@@ -22,6 +27,7 @@ import {
   readTranscriptStatsSync as readAccessorTranscriptStatsSync,
   replaceSessionEntry,
   resolveTranscriptSessionKeyBySessionId as resolveAccessorTranscriptSessionKeyBySessionId,
+  resetSessionEntryLifecycle as resetAccessorSessionEntryLifecycle,
   type SessionAccessScope,
   updateSessionEntry,
 } from "../config/sessions/session-accessor.js";
@@ -36,6 +42,11 @@ import type { ResolvedSessionMaintenanceConfigInput } from "../config/sessions/s
 import type { AmbientTranscriptWatermark, SessionEntry } from "../config/sessions/types.js";
 import { replaceFileAtomicSync } from "../infra/replace-file.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import {
+  interruptSessionWorkAdmissions,
+  runExclusiveSessionLifecycleMutation,
+  SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+} from "../sessions/session-lifecycle-admission.js";
 import type { SessionTranscriptEvent } from "./session-transcript-runtime.js";
 
 const SQLITE_SESSION_STORE_BACKUP_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
@@ -93,6 +104,18 @@ type PatchSessionEntryParams = SessionStoreReadParams & {
   update: SessionStoreEntryPatch;
 };
 
+type ResetSessionEntryLifecycleParams = SessionStoreReadParams & {
+  expectedSessionId?: string;
+  expectedUpdatedAt?: number;
+  update: (
+    entry: SessionEntry,
+    context: {
+      nextSessionFile: string;
+      nextSessionId: string;
+    },
+  ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null;
+};
+
 type ReadAmbientTranscriptWatermarkParams = SessionStoreReadParams & {
   key: string;
 };
@@ -130,6 +153,13 @@ type SessionLifecycleArtifactsCleanupResult = {
   archivedTranscriptArtifacts: number;
   removedEntries: number;
 };
+
+class SessionLifecycleResetSkipped extends Error {
+  constructor() {
+    super("session lifecycle reset skipped");
+    this.name = "SessionLifecycleResetSkipped";
+  }
+}
 
 function toSessionAccessScope(params: SessionStoreReadParams): SessionAccessScope {
   // Maintainer note: keep this adapter narrow so plugin callers retain the
@@ -410,6 +440,113 @@ export async function patchSessionEntry(
     replaceEntry: params.replaceEntry,
     skipMaintenance: params.skipMaintenance,
   });
+}
+
+/** Rotates one session through the canonical lifecycle owner and active-work fence. */
+export async function resetSessionEntryLifecycle(
+  params: ResetSessionEntryLifecycleParams,
+): Promise<SessionEntry | null> {
+  const storePath =
+    params.storePath ??
+    resolveSessionStorePath(undefined, {
+      ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
+      ...(params.env !== undefined ? { env: params.env } : {}),
+    });
+  const snapshot = loadSessionEntry({
+    sessionKey: params.sessionKey,
+    storePath,
+  });
+  const expectedSessionId = params.expectedSessionId ?? snapshot?.sessionId;
+  const expectedUpdatedAt = params.expectedUpdatedAt ?? snapshot?.updatedAt;
+  if (!expectedSessionId) {
+    return null;
+  }
+
+  const identities = [params.sessionKey, expectedSessionId];
+  let skipped = false;
+  let resultEntry: SessionEntry | null = null;
+
+  await runExclusiveSessionLifecycleMutation({
+    scope: storePath,
+    identities,
+    prepare: async () => {
+      const current = loadSessionEntry({
+        sessionKey: params.sessionKey,
+        storePath,
+      });
+      if (
+        !current ||
+        current.sessionId !== expectedSessionId ||
+        (expectedUpdatedAt !== undefined && current.updatedAt !== expectedUpdatedAt)
+      ) {
+        skipped = true;
+        return;
+      }
+      const drained = await interruptSessionWorkAdmissions({
+        scope: storePath,
+        identities,
+        timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+      });
+      if (!drained) {
+        throw new Error(
+          `timed out draining work before session lifecycle reset: ${params.sessionKey}`,
+        );
+      }
+    },
+    run: async () => {
+      if (skipped) {
+        return;
+      }
+      try {
+        const result = await resetAccessorSessionEntryLifecycle({
+          ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
+          storePath,
+          target: {
+            canonicalKey: params.sessionKey,
+            storeKeys: [params.sessionKey],
+          },
+          buildNextEntry: async ({ currentEntry }) => {
+            if (
+              !currentEntry ||
+              currentEntry.sessionId !== expectedSessionId ||
+              (expectedUpdatedAt !== undefined && currentEntry.updatedAt !== expectedUpdatedAt)
+            ) {
+              throw new SessionLifecycleResetSkipped();
+            }
+            const nextSessionId = randomUUID();
+            const nextSessionFile = resolveSessionFilePath(nextSessionId, undefined, {
+              ...resolveSessionFilePathOptions({
+                ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
+                storePath,
+              }),
+            });
+            const patch = await params.update(currentEntry, {
+              nextSessionFile,
+              nextSessionId,
+            });
+            if (!patch) {
+              throw new SessionLifecycleResetSkipped();
+            }
+            return {
+              ...patch,
+              sessionFile: nextSessionFile,
+              sessionId: nextSessionId,
+              updatedAt: patch.updatedAt ?? Date.now(),
+            };
+          },
+        });
+        resultEntry = result.nextEntry;
+      } catch (err) {
+        if (err instanceof SessionLifecycleResetSkipped) {
+          skipped = true;
+          return;
+        }
+        throw err;
+      }
+    },
+  });
+
+  return resultEntry;
 }
 
 /** Reads the last activity timestamp for one session entry. */
