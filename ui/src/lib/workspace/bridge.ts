@@ -143,17 +143,71 @@ export function resetBusRateStatesForTest(): void {
   busRateStates.clear();
 }
 
-function payloadByteLength(payload: unknown): number | null {
+function isStrictJsonValue(root: unknown): boolean {
+  const ancestors = new Set<object>();
+  const stack: Array<{ value: unknown; exit?: boolean }> = [{ value: root }];
+  while (stack.length > 0) {
+    const frame = stack.pop()!;
+    const value = frame.value;
+    if (frame.exit) {
+      ancestors.delete(value as object);
+      continue;
+    }
+    if (
+      value === null ||
+      typeof value === "string" ||
+      typeof value === "boolean" ||
+      (typeof value === "number" && Number.isFinite(value))
+    ) {
+      continue;
+    }
+    if (typeof value !== "object" || ancestors.has(value)) {
+      return false;
+    }
+    ancestors.add(value);
+    stack.push({ value, exit: true });
+    if (Array.isArray(value)) {
+      for (let index = value.length - 1; index >= 0; index -= 1) {
+        if (!Object.hasOwn(value, index)) {
+          return false;
+        }
+        stack.push({ value: value[index] });
+      }
+      continue;
+    }
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      return false;
+    }
+    for (const key of Reflect.ownKeys(value)) {
+      if (typeof key !== "string") {
+        return false;
+      }
+      stack.push({ value: (value as Record<string, unknown>)[key] });
+    }
+  }
+  return true;
+}
+
+function normalizeJsonPayload(payload: unknown): { payload: unknown; byteLength: number } | null {
   let json: string | undefined;
   try {
+    if (!isStrictJsonValue(payload)) {
+      return null;
+    }
     json = JSON.stringify(payload);
   } catch {
     return null;
   }
   if (json === undefined) {
-    return 0;
+    return null;
   }
-  return new TextEncoder().encode(json).length;
+  return {
+    // Forward exactly the JSON value that was measured, never the richer
+    // structured-clone input supplied by hostile iframe code.
+    payload: JSON.parse(json) as unknown,
+    byteLength: new TextEncoder().encode(json).length,
+  };
 }
 
 const INBOUND_TYPES = new Set<WidgetInboundType>([
@@ -306,12 +360,12 @@ export function createWidgetBridge(deps: WidgetBridgeDeps): WidgetBridge {
     if (!deps.bus) {
       return;
     }
-    const byteLength = payloadByteLength(payload);
-    if (byteLength === null) {
+    const normalized = normalizeJsonPayload(payload);
+    if (!normalized) {
       error("malformed", "publish payload is not serializable", requestId);
       return;
     }
-    if (byteLength > BUS_MAX_PAYLOAD_BYTES) {
+    if (normalized.byteLength > BUS_MAX_PAYLOAD_BYTES) {
       error(
         "payload_too_large",
         `publish payload exceeds ${BUS_MAX_PAYLOAD_BYTES} bytes`,
@@ -326,7 +380,7 @@ export function createWidgetBridge(deps: WidgetBridgeDeps): WidgetBridge {
       return;
     }
     busRateState.timestamps.push(now());
-    deps.bus.publish(channel, payload);
+    deps.bus.publish(channel, normalized.payload);
   }
 
   function handleSubscribe(channel: string): void {

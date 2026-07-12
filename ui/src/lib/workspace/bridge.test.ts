@@ -316,6 +316,26 @@ describe("pub/sub capability + limits + cleanup", () => {
       channel: "c",
       payload: circular,
     });
+    bridge.handleMessage({
+      v: 1,
+      type: "workspace:publish",
+      channel: "c",
+      // Structured clone accepts this, but it is not JSON. JSON.stringify would
+      // misleadingly measure the 1 MiB buffer as `{}` and omit `undefined`.
+      payload: { bytes: new ArrayBuffer(1024 * 1024), omitted: undefined },
+    });
+    let deeplyNested: unknown = null;
+    for (let index = 0; index < 10_000; index += 1) {
+      deeplyNested = { value: deeplyNested };
+    }
+    expect(() =>
+      bridge.handleMessage({
+        v: 1,
+        type: "workspace:publish",
+        channel: "c",
+        payload: deeplyNested,
+      }),
+    ).not.toThrow();
     for (let index = 0; index < 61; index += 1) {
       bridge.handleMessage({ v: 1, type: "workspace:publish", channel: "c", payload: index });
     }
@@ -328,6 +348,10 @@ describe("pub/sub capability + limits + cleanup", () => {
         expect.objectContaining({ type: "workspace:error", code: "rate_limited" }),
       ]),
     );
+    expect(
+      posted.filter((message) => message.type === "workspace:error" && message.code === "malformed")
+        .length,
+    ).toBeGreaterThanOrEqual(2);
   });
 
   it("unsubscribe and dispose sever child delivery", () => {
