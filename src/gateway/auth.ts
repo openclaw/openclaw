@@ -388,6 +388,17 @@ function authorizeHttpBrowserOrigin(params: {
   return { ok: false, reason: params.reason };
 }
 
+function authorizeTrustedProxyBrowserOrigin(params: {
+  authSurface: GatewayAuthSurface;
+  browserOriginPolicy?: AuthorizeGatewayConnectParams["browserOriginPolicy"];
+}): { ok: false; reason: string } | null {
+  return authorizeHttpBrowserOrigin({
+    ...params,
+    isLocalClient: false,
+    reason: "trusted_proxy_origin_not_allowed",
+  });
+}
+
 function authorizeTokenAuth(params: {
   authToken?: string;
   connectToken?: string;
@@ -507,11 +518,9 @@ async function authorizeGatewayConnectCore(
     });
 
     if ("user" in result) {
-      const originResult = authorizeHttpBrowserOrigin({
+      const originResult = authorizeTrustedProxyBrowserOrigin({
         authSurface,
         browserOriginPolicy: params.browserOriginPolicy,
-        isLocalClient: false,
-        reason: "trusted_proxy_origin_not_allowed",
       });
       if (originResult) {
         return originResult;
