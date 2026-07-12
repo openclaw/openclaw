@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.gateway.isLocalCleartextGatewayHost
+import ai.openclaw.app.i18n.nativeString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -304,26 +305,26 @@ internal fun gatewayEndpointValidationMessage(
     GatewayEndpointValidationError.INSECURE_REMOTE_URL ->
       when (source) {
         GatewayEndpointInputSource.SETUP_CODE ->
-          "Setup code points to an insecure remote gateway. $remoteGatewaySecurityRule $remoteGatewaySecurityFix"
+          nativeString("Setup code points to an insecure remote gateway. \$remoteGatewaySecurityRule \$remoteGatewaySecurityFix", remoteGatewaySecurityRule, remoteGatewaySecurityFix)
         GatewayEndpointInputSource.QR_SCAN ->
-          "QR code points to an insecure remote gateway. $remoteGatewaySecurityRule $remoteGatewaySecurityFix"
+          nativeString("QR code points to an insecure remote gateway. \$remoteGatewaySecurityRule \$remoteGatewaySecurityFix", remoteGatewaySecurityRule, remoteGatewaySecurityFix)
         GatewayEndpointInputSource.MANUAL ->
-          "$remoteGatewaySecurityRule $remoteGatewaySecurityFix"
+          nativeString("\$remoteGatewaySecurityRule \$remoteGatewaySecurityFix", remoteGatewaySecurityRule, remoteGatewaySecurityFix)
       }
     GatewayEndpointValidationError.IPV6_ZONE_ID_UNSUPPORTED ->
       when (source) {
         GatewayEndpointInputSource.SETUP_CODE ->
-          "Setup code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname."
+          nativeString("Setup code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname.")
         GatewayEndpointInputSource.QR_SCAN ->
-          "QR code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname."
+          nativeString("QR code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname.")
         GatewayEndpointInputSource.MANUAL ->
-          "IPv6 zone IDs are not supported. Use an unscoped IPv6 address or a LAN hostname."
+          nativeString("IPv6 zone IDs are not supported. Use an unscoped IPv6 address or a LAN hostname.")
       }
     GatewayEndpointValidationError.INVALID_URL ->
       when (source) {
-        GatewayEndpointInputSource.SETUP_CODE -> "Setup code has invalid gateway URL."
-        GatewayEndpointInputSource.QR_SCAN -> "QR code did not contain a valid setup code."
-        GatewayEndpointInputSource.MANUAL -> "Enter a valid manual endpoint to connect."
+        GatewayEndpointInputSource.SETUP_CODE -> nativeString("Setup code has invalid gateway URL.")
+        GatewayEndpointInputSource.QR_SCAN -> nativeString("QR code did not contain a valid setup code.")
+        GatewayEndpointInputSource.MANUAL -> nativeString("Enter a valid manual endpoint to connect.")
       }
   }
 

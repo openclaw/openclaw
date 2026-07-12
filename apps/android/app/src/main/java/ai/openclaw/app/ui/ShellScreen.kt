@@ -16,6 +16,7 @@ import ai.openclaw.app.NodeRuntime
 import ai.openclaw.app.R
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.currentAppLanguage
+import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.node.CanvasController
 import ai.openclaw.app.ui.chat.ChatScreen
 import ai.openclaw.app.ui.design.AgentAvatarSource
@@ -215,7 +216,10 @@ fun ShellScreen(
       bottomBar = {
         if (showBottomNav) {
           ClawBottomNav(
-            items = shellNavTabs.map { ClawNavItem(key = it.key, label = it.label, icon = it.icon) },
+            items =
+              shellNavTabs.map {
+                ClawNavItem(key = it.key, label = nativeString(it.label), icon = it.icon)
+              },
             selectedKey = if (nav.activeTab in shellNavTabs) nav.activeTab.key else Tab.Overview.key,
             onSelect = { key ->
               nav.selectTab(shellNavTabs.firstOrNull { it.key == key } ?: Tab.Overview)
@@ -344,7 +348,7 @@ private fun CanvasOverlay(
     if (visible) {
       ClawIconButton(
         icon = Icons.Default.Close,
-        contentDescription = "Close Canvas",
+        contentDescription = nativeString("Close Canvas"),
         onClick = onClose,
         modifier =
           Modifier
@@ -492,7 +496,7 @@ private fun OverviewScreen(
 
         item {
           Text(
-            text = "Overview",
+            text = nativeString("Overview"),
             style = ClawTheme.type.display.copy(fontSize = 24.sp, lineHeight = 28.sp),
             color = ClawTheme.colors.text,
           )
@@ -538,9 +542,9 @@ private fun OverviewScreen(
         if (visibleRecentRows.isEmpty()) {
           item {
             ClawEmptyState(
-              title = "No recent sessions",
-              body = "Start a chat and your active OpenClaw conversations will appear here.",
-              action = { ClawPrimaryButton(text = "Start Chat", onClick = { onSelectTab(Tab.Chat) }) },
+              title = nativeString("No recent sessions"),
+              body = nativeString("Start a chat and your active OpenClaw conversations will appear here."),
+              action = { ClawPrimaryButton(text = nativeString("Start Chat"), onClick = { onSelectTab(Tab.Chat) }) },
             )
           }
         } else {
@@ -586,7 +590,7 @@ private fun OverviewHeader(
   ) {
     OpenClawMascot(modifier = Modifier.size(25.dp), tint = ClawTheme.colors.text)
     Text(
-      text = "OpenClaw",
+      text = nativeString("OpenClaw"),
       style = ClawTheme.type.title.copy(fontSize = 17.sp, lineHeight = 21.sp),
       color = ClawTheme.colors.text,
       modifier = Modifier.weight(1f),
@@ -594,7 +598,7 @@ private fun OverviewHeader(
       overflow = TextOverflow.Ellipsis,
     )
     OverviewStatusPill(status = status, onClick = onOpenStatus)
-    ClawPlainIconButton(icon = Icons.Default.Search, contentDescription = "Search", onClick = onOpenCommand)
+    ClawPlainIconButton(icon = Icons.Default.Search, contentDescription = nativeString("Search"), onClick = onOpenCommand)
   }
 }
 
@@ -624,7 +628,7 @@ private fun OverviewStatusPill(
       horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
       Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(dotColor))
-      Text(text = status.label, style = ClawTheme.type.caption.copy(fontSize = 13.sp, lineHeight = 17.sp), color = ClawTheme.colors.text, maxLines = 1)
+      Text(text = nativeString(status.label), style = ClawTheme.type.caption.copy(fontSize = 13.sp, lineHeight = 17.sp), color = ClawTheme.colors.text, maxLines = 1)
       Icon(imageVector = Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(15.dp), tint = ClawTheme.colors.textMuted)
     }
   }
@@ -647,7 +651,7 @@ private fun OverviewPrimaryPanel(
 ) {
   OverviewLayeredPanel(contentPadding = PaddingValues(ClawTheme.spacing.sm), elevated = true) {
     Column(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xs)) {
-      Text(text = "ACTIVE AGENT", style = ClawTheme.type.caption.copy(fontSize = 12.sp, lineHeight = 15.sp), color = ClawTheme.colors.textMuted)
+      Text(text = nativeString("ACTIVE AGENT"), style = ClawTheme.type.caption.copy(fontSize = 12.sp, lineHeight = 15.sp), color = ClawTheme.colors.textMuted)
       Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
         OverviewAgentBadge(text = agentBadge, active = isConnected, avatarSource = agentAvatarSource)
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -656,19 +660,19 @@ private fun OverviewPrimaryPanel(
           }
           Text(text = overviewAgentActivityText(isConnected = isConnected, pendingRunCount = pendingRunCount, sessionCount = sessionCount, cronJobCount = cronJobCount, statusText = statusText), style = ClawTheme.type.caption.copy(fontSize = 13.5.sp, lineHeight = 17.sp), color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        ClawSecondaryButton(text = "View", onClick = onOpenAgent)
+        ClawSecondaryButton(text = nativeString("View"), onClick = onOpenAgent)
       }
       Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        OverviewStateChip(label = "Runs", value = if (pendingRunCount > 0) "$pendingRunCount active" else "Idle", modifier = Modifier.weight(1f))
-        OverviewStateChip(label = "Sessions", value = if (sessionCount == 0) "None" else "$sessionCount recent", modifier = Modifier.weight(1f))
-        OverviewStateChip(label = "Cron", value = cronJobsSummary(cronJobCount), modifier = Modifier.weight(1f))
+        OverviewStateChip(label = nativeString("Runs"), value = if (pendingRunCount > 0) nativeString("\$pendingRunCount active", pendingRunCount) else nativeString("Idle"), modifier = Modifier.weight(1f))
+        OverviewStateChip(label = nativeString("Sessions"), value = if (sessionCount == 0) nativeString("None") else nativeString("\$sessionCount recent", sessionCount), modifier = Modifier.weight(1f))
+        OverviewStateChip(label = nativeString("Cron"), value = cronJobsSummary(cronJobCount), modifier = Modifier.weight(1f))
       }
       Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        OverviewActionPill(text = "Chat", icon = Icons.Outlined.ChatBubbleOutline, emphasized = true, onClick = onOpenChat, modifier = Modifier.weight(1f))
-        OverviewActionPill(text = "Talk", icon = Icons.Outlined.MicNone, emphasized = false, onClick = onOpenVoice, modifier = Modifier.weight(1f))
+        OverviewActionPill(text = nativeString("Chat"), icon = Icons.Outlined.ChatBubbleOutline, emphasized = true, onClick = onOpenChat, modifier = Modifier.weight(1f))
+        OverviewActionPill(text = nativeString("Talk"), icon = Icons.Outlined.MicNone, emphasized = false, onClick = onOpenVoice, modifier = Modifier.weight(1f))
       }
       if (!isConnected) {
-        ClawSecondaryButton(text = "Reconnect gateway", icon = Icons.Default.Cloud, onClick = onOpenGateway, modifier = Modifier.fillMaxWidth())
+        ClawSecondaryButton(text = nativeString("Reconnect gateway"), icon = Icons.Default.Cloud, onClick = onOpenGateway, modifier = Modifier.fillMaxWidth())
       }
     }
   }
@@ -818,11 +822,11 @@ private fun OverviewMetricTile(
     Column(modifier = Modifier.padding(ClawTheme.spacing.xs), verticalArrangement = Arrangement.spacedBy(6.dp)) {
       Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Icon(imageVector = card.icon, contentDescription = null, modifier = Modifier.size(17.dp), tint = card.tint)
-        Text(text = card.title.uppercase(), style = ClawTheme.type.caption.copy(fontSize = 10.5.sp, lineHeight = 13.sp), color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-        Icon(imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "Open ${card.title}", modifier = Modifier.size(15.dp), tint = ClawTheme.colors.textMuted)
+        Text(text = nativeString(card.title).uppercase(), style = ClawTheme.type.caption.copy(fontSize = 10.5.sp, lineHeight = 13.sp), color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        Icon(imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = nativeString("Open \${card.title}", card.title), modifier = Modifier.size(15.dp), tint = ClawTheme.colors.textMuted)
       }
-      Text(text = card.value, style = ClawTheme.type.title.copy(fontSize = 22.sp, lineHeight = 25.sp), color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-      Text(text = card.subtitle, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textSubtle, maxLines = 2, overflow = TextOverflow.Ellipsis)
+      Text(text = nativeString(card.value), style = ClawTheme.type.title.copy(fontSize = 22.sp, lineHeight = 25.sp), color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+      Text(text = nativeString(card.subtitle), style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textSubtle, maxLines = 2, overflow = TextOverflow.Ellipsis)
       card.progressFraction?.let { progress ->
         OverviewProgressBar(progress = progress, tint = card.tint)
       }
@@ -887,10 +891,10 @@ private fun TalkEntryPanel(
         }
       }
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(text = "Talk", style = ClawTheme.type.caption.copy(fontSize = 12.sp, lineHeight = 15.sp), color = ClawTheme.colors.textMuted)
-        Text(text = "Open Talk", style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(text = nativeString("Talk"), style = ClawTheme.type.caption.copy(fontSize = 12.sp, lineHeight = 15.sp), color = ClawTheme.colors.textMuted)
+        Text(text = nativeString("Open Talk"), style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
       }
-      ClawPlainIconButton(icon = Icons.Default.Tune, contentDescription = "Talk settings", onClick = onOpenVoiceSettings)
+      ClawPlainIconButton(icon = Icons.Default.Tune, contentDescription = nativeString("Talk settings"), onClick = onOpenVoiceSettings)
     }
   }
 }
@@ -898,7 +902,7 @@ private fun TalkEntryPanel(
 @Composable
 private fun RecentSessionsHeader(onOpenSessions: () -> Unit) {
   SectionLabel(
-    title = "Recent Sessions",
+    title = nativeString("Recent Sessions"),
     action = {
       Surface(
         onClick = onOpenSessions,
@@ -908,7 +912,7 @@ private fun RecentSessionsHeader(onOpenSessions: () -> Unit) {
       ) {
         Box(contentAlignment = Alignment.Center) {
           Text(
-            text = "View all",
+            text = nativeString("View all"),
             style = ClawTheme.type.caption,
             color = ClawTheme.colors.textMuted,
           )
@@ -1022,10 +1026,10 @@ internal fun overviewMetricCardSpecs(
   val nodeCount = nodesDevicesSummary.nodes.size
   return listOf(
     OverviewMetricCardSpec(
-      title = "Gateway",
+      title = nativeString("Gateway"),
       value =
         when {
-          !isConnected -> "Offline"
+          !isConnected -> nativeString("Offline")
           hasAttention -> "Online"
           else -> "Healthy"
         },
@@ -1046,8 +1050,8 @@ internal fun overviewMetricCardSpecs(
       settingsRoute = SettingsRoute.Gateway,
     ),
     OverviewMetricCardSpec(
-      title = "Nodes",
-      value = if (nodeCount == 0) "None" else "$onlineNodes/$nodeCount",
+      title = nativeString("Nodes"),
+      value = if (nodeCount == 0) nativeString("None") else nativeString("\$onlineNodes/\$nodeCount", onlineNodes, nodeCount),
       subtitle =
         if (nodesDevicesSummary.hasNodeCapabilityApprovalPending()) {
           "Review node access"
@@ -1068,7 +1072,7 @@ internal fun overviewMetricCardSpecs(
       progressFraction = if (nodeCount > 0) onlineNodes.toFloat() / nodeCount.toFloat() else null,
     ),
     OverviewMetricCardSpec(
-      title = "Approvals",
+      title = nativeString("Approvals"),
       value = pendingApprovals.toString(),
       subtitle = approvalsSummary(pendingApprovals),
       icon = Icons.Default.Security,
@@ -1077,17 +1081,17 @@ internal fun overviewMetricCardSpecs(
       settingsRoute = SettingsRoute.Approvals,
     ),
     OverviewMetricCardSpec(
-      title = "Sessions",
+      title = nativeString("Sessions"),
       value = sessionCount.toString(),
-      subtitle = if (sessionCount == 0) "No recent sessions" else "Recent conversations",
+      subtitle = if (sessionCount == 0) nativeString("No recent sessions") else nativeString("Recent conversations"),
       icon = Icons.Default.Groups,
       status = if (sessionCount > 0) ClawStatus.Success else ClawStatus.Neutral,
       tab = Tab.Sessions,
     ),
     OverviewMetricCardSpec(
-      title = "Files",
-      value = if (isConnected) "Browse" else "Offline",
-      subtitle = "Agent workspace files",
+      title = nativeString("Files"),
+      value = if (isConnected) nativeString("Browse") else nativeString("Offline"),
+      subtitle = nativeString("Agent workspace files"),
       icon = Icons.Outlined.Folder,
       status = if (isConnected) ClawStatus.Success else ClawStatus.Neutral,
       tab = Tab.Files,
@@ -1100,7 +1104,7 @@ internal fun overviewAgentName(
   defaultAgentId: String?,
 ): String {
   val agent = overviewAgent(agents = agents, defaultAgentId = defaultAgentId)
-  return agent?.name?.takeIf { it.isNotBlank() } ?: agent?.id?.takeIf { it.isNotBlank() } ?: "OpenClaw"
+  return agent?.name?.takeIf { it.isNotBlank() } ?: agent?.id?.takeIf { it.isNotBlank() } ?: nativeString("OpenClaw")
 }
 
 internal fun overviewAgentBadgeText(
@@ -1114,7 +1118,7 @@ internal fun overviewAgentBadgeText(
     ?.takeIf { it.isNotEmpty() }
     ?.let { return it }
   if (agent == null) return "OC"
-  val source = agent.name?.takeIf { it.isNotBlank() } ?: agent.id.takeIf { it.isNotBlank() } ?: "OpenClaw"
+  val source = agent.name?.takeIf { it.isNotBlank() } ?: agent.id.takeIf { it.isNotBlank() } ?: nativeString("OpenClaw")
   return agentInitials(source)
 }
 
@@ -1201,7 +1205,7 @@ internal fun sessionSourceLabel(
     } else {
       normalized
     }
-  if (!scopedKey.contains(':') && !scopedKey.contains('#')) return "OpenClaw"
+  if (!scopedKey.contains(':') && !scopedKey.contains('#')) return nativeString("OpenClaw")
   val source = scopedKey.substringBefore(':').substringBefore('#').lowercase()
   val channelLabel =
     channelsSummary.channels
@@ -1210,7 +1214,7 @@ internal fun sessionSourceLabel(
       }?.label
       ?.takeIf { it.isNotBlank() }
   if (channelLabel != null) return channelLabel
-  return sessionSourceLabels[source] ?: "OpenClaw"
+  return nativeString(sessionSourceLabels[source] ?: "OpenClaw")
 }
 
 internal data class HomeAttentionRow(
@@ -1265,7 +1269,7 @@ private fun HomeAttentionPanel(
 ) {
   OverviewLayeredPanel(contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-      Text(text = "Needs attention", style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.warning)
+      Text(text = nativeString("Needs attention"), style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.warning)
       rows.forEach { row ->
         ModuleListRow(
           row = ModuleRow(row.title, row.subtitle, row.icon, row.tab, row.settingsRoute),
@@ -1293,7 +1297,7 @@ private fun SectionLabel(
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.SpaceBetween,
   ) {
-    Text(text = title.uppercase(), style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted)
+    Text(text = nativeString(title).uppercase(), style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted)
     action?.invoke()
   }
 }
@@ -1318,19 +1322,19 @@ private fun ModuleListRow(
       Icon(imageVector = row.icon, contentDescription = null, modifier = Modifier.size(20.dp), tint = ClawTheme.colors.text)
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
         Text(
-          text = row.title,
+          text = nativeString(row.title),
           style = ClawTheme.type.body,
           color = ClawTheme.colors.text,
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
         )
         row.subtitle?.let {
-          Text(text = it, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textSubtle, maxLines = 1, overflow = TextOverflow.Ellipsis)
+          Text(text = nativeString(it), style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textSubtle, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
       }
       Icon(
         imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-        contentDescription = "Open ${row.title}",
+        contentDescription = nativeString("Open \${row.title}", row.title),
         modifier = Modifier.size(17.dp),
         tint = ClawTheme.colors.textMuted,
       )
@@ -1433,12 +1437,12 @@ private fun RecentSessionRowContent(
       }
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
         Text(text = title, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(text = source, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textSubtle, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(text = nativeString(source), style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textSubtle, maxLines = 1, overflow = TextOverflow.Ellipsis)
       }
       Text(text = metadata, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted)
       Icon(
         imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-        contentDescription = "Open session",
+        contentDescription = nativeString("Open session"),
         modifier = Modifier.size(14.dp),
         tint = ClawTheme.colors.textMuted,
       )
@@ -1556,13 +1560,13 @@ private fun SettingsShellScreen(
         ) {
           ClawPlainIconButton(
             icon = Icons.AutoMirrored.Filled.ArrowBack,
-            contentDescription = "Back",
+            contentDescription = nativeString("Back"),
             onClick = onBack,
           )
-          Text(text = "Settings", style = ClawTheme.type.display.copy(fontSize = 24.sp, lineHeight = 28.sp), color = ClawTheme.colors.text, modifier = Modifier.weight(1f))
+          Text(text = nativeString("Settings"), style = ClawTheme.type.display.copy(fontSize = 24.sp, lineHeight = 28.sp), color = ClawTheme.colors.text, modifier = Modifier.weight(1f))
           ClawPlainIconButton(
             icon = Icons.Default.Search,
-            contentDescription = "Search settings",
+            contentDescription = nativeString("Search settings"),
             onClick = onOpenCommand,
           )
         }
@@ -1614,10 +1618,10 @@ private fun SettingsShellScreen(
           ),
           SettingsRow("Dreaming", dreamingSummaryText(dreamingSummary), Icons.Default.Storage, status = dreamingStatus(dreamingSummary), route = SettingsRoute.Dreaming),
           SettingsRow("Terminal", "Shell in the agent workspace", Icons.Outlined.Terminal, status = isConnected, route = SettingsRoute.Terminal),
-          SettingsRow("Voice", if (speakerEnabled) "Speaker on" else "Speaker muted", Icons.Default.Mic, route = SettingsRoute.Voice),
+          SettingsRow("Voice", if (speakerEnabled) nativeString("Speaker on") else nativeString("Speaker muted"), Icons.Default.Mic, route = SettingsRoute.Voice),
           SettingsRow("Canvas", "Screen surface", Icons.AutoMirrored.Filled.ScreenShare, status = isConnected, route = SettingsRoute.Canvas),
-          SettingsRow("Notifications", if (notificationForwardingEnabled) "Smart delivery" else "Off", Icons.Default.Notifications, route = SettingsRoute.Notifications),
-          SettingsRow("Phone Capabilities", if (cameraEnabled) "Camera enabled" else "Locked", Icons.Default.Lock, status = !cameraEnabled, route = SettingsRoute.PhoneCapabilities),
+          SettingsRow("Notifications", if (notificationForwardingEnabled) nativeString("Smart delivery") else nativeString("Off"), Icons.Default.Notifications, route = SettingsRoute.Notifications),
+          SettingsRow("Phone Capabilities", if (cameraEnabled) nativeString("Camera enabled") else nativeString("Locked"), Icons.Default.Lock, status = !cameraEnabled, route = SettingsRoute.PhoneCapabilities),
           SettingsRow(
             "Appearance",
             "${appearanceThemeSummary(appearanceThemeMode)} · ${appLanguage.displayName}",
@@ -1664,10 +1668,10 @@ private fun SettingsShellScreen(
           horizontalAlignment = Alignment.CenterHorizontally,
           verticalArrangement = Arrangement.spacedBy(3.dp),
         ) {
-          Text(text = "OpenClaw ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})", style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted)
+          Text(text = nativeString("OpenClaw \${BuildConfig.VERSION_NAME} (\${BuildConfig.VERSION_CODE})", BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE), style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted)
           Row(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(
-              text = if (isConnected) "All systems operational" else "Gateway not connected",
+              text = if (isConnected) nativeString("All systems operational") else nativeString("Gateway not connected"),
               style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp),
               color = ClawTheme.colors.textSubtle,
             )
@@ -1682,7 +1686,7 @@ private fun SettingsShellScreen(
 private fun approvalsSummary(count: Int): String =
   when (count) {
     0 -> "No pending approvals"
-    1 -> "1 pending"
+    1 -> nativeString("1 pending")
     else -> "$count pending"
   }
 
@@ -1699,15 +1703,19 @@ private fun cronJobsSummary(count: Int): String =
 /** Summarizes provider usage buckets without exposing detailed billing data. */
 private fun usageSummaryText(count: Int): String =
   when (count) {
-    0 -> "No provider usage"
-    1 -> "1 provider"
-    else -> "$count providers"
+    0 -> nativeString("No provider usage")
+    1 -> nativeString("1 provider")
+    else -> nativeString("\$count providers", count)
   }
 
 /** Reports how many gateway skills are enabled, eligible, and dependency-complete. */
 private fun skillsSummaryText(skills: List<GatewaySkillSummary>): String {
   val ready = skills.count { !it.disabled && it.eligible && it.missingCount == 0 }
-  return if (skills.isEmpty()) "No skills" else "$ready/${skills.size} ready"
+  return if (skills.isEmpty()) {
+    nativeString("No skills")
+  } else {
+    nativeString("\$ready/\${skills.size} ready", ready, skills.size)
+  }
 }
 
 /** Converts gateway skill health into a tri-state settings status dot. */
@@ -1721,13 +1729,13 @@ private fun skillsStatus(skills: List<GatewaySkillSummary>): Boolean? =
 /** Mirrors the Skill Workshop review queue in one compact Settings row. */
 internal fun skillWorkshopSummaryText(summary: GatewaySkillWorkshopSummary): String {
   val pending = summary.proposals.count { it.status == "pending" }
-  if (pending > 0) return if (pending == 1) "1 pending" else "$pending pending"
+  if (pending > 0) return if (pending == 1) nativeString("1 pending") else nativeString("\$pending pending", pending)
   val held = summary.proposals.count { it.status == "quarantined" || it.status == "stale" }
   val applied = summary.proposals.count { it.status == "applied" }
   return when {
     summary.proposals.isEmpty() -> "No proposals"
-    held > 0 -> if (held == 1) "1 held" else "$held held"
-    applied > 0 -> if (applied == 1) "1 applied" else "$applied applied"
+    held > 0 -> if (held == 1) nativeString("1 held") else nativeString("\$held held", held)
+    applied > 0 -> if (applied == 1) nativeString("1 applied") else nativeString("\$applied applied", applied)
     else -> "${summary.proposals.size} proposals"
   }
 }
@@ -1792,9 +1800,9 @@ private fun channelsStatus(summary: GatewayChannelsSummary): Boolean? =
 /** Summarizes dreaming memory health before enabled/off state. */
 private fun dreamingSummaryText(summary: GatewayDreamingSummary): String =
   when {
-    !summary.storeHealthy || !summary.phaseSignalHealthy -> "Needs attention"
+    !summary.storeHealthy || !summary.phaseSignalHealthy -> nativeString("Needs attention")
     summary.enabled -> "${summary.shortTermCount} waiting"
-    else -> "Off"
+    else -> nativeString("Off")
   }
 
 /** Maps dreaming store/phase health and enabled state to a settings status dot. */
@@ -1870,7 +1878,7 @@ internal fun settingsSectionTitleForRoute(route: SettingsRoute): String =
 @Composable
 private fun SettingsSectionTitle(title: String) {
   Text(
-    text = title.uppercase(),
+    text = nativeString(title).uppercase(),
     style = ClawTheme.type.caption.copy(fontSize = 12.sp, lineHeight = 16.sp),
     color = ClawTheme.colors.textMuted,
   )
@@ -1908,11 +1916,11 @@ private fun ProfilePanel(
       }
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Text(text = displayName, style = ClawTheme.type.section, color = ClawTheme.colors.text, maxLines = 1)
-        Text(text = "OpenClaw mobile", style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
+        Text(text = nativeString("OpenClaw mobile"), style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
       }
       Icon(
         imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-        contentDescription = "Open profile",
+        contentDescription = nativeString("Open profile"),
         modifier = Modifier.size(15.dp),
         tint = ClawTheme.colors.text,
       )
@@ -1967,10 +1975,10 @@ private fun SettingsListRow(
     horizontalArrangement = Arrangement.spacedBy(10.dp),
   ) {
     Icon(imageVector = row.icon, contentDescription = null, modifier = Modifier.size(20.dp), tint = ClawTheme.colors.text)
-    Text(text = row.title, style = ClawTheme.type.body, color = ClawTheme.colors.text, modifier = Modifier.weight(1f), maxLines = 1)
+    Text(text = nativeString(row.title), style = ClawTheme.type.body, color = ClawTheme.colors.text, modifier = Modifier.weight(1f), maxLines = 1)
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
       if (row.value.isNotBlank()) {
-        Text(text = row.value, style = ClawTheme.type.caption.copy(fontSize = 13.sp, lineHeight = 17.sp), color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(text = nativeString(row.value), style = ClawTheme.type.caption.copy(fontSize = 13.sp, lineHeight = 17.sp), color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
       }
       row.status?.let { active ->
         Box(modifier = Modifier.size(4.5.dp).clip(CircleShape).background(if (active) ClawTheme.colors.success else ClawTheme.colors.textSubtle))
@@ -1978,7 +1986,12 @@ private fun SettingsListRow(
       if (showDisclosure) {
         Icon(
           imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-          contentDescription = if (row.route != null) "Open ${row.title}" else row.title,
+          contentDescription =
+            if (row.route != null) {
+              nativeString("Open \${row.title}", row.title)
+            } else {
+              nativeString(row.title)
+            },
           modifier = Modifier.size(17.dp),
           tint = ClawTheme.colors.text,
         )
@@ -1990,30 +2003,30 @@ private fun SettingsListRow(
 private fun relativeSessionTime(updatedAtMs: Long): String {
   val deltaMs = (System.currentTimeMillis() - updatedAtMs).coerceAtLeast(0L)
   val minutes = deltaMs / 60_000L
-  if (minutes < 1) return "now"
+  if (minutes < 1) return nativeString("now")
   if (minutes < 60) return "${minutes}m"
   val hours = minutes / 60
   if (hours < 24) return "${hours}h"
   return "${hours / 24}d"
 }
 
-private fun displaySessionTitle(displayName: String?): String = displayName?.takeIf { it.isNotBlank() } ?: "Main session"
+private fun displaySessionTitle(displayName: String?): String = displayName?.takeIf { it.isNotBlank() } ?: nativeString("Main session")
 
 internal fun gatewaySummary(
   statusText: String,
   isConnected: Boolean,
   gatewayConnectionProblem: GatewayConnectionProblem? = null,
 ): String {
-  if (isConnected) return "Online and ready"
+  if (isConnected) return nativeString("Online and ready")
   val status = statusText.trim().lowercase()
   return when {
-    status.contains("connecting") || status.contains("reconnecting") -> "Connecting..."
-    status.contains("pairing") -> "Waiting for pairing"
-    status.contains("auth") || status.contains("device identity") -> gatewayAuthRecoveryLabel(gatewayConnectionProblem) ?: "Authentication needed"
-    status.contains("fingerprint verification timed out") -> "TLS timed out"
-    status.contains("no tls endpoint") -> "No TLS endpoint"
-    status.contains("certificate") || status.contains("tls") -> "Certificate review needed"
-    else -> "Not connected"
+    status.contains("connecting") || status.contains("reconnecting") -> nativeString("Connecting...")
+    status.contains("pairing") -> nativeString("Waiting for pairing")
+    status.contains("auth") || status.contains("device identity") -> gatewayAuthRecoveryLabel(gatewayConnectionProblem) ?: nativeString("Authentication needed")
+    status.contains("fingerprint verification timed out") -> nativeString("TLS timed out")
+    status.contains("no tls endpoint") -> nativeString("No TLS endpoint")
+    status.contains("certificate") || status.contains("tls") -> nativeString("Certificate review needed")
+    else -> nativeString("Not connected")
   }
 }
 

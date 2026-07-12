@@ -3,6 +3,7 @@ package ai.openclaw.app.ui
 import ai.openclaw.app.GatewayModelProviderSummary
 import ai.openclaw.app.GatewayModelSummary
 import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawEmptyState
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawPlainIconButton
@@ -97,25 +98,25 @@ internal fun CommandPalette(
           ) {
             ClawPlainIconButton(
               icon = Icons.AutoMirrored.Filled.ArrowBack,
-              contentDescription = "Close search",
+              contentDescription = nativeString("Close search"),
               onClick = onDismiss,
             )
-            Text(text = "Search", style = ClawTheme.type.title, color = ClawTheme.colors.text, modifier = Modifier.weight(1f), textAlign = TextAlign.Center)
+            Text(text = nativeString("Search"), style = ClawTheme.type.title, color = ClawTheme.colors.text, modifier = Modifier.weight(1f), textAlign = TextAlign.Center)
             CommandAvatar(text = "OC")
           }
         }
 
         item {
-          ClawTextField(value = query, onValueChange = { query = it }, placeholder = "Search OpenClaw")
+          ClawTextField(value = query, onValueChange = { query = it }, placeholder = nativeString("Search OpenClaw"))
         }
 
         item {
-          CommandSectionLabel(title = "Quick actions")
+          CommandSectionLabel(title = nativeString("Quick actions"))
         }
 
         if (actionRows.isEmpty()) {
           item {
-            ClawEmptyState(title = "No actions found", body = "Try Chat, Voice, Sessions, Providers, or Settings.")
+            ClawEmptyState(title = nativeString("No actions found"), body = nativeString("Try Chat, Voice, Sessions, Providers, or Settings."))
           }
         } else {
           item {
@@ -124,14 +125,14 @@ internal fun CommandPalette(
         }
 
         item {
-          CommandSectionLabel(title = "Sessions")
+          CommandSectionLabel(title = nativeString("Sessions"))
         }
 
         if (sessionRows.isEmpty()) {
           item {
             ClawPanel {
               Text(
-                text = if (isConnected) "No matching sessions yet." else "Connect the Gateway to search sessions.",
+                text = if (isConnected) nativeString("No matching sessions yet.") else nativeString("Connect the Gateway to search sessions."),
                 style = ClawTheme.type.body,
                 color = ClawTheme.colors.textMuted,
               )
@@ -145,7 +146,7 @@ internal fun CommandPalette(
                   CommandSessionRow(
                     key = session.key,
                     title = commandSessionTitle(session.displayName),
-                    subtitle = if (pendingRunCount > 0) "Assistant working" else "OpenClaw session",
+                    subtitle = if (pendingRunCount > 0) nativeString("Assistant working") else nativeString("OpenClaw session"),
                     metadata = session.updatedAtMs?.let(::commandRelativeTime) ?: "now",
                   )
                 },
@@ -200,10 +201,10 @@ private fun CommandActionRow(row: CommandItem) {
     ) {
       CommandRowIcon(icon = row.icon)
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-        Text(text = row.title, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(text = row.subtitle, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(text = nativeString(row.title), style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(text = nativeString(row.subtitle), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
       }
-      CommandRowChevron(contentDescription = "Open ${row.title}")
+      CommandRowChevron(contentDescription = nativeString("Open \${row.title}", row.title))
     }
   }
 }
@@ -243,7 +244,7 @@ private fun CommandSessionListRow(
         Text(text = row.subtitle, style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle, maxLines = 1, overflow = TextOverflow.Ellipsis)
       }
       Text(text = row.metadata, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
-      CommandRowChevron(contentDescription = "Open session")
+      CommandRowChevron(contentDescription = nativeString("Open session"))
     }
   }
 }
@@ -301,16 +302,16 @@ internal fun providerCommandSubtitle(
   providers: List<GatewayModelProviderSummary>,
   models: List<GatewayModelSummary>,
 ): String {
-  if (!isConnected) return "Connect Gateway to view providers"
+  if (!isConnected) return nativeString("Connect Gateway to view providers")
   val rows = providerRows(providers = providers, models = models)
   val readyProviderCount = rows.count { it.ready }
-  if (readyProviderCount > 0) return "$readyProviderCount providers ready"
-  if (rows.any { it.availability == ProviderAvailability.Unknown }) return "Provider availability unknown"
-  return "No ready providers"
+  if (readyProviderCount > 0) return nativeString("\$readyProviderCount providers ready", readyProviderCount)
+  if (rows.any { it.availability == ProviderAvailability.Unknown }) return nativeString("Provider availability unknown")
+  return nativeString("No ready providers")
 }
 
 /** Falls back to the canonical main-session label when gateway display names are blank. */
-private fun commandSessionTitle(displayName: String?): String = displayName?.takeIf { it.isNotBlank() } ?: "Main session"
+private fun commandSessionTitle(displayName: String?): String = displayName?.takeIf { it.isNotBlank() } ?: nativeString("Main session")
 
 /** Formats command-palette session timestamps for compact rows. */
 private fun commandRelativeTime(updatedAtMs: Long): String {

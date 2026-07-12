@@ -5,6 +5,7 @@ import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.GatewayNodeApprovalState
 import ai.openclaw.app.GatewayNodeCapabilityApproval
 import ai.openclaw.app.gateway.normalizeGatewayApprovalRequestId
+import ai.openclaw.app.i18n.nativeString
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -22,7 +23,7 @@ internal fun openClawAndroidVersionLabel(): String {
 }
 
 /** Normalizes blank gateway status text for display and diagnostics copy. */
-internal fun gatewayStatusForDisplay(statusText: String): String = statusText.trim().ifEmpty { "Offline" }
+internal fun gatewayStatusForDisplay(statusText: String): String = statusText.trim().ifEmpty { nativeString("Offline") }
 
 /** Resolves the best non-secret endpoint label available to diagnostics surfaces. */
 internal fun gatewayDiagnosticsEndpoint(
@@ -77,15 +78,15 @@ private enum class GatewayAuthRecoveryLabelKind {
 
 private fun gatewayAuthRecoveryLabel(kind: GatewayAuthRecoveryLabelKind): String =
   when (kind) {
-    GatewayAuthRecoveryLabelKind.SETUP_CODE_EXPIRED -> "Setup code expired"
-    GatewayAuthRecoveryLabelKind.TOKEN_NEEDED -> "Gateway token needed"
-    GatewayAuthRecoveryLabelKind.TOKEN_NOT_CONFIGURED -> "Gateway token not configured"
-    GatewayAuthRecoveryLabelKind.PASSWORD_NEEDED -> "Gateway password needed"
-    GatewayAuthRecoveryLabelKind.PASSWORD_INVALID -> "Gateway password invalid"
-    GatewayAuthRecoveryLabelKind.PASSWORD_NOT_CONFIGURED -> "Gateway password not configured"
-    GatewayAuthRecoveryLabelKind.ACCESS_NEEDS_REVIEW -> "Gateway access needs review"
-    GatewayAuthRecoveryLabelKind.SAVED_AUTH_INVALID -> "Saved auth invalid"
-    GatewayAuthRecoveryLabelKind.DEVICE_IDENTITY_REQUIRED -> "Device identity required"
+    GatewayAuthRecoveryLabelKind.SETUP_CODE_EXPIRED -> nativeString("Setup code expired")
+    GatewayAuthRecoveryLabelKind.TOKEN_NEEDED -> nativeString("Gateway token needed")
+    GatewayAuthRecoveryLabelKind.TOKEN_NOT_CONFIGURED -> nativeString("Gateway token not configured")
+    GatewayAuthRecoveryLabelKind.PASSWORD_NEEDED -> nativeString("Gateway password needed")
+    GatewayAuthRecoveryLabelKind.PASSWORD_INVALID -> nativeString("Gateway password invalid")
+    GatewayAuthRecoveryLabelKind.PASSWORD_NOT_CONFIGURED -> nativeString("Gateway password not configured")
+    GatewayAuthRecoveryLabelKind.ACCESS_NEEDS_REVIEW -> nativeString("Gateway access needs review")
+    GatewayAuthRecoveryLabelKind.SAVED_AUTH_INVALID -> nativeString("Saved auth invalid")
+    GatewayAuthRecoveryLabelKind.DEVICE_IDENTITY_REQUIRED -> nativeString("Device identity required")
   }
 
 /** Returns the exact host command for one node's approval state when available. */
@@ -168,5 +169,5 @@ internal fun copyGatewayDiagnosticsReport(
   val clipboard = context.getSystemService(ClipboardManager::class.java) ?: return
   val report = buildGatewayDiagnosticsReport(screen = screen, gatewayAddress = gatewayAddress, statusText = statusText)
   clipboard.setPrimaryClip(ClipData.newPlainText("OpenClaw gateway diagnostics", report))
-  Toast.makeText(context, "Copied gateway diagnostics", Toast.LENGTH_SHORT).show()
+  Toast.makeText(context, nativeString("Copied gateway diagnostics"), Toast.LENGTH_SHORT).show()
 }
