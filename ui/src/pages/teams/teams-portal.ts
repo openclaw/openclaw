@@ -1267,8 +1267,7 @@ export function renderTeamsPortal(
                   <ul>
                     ${visibleInvites.map(
                       (invite) => html`<li>
-                        ${presetLabel(invite.preset)}
-                        ${invite.state}${invite.recipientLabel
+                        ${`${presetLabel(invite.preset)} ${invite.state}`}${invite.recipientLabel
                           ? ` for ${invite.recipientLabel}`
                           : ""}
                         ${invite.state === "active"
