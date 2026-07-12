@@ -61,7 +61,7 @@ export function resolveCapabilityProjectionTrajectoryPath(params: {
   agentId?: string;
   storePath?: string;
   env?: NodeJS.ProcessEnv;
-}): { sessionId: string; trajectoryPath: string } | null {
+}): { sessionId: string; sessionFile: string; trajectoryPath: string } | null {
   const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
   const entry = loadSessionEntry({
     agentId,
@@ -82,6 +82,7 @@ export function resolveCapabilityProjectionTrajectoryPath(params: {
   );
   return {
     sessionId: entry.sessionId,
+    sessionFile,
     trajectoryPath: resolveTrajectoryFilePath({
       env: params.env,
       sessionFile,
@@ -102,11 +103,16 @@ export async function collectCapabilityProjectionTrajectory(params: {
   if (!target) {
     return { compiled: null, successfulToolResults: [], errorCode: "MISSING_SESSION_PROJECTION" };
   }
-  return await collectExactTurnFromTrajectory(target.trajectoryPath, params.selection, {
-    sessionId: target.sessionId,
-    sessionKey: params.sessionKey,
-    evidenceWindow: params.evidenceWindow,
-  });
+  return await collectExactTurnFromTrajectory(
+    target.trajectoryPath,
+    params.selection,
+    {
+      sessionId: target.sessionId,
+      sessionKey: params.sessionKey,
+      evidenceWindow: params.evidenceWindow,
+    },
+    target.sessionFile,
+  );
 }
 
 function selectionMode(
@@ -153,7 +159,7 @@ function safeCollectionError(input: CollectionError): CollectionError {
 
 const SAFE_EVIDENCE_SOURCE_RE = /^[A-Za-z0-9_. -]{1,160}$/u;
 const SECRET_BEARING_VALUE_RE =
-  /(?:authorization|bearer\s+|cookie\s*[:=]|begin [A-Z ]*private key|(?:api[_-]?key|password|secret|token)\s*[:=]|https?:\/\/\S*\?)/iu;
+  /(?:authorization|bearer\s+|cookie\s*[:=]|begin [A-Z ]*private key|(?:api[_-]?key|password|secret|token)\s*[:=]|https?:\/\/\S*\?|\bsk-(?:proj-)?[A-Za-z0-9_-]{8,}\b|\bgh[pousr]_[A-Za-z0-9_]{20,}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b|\bxox[baprs]-[A-Za-z0-9-]{10,}\b|\b[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\b)/iu;
 
 function validateEvidenceStrings(value: unknown, key = "evidence"): void {
   if (typeof value === "string") {
@@ -181,6 +187,9 @@ function validateEvidenceStrings(value: unknown, key = "evidence"): void {
 function sanitizeEvidenceRecord(input: EvidenceRecord): EvidenceRecord {
   if (input.redactionApplied !== true) {
     throw new Error("Evidence record is not marked as redacted");
+  }
+  if (input.kind === "context_compiled" || input.kind === "existing_tool_result") {
+    throw new Error("Reserved evidence kind cannot be supplied externally");
   }
   const parsed = CapabilityProjectionEvidenceSchema.parse({ ...input, redactionApplied: true });
   validateEvidenceStrings(parsed);
@@ -270,6 +279,7 @@ export function buildCapabilityProjectionReport(
         },
         redactionApplied: true,
       };
+  validateEvidenceStrings(contextEvidence);
   const sanitizedInputEvidence = input.evidence.map(sanitizeEvidenceRecord);
   const evidence = [contextEvidence, ...sanitizedInputEvidence].sort(
     (a, b) =>
@@ -284,6 +294,17 @@ export function buildCapabilityProjectionReport(
   });
   const capabilities = buildCapabilityRecords(withProjection(facts, input.trajectory));
   const lowConfidence = !compiled;
+  const hasUnknownRequiredEvidence = capabilities.some((capability) =>
+    capability.tools
+      .filter((tool) => tool.membership === "required")
+      .some(
+        (tool) =>
+          tool.configured.value === "unknown" ||
+          tool.runtimeLoaded.value === "unknown" ||
+          tool.policyAllowed.value === "unknown" ||
+          tool.turnProjected.value === "unknown",
+      ),
+  );
   const evidenceGapReasonCodes = [
     ...new Set(
       sanitizedInputEvidence
@@ -345,13 +366,19 @@ export function buildCapabilityProjectionReport(
     overallConfidence: {
       level: lowConfidence
         ? ("low" as const)
-        : collectionErrors.length > 0 || evidenceGapReasonCodes.length > 0
+        : collectionErrors.length > 0 ||
+            evidenceGapReasonCodes.length > 0 ||
+            hasUnknownRequiredEvidence
           ? ("medium" as const)
           : ("high" as const),
       reasonCodes: lowConfidence
         ? [input.trajectory.errorCode ?? "MISSING_SESSION_PROJECTION"]
         : [
-            ...new Set([...collectionErrors.map((error) => error.code), ...evidenceGapReasonCodes]),
+            ...new Set([
+              ...collectionErrors.map((error) => error.code),
+              ...evidenceGapReasonCodes,
+              ...(hasUnknownRequiredEvidence ? ["MISSING_CAPABILITY_EVIDENCE"] : []),
+            ]),
           ].sort(),
     },
   };

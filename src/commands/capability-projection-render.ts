@@ -159,7 +159,13 @@ export async function publishCapabilityProjectionPair(params: {
   outputDir: string;
   fsImpl?: PublicationFs;
   platform?: NodeJS.Platform;
-}): Promise<{ jsonPath: string; markdownPath: string }> {
+}): Promise<{
+  jsonPath: string;
+  markdownPath: string;
+  pointerPath: string;
+  latestJsonPath: string;
+  latestMarkdownPath: string;
+}> {
   if ((params.platform ?? process.platform) !== "linux") {
     throw new Error("Atomic capability projection publication is supported on Linux only");
   }
@@ -259,10 +265,16 @@ export async function publishCapabilityProjectionPair(params: {
       }
     }
     await fsImpl.symlink(path.join(".versions", versionName), stagedPointer);
-    // Readers resolve this pointer once before opening either format. Renaming
-    // it is the sole visibility commit, so it never names a partial pair.
+    // Renaming the pointer is the sole visibility commit. Pair readers use the
+    // version-pinned paths returned below, never two independent latest-link opens.
     await fsImpl.rename(stagedPointer, currentPointer);
-    return { jsonPath, markdownPath };
+    return {
+      jsonPath: path.join(versionDir, "current-turn.json"),
+      markdownPath: path.join(versionDir, "current-turn.md"),
+      pointerPath: currentPointer,
+      latestJsonPath: jsonPath,
+      latestMarkdownPath: markdownPath,
+    };
   } catch (error) {
     await fsImpl.rm(stagedPointer, { force: true }).catch(() => undefined);
     await fsImpl.rm(stagedVersionDir, { recursive: true, force: true }).catch(() => undefined);

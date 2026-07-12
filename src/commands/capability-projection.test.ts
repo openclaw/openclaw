@@ -241,6 +241,24 @@ describe("capability projection acceptance fixtures", () => {
     expect(record.mismatchCodes).toContain("LOADED_NOT_POLICY_ALLOWED");
   });
 
+  it("uses an explicit Workboard read-only catalog with a mutating fallback", () => {
+    const report = buildCapabilityProjectionReport(
+      input({
+        facts: [
+          fact("workboard", "workboard_boards"),
+          fact("workboard", "workboard_get_or_create"),
+        ],
+        tools: ["workboard_boards", "workboard_get_or_create"],
+      }),
+    );
+    expect(tool(report, "workboard", "workboard_boards").callabilityStatus).toBe(
+      "projected_not_call_tested",
+    );
+    expect(tool(report, "workboard", "workboard_get_or_create").callabilityStatus).toBe(
+      "projected_but_not_safely_probed",
+    );
+  });
+
   it("derives historical acceptance facts from sanitized evidence only", () => {
     const report = buildCapabilityProjectionReport({
       ...input({ facts: [] }),
@@ -360,6 +378,12 @@ describe("capability projection acceptance fixtures", () => {
     expect(record.mismatchCodes).toContain("EVIDENCE_PERIOD_MISMATCH");
     expect(report.overallConfidence.level).toBe("medium");
     expect(report.overallConfidence.reasonCodes).toContain("EVIDENCE_COLLECTION_FAILED");
+  });
+
+  it("does not report high confidence when capability evidence is absent", () => {
+    const report = buildCapabilityProjectionReport(input({ facts: [] }));
+    expect(report.overallConfidence.level).toBe("medium");
+    expect(report.overallConfidence.reasonCodes).toContain("MISSING_CAPABILITY_EVIDENCE");
   });
 
   it("reports absent goal tools without probing them", () => {
@@ -499,6 +523,22 @@ describe("capability projection acceptance fixtures", () => {
         ],
       }),
     ).toThrow();
+    expect(() =>
+      buildCapabilityProjectionReport({
+        ...input({ facts: [] }),
+        trajectory: {
+          compiled: {
+            ts: now,
+            seq: 7,
+            sessionId: "session-synthetic",
+            sessionKey,
+            runId: "sk-proj-abcdefghijklmnop",
+            toolNames: ["memory_get"],
+          },
+          successfulToolResults: [],
+        },
+      }),
+    ).toThrow("prohibited secret-bearing value");
     expect(() =>
       buildCapabilityProjectionReport({
         ...input({ facts: [] }),
@@ -739,6 +779,116 @@ describe("capability projection acceptance fixtures", () => {
     expect(wrongSession.errorCode).toBe("MISSING_SESSION_PROJECTION");
   });
 
+  it("verifies a successful tool result from the canonical transcript branch", async () => {
+    const dir = await makeTempDir();
+    const trajectory = path.join(dir, "fixture.trajectory.jsonl");
+    const transcript = path.join(dir, "fixture.jsonl");
+    await fs.writeFile(
+      trajectory,
+      `${JSON.stringify({
+        traceSchema: "openclaw-trajectory",
+        schemaVersion: 1,
+        traceId: "t",
+        source: "runtime",
+        type: "context.compiled",
+        ts: now,
+        seq: 1,
+        sessionId: "s",
+        sessionKey,
+        runId,
+        data: { tools: [{ name: "memory_get" }] },
+      })}\n`,
+    );
+    await fs.writeFile(
+      transcript,
+      `${[
+        {
+          type: "session",
+          version: 3,
+          id: "s",
+          timestamp: "2026-07-12T15:59:00.000Z",
+          cwd: dir,
+        },
+        {
+          type: "message",
+          id: "result-1",
+          parentId: null,
+          timestamp: "2026-07-12T16:00:00.500Z",
+          message: {
+            role: "toolResult",
+            toolCallId: "call-1",
+            toolName: "memory_get",
+            content: [{ type: "text", text: "private result must be discarded" }],
+            isError: false,
+            timestamp: Date.parse("2026-07-12T16:00:00.500Z"),
+          },
+        },
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n")}\n`,
+    );
+    const collected = await collectExactTurnFromTrajectory(
+      trajectory,
+      { mode: "exact_run_id", runId },
+      {
+        sessionId: "s",
+        sessionKey,
+        evidenceWindow: { start: "2026-07-12T15:59:00Z", end: "2026-07-12T16:01:00Z" },
+      },
+      transcript,
+    );
+    expect(collected.successfulToolResults).toEqual([
+      {
+        ts: "2026-07-12T16:00:00.500Z",
+        runId,
+        toolName: "memory_get",
+        success: true,
+      },
+    ]);
+    expect(JSON.stringify(collected)).not.toContain("private result");
+  });
+
+  it("selects the highest sequence when latest events share a timestamp", async () => {
+    const dir = await makeTempDir();
+    const trajectory = path.join(dir, "fixture.trajectory.jsonl");
+    const events = [
+      {
+        traceSchema: "openclaw-trajectory",
+        schemaVersion: 1,
+        traceId: "t",
+        source: "runtime",
+        type: "context.compiled",
+        ts: now,
+        seq: 1,
+        sessionId: "s",
+        sessionKey,
+        runId: "run-1",
+        data: { tools: [{ name: "memory_get" }] },
+      },
+      {
+        traceSchema: "openclaw-trajectory",
+        schemaVersion: 1,
+        traceId: "t",
+        source: "runtime",
+        type: "context.compiled",
+        ts: now,
+        seq: 2,
+        sessionId: "s",
+        sessionKey,
+        runId: "run-2",
+        data: { tools: [{ name: "memory_search" }] },
+      },
+    ];
+    await fs.writeFile(trajectory, `${events.map((event) => JSON.stringify(event)).join("\n")}\n`);
+    const collected = await collectExactTurnFromTrajectory(
+      trajectory,
+      { mode: "latest_in_window", start: now, end: now },
+      { sessionId: "s", sessionKey, evidenceWindow: { start: now, end: now } },
+    );
+    expect(collected.compiled?.seq).toBe(2);
+    expect(collected.compiled?.toolNames).toEqual(["memory_search"]);
+  });
+
   it("does not treat readiness observability as autonomy", () => {
     const report = buildCapabilityProjectionReport(
       input({
@@ -904,6 +1054,9 @@ describe("collector and publication safety", () => {
     });
     expect((await fs.stat(result.jsonPath)).mode & 0o777).toBe(0o600);
     expect((await fs.stat(result.markdownPath)).mode & 0o777).toBe(0o600);
+    expect(path.dirname(result.jsonPath)).toBe(path.dirname(result.markdownPath));
+    expect(result.jsonPath).not.toBe(result.latestJsonPath);
+    expect(result.markdownPath).not.toBe(result.latestMarkdownPath);
     await expect(
       publishCapabilityProjectionPair({
         report,

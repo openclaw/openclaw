@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readSafeTranscriptToolResultEvents } from "../trajectory/export.js";
 import type { TrajectoryEvent } from "../trajectory/types.js";
 import type {
   CapabilityName,
@@ -46,6 +47,19 @@ type ExpectedTrajectoryContext = {
 };
 
 const MAX_TRAJECTORY_BYTES = 50 * 1024 * 1024;
+const READ_ONLY_WORKBOARD_TOOLS = new Set([
+  "workboard_board",
+  "workboard_boards",
+  "workboard_card",
+  "workboard_cards",
+  "workboard_get",
+  "workboard_list",
+  "workboard_run",
+  "workboard_runs",
+  "workboard_search",
+  "workboard_stats",
+  "workboard_status",
+]);
 
 const BASE_TOOL_CATALOG: Array<{
   capability: CapabilityName;
@@ -76,7 +90,7 @@ export function classifyCapabilityToolName(
   if (name.startsWith("workboard_")) {
     return {
       capability: "workboard",
-      mutationRisk: /(?:list|get|read|search|status)/u.test(name) ? "read_only" : "mutating",
+      mutationRisk: READ_ONLY_WORKBOARD_TOOLS.has(name) ? "read_only" : "mutating",
     };
   }
   if (name.startsWith("llm_task")) {
@@ -338,7 +352,7 @@ function successfulResult(
   expected: ExpectedTrajectoryContext,
 ): SafeExistingToolResult | null {
   if (
-    event.runId !== runId ||
+    (event.source === "runtime" ? event.runId !== runId : event.source !== "transcript") ||
     event.sessionId !== expected.sessionId ||
     event.sessionKey !== expected.sessionKey ||
     event.type !== "tool.result" ||
@@ -361,7 +375,9 @@ function successfulResult(
         ? event.data.toolName
         : null;
   const success =
-    event.data.success === true || (event.data.isError !== true && event.data.status === "ok");
+    event.data.success === true ||
+    (event.source === "transcript" && event.data.isError !== true) ||
+    (event.data.isError !== true && event.data.status === "ok");
   return toolName && success ? { ts: event.ts, runId, toolName, success: true } : null;
 }
 
@@ -373,6 +389,7 @@ export async function collectExactTurnFromTrajectory(
   trajectoryPath: string,
   selection: ExactTurnSelection,
   expected: ExpectedTrajectoryContext,
+  transcriptPath?: string,
 ): Promise<TrajectoryCollection> {
   try {
     const evidenceWindowStart = Date.parse(expected.evidenceWindow.start);
@@ -408,9 +425,31 @@ export async function collectExactTurnFromTrajectory(
       return { compiled: null, successfulToolResults: [], errorCode: "EVIDENCE_COLLECTION_FAILED" };
     }
     const lines = (await fs.readFile(trajectoryPath, "utf8")).split("\n");
-    const events = lines.flatMap((line) => {
+    const runtimeEvents = lines.flatMap((line) => {
       const event = parseEvent(line);
       return event ? [event] : [];
+    });
+    const transcriptEvents = transcriptPath
+      ? await readSafeTranscriptToolResultEvents({
+          sessionFile: transcriptPath,
+          sessionId: expected.sessionId,
+          sessionKey: expected.sessionKey,
+        })
+      : [];
+    const sourceOrder: Record<TrajectoryEvent["source"], number> = {
+      runtime: 0,
+      transcript: 1,
+      export: 2,
+    };
+    const events = [...runtimeEvents, ...transcriptEvents].toSorted((left, right) => {
+      const byTimestamp = Date.parse(left.ts) - Date.parse(right.ts);
+      if (byTimestamp !== 0) {
+        return byTimestamp;
+      }
+      const bySource = sourceOrder[left.source] - sourceOrder[right.source];
+      return bySource !== 0
+        ? bySource
+        : (left.sourceSeq ?? left.seq) - (right.sourceSeq ?? right.seq);
     });
     const candidates = events.flatMap((event, index) => {
       const compiled = toCompiled(event);
@@ -426,7 +465,10 @@ export async function collectExactTurnFromTrajectory(
     const selected =
       selection.mode === "latest_in_window"
         ? candidates
-            .sort((a, b) => Date.parse(b.compiled.ts) - Date.parse(a.compiled.ts))
+            .sort((a, b) => {
+              const byTimestamp = Date.parse(b.compiled.ts) - Date.parse(a.compiled.ts);
+              return byTimestamp !== 0 ? byTimestamp : b.compiled.seq - a.compiled.seq;
+            })
             .slice(0, 1)
         : candidates;
     if (selected.length === 0) {
