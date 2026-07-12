@@ -285,21 +285,30 @@ describe("searchMemoryWiki", () => {
     let started = 0;
     const originalReadFile = fs.readFile.bind(fs);
     const readFileSpy = vi.spyOn(fs, "readFile").mockImplementation(async (file, encoding) => {
-      const filePath = String(file);
+      const filePath =
+        typeof file === "string"
+          ? file
+          : file instanceof URL
+            ? file.pathname
+            : file.toString();
       if (!filePath.includes(`${path.sep}sources${path.sep}page-`)) {
         return originalReadFile(file, encoding as BufferEncoding);
       }
       started += 1;
       running += 1;
       peak = Math.max(peak, running);
-      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 25);
+      });
       running -= 1;
       return originalReadFile(file, encoding as BufferEncoding);
     });
 
     const controller = new AbortController();
     const readPromise = readQueryableWikiPages(rootDir, controller.signal);
-    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 10);
+    });
     controller.abort();
     const pages = await readPromise;
     readFileSpy.mockRestore();
