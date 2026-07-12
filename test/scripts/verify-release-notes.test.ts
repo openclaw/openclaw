@@ -46,7 +46,8 @@ describe("release-note verification", () => {
       authorName: "Maintainer",
       changedPaths: new Set(["src/channel.ts"]),
       hash: "a".repeat(40),
-      subject: "fix(channel): preserve durable replies (#123)",
+      pullRequests: [123],
+      subject: "fix(channel): preserve durable replies",
     };
     const explicitBackport = {
       authorEmail: "other@example.com",
@@ -82,11 +83,21 @@ describe("release-note verification", () => {
       canonicalMainCommitMatches(pullRequestBackport, [
         {
           ...mainCommit,
+          pullRequests: [],
           body: "Original main PR #123.",
           subject: "fix(channel): preserve durable replies",
         },
       ]),
-    ).toEqual([mainCommit.hash]);
+    ).toEqual([]);
+    expect(
+      canonicalMainCommitMatches(pullRequestBackport, [
+        {
+          ...mainCommit,
+          pullRequests: [999],
+          subject: "fix(channel): keep replies after renewal",
+        },
+      ]),
+    ).toEqual([]);
     expect(
       canonicalMainCommitMatches(
         { ...pullRequestBackport, authorEmail: "other@example.com", authorName: "Other" },
@@ -105,9 +116,20 @@ describe("release-note verification", () => {
     expect(
       canonicalMainCommitMatches(pullRequestBackport, [
         mainCommit,
-        { ...mainCommit, hash: "e".repeat(40) },
+        { ...mainCommit, hash: "e".repeat(40), pullRequests: [123] },
       ]),
     ).toEqual([]);
+    expect(
+      canonicalMainCommitMatches(pullRequestBackport, [
+        mainCommit,
+        {
+          ...mainCommit,
+          body: "Original main PR #123.",
+          hash: "f".repeat(40),
+          pullRequests: [],
+        },
+      ]),
+    ).toEqual([mainCommit.hash]);
     expect(canonicalPullRequests([456], [123])).toEqual([123]);
   });
 

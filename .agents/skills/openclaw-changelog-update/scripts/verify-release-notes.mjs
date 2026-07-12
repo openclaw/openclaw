@@ -806,19 +806,14 @@ export function canonicalMainCommitMatches(commit, candidates) {
   }
 
   const pullRequestOrigins = new Set(backportPullRequestOrigins(commit.body));
-  const pullRequestMatches = candidates.filter(
-    (candidate) =>
-      referencesIn(`${candidate.subject}\n${candidate.body ?? ""}`).some((number) =>
-        pullRequestOrigins.has(number),
-      ) &&
-      authorsMatch(commit, candidate) &&
-      pathsOverlap(commit.changedPaths, candidate.changedPaths),
-  );
-  if (pullRequestMatches.length === 1) {
-    return [pullRequestMatches[0].hash];
-  }
-  if (pullRequestMatches.length > 1) {
-    return [];
+  if (pullRequestOrigins.size > 0) {
+    const pullRequestMatches = candidates.filter(
+      (candidate) =>
+        (candidate.pullRequests ?? []).some((number) => pullRequestOrigins.has(number)) &&
+        authorsMatch(commit, candidate) &&
+        pathsOverlap(commit.changedPaths, candidate.changedPaths),
+    );
+    return pullRequestMatches.length === 1 ? [pullRequestMatches[0].hash] : [];
   }
 
   const subject = normalizedCommitSubject(commit.subject);
@@ -1042,20 +1037,17 @@ function sourceCommits(base, target, mainRef) {
   const mainCommits = canonicalMainCommits(base, mainRef);
   const mainCommitsByHash = new Map(mainCommits.map((commit) => [commit.hash, commit]));
   const mainCommitsBySubject = new Map();
-  const mainCommitsByPullRequest = new Map();
   for (const commit of mainCommits) {
     const subject = normalizedCommitSubject(commit.subject);
     const matches = mainCommitsBySubject.get(subject) ?? [];
     matches.push(commit);
     mainCommitsBySubject.set(subject, matches);
-    for (const number of referencesIn(`${commit.subject}\n${commit.body}`)) {
-      const pullRequestMatches = mainCommitsByPullRequest.get(number) ?? [];
-      pullRequestMatches.push(commit);
-      mainCommitsByPullRequest.set(number, pullRequestMatches);
-    }
   }
   const canonicalMainCommitsByReleaseCommit = new Map();
+  const namedMainPullRequestsByReleaseCommit = new Map();
   const canonicalMainHashes = new Set();
+  const mainAssociationCandidateHashes = new Set();
+  const pendingCanonicalMatches = [];
   const changedPathsByCommit = new Map();
   const withChangedPaths = (commit) => {
     if (!changedPathsByCommit.has(commit.hash)) {
@@ -1072,22 +1064,59 @@ function sourceCommits(base, target, mainRef) {
     const explicit = cherryPickOrigins(commit.body)
       .map((origin) => mainCommitsByHash.get(origin))
       .filter(Boolean);
+    if (explicit.length > 0) {
+      const matches = [...new Set(explicit.map((candidate) => candidate.hash))];
+      canonicalMainCommitsByReleaseCommit.set(commit.hash, matches);
+      for (const hash of matches) {
+        canonicalMainHashes.add(hash);
+      }
+      continue;
+    }
+    const releaseCommit = withChangedPaths(commit);
+    const pullRequestOrigins = backportPullRequestOrigins(commit.body);
     const candidates = new Map(
-      [
-        ...(mainCommitsBySubject.get(normalizedCommitSubject(commit.subject)) ?? []),
-        ...backportPullRequestOrigins(commit.body).flatMap(
-          (number) => mainCommitsByPullRequest.get(number) ?? [],
-        ),
-      ].map((candidate) => [candidate.hash, candidate]),
+      (mainCommitsBySubject.get(normalizedCommitSubject(commit.subject)) ?? []).map((candidate) => [
+        candidate.hash,
+        candidate,
+      ]),
     );
-    const matches =
-      explicit.length > 0
-        ? [...new Set(explicit.map((candidate) => candidate.hash))]
-        : canonicalMainCommitMatches(
-            withChangedPaths(commit),
-            [...candidates.values()].map(withChangedPaths),
-          );
+    if (pullRequestOrigins.length > 0) {
+      for (const candidate of mainCommits) {
+        if (!authorsMatch(releaseCommit, candidate)) {
+          continue;
+        }
+        const mainCandidate = withChangedPaths(candidate);
+        if (!pathsOverlap(releaseCommit.changedPaths, mainCandidate.changedPaths)) {
+          continue;
+        }
+        candidates.set(candidate.hash, candidate);
+        mainAssociationCandidateHashes.add(candidate.hash);
+      }
+    }
+    pendingCanonicalMatches.push({ candidates, commit: releaseCommit, pullRequestOrigins });
+  }
+  const candidateMainPullRequests = resolveAssociatedPullRequests(
+    [...mainAssociationCandidateHashes],
+    Number.POSITIVE_INFINITY,
+  );
+  for (const { candidates, commit, pullRequestOrigins } of pendingCanonicalMatches) {
+    const matches = canonicalMainCommitMatches(
+      commit,
+      [...candidates.values()].map((candidate) => ({
+        ...withChangedPaths(candidate),
+        pullRequests: candidateMainPullRequests.get(candidate.hash) ?? [],
+      })),
+    );
     canonicalMainCommitsByReleaseCommit.set(commit.hash, matches);
+    if (pullRequestOrigins.length > 0 && matches.length === 1) {
+      const associatedPullRequests = candidateMainPullRequests.get(matches[0]) ?? [];
+      const namedPullRequests = pullRequestOrigins.filter((number) =>
+        associatedPullRequests.includes(number),
+      );
+      if (namedPullRequests.length > 0) {
+        namedMainPullRequestsByReleaseCommit.set(commit.hash, namedPullRequests);
+      }
+    }
     for (const hash of matches) {
       canonicalMainHashes.add(hash);
     }
@@ -1101,10 +1130,18 @@ function sourceCommits(base, target, mainRef) {
   const nonRevertPullRequests = new Set();
   for (const commit of activeCommits) {
     const currentPullRequests = activePullRequests.get(commit.hash) ?? [];
-    const mainPullRequests = (canonicalMainCommitsByReleaseCommit.get(commit.hash) ?? []).flatMap(
-      (hash) => canonicalMainPullRequests.get(hash) ?? [],
+    const namedMainPullRequests = namedMainPullRequestsByReleaseCommit.get(commit.hash);
+    const mainPullRequests =
+      namedMainPullRequests ??
+      (canonicalMainCommitsByReleaseCommit.get(commit.hash) ?? []).flatMap(
+        (hash) => canonicalMainPullRequests.get(hash) ?? [],
+      );
+    const matchedMainCommits = canonicalMainCommitsByReleaseCommit.get(commit.hash) ?? [];
+    const associatedPullRequests = canonicalPullRequests(
+      currentPullRequests,
+      mainPullRequests,
+      matchedMainCommits.length > 0,
     );
-    const associatedPullRequests = canonicalPullRequests(currentPullRequests, mainPullRequests);
     commit.pullRequests = associatedPullRequests;
     const suppressedBackportPullRequests = new Set(
       currentPullRequests.filter((number) => !associatedPullRequests.includes(number)),
