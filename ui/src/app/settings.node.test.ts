@@ -5,6 +5,7 @@ import { createStorageMock } from "../test-helpers/storage.ts";
 import {
   loadLocalUserIdentity,
   loadSettings,
+  persistSessionToken,
   resolvePageGatewaySettings,
   resolveApplicationStartupSettings,
   saveSettings,
@@ -141,11 +142,13 @@ describe("loadSettings default gateway URL derivation", () => {
       sessionKey: "agent:remote:main",
       lastActiveSessionKey: "agent:remote:main",
     });
+    const sessionCredential = ["page", "session", "credential"].join("-");
+    persistSessionToken(expectedGatewayUrl("/openclaw"), sessionCredential);
     const before = [...Array(localStorage.length)].map((_, index) => localStorage.key(index));
 
     expect(resolvePageGatewaySettings(remote)).toMatchObject({
       gatewayUrl: expectedGatewayUrl("/openclaw"),
-      token: "",
+      token: sessionCredential,
       sessionKey: "main",
       lastActiveSessionKey: "main",
     });

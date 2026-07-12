@@ -358,7 +358,7 @@ export function resolvePageGatewaySettings(settings: UiSettings): UiSettings {
   return {
     ...settings,
     gatewayUrl: effectiveUrl,
-    token: resolveGatewayTokenForUrlEdit(settings.gatewayUrl, settings.token, effectiveUrl),
+    token: resolveGatewayTokenForUrlEdit(settings.gatewayUrl, effectiveUrl, settings.token),
     sessionKey: session.sessionKey,
     lastActiveSessionKey: session.lastActiveSessionKey,
   };
