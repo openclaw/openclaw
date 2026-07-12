@@ -2,6 +2,7 @@
 
 import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { i18n } from "../i18n/index.ts";
 import type { OpenClawFilePreviewModal } from "./file-preview-modal.ts";
 import "./file-preview-modal.ts";
 
@@ -62,7 +63,8 @@ describe("openclaw-file-preview-modal", () => {
     document.body.append(container);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await i18n.setLocale("en");
     render(nothing, container);
     container.remove();
     vi.restoreAllMocks();
@@ -219,5 +221,34 @@ describe("openclaw-file-preview-modal", () => {
       expect(writeText).toHaveBeenCalledWith(contents);
       expect(copyButton?.dataset.copied).toBe("1");
     });
+  });
+
+  it("rerenders default copy when the locale changes", async () => {
+    const modal = await renderPreview();
+    i18n.registerTranslation("pt-BR", {
+      common: { close: "Fechar" },
+      filePreview: {
+        label: "Arquivos de suporte",
+        listLabel: "Arquivos",
+        searchPlaceholder: "Buscar arquivos…",
+        readOnly: "somente leitura",
+        emptyTitle: "Nenhum arquivo corresponde",
+        emptySubtitle: "Tente outro nome ou conteúdo.",
+        copyFile: "Copiar arquivo",
+        fileCount: "{count} arquivos",
+        filteredFileCount: "{count}/{total} arquivos",
+        noMatches: "Nenhum arquivo corresponde.",
+        navigate: "navegar",
+      },
+    });
+
+    await i18n.setLocale("pt-BR");
+    await modal.updateComplete;
+
+    expect(modal.shadowRoot?.querySelector(".modal")?.getAttribute("aria-label")).toBe(
+      "Arquivos de suporte",
+    );
+    expect(shadowText(modal)).toContain("2 arquivos");
+    expect(shadowText(modal)).toContain("Fechar");
   });
 });

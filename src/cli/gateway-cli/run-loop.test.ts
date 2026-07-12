@@ -1365,6 +1365,83 @@ describe("runGatewayLoop", () => {
     });
   });
 
+  it("keeps the process alive and retries after task-registry restore fails during restart", async () => {
+    vi.clearAllMocks();
+    reloadTaskRegistryFromStore.mockReset();
+    reloadTaskRegistryFromStore.mockImplementationOnce(() => {
+      throw new Error("task registry restore failed");
+    });
+    peekGatewaySigusr1RestartReason.mockReturnValue(undefined);
+    respawnGatewayProcessForUpdate.mockReturnValue({
+      mode: "disabled",
+      detail: "OPENCLAW_NO_RESPAWN",
+    });
+
+    try {
+      await withIsolatedSignals(async ({ captureSignal }) => {
+        const closeFirst = createCloseMock();
+        const closeSecond = createCloseMock();
+        const { runtime, exited } = createRuntimeWithExitSignal();
+        let resolveSecondStart: (() => void) | null = null;
+        const startedSecond = new Promise<void>((resolve) => {
+          resolveSecondStart = resolve;
+        });
+        const start = vi
+          .fn()
+          .mockResolvedValueOnce({ close: closeFirst })
+          .mockImplementationOnce(async () => {
+            resolveSecondStart?.();
+            return { close: closeSecond };
+          });
+
+        const { runGatewayLoop } = await import("./run-loop.js");
+        void runGatewayLoop({
+          start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
+          runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
+        });
+        await waitForLoopCondition(
+          () => start.mock.calls.length === 1,
+          "expected initial gateway start",
+        );
+        const sigusr1 = captureSignal("SIGUSR1");
+        const sigterm = captureSignal("SIGTERM");
+
+        try {
+          sigusr1();
+          await waitForLoopCondition(
+            () =>
+              gatewayLog.error.mock.calls.some(([message]) =>
+                String(message).includes("gateway startup failed: task registry restore failed."),
+              ),
+            "expected failed task-registry restore to be logged",
+          );
+
+          expectRestartCloseCall(closeFirst, 90_000);
+          expect(reloadTaskRegistryFromStore).toHaveBeenCalledTimes(1);
+          expect(start).toHaveBeenCalledTimes(1);
+          expect(runtime.exit).not.toHaveBeenCalled();
+
+          sigusr1();
+          await startedSecond;
+
+          expect(reloadTaskRegistryFromStore).toHaveBeenCalledTimes(2);
+          expect(start).toHaveBeenCalledTimes(2);
+          expect(runtime.exit).not.toHaveBeenCalled();
+        } finally {
+          sigterm();
+          await expect(exited).resolves.toBe(0);
+        }
+
+        expect(closeSecond).toHaveBeenCalledWith({
+          reason: "gateway stopping",
+          restartExpectedMs: null,
+        });
+      });
+    } finally {
+      reloadTaskRegistryFromStore.mockReset();
+    }
+  });
+
   it("uses the default restart drain timeout when config omits deferralTimeoutMs", async () => {
     vi.clearAllMocks();
     loadConfig.mockReturnValue({ gateway: { reload: {} } });

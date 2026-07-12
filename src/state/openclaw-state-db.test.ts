@@ -27,6 +27,7 @@ import {
   OPENCLAW_STATE_SCHEMA_VERSION,
   repairOpenClawStateDatabaseSchema,
   runOpenClawStateWriteTransaction,
+  withOpenClawStateStartupMigrationCheckpointDatabase,
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import {
@@ -214,6 +215,156 @@ function insertAuditMarker(
   );
 }
 
+function createUnsafeIndexDrift(databasePath: string): void {
+  const { DatabaseSync } = requireNodeSqlite();
+  const database = new DatabaseSync(databasePath);
+  try {
+    database.exec(`
+      CREATE TABLE unsafe_index_records (
+        id INTEGER PRIMARY KEY,
+        indexed_value TEXT NOT NULL,
+        alternate_value TEXT NOT NULL
+      );
+      CREATE INDEX unsafe_index_records_value ON unsafe_index_records(indexed_value);
+      INSERT INTO unsafe_index_records (indexed_value, alternate_value)
+      VALUES ('alpha', 'zeta'), ('beta', 'eta'), ('gamma', 'theta');
+    `);
+    database.enableDefensive?.(false);
+    database.exec("PRAGMA writable_schema = ON;");
+    database
+      .prepare(
+        "UPDATE sqlite_schema SET sql = 'CREATE INDEX unsafe_index_records_value ON unsafe_index_records(alternate_value)' WHERE name = 'unsafe_index_records_value'",
+      )
+      .run();
+    const schemaVersion = readSqliteNumberPragma(database, "schema_version");
+    database.exec(`PRAGMA writable_schema = OFF; PRAGMA schema_version = ${schemaVersion + 1};`);
+  } finally {
+    database.close();
+  }
+}
+
+function runHotRollbackJournalRecoveryProbe(params: { moduleUrl: string; rootDir: string }): {
+  integrity: string;
+  journalExistsAfterRecovery: boolean;
+  value: string;
+} {
+  const probeSource = `
+    import { spawn } from "node:child_process";
+    import fs from "node:fs";
+    import path from "node:path";
+    import { DatabaseSync } from "node:sqlite";
+
+    const moduleUrl = ${JSON.stringify(params.moduleUrl)};
+    const databasePath = path.join(${JSON.stringify(params.rootDir)}, "hot-journal.sqlite");
+    const readyPath = path.join(${JSON.stringify(params.rootDir)}, "writer-ready");
+    const {
+      closeOpenClawStateDatabaseForTest,
+      openOpenClawStateDatabase,
+    } = await import(moduleUrl);
+
+    const initial = openOpenClawStateDatabase({ path: databasePath });
+    initial.db.exec(\`
+      CREATE TABLE hot_journal_probe (
+        id INTEGER PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+      INSERT INTO hot_journal_probe (id, value) VALUES (1, 'committed');
+    \`);
+    closeOpenClawStateDatabaseForTest();
+
+    const rollbackMode = new DatabaseSync(databasePath);
+    rollbackMode.exec("PRAGMA journal_mode = DELETE;");
+    rollbackMode.close();
+
+    const writerSource = \`
+      import fs from "node:fs";
+      import { DatabaseSync } from "node:sqlite";
+
+      const database = new DatabaseSync(process.env.OPENCLAW_HOT_JOURNAL_DATABASE_PATH);
+      database.exec("PRAGMA journal_mode = DELETE; PRAGMA synchronous = FULL; BEGIN IMMEDIATE;");
+      database
+        .prepare("UPDATE hot_journal_probe SET value = ? WHERE id = 1")
+        .run("uncommitted");
+      fs.writeFileSync(process.env.OPENCLAW_HOT_JOURNAL_READY_PATH, "ready");
+      setInterval(() => {}, 1_000);
+    \`;
+    const writer = spawn(
+      process.execPath,
+      ["--input-type=module", "-e", writerSource],
+      {
+        env: {
+          ...process.env,
+          OPENCLAW_HOT_JOURNAL_DATABASE_PATH: databasePath,
+          OPENCLAW_HOT_JOURNAL_READY_PATH: readyPath,
+        },
+        stdio: ["ignore", "ignore", "pipe"],
+      },
+    );
+    let writerStderr = "";
+    writer.stderr.on("data", (chunk) => {
+      writerStderr += chunk;
+    });
+    const writerClosed = new Promise((resolve, reject) => {
+      writer.once("error", reject);
+      writer.once("close", (code, signal) => resolve({ code, signal }));
+    });
+
+    try {
+      const deadline = Date.now() + 15_000;
+      while (!fs.existsSync(readyPath)) {
+        if (writer.exitCode !== null || writer.signalCode !== null) {
+          throw new Error(\`writer exited before creating a hot journal: \${writerStderr}\`);
+        }
+        if (Date.now() >= deadline) {
+          throw new Error("timed out waiting for hot rollback journal writer");
+        }
+        await new Promise((resolve) => setTimeout(resolve, 2));
+      }
+      const journalPath = \`\${databasePath}-journal\`;
+      if (!fs.existsSync(journalPath) || fs.statSync(journalPath).size === 0) {
+        throw new Error("writer did not leave a rollback journal");
+      }
+      writer.kill("SIGKILL");
+      const outcome = await writerClosed;
+      if (outcome.signal !== "SIGKILL") {
+        throw new Error(\`writer was not killed: \${JSON.stringify(outcome)} \${writerStderr}\`);
+      }
+
+      const reopened = openOpenClawStateDatabase({ path: databasePath });
+      const row = reopened.db
+        .prepare("SELECT value FROM hot_journal_probe WHERE id = 1")
+        .get();
+      const integrity = reopened.db.prepare("PRAGMA integrity_check").get();
+      closeOpenClawStateDatabaseForTest();
+      console.log(JSON.stringify({
+        integrity: integrity?.integrity_check,
+        journalExistsAfterRecovery: fs.existsSync(journalPath),
+        value: row?.value,
+      }));
+    } finally {
+      if (writer.exitCode === null && writer.signalCode === null) {
+        writer.kill("SIGKILL");
+        await writerClosed;
+      }
+      closeOpenClawStateDatabaseForTest();
+    }
+  `;
+  const output = execFileSync(
+    process.execPath,
+    ["--import", "tsx", "--input-type=module", "-e", probeSource],
+    { encoding: "utf8", timeout: 30_000 },
+  );
+  const resultLine = output.trim().split("\n").at(-1);
+  if (!resultLine) {
+    throw new Error("hot rollback journal recovery probe produced no result");
+  }
+  return JSON.parse(resultLine) as {
+    integrity: string;
+    journalExistsAfterRecovery: boolean;
+    value: string;
+  };
+}
+
 function expectNoncanonicalAuditSchemaRejected(stateDir: string, databasePath: string): void {
   const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
   expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([
@@ -224,6 +375,244 @@ function expectNoncanonicalAuditSchemaRejected(stateDir: string, databasePath: s
     changes: [],
     warnings: [expect.stringContaining("cannot be repaired automatically")],
   });
+}
+
+function runConcurrentSchemaProbe(params: {
+  mode: "fresh" | "upgrade";
+  moduleUrl: string;
+  rootDir: string;
+}): string[] {
+  const workerSource = `
+    import fs from "node:fs";
+    import { DatabaseSync } from "node:sqlite";
+
+    const pageBarrierDir = process.env.OPENCLAW_SCHEMA_TEST_PAGE_BARRIER_DIR;
+    if (pageBarrierDir) {
+      const pageReadyPath = process.env.OPENCLAW_SCHEMA_TEST_PAGE_READY_PATH;
+      const workerCount = Number(process.env.OPENCLAW_SCHEMA_TEST_WORKER_COUNT);
+      const originalPrepare = DatabaseSync.prototype.prepare;
+      const sleepBuffer = new Int32Array(new SharedArrayBuffer(4));
+      DatabaseSync.prototype.prepare = function (sql) {
+        const statement = originalPrepare.call(this, sql);
+        if (sql !== "PRAGMA page_count") {
+          return statement;
+        }
+        return new Proxy(statement, {
+          get(target, property) {
+            if (property === "get") {
+              return (...args) => {
+                const row = target.get(...args);
+                if (row?.page_count !== 0) {
+                  throw new Error("fresh database acquired pages before the initialization barrier");
+                }
+                fs.writeFileSync(pageReadyPath, "ready");
+                const deadline = Date.now() + 15_000;
+                while (
+                  fs.readdirSync(pageBarrierDir).filter((name) => name.startsWith("page-ready-"))
+                    .length < workerCount
+                ) {
+                  if (Date.now() >= deadline) {
+                    throw new Error("timed out waiting for fresh database page-count barrier");
+                  }
+                  Atomics.wait(sleepBuffer, 0, 0, 2);
+                }
+                return row;
+              };
+            }
+            const value = Reflect.get(target, property, target);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+      };
+    }
+
+    const {
+      closeOpenClawStateDatabaseForTest,
+      openOpenClawStateDatabase,
+    } = await import(process.env.OPENCLAW_SCHEMA_TEST_MODULE_URL);
+    const databasePath = process.env.OPENCLAW_SCHEMA_TEST_DATABASE_PATH;
+    const readyPath = process.env.OPENCLAW_SCHEMA_TEST_READY_PATH;
+    const startPath = process.env.OPENCLAW_SCHEMA_TEST_START_PATH;
+    fs.writeFileSync(readyPath, "ready");
+    const deadline = Date.now() + 15_000;
+    while (!fs.existsSync(startPath)) {
+      if (Date.now() >= deadline) {
+        throw new Error("timed out waiting for concurrent schema upgrade start");
+      }
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+    try {
+      const database = openOpenClawStateDatabase({ path: databasePath });
+      const integrity = database.db.prepare("PRAGMA integrity_check").get();
+      if (integrity?.integrity_check !== "ok") {
+        throw new Error("state database integrity check failed");
+      }
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+    }
+  `;
+  const orchestratorSource = `
+    import { spawn } from "node:child_process";
+    import fs from "node:fs";
+    import path from "node:path";
+    import { DatabaseSync } from "node:sqlite";
+
+    const moduleUrl = ${JSON.stringify(params.moduleUrl)};
+    const rootDir = ${JSON.stringify(params.rootDir)};
+    const mode = ${JSON.stringify(params.mode)};
+    const workerSource = ${JSON.stringify(workerSource)};
+    const workerCount = 8;
+    const roundCount = 3;
+    const databasePaths = [];
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    function waitForChild(child) {
+      let stdout = "";
+      let stderr = "";
+      child.stdout.on("data", (chunk) => {
+        stdout += chunk;
+      });
+      child.stderr.on("data", (chunk) => {
+        stderr += chunk;
+      });
+      return new Promise((resolve, reject) => {
+        child.once("error", reject);
+        child.once("close", (code, signal) => resolve({ code, signal, stderr, stdout }));
+      });
+    }
+
+    for (let round = 0; round < roundCount; round += 1) {
+      const databasePath = path.join(rootDir, \`concurrent-\${mode}-\${round}.sqlite\`);
+      const barrierDir = path.join(rootDir, \`barrier-\${round}\`);
+      fs.mkdirSync(barrierDir, { recursive: true });
+
+      if (mode === "upgrade") {
+        const {
+          closeOpenClawStateDatabaseForTest,
+          openOpenClawStateDatabase,
+        } = await import(moduleUrl);
+        openOpenClawStateDatabase({ path: databasePath });
+        closeOpenClawStateDatabaseForTest();
+
+        const legacy = new DatabaseSync(databasePath);
+        legacy
+          .prepare(
+            \`INSERT INTO task_runs (
+               task_id, runtime, requester_session_key, owner_key, scope_kind,
+               child_session_key, agent_id, task, status, delivery_status,
+               notify_policy, created_at, last_event_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)\`,
+          )
+          .run(
+            \`legacy-concurrent-\${round}\`,
+            "subagent",
+            "agent:main:main",
+            "agent:main:main",
+            "session",
+            \`agent:worker:subagent:concurrent-\${round}\`,
+            "main",
+            "Verify concurrent schema upgrade",
+            "running",
+            "pending",
+            "done_only",
+            100,
+            100,
+          );
+        legacy.exec(\`
+          DROP TABLE worker_environment_credentials;
+          ALTER TABLE gateway_boot_lifecycle DROP COLUMN startup_reason;
+          ALTER TABLE task_runs DROP COLUMN requester_agent_id;
+          ALTER TABLE official_external_plugin_catalog_snapshots DROP COLUMN trust_mode;
+          ALTER TABLE official_external_plugin_catalog_snapshots DROP COLUMN trust_key_id;
+          ALTER TABLE official_external_plugin_catalog_snapshots DROP COLUMN trust_signature_count;
+          ALTER TABLE official_external_plugin_catalog_snapshots DROP COLUMN trust_threshold;
+          ALTER TABLE official_external_plugin_catalog_snapshots DROP COLUMN trust_verified_at;
+          ALTER TABLE worker_environments DROP COLUMN bootstrap_bundle_hash;
+          ALTER TABLE worker_environments DROP COLUMN bootstrap_openclaw_version;
+          ALTER TABLE worker_environments DROP COLUMN bootstrap_protocol_features_json;
+          ALTER TABLE worker_environments DROP COLUMN owner_epoch;
+          ALTER TABLE worker_environments DROP COLUMN teardown_terminal_state;
+          ALTER TABLE worker_environments DROP COLUMN ssh_host_key;
+          PRAGMA user_version = 1;
+          UPDATE schema_meta
+             SET schema_version = 1,
+                 updated_at = 1
+           WHERE meta_key = 'primary';
+        \`);
+        legacy.close();
+      }
+
+      const startPath = path.join(barrierDir, "start");
+      const workers = Array.from({ length: workerCount }, (_, index) => {
+        const readyPath = path.join(barrierDir, \`ready-\${index}\`);
+        const pageReadyPath = path.join(barrierDir, \`page-ready-\${index}\`);
+        return spawn(
+          process.execPath,
+          ["--import", "tsx", "--input-type=module", "-e", workerSource],
+          {
+            env: {
+              ...process.env,
+              OPENCLAW_SCHEMA_TEST_DATABASE_PATH: databasePath,
+              OPENCLAW_SCHEMA_TEST_MODULE_URL: moduleUrl,
+              OPENCLAW_SCHEMA_TEST_READY_PATH: readyPath,
+              OPENCLAW_SCHEMA_TEST_START_PATH: startPath,
+              ...(mode === "fresh"
+                ? {
+                    OPENCLAW_SCHEMA_TEST_PAGE_BARRIER_DIR: barrierDir,
+                    OPENCLAW_SCHEMA_TEST_PAGE_READY_PATH: pageReadyPath,
+                    OPENCLAW_SCHEMA_TEST_WORKER_COUNT: String(workerCount),
+                  }
+                : {}),
+            },
+            stdio: ["ignore", "pipe", "pipe"],
+          },
+        );
+      });
+      const outcomes = workers.map(waitForChild);
+      try {
+        const readyDeadline = Date.now() + 15_000;
+        while (
+          !workers.every((_worker, index) =>
+            fs.existsSync(path.join(barrierDir, \`ready-\${index}\`)),
+          )
+        ) {
+          if (workers.some((worker) => worker.exitCode !== null || worker.signalCode !== null)) {
+            break;
+          }
+          if (Date.now() >= readyDeadline) {
+            throw new Error(\`round \${round} timed out waiting for workers\`);
+          }
+          await sleep(2);
+        }
+        fs.writeFileSync(startPath, "start");
+        const results = await Promise.all(outcomes);
+        const failures = results.filter((result) => result.code !== 0);
+        if (failures.length > 0) {
+          throw new Error(\`round \${round} worker failures: \${JSON.stringify(failures)}\`);
+        }
+      } finally {
+        for (const worker of workers) {
+          if (worker.exitCode === null && worker.signalCode === null) {
+            worker.kill();
+          }
+        }
+        await Promise.allSettled(outcomes);
+      }
+      databasePaths.push(databasePath);
+    }
+
+    console.log(JSON.stringify(databasePaths));
+  `;
+  const output = execFileSync(
+    process.execPath,
+    ["--import", "tsx", "--input-type=module", "-e", orchestratorSource],
+    { encoding: "utf8", timeout: 60_000 },
+  );
+  const resultLine = output.trim().split("\n").at(-1);
+  if (!resultLine) {
+    throw new Error(`concurrent schema ${params.mode} probe produced no result`);
+  }
+  return JSON.parse(resultLine) as string[];
 }
 
 afterAll(() => {
@@ -775,6 +1164,86 @@ describe("openclaw state database", () => {
     expect(listOpenFileDescriptorsForPath(databasePath)).toEqual([]);
   });
 
+  it("rejects stale secondary indexes before writable initialization", () => {
+    const stateDir = createTempStateDir();
+    const databasePath = createCanonicalAuditStateDatabase(stateDir);
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    createUnsafeIndexDrift(databasePath);
+    const { DatabaseSync } = requireNodeSqlite();
+    const before = new DatabaseSync(databasePath, { readOnly: true });
+    let metadataBefore: unknown;
+    try {
+      expect(before.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
+      expect(before.prepare("PRAGMA integrity_check").all()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            integrity_check: expect.stringMatching(/missing from index unsafe_index_records_value/),
+          }),
+        ]),
+      );
+      metadataBefore = before
+        .prepare(
+          "SELECT schema_version, updated_at FROM schema_meta WHERE meta_key = 'primary' LIMIT 1",
+        )
+        .get();
+    } finally {
+      before.close();
+    }
+
+    expect(() => openOpenClawStateDatabase(options)).toThrow(
+      /integrity_check failed.*missing from index unsafe_index_records_value/iu,
+    );
+    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+      changes: [],
+      warnings: [
+        expect.stringMatching(
+          /integrity_check failed.*missing from index unsafe_index_records_value/iu,
+        ),
+      ],
+    });
+    const checkpointCallback = vi.fn();
+    expect(() =>
+      withOpenClawStateStartupMigrationCheckpointDatabase(checkpointCallback, options),
+    ).toThrow(/integrity_check failed.*missing from index unsafe_index_records_value/iu);
+    expect(checkpointCallback).not.toHaveBeenCalled();
+
+    const after = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(
+        after
+          .prepare(
+            "SELECT schema_version, updated_at FROM schema_meta WHERE meta_key = 'primary' LIMIT 1",
+          )
+          .get(),
+      ).toEqual(metadataBefore);
+      expect(after.prepare("PRAGMA integrity_check").all()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            integrity_check: expect.stringMatching(/missing from index unsafe_index_records_value/),
+          }),
+        ]),
+      );
+    } finally {
+      after.close();
+    }
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "recovers a hot rollback journal before checking integrity",
+    () => {
+      expect(
+        runHotRollbackJournalRecoveryProbe({
+          moduleUrl: new URL("./openclaw-state-db.ts", import.meta.url).href,
+          rootDir: createTempStateDir(),
+        }),
+      ).toEqual({
+        integrity: "ok",
+        journalExistsAfterRecovery: false,
+        value: "committed",
+      });
+    },
+  );
+
   it("adds gateway boot lifecycle startup markers to existing state databases", () => {
     const stateDir = createTempStateDir();
     const database = openOpenClawStateDatabase({
@@ -940,6 +1409,67 @@ describe("openclaw state database", () => {
       expect.objectContaining({ name: "idx_operator_approvals_resolution_ref", unique: 1 }),
     );
   });
+
+  it("serializes concurrent additive schema upgrades across processes", () => {
+    const rootDir = createTempStateDir();
+    const moduleUrl = new URL("./openclaw-state-db.ts", import.meta.url).href;
+    const databasePaths = runConcurrentSchemaProbe({ mode: "upgrade", moduleUrl, rootDir });
+    const expectedShape = createSqliteSchemaShapeFromSql(
+      new URL("./openclaw-state-schema.sql", import.meta.url),
+    );
+    const { DatabaseSync } = requireNodeSqlite();
+
+    expect(databasePaths).toHaveLength(3);
+    for (const [round, databasePath] of databasePaths.entries()) {
+      const db = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+        expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+        expect(readSqliteNumberPragma(db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+        expect(
+          db.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get(),
+        ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
+        expect(
+          db
+            .prepare("SELECT agent_id, requester_agent_id FROM task_runs WHERE task_id = ?")
+            .get(`legacy-concurrent-${round}`),
+        ).toEqual({
+          agent_id: "worker",
+          requester_agent_id: "main",
+        });
+        expect(collectSqliteSchemaShape(db)).toEqual(expectedShape);
+      } finally {
+        db.close();
+      }
+    }
+  }, 60_000);
+
+  it("serializes concurrent fresh database initialization across processes", () => {
+    const rootDir = createTempStateDir();
+    const moduleUrl = new URL("./openclaw-state-db.ts", import.meta.url).href;
+    const databasePaths = runConcurrentSchemaProbe({ mode: "fresh", moduleUrl, rootDir });
+    const expectedShape = createSqliteSchemaShapeFromSql(
+      new URL("./openclaw-state-schema.sql", import.meta.url),
+    );
+    const { DatabaseSync } = requireNodeSqlite();
+
+    expect(databasePaths).toHaveLength(3);
+    for (const databasePath of databasePaths) {
+      const db = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+        expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+        expect(readSqliteNumberPragma(db, "auto_vacuum")).toBe(2);
+        expect(readSqliteNumberPragma(db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+        expect(
+          db.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get(),
+        ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
+        expect(collectSqliteSchemaShape(db)).toEqual(expectedShape);
+      } finally {
+        db.close();
+      }
+    }
+  }, 60_000);
 
   it("migrates requester and executor attribution for existing cross-agent tasks", () => {
     const stateDir = createTempStateDir();
@@ -1565,6 +2095,7 @@ describe("openclaw state database", () => {
     );
     expect(readSqliteNumberPragma(database.db, "foreign_keys")).toBe(1);
     expect(readSqliteNumberPragma(database.db, "synchronous")).toBe(1);
+    expect(readSqliteNumberPragma(database.db, "auto_vacuum")).toBe(2);
     expect(readSqliteNumberPragma(database.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
     expect(readSqliteNumberPragma(database.db, "wal_autocheckpoint")).toBe(1000);
     const journalMode = database.db.prepare("PRAGMA journal_mode").get() as

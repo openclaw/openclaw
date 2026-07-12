@@ -31,7 +31,7 @@ import {
   resolveChromeNode,
   type BrowserTab,
 } from "./chrome-browser-proxy.js";
-import type { GoogleMeetChromeHealth } from "./types.js";
+import type { GoogleMeetBrowserTab, GoogleMeetChromeHealth } from "./types.js";
 
 type BrowserRequestParams = {
   method: "GET" | "POST" | "DELETE";
@@ -53,8 +53,10 @@ export const testing = {
     chromeTransportDeps.callGatewayFromCli = deps?.callGatewayFromCli ?? callGatewayFromCli;
   },
   meetStatusScriptForTest: meetStatusScript,
+  meetLeaveScriptForTest: meetLeaveScript,
   parseMeetBrowserStatusForTest: parseMeetBrowserStatus,
   resolveBrowserGatewayTimeoutMsForTest: resolveBrowserGatewayTimeoutMs,
+  resolveLocalBrowserRequestForTest: resolveLocalBrowserRequest,
 };
 
 function isGoogleMeetTalkBackMode(mode: GoogleMeetMode): boolean {
@@ -118,6 +120,7 @@ export async function launchChromeMeet(params: {
     | { type: "external-command" }
     | ({ type: "command-pair" } & ChromeRealtimeAudioBridgeHandle);
   browser?: GoogleMeetChromeHealth;
+  tab?: GoogleMeetBrowserTab;
 }> {
   const checkRealtimeAudioPrerequisites = async () => {
     if (!isGoogleMeetTalkBackMode(params.mode)) {
@@ -207,7 +210,7 @@ export async function launchChromeMeet(params: {
   }
 
   const result = await openMeetWithBrowserRequest({
-    callBrowser: callLocalBrowserRequest,
+    callBrowser: await resolveLocalBrowserRequest(params.runtime),
     config: params.config,
     mode: params.mode,
     url: params.url,
@@ -317,6 +320,28 @@ async function callLocalBrowserRequest(params: BrowserRequestParams) {
     },
     { progress: false },
   );
+}
+
+async function resolveLocalBrowserRequest(runtime: PluginRuntime): Promise<BrowserRequestCaller> {
+  // Gateway-hosted plugin work stays in-process; otherwise agent tools would
+  // need an external operator.admin token just to reach the local browser.
+  if (!(await runtime.gateway.isAvailable())) {
+    return callLocalBrowserRequest;
+  }
+  return async (params) =>
+    await runtime.gateway.request(
+      "browser.request",
+      {
+        method: params.method,
+        path: params.path,
+        body: params.body,
+        timeoutMs: params.timeoutMs,
+      },
+      {
+        timeoutMs: resolveBrowserGatewayTimeoutMs(params.timeoutMs),
+        scopes: ["operator.admin"],
+      },
+    );
 }
 
 function resolveBrowserGatewayTimeoutMs(timeoutMs: number): number {
@@ -647,13 +672,279 @@ function meetStatusScript(params: {
 }`;
 }
 
+function meetLeaveScript(meetingUrl: string) {
+  const expectedMeetingUrl = normalizeMeetUrlForReuse(meetingUrl);
+  return `() => {
+  const expectedMeetingUrl = ${JSON.stringify(expectedMeetingUrl)};
+  let currentMeetingUrl;
+  try {
+    const currentUrl = new URL(location.href);
+    currentMeetingUrl = currentUrl.origin + currentUrl.pathname.toLowerCase().replace(/\\/$/, "");
+  } catch {
+    return JSON.stringify({ departed: false });
+  }
+  if (!expectedMeetingUrl || currentMeetingUrl !== expectedMeetingUrl) {
+    return JSON.stringify({ departed: true, urlMatched: false });
+  }
+  const text = (node) => (node?.innerText || node?.textContent || "").trim();
+  // Locale-independent fallback: Meet renders the leave control as a Material
+  // Symbols icon whose ligature text is "call_end" in every UI language, so a
+  // localized aria-label (e.g. "Anruf verlassen") still resolves to the button.
+  const hasLeaveIcon = (button) => {
+    const icon = button.querySelector ? button.querySelector("i") : null;
+    return icon ? (icon.textContent || "").trim() === "call_end" : false;
+  };
+  const buttons = [...document.querySelectorAll('button')];
+  const label = (button) => [
+    button.getAttribute("aria-label"),
+    button.getAttribute("data-tooltip"),
+    text(button),
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const postCall = buttons.some((button) => /\\b(rejoin|return to home screen)\\b/i.test(label(button)));
+  if (postCall) {
+    return JSON.stringify({ departed: true, urlMatched: true });
+  }
+  // Managed join tabs are reused only after the English-tab gate or opened
+  // through the English-UI helper, so follow-up labels are pinned to English.
+  const confirmation = buttons.find((button) => {
+    return !button.disabled && /\\bleave meeting\\b/i.test(label(button));
+  });
+  if (confirmation) {
+    confirmation.click();
+    return JSON.stringify({ departed: false, leaveAction: "confirm", urlMatched: true });
+  }
+  const leave = buttons.find((button) => {
+    if (button.disabled) return false;
+    return /leave call/i.test(label(button)) || hasLeaveIcon(button);
+  });
+  if (leave) {
+    leave.click();
+    return JSON.stringify({ departed: false, leaveAction: "leave", urlMatched: true });
+  }
+  return JSON.stringify({ departed: false, urlMatched: true });
+}`;
+}
+
+function parseMeetLeaveResult(result: unknown): {
+  departed: boolean;
+  leaveAction?: "leave" | "confirm";
+  urlMatched?: boolean;
+} {
+  const record = result && typeof result === "object" ? (result as Record<string, unknown>) : {};
+  const raw = record.result;
+  if (typeof raw !== "string" || !raw.trim()) {
+    return { departed: false };
+  }
+  try {
+    const parsed = JSON.parse(raw) as {
+      departed?: boolean;
+      leaveAction?: string;
+      urlMatched?: boolean;
+    };
+    const leaveAction =
+      parsed.leaveAction === "leave" || parsed.leaveAction === "confirm"
+        ? parsed.leaveAction
+        : undefined;
+    return {
+      departed: parsed.departed === true,
+      ...(leaveAction ? { leaveAction } : {}),
+      ...(typeof parsed.urlMatched === "boolean" ? { urlMatched: parsed.urlMatched } : {}),
+    };
+  } catch {
+    return { departed: false };
+  }
+}
+
+async function leaveMeetInPage(params: {
+  callBrowser: BrowserRequestCaller;
+  meetingUrl: string;
+  targetId: string;
+  timeoutMs: number;
+}): Promise<{
+  departed: boolean;
+  clickedLeave: boolean;
+  clickedConfirmation: boolean;
+  urlMatched?: boolean;
+}> {
+  const deadline = Date.now() + params.timeoutMs;
+  let clickedLeave = false;
+  let clickedConfirmation = false;
+  do {
+    const evaluated = await params.callBrowser({
+      method: "POST",
+      path: "/act",
+      body: {
+        kind: "evaluate",
+        targetId: params.targetId,
+        fn: meetLeaveScript(params.meetingUrl),
+      },
+      timeoutMs: params.timeoutMs,
+    });
+    const step = parseMeetLeaveResult(evaluated);
+    clickedLeave ||= step.leaveAction === "leave";
+    clickedConfirmation ||= step.leaveAction === "confirm";
+    if (step.departed || step.urlMatched !== true) {
+      return {
+        departed: step.departed,
+        clickedLeave,
+        clickedConfirmation,
+        urlMatched: step.urlMatched,
+      };
+    }
+    if (!step.leaveAction && !clickedLeave) {
+      return { departed: false, clickedLeave, clickedConfirmation, urlMatched: true };
+    }
+    if (!step.leaveAction) {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 100);
+      });
+    }
+  } while (Date.now() < deadline);
+  return { departed: false, clickedLeave, clickedConfirmation, urlMatched: true };
+}
+
+// `leave` must remove the browser participant from the call, not just flip local
+// session state; otherwise the tab keeps sitting in the meeting after the CLI
+// reports "left" (#103386). It acts on the exact tab identity persisted at join:
+// clicking Leave call is the graceful path, and the tab is closed afterwards only
+// when the plugin opened it — a reused tab belongs to the user and stays open.
+async function leaveMeetWithBrowserRequest(params: {
+  callBrowser: BrowserRequestCaller;
+  config: GoogleMeetConfig;
+  meetingUrl: string;
+  tab: GoogleMeetBrowserTab;
+}): Promise<{ left: boolean; note: string }> {
+  if (!params.config.chrome.launch) {
+    return {
+      left: false,
+      note: "Browser leave skipped because chrome.launch is disabled.",
+    };
+  }
+  const timeoutMs = Math.min(Math.max(1_000, params.config.chrome.joinTimeoutMs), 5_000);
+  const { targetId, openedByPlugin } = params.tab;
+  try {
+    const tabs = asBrowserTabs(
+      await params.callBrowser({ method: "GET", path: "/tabs", timeoutMs }),
+    );
+    const currentTab = tabs.find((entry) => entry.targetId === targetId);
+    if (!currentTab) {
+      return {
+        left: true,
+        note: "Meet tab is already closed.",
+      };
+    }
+    let leaveResult: Awaited<ReturnType<typeof leaveMeetInPage>>;
+    try {
+      leaveResult = await leaveMeetInPage({
+        callBrowser: params.callBrowser,
+        meetingUrl: params.meetingUrl,
+        targetId,
+        timeoutMs,
+      });
+    } catch (error) {
+      return {
+        left: false,
+        note: `Browser control could not verify the Meet tab before leaving: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      };
+    }
+    if (leaveResult.urlMatched === false) {
+      return {
+        left: true,
+        note: "Meet tab moved away from this session; left its current page untouched.",
+      };
+    }
+    if (leaveResult.urlMatched !== true) {
+      return {
+        left: false,
+        note: "Browser control could not verify that the tracked tab still showed this meeting.",
+      };
+    }
+    const { clickedLeave, departed } = leaveResult;
+    if (!openedByPlugin) {
+      return {
+        left: departed,
+        note: departed
+          ? "Clicked Meet's Leave call button; kept the reused browser tab open."
+          : clickedLeave
+            ? "Clicked Meet's Leave call button, but could not verify departure; leave it manually."
+            : "Could not find Meet's Leave call button in the reused browser tab; leave it manually.",
+      };
+    }
+    await params.callBrowser({
+      method: "DELETE",
+      path: `/tabs/${targetId}`,
+      timeoutMs,
+    });
+    return {
+      left: true,
+      note: clickedLeave
+        ? "Clicked Meet's Leave call button and closed the Meet tab."
+        : "Closed the Meet tab to leave the meeting (Leave call button was not found).",
+    };
+  } catch (error) {
+    return {
+      left: false,
+      note: `Browser control could not leave the Meet tab: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    };
+  }
+}
+
+export async function leaveChromeMeet(params: {
+  runtime: PluginRuntime;
+  config: GoogleMeetConfig;
+  meetingUrl: string;
+  tab: GoogleMeetBrowserTab;
+}): Promise<{ left: boolean; note: string }> {
+  return await leaveMeetWithBrowserRequest({
+    callBrowser: await resolveLocalBrowserRequest(params.runtime),
+    config: params.config,
+    meetingUrl: params.meetingUrl,
+    tab: params.tab,
+  });
+}
+
+export async function leaveChromeMeetOnNode(params: {
+  runtime: PluginRuntime;
+  nodeId?: string;
+  config: GoogleMeetConfig;
+  meetingUrl: string;
+  tab: GoogleMeetBrowserTab;
+}): Promise<{ left: boolean; note: string }> {
+  const nodeId =
+    params.nodeId ??
+    (await resolveChromeNode({
+      runtime: params.runtime,
+      requestedNode: params.config.chromeNode.node,
+    }));
+  return await leaveMeetWithBrowserRequest({
+    callBrowser: async (request) =>
+      await callBrowserProxyOnNode({
+        runtime: params.runtime,
+        nodeId,
+        method: request.method,
+        path: request.path,
+        body: request.body,
+        timeoutMs: request.timeoutMs,
+      }),
+    config: params.config,
+    meetingUrl: params.meetingUrl,
+    tab: params.tab,
+  });
+}
+
 async function openMeetWithBrowserProxy(params: {
   runtime: PluginRuntime;
   nodeId: string;
   config: GoogleMeetConfig;
   mode: GoogleMeetMode;
   url: string;
-}): Promise<{ launched: boolean; browser?: GoogleMeetChromeHealth }> {
+}): Promise<{ launched: boolean; browser?: GoogleMeetChromeHealth; tab?: GoogleMeetBrowserTab }> {
   return await openMeetWithBrowserRequest({
     callBrowser: async (request) =>
       await callBrowserProxyOnNode({
@@ -675,7 +966,7 @@ async function openMeetWithBrowserRequest(params: {
   config: GoogleMeetConfig;
   mode: GoogleMeetMode;
   url: string;
-}): Promise<{ launched: boolean; browser?: GoogleMeetChromeHealth }> {
+}): Promise<{ launched: boolean; browser?: GoogleMeetChromeHealth; tab?: GoogleMeetBrowserTab }> {
   if (!params.config.chrome.launch) {
     return { launched: false };
   }
@@ -684,6 +975,7 @@ async function openMeetWithBrowserRequest(params: {
   let targetId: string | undefined;
   let tab: BrowserTab | undefined;
   let openUrl = params.url;
+  let openedByPlugin = false;
   if (params.config.chrome.reuseExistingTab) {
     const tabs = asBrowserTabs(
       await params.callBrowser({
@@ -725,6 +1017,7 @@ async function openMeetWithBrowserRequest(params: {
       }),
     );
     targetId = tab?.targetId;
+    openedByPlugin = Boolean(targetId);
   }
   if (!targetId) {
     return {
@@ -738,6 +1031,7 @@ async function openMeetWithBrowserRequest(params: {
     };
   }
 
+  const tabIdentity: GoogleMeetBrowserTab = { targetId, openedByPlugin };
   const permissionNotes = await grantMeetMediaPermissions({
     allowMicrophone: isGoogleMeetTalkBackMode(params.mode),
     callBrowser: params.callBrowser,
@@ -773,10 +1067,10 @@ async function openMeetWithBrowserRequest(params: {
         browser?.inCall === true &&
         (!isGoogleMeetTalkBackMode(params.mode) || browser.micMuted !== true)
       ) {
-        return { launched: true, browser };
+        return { launched: true, browser, tab: tabIdentity };
       }
       if (browser?.manualActionRequired === true) {
-        return { launched: true, browser };
+        return { launched: true, browser, tab: tabIdentity };
       }
     } catch (error) {
       browser = {
@@ -802,7 +1096,7 @@ async function openMeetWithBrowserRequest(params: {
       });
     }
   } while (Date.now() < deadline);
-  return { launched: true, browser };
+  return { launched: true, browser, tab: tabIdentity };
 }
 
 function isRecoverableMeetTab(tab: BrowserTab, url?: string): boolean {
@@ -913,6 +1207,7 @@ async function inspectRecoverableMeetTab(params: {
 }
 
 export async function recoverCurrentMeetTab(params: {
+  runtime: PluginRuntime;
   config: GoogleMeetConfig;
   mode?: GoogleMeetMode;
   readOnly?: boolean;
@@ -927,8 +1222,9 @@ export async function recoverCurrentMeetTab(params: {
   message: string;
 }> {
   const timeoutMs = Math.max(1_000, params.config.chrome.joinTimeoutMs);
+  const callBrowser = await resolveLocalBrowserRequest(params.runtime);
   const tabs = asBrowserTabs(
-    await callLocalBrowserRequest({
+    await callBrowser({
       method: "GET",
       path: "/tabs",
       timeoutMs: Math.min(timeoutMs, 5_000),
@@ -949,7 +1245,7 @@ export async function recoverCurrentMeetTab(params: {
   return {
     transport: "chrome",
     ...(await inspectRecoverableMeetTab({
-      callBrowser: callLocalBrowserRequest,
+      callBrowser,
       config: params.config,
       mode: params.mode,
       readOnly: params.readOnly,
@@ -1041,6 +1337,7 @@ export async function launchChromeMeetOnNode(params: {
     | { type: "external-command" }
     | ({ type: "node-command-pair" } & ChromeNodeRealtimeAudioBridgeHandle);
   browser?: GoogleMeetChromeHealth;
+  tab?: GoogleMeetBrowserTab;
 }> {
   const nodeId = await resolveChromeNode({
     runtime: params.runtime,
@@ -1116,6 +1413,7 @@ export async function launchChromeMeetOnNode(params: {
       launched: browserControl.launched || result.launched === true,
       audioBridge: bridge,
       browser: browserControl.browser ?? result.browser,
+      tab: browserControl.tab,
     };
   }
   if (result.audioBridge?.type === "external-command") {
@@ -1124,12 +1422,14 @@ export async function launchChromeMeetOnNode(params: {
       launched: browserControl.launched || result.launched === true,
       audioBridge: { type: "external-command" },
       browser: browserControl.browser ?? result.browser,
+      tab: browserControl.tab,
     };
   }
   return {
     nodeId,
     launched: browserControl.launched || result.launched === true,
     browser: browserControl.browser ?? result.browser,
+    tab: browserControl.tab,
   };
 }
 export { testing as __testing };
