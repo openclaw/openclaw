@@ -67,6 +67,7 @@ const waitForActiveCronJobs = vi.fn(async (_timeoutMs?: number) => ({
   drained: true,
   active: 0,
 }));
+const reloadTaskFlowRegistryFromStore = vi.fn();
 const reloadTaskRegistryFromStore = vi.fn();
 const rotateAgentEventLifecycleGeneration = vi.fn();
 const clearRuntimeConfigSnapshot = vi.fn();
@@ -181,6 +182,10 @@ vi.mock("../../tasks/cron-task-cancel.js", () => ({
 
 vi.mock("../../tasks/runtime-internal.js", () => ({
   reloadTaskRegistryFromStore: () => reloadTaskRegistryFromStore(),
+}));
+
+vi.mock("../../tasks/task-flow-runtime-internal.js", () => ({
+  reloadTaskFlowRegistryFromStore: () => reloadTaskFlowRegistryFromStore(),
 }));
 
 vi.mock("../../infra/agent-events.js", () => ({
@@ -948,6 +953,13 @@ describe("runGatewayLoop", () => {
       expect(resetGatewayRestartStateForInProcessRestart).toHaveBeenCalledTimes(1);
       expect(rotateAgentEventLifecycleGeneration).toHaveBeenCalledTimes(1);
       expect(reloadTaskRegistryFromStore).toHaveBeenCalledTimes(1);
+      expect(reloadTaskFlowRegistryFromStore).toHaveBeenCalledTimes(1);
+      expect(reloadTaskRegistryFromStore.mock.invocationCallOrder[0] ?? Infinity).toBeLessThan(
+        reloadTaskFlowRegistryFromStore.mock.invocationCallOrder[0] ?? Infinity,
+      );
+      expect(reloadTaskFlowRegistryFromStore.mock.invocationCallOrder[0] ?? Infinity).toBeLessThan(
+        start.mock.invocationCallOrder[1] ?? Infinity,
+      );
       expect(
         rotateAgentEventLifecycleGeneration.mock.invocationCallOrder[0] ?? Infinity,
       ).toBeLessThan(resetAllLanes.mock.invocationCallOrder[0] ?? Infinity);
@@ -984,6 +996,7 @@ describe("runGatewayLoop", () => {
       expect(resetGatewayRestartStateForInProcessRestart).toHaveBeenCalledTimes(2);
       expect(rotateAgentEventLifecycleGeneration).toHaveBeenCalledTimes(2);
       expect(reloadTaskRegistryFromStore).toHaveBeenCalledTimes(2);
+      expect(reloadTaskFlowRegistryFromStore).toHaveBeenCalledTimes(2);
       expect(acquireGatewayLock).toHaveBeenCalledTimes(3);
 
       sigterm();
@@ -1096,6 +1109,7 @@ describe("runGatewayLoop", () => {
         expect(resetAllLanes).toHaveBeenCalledTimes(1);
         expect(resetGatewayRestartStateForInProcessRestart).toHaveBeenCalledTimes(1);
         expect(reloadTaskRegistryFromStore).toHaveBeenCalledTimes(1);
+        expect(reloadTaskFlowRegistryFromStore).toHaveBeenCalledTimes(1);
       } finally {
         sigterm();
         await expect(exited).resolves.toBe(0);
@@ -1365,11 +1379,15 @@ describe("runGatewayLoop", () => {
     });
   });
 
-  it("keeps the process alive and retries after task-registry restore fails during restart", async () => {
+  it("keeps the process alive and retries after task registry restores fail during restart", async () => {
     vi.clearAllMocks();
     reloadTaskRegistryFromStore.mockReset();
     reloadTaskRegistryFromStore.mockImplementationOnce(() => {
       throw new Error("task registry restore failed");
+    });
+    reloadTaskFlowRegistryFromStore.mockReset();
+    reloadTaskFlowRegistryFromStore.mockImplementationOnce(() => {
+      throw new Error("task-flow registry restore failed");
     });
     peekGatewaySigusr1RestartReason.mockReturnValue(undefined);
     respawnGatewayProcessForUpdate.mockReturnValue({
@@ -1418,13 +1436,31 @@ describe("runGatewayLoop", () => {
 
           expectRestartCloseCall(closeFirst, 90_000);
           expect(reloadTaskRegistryFromStore).toHaveBeenCalledTimes(1);
+          expect(reloadTaskFlowRegistryFromStore).not.toHaveBeenCalled();
+          expect(start).toHaveBeenCalledTimes(1);
+          expect(runtime.exit).not.toHaveBeenCalled();
+
+          sigusr1();
+          await waitForLoopCondition(
+            () =>
+              gatewayLog.error.mock.calls.some(([message]) =>
+                String(message).includes(
+                  "gateway startup failed: task-flow registry restore failed.",
+                ),
+              ),
+            "expected failed task-flow registry restore to be logged",
+          );
+
+          expect(reloadTaskRegistryFromStore).toHaveBeenCalledTimes(2);
+          expect(reloadTaskFlowRegistryFromStore).toHaveBeenCalledTimes(1);
           expect(start).toHaveBeenCalledTimes(1);
           expect(runtime.exit).not.toHaveBeenCalled();
 
           sigusr1();
           await startedSecond;
 
-          expect(reloadTaskRegistryFromStore).toHaveBeenCalledTimes(2);
+          expect(reloadTaskRegistryFromStore).toHaveBeenCalledTimes(3);
+          expect(reloadTaskFlowRegistryFromStore).toHaveBeenCalledTimes(2);
           expect(start).toHaveBeenCalledTimes(2);
           expect(runtime.exit).not.toHaveBeenCalled();
         } finally {
@@ -1439,6 +1475,7 @@ describe("runGatewayLoop", () => {
       });
     } finally {
       reloadTaskRegistryFromStore.mockReset();
+      reloadTaskFlowRegistryFromStore.mockReset();
     }
   });
 

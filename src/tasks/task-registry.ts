@@ -38,6 +38,7 @@ import {
 } from "./task-executor-policy.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
+  ensureTaskFlowRegistryReady,
   getTaskFlowById,
   syncFlowFromTaskResult,
   updateFlowRecordByIdExpectedRevision,
@@ -211,6 +212,12 @@ function assertParentFlowLinkAllowed(params: {
       flowId,
       status: flow.status,
     });
+  }
+}
+
+function ensureLinkedTaskFlowRegistryReady(task: Pick<TaskRecord, "parentFlowId">): void {
+  if (task.parentFlowId?.trim()) {
+    ensureTaskFlowRegistryReady();
   }
 }
 
@@ -938,6 +945,7 @@ function mergeExistingTaskForCreate(
     notifyPolicy?: TaskNotifyPolicy;
   },
 ): TaskRecord | null {
+  ensureLinkedTaskFlowRegistryReady(existing);
   const patch: Partial<TaskRecord> = {};
   const requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
   const currentDeliveryState = taskDeliveryStates.get(existing.taskId);
@@ -1295,6 +1303,8 @@ function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | nu
     normalizeOptionalString(current.childSessionKey) !==
       normalizeOptionalString(next.childSessionKey);
   const parentFlowIndexChanged = current.parentFlowId?.trim() !== next.parentFlowId?.trim();
+  ensureLinkedTaskFlowRegistryReady(current);
+  ensureLinkedTaskFlowRegistryReady(next);
   // Persist before mutating memory. If the store rejects the write, keep the
   // in-memory mirror at the durable value and report that no mutation applied.
   if (!tryPersistTaskUpsert(next, "update")) {
@@ -2678,6 +2688,7 @@ export function deleteTaskRecordById(taskId: string): boolean {
   if (!current) {
     return false;
   }
+  ensureLinkedTaskFlowRegistryReady(current);
   // Persist the delete before mutating memory, as a single atomic store
   // operation. If persistence fails, leave the in-memory record intact and
   // report that no delete was applied.

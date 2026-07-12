@@ -18,6 +18,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { getTaskById, updateTaskNotifyPolicyById } from "../tasks/runtime-internal.js";
 import { cancelDetachedTaskRunById } from "../tasks/task-executor.js";
 import { listTaskFlowAuditFindings } from "../tasks/task-flow-registry.audit.js";
+import { getTaskFlowRegistryRestoreFailure } from "../tasks/task-flow-registry.js";
 import {
   getInspectableTaskFlowAuditSummary,
   previewTaskFlowRegistryMaintenance,
@@ -587,6 +588,12 @@ export async function tasksMaintenanceCommand(
   runtime: RuntimeEnv,
 ) {
   configureTaskMaintenanceFromConfig();
+  const flowRestoreFailure = getTaskFlowRegistryRestoreFailure();
+  if (flowRestoreFailure) {
+    throw new Error(
+      `Task-flow registry restore failed: ${flowRestoreFailure}. Refusing task maintenance.`,
+    );
+  }
   const auditBefore = getInspectableTaskAuditSummary();
   const flowAuditBefore = getInspectableTaskFlowAuditSummary();
   const taskMaintenance = opts.apply

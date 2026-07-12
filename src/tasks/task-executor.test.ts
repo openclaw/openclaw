@@ -31,6 +31,7 @@ import {
   listTaskFlowRecords,
   resetTaskFlowRegistryForTests,
 } from "./task-flow-registry.js";
+import { configureTaskFlowRegistryRuntime } from "./task-flow-registry.store.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
   setTaskRegistryDeliveryRuntimeForTests,
@@ -360,6 +361,39 @@ describe("task-executor", () => {
       expect(succeededFlow?.endedAt).toBe(40);
       expect(succeededFlow?.goal).toBe("Write summary");
       expect(succeededFlow?.notifyPolicy).toBe("done_only");
+    });
+  });
+
+  it("keeps detached tasks standalone when task-flow restore fails", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const loadSnapshot = vi.fn(() => {
+        throw new Error("SQLITE_IOERR: task-flow restore failed");
+      });
+      configureTaskFlowRegistryRuntime({
+        store: {
+          loadSnapshot,
+          saveSnapshot: () => {},
+        },
+      });
+
+      const created = createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:codex:subagent:standalone",
+        runId: "run-executor-flow-restore-failed",
+        task: "Continue without a one-task flow",
+        startedAt: 10,
+        deliveryStatus: "pending",
+      });
+
+      expect(created.parentFlowId).toBeUndefined();
+      expect(getTaskById(created.taskId)).toMatchObject({
+        taskId: created.taskId,
+        status: "running",
+        parentFlowId: undefined,
+      });
+      expect(loadSnapshot).toHaveBeenCalledTimes(1);
     });
   });
 

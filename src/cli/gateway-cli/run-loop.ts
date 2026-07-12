@@ -885,6 +885,7 @@ export async function runGatewayLoop(params: {
       const {
         abortActiveCronTaskRuns,
         advanceCronActiveJobGeneration,
+        reloadTaskFlowRegistryFromStore,
         reloadTaskRegistryFromStore,
         retireActiveCronTaskRunTracking,
         resetCronActiveJobs,
@@ -911,6 +912,7 @@ export async function runGatewayLoop(params: {
       clearRuntimeConfigSnapshot();
       resetGatewayRestartStateForInProcessRestart();
       reloadTaskRegistryFromStore();
+      reloadTaskFlowRegistryFromStore();
       markGatewayRestartTrace("restart.next-start");
     });
 
