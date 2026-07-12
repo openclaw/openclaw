@@ -530,8 +530,8 @@ describe("release Telegram QA workflow", () => {
     expect(runStep?.run).toContain('"$OPENCLAW_QA_TELEGRAM_SUT_OPENCLAW_COMMAND" --terminate-uid');
     expect(runStep?.run).toContain("run_qa_attempt preflight --scenario channel-canary");
     expect(runStep?.run).toContain('candidate_telegram_qa="$CANDIDATE_ROOT/extensions/qa-lab');
-    expect(runStep?.run).toContain('grep -Fq \'"openai/gpt-5.5": {\'');
-    expect(runStep?.run).toContain('! grep -Fq \'"openai/gpt-5.6-luna": {\'');
+    expect(runStep?.run).toContain("grep -Fq '\"openai/gpt-5.5\": {'");
+    expect(runStep?.run).toContain("! grep -Fq '\"openai/gpt-5.6-luna\": {'");
     expect(runStep?.run).toContain('qa_model="mock-openai/gpt-5.5"');
     expect(runStep?.run).toContain('--model "$qa_model"');
     expect(runStep?.run).toContain(
