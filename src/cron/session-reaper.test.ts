@@ -406,4 +406,34 @@ describe("sweepCronRunSessions", () => {
     });
     expect(r3.swept).toBe(false);
   });
+
+  it("does not reset throttle on persistence errors", async () => {
+    const now = Date.now();
+    // Spy on listSessionEntries to throw, simulating EACCES or disk full
+    const accessor = await import("../config/sessions/session-accessor.js");
+    const spy = vi.spyOn(accessor, "listSessionEntries").mockImplementation(() => {
+      throw new Error("simulated EACCES: permission denied");
+    });
+
+    const r1 = await sweepCronRunSessions({
+      sessionStorePath: storePath,
+      nowMs: now,
+      log,
+      force: true,
+    });
+
+    // First sweep fails due to error — throttle timestamp still updated
+    expect(r1.swept).toBe(false);
+    expect(r1.pruned).toBe(0);
+
+    // Second sweep (force=false) is throttled — proves catch block set timestamp
+    const r2 = await sweepCronRunSessions({
+      sessionStorePath: storePath,
+      nowMs: now + 1000,
+      log,
+    });
+    expect(r2.swept).toBe(false);
+
+    spy.mockRestore();
+  });
 });
