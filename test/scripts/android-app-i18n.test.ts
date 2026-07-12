@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import {
   checkAndroidAppI18n,
+  findUnusedAndroidResourceKeys,
   findUnlocalizedAndroidUiLiterals,
   renderAndroidResourceValue,
   selectDeterministicTranslation,
@@ -20,6 +21,15 @@ describe("Android app i18n resources", () => {
   it("preserves the existing Swedish app name", async () => {
     const strings = await readFile("apps/android/app/src/main/res/values-sv/strings.xml", "utf8");
     expect(strings).toContain('<string name="app_name">OpenClaw-nod</string>');
+  });
+
+  it("counts Kotlin and XML resource references", () => {
+    expect(
+      findUnusedAndroidResourceKeys(
+        ["kotlin_only", "manifest_only", "unused"],
+        'R.string.kotlin_only android:label="@string/manifest_only"',
+      ),
+    ).toEqual(["unused"]);
   });
 
   it("selects duplicate-source translations by frequency then stable text order", () => {

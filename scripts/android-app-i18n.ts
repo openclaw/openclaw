@@ -205,6 +205,36 @@ async function readAndroidSource(
   return sources;
 }
 
+async function readAndroidResourceReferences(root = ANDROID_ROOT): Promise<string> {
+  const entries = await readdir(root, { withFileTypes: true });
+  const sources: string[] = [];
+  for (const entry of entries) {
+    const fullPath = path.join(root, entry.name);
+    if (entry.isDirectory()) {
+      if (fullPath.startsWith(`${RESOURCE_ROOT}${path.sep}values`)) {
+        continue;
+      }
+      sources.push(await readAndroidResourceReferences(fullPath));
+      continue;
+    }
+    if (entry.isFile() && /\.(?:kt|kts|xml)$/u.test(entry.name)) {
+      sources.push(await readFile(fullPath, "utf8"));
+    }
+  }
+  return sources.join("\n");
+}
+
+export function findUnusedAndroidResourceKeys(
+  keys: Iterable<string>,
+  referenceSource: string,
+): string[] {
+  return [...keys].filter(
+    (key) =>
+      !referenceSource.includes(`R.string.${key}`) &&
+      !referenceSource.includes(`@string/${key}`),
+  );
+}
+
 function lineNumber(source: string, offset: number): number {
   return source.slice(0, offset).split("\n").length;
 }
@@ -326,6 +356,10 @@ const ALLOWED_UI_LITERALS = new Map<string, ReadonlySet<string>>([
   [
     "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
     new Set(["Chat", "Files", "Home", "Providers", "Sessions", "Settings", "Voice"]),
+  ],
+  [
+    "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
+    new Set(["Off"]),
   ],
   [
     "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
@@ -940,9 +974,10 @@ export async function syncAndroidAppI18n(options: { check?: boolean } = {}) {
 }
 
 export async function checkAndroidAppI18n() {
-  const [sourceFiles, localeStrings] = await Promise.all([
+  const [sourceFiles, localeStrings, referenceSource] = await Promise.all([
     readAndroidSource(),
     Promise.all(LOCALES.map(readStrings)),
+    readAndroidResourceReferences(),
   ]);
   await syncAndroidAppI18n({ check: true });
   const base = expectDefined(localeStrings[0], "English Android string resources");
@@ -970,14 +1005,8 @@ export async function checkAndroidAppI18n() {
     ] as const;
   });
   problems.push(["English syntax", findInvalidResourceSyntax(base)]);
-  const allSource = sourceFiles.map((file) => file.source).join("\n");
   const manualBaseKeys = [...baseKeys].filter((key) => !key.startsWith(MANAGED_PREFIX));
-  problems.push([
-    "English unused",
-    manualBaseKeys.filter(
-      (key) => !allSource.includes(`R.string.${key}`) && !allSource.includes(`@string/${key}`),
-    ),
-  ]);
+  problems.push(["English unused", findUnusedAndroidResourceKeys(manualBaseKeys, referenceSource)]);
   const uiFindings = sourceFiles.flatMap((file) =>
     findUnlocalizedAndroidUiLiterals(file.source, file.path),
   );
