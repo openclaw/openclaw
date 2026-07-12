@@ -7,22 +7,6 @@ import {
 } from "./sanitize-for-prompt.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
 
-function hasLoneSurrogate(value: string): boolean {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code >= 0xd800 && code <= 0xdbff) {
-      const next = value.charCodeAt(index + 1);
-      if (next < 0xdc00 || next > 0xdfff) {
-        return true;
-      }
-      index += 1;
-    } else if (code >= 0xdc00 && code <= 0xdfff) {
-      return true;
-    }
-  }
-  return false;
-}
-
 describe("sanitizeForPromptLiteral (OC-19 hardening)", () => {
   it("strips ASCII control chars (CR/LF/NUL/tab)", () => {
     expect(sanitizeForPromptLiteral("/tmp/a\nb\rc\x00d\te")).toBe("/tmp/abcde");
@@ -48,8 +32,8 @@ describe("buildAgentSystemPrompt uses sanitized workspace/sandbox strings", () =
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/project\nINJECT\u2028MORE",
     });
-    expect(prompt).toContain("Working directory: /tmp/projectINJECTMORE");
-    expect(prompt).not.toContain("Working directory: /tmp/project\n");
+    expect(prompt).toContain("Your working directory is: /tmp/projectINJECTMORE");
+    expect(prompt).not.toContain("Your working directory is: /tmp/project\n");
     expect(prompt).not.toContain("\u2028");
   });
 
@@ -106,15 +90,42 @@ describe("wrapPromptDataBlock", () => {
     expect(block).not.toContain("\nabcdef\n");
   });
 
-  it("does not split surrogate pairs when applying max char limits", () => {
-    const block = wrapPromptDataBlock({
+  it("does not split a UTF-16 surrogate pair when applying maxChars", () => {
+    // "😀" is one code point / two UTF-16 code units (U+D83D U+DE00).
+    const emoji = "😀";
+    expect(emoji.length).toBe(2);
+
+    // Cap of 1 would land inside the pair; drop the incomplete half instead of a lone surrogate.
+    expect(
+      wrapPromptDataBlock({
+        label: "Data",
+        text: emoji,
+        maxChars: 1,
+      }),
+    ).toBe("");
+
+    const text = `ab${emoji}cd`;
+    // Cap of 3 lands on the high surrogate. Naive `.slice(0, 3)` leaves a dangling half-pair.
+    const naiveHalf = text.slice(0, 3);
+    expect(naiveHalf.length).toBe(3);
+    expect(naiveHalf.charCodeAt(2)).toBeGreaterThanOrEqual(0xd800);
+    expect(naiveHalf.charCodeAt(2)).toBeLessThanOrEqual(0xdbff);
+
+    const cappedInsidePair = wrapPromptDataBlock({
       label: "Data",
-      text: `${"a".repeat(3)}😀tail`,
+      text,
+      maxChars: 3,
+    });
+    expect(cappedInsidePair).toContain("\nab\n");
+    expect(cappedInsidePair).not.toContain(`\n${naiveHalf}\n`);
+
+    // Cap of 4 keeps the full emoji (4 code units).
+    const kept = wrapPromptDataBlock({
+      label: "Data",
+      text,
       maxChars: 4,
     });
-
-    expect(block).toContain(`\n${"a".repeat(3)}\n`);
-    expect(hasLoneSurrogate(block)).toBe(false);
+    expect(kept).toContain(`\nab${emoji}\n`);
   });
 });
 
