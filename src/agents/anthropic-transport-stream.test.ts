@@ -4087,4 +4087,27 @@ describe("anthropic transport stream", () => {
     expect(result.status).toBe(429);
     expect(result.retryAfterSeconds).toBe(30);
   });
+
+  it("ignores non-finite oversized Retry-After values", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ error: { type: "rate_limit_error", message: "Rate limit exceeded" } }),
+        {
+          status: 429,
+          headers: { "content-type": "application/json", "retry-after-ms": "9007199254740993" },
+        },
+      ),
+    );
+
+    const streamPromise = runTransportStream(
+      makeAnthropicTransportModel(),
+      { messages: [{ role: "user", content: "hello" }] } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    const result = await streamPromise;
+    expect(result.stopReason).toBe("error");
+    expect(result.status).toBe(429);
+    expect(result.retryAfterSeconds).toBeUndefined();
+  });
 });

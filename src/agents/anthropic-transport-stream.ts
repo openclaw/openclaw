@@ -845,7 +845,7 @@ function createAnthropicMessagesClient(params: {
           ) as Error & { status?: number; retryAfterSeconds?: number };
           error.status = response.status;
           const retryAfterSeconds = parseRetryAfterSeconds(response.headers);
-          if (retryAfterSeconds !== undefined) {
+          if (retryAfterSeconds !== undefined && Number.isFinite(retryAfterSeconds)) {
             error.retryAfterSeconds = retryAfterSeconds;
           }
           throw error;

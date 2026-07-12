@@ -2685,7 +2685,11 @@ export class AgentSession {
 
     let delayMs = settings.baseDelayMs * 2 ** (this.retryCount - 1);
 
-    if (typeof message.retryAfterSeconds === "number" && message.retryAfterSeconds > 0) {
+    if (
+      typeof message.retryAfterSeconds === "number" &&
+      Number.isFinite(message.retryAfterSeconds) &&
+      message.retryAfterSeconds > 0
+    ) {
       const requestedDelayMs = message.retryAfterSeconds * 1000;
       if (requestedDelayMs > delayMs) {
         delayMs = requestedDelayMs;
