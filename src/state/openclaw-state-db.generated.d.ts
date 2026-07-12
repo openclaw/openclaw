@@ -776,6 +776,7 @@ export interface OperatorApprovals {
   requested_by_client_id: string | null;
   requested_by_device_id: string | null;
   requested_by_device_token_auth: Generated<number>;
+  resolution_ref: string;
   resolved_at_ms: number | null;
   resolver_id: string | null;
   resolver_kind: string | null;
