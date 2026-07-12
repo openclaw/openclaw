@@ -602,30 +602,32 @@ describe("reconcileSlackUnknownSend", () => {
     });
   });
 
-  it("does not throw when the stored signature contains multi-byte UTF-8 characters", async () => {
+  it("skips a malformed multi-byte signature and finds the valid delivery marker", async () => {
     const client = createSlackReconcileTestClient();
     const metadata = await postWithDeliveryMetadata({ client });
-    // Tamper the signature with a multi-byte payload whose UTF-16 length
-    // happens to match the original base64url signature length, but whose
-    // UTF-8 byte length differs — this exercises the Buffer-length guard.
     const signature = metadata.event_payload.openclaw_delivery_signature as string;
+    const malformedSignature = "é".repeat(signature.length);
+    expect(malformedSignature).toHaveLength(signature.length);
+    expect(Buffer.byteLength(malformedSignature)).not.toBe(Buffer.byteLength(signature));
     const tampered: MessageMetadata = {
       ...metadata,
       event_payload: {
         ...metadata.event_payload,
-        openclaw_delivery_signature: "\u{1f600}".repeat(signature.length),
+        openclaw_delivery_signature: malformedSignature,
       },
     };
     client.conversations.history.mockResolvedValueOnce({
-      messages: [{ ts: "1782584647.000002", metadata: tampered }],
+      messages: [
+        { ts: "1782584648.000003", metadata: tampered },
+        { ts: "1782584647.000002", metadata },
+      ],
     });
 
-    await expect(
-      reconcileSlackUnknownSend(createUnknownSendContext(), { client }),
-    ).resolves.toEqual({
-      status: "unresolved",
-      error: "Slack history contains no exact durable delivery marker",
-      retryable: true,
-    });
+    const reconciled = await reconcileSlackUnknownSend(createUnknownSendContext(), { client });
+
+    expect(reconciled.status).toBe("sent");
+    if (reconciled.status === "sent") {
+      expect(reconciled.messageId).toBe("1782584647.000002");
+    }
   });
 });
