@@ -4,7 +4,7 @@
  * Cover the computer.act wire mapping and node resolution / arming behavior.
  */
 import { createHash } from "node:crypto";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentMessage } from "../runtime/index.js";
 
 const listNodesMock = vi.fn();
@@ -34,6 +34,7 @@ const {
   invalidateComputerFrameIfMissing,
   COMPUTER_ACT_COMMAND,
   COMPUTER_REF_WIDTH,
+  testing,
 } = await import("./computer-tool.js");
 const { DEFAULT_IMAGE_MAX_DIMENSION_PX } = await import("../image-sanitization.js");
 // With no config the reference width is capped at the default sanitization limit.
@@ -234,6 +235,16 @@ describe("buildComputerActParams", () => {
     });
   });
 
+  it.each([0, -1, 1.5, true, "many"])("rejects malformed scrollAmount %#", (scrollAmount) => {
+    expect(() =>
+      buildComputerActParams({
+        action: "scroll",
+        input: { scrollDirection: "down", scrollAmount },
+        screenIndex: 0,
+      }),
+    ).toThrow(/scrollAmount must be a positive integer/);
+  });
+
   it("rejects scroll without a valid direction", () => {
     expect(() => buildComputerActParams({ action: "scroll", input: {}, screenIndex: 0 })).toThrow(
       /scrollDirection/,
@@ -278,6 +289,13 @@ describe("buildComputerActParams", () => {
       buildComputerActParams({
         action: "hold_key",
         input: { text: "space", duration: 11 },
+        screenIndex: 0,
+      }),
+    ).toThrow(/duration must be >0 and <=10 seconds/);
+    expect(() =>
+      buildComputerActParams({
+        action: "hold_key",
+        input: { text: "space", duration: true },
         screenIndex: 0,
       }),
     ).toThrow(/duration must be >0 and <=10 seconds/);
@@ -351,6 +369,12 @@ describe("createComputerTool node resolution", () => {
   beforeEach(() => {
     listNodesMock.mockReset();
     callGatewayToolMock.mockReset();
+    // Mapping and state tests do not need the real desktop's 500ms settle.
+    testing.setWaitForPostActionSettleForTest(async (signal) => signal?.throwIfAborted());
+  });
+
+  afterEach(() => {
+    testing.setWaitForPostActionSettleForTest();
   });
 
   it("errors when no computer-capable node is connected", async () => {
@@ -549,6 +573,29 @@ describe("createComputerTool node resolution", () => {
     );
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
+
+  it.each([
+    [
+      "scroll",
+      { action: "scroll", scrollDirection: "down", scrollAmount: 1.5 },
+      /scrollAmount must be a positive integer/,
+    ],
+    [
+      "hold_key",
+      { action: "hold_key", text: "space", duration: true },
+      /duration must be >0 and <=10 seconds/,
+    ],
+    ["wait", { action: "wait", duration: true }, /duration must be 0-100 seconds for wait/],
+  ])(
+    "rejects malformed %s numeric input before invoking the node",
+    async (_action, params, error) => {
+      listNodesMock.mockResolvedValue([macComputerNode()]);
+      const tool = createComputerTool({ modelHasVision: true });
+
+      await expect(tool.execute("call", params)).rejects.toThrow(error);
+      expect(callGatewayToolMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("targets the last screenshot's display when a coordinate action omits screenIndex", async () => {
     listNodesMock.mockResolvedValue([macComputerNode()]);

@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
@@ -83,8 +84,9 @@ const RAW_CONVERSATION_SUMMARY_RE = /^(?:[-*+]\s*)?Conversation Summary:/i;
 const RAW_TRANSCRIPT_TURN_RE = /^(?:[-*+]\s*)?(?:user|assistant):\s/i;
 const MEMORY_FLUSH_PROMPT_RE =
   /Save important context from this session to the daily memory file\.\s*STRICT RULES:/i;
+// Optional signals=N accepts both legacy annotations and the current format.
 const PROMOTION_SCORE_METADATA_RE =
-  /\[\s*score=\d+(?:\.\d+)?\s+recalls=\d+\s+avg=\d+(?:\.\d+)?\s+source=memory\//i;
+  /\[\s*score=\d+(?:\.\d+)?\s+(?:signals=\d+\s+)?recalls=\d+\s+avg=\d+(?:\.\d+)?\s+source=memory\//i;
 const DREAMING_DIFF_PREFIX_RE = /@@\s*-\d+(?:,\d+)?\s+[-*+]\s+/iy;
 const GENERIC_DAY_HEADING_RE =
   /^(?:(?:mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)(?:,\s+)?)?(?:(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{4}[/-]\d{2}[/-]\d{2})$/i;
@@ -180,7 +182,7 @@ export type PromotionCandidate = {
   recallCount: number;
   dailyCount?: number;
   groundedCount?: number;
-  signalCount?: number;
+  signalCount: number;
   avgScore: number;
   maxScore: number;
   uniqueQueries: number;
@@ -413,7 +415,10 @@ function hasDreamingNarrativeLead(snippet: string): boolean {
   return /\b(?:Candidate|Reflections?):/i.test(head);
 }
 
-function isContaminatedDreamingSnippet(raw: string): boolean {
+function isContaminatedDreamingSnippet(
+  raw: string,
+  opts: { allowTranscriptTurnSnippet?: boolean } = {},
+): boolean {
   const snippet = normalizeSnippet(raw);
   if (!snippet) {
     return false;
@@ -423,7 +428,7 @@ function isContaminatedDreamingSnippet(raw: string): boolean {
     DREAMING_TRANSCRIPT_PROMPT_LINE_RE.test(snippet) ||
     RAW_SESSION_METADATA_RE.test(snippet) ||
     RAW_CONVERSATION_SUMMARY_RE.test(snippet) ||
-    RAW_TRANSCRIPT_TURN_RE.test(snippet) ||
+    (!opts.allowTranscriptTurnSnippet && RAW_TRANSCRIPT_TURN_RE.test(snippet)) ||
     MEMORY_FLUSH_PROMPT_RE.test(snippet) ||
     PROMOTION_SCORE_METADATA_RE.test(snippet)
   ) {
@@ -559,7 +564,9 @@ function calculateConsolidationComponent(recallDays: string[]): number {
   if (parsed.length <= 1) {
     return 0.2;
   }
-  const spanDays = Math.max(0, (parsed.at(-1)! - parsed[0]) / DAY_MS);
+  const first = expectDefined(parsed.at(0), "multiple parsed recall days");
+  const last = expectDefined(parsed.at(-1), "multiple parsed recall days");
+  const spanDays = Math.max(0, (last - first) / DAY_MS);
   const spacing = clampScore(Math.log1p(parsed.length - 1) / Math.log1p(4));
   const span = clampScore(spanDays / 7);
   return clampScore(0.55 * spacing + 0.45 * span);
@@ -614,7 +621,12 @@ export function normalizeShortTermRecallStore(raw: unknown, nowIso: string): Sho
           ? entry.claimHash.trim()
           : undefined;
       const fullSnippet = typeof entry.snippet === "string" ? normalizeSnippet(entry.snippet) : "";
-      if (fullSnippet && isContaminatedDreamingSnippet(fullSnippet)) {
+      if (
+        fullSnippet &&
+        isContaminatedDreamingSnippet(fullSnippet, {
+          allowTranscriptTurnSnippet: isShortTermSessionCorpusPath(entryPath),
+        })
+      ) {
         continue;
       }
       const snippet = truncateShortTermSnippet(fullSnippet);
@@ -1062,6 +1074,10 @@ export function isShortTermMemoryPath(filePath: string): boolean {
   return SHORT_TERM_BASENAME_RE.test(normalized);
 }
 
+function isShortTermSessionCorpusPath(filePath: string): boolean {
+  return SHORT_TERM_SESSION_CORPUS_RE.test(normalizeMemoryPath(filePath));
+}
+
 function normalizeMemoryPathForWorkspace(workspaceDir: string, rawPath: string): string {
   const normalized = normalizeMemoryPath(rawPath);
   const workspaceNormalized = normalizeMemoryPath(workspaceDir);
@@ -1151,7 +1167,7 @@ function trimDreamingStatsEntries(
   for (const entry of entries) {
     let insertAt = selected.length;
     for (let index = 0; index < selected.length; index += 1) {
-      if (compare(entry, selected[index]) < 0) {
+      if (compare(entry, expectDefined(selected[index], "selected dreaming stats index")) < 0) {
         insertAt = index;
         break;
       }
@@ -1414,7 +1430,12 @@ export async function recordShortTermRecalls(params: {
       const normalizedPath = normalizeMemoryPath(result.path);
       const rawSnippet = normalizeSnippet(result.snippet);
       const snippet = truncateShortTermSnippet(rawSnippet);
-      if (!rawSnippet || isContaminatedDreamingSnippet(rawSnippet)) {
+      if (
+        !rawSnippet ||
+        isContaminatedDreamingSnippet(rawSnippet, {
+          allowTranscriptTurnSnippet: isShortTermSessionCorpusPath(normalizedPath),
+        })
+      ) {
         continue;
       }
       const claimHash = buildClaimHash(rawSnippet);
@@ -1840,7 +1861,11 @@ export async function rankShortTermPromotionCandidates(
     if (!entry || entry.source !== "memory" || !isShortTermMemoryPath(entry.path)) {
       continue;
     }
-    if (isContaminatedDreamingSnippet(entry.snippet)) {
+    if (
+      isContaminatedDreamingSnippet(entry.snippet, {
+        allowTranscriptTurnSnippet: isShortTermSessionCorpusPath(entry.path),
+      })
+    ) {
       continue;
     }
     if (!includePromoted && entry.promotedAt) {
@@ -2090,7 +2115,7 @@ function extractTargetHeadingBodySnippet(
     return null;
   }
   const normalizedBody = normalizeSnippet(bodySnippet);
-  for (let separatorIndex = targetSnippet.indexOf(": "); separatorIndex > 0; ) {
+  for (let separatorIndex = targetSnippet.indexOf(": "); separatorIndex > 0;) {
     const targetBody = normalizeSnippet(targetSnippet.slice(separatorIndex + 2));
     if (targetBody && normalizedBody.startsWith(targetBody)) {
       return targetBody;
@@ -2324,7 +2349,7 @@ function buildPromotionSection(
 
   for (const candidate of candidates) {
     const source = `${candidate.path}:${candidate.startLine}-${candidate.endLine}`;
-    const metadata = `[score=${candidate.score.toFixed(3)} recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} source=${source}]`;
+    const metadata = `[score=${candidate.score.toFixed(3)} signals=${candidate.signalCount} recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} source=${source}]`;
     lines.push(`<!-- ${PROMOTION_MARKER_PREFIX}${candidate.key} -->`);
     // Cap only the visible MEMORY.md text. The recall store keeps the full
     // rehydrated snippet so ranking, provenance, and dream narratives remain
@@ -2431,16 +2456,7 @@ export async function applyShortTermPromotions(
         if (candidate.score < minScore) {
           return false;
         }
-        const candidateSignalCount = Math.max(
-          0,
-          candidate.signalCount ??
-            totalSignalCountForEntry({
-              recallCount: candidate.recallCount,
-              dailyCount: candidate.dailyCount,
-              groundedCount: candidate.groundedCount,
-            }),
-        );
-        if (candidateSignalCount < minRecallCount) {
+        if (candidate.signalCount < minRecallCount) {
           return false;
         }
         if (Math.max(candidate.uniqueQueries, candidate.recallDays.length) < minUniqueQueries) {

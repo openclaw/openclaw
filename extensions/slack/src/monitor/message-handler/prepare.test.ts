@@ -11,7 +11,7 @@ import {
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
-import { saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
+import { upsertSessionEntry, type SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import {
@@ -96,6 +96,17 @@ describe("slack prepareSlackMessage inbound contract", () => {
 
   const createInboundSlackCtx = createInboundSlackTestContext;
 
+  async function seedSessionEntries(
+    storePath: string,
+    entries: Record<string, SessionEntry>,
+  ): Promise<void> {
+    await Promise.all(
+      Object.entries(entries).map(([sessionKey, entry]) =>
+        upsertSessionEntry({ storePath, sessionKey, entry }),
+      ),
+    );
+  }
+
   function createDefaultSlackCtx() {
     const slackCtx = createInboundSlackCtx({
       cfg: {
@@ -177,6 +188,32 @@ describe("slack prepareSlackMessage inbound contract", () => {
     });
     slackCtx.allowFrom = ["UOWNER"];
     return { slackCtx, members };
+  }
+
+  function createMissingChannelInfoBotCtx(params?: { groupDmEnabled?: boolean; ownerId?: string }) {
+    const conversationsInfo = vi.fn().mockRejectedValue(new Error("missing_scope"));
+    const members = vi.fn().mockResolvedValue({
+      members: params?.ownerId ? [params.ownerId] : [],
+      response_metadata: { next_cursor: "" },
+    });
+    const ctx = createInboundSlackCtx({
+      cfg: {
+        channels: { slack: { enabled: true, allowBots: true, replyToMode: "all" } },
+      } as OpenClawConfig,
+      appClient: {
+        conversations: { info: conversationsInfo, members },
+      } as unknown as App["client"],
+      defaultRequireMention: false,
+      replyToMode: "all",
+      groupDmEnabled: params?.groupDmEnabled,
+    });
+    ctx.allowFrom = params?.ownerId ? [params.ownerId] : ctx.allowFrom;
+    ctx.resolveUserName = async () => ({ name: "Alice" });
+    return {
+      account: createSlackAccount({ allowBots: true, replyToMode: "all" }),
+      conversationsInfo,
+      ctx,
+    };
   }
 
   async function prepareMessageWith(
@@ -651,6 +688,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     channel: string;
     channelType: SlackMessageEvent["channel_type"];
     user: string;
+    historyUser?: string;
     userName: string;
     starterText: string;
     followUpText: string;
@@ -670,16 +708,17 @@ describe("slack prepareSlackMessage inbound contract", () => {
 
   async function prepareThreadContextAllowlistCase(params: ThreadContextAllowlistCaseParams) {
     const { storePath } = storeFixture.makeTmpStorePath();
+    const historyUser = params.historyUser ?? params.user;
     const replies = vi
       .fn()
       .mockResolvedValueOnce({
-        messages: [{ text: params.starterText, user: params.user, ts: params.startTs }],
+        messages: [{ text: params.starterText, user: historyUser, ts: params.startTs }],
       })
       .mockResolvedValueOnce({
         messages: [
-          { text: params.starterText, user: params.user, ts: params.startTs },
+          { text: params.starterText, user: historyUser, ts: params.startTs },
           { text: "assistant reply", bot_id: "B1", ts: params.replyTs },
-          { text: params.followUpText, user: params.user, ts: params.followUpTs },
+          { text: params.followUpText, user: historyUser, ts: params.followUpTs },
           { text: "current message", user: params.user, ts: params.currentTs },
         ],
         response_metadata: { next_cursor: "" },
@@ -1886,6 +1925,134 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     expect(prepared.ctxPayload.From).toBe("slack:group:G123");
   });
 
+  it("blocks MPIM messages from senders outside the configured allowFrom", async () => {
+    const ctx = createReplyToAllSlackCtx();
+    ctx.allowFrom = ["U_OWNER"];
+    const prepared = await prepareMessageWith(
+      ctx,
+      createSlackAccount({ replyToMode: "all" }),
+      createSlackMessage({
+        channel: "G123",
+        channel_type: "mpim",
+        user: "U_ATTACKER",
+      }),
+    );
+
+    expect(prepared).toBeNull();
+  });
+
+  it("allows MPIM messages from senders in the configured allowFrom", async () => {
+    const ctx = createReplyToAllSlackCtx();
+    ctx.allowFrom = ["U_OWNER"];
+    const prepared = await prepareMessageWith(
+      ctx,
+      createSlackAccount({ replyToMode: "all" }),
+      createSlackMessage({
+        channel: "G123",
+        channel_type: "mpim",
+        user: "U_OWNER",
+      }),
+    );
+
+    assertPrepared(prepared);
+    expect(prepared.ctxPayload.ChatType).toBe("group");
+  });
+
+  it("keeps one mpDM classification when a later event omits channel_type (#102676)", async () => {
+    const { account, conversationsInfo, ctx } = createMissingChannelInfoBotCtx();
+    // The real message ingress boundary records this before preparation starts.
+    ctx.rememberSlackChannelType("C0MPDM42", "mpim");
+
+    const humanPrepared = await prepareMessageWith(
+      ctx,
+      account,
+      createSlackMessage({
+        channel: "C0MPDM42",
+        channel_type: "mpim",
+        user: "U1",
+        text: "hello from a human",
+      }),
+    );
+    assertPrepared(humanPrepared);
+    expect(humanPrepared.ctxPayload.ChatType).toBe("group");
+    expect(humanPrepared.ctxPayload.From).toBe("slack:group:C0MPDM42");
+
+    const typelessPrepared = await prepareMessageWith(
+      ctx,
+      account,
+      createSlackMessage({
+        channel: "C0MPDM42",
+        channel_type: undefined,
+        user: undefined,
+        bot_id: "B_OTHER",
+        subtype: "bot_message",
+        username: "other-agent",
+        text: "same room, bot ingress without channel_type",
+        ts: "2.000",
+      }),
+    );
+    assertPrepared(typelessPrepared);
+    expect(typelessPrepared.ctxPayload.ChatType).toBe("group");
+    expect(typelessPrepared.ctxPayload.From).toBe("slack:group:C0MPDM42");
+    expect(typelessPrepared.ctxPayload.SessionKey).toBe(humanPrepared.ctxPayload.SessionKey);
+    expect(conversationsInfo).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a typeless cached mpDM behind the group-DM policy gate (#102676)", async () => {
+    const { account, ctx } = createMissingChannelInfoBotCtx({ groupDmEnabled: false });
+    ctx.rememberSlackChannelType("C0MPDM42", "mpim");
+
+    const prepared = await prepareMessageWith(
+      ctx,
+      account,
+      createSlackMessage({
+        channel: "C0MPDM42",
+        channel_type: undefined,
+        user: undefined,
+        bot_id: "B_OTHER",
+        subtype: "bot_message",
+        username: "other-agent",
+      }),
+    );
+
+    expect(prepared).toBeNull();
+  });
+
+  it("keeps unresolved G-prefix private-channel bot ingress on channel sessions (#102676)", async () => {
+    const { account, ctx } = createMissingChannelInfoBotCtx({ ownerId: "UOWNER" });
+
+    const humanPrepared = await prepareMessageWith(
+      ctx,
+      account,
+      createSlackMessage({
+        channel: "G0PRIVATE1",
+        channel_type: "group",
+        user: "U1",
+        text: "human in private channel",
+      }),
+    );
+    const botPrepared = await prepareMessageWith(
+      ctx,
+      account,
+      createSlackMessage({
+        channel: "G0PRIVATE1",
+        channel_type: undefined,
+        user: undefined,
+        bot_id: "B_OTHER",
+        subtype: "bot_message",
+        username: "other-agent",
+        text: "bot in same private channel",
+        ts: "2.000",
+      }),
+    );
+
+    assertPrepared(humanPrepared);
+    assertPrepared(botPrepared);
+    expect(humanPrepared.ctxPayload.From).toBe("slack:channel:G0PRIVATE1");
+    expect(botPrepared.ctxPayload.From).toBe(humanPrepared.ctxPayload.From);
+    expect(botPrepared.ctxPayload.ChatType).toBe("channel");
+  });
+
   it.each([
     {
       peer: { kind: "group", id: "channel:C0AJUGWG5L6" },
@@ -2142,16 +2309,12 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     });
 
     history.mockClear();
-    await saveSessionStore(
-      storePath,
-      {
-        [prepared.ctxPayload.SessionKey!]: {
-          sessionId: "existing-channel-session",
-          updatedAt: Date.now(),
-        },
+    await seedSessionEntries(storePath, {
+      [prepared.ctxPayload.SessionKey!]: {
+        sessionId: "existing-channel-session",
+        updatedAt: Date.now(),
       },
-      { skipMaintenance: true },
-    );
+    });
     const existing = await prepareMessageWith(
       slackCtx,
       account,
@@ -2249,6 +2412,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       channel: "G400",
       channelType: "mpim",
       user: "U4",
+      historyUser: "U5",
       userName: "Evan",
       starterText: "starter from mpim",
       followUpText: "mpim follow-up",
@@ -2256,6 +2420,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       replyTs: "400.500",
       followUpTs: "400.800",
       currentTs: "401.000",
+      allowFrom: ["U4"],
     });
 
     expectThreadContextAllowsHumanHistory(prepared, replies, "starter from mpim", "mpim follow-up");
@@ -2279,18 +2444,14 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       threadId: "200.000",
     });
     const now = Date.now();
-    await saveSessionStore(
-      storePath,
-      {
-        [threadKeys.sessionKey]: {
-          sessionId: "existing-thread-session",
-          updatedAt: now,
-          sessionStartedAt: now,
-          lastInteractionAt: now,
-        },
+    await seedSessionEntries(storePath, {
+      [threadKeys.sessionKey]: {
+        sessionId: "existing-thread-session",
+        updatedAt: now,
+        sessionStartedAt: now,
+        lastInteractionAt: now,
       },
-      { skipMaintenance: true },
-    );
+    });
 
     const replies = vi.fn().mockResolvedValueOnce({
       messages: [{ text: "starter", user: "U2", ts: "200.000" }],
@@ -2334,18 +2495,14 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       threadId: "250.000",
     });
     const now = Date.now();
-    await saveSessionStore(
-      storePath,
-      {
-        [threadKeys.sessionKey]: {
-          sessionId: "direct-monitor-existing-thread-session",
-          updatedAt: now - 2 * 24 * 60 * 60 * 1000,
-          sessionStartedAt: now - 2 * 24 * 60 * 60 * 1000,
-          lastInteractionAt: now - 2 * 24 * 60 * 60 * 1000,
-        },
+    await seedSessionEntries(storePath, {
+      [threadKeys.sessionKey]: {
+        sessionId: "direct-monitor-existing-thread-session",
+        updatedAt: now - 2 * 24 * 60 * 60 * 1000,
+        sessionStartedAt: now - 2 * 24 * 60 * 60 * 1000,
+        lastInteractionAt: now - 2 * 24 * 60 * 60 * 1000,
       },
-      { skipMaintenance: true },
-    );
+    });
 
     const replies = vi.fn().mockResolvedValueOnce({
       messages: [{ text: "starter", user: "U2", ts: "250.000" }],
@@ -2386,18 +2543,14 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       baseSessionKey: route.sessionKey,
       threadId: "300.000",
     });
-    await saveSessionStore(
-      storePath,
-      {
-        [threadKeys.sessionKey]: {
-          sessionId: "stale-thread-session",
-          updatedAt: now,
-          sessionStartedAt: now - 2 * 24 * 60 * 60 * 1000,
-          lastInteractionAt: now - 2 * 24 * 60 * 60 * 1000,
-        },
+    await seedSessionEntries(storePath, {
+      [threadKeys.sessionKey]: {
+        sessionId: "stale-thread-session",
+        updatedAt: now,
+        sessionStartedAt: now - 2 * 24 * 60 * 60 * 1000,
+        lastInteractionAt: now - 2 * 24 * 60 * 60 * 1000,
       },
-      { skipMaintenance: true },
-    );
+    });
 
     const replies = vi
       .fn()
@@ -2468,22 +2621,18 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       baseSessionKey: route.sessionKey,
       threadId: "350.000",
     });
-    await saveSessionStore(
-      storePath,
-      {
-        [threadKeys.sessionKey]: {
-          sessionId: "provider-owned-thread-session",
-          updatedAt: now,
-          sessionStartedAt: now - 2 * 24 * 60 * 60 * 1000,
-          lastInteractionAt: now - 2 * 24 * 60 * 60 * 1000,
-          providerOverride: "claude-cli",
-          cliSessionBindings: {
-            "claude-cli": { sessionId: "claude-cli-thread-session" },
-          },
+    await seedSessionEntries(storePath, {
+      [threadKeys.sessionKey]: {
+        sessionId: "provider-owned-thread-session",
+        updatedAt: now,
+        sessionStartedAt: now - 2 * 24 * 60 * 60 * 1000,
+        lastInteractionAt: now - 2 * 24 * 60 * 60 * 1000,
+        providerOverride: "claude-cli",
+        cliSessionBindings: {
+          "claude-cli": { sessionId: "claude-cli-thread-session" },
         },
       },
-      { skipMaintenance: true },
-    );
+    });
 
     const replies = vi.fn().mockResolvedValueOnce({
       messages: [{ text: "starter", user: "U2", ts: "350.000" }],
@@ -2530,18 +2679,14 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       baseSessionKey: route.sessionKey,
       threadId: "400.000",
     });
-    await saveSessionStore(
-      storePath,
-      {
-        [threadKeys.sessionKey]: {
-          sessionId: "stale-zero-history-thread-session",
-          updatedAt: now,
-          sessionStartedAt: now - 2 * 24 * 60 * 60 * 1000,
-          lastInteractionAt: now - 2 * 24 * 60 * 60 * 1000,
-        },
+    await seedSessionEntries(storePath, {
+      [threadKeys.sessionKey]: {
+        sessionId: "stale-zero-history-thread-session",
+        updatedAt: now,
+        sessionStartedAt: now - 2 * 24 * 60 * 60 * 1000,
+        lastInteractionAt: now - 2 * 24 * 60 * 60 * 1000,
       },
-      { skipMaintenance: true },
-    );
+    });
 
     const replies = vi.fn().mockResolvedValueOnce({
       messages: [{ text: "starter", user: "U2", ts: "400.000" }],
@@ -2744,17 +2889,13 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
 
   it("preserves Slack thread history when an existing DM session receives a thread reply", async () => {
     const { storePath } = storeFixture.makeTmpStorePath();
-    await saveSessionStore(
-      storePath,
-      {
-        "agent:main:main": { sessionId: "existing-dm-session", updatedAt: Date.now() },
-        "agent:main:main:thread:650.000": {
-          sessionId: "existing-dm-thread-session",
-          updatedAt: Date.now(),
-        },
+    await seedSessionEntries(storePath, {
+      "agent:main:main": { sessionId: "existing-dm-session", updatedAt: Date.now() },
+      "agent:main:main:thread:650.000": {
+        sessionId: "existing-dm-thread-session",
+        updatedAt: Date.now(),
       },
-      { skipMaintenance: true },
-    );
+    });
     const replies = vi
       .fn()
       .mockResolvedValueOnce({

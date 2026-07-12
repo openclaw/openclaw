@@ -9,6 +9,7 @@ import {
   embeddedAgentLog,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { parseSqliteSessionFileMarker } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveCodexAppServerHomeDir } from "./auth-bridge.js";
 import { isJsonObject, type JsonValue } from "./protocol.js";
 import type {
@@ -127,6 +128,9 @@ async function listCodexAppServerRolloutFilesForThread(
 async function readCodexSessionRecordForSessionFile(
   sessionFile: string,
 ): Promise<(Record<string, unknown> & { sessionKey: string }) | undefined> {
+  if (isSqliteSessionFileMarker(sessionFile)) {
+    return undefined;
+  }
   const sessionsFile = path.join(path.dirname(sessionFile), "sessions.json");
   const resolvedSessionFile = path.resolve(sessionFile);
   let stat: Awaited<ReturnType<typeof fs.stat>>;
@@ -173,6 +177,10 @@ async function readCodexSessionRecordForSessionFile(
     record: found,
   });
   return found;
+}
+
+function isSqliteSessionFileMarker(sessionFile: string | undefined): boolean {
+  return parseSqliteSessionFileMarker(sessionFile) !== undefined;
 }
 
 type CodexAppServerRolloutTokenSnapshot = {
@@ -342,6 +350,11 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
 }): Promise<CodexAppServerThreadBinding | undefined> {
   const binding = params.binding;
   if (!binding?.threadId) {
+    return binding;
+  }
+  // Native Codex owns compaction for supervised threads. Clearing this private
+  // scope marker would silently move the next turn back to the agent runtime.
+  if (binding.connectionScope === "supervision") {
     return binding;
   }
   const sessionRecord = await readCodexSessionRecordForSessionFile(params.sessionFile);

@@ -19,6 +19,7 @@ import {
   mockedSleepWithAbort,
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
+  useOpenAIPlatformAuthFixture,
   warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
 import {
@@ -60,6 +61,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
   beforeEach(() => {
     resetRunOverflowCompactionHarnessMocks();
+    useOpenAIPlatformAuthFixture();
     mockedGlobalHookRunner.hasHooks.mockImplementation(() => false);
   });
 
@@ -198,6 +200,122 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       { text: "⚠️ Agent couldn't generate a response. Please try again.", isError: true },
     ]);
     expect(result.meta?.livenessState).toBe("abandoned");
+  });
+
+  it("does not route caller timeouts through provider failover", async () => {
+    const controller = new AbortController();
+    const timeoutError = new Error("caller deadline elapsed");
+    timeoutError.name = "TimeoutError";
+    const setTerminalLifecycleMeta = vi.fn();
+    const interruptedAssistant = {
+      role: "assistant",
+      stopReason: "error",
+      errorMessage: "HTTP 429 Too Many Requests",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedClassifyFailoverReason.mockReturnValue("rate_limit");
+    mockedIsRateLimitAssistantError.mockReturnValue(true);
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async () => {
+      controller.abort(timeoutError);
+      return makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: interruptedAssistant,
+        currentAttemptAssistant: interruptedAssistant,
+        setTerminalLifecycleMeta,
+      });
+    });
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      runId: "run-caller-timeout",
+      abortSignal: controller.signal,
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads?.at(-1)?.text).toContain("timed out");
+    expect(result.meta?.aborted).toBe(false);
+    expect(result.meta?.timeoutPhase).toBeUndefined();
+    expect(result.meta?.providerStarted).toBeUndefined();
+    const lifecycleMeta = setTerminalLifecycleMeta.mock.lastCall?.[0];
+    expect(lifecycleMeta).toMatchObject({
+      aborted: false,
+      livenessState: "blocked",
+      stopReason: "timeout",
+    });
+    expect(lifecycleMeta).not.toHaveProperty("timeoutPhase");
+    expect(lifecycleMeta).not.toHaveProperty("providerStarted");
+  });
+
+  it("does not synthesize an incomplete turn for a caller abort before attempt flags settle", async () => {
+    const controller = new AbortController();
+    const abortError = new Error("caller cancelled");
+    abortError.name = "AbortError";
+    const setTerminalLifecycleMeta = vi.fn();
+    const lateAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "text", text: "Late answer" }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async () => {
+      controller.abort(abortError);
+      return makeAttemptResult({
+        assistantTexts: ["Late answer"],
+        lastAssistant: lateAssistant,
+        currentAttemptAssistant: lateAssistant,
+        setTerminalLifecycleMeta,
+      });
+    });
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      runId: "run-caller-abort",
+      abortSignal: controller.signal,
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads).toBeUndefined();
+    expect(result.meta?.aborted).toBe(true);
+    expect(result.meta?.error).toBeUndefined();
+    expectNoWarnMessageWith("incomplete turn detected");
+    expect(setTerminalLifecycleMeta.mock.lastCall?.[0]).toMatchObject({
+      aborted: true,
+      livenessState: "blocked",
+      stopReason: "aborted",
+    });
+  });
+
+  it("propagates canonical assistant aborts into terminal lifecycle metadata", async () => {
+    const setTerminalLifecycleMeta = vi.fn();
+    const abortedAssistant = {
+      role: "assistant",
+      stopReason: "aborted",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: abortedAssistant,
+        currentAttemptAssistant: abortedAssistant,
+        setTerminalLifecycleMeta,
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      runId: "run-canonical-assistant-abort",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.meta?.aborted).toBe(true);
+    expect(setTerminalLifecycleMeta.mock.lastCall?.[0]).toMatchObject({
+      aborted: true,
+    });
   });
 
   it("synthesizes a silent cron payload from a trailing current-attempt NO_REPLY tool result", () => {
@@ -990,12 +1108,19 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expectWarnMessageWith("empty response detected");
   });
 
-  it("retries replay-safe missing terminal assistant turns once with the same prompt", async () => {
+  it("retries replay-safe missing turns despite a stale aborted transcript assistant", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
+    const staleAssistant = {
+      role: "assistant",
+      stopReason: "aborted",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],
-        lastAssistant: undefined,
+        lastAssistant: staleAssistant,
         currentAttemptAssistant: undefined,
       }),
     );
@@ -1022,10 +1147,10 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expect(runAttemptCall(1).prompt).toBe(runAttemptCall(0).prompt);
+    expect(runAttemptCall(1).prompt).toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
     expect(result.meta?.finalAssistantVisibleText).toBe("Recovered answer.");
-    expectWarnMessageWith("missing assistant terminal message detected");
-    expectNoWarnMessageWith("empty response detected");
+    expectWarnMessageWith("empty response detected");
+    expectNoWarnMessageWith("missing assistant terminal message detected");
     expectNoWarnMessageWith("incomplete turn detected");
   });
 
@@ -2928,6 +3053,41 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       }),
     ).toBe(false);
   });
+
+  it.each([
+    ["current clean overrides cumulative dirty", true, false, true],
+    ["current dirty overrides cumulative clean", false, true, false],
+    ["both clean remain retryable", false, false, true],
+  ] as const)(
+    "uses current-attempt replay metadata when %s",
+    (_label, cumulativeDirty, currentDirty, expected) => {
+      const assistant = {
+        role: "assistant",
+        stopReason: "error",
+        provider: "openrouter",
+        model: "test-model",
+        content: [],
+        usage: { input: 100, output: 0, totalTokens: 100 },
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+      expect(
+        shouldRetrySilentErrorAssistantTurn({
+          attempt: makeAttemptResult({
+            assistantTexts: [],
+            lastAssistant: assistant,
+            replayMetadata: {
+              hadPotentialSideEffects: cumulativeDirty,
+              replaySafe: !cumulativeDirty,
+            },
+            currentAttemptReplayMetadata: {
+              hadPotentialSideEffects: currentDirty,
+              replaySafe: !currentDirty,
+            },
+          }),
+          assistant,
+        }),
+      ).toBe(expected);
+    },
+  );
 
   it("detects empty openai-compatible stop turns with non-zero output usage", () => {
     const retryInstruction = resolveEmptyResponseRetryInstruction({

@@ -12,6 +12,7 @@ import {
   isOpenAICompatibleAzureResponsesBaseUrl,
   isOpenAIGpt54MiniModel,
   isOpenAIGpt55Model,
+  isOpenAIGpt56Model,
   isResponsesTextContentPartType,
   isResponsesTextDeltaEventType,
   mapOpenAIStopReason,
@@ -1146,7 +1147,9 @@ function convertResponsesMessages(
     if (!id.includes("|")) {
       return normalizeIdPart(id);
     }
-    const [callId, itemId] = id.split("|");
+    const separatorIndex = id.indexOf("|");
+    const callId = id.slice(0, separatorIndex);
+    const itemId = id.slice(separatorIndex + 1);
     const normalizedCallId = normalizeIdPart(callId);
     const isForeignToolCall = source.provider !== model.provider || source.api !== model.api;
     let normalizedItemId = isForeignToolCall
@@ -1277,7 +1280,9 @@ function convertResponsesMessages(
           output.push(messageItem as ResponseInputItem);
           previousReplayItemWasReasoning = false;
         } else if (block.type === "toolCall") {
-          const [callId, itemIdRaw] = block.id.split("|");
+          const separatorIndex = block.id.indexOf("|");
+          const callId = separatorIndex === -1 ? block.id : block.id.slice(0, separatorIndex);
+          const itemIdRaw = separatorIndex === -1 ? undefined : block.id.slice(separatorIndex + 1);
           const itemId =
             shouldReplayResponsesItemIds && !(isDifferentModel && itemIdRaw?.startsWith("fc_"))
               ? itemIdRaw
@@ -1304,7 +1309,9 @@ function convertResponsesMessages(
       const hasText = sanitizedTextResult.trim().length > 0;
       const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
       const hasImages = msg.content.some((item) => item.type === "image");
-      const [callId] = msg.toolCallId.split("|");
+      const separatorIndex = msg.toolCallId.indexOf("|");
+      const callId =
+        separatorIndex === -1 ? msg.toolCallId : msg.toolCallId.slice(0, separatorIndex);
       messages.push({
         type: "function_call_output",
         call_id: callId,
@@ -1537,13 +1544,16 @@ async function processResponsesStream(
     const compatible = uniqueCandidates.filter((state) => !identitiesConflict(state, identity));
     const matches = compatible.filter((state) => sharesIdentity(state, identity));
     if (matches.length === 1) {
-      return adoptToolCallIdentity(matches[0], identity);
+      const match = matches.at(0);
+      return match ? adoptToolCallIdentity(match, identity) : undefined;
     }
     // Only a sole active call may adopt an identity it did not already know.
     // Parallel calls require a positive match so missing indices stay fail-closed.
-    return uniqueCandidates.length === 1 && compatible.length === 1 && matches.length === 0
-      ? adoptToolCallIdentity(compatible[0], identity)
-      : undefined;
+    if (uniqueCandidates.length !== 1 || compatible.length !== 1 || matches.length !== 0) {
+      return undefined;
+    }
+    const candidate = compatible.at(0);
+    return candidate ? adoptToolCallIdentity(candidate, identity) : undefined;
   };
   const resolveStreamingToolCall = (
     event: Record<string, unknown>,
@@ -1616,7 +1626,19 @@ async function processResponsesStream(
     }
     // Diverged from the prior text: this is a distinct message, so open its
     // block now and replay the withheld text as one delta.
-    currentBlock = { type: "text", text: pendingMessageText };
+    const phase =
+      currentItem?.type === "message"
+        ? ((currentItem.phase as "commentary" | "final_answer" | undefined) ?? undefined)
+        : undefined;
+    currentBlock = {
+      type: "text",
+      text: pendingMessageText,
+      ...(currentItem?.type === "message" && phase
+        ? {
+            textSignature: encodeTextSignatureV1(stringifyUnknown(currentItem.id), phase),
+          }
+        : {}),
+    };
     output.content.push(currentBlock);
     stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
     stream.push({ type: "text_delta", contentIndex: blockIndex(), delta: pendingMessageText });
@@ -1760,7 +1782,14 @@ async function processResponsesStream(
           currentBlock = null;
           pendingMessageText = "";
         } else {
-          currentBlock = { type: "text", text: "" };
+          const phase = (item.phase as "commentary" | "final_answer" | undefined) ?? undefined;
+          currentBlock = {
+            type: "text",
+            text: "",
+            ...(phase
+              ? { textSignature: encodeTextSignatureV1(stringifyUnknown(item.id), phase) }
+              : {}),
+          };
           output.content.push(currentBlock);
           stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
         }
@@ -1935,7 +1964,13 @@ async function processResponsesStream(
           if (currentBlock?.type !== "text") {
             // Deferred distinct message: open its block now, balanced with the
             // text_end below.
-            currentBlock = { type: "text", text: "" };
+            currentBlock = {
+              type: "text",
+              text: "",
+              ...(phase
+                ? { textSignature: encodeTextSignatureV1(stringifyUnknown(item.id), phase) }
+                : {}),
+            };
             output.content.push(currentBlock);
             stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
           }
@@ -4803,6 +4838,11 @@ export function buildOpenAICompletionsParams(
     params.tools.length > 0 &&
     (isOpenAIGpt54MiniModel(model) ||
       (isOpenAIGpt55Model(model) && isKnownOpenAICompletionsEndpoint(model)));
+  const disableChatCompletionsToolReasoning =
+    Array.isArray(params.tools) &&
+    params.tools.length > 0 &&
+    isOpenAIGpt56Model(model) &&
+    isKnownOpenAICompletionsEndpoint(model);
   const handledQwenThinkingFormat = applyQwenOpenAICompletionsThinkingParams({
     compatThinkingFormat: compat.thinkingFormat,
     modelReasoning: model.reasoning,
@@ -4815,7 +4855,11 @@ export function buildOpenAICompletionsParams(
     payload: params,
     requestedEffort: completionsReasoningEffort,
   });
-  if (
+  if (disableChatCompletionsToolReasoning) {
+    // GPT-5.6 Chat Completions defaults reasoning on, but rejects function
+    // tools unless reasoning is explicitly disabled.
+    params.reasoning_effort = "none";
+  } else if (
     compat.thinkingFormat === "openrouter" &&
     model.reasoning &&
     resolvedCompletionsReasoningEffort

@@ -90,7 +90,12 @@ async function resolveNodePairApproveScopes(
 const NodesToolSchema = Type.Object({
   action: stringEnum(NODES_TOOL_ACTIONS),
   ...gatewayCallOptionSchemaProperties(),
-  node: Type.Optional(Type.String()),
+  node: Type.Optional(
+    Type.String({
+      description:
+        "Node ID, name, or IP. Required for describe and node-targeted actions; use status to discover nodes.",
+    }),
+  ),
   requestId: Type.Optional(Type.String()),
   // notify
   title: Type.Optional(Type.String()),
@@ -147,7 +152,7 @@ export function createNodesTool(options?: {
     label: "Nodes",
     name: "nodes",
     description:
-      "Discover/control paired nodes: status, describe, pairing, notify, camera/photos/screen/location/notifications/invoke. Use file_fetch for files.",
+      "Paired nodes: status/list; pass node to describe/control. Pairing, notify, camera/photos/screen/location/notifications/invoke. Files: file_fetch.",
     parameters: NodesToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -159,7 +164,12 @@ export function createNodesTool(options?: {
           case "status":
             return jsonResult(await callGatewayTool("node.list", gatewayOpts, {}));
           case "describe": {
-            const node = readStringParam(params, "node", { required: true });
+            const node = readStringParam(params, "node");
+            if (!node) {
+              throw new Error(
+                'node required for describe; call nodes with action="status" to list nodes, then retry with node',
+              );
+            }
             const nodeId = await resolveNodeId(gatewayOpts, node);
             return jsonResult(await callGatewayTool("node.describe", gatewayOpts, { nodeId }));
           }

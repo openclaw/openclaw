@@ -1,6 +1,7 @@
 // Gateway hot-reload handlers.
 // Applies config reload plans to hooks, cron, heartbeat, plugins, channels, and restarts.
 import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
+import { getActiveBackgroundExecSessionCount } from "../agents/bash-process-registry.js";
 import { refreshContextWindowCache } from "../agents/context.js";
 import {
   getActiveEmbeddedRunCount,
@@ -23,11 +24,15 @@ import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import {
   deferGatewayRestartUntilIdle,
-  emitGatewayRestart,
+  emitGatewayRestartWithSignalAdmission,
   resolveGatewayRestartDeferralTimeoutMs,
   setGatewaySigusr1RestartPolicy,
 } from "../infra/restart.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
+import {
+  getActiveGatewayRootWorkCount,
+  runWithGatewayIndependentRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import {
   clearSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshot,
@@ -39,6 +44,7 @@ import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
 import type { ChannelKind } from "./config-reload-plan.js";
 import { startGatewayConfigReloader, type GatewayReloadPlan } from "./config-reload.js";
 import { resolveHooksConfig } from "./hooks.js";
+import type { GatewayCronReconciliation } from "./server-cron-reconciled.js";
 import { buildGatewayCronService, type GatewayCronState } from "./server-cron.js";
 import { applyGatewayLaneConcurrency } from "./server-lanes.js";
 import { markGatewayModelCatalogStaleForReload } from "./server-model-catalog.js";
@@ -196,6 +202,7 @@ type GatewayReloadHandlerParams = {
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
   logCron: { error: (msg: string) => void };
   logReload: GatewayReloadLog;
+  cronReconciliation: GatewayCronReconciliation;
   createHealthMonitor: (config: OpenClawConfig) => ChannelHealthMonitor | null;
   createGmailRestartAbortController?: () => GatewayGmailRestartAbortController;
   clearGmailRestartAbortController?: (controller: GatewayGmailRestartAbortController) => void;
@@ -233,13 +240,23 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     const queueSize = getTotalQueueSize();
     const pendingReplies = getTotalPendingReplies();
     const embeddedRuns = getActiveEmbeddedRunCount();
+    const backgroundExecSessions = getActiveBackgroundExecSessionCount();
+    const rootRequests = getActiveGatewayRootWorkCount({ excludeCurrent: true });
     const activeTasks = getInspectableActiveTaskRestartBlockers().length;
     return {
       queueSize,
       pendingReplies,
       embeddedRuns,
+      backgroundExecSessions,
+      rootRequests,
       activeTasks,
-      totalActive: queueSize + pendingReplies + embeddedRuns + activeTasks,
+      totalActive:
+        queueSize +
+        pendingReplies +
+        embeddedRuns +
+        backgroundExecSessions +
+        rootRequests +
+        activeTasks,
     };
   };
   const formatActiveDetails = (counts: ReturnType<typeof getActiveCounts>) => {
@@ -252,6 +269,12 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
     if (counts.embeddedRuns > 0) {
       details.push(`${counts.embeddedRuns} embedded run(s)`);
+    }
+    if (counts.backgroundExecSessions > 0) {
+      details.push(`${counts.backgroundExecSessions} background exec session(s)`);
+    }
+    if (counts.rootRequests > 0) {
+      details.push(`${counts.rootRequests} gateway request(s)`);
     }
     if (counts.activeTasks > 0) {
       details.push(`${counts.activeTasks} background task run(s)`);
@@ -467,6 +490,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       }
     }
     if (plan.restartCron) {
+      params.cronReconciliation.invalidate();
       params.onCronRestart?.();
       state.cronState.cron.stop();
       state.cronState.stopExitWatchers?.();
@@ -476,7 +500,10 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         broadcast: params.broadcast,
       });
       startGatewayCronWithLogging({
-        cron: nextState.cronState.cron,
+        cronState: nextState.cronState,
+        cronReconciliation: params.cronReconciliation,
+        reason: "reload",
+        config: nextConfig,
         afterStart: nextState.cronState.reconcileExitWatchers,
         logCron: params.logCron,
       });
@@ -484,6 +511,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
 
     if (plan.restartHealthMonitor) {
       state.channelHealthMonitor?.stop();
+      await state.channelHealthMonitor?.waitForIdle();
       nextState.channelHealthMonitor = params.createHealthMonitor(nextConfig);
     }
 
@@ -713,7 +741,10 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
     // No active operations or pending replies, restart immediately
     params.logReload.warn(`config change requires gateway restart (${reasons})`);
-    const emitted = emitGatewayRestart();
+    // The managed reloader owns independent root admission until onRestart
+    // returns. Extend that fence across signal delivery until the run loop
+    // atomically promotes it to one-way restart drain.
+    const emitted = emitGatewayRestartWithSignalAdmission();
     if (!emitted) {
       params.logReload.info("gateway restart already scheduled; skipping duplicate signal");
     }
@@ -760,6 +791,7 @@ export function startManagedGatewayConfigReloader(
     logChannels: params.logChannels,
     logCron: params.logCron,
     logReload: params.logReload,
+    cronReconciliation: params.cronReconciliation,
     createGmailRestartAbortController,
     clearGmailRestartAbortController: (abortController) => {
       if (activeGmailRestartAbortController === abortController) {
@@ -778,6 +810,7 @@ export function startManagedGatewayConfigReloader(
     initialConfig: params.initialConfig,
     initialCompareConfig: params.initialCompareConfig,
     initialInternalWriteHash: params.initialInternalWriteHash,
+    runTransaction: runWithGatewayIndependentRootWorkAdmission,
     readSnapshot: params.readSnapshot,
     promoteSnapshot: async (snapshot, _reason) => await params.promoteSnapshot(snapshot),
     subscribeToWrites: params.subscribeToWrites,

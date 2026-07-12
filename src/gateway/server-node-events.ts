@@ -15,6 +15,8 @@ import {
   scopedHeartbeatWakeOptionsForPolicy,
 } from "../infra/event-session-routing.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
+import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
+import { resolveAgentHarnessSessionContextError } from "../sessions/agent-harness-session-key.js";
 import {
   NODE_PRESENCE_ALIVE_EVENT,
   normalizeNodePresenceAliveReason,
@@ -79,7 +81,11 @@ function dispatchNodeAgentCommand(
   nodeId: string,
   input: NodeAgentCommandInput,
 ): void {
-  void agentCommandFromIngress(input, defaultRuntime, ctx.deps).catch((err: unknown) => {
+  // The node RPC can finish before the agent starts its own session admission.
+  // Reserve a root now so suspension cannot acknowledge and then strand the turn.
+  void runWithGatewayIndependentRootWorkContinuation(() =>
+    agentCommandFromIngress(input, defaultRuntime, ctx.deps),
+  ).catch((err: unknown) => {
     ctx.logGateway.warn(`agent failed node=${nodeId}: ${formatForLog(err)}`);
   });
 }
@@ -299,14 +305,18 @@ function queueSessionStoreTouch(params: {
   sessionId: string;
   now: number;
 }) {
-  void touchSessionStore({
-    storePath: params.storePath,
-    canonicalKey: params.canonicalKey,
-    storeKeys: params.storeKeys,
-    entry: params.entry,
-    sessionId: params.sessionId,
-    now: params.now,
-  }).catch((err: unknown) => {
+  // Voice dispatch intentionally does not wait for persistence, but a host
+  // snapshot must not race the accepted write after its node RPC returns.
+  void runWithGatewayIndependentRootWorkContinuation(() =>
+    touchSessionStore({
+      storePath: params.storePath,
+      canonicalKey: params.canonicalKey,
+      storeKeys: params.storeKeys,
+      entry: params.entry,
+      sessionId: params.sessionId,
+      now: params.now,
+    }),
+  ).catch((err: unknown) => {
     params.ctx.logGateway.warn("voice session-store update failed: " + formatForLog(err));
   });
 }
@@ -401,6 +411,9 @@ export const handleNodeEvent = async (
       const rawMainKey = normalizeMainKey(cfg.session?.mainKey);
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : rawMainKey;
       const { storePath, entry, canonicalKey, storeKeys } = loadSessionEntry(sessionKey);
+      if (resolveAgentHarnessSessionContextError(canonicalKey, entry)) {
+        return undefined;
+      }
       const now = Date.now();
       const fingerprint = resolveVoiceTranscriptFingerprint(obj, text);
       if (shouldDropDuplicateVoiceTranscript({ sessionKey: canonicalKey, fingerprint, now })) {
@@ -476,6 +489,9 @@ export const handleNodeEvent = async (
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : `node-${nodeId}`;
       const cfg = getRuntimeConfig();
       const { storePath, entry, canonicalKey, storeKeys } = loadSessionEntry(sessionKey);
+      if (resolveAgentHarnessSessionContextError(canonicalKey, entry)) {
+        return undefined;
+      }
 
       let message = (link?.message ?? "").trim();
       const transcriptMessage = message;
@@ -584,14 +600,18 @@ export const handleNodeEvent = async (
       }
 
       if (wantsReceipt && deliveryChannel && deliveryTo) {
-        void sendReceiptAck({
-          cfg,
-          deps: ctx.deps,
-          sessionKey: canonicalKey,
-          channel: deliveryChannel,
-          to: deliveryTo,
-          text: receiptText,
-        }).catch((err: unknown) => {
+        // Delivery stays detached from agent startup, but remains part of the
+        // accepted node request until the durable send settles.
+        void runWithGatewayIndependentRootWorkContinuation(() =>
+          sendReceiptAck({
+            cfg,
+            deps: ctx.deps,
+            sessionKey: canonicalKey,
+            channel: deliveryChannel,
+            to: deliveryTo,
+            text: receiptText,
+          }),
+        ).catch((err: unknown) => {
           ctx.logGateway.warn(`agent receipt failed node=${nodeId}: ${formatForLog(err)}`);
         });
       } else if (wantsReceipt) {
@@ -646,7 +666,10 @@ export const handleNodeEvent = async (
       }
       const key = sanitizeInboundSystemTags(keyRaw);
       const sessionKeyRaw = normalizeOptionalString(obj.sessionKey) ?? `node-${nodeId}`;
-      const { canonicalKey: sessionKey } = loadSessionEntry(sessionKeyRaw);
+      const { canonicalKey: sessionKey, entry } = loadSessionEntry(sessionKeyRaw);
+      if (resolveAgentHarnessSessionContextError(sessionKey, entry)) {
+        return undefined;
+      }
       const packageNameRaw = normalizeOptionalString(obj.packageName);
       const packageName = packageNameRaw ? sanitizeInboundSystemTags(packageNameRaw) : null;
       const title = compactNotificationEventText(

@@ -1,7 +1,9 @@
-export const MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES = 5_000_000;
+// Raised for the plugins.uninstall/catalog actions and sessions.search protocol surfaces;
+// the cap exists to force a conscious decision on published declaration growth.
+export const MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES = 5_100_000;
 // Private-only entrypoints reshape chunks reachable from public roots but are never published.
 // Bound that topology overhead without counting local-only declarations as package surface.
-export const MAX_PRIVATE_QA_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES = 5_025_000;
+export const MAX_PRIVATE_QA_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES = 5_125_000;
 
 export function isPrivateQaPluginSdkBuild(env) {
   return env.OPENCLAW_BUILD_PRIVATE_QA === "1";

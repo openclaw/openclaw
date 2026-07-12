@@ -20,6 +20,7 @@ import {
 } from "openclaw/plugin-sdk/secret-input";
 import { normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { detectWindowsSpawnCommandInlineArgs } from "openclaw/plugin-sdk/windows-spawn";
+import { parse as parseToml } from "smol-toml";
 import { z } from "zod";
 import type {
   CodexApprovalPolicy,
@@ -37,7 +38,7 @@ const CODEX_APP_SERVER_HOME_DIRNAME = "codex-home";
 const CODEX_CONFIG_TOML_FILENAME = "config.toml";
 const PLAIN_DECIMAL_NUMBER_RE = /^[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))$/;
 
-type CodexAppServerTransportMode = "stdio" | "websocket";
+export type CodexAppServerTransportMode = "stdio" | "websocket" | "unix";
 export type CodexAppServerHomeScope = "agent" | "user";
 type CodexAppServerPolicyMode = "yolo" | "guardian";
 export type CodexAppServerConnectionClass = "local-loopback" | "remote";
@@ -70,16 +71,28 @@ export type CodexAppServerEffectiveApprovalPolicy = CodexApprovalPolicy;
 export type CodexAppServerSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 type CodexAppServerApprovalsReviewer = "user" | "auto_review" | "guardian_subagent";
 type CodexAppServerCommandSource = "managed" | "resolved-managed" | "config" | "env";
+export type CodexManagedCommandOrder = "package-first" | "desktop-first";
 export type CodexDynamicToolsLoading = "searchable" | "direct";
 export type CodexPluginDestructivePolicy = boolean | "auto" | "ask";
 export type CodexPluginDestructiveApprovalMode = "allow" | "deny" | "auto" | "ask";
 
 export const CODEX_PLUGINS_MARKETPLACE_NAME = "openai-curated";
+export const CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME = "workspace-directory";
+export type CodexPluginMarketplaceName =
+  | typeof CODEX_PLUGINS_MARKETPLACE_NAME
+  | typeof CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME;
 
 export type CodexComputerUseConfig = {
   enabled?: boolean;
   autoInstall?: boolean;
   marketplaceDiscoveryTimeoutMs?: number;
+  liveTestTimeoutMs?: number;
+  toolCallTimeoutMs?: number;
+  healthCheckEnabled?: boolean;
+  healthCheckIntervalMinutes?: number;
+  pluginCacheMode?: "shared" | "independent";
+  strictReadiness?: boolean;
+  autoRepair?: boolean;
   marketplaceSource?: string;
   marketplacePath?: string;
   marketplaceName?: string;
@@ -91,6 +104,13 @@ export type ResolvedCodexComputerUseConfig = {
   enabled: boolean;
   autoInstall: boolean;
   marketplaceDiscoveryTimeoutMs: number;
+  liveTestTimeoutMs: number;
+  toolCallTimeoutMs: number;
+  healthCheckEnabled: boolean;
+  healthCheckIntervalMinutes: 30 | 60 | 120 | 240;
+  pluginCacheMode: "shared" | "independent";
+  strictReadiness: boolean;
+  autoRepair: boolean;
   pluginName: string;
   mcpServerName: string;
   marketplaceSource?: string;
@@ -110,6 +130,30 @@ export type CodexPluginsConfig = {
   allow_all_plugins?: boolean;
   allow_destructive_actions?: CodexPluginDestructivePolicy;
   plugins?: Record<string, CodexPluginEntryConfig>;
+};
+
+export type CodexSupervisionEndpoint =
+  | {
+      id?: string;
+      label?: string;
+      transport?: "stdio-proxy";
+      command?: string;
+      args?: string[];
+      cwd?: string;
+    }
+  | {
+      id?: string;
+      label?: string;
+      transport: "websocket";
+      url: string;
+      authTokenEnv?: string;
+    };
+
+export type CodexSupervisionConfig = {
+  enabled?: boolean;
+  endpoints?: CodexSupervisionEndpoint[];
+  allowRawTranscripts?: boolean;
+  allowWriteControls?: boolean;
 };
 
 export type CodexAppServerExperimentalConfig = {
@@ -146,7 +190,7 @@ export type ResolvedCodexAppServerNetworkProxyConfig = {
 
 export type ResolvedCodexPluginPolicy = {
   configKey: string;
-  marketplaceName: typeof CODEX_PLUGINS_MARKETPLACE_NAME;
+  marketplaceName: CodexPluginMarketplaceName;
   pluginName: string;
   enabled: boolean;
   allowDestructiveActions: boolean;
@@ -167,8 +211,14 @@ export type CodexAppServerStartOptions = {
   homeScope?: CodexAppServerHomeScope;
   command: string;
   commandSource?: CodexAppServerCommandSource;
+  /** Desktop-first is reserved for the macOS app process that owns Computer Use permissions. */
+  managedCommandOrder?: CodexManagedCommandOrder;
+  /** Native plugin names checked at the final managed spawn boundary. */
+  managedComputerUsePluginNames?: string[];
   managedFallbackCommandPaths?: string[];
   args: string[];
+  /** Process working directory for shipped Supervisor stdio endpoint compatibility. */
+  cwd?: string;
   url?: string;
   authToken?: string;
   headers: Record<string, string>;
@@ -212,6 +262,7 @@ export type CodexPluginConfig = {
   };
   computerUse?: CodexComputerUseConfig;
   codexPlugins?: CodexPluginsConfig;
+  supervision?: CodexSupervisionConfig;
   appServer?: {
     mode?: CodexAppServerPolicyMode;
     transport?: CodexAppServerTransportMode;
@@ -277,6 +328,13 @@ export const CODEX_COMPUTER_USE_CONFIG_KEYS = [
   "enabled",
   "autoInstall",
   "marketplaceDiscoveryTimeoutMs",
+  "liveTestTimeoutMs",
+  "toolCallTimeoutMs",
+  "healthCheckEnabled",
+  "healthCheckIntervalMinutes",
+  "pluginCacheMode",
+  "strictReadiness",
+  "autoRepair",
   "marketplaceSource",
   "marketplacePath",
   "marketplaceName",
@@ -298,12 +356,39 @@ export const CODEX_PLUGIN_ENTRY_CONFIG_KEYS = [
   "allow_destructive_actions",
 ] as const;
 
+export const CODEX_SUPERVISION_CONFIG_KEYS = [
+  "enabled",
+  "endpoints",
+  "allowRawTranscripts",
+  "allowWriteControls",
+] as const;
+
+export const CODEX_SUPERVISION_STDIO_ENDPOINT_CONFIG_KEYS = [
+  "id",
+  "label",
+  "transport",
+  "command",
+  "args",
+  "cwd",
+] as const;
+
+export const CODEX_SUPERVISION_WEBSOCKET_ENDPOINT_CONFIG_KEYS = [
+  "id",
+  "label",
+  "transport",
+  "url",
+  "authTokenEnv",
+] as const;
+
 const DEFAULT_CODEX_COMPUTER_USE_PLUGIN_NAME = "computer-use";
 const DEFAULT_CODEX_COMPUTER_USE_MCP_SERVER_NAME = "computer-use";
 const DEFAULT_CODEX_COMPUTER_USE_MARKETPLACE_DISCOVERY_TIMEOUT_MS = 60_000;
+const DEFAULT_CODEX_COMPUTER_USE_LIVE_TEST_TIMEOUT_MS = 60_000;
+const DEFAULT_CODEX_COMPUTER_USE_TOOL_CALL_TIMEOUT_MS = 60_000;
+const DEFAULT_CODEX_COMPUTER_USE_HEALTH_CHECK_INTERVAL_MINUTES = 60;
 const DEFAULT_CODEX_APP_SERVER_NETWORK_PROXY_PROFILE_PREFIX = "openclaw-network";
 
-const codexAppServerTransportSchema = z.enum(["stdio", "websocket"]);
+const codexAppServerTransportSchema = z.enum(["stdio", "websocket", "unix"]);
 const codexAppServerHomeScopeSchema = z.enum(["agent", "user"]);
 const SecretInputSchema = buildSecretInputSchema();
 const codexAppServerPolicyModeSchema = z.enum(["yolo", "guardian"]);
@@ -316,6 +401,13 @@ const codexAppServerApprovalPolicySchema = z.preprocess(
 const codexAppServerSandboxSchema = z.enum(["read-only", "workspace-write", "danger-full-access"]);
 const codexAppServerApprovalsReviewerSchema = z.enum(["user", "auto_review", "guardian_subagent"]);
 const codexDynamicToolsLoadingSchema = z.enum(["searchable", "direct"]);
+const codexComputerUseHealthIntervalSchema = z.union([
+  z.literal(30),
+  z.literal(60),
+  z.literal(120),
+  z.literal(240),
+]);
+const codexComputerUsePluginCacheModeSchema = z.enum(["shared", "independent"]);
 const codexPluginDestructivePolicySchema = z.union([
   z.boolean(),
   z.literal("auto"),
@@ -359,7 +451,9 @@ const codexAppServerNetworkProxySchema = z
 const codexPluginEntryConfigSchema = z
   .object({
     enabled: z.boolean().optional(),
-    marketplaceName: z.literal(CODEX_PLUGINS_MARKETPLACE_NAME).optional(),
+    marketplaceName: z
+      .enum([CODEX_PLUGINS_MARKETPLACE_NAME, CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME])
+      .optional(),
     pluginName: z.string().trim().min(1).optional(),
     allow_destructive_actions: codexPluginDestructivePolicySchema.optional(),
   })
@@ -371,6 +465,37 @@ const codexPluginsConfigSchema = z
     allow_all_plugins: z.boolean().optional(),
     allow_destructive_actions: codexPluginDestructivePolicySchema.optional(),
     plugins: z.record(z.string(), codexPluginEntryConfigSchema).optional(),
+  })
+  .strict();
+
+const codexSupervisionEndpointSchema = z.union([
+  z
+    .object({
+      id: z.string().optional(),
+      label: z.string().optional(),
+      transport: z.literal("stdio-proxy").optional(),
+      command: z.string().optional(),
+      args: z.array(z.string()).optional(),
+      cwd: z.string().optional(),
+    })
+    .strict(),
+  z
+    .object({
+      id: z.string().optional(),
+      label: z.string().optional(),
+      transport: z.literal("websocket"),
+      url: z.string(),
+      authTokenEnv: z.string().optional(),
+    })
+    .strict(),
+]);
+
+const codexSupervisionConfigSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    endpoints: z.array(codexSupervisionEndpointSchema).optional(),
+    allowRawTranscripts: z.boolean().optional(),
+    allowWriteControls: z.boolean().optional(),
   })
   .strict();
 
@@ -390,6 +515,13 @@ const codexPluginConfigSchema = z
         enabled: z.boolean().optional(),
         autoInstall: z.boolean().optional(),
         marketplaceDiscoveryTimeoutMs: z.number().positive().optional(),
+        liveTestTimeoutMs: z.number().positive().optional(),
+        toolCallTimeoutMs: z.number().positive().optional(),
+        healthCheckEnabled: z.boolean().optional(),
+        healthCheckIntervalMinutes: codexComputerUseHealthIntervalSchema.optional(),
+        pluginCacheMode: codexComputerUsePluginCacheModeSchema.optional(),
+        strictReadiness: z.boolean().optional(),
+        autoRepair: z.boolean().optional(),
         marketplaceSource: z.string().optional(),
         marketplacePath: z.string().optional(),
         marketplaceName: z.string().optional(),
@@ -399,6 +531,7 @@ const codexPluginConfigSchema = z
       .strict()
       .optional(),
     codexPlugins: z.unknown().optional(),
+    supervision: codexSupervisionConfigSchema.optional(),
     appServer: z
       .object({
         mode: codexAppServerPolicyModeSchema.optional(),
@@ -475,7 +608,7 @@ export function resolveCodexPluginsPolicy(pluginConfig?: unknown): ResolvedCodex
   );
   const pluginPolicies = Object.entries(config?.plugins ?? {})
     .flatMap(([configKey, entry]): ResolvedCodexPluginPolicy[] => {
-      if (entry.marketplaceName !== CODEX_PLUGINS_MARKETPLACE_NAME || !entry.pluginName) {
+      if (!isCodexPluginMarketplaceName(entry.marketplaceName) || !entry.pluginName) {
         return [];
       }
       const entryDestructivePolicy = resolveCodexPluginDestructivePolicy(
@@ -484,7 +617,7 @@ export function resolveCodexPluginsPolicy(pluginConfig?: unknown): ResolvedCodex
       return [
         {
           configKey,
-          marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+          marketplaceName: entry.marketplaceName,
           pluginName: entry.pluginName,
           enabled: enabled && entry.enabled !== false,
           allowDestructiveActions: entryDestructivePolicy.allowDestructiveActions,
@@ -501,6 +634,14 @@ export function resolveCodexPluginsPolicy(pluginConfig?: unknown): ResolvedCodex
     destructiveApprovalMode: destructivePolicy.destructiveApprovalMode,
     pluginPolicies,
   };
+}
+
+function isCodexPluginMarketplaceName(
+  value: string | undefined,
+): value is CodexPluginMarketplaceName {
+  return (
+    value === CODEX_PLUGINS_MARKETPLACE_NAME || value === CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME
+  );
 }
 
 function resolveCodexPluginDestructivePolicy(policy: CodexPluginDestructivePolicy): {
@@ -533,12 +674,14 @@ export function resolveCodexAppServerRuntimeOptions(
     platform?: NodeJS.Platform;
     hostName?: string;
     openClawSandboxActive?: boolean;
+    managedCommandOrder?: CodexManagedCommandOrder;
   } = {},
 ): CodexAppServerRuntimeOptions {
   const env = params.env ?? process.env;
-  const config = readCodexPluginConfig(params.pluginConfig).appServer ?? {};
+  const pluginConfig = readCodexPluginConfig(params.pluginConfig);
+  const config = pluginConfig.appServer ?? {};
   const transport = resolveTransport(config.transport);
-  const homeScope: CodexAppServerHomeScope = config.homeScope === "user" ? "user" : "agent";
+  const homeScope: CodexAppServerHomeScope = config.homeScope ?? "agent";
   const configCommand = readNonEmptyString(config.command);
   const envCommand = readNonEmptyString(env.OPENCLAW_CODEX_APP_SERVER_BIN);
   const command = configCommand ?? envCommand ?? "codex";
@@ -557,7 +700,7 @@ export function resolveCodexAppServerRuntimeOptions(
     value: config.authToken,
     path: "plugins.entries.codex.config.appServer.authToken",
   });
-  const url = readNonEmptyString(config.url);
+  const url = readNonEmptyString(config.url) ?? (transport === "unix" ? "unix://" : undefined);
   const connectionClass = inferCodexAppServerConnectionClass({ transport, url });
   const remoteAppsSubstrate: CodexAppServerRemoteAppsSubstrate = "preconfigured";
   const remoteWorkspaceRoot = normalizeRemoteWorkspaceRoot(config.remoteWorkspaceRoot);
@@ -656,11 +799,22 @@ export function resolveCodexAppServerRuntimeOptions(
   }
   if (transport === "websocket" && homeScope === "user") {
     throw new Error(
-      "plugins.entries.codex.config.appServer.homeScope=user requires appServer.transport=stdio",
+      "plugins.entries.codex.config.appServer.homeScope=user requires appServer.transport=stdio or unix",
     );
   }
-  assertCodexAppServerConnectionClassConfig({
-    connectionClass,
+  if (transport === "unix" && homeScope !== "user") {
+    throw new Error(
+      "plugins.entries.codex.config.appServer.transport=unix requires appServer.homeScope=user",
+    );
+  }
+  if (transport === "unix" && !url?.startsWith("unix://")) {
+    throw new Error(
+      "plugins.entries.codex.config.appServer.url must use unix:// when appServer.transport is unix",
+    );
+  }
+  assertCodexAppServerConnectionSecurity({
+    transport,
+    url,
     authToken,
     headers,
   });
@@ -679,6 +833,19 @@ export function resolveCodexAppServerRuntimeOptions(
       : defaultPolicy?.approvalPolicy
         ? "requirements"
         : "implicit";
+  const computerUseConfig = resolveCodexComputerUseConfig({
+    pluginConfig: params.pluginConfig,
+    env,
+  });
+  const managedCommandOrder =
+    params.managedCommandOrder ??
+    (homeScope === "user" || computerUseConfig.enabled ? "desktop-first" : "package-first");
+  const includeManagedCommandOrder =
+    commandSource === "managed" &&
+    (managedCommandOrder === "desktop-first" || params.managedCommandOrder === "package-first");
+  const managedComputerUsePluginNames = [
+    ...new Set([DEFAULT_CODEX_COMPUTER_USE_PLUGIN_NAME, computerUseConfig.pluginName]),
+  ];
 
   return {
     start: {
@@ -686,6 +853,8 @@ export function resolveCodexAppServerRuntimeOptions(
       homeScope,
       command,
       commandSource,
+      ...(includeManagedCommandOrder ? { managedCommandOrder } : {}),
+      ...(commandSource === "managed" ? { managedComputerUsePluginNames } : {}),
       args: args.length > 0 ? args : ["app-server", "--listen", "stdio://"],
       ...(url ? { url } : {}),
       ...(authToken ? { authToken } : {}),
@@ -720,6 +889,41 @@ export function resolveCodexAppServerRuntimeOptions(
     ...(serviceTier ? { serviceTier } : {}),
     ...resolveCodexAppServerNetworkProxy(config.networkProxy, resolvedSandbox),
   };
+}
+
+/**
+ * Rechecks Codex-owned plugin state at the final spawn boundary, where the
+ * effective agent home is known, so Computer Use keeps the desktop app's TCC ownership.
+ */
+export function resolveCodexAppServerStartOptionsForAgent(params: {
+  startOptions: CodexAppServerStartOptions;
+  agentDir: string;
+  codexConfigToml?: string | null;
+  env?: NodeJS.ProcessEnv;
+}): CodexAppServerStartOptions {
+  const startOptions = params.startOptions;
+  if (
+    startOptions.transport !== "stdio" ||
+    startOptions.commandSource !== "managed" ||
+    startOptions.managedCommandOrder !== undefined
+  ) {
+    return startOptions;
+  }
+  if (startOptions.homeScope === "user") {
+    return { ...startOptions, managedCommandOrder: "desktop-first" };
+  }
+  const nativeComputerUseEnabled = codexConfigEnablesNativeComputerUse({
+    agentDir: params.agentDir,
+    codexConfigToml: params.codexConfigToml,
+    env: params.env,
+    homeScope: "agent",
+    pluginNames: startOptions.managedComputerUsePluginNames ?? [
+      DEFAULT_CODEX_COMPUTER_USE_PLUGIN_NAME,
+    ],
+  });
+  return nativeComputerUseEnabled
+    ? { ...startOptions, managedCommandOrder: "desktop-first" }
+    : startOptions;
 }
 
 export function isCodexAppServerApprovalPolicyAllowedByRequirements(
@@ -849,6 +1053,14 @@ export function resolveCodexComputerUseConfig(
     readNonEmptyString(params.overrides?.marketplaceName) ??
     readNonEmptyString(config.marketplaceName) ??
     readNonEmptyString(env.OPENCLAW_CODEX_COMPUTER_USE_MARKETPLACE_NAME);
+  const configuredPluginName =
+    readNonEmptyString(params.overrides?.pluginName) ??
+    readNonEmptyString(config.pluginName) ??
+    readNonEmptyString(env.OPENCLAW_CODEX_COMPUTER_USE_PLUGIN_NAME);
+  const configuredMcpServerName =
+    readNonEmptyString(params.overrides?.mcpServerName) ??
+    readNonEmptyString(config.mcpServerName) ??
+    readNonEmptyString(env.OPENCLAW_CODEX_COMPUTER_USE_MCP_SERVER_NAME);
   const autoInstall =
     params.overrides?.autoInstall ??
     config.autoInstall ??
@@ -860,36 +1072,90 @@ export function resolveCodexComputerUseConfig(
       readNumberEnv(env.OPENCLAW_CODEX_COMPUTER_USE_MARKETPLACE_DISCOVERY_TIMEOUT_MS),
     DEFAULT_CODEX_COMPUTER_USE_MARKETPLACE_DISCOVERY_TIMEOUT_MS,
   );
+  const liveTestTimeoutMs = normalizePositiveNumber(
+    params.overrides?.liveTestTimeoutMs ??
+      config.liveTestTimeoutMs ??
+      readNumberEnv(env.OPENCLAW_CODEX_COMPUTER_USE_LIVE_TEST_TIMEOUT_MS),
+    DEFAULT_CODEX_COMPUTER_USE_LIVE_TEST_TIMEOUT_MS,
+  );
+  const toolCallTimeoutMs = normalizePositiveNumber(
+    params.overrides?.toolCallTimeoutMs ??
+      config.toolCallTimeoutMs ??
+      readNumberEnv(env.OPENCLAW_CODEX_COMPUTER_USE_TOOL_CALL_TIMEOUT_MS),
+    DEFAULT_CODEX_COMPUTER_USE_TOOL_CALL_TIMEOUT_MS,
+  );
+  const healthCheckIntervalMinutes = normalizeComputerUseHealthCheckIntervalMinutes(
+    params.overrides?.healthCheckIntervalMinutes ??
+      config.healthCheckIntervalMinutes ??
+      readNumberEnv(env.OPENCLAW_CODEX_COMPUTER_USE_HEALTH_CHECK_INTERVAL_MINUTES),
+  );
+  const healthCheckEnabled =
+    params.overrides?.healthCheckEnabled ??
+    config.healthCheckEnabled ??
+    readBooleanEnv(env.OPENCLAW_CODEX_COMPUTER_USE_HEALTH_CHECK_ENABLED) ??
+    false;
+  const pluginCacheMode =
+    normalizeComputerUsePluginCacheMode(params.overrides?.pluginCacheMode) ??
+    normalizeComputerUsePluginCacheMode(config.pluginCacheMode) ??
+    normalizeComputerUsePluginCacheMode(env.OPENCLAW_CODEX_COMPUTER_USE_PLUGIN_CACHE_MODE) ??
+    "independent";
+  const strictReadiness =
+    params.overrides?.strictReadiness ??
+    config.strictReadiness ??
+    readBooleanEnv(env.OPENCLAW_CODEX_COMPUTER_USE_STRICT_READINESS) ??
+    false;
+  const autoRepair =
+    params.overrides?.autoRepair ??
+    config.autoRepair ??
+    readBooleanEnv(env.OPENCLAW_CODEX_COMPUTER_USE_AUTO_REPAIR) ??
+    false;
   const enabled =
     params.overrides?.enabled ??
     config.enabled ??
     readBooleanEnv(env.OPENCLAW_CODEX_COMPUTER_USE) ??
-    Boolean(autoInstall || marketplaceSource || marketplacePath || marketplaceName);
+    Boolean(
+      autoInstall ||
+      marketplaceSource ||
+      marketplacePath ||
+      marketplaceName ||
+      configuredPluginName ||
+      configuredMcpServerName,
+    );
 
   return {
     enabled,
     autoInstall,
     marketplaceDiscoveryTimeoutMs,
-    pluginName:
-      readNonEmptyString(params.overrides?.pluginName) ??
-      readNonEmptyString(config.pluginName) ??
-      readNonEmptyString(env.OPENCLAW_CODEX_COMPUTER_USE_PLUGIN_NAME) ??
-      DEFAULT_CODEX_COMPUTER_USE_PLUGIN_NAME,
-    mcpServerName:
-      readNonEmptyString(params.overrides?.mcpServerName) ??
-      readNonEmptyString(config.mcpServerName) ??
-      readNonEmptyString(env.OPENCLAW_CODEX_COMPUTER_USE_MCP_SERVER_NAME) ??
-      DEFAULT_CODEX_COMPUTER_USE_MCP_SERVER_NAME,
+    liveTestTimeoutMs,
+    toolCallTimeoutMs,
+    healthCheckEnabled,
+    healthCheckIntervalMinutes,
+    pluginCacheMode,
+    strictReadiness,
+    autoRepair,
+    pluginName: configuredPluginName ?? DEFAULT_CODEX_COMPUTER_USE_PLUGIN_NAME,
+    mcpServerName: configuredMcpServerName ?? DEFAULT_CODEX_COMPUTER_USE_MCP_SERVER_NAME,
     ...(marketplaceSource ? { marketplaceSource } : {}),
     ...(marketplacePath ? { marketplacePath } : {}),
     ...(marketplaceName ? { marketplaceName } : {}),
   };
 }
 
+function normalizeComputerUseHealthCheckIntervalMinutes(value: unknown): 30 | 60 | 120 | 240 {
+  return value === 30 || value === 60 || value === 120 || value === 240
+    ? value
+    : DEFAULT_CODEX_COMPUTER_USE_HEALTH_CHECK_INTERVAL_MINUTES;
+}
+
+function normalizeComputerUsePluginCacheMode(value: unknown): "shared" | "independent" | null {
+  return value === "shared" || value === "independent" ? value : null;
+}
+
 export function codexAppServerStartOptionsKey(
   options: CodexAppServerStartOptions,
   params: {
     authProfileId?: string;
+    authBindingFingerprint?: string;
     agentDir?: string;
     fallbackApiKeyCacheKey?: string;
   } = {},
@@ -898,8 +1164,11 @@ export function codexAppServerStartOptionsKey(
     transport: options.transport,
     command: options.command,
     commandSource: options.commandSource ?? null,
+    managedCommandOrder: options.managedCommandOrder ?? "package-first",
+    managedComputerUsePluginNames: [...(options.managedComputerUsePluginNames ?? [])].toSorted(),
     managedFallbackCommandPaths: [...(options.managedFallbackCommandPaths ?? [])],
     args: options.args,
+    cwd: options.cwd ?? null,
     url: options.url ?? null,
     authToken: hashSecretForKey(options.authToken, "authToken"),
     headers: Object.entries(options.headers)
@@ -910,6 +1179,7 @@ export function codexAppServerStartOptionsKey(
       .map(([key, value]) => [key, hashSecretForKey(value, `env:${key}`)]),
     clearEnv: [...(options.clearEnv ?? [])].toSorted(),
     authProfileId: params.authProfileId ?? null,
+    authBindingFingerprint: params.authBindingFingerprint ?? null,
     agentDir: params.agentDir ?? null,
     fallbackApiKeyCacheKey: params.fallbackApiKeyCacheKey ?? null,
   });
@@ -932,6 +1202,23 @@ export function codexSandboxPolicyForTurn(
     excludeTmpdirEnvVar: false,
     excludeSlashTmp: false,
   };
+}
+
+/** Resolves the passive supervision control connection without changing harness defaults. */
+export function resolveCodexSupervisionAppServerRuntimeOptions(
+  params: NonNullable<Parameters<typeof resolveCodexAppServerRuntimeOptions>[0]> = {},
+): CodexAppServerRuntimeOptions {
+  const pluginConfig = readCodexPluginConfig(params.pluginConfig);
+  const appServer = pluginConfig.appServer ?? {};
+  const transport = resolveTransport(appServer.transport);
+  const homeScope = appServer.homeScope ?? (transport === "websocket" ? "agent" : "user");
+  return resolveCodexAppServerRuntimeOptions({
+    ...params,
+    pluginConfig: {
+      ...pluginConfig,
+      appServer: { ...appServer, homeScope },
+    },
+  });
 }
 
 function resolveCodexAppServerNetworkProxy(
@@ -1066,7 +1353,7 @@ export function withMcpElicitationsApprovalPolicy(
 }
 
 function resolveTransport(value: unknown): CodexAppServerTransportMode {
-  return value === "websocket" ? "websocket" : "stdio";
+  return value === "websocket" || value === "unix" ? value : "stdio";
 }
 
 function normalizeRemoteWorkspaceRoot(value: string | undefined): string | undefined {
@@ -1099,6 +1386,20 @@ function assertCodexAppServerConnectionClassConfig(params: {
       "remote Codex app-server WebSocket URLs require appServer.authToken or an Authorization header",
     );
   }
+}
+
+/** Applies the canonical remote-auth boundary to any Codex AppServer transport. */
+export function assertCodexAppServerConnectionSecurity(params: {
+  transport: CodexAppServerTransportMode;
+  url?: string;
+  authToken?: string;
+  headers: Record<string, string>;
+}): void {
+  assertCodexAppServerConnectionClassConfig({
+    connectionClass: inferCodexAppServerConnectionClass(params),
+    authToken: params.authToken,
+    headers: params.headers,
+  });
 }
 
 function isLoopbackWebSocketUrl(value: string): boolean {
@@ -1646,6 +1947,53 @@ function readCodexAppServerConfigToml(
   } catch (error) {
     return readErrorCode(error) === "ENOENT" ? undefined : false;
   }
+}
+
+function codexConfigEnablesNativeComputerUse(
+  params: Pick<
+    CodexModelBackedReviewerContext,
+    "agentDir" | "codexConfigToml" | "env" | "homeScope"
+  > & { pluginNames: readonly string[] },
+): boolean {
+  const configToml = readCodexAppServerConfigToml(params);
+  if (configToml === false) {
+    return true;
+  }
+  if (configToml === undefined) {
+    return false;
+  }
+  let parsedConfig: Record<string, unknown>;
+  try {
+    parsedConfig = parseToml(configToml, { integersAsBigInt: true }) as Record<string, unknown>;
+  } catch {
+    return true;
+  }
+  const rawPlugins = parsedConfig.plugins;
+  if (rawPlugins === undefined) {
+    return false;
+  }
+  const plugins = readRecord(rawPlugins);
+  if (!plugins) {
+    return true;
+  }
+  for (const [pluginId, rawPluginConfig] of Object.entries(plugins)) {
+    const matchesManagedIdentity = params.pluginNames.some(
+      (pluginName) => pluginId === pluginName || pluginId.startsWith(`${pluginName}@`),
+    );
+    if (!matchesManagedIdentity) {
+      continue;
+    }
+    const pluginConfig = readRecord(rawPluginConfig);
+    if (!pluginConfig) {
+      return true;
+    }
+    if (pluginConfig.enabled === false) {
+      continue;
+    }
+    // Codex defaults omitted enablement to true; malformed state stays conservative.
+    return true;
+  }
+  return false;
 }
 
 function resolveCodexAppServerConfigPath(

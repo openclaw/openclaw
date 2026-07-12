@@ -1,3 +1,4 @@
+import type { Static } from "typebox";
 import { Type } from "typebox";
 import { NonEmptyString } from "./primitives.js";
 
@@ -42,7 +43,32 @@ export const WorktreesRemoveParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 export const WorktreesRemoveResultSchema = Type.Object(
-  { removed: Type.Boolean(), snapshotRef: Type.Optional(NonEmptyString) },
+  {
+    removed: Type.Boolean(),
+    snapshotRef: Type.Optional(NonEmptyString),
+    /** Why the pre-removal snapshot failed; present only on forced removals that continued without one. */
+    snapshotError: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
+export const WorktreesBranchesParamsSchema = Type.Object(
+  { repoRoot: NonEmptyString },
+  { additionalProperties: false },
+);
+export const WorktreeBranchSchema = Type.Object(
+  {
+    name: NonEmptyString,
+    kind: Type.Union([Type.Literal("local"), Type.Literal("remote")]),
+  },
+  { additionalProperties: false },
+);
+export const WorktreesBranchesResultSchema = Type.Object(
+  {
+    branches: Type.Array(WorktreeBranchSchema),
+    defaultBranch: Type.Optional(NonEmptyString),
+    headBranch: Type.Optional(NonEmptyString),
+  },
   { additionalProperties: false },
 );
 
@@ -59,3 +85,18 @@ export const WorktreesGcResultSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+// Wire types derive directly from local schema consts so public d.ts graphs never
+// pull in the ProtocolSchemas registry.
+export type WorktreeRecord = Static<typeof WorktreeRecordSchema>;
+export type WorktreesListParams = Static<typeof WorktreesListParamsSchema>;
+export type WorktreesListResult = Static<typeof WorktreesListResultSchema>;
+export type WorktreesCreateParams = Static<typeof WorktreesCreateParamsSchema>;
+export type WorktreesRemoveParams = Static<typeof WorktreesRemoveParamsSchema>;
+export type WorktreesRemoveResult = Static<typeof WorktreesRemoveResultSchema>;
+export type WorktreesRestoreParams = Static<typeof WorktreesRestoreParamsSchema>;
+export type WorktreesGcParams = Static<typeof WorktreesGcParamsSchema>;
+export type WorktreesGcResult = Static<typeof WorktreesGcResultSchema>;
+export type WorktreeBranch = Static<typeof WorktreeBranchSchema>;
+export type WorktreesBranchesParams = Static<typeof WorktreesBranchesParamsSchema>;
+export type WorktreesBranchesResult = Static<typeof WorktreesBranchesResultSchema>;

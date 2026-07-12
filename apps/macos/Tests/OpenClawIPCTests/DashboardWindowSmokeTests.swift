@@ -3,6 +3,31 @@ import Foundation
 import Testing
 @testable import OpenClaw
 
+private actor DashboardRouteAuthGate {
+    private var token: String?
+    private var ready = false
+    private var probeCount = 0
+
+    init(token: String?) {
+        self.token = token
+    }
+
+    func authToken() -> String? {
+        self.ready ? self.token : nil
+    }
+
+    func probe() {
+        self.ready = true
+        self.probeCount += 1
+    }
+
+    func replaceToken(_ token: String?) {
+        self.token = token
+    }
+
+    func probes() -> Int { self.probeCount }
+}
+
 @Suite(.serialized)
 @MainActor
 struct DashboardWindowSmokeTests {
@@ -40,6 +65,19 @@ struct DashboardWindowSmokeTests {
             staleEndpoint,
             navigationType: .backForward,
             buttonNumber: 1))
+    }
+
+    @Test func `dashboard navigation shortcuts target the focused browser`() throws {
+        let dashboard = try #require(URL(string: "http://127.0.0.1:18789/control/"))
+        let controller = DashboardWindowController(
+            url: dashboard,
+            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil))
+        #expect(controller._testNavigationWebViewIdentity == controller._testDashboardWebViewIdentity)
+
+        controller._testOpenLinkBrowser(try #require(URL(string: "https://docs.openclaw.ai/")))
+        let linkWebView = try #require(controller._testLinkBrowserWebViewIdentity)
+        #expect(controller._testFocusLinkBrowser())
+        #expect(controller._testNavigationWebViewIdentity == linkWebView)
     }
 
     @Test func `dashboard parses only bounded native link requests`() throws {
@@ -84,6 +122,13 @@ struct DashboardWindowSmokeTests {
             "url": "https:hostless",
             "target": "external",
         ]) == nil)
+    }
+
+    @Test func `dashboard accepts only typed window drag requests`() {
+        #expect(DashboardWindowController.isWindowDragRequest(["type": "window-drag"]))
+        #expect(!DashboardWindowController.isWindowDragRequest(["type": "open-link"]))
+        #expect(!DashboardWindowController.isWindowDragRequest(["type": 1]))
+        #expect(!DashboardWindowController.isWindowDragRequest("window-drag"))
     }
 
     @Test func `dashboard trusts only its main control path for link messages`() throws {
@@ -208,13 +253,125 @@ struct DashboardWindowSmokeTests {
         #expect(controller._testLinkBrowserActiveTabIndex == 0)
     }
 
+    @Test func `dashboard link browser calculates final drag insertion indexes`() {
+        let midpoints: [CGFloat] = [50, 150, 250]
+        let cases: [(currentIndex: Int, locationX: CGFloat, targetIndex: Int?, order: [Int])] = [
+            (0, 100, nil, [0, 1, 2]),
+            (0, 150, 1, [1, 0, 2]),
+            (0, 200, 1, [1, 0, 2]),
+            (0, 300, 2, [1, 2, 0]),
+            (2, 100, 1, [0, 2, 1]),
+            (2, 0, 0, [2, 0, 1]),
+            (1, 150, nil, [0, 1, 2]),
+        ]
+        for testCase in cases {
+            let targetIndex = DashboardLinkBrowserTabBar.dropIndex(
+                currentIndex: testCase.currentIndex,
+                itemMidpoints: midpoints,
+                locationX: testCase.locationX)
+            #expect(targetIndex == testCase.targetIndex)
+
+            var order = Array(midpoints.indices)
+            if let targetIndex {
+                let moved = order.remove(at: testCase.currentIndex)
+                order.insert(moved, at: targetIndex)
+            }
+            #expect(order == testCase.order)
+        }
+    }
+
+    @Test func `dashboard link browser retires initial URL after later navigation`() throws {
+        let view = DashboardLinkBrowserView(websiteDataStore: .default())
+        defer { view.closeBrowser() }
+        let requestedURL = try #require(URL(string: "http://127.0.0.1:1/short"))
+        let currentURL = try #require(URL(string: "http://127.0.0.1:1/final"))
+        view.open(requestedURL)
+        let webView = try #require(view._testActiveWebView)
+        let initialNavigation = NSObject()
+        view._testStartNavigation(initialNavigation, in: webView)
+        view.navigationWillStart(currentURL, in: webView)
+
+        view.open(requestedURL)
+        #expect(view._testTabCount == 1)
+        #expect(view._testActiveWebView === webView)
+
+        view.open(currentURL)
+        #expect(view._testTabCount == 1)
+        #expect(view._testActiveWebView === webView)
+
+        view._testFinishNavigation(initialNavigation, at: currentURL, in: webView)
+        view.open(requestedURL)
+        #expect(view._testTabCount == 1)
+        #expect(view._testActiveWebView === webView)
+
+        view._testStartNavigation(NSObject(), in: webView)
+        view.navigationWillStart(currentURL, in: webView)
+        view.open(requestedURL)
+        #expect(view._testTabCount == 2)
+        #expect(view._testActiveWebView !== webView)
+    }
+
+    @Test func `dashboard link browser retires initial URL when navigation is replaced`() throws {
+        let view = DashboardLinkBrowserView(websiteDataStore: .default())
+        defer { view.closeBrowser() }
+        let requestedURL = try #require(URL(string: "http://127.0.0.1:1/short"))
+        let redirectURL = try #require(URL(string: "http://127.0.0.1:1/redirect"))
+        let replacementURL = try #require(URL(string: "http://127.0.0.1:1/replacement"))
+        view.open(requestedURL)
+        let webView = try #require(view._testActiveWebView)
+        view._testStartNavigation(NSObject(), in: webView)
+        view.navigationWillStart(redirectURL, in: webView)
+        view._testStartNavigation(NSObject(), in: webView)
+        view.navigationWillStart(replacementURL, in: webView)
+
+        view.open(requestedURL)
+
+        #expect(view._testTabCount == 2)
+        #expect(view._testActiveWebView !== webView)
+    }
+
+    @Test func `dashboard link browser retires initial URL when redirected navigation fails`() throws {
+        let view = DashboardLinkBrowserView(websiteDataStore: .default())
+        defer { view.closeBrowser() }
+        let requestedURL = try #require(URL(string: "http://127.0.0.1:1/short"))
+        let redirectURL = try #require(URL(string: "http://127.0.0.1:1/redirect"))
+        view.open(requestedURL)
+        let webView = try #require(view._testActiveWebView)
+        view._testStartNavigation(NSObject(), in: webView)
+        view.navigationWillStart(redirectURL, in: webView)
+        view.navigationDidFail(for: webView)
+
+        view.open(requestedURL)
+
+        #expect(view._testTabCount == 2)
+        #expect(view._testActiveWebView !== webView)
+    }
+
+    @Test func `dashboard link browser prefers current URL over initial alias`() throws {
+        let view = DashboardLinkBrowserView(websiteDataStore: .default())
+        defer { view.closeBrowser() }
+        let requestedURL = try #require(URL(string: "http://127.0.0.1:1/short"))
+        let currentURL = try #require(URL(string: "http://127.0.0.1:1/final"))
+        view.open(requestedURL)
+        let redirectedWebView = try #require(view._testActiveWebView)
+        view.navigationWillStart(currentURL, in: redirectedWebView)
+        view._testOpenInNewTab(requestedURL)
+        let currentWebView = try #require(view._testActiveWebView)
+        view._testSelectTab(at: 0)
+
+        view.open(requestedURL)
+
+        #expect(view._testTabCount == 2)
+        #expect(view._testActiveWebView === currentWebView)
+    }
+
     @Test func `dashboard link browser menu disables URL actions for blank tab`() throws {
         let view = DashboardLinkBrowserView(websiteDataStore: .default())
         let url = try #require(URL(string: "http://127.0.0.1:1/blank"))
         view.open(url)
         let webView = try #require(view._testActiveWebView)
         #expect(webView.url == nil)
-        view.navigationDidFinish(for: webView)
+        view.navigationURLDidChange(for: webView)
         let menu = try #require(view._testContextMenu(forTabAt: 0))
         #expect(!menu.items[0].isEnabled)
         #expect(!menu.items[1].isEnabled)
@@ -313,7 +470,7 @@ struct DashboardWindowSmokeTests {
         #expect(dashboardLogString(for: url) == "http://127.0.0.1:18789/control/")
     }
 
-    @Test func `dashboard native chrome offsets the drawer topbar`() throws {
+    @Test func `dashboard native chrome clears both desktop sidebars`() throws {
         let url = try #require(URL(string: "http://127.0.0.1:18789/control/"))
         let controller = DashboardWindowController(
             url: url,
@@ -322,16 +479,20 @@ struct DashboardWindowSmokeTests {
             $0.source.contains("openclaw-native-macos-chrome")
         })
 
-        // Desktop widths are styled by the Control UI's own
-        // html.openclaw-native-macos rules; only the drawer topbar needs
+        // Narrow widths are styled by the Control UI's own compact drawer-row
+        // rules (layout.mobile.css); only the desktop sidebar surfaces need
         // native padding injected here.
-        #expect(chromeScript.source.contains(".topbar"))
-        #expect(chromeScript.source.contains("max-width: 1100px"))
+        #expect(chromeScript.source.contains(".sidebar-shell"))
+        #expect(chromeScript.source.contains(".settings-sidebar__header"))
+        #expect(chromeScript.source.contains("min-width: 700px"))
         #expect(chromeScript.source.contains("--openclaw-native-titlebar-height"))
-        #expect(!chromeScript.source.contains(".sidebar-shell"))
+        #expect(!chromeScript.source.contains("max-width: 1100px"))
+        // Advertises the native titlebar sidebar toggle so the Control UI can
+        // drop its floating expand button (layout.css keys off this class).
+        #expect(chromeScript.source.contains("openclaw-native-nav"))
     }
 
-    @Test func `dashboard titlebar hosts back and forward controls`() throws {
+    @Test func `dashboard titlebar hosts sidebar and history controls`() throws {
         let url = try #require(URL(string: "http://127.0.0.1:18789/control/"))
         let controller = DashboardWindowController(
             url: url,
@@ -340,10 +501,22 @@ struct DashboardWindowSmokeTests {
         let buttons = accessories.flatMap { accessory in
             accessory.view.subviews.compactMap { $0 as? NSButton }
         }
+        let sidebar = try #require(buttons.first { $0.accessibilityLabel() == "Toggle Sidebar" })
         let back = try #require(buttons.first { $0.accessibilityLabel() == "Back" })
         let forward = try #require(buttons.first { $0.accessibilityLabel() == "Forward" })
-        // Nothing to traverse on a fresh webview: both stay disabled until the
-        // back-forward list gains entries (the SPA pushes history entries).
+        // Titlebar order mirrors Safari: sidebar toggle first, then history.
+        let stack = try #require(sidebar.superview as? NSStackView)
+        #expect(stack.arrangedSubviews.firstIndex(of: sidebar) == 0)
+        #expect(stack.arrangedSubviews.firstIndex(of: back) == 1)
+        #expect(stack.arrangedSubviews.firstIndex(of: forward) == 2)
+        // A typo'd SF Symbol name yields a nil image (invisible button), and a
+        // frame narrower than the fitting size clips the trailing control.
+        #expect(sidebar.image != nil)
+        #expect(stack.fittingSize.width <= stack.frame.width)
+        // The toggle has no readiness state; back/forward stay disabled until
+        // the back-forward list gains entries (the SPA pushes history entries).
+        #expect(sidebar.isEnabled)
+        #expect(!sidebar.isBordered)
         #expect(!back.isEnabled)
         #expect(!forward.isEnabled)
         #expect(controller._testAllowsBackForwardGestures)
@@ -396,7 +569,7 @@ struct DashboardWindowSmokeTests {
         #expect(authScripts.first?.source.contains("60001") == false)
     }
 
-    @Test func `dashboard keeps endpoint when ready state matches current URL`() async throws {
+    @Test func `dashboard retires its web view while endpoint is unavailable`() async throws {
         let controller = try makeShownController()
         defer { controller.closeDashboard() }
         let manager = DashboardManager._testMake()
@@ -411,9 +584,89 @@ struct DashboardWindowSmokeTests {
         await manager.handleEndpointState(.connecting(mode: .remote, detail: "Connecting…"))
         await manager.handleEndpointState(.unavailable(mode: .remote, reason: "tunnel down"))
 
-        #expect(controller.currentURL.absoluteString == "http://127.0.0.1:60001/#token=device-token")
-        // Identity check: an unchanged endpoint must not re-inject scripts or reload.
-        #expect(controller._testUserScripts.elementsEqual(scriptsBefore) { $0 === $1 })
+        let replacement = try #require(manager._testController())
+        #expect(replacement !== controller)
+        #expect(replacement.currentURL == URL(string: "about:blank"))
+        #expect(!controller.isWindowOpen)
+        #expect(!replacement._testUserScripts.elementsEqual(scriptsBefore) { $0 === $1 })
+    }
+
+    @Test func `same URL route revision recreates dashboard without prior token`() async throws {
+        let url = try #require(URL(string: "http://127.0.0.1:60001/#token=route-a-device-token"))
+        let controller = DashboardWindowController(
+            url: url,
+            auth: DashboardWindowAuth(
+                gatewayUrl: "ws://127.0.0.1:60001/",
+                token: "route-a-device-token",
+                password: nil))
+        controller.show()
+        let authGate = DashboardRouteAuthGate(token: "route-a-device-token")
+        let manager = DashboardManager._testMake(
+            authTokenProvider: { _ in await authGate.authToken() },
+            routeProbe: { await authGate.probe() })
+        manager._testSetController(controller)
+        defer { manager._testController()?.closeDashboard() }
+        let socketURL = try #require(URL(string: "ws://127.0.0.1:60001"))
+
+        await manager.handleEndpointState(.ready(
+            mode: .remote,
+            url: socketURL,
+            token: nil,
+            password: nil,
+            routeRevision: 1))
+        let routeAController = try #require(manager._testController())
+        #expect(routeAController !== controller)
+        #expect(await authGate.probes() == 1)
+
+        await authGate.replaceToken("route-b-device-token")
+        await manager.handleEndpointState(.ready(
+            mode: .remote,
+            url: socketURL,
+            token: nil,
+            password: nil,
+            routeRevision: 2))
+
+        let routeBController = try #require(manager._testController())
+        #expect(routeBController !== routeAController)
+        #expect(!routeAController.isWindowOpen)
+        #expect(routeBController.currentURL.absoluteString ==
+            "http://127.0.0.1:60001/#token=route-b-device-token")
+        let scripts = routeBController._testUserScripts
+            .filter { $0.source.contains("__OPENCLAW_NATIVE_CONTROL_AUTH__") }
+        #expect(scripts.count == 1)
+        #expect(scripts[0].source.contains("route-b-device-token"))
+        #expect(!scripts[0].source.contains("route-a-device-token"))
+    }
+
+    @Test func `route change without fresh credential blanks prior dashboard`() async throws {
+        let url = try #require(URL(string: "http://127.0.0.1:60001/#token=route-a-device-token"))
+        let controller = DashboardWindowController(
+            url: url,
+            auth: DashboardWindowAuth(
+                gatewayUrl: "ws://127.0.0.1:60001/",
+                token: "route-a-device-token",
+                password: nil))
+        controller.show()
+        let manager = DashboardManager._testMake(
+            authTokenProvider: { _ in nil },
+            routeProbe: {})
+        manager._testSetController(controller)
+        defer { manager._testController()?.closeDashboard() }
+
+        await manager.handleEndpointState(.ready(
+            mode: .remote,
+            url: try #require(URL(string: "ws://127.0.0.1:60001")),
+            token: nil,
+            password: nil,
+            routeRevision: 2))
+
+        let replacement = try #require(manager._testController())
+        #expect(replacement !== controller)
+        #expect(!controller.isWindowOpen)
+        #expect(replacement.currentURL == URL(string: "about:blank"))
+        let scripts = replacement._testUserScripts
+            .filter { $0.source.contains("__OPENCLAW_NATIVE_CONTROL_AUTH__") }
+        #expect(!scripts.contains { $0.source.contains("route-a-device-token") })
     }
 
     @Test func `dashboard ignores endpoint changes while window is closed`() async throws {

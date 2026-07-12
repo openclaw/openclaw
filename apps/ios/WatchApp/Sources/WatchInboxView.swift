@@ -36,7 +36,7 @@ private struct WatchControlSurfaceView: View {
     var onRefreshAppSnapshot: (() -> Void)?
     var onAppCommand: ((WatchAppCommand) -> Void)?
     var onSendChatMessage: ((String) -> String?)?
-    @State private var selectedFace = 0
+    @State private var selectedFace = WatchScreenshotMode.approvals ? 2 : 0
 
     var body: some View {
         TabView(selection: self.$selectedFace) {
@@ -80,7 +80,6 @@ private struct WatchControlSurfaceView: View {
                 section: "Now",
                 title: self.greetingText,
                 subtitle: self.connectionLine,
-                isOnline: self.store.appSnapshot?.gatewayConnected == true,
                 avatarImageSource: self.avatarImageSource,
                 avatarText: self.avatarText)
 
@@ -118,7 +117,6 @@ private struct WatchControlSurfaceView: View {
                 section: "Inbox",
                 title: "What needs you",
                 subtitle: self.inboxSubtitle,
-                isOnline: self.chatCount > 0 || self.approvalCount > 0,
                 avatarImageSource: self.avatarImageSource,
                 avatarText: self.avatarText)
 
@@ -237,7 +235,6 @@ private struct WatchControlSurfaceView: View {
                 section: "Approvals",
                 title: self.approvalHeadline,
                 subtitle: self.approvalHeaderSubtitle,
-                isOnline: self.approvalCount > 0,
                 avatarImageSource: self.avatarImageSource,
                 avatarText: self.avatarText)
 
@@ -248,32 +245,41 @@ private struct WatchControlSurfaceView: View {
                     subtitle: self.approvalDecisionSubtitle(record),
                     accessory: self.approvalAccessory(record))
 
-                if record.isResolving {
-                    WatchTinyStatus(text: record.statusText ?? "Sending decision...")
-                } else {
-                    HStack(spacing: 8) {
-                        if record.approval.allowedDecisions.contains(.allowOnce) {
-                            WatchDecisionButton(title: "Approve", color: .green) {
-                                self.onExecApprovalDecision?(
-                                    record.id,
-                                    record.approval.gatewayStableID,
-                                    .allowOnce)
-                            }
-                        }
-
-                        if record.approval.allowedDecisions.contains(.deny) {
-                            WatchDecisionButton(title: "Deny", color: WatchClawStyle.accent) {
-                                self.onExecApprovalDecision?(
-                                    record.id,
-                                    record.approval.gatewayStableID,
-                                    .deny)
-                            }
-                        }
-                    }
+                if let warningText = WatchExecApprovalDisplay.warningText(record.approval.warningText) {
+                    WatchApprovalWarning(text: warningText)
                 }
 
-                if let statusText = record.statusText, !statusText.isEmpty, !record.isResolving {
+                if let statusText = WatchExecApprovalDisplay.statusText(for: record) {
                     WatchTinyStatus(text: statusText)
+                }
+
+                if !record.isResolving {
+                    NavigationLink {
+                        WatchExecApprovalDetailView(
+                            store: self.store,
+                            record: record,
+                            onDecision: self.onExecApprovalDecision)
+                    } label: {
+                        WatchSecondaryLabel(title: "Review Command")
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Opens the full command before decisions are available")
+                }
+            } else if self.store.isExecApprovalReviewLoading {
+                WatchHeroCard(
+                    label: "Loading",
+                    title: "Loading approval",
+                    subtitle: self.store.execApprovalReviewStatusText ?? "Waiting for your iPhone",
+                    accessory: "Syncing")
+            } else if self.approvalCount > 0 || self.store.shouldShowExecApprovalReviewStatus {
+                WatchHeroCard(
+                    label: "Unavailable",
+                    title: "Approval not loaded",
+                    subtitle: self.store.execApprovalReviewStatusText ?? "Approval details have not loaded",
+                    accessory: "Retry")
+
+                WatchSecondaryButton(title: "Review again") {
+                    self.onRefreshExecApprovalReview?()
                 }
             } else {
                 WatchHeroCard(
@@ -281,12 +287,6 @@ private struct WatchControlSurfaceView: View {
                     title: "No approvals waiting",
                     subtitle: self.store.lastExecApprovalOutcomeText ?? "You are caught up",
                     accessory: "Ready")
-
-                if self.store.shouldShowExecApprovalReviewStatus {
-                    WatchSecondaryButton(title: "Review again") {
-                        self.onRefreshExecApprovalReview?()
-                    }
-                }
             }
 
             if self.approvalCount > 1 {
@@ -307,7 +307,6 @@ private struct WatchControlSurfaceView: View {
                 section: "Connection",
                 title: self.directNode.isConnected ? "Watch node online" : "Direct Gateway",
                 subtitle: self.directNode.statusText,
-                isOnline: self.directNode.isConnected,
                 avatarImageSource: self.avatarImageSource,
                 avatarText: self.avatarText)
 
@@ -320,7 +319,10 @@ private struct WatchControlSurfaceView: View {
                 accessory: self.directNode.isConnected ? "Online" : "Offline")
 
             WatchDetailText(
-                text: "Direct mode supports device info, status, and notifications. Chat, Talk, and approvals still use the iPhone.")
+                text: """
+                Direct mode supports device info, status, and notifications. \
+                Chat, Talk, and approvals still use the iPhone.
+                """)
 
             if self.directNode.isConfigured {
                 Toggle(isOn: Binding(
@@ -686,7 +688,6 @@ private struct WatchFaceHeader: View {
     let section: String
     let title: String
     let subtitle: String
-    let isOnline: Bool
     var avatarImageSource: String?
     var avatarText: String?
 
@@ -975,7 +976,8 @@ private struct WatchDecisionButton: View {
         Button(action: self.action) {
             Text(self.title)
                 .font(WatchClawType.captionBold)
-                .lineLimit(1)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 9)
                 .background {
@@ -984,6 +986,7 @@ private struct WatchDecisionButton: View {
                 }
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(self.title)
     }
 }
 
@@ -996,6 +999,61 @@ private struct WatchTinyStatus: View {
             .foregroundStyle(.secondary)
             .lineLimit(2)
             .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct WatchApprovalWarning: View {
+    let text: String
+
+    var body: some View {
+        Text(self.text)
+            .font(WatchClawType.body(size: 11))
+            .foregroundStyle(WatchClawStyle.accent)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+private struct WatchApprovalCommandReview: View {
+    let commandText: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Command")
+                .font(WatchClawType.label(size: 10, weight: .bold))
+                .foregroundStyle(.secondary)
+            Text(verbatim: self.commandText)
+                .font(WatchClawType.command)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.white.opacity(0.055))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(WatchClawStyle.border, lineWidth: 1)
+                }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Command to review")
+        .accessibilityValue(self.commandText)
+    }
+}
+
+private enum WatchExecApprovalDisplay {
+    static func warningText(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    static func statusText(for record: WatchExecApprovalRecord) -> String? {
+        let statusText = record.statusText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !statusText.isEmpty {
+            return statusText
+        }
+        return record.isResolving ? "Sending decision..." : nil
     }
 }
 
@@ -1418,27 +1476,33 @@ private struct WatchExecApprovalDetailView: View {
     var onDecision: ((String, String?, WatchExecApprovalDecision) -> Void)?
 
     var body: some View {
-        WatchDetailScroll(title: "Approval") {
+        WatchDetailScroll(title: "Review Command") {
             WatchHeroCard(
                 label: self.riskText(self.currentRecord?.approval.risk ?? self.record.approval.risk) ?? "Review",
-                title: self.currentRecord?.approval.commandText ?? self.record.approval.commandText,
+                title: "Command execution",
                 subtitle: self.metadataSummary,
                 accessory: Self
                     .expiresText(self.currentRecord?.approval.expiresAtMs ?? self.record.approval.expiresAtMs) ?? "Now")
 
-            if let statusText = self.currentRecord?.statusText, !statusText.isEmpty {
-                WatchTinyStatus(text: statusText)
+            WatchApprovalCommandReview(commandText: self.commandText)
+
+            if let warningText = WatchExecApprovalDisplay.warningText(
+                self.currentRecord?.approval.warningText ?? self.record.approval.warningText)
+            {
+                WatchApprovalWarning(text: warningText)
             }
 
             if let currentRecord {
-                if currentRecord.isResolving {
-                    WatchTinyStatus(text: "Sending decision...")
-                } else {
-                    HStack(spacing: 8) {
+                if let statusText = WatchExecApprovalDisplay.statusText(for: currentRecord) {
+                    WatchTinyStatus(text: statusText)
+                }
+
+                if !currentRecord.isResolving {
+                    VStack(spacing: 8) {
                         if currentRecord.approval.allowedDecisions.contains(.allowOnce) {
-                            WatchDecisionButton(title: "Approve", color: .green) {
+                            WatchDecisionButton(title: "Allow Once", color: .green) {
                                 self.onDecision?(
-                                    currentRecord.id,
+                                    currentRecord.approvalID,
                                     currentRecord.approval.gatewayStableID,
                                     .allowOnce)
                             }
@@ -1447,22 +1511,33 @@ private struct WatchExecApprovalDetailView: View {
                         if currentRecord.approval.allowedDecisions.contains(.deny) {
                             WatchDecisionButton(title: "Deny", color: WatchClawStyle.accent) {
                                 self.onDecision?(
-                                    currentRecord.id,
+                                    currentRecord.approvalID,
                                     currentRecord.approval.gatewayStableID,
                                     .deny)
                             }
                         }
                     }
                 }
+            } else if let terminalOutcomeText = self.store.terminalExecApprovalOutcomeText(
+                approvalId: self.record.approvalID,
+                gatewayStableID: self.record.approval.gatewayStableID)
+            {
+                WatchTinyStatus(text: terminalOutcomeText)
             }
         }
         .onAppear {
-            self.store.selectExecApproval(id: self.record.id)
+            self.store.selectExecApproval(
+                id: self.record.approvalID,
+                gatewayStableID: self.record.approval.gatewayStableID)
         }
     }
 
     private var currentRecord: WatchExecApprovalRecord? {
         self.store.execApprovals.first(where: { $0.id == self.record.id })
+    }
+
+    private var commandText: String {
+        self.currentRecord?.approval.commandText ?? self.record.approval.commandText
     }
 
     private var metadataSummary: String {
@@ -1477,7 +1552,7 @@ private struct WatchExecApprovalDetailView: View {
         if let agentId = approval.agentId, !agentId.isEmpty {
             parts.append(agentId)
         }
-        return parts.isEmpty ? "Tap to decide" : parts.joined(separator: " · ")
+        return parts.isEmpty ? "Review command below" : parts.joined(separator: " · ")
     }
 
     private func riskText(_ risk: WatchRiskLevel?) -> String? {

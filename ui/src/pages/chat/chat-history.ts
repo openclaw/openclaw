@@ -20,7 +20,11 @@ import {
   stripHeartbeatTokenForDisplay,
 } from "../../lib/chat/heartbeat-display.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
-import type { ChatSideResult } from "../../lib/chat/side-result.ts";
+import {
+  retirePendingChatSideQuestion,
+  type ChatSideResult,
+  type ChatSideResultPending,
+} from "../../lib/chat/side-result.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
@@ -30,6 +34,7 @@ import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
   scopedAgentParamsForSession,
   unsubscribeSessionMessages,
+  visibleSessionMatches,
   type SessionCapability,
 } from "../../lib/sessions/index.ts";
 import {
@@ -445,8 +450,12 @@ export type ChatState = {
   chatStreamStartedAt: number | null;
   lastError: string | null;
   chatError?: string | null;
-  chatSideResult?: ChatSideResult | null;
+  /** Completed side-chat turns (oldest first); follow-ups accumulate here. */
+  chatSideChatTurns?: ChatSideResult[];
+  chatSideResultPending?: ChatSideResultPending | null;
   chatSideResultTerminalRuns?: Set<string>;
+  /** Panel closed via X/Escape; conversation kept until cleared or reset. */
+  chatSideChatHidden?: boolean;
   chatReplyTarget?: unknown;
   agentsError?: string | null;
   onAgentsList?: (agentsList: AgentsListResult, client: GatewayBrowserClient) => void;
@@ -750,6 +759,8 @@ type ClearChatHistoryState = ChatState &
     sessions: Pick<SessionCapability, "reset">;
   };
 
+export type ClearChatHistoryResult = "completed" | "failed" | "uncertain";
+
 function hasAbortableChatSessionRun(state: ClearChatHistoryState): boolean {
   if (state.chatRunId) {
     return true;
@@ -761,43 +772,99 @@ function hasAbortableChatSessionRun(state: ClearChatHistoryState): boolean {
   );
 }
 
-function clearCachedChatMessagesForSession(state: ClearChatHistoryState, sessionKey: string) {
+function clearCachedChatMessagesForSession(
+  state: ClearChatHistoryState,
+  sessionKey: string,
+  agentId?: string,
+) {
   if (!state.chatMessagesBySession) {
     return;
   }
-  clearChatMessagesFromCache(state.chatMessagesBySession, state, { sessionKey });
+  clearChatMessagesFromCache(state.chatMessagesBySession, state, { sessionKey, agentId });
 }
 
-export async function clearChatHistory(state: ClearChatHistoryState) {
+export async function clearChatHistory(
+  state: ClearChatHistoryState,
+): Promise<ClearChatHistoryResult> {
   if (!state.client || !state.connected) {
-    return;
+    return "failed";
   }
+  const client = state.client;
+  const connectionEpoch = state.connectionEpoch;
+  const sessionKey = state.sessionKey;
+  const agentParams = scopedAgentParamsForSession(state, sessionKey);
+  const runId = state.chatRunId;
   const hadActiveRun = hasAbortableChatSessionRun(state);
   try {
-    await state.sessions.reset(
-      state.sessionKey,
-      scopedAgentParamsForSession(state, state.sessionKey),
-    );
-    state.chatMessages = [];
-    clearCachedChatMessagesForSession(state, state.sessionKey);
-    state.chatSideResult = null;
-    state.chatReplyTarget = null;
-    reconcileChatRunLifecycle(state, {
-      outcome: hadActiveRun ? "interrupted" : undefined,
-      sessionStatus: "killed",
-      runId: state.chatRunId,
-      sessionKey: state.sessionKey,
-      clearLocalRun: true,
-      clearChatStream: true,
-      clearToolStream: true,
-      clearSideResultTerminalRuns: true,
-      clearRunStatus: !hadActiveRun,
-    });
-    await loadChatHistory(state);
+    const resetResult = await state.sessions.reset(sessionKey, agentParams);
+    if (resetResult === "not-started") {
+      setChatError(state, "Gateway was unavailable before chat history could be cleared.");
+      scheduleChatScroll(state);
+      return "failed";
+    }
+    // Reset is destructive once issued. Drop the captured session's cached
+    // transcript before classifying the result so an ambiguous response cannot
+    // expose stale pre-reset history after a route switch.
+    clearCachedChatMessagesForSession(state, sessionKey, agentParams.agentId);
+    if (
+      resetResult === "uncertain" ||
+      state.client !== client ||
+      state.connectionEpoch !== connectionEpoch ||
+      !state.connected
+    ) {
+      let historyRefreshed = false;
+      if (
+        state.client &&
+        state.connected &&
+        visibleSessionMatches(state, sessionKey, agentParams.agentId)
+      ) {
+        // Do not let a failed refresh keep rendering the transcript that the
+        // ambiguous reset may already have destroyed. Clearing first also
+        // prevents history loading from preserving a pre-reset optimistic tail.
+        state.chatMessages = [];
+        historyRefreshed = Boolean(await loadChatHistory(state));
+      }
+      setChatError(
+        state,
+        historyRefreshed
+          ? "The clear request may have completed. Current history was refreshed; review it before resuming queued messages."
+          : "The clear request may have completed. Cached history was cleared, but current history could not be refreshed; reconnect and review it before resuming queued messages.",
+      );
+      scheduleChatScroll(state);
+      // sessions.reset is not idempotent. Treat an uncertain completion as
+      // consumed so a durable /clear row cannot erase newer history on retry.
+      return "uncertain";
+    }
   } catch (err) {
     setChatError(state, String(err));
+    scheduleChatScroll(state);
+    return "failed";
   }
+  if (!visibleSessionMatches(state, sessionKey, agentParams.agentId)) {
+    return "completed";
+  }
+  state.chatMessages = [];
+  state.chatSideChatTurns = [];
+  state.chatSideChatHidden = false;
+  state.chatReplyTarget = null;
+  reconcileChatRunLifecycle(state, {
+    outcome: hadActiveRun ? "interrupted" : undefined,
+    sessionStatus: "killed",
+    runId,
+    sessionKey,
+    clearLocalRun: true,
+    clearChatStream: true,
+    clearToolStream: true,
+    clearSideResultTerminalRuns: true,
+    clearRunStatus: !hadActiveRun,
+  });
+  // After the suppression-set wipe above: retire (not just drop) a pending
+  // BTW run so its late resultless terminal event cannot re-enter the freshly
+  // cleared transcript.
+  retirePendingChatSideQuestion(state);
+  await loadChatHistory(state);
   scheduleChatScroll(state);
+  return "completed";
 }
 
 export async function loadChatHistory(

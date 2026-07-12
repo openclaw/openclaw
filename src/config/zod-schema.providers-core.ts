@@ -100,6 +100,7 @@ const ChannelStreamingProgressSchema = z
     toolProgress: z.boolean().optional(),
     commandText: z.enum(["raw", "status"]).optional(),
     commentary: z.boolean().optional(),
+    narration: z.boolean().optional(),
   })
   .strict();
 const DiscordStreamingProgressSchema = ChannelStreamingProgressSchema;
@@ -1475,10 +1476,7 @@ export const IMessageAccountSchemaBase = z
     mediaMaxMb: z.number().int().positive().optional(),
     probeTimeoutMs: z.number().int().positive().optional(),
     textChunkLimit: z.number().int().positive().optional(),
-    chunkMode: z.enum(["length", "newline"]).optional(),
     streaming: ChannelDeliveryStreamingConfigSchema.optional(),
-    blockStreaming: z.boolean().optional(),
-    blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     sendReadReceipts: z.boolean().optional(),
     reactionNotifications: z.enum(["off", "own", "all"]).optional(),
     coalesceSameSenderDms: z.boolean().optional(),
@@ -1656,11 +1654,8 @@ export const MSTeamsConfigSchema = z
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     contextVisibility: ContextVisibilityModeSchema.optional(),
     textChunkLimit: z.number().int().positive().optional(),
-    chunkMode: z.enum(["length", "newline"]).optional(),
     streaming: ChannelPreviewStreamingConfigSchema.optional(),
     typingIndicator: z.boolean().optional(),
-    blockStreaming: z.boolean().optional(),
-    blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     mediaAllowHosts: z.array(z.string()).optional(),
     mediaAuthAllowHosts: z.array(z.string()).optional(),
     graphMediaFallback: z.boolean().optional(),

@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Gateway service lifecycle runners, including unmanaged-process fallbacks and restart health checks.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
@@ -88,6 +89,11 @@ function resolveGatewayPortFallback(): Promise<number> {
   return readBestEffortConfig()
     .then((cfg) => resolveGatewayPort(cfg, process.env))
     .catch(() => resolveGatewayPort(undefined, process.env));
+}
+
+async function resolveExplicitGatewayConfigPort(): Promise<number | undefined> {
+  const cfg = await readBestEffortConfig().catch(() => undefined);
+  return cfg?.gateway?.port;
 }
 
 async function assertUnmanagedGatewayRestartEnabled(port: number): Promise<void> {
@@ -252,7 +258,7 @@ async function restartGatewayWithoutServiceManager(
     reason: "gateway.restart",
     ...(restartIntent ? { intent: restartIntent } : {}),
   });
-  signalVerifiedGatewayPidSync(pids[0], "SIGUSR1");
+  signalVerifiedGatewayPidSync(expectDefined(pids[0], "pids entry at 0"), "SIGUSR1");
   return {
     result: "restarted" as const,
     message: `Gateway restart signal sent to unmanaged process on port ${port}: ${pids[0]}.`,
@@ -273,6 +279,7 @@ export async function runDaemonUninstall(opts: DaemonLifecycleOptions = {}) {
 /** Start the managed Gateway service, repairing stale service definitions when possible. */
 export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
   const service = resolveGatewayService();
+  const expectedPort = await resolveExplicitGatewayConfigPort();
   return await runServiceStart({
     serviceNoun: "Gateway",
     service,
@@ -284,12 +291,14 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
     repairLoadedService: async ({ json, stdout, warn, state, issues }) =>
       await repairLoadedGatewayServiceForStart({
         service,
+        port: expectedPort,
         json,
         stdout,
         warn,
         state,
         issues,
       }),
+    expectedPort,
     opts,
   });
 }
@@ -320,13 +329,14 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
   if (opts.safe) {
     return await requestSafeGatewayRestart(opts);
   }
-  const json = Boolean(opts.json);
+  const jsonOutput = Boolean(opts.json);
   const service = resolveGatewayService();
   let restartedWithoutServiceManager = false;
   const restartIntent = resolveGatewayRestartIntentOptions(opts);
-  const restartPort = await resolveGatewayLifecyclePort(service).catch(() =>
-    resolveGatewayPortFallback(),
-  );
+  const configuredPort = await resolveExplicitGatewayConfigPort();
+  const restartPort =
+    configuredPort ??
+    (await resolveGatewayLifecyclePort(service).catch(() => resolveGatewayPortFallback()));
   const restartHealthAttempts = postRestartHealthAttempts();
   const restartWaitMs = restartHealthAttempts * POST_RESTART_HEALTH_DELAY_MS;
   const restartWaitSeconds = Math.round(restartWaitMs / 1000);
@@ -340,6 +350,18 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       ...(restartIntent ? { restartIntent } : {}),
     },
     checkTokenDrift: true,
+    expectedPort: configuredPort,
+    repairLoadedService: async ({ json, stdout, warn, state, issues }) =>
+      await repairLoadedGatewayServiceForStart({
+        action: "restart",
+        service,
+        port: configuredPort,
+        json,
+        stdout,
+        warn,
+        state,
+        issues,
+      }),
     onNotLoaded: async () => {
       if (process.platform === "darwin") {
         const recovered = await recoverInstalledLaunchAgent({ result: "restarted" });
@@ -368,7 +390,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
 
         const diagnostics = renderGatewayPortHealthDiagnostics(health);
         const timeoutLine = `Timed out after ${restartWaitSeconds}s waiting for gateway port ${restartPort} to become healthy.`;
-        if (!json) {
+        if (!jsonOutput) {
           defaultRuntime.log(theme.warn(timeoutLine));
           for (const line of diagnostics) {
             defaultRuntime.log(theme.muted(line));
@@ -398,7 +420,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         // Gateway pids once, restart again, then re-run the same health proof.
         const staleMsg = `Found stale gateway process(es): ${health.staleGatewayPids.join(", ")}.`;
         warnings.push(staleMsg);
-        if (!json) {
+        if (!jsonOutput) {
           defaultRuntime.log(theme.warn(staleMsg));
           defaultRuntime.log(theme.muted("Stopping stale process(es) and retrying restart..."));
         }
@@ -431,7 +453,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         health.runtime.status === "running" && health.portUsage.status === "free"
           ? `Gateway process is running but port ${restartPort} is still free (startup hang/crash loop or very slow VM startup).`
           : null;
-      if (!json) {
+      if (!jsonOutput) {
         defaultRuntime.log(theme.warn(failure.statusLine));
         if (runningNoPortLine) {
           defaultRuntime.log(theme.warn(runningNoPortLine));

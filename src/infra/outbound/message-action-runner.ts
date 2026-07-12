@@ -19,6 +19,11 @@ import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { resolveResponsePrefixTemplate } from "../../auto-reply/reply/response-prefix-template.js";
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
+import { normalizeOutboundLocation } from "../../channels/location.js";
+import {
+  normalizeConversationReadInvocationOrigin,
+  type ConversationReadInvocationOrigin,
+} from "../../channels/plugins/conversation-read-origin.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import type {
@@ -47,8 +52,6 @@ import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citati
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
 import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
   INTERNAL_MESSAGE_CHANNEL,
   type GatewayClientMode,
   type GatewayClientName,
@@ -108,6 +111,7 @@ export type MessageActionRunnerGateway = {
   url?: string;
   token?: string;
   timeoutMs?: number;
+  resolveAgentRuntimeIdentityToken?: () => Promise<string | undefined>;
   clientName: GatewayClientName;
   clientDisplayName?: string;
   mode: GatewayClientMode;
@@ -130,6 +134,16 @@ export type RunMessageActionParams = {
   requesterSenderUsername?: string | null;
   requesterSenderE164?: string | null;
   senderIsOwner?: boolean;
+  conversationReadOrigin?: ConversationReadInvocationOrigin;
+  /**
+   * Authorization facts resolved from the host-issued current-turn capability.
+   * Presence means ambient routing fields must not be used as identity.
+   */
+  messageActionAuthorization?: {
+    requesterAccountId?: string;
+    requesterSenderId?: string;
+    toolContext?: ChannelThreadingToolContext;
+  };
   sessionId?: string;
   toolContext?: ChannelThreadingToolContext;
   gateway?: MessageActionRunnerGateway;
@@ -209,9 +223,10 @@ async function callGatewayMessageAction<T>(params: {
   gateway?: MessageActionRunnerGateway;
   actionParams: Record<string, unknown>;
 }): Promise<T> {
-  const { callGateway, callGatewayLeastPrivilege } = await loadMessageActionGatewayRuntime();
+  const { callGatewayLeastPrivilege } = await loadMessageActionGatewayRuntime();
   const gateway = resolveGatewayActionOptions(params.gateway);
-  const callParams = {
+  const agentRuntimeIdentityToken = await params.gateway?.resolveAgentRuntimeIdentityToken?.();
+  return await callGatewayLeastPrivilege<T>({
     url: gateway.url,
     token: gateway.token,
     method: "message.action",
@@ -220,26 +235,7 @@ async function callGatewayMessageAction<T>(params: {
     clientName: gateway.clientName,
     clientDisplayName: gateway.clientDisplayName,
     mode: gateway.mode,
-  };
-  const isTrustedBackendBridge =
-    gateway.clientName === GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT &&
-    gateway.mode === GATEWAY_CLIENT_MODES.BACKEND;
-  const requesterAccountId = normalizeOptionalString(params.actionParams.requesterAccountId);
-  const requesterSenderId = normalizeOptionalString(params.actionParams.requesterSenderId);
-  const carriesTrustedRequester =
-    isTrustedBackendBridge &&
-    (requesterAccountId !== undefined ||
-      requesterSenderId !== undefined ||
-      params.actionParams.senderIsOwner !== undefined);
-  if (!carriesTrustedRequester) {
-    return await callGatewayLeastPrivilege<T>(callParams);
-  }
-  // Trusted requester fields come from inbound server context. The RPC needs
-  // admin scope to prove provenance; the Gateway recognizes this backend bridge
-  // and keeps channel-handler authorization at message.action least privilege.
-  return await callGateway<T>({
-    ...callParams,
-    scopes: ["operator.admin"],
+    agentRuntimeIdentityToken,
   });
 }
 
@@ -528,6 +524,8 @@ function applySendPayloadPartsToActionParams(
   actionParams.mediaUrls = parts.mediaUrls;
   actionParams.asVoice = parts.asVoice || undefined;
   actionParams.audioAsVoice = parts.asVoice || undefined;
+  actionParams.asVideoNote = parts.payload.videoAsNote || undefined;
+  actionParams.location = parts.payload.location;
 }
 
 function collectMessageAttachmentMediaHints(value: unknown): string[] {
@@ -687,6 +685,9 @@ async function runGatewayPluginMessageActionOrNull(params: {
   if (executionMode !== "gateway") {
     return null;
   }
+  const conversationReadOrigin = normalizeConversationReadInvocationOrigin(
+    params.input.conversationReadOrigin,
+  );
   const payload = await callGatewayMessageAction<unknown>({
     gateway: params.gateway,
     actionParams: {
@@ -694,14 +695,12 @@ async function runGatewayPluginMessageActionOrNull(params: {
       action: params.action,
       params: params.params,
       accountId: params.accountId ?? undefined,
-      requesterAccountId: params.input.requesterAccountId ?? undefined,
-      requesterSenderId: params.input.requesterSenderId ?? undefined,
       senderIsOwner: params.input.senderIsOwner,
       sessionKey: params.input.sessionKey,
       sessionId: params.input.sessionId,
       inboundTurnKind: params.input.inboundEventKind,
       agentId: params.agentId,
-      toolContext: params.input.toolContext,
+      ...(conversationReadOrigin === "direct-operator" ? { conversationReadOrigin } : {}),
       idempotencyKey: await resolveGatewayActionIdempotencyKey(
         normalizeOptionalString(params.params.idempotencyKey),
       ),
@@ -721,6 +720,7 @@ function resolveGateway(input: RunMessageActionParams): MessageActionRunnerGatew
     clientName: input.gateway.clientName,
     clientDisplayName: input.gateway.clientDisplayName,
     mode: input.gateway.mode,
+    resolveAgentRuntimeIdentityToken: input.gateway.resolveAgentRuntimeIdentityToken,
   };
 }
 
@@ -944,10 +944,11 @@ async function buildSendPayloadParts(params: {
     Boolean(mediaHint) || mediaUrlHints.length > 0 || attachmentMediaHints.length > 0;
   const hasPresentation = hasMessagePresentationBlocks(actionParams.presentation);
   const hasInteractive = hasInteractiveReplyBlocks(actionParams.interactive);
+  const location = normalizeOutboundLocation(actionParams.location);
   const caption = readStringParam(actionParams, "caption", { allowEmpty: true }) ?? "";
   let message =
     readStringParam(actionParams, "message", {
-      required: !hasMediaHint && !hasPresentation && !hasInteractive,
+      required: !hasMediaHint && !hasPresentation && !hasInteractive && !location,
       allowEmpty: true,
     }) ?? "";
   if (message.includes("\\n")) {
@@ -1000,6 +1001,13 @@ async function buildSendPayloadParts(params: {
   }
   actionParams.mediaUrls = mergedMediaUrls.length > 0 ? [...mergedMediaUrls] : undefined;
 
+  if (
+    location &&
+    (message.trim() || mergedMediaUrls.length > 0 || hasPresentation || hasInteractive)
+  ) {
+    throw new Error("Location sends cannot be combined with message text or media.");
+  }
+
   if (params.channel && params.target) {
     message = await maybeApplyCrossContextMarker({
       cfg: params.cfg,
@@ -1023,9 +1031,10 @@ async function buildSendPayloadParts(params: {
       mediaUrls: mergedMediaUrls,
       presentation: actionParams.presentation,
       interactive: actionParams.interactive,
+      location,
     })
   ) {
-    throw new Error("send requires text or media");
+    throw new Error("send requires text or media or location");
   }
   if (message || !hasPresentation) {
     actionParams.message = message;
@@ -1041,6 +1050,7 @@ async function buildSendPayloadParts(params: {
     readBooleanParam(actionParams, "asVoice") ??
     readBooleanParam(actionParams, "audioAsVoice") ??
     parsed.audioAsVoice;
+  const asVideoNote = readBooleanParam(actionParams, "asVideoNote") ?? false;
   const bestEffort = readBooleanParam(actionParams, "bestEffort");
   const silent = readBooleanParam(actionParams, "silent");
   const mirrorMediaUrls =
@@ -1064,6 +1074,8 @@ async function buildSendPayloadParts(params: {
       ...(mediaUrl ? { mediaUrl } : {}),
       ...(mergedMediaUrls.length ? { mediaUrls: mergedMediaUrls } : {}),
       ...(asVoice ? { audioAsVoice: true } : {}),
+      ...(asVideoNote ? { videoAsNote: true } : {}),
+      ...(location ? { location } : {}),
       ...(presentation ? { presentation } : {}),
       ...(interactive ? { interactive } : {}),
       ...(delivery ? { delivery } : {}),
@@ -1252,8 +1264,12 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       requesterSenderUsername: input.requesterSenderUsername ?? undefined,
       requesterSenderE164: input.requesterSenderE164 ?? undefined,
       senderIsOwner: input.senderIsOwner,
+      conversationReadOrigin: normalizeConversationReadInvocationOrigin(
+        input.conversationReadOrigin,
+      ),
       mediaAccess,
       accountId: accountId ?? undefined,
+      conversationType: outboundRoute?.chatType,
       sessionId: input.sessionId,
       inboundEventKind: input.inboundEventKind,
       gateway,
@@ -1364,6 +1380,9 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
       agentId,
       requesterAccountId: input.requesterAccountId ?? undefined,
       requesterSenderId: input.requesterSenderId ?? undefined,
+      conversationReadOrigin: normalizeConversationReadInvocationOrigin(
+        input.conversationReadOrigin,
+      ),
       sessionKey: input.sessionKey,
       sessionId: input.sessionId,
       inboundEventKind: input.inboundEventKind,
@@ -1480,6 +1499,7 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
     return gatewayPluginAction;
   }
 
+  const authorization = input.messageActionAuthorization;
   const handled = await dispatchChannelMessageAction({
     channel,
     action,
@@ -1489,15 +1509,22 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
     mediaLocalRoots: mediaAccess.localRoots,
     mediaReadFile: mediaAccess.readFile,
     accountId: accountId ?? undefined,
-    requesterAccountId: input.requesterAccountId ?? undefined,
-    requesterSenderId: input.requesterSenderId ?? undefined,
+    requesterAccountId:
+      authorization !== undefined
+        ? authorization.requesterAccountId
+        : (input.requesterAccountId ?? undefined),
+    requesterSenderId:
+      authorization !== undefined
+        ? authorization.requesterSenderId
+        : (input.requesterSenderId ?? undefined),
     senderIsOwner: input.senderIsOwner,
+    conversationReadOrigin: normalizeConversationReadInvocationOrigin(input.conversationReadOrigin),
     sessionKey: input.sessionKey,
     sessionId: input.sessionId,
     inboundEventKind: input.inboundEventKind,
     agentId,
     gateway,
-    toolContext: input.toolContext,
+    toolContext: authorization !== undefined ? authorization.toolContext : input.toolContext,
     dryRun,
   });
   if (!handled) {
@@ -1551,6 +1578,15 @@ export async function runMessageAction(
   }
   const channel = await resolveChannel(cfg, params, input.toolContext);
   params.channel = channel;
+  const channelPlugin = resolveOutboundChannelPlugin({ channel, cfg });
+  const pluginOwnedAction = action !== "send" && action !== "poll";
+  if (
+    pluginOwnedAction &&
+    channelPlugin?.actions?.supportsAction &&
+    !channelPlugin.actions.supportsAction({ action })
+  ) {
+    throw new Error(`Message action ${action} not supported for channel ${channel}.`);
+  }
   params = normalizeMessageActionInput({
     action,
     args: params,
@@ -1614,7 +1650,6 @@ export async function runMessageAction(
     mediaAccess,
   });
   const gateway = resolveGateway(input);
-  const channelPlugin = resolveOutboundChannelPlugin({ channel, cfg });
   const preserveSendBuffer =
     action === "send" &&
     Boolean(gateway) &&

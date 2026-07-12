@@ -60,6 +60,7 @@ import {
 import { createSseByteGuard } from "../utils/streaming-byte-guard.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
+import { supportsOpenAITemperature } from "./openai-reasoning-effort.js";
 import {
   convertResponsesMessages,
   convertResponsesToolPayload,
@@ -569,7 +570,7 @@ function buildRequestBody(
     parallel_tool_calls: true,
   };
 
-  if (options?.temperature !== undefined) {
+  if (options?.temperature !== undefined && supportsOpenAITemperature(model)) {
     body.temperature = options.temperature;
   }
 
@@ -1437,8 +1438,9 @@ async function* parseWebSocket(
       if (signal?.aborted) {
         throw new Error("Request was aborted");
       }
-      if (queue.length > 0) {
-        yield queue.shift()!;
+      const next = queue.shift();
+      if (next !== undefined) {
+        yield next;
         continue;
       }
       if (done) {
