@@ -627,7 +627,7 @@ If you disable gateway auth (not recommended on shared hosts), the avatar route 
 
 When gateway auth is configured, assistant local-media previews use a two-step route:
 
-- `GET /__openclaw__/assistant-media?meta=1&source=<path>` requires the normal Control UI operator auth; the browser sends the gateway token as a bearer header when checking availability.
+- `GET /__openclaw__/assistant-media?meta=1&source=<path>` requires the normal Control UI operator auth: the browser sends the gateway token as a bearer header when checking availability, or — over Tailscale Serve with `gateway.auth.allowTailscale` enabled — the request is authorized by the verified Tailscale identity that also satisfies the other Control UI HTTP reads (see [Tailnet access](#tailnet-access-recommended) above), subject to the same browser-origin policy.
 - Successful metadata responses include a short-lived `mediaTicket` scoped to that exact source path.
 - Browser-rendered image, audio, video, and document URLs use `mediaTicket=<ticket>` instead of the active gateway token or password. The ticket expires quickly and cannot authorize a different source.
 
