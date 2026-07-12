@@ -26,4 +26,16 @@ describe("quoteCliArg", () => {
   it("wraps string with dollar sign", () => {
     expect(quoteCliArg("$PATH")).toBe("'$PATH'");
   });
+
+  it("wraps string with ampersand", () => {
+    expect(quoteCliArg("build & run")).toBe("'build & run'");
+  });
+
+  it("wraps string with pipe", () => {
+    expect(quoteCliArg("cat file | grep x")).toBe("'cat file | grep x'");
+  });
+
+  it("wraps string with glob wildcard", () => {
+    expect(quoteCliArg("*.txt")).toBe("'*.txt'");
+  });
 });
