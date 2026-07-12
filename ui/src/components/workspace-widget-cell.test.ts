@@ -109,6 +109,83 @@ describe("workspace widget cell", () => {
     expect(chip?.getAttribute("title")).toContain("finance");
   });
 
+  it("renders versioned blame with a logbook link for agent-authored widgets", () => {
+    const container = renderToContainer(
+      renderWidgetCell({
+        widget: widget({ createdBy: "agent:main" }),
+        binding: { value: 1 },
+        blame: {
+          creator: "agent:main",
+          agentId: "main",
+          firstSeen: { kind: "exact", version: 41 },
+          logbookHref: "/plugin?plugin=logbook&id=logbook",
+        },
+        menuOpen: true,
+        pending: false,
+        dragging: false,
+        builtinContext: BUILTIN_CONTEXT,
+        callbacks: noopCallbacks(),
+      }),
+    );
+
+    expect(
+      container.querySelector('[data-test-id="workspace-widget-blame"]')?.textContent,
+    ).toContain("agent:main");
+    expect(
+      container.querySelector('[data-test-id="workspace-widget-blame"]')?.textContent,
+    ).toContain("v41");
+    expect(
+      container
+        .querySelector<HTMLAnchorElement>('[data-test-id="workspace-widget-blame-link"]')
+        ?.getAttribute("href"),
+    ).toBe("/plugin?plugin=logbook&id=logbook");
+  });
+
+  it("renders blame without a link for user authors", () => {
+    const container = renderToContainer(
+      renderWidgetCell({
+        widget: widget({ createdBy: "user" }),
+        binding: { value: 1 },
+        blame: { creator: "user", agentId: null, firstSeen: { kind: "unknown" } },
+        menuOpen: true,
+        pending: false,
+        dragging: false,
+        builtinContext: BUILTIN_CONTEXT,
+        callbacks: noopCallbacks(),
+      }),
+    );
+
+    expect(
+      container.querySelector('[data-test-id="workspace-widget-blame"]')?.textContent,
+    ).toContain("user");
+    expect(container.querySelector('[data-test-id="workspace-widget-blame-link"]')).toBeNull();
+  });
+
+  it("omits the blame link when an agent author has no derivable logbook target", () => {
+    const container = renderToContainer(
+      renderWidgetCell({
+        widget: widget({ createdBy: "agent:main" }),
+        binding: { value: 1 },
+        blame: {
+          creator: "agent:main",
+          agentId: "main",
+          firstSeen: { kind: "unknown" },
+          logbookHref: null,
+        },
+        menuOpen: true,
+        pending: false,
+        dragging: false,
+        builtinContext: BUILTIN_CONTEXT,
+        callbacks: noopCallbacks(),
+      }),
+    );
+
+    expect(
+      container.querySelector('[data-test-id="workspace-widget-blame"]')?.textContent,
+    ).toContain("agent:main");
+    expect(container.querySelector('[data-test-id="workspace-widget-blame-link"]')).toBeNull();
+  });
+
   it("omits the provenance chip for user-authored widgets", () => {
     const container = renderToContainer(
       renderWidgetCell({

@@ -94,6 +94,14 @@ function readOptionalString(record: Record<string, unknown>, key: string): strin
   return value.trim();
 }
 
+function readVersion(record: Record<string, unknown>, key = "version"): number {
+  const value = record[key];
+  if (!Number.isInteger(value) || (value as number) < 0) {
+    throw new Error(`${key} must be a non-negative integer`);
+  }
+  return value as number;
+}
+
 // Gateway RPC is the operator's surface (Control UI and CLI). Provenance is
 // derived from the caller, never read from params: a caller-supplied `RPC_ACTOR`
 // would let an operator forge `agent:<id>` chips, and let any agent that can
@@ -787,6 +795,47 @@ export function registerWorkspaceGatewayMethods(options: WorkspaceGatewayMethodO
       try {
         readParams(opts.params, []);
         const doc = store.undo();
+        broadcastChange(opts.context.broadcast, { doc, actor: RPC_ACTOR });
+        opts.respond(true, { doc, workspaceVersion: doc.workspaceVersion });
+      } catch (error) {
+        respondError(opts.respond, error);
+      }
+    },
+    { scope: WRITE_SCOPE },
+  );
+
+  api.registerGatewayMethod(
+    "workspaces.history.list",
+    async ({ params: requestParams, respond }) => {
+      try {
+        readParams(requestParams, []);
+        respond(true, { entries: store.listHistory() });
+      } catch (error) {
+        respondError(respond, error);
+      }
+    },
+    { scope: READ_SCOPE },
+  );
+
+  api.registerGatewayMethod(
+    "workspaces.history.get",
+    async ({ params: requestParams, respond }) => {
+      try {
+        const params = readParams(requestParams, ["version"]);
+        respond(true, { doc: store.getHistorySnapshot(readVersion(params)) });
+      } catch (error) {
+        respondError(respond, error);
+      }
+    },
+    { scope: READ_SCOPE },
+  );
+
+  api.registerGatewayMethod(
+    "workspaces.history.restore",
+    async (opts) => {
+      try {
+        const params = readParams(opts.params, ["version"]);
+        const doc = store.restoreHistorySnapshot(readVersion(params));
         broadcastChange(opts.context.broadcast, { doc, actor: RPC_ACTOR });
         opts.respond(true, { doc, workspaceVersion: doc.workspaceVersion });
       } catch (error) {

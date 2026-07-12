@@ -59,6 +59,22 @@ JSON file into the data directory and point a `stat-card` at it.
 Tabs and widgets carry a `createdBy` stamp — `user`, `system`, or `agent:<id>` — set from
 whoever made the write. It cannot be supplied by the caller, so an agent cannot label its
 work as yours, and the "AI" chip on an agent-authored widget always means what it says.
+The widget menu shows that creator and, when the loaded history proves it, the exact
+version or bounded version range where the widget first appeared. Sparse history is
+reported as unknown rather than guessed. Agent-authored widgets also link to the
+advertised Logbook plugin when it is available.
+
+## History and restore
+
+Select **History** in a workspace header to inspect the 20-entry undo ring. History
+previews are read-only, corrupt snapshots are omitted without hiding valid older entries,
+and the comparison lists structural tab and widget changes only. It does not claim to
+cover bindings, widget properties, registry approvals, or preferences.
+
+Restoring a previewed snapshot creates a new, monotonically increasing workspace version;
+it never rewinds the version counter. The restore consumes the exact selected snapshot,
+preserves current custom-widget approval state, and saves the pre-restore workspace so
+the restore itself can be undone.
 
 ## Custom widgets
 

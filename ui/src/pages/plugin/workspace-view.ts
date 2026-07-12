@@ -13,9 +13,11 @@ import {
 import {
   renderWidgetCell,
   type WorkspaceCustomWidgetContext,
+  type WorkspaceWidgetBlame,
   type WorkspaceWidgetCellCallbacks,
 } from "../../components/workspace-widget-cell.ts";
 import { t } from "../../i18n/index.ts";
+import { formatRelativeTimestamp } from "../../lib/format.ts";
 import {
   beginDrag,
   collides,
@@ -28,6 +30,15 @@ import {
   updateDrag,
   type WorkspaceDragState,
 } from "../../lib/workspace/grid.ts";
+import {
+  computeWorkspaceStructuralDiff,
+  firstSeenVersion,
+  groupDiffByCreator,
+  loadHistoryList,
+  loadHistorySnapshot,
+  type WorkspaceHistoryEntry,
+  type WorkspaceHistorySnapshot,
+} from "../../lib/workspace/history.ts";
 import {
   approveWidget,
   clearActiveDrag,
@@ -48,8 +59,10 @@ import {
   setWidgetCollapsed,
   startBindingPolling,
   subscribeToWorkspaceEvents,
+  restoreWorkspaceVersion,
   updateWidgetTitle,
   visibleTabs,
+  workspaceAgentProvenance,
   type WorkspaceBindingResult,
   type WorkspaceUiState,
 } from "../../lib/workspace/index.ts";
@@ -76,6 +89,8 @@ export type WorkspaceProps = {
   basePath?: string;
   /** Session key for custom-widget prompt dispatch (L5). */
   sessionKey?: string;
+  /** Closest advertised logbook target for agent-authored provenance. */
+  logbookHref?: string | null;
 };
 
 const DEFAULT_EMBED_CONTEXT: BuiltinWidgetContext["embed"] = {
@@ -108,7 +123,32 @@ type WorkspaceViewState = {
   dialog: WorkspaceDialogState | null;
   /** First-visit onboarding banner dismissed this session (#5); mirrors localStorage. */
   onboardingDismissed: boolean;
+  history: WorkspaceHistoryViewState;
 };
+
+type WorkspaceHistoryViewState = {
+  open: boolean;
+  loading: boolean;
+  error: string | null;
+  entries: WorkspaceHistoryEntry[];
+  snapshots: Map<number, WorkspaceDocument>;
+  selectedVersion: number | null;
+  confirmRestore: boolean;
+  restoring: boolean;
+};
+
+function initialHistoryViewState(): WorkspaceHistoryViewState {
+  return {
+    open: false,
+    loading: false,
+    error: null,
+    entries: [],
+    snapshots: new Map(),
+    selectedVersion: null,
+    confirmRestore: false,
+    restoring: false,
+  };
+}
 
 /** localStorage flag so the first-visit onboarding banner (#5) stays dismissed across reloads. */
 const ONBOARDING_DISMISS_KEY = "openclaw:control-ui:workspace-onboarding-dismissed:v1";
@@ -227,6 +267,7 @@ function getViewState(host: object): WorkspaceViewState {
       dataVersion: 0,
       dialog: null,
       onboardingDismissed: isOnboardingDismissed(),
+      history: initialHistoryViewState(),
     };
     workspaceViewStates.set(host, state);
   }
@@ -236,6 +277,105 @@ function getViewState(host: object): WorkspaceViewState {
 /** Advance the data-refresh counter so the next render re-resolves bindings. */
 export function bumpWorkspaceDataVersion(host: object): void {
   getViewState(host).dataVersion += 1;
+}
+
+function loadedHistorySnapshots(
+  viewState: WorkspaceViewState,
+  current: WorkspaceDocument,
+): WorkspaceHistorySnapshot[] {
+  const snapshots = [...viewState.history.snapshots.entries()].map(([version, workspace]) => ({
+    version,
+    workspace,
+  }));
+  return snapshots.some((snapshot) => snapshot.version === current.workspaceVersion)
+    ? snapshots
+    : [...snapshots, { version: current.workspaceVersion, workspace: current }];
+}
+
+function computeWidgetBlame(
+  props: WorkspaceProps,
+  viewState: WorkspaceViewState,
+  workspace: WorkspaceDocument,
+  widget: WorkspaceWidget,
+): WorkspaceWidgetBlame | undefined {
+  const creator = widget.createdBy;
+  if (!creator) {
+    return undefined;
+  }
+  const agentId = workspaceAgentProvenance(creator);
+  return {
+    creator,
+    agentId,
+    firstSeen: firstSeenVersion(widget.id, loadedHistorySnapshots(viewState, workspace)),
+    ...(agentId ? { logbookHref: props.logbookHref ?? null } : {}),
+  };
+}
+
+async function ensureHistorySnapshot(
+  props: WorkspaceProps,
+  viewState: WorkspaceViewState,
+  version: number,
+): Promise<void> {
+  const history = viewState.history;
+  if (history.snapshots.has(version)) {
+    return;
+  }
+  try {
+    const workspace = await loadHistorySnapshot(props.client, version);
+    if (workspace) {
+      history.snapshots.set(version, workspace);
+    }
+  } catch (error) {
+    history.error = error instanceof Error ? error.message : String(error);
+  }
+  props.onRequestUpdate?.();
+}
+
+async function refreshHistoryList(
+  props: WorkspaceProps,
+  viewState: WorkspaceViewState,
+): Promise<void> {
+  const history = viewState.history;
+  history.loading = true;
+  history.error = null;
+  props.onRequestUpdate?.();
+  try {
+    history.entries = await loadHistoryList(props.client);
+    if (!history.entries.some((entry) => entry.version === history.selectedVersion)) {
+      history.selectedVersion = history.entries[0]?.version ?? null;
+    }
+  } catch (error) {
+    history.error = error instanceof Error ? error.message : String(error);
+  } finally {
+    history.loading = false;
+    props.onRequestUpdate?.();
+  }
+  if (history.selectedVersion !== null) {
+    await ensureHistorySnapshot(props, viewState, history.selectedVersion);
+  }
+}
+
+function openHistory(props: WorkspaceProps, viewState: WorkspaceViewState): void {
+  viewState.history.open = true;
+  viewState.history.confirmRestore = false;
+  void refreshHistoryList(props, viewState);
+  props.onRequestUpdate?.();
+}
+
+function closeHistory(props: WorkspaceProps, viewState: WorkspaceViewState): void {
+  viewState.history.open = false;
+  viewState.history.confirmRestore = false;
+  props.onRequestUpdate?.();
+}
+
+function selectHistoryVersion(
+  props: WorkspaceProps,
+  viewState: WorkspaceViewState,
+  version: number,
+): void {
+  viewState.history.selectedVersion = version;
+  void ensureHistorySnapshot(props, viewState, version);
+  props.onRequestUpdate?.();
 }
 
 /** The workspace tab slug requested via the `?ws=` deep-link query param. */
@@ -575,9 +715,11 @@ function renderGrid(
     <div class="workspace-grid" style="min-height: ${minHeight}px" data-test-id="workspace-grid">
       ${tab.widgets.map((widget) => {
         const custom = buildCustomContext(props, state, viewState, workspace, widget);
+        const blame = computeWidgetBlame(props, viewState, workspace, widget);
         return renderWidgetCell({
           widget,
           binding: viewState.bindingResults.get(widget.id) ?? null,
+          ...(blame ? { blame } : {}),
           menuOpen: viewState.openMenuWidgetId === widget.id,
           pending: state.pendingWidgetIds.has(widget.id),
           dragging: viewState.drag?.widgetId === widget.id,
@@ -914,8 +1056,268 @@ export function renderWorkspace(props: WorkspaceProps): TemplateResult {
         ? html`<div class="callout danger workspace__toast" role="alert">${state.actionError}</div>`
         : nothing}
       ${renderBody(props, state, viewState)} ${renderDialog(props, state, viewState)}
+      ${renderHistoryPanel(props, state, viewState)}
     </section>
   `;
+}
+
+function renderHistoryPanel(
+  props: WorkspaceProps,
+  state: WorkspaceUiState,
+  viewState: WorkspaceViewState,
+): TemplateResult | typeof nothing {
+  const history = viewState.history;
+  if (!history.open) {
+    return nothing;
+  }
+  const selected =
+    history.selectedVersion === null ? undefined : history.snapshots.get(history.selectedVersion);
+  return html`
+    <openclaw-modal-dialog
+      label=${t("workspaces.history.title")}
+      @modal-cancel=${() => closeHistory(props, viewState)}
+    >
+      <div class="workspace-history" data-test-id="workspace-history">
+        <div class="workspace-history__header">
+          <div class="exec-approval-title">${t("workspaces.history.title")}</div>
+          <div class="card-sub">${t("workspaces.history.subtitle")}</div>
+        </div>
+        ${history.error
+          ? html`<div class="callout danger" role="alert">${history.error}</div>`
+          : nothing}
+        <div class="workspace-history__body">
+          ${renderHistoryList(props, viewState)}
+          <div class="workspace-history__detail">
+            ${history.selectedVersion === null
+              ? html`<div class="card-sub">${t("workspaces.history.emptyDetail")}</div>`
+              : renderHistoryDetail(props, state, viewState, history.selectedVersion, selected)}
+          </div>
+        </div>
+        <div class="exec-approval-actions">
+          <button class="btn" type="button" @click=${() => closeHistory(props, viewState)}>
+            ${t("common.close")}
+          </button>
+        </div>
+      </div>
+    </openclaw-modal-dialog>
+  `;
+}
+
+function renderHistoryList(props: WorkspaceProps, viewState: WorkspaceViewState): TemplateResult {
+  const history = viewState.history;
+  if (history.loading && history.entries.length === 0) {
+    return html`<div class="workspace-history__list">
+      <div class="card-sub">${t("common.loading")}</div>
+    </div>`;
+  }
+  if (history.entries.length === 0) {
+    return html`<div class="workspace-history__list">
+      <div class="card-sub">${t("workspaces.history.empty")}</div>
+    </div>`;
+  }
+  const newest = history.entries[0]?.version;
+  return html`
+    <ul class="workspace-history__list" role="listbox" aria-label=${t("workspaces.history.title")}>
+      ${history.entries.map((entry) => {
+        const active = entry.version === history.selectedVersion;
+        return html`<li>
+          <button
+            class="workspace-history__item ${active ? "workspace-history__item--active" : ""}"
+            type="button"
+            role="option"
+            aria-selected=${active ? "true" : "false"}
+            data-test-id="workspace-history-item"
+            @click=${() => selectHistoryVersion(props, viewState, entry.version)}
+          >
+            <span class="workspace-history__version"
+              >${t("workspaces.history.version", { version: String(entry.version) })}</span
+            >
+            <span class="workspace-history__time"
+              >${formatRelativeTimestamp(Date.parse(entry.savedAt))}</span
+            >
+            ${entry.version === newest
+              ? html`<span class="workspace-history__latest"
+                  >${t("workspaces.history.latest")}</span
+                >`
+              : nothing}
+          </button>
+        </li>`;
+      })}
+    </ul>
+  `;
+}
+
+function renderHistoryDetail(
+  props: WorkspaceProps,
+  state: WorkspaceUiState,
+  viewState: WorkspaceViewState,
+  version: number,
+  snapshot: WorkspaceDocument | undefined,
+): TemplateResult {
+  const history = viewState.history;
+  if (!snapshot) {
+    return html`<div class="card-sub" data-test-id="workspace-history-loading">
+      ${t("common.loading")}
+    </div>`;
+  }
+  const current = state.workspace;
+  return html`
+    <div>
+      <div class="workspace-history__section-title">${t("workspaces.history.previewTitle")}</div>
+      ${renderHistoryPreview(snapshot, state.activeSlug)}
+    </div>
+    <div>
+      <div class="workspace-history__section-title">${t("workspaces.history.diffTitle")}</div>
+      ${current ? renderHistoryDiff(snapshot, current) : nothing}
+    </div>
+    <div class="workspace-history__restore">
+      ${history.confirmRestore
+        ? html`
+            <span class="workspace-history__confirm"
+              >${t("workspaces.history.restoreConfirm")}</span
+            >
+            <button
+              class="btn btn--small btn--primary"
+              type="button"
+              ?disabled=${history.restoring}
+              data-test-id="workspace-history-restore-confirm"
+              @click=${async () => {
+                history.restoring = true;
+                props.onRequestUpdate?.();
+                const restored = await restoreWorkspaceVersion(state, props.client, version);
+                history.restoring = false;
+                if (restored) {
+                  closeHistory(props, viewState);
+                } else {
+                  props.onRequestUpdate?.();
+                }
+              }}
+            >
+              ${t("workspaces.history.restore")}
+            </button>
+            <button
+              class="btn btn--small"
+              type="button"
+              @click=${() => {
+                history.confirmRestore = false;
+                props.onRequestUpdate?.();
+              }}
+            >
+              ${t("common.cancel")}
+            </button>
+          `
+        : html`<button
+            class="btn btn--small"
+            type="button"
+            data-test-id="workspace-history-restore"
+            @click=${() => {
+              history.confirmRestore = true;
+              props.onRequestUpdate?.();
+            }}
+          >
+            ${t("workspaces.history.restore")}
+          </button>`}
+    </div>
+  `;
+}
+
+function renderHistoryPreview(
+  snapshot: WorkspaceDocument,
+  activeSlug: string | null,
+): TemplateResult {
+  const tab =
+    (activeSlug ? snapshot.tabs.find((entry) => entry.slug === activeSlug) : undefined) ??
+    visibleTabs(snapshot)[0] ??
+    snapshot.tabs[0];
+  if (!tab || tab.widgets.length === 0) {
+    return html`<div class="workspace-history__preview workspace-history__preview--empty">
+      ${t("workspaces.history.previewEmpty")}
+    </div>`;
+  }
+  const rows = gridRowCount(tab.widgets);
+  const minHeight = rows * WORKSPACE_ROW_HEIGHT + Math.max(0, rows - 1) * WORKSPACE_GRID_GAP;
+  return html`
+    <div
+      class="workspace-history__preview workspace-grid workspace-grid--readonly"
+      style="min-height: ${minHeight}px"
+      data-test-id="workspace-history-preview"
+      aria-hidden="true"
+    >
+      ${tab.widgets.map(
+        (widget) => html`<div
+          class="workspace-history__cell"
+          style=${gridPlacementStyle(widget.grid)}
+        >
+          <span class="workspace-history__cell-title">${widget.title || widget.kind}</span>
+          ${workspaceAgentProvenance(widget.createdBy)
+            ? html`<span class="workspace-widget__provenance"
+                >${t("workspaces.widget.provenanceChip")}</span
+              >`
+            : nothing}
+        </div>`,
+      )}
+    </div>
+  `;
+}
+
+function renderHistoryDiff(
+  snapshot: WorkspaceDocument,
+  current: WorkspaceDocument,
+): TemplateResult {
+  const diff = computeWorkspaceStructuralDiff(snapshot, current);
+  if (diff.length === 0) {
+    return html`<div class="card-sub" data-test-id="workspace-history-diff-empty">
+      ${t("workspaces.history.diffEmpty")}
+    </div>`;
+  }
+  return html`
+    <div class="workspace-history__diff-groups" data-test-id="workspace-history-diff">
+      ${groupDiffByCreator(diff).map(
+        (group) => html`<div class="workspace-history__diff-group">
+          <div class="workspace-history__diff-actor">
+            ${group.creator ?? t("workspaces.history.creatorUnknown")}
+          </div>
+          <ul class="workspace-history__diff-list">
+            ${group.entries.map(
+              (entry) => html`<li class="workspace-history__diff-item">
+                <span class="workspace-history__diff-kind"
+                  >${historyDiffKindLabel(entry.kind)}</span
+                >
+                <span>${entry.label}</span>
+                ${entry.detail
+                  ? html`<span class="workspace-history__diff-detail">${entry.detail}</span>`
+                  : nothing}
+              </li>`,
+            )}
+          </ul>
+        </div>`,
+      )}
+    </div>
+  `;
+}
+
+function historyDiffKindLabel(
+  kind: ReturnType<typeof computeWorkspaceStructuralDiff>[number]["kind"],
+): string {
+  switch (kind) {
+    case "widget-added":
+      return t("workspaces.history.kind.widget-added");
+    case "widget-removed":
+      return t("workspaces.history.kind.widget-removed");
+    case "widget-moved":
+      return t("workspaces.history.kind.widget-moved");
+    case "widget-resized":
+      return t("workspaces.history.kind.widget-resized");
+    case "widget-retitled":
+      return t("workspaces.history.kind.widget-retitled");
+    case "tab-added":
+      return t("workspaces.history.kind.tab-added");
+    case "tab-removed":
+      return t("workspaces.history.kind.tab-removed");
+    case "tab-retitled":
+      return t("workspaces.history.kind.tab-retitled");
+  }
+  throw new Error("unsupported workspace structural diff kind");
 }
 
 function renderBody(
@@ -967,7 +1369,7 @@ function renderBody(
     </div>`;
   }
   return html`
-    ${renderWorkspacesHeader(tab)}
+    ${renderWorkspacesHeader(props, viewState, tab)}
     ${renderOnboardingBanner(viewState, () => props.onRequestUpdate?.())}
     ${renderTabStrip(state, workspace)} ${renderGrid(props, state, viewState, workspace, tab)}
   `;
@@ -978,11 +1380,25 @@ function renderBody(
  * the title with a subtitle line, matching the app's .page-title / .page-sub
  * idiom used by the other top-level pages.
  */
-function renderWorkspacesHeader(tab: WorkspaceTab): TemplateResult {
+function renderWorkspacesHeader(
+  props: WorkspaceProps,
+  viewState: WorkspaceViewState,
+  tab: WorkspaceTab,
+): TemplateResult {
   return html`
     <div class="workspace-page-header" data-test-id="workspace-page-header">
-      <div class="page-title">${tab.title}</div>
-      <div class="page-sub">${t("workspaces.header.subtitle")}</div>
+      <div class="workspace-page-header__titles">
+        <div class="page-title">${tab.title}</div>
+        <div class="page-sub">${t("workspaces.header.subtitle")}</div>
+      </div>
+      <button
+        class="btn btn--small workspace-history__toggle"
+        type="button"
+        data-test-id="workspace-history-toggle"
+        @click=${() => openHistory(props, viewState)}
+      >
+        ${icons.clock} ${t("workspaces.history.open")}
+      </button>
     </div>
   `;
 }

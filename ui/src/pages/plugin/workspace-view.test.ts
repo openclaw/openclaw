@@ -2,6 +2,7 @@ import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { getWorkspaceState } from "../../lib/workspace/index.ts";
+import type { WorkspaceDocument } from "../../lib/workspace/types.ts";
 import { stopWorkspace } from "./workspace-controller.ts";
 import {
   bumpWorkspaceDataVersion,
@@ -19,7 +20,7 @@ function renderView(host: object): HTMLElement {
   return container;
 }
 
-const doc = {
+const doc: WorkspaceDocument = {
   schemaVersion: 1,
   workspaceVersion: 1,
   tabs: [
@@ -271,6 +272,105 @@ describe("renderWorkspace", () => {
           "3333333333333333333333333333333333333333333",
         );
       });
+    } finally {
+      stopWorkspace(host);
+      host.remove();
+    }
+  });
+
+  it("reviews history, shows provenance blame, and restores through monotonic undo", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const state = getWorkspaceState(host);
+    const current = structuredClone(doc);
+    current.workspaceVersion = 3;
+    current.tabs[0]!.widgets[0]!.createdBy = "agent:main";
+    const historical = structuredClone(current);
+    historical.workspaceVersion = 2;
+    historical.tabs[0]!.widgets[0]!.title = "Notes before";
+    current.tabs[0]!.widgets.push({
+      id: "new-widget",
+      kind: "builtin:markdown",
+      title: "New",
+      grid: { x: 6, y: 0, w: 6, h: 2 },
+      collapsed: false,
+      createdBy: "agent:main",
+    });
+    const restored = structuredClone(historical);
+    restored.workspaceVersion = 5;
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "workspaces.history.list") {
+        return {
+          entries: [{ version: 2, savedAt: "2026-07-08T00:00:00.000Z", bytes: 120 }],
+        };
+      }
+      if (method === "workspaces.history.get") {
+        return { doc: historical };
+      }
+      if (method === "workspaces.history.restore") {
+        expect(params).toEqual({ version: 2 });
+        return { doc: restored, workspaceVersion: 5 };
+      }
+      return {};
+    });
+    const client = {
+      request,
+      addEventListener: vi.fn(() => () => undefined),
+    } as unknown as GatewayBrowserClient;
+    const props = {
+      host,
+      client,
+      connected: true,
+      logbookHref: "/plugin?plugin=logbook&id=logbook",
+    };
+    state.loaded = true;
+    state.workspace = current;
+    state.activeSlug = "main";
+
+    try {
+      render(renderWorkspace(props), host);
+      const historyToggle = host.querySelector<HTMLButtonElement>(
+        '[data-test-id="workspace-history-toggle"]',
+      );
+      expect(historyToggle).not.toBeNull();
+      historyToggle!.click();
+      await vi.waitFor(() =>
+        expect(request).toHaveBeenCalledWith("workspaces.history.get", { version: 2 }),
+      );
+
+      render(renderWorkspace(props), host);
+      expect(host.querySelector('[data-test-id="workspace-history"]')).not.toBeNull();
+      expect(host.querySelector('[data-test-id="workspace-history-diff"]')?.textContent).toContain(
+        "Notes",
+      );
+      const newWidgetMenu = host.querySelector<HTMLButtonElement>(
+        '[data-widget-id="new-widget"] .workspace-widget__menu-toggle',
+      );
+      newWidgetMenu?.click();
+      render(renderWorkspace({ host, client, connected: true }), host);
+      expect(host.querySelector('[data-test-id="workspace-widget-blame"]')?.textContent).toContain(
+        "v3",
+      );
+
+      host.querySelector<HTMLButtonElement>(".workspace-widget__menu-toggle")!.click();
+      render(renderWorkspace(props), host);
+      expect(host.querySelector('[data-test-id="workspace-widget-blame"]')?.textContent).toContain(
+        "agent:main",
+      );
+      expect(
+        host
+          .querySelector<HTMLAnchorElement>('[data-test-id="workspace-widget-blame-link"]')
+          ?.getAttribute("href"),
+      ).toBe("/plugin?plugin=logbook&id=logbook");
+
+      host.querySelector<HTMLButtonElement>('[data-test-id="workspace-history-restore"]')!.click();
+      render(renderWorkspace(props), host);
+      host
+        .querySelector<HTMLButtonElement>('[data-test-id="workspace-history-restore-confirm"]')!
+        .click();
+      await vi.waitFor(() => expect(state.workspace?.workspaceVersion).toBe(5));
+      expect(request).toHaveBeenCalledWith("workspaces.history.restore", { version: 2 });
+      expect(request).not.toHaveBeenCalledWith("workspaces.get", {});
     } finally {
       stopWorkspace(host);
       host.remove();
