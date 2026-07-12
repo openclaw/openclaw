@@ -41,6 +41,20 @@ describe("Android app i18n resources", () => {
     ).toEqual(["native_status", "native_unused"]);
   });
 
+  it("ignores Android resource references that only appear in comments", () => {
+    expect(
+      findUnusedAndroidResourceKeys(
+        ["kotlin_comment", "block_comment", "xml_comment", "live"],
+        `
+          // R.string.kotlin_comment
+          /* R.string.block_comment */
+          <!-- @string/xml_comment -->
+          R.string.live
+        `,
+      ),
+    ).toEqual(["kotlin_comment", "block_comment", "xml_comment"]);
+  });
+
   it("selects duplicate-source translations by frequency then stable text order", () => {
     expect(selectDeterministicTranslation("Source", ["Beta", "Alpha", "Beta"])).toBe("Beta");
     expect(selectDeterministicTranslation("Source", ["Beta", "Alpha"])).toBe("Alpha");

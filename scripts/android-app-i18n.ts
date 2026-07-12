@@ -284,6 +284,9 @@ async function readAndroidResourceReferences(root = ANDROID_MAIN_ROOT): Promise<
       sources.push(await readAndroidResourceReferences(fullPath));
       continue;
     }
+    if (fullPath === GENERATED_KOTLIN_PATH) {
+      continue;
+    }
     if (entry.isFile() && /\.(?:kt|kts|xml)$/u.test(entry.name)) {
       sources.push(await readFile(fullPath, "utf8"));
     }
@@ -295,11 +298,15 @@ export function findUnusedAndroidResourceKeys(
   keys: Iterable<string>,
   referenceSource: string,
 ): string[] {
+  const sourceWithoutComments = referenceSource
+    .replaceAll(/<!--[\s\S]*?-->/gu, "")
+    .replaceAll(/\/\*[\s\S]*?\*\//gu, "")
+    .replaceAll(/\/\/[^\r\n]*/gu, "");
   const references = new Set([
-    ...[...referenceSource.matchAll(/\bR\.string\.([A-Za-z0-9_]+)\b/gu)].flatMap((match) =>
+    ...[...sourceWithoutComments.matchAll(/\bR\.string\.([A-Za-z0-9_]+)\b/gu)].flatMap((match) =>
       match[1] ? [match[1]] : [],
     ),
-    ...[...referenceSource.matchAll(/@string\/([A-Za-z0-9_]+)\b/gu)].flatMap((match) =>
+    ...[...sourceWithoutComments.matchAll(/@string\/([A-Za-z0-9_]+)\b/gu)].flatMap((match) =>
       match[1] ? [match[1]] : [],
     ),
   ]);
@@ -377,7 +384,7 @@ const UI_STRING_FUNCTION_RE = /\bfun\s+(?:<[^>{}]*>\s*)?([A-Za-z_][A-Za-z0-9_]*)
 const UI_STRING_PROPERTY_RE =
   /\bval\s+(?:[A-Za-z_][A-Za-z0-9_]*\.)?([A-Za-z_][A-Za-z0-9_]*)\s*:\s*String\s*(?:\n\s*)?get\(\)\s*=\s*/gu;
 const UI_BRANCH_LITERAL_RE = /(?:->|return|\?:)\s*"((?:\\.|[^"\\])+)"/gu;
-const UI_IF_BRANCH_LITERAL_RE = /(?:\bif\s*\([^)]*\)|\belse)\s*\{\s*"((?:\\.|[^"\\])+)"/gu;
+const UI_ELSE_BRANCH_LITERAL_RE = /\belse\s*\{?\s*"((?:\\.|[^"\\])+)"/gu;
 const UI_MODEL_STRING_NAME_RE =
   /^(?:contentDescription|errorText|helperText|onClickLabel|statusText)$/u;
 const UI_MODEL_CLASS_FIELDS = new Map<string, ReadonlySet<string>>([
@@ -647,19 +654,51 @@ function collectHelperLiteralFindings(source: string, repoPath: string): Android
     const matches = [
       ...(direct ? [direct] : []),
       ...body.matchAll(UI_BRANCH_LITERAL_RE),
-      ...body.matchAll(UI_IF_BRANCH_LITERAL_RE),
+      ...body.matchAll(UI_ELSE_BRANCH_LITERAL_RE),
     ];
+    const seenOffsets = new Set<number>();
+    const addLiteral = (literal: string, literalOffset: number) => {
+      if (seenOffsets.has(literalOffset)) {
+        return;
+      }
+      seenOffsets.add(literalOffset);
+      findings.push({
+        line: lineNumber(source, start + literalOffset),
+        path: repoPath,
+        source: decodeKotlinLiteral(literal),
+      });
+    };
     for (const match of matches) {
       const literal = match[1];
       if (!literal) {
         continue;
       }
       const literalOffset = body.indexOf(`"${literal}"`, match.index ?? 0);
-      findings.push({
-        line: lineNumber(source, start + Math.max(0, literalOffset)),
-        path: repoPath,
-        source: decodeKotlinLiteral(literal),
-      });
+      addLiteral(literal, Math.max(0, literalOffset));
+    }
+    for (const match of body.matchAll(/\bif\s*/gu)) {
+      let cursor = (match.index ?? 0) + match[0].length;
+      if (body[cursor] !== "(") {
+        continue;
+      }
+      const closingParen = findClosingDelimiter(body, cursor, "(", ")");
+      if (closingParen === null) {
+        continue;
+      }
+      cursor = closingParen + 1;
+      while (/\s/u.test(body[cursor] ?? "")) {
+        cursor += 1;
+      }
+      if (body[cursor] === "{") {
+        cursor += 1;
+        while (/\s/u.test(body[cursor] ?? "")) {
+          cursor += 1;
+        }
+      }
+      const literal = body.slice(cursor).match(/^"((?:\\.|[^"\\])+)"/u)?.[1];
+      if (literal) {
+        addLiteral(literal, cursor);
+      }
     }
   };
   for (const match of source.matchAll(UI_STRING_FUNCTION_RE)) {
@@ -753,9 +792,25 @@ function collectTypedModelLiteralFindings(
     if (userFacingParameters.size === 0) {
       continue;
     }
-    const callPattern = new RegExp(`\\b${className}\\s*\\(`, "gu");
+    const callPattern = new RegExp(`\\b${className}\\b`, "gu");
     for (const call of source.matchAll(callPattern)) {
-      const callOpening = (call.index ?? 0) + call[0].lastIndexOf("(");
+      let callOpening = (call.index ?? 0) + call[0].length;
+      while (/\s/u.test(source[callOpening] ?? "")) {
+        callOpening += 1;
+      }
+      if (source[callOpening] === "<") {
+        const closingTypeArguments = findClosingDelimiter(source, callOpening, "<", ">");
+        if (closingTypeArguments === null) {
+          continue;
+        }
+        callOpening = closingTypeArguments + 1;
+        while (/\s/u.test(source[callOpening] ?? "")) {
+          callOpening += 1;
+        }
+      }
+      if (source[callOpening] !== "(") {
+        continue;
+      }
       if (callOpening === openingParen) {
         continue;
       }
