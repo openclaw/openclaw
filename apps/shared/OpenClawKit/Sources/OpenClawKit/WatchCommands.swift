@@ -29,7 +29,6 @@ public enum OpenClawWatchRisk: String, Codable, Sendable, Equatable {
 
 public enum OpenClawWatchExecApprovalDecision: String, Codable, Sendable, Equatable {
     case allowOnce = "allow-once"
-    case allowAlways = "allow-always"
     case deny
 }
 
@@ -379,7 +378,7 @@ public struct OpenClawWatchAppSnapshotMessage: Codable, Sendable, Equatable {
         self.pendingApprovalCount = pendingApprovalCount
         self.chatItems = chatItems
         self.chatStatus = chatStatus
-        self.chatStatusText = chatStatusText
+        self.chatStatusText = chatStatusText ?? chatStatus.map(Self.legacyText)
         self.sentAtMs = sentAtMs
         self.snapshotId = snapshotId
     }

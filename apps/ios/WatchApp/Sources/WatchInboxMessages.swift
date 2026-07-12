@@ -101,7 +101,6 @@ enum WatchStatusLocalizationKey: String {
     case queuedFormat
     case refreshingFromIPhone
     case allowOnce
-    case allowAlways
     case deny
     case retryApproval
     case allowedOnce
@@ -176,8 +175,6 @@ enum WatchStatusLocalizationKey: String {
             String(localized: "Refreshing from iPhone…")
         case .allowOnce:
             String(localized: "Allow Once")
-        case .allowAlways:
-            String(localized: "Allow Always")
         case .deny:
             String(localized: "Deny")
         case .retryApproval:
@@ -410,8 +407,6 @@ private extension WatchExecApprovalDecision {
         switch self {
         case .allowOnce:
             localize(.allowOnce)
-        case .allowAlways:
-            localize(.allowAlways)
         case .deny:
             localize(.deny)
         }

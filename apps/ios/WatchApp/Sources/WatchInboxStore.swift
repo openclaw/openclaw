@@ -750,8 +750,6 @@ extension WatchInboxStore {
             switch message.decision {
             case .allowOnce:
                 WatchExecApprovalOutcome(code: .allowedOnce)
-            case .allowAlways:
-                WatchExecApprovalOutcome(code: .allowedAlways)
             case .deny:
                 WatchExecApprovalOutcome(code: .denied)
             case nil:

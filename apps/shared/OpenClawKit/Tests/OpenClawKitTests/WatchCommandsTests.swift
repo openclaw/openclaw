@@ -46,6 +46,28 @@ struct WatchCommandsTests {
         #expect(message.talkStatus.code == .talkOff)
     }
 
+    @Test func `semantic chat status always writes the shipped text field`() throws {
+        let message = OpenClawWatchAppSnapshotMessage(
+            gatewayStatus: OpenClawWatchAppStatus(code: .gatewayConnected),
+            gatewayStatusText: "Connected",
+            gatewayConnected: true,
+            agentName: "Main",
+            sessionKey: "main",
+            talkStatus: OpenClawWatchAppStatus(code: .talkOff),
+            talkStatusText: "Off",
+            talkEnabled: false,
+            talkListening: false,
+            talkSpeaking: false,
+            pendingApprovalCount: 0,
+            chatStatus: OpenClawWatchAppStatus(code: .chatUnavailable))
+
+        let encoded = try JSONEncoder().encode(message)
+        let object = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+
+        #expect(message.chatStatusText == "Chat unavailable")
+        #expect(object["chatStatusText"] as? String == "Chat unavailable")
+    }
+
     @Test func `unknown semantic statuses fall back to legacy text`() throws {
         let json = """
         {
