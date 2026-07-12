@@ -8,6 +8,7 @@ import * as tar from "tar";
 import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "../infra/disk-space.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { isRecord, resolveUserPath } from "../utils.js";
 import { buildBackupArchivePath } from "./backup-shared.js";
@@ -607,21 +608,6 @@ function assertSqliteExtractionBudget(params: {
   }
 }
 
-function assertSqliteCheckOk(params: {
-  database: DatabaseSync;
-  archivePath: string;
-  pragma: "integrity_check" | "quick_check";
-}): void {
-  const rows = params.database.prepare(`PRAGMA ${params.pragma}`).all() as Array<
-    Record<string, unknown>
-  >;
-  const results = rows.map((row) => row[params.pragma]);
-  if (results.length === 0 || results.some((result) => result !== "ok")) {
-    const details = results.map((result) => String(result)).join("; ") || "no result";
-    throw new Error(`SQLite ${params.pragma} failed for ${params.archivePath}: ${details}`);
-  }
-}
-
 function assertExpectedSqliteRole(
   database: DatabaseSync,
   archivePath: string,
@@ -748,16 +734,7 @@ async function verifySqliteSnapshots(params: {
         });
         database.exec("PRAGMA query_only = ON; PRAGMA trusted_schema = OFF;");
         await loadSqliteVecExtension({ db: database });
-        assertSqliteCheckOk({
-          database,
-          archivePath: entry.normalized,
-          pragma: "quick_check",
-        });
-        assertSqliteCheckOk({
-          database,
-          archivePath: entry.normalized,
-          pragma: "integrity_check",
-        });
+        assertSqliteIntegrity(database, entry.normalized);
         assertExpectedSqliteRole(database, entry.normalized, expectedRole);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
