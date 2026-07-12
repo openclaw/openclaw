@@ -492,7 +492,9 @@ describe("formatApiKeyPreview", () => {
     expect(formatApiKeyPreview("😀".repeat(10))).toBe("😀😀…😀😀");
 
     // No isolated surrogates are emitted anywhere.
-    const all = ["a😀b", headSplit, tailSplit, "😀".repeat(10)].map(formatApiKeyPreview).join("");
+    const all = ["a😀b", headSplit, tailSplit, "😀".repeat(10)]
+      .map((value) => formatApiKeyPreview(value))
+      .join("");
     expect(() => encodeURIComponent(all)).not.toThrow();
     expect(all).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
     expect(all).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
