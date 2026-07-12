@@ -29,6 +29,10 @@ export type BackupSqliteJsonOptions = {
   json?: boolean;
 };
 
+export type BackupSqliteVerifyOptions = BackupSqliteJsonOptions & {
+  scratch?: string;
+};
+
 export type BackupSqliteRestoreOptions = BackupSqliteJsonOptions & {
   target?: string;
 };
@@ -101,9 +105,9 @@ export async function backupSqliteListCommand(
 export async function backupSqliteVerifyCommand(
   runtime: RuntimeEnv,
   snapshot: string,
-  options: BackupSqliteJsonOptions,
+  options: BackupSqliteVerifyOptions,
 ): Promise<BackupSqliteVerifyResult> {
-  const resolved = resolveSnapshot(snapshot);
+  const resolved = resolveSnapshot(snapshot, options.scratch);
   const verified = await resolved.provider.verify(resolved.ref);
   const report: BackupSqliteVerifyResult = {
     ok: true,
@@ -155,14 +159,22 @@ async function resolveSnapshotDatabase(
   };
 }
 
-function resolveSnapshot(snapshot: string): {
+function resolveSnapshot(
+  snapshot: string,
+  scratch?: string,
+): {
   provider: ReturnType<typeof createLocalSqliteSnapshotProvider>;
   ref: SnapshotRef;
 } {
   const snapshotPath = resolveRequiredPath(snapshot, "<snapshot>");
+  const repositoryPath = path.dirname(snapshotPath);
+  const validationRootPath = scratch
+    ? resolveRequiredPath(scratch, "--scratch")
+    : path.dirname(repositoryPath);
   return {
     provider: createLocalSqliteSnapshotProvider({
-      repositoryPath: path.dirname(snapshotPath),
+      repositoryPath,
+      validationRootPath,
       ...OPENCLAW_SNAPSHOT_READ_OPTIONS,
     }),
     ref: { path: snapshotPath },

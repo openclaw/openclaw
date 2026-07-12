@@ -171,8 +171,17 @@ describe("registerBackupCommand", () => {
       json: true,
     });
 
-    await runCli(["backup", "sqlite", "verify", "/tmp/snapshots/one", "--json"]);
+    await runCli([
+      "backup",
+      "sqlite",
+      "verify",
+      "/tmp/snapshots/one",
+      "--scratch",
+      "/tmp/private-scratch",
+      "--json",
+    ]);
     expect(backupSqliteVerifyCommand).toHaveBeenCalledWith(runtime, "/tmp/snapshots/one", {
+      scratch: "/tmp/private-scratch",
       json: true,
     });
 

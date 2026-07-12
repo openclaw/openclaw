@@ -122,10 +122,13 @@ describe("SQLite backup commands", () => {
     const tempDir = tempDirs.make("openclaw-backup-sqlite-");
     const stateDir = path.join(tempDir, "state");
     const repositoryPath = path.join(tempDir, "snapshots");
+    const scratchPath = path.join(tempDir, "scratch");
     const restorePath = path.join(tempDir, "restore", "openclaw.sqlite");
     process.env.OPENCLAW_STATE_DIR = stateDir;
     const databasePath = resolveOpenClawStateSqlitePath();
     await fs.mkdir(path.dirname(databasePath), { recursive: true });
+    await fs.mkdir(scratchPath, { mode: 0o700 });
+    await fs.chmod(scratchPath, 0o700);
     createGlobalDatabase(databasePath);
     const runtime = createRuntimeCapture();
 
@@ -149,9 +152,11 @@ describe("SQLite backup commands", () => {
     expect(listed.snapshots[0]?.manifest.snapshotId).toBe(created.manifest.snapshotId);
 
     const verified = await backupSqliteVerifyCommand(runtime, created.snapshotPath, {
+      scratch: scratchPath,
       json: true,
     });
     expect(verified.manifest).toEqual(created.manifest);
+    await expect(fs.readdir(scratchPath)).resolves.toEqual([]);
 
     const restored = await backupSqliteRestoreCommand(runtime, created.snapshotPath, {
       target: restorePath,

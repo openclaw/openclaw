@@ -159,10 +159,12 @@ function registerBackupSqliteCommands(backup: Command): void {
   sqlite
     .command("verify <snapshot>")
     .description("Verify a snapshot manifest, artifact hash, SQLite integrity, and database owner")
+    .option("--scratch <path>", "Existing private directory for verification copies")
     .option("--json", "Output JSON", false)
     .action(async (snapshot, opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         await backupSqliteVerifyCommand(defaultRuntime, snapshot as string, {
+          scratch: opts.scratch as string | undefined,
           json: Boolean(opts.json),
         });
       });
