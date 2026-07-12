@@ -204,7 +204,17 @@ function toConfigPathSegments(pathLocal3: unknown): ConfigPathSegment[] {
 }
 
 function formatConfigPath(segments: readonly ConfigPathSegment[]): string {
-  return segments.join(".");
+  if (segments.length === 0) {
+    return "";
+  }
+  let out = String(segments[0]);
+  for (let i = 1; i < segments.length; i++) {
+    const segment = segments[i];
+    // Use bracket notation for numeric (array-index) segments so the path is
+    // unambiguous and grep-able, e.g. `agents.list[3].tools.profile`.
+    out += typeof segment === "number" ? `[${segment}]` : `.${segment}`;
+  }
+  return out;
 }
 
 function formatMissingOfficialExternalPluginWarning(
@@ -825,7 +835,21 @@ export function collectUnsupportedSecretRefPolicyIssues(raw: unknown): ConfigVal
 function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
   const record = toIssueRecord(issue);
   const pathItem = formatConfigPath(toConfigPathSegments(record?.path));
-  const message = typeof record?.message === "string" ? record.message : "Invalid input";
+  let message = typeof record?.message === "string" ? record.message : "Invalid input";
+
+  // Surface the rejected value for enum/invalid-value issues. Zod's
+  // invalid_enum_value / invalid_literal issues carry a `received` field that
+  // is otherwise dropped before formatting; appending it tells the user exactly
+  // what they set wrong. See issue #104854.
+  const received = record?.received;
+  if (
+    typeof record?.code === "string" &&
+    (record.code === "invalid_enum_value" || record.code === "invalid_literal") &&
+    received !== undefined &&
+    received !== null
+  ) {
+    message = `${message}, got: ${JSON.stringify(received)}`;
+  }
 
   // Numeric ceiling/floor hints (too_big / too_small with numeric origin).
   // Append a parenthesized bound alongside Zod's native message,

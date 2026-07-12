@@ -433,4 +433,40 @@ describe("mapZodIssueToConfigIssue", () => {
       expect(result.message).toBe("Invalid input");
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Issue #104854: bracket-notation paths and rejected enum value
+  // ---------------------------------------------------------------------------
+
+  describe("issue 104854 message clarity", () => {
+    it("renders numeric path segments as bracket notation", () => {
+      const result = testing.mapZodIssueToConfigIssue({
+        code: "invalid_enum_value",
+        path: ["agents", "list", 3, "tools", "profile"],
+        message: 'Invalid enum value, expected "minimal"',
+        received: "none",
+      });
+      expect(result.path).toBe("agents.list[3].tools.profile");
+    });
+
+    it("surfaces the rejected value with got: for enum issues", () => {
+      const result = testing.mapZodIssueToConfigIssue({
+        code: "invalid_enum_value",
+        path: ["agents", "list", 0, "tools", "profile"],
+        message: 'Invalid enum value, expected "minimal"',
+        received: "none",
+      });
+      expect(result.message).toContain('got: "none"');
+    });
+
+    it("does not append got: for non-enum issues", () => {
+      const result = testing.mapZodIssueToConfigIssue({
+        code: "custom",
+        path: ["channels", "telegram", "botToken"],
+        message: "invalid bot token",
+        received: "none",
+      });
+      expect(result.message).not.toContain("got:");
+    });
+  });
 });
