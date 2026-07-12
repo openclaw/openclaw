@@ -10,6 +10,7 @@ import {
   collectPublishablePluginPackages,
   collectPublishablePluginPackageErrors,
   OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
+  parsePluginNpmReleaseArgs,
   parsePluginReleaseArgs,
   parsePluginReleaseSelection,
   parsePluginReleaseSelectionMode,
@@ -84,6 +85,36 @@ describe("parsePluginReleaseArgs", () => {
       selection: [],
       pluginsFlagProvided: false,
     });
+  });
+
+  it("accepts only the closed extended-stable npm tag override", () => {
+    expect(
+      parsePluginNpmReleaseArgs([
+        "--selection-mode",
+        "all-publishable",
+        "--npm-dist-tag",
+        "extended-stable",
+      ]),
+    ).toMatchObject({ npmDistTag: "extended-stable" });
+    expect(() => parsePluginNpmReleaseArgs(["--npm-dist-tag", "latest"])).toThrow(
+      'Unknown npm dist-tag override: latest. Expected "extended-stable".',
+    );
+  });
+
+  it("requires extended-stable publication to include every publishable plugin", () => {
+    expect(() => parsePluginNpmReleaseArgs(["--npm-dist-tag", "extended-stable"])).toThrow(
+      "extended-stable requires --selection-mode all-publishable",
+    );
+    expect(() =>
+      parsePluginNpmReleaseArgs([
+        "--selection-mode",
+        "selected",
+        "--plugins",
+        "@openclaw/zalo",
+        "--npm-dist-tag",
+        "extended-stable",
+      ]),
+    ).toThrow("extended-stable requires --selection-mode all-publishable");
   });
 });
 
@@ -485,6 +516,50 @@ describe("collectPublishablePluginPackages", () => {
         version: "2026.4.10-alpha.1",
       },
     ]);
+  });
+
+  it("uses extended-stable for every publishable plugin at the exact root version", () => {
+    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
+    writeJsonFile(join(repoDir, "package.json"), { version: "2026.7.33" });
+    writePluginReadme(repoDir, "demo-plugin");
+    writeJsonFile(join(repoDir, "extensions", "demo-plugin", "package.json"), {
+      name: "@openclaw/demo-plugin",
+      version: "2026.7.33",
+      type: "module",
+      repository: { type: "git", url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL },
+      openclaw: {
+        extensions: ["./index.ts"],
+        ...externalPluginContract("2026.7.33"),
+        install: { npmSpec: "@openclaw/demo-plugin" },
+        release: { publishToNpm: true },
+      },
+    });
+
+    expect(
+      collectPublishablePluginPackages(repoDir, { npmDistTag: "extended-stable" }),
+    ).toMatchObject([{ version: "2026.7.33", publishTag: "extended-stable" }]);
+  });
+
+  it("rejects extended-stable plugins whose version differs from core", () => {
+    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
+    writeJsonFile(join(repoDir, "package.json"), { version: "2026.7.34" });
+    writePluginReadme(repoDir, "demo-plugin");
+    writeJsonFile(join(repoDir, "extensions", "demo-plugin", "package.json"), {
+      name: "@openclaw/demo-plugin",
+      version: "2026.7.33",
+      type: "module",
+      repository: { type: "git", url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL },
+      openclaw: {
+        extensions: ["./index.ts"],
+        ...externalPluginContract("2026.7.33"),
+        install: { npmSpec: "@openclaw/demo-plugin" },
+        release: { publishToNpm: true },
+      },
+    });
+
+    expect(() =>
+      collectPublishablePluginPackages(repoDir, { npmDistTag: "extended-stable" }),
+    ).toThrow("must match root package version 2026.7.34");
   });
 });
 

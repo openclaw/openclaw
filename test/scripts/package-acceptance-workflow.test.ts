@@ -1512,7 +1512,7 @@ describe("package artifact reuse", () => {
     expect(manifestStep.run).toContain('--arg performanceRunId "$PERFORMANCE_RUN_ID"');
   });
 
-  it("keeps release publish creation compatible while npm rehearsal stays preflight-only", () => {
+  it("keeps release publish creation compatible with canonical npm publication", () => {
     const workflow = readFileSync(RELEASE_PUBLISH_WORKFLOW, "utf8");
     const npmWorkflow = readFileSync(".github/workflows/openclaw-npm-release.yml", "utf8");
     const fullReleaseWorkflow = readFileSync(FULL_RELEASE_VALIDATION_WORKFLOW, "utf8");
@@ -1532,11 +1532,13 @@ describe("package artifact reuse", () => {
     );
     expect(workflow).toContain("preflight-manifest.json");
     expect(npmWorkflow).toContain("preflight-manifest.json");
-    expect(npmWorkflow).not.toContain("validate_publish_request:");
-    expect(npmWorkflow).not.toContain("publish_openclaw_npm:");
-    expect(npmWorkflow).not.toContain("id-token: write");
-    expect(npmWorkflow).toContain("This throwaway workflow requires preflight_only=true");
-    expect(npmWorkflow).toContain("This throwaway workflow requires a full 40-character commit SHA");
+    expect(npmWorkflow).toContain("validate_publish_request:");
+    expect(npmWorkflow).toContain("publish_openclaw_npm:");
+    expect(npmWorkflow).toContain("id-token: write");
+    expect(npmWorkflow).not.toContain("This throwaway workflow requires preflight_only=true");
+    expect(npmWorkflow).toContain("preflight_run_attempt");
+    expect(npmWorkflow).toContain("full_release_validation_run_attempt");
+    expect(npmWorkflow).toContain("actions/artifacts/${artifact_id}/zip");
     expect(npmWorkflow).not.toContain("Build and smoke test final Docker runtime image");
     expect(fullReleaseWorkflow).toContain("docker_runtime_assets_preflight");
     expect(fullReleaseWorkflow).not.toContain("Build and smoke test final Docker runtime image");
@@ -1883,7 +1885,7 @@ describe("package artifact reuse", () => {
     expect(clawHubReleasePlanScript).toContain("--skip-clawhub");
     expect(pluginNpmWorkflow).toContain("Validate release publish approval run");
     expect(clawHubWorkflow).toContain("Validate release publish approval run");
-    expect(openclawNpmWorkflow).not.toContain("Validate release publish approval run");
+    expect(openclawNpmWorkflow).toContain("Validate release publish approval run");
     expect(pluginNpmWorkflow).toContain("Check npm package version");
     expect(pluginNpmWorkflow).toContain("already_published=true");
     expect(pluginNpmWorkflow).toContain(
@@ -1891,16 +1893,16 @@ describe("package artifact reuse", () => {
     );
     expect(pluginNpmWorkflow).toContain("Direct Plugin NPM Release dispatch");
     expect(clawHubWorkflow).toContain("Direct Plugin ClawHub Release dispatch");
-    expect(openclawNpmWorkflow).not.toContain("Direct OpenClaw npm publish");
+    expect(openclawNpmWorkflow).toContain("Direct OpenClaw npm publish");
     expect(pluginNpmWorkflow).toContain('GITHUB_ACTOR}" != "github-actions[bot]"');
     expect(clawHubWorkflow).toContain('GITHUB_ACTOR}" != "github-actions[bot]"');
-    expect(openclawNpmWorkflow).not.toContain('GITHUB_ACTOR}" != "github-actions[bot]"');
+    expect(openclawNpmWorkflow).toContain('GITHUB_ACTOR}" != "github-actions[bot]"');
     expect(pluginNpmWorkflow).toContain("Direct Plugin NPM Release recovery");
     expect(clawHubWorkflow).toContain("Direct Plugin ClawHub Release recovery");
-    expect(openclawNpmWorkflow).not.toContain("Direct OpenClaw npm recovery");
+    expect(openclawNpmWorkflow).toContain("Direct OpenClaw npm recovery");
     expect(pluginNpmWorkflow).toContain("validate-release-publish-approval.mjs");
     expect(clawHubWorkflow).toContain("validate-release-publish-approval.mjs");
-    expect(openclawNpmWorkflow).not.toContain("validate-release-publish-approval.mjs");
+    expect(openclawNpmWorkflow).toContain("validate-release-publish-approval.mjs");
     expect(approvalScript).toContain("must still be in_progress");
     expect(approvalScript).toContain("completed with success/failure");
     expect(pluginNpmWorkflow).toContain("environment: npm-release");
@@ -1960,7 +1962,7 @@ describe("package artifact reuse", () => {
     expect(clawHubNewWorkflow).toContain("Verify bootstrap ClawHub package and trusted publisher");
     expect(clawHubNewWorkflow).toContain("/trusted-publisher");
     expect(clawHubNewWorkflow).toContain('trustedPublisher?.repository !== "openclaw/openclaw"');
-    expect(openclawNpmWorkflow).not.toContain("environment: npm-release");
+    expect(openclawNpmWorkflow).toContain("environment: npm-release");
     expect(releaseWorkflow).toContain("default: from-validation");
     expect(releaseWorkflow).toContain('--release-publish-branch "${CHILD_WORKFLOW_REF}"');
     expect(releaseWorkflow).toContain('--release-publish-run-id "${GITHUB_RUN_ID}"');

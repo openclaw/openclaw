@@ -1645,6 +1645,14 @@ jobs:
         if: ${{ success() }}
         uses: actions/upload-artifact@v7
         with:
+          name: full-release-validation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/full-release-validation
+          if-no-files-found: error
+
+      - name: Upload legacy release validation manifest alias
+        if: ${{ success() }}
+        uses: actions/upload-artifact@v7
+        with:
           name: full-release-validation-${{ github.run_id }}
           path: ${{ runner.temp }}/full-release-validation
           if-no-files-found: error

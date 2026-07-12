@@ -85,6 +85,9 @@ describe("extended-stable Full Release Validation workflow", () => {
     expect(fullValidation).toContain(
       "Dispatch Full Release Validation from a pinned release-ci, throwaway rehearsal, or extended-stable ref",
     );
+    expect(fullValidation).toContain(
+      "full-release-validation-${{ github.run_id }}-${{ github.run_attempt }}",
+    );
   });
 
   it("accepts only the exact extended-stable/YYYY.M.33 workflow-ref shape", () => {

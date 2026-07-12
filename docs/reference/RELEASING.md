@@ -54,10 +54,11 @@ not by itself change CLI update-channel resolution.
 - `beta` means the current beta install target
 - `extended-stable` means the supported trailing-month npm package, beginning at patch
   `33`; patch `34` and later are maintenance releases on that monthly line
-- The dedicated monthly extended-stable path publishes only the core npm package. It
-  does not publish plugins, macOS or Windows artifacts, a GitHub Release,
-  private-repository dist-tags, Docker images, mobile artifacts, or website
-  downloads.
+- The dedicated monthly extended-stable path publishes the core npm package and
+  every npm-publishable official plugin at the same exact version. It does not
+  publish plugins to ClawHub or publish macOS or Windows artifacts, a GitHub
+  Release, private-repository dist-tags, Docker images, mobile artifacts, or
+  website downloads.
 
 ## Release cadence
 
@@ -71,40 +72,99 @@ not by itself change CLI update-channel resolution.
 - Detailed release procedure, approvals, credentials, and recovery notes are
   maintainer-only
 
-## Throwaway extended-stable rehearsal
+## Monthly npm-only extended-stable publication
 
-This branch contains a validation-only rehearsal for the June 2026 extended-stable
-line. It is based on `v2026.6.8`, uses internal package version `2026.6.33`, and must
-remain on `dev/throwaway-2026.0.33-v6.8`. Do not create a tag or dispatch any publish
-workflow. The rehearsal npm workflow contains no publish job or npm OIDC permission.
+For a completed month `YYYY.M`, create `extended-stable/YYYY.M.33`. Publish
+`vYYYY.M.33` and later maintenance patches from that same branch. The release
+tag, branch tip, checkout, package version, npm preflight, Full Release
+Validation, and plugin release evidence must all identify the same commit.
+Protected `main` must already contain a strictly later calendar month's final
+version below patch `33`.
 
-Resolve the branch head once, then use that same full SHA for both approved dispatches:
+Prepare the exact branch tip before dispatching workflows. Set the root package
+and every publishable plugin to `YYYY.M.P`, run `pnpm release:prep`, commit and
+push generated changes, then create and push immutable tag `vYYYY.M.P` at that
+same commit.
+
+Run npm preflight and Full Release Validation from the canonical branch. Save
+each run ID and exact successful attempt:
 
 ```bash
-branch=dev/throwaway-2026.0.33-v6.8
-sha="$(gh api "repos/openclaw/openclaw/git/ref/heads/${branch}" --jq .object.sha)"
+branch=extended-stable/YYYY.M.33
+tag=vYYYY.M.P
 
 gh workflow run openclaw-npm-release.yml \
   --ref "$branch" \
-  -f tag="$sha" \
+  -f tag="$tag" \
   -f preflight_only=true \
-  -f npm_dist_tag=extended-stable \
-  -f bypass_extended_stable_guard=true
+  -f npm_dist_tag=extended-stable
 
 gh workflow run full-release-validation.yml \
   --ref "$branch" \
-  -f ref="$sha" \
+  -f ref="$branch" \
   -f release_profile=stable
 ```
 
-`release_profile=stable` is the existing validation-depth profile; it is
-separate from the npm `extended-stable` dist-tag. On this branch it also forces the
-release-soak lanes, and product-performance regression checks are blocking. Record both
-run URLs and conclusions. Stop after validation; there is no promotion step.
+`release_profile=stable` controls validation depth; it is separate from the npm
+`extended-stable` dist-tag. Product performance is blocking, and release-soak
+lanes must pass.
+
+After both runs succeed, publish every npm-publishable official plugin from the
+same exact branch tip. Pass the full release SHA as `ref`, wait for the complete
+matrix and registry readback, then save the plugin run ID and attempt:
+
+```bash
+release_sha="$(git rev-parse "$tag^{commit}")"
+
+gh workflow run plugin-npm-release.yml \
+  --ref "$branch" \
+  -f publish_scope=all-publishable \
+  -f ref="$release_sha" \
+  -f npm_dist_tag=extended-stable
+```
+
+The plugin workflow reuses already-published exact versions, publishes missing
+packages, verifies every plugin `extended-stable` selector, and refuses npm
+mutation if the canonical remote branch tip no longer equals `release_sha`.
+
+Publish the core package only after plugin readback succeeds. Supply all three
+run IDs and their exact successful attempts:
+
+```bash
+gh workflow run openclaw-npm-release.yml \
+  --ref "$branch" \
+  -f tag="$tag" \
+  -f preflight_only=false \
+  -f npm_dist_tag=extended-stable \
+  -f preflight_run_id=<npm-preflight-run-id> \
+  -f preflight_run_attempt=<npm-preflight-run-attempt> \
+  -f full_release_validation_run_id=<full-validation-run-id> \
+  -f full_release_validation_run_attempt=<full-validation-run-attempt> \
+  -f plugin_npm_run_id=<plugin-npm-run-id> \
+  -f plugin_npm_run_attempt=<plugin-npm-run-attempt>
+```
+
+The core publisher queries the attempt-specific workflow APIs, selects the
+single run/attempt-qualified preflight and validation artifacts by immutable
+artifact ID, verifies their API SHA-256 digests, and then verifies the embedded
+run, attempt, branch, release SHA, package, and tarball identities before npm
+mutation. A rerun has a new attempt and cannot silently replace recorded
+evidence.
+
+Independently confirm the exact package and selector after success:
+
+```bash
+npm view openclaw@YYYY.M.P version --userconfig "$(mktemp)"
+npm view openclaw@extended-stable version --userconfig "$(mktemp)"
+```
+
+Both commands must return `YYYY.M.P`. Do not republish an immutable package
+version to repair a selector. Use the single `npm dist-tag add` repair command
+printed in the failed workflow's summary, then repeat both readbacks.
 
 The regular checklist below continues to own beta, `latest`, GitHub Release,
-plugins, macOS, Windows, and other platform publication. Do not run those steps for this
-throwaway rehearsal.
+ClawHub, macOS, Windows, and other platform publication. Do not run those steps
+for the npm-only extended-stable path.
 
 ## Regular release operator checklist
 
@@ -818,18 +878,27 @@ package cannot ship without every publishable official plugin, including
 `publish_openclaw_npm=false` with `plugin_publish_scope=selected` and
 `plugins=@openclaw/name`, or dispatch the child workflow directly.
 
-## NPM rehearsal workflow inputs
+## Extended-stable npm workflow inputs
 
-On this throwaway branch, `OpenClaw NPM Release` accepts only the rehearsal shape:
+`OpenClaw NPM Release` accepts the following extended-stable inputs:
 
-- `tag`: the branch head's full 40-character commit SHA
-- `preflight_only`: must be `true`; `false` reaches only an explicit rejection job
-- `npm_dist_tag`: must be `extended-stable`
-- `bypass_extended_stable_guard`: must be `true`, and is accepted only from
-  `dev/throwaway-2026.0.33-v6.8`
+- `tag`: immutable `vYYYY.M.P` tag at the canonical branch tip
+- `preflight_only`: `true` for packaging validation; `false` only for the final
+  core publication
+- `npm_dist_tag`: `extended-stable`
+- `preflight_run_id` and `preflight_run_attempt`: exact successful npm
+  preflight evidence; required for publication
+- `full_release_validation_run_id` and
+  `full_release_validation_run_attempt`: exact successful all-groups Full
+  Release Validation evidence; required for publication
+- `plugin_npm_run_id` and `plugin_npm_run_attempt`: exact successful plugin
+  publication and registry-readback evidence; required for publication
+- `bypass_extended_stable_guard`: leave `false` for production; it is a
+  validation-only testing escape hatch and cannot authorize publication
 
-There are no promotion inputs, publish environment, npm OIDC permission, or publish job in
-this branch's workflow.
+Use `gh run view <run-id> --json attempt --jq .attempt` to record an exact run
+attempt. The npm workflow has an `npm-release` environment and OIDC publish
+permission only in its gated publish job.
 
 `OpenClaw Release Publish` accepts these operator-controlled inputs:
 

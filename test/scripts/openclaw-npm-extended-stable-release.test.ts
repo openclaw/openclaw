@@ -250,44 +250,34 @@ describe("extended-stable npm release request", () => {
       ...valid,
       bypassExtendedStableGuard: true,
       preflightOnly: true,
-      releaseTag: sha,
-      npmWorkflowRef: "refs/heads/dev/throwaway-2026.0.33-v6.8",
-      extendedStableBranchSha: "",
+      releaseTag: "v2026.6.11",
+      packageVersion: "2026.6.11",
       mainPackageVersion: "",
     };
     expect(validateExtendedStableNpmReleaseRequest(bypassed)).toEqual({
       extendedStable: true,
-      releaseVersion: "2026.6.33",
+      releaseVersion: "2026.6.11",
       extendedStableBranch: "extended-stable/2026.6.33",
       bypassExtendedStableGuard: true,
     });
     expect(() =>
-      validateExtendedStableNpmReleaseRequest({
-        ...bypassed,
-        packageVersion: "2026.6.33-beta.1",
-      }),
-    ).toThrow(/exact final vYYYY\.M\.P release tag/u);
+      validateExtendedStableNpmReleaseRequest({ ...bypassed, packageVersion: "2026.6.12" }),
+    ).toThrow(/package version mismatch/u);
     expect(() =>
       validateExtendedStableNpmReleaseRequest({
         ...bypassed,
         npmWorkflowRef: "refs/heads/dev/extended-stable-publish-test",
       }),
-    ).toThrow(/requires workflow ref/u);
+    ).toThrow(/workflow ref mismatch/u);
     expect(() =>
       validateExtendedStableNpmReleaseRequest({
         ...bypassed,
-        checkoutSha: "b".repeat(40),
+        extendedStableBranchSha: "b".repeat(40),
       }),
-    ).toThrow(/must match the checked-out commit/u);
+    ).toThrow(/branch tip SHAs must match/u);
     expect(() =>
       validateExtendedStableNpmReleaseRequest({ ...bypassed, preflightOnly: false }),
-    ).toThrow(/requires validation-only preflight with a full commit SHA/u);
-    expect(() =>
-      validateExtendedStableNpmReleaseRequest({
-        ...bypassed,
-        releaseTag: "v2026.6.33",
-      }),
-    ).toThrow(/requires validation-only preflight with a full commit SHA/u);
+    ).toThrow(/only for validation-only preflight/u);
   });
 
   it("rejects bypass on a regular npm release request", () => {
@@ -336,6 +326,45 @@ describe("extended-stable npm run identity", () => {
     ).not.toThrow();
   });
 
+  it("accepts only a completed successful plugin release on the exact branch and SHA", () => {
+    const pluginRun = {
+      workflowName: "Plugin NPM Release",
+      displayTitle: `Plugin NPM Release [extended-stable] ${sha}`,
+      event: "workflow_dispatch",
+      status: "completed",
+      conclusion: "success",
+      headBranch: branch,
+      headSha: sha,
+    };
+    expect(
+      validateExtendedStableRunIdentity({
+        run: pluginRun,
+        kind: "plugin",
+        npmDistTag: "extended-stable",
+        expectedBranch: branch,
+        expectedSha: sha,
+      }),
+    ).toBe(pluginRun);
+    for (const changes of [
+      { workflowName: "OpenClaw NPM Release" },
+      { displayTitle: `Plugin NPM Release [default] ${sha}` },
+      { status: "in_progress" },
+      { conclusion: "failure" },
+      { headBranch: "main" },
+      { headSha: "b".repeat(40) },
+    ]) {
+      expect(() =>
+        validateExtendedStableRunIdentity({
+          run: { ...pluginRun, ...changes },
+          kind: "plugin",
+          npmDistTag: "extended-stable",
+          expectedBranch: branch,
+          expectedSha: sha,
+        }),
+      ).toThrow();
+    }
+  });
+
   it.each([
     ["wrong branch", { headBranch: "main" }],
     ["missing branch", { headBranch: undefined }],
@@ -355,7 +384,13 @@ describe("extended-stable npm run identity", () => {
 });
 
 describe("Full Validation manifest identity", () => {
-  const valid = { workflowName: "Full Release Validation", workflowRef: branch, targetSha: sha };
+  const valid = {
+    workflowName: "Full Release Validation",
+    runId: "12345",
+    runAttempt: "2",
+    workflowRef: branch,
+    targetSha: sha,
+  };
 
   it("accepts the exact branch and target SHA", () => {
     expect(
@@ -364,11 +399,15 @@ describe("Full Validation manifest identity", () => {
         npmDistTag: "extended-stable",
         expectedWorkflowRef: branch,
         expectedSha: sha,
+        expectedRunId: "12345",
+        expectedRunAttempt: "2",
       }),
     ).toBe(valid);
   });
 
   it.each([
+    ["wrong run ID", { runId: "54321" }],
+    ["wrong run attempt", { runAttempt: "3" }],
     ["wrong workflow ref", { workflowRef: "main" }],
     ["missing workflow ref", { workflowRef: undefined }],
     ["wrong target SHA", { targetSha: "b".repeat(40) }],
@@ -380,6 +419,8 @@ describe("Full Validation manifest identity", () => {
         npmDistTag: "extended-stable",
         expectedWorkflowRef: branch,
         expectedSha: sha,
+        expectedRunId: "12345",
+        expectedRunAttempt: "2",
       }),
     ).toThrow();
   });

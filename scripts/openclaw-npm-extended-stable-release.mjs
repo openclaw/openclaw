@@ -6,7 +6,6 @@ import { pathToFileURL } from "node:url";
 import { parseReleaseVersion } from "./lib/npm-publish-plan.mjs";
 
 const SUPPORTED_DIST_TAGS = new Set(["alpha", "beta", "latest", "extended-stable"]);
-const THROWAWAY_REHEARSAL_REF = "refs/heads/dev/throwaway-2026.0.33-v6.8";
 
 export function parseExtendedStableGuardBypass(value = "") {
   if (value === "" || value === "false") {
@@ -25,7 +24,6 @@ function requireExtendedStableBypassTag(npmDistTag, bypassExtendedStableGuard) {
     );
   }
 }
-
 export function validateNpmPublishBoundary(
   packageVersion,
   npmDistTag,
@@ -75,15 +73,8 @@ export function validateExtendedStableNpmReleaseRequest(request) {
   requireExtendedStableBypassTag(request.npmDistTag, bypassExtendedStableGuard);
   const shaPreflight =
     request.preflightOnly === true && /^[0-9a-f]{40}$/iu.test(request.releaseTag);
-  if (bypassExtendedStableGuard && !shaPreflight) {
-    throw new Error(
-      "Extended-stable guard bypass requires validation-only preflight with a full commit SHA.",
-    );
-  }
-  if (bypassExtendedStableGuard && request.npmWorkflowRef !== THROWAWAY_REHEARSAL_REF) {
-    throw new Error(
-      `Extended-stable guard bypass requires workflow ref ${THROWAWAY_REHEARSAL_REF}.`,
-    );
+  if (bypassExtendedStableGuard && request.preflightOnly !== true) {
+    throw new Error("Extended-stable guard bypass is allowed only for validation-only preflight.");
   }
   if (shaPreflight) {
     if (!/^[0-9a-f]{40}$/iu.test(request.checkoutSha)) {
@@ -184,12 +175,19 @@ export function validateExtendedStableRunIdentity({
   expectedSha,
 }) {
   const expectedWorkflowName =
-    kind === "preflight" ? "OpenClaw NPM Release" : "Full Release Validation";
+    kind === "preflight"
+      ? "OpenClaw NPM Release"
+      : kind === "plugin"
+        ? "Plugin NPM Release"
+        : "Full Release Validation";
   const checks = [
     ["workflowName", expectedWorkflowName],
     ["event", "workflow_dispatch"],
-    ...(kind === "validation" ? [["status", "completed"]] : []),
+    ...(kind === "validation" || kind === "plugin" ? [["status", "completed"]] : []),
     ["conclusion", "success"],
+    ...(kind === "plugin" && npmDistTag === "extended-stable"
+      ? [["displayTitle", `Plugin NPM Release [extended-stable] ${expectedSha}`]]
+      : []),
   ];
   for (const [key, expected] of checks) {
     if (run[key] !== expected) {
@@ -214,6 +212,8 @@ export function validateFullReleaseValidationManifest({
   npmDistTag,
   expectedWorkflowRef,
   expectedSha,
+  expectedRunId,
+  expectedRunAttempt,
 }) {
   if (manifest.workflowName !== "Full Release Validation") {
     throw new Error(
@@ -223,6 +223,19 @@ export function validateFullReleaseValidationManifest({
   if (manifest.targetSha !== expectedSha) {
     throw new Error(
       `Full release validation target SHA mismatch: expected ${expectedSha}, got ${manifest.targetSha ?? "<missing>"}.`,
+    );
+  }
+  if (expectedRunId !== undefined && String(manifest.runId) !== String(expectedRunId)) {
+    throw new Error(
+      `Full release validation run ID mismatch: expected ${expectedRunId}, got ${manifest.runId ?? "<missing>"}.`,
+    );
+  }
+  if (
+    expectedRunAttempt !== undefined &&
+    String(manifest.runAttempt) !== String(expectedRunAttempt)
+  ) {
+    throw new Error(
+      `Full release validation run attempt mismatch: expected ${expectedRunAttempt}, got ${manifest.runAttempt ?? "<missing>"}.`,
     );
   }
   if (npmDistTag === "extended-stable" && manifest.workflowRef !== expectedWorkflowRef) {
@@ -486,6 +499,10 @@ async function main() {
       npmDistTag: process.env.RELEASE_NPM_DIST_TAG,
       expectedWorkflowRef: process.env.EXPECTED_WORKFLOW_REF,
       expectedSha: process.env.EXPECTED_RELEASE_SHA,
+      expectedRunId: process.env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT
+        ? process.env.FULL_RELEASE_VALIDATION_RUN_ID
+        : undefined,
+      expectedRunAttempt: process.env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT || undefined,
     });
     return;
   }

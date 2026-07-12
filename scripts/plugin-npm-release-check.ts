@@ -6,13 +6,14 @@ import {
   collectChangedExtensionIdsFromGitRange,
   collectPublishablePluginPackages,
   assertPluginReleaseVersionFloors,
-  parsePluginReleaseArgs,
+  parsePluginNpmReleaseArgs,
   resolveChangedPublishablePluginPackages,
   resolveSelectedPublishablePluginPackages,
 } from "./lib/plugin-npm-release.ts";
 
 export function runPluginNpmReleaseCheck(argv: string[]) {
-  const { selection, selectionMode, baseRef, headRef } = parsePluginReleaseArgs(argv);
+  const { selection, selectionMode, npmDistTag, baseRef, headRef } =
+    parsePluginNpmReleaseArgs(argv);
   const changedExtensionIds =
     baseRef && headRef
       ? collectChangedExtensionIdsFromGitRange({
@@ -25,6 +26,7 @@ export function runPluginNpmReleaseCheck(argv: string[]) {
         ? undefined
         : changedExtensionIds,
     packageNames: selection.length > 0 ? selection : undefined,
+    npmDistTag,
   });
   const selected =
     selectionMode === "all-publishable"
