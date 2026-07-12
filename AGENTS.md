@@ -132,6 +132,7 @@ Skills own workflows; root owns hard policy and routing.
 - Use `$openclaw-testing` for test/CI choice and `$crabbox` for remote/full/E2E proof.
 - At task start, if code changes, tests, builds, typechecks, lint fan-out, Docker, packaging, E2E, or live proof are likely, classify source trust and immediately pre-warm the safe Crabbox backend in a background command session. Trusted maintainer code defaults to Blacksmith Testbox; untrusted contributor/fork code uses secretless fork CI or sanitized direct AWS Crabbox under the rule above. Continue inspection/editing while it hydrates; sync the current checkout for every run, reuse the lease, then stop it before handoff.
 - Warm Testbox from the task checkout; ownership is checkout-path scoped; `--reclaim` only for intentional transfer.
+- Testbox `--reclaim` does not retarget the remote checkout; never cross repos.
 - Base/head changed: stop and rewarm Testbox; never override stale lease checks.
 - Compound Testbox commands: `bash -lc`, never `sh -lc`; job env uses Bash `declare`.
 - Testbox cleanup: `blacksmith testbox stop --id <tbx_id>`; id is not positional.
@@ -162,6 +163,9 @@ Skills own workflows; root owns hard policy and routing.
 - Issue/PR start: `git status -sb`; if clean, `git pull --ff-only`; if dirty, yell before pull/rebase.
 - PR refs: `gh pr view/diff` or `gh api`, not web search. Prefer `gitcrawl` for maintainer discovery; missing/stale `gitcrawl` falls through to live `gh`, not contributor setup. Verify live with `gh` before mutation.
 - zsh: quote `gh api` endpoints containing `?` or brackets; otherwise glob expansion corrupts the invocation.
+- GitHub Actions: resolve workflow files from `.github/workflows` or API; never infer filenames from display names.
+- zsh: quote command globs; unmatched patterns abort before the tool runs.
+- `scripts/pr` artifacts: preserve template enum values; validate before prepare.
 - Bare issue/PR URL/number: inspect live and take the efficient maintainer path; switch branches/refs when useful.
 - No unsolicited PR labels/retitles/rebases/fixups/landing. Comments/reviews ok only for reviewable findings, pre-merge proof, or close/duplicate reason after explicit close/sweep/landing request.
 - Maintainer decision closes the cluster: if deciding reported behavior/proposed fix is not planned, comment+close all directly associated open issues/PRs unless explicitly told to keep one open. Associated means linked PRs/issues, duplicates, companion workaround PRs, and the canonical issue for the rejected behavior.
