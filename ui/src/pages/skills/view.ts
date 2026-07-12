@@ -566,7 +566,7 @@ function renderSkill(skill: SkillStatusEntry, props: SkillsProps) {
 
 function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
   const busy = props.busyKey === skill.skillKey;
-  const apiKey = props.edits[skill.skillKey] ?? "";
+  const editValue = props.edits[skill.skillKey] ?? "";
   const message = props.messages[skill.skillKey] ?? null;
   const installOption = skill.install[0];
   const canInstall = installOption !== undefined && skill.missing.bins.length > 0;
@@ -702,7 +702,7 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
                     >
                     <input
                       type="password"
-                      .value=${apiKey}
+                      .value=${editValue}
                       @input=${(e: Event) =>
                         props.onEdit(skill.skillKey, (e.target as HTMLInputElement).value)}
                     />
