@@ -4,13 +4,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { i18n } from "../i18n/index.ts";
 import {
+  GitHubLinkHovercardProvider,
   parseGitHubIssueOrPullRequestLink,
-  type GitHubLinkHovercardProvider,
 } from "./github-link-hovercard.ts";
+
+const GITHUB_LINK_HOVERCARD_ELEMENT_NAME = `test-openclaw-github-link-hovercard-provider-${crypto.randomUUID()}`;
+
+// The non-isolated UI runner resets modules but not customElements. Register
+// the current class graph so locale updates reach the mounted test element.
+class TestGitHubLinkHovercardProvider extends GitHubLinkHovercardProvider {}
+
+customElements.define(GITHUB_LINK_HOVERCARD_ELEMENT_NAME, TestGitHubLinkHovercardProvider);
 
 function createLink(href: string, label = "GitHub item") {
   const provider = document.createElement(
-    "openclaw-github-link-hovercard-provider",
+    GITHUB_LINK_HOVERCARD_ELEMENT_NAME,
   ) as GitHubLinkHovercardProvider;
   const anchor = document.createElement("a");
   anchor.href = href;
