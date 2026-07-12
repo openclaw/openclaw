@@ -1,4 +1,5 @@
 // Msteams plugin module implements request deadline behavior.
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   createProviderOperationDeadline,
   resolveProviderOperationTimeoutMs,
@@ -7,7 +8,10 @@ import {
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 
 export const MSTEAMS_REQUEST_TIMEOUT_MS = 30_000;
-export const MSTEAMS_SHAREPOINT_UPLOAD_TIMEOUT_MS = 5 * 60_000;
+// SharePoint PUTs are data-plane transfers: keep a base stall bound, then add
+// slow-transfer budget so valid large uploads do not hit a fixed cutoff.
+export const MSTEAMS_SHAREPOINT_UPLOAD_BASE_TIMEOUT_MS = 5 * 60_000;
+export const MSTEAMS_SHAREPOINT_UPLOAD_MIN_BYTES_PER_SECOND = 256 * 1024;
 
 // Cap optional enrichment before agent dispatch. The Teams SDK still holds the
 // webhook open for the agent turn, so this budget alone cannot prevent retries.
@@ -41,6 +45,18 @@ export async function withMSTeamsRequestDeadline<T>(params: {
   return await withTimeout(params.work(), timeoutMs, params.label);
 }
 
+export function resolveMSTeamsSharePointUploadTimeoutMs(sizeInBytes: number): number {
+  const bytes = Number.isFinite(sizeInBytes) && sizeInBytes > 0 ? Math.ceil(sizeInBytes) : 0;
+  const transferBudgetMs = Math.ceil(
+    (bytes / MSTEAMS_SHAREPOINT_UPLOAD_MIN_BYTES_PER_SECOND) * 1000,
+  );
+  return resolveTimerTimeoutMs(
+    MSTEAMS_SHAREPOINT_UPLOAD_BASE_TIMEOUT_MS + transferBudgetMs,
+    MSTEAMS_SHAREPOINT_UPLOAD_BASE_TIMEOUT_MS,
+    1,
+  );
+}
+
 function createMSTeamsRequestTimeoutError(label: string, timeoutMs: number): Error {
   const error = new Error(`${label} timed out after ${timeoutMs}ms`);
   error.name = "TimeoutError";
@@ -55,7 +71,7 @@ export async function withMSTeamsAbortableRequestTimeout<T>(params: {
   const controller = new AbortController();
   let timeoutError: Error | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeoutMs = params.timeoutMs ?? MSTEAMS_REQUEST_TIMEOUT_MS;
+  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, MSTEAMS_REQUEST_TIMEOUT_MS, 1);
   const timeoutPromise = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => {
       timeoutError = createMSTeamsRequestTimeoutError(params.label, timeoutMs);

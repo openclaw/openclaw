@@ -12,7 +12,7 @@ import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import { createMSTeamsHttpError } from "./http-error.js";
 import {
-  MSTEAMS_SHAREPOINT_UPLOAD_TIMEOUT_MS,
+  resolveMSTeamsSharePointUploadTimeoutMs,
   withMSTeamsAbortableRequestTimeout,
 } from "./request-timeout.js";
 import { buildUserAgent } from "./user-agent.js";
@@ -70,7 +70,7 @@ export async function uploadToSharePoint(params: {
 
   const data = await withMSTeamsAbortableRequestTimeout({
     label: SHAREPOINT_UPLOAD_TIMEOUT_LABEL,
-    timeoutMs: MSTEAMS_SHAREPOINT_UPLOAD_TIMEOUT_MS,
+    timeoutMs: resolveMSTeamsSharePointUploadTimeoutMs(params.buffer.length),
     work: async (signal) => {
       const res = await fetchFn(
         `${GRAPH_ROOT}/sites/${params.siteId}/drive/root:${uploadPath}:/content`,

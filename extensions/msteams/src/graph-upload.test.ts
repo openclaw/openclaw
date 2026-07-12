@@ -9,7 +9,8 @@ import {
 } from "./graph-upload.js";
 import {
   MSTEAMS_REQUEST_TIMEOUT_MS,
-  MSTEAMS_SHAREPOINT_UPLOAD_TIMEOUT_MS,
+  MSTEAMS_SHAREPOINT_UPLOAD_BASE_TIMEOUT_MS,
+  resolveMSTeamsSharePointUploadTimeoutMs,
 } from "./request-timeout.js";
 
 type FetchCall = [string, { method?: string; headers?: Record<string, string> } | undefined];
@@ -203,9 +204,11 @@ describe("graph upload request timeouts", () => {
   it("aborts SharePoint uploads that hang before response headers", async () => {
     vi.useFakeTimers();
     const fetchFn = createHangingFetch();
+    const buffer = Buffer.from("world");
+    const timeoutMs = resolveMSTeamsSharePointUploadTimeoutMs(buffer.length);
 
     const upload = uploadToSharePoint({
-      buffer: Buffer.from("world"),
+      buffer,
       filename: "hang.txt",
       siteId: "site-123",
       tokenProvider,
@@ -215,13 +218,9 @@ describe("graph upload request timeouts", () => {
 
     const signal = fetchSignal(fetchFn);
     expect(signal.aborted).toBe(false);
-    const assertion = expectMSTeamsTimeout(
-      upload,
-      "MS Teams SharePoint upload",
-      MSTEAMS_SHAREPOINT_UPLOAD_TIMEOUT_MS,
-    );
+    const assertion = expectMSTeamsTimeout(upload, "MS Teams SharePoint upload", timeoutMs);
 
-    await vi.advanceTimersByTimeAsync(MSTEAMS_SHAREPOINT_UPLOAD_TIMEOUT_MS);
+    await vi.advanceTimersByTimeAsync(timeoutMs);
 
     await assertion;
     expect(signal.aborted).toBe(true);
@@ -230,9 +229,11 @@ describe("graph upload request timeouts", () => {
   it("keeps the SharePoint timeout active while reading the response body", async () => {
     vi.useFakeTimers();
     const fetchFn = createHangingBodyFetch();
+    const buffer = Buffer.from("world");
+    const timeoutMs = resolveMSTeamsSharePointUploadTimeoutMs(buffer.length);
 
     const upload = uploadToSharePoint({
-      buffer: Buffer.from("world"),
+      buffer,
       filename: "body-hang.txt",
       siteId: "site-123",
       tokenProvider,
@@ -240,13 +241,9 @@ describe("graph upload request timeouts", () => {
     });
     await waitForFetchCall(fetchFn);
     const signal = fetchSignal(fetchFn);
-    const assertion = expectMSTeamsTimeout(
-      upload,
-      "MS Teams SharePoint upload",
-      MSTEAMS_SHAREPOINT_UPLOAD_TIMEOUT_MS,
-    );
+    const assertion = expectMSTeamsTimeout(upload, "MS Teams SharePoint upload", timeoutMs);
 
-    await vi.advanceTimersByTimeAsync(MSTEAMS_SHAREPOINT_UPLOAD_TIMEOUT_MS);
+    await vi.advanceTimersByTimeAsync(timeoutMs);
 
     await assertion;
     expect(signal.aborted).toBe(true);
@@ -296,6 +293,77 @@ describe("graph upload request timeouts", () => {
 
     await expect(upload).resolves.toEqual(uploadResponse);
     expect(signal.aborted).toBe(false);
+  });
+
+  it("sizes the SharePoint upload timeout for slow large transfers", async () => {
+    vi.useFakeTimers();
+    const buffer = Buffer.alloc(1024 * 1024);
+    const timeoutMs = resolveMSTeamsSharePointUploadTimeoutMs(buffer.length);
+    const uploadResponse = {
+      id: "item-large",
+      webUrl: "https://example.com/large",
+      name: "large.bin",
+    };
+    const fetchFn = vi.fn(async (_url: string, init?: RequestInit) => {
+      const signal = init?.signal;
+      if (!signal) {
+        throw new Error("Expected fetch AbortSignal");
+      }
+      return await new Promise<Response>((resolve, reject) => {
+        signal.addEventListener("abort", () => reject(abortReasonError(signal)), { once: true });
+        setTimeout(
+          () =>
+            resolve(
+              new Response(JSON.stringify(uploadResponse), {
+                status: 200,
+                headers: { "content-type": "application/json" },
+              }),
+            ),
+          MSTEAMS_SHAREPOINT_UPLOAD_BASE_TIMEOUT_MS + 1_000,
+        );
+      });
+    });
+
+    const upload = uploadToSharePoint({
+      buffer,
+      filename: "large.bin",
+      siteId: "site-123",
+      tokenProvider,
+      fetchFn: fetchFn as unknown as typeof fetch,
+    });
+    await waitForFetchCall(fetchFn);
+    const signal = fetchSignal(fetchFn);
+
+    await vi.advanceTimersByTimeAsync(MSTEAMS_SHAREPOINT_UPLOAD_BASE_TIMEOUT_MS);
+    expect(signal.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await expect(upload).resolves.toEqual(uploadResponse);
+    expect(signal.aborted).toBe(false);
+    expect(timeoutMs).toBeGreaterThan(MSTEAMS_SHAREPOINT_UPLOAD_BASE_TIMEOUT_MS + 1_000);
+  });
+
+  it("aborts slow large SharePoint uploads after the size-aware transfer budget", async () => {
+    vi.useFakeTimers();
+    const buffer = Buffer.alloc(1024 * 1024);
+    const timeoutMs = resolveMSTeamsSharePointUploadTimeoutMs(buffer.length);
+    const fetchFn = createHangingFetch();
+
+    const upload = uploadToSharePoint({
+      buffer,
+      filename: "large-hang.bin",
+      siteId: "site-123",
+      tokenProvider,
+      fetchFn: fetchFn as unknown as typeof fetch,
+    });
+    await waitForFetchCall(fetchFn);
+    const signal = fetchSignal(fetchFn);
+    const assertion = expectMSTeamsTimeout(upload, "MS Teams SharePoint upload", timeoutMs);
+
+    await vi.advanceTimersByTimeAsync(timeoutMs);
+
+    await assertion;
+    expect(signal.aborted).toBe(true);
   });
 
   it("keeps the short timeout for SharePoint control-plane requests", async () => {
