@@ -3428,6 +3428,41 @@ describe("resolvePluginTools optional tools", () => {
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
+  it("cold-loads default-enabled plugin tools without an ambient registry", () => {
+    const config = createContext().config;
+    installToolManifestSnapshot({
+      config,
+      plugin: {
+        id: "default-plugin",
+        origin: "bundled",
+        enabledByDefault: true,
+        channels: [],
+        providers: [],
+        contracts: { tools: ["default_tool"] },
+      },
+    });
+    const factory = vi.fn(() => makeTool("default_tool"));
+    loadOpenClawPluginsMock.mockReturnValue(
+      createToolRegistry([
+        {
+          pluginId: "default-plugin",
+          optional: false,
+          source: "/tmp/default-plugin.js",
+          names: ["default_tool"],
+          factory,
+        },
+      ]),
+    );
+
+    const tools = resolvePluginTools(
+      createResolveToolsParams({ toolAllowlist: ["group:plugins"] }),
+    );
+
+    expectResolvedToolNames(tools, ["default_tool"]);
+    expect(factory).toHaveBeenCalledTimes(1);
+    expectLoaderSelectedOnlyPluginIds(["default-plugin"]);
+  });
+
   it("preserves tools from a caller-supplied request registry", () => {
     const baseContext = createContext();
     const config = {
@@ -3581,6 +3616,7 @@ describe("resolvePluginTools optional tools", () => {
         contracts: { tools: ["stale_tool"] },
       },
     });
+    loadOpenClawPluginsMock.mockReturnValue(createToolRegistry([]));
 
     const tools = resolvePluginTools(
       createResolveToolsParams({ toolAllowlist: ["group:plugins"] }),
@@ -3588,7 +3624,7 @@ describe("resolvePluginTools optional tools", () => {
 
     expectResolvedToolNames(tools, []);
     expect(staleFactory).not.toHaveBeenCalled();
-    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+    expectLoaderSelectedOnlyPluginIds(["stale-plugin"]);
   });
 
   it("ignores a pinned channel plugin registry from another workspace", () => {
@@ -3627,6 +3663,7 @@ describe("resolvePluginTools optional tools", () => {
         contracts: { tools: ["stale_tool"] },
       },
     });
+    loadOpenClawPluginsMock.mockReturnValue(createToolRegistry([]));
 
     const tools = resolvePluginTools(
       createResolveToolsParams({ toolAllowlist: ["group:plugins"] }),
@@ -3634,7 +3671,7 @@ describe("resolvePluginTools optional tools", () => {
 
     expectResolvedToolNames(tools, []);
     expect(staleFactory).not.toHaveBeenCalled();
-    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+    expectLoaderSelectedOnlyPluginIds(["stale-plugin"]);
   });
 
   it("cold-loads slot-selected plugin tools when an unrelated plugin is already loaded", () => {

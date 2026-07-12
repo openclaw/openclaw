@@ -1260,10 +1260,15 @@ export function resolvePluginTools(params: {
   // ambient active/channel state. Preserve its selected tools without treating it as
   // evidence that any global registry is compatible with this request.
   const retainedPluginIds = new Set(params.runtimeRegistry?.tools.map((entry) => entry.pluginId));
-  const eligiblePluginIds = runtimePluginIds.filter(
-    (id) =>
-      loadedPluginIds.has(id) || explicitlyConfiguredPluginIds.has(id) || retainedPluginIds.has(id),
-  );
+  const hasCompatibleRegistry = loadedPluginIds.size > 0 || retainedPluginIds.size > 0;
+  const eligiblePluginIds = hasCompatibleRegistry
+    ? runtimePluginIds.filter(
+        (id) =>
+          loadedPluginIds.has(id) ||
+          explicitlyConfiguredPluginIds.has(id) ||
+          retainedPluginIds.has(id),
+      )
+    : runtimePluginIds;
   if (eligiblePluginIds.length === 0) {
     return tools;
   }
