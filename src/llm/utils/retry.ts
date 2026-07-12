@@ -1,4 +1,5 @@
 import type { AssistantMessage } from "../types.js";
+import { extractLeadingHttpStatus } from "../../shared/assistant-error-format.js";
 
 function buildProviderErrorPattern(patterns: readonly string[]): RegExp {
   return new RegExp(patterns.join("|"), "i");
@@ -16,15 +17,12 @@ const NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN = buildProviderErrorPattern([
   "retry after\\s+\\d+\\s*(?:h|hours?|d|days?)",
 ]);
 
+const RETRYABLE_HTTP_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
+
 const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
   "overloaded",
   "rate.?limit",
   "too many requests",
-  "\\b429\\b",
-  "\\b500\\b",
-  "\\b502\\b",
-  "\\b503\\b",
-  "\\b504\\b",
   "service.?unavailable",
   "server.?error",
   "internal.?error",
@@ -57,8 +55,13 @@ export function isRetryableAssistantError(message: AssistantMessage): boolean {
   if (message.stopReason !== "error" || !message.errorMessage) {
     return false;
   }
-  if (NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN.test(message.errorMessage)) {
+  const errorMessage = message.errorMessage.trim();
+  if (NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN.test(errorMessage)) {
     return false;
   }
-  return RETRYABLE_PROVIDER_ERROR_PATTERN.test(message.errorMessage);
+  const status = extractLeadingHttpStatus(errorMessage)?.code;
+  if (status && RETRYABLE_HTTP_STATUS_CODES.has(status)) {
+    return true;
+  }
+  return RETRYABLE_PROVIDER_ERROR_PATTERN.test(errorMessage);
 }

@@ -39,10 +39,20 @@ describe("isRetryableAssistantError", () => {
 
   it.each([
     "model gpt-5.5-preview-0429 not found",
+    "model model-x-500-preview not found",
     "Image dimensions 1504x1504 exceed the maximum allowed size",
+    "Image width 500 exceeds the maximum allowed size",
     "invalid api key sk-example502value",
   ])("does not retry permanent errors with status-code substrings: %s", (text) => {
     expect(isRetryableAssistantError(errorMessage(text))).toBe(false);
+  });
+
+  it.each([
+    "429 temporary provider response",
+    "HTTP 500 temporary provider response",
+    "503: temporary provider response",
+  ])("retries explicit transient HTTP statuses: %s", (text) => {
+    expect(isRetryableAssistantError(errorMessage(text))).toBe(true);
   });
 
   it.each([
