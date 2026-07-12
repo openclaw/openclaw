@@ -205,7 +205,13 @@ async function reconcileSessionStoreCompactionCountAfterSuccess(params: {
   observedCompactionCount: number;
   now?: number;
 }): Promise<number | undefined> {
-  const { default: reconcile } =
+  // Import the NAMED export, not the default: this module is loaded via a
+  // dynamically-imported chunk that the bundler re-exports with `export *`,
+  // which does not forward `default` (ESM spec). Importing `default` here
+  // resolved to `undefined` → "TypeError: reconcile is not a function", which
+  // broke compaction-count reconciliation and cascaded into a duplicate
+  // "Already compacted" failure on the turn that triggered compaction.
+  const { reconcileSessionStoreCompactionCountAfterSuccess: reconcile } =
     await import("./embedded-agent-subscribe.handlers.compaction.runtime.js");
   return reconcile(params);
 }
