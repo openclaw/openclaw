@@ -11,8 +11,8 @@ import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.j
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   OPENCLAW_STATE_SCHEMA_VERSION,
+  acquireOpenClawStateDatabaseLease,
   closeOpenClawStateDatabaseForPath,
-  openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveDurableRuntimeSqlitePath } from "./config.js";
 import type {
@@ -402,9 +402,18 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
 }): DurableRuntimeStore {
   const env = storeOptions?.env ?? process.env;
   const pathname = path.resolve(storeOptions?.path ?? resolveDurableRuntimeSqlitePath(env));
-  const stateDatabase = openOpenClawStateDatabase({ env, path: pathname });
+  const stateDatabaseLease = acquireOpenClawStateDatabaseLease({ env, path: pathname });
+  const stateDatabase = stateDatabaseLease.database;
   const db = stateDatabase.db;
-  const durableDb = getNodeSqliteKysely<DurableRuntimeDatabase>(db);
+  const durableDb = (() => {
+    try {
+      return getNodeSqliteKysely<DurableRuntimeDatabase>(db);
+    } catch (err) {
+      stateDatabaseLease.release();
+      closeOpenClawStateDatabaseForPath({ env, path: pathname });
+      throw err;
+    }
+  })();
   let closed = false;
 
   return {
@@ -1558,6 +1567,7 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
         return;
       }
       closed = true;
+      stateDatabaseLease.release();
       closeOpenClawStateDatabaseForPath({ env, path: pathname });
     },
   };
