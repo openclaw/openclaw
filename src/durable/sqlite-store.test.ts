@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import type { DatabaseSync } from "node:sqlite";
+import { describe, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db.js";
@@ -338,6 +339,84 @@ describe("durable runtime sqlite store", () => {
       expect(store.getStats()).toMatchObject({ runs: 1, events: 2, steps: 0, openRuns: 0 });
     } finally {
       store.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a shared state handle open while another durable store still owns it", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-store-"));
+    const dbPath = path.join(dir, "openclaw.sqlite");
+    const first = openDurableRuntimeSqliteStore({ path: dbPath });
+    const second = openDurableRuntimeSqliteStore({ path: dbPath });
+    try {
+      const firstRun = first.createRun({
+        runtimeRunId: "run-first-owner",
+        operationKind: "test.runtime",
+        status: "queued",
+        recoveryState: "runnable",
+        now: 100,
+      });
+
+      first.close();
+
+      expect(second.getRun(firstRun.runtimeRunId)).toMatchObject({
+        runtimeRunId: firstRun.runtimeRunId,
+        status: "queued",
+      });
+      expect(
+        second.createRun({
+          runtimeRunId: "run-second-owner-after-first-close",
+          operationKind: "test.runtime",
+          status: "queued",
+          recoveryState: "runnable",
+          now: 200,
+        }),
+      ).toMatchObject({
+        runtimeRunId: "run-second-owner-after-first-close",
+        status: "queued",
+      });
+    } finally {
+      first.close();
+      second.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("releases the shared state lease if durable facade construction fails", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-store-"));
+    const dbPath = path.join(dir, "openclaw.sqlite");
+    let kyselyCalls = 0;
+
+    vi.resetModules();
+    vi.doMock("../infra/kysely-sync.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("../infra/kysely-sync.js")>();
+      return {
+        ...actual,
+        getNodeSqliteKysely: <Database>(db: DatabaseSync) => {
+          kyselyCalls += 1;
+          if (kyselyCalls === 2) {
+            throw new Error("durable kysely construction failed");
+          }
+          return actual.getNodeSqliteKysely<Database>(db);
+        },
+      };
+    });
+
+    try {
+      const [
+        { openDurableRuntimeSqliteStore: openWithFailingKysely },
+        { closeOpenClawStateDatabaseForPath, openOpenClawStateDatabase },
+      ] = await Promise.all([import("./sqlite-store.js"), import("../state/openclaw-state-db.js")]);
+
+      expect(() => openWithFailingKysely({ path: dbPath })).toThrow(
+        /durable kysely construction failed/,
+      );
+
+      const database = openOpenClawStateDatabase({ path: dbPath });
+      closeOpenClawStateDatabaseForPath({ path: dbPath });
+      expect(database.db.isOpen).toBe(false);
+    } finally {
+      vi.doUnmock("../infra/kysely-sync.js");
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });

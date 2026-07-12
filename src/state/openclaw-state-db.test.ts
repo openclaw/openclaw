@@ -18,6 +18,7 @@ import { loadTaskRegistryStateFromSqlite } from "../tasks/task-registry.store.sq
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
+  closeOpenClawStateDatabaseForPath,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -30,7 +31,12 @@ import {
 
 type StateDbTestDatabase = Pick<
   OpenClawStateKyselyDatabase,
-  "diagnostic_events" | "schema_meta" | "skill_curator_state" | "skill_lifecycle" | "skill_usage"
+  | "diagnostic_events"
+  | "durable_runtime_runs"
+  | "schema_meta"
+  | "skill_curator_state"
+  | "skill_lifecycle"
+  | "skill_usage"
 >;
 
 const stateDbTempDirs: string[] = [];
@@ -1055,6 +1061,103 @@ describe("openclaw state database", () => {
     expect(result.secondFileExists).toBe(true);
     expect(result.firstRows).toEqual([{ event_key: "first" }]);
     expect(result.secondRows).toEqual([{ event_key: "second" }]);
+  });
+
+  it("does not count ordinary cached lookups as durable state handle leases", () => {
+    const databasePath = path.join(createTempStateDir(), "state", "cached-lookup.sqlite");
+    const first = openOpenClawStateDatabase({ path: databasePath });
+    const second = openOpenClawStateDatabase({ path: databasePath });
+
+    expect(second).toBe(first);
+
+    closeOpenClawStateDatabaseForPath({ path: databasePath });
+
+    expect(first.db.isOpen).toBe(false);
+
+    const reopened = openOpenClawStateDatabase({ path: databasePath });
+    expect(reopened).not.toBe(first);
+    expect(reopened.db.isOpen).toBe(true);
+  });
+
+  it("persists durable writes across explicit close and reopen", () => {
+    const databasePath = path.join(createTempStateDir(), "state", "durable-reopen.sqlite");
+    const options = { path: databasePath };
+
+    runOpenClawStateWriteTransaction((database) => {
+      const stateDb = getNodeSqliteKysely<StateDbTestDatabase>(database.db);
+      executeSqliteQuerySync(
+        database.db,
+        stateDb.insertInto("durable_runtime_runs").values({
+          runtime_run_id: "durable-reopen-run",
+          operation_kind: "test",
+          status: "queued",
+          recovery_state: "not_started",
+          metadata_json: "{}",
+          created_at: 10,
+          updated_at: 10,
+        }),
+      );
+    }, options);
+
+    const written = openOpenClawStateDatabase(options);
+    expect(written.db.isOpen).toBe(true);
+
+    closeOpenClawStateDatabaseForPath(options);
+
+    expect(written.db.isOpen).toBe(false);
+
+    const reopened = openOpenClawStateDatabase(options);
+    const stateDb = getNodeSqliteKysely<StateDbTestDatabase>(reopened.db);
+    expect(
+      executeSqliteQuerySync(
+        reopened.db,
+        stateDb
+          .selectFrom("durable_runtime_runs")
+          .select(["runtime_run_id", "status"])
+          .where("runtime_run_id", "=", "durable-reopen-run"),
+      ).rows,
+    ).toEqual([{ runtime_run_id: "durable-reopen-run", status: "queued" }]);
+  });
+
+  it("defers close requests until the explicit durable write lease is released", () => {
+    const databasePath = path.join(createTempStateDir(), "state", "durable-lease.sqlite");
+    const options = { path: databasePath };
+    let leasedDatabase: ReturnType<typeof openOpenClawStateDatabase> | undefined;
+
+    runOpenClawStateWriteTransaction((database) => {
+      leasedDatabase = database;
+      const stateDb = getNodeSqliteKysely<StateDbTestDatabase>(database.db);
+      executeSqliteQuerySync(
+        database.db,
+        stateDb.insertInto("durable_runtime_runs").values({
+          runtime_run_id: "durable-lease-run",
+          operation_kind: "test",
+          status: "queued",
+          recovery_state: "not_started",
+          metadata_json: "{}",
+          created_at: 20,
+          updated_at: 20,
+        }),
+      );
+
+      closeOpenClawStateDatabaseForPath(options);
+
+      expect(database.db.isOpen).toBe(true);
+    }, options);
+
+    expect(leasedDatabase?.db.isOpen).toBe(false);
+
+    const reopened = openOpenClawStateDatabase(options);
+    const stateDb = getNodeSqliteKysely<StateDbTestDatabase>(reopened.db);
+    expect(
+      executeSqliteQuerySync(
+        reopened.db,
+        stateDb
+          .selectFrom("durable_runtime_runs")
+          .select(["runtime_run_id", "status"])
+          .where("runtime_run_id", "=", "durable-lease-run"),
+      ).rows,
+    ).toEqual([{ runtime_run_id: "durable-lease-run", status: "queued" }]);
   });
 
   it("uses savepoints for nested write transaction rollback", () => {
