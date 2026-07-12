@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { setBundledPluginsDirOverrideForTest } from "../plugins/bundled-dir.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import {
   listImportedBundledPluginFacadeIds,
@@ -173,6 +174,7 @@ afterEach(() => {
   for (const dir of trustedBundledPluginFixtureRoots.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+  setBundledPluginsDirOverrideForTest(undefined);
   delete (globalThis as typeof globalThis & Record<string, unknown>)[FACADE_LOADER_GLOBAL];
   if (originalBundledPluginsDir === undefined) {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
