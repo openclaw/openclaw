@@ -180,6 +180,9 @@ export type SpawnAcpContext = {
   sandboxed?: boolean;
   inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
+  /** Parent session cancellation signal. When aborted, the spawned ACP runtime
+   *  and session are cleaned up so orphaned child processes do not continue. */
+  abortSignal?: AbortSignal;
 };
 
 const ACP_SPAWN_ERROR_CODES = [
@@ -1521,6 +1524,37 @@ export async function spawnAcpDirect(
       errorCode: isSessionBindingError(err) ? "thread_binding_invalid" : "spawn_failed",
       error: isSessionBindingError(err) ? err.message : summarizeError(err),
     });
+  }
+
+  // Register parent-abort listener so the child ACP session is cleaned up
+  // when the spawning (parent) session is cancelled. Without this link,
+  // the child runtime handle survives parent cancellation and its subprocess
+  // becomes orphaned.
+  const parentAbortSignal = ctx.abortSignal;
+  if (parentAbortSignal && sessionCreated && initializedRuntime) {
+    const onParentAbort = () => {
+      cleanupFailedAcpSpawn({
+        cfg,
+        sessionKey,
+        shouldDeleteSession: true,
+        deleteTranscript: true,
+        runtimeCloseHandle: initializedRuntime,
+      }).catch((err: unknown) => {
+        log.warn(
+          `ACP spawn: parent-abort cleanup failed for ${sessionKey}: ${summarizeError(err)}`,
+        );
+      });
+    };
+    parentAbortSignal.addEventListener("abort", onParentAbort, { once: true });
+    if (parentAbortSignal.aborted) {
+      onParentAbort();
+      return createAcpSpawnFailure({
+        status: "error",
+        errorCode: "dispatch_failed",
+        error: "Parent session cancelled before ACP dispatch completed.",
+        childSessionKey: sessionKey,
+      });
+    }
   }
 
   const deliveryPlan = resolveAcpSpawnBootstrapDeliveryPlan({

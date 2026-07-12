@@ -279,7 +279,7 @@ export function createSessionsSpawnTool(
       : SESSIONS_SPAWN_SUBAGENT_TOOL_DISPLAY_SUMMARY,
     description: describeSessionsSpawnTool({ acpAvailable, threadAvailable }),
     parameters: createSessionsSpawnToolSchema({ acpAvailable, threadAvailable }),
-    execute: async (_toolCallId, args) => {
+    execute: async (_toolCallId, args, signal) => {
       const params = args as Record<string, unknown>;
       const unsupportedParam = UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS.find((key) =>
         Object.hasOwn(params, key),
@@ -411,10 +411,21 @@ export function createSessionsSpawnTool(
             sandboxed: opts?.sandboxed,
             inheritedToolAllowlist: opts?.inheritedToolAllowlist,
             inheritedToolDenylist: opts?.inheritedToolDenylist,
+            abortSignal: signal,
           },
         );
         const childSessionKey = result.childSessionKey?.trim();
         const childRunId = isSpawnAcpAcceptedResult(result) ? result.runId?.trim() : undefined;
+        // If the parent session was cancelled during or after spawnAcpDirect,
+        // skip all child-session registration: the abort listener in
+        // spawnAcpDirect already cleaned up the session and runtime.
+        if (signal?.aborted) {
+          return jsonResult({
+            status: "error",
+            error: "ACP spawn cancelled because parent session was aborted.",
+            ...roleContext,
+          });
+        }
         const shouldTrackViaRegistry =
           result.status === "accepted" && Boolean(childSessionKey) && Boolean(childRunId);
         if (shouldTrackViaRegistry && childSessionKey && childRunId) {
