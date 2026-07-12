@@ -23451,7 +23451,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 526,
+      "line": 528,
       "path": "apps/ios/WatchApp/Sources/WatchInboxMessages.swift",
       "source": "Main",
       "surface": "apple",
@@ -23459,7 +23459,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 561,
+      "line": 567,
       "path": "apps/ios/WatchApp/Sources/WatchInboxMessages.swift",
       "source": "^[\\(chatCount) recent message](inflect: true)",
       "surface": "apple",
@@ -23507,23 +23507,23 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 123,
+      "line": 115,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Talk to Claw",
       "surface": "apple",
       "id": "native.apple.732051c3e897a9f1"
     },
     {
-      "kind": "ui-named-argument",
-      "line": 141,
+      "kind": "ui-localized-call",
+      "line": 133,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "What needs you",
       "surface": "apple",
       "id": "native.apple.73d98baeb297e2fc"
     },
     {
-      "kind": "ui-named-argument",
-      "line": 158,
+      "kind": "ui-localized-call",
+      "line": 150,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Caught up",
       "surface": "apple",
@@ -23531,7 +23531,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 161,
+      "line": 153,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "No chats or approvals need you",
       "surface": "apple",
@@ -23539,7 +23539,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 162,
+      "line": 154,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Waiting for iPhone sync",
       "surface": "apple",
@@ -23547,23 +23547,15 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 169,
+      "line": 161,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Continue on iPhone",
       "surface": "apple",
       "id": "native.apple.6a2c7f809c734c45"
     },
     {
-      "kind": "ui-named-argument",
-      "line": 181,
-      "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
-      "source": "Chat",
-      "surface": "apple",
-      "id": "native.apple.a974845eb4fcc692"
-    },
-    {
       "kind": "ui-localized-call",
-      "line": 210,
+      "line": 202,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Latest",
       "surface": "apple",
@@ -23571,7 +23563,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 246,
+      "line": 238,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Approval waiting",
       "surface": "apple",
@@ -23579,7 +23571,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 252,
+      "line": 244,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Latest update",
       "surface": "apple",
@@ -23587,15 +23579,15 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 255,
+      "line": 247,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Nothing waiting",
       "surface": "apple",
       "id": "native.apple.dc532fb77a310766"
     },
     {
-      "kind": "ui-named-argument",
-      "line": 271,
+      "kind": "ui-localized-call",
+      "line": 263,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Approval needed",
       "surface": "apple",
@@ -23603,23 +23595,23 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 294,
+      "line": 286,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Opens the full command before decisions are available",
       "surface": "apple",
       "id": "native.apple.3472ab6e7b81a746"
     },
     {
-      "kind": "ui-named-argument",
-      "line": 298,
+      "kind": "ui-localized-call",
+      "line": 290,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Loading",
       "surface": "apple",
       "id": "native.apple.ceaf03f87100f512"
     },
     {
-      "kind": "ui-named-argument",
-      "line": 299,
+      "kind": "ui-localized-call",
+      "line": 291,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Loading approval",
       "surface": "apple",
@@ -23627,23 +23619,31 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 302,
+      "line": 294,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Waiting for your iPhone",
       "surface": "apple",
       "id": "native.apple.ccb410a28ce9fbe2"
     },
     {
-      "kind": "ui-named-argument",
-      "line": 306,
+      "kind": "ui-localized-call",
+      "line": 295,
+      "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
+      "source": "Syncing",
+      "surface": "apple",
+      "id": "native.apple.b5de6b91209ad07c"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 298,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Unavailable",
       "surface": "apple",
       "id": "native.apple.7eadc6444e799223"
     },
     {
-      "kind": "ui-named-argument",
-      "line": 307,
+      "kind": "ui-localized-call",
+      "line": 299,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Approval not loaded",
       "surface": "apple",
@@ -23651,15 +23651,23 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 310,
+      "line": 302,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Approval details have not loaded",
       "surface": "apple",
       "id": "native.apple.4e820bf84e971fa2"
     },
     {
+      "kind": "ui-localized-call",
+      "line": 303,
+      "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
+      "source": "Retry",
+      "surface": "apple",
+      "id": "native.apple.a30328bfb2a82106"
+    },
+    {
       "kind": "ui-named-argument",
-      "line": 313,
+      "line": 305,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Review again",
       "surface": "apple",
@@ -23667,7 +23675,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 330,
+      "line": 322,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Open all approvals",
       "surface": "apple",
@@ -23675,7 +23683,15 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 343,
+      "line": 333,
+      "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
+      "source": "Connection",
+      "surface": "apple",
+      "id": "native.apple.7cf623c78bbd5ed3"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 335,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Watch node online",
       "surface": "apple",
@@ -23683,7 +23699,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 344,
+      "line": 336,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Direct Gateway",
       "surface": "apple",
@@ -23691,7 +23707,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 351,
+      "line": 343,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Direct",
       "surface": "apple",
@@ -23699,7 +23715,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 352,
+      "line": 344,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Setup",
       "surface": "apple",
@@ -23707,7 +23723,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 354,
+      "line": 346,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Enable from iPhone",
       "surface": "apple",
@@ -23715,7 +23731,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 357,
+      "line": 349,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Uses Wi-Fi or cellular while OpenClaw is active",
       "surface": "apple",
@@ -23723,7 +23739,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 358,
+      "line": 350,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Open iPhone Settings → Apple Watch",
       "surface": "apple",
@@ -23731,7 +23747,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 360,
+      "line": 352,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Online",
       "surface": "apple",
@@ -23739,15 +23755,15 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 361,
+      "line": 353,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Offline",
       "surface": "apple",
       "id": "native.apple.f748dad8f2ce22ae"
     },
     {
-      "kind": "ui-named-argument-multiline",
-      "line": 364,
+      "kind": "ui-localized-call-multiline",
+      "line": 356,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Direct mode supports device info, status, and notifications. Chat, Talk, and approvals still use the iPhone.",
       "surface": "apple",
@@ -23755,7 +23771,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 374,
+      "line": 366,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Direct connection",
       "surface": "apple",
@@ -23763,15 +23779,15 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 380,
+      "line": 372,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Forget direct setup",
       "surface": "apple",
       "id": "native.apple.72270e305e05cf02"
     },
     {
-      "kind": "ui-named-argument",
-      "line": 385,
+      "kind": "ui-localized-call",
+      "line": 378,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "The iPhone securely sends a one-time setup code. Existing relay features stay available.",
       "surface": "apple",
@@ -23779,7 +23795,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 437,
+      "line": 430,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "AI agent online",
       "surface": "apple",
@@ -23787,7 +23803,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 438,
+      "line": 431,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Reconnect on iPhone",
       "surface": "apple",
@@ -23795,7 +23811,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 440,
+      "line": 433,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Pair iPhone",
       "surface": "apple",
@@ -23803,7 +23819,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 444,
+      "line": 437,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Next up",
       "surface": "apple",
@@ -23811,7 +23827,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 446,
+      "line": 439,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Running",
       "surface": "apple",
@@ -23819,7 +23835,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 447,
+      "line": 440,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Pairing",
       "surface": "apple",
@@ -23827,7 +23843,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 462,
+      "line": 455,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Approval waiting on your wrist",
       "surface": "apple",
@@ -23835,7 +23851,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 468,
+      "line": 461,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Ready for quick actions",
       "surface": "apple",
@@ -23843,7 +23859,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 475,
+      "line": 468,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "^[\\(count) approval](inflect: true) waiting",
       "surface": "apple",
@@ -23851,7 +23867,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 487,
+      "line": 480,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Decide from watch",
       "surface": "apple",
@@ -23859,7 +23875,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 488,
+      "line": 481,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "No approvals",
       "surface": "apple",
@@ -23867,7 +23883,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 496,
+      "line": 489,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Expires in %@",
       "surface": "apple",
@@ -23875,7 +23891,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 503,
+      "line": 496,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Review before it runs",
       "surface": "apple",
@@ -23883,7 +23899,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 510,
+      "line": 503,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Sending",
       "surface": "apple",
@@ -23891,7 +23907,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 559,
+      "line": 552,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Good morning",
       "surface": "apple",
@@ -23899,7 +23915,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 560,
+      "line": 553,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Good afternoon",
       "surface": "apple",
@@ -23907,7 +23923,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 561,
+      "line": 554,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Good evening",
       "surface": "apple",
@@ -23915,7 +23931,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 575,
+      "line": 568,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Synced",
       "surface": "apple",
@@ -23923,7 +23939,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 576,
+      "line": 569,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Waiting for iPhone",
       "surface": "apple",
@@ -23931,7 +23947,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 580,
+      "line": 573,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Just now",
       "surface": "apple",
@@ -23939,7 +23955,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 598,
+      "line": 591,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Requires confirmation",
       "surface": "apple",
@@ -23947,7 +23963,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 600,
+      "line": 593,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Dismiss this update",
       "surface": "apple",
@@ -23955,7 +23971,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 602,
+      "line": 595,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Send from watch",
       "surface": "apple",
@@ -23963,7 +23979,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 610,
+      "line": 603,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "less than 1 min",
       "surface": "apple",
@@ -23971,7 +23987,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 613,
+      "line": 606,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "%@ min",
       "surface": "apple",
@@ -23979,23 +23995,15 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 843,
+      "line": 836,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Inbox",
       "surface": "apple",
       "id": "native.apple.fadaa0ca97ba0c43"
     },
     {
-      "kind": "ui-named-argument",
-      "line": 1019,
-      "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
-      "source": "OpenClaw",
-      "surface": "apple",
-      "id": "native.apple.3fdc651e507de84b"
-    },
-    {
       "kind": "ui-call",
-      "line": 1079,
+      "line": 1072,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Command",
       "surface": "apple",
@@ -24003,7 +24011,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 1098,
+      "line": 1091,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Command to review",
       "surface": "apple",
@@ -24011,7 +24019,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1115,
+      "line": 1108,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Sending decision...",
       "surface": "apple",
@@ -24019,23 +24027,39 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1169,
+      "line": 1162,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "System",
       "surface": "apple",
       "id": "native.apple.a8cfe6cb5bc33c21"
     },
     {
+      "kind": "conditional-branch",
+      "line": 1164,
+      "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
+      "source": "OpenClaw",
+      "surface": "apple",
+      "id": "native.apple.3fdc651e507de84b"
+    },
+    {
       "kind": "ui-named-argument",
-      "line": 1221,
+      "line": 1214,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Refresh",
       "surface": "apple",
       "id": "native.apple.c1de056da9ee1b27"
     },
     {
+      "kind": "ui-modifier",
+      "line": 1244,
+      "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
+      "source": "Chat",
+      "surface": "apple",
+      "id": "native.apple.a974845eb4fcc692"
+    },
+    {
       "kind": "ui-localized-call",
-      "line": 1269,
+      "line": 1262,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Speaking reply…",
       "surface": "apple",
@@ -24043,7 +24067,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1272,
+      "line": 1265,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Waiting for spoken reply…",
       "surface": "apple",
@@ -24051,7 +24075,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1316,
+      "line": 1309,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "No chat synced",
       "surface": "apple",
@@ -24059,7 +24083,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1323,
+      "line": 1316,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Tap the message pill below to start from your watch.",
       "surface": "apple",
@@ -24067,7 +24091,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1344,
+      "line": 1337,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "You",
       "surface": "apple",
@@ -24075,7 +24099,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1371,
+      "line": 1364,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Message OpenClaw",
       "surface": "apple",
@@ -24083,7 +24107,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1429,
+      "line": 1422,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Stop speaking",
       "surface": "apple",
@@ -24091,7 +24115,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1432,
+      "line": 1425,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Cancel voice turn",
       "surface": "apple",
@@ -24099,7 +24123,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1434,
+      "line": 1427,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Start voice turn",
       "surface": "apple",
@@ -24107,23 +24131,23 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1474,
+      "line": 1467,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Approvals",
       "surface": "apple",
       "id": "native.apple.f3ccbf04d80cf021"
     },
     {
-      "kind": "ui-named-argument",
-      "line": 1477,
+      "kind": "ui-localized-call",
+      "line": 1470,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Clear",
       "surface": "apple",
       "id": "native.apple.fde372bcd0305149"
     },
     {
-      "kind": "ui-named-argument",
-      "line": 1478,
+      "kind": "ui-localized-call",
+      "line": 1471,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "No approvals waiting",
       "surface": "apple",
@@ -24131,15 +24155,23 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1481,
+      "line": 1474,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "You are caught up",
       "surface": "apple",
       "id": "native.apple.88dcffad1e47412e"
     },
     {
-      "kind": "ui-named-argument",
-      "line": 1492,
+      "kind": "ui-localized-call",
+      "line": 1475,
+      "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
+      "source": "Ready",
+      "surface": "apple",
+      "id": "native.apple.6da5ce592afa6a14"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 1485,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Approval",
       "surface": "apple",
@@ -24147,7 +24179,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1521,
+      "line": 1514,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Pending review",
       "surface": "apple",
@@ -24155,7 +24187,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1528,
+      "line": 1521,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Expires in less than 1 min",
       "surface": "apple",
@@ -24163,7 +24195,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1531,
+      "line": 1524,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Expires in %@ min",
       "surface": "apple",
@@ -24171,7 +24203,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1542,
+      "line": 1535,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Review Command",
       "surface": "apple",
@@ -24179,15 +24211,15 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1546,
+      "line": 1539,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Review",
       "surface": "apple",
       "id": "native.apple.b8d5c2abcfba5377"
     },
     {
-      "kind": "ui-named-argument",
-      "line": 1547,
+      "kind": "ui-localized-call",
+      "line": 1540,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Command execution",
       "surface": "apple",
@@ -24195,7 +24227,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1552,
+      "line": 1545,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Now",
       "surface": "apple",
@@ -24203,7 +24235,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1570,
+      "line": 1563,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Allow Once",
       "surface": "apple",
@@ -24211,7 +24243,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1579,
+      "line": 1572,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Deny",
       "surface": "apple",
@@ -24219,7 +24251,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1623,
+      "line": 1616,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Review command below",
       "surface": "apple",
@@ -24227,7 +24259,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1630,
+      "line": 1623,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "High risk",
       "surface": "apple",
@@ -24235,7 +24267,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1632,
+      "line": 1625,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Medium risk",
       "surface": "apple",
@@ -24243,7 +24275,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1634,
+      "line": 1627,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Low risk",
       "surface": "apple",
@@ -24251,7 +24283,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1644,
+      "line": 1637,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "less than 1 minute",
       "surface": "apple",
@@ -24259,7 +24291,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1648,
+      "line": 1641,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "^[\\(minutes) minute](inflect: true)",
       "surface": "apple",

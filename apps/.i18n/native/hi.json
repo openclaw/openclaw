@@ -14724,11 +14724,6 @@
       "translated": "iPhone पर जारी रखें"
     },
     {
-      "id": "native.apple.a974845eb4fcc692",
-      "source": "Chat",
-      "translated": "चैट"
-    },
-    {
       "id": "native.apple.1f56c2d5162b3561",
       "source": "Latest",
       "translated": "नवीनतम"
@@ -14774,6 +14769,11 @@
       "translated": "आपके iPhone की प्रतीक्षा है"
     },
     {
+      "id": "native.apple.b5de6b91209ad07c",
+      "source": "Syncing",
+      "translated": "सिंक हो रहा है"
+    },
+    {
       "id": "native.apple.7eadc6444e799223",
       "source": "Unavailable",
       "translated": "अनुपलब्ध"
@@ -14789,6 +14789,11 @@
       "translated": "मंज़ूरी का विवरण लोड नहीं हुआ है"
     },
     {
+      "id": "native.apple.a30328bfb2a82106",
+      "source": "Retry",
+      "translated": "पुनः प्रयास करें"
+    },
+    {
       "id": "native.apple.373973b577f97d63",
       "source": "Review again",
       "translated": "फिर से समीक्षा करें"
@@ -14797,6 +14802,11 @@
       "id": "native.apple.6fc58b4047340605",
       "source": "Open all approvals",
       "translated": "सभी अनुमोदन खोलें"
+    },
+    {
+      "id": "native.apple.7cf623c78bbd5ed3",
+      "source": "Connection",
+      "translated": "कनेक्शन"
     },
     {
       "id": "native.apple.b5ac093277f18109",
@@ -14994,11 +15004,6 @@
       "translated": "इनबॉक्स"
     },
     {
-      "id": "native.apple.3fdc651e507de84b",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
-    },
-    {
       "id": "native.apple.a4e70d96cf65b2b2",
       "source": "Command",
       "translated": "कमांड"
@@ -15019,9 +15024,19 @@
       "translated": "सिस्टम"
     },
     {
+      "id": "native.apple.3fdc651e507de84b",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
       "id": "native.apple.c1de056da9ee1b27",
       "source": "Refresh",
       "translated": "रीफ़्रेश करें"
+    },
+    {
+      "id": "native.apple.a974845eb4fcc692",
+      "source": "Chat",
+      "translated": "चैट"
     },
     {
       "id": "native.apple.381840bafc83d21d",
@@ -15087,6 +15102,11 @@
       "id": "native.apple.88dcffad1e47412e",
       "source": "You are caught up",
       "translated": "आपने सब देख लिया है"
+    },
+    {
+      "id": "native.apple.6da5ce592afa6a14",
+      "source": "Ready",
+      "translated": "तैयार"
     },
     {
       "id": "native.apple.ef3ff87537a32741",

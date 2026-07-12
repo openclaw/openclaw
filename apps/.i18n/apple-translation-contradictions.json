@@ -5607,6 +5607,7 @@
       "source": "Retry",
       "translations": [
         "Coba lagi",
+        "Coba Lagi",
         "Retry"
       ]
     },
@@ -5688,7 +5689,8 @@
       "source": "Retry",
       "translations": [
         "Retry",
-        "Yeniden dene"
+        "Yeniden dene",
+        "Yeniden Dene"
       ]
     },
     {

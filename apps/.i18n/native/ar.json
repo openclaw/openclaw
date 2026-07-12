@@ -14724,11 +14724,6 @@
       "translated": "المتابعة على iPhone"
     },
     {
-      "id": "native.apple.a974845eb4fcc692",
-      "source": "Chat",
-      "translated": "دردشة"
-    },
-    {
       "id": "native.apple.1f56c2d5162b3561",
       "source": "Latest",
       "translated": "الأحدث"
@@ -14774,6 +14769,11 @@
       "translated": "في انتظار iPhone"
     },
     {
+      "id": "native.apple.b5de6b91209ad07c",
+      "source": "Syncing",
+      "translated": "جارٍ المزامنة"
+    },
+    {
       "id": "native.apple.7eadc6444e799223",
       "source": "Unavailable",
       "translated": "غير متاح"
@@ -14789,6 +14789,11 @@
       "translated": "لم يتم تحميل تفاصيل الموافقة"
     },
     {
+      "id": "native.apple.a30328bfb2a82106",
+      "source": "Retry",
+      "translated": "إعادة المحاولة"
+    },
+    {
       "id": "native.apple.373973b577f97d63",
       "source": "Review again",
       "translated": "المراجعة مرة أخرى"
@@ -14797,6 +14802,11 @@
       "id": "native.apple.6fc58b4047340605",
       "source": "Open all approvals",
       "translated": "فتح كل الموافقات"
+    },
+    {
+      "id": "native.apple.7cf623c78bbd5ed3",
+      "source": "Connection",
+      "translated": "الاتصال"
     },
     {
       "id": "native.apple.b5ac093277f18109",
@@ -14994,11 +15004,6 @@
       "translated": "صندوق الوارد"
     },
     {
-      "id": "native.apple.3fdc651e507de84b",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
-    },
-    {
       "id": "native.apple.a4e70d96cf65b2b2",
       "source": "Command",
       "translated": "الأمر"
@@ -15019,9 +15024,19 @@
       "translated": "النظام"
     },
     {
+      "id": "native.apple.3fdc651e507de84b",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
       "id": "native.apple.c1de056da9ee1b27",
       "source": "Refresh",
       "translated": "تحديث"
+    },
+    {
+      "id": "native.apple.a974845eb4fcc692",
+      "source": "Chat",
+      "translated": "دردشة"
     },
     {
       "id": "native.apple.381840bafc83d21d",
@@ -15087,6 +15102,11 @@
       "id": "native.apple.88dcffad1e47412e",
       "source": "You are caught up",
       "translated": "أنت مطّلع على كل جديد"
+    },
+    {
+      "id": "native.apple.6da5ce592afa6a14",
+      "source": "Ready",
+      "translated": "جاهز"
     },
     {
       "id": "native.apple.ef3ff87537a32741",
