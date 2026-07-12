@@ -421,6 +421,8 @@ targets:
         group: ShareExtension
       - path: WatchApp/Sources/WatchVoiceTurnTracker.swift
         group: WatchApp/Sources
+      - path: WatchApp/Sources/WatchInboxMessages.swift
+        group: WatchApp/Sources
     dependencies:
       - package: OpenClawKit
     settings:
