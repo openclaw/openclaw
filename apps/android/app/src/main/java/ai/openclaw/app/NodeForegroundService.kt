@@ -126,8 +126,9 @@ class NodeForegroundService : Service() {
               state.connected -> nativeString("OpenClaw Node · Connected")
               else -> nativeString("OpenClaw Node")
             }
+          val displayStatus = gatewayConnectionStatusForDisplay(state.status)
           val text =
-            (state.server?.let { "${state.status} · $it" } ?: state.status) +
+            (state.server?.let { nativeString("\$status · \$server", displayStatus, it) } ?: displayStatus) +
               voiceNotificationSuffix(
                 mode = state.mode,
                 manualMicEnabled = state.capture.micEnabled,

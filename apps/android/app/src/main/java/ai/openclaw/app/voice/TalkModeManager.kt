@@ -2798,21 +2798,21 @@ class TalkModeManager internal constructor(
         if (stopRequested) return
         _isListening.value = false
         if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
-          setStatus("Microphone permission required")
+          setStatus(nativeString("Microphone permission required"))
           return
         }
 
         setStatus(
           when (error) {
-            SpeechRecognizer.ERROR_AUDIO -> "Audio error"
-            SpeechRecognizer.ERROR_CLIENT -> "Client error"
-            SpeechRecognizer.ERROR_NETWORK -> "Network error"
-            SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Network timeout"
+            SpeechRecognizer.ERROR_AUDIO -> nativeString("Audio error")
+            SpeechRecognizer.ERROR_CLIENT -> nativeString("Client error")
+            SpeechRecognizer.ERROR_NETWORK -> nativeString("Network error")
+            SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> nativeString("Network timeout")
             SpeechRecognizer.ERROR_NO_MATCH -> nativeString("Listening")
-            SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "Recognizer busy"
-            SpeechRecognizer.ERROR_SERVER -> "Server error"
+            SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> nativeString("Recognizer busy")
+            SpeechRecognizer.ERROR_SERVER -> nativeString("Server error")
             SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> nativeString("Listening")
-            else -> "Speech error ($error)"
+            else -> nativeString("Speech error (\$error)", error)
           },
         )
         scheduleRestart(delayMs = 600)

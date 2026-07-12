@@ -424,9 +424,9 @@ private fun gatewayManualTransportPresentation(
     effectiveTls = effectiveTls,
     helperText =
       when {
-        requiresTls -> "Secure connection is required for this host."
+        requiresTls -> nativeString("Secure connection is required for this host.")
         effectiveTls -> null
-        else -> "Use only on a trusted private network."
+        else -> nativeString("Use only on a trusted private network.")
       },
   )
 

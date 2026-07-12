@@ -246,7 +246,7 @@ internal class MicCaptureManager(
           _statusText.value =
             when {
               _micEnabled.value && _isSending.value -> nativeString("Listening · sending queued voice")
-              _micEnabled.value -> "Listening"
+              _micEnabled.value -> nativeString("Listening")
               _isSending.value -> nativeString("Mic off · sending…")
               else -> nativeString("Mic off")
             }
@@ -602,7 +602,8 @@ internal class MicCaptureManager(
     sendQueuedIfIdle()
   }
 
-  private fun queuedWaitingStatus(): String = "${queuedMessageCount()} queued · waiting for gateway"
+  private fun queuedWaitingStatus(): String =
+    nativeString("\${queuedMessageCount()} queued · waiting for gateway", queuedMessageCount())
 
   private fun appendConversation(
     role: VoiceConversationRole,
@@ -783,8 +784,8 @@ internal class MicCaptureManager(
   private fun listeningStatus(): String =
     when {
       _isSending.value -> nativeString("Listening · sending queued voice")
-      hasQueuedMessages() -> "Listening · ${queuedMessageCount()} queued"
-      else -> "Listening"
+      hasQueuedMessages() -> nativeString("Listening · \${queuedMessageCount()} queued", queuedMessageCount())
+      else -> nativeString("Listening")
     }
 
   private fun pcm16ToPcmu(pcm16: ByteArray): ByteArray {

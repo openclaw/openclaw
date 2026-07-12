@@ -319,6 +319,29 @@ data class GatewayConnectionDisplay(
   val problem: GatewayConnectionProblem?,
 )
 
+private const val GATEWAY_STATUS_OFFLINE = "Offline"
+private const val GATEWAY_STATUS_CONNECTED = "Connected"
+private const val GATEWAY_STATUS_NODE_OFFLINE = "Connected (node offline)"
+private const val GATEWAY_STATUS_OPERATOR_OFFLINE = "Connected (operator offline)"
+
+private fun gatewayOperatorConnectionState(operator: String): String = "Connected (operator: $operator)"
+
+internal fun gatewayConnectionStatusForDisplay(statusText: String): String {
+  val status = statusText.trim()
+  return when {
+    status.isEmpty() || status == GATEWAY_STATUS_OFFLINE -> nativeString("Offline")
+    status == GATEWAY_STATUS_CONNECTED -> nativeString("Connected")
+    status == GATEWAY_STATUS_NODE_OFFLINE -> nativeString("Connected (node offline)")
+    status == GATEWAY_STATUS_OPERATOR_OFFLINE -> nativeString("Connected (operator offline)")
+    status.startsWith("Connected (operator: ") && status.endsWith(")") ->
+      nativeString(
+        "Connected (operator: \$operator)",
+        status.removePrefix("Connected (operator: ").dropLast(1),
+      )
+    else -> status
+  }
+}
+
 private fun gatewayProblemAfterDisconnect(
   problem: GatewayConnectionProblem?,
   statusText: String,
@@ -337,16 +360,16 @@ internal fun gatewayConnectionDisplay(
   val operator = operatorStatusText.trim()
   val node = nodeStatusText.trim()
   return when {
-    operatorConnected && nodeConnected -> GatewayConnectionDisplay(true, "Connected", null)
-    operatorConnected -> GatewayConnectionDisplay(true, "Connected (node offline)", nodeProblem)
+    operatorConnected && nodeConnected -> GatewayConnectionDisplay(true, GATEWAY_STATUS_CONNECTED, null)
+    operatorConnected -> GatewayConnectionDisplay(true, GATEWAY_STATUS_NODE_OFFLINE, nodeProblem)
     nodeConnected ->
       GatewayConnectionDisplay(
         isConnected = false,
         statusText =
           if (operator.isNotEmpty() && operator != "Offline") {
-            "Connected (operator: $operator)"
+            gatewayOperatorConnectionState(operator)
           } else {
-            "Connected (operator offline)"
+            GATEWAY_STATUS_OPERATOR_OFFLINE
           },
         problem = operatorProblem,
       )
@@ -697,9 +720,9 @@ class NodeRuntime private constructor(
   private val _nodeCapabilityApproval = MutableStateFlow<GatewayNodeCapabilityApproval>(GatewayNodeCapabilityApproval.Loading)
   val nodeCapabilityApproval: StateFlow<GatewayNodeCapabilityApproval> = _nodeCapabilityApproval.asStateFlow()
 
-  private val _gatewayConnectionDisplay = MutableStateFlow(GatewayConnectionDisplay(false, "Offline", null))
+  private val _gatewayConnectionDisplay = MutableStateFlow(GatewayConnectionDisplay(false, GATEWAY_STATUS_OFFLINE, null))
   val gatewayConnectionDisplay: StateFlow<GatewayConnectionDisplay> = _gatewayConnectionDisplay.asStateFlow()
-  private val _statusText = MutableStateFlow("Offline")
+  private val _statusText = MutableStateFlow(GATEWAY_STATUS_OFFLINE)
   val statusText: StateFlow<String> = _statusText.asStateFlow()
   private val _gatewayConnectionProblem = MutableStateFlow<GatewayConnectionProblem?>(null)
   val gatewayConnectionProblem: StateFlow<GatewayConnectionProblem?> = _gatewayConnectionProblem.asStateFlow()

@@ -433,19 +433,19 @@ fun ChatOutboxBubble(
   val statusColor = if (failed) mobileDanger else mobileWarning
   val statusLabel =
     when (item.status) {
-      ChatOutboxStatus.Queued -> "Queued — sends when reconnected"
-      ChatOutboxStatus.Sending -> "Sending…"
-      ChatOutboxStatus.Accepted -> "Sent — confirming delivery…"
+      ChatOutboxStatus.Queued -> nativeString("Queued — sends when reconnected")
+      ChatOutboxStatus.Sending -> nativeString("Sending…")
+      ChatOutboxStatus.Accepted -> nativeString("Sent — confirming delivery…")
       ChatOutboxStatus.Failed ->
         item.lastError
           ?.trim()
           ?.takeIf { it.isNotEmpty() }
-          ?.let { "Failed — $it" } ?: "Failed"
+          ?.let { nativeString("Failed — \$it", it) } ?: nativeString("Failed")
     }
 
   ChatBubbleContainer(
     style = bubbleStyle("user").copy(borderColor = statusColor.copy(alpha = 0.6f)),
-    roleLabel = "You",
+    roleLabel = nativeString("You"),
   ) {
     if (item.text.isNotBlank()) {
       ChatMarkdown(text = item.text, textColor = mobileText)
@@ -566,7 +566,7 @@ internal fun ChatBase64Image(
       Box {
         Image(
           bitmap = image,
-          contentDescription = mimeType ?: "attachment",
+          contentDescription = mimeType ?: nativeString("Attachment"),
           contentScale = ContentScale.Fit,
           modifier = Modifier.fillMaxWidth(),
         )

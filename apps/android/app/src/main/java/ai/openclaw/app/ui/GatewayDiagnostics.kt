@@ -4,6 +4,7 @@ import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.GatewayNodeApprovalState
 import ai.openclaw.app.GatewayNodeCapabilityApproval
+import ai.openclaw.app.gatewayConnectionStatusForDisplay
 import ai.openclaw.app.gateway.normalizeGatewayApprovalRequestId
 import ai.openclaw.app.i18n.nativeString
 import android.content.ClipData
@@ -23,7 +24,7 @@ internal fun openClawAndroidVersionLabel(): String {
 }
 
 /** Normalizes blank gateway status text for display and diagnostics copy. */
-internal fun gatewayStatusForDisplay(statusText: String): String = statusText.trim().ifEmpty { nativeString("Offline") }
+internal fun gatewayStatusForDisplay(statusText: String): String = gatewayConnectionStatusForDisplay(statusText)
 
 /** Resolves the best non-secret endpoint label available to diagnostics surfaces. */
 internal fun gatewayDiagnosticsEndpoint(
@@ -38,7 +39,7 @@ internal fun gatewayDiagnosticsEndpoint(
 
 /** Detects pairing/approval status text so UI can offer pairing-specific actions. */
 internal fun gatewayStatusLooksLikePairing(statusText: String): Boolean {
-  val lower = gatewayStatusForDisplay(statusText).lowercase()
+  val lower = statusText.trim().lowercase()
   return lower.contains("pair") || lower.contains("approve")
 }
 
@@ -136,7 +137,7 @@ internal fun buildGatewayDiagnosticsReport(
       .orEmpty()
       .ifEmpty { Build.VERSION.SDK_INT.toString() }
   val endpoint = gatewayAddress.trim().ifEmpty { "unknown" }
-  val status = gatewayStatusForDisplay(statusText)
+  val status = statusText.trim().ifEmpty { "Offline" }
   return """
     Help diagnose this OpenClaw Android gateway connection failure.
 

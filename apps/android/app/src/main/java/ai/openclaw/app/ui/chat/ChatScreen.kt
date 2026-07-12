@@ -309,7 +309,7 @@ fun ChatScreen(
       attachments.addAll(merged.attachments)
       shareImportNotice =
         if (merged.failedImageCount + merged.droppedImageCount > 0) {
-          "Some shared images were omitted or could not be added."
+          nativeString("Some shared images were omitted or could not be added.")
         } else {
           null
         }
@@ -653,9 +653,9 @@ private fun ChatHeader(
       ModelPill(
         text =
           when {
-            pendingRunCount > 0 -> "Working"
-            healthOk -> "Ready"
-            else -> "Offline"
+            pendingRunCount > 0 -> nativeString("Working")
+            healthOk -> nativeString("Ready")
+            else -> nativeString("Offline")
           },
         status =
           when {
@@ -1039,9 +1039,9 @@ private fun ChatBubble(
           Text(
             text =
               when {
-                live -> "OpenClaw · Live"
-                isUser -> "You"
-                normalizedRole == "system" -> "System"
+                live -> nativeString("OpenClaw · Live")
+                isUser -> nativeString("You")
+                normalizedRole == "system" -> nativeString("System")
                 else -> nativeString("OpenClaw")
               },
             style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp, fontWeight = FontWeight.SemiBold),
@@ -1056,7 +1056,7 @@ private fun ChatBubble(
                   base64 = checkNotNull(part.base64),
                   mimeType = part.mimeType,
                 )
-              else -> Text(text = part.fileName ?: "Attachment", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+              else -> Text(text = part.fileName ?: nativeString("Attachment"), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
             }
           }
           if (messageId != null) {
@@ -1569,7 +1569,7 @@ private fun SlashCommandRow(
       )
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
         Text(
-          text = command.description.ifBlank { command.category ?: "Command" },
+          text = command.description.ifBlank { command.category ?: nativeString("Command") },
           style = ClawTheme.type.caption,
           color = ClawTheme.colors.textMuted,
           maxLines = 1,
@@ -1786,7 +1786,7 @@ private fun AttachmentChip(
       }
       Text(
         text =
-          attachment.durationMs?.let { duration -> "Voice note · ${formatVoiceNoteDuration(duration)}" }
+          attachment.durationMs?.let { duration -> nativeString("Voice note · \${formatVoiceNoteDuration(duration)}", formatVoiceNoteDuration(duration)) }
             ?: attachment.fileName,
         style = ClawTheme.type.caption,
         color = ClawTheme.colors.textMuted,
@@ -1817,7 +1817,7 @@ private fun chatSessionChipText(
 ): String {
   val mainKey = mainSessionKey.trim().ifEmpty { "main" }
   if (entry.key == mainKey || (entry.key == "main" && mainKey == "main")) return nativeString("Main")
-  val name = entry.displayName?.takeIf { it.isNotBlank() } ?: entry.key.takeIf { entry.updatedAtMs != null } ?: "Current"
+  val name = entry.displayName?.takeIf { it.isNotBlank() } ?: entry.key.takeIf { entry.updatedAtMs != null } ?: nativeString("Current")
   return friendlySessionName(name)
 }
 
@@ -1894,9 +1894,9 @@ internal fun userFacingChatError(
 ): String {
   val lower = error.lowercase(Locale.US)
   return when {
-    lower.contains("not connected") && gatewayConnected -> "Chat is still checking Gateway health."
-    lower.contains("not connected") -> "Gateway is offline. Fix the connection below or copy diagnostics."
-    lower.contains("unauthorized") || lower.contains("auth") -> "Gateway authentication needs attention."
+    lower.contains("not connected") && gatewayConnected -> nativeString("Chat is still checking Gateway health.")
+    lower.contains("not connected") -> nativeString("Gateway is offline. Fix the connection below or copy diagnostics.")
+    lower.contains("unauthorized") || lower.contains("auth") -> nativeString("Gateway authentication needs attention.")
     else -> error
   }
 }
@@ -1913,7 +1913,10 @@ internal fun contextMeterLabel(
   thinkingLevel: String,
   thinkingSupported: Boolean = true,
 ): String {
-  val contextLabel = contextMeterWidth(usage)?.let { "Context ${(it * 100).roundToInt()}%" } ?: "Context --"
+  val contextLabel =
+    contextMeterWidth(usage)?.let {
+      nativeString("Context \${(it * 100).roundToInt()}%", (it * 100).roundToInt())
+    } ?: nativeString("Context --")
   return if (thinkingSupported) nativeString("\$contextLabel · \${contextMeterThinkingLabel(thinkingLevel)}", contextLabel, contextMeterThinkingLabel(thinkingLevel)) else contextLabel
 }
 
