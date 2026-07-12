@@ -253,7 +253,7 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
     "status: .disconnected",
   ],
   "apps/ios/WatchApp/Sources/WatchInboxView.swift": [
-    "enum WatchTextValue: ExpressibleByStringLiteral",
+    "enum WatchTextValue {\n    case localized(LocalizedStringResource)",
     "private struct WatchFaceHeader: View {\n    let section: WatchTextValue\n    let title: WatchTextValue\n    let subtitle: WatchTextValue",
     "private struct WatchHeroCard: View {\n    let label: WatchTextValue\n    let title: WatchTextValue\n    let subtitle: WatchTextValue",
     "private struct WatchStackCard: View {\n    let label: WatchTextValue\n    let title: WatchTextValue\n    let subtitle: WatchTextValue",

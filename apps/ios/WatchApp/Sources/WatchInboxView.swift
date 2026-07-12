@@ -2,22 +2,14 @@ import Foundation
 import SwiftUI
 import WatchKit
 
-private enum WatchTextValue: ExpressibleByStringLiteral {
-    case localized(LocalizedStringKey)
+private enum WatchTextValue {
+    case localized(LocalizedStringResource)
     case verbatim(String)
-
-    init(stringLiteral value: String) {
-        self = .localized(LocalizedStringKey(value))
-    }
-
-    static func localized(_ value: String) -> Self {
-        .localized(LocalizedStringKey(value))
-    }
 
     var text: Text {
         switch self {
-        case let .localized(key):
-            Text(key)
+        case let .localized(resource):
+            Text(resource)
         case let .verbatim(value):
             Text(verbatim: value)
         }
@@ -100,7 +92,7 @@ private struct WatchControlSurfaceView: View {
         WatchFaceScroll {
             self.pageRail
             WatchFaceHeader(
-                section: "Now",
+                section: .localized("Now"),
                 title: .verbatim(self.greetingText),
                 subtitle: .verbatim(self.connectionLine),
                 avatarImageSource: self.avatarImageSource,
@@ -113,7 +105,7 @@ private struct WatchControlSurfaceView: View {
                     label: .verbatim(self.primaryLabel),
                     title: .verbatim(self.primaryTitle),
                     subtitle: .verbatim(self.primarySubtitle),
-                    accessory: .localized(self.store.talkSummaryText))
+                    accessory: .verbatim(self.store.talkSummaryText))
             }
             .buttonStyle(.plain)
 
@@ -137,8 +129,8 @@ private struct WatchControlSurfaceView: View {
         WatchFaceScroll {
             self.pageRail
             WatchFaceHeader(
-                section: "Inbox",
-                title: "What needs you",
+                section: .localized("Inbox"),
+                title: .localized("What needs you"),
                 subtitle: .verbatim(self.inboxSubtitle),
                 avatarImageSource: self.avatarImageSource,
                 avatarText: self.avatarText)
@@ -154,13 +146,13 @@ private struct WatchControlSurfaceView: View {
                 self.inboxPromptBlock
             } else {
                 WatchHeroCard(
-                    label: "Clear",
-                    title: "Caught up",
+                    label: .localized("Clear"),
+                    title: .localized("Caught up"),
                     subtitle: .localized(
                         self.store.hasAppSnapshot
                             ? "No chats or approvals need you"
                             : "Waiting for iPhone sync"),
-                    accessory: "Ready")
+                    accessory: .localized("Ready"))
             }
 
             Button {
@@ -178,7 +170,7 @@ private struct WatchControlSurfaceView: View {
                 self.chatTimelineDestination
             } label: {
                 WatchStackCard(
-                    label: "Chat",
+                    label: .localized("Chat"),
                     title: .verbatim(self.chatPreviewTitle),
                     subtitle: .verbatim(self.chatPreviewSubtitle),
                     badge: self.chatCount.formatted(),
@@ -194,7 +186,7 @@ private struct WatchControlSurfaceView: View {
                 WatchExecApprovalListView(store: self.store, onDecision: self.onExecApprovalDecision)
             } label: {
                 WatchStackCard(
-                    label: "Approvals",
+                    label: .localized("Approvals"),
                     title: .verbatim(self.approvalHeadline),
                     subtitle: .verbatim(self.approvalSubtitle),
                     badge: self.approvalCount.formatted(),
@@ -260,7 +252,7 @@ private struct WatchControlSurfaceView: View {
         WatchFaceScroll {
             self.pageRail
             WatchFaceHeader(
-                section: "Approvals",
+                section: .localized("Approvals"),
                 title: .verbatim(self.approvalHeadline),
                 subtitle: .verbatim(self.approvalHeaderSubtitle),
                 avatarImageSource: self.avatarImageSource,
@@ -268,7 +260,7 @@ private struct WatchControlSurfaceView: View {
 
             if let record = self.store.activeExecApproval {
                 WatchHeroCard(
-                    label: "Approval needed",
+                    label: .localized("Approval needed"),
                     title: .verbatim(record.approval.commandPreview ?? record.approval.commandText),
                     subtitle: .verbatim(self.approvalDecisionSubtitle(record)),
                     accessory: .verbatim(self.approvalAccessory(record)))
@@ -295,32 +287,32 @@ private struct WatchControlSurfaceView: View {
                 }
             } else if self.store.isExecApprovalReviewLoading {
                 WatchHeroCard(
-                    label: "Loading",
-                    title: "Loading approval",
+                    label: .localized("Loading"),
+                    title: .localized("Loading approval"),
                     subtitle: .verbatim(
                         self.store.execApprovalReviewStatusText
                             ?? String(localized: "Waiting for your iPhone")),
-                    accessory: "Syncing")
+                    accessory: .localized("Syncing"))
             } else if self.approvalCount > 0 || self.store.shouldShowExecApprovalReviewStatus {
                 WatchHeroCard(
-                    label: "Unavailable",
-                    title: "Approval not loaded",
+                    label: .localized("Unavailable"),
+                    title: .localized("Approval not loaded"),
                     subtitle: .verbatim(
                         self.store.execApprovalReviewStatusText
                             ?? String(localized: "Approval details have not loaded")),
-                    accessory: "Retry")
+                    accessory: .localized("Retry"))
 
                 WatchSecondaryButton(title: "Review again") {
                     self.onRefreshExecApprovalReview?()
                 }
             } else {
                 WatchHeroCard(
-                    label: "Clear",
-                    title: "No approvals waiting",
+                    label: .localized("Clear"),
+                    title: .localized("No approvals waiting"),
                     subtitle: .verbatim(
                         self.store.lastExecApprovalOutcomeText
                             ?? String(localized: "You are caught up")),
-                    accessory: "Ready")
+                    accessory: .localized("Ready"))
             }
 
             if self.approvalCount > 1 {
@@ -338,7 +330,7 @@ private struct WatchControlSurfaceView: View {
         WatchFaceScroll {
             self.pageRail
             WatchFaceHeader(
-                section: "Connection",
+                section: .localized("Connection"),
                 title: .verbatim(self.directNode.isConnected
                     ? String(localized: "Watch node online")
                     : String(localized: "Direct Gateway")),
@@ -361,10 +353,10 @@ private struct WatchControlSurfaceView: View {
                     : String(localized: "Offline")))
 
             WatchDetailText(
-                text: """
-                Direct mode supports device info, status, and notifications. \
-                Chat, Talk, and approvals still use the iPhone.
-                """)
+                text: .verbatim(String(localized: """
+                    Direct mode supports device info, status, and notifications. \
+                    Chat, Talk, and approvals still use the iPhone.
+                    """)))
 
             if self.directNode.isConfigured {
                 Toggle(isOn: Binding(
@@ -382,7 +374,8 @@ private struct WatchControlSurfaceView: View {
                 }
             } else {
                 WatchDetailText(
-                    text: "The iPhone securely sends a one-time setup code. Existing relay features stay available.")
+                    text: .localized(
+                        "The iPhone securely sends a one-time setup code. Existing relay features stay available."))
             }
         }
     }
@@ -1016,7 +1009,7 @@ private struct WatchActionCard: View {
     var body: some View {
         Button(action: self.action) {
             WatchStackCard(
-                label: "OpenClaw",
+                label: .localized("OpenClaw"),
                 title: .verbatim(self.title),
                 subtitle: .verbatim(self.subtitle),
                 badge: nil)
@@ -1474,12 +1467,12 @@ private struct WatchExecApprovalListView: View {
         WatchDetailScroll(title: "Approvals") {
             if self.store.sortedExecApprovals.isEmpty {
                 WatchHeroCard(
-                    label: "Clear",
-                    title: "No approvals waiting",
+                    label: .localized("Clear"),
+                    title: .localized("No approvals waiting"),
                     subtitle: .verbatim(
                         self.store.lastExecApprovalOutcomeText
                             ?? String(localized: "You are caught up")),
-                    accessory: "Ready")
+                    accessory: .localized("Ready"))
             } else {
                 ForEach(self.store.sortedExecApprovals) { record in
                     NavigationLink {
@@ -1489,7 +1482,7 @@ private struct WatchExecApprovalListView: View {
                             onDecision: self.onDecision)
                     } label: {
                         WatchStackCard(
-                            label: "Approval",
+                            label: .localized("Approval"),
                             title: .verbatim(record.approval.commandPreview ?? record.approval.commandText),
                             subtitle: .verbatim(self.metadataLine(for: record)),
                             badge: nil)
@@ -1544,7 +1537,7 @@ private struct WatchExecApprovalDetailView: View {
                 label: .verbatim(
                     self.riskText(self.currentRecord?.approval.risk ?? self.record.approval.risk)
                         ?? String(localized: "Review")),
-                title: "Command execution",
+                title: .localized("Command execution"),
                 subtitle: .verbatim(self.metadataSummary),
                 accessory: .verbatim(
                     Self.expiresText(

@@ -46,6 +46,7 @@ struct RuntimeLocalizationSourceGuardTests {
         let widget = try Self.source("ActivityWidget/OpenClawLiveActivity.swift")
         let project = try Self.source("project.yml")
         let dreaming = try Self.source("Sources/Design/AgentProDreamingDestination.swift")
+        let watchInbox = try Self.source("WatchApp/Sources/WatchInboxView.swift")
         let chat = try Self.sharedSource("OpenClawChatUI/ChatMessageViews.swift")
 
         #expect(!attributes.contains("var statusText"))
@@ -69,6 +70,9 @@ struct RuntimeLocalizationSourceGuardTests {
         #expect(chat.contains("private var title: LocalizedStringResource"))
         #expect(chat.contains("private var accessibilityText: LocalizedStringResource"))
         #expect(chat.contains(".accessibilityLabel(Text(self.accessibilityText))"))
+        #expect(watchInbox.contains("case localized(LocalizedStringResource)"))
+        #expect(!watchInbox.contains("WatchTextValue: ExpressibleByStringLiteral"))
+        #expect(watchInbox.contains("accessory: .verbatim(self.store.talkSummaryText)"))
     }
 
     private static func source(_ path: String) throws -> String {

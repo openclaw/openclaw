@@ -245,6 +245,9 @@ describe("Apple app i18n catalogs", () => {
     expect(watch).toContain(
       "private struct WatchHeroCard: View {\n    let label: WatchTextValue\n    let title: WatchTextValue\n    let subtitle: WatchTextValue",
     );
+    expect(watch).toContain("case localized(LocalizedStringResource)");
+    expect(watch).not.toContain("WatchTextValue: ExpressibleByStringLiteral");
+    expect(watch).toContain("accessory: .verbatim(self.store.talkSummaryText)");
     expect(watch).toContain("title: .verbatim(record.approval.commandPreview");
     expect(settings).toContain(
       "let title: OpenClawTextValue\n    let detail: OpenClawTextValue\n    let priority: OpenClawTextValue",
