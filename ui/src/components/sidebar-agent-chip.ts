@@ -30,10 +30,18 @@ class SidebarAgentChip extends OpenClawLightDomContentsElement {
           aria-label=${t("agentChip.openConversation", { name: this.agentName })}
           @click=${() => this.onOpenConversation?.()}
         >
-          <span class="sidebar-agent-chip__avatar" aria-hidden="true">
+          <span class="sidebar-agent-chip__avatar">
             ${this.avatarUrl
-              ? html`<img src=${this.avatarUrl} alt="" loading="lazy" decoding="async" />`
-              : html`<span class="sidebar-agent-chip__avatar-text">${this.avatarText}</span>`}
+              ? html`<img
+                  src=${this.avatarUrl}
+                  alt=""
+                  aria-hidden="true"
+                  loading="lazy"
+                  decoding="async"
+                />`
+              : html`<span class="sidebar-agent-chip__avatar-text" aria-hidden="true"
+                  >${this.avatarText}</span
+                >`}
             <span
               class="sidebar-agent-chip__presence ${this.connected
                 ? "sidebar-connection-status--online"
