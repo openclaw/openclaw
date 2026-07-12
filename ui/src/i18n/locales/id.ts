@@ -4302,8 +4302,6 @@ export const id: TranslationMap = {
       modelLockedLabel: "Pemilihan model dikendalikan untuk sesi ini",
       lockedSessionModel: "Model sesi",
       nativeCodexModel: "Model yang dikontrol Codex",
-      replaceModeHint: "Replace mode shows only models explicitly listed in Settings.",
-      manageModels: "Manage models",
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {

@@ -4195,8 +4195,6 @@ export const zh_TW: TranslationMap = {
       modelLockedLabel: "此工作階段的模型選擇受到控制",
       lockedSessionModel: "工作階段模型",
       nativeCodexModel: "Codex 控制的模型",
-      replaceModeHint: "Replace mode shows only models explicitly listed in Settings.",
-      manageModels: "Manage models",
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {

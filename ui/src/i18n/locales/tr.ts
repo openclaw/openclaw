@@ -4324,8 +4324,6 @@ export const tr: TranslationMap = {
       modelLockedLabel: "Bu oturum için model seçimi denetleniyor",
       lockedSessionModel: "Oturum modeli",
       nativeCodexModel: "Codex kontrollü model",
-      replaceModeHint: "Replace mode shows only models explicitly listed in Settings.",
-      manageModels: "Manage models",
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {

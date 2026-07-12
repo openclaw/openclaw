@@ -4323,8 +4323,6 @@ export const ja_JP: TranslationMap = {
       modelLockedLabel: "このセッションではモデル選択が制御されています",
       lockedSessionModel: "セッションモデル",
       nativeCodexModel: "Codex 制御のモデル",
-      replaceModeHint: "Replace mode shows only models explicitly listed in Settings.",
-      manageModels: "Manage models",
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {

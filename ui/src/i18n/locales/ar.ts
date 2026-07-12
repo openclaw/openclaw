@@ -4259,8 +4259,6 @@ export const ar: TranslationMap = {
       modelLockedLabel: "اختيار النموذج متحكَّم به لهذه الجلسة",
       lockedSessionModel: "نموذج الجلسة",
       nativeCodexModel: "النموذج المتحكَّم به من Codex",
-      replaceModeHint: "Replace mode shows only models explicitly listed in Settings.",
-      manageModels: "Manage models",
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {

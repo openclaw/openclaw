@@ -4221,8 +4221,6 @@ export const th: TranslationMap = {
       modelLockedLabel: "การเลือกโมเดลถูกควบคุมสำหรับเซสชันนี้",
       lockedSessionModel: "โมเดลของเซสชัน",
       nativeCodexModel: "โมเดลที่ควบคุมโดย Codex",
-      replaceModeHint: "Replace mode shows only models explicitly listed in Settings.",
-      manageModels: "Manage models",
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {
