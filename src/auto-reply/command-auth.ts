@@ -27,6 +27,13 @@ export type CommandAuthorization = {
   ownerList: string[];
   senderId?: string;
   senderIsOwner: boolean;
+  /**
+   * True when owner authority is global (gateway operator.admin scope, wildcard
+   * owners, or an explicit commands.ownerAllowFrom match) rather than the origin
+   * channel's own allowFrom fallback. Cross-channel command targets rely on this
+   * to avoid re-scoping a global owner to a single channel (#104984).
+   */
+  senderIsGlobalOwner: boolean;
   isAuthorizedSender: boolean;
   from?: string;
   to?: string;
@@ -53,6 +60,7 @@ type OwnerAuthorizationState = {
   ownerAllowAll: boolean;
   ownerCandidatesForCommands: string[];
   explicitOwners: string[];
+  hasExplicitOwners: boolean;
   ownerList: string[];
 };
 
@@ -427,6 +435,10 @@ function resolveOwnerAuthorizationState(params: {
     ownerAllowAll,
     ownerCandidatesForCommands,
     explicitOwners,
+    // True when the owner list came from explicit config (commands.ownerAllowFrom
+    // or a context override) rather than the origin channel's allowFrom fallback.
+    // Explicit owners hold global authority; fallback owners are origin-scoped.
+    hasExplicitOwners: explicitOwners.length > 0 || explicitOverrides.length > 0,
     ownerList,
   };
 }
@@ -677,6 +689,13 @@ export function resolveCommandAuthorization(params: {
     ctx.GatewayClientScopes.includes("operator.admin");
   const ownerAllowlistConfigured = ownerState.ownerAllowAll || ownerState.explicitOwners.length > 0;
   const senderIsOwner = senderIsOwnerByIdentity || senderIsOwnerByScope || ownerState.ownerAllowAll;
+  // Global authority = admin scope, wildcard owners, or an explicit
+  // ownerAllowFrom match. A match against the origin allowFrom fallback is
+  // origin-scoped only and must not carry to other channels' config.
+  const senderIsGlobalOwner =
+    senderIsOwnerByScope ||
+    ownerState.ownerAllowAll ||
+    (ownerState.hasExplicitOwners && senderIsOwnerByIdentity);
   const requireOwner = enforceOwner || ownerAllowlistConfigured;
   const isOwnerForCommands = !requireOwner
     ? true
@@ -703,6 +722,7 @@ export function resolveCommandAuthorization(params: {
     ownerList: ownerState.ownerList,
     senderId: senderId || undefined,
     senderIsOwner,
+    senderIsGlobalOwner,
     isAuthorizedSender,
     from: from || undefined,
     to: to || undefined,

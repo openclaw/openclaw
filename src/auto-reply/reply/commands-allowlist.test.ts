@@ -621,8 +621,10 @@ describe("handleAllowlistCommand", () => {
       SenderId: "123456789",
       From: "123456789",
     });
-    // Origin (Telegram) owner authority — the pre-fix state that let this through.
+    // Origin (Telegram) owner authority via allowFrom fallback only — the
+    // pre-fix state that let this through. senderIsGlobalOwner is false.
     params.command.senderIsOwner = true;
+    params.command.senderIsGlobalOwner = false;
 
     const result = await handleAllowlistCommand(params, true);
 
@@ -632,9 +634,11 @@ describe("handleAllowlistCommand", () => {
     expect(addChannelAllowFromStoreEntryMock).not.toHaveBeenCalled();
   });
 
-  it("allows a cross-channel write from a global commands owner (#104984)", async () => {
-    // A global commands.ownerAllowFrom identity is an owner everywhere, so a
-    // legitimate operator can still edit another channel cross-surface.
+  it("allows a cross-channel write from a global commands owner without re-scoping (#104984)", async () => {
+    // A global commands.ownerAllowFrom identity — including the documented
+    // provider-qualified form (telegram:123456789) — is an owner everywhere.
+    // senderIsGlobalOwner short-circuits the target re-check so a legitimate
+    // operator is never wrongly re-scoped to a single channel.
     const cfg = {
       commands: {
         text: true,
@@ -650,6 +654,10 @@ describe("handleAllowlistCommand", () => {
       valid: true,
       parsed: structuredClone(cfg),
     });
+    addChannelAllowFromStoreEntryMock.mockResolvedValueOnce({
+      changed: true,
+      allowFrom: ["+15550000000", "+15551234567"],
+    });
     const params = buildAllowlistParams("/allowlist add dm --channel whatsapp +15551234567", cfg, {
       Provider: "telegram",
       Surface: "telegram",
@@ -657,11 +665,13 @@ describe("handleAllowlistCommand", () => {
       From: "123456789",
     });
     params.command.senderIsOwner = true;
+    params.command.senderIsGlobalOwner = true;
 
     const result = await handleAllowlistCommand(params, true);
 
     // Global owner passes the cross-channel gate and reaches the write path.
     expect(result?.reply?.text ?? "").not.toContain("not authorized");
+    expect(replaceConfigFileMock).toHaveBeenCalled();
   });
 
   it("blocks non-owner allowlist writes before resolving target channel", async () => {

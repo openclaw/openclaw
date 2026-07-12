@@ -100,6 +100,81 @@ describe("senderIsOwner only reflects explicit owner authorization", () => {
     expect(auth.senderIsOwner).toBe(false);
   });
 
+  // #104984: senderIsGlobalOwner distinguishes global authority (explicit
+  // ownerAllowFrom, wildcard, admin scope) from origin-channel allowFrom
+  // fallback ownership, so cross-channel command targets can re-scope only the
+  // latter without revoking legitimate global owners.
+  it("marks an origin allowFrom fallback owner as non-global (#104984)", () => {
+    const cfg = {
+      channels: { discord: { allowFrom: ["123"] } },
+    } as OpenClawConfig;
+    const ctx = {
+      Provider: "discord",
+      Surface: "discord",
+      From: "discord:123",
+      SenderId: "123",
+    } as MsgContext;
+
+    const auth = resolveCommandAuthorization({ ctx, cfg, commandAuthorized: true });
+
+    expect(auth.senderIsOwner).toBe(true);
+    expect(auth.senderIsGlobalOwner).toBe(false);
+  });
+
+  it("marks an unprefixed commands.ownerAllowFrom owner as global (#104984)", () => {
+    const cfg = {
+      channels: { discord: { allowFrom: ["123"] } },
+      commands: { ownerAllowFrom: ["123"] },
+    } as OpenClawConfig;
+    const ctx = {
+      Provider: "discord",
+      Surface: "discord",
+      From: "discord:123",
+      SenderId: "123",
+    } as MsgContext;
+
+    const auth = resolveCommandAuthorization({ ctx, cfg, commandAuthorized: true });
+
+    expect(auth.senderIsOwner).toBe(true);
+    expect(auth.senderIsGlobalOwner).toBe(true);
+  });
+
+  it("marks a provider-qualified commands.ownerAllowFrom owner as global (#104984)", () => {
+    const cfg = {
+      channels: { discord: { allowFrom: ["123"] } },
+      commands: { ownerAllowFrom: ["discord:123"] },
+    } as OpenClawConfig;
+    const ctx = {
+      Provider: "discord",
+      Surface: "discord",
+      From: "discord:123",
+      SenderId: "123",
+    } as MsgContext;
+
+    const auth = resolveCommandAuthorization({ ctx, cfg, commandAuthorized: true });
+
+    expect(auth.senderIsOwner).toBe(true);
+    expect(auth.senderIsGlobalOwner).toBe(true);
+  });
+
+  it("leaves a non-owner as neither owner nor global owner (#104984)", () => {
+    const cfg = {
+      channels: { discord: { allowFrom: ["123"] } },
+      commands: { ownerAllowFrom: ["456"] },
+    } as OpenClawConfig;
+    const ctx = {
+      Provider: "discord",
+      Surface: "discord",
+      From: "discord:789",
+      SenderId: "789",
+    } as MsgContext;
+
+    const auth = resolveCommandAuthorization({ ctx, cfg, commandAuthorized: true });
+
+    expect(auth.senderIsOwner).toBe(false);
+    expect(auth.senderIsGlobalOwner).toBe(false);
+  });
+
   it("does not let native command authorization bypass explicit owner allowlists", () => {
     const cfg = {
       channels: { telegram: {} },

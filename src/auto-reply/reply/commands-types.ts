@@ -19,6 +19,12 @@ export type CommandContext = {
   accountId?: string;
   ownerList: string[];
   senderIsOwner: boolean;
+  /**
+   * Global (non-origin-scoped) owner authority; see CommandAuthorization
+   * (#104984). Optional so only the main command path must populate it; when
+   * unset, cross-channel command targets re-check ownership (the safe default).
+   */
+  senderIsGlobalOwner?: boolean;
   isAuthorizedSender: boolean;
   senderId?: string;
   abortKey?: string;
