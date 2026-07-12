@@ -1,5 +1,6 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.node.asObjectOrNull
 import ai.openclaw.app.node.asStringOrNull
 import kotlinx.serialization.json.JsonArray
@@ -208,36 +209,36 @@ internal fun formatCronInterval(everyMs: Long): String {
   val hours = minutes / 60L
   val days = hours / 24L
   return when {
-    days >= 1 && hours % 24L == 0L -> "Every ${days}d"
-    hours >= 1 && minutes % 60L == 0L -> "Every ${hours}h"
-    minutes >= 1 -> "Every ${minutes}m"
-    else -> "Repeating"
+    days >= 1 && hours % 24L == 0L -> nativeString("Every \${days}d", days)
+    hours >= 1 && minutes % 60L == 0L -> nativeString("Every \${hours}h", hours)
+    minutes >= 1 -> nativeString("Every \${minutes}m", minutes)
+    else -> nativeString("Repeating")
   }
 }
 
 private fun cronScheduleLabel(schedule: JsonObject): String =
   when (schedule.string("kind")) {
-    "at" -> "One time"
-    "every" -> schedule.long("everyMs")?.let(::formatCronInterval) ?: "Repeating"
-    "cron" -> schedule.string("expr") ?: "Cron"
-    else -> "Scheduled"
+    "at" -> nativeString("One time")
+    "every" -> schedule.long("everyMs")?.let(::formatCronInterval) ?: nativeString("Repeating")
+    "cron" -> schedule.string("expr") ?: nativeString("Cron")
+    else -> nativeString("Scheduled")
   }
 
 private fun cronScheduleDetail(schedule: JsonObject): String =
   when (schedule.string("kind")) {
-    "at" -> schedule.string("at") ?: "One time"
+    "at" -> schedule.string("at") ?: nativeString("One time")
     "every" -> {
-      val every = schedule.long("everyMs")?.let(::formatCronInterval) ?: "Repeating"
-      val anchor = schedule.long("anchorMs")?.let { "Anchor $it" }
+      val every = schedule.long("everyMs")?.let(::formatCronInterval) ?: nativeString("Repeating")
+      val anchor = schedule.long("anchorMs")?.let { nativeString("Anchor \$it", it) }
       listOfNotNull(every, anchor).joinToString(" · ")
     }
     "cron" -> {
-      val expression = schedule.string("expr") ?: "Cron"
+      val expression = schedule.string("expr") ?: nativeString("Cron")
       val timezone = schedule.string("tz")
-      val stagger = schedule.long("staggerMs")?.takeIf { it > 0L }?.let { "Stagger ${formatCronInterval(it)}" }
+      val stagger = schedule.long("staggerMs")?.takeIf { it > 0L }?.let { nativeString("Stagger \${formatCronInterval(it)}", formatCronInterval(it)) }
       listOfNotNull(expression, timezone, stagger).joinToString(" · ")
     }
-    else -> "Scheduled"
+    else -> nativeString("Scheduled")
   }
 
 private fun cronPayloadText(payload: JsonObject): String? =
@@ -253,38 +254,38 @@ private fun cronPayloadText(payload: JsonObject): String? =
 
 private fun cronPayloadLabel(payload: JsonObject): String =
   when (payload.string("kind")) {
-    "systemEvent" -> "System event"
+    "systemEvent" -> nativeString("System event")
     "agentTurn" -> {
       val model = payload.string("model")
-      val thinking = payload.string("thinking")?.let { "Thinking $it" }
-      listOfNotNull("Agent turn", model, thinking).joinToString(" · ")
+      val thinking = payload.string("thinking")?.let { nativeString("Thinking \$it", it) }
+      listOfNotNull(nativeString("Agent turn"), model, thinking).joinToString(" · ")
     }
-    "command" -> "Command"
-    else -> "Payload"
+    "command" -> nativeString("Command")
+    else -> nativeString("Payload")
   }
 
 private fun cronDeliveryLabel(delivery: JsonObject?): String {
-  val value = delivery ?: return "Default"
-  val mode = value.string("mode") ?: return "Default"
+  val value = delivery ?: return nativeString("Default")
+  val mode = value.string("mode") ?: return nativeString("Default")
   return listOfNotNull(
     mode.replaceFirstChar { it.uppercaseChar() },
     value.string("channel"),
     value.string("to"),
-    value.string("accountId")?.let { "Account $it" },
+    value.string("accountId")?.let { nativeString("Account \$it", it) },
   ).joinToString(" · ")
 }
 
 private fun cronFailureAlertLabel(failureAlert: JsonElement?): String {
-  if ((failureAlert as? JsonPrimitive)?.booleanOrNull == false) return "Off"
-  val alert = failureAlert.asObjectOrNull() ?: return "Default"
+  if ((failureAlert as? JsonPrimitive)?.booleanOrNull == false) return nativeString("Off")
+  val alert = failureAlert.asObjectOrNull() ?: return nativeString("Default")
   return listOfNotNull(
-    alert.long("after")?.let { "After $it" },
+    alert.long("after")?.let { nativeString("After \$it", it) },
     alert.string("mode")?.replaceFirstChar { it.uppercaseChar() },
     alert.string("channel"),
     alert.string("to"),
-    alert.long("cooldownMs")?.takeIf { it > 0L }?.let { "Cooldown ${formatCronInterval(it)}" },
+    alert.long("cooldownMs")?.takeIf { it > 0L }?.let { nativeString("Cooldown \${formatCronInterval(it)}", formatCronInterval(it)) },
   ).joinToString(" · ")
-    .ifBlank { "On" }
+    .ifBlank { nativeString("On") }
 }
 
 private fun JsonObject.string(key: String): String? =

@@ -41,6 +41,7 @@ import ai.openclaw.app.gateway.normalizeGatewayApprovalRequestId
 import ai.openclaw.app.gateway.normalizeGatewayTlsFingerprint
 import ai.openclaw.app.gateway.parseChatSendAck
 import ai.openclaw.app.gateway.probeGatewayTlsFingerprint
+import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.node.A2UIHandler
 import ai.openclaw.app.node.CalendarHandler
 import ai.openclaw.app.node.CallLogHandler
@@ -125,15 +126,15 @@ private const val NODE_APPROVAL_COMMAND_FRESH_MS = 30_000L
 private const val CRON_RUN_TRACKING_POLL_MS = 2_000L
 private const val OperatorAdminScope = "operator.admin"
 
-private fun execApprovalOutcomeUnknownMessage(): String = "Resolution outcome unknown. Actions stay disabled until the Gateway record is verified."
+private fun execApprovalOutcomeUnknownMessage(): String = nativeString("Resolution outcome unknown. Actions stay disabled until the Gateway record is verified.")
 
-private fun execApprovalStillPendingMessage(): String = "The Gateway still shows this approval as pending. Review it before trying again."
+private fun execApprovalStillPendingMessage(): String = nativeString("The Gateway still shows this approval as pending. Review it before trying again.")
 
-private fun execApprovalLoadDetailsFailureMessage(): String = "Could not load approval details. Refresh and try again."
+private fun execApprovalLoadDetailsFailureMessage(): String = nativeString("Could not load approval details. Refresh and try again.")
 
-private fun execApprovalLoadFailureMessage(): String = "Could not load approvals."
+private fun execApprovalLoadFailureMessage(): String = nativeString("Could not load approvals.")
 
-private fun execApprovalResolveFailureMessage(): String = "Could not resolve approval. Refresh and try again."
+private fun execApprovalResolveFailureMessage(): String = nativeString("Could not resolve approval. Refresh and try again.")
 
 internal typealias GatewayDataRequestOverride =
   suspend (stableId: String, method: String, paramsJson: String?) -> String
@@ -1598,7 +1599,7 @@ class NodeRuntime private constructor(
       _cronActionState.value =
         GatewayCronActionState.Notice(
           id = jobId,
-          message = "This cron job already has a queued run.",
+          message = nativeString("This cron job already has a queued run."),
           kind = GatewayCronNoticeKind.Warning,
         )
       return
@@ -1628,7 +1629,7 @@ class NodeRuntime private constructor(
             }
           }
           CronActionResult(
-            message = if (outcome.runId == null) "Cron job started." else "Cron run queued.",
+            message = if (outcome.runId == null) nativeString("Cron job started.") else nativeString("Cron run queued."),
             kind = GatewayCronNoticeKind.Success,
             refresh = cronRunShouldRefresh(outcome),
           )
@@ -1641,7 +1642,7 @@ class NodeRuntime private constructor(
           )
         GatewayCronRunOutcome.Rejected ->
           CronActionResult(
-            message = "Gateway rejected the cron run.",
+            message = nativeString("Gateway rejected the cron run."),
             kind = GatewayCronNoticeKind.Error,
             refresh = false,
           )
@@ -1672,7 +1673,7 @@ class NodeRuntime private constructor(
         }.toString(),
       )
       CronActionResult(
-        message = if (enabled) "Cron job enabled." else "Cron job disabled.",
+        message = if (enabled) nativeString("Cron job enabled.") else nativeString("Cron job disabled."),
         kind = GatewayCronNoticeKind.Success,
         refresh = true,
       )
@@ -1694,13 +1695,13 @@ class NodeRuntime private constructor(
         if (!isCronJobRevisionConflict(err.gatewayError)) throw err
         reloadCronJobIfSelected(original.id)
         return@launchCronAction CronActionResult(
-          message = "This cron job changed on the gateway. Review the latest version before saving again.",
+          message = nativeString("This cron job changed on the gateway. Review the latest version before saving again."),
           kind = GatewayCronNoticeKind.Warning,
           refresh = false,
         )
       }
       CronActionResult(
-        message = "Cron job updated.",
+        message = nativeString("Cron job updated."),
         kind = GatewayCronNoticeKind.Success,
         refresh = true,
       )
@@ -1715,7 +1716,7 @@ class NodeRuntime private constructor(
         buildJsonObject { put("id", JsonPrimitive(jobId)) }.toString(),
       )
       CronActionResult(
-        message = "Cron job deleted.",
+        message = nativeString("Cron job deleted."),
         kind = GatewayCronNoticeKind.Success,
         refresh = true,
         deleted = true,
@@ -1867,7 +1868,7 @@ class NodeRuntime private constructor(
     scope.launch {
       if (gatewayId == null || !_nodeConnected.value) {
         _canvasRehydratePending.value = false
-        _canvasRehydrateErrorText.value = "Node offline. Reconnect and retry."
+        _canvasRehydrateErrorText.value = nativeString("Node offline. Reconnect and retry.")
         return@launch
       }
       if (!force && didAutoRequestCanvasRehydrate) return@launch
@@ -1899,7 +1900,7 @@ class NodeRuntime private constructor(
         }
         if (canvasRehydrateSeq.get() == requestId) {
           _canvasRehydratePending.value = false
-          _canvasRehydrateErrorText.value = "Failed to request restore. Tap to retry."
+          _canvasRehydrateErrorText.value = nativeString("Failed to request restore. Tap to retry.")
         }
         Log.w("OpenClawCanvas", "canvas rehydrate request failed ($source): transport unavailable")
         return@launch
@@ -1910,7 +1911,7 @@ class NodeRuntime private constructor(
         if (!_canvasRehydratePending.value) return@launch
         if (_canvasA2uiHydrated.value) return@launch
         _canvasRehydratePending.value = false
-        _canvasRehydrateErrorText.value = "No canvas update yet. Tap to retry."
+        _canvasRehydrateErrorText.value = nativeString("No canvas update yet. Tap to retry.")
       }
     }
   }
@@ -3279,11 +3280,11 @@ class NodeRuntime private constructor(
   private fun gatewayTlsProbeFailureMessage(failure: GatewayTlsProbeFailure?): String =
     when (failure) {
       GatewayTlsProbeFailure.TLS_UNAVAILABLE ->
-        "Failed: no secure gateway endpoint was detected. Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address with Unencrypted selected."
+        nativeString("Failed: no secure gateway endpoint was detected. Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address with Unencrypted selected.")
       GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT ->
-        "Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry."
+        nativeString("Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry.")
       GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE, null ->
-        "Failed: couldn't reach the secure gateway endpoint for this host."
+        nativeString("Failed: couldn't reach the secure gateway endpoint for this host.")
     }
 
   private fun hasRecordAudioPermission(): Boolean =
@@ -4025,7 +4026,7 @@ class NodeRuntime private constructor(
         _modelCatalog.value = models
       }
     } catch (_: Throwable) {
-      publishGatewayData(gatewayScope) { _modelCatalogErrorText.value = "Could not load provider catalog." }
+      publishGatewayData(gatewayScope) { _modelCatalogErrorText.value = nativeString("Could not load provider catalog.") }
     } finally {
       publishGatewayData(gatewayScope) { _modelCatalogRefreshing.value = false }
     }
@@ -4056,9 +4057,9 @@ class NodeRuntime private constructor(
         publishProviderModelRefresh(gatewayScope, refreshGeneration) {
           _providerModelCatalogErrorText.value =
             if (err is ProviderModelConfigUnsupported) {
-              "Update your Gateway to view provider model config."
+              nativeString("Update your Gateway to view provider model config.")
             } else {
-              "Could not load provider model config."
+              nativeString("Could not load provider model config.")
             }
         }
       }
@@ -4074,7 +4075,7 @@ class NodeRuntime private constructor(
         publishProviderModelRefresh(gatewayScope, refreshGeneration) {
           if (_providerModelCatalogErrorText.value == null) {
             _providerModelCatalogErrorText.value =
-              "Provider models loaded, but readiness is unavailable."
+              nativeString("Provider models loaded, but readiness is unavailable.")
           }
         }
       }
@@ -4150,7 +4151,7 @@ class NodeRuntime private constructor(
       }
     } catch (_: Throwable) {
       publishCronRefresh(gatewayScope, refreshGeneration) {
-        _cronErrorText.value = "Could not load cron jobs."
+        _cronErrorText.value = nativeString("Could not load cron jobs.")
       }
     } finally {
       publishCronRefresh(gatewayScope, refreshGeneration) {
@@ -4163,7 +4164,7 @@ class NodeRuntime private constructor(
     val gatewayScope = captureGatewayDataScope() ?: return
     if (!operatorConnected) {
       cronJobDetailRequestGuard.publishIfCurrent(request) {
-        _cronJobDetailState.value = GatewayCronJobDetailState.Error(request.id, "Connect the gateway to inspect cron jobs.")
+        _cronJobDetailState.value = GatewayCronJobDetailState.Error(request.id, nativeString("Connect the gateway to inspect cron jobs."))
       }
       return
     }
@@ -4173,11 +4174,11 @@ class NodeRuntime private constructor(
       cronJobDetailRequestGuard.publishIfCurrent(request) {
         _cronJobDetailState.value =
           parseGatewayCronJobDetail(root)?.let(GatewayCronJobDetailState::Loaded)
-            ?: GatewayCronJobDetailState.Error(request.id, "Gateway returned an invalid cron job.")
+            ?: GatewayCronJobDetailState.Error(request.id, nativeString("Gateway returned an invalid cron job."))
       }
     } catch (_: Throwable) {
       cronJobDetailRequestGuard.publishIfCurrent(request) {
-        _cronJobDetailState.value = GatewayCronJobDetailState.Error(request.id, "Could not load cron job.")
+        _cronJobDetailState.value = GatewayCronJobDetailState.Error(request.id, nativeString("Could not load cron job."))
       }
     }
   }
@@ -4189,7 +4190,7 @@ class NodeRuntime private constructor(
         _cronRunHistoryState.value =
           GatewayCronRunHistoryState.Error(
             id = request.id,
-            message = "Connect the gateway to inspect cron run history.",
+            message = nativeString("Connect the gateway to inspect cron run history."),
           )
       }
       return
@@ -4220,7 +4221,7 @@ class NodeRuntime private constructor(
           _cronRunHistoryState.value =
             GatewayCronRunHistoryState.Error(
               id = request.id,
-              message = "Could not load cron run history.",
+              message = nativeString("Could not load cron run history."),
             )
         }
       }
@@ -4237,7 +4238,7 @@ class NodeRuntime private constructor(
       _cronActionState.value =
         GatewayCronActionState.Notice(
           id = jobId,
-          message = "Cron changes require operator.admin access.",
+          message = nativeString("Cron changes require operator.admin access."),
           kind = GatewayCronNoticeKind.Error,
         )
       return
@@ -4246,7 +4247,7 @@ class NodeRuntime private constructor(
       _cronActionState.value =
         GatewayCronActionState.Notice(
           id = jobId,
-          message = "Connect the gateway to manage cron jobs.",
+          message = nativeString("Connect the gateway to manage cron jobs."),
           kind = GatewayCronNoticeKind.Error,
         )
       return
@@ -4258,7 +4259,7 @@ class NodeRuntime private constructor(
         _cronActionState.value =
           GatewayCronActionState.Notice(
             id = jobId,
-            message = "Another cron action is still finishing.",
+            message = nativeString("Another cron action is still finishing."),
             kind = GatewayCronNoticeKind.Warning,
           )
       }
@@ -4300,7 +4301,7 @@ class NodeRuntime private constructor(
       } catch (err: CancellationException) {
         throw err
       } catch (err: Throwable) {
-        val message = err.message?.trim()?.takeIf { it.isNotEmpty() } ?: "Cron action failed."
+        val message = err.message?.trim()?.takeIf { it.isNotEmpty() } ?: nativeString("Cron action failed.")
         completionState =
           GatewayCronActionState.Notice(
             id = jobId,
@@ -4427,7 +4428,7 @@ class NodeRuntime private constructor(
         )
       publishGatewayData(gatewayScope) { _usageSummary.value = summary }
     } catch (_: Throwable) {
-      publishGatewayData(gatewayScope) { _usageErrorText.value = "Could not load usage." }
+      publishGatewayData(gatewayScope) { _usageErrorText.value = nativeString("Could not load usage.") }
     } finally {
       publishGatewayData(gatewayScope) { _usageRefreshing.value = false }
     }
@@ -4459,7 +4460,7 @@ class NodeRuntime private constructor(
         )
       publishGatewayData(gatewayScope) { _skillsSummary.value = summary }
     } catch (_: Throwable) {
-      publishGatewayData(gatewayScope) { _skillsErrorText.value = "Could not load skills." }
+      publishGatewayData(gatewayScope) { _skillsErrorText.value = nativeString("Could not load skills.") }
     } finally {
       publishGatewayData(gatewayScope) { _skillsRefreshing.value = false }
     }
@@ -4472,7 +4473,7 @@ class NodeRuntime private constructor(
     if (gatewayScope == null || !operatorConnected) {
       _skillWorkshopSummary.value = GatewaySkillWorkshopSummary(agentId = requestAgentId, proposals = emptyList())
       _skillWorkshopRefreshing.value = false
-      _skillWorkshopErrorText.value = "Connect the gateway to load Skill Workshop proposals."
+      _skillWorkshopErrorText.value = nativeString("Connect the gateway to load Skill Workshop proposals.")
       return
     }
     publishGatewayData(gatewayScope) {
@@ -4512,7 +4513,7 @@ class NodeRuntime private constructor(
     } catch (_: Throwable) {
       publishGatewayData(gatewayScope) {
         if (skillWorkshopListSeq.get() == listSeq && _skillWorkshopSummary.value.agentId == requestAgentId) {
-          _skillWorkshopErrorText.value = "Could not load Skill Workshop proposals."
+          _skillWorkshopErrorText.value = nativeString("Could not load Skill Workshop proposals.")
         }
       }
     } finally {
@@ -4532,7 +4533,7 @@ class NodeRuntime private constructor(
     val requestAgentId = normalizeSkillWorkshopAgentId(agentId)
     val gatewayScope = captureGatewayDataScope()
     if (gatewayScope == null || !operatorConnected) {
-      _skillWorkshopErrorText.value = "Connect the gateway to inspect Skill Workshop proposals."
+      _skillWorkshopErrorText.value = nativeString("Connect the gateway to inspect Skill Workshop proposals.")
       return
     }
     var inspectStarted = false
@@ -4584,7 +4585,7 @@ class NodeRuntime private constructor(
     } catch (_: Throwable) {
       publishGatewayData(gatewayScope) {
         if (skillWorkshopInspectSeq.get() == inspectSeq && _skillWorkshopSummary.value.agentId == requestAgentId) {
-          _skillWorkshopErrorText.value = "Could not inspect Skill Workshop proposal."
+          _skillWorkshopErrorText.value = nativeString("Could not inspect Skill Workshop proposal.")
         }
       }
     } finally {
@@ -4604,12 +4605,12 @@ class NodeRuntime private constructor(
     var mutationSeq = 0L
     val requestAgentId = normalizeSkillWorkshopAgentId(agentId)
     if (!operatorAdminScopeAvailable.value) {
-      _skillWorkshopErrorText.value = "Skill Workshop proposal actions require operator.admin scope."
+      _skillWorkshopErrorText.value = nativeString("Skill Workshop proposal actions require operator.admin scope.")
       return
     }
     val gatewayScope = captureGatewayDataScope()
     if (gatewayScope == null || !operatorConnected) {
-      _skillWorkshopErrorText.value = "Connect the gateway to update Skill Workshop proposals."
+      _skillWorkshopErrorText.value = nativeString("Connect the gateway to update Skill Workshop proposals.")
       return
     }
     var mutationStarted = false
@@ -4656,12 +4657,12 @@ class NodeRuntime private constructor(
         if (skillWorkshopMutationSeq.get() == mutationSeq && _skillWorkshopSummary.value.agentId == requestAgentId) {
           if (updatedProposal?.status == action.expectedStatus) {
             _skillWorkshopSummary.value = _skillWorkshopSummary.value.withProposal(updatedProposal)
-            _skillWorkshopNoticeText.value = action.notice
+            _skillWorkshopNoticeText.value = nativeString(action.notice)
             mutationConfirmed = true
           } else {
             val statusLabel = updatedProposal?.status?.takeIf { it.isNotBlank() } ?: "unknown"
             _skillWorkshopErrorText.value =
-              "Gateway returned status '$statusLabel' after ${action.verb}."
+              nativeString("Gateway returned status '\$statusLabel' after \${action.verb}.", statusLabel, action.verb)
           }
         }
       }
@@ -4680,7 +4681,7 @@ class NodeRuntime private constructor(
     } catch (_: Throwable) {
       publishGatewayData(gatewayScope) {
         if (skillWorkshopMutationSeq.get() == mutationSeq && _skillWorkshopSummary.value.agentId == requestAgentId) {
-          _skillWorkshopErrorText.value = "Could not ${action.verb} Skill Workshop proposal."
+          _skillWorkshopErrorText.value = nativeString("Could not \${action.verb} Skill Workshop proposal.", action.verb)
         }
       }
     } finally {
@@ -4796,7 +4797,7 @@ class NodeRuntime private constructor(
     } catch (_: Throwable) {
       publishGatewayData(gatewayScope) {
         nodeApprovalRefreshGuard.publishIfCurrent(refreshGeneration) {
-          _nodesDevicesErrorText.value = "Could not load nodes and devices."
+          _nodesDevicesErrorText.value = nativeString("Could not load nodes and devices.")
         }
       }
     } finally {
@@ -5453,7 +5454,7 @@ class NodeRuntime private constructor(
         )
       publishGatewayData(gatewayScope) { _channelsSummary.value = summary }
     } catch (_: Throwable) {
-      publishGatewayData(gatewayScope) { _channelsErrorText.value = "Could not load channels." }
+      publishGatewayData(gatewayScope) { _channelsErrorText.value = nativeString("Could not load channels.") }
     } finally {
       publishGatewayData(gatewayScope) { _channelsRefreshing.value = false }
     }
@@ -5483,7 +5484,7 @@ class NodeRuntime private constructor(
         )
       publishGatewayData(gatewayScope) { _dreamingSummary.value = summary }
     } catch (_: Throwable) {
-      publishGatewayData(gatewayScope) { _dreamingErrorText.value = "Could not load dreaming." }
+      publishGatewayData(gatewayScope) { _dreamingErrorText.value = nativeString("Could not load dreaming.") }
     } finally {
       publishGatewayData(gatewayScope) { _dreamingRefreshing.value = false }
     }
@@ -5520,7 +5521,7 @@ class NodeRuntime private constructor(
         )
       publishGatewayData(gatewayScope) { _healthLogsSummary.value = summary }
     } catch (_: Throwable) {
-      publishGatewayData(gatewayScope) { _healthLogsErrorText.value = "Could not load gateway logs." }
+      publishGatewayData(gatewayScope) { _healthLogsErrorText.value = nativeString("Could not load gateway logs.") }
     } finally {
       publishGatewayData(gatewayScope) { _healthLogsRefreshing.value = false }
     }
@@ -5966,7 +5967,7 @@ class NodeRuntime private constructor(
         .joinToString(" ")
         .replace(Regex("\\s+"), " ")
         .takeIf { it.isNotEmpty() }
-    return text?.let { GatewayDreamDiaryEntry(date = date ?: "Dream", text = it) }
+    return text?.let { GatewayDreamDiaryEntry(date = date ?: nativeString("Dream"), text = it) }
   }
 
   private fun parseStringArray(items: JsonArray?): List<String> =
@@ -5976,15 +5977,15 @@ class NodeRuntime private constructor(
 
   private fun cronScheduleLabel(schedule: JsonObject?): String =
     when (schedule?.get("kind").asStringOrNull()) {
-      "at" -> "One time"
-      "every" -> schedule.long("everyMs")?.let(::formatCronInterval) ?: "Repeating"
+      "at" -> nativeString("One time")
+      "every" -> schedule.long("everyMs")?.let(::formatCronInterval) ?: nativeString("Repeating")
       "cron" ->
         schedule
           ?.get("expr")
           .asStringOrNull()
           ?.trim()
-          ?.takeIf { it.isNotEmpty() } ?: "Cron"
-      else -> "Scheduled"
+          ?.takeIf { it.isNotEmpty() } ?: nativeString("Cron")
+      else -> nativeString("Scheduled")
     }
 
   private fun cronPayloadPreview(payload: JsonObject?): String {
@@ -5994,7 +5995,7 @@ class NodeRuntime private constructor(
         "agentTurn" -> payload?.get("message").asStringOrNull()
         else -> null
       }
-    return text?.trim()?.replace(Regex("\\s+"), " ")?.takeIf { it.isNotEmpty() } ?: "No prompt"
+    return text?.trim()?.replace(Regex("\\s+"), " ")?.takeIf { it.isNotEmpty() } ?: nativeString("No prompt")
   }
 
   private fun updateHomeCanvasState() {
@@ -6011,7 +6012,7 @@ class NodeRuntime private constructor(
     val state = resolveHomeCanvasGatewayState()
     val gatewayName = normalized(_serverName.value)
     val gatewayAddress = normalized(_remoteAddress.value)
-    val gatewayLabel = gatewayName ?: gatewayAddress ?: "Gateway"
+    val gatewayLabel = gatewayName ?: gatewayAddress ?: nativeString("Gateway")
     val activeAgentId = resolveActiveAgentId()
     val agents = homeCanvasAgents(activeAgentId)
 
@@ -6019,47 +6020,47 @@ class NodeRuntime private constructor(
       HomeCanvasGatewayState.Connected ->
         HomeCanvasPayload(
           gatewayState = "connected",
-          eyebrow = "Connected to $gatewayLabel",
-          title = "Your agents are ready",
+          eyebrow = nativeString("Connected to \$gatewayLabel", gatewayLabel),
+          title = nativeString("Your agents are ready"),
           subtitle =
-            "This phone stays dormant until the gateway needs it, then wakes, syncs, and goes back to sleep.",
+            nativeString("This phone stays dormant until the gateway needs it, then wakes, syncs, and goes back to sleep."),
           gatewayLabel = gatewayLabel,
           activeAgentName = resolveActiveAgentName(activeAgentId),
           activeAgentBadge = agents.firstOrNull { it.isActive }?.badge ?: "OC",
-          activeAgentCaption = "Selected on this phone",
+          activeAgentCaption = nativeString("Selected on this phone"),
           agentCount = agents.size,
           agents = agents.take(6),
-          footer = "The overview refreshes on reconnect and when this screen opens.",
+          footer = nativeString("The overview refreshes on reconnect and when this screen opens."),
         )
       HomeCanvasGatewayState.Connecting ->
         HomeCanvasPayload(
           gatewayState = "connecting",
-          eyebrow = "Reconnecting",
-          title = "OpenClaw is syncing back up",
+          eyebrow = nativeString("Reconnecting"),
+          title = nativeString("OpenClaw is syncing back up"),
           subtitle =
-            "The gateway session is coming back online. Agent shortcuts should settle automatically in a moment.",
+            nativeString("The gateway session is coming back online. Agent shortcuts should settle automatically in a moment."),
           gatewayLabel = gatewayLabel,
           activeAgentName = resolveActiveAgentName(activeAgentId),
           activeAgentBadge = "OC",
-          activeAgentCaption = "Gateway session in progress",
+          activeAgentCaption = nativeString("Gateway session in progress"),
           agentCount = agents.size,
           agents = agents.take(4),
-          footer = "If the gateway is reachable, reconnect should complete without intervention.",
+          footer = nativeString("If the gateway is reachable, reconnect should complete without intervention."),
         )
       HomeCanvasGatewayState.Error, HomeCanvasGatewayState.Offline ->
         HomeCanvasPayload(
           gatewayState = if (state == HomeCanvasGatewayState.Error) "error" else "offline",
-          eyebrow = "Welcome to OpenClaw",
-          title = "Your phone stays quiet until it is needed",
+          eyebrow = nativeString("Welcome to OpenClaw"),
+          title = nativeString("Your phone stays quiet until it is needed"),
           subtitle =
-            "Pair this device to your gateway to wake it only for real work, keep a live agent overview handy, and avoid battery-draining background loops.",
+            nativeString("Pair this device to your gateway to wake it only for real work, keep a live agent overview handy, and avoid battery-draining background loops."),
           gatewayLabel = gatewayLabel,
-          activeAgentName = "Main",
+          activeAgentName = nativeString("Main"),
           activeAgentBadge = "OC",
-          activeAgentCaption = "Connect to load your agents",
+          activeAgentCaption = nativeString("Connect to load your agents"),
           agentCount = agents.size,
           agents = agents.take(4),
-          footer = "When connected, the gateway can wake the phone with a silent push instead of holding an always-on session.",
+          footer = nativeString("When connected, the gateway can wake the phone with a silent push instead of holding an always-on session."),
         )
     }
   }
@@ -6091,7 +6092,7 @@ class NodeRuntime private constructor(
       }
       return activeAgentId
     }
-    return gatewayAgents.value.firstOrNull()?.let { normalized(it.name) ?: it.id } ?: "Main"
+    return gatewayAgents.value.firstOrNull()?.let { normalized(it.name) ?: it.id } ?: nativeString("Main")
   }
 
   private fun homeCanvasAgents(activeAgentId: String): List<HomeCanvasAgentCard> {
@@ -6106,9 +6107,9 @@ class NodeRuntime private constructor(
           badge = homeCanvasBadge(agent),
           caption =
             when {
-              isActive -> "Active on this phone"
-              isDefault -> "Default agent"
-              else -> "Ready"
+              isActive -> nativeString("Active on this phone")
+              isDefault -> nativeString("Default agent")
+              else -> nativeString("Ready")
             },
           isActive = isActive,
         )

@@ -1,5 +1,6 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.node.asObjectOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -113,28 +114,28 @@ private fun gatewayExecApprovalAllowedMessage(
   saved: Boolean,
 ): String {
   if (attribution == GatewayExecApprovalResolutionAttribution.AppliedHere) {
-    if (saved) return "Approval allowed and saved."
-    return "Approval allowed once."
+    if (saved) return nativeString("Approval allowed and saved.")
+    return nativeString("Approval allowed once.")
   }
   if (attribution == GatewayExecApprovalResolutionAttribution.PriorResponse) {
-    if (saved) return "A prior response already allowed this command and saved the choice."
-    return "A prior response already allowed this command once."
+    if (saved) return nativeString("A prior response already allowed this command and saved the choice.")
+    return nativeString("A prior response already allowed this command once.")
   }
-  if (saved) return "Gateway recorded approval and saved the choice."
-  return "Gateway recorded approval once."
+  if (saved) return nativeString("Gateway recorded approval and saved the choice.")
+  return nativeString("Gateway recorded approval once.")
 }
 
 private fun gatewayExecApprovalDeniedMessage(attribution: GatewayExecApprovalResolutionAttribution): String =
   when (attribution) {
-    GatewayExecApprovalResolutionAttribution.AppliedHere -> "Approval denied."
-    GatewayExecApprovalResolutionAttribution.PriorResponse -> "A prior response already denied this approval."
-    GatewayExecApprovalResolutionAttribution.Unknown -> "Gateway recorded a denial."
+    GatewayExecApprovalResolutionAttribution.AppliedHere -> nativeString("Approval denied.")
+    GatewayExecApprovalResolutionAttribution.PriorResponse -> nativeString("A prior response already denied this approval.")
+    GatewayExecApprovalResolutionAttribution.Unknown -> nativeString("Gateway recorded a denial.")
   }
 
 private fun gatewayExecApprovalTerminalMessage(status: GatewayApprovalTerminalStatus): String =
   when (status) {
-    GatewayApprovalTerminalStatus.Expired -> "This approval expired before it could be resolved."
-    GatewayApprovalTerminalStatus.Cancelled -> "This approval was cancelled before it could be resolved."
+    GatewayApprovalTerminalStatus.Expired -> nativeString("This approval expired before it could be resolved.")
+    GatewayApprovalTerminalStatus.Cancelled -> nativeString("This approval was cancelled before it could be resolved.")
     else -> error("approval is not expired or cancelled")
   }
 
@@ -152,7 +153,7 @@ internal fun gatewayExecApprovalPriorResolutionNotice(id: String): GatewayExecAp
     warning = true,
   )
 
-private fun gatewayExecApprovalPriorResolutionMessage(): String = "A prior response already resolved this approval."
+private fun gatewayExecApprovalPriorResolutionMessage(): String = nativeString("A prior response already resolved this approval.")
 
 internal fun normalizeGatewayExecApprovalDecision(value: String): String? =
   when (value) {
@@ -248,7 +249,7 @@ internal fun parseGatewayExecApprovalListEntry(item: JsonElement): GatewayExecAp
   )
 }
 
-private fun gatewayExecApprovalCommandRequestText(): String = "Command request"
+private fun gatewayExecApprovalCommandRequestText(): String = nativeString("Command request")
 
 internal fun parseGatewayExecApprovalGetPayload(
   payloadJson: String,

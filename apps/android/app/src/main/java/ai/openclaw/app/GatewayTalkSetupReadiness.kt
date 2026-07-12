@@ -1,5 +1,6 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.node.asObjectOrNull
 import ai.openclaw.app.node.asStringOrNull
 import kotlinx.serialization.json.JsonArray
@@ -98,32 +99,32 @@ val GatewayTalkSetupState.requiresSetup: Boolean
 
 fun gatewayTalkSetupStatusText(state: GatewayTalkSetupState): String =
   when (state) {
-    is GatewayTalkSetupState.Ready -> "Ready"
-    is GatewayTalkSetupState.NeedsSetup -> "Needs setup"
-    is GatewayTalkSetupState.Unverified -> "Unverified"
+    is GatewayTalkSetupState.Ready -> nativeString("Ready")
+    is GatewayTalkSetupState.NeedsSetup -> nativeString("Needs setup")
+    is GatewayTalkSetupState.Unverified -> nativeString("Unverified")
   }
 
 fun gatewayTalkSetupDescription(state: GatewayTalkSetupState): String =
   when (state) {
-    is GatewayTalkSetupState.Ready -> "${state.provider.label} via Gateway relay"
+    is GatewayTalkSetupState.Ready -> nativeString("\${state.provider.label} via Gateway relay", state.provider.label)
     is GatewayTalkSetupState.NeedsSetup -> gatewayTalkSetupIssueDescription(state.issue)
     is GatewayTalkSetupState.Unverified -> gatewayTalkSetupIssueDescription(state.issue)
   }
 
 private fun gatewayTalkSetupIssueDescription(issue: GatewayTalkSetupIssue): String =
   when (issue) {
-    GatewayTalkSetupIssue.CatalogNotLoaded -> "Gateway talk catalog not loaded"
-    GatewayTalkSetupIssue.CatalogLoadFailed -> "Could not load Gateway talk catalog"
-    is GatewayTalkSetupIssue.GroupMissing -> "Gateway did not return ${issue.target.title} setup"
-    is GatewayTalkSetupIssue.NoProvider -> "No ${issue.target.title} provider is configured on the Gateway"
-    is GatewayTalkSetupIssue.UnknownProvider -> "Gateway selected unknown provider ${issue.providerId}"
-    is GatewayTalkSetupIssue.MissingReadiness -> "Gateway did not return ${issue.target.title} readiness"
-    is GatewayTalkSetupIssue.ConfigureProvider -> "Configure a ${issue.target.title} provider on the Gateway"
+    GatewayTalkSetupIssue.CatalogNotLoaded -> nativeString("Gateway talk catalog not loaded")
+    GatewayTalkSetupIssue.CatalogLoadFailed -> nativeString("Could not load Gateway talk catalog")
+    is GatewayTalkSetupIssue.GroupMissing -> nativeString("Gateway did not return \${issue.target.title} setup", issue.target.title)
+    is GatewayTalkSetupIssue.NoProvider -> nativeString("No \${issue.target.title} provider is configured on the Gateway", issue.target.title)
+    is GatewayTalkSetupIssue.UnknownProvider -> nativeString("Gateway selected unknown provider \${issue.providerId}", issue.providerId)
+    is GatewayTalkSetupIssue.MissingReadiness -> nativeString("Gateway did not return \${issue.target.title} readiness", issue.target.title)
+    is GatewayTalkSetupIssue.ConfigureProvider -> nativeString("Configure a \${issue.target.title} provider on the Gateway", issue.target.title)
     is GatewayTalkSetupIssue.MissingActiveProvider ->
-      "Gateway did not identify the active ${issue.target.title} provider"
+      nativeString("Gateway did not identify the active \${issue.target.title} provider", issue.target.title)
     is GatewayTalkSetupIssue.UnsupportedProvider ->
-      "Choose a supported ${issue.target.title} provider on the Gateway"
-    is GatewayTalkSetupIssue.ConfigureSelectedProvider -> "Configure ${issue.providerLabel} on the Gateway"
+      nativeString("Choose a supported \${issue.target.title} provider on the Gateway", issue.target.title)
+    is GatewayTalkSetupIssue.ConfigureSelectedProvider -> nativeString("Configure \${issue.providerLabel} on the Gateway", issue.providerLabel)
   }
 
 internal fun parseGatewayTalkSetupReadiness(catalog: JsonObject?): GatewayTalkSetupReadiness {

@@ -1,5 +1,6 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.i18n.nativeString
 import android.content.Context
 import android.content.res.Resources
 import androidx.appcompat.app.AppCompatDelegate
@@ -86,6 +87,8 @@ internal fun appLanguageRowSubtitle(
   systemLanguageTag: String,
 ): String {
   val languageTag = language.languageTag
-  if (languageTag != null) return "OpenClaw translations · $languageTag"
-  return "Follow Android · $systemLanguageTag"
+  if (languageTag != null) {
+    return nativeString("OpenClaw translations · \$languageTag", languageTag)
+  }
+  return nativeString("Follow Android · \$systemLanguageTag", systemLanguageTag)
 }

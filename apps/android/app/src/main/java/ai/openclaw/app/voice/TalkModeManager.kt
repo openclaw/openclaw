@@ -4,6 +4,7 @@ import ai.openclaw.app.gateway.ChatSendAck
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.chatSendAckHistorySinceSeconds
 import ai.openclaw.app.gateway.parseChatSendAck
+import ai.openclaw.app.i18n.nativeString
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
@@ -523,7 +524,7 @@ class TalkModeManager internal constructor(
           pttCompletion = null
           completion?.cancel()
           resumeRealtimeCaptureAfterPushToTalk(captureId)
-          setStatus(if (_isEnabled.value) "Listening" else "Ready")
+          setStatus(if (_isEnabled.value) nativeString("Listening") else nativeString("Ready"))
           throw err
         }
         setStatus("Listening (PTT)")
@@ -564,7 +565,7 @@ class TalkModeManager internal constructor(
       val transcript = cleared.transcript
 
       if (transcript.isEmpty()) {
-        setStatus(if (_isEnabled.value) "Listening" else "Ready")
+        setStatus(if (_isEnabled.value) nativeString("Listening") else nativeString("Ready"))
         resumeRealtimeCaptureAfterPushToTalk(captureId)
         return@withContext finishPushToTalk(
           TalkPttStopPayload(captureId = captureId, transcript = null, status = "empty"),
@@ -623,7 +624,7 @@ class TalkModeManager internal constructor(
       val cleared =
         clearPushToTalkRecognition(captureId)
           ?: return@withContext TalkPttStopPayload(captureId = captureId, transcript = null, status = "idle")
-      setStatus(if (_isEnabled.value) "Listening" else "Ready")
+      setStatus(if (_isEnabled.value) nativeString("Listening") else nativeString("Ready"))
       resumeRealtimeCaptureAfterPushToTalk(captureId)
       finishPushToTalk(
         TalkPttStopPayload(captureId = captureId, transcript = null, status = "cancelled"),
@@ -986,9 +987,9 @@ class TalkModeManager internal constructor(
 
   private fun realtimeCloseStatusText(reason: String?): String =
     when (reason) {
-      null, "completed" -> "Off"
-      "error" -> "Talk failed: Realtime provider closed unexpectedly."
-      else -> "Talk failed: Realtime provider closed: $reason"
+      null, "completed" -> nativeString("Off")
+      "error" -> nativeString("Talk failed: Realtime provider closed unexpectedly.")
+      else -> nativeString("Talk failed: Realtime provider closed: \$reason", reason)
     }
 
   /** Caller holds [realtimeCapturePauseLock] so PTT cannot miss newly installed jobs. */
@@ -2050,7 +2051,7 @@ class TalkModeManager internal constructor(
       val runId = ack.runId ?: throw IllegalStateException("chat.send returned no run id")
       Log.d(tag, "chat.send ok runId=$runId status=${ack.status}")
       if (ack.isTerminalFailure) {
-        setStatus(if (ack.normalizedStatus == "error") "Chat error" else "Aborted")
+        setStatus(if (ack.normalizedStatus == "error") nativeString("Chat error") else nativeString("Aborted"))
         start()
         return
       }
@@ -2807,10 +2808,10 @@ class TalkModeManager internal constructor(
             SpeechRecognizer.ERROR_CLIENT -> "Client error"
             SpeechRecognizer.ERROR_NETWORK -> "Network error"
             SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Network timeout"
-            SpeechRecognizer.ERROR_NO_MATCH -> "Listening"
+            SpeechRecognizer.ERROR_NO_MATCH -> nativeString("Listening")
             SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "Recognizer busy"
             SpeechRecognizer.ERROR_SERVER -> "Server error"
-            SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "Listening"
+            SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> nativeString("Listening")
             else -> "Speech error ($error)"
           },
         )

@@ -1,5 +1,6 @@
 package ai.openclaw.app.node
 
+import ai.openclaw.app.i18n.nativeString
 import android.os.Build
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
@@ -58,7 +59,7 @@ internal object NodePresenceAliveBeacon {
         ?.trim()
         .orEmpty()
         .ifEmpty { "unknown" }
-    return "Android $release (SDK ${Build.VERSION.SDK_INT})"
+    return nativeString("Android \$release (SDK \${Build.VERSION.SDK_INT})", release, Build.VERSION.SDK_INT)
   }
 
   /** Builds the compact JSON payload consumed by gateway node-presence handlers. */

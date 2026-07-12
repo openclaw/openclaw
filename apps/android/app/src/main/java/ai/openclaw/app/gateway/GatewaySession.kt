@@ -1,5 +1,6 @@
 package ai.openclaw.app.gateway
 
+import ai.openclaw.app.i18n.nativeString
 import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -1334,7 +1335,7 @@ class GatewaySession(
       }
 
       try {
-        onDisconnected(if (attempt == 0) "Connecting…" else "Reconnecting…")
+        onDisconnected(if (attempt == 0) nativeString("Connecting…") else nativeString("Reconnecting…"))
         drainReconnectSignals()
         connectOnce(target)
         attempt = 0

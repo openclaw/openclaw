@@ -1,5 +1,6 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.i18n.nativeString
 import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
@@ -38,7 +39,11 @@ class NodeForegroundService : Service() {
   override fun onCreate() {
     super.onCreate()
     ensureChannel()
-    val initial = buildNotification(title = "OpenClaw Node", text = "Starting…")
+    val initial =
+      buildNotification(
+        title = nativeString("OpenClaw Node"),
+        text = nativeString("Starting…"),
+      )
     startForegroundWithTypes(notification = initial)
   }
 
@@ -116,9 +121,10 @@ class NodeForegroundService : Service() {
           voiceCaptureMode = state.mode
           val title =
             when {
-              state.connected && state.mode == VoiceCaptureMode.TalkMode -> "OpenClaw Node · Talk"
-              state.connected -> "OpenClaw Node · Connected"
-              else -> "OpenClaw Node"
+              state.connected && state.mode == VoiceCaptureMode.TalkMode ->
+                nativeString("OpenClaw Node · Talk")
+              state.connected -> nativeString("OpenClaw Node · Connected")
+              else -> nativeString("OpenClaw Node")
             }
           val text =
             (state.server?.let { "${state.status} · $it" } ?: state.status) +
@@ -159,8 +165,13 @@ class NodeForegroundService : Service() {
         startForegroundWithTypes(
           notification =
             buildNotification(
-              title = "OpenClaw Node",
-              text = if (voiceCaptureMode == VoiceCaptureMode.TalkMode) "Talk mode active" else "Connected",
+              title = nativeString("OpenClaw Node"),
+              text =
+                if (voiceCaptureMode == VoiceCaptureMode.TalkMode) {
+                  nativeString("Talk mode active")
+                } else {
+                  nativeString("Connected")
+                },
             ),
         )
       }
@@ -190,10 +201,10 @@ class NodeForegroundService : Service() {
     val channel =
       NotificationChannel(
         CHANNEL_ID,
-        "Connection",
+        nativeString("Connection"),
         NotificationManager.IMPORTANCE_LOW,
       ).apply {
-        description = "OpenClaw node connection status"
+        description = nativeString("OpenClaw node connection status")
         setShowBadge(false)
       }
     mgr.createNotificationChannel(channel)
@@ -224,7 +235,7 @@ class NodeForegroundService : Service() {
       .setOngoing(true)
       .setOnlyAlertOnce(true)
       .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
-      .addAction(0, "Disconnect", stopPending)
+      .addAction(0, nativeString("Disconnect"), stopPending)
       .build()
   }
 
@@ -334,7 +345,7 @@ internal fun foregroundServiceTypes(
 
 internal fun backgroundLocationNotificationSuffix(active: Boolean): String =
   if (active) {
-    " · Location: Always"
+    nativeString(" · Location: Always")
   } else {
     ""
   }
@@ -349,13 +360,17 @@ internal fun voiceNotificationSuffix(
   when (mode) {
     VoiceCaptureMode.TalkMode ->
       when {
-        talkSpeaking -> " · Talk: Speaking"
-        talkListening -> " · Talk: Listening"
-        else -> " · Talk: On"
+        talkSpeaking -> nativeString(" · Talk: Speaking")
+        talkListening -> nativeString(" · Talk: Listening")
+        else -> nativeString(" · Talk: On")
       }
     VoiceCaptureMode.ManualMic ->
       if (manualMicEnabled) {
-        if (manualMicListening) " · Mic: Listening" else " · Mic: Pending"
+        if (manualMicListening) {
+          nativeString(" · Mic: Listening")
+        } else {
+          nativeString(" · Mic: Pending")
+        }
       } else {
         ""
       }

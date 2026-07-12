@@ -1,6 +1,7 @@
 package ai.openclaw.app.voice
 
 import ai.openclaw.app.gateway.ChatSendAck
+import ai.openclaw.app.i18n.nativeString
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
@@ -174,7 +175,7 @@ internal class MicCaptureManager(
           }
         }
       if (pausedForTts) {
-        _statusText.value = if (_isSending.value) "Speaking · waiting for reply" else "Speaking…"
+        _statusText.value = if (_isSending.value) nativeString("Speaking · waiting for reply") else nativeString("Speaking…")
         return
       }
       transcriptionDrainJob?.cancel()
@@ -225,7 +226,7 @@ internal class MicCaptureManager(
         _isListening.value = false
         _inputLevel.value = 0f
         _liveTranscript.value = null
-        _statusText.value = if (_isSending.value) "Speaking · waiting for reply" else "Speaking…"
+        _statusText.value = if (_isSending.value) nativeString("Speaking · waiting for reply") else nativeString("Speaking…")
         true
       }
     if (!shouldPause) return
@@ -244,10 +245,10 @@ internal class MicCaptureManager(
         if (!resume) {
           _statusText.value =
             when {
-              _micEnabled.value && _isSending.value -> "Listening · sending queued voice"
+              _micEnabled.value && _isSending.value -> nativeString("Listening · sending queued voice")
               _micEnabled.value -> "Listening"
-              _isSending.value -> "Mic off · sending…"
-              else -> "Mic off"
+              _isSending.value -> nativeString("Mic off · sending…")
+              else -> nativeString("Mic off")
             }
         }
         resume
@@ -304,7 +305,7 @@ internal class MicCaptureManager(
     _isSending.value = false
     stopRequested = true
     stopTranscription(preserveStatus = true)
-    _statusText.value = if (_micEnabled.value) "Mic on · waiting for gateway" else "Mic off"
+    _statusText.value = if (_micEnabled.value) nativeString("Mic on · waiting for gateway") else nativeString("Mic off")
   }
 
   internal fun submitTranscribedMessage(text: String) {
@@ -369,7 +370,7 @@ internal class MicCaptureManager(
         completePendingTurn()
       }
       "aborted" -> {
-        upsertPendingAssistant(text = "Response aborted", isStreaming = false)
+        upsertPendingAssistant(text = nativeString("Response aborted"), isStreaming = false)
         completePendingTurn()
       }
     }
@@ -378,12 +379,12 @@ internal class MicCaptureManager(
   private fun start() {
     stopRequested = false
     if (!hasMicPermission()) {
-      _statusText.value = "Microphone permission required"
+      _statusText.value = nativeString("Microphone permission required")
       _micEnabled.value = false
       return
     }
     if (!gatewayConnected) {
-      _statusText.value = "Mic on · waiting for gateway"
+      _statusText.value = nativeString("Mic on · waiting for gateway")
       return
     }
     if (transcriptionSession != null || transcriptionStartJob?.isActive == true) return
@@ -407,7 +408,8 @@ internal class MicCaptureManager(
             restartAfterCancellation = _micEnabled.value && gatewayConnected && !stopRequested
             return@launch
           }
-          _statusText.value = "Transcription unavailable: ${err.message ?: err::class.simpleName}"
+          val message = err.message ?: err::class.simpleName.orEmpty()
+          _statusText.value = nativeString("Transcription unavailable: \$message", message)
           _micEnabled.value = false
           stopTranscription(preserveStatus = true)
         } finally {
@@ -446,7 +448,7 @@ internal class MicCaptureManager(
     _isListening.value = false
     _inputLevel.value = 0f
     if (!preserveStatus) {
-      _statusText.value = if (_isSending.value) "Mic off · sending…" else "Mic off"
+      _statusText.value = if (_isSending.value) nativeString("Mic off · sending…") else nativeString("Mic off")
     } else {
       _statusText.value = status
     }
@@ -497,9 +499,9 @@ internal class MicCaptureManager(
     if (_isSending.value) return
     if (!hasQueuedMessages()) {
       if (_micEnabled.value) {
-        _statusText.value = "Listening"
+        _statusText.value = nativeString("Listening")
       } else {
-        _statusText.value = "Mic off"
+        _statusText.value = nativeString("Mic off")
       }
       return
     }
@@ -512,7 +514,7 @@ internal class MicCaptureManager(
     _isSending.value = true
     pendingRunTimeoutJob?.cancel()
     pendingRunTimeoutJob = null
-    _statusText.value = if (_micEnabled.value) "Listening · sending queued voice" else "Sending queued voice"
+    _statusText.value = if (_micEnabled.value) nativeString("Listening · sending queued voice") else nativeString("Sending queued voice")
 
     val sendGeneration = gatewayGeneration
     sendJob =
@@ -537,7 +539,7 @@ internal class MicCaptureManager(
             }
             ack.isTerminalFailure -> {
               completePendingTurn()
-              _statusText.value = "Send failed: Chat failed before the run started; try again."
+              _statusText.value = nativeString("Send failed: Chat failed before the run started; try again.")
             }
             runId == null -> {
               completePendingTurn()
@@ -773,14 +775,14 @@ internal class MicCaptureManager(
     message: String,
   ) {
     if (transcriptionSession != session) return
-    _statusText.value = "Transcription failed: $message"
+    _statusText.value = nativeString("Transcription failed: \$message", message)
     _micEnabled.value = false
     stopTranscription(preserveStatus = true)
   }
 
   private fun listeningStatus(): String =
     when {
-      _isSending.value -> "Listening · sending queued voice"
+      _isSending.value -> nativeString("Listening · sending queued voice")
       hasQueuedMessages() -> "Listening · ${queuedMessageCount()} queued"
       else -> "Listening"
     }
