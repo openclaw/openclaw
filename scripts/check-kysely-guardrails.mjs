@@ -48,6 +48,9 @@ const rawSqliteAllowPathGroups = {
     "src/infra/backup-create.ts",
     "src/snapshot/local-repository.ts",
   ],
+  "bounded transcript search index reconciliation": [
+    "src/config/sessions/session-transcript-reconcile.ts",
+  ],
   "agent auth profile read-only bootstrap": ["src/agents/auth-profiles/sqlite.ts"],
   "read-only shared state database access": ["src/state/openclaw-state-db-readonly.ts"],
   "read-only SQLite status probes": [
