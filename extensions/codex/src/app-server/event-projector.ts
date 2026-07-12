@@ -830,10 +830,11 @@ export class CodexAppServerEventProjector {
     const turnFailed = this.completedTurn?.status === "failed";
     // When OpenClaw itself cancelled the turn (steer, interrupt signal),
     // suppress the synthesized missing-tool-result promptError — the abort
-    // flag is the authoritative terminal reason. Non-cancellation Codex
-    // interruption reasons (Replaced, ReviewEnded, BudgetLimited) reach us
-    // with this.aborted false, so the synthesized error survives and the
-    // run is not incorrectly classified as successful.
+    // flag is the authoritative terminal reason. Codex v2 only exposes
+    // interrupted status; it does not expose the underlying reason. When
+    // the interruption is not an OpenClaw cancellation this.aborted is
+    // false, so the synthesized error survives and the run is not
+    // incorrectly classified as successful.
     const promptError =
       this.promptError ??
       (this.aborted ? null : this.synthesizedMissingToolResultError) ??

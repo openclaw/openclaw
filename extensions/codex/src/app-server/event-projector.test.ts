@@ -1645,8 +1645,9 @@ describe("CodexAppServerEventProjector", () => {
     );
 
     // Turn ends interrupted WITHOUT an OpenClaw-observed cancellation.
-    // markAborted() is NOT called — this is a Replaced/ReviewEnded/BudgetLimited
-    // interruption, not a user-initiated steer/interrupt signal.
+    // markAborted() is NOT called — Codex v2 only exposes interrupted
+    // status, not the underlying reason, so the specific cause (e.g.
+    // replaced, review-ended, budget-limited) is unknowable here.
     await projector.handleNotification(
       turnWithStatus("interrupted", [
         {
