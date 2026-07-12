@@ -47,7 +47,6 @@ Docs: https://docs.openclaw.ai
 - **Windows Node resolution:** preserve the current executable when resolving bare case-insensitive `node.exe` entries under hostile `PATH` values. (#103907) Thanks @soldforaloss.
 - **Codex runtime switching:** accept the bundled Codex runtime for both `codex/*` and `openai/*` model routes while keeping unsupported provider/runtime pairs rejected. (#103762)
 - **Agent abort cleanup:** serialize prompt lock reacquisition with terminal cleanup so canceled embedded runs do not self-contend on session locks for up to 60 seconds.
-- **Slack App Home command hints:** show the configured native slash command instead of always `/openclaw` in the Home tab. (#102340) Thanks @jontsai.
 - **Chutes OAuth deadlines:** bound token exchange, profile lookup, and refresh requests, and keep issued tokens when optional userinfo enrichment stalls. (#102026) Thanks @Alix-007.
 - **Control UI workspace avatars:** inline validated agent avatar files in bootstrap and identity responses so Personal card images render without unauthenticated avatar-route requests, while preserving configured emoji precedence. (#102892, #97602) Thanks @LZY3538.
 - **Exec safe-bin flags:** auto-approve curated read-only boolean flags for default stdin-only filters while keeping unknown flags, tail follow/retry modes, file operands, and custom profiles fail-closed. (#88953) Thanks @yetval.

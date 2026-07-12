@@ -17,17 +17,15 @@ function createHomeContext(params?: {
   if (params?.shouldDropMismatchedSlackEvent) {
     harness.ctx.shouldDropMismatchedSlackEvent = params.shouldDropMismatchedSlackEvent;
   }
-  harness.ctx.slashCommand = {
-    enabled: true,
-    name: params?.slashCommandName ?? "openclaw",
-    sessionPrefix: "slack:slash",
-    ephemeral: true,
-  };
   harness.ctx.botToken = "xoxb-test";
   (harness.ctx.app as unknown as { client: { views: { publish: typeof publish } } }).client = {
     views: { publish },
   };
-  registerSlackHomeEvents({ ctx: harness.ctx, trackEvent: params?.trackEvent });
+  registerSlackHomeEvents({
+    ctx: harness.ctx,
+    slashCommandName: params?.slashCommandName,
+    trackEvent: params?.trackEvent,
+  });
   return {
     publish,
     getHomeHandler: () => harness.getHandler("app_home_opened") as HomeHandler | null,
@@ -44,7 +42,7 @@ describe("registerSlackHomeEvents", () => {
     vi.clearAllMocks();
   });
 
-  it("publishes the default Home tab view for app_home_opened", async () => {
+  it("publishes the Home tab without an inactive slash command hint", async () => {
     const trackEvent = vi.fn();
     const { publish, getHomeHandler } = createHomeContext({ trackEvent });
     const handler = getHomeHandler();
@@ -69,6 +67,12 @@ describe("registerSlackHomeEvents", () => {
       token: "xoxb-test",
       user_id: "U123",
       view: buildSlackHomeView(),
+    });
+    expect(buildSlackHomeView().blocks[1]).toMatchObject({
+      type: "section",
+      text: {
+        text: "Send a DM or mention OpenClaw in a channel to start a session.",
+      },
     });
   });
 

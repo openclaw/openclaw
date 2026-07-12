@@ -367,11 +367,16 @@ function buildSlackCommandArgMenuBlocks(params: {
   ];
 }
 
+type SlackCommandRegistration =
+  | { mode: "single"; name: string }
+  | { mode: "native" }
+  | { mode: "disabled" };
+
 export async function registerSlackMonitorSlashCommands(params: {
   ctx: SlackMonitorContext;
   account: ResolvedSlackAccount;
   trackEvent?: () => void;
-}): Promise<void> {
+}): Promise<SlackCommandRegistration> {
   const { ctx, account, trackEvent } = params;
   const startupCfg = ctx.cfg;
   const runtime = ctx.runtime;
@@ -906,8 +911,15 @@ export async function registerSlackMonitorSlashCommands(params: {
     logVerbose("slack: slash commands disabled");
   }
 
+  const registration: SlackCommandRegistration =
+    nativeCommands.length > 0
+      ? { mode: "native" }
+      : slashCommand.enabled
+        ? { mode: "single", name: slashCommand.name }
+        : { mode: "disabled" };
+
   if (nativeCommands.length === 0 || !supportsInteractiveArgMenus) {
-    return;
+    return registration;
   }
 
   const registerArgOptions = () => {
@@ -1082,4 +1094,5 @@ export async function registerSlackMonitorSlashCommands(params: {
     });
   };
   registerArgAction(SLACK_COMMAND_ARG_ACTION_LISTENER);
+  return registration;
 }
