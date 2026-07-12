@@ -439,17 +439,26 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     process.off("SIGINT", onSigint);
     process.off("SIGTERM", onSigterm);
   };
+  const stopClientAndMcp = async () => {
+    client.stop();
+    try {
+      await closeMcpRuntime();
+    } finally {
+      clearInterval(lifetimeInterval);
+    }
+  };
   const finish = async (exitCode: number) => {
     if (stopping) {
       return;
     }
     stopping = true;
     removeSignalHandlers();
-    clearInterval(lifetimeInterval);
-    client.stop();
-    await closeMcpRuntime();
-    process.exitCode = exitCode;
-    resolveStopped?.();
+    try {
+      await stopClientAndMcp();
+    } finally {
+      process.exitCode = exitCode;
+      resolveStopped?.();
+    }
   };
   const onSigint = () => void finish(130);
   const onSigterm = () => void finish(143);
@@ -476,9 +485,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       return;
     }
     removeSignalHandlers();
-    clearInterval(lifetimeInterval);
-    client.stop();
-    await closeMcpRuntime();
+    await stopClientAndMcp();
     throw error;
   }
   if (!readiness.ready) {
@@ -487,9 +494,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       return;
     }
     removeSignalHandlers();
-    clearInterval(lifetimeInterval);
-    client.stop();
-    await closeMcpRuntime();
+    await stopClientAndMcp();
     throw new Error("node host gateway event loop readiness timeout");
   }
   await stopped;
