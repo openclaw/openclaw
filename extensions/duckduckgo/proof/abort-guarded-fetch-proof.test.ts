@@ -43,8 +43,8 @@ describe("ddg abort signal proof", () => {
     }
 
     const startedAt = Date.now();
-    let errorType: string;
-    let errorMessage: string;
+    let errorType = "unknown";
+    let errorMessage = "unknown";
     try {
       await tool.execute({ query: "openclaw test" }, { signal: controller.signal });
       throw new Error("Expected execute() to reject with aborted signal");
@@ -105,8 +105,8 @@ describe("ddg abort signal proof", () => {
     const elapsed = Date.now() - startedAt;
 
     // Capture the exact error for the PR body.
-    let errorType: string;
-    let errorMessage: string;
+    let errorType = "unknown";
+    let errorMessage = "unknown";
     try {
       await searchPromise;
     } catch (err) {
