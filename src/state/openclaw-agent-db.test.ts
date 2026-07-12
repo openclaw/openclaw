@@ -185,6 +185,50 @@ function createUnsafeIndexDrift(databasePath: string): void {
   }
 }
 
+function createTranscriptIdempotencyIndexDrift(
+  databasePath: string,
+  options: { duplicateRows?: boolean } = {},
+): void {
+  const { DatabaseSync } = requireNodeSqlite();
+  const database = new DatabaseSync(databasePath);
+  try {
+    database.exec(`
+      DROP INDEX idx_agent_transcript_message_idempotency;
+      CREATE UNIQUE INDEX idx_agent_transcript_message_idempotency
+        ON transcript_event_identities(session_id, event_id);
+      INSERT INTO sessions (
+        session_id, session_key, session_scope, created_at, updated_at
+      ) VALUES (
+        'session-1', 'agent:worker-1:session-1', 'conversation', 1, 1
+      );
+      INSERT INTO transcript_events (session_id, seq, event_json, created_at)
+      VALUES
+        ('session-1', 1, '{}', 1),
+        ('session-1', 2, '{}', 2);
+      INSERT INTO transcript_event_identities (
+        session_id, event_id, seq, message_idempotency_key, created_at
+      ) VALUES (
+        'session-1', 'event-1', 1, 'message-1', 1
+      );
+    `);
+    if (options.duplicateRows) {
+      database.exec(`
+        INSERT INTO transcript_event_identities (
+          session_id, event_id, seq, message_idempotency_key, created_at
+        ) VALUES (
+          'session-1', 'event-2', 2, 'message-1', 2
+        );
+      `);
+    }
+    expect(database.prepare("PRAGMA integrity_check").get()).toEqual({
+      integrity_check: "ok",
+    });
+    expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+  } finally {
+    database.close();
+  }
+}
+
 type AgentSchemaOpenerResult = { agentId: string; ok: boolean; error?: string };
 
 function launchAgentSchemaOpener(params: {
@@ -1110,6 +1154,81 @@ describe("openclaw agent database", () => {
         : transcriptIndex?.sql,
     ).toContain("ON transcript_event_identities(session_id, event_type, seq DESC)");
     expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
+  });
+
+  it("repairs a same-name transcript uniqueness index before accepting writes", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const created = openOpenClawAgentDatabase({ agentId: "worker-1", env });
+    const databasePath = created.path;
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    createTranscriptIdempotencyIndexDrift(databasePath);
+
+    const reopened = openOpenClawAgentDatabase({ agentId: "worker-1", env });
+    const index = reopened.db
+      .prepare(
+        "SELECT sql FROM sqlite_schema WHERE type = 'index' AND name = 'idx_agent_transcript_message_idempotency'",
+      )
+      .get() as { sql?: unknown };
+    expect(index.sql).toContain(
+      "ON transcript_event_identities(session_id, message_idempotency_key)",
+    );
+    expect(index.sql).toContain("WHERE message_idempotency_key IS NOT NULL");
+
+    expect(() =>
+      reopened.db
+        .prepare(
+          `INSERT INTO transcript_event_identities (
+             session_id, event_id, seq, message_idempotency_key, created_at
+           ) VALUES (?, ?, ?, ?, ?)`,
+        )
+        .run("session-1", "event-2", 2, "message-1", 2),
+    ).toThrow(/UNIQUE constraint failed/iu);
+  });
+
+  it("rejects same-name transcript index drift when duplicate rows block repair", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const created = openOpenClawAgentDatabase({ agentId: "worker-1", env });
+    const databasePath = created.path;
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    createTranscriptIdempotencyIndexDrift(databasePath, { duplicateRows: true });
+
+    expect(() => openOpenClawAgentDatabase({ agentId: "worker-1", env })).toThrow(
+      /canonical unique index idx_agent_transcript_message_idempotency failed.*UNIQUE constraint failed/iu,
+    );
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const after = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(
+        after
+          .prepare(
+            "SELECT sql FROM sqlite_schema WHERE type = 'index' AND name = 'idx_agent_transcript_message_idempotency'",
+          )
+          .get(),
+      ).toEqual({
+        sql: expect.stringContaining("ON transcript_event_identities(session_id, event_id)"),
+      });
+      expect(
+        after
+          .prepare(
+            "SELECT COUNT(*) AS count FROM transcript_event_identities WHERE message_idempotency_key = 'message-1'",
+          )
+          .get(),
+      ).toEqual({ count: 2 });
+      expect(
+        after
+          .prepare(
+            "SELECT name FROM sqlite_schema WHERE type = 'index' AND name LIKE 'openclaw_probe_%'",
+          )
+          .all(),
+      ).toEqual([]);
+    } finally {
+      after.close();
+    }
   });
 
   it("records durable per-agent schema metadata", () => {
