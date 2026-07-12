@@ -56,7 +56,7 @@ import {
   respondNotFound as respondControlUiNotFound,
   respondPlainText,
 } from "./control-ui-http-utils.js";
-import { classifyControlUiRequest } from "./control-ui-routing.js";
+import { classifyControlUiRequest, isControlUiApprovalDocumentPath } from "./control-ui-routing.js";
 import {
   buildControlUiAvatarUrl,
   CONTROL_UI_AVATAR_PREFIX,
@@ -229,6 +229,9 @@ function applyControlUiSecurityHeaders(res: ServerResponse) {
   res.setHeader("Content-Security-Policy", buildControlUiCspHeader());
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Referrer-Policy", "no-referrer");
+  // The active Gateway may differ from the server that delivered this UI.
+  // Exact sandbox policies and iframe allow attributes still narrow delegation.
+  res.setHeader("Permissions-Policy", "camera=*, microphone=*, geolocation=*, clipboard-write=*");
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown) {
@@ -1087,6 +1090,7 @@ export async function handleControlUiHttpRequest(
 
   const uiPath =
     basePath && pathname.startsWith(`${basePath}/`) ? pathname.slice(basePath.length) : pathname;
+  const approvalDocument = isControlUiApprovalDocumentPath({ basePath, pathname });
   const rel = (() => {
     if (uiPath === ROOT_PREFIX) {
       return "";
@@ -1103,7 +1107,11 @@ export async function handleControlUiHttpRequest(
     }
     return uiPath.slice(1);
   })();
-  const requested = rel && !rel.endsWith("/") ? rel : `${rel}index.html`;
+  const requested = approvalDocument
+    ? "index.html"
+    : rel && !rel.endsWith("/")
+      ? rel
+      : `${rel}index.html`;
   const fileRel = requested || "index.html";
   if (!isSafeRelativePath(fileRel)) {
     respondControlUiNotFound(res);

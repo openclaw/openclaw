@@ -783,7 +783,9 @@ function filterUnsupportedMutableSecretRefSchemaIssue(params: {
   if (!unrecognizedKeys.includes(childKey)) {
     return issue;
   }
-  const remainingKeys = unrecognizedKeys.filter((key) => key !== childKey);
+  const remainingKeys = unrecognizedKeys.filter(
+    (key): key is string => key !== undefined && key !== childKey,
+  );
   if (remainingKeys.length === 0) {
     return null;
   }
@@ -1931,7 +1933,7 @@ function validateConfigObjectWithPluginsBase(
     if (
       normalizePluginId(pluginId) === "codex" &&
       pathLocal === "plugins.entries.codex" &&
-      shouldSuppressMissingCodexPluginDiagnostics(config)
+      shouldSuppressMissingCodexPluginDiagnostics(config, opts.env ?? process.env)
     ) {
       return;
     }

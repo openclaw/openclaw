@@ -11,7 +11,7 @@ import {
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
-import { saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
+import { upsertSessionEntry, type SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import {
@@ -95,6 +95,17 @@ describe("slack prepareSlackMessage inbound contract", () => {
   });
 
   const createInboundSlackCtx = createInboundSlackTestContext;
+
+  async function seedSessionEntries(
+    storePath: string,
+    entries: Record<string, SessionEntry>,
+  ): Promise<void> {
+    await Promise.all(
+      Object.entries(entries).map(([sessionKey, entry]) =>
+        upsertSessionEntry({ storePath, sessionKey, entry }),
+      ),
+    );
+  }
 
   function createDefaultSlackCtx() {
     const slackCtx = createInboundSlackCtx({
@@ -2298,16 +2309,12 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     });
 
     history.mockClear();
-    await saveSessionStore(
-      storePath,
-      {
-        [prepared.ctxPayload.SessionKey!]: {
-          sessionId: "existing-channel-session",
-          updatedAt: Date.now(),
-        },
+    await seedSessionEntries(storePath, {
+      [prepared.ctxPayload.SessionKey!]: {
+        sessionId: "existing-channel-session",
+        updatedAt: Date.now(),
       },
-      { skipMaintenance: true },
-    );
+    });
     const existing = await prepareMessageWith(
       slackCtx,
       account,
@@ -2437,18 +2444,14 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       threadId: "200.000",
     });
     const now = Date.now();
-    await saveSessionStore(
-      storePath,
-      {
-        [threadKeys.sessionKey]: {
-          sessionId: "existing-thread-session",
-          updatedAt: now,
-          sessionStartedAt: now,
-          lastInteractionAt: now,
-        },
+    await seedSessionEntries(storePath, {
+      [threadKeys.sessionKey]: {
+        sessionId: "existing-thread-session",
+        updatedAt: now,
+        sessionStartedAt: now,
+        lastInteractionAt: now,
       },
-      { skipMaintenance: true },
-    );
+    });
 
     const replies = vi.fn().mockResolvedValueOnce({
       messages: [{ text: "starter", user: "U2", ts: "200.000" }],
@@ -2492,18 +2495,14 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       threadId: "250.000",
     });
     const now = Date.now();
-    await saveSessionStore(
-      storePath,
-      {
-        [threadKeys.sessionKey]: {
-          sessionId: "direct-monitor-existing-thread-session",
-          updatedAt: now - 2 * 24 * 60 * 60 * 1000,
-          sessionStartedAt: now - 2 * 24 * 60 * 60 * 1000,
-          lastInteractionAt: now - 2 * 24 * 60 * 60 * 1000,
-        },
+    await seedSessionEntries(storePath, {
+      [threadKeys.sessionKey]: {
+        sessionId: "direct-monitor-existing-thread-session",
+        updatedAt: now - 2 * 24 * 60 * 60 * 1000,
+        sessionStartedAt: now - 2 * 24 * 60 * 60 * 1000,
+        lastInteractionAt: now - 2 * 24 * 60 * 60 * 1000,
       },
-      { skipMaintenance: true },
-    );
+    });
 
     const replies = vi.fn().mockResolvedValueOnce({
       messages: [{ text: "starter", user: "U2", ts: "250.000" }],
@@ -2544,18 +2543,14 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       baseSessionKey: route.sessionKey,
       threadId: "300.000",
     });
-    await saveSessionStore(
-      storePath,
-      {
-        [threadKeys.sessionKey]: {
-          sessionId: "stale-thread-session",
-          updatedAt: now,
-          sessionStartedAt: now - 2 * 24 * 60 * 60 * 1000,
-          lastInteractionAt: now - 2 * 24 * 60 * 60 * 1000,
-        },
+    await seedSessionEntries(storePath, {
+      [threadKeys.sessionKey]: {
+        sessionId: "stale-thread-session",
+        updatedAt: now,
+        sessionStartedAt: now - 2 * 24 * 60 * 60 * 1000,
+        lastInteractionAt: now - 2 * 24 * 60 * 60 * 1000,
       },
-      { skipMaintenance: true },
-    );
+    });
 
     const replies = vi
       .fn()
@@ -2626,22 +2621,18 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       baseSessionKey: route.sessionKey,
       threadId: "350.000",
     });
-    await saveSessionStore(
-      storePath,
-      {
-        [threadKeys.sessionKey]: {
-          sessionId: "provider-owned-thread-session",
-          updatedAt: now,
-          sessionStartedAt: now - 2 * 24 * 60 * 60 * 1000,
-          lastInteractionAt: now - 2 * 24 * 60 * 60 * 1000,
-          providerOverride: "claude-cli",
-          cliSessionBindings: {
-            "claude-cli": { sessionId: "claude-cli-thread-session" },
-          },
+    await seedSessionEntries(storePath, {
+      [threadKeys.sessionKey]: {
+        sessionId: "provider-owned-thread-session",
+        updatedAt: now,
+        sessionStartedAt: now - 2 * 24 * 60 * 60 * 1000,
+        lastInteractionAt: now - 2 * 24 * 60 * 60 * 1000,
+        providerOverride: "claude-cli",
+        cliSessionBindings: {
+          "claude-cli": { sessionId: "claude-cli-thread-session" },
         },
       },
-      { skipMaintenance: true },
-    );
+    });
 
     const replies = vi.fn().mockResolvedValueOnce({
       messages: [{ text: "starter", user: "U2", ts: "350.000" }],
@@ -2688,18 +2679,14 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       baseSessionKey: route.sessionKey,
       threadId: "400.000",
     });
-    await saveSessionStore(
-      storePath,
-      {
-        [threadKeys.sessionKey]: {
-          sessionId: "stale-zero-history-thread-session",
-          updatedAt: now,
-          sessionStartedAt: now - 2 * 24 * 60 * 60 * 1000,
-          lastInteractionAt: now - 2 * 24 * 60 * 60 * 1000,
-        },
+    await seedSessionEntries(storePath, {
+      [threadKeys.sessionKey]: {
+        sessionId: "stale-zero-history-thread-session",
+        updatedAt: now,
+        sessionStartedAt: now - 2 * 24 * 60 * 60 * 1000,
+        lastInteractionAt: now - 2 * 24 * 60 * 60 * 1000,
       },
-      { skipMaintenance: true },
-    );
+    });
 
     const replies = vi.fn().mockResolvedValueOnce({
       messages: [{ text: "starter", user: "U2", ts: "400.000" }],
@@ -2902,17 +2889,13 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
 
   it("preserves Slack thread history when an existing DM session receives a thread reply", async () => {
     const { storePath } = storeFixture.makeTmpStorePath();
-    await saveSessionStore(
-      storePath,
-      {
-        "agent:main:main": { sessionId: "existing-dm-session", updatedAt: Date.now() },
-        "agent:main:main:thread:650.000": {
-          sessionId: "existing-dm-thread-session",
-          updatedAt: Date.now(),
-        },
+    await seedSessionEntries(storePath, {
+      "agent:main:main": { sessionId: "existing-dm-session", updatedAt: Date.now() },
+      "agent:main:main:thread:650.000": {
+        sessionId: "existing-dm-thread-session",
+        updatedAt: Date.now(),
       },
-      { skipMaintenance: true },
-    );
+    });
     const replies = vi
       .fn()
       .mockResolvedValueOnce({

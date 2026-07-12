@@ -5,6 +5,7 @@ import type {
   ErrorShape,
   RequestFrame,
 } from "../../../packages/gateway-protocol/src/schema/frames.js";
+import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import type { HealthSummary } from "../../commands/health.types.js";
@@ -69,18 +70,36 @@ export type RespondFn = (
   meta?: Record<string, unknown>,
 ) => void;
 
+/** Minimal hosted Crestodian contract retained by the gateway request router. */
+type GatewayCrestodianSession = {
+  engine: {
+    handle: (message: string) => Promise<{
+      text: string;
+      action: "none" | "exit" | "open-tui" | "open-setup";
+      sensitive?: boolean;
+    }>;
+    dispose: () => Promise<void>;
+  };
+  welcome: string;
+  lastUsedAt: number;
+};
+
 /** Runtime services and mutable gateway state available to request handlers. */
 export type GatewayRequestContext = {
   deps: CliDeps;
   cron: GatewayCronServiceContract;
   cronStorePath: string;
   getRuntimeConfig: () => OpenClawConfig;
+  getMcpAppSandboxPort?: () => number | undefined;
   resolveTerminalLaunchPolicy: (agentId?: string) => TerminalLaunchResolution;
   isTerminalEnabled: () => boolean;
   execApprovalManager?: ExecApprovalManager;
   pluginApprovalManager?: ExecApprovalManager<PluginApprovalRequestPayload>;
   forwardPluginApprovalRequest?: (request: PluginApprovalRequest) => Promise<boolean>;
   loadGatewayModelCatalog: (params?: { readOnly?: boolean }) => Promise<ModelCatalogEntry[]>;
+  loadGatewayModelCatalogSnapshot: (params?: {
+    readOnly?: boolean;
+  }) => Promise<ModelCatalogSnapshot>;
   getHealthCache: () => HealthSummary | null;
   refreshHealthSnapshot: (opts?: {
     probe?: boolean;
@@ -145,7 +164,7 @@ export type GatewayRequestContext = {
   registerToolEventRecipient: (runId: string, connId: string) => void;
   dedupe: Map<string, DedupeEntry>;
   wizardSessions: Map<string, WizardSession>;
-  crestodianSessions: Map<string, import("./crestodian.js").CrestodianChatSession>;
+  crestodianSessions: Map<string, GatewayCrestodianSession>;
   findRunningWizard: () => string | null;
   purgeWizardSession: (id: string) => void;
   getRuntimeSnapshot: () => ChannelRuntimeSnapshot;

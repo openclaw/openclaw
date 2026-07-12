@@ -431,6 +431,7 @@ describe("qa scenario catalog", () => {
       "webchat-direct-reply-routing",
       "long-context-progress-watchdog",
       "gateway-restart-inflight-run",
+      "gateway-restart-multi-live",
       "streaming-final-integrity",
     ];
 
@@ -447,21 +448,35 @@ describe("qa scenario catalog", () => {
       "qa/scenarios/runtime/long-context-progress-watchdog.yaml",
     );
     const gatewayRestartFlow = readQaScenarioById("gateway-restart-inflight-run").execution.flow;
-    const interruptedStatusAssertion = gatewayRestartFlow?.steps
-      .flatMap((step) => step.actions)
-      .find((action) =>
-        JSON.stringify(action).includes("interrupted agent run ended with unexpected status"),
-      );
-    expect(interruptedStatusAssertion).toBeDefined();
-    const interruptedStatusContract = JSON.stringify(interruptedStatusAssertion);
-    expect(interruptedStatusContract).toContain("waited.stopReason === 'restart'");
-    expect(interruptedStatusContract).toContain(
-      "env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME === 'codex' && waited.stopReason === 'aborted'",
+    const gatewayRestartContract = JSON.stringify(gatewayRestartFlow);
+    expect(
+      JSON.stringify(readQaScenarioById("gateway-restart-inflight-run").gatewayConfigPatch),
+    ).toContain('"alsoAllow":["qa_restart_wait","qa_restart_unsafe_probe"]');
+    expect(gatewayRestartContract).toContain("plannedToolName === 'wait'");
+    expect(gatewayRestartContract).toContain("lastAssistantToolNames?.includes('wait')");
+    expect(gatewayRestartContract).toContain('"taskTracking":false');
+    expect(gatewayRestartContract).toContain('"restartGatewayWithConfigPatch"');
+    expect(gatewayRestartContract).toContain("interruptedMatches.length === 1");
+    expect(gatewayRestartContract).toContain("restartNotices.length === 0");
+    expect(gatewayRestartContract).toContain("dispatching restart-safe recovery");
+    expect(gatewayRestartContract).toContain("[OpenClaw heartbeat poll]");
+    expect(gatewayRestartContract).toContain("liveTurnTimeoutMs(env, 180000)");
+    expect(gatewayRestartContract).toContain("dmScope: 'per-channel-peer'");
+    const liveMultiRestart = readQaScenarioById("gateway-restart-multi-live");
+    const liveMultiRestartContract = JSON.stringify(liveMultiRestart.execution.flow);
+    expect(JSON.stringify(liveMultiRestart.gatewayConfigPatch)).toContain(
+      '"alsoAllow":["qa_restart_wait","qa_restart_unsafe_probe"]',
     );
-    expect(interruptedStatusContract).toContain("EmbeddedAttemptSessionTakeoverError");
-    expect(interruptedStatusContract).toContain("AbortError");
-    expect(interruptedStatusContract).toContain("This operation was aborted");
-    expect(JSON.stringify(gatewayRestartFlow)).toContain("liveTurnTimeoutMs(env, 180000)");
+    expect(liveMultiRestartContract).toContain("assistantToolCallCounts.exec");
+    expect(liveMultiRestartContract).toContain("checkpoint");
+    expect(liveMultiRestartContract).toContain("restarts=3");
+    expect(liveMultiRestartContract).toContain("dmScope: 'per-channel-peer'");
+    expect(liveMultiRestartContract).toContain("dispatching restart-safe recovery");
+    expect(readQaScenarioExecutionConfig("gateway-restart-multi-live")).toMatchObject({
+      requiredProviderMode: "live-frontier",
+      requiredProvider: "openai",
+      requiredModel: "gpt-5.4",
+    });
     const longContextFlow = JSON.stringify(
       readQaScenarioById("long-context-progress-watchdog").execution.flow,
     );

@@ -47,6 +47,7 @@ final class MacNodeModeCoordinator: NSObject {
         let url: URL
         let token: String?
         let password: String?
+        let routeRevision: UInt64
     }
 
     private struct ConnectionAttempt {
@@ -102,6 +103,7 @@ final class MacNodeModeCoordinator: NSObject {
     private var lastObservedComputerControlEnabled: Bool
     private let runtime: MacNodeRuntime
     private let session: GatewayNodeSession
+    private let presenceReporter: MacNodePresenceReporter
     private let routeInvalidationHook: (@Sendable () async -> Void)?
     private let refreshEvents: AsyncStream<Void>
     private let refreshContinuation: AsyncStream<Void>.Continuation
@@ -115,6 +117,7 @@ final class MacNodeModeCoordinator: NSObject {
             runtime: MacNodeRuntime(
                 canvasSurfaceUrl: { await session.currentCanvasHostUrl() },
                 refreshCanvasSurfaceUrl: { await session.refreshCanvasHostUrl() }),
+            presenceReporter: MacNodePresenceReporter(),
             observeNotifications: true,
             initialPaused: nil,
             initialComputerControlEnabled: nil,
@@ -124,6 +127,7 @@ final class MacNodeModeCoordinator: NSObject {
     init(
         session: GatewayNodeSession,
         runtime: MacNodeRuntime,
+        presenceReporter: MacNodePresenceReporter = MacNodePresenceReporter(),
         observeNotifications: Bool = false,
         initialPaused: Bool? = nil,
         initialComputerControlEnabled: Bool? = nil,
@@ -132,6 +136,7 @@ final class MacNodeModeCoordinator: NSObject {
         let refreshEvents = AsyncStream.makeStream(of: Void.self, bufferingPolicy: .bufferingNewest(1))
         self.session = session
         self.runtime = runtime
+        self.presenceReporter = presenceReporter
         self.routeInvalidationHook = routeInvalidationHook
         self.refreshEvents = refreshEvents.stream
         self.refreshContinuation = refreshEvents.continuation
@@ -207,8 +212,16 @@ final class MacNodeModeCoordinator: NSObject {
         self.reconnectProbeTask = nil
     }
 
-    func setPreferredGatewayStableID(_ stableID: String?) {
-        GatewayDiscoveryPreferences.setPreferredStableID(stableID)
+    func setPreferredGatewayStableID(
+        _ stableID: String?,
+        state: AppState = AppStateStore.shared)
+    {
+        let routeBinding = stableID == nil ? nil : GatewayDiscoveryPreferences.routeBinding(
+            connectionMode: .remote,
+            remoteTransport: state.remoteTransport,
+            remoteURL: state.remoteUrl,
+            remoteTarget: state.remoteTarget)
+        GatewayDiscoveryPreferences.setPreferredStableID(stableID, routeBinding: routeBinding)
         // Revoke a suspended endpoint attempt before its preference change is
         // reflected back through GatewayEndpointStore's async subscription.
         self.enqueueRouteInvalidation(yieldRefresh: true)
@@ -306,7 +319,7 @@ final class MacNodeModeCoordinator: NSObject {
         _ state: GatewayEndpointState,
         matches config: GatewayConnection.Config) -> Bool
     {
-        guard case let .ready(_, url, token, password) = state else { return false }
+        guard case let .ready(_, url, token, password, _) = state else { return false }
         return url == config.url && token == config.token && password == config.password
     }
 
@@ -370,11 +383,17 @@ final class MacNodeModeCoordinator: NSObject {
     }
 
     private static func effectiveEndpoint(from state: GatewayEndpointState) -> EffectiveEndpoint? {
-        guard case let .ready(mode, url, token, password) = state else { return nil }
-        return EffectiveEndpoint(mode: mode, url: url, token: token, password: password)
+        guard case let .ready(mode, url, token, password, routeRevision) = state else { return nil }
+        return EffectiveEndpoint(
+            mode: mode,
+            url: url,
+            token: token,
+            password: password,
+            routeRevision: routeRevision)
     }
 
     private func invalidateRuntimeRoute() async {
+        self.presenceReporter.stop()
         await self.runtime.setEventSender(nil)
         await self.runtime.releaseHeldComputerInput()
         await self.routeInvalidationHook?()
@@ -557,6 +576,13 @@ final class MacNodeModeCoordinator: NSObject {
                 await self.runtime.setEventSender { [weak self] event, payload in
                     guard let self else { return }
                     await self.session.sendEvent(
+                        event: event,
+                        payloadJSON: payload,
+                        ifCurrentRoute: installedRoute)
+                }
+                await self.presenceReporter.start { [weak self] event, payload in
+                    guard let self else { return false }
+                    return await self.session.sendEvent(
                         event: event,
                         payloadJSON: payload,
                         ifCurrentRoute: installedRoute)
@@ -779,6 +805,7 @@ final class MacNodeModeCoordinator: NSObject {
             OpenClawSystemCommand.run.rawValue,
             OpenClawSystemCommand.execApprovalsGet.rawValue,
             OpenClawSystemCommand.execApprovalsSet.rawValue,
+            OpenClawFileSystemCommand.listDir.rawValue,
         ]
 
         let capsSet = Set(caps)

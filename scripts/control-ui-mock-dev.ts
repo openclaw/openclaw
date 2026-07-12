@@ -1,8 +1,10 @@
 // Control Ui Mock Dev script supports OpenClaw repository automation.
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import qrcode from "qrcode";
 import { createServer, type Plugin, type ViteDevServer } from "vite";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../src/gateway/control-ui-contract.js";
 import {
   createControlUiMockBootstrapConfig,
@@ -35,10 +37,14 @@ const TOTAL_TELEGRAM_SESSIONS = 180;
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const uiRoot = path.join(repoRoot, "ui");
 
+function mockFileHash(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
 function parseArgs(args: string[]): CliOptions {
   const options: CliOptions = { allowedHosts: [], host: "127.0.0.1", port: 5187 };
   for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i];
+    const arg = expectDefined(args[i], `control UI mock argument at index ${i}`);
     if (arg === "--allowed-host") {
       const allowedHost = args[++i]?.trim();
       if (allowedHost) {
@@ -242,6 +248,144 @@ function buildSessionDiffMock() {
     ],
     additions: 6,
     deletions: 2,
+  };
+}
+
+function buildPluginCatalogMock() {
+  const entry = (params: {
+    id: string;
+    name: string;
+    description: string;
+    category: string;
+    installed: boolean;
+    enabled?: boolean;
+    featured?: boolean;
+  }) => ({
+    id: params.id,
+    name: params.name,
+    description: params.description,
+    version: "1.4.0",
+    installed: params.installed,
+    enabled: params.installed && (params.enabled ?? true),
+    state: params.installed ? ((params.enabled ?? true) ? "enabled" : "disabled") : "not-installed",
+    category: params.category,
+    featured: params.featured ?? false,
+    removable: params.installed,
+  });
+  return {
+    plugins: [
+      entry({
+        id: "telegram",
+        name: "Telegram",
+        description: "Chat with your agent from Telegram DMs and groups.",
+        category: "channel",
+        installed: true,
+      }),
+      entry({
+        id: "discord",
+        name: "Discord",
+        description: "Bridge agents into Discord servers and DMs.",
+        category: "channel",
+        installed: true,
+        enabled: false,
+      }),
+      entry({
+        id: "memory-wiki",
+        name: "Memory Wiki",
+        description: "Long-term wiki-style memory for people and projects.",
+        category: "memory",
+        installed: true,
+      }),
+      entry({
+        id: "browser",
+        name: "Browser",
+        description: "Drive a managed browser profile for research and automation.",
+        category: "tool",
+        installed: false,
+        featured: true,
+      }),
+      entry({
+        id: "canvas",
+        name: "Canvas",
+        description: "Generate and preview visual artifacts from sessions.",
+        category: "tool",
+        installed: false,
+      }),
+    ],
+    diagnostics: [],
+    mutationAllowed: true,
+  };
+}
+
+function buildSkillWorkshopMocks(baseTime: number) {
+  const hour = 60 * 60 * 1000;
+  const day = 24 * hour;
+  const proposals = [
+    {
+      id: "prop-release-tweets",
+      kind: "update",
+      status: "pending",
+      title: "Tighten release tweet drafting",
+      description: "Capture the changelog-to-tweet flow the agent keeps re-deriving.",
+      skillName: "release-tweets",
+      skillKey: "release-tweets",
+      createdAt: new Date(baseTime - 2 * hour).toISOString(),
+      updatedAt: new Date(baseTime - hour).toISOString(),
+      scanState: "clean",
+    },
+    {
+      id: "prop-crawler-etiquette",
+      kind: "create",
+      status: "pending",
+      title: "Add crawler etiquette skill",
+      description: "Rate limits and robots.txt handling learned during the docs sweep.",
+      skillName: "crawler-etiquette",
+      skillKey: "crawler-etiquette",
+      createdAt: new Date(baseTime - 3 * day).toISOString(),
+      updatedAt: new Date(baseTime - 2 * day).toISOString(),
+      scanState: "clean",
+    },
+    {
+      id: "prop-changelog-style",
+      kind: "update",
+      status: "applied",
+      title: "Changelog bullet style",
+      description: "One bullet per entry, no hard wraps.",
+      skillName: "changelog-style",
+      skillKey: "changelog-style",
+      createdAt: new Date(baseTime - 6 * day).toISOString(),
+      updatedAt: new Date(baseTime - 5 * day).toISOString(),
+      scanState: "clean",
+    },
+  ];
+  return {
+    list: {
+      schema: "openclaw.skill-workshop.proposals-manifest.v1",
+      updatedAt: new Date(baseTime - hour).toISOString(),
+      proposals,
+    },
+    inspect: {
+      cases: proposals.map((proposal) => ({
+        match: { proposalId: proposal.id },
+        response: {
+          record: {
+            ...proposal,
+            proposedVersion: "2",
+            target: { skillName: proposal.skillName, skillKey: proposal.skillKey },
+          },
+          content: [
+            `# ${proposal.title}`,
+            "",
+            proposal.description,
+            "",
+            "## Steps",
+            "1. Gather the source material.",
+            "2. Apply the documented workflow.",
+          ].join("\n"),
+          supportFiles: [],
+        },
+      })),
+    },
   };
 }
 
@@ -753,6 +897,22 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       file: {
         ...file,
         content: sessionFileContentByPath.get(file.path) ?? "",
+        // Fake CAS token so the file panel offers edit mode against the mock.
+        hash: mockFileHash(sessionFileContentByPath.get(file.path) ?? ""),
+      },
+      root: sessionWorkspaceRoot,
+      sessionKey: "agent:alpha",
+    },
+  }));
+  const sessionFileSetCases = sessionFiles.map((file) => ({
+    match: { sessionKey: "agent:alpha", path: file.path },
+    response: {
+      file: {
+        ...file,
+        kind: "modified",
+        workspacePath: file.path,
+        hash: mockFileHash(`${file.path}:saved`),
+        updatedAtMs: baseTime,
       },
       root: sessionWorkspaceRoot,
       sessionKey: "agent:alpha",
@@ -806,14 +966,18 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
   // heatmap stay filled no matter when the mock harness runs.
   const profileUsage = buildProfileUsageMocks(Date.now());
   const modelProviders = buildModelProviderMocks(Date.now());
+  const skillWorkshop = buildSkillWorkshopMocks(Date.now());
   return {
     assistantAgentId: "openclaw-mock",
     assistantName: "OpenClaw mock",
     defaultAgentId: "openclaw-mock",
-    featureMethods: ["chat.metadata", "chat.startup", "sessions.diff"],
+    featureMethods: ["chat.metadata", "chat.startup", "sessions.diff", "sessions.files.set"],
     historyMessages: buildScrollableChatHistory(baseTime),
     methodResponses: {
       "sessions.diff": buildSessionDiffMock(),
+      "plugins.list": buildPluginCatalogMock(),
+      "skills.proposals.list": skillWorkshop.list,
+      "skills.proposals.inspect": skillWorkshop.inspect,
       "usage.cost": profileUsage.cost,
       "sessions.usage": profileUsage.sessions,
       "models.authStatus": modelProviders.authStatus,
@@ -959,6 +1123,49 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
           },
         ],
       },
+      "system-presence": [
+        {
+          host: "gateway-mock.local",
+          ip: "192.168.1.10",
+          version: "2026.6.11",
+          platform: "macos 26.5.2",
+          deviceFamily: "Mac",
+          modelIdentifier: "Mac14,12",
+          lastInputSeconds: 42,
+          mode: "gateway",
+          reason: "self",
+          instanceId: "mock-gateway-instance",
+          text: "Gateway: gateway-mock.local (192.168.1.10) · app 2026.6.11 · mode gateway · reason self",
+          ts: baseTime,
+        },
+        {
+          host: "Mac Studio",
+          ip: "192.168.1.11",
+          version: "2026.6.11",
+          platform: "macos 26.5.2",
+          deviceFamily: "Mac",
+          modelIdentifier: "Mac15,14",
+          lastInputSeconds: 177,
+          mode: "node",
+          reason: "periodic",
+          deviceId: "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
+          instanceId: "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
+          roles: ["node"],
+          text: "Node: Mac Studio (192.168.1.11) · app 2026.6.11 · last input 177s ago · mode node · reason periodic",
+          ts: baseTime - 30_000,
+        },
+        {
+          host: "openclaw-control-ui",
+          version: "2026.6.11",
+          platform: "macos 26.5.2",
+          mode: "webchat",
+          reason: "connect",
+          roles: ["operator"],
+          instanceId: "mock-unpaired-webchat",
+          text: "Node: openclaw-control-ui · mode webchat",
+          ts: baseTime - 10_000,
+        },
+      ],
       "agents.files.get": {
         cases: workspaceFileCases,
       },
@@ -967,6 +1174,9 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       },
       "sessions.files.get": {
         cases: sessionFileGetCases,
+      },
+      "sessions.files.set": {
+        cases: sessionFileSetCases,
       },
       "sessions.files.list": {
         cases: [

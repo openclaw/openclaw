@@ -4,6 +4,7 @@
  * Manages CDP-backed Playwright connections, page lookup, observed dialogs,
  * console/network/page state, role refs, and safe navigation handling.
  */
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   isFutureDateTimestampMs,
   parseFiniteNumber,
@@ -15,6 +16,7 @@ import type {
   BrowserContext,
   ConsoleMessage,
   Dialog,
+  Frame,
   Page,
   Request,
   Response,
@@ -183,13 +185,22 @@ type PageState = {
   roleRefs?: Record<string, { role: string; name?: string; nth?: number; domMarker?: boolean }>;
   roleRefsMode?: "role" | "aria";
   roleRefsFrameSelector?: string;
+  roleRefsFrame?: Frame;
+  /** Target-cache entry owned by the current role refs. */
+  roleRefsTargetKey?: string;
+  /** Cache generation restored or stored by this Page. */
+  roleRefsTargetGeneration?: number;
+  /** Main-frame navigation observed before this Page could be bound to its target. */
+  roleRefsInvalidBeforeGeneration?: number;
+  /** Any frame changed before target binding; invalidates only page-wide aria refs. */
+  roleRefsAriaInvalidBeforeGeneration?: number;
 };
 
 type RoleRefs = NonNullable<PageState["roleRefs"]>;
 type RoleRefsCacheEntry = {
   refs: RoleRefs;
-  frameSelector?: string;
   mode?: NonNullable<PageState["roleRefsMode"]>;
+  generation: number;
 };
 
 type ContextState = {
@@ -205,6 +216,7 @@ const observedPages = new WeakSet<Page>();
 // for the same CDP target across requests.
 const roleRefsByTarget = new Map<string, RoleRefsCacheEntry>();
 const MAX_ROLE_REFS_CACHE = 50;
+let roleRefsCacheGeneration = 0;
 
 const MAX_CONSOLE_MESSAGES = 500;
 const MAX_PAGE_ERRORS = 200;
@@ -213,12 +225,23 @@ const MAX_RECENT_DIALOGS = 20;
 const OBSERVED_DIALOG_TIMEOUT_MS = 120_000;
 
 type PendingBrowserConnection = {
-  attempt: { cancelled: boolean };
+  attempt: { cancelled: boolean; retired?: ConnectedBrowser };
   promise: Promise<ConnectedBrowser>;
+};
+
+export type PlaywrightConnectionRetirement = {
+  readonly retired: boolean;
+  /** Capture handles created by already-admitted work before cleanup begins. */
+  refresh?: () => boolean;
+  close: () => Promise<void>;
 };
 
 const cachedByCdpUrl = new Map<string, ConnectedBrowser>();
 const connectingByCdpUrl = new Map<string, PendingBrowserConnection>();
+const retainedClosingByCdpUrl = new Map<string, Set<ConnectedBrowser>>();
+const closeConnectionPromises = new WeakMap<ConnectedBrowser, Promise<void>>();
+const closedConnections = new WeakSet<ConnectedBrowser>();
+const PLAYWRIGHT_CONNECTION_CLOSE_TIMEOUT_MS = 2_000;
 const blockedTargetsByCdpUrl = new Set<string>();
 const blockedPageRefsByCdpUrl = new Map<string, WeakSet<Page>>();
 let cdpConnectRetryDelayMsForTests: number | undefined;
@@ -511,6 +534,33 @@ function roleRefsKey(cdpUrl: string, targetId: string) {
   return targetKey(cdpUrl, targetId);
 }
 
+function bindRoleRefsTarget(page: Page, cdpUrl: string, targetId?: string | null): void {
+  const normalizedTargetId = normalizeOptionalString(targetId ?? undefined);
+  if (!normalizedTargetId) {
+    return;
+  }
+  const state = ensurePageState(page);
+  const key = roleRefsKey(cdpUrl, normalizedTargetId);
+  const invalidBeforeGeneration = state.roleRefsInvalidBeforeGeneration;
+  const ariaInvalidBeforeGeneration = state.roleRefsAriaInvalidBeforeGeneration;
+  const cached = roleRefsByTarget.get(key);
+  if (
+    cached &&
+    ((invalidBeforeGeneration !== undefined && cached.generation <= invalidBeforeGeneration) ||
+      (ariaInvalidBeforeGeneration !== undefined &&
+        cached.mode === "aria" &&
+        cached.generation <= ariaInvalidBeforeGeneration))
+  ) {
+    roleRefsByTarget.delete(key);
+  }
+  state.roleRefsInvalidBeforeGeneration = undefined;
+  state.roleRefsAriaInvalidBeforeGeneration = undefined;
+  state.roleRefsTargetKey = key;
+  if (!state.roleRefs) {
+    state.roleRefsTargetGeneration = roleRefsByTarget.get(key)?.generation;
+  }
+}
+
 function isBlockedTarget(cdpUrl: string, targetId?: string): boolean {
   const normalizedTargetId = normalizeOptionalString(targetId) ?? "";
   if (!normalizedTargetId) {
@@ -599,13 +649,165 @@ function takeCachedPlaywrightBrowserConnection(cdpUrl: string): ConnectedBrowser
   return cur;
 }
 
+function retainClosingPlaywrightConnection(connection: ConnectedBrowser): void {
+  const retained = retainedClosingByCdpUrl.get(connection.cdpUrl) ?? new Set<ConnectedBrowser>();
+  retained.add(connection);
+  retainedClosingByCdpUrl.set(connection.cdpUrl, retained);
+}
+
+function releaseClosingPlaywrightConnection(connection: ConnectedBrowser): void {
+  const retained = retainedClosingByCdpUrl.get(connection.cdpUrl);
+  retained?.delete(connection);
+  if (retained?.size === 0) {
+    retainedClosingByCdpUrl.delete(connection.cdpUrl);
+  }
+}
+
+async function closeTrackedPlaywrightConnection(connection: ConnectedBrowser): Promise<void> {
+  if (closedConnections.has(connection)) {
+    return;
+  }
+  const existing = closeConnectionPromises.get(connection);
+  if (existing) {
+    return await existing;
+  }
+  retainClosingPlaywrightConnection(connection);
+  const closing = (async () => {
+    try {
+      await connection.browser.close();
+      closedConnections.add(connection);
+      releaseClosingPlaywrightConnection(connection);
+    } finally {
+      closeConnectionPromises.delete(connection);
+    }
+  })();
+  closeConnectionPromises.set(connection, closing);
+  return await closing;
+}
+
+async function withPlaywrightCloseTimeout(task: Promise<void>): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      task,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("Playwright adapter disconnect timed out.")),
+          PLAYWRIGHT_CONNECTION_CLOSE_TIMEOUT_MS,
+        );
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+/** Capture and retire only the adapter handles currently owned by one lifecycle transition. */
+export function retirePlaywrightBrowserConnectionExact(opts: {
+  cdpUrl: string;
+}): PlaywrightConnectionRetirement {
+  const normalized = normalizeCdpUrl(opts.cdpUrl);
+  clearBlockedTargetsForCdpUrl(normalized);
+  clearBlockedPageRefsForCdpUrl(normalized);
+  const connections = new Set<ConnectedBrowser>();
+  const closeAttempts = new Map<ConnectedBrowser, Promise<void>>();
+  const pendingCollections = new Set<Promise<void>>();
+  let retired = false;
+  const startClosing = () => {
+    for (const connection of connections) {
+      if (closeAttempts.has(connection)) {
+        continue;
+      }
+      const closing = closeTrackedPlaywrightConnection(connection);
+      closeAttempts.set(connection, closing);
+      void closing.catch(() => {});
+    }
+  };
+  const awaitClosing = async () => {
+    const attempts = [...closeAttempts];
+    const results = await Promise.allSettled(attempts.map(([, closing]) => closing));
+    let firstError: Error | undefined;
+    for (const [index, result] of results.entries()) {
+      if (result.status === "rejected") {
+        const [connection, closing] = attempts[index] ?? [];
+        if (connection && closeAttempts.get(connection) === closing) {
+          closeAttempts.delete(connection);
+        }
+        firstError ??= toLintErrorObject(result.reason, "Playwright adapter disconnect failed.");
+      }
+    }
+    if (firstError) {
+      throw firstError;
+    }
+  };
+  const capture = () => {
+    const pending = connectingByCdpUrl.get(normalized);
+    const cached = takeCachedPlaywrightBrowserConnection(normalized);
+    for (const connection of retainedClosingByCdpUrl.get(normalized) ?? []) {
+      connections.add(connection);
+    }
+    if (cached) {
+      connections.add(cached);
+      retainClosingPlaywrightConnection(cached);
+    }
+    if (pending) {
+      const collection = pending.promise.then(
+        (connection) => {
+          connections.add(connection);
+        },
+        () => {
+          if (pending.attempt.retired) {
+            connections.add(pending.attempt.retired);
+          }
+        },
+      );
+      pendingCollections.add(collection);
+      void collection.then(() => {
+        pendingCollections.delete(collection);
+        startClosing();
+      });
+    }
+    startClosing();
+    const captured = Boolean(pending || connections.size > 0);
+    retired ||= captured;
+    return captured;
+  };
+  capture();
+  return {
+    get retired() {
+      return retired;
+    },
+    refresh: capture,
+    close: async () => {
+      await withPlaywrightCloseTimeout(
+        (async () => {
+          startClosing();
+          await Promise.all(pendingCollections);
+          startClosing();
+          await awaitClosing();
+        })(),
+      );
+    },
+  };
+}
+
+/** Retire a scoped adapter immediately; its CDP disconnect may settle later. */
+export function retirePlaywrightBrowserConnection(opts: { cdpUrl: string }): boolean {
+  return retirePlaywrightBrowserConnectionExact(opts).retired;
+}
+
 function evictStalePlaywrightBrowserConnection(cdpUrl: string, expectedBrowser?: Browser): void {
   const current = cachedByCdpUrl.get(normalizeCdpUrl(cdpUrl));
   if (expectedBrowser && current?.browser !== expectedBrowser) {
     return;
   }
   const cur = takeCachedPlaywrightBrowserConnection(cdpUrl);
-  cur?.browser.close().catch(() => {});
+  if (cur) {
+    void closeTrackedPlaywrightConnection(cur).catch(() => {});
+  }
 }
 
 function hasBlockedTargetsForCdpUrl(cdpUrl: string): boolean {
@@ -633,15 +835,23 @@ export function rememberRoleRefsForTarget(opts: {
   refs: RoleRefs;
   frameSelector?: string;
   mode?: NonNullable<PageState["roleRefsMode"]>;
-}): void {
+}): number | undefined {
   const targetId = normalizeOptionalString(opts.targetId) ?? "";
   if (!targetId) {
-    return;
+    return undefined;
   }
-  roleRefsByTarget.set(roleRefsKey(opts.cdpUrl, targetId), {
+  const key = roleRefsKey(opts.cdpUrl, targetId);
+  // A selector cannot preserve frame identity across replacement Page objects.
+  // Frame-scoped refs remain local and require a fresh snapshot after reconnect.
+  if (opts.frameSelector) {
+    roleRefsByTarget.delete(key);
+    return undefined;
+  }
+  const generation = ++roleRefsCacheGeneration;
+  roleRefsByTarget.set(key, {
     refs: opts.refs,
-    ...(opts.frameSelector ? { frameSelector: opts.frameSelector } : {}),
     ...(opts.mode ? { mode: opts.mode } : {}),
+    generation,
   });
   while (roleRefsByTarget.size > MAX_ROLE_REFS_CACHE) {
     const first = roleRefsByTarget.keys().next();
@@ -650,6 +860,7 @@ export function rememberRoleRefsForTarget(opts: {
     }
     roleRefsByTarget.delete(first.value);
   }
+  return generation;
 }
 
 /** Store role refs on the page and target cache. */
@@ -659,23 +870,58 @@ export function storeRoleRefsForTarget(opts: {
   targetId?: string;
   refs: RoleRefs;
   frameSelector?: string;
+  frame?: Frame;
   mode: NonNullable<PageState["roleRefsMode"]>;
 }): void {
+  if (opts.frameSelector && !opts.frame) {
+    throw new Error("Frame-scoped role refs require their resolved frame.");
+  }
   const state = ensurePageState(opts.page);
   state.roleRefs = opts.refs;
   state.roleRefsFrameSelector = opts.frameSelector;
+  state.roleRefsFrame = opts.frame;
   state.roleRefsMode = opts.mode;
   const targetId = normalizeOptionalString(opts.targetId);
   if (!targetId) {
+    state.roleRefsTargetKey = undefined;
+    state.roleRefsTargetGeneration = undefined;
     return;
   }
-  rememberRoleRefsForTarget({
+  bindRoleRefsTarget(opts.page, opts.cdpUrl, targetId);
+  state.roleRefsTargetGeneration = rememberRoleRefsForTarget({
     cdpUrl: opts.cdpUrl,
     targetId,
     refs: opts.refs,
     frameSelector: opts.frameSelector,
     mode: opts.mode,
   });
+}
+
+function clearRoleRefs(state: PageState): void {
+  if (state.roleRefsTargetKey) {
+    const cached = roleRefsByTarget.get(state.roleRefsTargetKey);
+    // A delayed event from an obsolete Page must not erase refs that a newer
+    // wrapper stored for the same target after this Page's generation.
+    if (cached?.generation === state.roleRefsTargetGeneration) {
+      roleRefsByTarget.delete(state.roleRefsTargetKey);
+    }
+  }
+  state.roleRefs = undefined;
+  state.roleRefsMode = undefined;
+  state.roleRefsFrameSelector = undefined;
+  state.roleRefsFrame = undefined;
+  state.roleRefsTargetKey = undefined;
+  state.roleRefsTargetGeneration = undefined;
+}
+
+function currentTargetRoleRefsMode(
+  state: PageState,
+): NonNullable<PageState["roleRefsMode"]> | undefined {
+  if (!state.roleRefsTargetKey) {
+    return undefined;
+  }
+  const cached = roleRefsByTarget.get(state.roleRefsTargetKey);
+  return cached && cached.generation === state.roleRefsTargetGeneration ? cached.mode : undefined;
 }
 
 /** Restore cached role refs onto a newly resolved page. */
@@ -688,7 +934,9 @@ export function restoreRoleRefsForTarget(opts: {
   if (!targetId) {
     return;
   }
-  const cached = roleRefsByTarget.get(roleRefsKey(opts.cdpUrl, targetId));
+  const cacheKey = roleRefsKey(opts.cdpUrl, targetId);
+  bindRoleRefsTarget(opts.page, opts.cdpUrl, targetId);
+  const cached = roleRefsByTarget.get(cacheKey);
   if (!cached) {
     return;
   }
@@ -696,8 +944,9 @@ export function restoreRoleRefsForTarget(opts: {
   if (state.roleRefs) {
     return;
   }
+  state.roleRefsTargetKey = cacheKey;
+  state.roleRefsTargetGeneration = cached.generation;
   state.roleRefs = cached.refs;
-  state.roleRefsFrameSelector = cached.frameSelector;
   state.roleRefsMode = cached.mode;
 }
 
@@ -819,6 +1068,45 @@ export function ensurePageState(page: Page): PageState {
         finish();
       }
     });
+    page.on("framenavigated", (frame) => {
+      // Clear role refs on main-frame navigation so stale refs from the
+      // previous page are never used to locate elements on the new page.
+      // Unscoped refs survive subframe navigation. Frame-scoped refs are
+      // invalid only when their exact Frame replaces its document.
+      const isMainFrame = frame === page.mainFrame();
+      const targetWasBound = state.roleRefsTargetKey !== undefined;
+      if (!targetWasBound) {
+        // Target discovery is asynchronous. Remember an early navigation so
+        // binding removes only cache generations that already existed. Refs a
+        // newer Page stores after this event must survive the delayed lookup.
+        if (isMainFrame) {
+          state.roleRefsInvalidBeforeGeneration = roleRefsCacheGeneration;
+        } else {
+          state.roleRefsAriaInvalidBeforeGeneration = roleRefsCacheGeneration;
+        }
+      }
+      const pageWideAriaRefs =
+        state.roleRefsMode === "aria" || currentTargetRoleRefsMode(state) === "aria";
+      if (isMainFrame || pageWideAriaRefs || frame === state.roleRefsFrame) {
+        // Replacement Page objects restore from this target cache, so local
+        // clearing alone could resurrect refs from the previous document.
+        clearRoleRefs(state);
+      }
+    });
+    page.on("framedetached", (frame) => {
+      if (!state.roleRefsTargetKey) {
+        if (frame === page.mainFrame()) {
+          state.roleRefsInvalidBeforeGeneration = roleRefsCacheGeneration;
+        } else {
+          state.roleRefsAriaInvalidBeforeGeneration = roleRefsCacheGeneration;
+        }
+      }
+      const pageWideAriaRefs =
+        state.roleRefsMode === "aria" || currentTargetRoleRefsMode(state) === "aria";
+      if (pageWideAriaRefs || frame === state.roleRefsFrame) {
+        clearRoleRefs(state);
+      }
+    });
     page.on("close", () => {
       clearArmedDialogResponse(state);
       for (const controller of state.dialogAbortControllers) {
@@ -865,7 +1153,7 @@ function resolvePendingDialogForResponse(params: {
     throw new Error(`Dialog "${dialogId}" is not pending.`);
   }
   if (params.state.pendingDialogs.length === 1) {
-    return params.state.pendingDialogs[0];
+    return expectDefined(params.state.pendingDialogs.at(0), "single pending browser dialog");
   }
   if (params.state.pendingDialogs.length > 1) {
     throw new Error("Multiple dialogs are pending; pass dialogId.");
@@ -1043,7 +1331,7 @@ async function connectBrowser(cdpUrl: string, ssrfPolicy?: SsrFPolicy): Promise<
     return await connecting.promise;
   }
 
-  const connectionAttempt = { cancelled: false };
+  const connectionAttempt: PendingBrowserConnection["attempt"] = { cancelled: false };
   const connectWithRetry = async (): Promise<ConnectedBrowser> => {
     let lastErr: unknown;
     for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -1080,7 +1368,8 @@ async function connectBrowser(cdpUrl: string, ssrfPolicy?: SsrFPolicy): Promise<
           browser = await connectEndpoint(normalized);
         }
         if (connectionAttempt.cancelled) {
-          browser.close().catch(() => {});
+          connectionAttempt.retired = { browser, cdpUrl: normalized };
+          void closeTrackedPlaywrightConnection(connectionAttempt.retired).catch(() => {});
           throw new Error("Playwright connection attempt was superseded.");
         }
         const onDisconnected = () => {
@@ -1143,6 +1432,7 @@ async function partitionAccessiblePages(opts: { cdpUrl: string; pages: Page[] })
       blockedCount += 1;
       continue;
     }
+    ensurePageState(page);
     const targetId = await pageTargetId(page).catch(() => null);
     // Fail closed when we cannot resolve a target id while this session has
     // quarantined targets; otherwise a blocked tab can become selectable.
@@ -1158,6 +1448,7 @@ async function partitionAccessiblePages(opts: { cdpUrl: string; pages: Page[] })
       blockedCount += 1;
       continue;
     }
+    bindRoleRefsTarget(page, opts.cdpUrl, targetId);
     accessible.push({ page, targetId });
   }
   return { accessible, blockedCount };
@@ -1198,13 +1489,15 @@ async function getPageForTargetIdOnce(opts: {
     }
     throw new Error("No pages available in the connected browser.");
   }
-  const first = accessible[0].page;
+  const first = expectDefined(accessible.at(0), "non-empty accessible browser pages");
   if (!opts.targetId) {
-    return first;
+    bindRoleRefsTarget(first.page, opts.cdpUrl, first.targetId);
+    return first.page;
   }
-  const found = accessible.find((entry) => entry.targetId === opts.targetId)?.page;
+  const found = accessible.find((entry) => entry.targetId === opts.targetId);
   if (found) {
-    return found;
+    bindRoleRefsTarget(found.page, opts.cdpUrl, found.targetId);
+    return found.page;
   }
   throw new BrowserTabNotFoundError();
 }
@@ -1222,7 +1515,7 @@ export async function getPageForTargetId(opts: {
     if (!isRecoverableStalePageSelectionError(err, reusedCachedBrowser)) {
       throw err;
     }
-    await closePlaywrightBrowserConnection({ cdpUrl: opts.cdpUrl });
+    retirePlaywrightBrowserConnection({ cdpUrl: opts.cdpUrl });
     return await getPageForTargetIdOnce(opts);
   }
 }
@@ -1699,9 +1992,7 @@ export function refLocator(page: Page, ref: string) {
   if (/^e\d+$/.test(normalized)) {
     const state = pageStates.get(page);
     if (state?.roleRefsMode === "aria") {
-      const scope = state.roleRefsFrameSelector
-        ? page.frameLocator(state.roleRefsFrameSelector)
-        : page;
+      const scope = state.roleRefsFrame ?? page;
       return scope.locator(`aria-ref=${normalized}`);
     }
     const info = state?.roleRefs?.[normalized];
@@ -1710,9 +2001,7 @@ export function refLocator(page: Page, ref: string) {
         `Unknown ref "${normalized}". Run a new snapshot and use a ref from that snapshot.`,
       );
     }
-    const scope = state?.roleRefsFrameSelector
-      ? page.frameLocator(state.roleRefsFrameSelector)
-      : page;
+    const scope = state?.roleRefsFrame ?? page;
     const locAny = scope as unknown as {
       getByRole: (
         role: never,
@@ -1733,9 +2022,7 @@ export function refLocator(page: Page, ref: string) {
         `Unknown ref "${normalized}". Run a new snapshot and use a ref from that snapshot.`,
       );
     }
-    const scope = state.roleRefsFrameSelector
-      ? page.frameLocator(state.roleRefsFrameSelector)
-      : page;
+    const scope = state.roleRefsFrame ?? page;
     if (info.domMarker) {
       return scope.locator(`[${BROWSER_REF_MARKER_ATTRIBUTE}="${normalized}"]`);
     }
@@ -1759,29 +2046,27 @@ export async function closePlaywrightBrowserConnection(opts?: { cdpUrl?: string 
   const normalized = opts?.cdpUrl ? normalizeCdpUrl(opts.cdpUrl) : null;
 
   if (normalized) {
-    clearBlockedTargetsForCdpUrl(normalized);
-    clearBlockedPageRefsForCdpUrl(normalized);
-    const cur = takeCachedPlaywrightBrowserConnection(normalized);
-    if (!cur) {
-      return;
-    }
-    await cur.browser.close().catch(() => {});
+    await retirePlaywrightBrowserConnectionExact({ cdpUrl: normalized }).close();
     return;
   }
 
-  const connections = Array.from(cachedByCdpUrl.values());
-  for (const pending of connectingByCdpUrl.values()) {
-    pending.attempt.cancelled = true;
-  }
+  const cdpUrls = new Set([
+    ...cachedByCdpUrl.keys(),
+    ...connectingByCdpUrl.keys(),
+    ...retainedClosingByCdpUrl.keys(),
+  ]);
   clearBlockedTargetsForCdpUrl();
   clearBlockedPageRefsForCdpUrl();
-  cachedByCdpUrl.clear();
-  connectingByCdpUrl.clear();
-  for (const cur of connections) {
-    if (cur.onDisconnected && typeof cur.browser.off === "function") {
-      cur.browser.off("disconnected", cur.onDisconnected);
-    }
-    await cur.browser.close().catch(() => {});
+  const results = await Promise.allSettled(
+    [...cdpUrls].map(
+      async (cdpUrl) => await retirePlaywrightBrowserConnectionExact({ cdpUrl }).close(),
+    ),
+  );
+  const failed = results.find(
+    (result): result is PromiseRejectedResult => result.status === "rejected",
+  );
+  if (failed) {
+    throw failed.reason;
   }
 }
 
@@ -1916,7 +2201,7 @@ export async function forceDisconnectPlaywrightForTarget(opts: {
   }
 
   // Fire-and-forget: don't await because browser.close() may hang on the stuck CDP pipe.
-  cur.browser.close().catch(() => {});
+  void closeTrackedPlaywrightConnection(cur).catch(() => {});
 }
 
 async function withPlaywrightSafeReadReconnect<T>(

@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 // and WebSocket surfaces, config reload hooks, and graceful restart/shutdown.
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { WORKER_PROTOCOL_FEATURES } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { getActiveBackgroundExecSessionCount } from "../agents/bash-process-registry.js";
 import {
   getActiveEmbeddedRunCount,
@@ -86,6 +87,7 @@ import {
   type GatewayMethodRegistry,
 } from "./methods/registry.js";
 import { isLoopbackHost } from "./net.js";
+import { disposeNodeConnectionNotifications } from "./node-connection-notifications.js";
 import { createNodeReapprovalCoordinator } from "./node-reapproval-coordinator.js";
 import { resolveGatewayStartupPluginActivationConfig } from "./plugin-activation-runtime-config.js";
 import {
@@ -137,14 +139,20 @@ import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-
 import type { WorkerBundleProducer, WorkerNpmArtifact } from "./worker-environments/bundle.js";
 import { createWorkerEnvironmentService } from "./worker-environments/service.js";
 import { createWorkerEnvironmentStore } from "./worker-environments/store.js";
+import { createWorkerTranscriptCommitter } from "./worker-environments/transcript-commit.js";
 
 type LoadGatewayModelCatalog = typeof import("./server-model-catalog.js").loadGatewayModelCatalog;
+type LoadGatewayModelCatalogSnapshot =
+  typeof import("./server-model-catalog.js").loadGatewayModelCatalogSnapshot;
 
 const loadGatewayModelCatalogModule = createLazyRuntimeModule(
   () => import("./server-model-catalog.js"),
 );
 const loadWorkerEnvironmentRuntimeModule = createLazyRuntimeModule(
   () => import("./worker-environments/runtime.js"),
+);
+const loadWorkerTunnelRuntimeModule = createLazyRuntimeModule(
+  () => import("./worker-environments/tunnel.js"),
 );
 
 export async function resetModelCatalogCacheForTest(): Promise<void> {
@@ -209,6 +217,10 @@ const loadGatewayCloseModule = createLazyRuntimeModule(() => import("./server-cl
 const loadGatewayModelCatalog: LoadGatewayModelCatalog = async (...args) => {
   const mod = await loadGatewayModelCatalogModule();
   return mod.loadGatewayModelCatalog(...args);
+};
+const loadGatewayModelCatalogSnapshot: LoadGatewayModelCatalogSnapshot = async (...args) => {
+  const mod = await loadGatewayModelCatalogModule();
+  return mod.loadGatewayModelCatalogSnapshot(...args);
 };
 
 const loadGatewayPluginBootstrapModule = createLazyRuntimeModule(
@@ -752,9 +764,14 @@ export async function startGatewayServer(
     hasWorkerEnvironmentRecords;
   let workerBundleProducer: WorkerBundleProducer | undefined;
   let workerNpmArtifact: Promise<WorkerNpmArtifact> | undefined;
+  let resolveWorkerGatewayEndpoint: () =>
+    | { host: "127.0.0.1" | "::1"; port: number }
+    | undefined = () => undefined;
   const prepareWorkerInstallation = async (install: "bundle" | "npm") => {
     const workerEnvironmentRuntime = await loadWorkerEnvironmentRuntimeModule();
-    workerBundleProducer ??= workerEnvironmentRuntime.createWorkerBundleProducer();
+    workerBundleProducer ??= workerEnvironmentRuntime.createWorkerBundleProducer({
+      protocolFeatures: WORKER_PROTOCOL_FEATURES,
+    });
     const bundle = await workerBundleProducer.prepare();
     if (install === "bundle") {
       return bundle;
@@ -767,6 +784,10 @@ export async function startGatewayServer(
       });
     return await workerNpmArtifact;
   };
+  const workerTunnelManager =
+    workerEnvironmentStore && shouldStartWorkerEnvironmentService
+      ? (await loadWorkerTunnelRuntimeModule()).createWorkerTunnelManager()
+      : undefined;
   const workerEnvironmentService =
     workerEnvironmentStore && shouldStartWorkerEnvironmentService
       ? createWorkerEnvironmentService({
@@ -774,7 +795,29 @@ export async function startGatewayServer(
           getConfig: getRuntimeConfig,
           resolveProvider: (providerId) => resolveWorkerProvider(pluginRegistry, providerId),
           prepareInstallation: prepareWorkerInstallation,
-          bootstrapWorker: async ({ sshEndpoint, installation, signal }) => {
+          tunnelManager: workerTunnelManager,
+          resolveWorkerGateway: () => resolveWorkerGatewayEndpoint(),
+          applyTranscriptCommit: createWorkerTranscriptCommitter({
+            getConfig: getRuntimeConfig,
+          }).commit,
+          resolveSshIdentity: async ({ provider, leaseId, profile, keyRef }) => {
+            const workerEnvironmentRuntime = await loadWorkerEnvironmentRuntimeModule();
+            return await workerEnvironmentRuntime.resolveWorkerSshIdentity({
+              provider,
+              leaseId,
+              profile,
+              keyRef,
+              resolveGeneric: async (genericKeyRef) => ({
+                kind: "material",
+                contents: await workerEnvironmentRuntime.resolveSecretRefString(genericKeyRef, {
+                  config:
+                    getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig ?? getRuntimeConfig(),
+                  env: getActiveSecretsRuntimeEnv(),
+                }),
+              }),
+            });
+          },
+          bootstrapWorker: async ({ sshEndpoint, installation, resolveIdentity, signal }) => {
             const workerEnvironmentRuntime = await loadWorkerEnvironmentRuntimeModule();
             return await workerEnvironmentRuntime.bootstrapWorker(
               {
@@ -784,14 +827,7 @@ export async function startGatewayServer(
               },
               {
                 signal,
-                resolveIdentity: async (keyRef) => ({
-                  kind: "material",
-                  contents: await workerEnvironmentRuntime.resolveSecretRefString(keyRef, {
-                    config:
-                      getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig ?? getRuntimeConfig(),
-                    env: getActiveSecretsRuntimeEnv(),
-                  }),
-                }),
+                resolveIdentity,
               },
             );
           },
@@ -906,10 +942,7 @@ export async function startGatewayServer(
 
   const wizardRunner = opts.wizardRunner ?? runDefaultSetupWizard;
   const { wizardSessions, findRunningWizard, purgeWizardSession } = createWizardSessionTracker();
-  const crestodianSessions = new Map<
-    string,
-    import("./server-methods/crestodian.js").CrestodianChatSession
-  >();
+  const crestodianSessions: GatewayRequestContext["crestodianSessions"] = new Map();
 
   const deps = createDefaultDeps();
   let runtimeState: GatewayServerLiveState | null = null;
@@ -984,6 +1017,8 @@ export async function startGatewayServer(
     chatAbortControllers,
     chatQueuedTurns,
     toolEventRecipients,
+    getWorkerIngressEndpoint,
+    getMcpAppSandboxPort,
   } = await startupTrace.measure("runtime.state", () =>
     createGatewayRuntimeState({
       cfg: cfgAtStart,
@@ -1015,8 +1050,10 @@ export async function startGatewayServer(
       getReadiness,
       handleWatchNodeRequest: async (req, res) =>
         (await watchNodeRequestHandler.current?.(req, res)) ?? false,
+      workerIngressEnabled: Boolean(workerEnvironmentService),
     }),
   );
+  resolveWorkerGatewayEndpoint = getWorkerIngressEndpoint;
   const restartRecoveryCandidates = new Map<string, RestartRecoveryCandidate>();
   const { createGatewayNodeSessionRuntime } = await import("./server-node-session-runtime.js");
   const {
@@ -1031,7 +1068,12 @@ export async function startGatewayServer(
     nodeUnsubscribeAll,
     broadcastVoiceWakeChanged,
     hasTalkNodeConnected,
-  } = createGatewayNodeSessionRuntime({ broadcast });
+  } = createGatewayNodeSessionRuntime({
+    broadcast,
+    listRegisteredNodePluginToolCommands: () => pluginRegistry.nodeHostCommands,
+    nodePluginToolsEnabled: cfgAtStart.gateway?.nodes?.pluginTools?.enabled !== false,
+    nodeSkillsEnabled: cfgAtStart.gateway?.nodes?.skills?.enabled !== false,
+  });
   const { createWatchNodeHttpRuntime } = await import("./watch-node-http.js");
   const watchNodeHttpRuntime = createWatchNodeHttpRuntime({
     nodeRegistry,
@@ -1057,6 +1099,7 @@ export async function startGatewayServer(
       incrementPresenceVersion();
       recordRemoteNodeInfo({
         nodeId: session.nodeId,
+        connId: session.connId,
         displayName: session.displayName,
         platform: session.platform,
         deviceFamily: session.deviceFamily,
@@ -1136,6 +1179,7 @@ export async function startGatewayServer(
   };
   const runClosePrelude = async () => {
     markClosePreludeStarted();
+    disposeNodeConnectionNotifications(nodeRegistry);
     watchNodeHttpRuntime.close();
     clearPluginMetadataLifecycleCaches();
     const { runGatewayClosePrelude } = await loadGatewayCloseModule();
@@ -1155,7 +1199,11 @@ export async function startGatewayServer(
       },
       disposeBrowserAuthRateLimiter: () => browserAuthRateLimiter.dispose(),
       stopModelPricingRefresh: runtimeState.stopModelPricingRefresh,
-      stopChannelHealthMonitor: () => runtimeState?.channelHealthMonitor?.stop(),
+      stopChannelHealthMonitor: async () => {
+        const monitor = runtimeState?.channelHealthMonitor;
+        monitor?.shutdown();
+        await monitor?.waitForIdle();
+      },
       stopReadinessEventLoopHealth: readinessEventLoopHealth.stop,
       clearSecretsRuntimeSnapshot,
       closeMcpServer: closeMcpLoopbackServerOnDemand,
@@ -1437,6 +1485,7 @@ export async function startGatewayServer(
       pinActivePluginHttpRouteRegistry(pluginRegistry);
       pinActivePluginSessionExtensionRegistry(pluginRegistry);
       pinActivePluginChannelRegistry(pluginRegistry);
+      nodeRegistry.refreshNodePluginTools();
     };
     const refreshAttachedGatewayDiscovery = async (nextPluginRegistry: typeof pluginRegistry) => {
       if (minimalTestGateway) {
@@ -1605,12 +1654,14 @@ export async function startGatewayServer(
           deps,
           runtimeState,
           getRuntimeConfig,
+          getMcpAppSandboxPort,
           resolveTerminalLaunchPolicy: terminalLaunchPolicy.resolve,
           isTerminalEnabled: terminalLaunchPolicy.isEnabled,
           execApprovalManager,
           forwardPluginApprovalRequest,
           pluginApprovalManager,
           loadGatewayModelCatalog,
+          loadGatewayModelCatalogSnapshot,
           getHealthCache,
           refreshHealthSnapshot: refreshGatewayHealthSnapshotWithRuntime,
           logHealth,
@@ -1747,6 +1798,7 @@ export async function startGatewayServer(
         logWsControl,
         extraHandlers: attachedGatewayExtraHandlers,
         getMethodRegistry: () => attachedGatewayMethodRegistry,
+        ...(workerEnvironmentService ? { workerConnectionService: workerEnvironmentService } : {}),
         broadcast,
         context: gatewayRequestContext,
       }),

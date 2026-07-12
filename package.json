@@ -173,6 +173,7 @@
     "src/agents/templates/",
     "scripts/crabbox-wrapper-providers.mjs",
     "scripts/crabbox-wrapper.mjs",
+    "scripts/testbox-lease-freshness.mjs",
     "patches/",
     "skills/",
     "scripts/npm-runner.mjs",
@@ -288,6 +289,10 @@
     "./plugin-sdk/approval-gateway-runtime": {
       "types": "./dist/plugin-sdk/approval-gateway-runtime.d.ts",
       "default": "./dist/plugin-sdk/approval-gateway-runtime.js"
+    },
+    "./plugin-sdk/approval-reference-runtime": {
+      "types": "./dist/plugin-sdk/approval-reference-runtime.d.ts",
+      "default": "./dist/plugin-sdk/approval-reference-runtime.js"
     },
     "./plugin-sdk/approval-handler-adapter-runtime": {
       "types": "./dist/plugin-sdk/approval-handler-adapter-runtime.d.ts",
@@ -452,6 +457,10 @@
     "./plugin-sdk/heartbeat-runtime": {
       "types": "./dist/plugin-sdk/heartbeat-runtime.d.ts",
       "default": "./dist/plugin-sdk/heartbeat-runtime.js"
+    },
+    "./plugin-sdk/expect-runtime": {
+      "types": "./dist/plugin-sdk/expect-runtime.d.ts",
+      "default": "./dist/plugin-sdk/expect-runtime.js"
     },
     "./plugin-sdk/number-runtime": {
       "types": "./dist/plugin-sdk/number-runtime.d.ts",
@@ -989,6 +998,10 @@
       "types": "./dist/plugin-sdk/session-binding-runtime.d.ts",
       "default": "./dist/plugin-sdk/session-binding-runtime.js"
     },
+    "./plugin-sdk/session-catalog": {
+      "types": "./dist/plugin-sdk/session-catalog.d.ts",
+      "default": "./dist/plugin-sdk/session-catalog.js"
+    },
     "./plugin-sdk/session-key-runtime": {
       "types": "./dist/plugin-sdk/session-key-runtime.d.ts",
       "default": "./dist/plugin-sdk/session-key-runtime.js"
@@ -1520,7 +1533,7 @@
     "audit:seams": "node scripts/audit-seams.mjs",
     "build": "node scripts/build-all.mjs",
     "build:ci-artifacts": "node scripts/build-all.mjs ciArtifacts",
-    "build:docker": "node scripts/tsdown-build.mjs && node scripts/check-cli-bootstrap-imports.mjs && node scripts/runtime-postbuild.mjs && node scripts/build-stamp.mjs && node scripts/runtime-postbuild-stamp.mjs && pnpm plugins:assets:build && pnpm plugins:assets:copy && node --import tsx scripts/copy-hook-metadata.ts && node --import tsx scripts/copy-export-html-templates.ts && node --import tsx scripts/write-build-info.ts && node --import tsx scripts/write-cli-startup-metadata.ts && node --import tsx scripts/write-cli-compat.ts",
+    "build:docker": "node scripts/tsdown-build.mjs && node scripts/check-cli-bootstrap-imports.mjs && node scripts/runtime-postbuild.mjs && node scripts/build-stamp.mjs && node scripts/runtime-postbuild-stamp.mjs && pnpm plugins:assets:build && pnpm plugins:assets:copy && node --import tsx scripts/copy-hook-metadata.ts && node --import tsx scripts/copy-export-html-templates.ts && node --import tsx scripts/write-build-info.ts && node --import tsx scripts/write-cli-startup-metadata.ts",
     "build:plugin-sdk:dts": "node scripts/run-tsgo.mjs -p tsconfig.plugin-sdk.dts.json --declaration true",
     "build:plugin-sdk:strict-smoke": "node scripts/tsdown-build.mjs && node scripts/runtime-postbuild.mjs && node scripts/run-with-env.mjs OPENCLAW_PLUGIN_SDK_CANONICAL_DTS=1 -- node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node scripts/check-plugin-sdk-exports.mjs",
     "build:strict-smoke": "pnpm plugins:assets:build && node scripts/tsdown-build.mjs && node scripts/check-cli-bootstrap-imports.mjs && node scripts/runtime-postbuild.mjs && node scripts/build-stamp.mjs && node scripts/runtime-postbuild-stamp.mjs && node scripts/run-with-env.mjs OPENCLAW_PLUGIN_SDK_CANONICAL_DTS=1 -- node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node scripts/check-plugin-sdk-exports.mjs",
@@ -1689,6 +1702,7 @@
     "lint:tmp:session-accessor-boundary": "node scripts/check-session-accessor-boundary.mjs",
     "lint:tmp:session-accessor-boundary:gen": "node scripts/check-session-accessor-boundary.mjs --update-debt-baseline",
     "lint:tmp:session-transcript-reader-boundary": "node scripts/check-session-transcript-reader-boundary.mjs",
+    "lint:tmp:sqlite-transaction-boundary": "node scripts/check-sqlite-transaction-boundary.mjs",
     "lint:tmp:tsgo-core-boundary": "node scripts/check-tsgo-core-boundary.mjs",
     "lint:ui:no-raw-window-open": "node scripts/check-no-raw-window-open.mjs",
     "lint:web-fetch-provider-boundaries": "node scripts/check-web-fetch-provider-boundaries.mjs",
@@ -1773,6 +1787,8 @@
     "release:version": "node --import tsx scripts/release-version.ts",
     "runtime-sidecars:check": "node --import tsx scripts/generate-runtime-sidecar-paths-baseline.ts --check",
     "runtime-sidecars:gen": "node --import tsx scripts/generate-runtime-sidecar-paths-baseline.ts --write",
+    "sqlite:sessions-schema:check": "node --import tsx scripts/generate-sqlite-session-schema-baseline.ts --check",
+    "sqlite:sessions-schema:gen": "node --import tsx scripts/generate-sqlite-session-schema-baseline.ts --write",
     "start": "node openclaw.mjs",
     "test": "node scripts/test-projects.mjs",
     "test:all": "pnpm lint && pnpm build && pnpm test && pnpm test:e2e && pnpm test:live && pnpm test:docker:all",
@@ -1797,7 +1813,6 @@
     "test:docker:commitments-safety": "bash scripts/e2e/commitments-safety-docker.sh",
     "test:docker:config-reload": "bash scripts/e2e/config-reload-source-docker.sh",
     "test:docker:crestodian-first-run": "bash scripts/e2e/crestodian-first-run-docker.sh",
-    "test:docker:crestodian-planner": "bash scripts/e2e/crestodian-planner-docker.sh",
     "test:docker:crestodian-rescue": "bash scripts/e2e/crestodian-rescue-docker.sh",
     "test:docker:cron-cli": "bash scripts/e2e/cron-cli-docker.sh",
     "test:docker:cron-mcp-cleanup": "bash scripts/e2e/cron-mcp-cleanup-docker.sh",
@@ -1941,7 +1956,7 @@
     "test:startup:gateway": "node --import tsx scripts/bench-gateway-startup.ts",
     "test:restart:gateway": "node --import tsx scripts/bench-gateway-restart.ts",
     "test:startup:memory": "node scripts/ensure-cli-startup-build.mjs && node scripts/check-cli-startup-memory.mjs",
-    "test:ui": "pnpm ui:i18n:check && pnpm lint:ui:no-raw-window-open && node scripts/ensure-playwright-chromium.mjs && pnpm --dir ui test",
+    "test:ui": "pnpm lint:ui:no-raw-window-open && node scripts/ensure-playwright-chromium.mjs && pnpm --dir ui test",
     "test:ui:e2e": "node scripts/ensure-playwright-chromium.mjs && node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner",
     "test:unit": "pnpm test:unit:fast && node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts",
     "test:unit:fast": "node scripts/run-vitest.mjs run --config test/vitest/vitest.unit-fast.config.ts",

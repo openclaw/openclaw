@@ -28,6 +28,14 @@ export const WorkerEnvironmentStateSchema = Type.Union([
   Type.Literal("orphaned"),
 ]);
 
+/** Process-local SSH tunnel connectivity for a worker environment. */
+export const WorkerTunnelStatusSchema = Type.Union([
+  Type.Literal("stopped"),
+  Type.Literal("connecting"),
+  Type.Literal("connected"),
+  Type.Literal("reconnecting"),
+]);
+
 /** Worker-only lifecycle metadata layered onto the existing environment projection. */
 export const WorkerEnvironmentMetadataSchema = Type.Object(
   {
@@ -37,6 +45,7 @@ export const WorkerEnvironmentMetadataSchema = Type.Object(
     ageMs: Type.Integer({ minimum: 0 }),
     idleMs: Type.Optional(Type.Integer({ minimum: 0 })),
     attachedSessionIds: Type.Array(NonEmptyString),
+    tunnelStatus: WorkerTunnelStatusSchema,
   },
   { additionalProperties: false },
 );
@@ -98,6 +107,7 @@ export const EnvironmentsDestroyResultSchema = createEnvironmentSummarySchema();
 
 export type EnvironmentStatus = Static<typeof EnvironmentStatusSchema>;
 export type WorkerEnvironmentState = Static<typeof WorkerEnvironmentStateSchema>;
+export type WorkerTunnelStatus = Static<typeof WorkerTunnelStatusSchema>;
 export type WorkerEnvironmentMetadata = Static<typeof WorkerEnvironmentMetadataSchema>;
 export type EnvironmentSummary = Static<typeof EnvironmentSummarySchema>;
 export type EnvironmentsCreateParams = Static<typeof EnvironmentsCreateParamsSchema>;

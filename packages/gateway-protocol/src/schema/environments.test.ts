@@ -37,6 +37,7 @@ function workerSummary(
       state,
       ageMs: 250,
       attachedSessionIds: [],
+      tunnelStatus: "stopped",
     },
   };
 }
