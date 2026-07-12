@@ -1561,7 +1561,7 @@ describe("shared Codex app-server client", () => {
     vi.spyOn(CodexAppServerClient, "start").mockReturnValueOnce(harness.client);
 
     const clientPromise = getLeasedSharedCodexAppServerClient({ timeoutMs: 1000 });
-    await sendInitializeResult(harness, "openclaw/0.142.0 (macOS; test)");
+    await sendInitializeResult(harness, "openclaw/0.143.0 (Linux; test)");
     const client = await clientPromise;
     const deliverCompletion = vi.fn(async () => ({ delivered: true, path: "direct" as const }));
     const taskRuntime = {
