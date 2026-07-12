@@ -107,7 +107,7 @@ struct PrivacyAccessSectionView: View {
             if let healthError {
                 Text(healthError)
                     .font(OpenClawType.footnote)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(OpenClawBrand.danger)
             }
         } label: {
             Text("Privacy & Access")
@@ -405,10 +405,16 @@ struct PrivacyAccessSectionView: View {
         }
         if self.healthEnabled {
             return LocalizedStringResource(
-                "Shares only requested step, sleep, resting heart rate, and workout aggregates through your Gateway with your configured AI provider. Results may remain in chat history.")
+                """
+                Shares only requested step, sleep, resting heart rate, and workout aggregates through your Gateway \
+                with your configured AI provider. Results may remain in chat history.
+                """)
         }
         return LocalizedStringResource(
-            "Off by default. Enabling lets requested aggregates leave this iPhone through your Gateway and configured AI provider.")
+            """
+            Off by default. Enabling lets requested aggregates leave this iPhone through your Gateway and configured \
+            AI provider.
+            """)
     }
 
     private var healthActionTitle: LocalizedStringResource? {
