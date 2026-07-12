@@ -49,6 +49,7 @@ type TestChatPane = HTMLElement & {
   loadOlderMessages: () => Promise<void>;
   hasOlderMessages: () => boolean;
   catalogCursor: string | undefined;
+  olderCursorsSeen: Set<string>;
 };
 
 const suggestion: TaskSuggestion = {
@@ -469,6 +470,34 @@ describe("chat pane catalog session lifecycle", () => {
 
     expect(progressed).toBe(true);
     expect(pane.catalogCursor).toBe("cursor-2");
+  });
+
+  it("exhausts pagination when an older read cycles back to a visited cursor", async () => {
+    const readPage: SessionsCatalogReadResult = {
+      hostId: "gateway:local",
+      threadId: "thread-1",
+      items: [{ id: "x1", type: "other" }],
+      // Cursor points back to one already visited this session: a c1 -> c2 -> c1
+      // cycle that would otherwise loop forever on empty pages.
+      nextCursor: "cursor-1",
+    };
+    const client = {
+      request: vi.fn(async () => readPage),
+    } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const key = "catalog:claude:gateway%3Alocal:thread-1";
+    state.sessionKey = key;
+    pane.sessionKey = key;
+    pane.catalogCursor = "cursor-2";
+    pane.olderCursorsSeen.add("cursor-1");
+
+    const progressed = await pane.loadCatalogSession(
+      { catalogId: "claude", hostId: "gateway:local", threadId: "thread-1" },
+      true,
+    );
+
+    expect(progressed).toBe(false);
+    expect(pane.catalogCursor).toBeUndefined();
   });
 
   it("re-arms a failed older-page load only after another user scroll", () => {

@@ -286,6 +286,10 @@ class ChatPane extends OpenClawLightDomElement {
   private historyObserverArmed = false;
   private historyAutoLoadBlocked = false;
   private pendingHistoryAnchor: ChatHistoryAnchor | null = null;
+  // Older cursors already requested this session. A provider that cycles cursors
+  // (c1 -> c2 -> c1) on empty/duplicate pages would otherwise loop forever, since
+  // the sentinel never scrolls out of view when nothing new renders.
+  private readonly olderCursorsSeen = new Set<string>();
 
   private captureConnectionScope(): ChatPaneConnectionScope | null {
     const context = this.context;
@@ -782,6 +786,7 @@ class ChatPane extends OpenClawLightDomElement {
     if (!older) {
       this.catalogLoading = true;
       this.catalogCursor = undefined;
+      this.olderCursorsSeen.clear();
       this.historyObserverArmed = false;
       this.historyObserver?.disconnect();
       this.historyObserver = null;
@@ -818,6 +823,9 @@ class ChatPane extends OpenClawLightDomElement {
         }
       }
       const requestedOlderCursor = older ? this.catalogCursor : undefined;
+      if (requestedOlderCursor) {
+        this.olderCursorsSeen.add(requestedOlderCursor);
+      }
       const page = await client.request<SessionsCatalogReadResult>("sessions.catalog.read", {
         catalogId: key.catalogId,
         hostId: key.hostId,
@@ -834,14 +842,16 @@ class ChatPane extends OpenClawLightDomElement {
         .filter((message) => message !== null);
       const nextMessages = older ? this.prependUniqueCatalogMessages(messages) : messages;
       const grew = nextMessages.length > this.catalogMessages.length;
-      // Exhaust only when the cursor cannot advance (absent or unchanged): that is
-      // the sole proof no more history exists, and it stops the re-armed observer
-      // from re-issuing the identical request in an unbounded loop. An advancing
-      // cursor with no newly rendered messages (a page that is entirely filtered
-      // or duplicate) must keep paging — real older history may sit behind it, and
-      // each request advances toward a real end.
+      // Exhaust when the cursor cannot make new forward progress: absent, unchanged,
+      // or already visited this session (a provider cycling c1 -> c2 -> c1). Any of
+      // these stops the re-armed observer from looping. An advancing, never-seen
+      // cursor with no newly rendered messages (an entirely filtered/duplicate page)
+      // must keep paging — real older history may sit behind it.
       const olderExhausted =
-        older && (!page.nextCursor || page.nextCursor === requestedOlderCursor);
+        older &&
+        (!page.nextCursor ||
+          page.nextCursor === requestedOlderCursor ||
+          this.olderCursorsSeen.has(page.nextCursor));
       this.pendingHistoryAnchor =
         older && grew ? this.currentHistoryAnchor(state.sessionKey) : null;
       this.catalogMessages = nextMessages;
@@ -883,6 +893,7 @@ class ChatPane extends OpenClawLightDomElement {
     this.historyObserverArmed = false;
     this.historyAutoLoadBlocked = false;
     this.pendingHistoryAnchor = null;
+    this.olderCursorsSeen.clear();
     this.historyObserver?.disconnect();
     this.historyObserver = null;
   }
