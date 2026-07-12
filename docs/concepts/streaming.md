@@ -50,6 +50,14 @@ Model output
 newline, before falling back to length chunking once the text exceeds the
 limit.
 
+Channels with a nested `streaming` config (Telegram, Discord, Slack, iMessage,
+Microsoft Teams) spell these overrides as
+`channels.<id>.streaming.{chunkMode,block.enabled,block.coalesce}`; the flat
+`*.chunkMode` / `*.blockStreaming` / `*.blockStreamingCoalesce` spellings apply
+to channels without one (for example Signal, IRC, Google Chat, WhatsApp,
+Mattermost). Stale flat keys on nested-streaming channels are migrated by
+`openclaw doctor --fix` and are not read at runtime.
+
 **Boundary semantics** for `blockStreamingBreak`:
 
 - `text_end`: stream blocks as soon as the chunker emits; flush on each `text_end`.
@@ -146,7 +154,10 @@ block delivery there. Use `streaming.block.enabled` (or the legacy
 `blockStreaming` channel key) for normal block replies. Microsoft Teams is the
 exception: it has no draft-preview block transport, so `streaming.mode:
 "block"` disables native streaming entirely and the reply lands as regular
-block delivery instead of native partial/progress streaming.
+block delivery instead of native partial/progress streaming. Mattermost also
+differs: in `block` mode it rotates the preview between completed text and
+tool-activity blocks, so earlier blocks stay visible as separate posts
+instead of being overwritten in one editable draft.
 
 ### Channel mapping
 
@@ -218,6 +229,11 @@ Slack-only:
 - `block` mode uses draft chunking (`draftChunk`).
 - Preview streaming is skipped when Discord block streaming is explicitly
   enabled.
+- `progress` mode appends a small `-#` activity receipt (thought/tool-call
+  counts and elapsed time) to the final answer and deletes the status draft
+  once that answer is delivered, so busy channels keep no orphaned tool log
+  above the reply. Error finals keep the draft as the record of the failed
+  turn.
 - Final media, error, and explicit-reply payloads cancel pending previews
   without flushing a new draft, then use normal delivery.
 
@@ -237,8 +253,12 @@ Slack-only:
 
 ### Mattermost
 
-- Streams thinking, tool activity, and partial reply text into a single draft
+- In `partial` mode, streams thinking and partial reply text into a single draft
   preview post that finalizes in place when the final answer is safe to send.
+- In `progress` mode, streams thinking and tool activity into a single status
+  preview that finalizes in place when the final answer is safe to send.
+- In `block` mode, rotates between completed text and tool-activity posts;
+  parallel and consecutive tool updates share the current tool-activity post.
 - Falls back to sending a fresh final post if the preview post was deleted or
   is otherwise unavailable at finalize time.
 - Final media/error payloads cancel pending preview updates before normal
@@ -276,8 +296,9 @@ Supported surfaces:
   personal chats.
 - Telegram has shipped with tool-progress preview updates enabled since
   `v2026.4.22`; keeping them enabled preserves that released behavior.
-- **Mattermost** already folds tool activity into its single draft preview post
-  (see above).
+- **Mattermost** folds tool activity into one preview post in `partial` and
+  `progress` modes, or one tool-activity post between text blocks in `block`
+  mode (see above).
 - Tool-progress edits follow the active preview streaming mode; they are
   skipped when preview streaming is `off` or when block streaming has taken
   over the message. On Telegram, `streaming.mode: "off"` is final-only: generic

@@ -4,6 +4,12 @@
  * observability decisions shared across embedded-agent hot paths.
  */
 import type { TSchema } from "typebox";
+import type {
+  ModelApi,
+  ProviderModelRouteRuntimePolicy,
+  ProviderRouteOverridePresence,
+} from "../../plugin-sdk/provider-model-types.js";
+import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type { AgentTool } from "../runtime/index.js";
 
 /** Runtime transport selected for one model attempt. */
@@ -105,6 +111,20 @@ export type AgentRuntimeMessagePresentationAction =
   | {
       type: "callback";
       value: string;
+    }
+  | {
+      type: "approval";
+      approvalId: string;
+      approvalKind: "exec" | "plugin";
+      decision: "allow-once" | "allow-always" | "deny";
+    }
+  | {
+      type: "url";
+      url: string;
+    }
+  | {
+      type: "web-app";
+      url: string;
     };
 
 /** Portable action control exposed to agent runtime reply payloads. */
@@ -113,12 +133,14 @@ export type AgentRuntimeMessagePresentationButton = {
   label: string;
   /** Typed action sent when pressed. */
   action?: AgentRuntimeMessagePresentationAction;
-  /** Legacy opaque callback value sent when pressed. */
+  /** @deprecated Use action. */
   value?: string;
-  /** External URL opened by the button. */
+  /** @deprecated Use an action with type "url". */
   url?: string;
-  /** Channel-native web app URL for renderers that support embedded web apps. */
+  /** @deprecated Use an action with type "web-app". */
   webApp?: { url: string };
+  /** @deprecated Use an action with type "web-app". */
+  web_app?: { url: string };
   /** Higher values are kept first when channel action limits require dropping controls. */
   priority?: number;
   /** Disabled action hint; channels without disabled-state support render fallback text. */
@@ -132,8 +154,8 @@ export type AgentRuntimeMessagePresentationOption = {
   /** User-visible option label. */
   label: string;
   /** Typed action sent when selected. */
-  action?: AgentRuntimeMessagePresentationAction;
-  /** Legacy opaque callback value sent when selected. */
+  action?: Extract<AgentRuntimeMessagePresentationAction, { type: "command" | "callback" }>;
+  /** @deprecated Use action. */
   value?: string;
 };
 
@@ -180,6 +202,33 @@ export type AgentRuntimeMessagePresentationTone =
   | "danger"
   | "neutral";
 
+export type AgentRuntimeMessagePresentationChartBlock =
+  | {
+      type: "chart";
+      chartType: "pie";
+      title: string;
+      segments: Array<{ label: string; value: number }>;
+    }
+  | {
+      type: "chart";
+      chartType: "bar" | "area" | "line";
+      title: string;
+      categories: string[];
+      series: Array<{ name: string; values: number[] }>;
+      xLabel?: string;
+      yLabel?: string;
+    };
+
+export type AgentRuntimeMessagePresentationTableCell = string | number;
+
+export type AgentRuntimeMessagePresentationTableBlock = {
+  type: "table";
+  caption: string;
+  headers: string[];
+  rows: AgentRuntimeMessagePresentationTableCell[][];
+  rowHeaderColumnIndex?: number;
+};
+
 /** Portable structured reply block rendered or downgraded by channels. */
 export type AgentRuntimeMessagePresentationBlock =
   | {
@@ -201,7 +250,9 @@ export type AgentRuntimeMessagePresentationBlock =
       type: "select";
       placeholder?: string;
       options: AgentRuntimeMessagePresentationOption[];
-    };
+    }
+  | AgentRuntimeMessagePresentationChartBlock
+  | AgentRuntimeMessagePresentationTableBlock;
 
 /** Portable structured reply presentation for channel adapters. */
 export type AgentRuntimeMessagePresentation = {
@@ -352,13 +403,43 @@ export type AgentRuntimeResolvedRef = {
   transport?: AgentRuntimeTransport;
 };
 
+/** Concrete provider-owned route selected for one runtime attempt. */
+export type AgentRuntimeAuthModelRoute = {
+  provider: string;
+  modelId: string;
+  api: ModelApi;
+  baseUrl: string;
+  authRequirement: "api-key" | "subscription";
+  /** Secret-free request behavior that the selected runtime must reproduce. */
+  requestTransportOverrides: ProviderRouteOverridePresence;
+  /** Provider-owned native-runtime compatibility for this concrete route. */
+  runtimePolicy?: ProviderModelRouteRuntimePolicy;
+};
+
+/** Common native-runtime support proven across every route left to the harness. */
+export type AgentRuntimeAuthDeferredRouteSupport = {
+  requestTransportOverrides: ProviderRouteOverridePresence;
+  runtimePolicy: ProviderModelRouteRuntimePolicy;
+};
+
 /** Auth forwarding decision for one runtime attempt. */
 export type AgentRuntimeAuthPlan = {
   providerForAuth: string;
+  /** Model whose order, cooldown, and route facts produced this plan. */
+  modelId?: string;
   authProfileProviderForAuth: string;
   harnessAuthProvider?: string;
+  /** Preferred or user-locked profile; automatic selection may not have resolved its secret yet. */
   forwardedAuthProfileId?: string;
+  forwardedAuthProfileSource?: "auto" | "user";
+  /** Ordered exhaustive candidates for the selected route; a singleton is terminal. */
   forwardedAuthProfileCandidateIds?: string[];
+  /** Exact selected credential/config mode; secret-free route materialization input. */
+  selectedAuthMode?: string;
+  /** Concrete provider-owned route selected before runtime dispatch. */
+  modelRoute?: AgentRuntimeAuthModelRoute;
+  /** Secret-free support shared by every route deferred to harness-owned auth. */
+  deferredRouteSupport?: AgentRuntimeAuthDeferredRouteSupport;
 };
 
 /** Prompt transforms and provider contribution hooks for one runtime attempt. */
@@ -492,10 +573,15 @@ export type BuildAgentRuntimePlanParams = {
   harnessId?: string;
   harnessRuntime?: string;
   allowHarnessAuthProfileForwarding?: boolean;
+  /** Canonical route/auth decision prepared before attempt orchestration. */
+  preparedAuthPlan?: AgentRuntimeAuthPlan;
   authProfileProvider?: string;
   authProfileMode?: string;
   sessionAuthProfileId?: string;
+  sessionAuthProfileSource?: "auto" | "user";
   sessionAuthProfileCandidateIds?: string[];
+  authProfileStore?: AuthProfileStore;
+  modelRoute?: AgentRuntimeAuthModelRoute;
   agentId?: string;
   thinkingLevel?: AgentRuntimeThinkLevel;
   extraParamsOverride?: Record<string, unknown>;

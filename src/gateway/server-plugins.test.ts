@@ -113,6 +113,7 @@ function addLoadedPlugin(
 function createLookUpTableForTest(params: {
   manifestRegistry?: PluginLookUpTable["manifestRegistry"];
   pluginIds?: readonly string[];
+  workerProviderIds?: readonly string[];
 }): PluginLookUpTable {
   return {
     policyHash: "test",
@@ -148,6 +149,7 @@ function createLookUpTableForTest(params: {
       configuredDeferredChannelPluginIds: [],
       pluginIds: params.pluginIds ?? [],
     },
+    workerProviderIds: params.workerProviderIds ?? [],
     metrics: {
       registrySnapshotMs: 0,
       manifestRegistryMs: 0,
@@ -551,6 +553,44 @@ describe("loadGatewayPlugins", () => {
     });
   });
 
+  test("passes durable worker activation reasons to the runtime plugin load", () => {
+    applyPluginAutoEnable.mockReturnValue({
+      config: {},
+      changes: [],
+      autoEnabledReasons: { "qa-lab": ["static-ssh worker provider selected"] },
+    });
+    loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+
+    loadGatewayStartupPluginsForTest({
+      pluginIds: ["qa-lab"],
+      pluginLookUpTable: createLookUpTableForTest({
+        manifestRegistry: {
+          plugins: [
+            {
+              id: "qa-lab",
+              origin: "bundled",
+              channels: [],
+              providers: [],
+              cliBackends: [],
+              skills: [],
+              hooks: [],
+              rootDir: "/tmp/qa-lab",
+              source: "/tmp/qa-lab/index.js",
+              manifestPath: "/tmp/qa-lab/openclaw.plugin.json",
+              contracts: { workerProviders: ["static-ssh"] },
+            },
+          ],
+          diagnostics: [],
+        },
+        workerProviderIds: ["static-ssh"],
+      }),
+    });
+
+    expect(getLastPluginLoadOption("autoEnabledReasons")).toEqual({
+      "qa-lab": ["static-ssh durable worker lease"],
+    });
+  });
+
   test("preserves runtime defaults while applying source activation to startup loads", () => {
     const rawConfig = {
       channels: {
@@ -810,6 +850,23 @@ describe("loadGatewayPlugins", () => {
         { timeoutMs: 5 },
       ),
     ).resolves.toEqual({ status: "accepted", runId: "run-accepted" });
+  });
+
+  test("marks synthetic cron continuation calls as server-owned", async () => {
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("cron-run-continuation"));
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      expect(opts.client?.connect.client.mode).toBe("backend");
+      expect(opts.client?.internal?.cronRunContinuation).toBe(true);
+      opts.respond(true, { status: "ok" });
+    });
+
+    await expect(
+      serverPluginsModule.dispatchGatewayMethodInProcess(
+        "agent",
+        { sessionKey: "agent:main:cron:job:run:run-1" },
+        { allowSyntheticCronRunContinuation: true, forceSyntheticClient: true },
+      ),
+    ).resolves.toEqual({ status: "ok" });
   });
 
   test("uses one timeout budget across accepted and final in-process responses", async () => {

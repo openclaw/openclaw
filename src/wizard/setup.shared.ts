@@ -1,14 +1,14 @@
 // Shared setup-wizard steps used by the classic wizard and the bootstrap onboarding flow.
 import { isDeepStrictEqual } from "node:util";
+import type { GatewayAuthChoice, OnboardOptions } from "../commands/onboard-types.js";
+import { createConfigIO, replaceConfigFile, resolveGatewayPort } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   commitConfigWriteWithPendingPluginInstalls,
   hasPendingPluginInstallRecords,
   stripPendingPluginInstallRecords,
   unchangedPendingPluginInstallRecordIds,
-} from "../cli/plugins-install-record-commit.js";
-import type { GatewayAuthChoice, OnboardOptions } from "../commands/onboard-types.js";
-import { createConfigIO, replaceConfigFile, resolveGatewayPort } from "../config/config.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+} from "../plugins/install-record-commit.js";
 import { isPlainObject } from "../utils.js";
 import { t } from "./i18n/index.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
@@ -56,26 +56,39 @@ export async function writeWizardConfigFile(
   configInput: OpenClawConfig,
   opts: {
     allowConfigSizeDrop?: boolean;
+    /** Reject the write if config changed after the caller's verified snapshot. */
+    baseHash?: string;
     migrationBaseConfig?: OpenClawConfig;
     onPendingPluginInstallMigration?: () => void;
   } = {},
 ): Promise<OpenClawConfig> {
   let config = configInput;
+  let baseHash = opts.baseHash;
   const allowConfigSizeDrop = opts.allowConfigSizeDrop === true;
   if (!allowConfigSizeDrop && hasPendingPluginInstallRecords(config)) {
+    // Explicit undefined means this writer already migrated its baseline; an omitted
+    // key cannot distinguish fresh pending records from stale authored metadata.
+    if (!Object.hasOwn(opts, "migrationBaseConfig")) {
+      throw new Error(
+        "Wizard config writes with pending plugin installs must declare migration ownership.",
+      );
+    }
     const migrationBaseConfig = opts.migrationBaseConfig;
     if (migrationBaseConfig && hasPendingPluginInstallRecords(migrationBaseConfig)) {
-      await commitConfigWriteWithPendingPluginInstalls({
+      const migration = await commitConfigWriteWithPendingPluginInstalls({
         nextConfig: migrationBaseConfig,
+        sourceConfig: migrationBaseConfig,
         writeOptions: { allowConfigSizeDrop: true },
         commit: async (nextConfig, writeOptions) => {
           return await replaceConfigFile({
             nextConfig,
+            ...(baseHash !== undefined ? { baseHash } : {}),
             ...(writeOptions ? { writeOptions } : {}),
             afterWrite: { mode: "auto" },
           });
         },
       });
+      baseHash = migration.persistedHash ?? undefined;
       config = stripPendingPluginInstallRecords(
         config,
         unchangedPendingPluginInstallRecordIds(config, migrationBaseConfig),
@@ -89,6 +102,7 @@ export async function writeWizardConfigFile(
     commit: async (nextConfig, writeOptions) => {
       return await replaceConfigFile({
         nextConfig,
+        ...(baseHash !== undefined ? { baseHash } : {}),
         ...(writeOptions ? { writeOptions } : {}),
         afterWrite: { mode: "auto" },
       });

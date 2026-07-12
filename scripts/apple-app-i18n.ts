@@ -24,22 +24,29 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, string[]> = {
   ],
 };
 
-const CATALOGS = [
+type AppleCatalogSpec = {
+  path: string;
+  coverage: Record<string, readonly string[]>;
+};
+
+const CATALOGS: readonly AppleCatalogSpec[] = [
   {
     path: "apps/ios/Resources/Localizable.xcstrings",
     coverage: {
-      "apps/ios/ShareExtension/ShareViewController.swift": [
+      "apps/ios/ShareExtension/ShareComposeView.swift": [
         "Add a message, then tap Send.",
         "Cancel",
-        "Edit text, then tap Send.",
-        "Invalid saved gateway URL.",
-        "Message is empty.",
-        "OpenClaw is not connected to a gateway yet.",
         "Preparing share…",
-        "Send failed: %@",
         "Send to OpenClaw",
         "Sending to OpenClaw gateway…",
         "Sent to OpenClaw.",
+      ],
+      "apps/ios/ShareExtension/ShareViewController.swift": [
+        "Invalid saved gateway URL.",
+        "Message is empty.",
+        "OpenClaw is not connected to a gateway yet.",
+        "Send failed: %@",
+        "The shared image could not be prepared.",
       ],
       "apps/ios/Sources/Design/SettingsChannelsDestination.swift": ["Logout"],
       "apps/ios/Sources/Design/ChatProTab.swift": [
@@ -98,7 +105,7 @@ const CATALOGS = [
       "apps/macos/Sources/OpenClaw/CronSettings+Rows.swift": ["Run now"],
     },
   },
-] as const;
+];
 
 type Catalog = {
   sourceLanguage?: string;

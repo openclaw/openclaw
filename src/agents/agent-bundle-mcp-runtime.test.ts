@@ -1628,6 +1628,56 @@ process.on("SIGINT", shutdown);`,
     expect(manager.listSessionIds()).not.toContain("session-a");
   });
 
+  it("preserves agentDir scope when creating and reusing session MCP runtimes", async () => {
+    const created: Array<{ sessionId: string; agentDir?: string }> = [];
+    const disposed: Array<{ sessionId: string; agentDir?: string }> = [];
+    const createRuntime: RuntimeFactory = (params) => {
+      created.push({ sessionId: params.sessionId, agentDir: params.agentDir });
+      const runtime = makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]);
+      return {
+        ...runtime,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        workspaceDir: params.workspaceDir,
+        agentDir: params.agentDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+        dispose: async () => {
+          disposed.push({ sessionId: params.sessionId, agentDir: params.agentDir });
+        },
+      };
+    };
+    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
+
+    const runtimeA = await manager.getOrCreate({
+      sessionId: "session-agent-dir",
+      sessionKey: "agent:test:session-agent-dir",
+      workspaceDir: "/workspace",
+      agentDir: "/agents/one",
+    });
+    const runtimeB = await manager.getOrCreate({
+      sessionId: "session-agent-dir",
+      sessionKey: "agent:test:session-agent-dir",
+      workspaceDir: "/workspace",
+      agentDir: "/agents/one",
+    });
+    const runtimeC = await manager.getOrCreate({
+      sessionId: "session-agent-dir",
+      sessionKey: "agent:test:session-agent-dir",
+      workspaceDir: "/workspace",
+      agentDir: "/agents/two",
+    });
+
+    expect(runtimeA).toBe(runtimeB);
+    expect(runtimeC).not.toBe(runtimeA);
+    expect(created).toEqual([
+      { sessionId: "session-agent-dir", agentDir: "/agents/one" },
+      { sessionId: "session-agent-dir", agentDir: "/agents/two" },
+    ]);
+    expect(disposed).toEqual([{ sessionId: "session-agent-dir", agentDir: "/agents/one" }]);
+
+    await manager.disposeAll();
+  });
+
   it("peeks existing runtimes and populated catalogs without creating new runtimes", async () => {
     let catalogReady = false;
     const createRuntime: RuntimeFactory = (params) => {
@@ -2556,11 +2606,10 @@ async function handle(message) {
     };
     if (await isFirstConnect()) {
       log("slow first initialize");
-      setTimeout(() => send(response), 600);
-    } else {
-      log("fast retry initialize");
-      send(response);
+      return;
     }
+    log("fast retry initialize");
+    send(response);
     return;
   }
   if (message.method === "tools/list") {
@@ -2626,11 +2675,29 @@ process.on("SIGINT", shutdown);`,
           LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
         );
 
-        const secondCatalog = await runtime.getCatalog();
-        await firstCatalog;
+        const secondCatalogPromise = runtime.getCatalog();
+        const [firstCatalogResult, secondCatalog] = await Promise.all([
+          firstCatalog,
+          secondCatalogPromise,
+        ]);
 
+        const firstSlowDiagnostic = firstCatalogResult.diagnostics?.find(
+          (diag) => diag.serverName === "slow",
+        );
+        expect(firstSlowDiagnostic?.message).toContain("timed out");
+        expect(firstCatalogResult.servers.slow).toBeUndefined();
         expect(secondCatalog.servers.trigger).toBeDefined();
-        expect(secondCatalog.diagnostics?.some((diag) => diag.serverName === "slow")).toBe(true);
+        const secondSlowDiagnostic = secondCatalog.diagnostics?.find(
+          (diag) => diag.serverName === "slow",
+        );
+        // A loaded runner can let generation one retire the timed-out client before
+        // generation two adopts it. Both the shared timeout and fast replacement are valid.
+        if (secondSlowDiagnostic) {
+          expect(secondSlowDiagnostic.message).toContain("timed out");
+          expect(secondCatalog.servers.slow).toBeUndefined();
+        } else {
+          expect(secondCatalog.servers.slow).toBeDefined();
+        }
         await waitForFileText(
           slowLogPath,
           "slow first initialize",
@@ -2654,9 +2721,7 @@ process.on("SIGINT", shutdown);`,
 
         const retriedCatalog = await runtime.getCatalog();
 
-        expect(retriedCatalog.diagnostics?.some((diag) => diag.serverName === "slow")).not.toBe(
-          true,
-        );
+        expect(retriedCatalog.diagnostics ?? []).toEqual([]);
         expect(retriedCatalog.servers.slow).toBeDefined();
         expect(retriedCatalog.tools.map((tool) => tool.toolName).toSorted()).toEqual([
           "poke",

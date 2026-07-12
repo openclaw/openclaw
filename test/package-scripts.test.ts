@@ -120,7 +120,7 @@ describe("package scripts", () => {
   });
 
   it.each([
-    { scriptName: "build:docker", expectedCount: 5 },
+    { scriptName: "build:docker", expectedCount: 4 },
     { scriptName: "build:plugin-sdk:strict-smoke", expectedCount: 1 },
     { scriptName: "build:strict-smoke", expectedCount: 1 },
   ])("runs TypeScript steps in $scriptName through tsx", ({ scriptName, expectedCount }) => {
@@ -150,6 +150,13 @@ describe("package scripts", () => {
 
   it("uses the shipped package launcher for npm start", () => {
     expect(readPackageJson().scripts.start).toBe("node openclaw.mjs");
+  });
+
+  it("builds iOS against a generic simulator by default", () => {
+    const script = readPackageJson().scripts["ios:build"];
+
+    expect(script).toContain("${IOS_DEST:-generic/platform=iOS Simulator}");
+    expect(script).not.toContain("name=iPhone");
   });
 
   it("runs generated module formatting coverage in Windows CI", () => {

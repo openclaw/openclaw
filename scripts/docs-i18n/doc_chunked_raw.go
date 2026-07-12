@@ -22,11 +22,14 @@ var docsProtocolTokens = []string{
 	bodyTagStart,
 	bodyTagEnd,
 	"[[[FM_",
+	"__OC_I18N_",
 }
 
 type docChunkStructure struct {
-	fenceCount int
-	tagCounts  map[string]int
+	fenceCount      int
+	tagCounts       map[string]int
+	headingLevels   []int
+	inlineCodeSpans []string
 }
 
 type docChunkSplitPlan struct {
@@ -203,6 +206,12 @@ func validateDocChunkTranslation(source, translated string) error {
 	if sourceStructure.fenceCount != translatedStructure.fenceCount {
 		return fmt.Errorf("code fence mismatch: source=%d translated=%d", sourceStructure.fenceCount, translatedStructure.fenceCount)
 	}
+	if !slices.Equal(sourceStructure.headingLevels, translatedStructure.headingLevels) {
+		return fmt.Errorf("heading structure mismatch: source=%v translated=%v", sourceStructure.headingLevels, translatedStructure.headingLevels)
+	}
+	if !sameStringMultiset(sourceStructure.inlineCodeSpans, translatedStructure.inlineCodeSpans) {
+		return fmt.Errorf("inline code mismatch: source=%d translated=%d", len(sourceStructure.inlineCodeSpans), len(translatedStructure.inlineCodeSpans))
+	}
 	if !slices.Equal(sortedKeys(sourceStructure.tagCounts), sortedKeys(translatedStructure.tagCounts)) {
 		return fmt.Errorf("component tag set mismatch")
 	}
@@ -212,6 +221,17 @@ func validateDocChunkTranslation(source, translated string) error {
 		}
 	}
 	return nil
+}
+
+func sameStringMultiset(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	leftSorted := slices.Clone(left)
+	rightSorted := slices.Clone(right)
+	slices.Sort(leftSorted)
+	slices.Sort(rightSorted)
+	return slices.Equal(leftSorted, rightSorted)
 }
 
 func sanitizeDocChunkProtocolWrappers(source, translated string) string {
@@ -334,8 +354,10 @@ func summarizeDocChunkStructure(text string) docChunkStructure {
 		}
 	}
 	return docChunkStructure{
-		fenceCount: counts["__fence_toggle__"],
-		tagCounts:  countsWithoutFence(counts),
+		fenceCount:      counts["__fence_toggle__"],
+		tagCounts:       countsWithoutFence(counts),
+		headingLevels:   extractMarkdownHeadingLevels(text),
+		inlineCodeSpans: extractMarkdownInlineCodeValues(text),
 	}
 }
 

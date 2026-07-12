@@ -375,8 +375,8 @@ export default definePluginEntry({
         }
       }
       // Try to fetch the live model catalog from Copilot's /models endpoint so
-      // the runtime tracks per-account entitlements and accurate context
-      // windows (max_context_window_tokens) without manifest churn. On any
+      // the runtime tracks per-account entitlements and accurate token limits
+      // without manifest churn. On any
       // failure we return an empty model list, which lets the static manifest
       // catalog continue to be the visible fallback for users.
       let discoveredModels: Awaited<ReturnType<typeof fetchCopilotModelCatalog>> = [];
@@ -528,6 +528,9 @@ export default definePluginEntry({
         {
           showCode: async ({ verificationUrl, userCode, expiresInMs }) => {
             const expiresInMinutes = Math.max(1, Math.round(expiresInMs / 60_000));
+            if (ctx.isRemote) {
+              await ctx.openUrl(verificationUrl);
+            }
             await ctx.prompter.note(
               [
                 "Open this URL in your browser and enter the code below.",
@@ -540,9 +543,14 @@ export default definePluginEntry({
               "Authorize GitHub Copilot",
             );
           },
-          openUrl: async (url) => {
-            await ctx.openUrl(url);
-          },
+          ...(ctx.isRemote
+            ? {}
+            : {
+                openUrl: async (url: string) => {
+                  await ctx.openUrl(url);
+                },
+              }),
+          ...(ctx.signal ? { signal: ctx.signal } : {}),
         },
         normalizedDomain,
       );

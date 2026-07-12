@@ -15,6 +15,7 @@ import {
   PUBLIC_SURFACE_SOURCE_EXTENSIONS,
   normalizeBundledPluginArtifactSubpath,
   resolveBundledPluginPublicSurfacePath,
+  resolvePluginRootPublicSurfacePath,
 } from "./public-surface-runtime.js";
 import { resolvePluginLoaderTryNative, resolveLoaderPackageRoot } from "./sdk-alias.js";
 
@@ -153,7 +154,9 @@ function isPluginPublicArtifactCandidateFailure(error: unknown): boolean {
     error.message.startsWith("Unable to resolve plugin public surface ") ||
     error.message.startsWith("Unable to open plugin public surface ") ||
     error.message.startsWith("Unable to load plugin public surface ") ||
-    error.message.startsWith("Plugin public surface changed after validation: ")
+    error.message.startsWith("Plugin public surface changed after validation: ") ||
+    (error.message.startsWith("plugin public surface ") &&
+      error.message.endsWith(" changed after validation"))
   );
 }
 
@@ -181,30 +184,26 @@ function resolvePluginPublicSurfaceLocation(params: {
   return null;
 }
 
-export function loadPluginPublicArtifactModuleSync(params: {
-  rootDir: string;
-  source?: string;
-  artifactBasename: string;
+function loadValidatedPublicSurfaceModule(params: {
+  modulePath: string;
+  boundaryRoot: string;
+  boundaryLabel: string;
+  surfaceLabel: string;
+  loadFailureMessage?: string;
 }): Record<string, unknown> {
-  const location = resolvePluginPublicSurfaceLocation(params);
-  if (!location) {
-    throw new Error(`Unable to resolve plugin public surface ${params.artifactBasename}`);
-  }
-  const cached = publicSurfaceModuleCache.get(location.modulePath);
+  const cached = publicSurfaceModuleCache.get(params.modulePath);
   if (cached) {
     return cached as Record<string, unknown>;
   }
 
   const opened = openRootFileSync({
-    absolutePath: location.modulePath,
-    rootPath: location.boundaryRoot,
-    boundaryLabel: "plugin root",
+    absolutePath: params.modulePath,
+    rootPath: params.boundaryRoot,
+    boundaryLabel: params.boundaryLabel,
     rejectHardlinks: false,
   });
   if (!opened.ok) {
-    throw new Error(`Unable to open plugin public surface ${params.artifactBasename}`, {
-      cause: opened.error,
-    });
+    throw new Error(`Unable to open ${params.surfaceLabel}`, { cause: opened.error });
   }
   const validatedPath = opened.path;
   const validatedStat = opened.stat;
@@ -212,23 +211,56 @@ export function loadPluginPublicArtifactModuleSync(params: {
 
   const currentStat = fs.statSync(validatedPath);
   if (!sameFileIdentity(validatedStat, currentStat)) {
-    throw new Error(`Plugin public surface changed after validation: ${params.artifactBasename}`);
+    throw new Error(`${params.surfaceLabel} changed after validation`);
   }
 
   const sentinel: Record<string, unknown> = {};
-  publicSurfaceModuleCache.set(location.modulePath, sentinel);
+  publicSurfaceModuleCache.set(params.modulePath, sentinel);
   publicSurfaceModuleCache.set(validatedPath, sentinel);
   try {
-    const loaded = loadPublicSurfaceModule(validatedPath) as Record<string, unknown>;
+    const loaded = loadPublicSurfaceModule(validatedPath) as object;
     Object.assign(sentinel, loaded);
     return sentinel;
   } catch (error) {
-    publicSurfaceModuleCache.delete(location.modulePath);
+    publicSurfaceModuleCache.delete(params.modulePath);
     publicSurfaceModuleCache.delete(validatedPath);
-    throw new Error(`Unable to load plugin public surface ${params.artifactBasename}`, {
-      cause: error,
-    });
+    if (params.loadFailureMessage) {
+      throw new Error(params.loadFailureMessage, { cause: error });
+    }
+    throw error;
   }
+}
+
+export function loadPluginPublicArtifactModuleSync(
+  params:
+    | {
+        rootDir: string;
+        source?: string;
+        artifactBasename: string;
+      }
+    | {
+        pluginRoot: string;
+        artifactBasename: string;
+      },
+): Record<string, unknown> {
+  const location =
+    "pluginRoot" in params
+      ? (() => {
+          const modulePath = resolvePluginRootPublicSurfacePath(params);
+          return modulePath ? { modulePath, boundaryRoot: path.resolve(params.pluginRoot) } : null;
+        })()
+      : resolvePluginPublicSurfaceLocation(params);
+  if (!location) {
+    const root = "pluginRoot" in params ? `${params.pluginRoot}/` : "";
+    throw new Error(`Unable to resolve plugin public surface ${root}${params.artifactBasename}`);
+  }
+  return loadValidatedPublicSurfaceModule({
+    modulePath: location.modulePath,
+    boundaryRoot: location.boundaryRoot,
+    boundaryLabel: "plugin root",
+    surfaceLabel: `plugin public surface ${params.artifactBasename}`,
+    loadFailureMessage: `Unable to load plugin public surface ${params.artifactBasename}`,
+  });
 }
 
 /** Loads the first resolvable plugin public artifact from an ordered candidate list. */
@@ -265,47 +297,13 @@ export function loadBundledPluginPublicArtifactModuleSync<T extends object>(para
       `Unable to resolve bundled plugin public surface ${params.dirName}/${params.artifactBasename}`,
     );
   }
-  const cached = publicSurfaceModuleCache.get(location.modulePath);
-  if (cached) {
-    return cached as T;
-  }
-
-  const opened = openRootFileSync({
-    absolutePath: location.modulePath,
-    rootPath: location.boundaryRoot,
+  return loadValidatedPublicSurfaceModule({
+    modulePath: location.modulePath,
+    boundaryRoot: location.boundaryRoot,
     boundaryLabel:
       location.boundaryRoot === OPENCLAW_PACKAGE_ROOT ? "OpenClaw package root" : "plugin root",
-    rejectHardlinks: false,
-  });
-  if (!opened.ok) {
-    throw new Error(
-      `Unable to open bundled plugin public surface ${params.dirName}/${params.artifactBasename}`,
-      { cause: opened.error },
-    );
-  }
-  const validatedPath = opened.path;
-  const validatedStat = opened.stat;
-  fs.closeSync(opened.fd);
-
-  const currentStat = fs.statSync(validatedPath);
-  if (!sameFileIdentity(validatedStat, currentStat)) {
-    throw new Error(
-      `Bundled plugin public surface changed after validation: ${params.dirName}/${params.artifactBasename}`,
-    );
-  }
-
-  const sentinel = {} as T;
-  publicSurfaceModuleCache.set(location.modulePath, sentinel);
-  publicSurfaceModuleCache.set(validatedPath, sentinel);
-  try {
-    const loaded = loadPublicSurfaceModule(validatedPath) as T;
-    Object.assign(sentinel, loaded);
-    return sentinel;
-  } catch (error) {
-    publicSurfaceModuleCache.delete(location.modulePath);
-    publicSurfaceModuleCache.delete(validatedPath);
-    throw error;
-  }
+    surfaceLabel: `bundled plugin public surface ${params.dirName}/${params.artifactBasename}`,
+  }) as T;
 }
 
 /** Loads the first resolvable bundled public artifact from an ordered candidate list. */

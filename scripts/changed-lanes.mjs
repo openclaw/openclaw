@@ -12,14 +12,52 @@ const RAW_SYNC_CHANGED_LANES_ENV = "OPENCLAW_CHANGED_LANES_RAW_SYNC";
 const DOCS_PATH_RE = /^(?:docs\/|README\.md$|AGENTS\.md$|.*\.mdx?$)/u;
 const APP_PATH_RE = /^(?:apps\/|Swabble\/|appcast\.xml$)/u;
 const EXTENSION_PATH_RE = /^extensions\/[^/]+(?:\/|$)/u;
-const CORE_PATH_RE = /^(?:src\/|ui\/|packages\/)/u;
+const CORE_PATH_RE = /^(?:src\/|packages\/)/u;
+const UI_PATH_RE = /^(?:ui\/|tsconfig\.ui\.json$)/u;
+const SCRIPTS_TYPECHECK_PATH_RE =
+  /^(?:scripts\/.*\.(?:[cm]?ts|[cm]?tsx)|tsconfig\.scripts\.json)$/u;
+// Keep aligned with tsconfig.strict-ratchet.json includes and its oxlint override.
+export const STRICT_RATCHET_PACKAGE_DIRS = [
+  "packages/markdown-core",
+  "packages/net-policy",
+  "packages/media-understanding-common",
+  "packages/terminal-core",
+  "packages/normalization-core",
+  "packages/model-catalog-core",
+  "packages/web-content-core",
+  "packages/ai",
+  "packages/agent-core",
+  "packages/acp-core",
+  "packages/gateway-client",
+  "packages/gateway-protocol",
+  "packages/llm-core",
+  "packages/media-core",
+  "packages/media-generation-core",
+  "packages/plugin-package-contract",
+  "packages/sdk",
+];
+const TEST_ROOT_TYPECHECK_PATH_RE =
+  /^(?:test\/(?!fixtures\/).*\.(?:[cm]?ts|[cm]?tsx)|test\/tsconfig\/tsconfig\.test\.root\.json)$/u;
 const TOOLING_PATH_RE =
   /^(?:scripts\/|test\/vitest\/|\.github\/|\.vscode\/|config\/|deploy\/|git-hooks\/|Dockerfile\.sandbox(?:-(?:browser|common))?$|Makefile$|docker-setup\.sh$|setup-podman\.sh$|openclaw\.podman\.env$|skills\/pyproject\.toml$|vitest(?:\..+)?\.config\.ts$|tsconfig.*\.json$|\.dockerignore$|\.gitignore$|\.jscpd\.json$|\.npmignore$|\.pre-commit-config\.yaml$|\.swiftformat$|\.swiftlint\.yml$|\.oxlint.*|\.oxfmt.*)/u;
 const ROOT_GLOBAL_PATH_RE =
   /^(?:package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsdown\.config\.ts$|vitest\.config\.ts$)/u;
 const LEGACY_ROOT_ASSET_PATH_RE = /^assets\//u;
-const LIVE_DOCKER_TOOLING_PATH_RE =
-  /^(?:scripts\/test-docker-all\.mjs|scripts\/test-docker-all\.sh|scripts\/lib\/live-docker-auth\.sh|scripts\/test-live-(?:acp-bind|cli-backend|codex-harness|gateway-models|models)-docker\.sh|src\/gateway\/gateway-acp-bind\.live\.test\.ts|src\/gateway\/live-agent-probes\.test\.ts)$/u;
+export const LIVE_DOCKER_AUTH_SHELL_TARGETS = [
+  "scripts/lib/live-docker-auth.sh",
+  "scripts/test-live-acp-bind-docker.sh",
+  "scripts/test-live-cli-backend-docker.sh",
+  "scripts/test-live-codex-harness-docker.sh",
+  "scripts/test-live-gateway-models-docker.sh",
+  "scripts/test-live-models-docker.sh",
+  "scripts/test-live-subagent-announce-docker.sh",
+];
+const LIVE_DOCKER_TOOLING_PATHS = new Set([
+  ...LIVE_DOCKER_AUTH_SHELL_TARGETS,
+  "scripts/test-docker-all.mjs",
+  "src/gateway/gateway-acp-bind.live.test.ts",
+  "src/gateway/live-agent-probes.test.ts",
+]);
 const LIVE_DOCKER_PACKAGE_SCRIPT_RE = /^test:docker:live-[\w:-]+$/u;
 const TEST_PATH_RE =
   /(?:^|\/)(?:test|__tests__)\/|(?:\.|\/)(?:test|spec|e2e|browser\.test)\.[cm]?[jt]sx?$/u;
@@ -41,7 +79,7 @@ export const RELEASE_METADATA_PATHS = new Set([
   "package.json",
 ]);
 
-/** @typedef {"core" | "coreTests" | "extensions" | "extensionTests" | "apps" | "docs" | "tooling" | "liveDockerTooling" | "releaseMetadata" | "all"} ChangedLane */
+/** @typedef {"core" | "coreTests" | "ui" | "extensions" | "extensionTests" | "scripts" | "strictRatchet" | "testRoot" | "apps" | "docs" | "tooling" | "liveDockerTooling" | "releaseMetadata" | "all"} ChangedLane */
 
 /**
  * @typedef {{
@@ -70,8 +108,12 @@ export function createEmptyChangedLanes() {
   return {
     core: false,
     coreTests: false,
+    ui: false,
     extensions: false,
     extensionTests: false,
+    scripts: false,
+    strictRatchet: false,
+    testRoot: false,
     apps: false,
     docs: false,
     tooling: false,
@@ -126,6 +168,21 @@ export function detectChangedLanes(changedPaths, options = {}) {
   }
 
   for (const changedPath of paths) {
+    if (SCRIPTS_TYPECHECK_PATH_RE.test(changedPath)) {
+      lanes.scripts = true;
+    }
+    if (
+      changedPath === "tsconfig.strict-ratchet.json" ||
+      STRICT_RATCHET_PACKAGE_DIRS.some(
+        (packageDir) => changedPath === packageDir || changedPath.startsWith(`${packageDir}/`),
+      )
+    ) {
+      lanes.strictRatchet = true;
+    }
+    if (TEST_ROOT_TYPECHECK_PATH_RE.test(changedPath)) {
+      lanes.testRoot = true;
+    }
+
     if (DOCS_PATH_RE.test(changedPath)) {
       lanes.docs = true;
       continue;
@@ -145,7 +202,7 @@ export function detectChangedLanes(changedPaths, options = {}) {
       continue;
     }
 
-    if (LIVE_DOCKER_TOOLING_PATH_RE.test(changedPath)) {
+    if (LIVE_DOCKER_TOOLING_PATHS.has(changedPath)) {
       lanes.liveDockerTooling = true;
       reasons.push(`${changedPath}: live Docker tooling surface`);
       continue;
@@ -188,6 +245,18 @@ export function detectChangedLanes(changedPaths, options = {}) {
         lanes.core = true;
         lanes.coreTests = true;
         reasons.push(`${changedPath}: core production`);
+      }
+      continue;
+    }
+
+    if (UI_PATH_RE.test(changedPath)) {
+      if (isChangedLaneTestPath(changedPath)) {
+        lanes.coreTests = true;
+        reasons.push(`${changedPath}: UI test`);
+      } else {
+        lanes.ui = true;
+        lanes.coreTests = true;
+        reasons.push(`${changedPath}: UI production`);
       }
       continue;
     }
@@ -279,12 +348,14 @@ export function listChangedPathsFromGit(params) {
   let rangePaths;
   let noMergeBase = false;
   try {
+    // oxlint-disable-next-line typescript/no-base-to-string, typescript/restrict-template-expressions -- resolveMergeHeadDiffBase returns a git ref string when present.
     rangePaths = runGitNameOnlyDiff([`${base}...${head}`], cwd);
   } catch (error) {
     if (!isGitNoMergeBaseError(error)) {
       throw error;
     }
     noMergeBase = true;
+    // oxlint-disable-next-line typescript/no-base-to-string, typescript/restrict-template-expressions -- resolveMergeHeadDiffBase returns a git ref string when present.
     rangePaths = runGitNameOnlyDiff([`${base}..${head}`], cwd);
   }
   if (params.includeWorktree === false) {

@@ -9,6 +9,7 @@ import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.chat.ChatThinkingLevelSelection
 import ai.openclaw.app.chat.ChatTranscriptCache
 import ai.openclaw.app.chat.MessageSpeechClient
 import ai.openclaw.app.chat.MessageSpeechController
@@ -24,6 +25,7 @@ import ai.openclaw.app.gateway.GatewayDiscovery
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
+import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.GatewayTlsProbeFailure
 import ai.openclaw.app.gateway.GatewayTlsProbeResult
@@ -116,6 +118,7 @@ import java.util.concurrent.atomic.AtomicReference
 
 private const val MAX_PENDING_NOTIFICATION_EVENTS = 128
 private const val NODE_APPROVAL_COMMAND_FRESH_MS = 30_000L
+private const val CRON_RUN_TRACKING_POLL_MS = 2_000L
 private const val OperatorAdminScope = "operator.admin"
 
 private enum class SkillWorkshopGatewayAction(
@@ -354,6 +357,7 @@ class NodeRuntime private constructor(
   private val tlsFingerprintProbe: suspend (String, Int) -> GatewayTlsProbeResult,
   chatStores: AndroidChatStores,
   internal val mode: NodeRuntimeMode,
+  initialForeground: Boolean,
 ) {
   private val chatTranscriptCache = chatStores.transcriptCache
   private val chatCommandOutbox = chatStores.commandOutbox
@@ -374,6 +378,13 @@ class NodeRuntime private constructor(
     val generation: Long,
   )
 
+  private data class CronActionResult(
+    val message: String,
+    val kind: GatewayCronNoticeKind,
+    val refresh: Boolean,
+    val deleted: Boolean = false,
+  )
+
   constructor(
     context: Context,
     prefs: SecurePrefs = SecurePrefs(context.applicationContext),
@@ -384,6 +395,20 @@ class NodeRuntime private constructor(
     tlsFingerprintProbe = tlsFingerprintProbe,
     chatStores = openAndroidChatStores(context),
     mode = NodeRuntimeMode.Live,
+    initialForeground = true,
+  )
+
+  internal constructor(
+    context: Context,
+    prefs: SecurePrefs,
+    initialForeground: Boolean,
+  ) : this(
+    context = context,
+    prefs = prefs,
+    tlsFingerprintProbe = ::probeGatewayTlsFingerprint,
+    chatStores = openAndroidChatStores(context),
+    mode = NodeRuntimeMode.Live,
+    initialForeground = initialForeground,
   )
 
   internal constructor(
@@ -396,6 +421,7 @@ class NodeRuntime private constructor(
     tlsFingerprintProbe = ::probeGatewayTlsFingerprint,
     chatStores = openAndroidChatStores(context),
     mode = mode,
+    initialForeground = true,
   )
 
   internal constructor(
@@ -412,6 +438,7 @@ class NodeRuntime private constructor(
         commandOutbox = RoomChatCommandOutbox(ChatCacheDatabase.open(context.applicationContext)),
       ),
     mode = NodeRuntimeMode.Live,
+    initialForeground = true,
   )
 
   /**
@@ -689,6 +716,13 @@ class NodeRuntime private constructor(
   val seamColorArgb: StateFlow<Long> = _seamColorArgb.asStateFlow()
   private val _modelCatalog = MutableStateFlow<List<GatewayModelSummary>>(emptyList())
   val modelCatalog: StateFlow<List<GatewayModelSummary>> = _modelCatalog.asStateFlow()
+  private val _providerModelCatalog = MutableStateFlow<List<GatewayModelSummary>>(emptyList())
+  val providerModelCatalog: StateFlow<List<GatewayModelSummary>> = _providerModelCatalog.asStateFlow()
+  private val _providerModelCatalogRefreshing = MutableStateFlow(false)
+  val providerModelCatalogRefreshing: StateFlow<Boolean> = _providerModelCatalogRefreshing.asStateFlow()
+  private val _providerModelCatalogErrorText = MutableStateFlow<String?>(null)
+  val providerModelCatalogErrorText: StateFlow<String?> = _providerModelCatalogErrorText.asStateFlow()
+  private val providerModelCatalogRefreshGuard = LatestGatewayRefreshGuard()
   private val _modelAuthProviders = MutableStateFlow<List<GatewayModelProviderSummary>>(emptyList())
   val modelAuthProviders: StateFlow<List<GatewayModelProviderSummary>> = _modelAuthProviders.asStateFlow()
   private val _modelCatalogRefreshing = MutableStateFlow(false)
@@ -715,7 +749,17 @@ class NodeRuntime private constructor(
   val cronErrorText: StateFlow<String?> = _cronErrorText.asStateFlow()
   private val _cronJobDetailState = MutableStateFlow<GatewayCronJobDetailState>(GatewayCronJobDetailState.Idle)
   val cronJobDetailState: StateFlow<GatewayCronJobDetailState> = _cronJobDetailState.asStateFlow()
+  private val _cronRunHistoryState = MutableStateFlow<GatewayCronRunHistoryState>(GatewayCronRunHistoryState.Idle)
+  val cronRunHistoryState: StateFlow<GatewayCronRunHistoryState> = _cronRunHistoryState.asStateFlow()
+  private val _cronActionState = MutableStateFlow<GatewayCronActionState>(GatewayCronActionState.Idle)
+  val cronActionState: StateFlow<GatewayCronActionState> = _cronActionState.asStateFlow()
+  private val _pendingCronRunJobIds = MutableStateFlow<Set<String>>(emptySet())
+  val pendingCronRunJobIds: StateFlow<Set<String>> = _pendingCronRunJobIds.asStateFlow()
   private val cronJobDetailRequestGuard = CronJobDetailRequestGuard()
+  private val cronRunHistoryRequestGuard = CronJobDetailRequestGuard()
+  private val cronRefreshGuard = LatestGatewayRefreshGuard()
+  private val cronActionMutex = Mutex()
+  private val pendingCronRunRegistry = PendingCronRunRegistry()
   private val _usageSummary = MutableStateFlow(GatewayUsageSummary(updatedAtMs = null, providers = emptyList()))
   val usageSummary: StateFlow<GatewayUsageSummary> = _usageSummary.asStateFlow()
   private val _usageRefreshing = MutableStateFlow(false)
@@ -756,7 +800,7 @@ class NodeRuntime private constructor(
   val nodesDevicesRefreshing: StateFlow<Boolean> = _nodesDevicesRefreshing.asStateFlow()
   private val _nodesDevicesErrorText = MutableStateFlow<String?>(null)
   val nodesDevicesErrorText: StateFlow<String?> = _nodesDevicesErrorText.asStateFlow()
-  private val nodeApprovalRefreshGuard = GatewayNodeApprovalRefreshGuard()
+  private val nodeApprovalRefreshGuard = LatestGatewayRefreshGuard()
   private val _execApprovals = MutableStateFlow<List<GatewayExecApprovalSummary>>(emptyList())
   val execApprovals: StateFlow<List<GatewayExecApprovalSummary>> = _execApprovals.asStateFlow()
   private val _execApprovalsRefreshing = MutableStateFlow(false)
@@ -785,7 +829,7 @@ class NodeRuntime private constructor(
   private val _healthLogsErrorText = MutableStateFlow<String?>(null)
   val healthLogsErrorText: StateFlow<String?> = _healthLogsErrorText.asStateFlow()
 
-  private val _isForeground = MutableStateFlow(true)
+  private val _isForeground = MutableStateFlow(initialForeground)
   val isForeground: StateFlow<Boolean> = _isForeground.asStateFlow()
 
   private data class TalkPttOwnership(
@@ -848,7 +892,7 @@ class NodeRuntime private constructor(
         }
       },
       onDisconnected = { message ->
-        clearOperatorGatewayState()
+        clearOperatorGatewayState(retirePendingCronRuns = false)
         chat.applyMainSessionKey(resolveMainSessionKey())
         chat.onDisconnected(message)
         updateStatus {
@@ -869,7 +913,7 @@ class NodeRuntime private constructor(
       customHeadersProvider = prefs::loadGatewayCustomHeaders,
     )
 
-  private fun clearOperatorGatewayState() {
+  private fun clearOperatorGatewayState(retirePendingCronRuns: Boolean) {
     invalidateNodeCapabilityApprovalState()
     _serverName.value = null
     _remoteAddress.value = null
@@ -881,15 +925,25 @@ class NodeRuntime private constructor(
     _gatewayAgents.value = emptyList()
     selectedChatAgentId = null
     _modelCatalog.value = emptyList()
+    providerModelCatalogRefreshGuard.invalidate()
+    _providerModelCatalog.value = emptyList()
+    _providerModelCatalogRefreshing.value = false
+    _providerModelCatalogErrorText.value = null
     _modelAuthProviders.value = emptyList()
     _modelCatalogRefreshing.value = false
     _modelCatalogErrorText.value = null
     _talkSetupReadiness.value = GatewayTalkSetupReadiness.unverified()
+    cronRefreshGuard.invalidate()
     _cronStatus.value = GatewayCronStatus(enabled = false, jobs = 0, nextWakeAtMs = null)
     _cronJobs.value = emptyList()
     _cronRefreshing.value = false
     _cronErrorText.value = null
     cronJobDetailRequestGuard.cancel { _cronJobDetailState.value = GatewayCronJobDetailState.Idle }
+    cronRunHistoryRequestGuard.cancel { _cronRunHistoryState.value = GatewayCronRunHistoryState.Idle }
+    _cronActionState.value = GatewayCronActionState.Idle
+    if (retirePendingCronRuns) {
+      pendingCronRunRegistry.clear { _pendingCronRunJobIds.value = it }
+    }
     _usageSummary.value = GatewayUsageSummary(updatedAtMs = null, providers = emptyList())
     _usageRefreshing.value = false
     _usageErrorText.value = null
@@ -1370,6 +1424,7 @@ class NodeRuntime private constructor(
       refreshBrandingFromGateway()
       refreshAgentsFromGateway()
       refreshModelCatalogFromGateway()
+      refreshProviderModelsFromGateway()
       refreshTalkSetupReadinessFromGateway()
       refreshCronFromGateway()
       refreshUsageFromGateway()
@@ -1385,6 +1440,13 @@ class NodeRuntime private constructor(
     if (mode == NodeRuntimeMode.ScreenshotFixture) return
     scope.launch {
       refreshModelCatalogFromGateway()
+    }
+  }
+
+  fun refreshProviderModels() {
+    if (mode == NodeRuntimeMode.ScreenshotFixture) return
+    scope.launch {
+      refreshProviderModelsFromGateway()
     }
   }
 
@@ -1408,16 +1470,173 @@ class NodeRuntime private constructor(
   }
 
   fun loadCronJobDetail(id: String) {
-    val request = cronJobDetailRequestGuard.begin(id) ?: return
-    _cronJobDetailState.value = GatewayCronJobDetailState.Loading(request.id)
-    scope.launch {
-      loadCronJobDetailFromGateway(request)
+    val detailRequest = cronJobDetailRequestGuard.begin(id) ?: return
+    val historyRequest = cronRunHistoryRequestGuard.begin(detailRequest.id) ?: return
+    _cronJobDetailState.value = GatewayCronJobDetailState.Loading(detailRequest.id)
+    _cronRunHistoryState.value = GatewayCronRunHistoryState.Loading(historyRequest.id)
+    if (mode == NodeRuntimeMode.ScreenshotFixture) {
+      applyScreenshotCronDetail(detailRequest = detailRequest, historyRequest = historyRequest)
+      return
     }
+    scope.launch { loadCronJobDetailFromGateway(detailRequest) }
+    scope.launch { loadCronRunHistoryFromGateway(historyRequest) }
+  }
+
+  fun refreshCronRunHistory(id: String) {
+    val request = cronRunHistoryRequestGuard.begin(id) ?: return
+    _cronRunHistoryState.value = GatewayCronRunHistoryState.Loading(request.id)
+    if (mode == NodeRuntimeMode.ScreenshotFixture) {
+      publishScreenshotCronHistory(request)
+      return
+    }
+    scope.launch { loadCronRunHistoryFromGateway(request) }
   }
 
   fun clearCronJobDetail() {
     cronJobDetailRequestGuard.cancel {
       _cronJobDetailState.value = GatewayCronJobDetailState.Idle
+    }
+    cronRunHistoryRequestGuard.cancel {
+      _cronRunHistoryState.value = GatewayCronRunHistoryState.Idle
+    }
+  }
+
+  fun dismissCronActionNotice(id: String) {
+    val jobId = id.trim().takeIf { it.isNotEmpty() } ?: return
+    val notice = _cronActionState.value as? GatewayCronActionState.Notice
+    if (notice?.id == jobId) {
+      _cronActionState.value = GatewayCronActionState.Idle
+    }
+  }
+
+  fun runCronJob(id: String) {
+    val jobId = id.trim().takeIf { it.isNotEmpty() } ?: return
+    if (pendingCronRunRegistry.contains(jobId)) {
+      _cronActionState.value =
+        GatewayCronActionState.Notice(
+          id = jobId,
+          message = "This cron job already has a queued run.",
+          kind = GatewayCronNoticeKind.Warning,
+        )
+      return
+    }
+    launchCronAction(id = jobId, action = GatewayCronAction.Run) { gatewayScope, actionJobId ->
+      val response =
+        requestGatewayData(
+          gatewayScope,
+          "cron.run",
+          buildJsonObject {
+            put("id", JsonPrimitive(actionJobId))
+            put("mode", JsonPrimitive("force"))
+          }.toString(),
+        )
+      when (val outcome = parseGatewayCronRunOutcome(json.parseToJsonElement(response).asObjectOrNull())) {
+        is GatewayCronRunOutcome.Started -> {
+          outcome.runId?.let { runId ->
+            var trackingStarted = false
+            publishGatewayData(gatewayScope) {
+              trackingStarted =
+                pendingCronRunRegistry.begin(actionJobId, runId) {
+                  _pendingCronRunJobIds.value = it
+                }
+            }
+            if (trackingStarted) {
+              trackQueuedCronRun(gatewayScope = gatewayScope, jobId = actionJobId, runId = runId)
+            }
+          }
+          CronActionResult(
+            message = if (outcome.runId == null) "Cron job started." else "Cron run queued.",
+            kind = GatewayCronNoticeKind.Success,
+            refresh = cronRunShouldRefresh(outcome),
+          )
+        }
+        is GatewayCronRunOutcome.Skipped ->
+          CronActionResult(
+            message = outcome.reason.message,
+            kind = GatewayCronNoticeKind.Warning,
+            refresh = cronRunShouldRefresh(outcome),
+          )
+        GatewayCronRunOutcome.Rejected ->
+          CronActionResult(
+            message = "Gateway rejected the cron run.",
+            kind = GatewayCronNoticeKind.Error,
+            refresh = false,
+          )
+        null -> error("Gateway returned an invalid cron run result.")
+      }
+    }
+  }
+
+  fun setCronJobEnabled(
+    id: String,
+    enabled: Boolean,
+  ) {
+    launchCronAction(
+      id = id,
+      action = if (enabled) GatewayCronAction.Enable else GatewayCronAction.Disable,
+    ) { gatewayScope, jobId ->
+      requestGatewayData(
+        gatewayScope,
+        "cron.update",
+        buildJsonObject {
+          put("id", JsonPrimitive(jobId))
+          put(
+            "patch",
+            buildJsonObject {
+              put("enabled", JsonPrimitive(enabled))
+            },
+          )
+        }.toString(),
+      )
+      CronActionResult(
+        message = if (enabled) "Cron job enabled." else "Cron job disabled.",
+        kind = GatewayCronNoticeKind.Success,
+        refresh = true,
+      )
+    }
+  }
+
+  fun updateCronJob(
+    original: GatewayCronJobDetail,
+    edit: GatewayCronJobEdit,
+  ) {
+    launchCronAction(id = original.id, action = GatewayCronAction.Save) { gatewayScope, _ ->
+      try {
+        requestGatewayData(
+          gatewayScope,
+          "cron.update",
+          buildCronUpdateParams(original = original, edit = edit),
+        )
+      } catch (err: GatewayRequestRejected) {
+        if (!isCronJobRevisionConflict(err.gatewayError)) throw err
+        reloadCronJobIfSelected(original.id)
+        return@launchCronAction CronActionResult(
+          message = "This cron job changed on the gateway. Review the latest version before saving again.",
+          kind = GatewayCronNoticeKind.Warning,
+          refresh = false,
+        )
+      }
+      CronActionResult(
+        message = "Cron job updated.",
+        kind = GatewayCronNoticeKind.Success,
+        refresh = true,
+      )
+    }
+  }
+
+  fun deleteCronJob(id: String) {
+    launchCronAction(id = id, action = GatewayCronAction.Delete) { gatewayScope, jobId ->
+      requestGatewayData(
+        gatewayScope,
+        "cron.remove",
+        buildJsonObject { put("id", JsonPrimitive(jobId)) }.toString(),
+      )
+      CronActionResult(
+        message = "Cron job deleted.",
+        kind = GatewayCronNoticeKind.Success,
+        refresh = true,
+        deleted = true,
+      )
     }
   }
 
@@ -1699,6 +1918,7 @@ class NodeRuntime private constructor(
   val chatError: StateFlow<String?> = chat.errorText
   val chatHealthOk: StateFlow<Boolean> = chat.healthOk
   val chatThinkingLevel: StateFlow<String> = chat.thinkingLevel
+  val chatThinkingLevelSelection: StateFlow<ChatThinkingLevelSelection> = chat.thinkingLevelSelection
   val chatSelectedModelRef: StateFlow<String?> = chat.selectedModelRef
   val chatModelCatalog: StateFlow<List<GatewayModelSummary>> = chat.modelCatalog
   val chatStreamingAssistantText: StateFlow<String?> = chat.streamingAssistantText
@@ -1720,6 +1940,7 @@ class NodeRuntime private constructor(
     _gatewayDefaultAgentId.value = "main"
     _gatewayAgents.value = AndroidScreenshotFixture.agents
     _modelCatalog.value = AndroidScreenshotFixture.models
+    _providerModelCatalog.value = AndroidScreenshotFixture.models
     _modelAuthProviders.value = AndroidScreenshotFixture.providers
     _talkSetupReadiness.value =
       GatewayTalkSetupReadiness(
@@ -1729,9 +1950,11 @@ class NodeRuntime private constructor(
     _cronStatus.value =
       GatewayCronStatus(
         enabled = true,
-        jobs = 2,
+        jobs = 1,
         nextWakeAtMs = 1_783_641_600_000,
       )
+    _cronJobs.value = parseScreenshotCronJobs()
+    _operatorScopes.value = listOf(OperatorAdminScope)
     _nodesDevicesSummary.value = AndroidScreenshotFixture.nodes
     _channelsSummary.value = AndroidScreenshotFixture.channels
     _nodeCapabilityApproval.value = GatewayNodeCapabilityApproval.Approved
@@ -1748,14 +1971,55 @@ class NodeRuntime private constructor(
     chat.refreshSessions(limit = 20)
   }
 
+  private fun parseScreenshotCronJobs(): List<GatewayCronJobSummary> {
+    // Screenshot mode parses gateway-shaped fixtures so UI navigation covers the live data contract.
+    val list =
+      json
+        .parseToJsonElement(AndroidScreenshotFixture.request("cron.list", null))
+        .asObjectOrNull()
+    return parseCronJobs(list?.get("jobs") as? JsonArray)
+  }
+
+  private fun applyScreenshotCronDetail(
+    detailRequest: CronJobDetailRequest,
+    historyRequest: CronJobDetailRequest,
+  ) {
+    val detail =
+      json
+        .parseToJsonElement(AndroidScreenshotFixture.request("cron.get", cronJobGetParams(detailRequest.id)))
+        .asObjectOrNull()
+        ?.let(::parseGatewayCronJobDetail)
+        ?.takeIf { it.id == detailRequest.id }
+    cronJobDetailRequestGuard.publishIfCurrent(detailRequest) {
+      _cronJobDetailState.value =
+        detail?.let(GatewayCronJobDetailState::Loaded)
+          ?: GatewayCronJobDetailState.Error(detailRequest.id, "Gateway returned an invalid cron job.")
+    }
+    publishScreenshotCronHistory(historyRequest)
+  }
+
+  private fun publishScreenshotCronHistory(request: CronJobDetailRequest) {
+    val history =
+      json
+        .parseToJsonElement(AndroidScreenshotFixture.request("cron.runs", cronJobGetParams(request.id)))
+        .asObjectOrNull()
+    val runs = parseGatewayCronRunHistory(history?.get("entries") as? JsonArray)
+    cronRunHistoryRequestGuard.publishIfCurrent(request) {
+      _cronRunHistoryState.value = GatewayCronRunHistoryState.Loaded(id = request.id, runs = runs)
+    }
+  }
+
   init {
     if (mode == NodeRuntimeMode.Live) {
       if (prefs.voiceWakeMode.value != VoiceWakeMode.Off) {
         prefs.setVoiceWakeMode(VoiceWakeMode.Off)
       }
 
-      if (prefs.voiceMicEnabled.value) {
+      if (initialForeground && prefs.voiceMicEnabled.value) {
         setVoiceCaptureMode(VoiceCaptureMode.ManualMic, persistManualMic = false)
+      } else if (!initialForeground && prefs.voiceMicEnabled.value) {
+        // Process recovery without an Activity must not revive microphone capture.
+        prefs.setVoiceMicEnabled(false)
       }
 
       scope.launch(Dispatchers.Default) {
@@ -2009,9 +2273,15 @@ class NodeRuntime private constructor(
     prefs.setCanvasDebugStatusEnabled(value)
   }
 
-  fun setInstalledAppsSharingEnabled(value: Boolean) {
-    if (prefs.installedAppsSharingEnabled.value == value) return
-    prefs.setInstalledAppsSharingEnabled(value)
+  fun grantInstalledAppsDisclosureConsent() {
+    if (prefs.installedAppsSharingEnabled.value) return
+    prefs.grantInstalledAppsDisclosureConsent()
+    refreshNodeSurfaceAfterSharingChange()
+  }
+
+  fun revokeInstalledAppsDisclosureConsent() {
+    if (!prefs.installedAppsSharingEnabled.value) return
+    prefs.revokeInstalledAppsDisclosureConsent()
     refreshNodeSurfaceAfterSharingChange()
   }
 
@@ -3126,7 +3396,7 @@ class NodeRuntime private constructor(
     connectAttemptSeq.incrementAndGet()
     synchronized(gatewayDataScopeLock) {
       gatewayDataGeneration += 1
-      clearOperatorGatewayState()
+      clearOperatorGatewayState(retirePendingCronRuns = true)
     }
     chat.onGatewayScopeChanging(retireRunState)
     stopMessageSpeech()
@@ -3474,6 +3744,24 @@ class NodeRuntime private constructor(
       }
     }
 
+  private inline fun publishCronRefresh(
+    gatewayScope: GatewayDataScope,
+    refreshGeneration: Long,
+    crossinline publish: () -> Unit,
+  ): Boolean =
+    publishGatewayData(gatewayScope) {
+      cronRefreshGuard.publishIfCurrent(refreshGeneration) { publish() }
+    }
+
+  private inline fun publishProviderModelRefresh(
+    gatewayScope: GatewayDataScope,
+    refreshGeneration: Long,
+    crossinline publish: () -> Unit,
+  ): Boolean =
+    publishGatewayData(gatewayScope) {
+      providerModelCatalogRefreshGuard.publishIfCurrent(refreshGeneration) { publish() }
+    }
+
   private suspend fun refreshBrandingFromGateway() {
     val gatewayScope = captureGatewayDataScope() ?: return
     if (!gatewayConnectionDisplay.value.isConnected) return
@@ -3531,25 +3819,7 @@ class NodeRuntime private constructor(
       val root = json.parseToJsonElement(res).asObjectOrNull() ?: return
       val defaultAgentId = root["defaultId"].asStringOrNull()?.trim().orEmpty()
       val mainKey = normalizeMainKey(root["mainKey"].asStringOrNull())
-      val agents =
-        (root["agents"] as? JsonArray)?.mapNotNull { item ->
-          val obj = item.asObjectOrNull() ?: return@mapNotNull null
-          val id = obj["id"].asStringOrNull()?.trim().orEmpty()
-          if (id.isEmpty()) return@mapNotNull null
-          val name = obj["name"].asStringOrNull()?.trim()
-          val emoji =
-            obj["identity"]
-              .asObjectOrNull()
-              ?.get("emoji")
-              .asStringOrNull()
-              ?.trim()
-          GatewayAgentSummary(
-            id = id,
-            name = name?.takeIf { it.isNotEmpty() },
-            emoji = emoji?.takeIf { it.isNotEmpty() },
-            workspaceGit = (obj["workspaceGit"] as? JsonPrimitive)?.content?.toBooleanStrictOrNull() == true,
-          )
-        } ?: emptyList()
+      val agents = parseGatewayAgentSummaries(root)
 
       publishGatewayData(gatewayScope) {
         _gatewayDefaultAgentId.value = defaultAgentId.ifEmpty { null }
@@ -3580,18 +3850,83 @@ class NodeRuntime private constructor(
       val modelsRes = requestGatewayData(gatewayScope, "models.list", "{}")
       val modelsRoot = json.parseToJsonElement(modelsRes).asObjectOrNull()
       val models = parseGatewayModels(modelsRoot?.get("models") as? JsonArray)
-      val authRes = requestGatewayData(gatewayScope, "models.authStatus", "{}")
-      val authRoot = json.parseToJsonElement(authRes).asObjectOrNull()
-      val providers = parseGatewayModelProviders(authRoot?.get("providers") as? JsonArray)
       publishGatewayData(gatewayScope) {
         _modelCatalog.value = models
-        _modelAuthProviders.value = providers
       }
     } catch (_: Throwable) {
       publishGatewayData(gatewayScope) { _modelCatalogErrorText.value = "Could not load provider catalog." }
     } finally {
       publishGatewayData(gatewayScope) { _modelCatalogRefreshing.value = false }
     }
+  }
+
+  private suspend fun refreshProviderModelsFromGateway() {
+    val refreshGeneration = providerModelCatalogRefreshGuard.begin()
+    val gatewayScope = captureGatewayDataScope() ?: return
+    publishProviderModelRefresh(gatewayScope, refreshGeneration) {
+      _providerModelCatalogRefreshing.value = true
+      _providerModelCatalogErrorText.value = null
+    }
+    if (!operatorConnected) {
+      publishProviderModelRefresh(gatewayScope, refreshGeneration) {
+        _providerModelCatalog.value = emptyList()
+        _modelAuthProviders.value = emptyList()
+        _providerModelCatalogRefreshing.value = false
+      }
+      return
+    }
+    try {
+      try {
+        val models = requestProviderModelCatalog(gatewayScope)
+        publishProviderModelRefresh(gatewayScope, refreshGeneration) {
+          _providerModelCatalog.value = models
+        }
+      } catch (err: Throwable) {
+        publishProviderModelRefresh(gatewayScope, refreshGeneration) {
+          _providerModelCatalogErrorText.value =
+            if (err is ProviderModelConfigUnsupported) {
+              "Update your Gateway to view provider model config."
+            } else {
+              "Could not load provider model config."
+            }
+        }
+      }
+
+      // Keep readiness independent from the additive provider-config view so
+      // older Gateways still populate provider status while prompting an upgrade.
+      try {
+        val providers = requestModelAuthProviders(gatewayScope)
+        publishProviderModelRefresh(gatewayScope, refreshGeneration) {
+          _modelAuthProviders.value = providers
+        }
+      } catch (_: Throwable) {
+        publishProviderModelRefresh(gatewayScope, refreshGeneration) {
+          if (_providerModelCatalogErrorText.value == null) {
+            _providerModelCatalogErrorText.value =
+              "Provider models loaded, but readiness is unavailable."
+          }
+        }
+      }
+    } finally {
+      publishProviderModelRefresh(gatewayScope, refreshGeneration) {
+        _providerModelCatalogRefreshing.value = false
+      }
+    }
+  }
+
+  private suspend fun requestProviderModelCatalog(gatewayScope: GatewayDataScope): List<GatewayModelSummary> {
+    val modelsRes =
+      requestProviderModelConfig { paramsJson ->
+        requestGatewayData(gatewayScope, "models.list", paramsJson)
+      }
+    val modelsRoot = json.parseToJsonElement(modelsRes).asObjectOrNull()
+    return parseGatewayModels(modelsRoot?.get("models") as? JsonArray)
+  }
+
+  private suspend fun requestModelAuthProviders(gatewayScope: GatewayDataScope): List<GatewayModelProviderSummary> {
+    val authRes = requestGatewayData(gatewayScope, "models.authStatus", "{}")
+    val authRoot = json.parseToJsonElement(authRes).asObjectOrNull()
+    return parseGatewayModelProviders(authRoot?.get("providers") as? JsonArray)
   }
 
   private suspend fun refreshTalkSetupReadinessFromGateway() {
@@ -3611,15 +3946,18 @@ class NodeRuntime private constructor(
   }
 
   private suspend fun refreshCronFromGateway() {
+    val refreshGeneration = cronRefreshGuard.begin()
     val gatewayScope = captureGatewayDataScope() ?: return
-    publishGatewayData(gatewayScope) {
+    publishCronRefresh(gatewayScope, refreshGeneration) {
       _cronRefreshing.value = true
       _cronErrorText.value = null
     }
     if (!operatorConnected) {
-      _cronStatus.value = GatewayCronStatus(enabled = false, jobs = 0, nextWakeAtMs = null)
-      _cronJobs.value = emptyList()
-      _cronRefreshing.value = false
+      publishCronRefresh(gatewayScope, refreshGeneration) {
+        _cronStatus.value = GatewayCronStatus(enabled = false, jobs = 0, nextWakeAtMs = null)
+        _cronJobs.value = emptyList()
+        _cronRefreshing.value = false
+      }
       return
     }
     try {
@@ -3635,14 +3973,18 @@ class NodeRuntime private constructor(
       val listRes = requestGatewayData(gatewayScope, "cron.list", """{"includeDisabled":true,"limit":20,"sortBy":"nextRunAtMs","sortDir":"asc"}""")
       val listRoot = json.parseToJsonElement(listRes).asObjectOrNull()
       val jobs = parseCronJobs(listRoot?.get("jobs") as? JsonArray)
-      publishGatewayData(gatewayScope) {
+      publishCronRefresh(gatewayScope, refreshGeneration) {
         _cronStatus.value = status
         _cronJobs.value = jobs
       }
     } catch (_: Throwable) {
-      publishGatewayData(gatewayScope) { _cronErrorText.value = "Could not load cron jobs." }
+      publishCronRefresh(gatewayScope, refreshGeneration) {
+        _cronErrorText.value = "Could not load cron jobs."
+      }
     } finally {
-      publishGatewayData(gatewayScope) { _cronRefreshing.value = false }
+      publishCronRefresh(gatewayScope, refreshGeneration) {
+        _cronRefreshing.value = false
+      }
     }
   }
 
@@ -3665,6 +4007,230 @@ class NodeRuntime private constructor(
     } catch (_: Throwable) {
       cronJobDetailRequestGuard.publishIfCurrent(request) {
         _cronJobDetailState.value = GatewayCronJobDetailState.Error(request.id, "Could not load cron job.")
+      }
+    }
+  }
+
+  private suspend fun loadCronRunHistoryFromGateway(request: CronJobDetailRequest) {
+    val gatewayScope = captureGatewayDataScope() ?: return
+    if (!operatorConnected) {
+      cronRunHistoryRequestGuard.publishIfCurrent(request) {
+        _cronRunHistoryState.value =
+          GatewayCronRunHistoryState.Error(
+            id = request.id,
+            message = "Connect the gateway to inspect cron run history.",
+          )
+      }
+      return
+    }
+    try {
+      val response =
+        requestGatewayData(
+          gatewayScope,
+          "cron.runs",
+          buildJsonObject {
+            put("id", JsonPrimitive(request.id))
+            put("limit", JsonPrimitive(20))
+            put("sortDir", JsonPrimitive("desc"))
+          }.toString(),
+        )
+      val root = json.parseToJsonElement(response).asObjectOrNull()
+      val runs = parseGatewayCronRunHistory(root?.get("entries") as? JsonArray)
+      publishGatewayData(gatewayScope) {
+        cronRunHistoryRequestGuard.publishIfCurrent(request) {
+          _cronRunHistoryState.value = GatewayCronRunHistoryState.Loaded(id = request.id, runs = runs)
+        }
+      }
+    } catch (err: CancellationException) {
+      throw err
+    } catch (_: Throwable) {
+      publishGatewayData(gatewayScope) {
+        cronRunHistoryRequestGuard.publishIfCurrent(request) {
+          _cronRunHistoryState.value =
+            GatewayCronRunHistoryState.Error(
+              id = request.id,
+              message = "Could not load cron run history.",
+            )
+        }
+      }
+    }
+  }
+
+  private fun launchCronAction(
+    id: String,
+    action: GatewayCronAction,
+    perform: suspend (GatewayDataScope, String) -> CronActionResult,
+  ) {
+    val jobId = id.trim().takeIf { it.isNotEmpty() } ?: return
+    if (!operatorAdminScopeAvailable.value) {
+      _cronActionState.value =
+        GatewayCronActionState.Notice(
+          id = jobId,
+          message = "Cron changes require operator.admin access.",
+          kind = GatewayCronNoticeKind.Error,
+        )
+      return
+    }
+    if (!operatorConnected) {
+      _cronActionState.value =
+        GatewayCronActionState.Notice(
+          id = jobId,
+          message = "Connect the gateway to manage cron jobs.",
+          kind = GatewayCronNoticeKind.Error,
+        )
+      return
+    }
+    if (_cronActionState.value is GatewayCronActionState.Running) return
+    // One mutating RPC at a time keeps button taps and programmatic calls from racing.
+    if (!cronActionMutex.tryLock()) {
+      if (_cronActionState.value !is GatewayCronActionState.Running) {
+        _cronActionState.value =
+          GatewayCronActionState.Notice(
+            id = jobId,
+            message = "Another cron action is still finishing.",
+            kind = GatewayCronNoticeKind.Warning,
+          )
+      }
+      return
+    }
+    // Publish ownership before returning to Compose so Activity recreation can
+    // distinguish a retained Save from dead pending state after process death.
+    val actionScope = captureGatewayDataScope()
+    if (actionScope == null) {
+      cronActionMutex.unlock()
+      return
+    }
+    val started =
+      publishGatewayData(actionScope) {
+        _cronActionState.value = GatewayCronActionState.Running(id = jobId, action = action)
+      }
+    if (!started) {
+      cronActionMutex.unlock()
+      return
+    }
+    scope.launch {
+      var completionState: GatewayCronActionState.Notice? = null
+      try {
+        val result = perform(actionScope, jobId)
+        if (result.deleted) {
+          clearDeletedCronSelection(jobId)
+        }
+        if (result.refresh) {
+          refreshCronFromGateway()
+          if (!result.deleted) reloadCronJobIfSelected(jobId)
+        }
+        completionState =
+          GatewayCronActionState.Notice(
+            id = jobId,
+            message = result.message,
+            kind = result.kind,
+            deleted = result.deleted,
+          )
+      } catch (err: CancellationException) {
+        throw err
+      } catch (err: Throwable) {
+        val message = err.message?.trim()?.takeIf { it.isNotEmpty() } ?: "Cron action failed."
+        completionState =
+          GatewayCronActionState.Notice(
+            id = jobId,
+            message = message,
+            kind = GatewayCronNoticeKind.Error,
+          )
+      } finally {
+        cronActionMutex.unlock()
+        val notice = completionState
+        if (notice != null) {
+          publishGatewayData(actionScope) {
+            _cronActionState.value = notice
+          }
+        }
+      }
+    }
+  }
+
+  private fun reloadCronJobIfSelected(jobId: String) {
+    // Ownership checks and loading publication stay under each guard's lock;
+    // navigation that wins afterward invalidates these requests before publish.
+    val detailRequest =
+      cronJobDetailRequestGuard.beginIfCurrent(jobId) { request ->
+        _cronJobDetailState.value = GatewayCronJobDetailState.Loading(request.id)
+      }
+    val historyRequest =
+      cronRunHistoryRequestGuard.beginIfCurrent(jobId) { request ->
+        _cronRunHistoryState.value = GatewayCronRunHistoryState.Loading(request.id)
+      }
+    detailRequest?.let { scope.launch { loadCronJobDetailFromGateway(it) } }
+    historyRequest?.let { scope.launch { loadCronRunHistoryFromGateway(it) } }
+  }
+
+  private fun clearDeletedCronSelection(jobId: String) {
+    // A completed delete can race navigation to another job. Clear only state
+    // still owned by the deleted id so the newer detail/history survives.
+    cronJobDetailRequestGuard.cancelIfCurrent(jobId) {
+      _cronJobDetailState.value = GatewayCronJobDetailState.Idle
+    }
+    cronRunHistoryRequestGuard.cancelIfCurrent(jobId) {
+      _cronRunHistoryState.value = GatewayCronRunHistoryState.Idle
+    }
+  }
+
+  private fun trackQueuedCronRun(
+    gatewayScope: GatewayDataScope,
+    jobId: String,
+    runId: String,
+  ) {
+    // cron.run acknowledges before lane admission. Track its exact run-log id
+    // so only this job stays deduped until terminal evidence or scope retirement.
+    scope.launch {
+      var completedRun: GatewayCronRunSummary? = null
+      while (isGatewayDataScopeCurrent(gatewayScope) && completedRun == null) {
+        completedRun =
+          try {
+            val response =
+              requestGatewayData(
+                gatewayScope,
+                "cron.runs",
+                buildJsonObject {
+                  put("id", JsonPrimitive(jobId))
+                  put("runId", JsonPrimitive(runId))
+                  put("limit", JsonPrimitive(1))
+                  put("sortDir", JsonPrimitive("desc"))
+                }.toString(),
+              )
+            val root = json.parseToJsonElement(response).asObjectOrNull()
+            parseGatewayCronRunHistory(root?.get("entries") as? JsonArray)
+              .firstOrNull { it.runId == runId }
+          } catch (err: CancellationException) {
+            throw err
+          } catch (_: Throwable) {
+            if (!isGatewayDataScopeCurrent(gatewayScope)) return@launch
+            null
+          }
+        if (completedRun == null) delay(CRON_RUN_TRACKING_POLL_MS)
+      }
+      if (!isGatewayDataScopeCurrent(gatewayScope)) return@launch
+      val terminalRun = completedRun ?: return@launch
+
+      var pendingCleared = false
+      val scopeCurrent =
+        publishGatewayData(gatewayScope) {
+          pendingCleared =
+            pendingCronRunRegistry.finish(jobId, runId) {
+              _pendingCronRunJobIds.value = it
+            }
+        }
+      if (!scopeCurrent || !pendingCleared) return@launch
+
+      refreshCronFromGateway()
+      reloadCronJobIfSelected(jobId)
+      publishGatewayData(gatewayScope) {
+        val currentAction = _cronActionState.value
+        val canPublish =
+          currentAction == GatewayCronActionState.Idle ||
+            (currentAction is GatewayCronActionState.Notice && currentAction.id == jobId)
+        if (canPublish) {
+          _cronActionState.value = cronRunCompletionNotice(jobId, terminalRun.status)
+        }
       }
     }
   }
@@ -5161,13 +5727,6 @@ private enum class HomeCanvasGatewayState {
   Offline,
 }
 
-data class GatewayAgentSummary(
-  val id: String,
-  val name: String?,
-  val emoji: String?,
-  val workspaceGit: Boolean = false,
-)
-
 data class GatewayModelSummary(
   val id: String,
   val name: String,
@@ -5175,6 +5734,7 @@ data class GatewayModelSummary(
   val available: Boolean?,
   val supportsVision: Boolean,
   val supportsAudio: Boolean,
+  val supportsVideo: Boolean,
   val supportsDocuments: Boolean,
   val supportsReasoning: Boolean,
   val contextTokens: Long?,
@@ -5195,11 +5755,22 @@ internal fun parseGatewayModels(models: JsonArray?): List<GatewayModelSummary> =
         available = obj.optionalBoolean("available"),
         supportsVision = "image" in inputTypes,
         supportsAudio = "audio" in inputTypes,
+        supportsVideo = "video" in inputTypes,
         supportsDocuments = "document" in inputTypes,
         supportsReasoning = obj["reasoning"].toString().trim() == "true",
-        contextTokens = obj["contextWindow"].toString().toLongOrNull() ?: obj["contextTokens"].toString().toLongOrNull(),
+        contextTokens = obj["contextTokens"].toString().toLongOrNull() ?: obj["contextWindow"].toString().toLongOrNull(),
       )
     }.orEmpty()
+
+internal class ProviderModelConfigUnsupported : Exception()
+
+internal suspend fun requestProviderModelConfig(request: suspend (String) -> String): String =
+  try {
+    request("""{"view":"provider-config"}""")
+  } catch (err: GatewayRequestRejected) {
+    if (err.gatewayError.code != "INVALID_REQUEST") throw err
+    throw ProviderModelConfigUnsupported()
+  }
 
 data class GatewayModelProviderSummary(
   val id: String,
@@ -5339,8 +5910,8 @@ internal fun GatewayNodeCapabilityApproval.withoutExactRequestId(): GatewayNodeC
 
 internal fun GatewayNodesDevicesSummary.withoutExactApprovalRequestIds(): GatewayNodesDevicesSummary = copy(nodes = nodes.map { node -> node.copy(pendingRequestId = null) })
 
-/** Prevents older node.list responses from overwriting newer approval state. */
-internal class GatewayNodeApprovalRefreshGuard {
+/** Prevents an older gateway response from publishing after a newer refresh begins. */
+internal class LatestGatewayRefreshGuard {
   private val lock = Any()
   private var generation = 0L
 
@@ -5349,6 +5920,10 @@ internal class GatewayNodeApprovalRefreshGuard {
       generation += 1
       generation
     }
+
+  fun invalidate() {
+    begin()
+  }
 
   fun publishIfCurrent(
     refreshGeneration: Long,

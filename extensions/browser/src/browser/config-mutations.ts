@@ -4,6 +4,7 @@
  * Persists browser-control credentials and profile config changes through the
  * canonical config writer while preserving port/color allocation rules.
  */
+import { isDeepStrictEqual } from "node:util";
 import { mutateConfigFile } from "../config/config.js";
 import type { BrowserProfileConfig } from "../config/config.js";
 import { deriveDefaultBrowserCdpPortRange } from "../config/port-defaults.js";
@@ -162,20 +163,46 @@ export async function createBrowserProfileConfig(params: {
   return mutation.result;
 }
 
-/** Delete a persisted browser profile config by name. */
-export async function deleteBrowserProfileConfig(name: string): Promise<void> {
+/** Delete the exact persisted browser profile definition captured by the caller. */
+export async function deleteBrowserProfileConfig(params: {
+  name: string;
+  expected: BrowserProfileConfig;
+}): Promise<void> {
   await mutateConfigFile({
     afterWrite: { mode: "auto" },
     mutate: (draft) => {
-      const { [name]: _removed, ...remainingProfiles } = draft.browser?.profiles ?? {};
-      const nextBrowser = {
+      if (draft.browser?.defaultProfile === params.name) {
+        throw new BrowserValidationError(
+          `cannot delete the default profile "${params.name}"; change browser.defaultProfile first`,
+        );
+      }
+      const currentProfile = draft.browser?.profiles?.[params.name];
+      if (!isDeepStrictEqual(currentProfile, params.expected)) {
+        throw new BrowserConflictError(
+          `profile "${params.name}" changed while deletion was pending; retry the delete request`,
+        );
+      }
+      const { [params.name]: _removed, ...remainingProfiles } = draft.browser?.profiles ?? {};
+      draft.browser = {
         ...draft.browser,
         profiles: remainingProfiles,
       };
-      if (nextBrowser.defaultProfile === name) {
-        delete nextBrowser.defaultProfile;
+    },
+  });
+}
+
+/** Make one persisted managed profile the default for future browser calls. */
+export async function setDefaultBrowserProfile(name: string): Promise<void> {
+  await mutateConfigFile({
+    afterWrite: { mode: "auto" },
+    mutate: (draft) => {
+      if (!(name in (draft.browser?.profiles ?? {}))) {
+        throw new BrowserValidationError(`profile "${name}" does not exist`);
       }
-      draft.browser = nextBrowser;
+      draft.browser = {
+        ...draft.browser,
+        defaultProfile: name,
+      };
     },
   });
 }

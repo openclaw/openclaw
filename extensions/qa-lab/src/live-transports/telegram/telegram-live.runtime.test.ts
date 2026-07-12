@@ -381,7 +381,7 @@ describe("telegram live qa runtime", () => {
     });
 
     expect(next.agents?.defaults?.skipBootstrap).toBe(true);
-    expect(next.agents?.defaults?.models?.["openai/gpt-5.5"]?.agentRuntime).toEqual({
+    expect(next.agents?.defaults?.models?.["openai/gpt-5.6-luna"]?.agentRuntime).toEqual({
       id: "openclaw",
     });
     expect(next.plugins?.allow).toContain("telegram");
@@ -1364,5 +1364,11 @@ describe("telegram live qa runtime", () => {
 
     expect(message).toContain("Phase: unknown");
     expect(message).toContain("boom");
+  });
+
+  it("keeps bounded telegram QA progress details on UTF-16 boundaries", () => {
+    const prefix = "a".repeat(236);
+    expect(testing.formatTelegramQaProgressDetails(`${prefix}😀after`)).toBe(`${prefix}...`);
+    expect(testing.formatTelegramQaProgressDetails("a".repeat(241))).toBe(`${"a".repeat(237)}...`);
   });
 });

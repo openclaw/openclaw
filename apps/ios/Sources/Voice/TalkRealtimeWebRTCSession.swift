@@ -283,115 +283,6 @@ final class TalkRealtimeWebRTCSession: NSObject {
         }
     }
 
-    private func createClientSession(
-        provider: String?,
-        model: String?,
-        voice: String?) async throws -> TalkRealtimeClientSession
-    {
-        self.trace("gateway talk.client.create start")
-        let startedAt = ProcessInfo.processInfo.systemUptime
-        let params = TalkRealtimeClientCreateParams(provider: provider, model: model, voice: voice)
-        let data = try JSONEncoder().encode(params)
-        let json = String(data: data, encoding: .utf8)
-        let res = try await gateway.request(method: "talk.client.create", paramsJSON: json, timeoutSeconds: 12)
-        let session = try JSONDecoder().decode(TalkRealtimeClientSession.self, from: res)
-        let elapsed = Int((ProcessInfo.processInfo.systemUptime - startedAt) * 1000)
-        self.trace(
-            "gateway talk.client.create done elapsedMs=\(elapsed) "
-                + "provider=\(session.provider) transport=\(session.transport) "
-                + "model=\(session.model ?? "unknown") voice=\(session.voice ?? "unknown")")
-        return session
-    }
-
-    private func createOffer(peer: RTCPeerConnection) async throws -> RTCSessionDescription {
-        self.trace("local offer create start")
-        let constraints = RTCMediaConstraints(
-            mandatoryConstraints: [
-                "OfferToReceiveAudio": "true",
-                "OfferToReceiveVideo": "false",
-            ],
-            optionalConstraints: nil)
-        return try await withCheckedThrowingContinuation { continuation in
-            peer.offer(for: constraints) { offer, error in
-                if let error {
-                    continuation.resume(throwing: error)
-                } else if let offer {
-                    continuation.resume(returning: offer)
-                } else {
-                    continuation.resume(throwing: NSError(domain: "TalkRealtimeWebRTC", code: 3, userInfo: [
-                        NSLocalizedDescriptionKey: "OpenAI realtime offer creation returned no SDP",
-                    ]))
-                }
-            }
-        }
-    }
-
-    private func setLocalDescription(_ description: RTCSessionDescription, peer: RTCPeerConnection) async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            peer.setLocalDescription(description) { error in
-                if let error {
-                    continuation.resume(throwing: error)
-                } else {
-                    continuation.resume()
-                }
-            }
-        }
-    }
-
-    private func setRemoteDescription(_ description: RTCSessionDescription, peer: RTCPeerConnection) async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            peer.setRemoteDescription(description) { error in
-                if let error {
-                    continuation.resume(throwing: error)
-                } else {
-                    continuation.resume()
-                }
-            }
-        }
-    }
-
-    private func exchangeOffer(_ sdp: String, session: TalkRealtimeClientSession) async throws -> String {
-        let rawURL = session.offerUrl ?? Self.defaultOfferURL
-        guard let url = URL(string: rawURL) else {
-            throw NSError(domain: "TalkRealtimeWebRTC", code: 4, userInfo: [
-                NSLocalizedDescriptionKey: "Invalid OpenAI realtime offer URL",
-            ])
-        }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(session.clientSecret)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/sdp", forHTTPHeaderField: "Content-Type")
-        request.httpBody = sdp.data(using: .utf8)
-        for (key, value) in session.offerHeaders ?? [:] {
-            request.setValue(value, forHTTPHeaderField: key)
-        }
-
-        self.trace("openai webrtc offer exchange start urlHost=\(url.host ?? "unknown")")
-        let startedAt = ProcessInfo.processInfo.systemUptime
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw NSError(domain: "TalkRealtimeWebRTC", code: 5, userInfo: [
-                NSLocalizedDescriptionKey: "OpenAI realtime offer returned a non-HTTP response",
-            ])
-        }
-        let elapsed = Int((ProcessInfo.processInfo.systemUptime - startedAt) * 1000)
-        self.trace("openai webrtc offer exchange response status=\(http.statusCode) elapsedMs=\(elapsed)")
-        guard (200..<300).contains(http.statusCode) else {
-            let body = String(data: data, encoding: .utf8) ?? ""
-            throw NSError(domain: "TalkRealtimeWebRTC", code: http.statusCode, userInfo: [
-                NSLocalizedDescriptionKey: "OpenAI realtime offer failed: \(http.statusCode) \(body)",
-            ])
-        }
-        guard let answer = String(data: data, encoding: .utf8),
-              !answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        else {
-            throw NSError(domain: "TalkRealtimeWebRTC", code: 6, userInfo: [
-                NSLocalizedDescriptionKey: "OpenAI realtime offer returned an empty SDP answer",
-            ])
-        }
-        return answer
-    }
-
     private func handleRealtimeEvent(_ event: TalkRealtimeServerEvent) {
         if !self.seenRealtimeEventTypes.contains(event.type) {
             self.seenRealtimeEventTypes.insert(event.type)
@@ -993,6 +884,117 @@ final class TalkRealtimeWebRTCSession: NSObject {
             preferenceEnabled: forceSpeaker,
             outputPortTypes: session.currentRoute.outputs.map(\.portType))
         try? session.overrideOutputAudioPort(shouldForceSpeaker ? .speaker : .none)
+    }
+}
+
+extension TalkRealtimeWebRTCSession {
+    private func createClientSession(
+        provider: String?,
+        model: String?,
+        voice: String?) async throws -> TalkRealtimeClientSession
+    {
+        self.trace("gateway talk.client.create start")
+        let startedAt = ProcessInfo.processInfo.systemUptime
+        let params = TalkRealtimeClientCreateParams(provider: provider, model: model, voice: voice)
+        let data = try JSONEncoder().encode(params)
+        let json = String(data: data, encoding: .utf8)
+        let res = try await gateway.request(method: "talk.client.create", paramsJSON: json, timeoutSeconds: 12)
+        let session = try JSONDecoder().decode(TalkRealtimeClientSession.self, from: res)
+        let elapsed = Int((ProcessInfo.processInfo.systemUptime - startedAt) * 1000)
+        self.trace(
+            "gateway talk.client.create done elapsedMs=\(elapsed) "
+                + "provider=\(session.provider) transport=\(session.transport) "
+                + "model=\(session.model ?? "unknown") voice=\(session.voice ?? "unknown")")
+        return session
+    }
+
+    private func createOffer(peer: RTCPeerConnection) async throws -> RTCSessionDescription {
+        self.trace("local offer create start")
+        let constraints = RTCMediaConstraints(
+            mandatoryConstraints: [
+                "OfferToReceiveAudio": "true",
+                "OfferToReceiveVideo": "false",
+            ],
+            optionalConstraints: nil)
+        return try await withCheckedThrowingContinuation { continuation in
+            peer.offer(for: constraints) { offer, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else if let offer {
+                    continuation.resume(returning: offer)
+                } else {
+                    continuation.resume(throwing: NSError(domain: "TalkRealtimeWebRTC", code: 3, userInfo: [
+                        NSLocalizedDescriptionKey: "OpenAI realtime offer creation returned no SDP",
+                    ]))
+                }
+            }
+        }
+    }
+
+    private func setLocalDescription(_ description: RTCSessionDescription, peer: RTCPeerConnection) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            peer.setLocalDescription(description) { error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume()
+                }
+            }
+        }
+    }
+
+    private func setRemoteDescription(_ description: RTCSessionDescription, peer: RTCPeerConnection) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            peer.setRemoteDescription(description) { error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume()
+                }
+            }
+        }
+    }
+
+    private func exchangeOffer(_ sdp: String, session: TalkRealtimeClientSession) async throws -> String {
+        let rawURL = session.offerUrl ?? Self.defaultOfferURL
+        guard let url = URL(string: rawURL) else {
+            throw NSError(domain: "TalkRealtimeWebRTC", code: 4, userInfo: [
+                NSLocalizedDescriptionKey: "Invalid OpenAI realtime offer URL",
+            ])
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(session.clientSecret)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/sdp", forHTTPHeaderField: "Content-Type")
+        request.httpBody = sdp.data(using: .utf8)
+        for (key, value) in session.offerHeaders ?? [:] {
+            request.setValue(value, forHTTPHeaderField: key)
+        }
+
+        self.trace("openai webrtc offer exchange start urlHost=\(url.host ?? "unknown")")
+        let startedAt = ProcessInfo.processInfo.systemUptime
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw NSError(domain: "TalkRealtimeWebRTC", code: 5, userInfo: [
+                NSLocalizedDescriptionKey: "OpenAI realtime offer returned a non-HTTP response",
+            ])
+        }
+        let elapsed = Int((ProcessInfo.processInfo.systemUptime - startedAt) * 1000)
+        self.trace("openai webrtc offer exchange response status=\(http.statusCode) elapsedMs=\(elapsed)")
+        guard (200..<300).contains(http.statusCode) else {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw NSError(domain: "TalkRealtimeWebRTC", code: http.statusCode, userInfo: [
+                NSLocalizedDescriptionKey: "OpenAI realtime offer failed: \(http.statusCode) \(body)",
+            ])
+        }
+        guard let answer = String(data: data, encoding: .utf8),
+              !answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            throw NSError(domain: "TalkRealtimeWebRTC", code: 6, userInfo: [
+                NSLocalizedDescriptionKey: "OpenAI realtime offer returned an empty SDP answer",
+            ])
+        }
+        return answer
     }
 }
 

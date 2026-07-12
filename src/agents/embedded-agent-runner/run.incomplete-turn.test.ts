@@ -19,6 +19,7 @@ import {
   mockedSleepWithAbort,
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
+  useOpenAIPlatformAuthFixture,
   warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
 import {
@@ -60,6 +61,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
   beforeEach(() => {
     resetRunOverflowCompactionHarnessMocks();
+    useOpenAIPlatformAuthFixture();
     mockedGlobalHookRunner.hasHooks.mockImplementation(() => false);
   });
 
@@ -2928,6 +2930,41 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       }),
     ).toBe(false);
   });
+
+  it.each([
+    ["current clean overrides cumulative dirty", true, false, true],
+    ["current dirty overrides cumulative clean", false, true, false],
+    ["both clean remain retryable", false, false, true],
+  ] as const)(
+    "uses current-attempt replay metadata when %s",
+    (_label, cumulativeDirty, currentDirty, expected) => {
+      const assistant = {
+        role: "assistant",
+        stopReason: "error",
+        provider: "openrouter",
+        model: "test-model",
+        content: [],
+        usage: { input: 100, output: 0, totalTokens: 100 },
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+      expect(
+        shouldRetrySilentErrorAssistantTurn({
+          attempt: makeAttemptResult({
+            assistantTexts: [],
+            lastAssistant: assistant,
+            replayMetadata: {
+              hadPotentialSideEffects: cumulativeDirty,
+              replaySafe: !cumulativeDirty,
+            },
+            currentAttemptReplayMetadata: {
+              hadPotentialSideEffects: currentDirty,
+              replaySafe: !currentDirty,
+            },
+          }),
+          assistant,
+        }),
+      ).toBe(expected);
+    },
+  );
 
   it("detects empty openai-compatible stop turns with non-zero output usage", () => {
     const retryInstruction = resolveEmptyResponseRetryInstruction({

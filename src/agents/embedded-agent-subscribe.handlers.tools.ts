@@ -61,6 +61,7 @@ import {
   isMessagingToolTargetEvidenceAction,
 } from "./embedded-agent-messaging.js";
 import { mergeEmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
+import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import type {
   ToolCallSummary,
   ToolHandlerContext,
@@ -317,35 +318,26 @@ function emitTrackedItemEvent(ctx: ToolHandlerContext, itemData: AgentItemEventD
   });
 }
 
-function warnBestEffortEventFailure(ctx: ToolHandlerContext, label: string, error: unknown): void {
-  ctx.log.warn(`${label} callback failed: ${String(error)}`);
-}
-
 function emitExecutionPhaseBestEffort(
   ctx: ToolHandlerContext,
   info: Parameters<NonNullable<ToolHandlerContext["params"]["onExecutionPhase"]>>[0],
 ): void {
-  try {
-    ctx.params.onExecutionPhase?.(info);
-  } catch (error) {
-    warnBestEffortEventFailure(ctx, "tool execution phase", error);
-  }
+  runBestEffortCallback({
+    label: "tool execution phase",
+    log: ctx.log,
+    callback: () => ctx.params.onExecutionPhase?.(info),
+  });
 }
 
 function emitAgentEventCallbackBestEffort(
   ctx: ToolHandlerContext,
   event: Parameters<NonNullable<ToolHandlerContext["params"]["onAgentEvent"]>>[0],
 ): void {
-  try {
-    const result = ctx.params.onAgentEvent?.(event);
-    if (isPromiseLike<void>(result)) {
-      void Promise.resolve(result).catch((error: unknown) => {
-        warnBestEffortEventFailure(ctx, "tool agent event", error);
-      });
-    }
-  } catch (error) {
-    warnBestEffortEventFailure(ctx, "tool agent event", error);
-  }
+  runBestEffortCallback({
+    label: "tool agent event",
+    log: ctx.log,
+    callback: () => ctx.params.onAgentEvent?.(event),
+  });
 }
 
 function applyCurrentMessageProvider(
@@ -766,6 +758,8 @@ function readExecApprovalUnavailableDetails(result: unknown): {
   channelLabel?: string;
   accountId?: string;
   sentApproverDms?: boolean;
+  host?: "gateway" | "node";
+  nodeId?: string;
 } | null {
   if (!result || typeof result !== "object") {
     return null;
@@ -794,6 +788,8 @@ function readExecApprovalUnavailableDetails(result: unknown): {
     channelLabel: readStringValue(details.channelLabel),
     accountId: readStringValue(details.accountId),
     sentApproverDms: details.sentApproverDms === true,
+    host: details.host === "gateway" || details.host === "node" ? details.host : undefined,
+    nodeId: readStringValue(details.nodeId),
   };
 }
 
@@ -824,9 +820,9 @@ async function emitToolResultOutput(params: {
     }
     ctx.state.deterministicApprovalPromptPending = true;
     try {
-      const { buildExecApprovalPendingReplyPayload } = await loadExecApprovalReply();
+      const { buildTypedExecApprovalPendingReplyPayload } = await loadExecApprovalReply();
       await ctx.params.onToolResult(
-        buildExecApprovalPendingReplyPayload({
+        buildTypedExecApprovalPendingReplyPayload({
           approvalId: approvalPending.approvalId,
           approvalSlug: approvalPending.approvalSlug,
           allowedDecisions: approvalPending.allowedDecisions,
@@ -863,6 +859,8 @@ async function emitToolResultOutput(params: {
           channelLabel: approvalUnavailable.channelLabel,
           accountId: approvalUnavailable.accountId,
           sentApproverDms: approvalUnavailable.sentApproverDms,
+          host: approvalUnavailable.host,
+          nodeId: approvalUnavailable.nodeId,
         }),
       );
       ctx.state.deterministicApprovalPromptSent = true;
@@ -1482,7 +1480,11 @@ export async function handleToolExecutionEnd(
       const isFirstHeartbeatResponse = ctx.state.heartbeatToolResponse === undefined;
       ctx.state.heartbeatToolResponse = response;
       if (isFirstHeartbeatResponse) {
-        void ctx.params.onHeartbeatToolResponse?.(response);
+        runBestEffortCallback({
+          label: "heartbeat tool response",
+          log: ctx.log,
+          callback: () => ctx.params.onHeartbeatToolResponse?.(response),
+        });
       }
     }
   }

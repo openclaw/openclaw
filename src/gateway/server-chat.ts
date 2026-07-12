@@ -1,18 +1,24 @@
 // Gateway chat runtime projects agent events into chat/session subscriber
 // streams, lifecycle persistence, heartbeat visibility, and live UI updates.
 import { performance } from "node:perf_hooks";
+import type { ChatEvent } from "../../packages/gateway-protocol/src/schema/types.js";
 import { buildAgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { isTimeoutError, resolveFailoverReasonFromError } from "../agents/failover-error.js";
 import { resolveToolSearchCodeDisplayTarget } from "../agents/tool-display-common.js";
 import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
-import { detectErrorKind, type ErrorKind } from "../infra/errors.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import { logError } from "../logger.js";
-import { isAcpSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
+import {
+  isAcpSessionKey,
+  isSubagentSessionKey,
+  parseCronRunScopeSuffix,
+} from "../sessions/session-key-utils.js";
 import { resolveAssistantEventPhase } from "../shared/chat-message-content.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
 import {
@@ -193,7 +199,10 @@ export type ChatEventBroadcast = (
 
 export type NodeSendToSession = (sessionKey: string, event: string, payload: unknown) => void;
 
-const CHAT_ERROR_KINDS = new Set<ErrorKind>([
+// Derived from ChatErrorEventSchema.errorKind (gateway-protocol); keep set in sync.
+type ChatErrorKind = NonNullable<Extract<ChatEvent, { state: "error" }>["errorKind"]>;
+
+const CHAT_ERROR_KINDS = new Set<ChatErrorKind>([
   "refusal",
   "timeout",
   "rate_limit",
@@ -214,10 +223,36 @@ function buildChatErrorMessage(error: unknown): Record<string, unknown> | undefi
   };
 }
 
-function readChatErrorKind(value: unknown): ErrorKind | undefined {
-  return typeof value === "string" && CHAT_ERROR_KINDS.has(value as ErrorKind)
-    ? (value as ErrorKind)
+function readChatErrorKind(value: unknown): ChatErrorKind | undefined {
+  return typeof value === "string" && CHAT_ERROR_KINDS.has(value as ChatErrorKind)
+    ? (value as ChatErrorKind)
     : undefined;
+}
+
+// Refusal first (stop-reason fact, not FailoverReason); then canonical failover map.
+export function resolveChatErrorKindFromError(error: unknown): ChatErrorKind | undefined {
+  if (error === undefined) {
+    return undefined;
+  }
+  const message = formatErrorMessage(error).toLowerCase();
+  if (
+    message.includes("refusal") ||
+    message.includes("content_filter") ||
+    message.includes("sensitive") ||
+    message.includes("unhandled stop reason: refusal_policy")
+  ) {
+    return "refusal";
+  }
+  const reason = resolveFailoverReasonFromError(error);
+  if (reason === "rate_limit" || reason === "overloaded") {
+    return "rate_limit";
+  }
+  if (reason === "context_overflow") {
+    return "context_length";
+  }
+  // FailoverReason "timeout" is the retryable-transient bucket and deliberately
+  // swallows generic 5xx; only genuinely timeout-shaped errors get the badge.
+  return isTimeoutError(error) ? "timeout" : undefined;
 }
 
 function excludeConnIds(
@@ -681,7 +716,8 @@ export function createAgentEventHandler({
             terminalState,
             terminalOutcome.error ?? evt.data?.error,
             terminalOutcome.stopReason,
-            readChatErrorKind(evt.data?.errorKind) ?? detectErrorKind(evt.data?.error),
+            readChatErrorKind(evt.data?.errorKind) ??
+              resolveChatErrorKindFromError(evt.data?.error),
             {
               agentId: terminalAgentId,
               controlUiVisible: isControlUiVisible,
@@ -724,6 +760,9 @@ export function createAgentEventHandler({
           persistence,
         });
         const broadcastSessionChange = (snapshotEvent?: AgentEventPayload) => {
+          if (parseCronRunScopeSuffix(sessionKey).runId) {
+            return;
+          }
           const sessionEventConnIds = sessionEventSubscribers.getAll();
           if (sessionEventConnIds.size === 0) {
             return;
@@ -959,7 +998,7 @@ export function createAgentEventHandler({
     jobState: "done" | "error" | "aborted",
     error?: unknown,
     stopReason?: string,
-    errorKind?: ErrorKind,
+    errorKind?: ChatErrorKind,
     opts?: {
       agentId?: string;
       controlUiVisible?: boolean;

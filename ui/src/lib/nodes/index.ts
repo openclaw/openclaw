@@ -46,6 +46,8 @@ export type PairedDevice = {
   deviceId: string;
   publicKey?: string;
   displayName?: string;
+  /** Operator-assigned label; preferred over client displayName when rendering. */
+  operatorLabel?: string;
   platform?: string;
   clientId?: string;
   clientMode?: string;
@@ -54,7 +56,7 @@ export type PairedDevice = {
   scopes?: string[];
   remoteIp?: string;
   tokens?: DeviceTokenSummary[];
-  approvedVia?: "owner" | "silent" | "trusted-cidr" | "bootstrap";
+  approvedVia?: "owner" | "silent" | "trusted-cidr" | "ssh-verified" | "bootstrap";
   /** Server-computed: the device currently holds a live gateway connection. */
   connected?: boolean;
   createdAtMs?: number;

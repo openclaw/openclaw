@@ -4,7 +4,7 @@ import { property, state } from "lit/decorators.js";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { FastMode } from "../../api/types.ts";
-import type { RouteId } from "../../app-route-paths.ts";
+import { pathForRoute, type RouteId } from "../../app-route-paths.ts";
 import {
   applicationContext,
   type ApplicationContext,
@@ -21,7 +21,7 @@ import {
 import { startThemeTransition } from "../../app/theme-transition.ts";
 import { resolveTheme, type ThemeMode, type ThemeName } from "../../app/theme.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
-import { t } from "../../i18n/index.ts";
+import { i18n, isSupportedLocale, t, type Locale } from "../../i18n/index.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
@@ -576,11 +576,17 @@ export class ConfigPage extends OpenClawLightDomElement {
       customTheme: next.customTheme,
       textScale: next.textScale,
       lobsterPetVisits: next.lobsterPetVisits,
+      lobsterPetSounds: next.lobsterPetSounds,
     });
     applyTextScale(this.settings.textScale);
     // theme.refresh() also republishes non-theme appearance prefs (text
-    // scale, lobster pet visits) to app-host subscribers.
+    // scale, lobster pet visits/sounds) to app-host subscribers.
     this.context.theme.refresh();
+  }
+
+  private setLocale(locale: Locale) {
+    this.settings = patchSettings({ locale });
+    void i18n.setLocale(locale);
   }
 
   private setTheme(
@@ -791,9 +797,9 @@ export class ConfigPage extends OpenClawLightDomElement {
       configSaving: configState.configSaving,
       configApplying: configState.configApplying,
       connected: configState.connected,
+      pluginsHref: pathForRoute("plugins", this.context.basePath),
       onSaveConfig: () => void runtimeConfig.save(),
       onApplyConfig: () => void runtimeConfig.apply(),
-      onServerEnabledChange: (name, enabled) => runtimeConfig.setMcpServerEnabled(name, enabled),
       editor: renderConfig({
         ...props,
         activeSection: "mcp",
@@ -810,10 +816,12 @@ export class ConfigPage extends OpenClawLightDomElement {
     const agentsDefaults = asConfigRecord(asConfigRecord(configObject.agents)?.defaults);
     const model = typeof agentsDefaults?.model === "string" ? agentsDefaults.model : "default";
     const thinkingLevel =
-      typeof agentsDefaults?.thinkingLevel === "string" ? agentsDefaults.thinkingLevel : "off";
+      typeof agentsDefaults?.thinkingDefault === "string" ? agentsDefaults.thinkingDefault : "off";
     const fastMode = agentsDefaults?.fastMode;
     const appConfig = this.context.config.current;
     return renderQuickSettings({
+      locale: isSupportedLocale(this.settings.locale) ? this.settings.locale : i18n.getLocale(),
+      onLocaleChange: (locale) => this.setLocale(locale),
       currentModel: model,
       thinkingLevel,
       fastMode: fastMode === "auto" || typeof fastMode === "boolean" ? fastMode : false,
@@ -845,6 +853,9 @@ export class ConfigPage extends OpenClawLightDomElement {
       lobsterPetVisits: this.settings.lobsterPetVisits !== false,
       setLobsterPetVisits: (enabled) =>
         this.applySettings({ ...this.settings, lobsterPetVisits: enabled }),
+      lobsterPetSounds: this.settings.lobsterPetSounds === true,
+      setLobsterPetSounds: (enabled) =>
+        this.applySettings({ ...this.settings, lobsterPetSounds: enabled }),
       onOpenCustomThemeImport: () => {
         this.pageId = "appearance";
         this.setFormMode("form");
@@ -868,7 +879,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       onSaveConfig: () => void runtimeConfig.save(),
       onApplyConfig: () => void runtimeConfig.apply(),
       onThinkingChange: (level) =>
-        runtimeConfig.patchForm(["agents", "defaults", "thinkingLevel"], level),
+        runtimeConfig.patchForm(["agents", "defaults", "thinkingDefault"], level),
       onFastModeChange: (mode: FastMode) =>
         runtimeConfig.patchForm(["agents", "defaults", "fastMode"], mode),
       onChannelConfigure: () => this.navigate("communications"),

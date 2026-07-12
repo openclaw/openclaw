@@ -4,6 +4,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { isWellFormedApprovalId } from "../../packages/gateway-protocol/src/schema/approval-id.js";
 
 export type InteractiveButtonStyle = "primary" | "secondary" | "success" | "danger";
 
@@ -24,6 +25,23 @@ export type MessagePresentationAction =
       /** Opaque callback value interpreted by the target channel/plugin. */
       type: "callback";
       value: string;
+    }
+  | {
+      /** Resolve one durable operator approval without exposing transport callback data. */
+      type: "approval";
+      approvalId: string;
+      approvalKind: "exec" | "plugin";
+      decision: "allow-once" | "allow-always" | "deny";
+    }
+  | {
+      /** Open a normal external link. */
+      type: "url";
+      url: string;
+    }
+  | {
+      /** Launch a channel-native web app. */
+      type: "web-app";
+      url: string;
     };
 
 /** Portable action control rendered as a button or link by channel adapters. */
@@ -35,16 +53,17 @@ export type MessagePresentationButton = {
   /**
    * Legacy opaque callback value sent when the button is pressed.
    * Prefer action for new presentation controls.
+   * @deprecated Use action.
    */
   value?: string;
-  /** External URL opened by the button instead of sending a callback value. */
+  /** @deprecated Use an action with type "url". */
   url?: string;
-  /** Telegram-style web app launch target. */
+  /** @deprecated Use an action with type "web-app". */
   webApp?: {
     url: string;
   };
   /**
-   * @deprecated Use webApp. The snake_case alias is accepted for legacy JSON payloads only.
+   * @deprecated Use an action with type "web-app". Accepted for legacy JSON payloads only.
    */
   web_app?: {
     url: string;
@@ -64,8 +83,8 @@ export type MessagePresentationOption = {
   /** User-visible option label. */
   label: string;
   /** Typed action sent when the option is selected. */
-  action?: MessagePresentationAction;
-  /** Legacy opaque callback value sent when the option is selected. */
+  action?: Extract<MessagePresentationAction, { type: "command" | "callback" }>;
+  /** @deprecated Use action. */
   value?: string;
 };
 
@@ -85,7 +104,39 @@ export function resolveMessagePresentationControlValue(control: {
   action?: MessagePresentationAction;
   value?: string;
 }): string | undefined {
-  return resolveMessagePresentationActionValue(control.action) ?? control.value;
+  if (control.action !== undefined) {
+    const action = normalizePresentationAction(control.action);
+    return action ? resolveMessagePresentationActionValue(action) : undefined;
+  }
+  return control.value;
+}
+
+/** Resolve a canonical button action, including deprecated boundary inputs. */
+export function resolveMessagePresentationButtonAction(
+  button: Pick<MessagePresentationButton, "action" | "url" | "value" | "webApp" | "web_app">,
+): MessagePresentationAction | undefined {
+  if (button.action !== undefined) {
+    return normalizePresentationAction(button.action);
+  }
+  if (button.url) {
+    return { type: "url", url: button.url };
+  }
+  const webAppUrl = button.webApp?.url ?? button.web_app?.url;
+  if (webAppUrl) {
+    return { type: "web-app", url: webAppUrl };
+  }
+  return button.value ? { type: "callback", value: button.value } : undefined;
+}
+
+/** Resolve a canonical select action, including the deprecated value input. */
+export function resolveMessagePresentationOptionAction(
+  option: Pick<MessagePresentationOption, "action" | "value">,
+): Extract<MessagePresentationAction, { type: "command" | "callback" }> | undefined {
+  if (option.action !== undefined) {
+    const action = normalizePresentationAction(option.action);
+    return action?.type === "command" || action?.type === "callback" ? action : undefined;
+  }
+  return option.value ? { type: "callback", value: option.value } : undefined;
 }
 
 /**
@@ -168,6 +219,56 @@ export type MessagePresentationSelectBlock = {
   options: MessagePresentationOption[];
 };
 
+export type MessagePresentationChartSegment = {
+  /** Category label shown in the chart legend. */
+  label: string;
+  /** Positive segment magnitude. */
+  value: number;
+};
+
+export type MessagePresentationChartSeries = {
+  /** Unique series name shown in the chart legend. */
+  name: string;
+  /** One finite value for each chart category, in category order. */
+  values: number[];
+};
+
+export type MessagePresentationChartBlock =
+  | {
+      type: "chart";
+      chartType: "pie";
+      /** Short chart heading. */
+      title: string;
+      segments: MessagePresentationChartSegment[];
+    }
+  | {
+      type: "chart";
+      chartType: "bar" | "area" | "line";
+      /** Short chart heading. */
+      title: string;
+      /** Ordered categories shared by every series. */
+      categories: string[];
+      series: MessagePresentationChartSeries[];
+      xLabel?: string;
+      yLabel?: string;
+    };
+
+/** Scalar cell value supported by portable table presentations. */
+export type MessagePresentationTableCell = string | number;
+
+/** Portable table rendered natively where supported and linearly elsewhere. */
+export type MessagePresentationTableBlock = {
+  type: "table";
+  /** Short table heading used by native renderers and fallback text. */
+  caption: string;
+  /** Unique ordered column labels shared by every row. */
+  headers: string[];
+  /** Rows whose width exactly matches the header count. */
+  rows: MessagePresentationTableCell[][];
+  /** Optional column whose cells should be rendered as row headers. */
+  rowHeaderColumnIndex?: number;
+};
+
 export type MessagePresentationInteractiveBlock =
   | MessagePresentationButtonsBlock
   | MessagePresentationSelectBlock;
@@ -177,7 +278,9 @@ export type MessagePresentationBlock =
   | MessagePresentationContextBlock
   | MessagePresentationDividerBlock
   | MessagePresentationButtonsBlock
-  | MessagePresentationSelectBlock;
+  | MessagePresentationSelectBlock
+  | MessagePresentationChartBlock
+  | MessagePresentationTableBlock;
 
 export type MessagePresentation = {
   /** Optional short heading rendered before blocks when the channel supports it. */
@@ -230,6 +333,27 @@ function normalizePresentationAction(raw: unknown): MessagePresentationAction | 
     const value = normalizeOptionalString(record.value);
     return value ? { type: "callback", value } : undefined;
   }
+  if (type === "approval") {
+    if (record.type !== "approval") {
+      return undefined;
+    }
+    const approvalId = record.approvalId;
+    const approvalKind = record.approvalKind;
+    const decision = record.decision;
+    if (
+      typeof approvalId !== "string" ||
+      !isWellFormedApprovalId(approvalId) ||
+      (approvalKind !== "exec" && approvalKind !== "plugin") ||
+      (decision !== "allow-once" && decision !== "allow-always" && decision !== "deny")
+    ) {
+      return undefined;
+    }
+    return { type: "approval", approvalId, approvalKind, decision };
+  }
+  if (type === "url" || type === "web-app") {
+    const url = normalizeOptionalString(record.url);
+    return url ? { type, url } : undefined;
+  }
   return undefined;
 }
 
@@ -243,11 +367,16 @@ function normalizeButton(raw: unknown): InteractiveReplyButton | undefined {
     normalizeOptionalString(record.value) ??
     normalizeOptionalString(record.callbackData) ??
     normalizeOptionalString(record.callback_data);
-  const action = normalizePresentationAction(record.action);
   const url = normalizeOptionalString(record.url);
   const webAppRecord = toRecord(record.webApp) ?? toRecord(record.web_app);
   const webAppUrl = normalizeOptionalString(webAppRecord?.url);
-  if (!label || (!action && !value && !url && !webAppUrl)) {
+  const action =
+    record.action !== undefined ? normalizePresentationAction(record.action) : undefined;
+  if (
+    !label ||
+    (record.action !== undefined && !action) ||
+    (!action && !value && !url && !webAppUrl)
+  ) {
     return undefined;
   }
   const priority =
@@ -273,13 +402,17 @@ function normalizeOption(raw: unknown): InteractiveReplyOption | undefined {
     return undefined;
   }
   const label = normalizeOptionalString(record.label) ?? normalizeOptionalString(record.text);
-  const action = normalizePresentationAction(record.action);
-  const value =
-    normalizeOptionalString(record.value) ?? resolveMessagePresentationActionValue(action);
-  if (!label || !value) {
+  const value = normalizeOptionalString(record.value);
+  const normalizedAction =
+    record.action !== undefined ? normalizePresentationAction(record.action) : undefined;
+  const action =
+    normalizedAction?.type === "command" || normalizedAction?.type === "callback"
+      ? normalizedAction
+      : undefined;
+  if (!label || (record.action !== undefined && !action) || (!action && !value)) {
     return undefined;
   }
-  return { label, ...(action ? { action } : {}), value };
+  return { label, ...(action ? { action } : {}), ...(value ? { value } : {}) };
 }
 
 function normalizeList<T>(value: unknown, normalizeEntry: (entry: unknown) => T | undefined): T[] {
@@ -313,6 +446,155 @@ function normalizeInteractiveBlock(raw: unknown): InteractiveReplyBlock | undefi
       : undefined;
   }
   return undefined;
+}
+
+function normalizeChartSegments(value: unknown): MessagePresentationChartSegment[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) {
+    return undefined;
+  }
+  const segments = value.map((entry) => {
+    const record = toRecord(entry);
+    const label = normalizeOptionalString(record?.label);
+    const segmentValue = record?.value;
+    return label && typeof segmentValue === "number" && Number.isFinite(segmentValue)
+      ? { label, value: segmentValue }
+      : undefined;
+  });
+  return segments.every((segment): segment is MessagePresentationChartSegment =>
+    Boolean(segment && segment.value > 0),
+  )
+    ? segments
+    : undefined;
+}
+
+function normalizeChartCategories(value: unknown): string[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) {
+    return undefined;
+  }
+  const categories = value.map((entry) => normalizeOptionalString(entry));
+  if (categories.some((entry) => !entry)) {
+    return undefined;
+  }
+  const normalized = categories as string[];
+  return new Set(normalized).size === normalized.length ? normalized : undefined;
+}
+
+function normalizeChartSeries(params: {
+  value: unknown;
+  categoryCount: number;
+}): MessagePresentationChartSeries[] | undefined {
+  if (!Array.isArray(params.value) || params.value.length === 0) {
+    return undefined;
+  }
+  const series = params.value.map((entry) => {
+    const record = toRecord(entry);
+    const name = normalizeOptionalString(record?.name);
+    const values = record?.values;
+    if (
+      !name ||
+      !Array.isArray(values) ||
+      values.length !== params.categoryCount ||
+      !values.every((value) => typeof value === "number" && Number.isFinite(value))
+    ) {
+      return undefined;
+    }
+    return { name, values: values as number[] };
+  });
+  if (
+    !series.every((entry): entry is MessagePresentationChartSeries => Boolean(entry)) ||
+    new Set(series.map((entry) => entry.name)).size !== series.length
+  ) {
+    return undefined;
+  }
+  return series;
+}
+
+function normalizeChartBlock(
+  record: Record<string, unknown>,
+): MessagePresentationChartBlock | undefined {
+  const title = normalizeOptionalString(record.title);
+  const chartType = normalizeOptionalLowercaseString(record.chartType);
+  if (!title) {
+    return undefined;
+  }
+  if (chartType === "pie") {
+    const segments = normalizeChartSegments(record.segments);
+    return segments ? { type: "chart", chartType, title, segments } : undefined;
+  }
+  if (chartType !== "bar" && chartType !== "area" && chartType !== "line") {
+    return undefined;
+  }
+  const categories = normalizeChartCategories(record.categories);
+  if (!categories) {
+    return undefined;
+  }
+  const series = normalizeChartSeries({ value: record.series, categoryCount: categories.length });
+  if (!series) {
+    return undefined;
+  }
+  const xLabel = normalizeOptionalString(record.xLabel);
+  const yLabel = normalizeOptionalString(record.yLabel);
+  return {
+    type: "chart",
+    chartType,
+    title,
+    categories,
+    series,
+    ...(xLabel ? { xLabel } : {}),
+    ...(yLabel ? { yLabel } : {}),
+  };
+}
+
+function normalizeTableBlock(
+  record: Record<string, unknown>,
+): MessagePresentationTableBlock | undefined {
+  const caption = normalizeOptionalString(record.caption);
+  if (!caption || !Array.isArray(record.headers) || record.headers.length === 0) {
+    return undefined;
+  }
+  const headers = record.headers.map((header) => normalizeOptionalString(header));
+  if (
+    !headers.every((header): header is string => Boolean(header)) ||
+    new Set(headers).size !== headers.length ||
+    !Array.isArray(record.rows) ||
+    record.rows.length === 0
+  ) {
+    return undefined;
+  }
+  const rows = record.rows.map((row) => {
+    if (!Array.isArray(row) || row.length !== headers.length) {
+      return undefined;
+    }
+    const cells = row.map((cell) => {
+      if (typeof cell === "number") {
+        return Number.isFinite(cell) ? cell : undefined;
+      }
+      return normalizeOptionalString(cell);
+    });
+    return cells.every((cell): cell is MessagePresentationTableCell => cell !== undefined)
+      ? cells
+      : undefined;
+  });
+  if (!rows.every((row): row is MessagePresentationTableCell[] => Boolean(row))) {
+    return undefined;
+  }
+  const rowHeaderColumnIndex = record.rowHeaderColumnIndex;
+  if (
+    rowHeaderColumnIndex !== undefined &&
+    (typeof rowHeaderColumnIndex !== "number" ||
+      !Number.isInteger(rowHeaderColumnIndex) ||
+      rowHeaderColumnIndex < 0 ||
+      rowHeaderColumnIndex >= headers.length)
+  ) {
+    return undefined;
+  }
+  return {
+    type: "table",
+    caption,
+    headers,
+    rows,
+    ...(typeof rowHeaderColumnIndex === "number" ? { rowHeaderColumnIndex } : {}),
+  };
 }
 
 /**
@@ -353,6 +635,12 @@ function normalizePresentationBlock(raw: unknown): MessagePresentationBlock | un
           options,
         }
       : undefined;
+  }
+  if (type === "chart") {
+    return normalizeChartBlock(record);
+  }
+  if (type === "table") {
+    return normalizeTableBlock(record);
   }
   return undefined;
 }
@@ -402,10 +690,7 @@ export function presentationToInteractiveReply(
     }
     if (block.type === "buttons") {
       const buttons = block.buttons
-        .filter(
-          (button) =>
-            button.action || button.value || button.url || button.webApp || button.web_app,
-        )
+        .filter((button) => resolveMessagePresentationButtonAction(button))
         .map((button) => {
           const interactiveButton: InteractiveReplyButton = {
             label: button.label,
@@ -413,20 +698,25 @@ export function presentationToInteractiveReply(
           };
           if (button.action) {
             interactiveButton.action = button.action;
-          }
-          if (button.value) {
-            interactiveButton.value = button.value;
-          } else if (button.action?.type === "command") {
-            interactiveButton.value = button.action.command;
-          } else if (button.action?.type === "callback") {
-            interactiveButton.value = button.action.value;
-          }
-          if (button.url) {
-            interactiveButton.url = button.url;
-          }
-          const webApp = button.webApp ?? button.web_app;
-          if (webApp) {
-            interactiveButton.webApp = webApp;
+            const actionValue = resolveMessagePresentationActionValue(button.action);
+            if (actionValue) {
+              interactiveButton.value = actionValue;
+            } else if (button.action.type === "url") {
+              interactiveButton.url = button.action.url;
+            } else if (button.action.type === "web-app") {
+              interactiveButton.webApp = { url: button.action.url };
+            }
+          } else {
+            if (button.value) {
+              interactiveButton.value = button.value;
+            }
+            if (button.url) {
+              interactiveButton.url = button.url;
+            }
+            const webApp = button.webApp ?? button.web_app;
+            if (webApp) {
+              interactiveButton.webApp = webApp;
+            }
           }
           if (button.priority !== undefined) {
             interactiveButton.priority = button.priority;
@@ -444,6 +734,14 @@ export function presentationToInteractiveReply(
       }
       continue;
     }
+    if (block.type === "chart") {
+      blocks.push({ type: "text", text: renderMessagePresentationChartFallbackText(block) });
+      continue;
+    }
+    if (block.type === "table") {
+      blocks.push({ type: "text", text: renderMessagePresentationTableFallbackText(block) });
+      continue;
+    }
     if (block.type === "select") {
       blocks.push({
         type: "select",
@@ -451,10 +749,18 @@ export function presentationToInteractiveReply(
         options: block.options.map((option) => {
           const interactiveOption: InteractiveReplyOption = {
             label: option.label,
-            value: resolveMessagePresentationControlValue(option) ?? option.value,
           };
-          if (option.action) {
-            interactiveOption.action = option.action;
+          if (option.action !== undefined) {
+            const action = resolveMessagePresentationOptionAction(option);
+            if (action) {
+              interactiveOption.action = action;
+              const actionValue = resolveMessagePresentationActionValue(action);
+              if (actionValue) {
+                interactiveOption.value = actionValue;
+              }
+            }
+          } else if (option.value) {
+            interactiveOption.value = option.value;
           }
           return interactiveOption;
         }),
@@ -508,16 +814,61 @@ export function interactiveReplyToPresentation(
  * support native interactive controls.
  *
  * Text and context blocks are rendered as-is. Buttons with a `command`-typed
- * action render as `label: \`command\`` so the value is copyable. Buttons with
- * a `callback` action, legacy `value`, or `select` options render as label-only
- * to keep opaque callback values private. Disabled buttons render as label-only
- * regardless of action type, since they are not actionable.
+ * action render as `label: \`command\`` so the value is copyable. URL and web
+ * app actions include their user-facing URL. Approval, callback, legacy value,
+ * and select actions render label-only to keep transport data private. Disabled
+ * buttons render label-only regardless of action type.
  *
  * Downstream consumers should not claim a manual command is available unless
  * they verify one was actually rendered.
  *
  * Exported through the plugin SDK for channel adapters.
  */
+export function renderMessagePresentationChartFallbackText(
+  block: MessagePresentationChartBlock,
+): string {
+  const lines = [`${block.title} (${block.chartType} chart)`];
+  if (block.chartType === "pie") {
+    lines.push(...block.segments.map((segment) => `- ${segment.label}: ${String(segment.value)}`));
+    return lines.join("\n");
+  }
+  if (block.xLabel) {
+    lines.push(`X axis: ${block.xLabel}`);
+  }
+  if (block.yLabel) {
+    lines.push(`Y axis: ${block.yLabel}`);
+  }
+  lines.push(
+    ...block.series.map(
+      (series) =>
+        `- ${series.name}: ${block.categories
+          .map((category, index) => `${category}: ${String(series.values[index])}`)
+          .join("; ")}`,
+    ),
+  );
+  return lines.join("\n");
+}
+
+function renderTableFallbackValue(value: MessagePresentationTableCell): string {
+  return String(value).replace(/\s+/g, " ").trim();
+}
+
+export function renderMessagePresentationTableFallbackText(
+  block: MessagePresentationTableBlock,
+): string {
+  const headers = block.headers.map(renderTableFallbackValue);
+  const lines = [`${renderTableFallbackValue(block.caption)} (table)`];
+  lines.push(
+    ...block.rows.map(
+      (row) =>
+        `- ${row
+          .map((cell, index) => `${headers[index]}: ${renderTableFallbackValue(cell)}`)
+          .join("; ")}`,
+    ),
+  );
+  return lines.join("\n");
+}
+
 export function renderMessagePresentationFallbackText(params: {
   presentation?: MessagePresentation;
   emptyFallback?: string | null;
@@ -543,16 +894,15 @@ export function renderMessagePresentationFallbackText(params: {
     if (block.type === "buttons") {
       const labels = block.buttons
         .map((button) => {
-          const targetUrl = button.url ?? button.webApp?.url ?? button.web_app?.url;
-          if (targetUrl) {
-            return `${button.label}: ${targetUrl}`;
+          if (button.disabled) {
+            return button.label;
           }
-          const controlValue =
-            button.action?.type === "command"
-              ? resolveMessagePresentationControlValue(button)
-              : undefined;
-          if (controlValue && !button.disabled) {
-            return `${button.label}: \`${controlValue}\``;
+          const action = resolveMessagePresentationButtonAction(button);
+          if (action?.type === "url" || action?.type === "web-app") {
+            return `${button.label}: ${action.url}`;
+          }
+          if (action?.type === "command") {
+            return `${button.label}: \`${action.command}\``;
           }
           return button.label;
         })
@@ -560,6 +910,14 @@ export function renderMessagePresentationFallbackText(params: {
       if (labels.length > 0) {
         lines.push(labels.map((label) => `- ${label}`).join("\n"));
       }
+      continue;
+    }
+    if (block.type === "chart") {
+      lines.push(renderMessagePresentationChartFallbackText(block));
+      continue;
+    }
+    if (block.type === "table") {
+      lines.push(renderMessagePresentationTableFallbackText(block));
       continue;
     }
     if (block.type === "select") {

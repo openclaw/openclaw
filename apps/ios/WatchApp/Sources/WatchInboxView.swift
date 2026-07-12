@@ -320,7 +320,10 @@ private struct WatchControlSurfaceView: View {
                 accessory: self.directNode.isConnected ? "Online" : "Offline")
 
             WatchDetailText(
-                text: "Direct mode supports device info, status, and notifications. Chat, Talk, and approvals still use the iPhone.")
+                text: """
+                Direct mode supports device info, status, and notifications. \
+                Chat, Talk, and approvals still use the iPhone.
+                """)
 
             if self.directNode.isConfigured {
                 Toggle(isOn: Binding(
