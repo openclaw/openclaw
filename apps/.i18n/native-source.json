@@ -2195,7 +2195,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 82,
+      "line": 93,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
       "source": "Open Chat",
       "surface": "android",
@@ -2203,7 +2203,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 82,
+      "line": 93,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
       "source": "Start or continue a conversation",
       "surface": "android",
@@ -2211,7 +2211,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 83,
+      "line": 94,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
       "source": "Start Voice",
       "surface": "android",
@@ -2219,7 +2219,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 83,
+      "line": 94,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
       "source": "Talk or dictate with OpenClaw",
       "surface": "android",
@@ -2227,7 +2227,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 84,
+      "line": 95,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
       "source": "Browse Sessions",
       "surface": "android",
@@ -2235,7 +2235,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 84,
+      "line": 95,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
       "source": "Find previous conversations",
       "surface": "android",
@@ -2243,7 +2243,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 85,
+      "line": 96,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
       "source": "Providers & Models",
       "surface": "android",
@@ -2251,7 +2251,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 86,
+      "line": 97,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
       "source": "Gateway, voice, notifications, privacy",
       "surface": "android",
@@ -2259,7 +2259,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 86,
+      "line": 97,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
       "source": "Settings",
       "surface": "android",
@@ -2267,7 +2267,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 107,
+      "line": 118,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
       "source": "Close search",
       "surface": "android",
@@ -2275,7 +2275,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 110,
+      "line": 121,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
       "source": "Search",
       "surface": "android",
@@ -2283,7 +2283,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 111,
+      "line": 122,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
       "source": "OC",
       "surface": "android",
@@ -2291,7 +2291,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 116,
+      "line": 130,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
       "source": "Search OpenClaw",
       "surface": "android",
@@ -2299,7 +2299,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 120,
+      "line": 136,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
       "source": "Quick actions",
       "surface": "android",
@@ -2307,7 +2307,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 125,
+      "line": 141,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
       "source": "No actions found",
       "surface": "android",
@@ -2315,7 +2315,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 125,
+      "line": 141,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
       "source": "Try Chat, Voice, Sessions, Providers, or Settings.",
       "surface": "android",
@@ -2323,7 +2323,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 134,
+      "line": 150,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
       "source": "Sessions",
       "surface": "android",
@@ -2331,7 +2331,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 141,
+      "line": 157,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
       "source": "Connect the Gateway to search sessions.",
       "surface": "android",
@@ -2339,7 +2339,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 141,
+      "line": 157,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
       "source": "No matching sessions yet.",
       "surface": "android",
@@ -2347,7 +2347,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 155,
+      "line": 171,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
       "source": "Assistant working",
       "surface": "android",
@@ -2355,7 +2355,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 155,
+      "line": 171,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
       "source": "OpenClaw session",
       "surface": "android",
@@ -2363,7 +2363,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 287,
+      "line": 303,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
       "source": "Open session",
       "surface": "android",
@@ -2371,7 +2371,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 345,
+      "line": 361,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
       "source": "Connect Gateway to view providers",
       "surface": "android",
@@ -2379,7 +2379,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 348,
+      "line": 364,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
       "source": "$readyProviderCount providers ready",
       "surface": "android",
@@ -2387,7 +2387,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 349,
+      "line": 365,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
       "source": "Provider availability unknown",
       "surface": "android",
@@ -2395,7 +2395,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 350,
+      "line": 366,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
       "source": "No ready providers",
       "surface": "android",
@@ -2403,7 +2403,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 354,
+      "line": 370,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
       "source": "Main session",
       "surface": "android",
@@ -2411,7 +2411,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 363,
+      "line": 379,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
       "source": "now",
       "surface": "android",
@@ -2419,7 +2419,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 364,
+      "line": 380,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
       "source": "${minutes}m",
       "surface": "android",
@@ -2427,7 +2427,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 366,
+      "line": 382,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
       "source": "${hours}h",
       "surface": "android",
@@ -2435,7 +2435,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 368,
+      "line": 384,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
       "source": "${days}d",
       "surface": "android",
