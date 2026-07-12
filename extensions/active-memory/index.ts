@@ -438,15 +438,19 @@ function isCircuitBreakerOpen(key: string, maxTimeouts: number, cooldownMs: numb
   return true;
 }
 
-function recordCircuitBreakerTimeout(key: string, nowMs: number = Date.now()): void {
+function recordCircuitBreakerTimeout(
+  key: string,
+  nowMs: number = Date.now(),
+  cooldownMs: number = DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS,
+): void {
   const entry = timeoutCircuitBreaker.get(key);
   if (entry) {
     entry.consecutiveTimeouts++;
     entry.lastTimeoutAt = nowMs;
-    purgeExpiredTimeoutCircuitBreakers(nowMs);
+    purgeExpiredTimeoutCircuitBreakers(nowMs, cooldownMs);
     return;
   }
-  purgeExpiredTimeoutCircuitBreakers(nowMs);
+  purgeExpiredTimeoutCircuitBreakers(nowMs, cooldownMs);
   evictOldestTimeoutCircuitBreakers();
   timeoutCircuitBreaker.set(key, { consecutiveTimeouts: 1, lastTimeoutAt: nowMs });
 }
@@ -3586,7 +3590,7 @@ async function maybeResolveActiveRecall(params: {
   const recordRecallTimeout = () => {
     if (!circuitBreakerTimeoutRecorded) {
       circuitBreakerTimeoutRecorded = true;
-      recordCircuitBreakerTimeout(cbKey);
+      recordCircuitBreakerTimeout(cbKey, Date.now(), params.config.circuitBreakerCooldownMs);
     }
     scheduleTimeoutCleanup();
   };

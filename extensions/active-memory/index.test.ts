@@ -6442,7 +6442,7 @@ describe("active-memory plugin", () => {
     const cap = 1000;
     const base = 1_000_000;
     for (let i = 0; i < cap + 5; i += 1) {
-      testing.recordCircuitBreakerTimeout(`agent:model-${i}`, base + i);
+      testing.recordCircuitBreakerTimeout(`agent:model-${i}`, base + i, 60_000);
     }
     expect(testing.getTimeoutCircuitBreakerSize()).toBe(cap);
     expect(testing.getCircuitBreakerEntry("agent:model-0")).toBeUndefined();
@@ -6452,13 +6452,35 @@ describe("active-memory plugin", () => {
 
   it("purges cooldown-expired circuit breaker entries before inserting", () => {
     testing.resetActiveRecallCacheForTests();
-    testing.recordCircuitBreakerTimeout("agent:old-a", 1_000_000);
-    testing.recordCircuitBreakerTimeout("agent:old-b", 1_000_000);
-    testing.recordCircuitBreakerTimeout("agent:fresh", 1_000_000 + 60_000);
+    testing.recordCircuitBreakerTimeout("agent:old-a", 1_000_000, 60_000);
+    testing.recordCircuitBreakerTimeout("agent:old-b", 1_000_000, 60_000);
+    testing.recordCircuitBreakerTimeout("agent:fresh", 1_000_000 + 60_000, 60_000);
     expect(testing.getTimeoutCircuitBreakerSize()).toBe(1);
     expect(testing.getCircuitBreakerEntry("agent:old-a")).toBeUndefined();
     expect(testing.getCircuitBreakerEntry("agent:old-b")).toBeUndefined();
     expect(testing.getCircuitBreakerEntry("agent:fresh")?.consecutiveTimeouts).toBe(1);
+  });
+
+  it("honors a shorter configured circuitBreakerCooldownMs when purging peers", () => {
+    testing.resetActiveRecallCacheForTests();
+    testing.recordCircuitBreakerTimeout("agent:old", 1_000_000, 5_000);
+    testing.recordCircuitBreakerTimeout("agent:peer", 1_000_000 + 5_000, 5_000);
+    expect(testing.getCircuitBreakerEntry("agent:old")).toBeUndefined();
+    expect(testing.getCircuitBreakerEntry("agent:peer")?.consecutiveTimeouts).toBe(1);
+  });
+
+  it("honors a longer configured circuitBreakerCooldownMs when purging peers", () => {
+    testing.resetActiveRecallCacheForTests();
+    testing.recordCircuitBreakerTimeout("agent:old", 1_000_000, 120_000);
+    // At +60s with a 120s cooldown the peer write must keep the still-active entry.
+    testing.recordCircuitBreakerTimeout("agent:peer", 1_000_000 + 60_000, 120_000);
+    expect(testing.getCircuitBreakerEntry("agent:old")?.consecutiveTimeouts).toBe(1);
+    expect(testing.getCircuitBreakerEntry("agent:peer")?.consecutiveTimeouts).toBe(1);
+    // Only after a full 120s from old should a new write purge it.
+    testing.recordCircuitBreakerTimeout("agent:later", 1_000_000 + 120_000, 120_000);
+    expect(testing.getCircuitBreakerEntry("agent:old")).toBeUndefined();
+    expect(testing.getCircuitBreakerEntry("agent:peer")?.consecutiveTimeouts).toBe(1);
+    expect(testing.getCircuitBreakerEntry("agent:later")?.consecutiveTimeouts).toBe(1);
   });
 });
 
