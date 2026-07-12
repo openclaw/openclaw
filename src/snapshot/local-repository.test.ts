@@ -402,6 +402,28 @@ describe("local SQLite snapshot repository", () => {
   });
 
   it.runIf(process.platform !== "win32")(
+    "rejects snapshot repositories beneath a replaceable ancestor",
+    async () => {
+      const tempDir = await createTempDir();
+      const sourcePath = path.join(tempDir, "source.sqlite");
+      const sharedPath = path.join(tempDir, "shared");
+      const repositoryPath = path.join(sharedPath, "snapshots");
+      createGenericDatabase(sourcePath);
+      await fs.mkdir(sharedPath, { mode: 0o777 });
+      await fs.chmod(sharedPath, 0o777);
+      const provider = createLocalSqliteSnapshotProvider({ repositoryPath });
+
+      await expect(
+        provider.create({
+          path: sourcePath,
+          identity: { role: "generic", id: "replaceable-repository-ancestor" },
+        }),
+      ).rejects.toThrow(/ancestor must not allow another user/u);
+      await expect(fs.readdir(repositoryPath)).resolves.toEqual([]);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "rejects verification and restore staging roots writable by other users",
     async () => {
       const tempDir = await createTempDir();
@@ -559,6 +581,32 @@ describe("local SQLite snapshot repository", () => {
         ]);
       } finally {
         restored.close();
+      }
+    },
+  );
+
+  it.runIf(process.platform === "darwin")(
+    "rejects snapshot repositories beneath a granting macOS ACL",
+    async () => {
+      const tempDir = await createTempDir();
+      const sourcePath = path.join(tempDir, "source.sqlite");
+      const sharedPath = path.join(tempDir, "shared");
+      const repositoryPath = path.join(sharedPath, "snapshots");
+      createGenericDatabase(sourcePath);
+      await fs.mkdir(sharedPath, { mode: 0o700 });
+      await runExec("/bin/chmod", ["+a", "everyone allow add_file,delete_child", sharedPath]);
+      const provider = createLocalSqliteSnapshotProvider({ repositoryPath });
+
+      try {
+        await expect(
+          provider.create({
+            path: sourcePath,
+            identity: { role: "generic", id: "macos-acl-repository" },
+          }),
+        ).rejects.toThrow(/macOS ACL permits untrusted SQLite staging access/u);
+        await expect(fs.readdir(repositoryPath)).resolves.toEqual([]);
+      } finally {
+        await runExec("/bin/chmod", ["-N", sharedPath]).catch(() => undefined);
       }
     },
   );
@@ -808,7 +856,7 @@ describe("local SQLite snapshot repository", () => {
     const mkdirSpy = vi.spyOn(fs, "mkdir").mockImplementation(async (directoryPath, options) => {
       const resolvedPath = path.resolve(String(directoryPath));
       if (
-        path.dirname(resolvedPath) === repositoryPath &&
+        path.basename(path.dirname(resolvedPath)) === path.basename(repositoryPath) &&
         !path.basename(resolvedPath).startsWith(".tmp-")
       ) {
         racedPath = resolvedPath;

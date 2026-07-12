@@ -151,6 +151,11 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
 
   async create(database: SnapshotDatabaseRef): Promise<SnapshotResult> {
     await ensurePrivateDirectory(this.#repositoryPath, "SQLite snapshot repository");
+    const repositoryIdentity = await fs.lstat(this.#repositoryPath);
+    const trustedRepositoryPath = await assertTrustedStagingRoot(
+      repositoryIdentity,
+      this.#repositoryPath,
+    );
     const sourcePath = path.resolve(database.path);
     const identity = normalizeSnapshotIdentity(database.identity);
     const now = this.#now();
@@ -158,9 +163,11 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
       throw new Error("SQLite snapshot timestamp is invalid.");
     }
     const snapshotId = buildSnapshotId(now, sourcePath);
-    const snapshotDir = path.join(this.#repositoryPath, snapshotId);
-    const stagingDir = path.join(this.#repositoryPath, `.tmp-${snapshotId}-${randomUUID()}`);
+    const snapshotRefPath = path.join(this.#repositoryPath, snapshotId);
+    const snapshotDir = path.join(trustedRepositoryPath, snapshotId);
+    const stagingDir = path.join(trustedRepositoryPath, `.tmp-${snapshotId}-${randomUUID()}`);
     const artifactPath = path.join(stagingDir, SNAPSHOT_SQLITE_FILENAME);
+    await assertDirectoryIdentity(trustedRepositoryPath, repositoryIdentity);
     await fs.mkdir(stagingDir, { mode: SNAPSHOT_DIRECTORY_MODE });
 
     let stagingIdentity: Stats | undefined;
@@ -169,8 +176,11 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
     const publishedEntries = new Map<string, Stats>();
     let snapshotDirectoryCreated = false;
     try {
+      await assertDirectoryIdentity(trustedRepositoryPath, repositoryIdentity);
       stagingIdentity = await fs.lstat(stagingDir);
       applyPrivateModeSync(stagingDir, SNAPSHOT_DIRECTORY_MODE);
+      await assertPrivateStagingDirectory(stagingIdentity, stagingDir);
+      await assertDirectoryIdentity(trustedRepositoryPath, repositoryIdentity);
       const result = await createVerifiedSqliteSnapshot({
         sourcePath,
         targetPath: artifactPath,
@@ -195,6 +205,7 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
       await readSnapshotManifest(stagingDir, snapshotId);
       await syncDirectoryBestEffort(stagingDir);
 
+      await assertDirectoryIdentity(trustedRepositoryPath, repositoryIdentity);
       try {
         await fs.mkdir(snapshotDir, { mode: SNAPSHOT_DIRECTORY_MODE });
         snapshotDirectoryCreated = true;
@@ -206,8 +217,10 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
         }
         throw error;
       }
+      await assertDirectoryIdentity(trustedRepositoryPath, repositoryIdentity);
       publishedIdentity = await fs.lstat(snapshotDir);
       applyPrivateModeSync(snapshotDir, SNAPSHOT_DIRECTORY_MODE);
+      await assertPrivateStagingDirectory(publishedIdentity, snapshotDir);
       publishedDirectory = await fs.open(snapshotDir, "r");
       await assertOpenDirectoryIdentity(publishedDirectory, snapshotDir, publishedIdentity);
       const pendingPath = path.join(snapshotDir, SNAPSHOT_PENDING_FILENAME);
@@ -244,7 +257,7 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
         publishedArtifactPath,
         publishedArtifact.stat,
         publishedManifest,
-        this.#repositoryPath,
+        trustedRepositoryPath,
       );
       const expectedPendingIdentity = publishedEntries.get(SNAPSHOT_PENDING_FILENAME);
       const currentPendingIdentity = fsSync.lstatSync(pendingPath);
@@ -274,8 +287,9 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
         throw new Error(`SQLite snapshot directory changed during publication: ${snapshotDir}`);
       }
       await assertExactSnapshotContents(snapshotDir);
-      await syncDirectoryBestEffort(this.#repositoryPath);
-      return { ref: { path: snapshotDir }, manifest };
+      await assertDirectoryIdentity(trustedRepositoryPath, repositoryIdentity);
+      await syncDirectoryBestEffort(trustedRepositoryPath);
+      return { ref: { path: snapshotRefPath }, manifest };
     } catch (error) {
       await publishedDirectory?.close().catch(() => undefined);
       publishedDirectory = undefined;
@@ -289,7 +303,7 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
           publishedEntries,
         );
         if (removed) {
-          await syncDirectoryBestEffort(this.#repositoryPath);
+          await syncDirectoryBestEffort(trustedRepositoryPath);
         }
       }
       throw error;
@@ -305,7 +319,7 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
             .then(() => true)
             .catch(() => false);
       if (removed) {
-        await syncDirectoryBestEffort(this.#repositoryPath).catch(() => undefined);
+        await syncDirectoryBestEffort(trustedRepositoryPath).catch(() => undefined);
       }
     }
   }
