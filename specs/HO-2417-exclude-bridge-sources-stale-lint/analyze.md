@@ -1,0 +1,19 @@
+# Specification Analysis: HO-2417
+
+## Requirement Coverage
+
+| Requirement                        | Task       |
+| ---------------------------------- | ---------- |
+| Bridge-only exemption              | T001, T002 |
+| Unsafe-local preservation          | T003       |
+| Ordinary stale entity preservation | T003       |
+| Validation                         | T004       |
+
+## Quality Check
+
+- Fatal: 0
+- Critical: 0
+- Missing part: none
+- UI evidence: N/A. This change has no UI, route, or snapshot surface.
+- Async lifecycle ownership: N/A. The lint operation is bounded local analysis
+  and does not acquire or transfer pipeline ownership.
