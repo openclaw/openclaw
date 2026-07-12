@@ -28,6 +28,8 @@ export function injectCanvasLiveReload(html: string): string {
   // - Android: window.openclawCanvasA2UIAction.postMessage(...)
   const handlerNames = ["openclawCanvasA2UIAction"];
   let liveReloadErrorReported = false;
+  let pageUnloading = false;
+  globalThis.addEventListener?.("pagehide", () => { pageUnloading = true; }, { once: true });
   function reportCanvasLiveReloadError(err) {
     if (liveReloadErrorReported) return;
     liveReloadErrorReported = true;
@@ -79,8 +81,9 @@ export function injectCanvasLiveReload(html: string): string {
       reportCanvasLiveReloadError(ev);
     };
     ws.onclose = (ev) => {
-      // Normal and page-going-away closes are expected; surface every failure code.
-      if (ev.code !== 1000 && ev.code !== 1001) reportCanvasLiveReloadError(ev);
+      if (ev.code !== 1000 && !(ev.code === 1001 && pageUnloading)) {
+        reportCanvasLiveReloadError(ev);
+      }
     };
   } catch (err) {
     reportCanvasLiveReloadError(err);

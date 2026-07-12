@@ -134,9 +134,13 @@ type MockLiveReloadSocket = {
 
 function runInjectedScript(WebSocket: (this: MockLiveReloadSocket) => void) {
   const consoleError = vi.fn();
+  let pagehide: (() => void) | undefined;
   const runtime: Record<string, unknown> = {
     URLSearchParams,
     WebSocket,
+    addEventListener: (event: string, listener: () => void) => {
+      if (event === "pagehide") pagehide = listener;
+    },
     console: { error: consoleError },
     encodeURIComponent,
     location: {
@@ -154,7 +158,7 @@ function runInjectedScript(WebSocket: (this: MockLiveReloadSocket) => void) {
     extractInjectedScript(injectCanvasLiveReload("<html><body>Hello</body></html>")),
     runtime,
   );
-  return consoleError;
+  return { consoleError, pagehide: () => pagehide?.() };
 }
 
 describe("canvas host", () => {
@@ -238,7 +242,7 @@ describe("canvas host", () => {
     function ThrowingWebSocket(): never {
       throw new TypeError("constructor failed");
     }
-    const consoleError = runInjectedScript(ThrowingWebSocket);
+    const { consoleError } = runInjectedScript(ThrowingWebSocket);
 
     expect(consoleError).toHaveBeenCalledTimes(1);
     expect(consoleError).toHaveBeenCalledWith(
@@ -252,7 +256,7 @@ describe("canvas host", () => {
     function CapturingWebSocket(this: MockLiveReloadSocket): void {
       sockets.push(this);
     }
-    const consoleError = runInjectedScript(CapturingWebSocket);
+    const { consoleError } = runInjectedScript(CapturingWebSocket);
 
     expect(sockets).toHaveLength(1);
     sockets[0]?.onerror?.(new Error("connect failed"));
@@ -263,10 +267,11 @@ describe("canvas host", () => {
 
   it("does not report a normal close after connecting", () => {
     const sockets: MockLiveReloadSocket[] = [];
-    const consoleError = runInjectedScript(function (this: MockLiveReloadSocket) {
+    const { consoleError, pagehide } = runInjectedScript(function (this: MockLiveReloadSocket) {
       sockets.push(this);
     });
 
+    pagehide();
     sockets[0]?.onclose?.({ code: 1001, reason: "page closed" });
 
     expect(consoleError).not.toHaveBeenCalled();
@@ -274,7 +279,7 @@ describe("canvas host", () => {
 
   it("reports an abnormal close without a preceding error event", () => {
     const sockets: MockLiveReloadSocket[] = [];
-    const consoleError = runInjectedScript(function (this: MockLiveReloadSocket) {
+    const { consoleError } = runInjectedScript(function (this: MockLiveReloadSocket) {
       sockets.push(this);
     });
 
