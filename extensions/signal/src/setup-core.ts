@@ -1,3 +1,4 @@
+import { parseTcpPort } from "openclaw/plugin-sdk/number-runtime";
 // Signal plugin module implements setup core behavior.
 import {
   createCliPathTextInput,
@@ -89,16 +90,13 @@ function buildSignalSetupPatch(input: {
   httpHost?: string;
   httpPort?: string;
 }) {
-  const httpPort =
-    input.httpPort !== undefined && input.httpPort !== "" ? Number(input.httpPort) : undefined;
+  const httpPort = parseTcpPort(input.httpPort);
   return {
     ...(input.signalNumber ? { account: input.signalNumber } : {}),
     ...(input.cliPath ? { cliPath: input.cliPath } : {}),
     ...(input.httpUrl ? { httpUrl: input.httpUrl } : {}),
     ...(input.httpHost ? { httpHost: input.httpHost } : {}),
-    ...(httpPort !== undefined && Number.isInteger(httpPort) && httpPort >= 1 && httpPort <= 65535
-      ? { httpPort }
-      : {}),
+    ...(httpPort !== null ? { httpPort } : {}),
   };
 }
 
@@ -135,6 +133,11 @@ async function promptSignalAllowFrom(params: {
       }),
   });
 }
+
+/** Test-only exports. */
+export const testing = {
+  buildSignalSetupPatch,
+};
 
 export const signalDmPolicy = {
   label: "Signal",
