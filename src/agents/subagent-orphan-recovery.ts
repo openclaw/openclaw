@@ -582,75 +582,115 @@ async function finalizeInterruptedRunWithRetry(params: {
   return false;
 }
 
-/**
- * Schedule orphan recovery after a delay, with retry logic.
- * The delay gives the gateway time to fully bootstrap after restart.
- * If recovery fails (e.g. gateway not yet ready), retries with exponential backoff.
- */
-export function scheduleOrphanRecovery(params: {
+type OrphanRecoveryScheduleParams = {
   getActiveRuns: () => Map<string, SubagentRunRecord>;
   delayMs?: number;
   maxRetries?: number;
-}): void {
-  const initialDelay = params.delayMs ?? DEFAULT_RECOVERY_DELAY_MS;
-  const maxRetries = params.maxRetries ?? MAX_RECOVERY_RETRIES;
+};
 
+let recoveryScheduleRunning = false;
+let queuedRecoveryParams: OrphanRecoveryScheduleParams | undefined;
+
+/** Test-only: clear the module-level single-flight state between tests. */
+export function resetOrphanRecoveryScheduleForTests(): void {
+  recoveryScheduleRunning = false;
+  queuedRecoveryParams = undefined;
+}
+
+function waitForRecoveryDelay(delayMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, delayMs);
+    timer.unref?.();
+  });
+}
+
+async function runOrphanRecoverySchedule(params: OrphanRecoveryScheduleParams): Promise<void> {
+  const maxRetries = params.maxRetries ?? MAX_RECOVERY_RETRIES;
   const resumedSessionKeys = new Set<string>();
   const pendingStaleFinalizations = new Map<string, string>();
-  const attemptRecovery = (attempt: number, delay: number) => {
-    setTimeout(() => {
+  let delay = params.delayMs ?? DEFAULT_RECOVERY_DELAY_MS;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    await waitForRecoveryDelay(delay);
+    try {
       // Every delayed/retry scan owns a fresh root lease. Keep terminal
       // mutation in the same lease so suspension cannot become ready mid-attempt.
-      void runWithGatewayIndependentRootWorkAdmission(async () => {
+      const scan = await runWithGatewayIndependentRootWorkAdmission(async () => {
         const result = await recoverOrphanedSubagentSessions({
           ...params,
           resumedSessionKeys,
           pendingStaleFinalizations,
         });
         if (result.failed > 0 && attempt < maxRetries) {
-          const nextDelay = delay * RETRY_BACKOFF_MULTIPLIER;
-          log.info(
-            `orphan recovery had ${result.failed} failure(s); retrying in ${nextDelay}ms (attempt ${attempt + 1}/${maxRetries})`,
-          );
-          attemptRecovery(attempt + 1, nextDelay);
-          return;
+          return { retry: true, failed: result.failed } as const;
         }
-        if (result.failedRuns.length === 0) {
-          return;
-        }
-        const attempts = attempt + 1;
-        const terminalResults = await Promise.all(
-          result.failedRuns.map(async (run) => ({
-            runId: run.runId,
-            completed: await finalizeInterruptedRunWithRetry({
+        if (result.failedRuns.length > 0) {
+          const attempts = attempt + 1;
+          const terminalResults = await Promise.all(
+            result.failedRuns.map(async (run) => ({
               runId: run.runId,
-              error: buildRecoveryFailureMessage({ attempts, error: run.error }),
-              initialDelayMs: delay,
-            }),
-          })),
-        );
-        const incomplete = terminalResults
-          .filter((terminal) => !terminal.completed)
-          .map((terminal) => terminal.runId);
-        if (incomplete.length > 0) {
-          log.warn(
-            `orphan recovery exhausted with ${incomplete.length} interrupted terminal projection(s) incomplete`,
-            { runIds: incomplete },
+              completed: await finalizeInterruptedRunWithRetry({
+                runId: run.runId,
+                error: buildRecoveryFailureMessage({ attempts, error: run.error }),
+                initialDelayMs: delay,
+              }),
+            })),
           );
+          const incomplete = terminalResults
+            .filter((terminal) => !terminal.completed)
+            .map((terminal) => terminal.runId);
+          if (incomplete.length > 0) {
+            log.warn(
+              `orphan recovery exhausted with ${incomplete.length} interrupted terminal projection(s) incomplete`,
+              { runIds: incomplete },
+            );
+          }
         }
-      }).catch((err: unknown) => {
-        if (attempt < maxRetries) {
-          const nextDelay = delay * RETRY_BACKOFF_MULTIPLIER;
-          log.warn(
-            `scheduled orphan recovery failed: ${String(err)}; retrying in ${nextDelay}ms (attempt ${attempt + 1}/${maxRetries})`,
-          );
-          attemptRecovery(attempt + 1, nextDelay);
-        } else {
-          log.warn(`scheduled orphan recovery failed after ${maxRetries} retries: ${String(err)}`);
-        }
+        return { retry: false, failed: result.failed } as const;
       });
-    }, delay).unref?.();
-  };
+      if (!scan.retry) {
+        return;
+      }
+      delay *= RETRY_BACKOFF_MULTIPLIER;
+      log.info(
+        `orphan recovery had ${scan.failed} failure(s); retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})`,
+      );
+    } catch (err) {
+      if (attempt >= maxRetries) {
+        log.warn(`scheduled orphan recovery failed after ${maxRetries} retries: ${String(err)}`);
+        return;
+      }
+      delay *= RETRY_BACKOFF_MULTIPLIER;
+      log.warn(
+        `scheduled orphan recovery failed: ${String(err)}; retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})`,
+      );
+    }
+  }
+}
 
-  attemptRecovery(0, initialDelay);
+/**
+ * Schedule orphan recovery after a delay, with retry logic.
+ * The delay gives the gateway time to fully bootstrap after restart.
+ * If recovery fails (e.g. gateway not yet ready), retries with exponential backoff.
+ *
+ * Only one recovery schedule runs at a time. Startup, restore, and reactive
+ * triggers share this lifecycle owner: a request arriving while a scan is in
+ * flight is coalesced into exactly one follow-up run rather than dropped, so
+ * work discovered mid-scan is neither lost nor resumed twice.
+ */
+export function scheduleOrphanRecovery(params: OrphanRecoveryScheduleParams): void {
+  if (recoveryScheduleRunning) {
+    queuedRecoveryParams ??= params;
+    return;
+  }
+
+  recoveryScheduleRunning = true;
+  void runOrphanRecoverySchedule(params).finally(() => {
+    recoveryScheduleRunning = false;
+    const queued = queuedRecoveryParams;
+    queuedRecoveryParams = undefined;
+    if (queued) {
+      scheduleOrphanRecovery(queued);
+    }
+  });
 }

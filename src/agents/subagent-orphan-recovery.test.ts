@@ -15,6 +15,7 @@ import { resolveInternalSessionEffectsTarget } from "./internal-session-effects.
 import * as announceDelivery from "./subagent-announce-delivery.js";
 import {
   recoverOrphanedSubagentSessions,
+  resetOrphanRecoveryScheduleForTests,
   scheduleOrphanRecovery,
 } from "./subagent-orphan-recovery.js";
 import * as subagentRegistrySteerRuntime from "./subagent-registry-steer-runtime.js";
@@ -192,6 +193,7 @@ describe("subagent-orphan-recovery", () => {
     vi.useFakeTimers();
     vi.clearAllMocks();
     resetGatewayWorkAdmission();
+    resetOrphanRecoveryScheduleForTests();
     vi.mocked(subagentRegistrySteerRuntime.finalizeInterruptedSubagentRun)
       .mockReset()
       .mockResolvedValue(1);
@@ -833,6 +835,36 @@ describe("subagent-orphan-recovery", () => {
     expect(second.skipped).toBe(1);
     expect(gateway.callGateway).toHaveBeenCalledOnce();
     expect(sessionAccessor.patchSessionEntry).toHaveBeenCalledOnce();
+  });
+
+  it("coalesces overlapping scheduled recovery into one follow-up scan", async () => {
+    const store = mockSingleAbortedSession();
+
+    let resolveResume: (result: { runId: string }) => void = () => {};
+    const parkedResume = new Promise<{ runId: string }>((resolve) => {
+      resolveResume = resolve;
+    });
+    vi.mocked(gateway.callGateway).mockResolvedValue({ runId: "unexpected-run" });
+    vi.mocked(gateway.callGateway).mockImplementationOnce(() => parkedResume as never);
+
+    const getActiveRuns = () => createActiveRuns(createTestRunRecord());
+    scheduleOrphanRecovery({ getActiveRuns, delayMs: 1, maxRetries: 0 });
+    // Requests arriving while the first scan is pending or in flight must be
+    // coalesced into exactly one follow-up run, not dropped and not stacked.
+    scheduleOrphanRecovery({ getActiveRuns, delayMs: 1, maxRetries: 0 });
+    scheduleOrphanRecovery({ getActiveRuns, delayMs: 1, maxRetries: 0 });
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(gateway.callGateway).toHaveBeenCalledOnce();
+
+    resolveResume({ runId: "resumed-run" });
+    await vi.runAllTimersAsync();
+
+    // One scan plus exactly one coalesced follow-up scan, each reading the
+    // session entry once; the orphan is resumed exactly once.
+    expect(sessionAccessor.loadSessionEntry).toHaveBeenCalledTimes(2);
+    expect(gateway.callGateway).toHaveBeenCalledOnce();
+    expect(store["agent:main:subagent:test-session-1"]?.abortedLastRun).toBe(false);
   });
 
   it("finalizes interrupted runs with a readable failure after recovery retries are exhausted", async () => {
