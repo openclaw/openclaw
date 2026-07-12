@@ -12,9 +12,7 @@ public enum OpenClawChatOutboxMessageState: Equatable, Sendable {
     case failed(reason: String?)
 
     public var isFailed: Bool {
-        if case .failed = self {
-            return true
-        }
+        if case .failed = self { return true }
         return false
     }
 
@@ -200,9 +198,7 @@ extension OpenClawChatViewModel {
             self.errorText = "Offline queue is full. Delete a queued message or reconnect to send."
             return
         }
-        if self.input == draftInput {
-            self.input = ""
-        }
+        if self.input == draftInput { self.input = "" }
         let capturedAttachmentIDs = Set(draftAttachments.map(\.id))
         self.attachments.removeAll { capturedAttachmentIDs.contains($0.id) }
         self.errorText = nil
@@ -379,9 +375,7 @@ extension OpenClawChatViewModel {
         guard !commands.isEmpty else { return }
         var next = self.messages
         for command in commands.sorted(by: { $0.createdAt < $1.createdAt }) {
-            if self.cancelingOutboxCommandIDs.contains(command.id) {
-                continue
-            }
+            if self.cancelingOutboxCommandIDs.contains(command.id) { continue }
             let key = Self.outboxUserIdempotencyKey(command.id)
             if let existing = next.first(where: { $0.idempotencyKey == key }) {
                 self.mapOutboxCommand(command, to: existing.id)
@@ -452,14 +446,10 @@ extension OpenClawChatViewModel {
         self.lastHealthPollAt = Date()
         do {
             let ok = try await self.transport.requestHealth(timeoutMs: 5000)
-            if let sessionSnapshot, !self.isCurrentSession(sessionSnapshot) {
-                return
-            }
+            if let sessionSnapshot, !self.isCurrentSession(sessionSnapshot) { return }
             self.applyTransportHealth(ok, refreshSessionsOnReconnect: refreshSessionsOnReconnect)
         } catch {
-            if let sessionSnapshot, !self.isCurrentSession(sessionSnapshot) {
-                return
-            }
+            if let sessionSnapshot, !self.isCurrentSession(sessionSnapshot) { return }
             self.applyTransportHealth(false)
         }
     }
@@ -882,17 +872,11 @@ extension OpenClawChatViewModel {
         let raw = session.key.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !raw.isEmpty else { return nil }
         guard self.transport.outboxRequiresSessionRoutingContract else { return raw }
-        if raw.lowercased() == "unknown" {
-            return raw
-        }
+        if raw.lowercased() == "unknown" { return raw }
         guard let agentID else { return nil }
         let normalized = raw.lowercased()
-        if normalized == "global" {
-            return "global"
-        }
-        if Self.agentID(fromSessionKey: raw) != nil {
-            return raw
-        }
+        if normalized == "global" { return "global" }
+        if Self.agentID(fromSessionKey: raw) != nil { return raw }
         // A malformed ownership prefix must fail closed, not become a nested
         // key such as agent:<id>:agent::main.
         guard !normalized.hasPrefix("agent:") else { return nil }
@@ -908,9 +892,7 @@ extension OpenClawChatViewModel {
         guard command.sessionKey == session.key else { return false }
         // Failed rows never auto-send. Keep them reachable on their original
         // presentation alias after an owner change for explicit retry/delete.
-        if command.status == .failed {
-            return true
-        }
+        if command.status == .failed { return true }
         // Migrated v2 aliases have no owner and are parked as failed. Show
         // them so explicit retry can adopt the currently selected agent.
         guard let commandAgentID = command.agentID else { return true }

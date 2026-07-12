@@ -34,6 +34,7 @@ import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../plugins/command-registry-state.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import { isValidAgentId, normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { recordSubagentSpawned } from "../sessions/session-state-events.js";
 import { resolveUserPath } from "../utils.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { listAgentIds, resolveAgentDir } from "./agent-scope-config.js";
@@ -92,11 +93,8 @@ import {
   getSessionBindingService,
   getRuntimeConfig,
   hasInProcessGatewayContext,
-  loadSessionStore,
-  mergeSessionEntry,
   mergeDeliveryContext,
   normalizeDeliveryContext,
-  pruneLegacyStoreKeys,
   ensureContextEnginesInitialized,
   resolveAgentConfig,
   resolveContextEngine,
@@ -104,7 +102,8 @@ import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
   resolveSandboxRuntimeStatus,
-  updateSessionStore,
+  loadSessionEntry,
+  upsertSessionEntry,
   resolveLeastPrivilegeOperatorScopesForMethod,
 } from "./subagent-spawn.runtime.js";
 import type {
@@ -137,7 +136,6 @@ type SubagentSpawnDeps = {
   hasInProcessGatewayContext: typeof hasInProcessGatewayContext;
   ensureContextEnginesInitialized: typeof ensureContextEnginesInitialized;
   resolveContextEngine: typeof resolveContextEngine;
-  updateSessionStore: typeof updateSessionStore;
 };
 
 const defaultSubagentSpawnDeps: SubagentSpawnDeps = {
@@ -149,7 +147,6 @@ const defaultSubagentSpawnDeps: SubagentSpawnDeps = {
   hasInProcessGatewayContext,
   ensureContextEnginesInitialized,
   resolveContextEngine,
-  updateSessionStore,
 };
 
 let subagentSpawnDeps: SubagentSpawnDeps = defaultSubagentSpawnDeps;
@@ -223,13 +220,6 @@ export type SpawnSubagentResult = {
 };
 
 export { splitModelRef } from "./subagent-spawn-plan.js";
-
-async function updateSubagentSessionStore(
-  storePath: string,
-  mutator: Parameters<typeof updateSessionStore>[1],
-) {
-  return await subagentSpawnDeps.updateSessionStore(storePath, mutator);
-}
 
 async function callSubagentGateway(
   params: Parameters<typeof callGateway>[0],
@@ -382,34 +372,20 @@ async function persistInitialChildSessionRuntimeModel(params: {
       cfg: params.cfg,
       key: params.childSessionKey,
     });
-    await updateSubagentSessionStore(target.storePath, (store) => {
-      pruneLegacyStoreKeys({
-        store,
-        canonicalKey: target.canonicalKey,
-        candidates: target.storeKeys,
-      });
-      store[target.canonicalKey] = mergeSessionEntry(store[target.canonicalKey], {
+    await upsertSessionEntry(
+      {
+        storePath: target.storePath,
+        sessionKey: target.canonicalKey,
+      },
+      {
         model,
         ...(provider ? { modelProvider: provider } : {}),
-      });
-    });
+      },
+    );
     return undefined;
   } catch (err) {
     return err instanceof Error ? err.message : typeof err === "string" ? err : "error";
   }
-}
-
-function resolveStoreEntryByKeys(
-  store: Record<string, SessionEntry>,
-  keys: readonly string[],
-): SessionEntry | undefined {
-  for (const key of keys) {
-    const entry = store[key];
-    if (entry) {
-      return entry;
-    }
-  }
-  return undefined;
 }
 
 function readRequesterThinkingLevel(params: {
@@ -423,8 +399,11 @@ function readRequesterThinkingLevel(params: {
       cfg: params.cfg,
       key: params.requesterInternalKey,
     });
-    const store = loadSessionStore(target.storePath, { clone: false });
-    entry = resolveStoreEntryByKeys(store, target.storeKeys);
+    entry = loadSessionEntry({
+      storePath: target.storePath,
+      sessionKey: target.canonicalKey,
+      clone: false,
+    });
   } catch {
     entry = undefined;
   }
@@ -830,7 +809,10 @@ function resolveRequesterBoundConversationRef(params: {
     return undefined;
   }
   if (activeBindings.length === 1) {
-    const conversation = activeBindings[0].conversation;
+    const conversation = activeBindings.at(0)?.conversation;
+    if (!conversation) {
+      return undefined;
+    }
     return {
       conversationId: conversation.conversationId,
       ...(conversation.parentConversationId
@@ -846,7 +828,10 @@ function resolveRequesterBoundConversationRef(params: {
           normalizeOptionalString(params.fallback?.parentConversationId),
     );
     if (matched.length === 1) {
-      const conversation = matched[0].conversation;
+      const conversation = matched.at(0)?.conversation;
+      if (!conversation) {
+        return undefined;
+      }
       return {
         conversationId: conversation.conversationId,
         ...(conversation.parentConversationId
@@ -1310,17 +1295,13 @@ export async function spawnSubagentDirect(
         cfg,
         key: childSessionKey,
       });
-      await updateSubagentSessionStore(target.storePath, (store) => {
-        pruneLegacyStoreKeys({
-          store,
-          canonicalKey: target.canonicalKey,
-          candidates: target.storeKeys,
-        });
-        store[target.canonicalKey] = mergeSessionEntry(
-          store[target.canonicalKey],
-          buildDirectChildSessionPatch(patch),
-        );
-      });
+      await upsertSessionEntry(
+        {
+          storePath: target.storePath,
+          sessionKey: target.canonicalKey,
+        },
+        buildDirectChildSessionPatch(patch),
+      );
       return undefined;
     } catch (err) {
       const message = err instanceof Error ? err.message : typeof err === "string" ? err : "error";
@@ -1491,6 +1472,8 @@ export async function spawnSubagentDirect(
     task,
   });
 
+  const childIdem = crypto.randomUUID();
+  let childRunId: string = childIdem;
   const spawnedMetadata = normalizeSpawnedRunMetadata({
     spawnedBy: spawnedByKey,
     ...toolSpawnMetadata,
@@ -1514,6 +1497,12 @@ export async function spawnSubagentDirect(
       childSessionKey,
     };
   }
+  recordSubagentSpawned({
+    childSessionKey,
+    childRunId,
+    requesterSessionKey: requesterInternalKey,
+    agentId: targetAgentId,
+  });
   const contextEnginePrepareResult =
     params.lightContext && preparedSpawnContext.mode === "isolated"
       ? ({ status: "ok", preparation: undefined } as const)
@@ -1539,8 +1528,6 @@ export async function spawnSubagentDirect(
   }
   const contextEnginePreparation = contextEnginePrepareResult.preparation;
 
-  const childIdem = crypto.randomUUID();
-  let childRunId: string = childIdem;
   const deliverInitialChildRunDirectly =
     requestThreadBinding && spawnMode === "session" && hasBoundThreadDeliveryOrigin;
   const shouldAnnounceCompletion = deliverInitialChildRunDirectly

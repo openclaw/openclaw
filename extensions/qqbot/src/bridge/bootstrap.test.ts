@@ -1,29 +1,61 @@
-// Qqbot tests cover built-in bridge adapter behavior.
+// Qqbot tests cover the built-in platform adapter boundary.
+import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { getPlatformAdapter } from "../engine/adapter/index.js";
+import { ensurePlatformAdapter } from "./bootstrap.js";
 
-const readRemoteMediaBufferMock = vi.hoisted(() => vi.fn());
-
-vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
-  readRemoteMediaBuffer: (...args: unknown[]) => readRemoteMediaBufferMock(...args),
+const mocks = vi.hoisted(() => ({
+  getRuntimeConfig: vi.fn(),
+  readRemoteMediaBuffer: vi.fn(),
+  resolveApprovalOverGateway: vi.fn(),
 }));
 
-describe("qqbot bridge bootstrap", () => {
+vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
+  readRemoteMediaBuffer: (...args: unknown[]) => mocks.readRemoteMediaBuffer(...args),
+}));
+
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", () => ({
+  getRuntimeConfig: mocks.getRuntimeConfig,
+}));
+
+vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
+  resolveApprovalOverGateway: mocks.resolveApprovalOverGateway,
+}));
+
+const canonicalLoserResult = {
+  applied: false,
+  approval: {
+    id: "exec:looks-like-exec/1",
+    urlPath: "/approve/exec%3Alooks-like-exec%2F1",
+    createdAtMs: 1,
+    expiresAtMs: 10_000,
+    presentation: {
+      kind: "plugin",
+      title: "Plugin approval",
+      description: "Approve a plugin operation",
+      severity: "warning",
+      allowedDecisions: ["allow-once", "deny"],
+    },
+    status: "denied",
+    decision: "deny",
+    resolvedAtMs: 2,
+    reason: "user",
+  },
+} satisfies ApprovalResolveResult;
+
+describe("QQBot built-in platform adapter", () => {
   beforeEach(() => {
-    readRemoteMediaBufferMock.mockReset();
-    vi.resetModules();
+    vi.clearAllMocks();
+    mocks.getRuntimeConfig.mockReturnValue({ channels: { qqbot: {} } });
+    mocks.resolveApprovalOverGateway.mockResolvedValue(canonicalLoserResult);
+    ensurePlatformAdapter();
   });
 
   it("forwards response header deadlines to the media runtime", async () => {
-    readRemoteMediaBufferMock.mockResolvedValueOnce({
+    mocks.readRemoteMediaBuffer.mockResolvedValueOnce({
       buffer: Buffer.from("image"),
       fileName: "remote.png",
     });
-
-    const [{ ensurePlatformAdapter }, { getPlatformAdapter }] = await Promise.all([
-      import("./bootstrap.js"),
-      import("../engine/adapter/index.js"),
-    ]);
-    ensurePlatformAdapter();
 
     const result = await getPlatformAdapter().fetchMedia({
       url: "https://media.qq.com/assets/photo.png",
@@ -37,7 +69,7 @@ describe("qqbot bridge bootstrap", () => {
     });
 
     expect(result).toEqual({ buffer: Buffer.from("image"), fileName: "remote.png" });
-    expect(readRemoteMediaBufferMock).toHaveBeenCalledWith({
+    expect(mocks.readRemoteMediaBuffer).toHaveBeenCalledWith({
       url: "https://media.qq.com/assets/photo.png",
       filePathHint: "photo.png",
       maxBytes: 1024,
@@ -47,5 +79,24 @@ describe("qqbot bridge bootstrap", () => {
       ssrfPolicy: { hostnameAllowlist: ["*.qq.com"] },
       requestInit: { headers: { accept: "image/png" } },
     });
+  });
+
+  it("preserves plugin ownership and the canonical first-answer result", async () => {
+    const adapter = getPlatformAdapter();
+
+    const result = await adapter.resolveApproval?.({
+      approvalId: "exec:looks-like-exec/1",
+      approvalKind: "plugin",
+      decision: "allow-once",
+    });
+
+    expect(mocks.resolveApprovalOverGateway).toHaveBeenCalledWith({
+      cfg: { channels: { qqbot: {} } },
+      approvalId: "exec:looks-like-exec/1",
+      approvalKind: "plugin",
+      decision: "allow-once",
+      clientDisplayName: "QQBot Approval Handler",
+    });
+    expect(result).toBe(canonicalLoserResult);
   });
 });

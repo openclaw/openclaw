@@ -1432,6 +1432,7 @@ describe("projectRecentChatDisplayMessages", () => {
             args: { action: "send", message: "visible via message tool" },
           },
         ],
+        __openclaw: { seq: 1 },
         timestamp: 1,
       },
       {
@@ -1442,6 +1443,7 @@ describe("projectRecentChatDisplayMessages", () => {
           sourceSessionKey: "agent:main:webchat:source",
           sourceTool: "sessions_send",
         },
+        __openclaw: { seq: 2 },
         timestamp: 2,
       },
       {
@@ -1449,6 +1451,7 @@ describe("projectRecentChatDisplayMessages", () => {
         toolName: "message",
         toolCallId: "call-message",
         content: JSON.stringify({ ok: true }),
+        details: { sourceReplySink: "internal-ui" },
         timestamp: 3,
       },
       {
@@ -1469,6 +1472,7 @@ describe("projectRecentChatDisplayMessages", () => {
             args: { action: "send", message: "visible via message tool" },
           },
         ],
+        __openclaw: { seq: 1 },
         timestamp: 1,
       },
       {
@@ -1480,6 +1484,7 @@ describe("projectRecentChatDisplayMessages", () => {
           sourceSessionKey: "agent:main:webchat:source",
           sourceTool: "sessions_send",
         },
+        __openclaw: { seq: 2 },
         timestamp: 2,
       },
       {
@@ -1495,6 +1500,8 @@ describe("projectRecentChatDisplayMessages", () => {
         openclawMessageToolMirror: {
           toolName: "message",
           toolCallId: "call-message",
+          sourceReplySink: "internal-ui",
+          sourceMessageSeq: 1,
         },
         timestamp: 1,
       },
@@ -2638,7 +2645,16 @@ describe("exec approval handlers", () => {
     deviceId?: string;
     scopes?: string[];
     approvalRuntime?: boolean;
+    agentRuntimeIdentity?: { agentId: string; sessionKey: string };
   }): ExecApprovalRequestArgs["client"] {
+    const internal = {
+      ...(params.approvalRuntime ? { approvalRuntime: true } : {}),
+      ...(params.agentRuntimeIdentity
+        ? {
+            agentRuntimeIdentity: { kind: "agentRuntime" as const, ...params.agentRuntimeIdentity },
+          }
+        : {}),
+    };
     return {
       connId: params.connId,
       connect: {
@@ -2646,7 +2662,7 @@ describe("exec approval handlers", () => {
         device: params.deviceId ? { id: params.deviceId } : undefined,
         scopes: params.scopes,
       },
-      ...(params.approvalRuntime ? { internal: { approvalRuntime: true } } : {}),
+      ...(Object.keys(internal).length > 0 ? { internal } : {}),
     } as unknown as ExecApprovalRequestArgs["client"];
   }
 
@@ -3402,6 +3418,108 @@ describe("exec approval handlers", () => {
 
     expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
     expect(manager.getSnapshot("approval-reviewer-runtime-runtime")?.decision).toBe("allow-once");
+    expect(manager.getSnapshot("approval-reviewer-runtime-runtime")?.resolutionSource).toBe(
+      "operator",
+    );
+  });
+
+  it("records matching trusted agent-runtime resolutions with default agent binding", async () => {
+    const { manager, handlers, respond, context } = createExecApprovalFixture();
+    const requesterClient = createExecApprovalClient({
+      connId: "conn-auto-review-requester",
+      clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+      deviceId: "device-auto-review-requester",
+      scopes: ["operator.approvals"],
+      approvalRuntime: true,
+    });
+    const resolverClient = createExecApprovalClient({
+      connId: "conn-auto-review-resolver",
+      clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+      deviceId: "device-auto-review-resolver",
+      scopes: ["operator.approvals"],
+      approvalRuntime: true,
+      agentRuntimeIdentity: { agentId: "main", sessionKey: "agent:main:main" },
+    });
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      client: requesterClient,
+      params: {
+        id: "approval-auto-review",
+        twoPhase: true,
+        systemRunPlan: {
+          ...defaultExecApprovalRequestParams.systemRunPlan,
+          agentId: null,
+        },
+      },
+    });
+    await vi.waitFor(() => {
+      expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
+    });
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: "approval-auto-review",
+      respond: resolveRespond,
+      context,
+      client: resolverClient,
+    });
+    await requestPromise;
+
+    expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(manager.getSnapshot("approval-auto-review")).toMatchObject({
+      decision: "allow-once",
+      resolutionSource: "auto-review",
+    });
+  });
+
+  it("rejects auto-review resolution when trusted agent identity mismatches the request", async () => {
+    const { manager, handlers, respond, context } = createExecApprovalFixture();
+    const requesterClient = createExecApprovalClient({
+      connId: "conn-auto-review-mismatch-requester",
+      clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+      deviceId: "device-auto-review-mismatch-requester",
+      scopes: ["operator.approvals"],
+      approvalRuntime: true,
+    });
+    const resolverClient = createExecApprovalClient({
+      connId: "conn-auto-review-mismatch-resolver",
+      clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+      scopes: ["operator.approvals"],
+      approvalRuntime: true,
+      agentRuntimeIdentity: { agentId: "other", sessionKey: "agent:other:main" },
+    });
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      client: requesterClient,
+      params: { id: "approval-auto-review-mismatch", twoPhase: true },
+    });
+    await vi.waitFor(() => {
+      expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
+    });
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: "approval-auto-review-mismatch",
+      respond: resolveRespond,
+      context,
+      client: resolverClient,
+    });
+
+    expect(mockCallArg(resolveRespond)).toBe(false);
+    expectRecordFields(mockCallArg(resolveRespond, 0, 2), {
+      code: "INVALID_REQUEST",
+      message: "auto-review approval identity does not match request",
+    });
+    expect(manager.getSnapshot("approval-auto-review-mismatch")?.decision).toBeUndefined();
+
+    expect(manager.resolve("approval-auto-review-mismatch", "deny")).toBe(true);
+    await requestPromise;
   });
 
   it("does not allow reviewer devices without approval scope to resolve runtime approvals", async () => {
@@ -3598,8 +3716,7 @@ describe("exec approval handlers", () => {
     expect(mockCallArg(resolveRespond)).toBe(false);
     expect(mockCallArg(resolveRespond, 0, 1)).toBeUndefined();
     expectRecordFields(mockCallArg(resolveRespond, 0, 2), {
-      message:
-        "allow-always is unavailable because the effective policy requires approval every time",
+      message: "allow-always is unavailable for this command",
     });
 
     const denyRespond = vi.fn();
@@ -3641,8 +3758,7 @@ describe("exec approval handlers", () => {
     expect(mockCallArg(resolveRespond)).toBe(false);
     expect(mockCallArg(resolveRespond, 0, 1)).toBeUndefined();
     expectRecordFields(mockCallArg(resolveRespond, 0, 2), {
-      message:
-        "allow-always is unavailable because the effective policy requires approval every time",
+      message: "allow-always is unavailable for this command",
     });
 
     const allowOnceRespond = vi.fn();
@@ -3797,6 +3913,13 @@ describe("exec approval handlers", () => {
           commandPreview: "echo ok",
           agentId: "main",
           sessionKey: "agent:main:main",
+          policySnapshot: {
+            security: "allowlist",
+            ask: "on-miss",
+            askFallback: "deny",
+            autoAllowSkills: false,
+            allowlistRules: [{ pattern: "/usr/bin/echo" }],
+          },
         },
       },
     });
@@ -3814,6 +3937,13 @@ describe("exec approval handlers", () => {
       commandPreview: "echo ok",
       agentId: "main",
       sessionKey: "agent:main:main",
+      policySnapshot: {
+        security: "allowlist",
+        ask: "on-miss",
+        askFallback: "deny",
+        autoAllowSkills: false,
+        allowlistRules: [{ pattern: "/usr/bin/echo" }],
+      },
     });
   });
 

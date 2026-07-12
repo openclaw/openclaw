@@ -6,7 +6,6 @@ on:
       ref:
         description: Ref, tag, or SHA to validate
         required: true
-        default: main
         type: string
       include_repo_e2e:
         description: Whether to run pnpm test:e2e plus repo-specific extra E2E lanes
@@ -51,10 +50,9 @@ on:
       shared_image_policy:
         description: Shared Docker image transport
         required: true
-        default: allow-push
+        default: no-push-artifact
         type: choice
         options:
-          - allow-push
           - existing-only
           - no-push-artifact
       shared_image_artifact_namespace:
@@ -121,6 +119,11 @@ on:
         required: false
         default: false
         type: boolean
+      allow_unreleased_changelog:
+        description: Allow current-tree QA packaging to use Unreleased notes when no exact version section exists
+        required: false
+        default: false
+        type: boolean
   workflow_call:
     inputs:
       advisory:
@@ -130,6 +133,11 @@ on:
         type: boolean
       live_advisory:
         description: Treat only live-provider suite failures as advisory for the caller; repo and Docker E2E stay blocking
+        required: false
+        default: false
+        type: boolean
+      allow_unreleased_changelog:
+        description: Allow current-tree QA packaging to use Unreleased notes when no exact version section exists
         required: false
         default: false
         type: boolean
@@ -223,9 +231,9 @@ on:
         default: ""
         type: string
       shared_image_policy:
-        description: "Shared Docker image transport: allow-push, existing-only, or no-push-artifact"
+        description: "Shared Docker image transport: existing-only or no-push-artifact"
         required: false
-        default: allow-push
+        default: no-push-artifact
         type: string
       shared_image_artifact_namespace:
         description: Safe unique artifact namespace when shared_image_policy=no-push-artifact
@@ -380,6 +388,7 @@ permissions:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.15.0"
+  OPENCLAW_DOCKER_E2E_ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog }}
 
 jobs:
   validate_selected_ref:
@@ -506,8 +515,6 @@ jobs:
           fi
 
           case "$SHARED_IMAGE_POLICY" in
-            allow-push)
-              ;;
             existing-only)
               if [[ -z "${PROVIDED_BARE_IMAGE// }" && -z "${PROVIDED_FUNCTIONAL_IMAGE// }" ]]; then
                 echo "shared_image_policy=existing-only requires explicit shared image refs." >&2
@@ -529,7 +536,7 @@ jobs:
               }
               ;;
             *)
-              echo "shared_image_policy must be allow-push, existing-only, or no-push-artifact." >&2
+              echo "shared_image_policy must be existing-only or no-push-artifact." >&2
               exit 1
               ;;
           esac
@@ -1910,13 +1917,22 @@ jobs:
 
       - name: Pack OpenClaw package for Docker E2E
         if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_name == '' && inputs.package_artifact_run_id == ''
+        env:
+          ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog }}
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p .artifacts/docker-e2e-package
-          node scripts/package-openclaw-for-docker.mjs \
-            --output-dir .artifacts/docker-e2e-package \
+          package_args=(
+            --output-dir .artifacts/docker-e2e-package
             --output-name openclaw-current.tgz
+          )
+          # Frozen targets that predate the opt-in flag still strict-pack against their versioned changelog.
+          if [[ "$ALLOW_UNRELEASED_CHANGELOG" == "true" ]] && \
+            grep -Fq -- '--allow-unreleased-changelog' scripts/package-openclaw-for-docker.mjs; then
+            package_args+=(--allow-unreleased-changelog)
+          fi
+          node scripts/package-openclaw-for-docker.mjs "${package_args[@]}"
 
       - name: Validate OpenClaw Docker E2E package
         id: package
@@ -2056,7 +2072,7 @@ jobs:
           echo "Shared Docker E2E functional image: \`$functional_image\`" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Log in to GHCR
-        if: steps.plan.outputs.needs_e2e_image == '1' && (inputs.shared_image_policy == 'allow-push' || inputs.shared_image_policy == 'existing-only')
+        if: steps.plan.outputs.needs_e2e_image == '1' && inputs.shared_image_policy == 'existing-only'
         run: bash .release-harness/scripts/ci-docker-login-ghcr.sh
         env:
           GHCR_USERNAME: ${{ github.actor }}
@@ -2064,7 +2080,7 @@ jobs:
 
       - name: Check existing shared Docker E2E images
         id: image_exists
-        if: steps.plan.outputs.needs_e2e_image == '1' && (inputs.shared_image_policy == 'allow-push' || inputs.shared_image_policy == 'existing-only')
+        if: steps.plan.outputs.needs_e2e_image == '1' && inputs.shared_image_policy == 'existing-only'
         shell: bash
         env:
           PROVIDED_BARE_IMAGE: ${{ inputs.docker_e2e_bare_image }}
@@ -2122,14 +2138,15 @@ jobs:
           IMAGE_REF: ${{ steps.image.outputs.bare_image }}
         run: |
           set -euo pipefail
+          # Docker's local image exporter cannot load attestation manifest lists.
           timeout --kill-after=30s 45m docker buildx build \
             --load \
             --file ./scripts/e2e/Dockerfile \
             --target bare \
             --platform linux/amd64 \
             --tag "$IMAGE_REF" \
-            --sbom=true \
-            --provenance=mode=max \
+            --sbom=false \
+            --provenance=false \
             .
 
       - name: Build functional Docker E2E image artifact
@@ -2139,6 +2156,7 @@ jobs:
           IMAGE_REF: ${{ steps.image.outputs.functional_image }}
         run: |
           set -euo pipefail
+          # Docker's local image exporter cannot load attestation manifest lists.
           timeout --kill-after=30s 45m docker buildx build \
             --load \
             --file ./scripts/e2e/Dockerfile \
@@ -2146,8 +2164,8 @@ jobs:
             --build-context openclaw_package=.artifacts/docker-e2e-package \
             --platform linux/amd64 \
             --tag "$IMAGE_REF" \
-            --sbom=true \
-            --provenance=mode=max \
+            --sbom=false \
+            --provenance=false \
             .
 
       - name: Pack Docker E2E image artifact
@@ -2196,126 +2214,8 @@ jobs:
           compression-level: 0
           retention-days: 7
 
-  push_docker_e2e_images:
-    needs: [validate_selected_ref, prepare_docker_e2e_image]
-    if: inputs.shared_image_policy == 'allow-push' && needs.prepare_docker_e2e_image.outputs.needs_registry_build == '1'
-    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
-    timeout-minutes: ${{ inputs.release_test_profile == 'full' && 90 || 60 }}
-    permissions:
-      actions: read
-      contents: read
-      packages: write
-    env:
-      DOCKER_BUILD_SUMMARY: "false"
-      DOCKER_BUILD_RECORD_UPLOAD: "false"
-    steps:
-      - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-        with:
-          ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
-          fetch-depth: 1
-          persist-credentials: false
-
-      - name: Download OpenClaw Docker E2E package
-        if: needs.prepare_docker_e2e_image.outputs.needs_functional_image == '1' && needs.prepare_docker_e2e_image.outputs.functional_exists != '1'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          artifact-ids: ${{ needs.prepare_docker_e2e_image.outputs.package_artifact_id }}
-          path: .artifacts/docker-e2e-package
-          run-id: ${{ needs.prepare_docker_e2e_image.outputs.package_artifact_run_id }}
-          github-token: ${{ github.token }}
-
-      - name: Normalize OpenClaw Docker E2E package
-        if: needs.prepare_docker_e2e_image.outputs.needs_functional_image == '1' && needs.prepare_docker_e2e_image.outputs.functional_exists != '1'
-        shell: bash
-        run: |
-          set -euo pipefail
-          target=".artifacts/docker-e2e-package/openclaw-current.tgz"
-          if [[ ! -f "$target" ]]; then
-            mapfile -t tgzs < <(find .artifacts/docker-e2e-package -type f -name '*.tgz' | sort)
-            if [[ "${#tgzs[@]}" -ne 1 ]]; then
-              echo "Expected exactly one package tarball for the registry image build; found ${#tgzs[@]}." >&2
-              exit 1
-            fi
-            cp "${tgzs[0]}" "$target"
-          fi
-
-      - name: Log in to GHCR
-        run: bash scripts/ci-docker-login-ghcr.sh
-        env:
-          GHCR_USERNAME: ${{ github.actor }}
-          GITHUB_TOKEN: ${{ github.token }}
-
-      - name: Setup Docker builder
-        uses: useblacksmith/setup-docker-builder@ab5c1da94f53f5cd75c1038092aa276dddfccbba # v1
-        with:
-          max-cache-size-mb: 800000
-
-      - name: Build and push bare Docker E2E image
-        if: needs.prepare_docker_e2e_image.outputs.needs_bare_image == '1' && needs.prepare_docker_e2e_image.outputs.bare_exists != '1'
-        shell: bash
-        env:
-          IMAGE_REF: ${{ needs.prepare_docker_e2e_image.outputs.bare_image }}
-        run: |
-          set -euo pipefail
-          build_cmd=(
-            docker buildx build
-            --file ./scripts/e2e/Dockerfile
-            --target bare
-            --platform linux/amd64
-            --tag "$IMAGE_REF"
-            --sbom=true
-            --provenance=mode=max
-            --push
-            .
-          )
-          for attempt in 1 2 3 4; do
-            if "${build_cmd[@]}"; then
-              exit 0
-            fi
-            if [[ "$attempt" == "4" ]]; then
-              echo "::error::Failed to build Docker E2E bare image after ${attempt} attempts"
-              exit 1
-            fi
-            sleep_seconds=$((attempt * 20))
-            echo "Docker E2E bare image build failed; retrying in ${sleep_seconds}s (${attempt}/4)."
-            sleep "$sleep_seconds"
-          done
-
-      - name: Build and push functional Docker E2E image
-        if: needs.prepare_docker_e2e_image.outputs.needs_functional_image == '1' && needs.prepare_docker_e2e_image.outputs.functional_exists != '1'
-        shell: bash
-        env:
-          IMAGE_REF: ${{ needs.prepare_docker_e2e_image.outputs.functional_image }}
-        run: |
-          set -euo pipefail
-          build_cmd=(
-            docker buildx build
-            --file ./scripts/e2e/Dockerfile
-            --target functional
-            --build-context openclaw_package=.artifacts/docker-e2e-package
-            --platform linux/amd64
-            --tag "$IMAGE_REF"
-            --sbom=true
-            --provenance=mode=max
-            --push
-            .
-          )
-          for attempt in 1 2 3 4; do
-            if "${build_cmd[@]}"; then
-              exit 0
-            fi
-            if [[ "$attempt" == "4" ]]; then
-              echo "::error::Failed to build Docker E2E functional image after ${attempt} attempts"
-              exit 1
-            fi
-            sleep_seconds=$((attempt * 20))
-            echo "Docker E2E functional image build failed; retrying in ${sleep_seconds}s (${attempt}/4)."
-            sleep "$sleep_seconds"
-          done
-
   docker_e2e_image_ready:
-    needs: [prepare_docker_e2e_image, push_docker_e2e_images]
+    needs: prepare_docker_e2e_image
     if: always() && needs.prepare_docker_e2e_image.result != 'skipped'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -2325,23 +2225,11 @@ jobs:
       - name: Verify Docker E2E image preparation
         env:
           PREPARE_RESULT: ${{ needs.prepare_docker_e2e_image.result }}
-          PUSH_RESULT: ${{ needs.push_docker_e2e_images.result }}
-          NEEDS_REGISTRY_BUILD: ${{ needs.prepare_docker_e2e_image.outputs.needs_registry_build }}
-          SHARED_IMAGE_POLICY: ${{ inputs.shared_image_policy }}
         shell: bash
         run: |
           set -euo pipefail
           if [[ "$PREPARE_RESULT" != "success" ]]; then
             echo "Docker E2E image preparation ended with ${PREPARE_RESULT}." >&2
-            exit 1
-          fi
-          if [[ "$SHARED_IMAGE_POLICY" == "allow-push" && "$NEEDS_REGISTRY_BUILD" == "1" ]]; then
-            if [[ "$PUSH_RESULT" != "success" ]]; then
-              echo "Docker E2E registry image publication ended with ${PUSH_RESULT}." >&2
-              exit 1
-            fi
-          elif [[ "$PUSH_RESULT" != "skipped" ]]; then
-            echo "Unexpected Docker E2E registry publication result: ${PUSH_RESULT}." >&2
             exit 1
           fi
 
@@ -2446,8 +2334,9 @@ jobs:
             OPENCLAW_EXTENSIONS=${{ steps.image.outputs.live_image_extensions }}
           platforms: linux/amd64
           tags: ${{ steps.image.outputs.live_image }}
-          sbom: true
-          provenance: mode=max
+          # Attestations remain on registry-published images; this path loads a local artifact.
+          sbom: false
+          provenance: false
           load: true
           push: false
 
@@ -2485,53 +2374,8 @@ jobs:
           compression-level: 0
           retention-days: 7
 
-  push_live_test_image:
-    needs: [validate_selected_ref, prepare_live_test_image]
-    if: inputs.shared_image_policy == 'allow-push' && needs.prepare_live_test_image.outputs.image_exists != '1'
-    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
-    timeout-minutes: 60
-    permissions:
-      contents: read
-      packages: write
-    env:
-      DOCKER_BUILD_SUMMARY: "false"
-      DOCKER_BUILD_RECORD_UPLOAD: "false"
-    steps:
-      - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-        with:
-          ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
-          fetch-depth: 1
-          persist-credentials: false
-
-      - name: Log in to GHCR
-        run: bash scripts/ci-docker-login-ghcr.sh
-        env:
-          GHCR_USERNAME: ${{ github.actor }}
-          GITHUB_TOKEN: ${{ github.token }}
-
-      - name: Setup Docker builder
-        uses: useblacksmith/setup-docker-builder@ab5c1da94f53f5cd75c1038092aa276dddfccbba # v1
-        with:
-          max-cache-size-mb: 800000
-
-      - name: Build and push shared live-test image
-        uses: useblacksmith/build-push-action@fb9e3e6a9299c78462bfadd0d93352c316adc9b8 # v2
-        with:
-          context: .
-          file: ./Dockerfile
-          target: build
-          build-args: |
-            OPENCLAW_EXTENSIONS=matrix,acpx
-          platforms: linux/amd64
-          tags: ${{ needs.prepare_live_test_image.outputs.live_image }}
-          sbom: true
-          provenance: mode=max
-          load: false
-          push: true
-
   live_test_image_ready:
-    needs: [prepare_live_test_image, push_live_test_image]
+    needs: prepare_live_test_image
     if: always() && needs.prepare_live_test_image.result != 'skipped'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -2540,24 +2384,12 @@ jobs:
     steps:
       - name: Verify live-test image preparation
         env:
-          IMAGE_EXISTS: ${{ needs.prepare_live_test_image.outputs.image_exists }}
           PREPARE_RESULT: ${{ needs.prepare_live_test_image.result }}
-          PUSH_RESULT: ${{ needs.push_live_test_image.result }}
-          SHARED_IMAGE_POLICY: ${{ inputs.shared_image_policy }}
         shell: bash
         run: |
           set -euo pipefail
           if [[ "$PREPARE_RESULT" != "success" ]]; then
             echo "Live-test image preparation ended with ${PREPARE_RESULT}." >&2
-            exit 1
-          fi
-          if [[ "$SHARED_IMAGE_POLICY" == "allow-push" && "$IMAGE_EXISTS" != "1" ]]; then
-            if [[ "$PUSH_RESULT" != "success" ]]; then
-              echo "Live-test registry image publication ended with ${PUSH_RESULT}." >&2
-              exit 1
-            fi
-          elif [[ "$PUSH_RESULT" != "skipped" ]]; then
-            echo "Unexpected live-test registry publication result: ${PUSH_RESULT}." >&2
             exit 1
           fi
 
@@ -3029,7 +2861,7 @@ jobs:
             profiles: stable full
           - suite_id: native-live-src-gateway-profiles-openai
             label: Native live gateway profiles OpenAI
-            command: OPENCLAW_LIVE_GATEWAY_THINKING=off OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai OPENCLAW_LIVE_GATEWAY_MODELS=openai/gpt-5.5 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=180000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=600000 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            command: OPENCLAW_LIVE_GATEWAY_THINKING=off OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai OPENCLAW_LIVE_GATEWAY_MODELS=openai/gpt-5.6-luna OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=180000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=600000 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 60
             profile_env_only: false
             profiles: beta minimum stable full
@@ -3328,7 +3160,7 @@ jobs:
         include:
           - suite_id: live-gateway-docker
             label: Docker live gateway OpenAI
-            command: OPENCLAW_LIVE_GATEWAY_THINKING=off OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai OPENCLAW_LIVE_GATEWAY_MODELS=openai/gpt-5.5 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=1 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=600000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-gateway-models-docker.sh
+            command: OPENCLAW_LIVE_GATEWAY_THINKING=off OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai OPENCLAW_LIVE_GATEWAY_MODELS=openai/gpt-5.6-luna OPENCLAW_LIVE_GATEWAY_MAX_MODELS=1 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=600000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-gateway-models-docker.sh
             timeout_minutes: 40
             profile_env_only: false
             profiles: beta minimum stable full

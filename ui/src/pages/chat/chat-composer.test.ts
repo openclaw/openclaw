@@ -11,7 +11,6 @@ import {
   renderCompactionIndicator,
   renderContextNotice,
   renderFallbackIndicator,
-  renderSideResult,
   resetContextNoticeThemeCacheForTest,
   type ChatRunControlsProps,
 } from "./components/chat-composer.ts";
@@ -20,13 +19,10 @@ vi.mock("../../components/icons.ts", () => ({
   icons: {},
 }));
 
-vi.mock("../../components/markdown.ts", () => ({
-  toSanitizedMarkdownHtml: (value: string) => value,
-}));
-
 function createProps(overrides: Partial<ChatRunControlsProps> = {}): ChatRunControlsProps {
   return {
     canAbort: false,
+    canSend: true,
     connected: true,
     draft: "",
     hasMessages: false,
@@ -121,6 +117,35 @@ describe("chat run controls", () => {
       getButton(container, `button[aria-label="${t("chat.runControls.sendMessage")}"]`),
     ).not.toBeNull();
     expect(container.querySelector('button[aria-label="Start voice input"]')).toBeNull();
+  });
+
+  it("keeps queued sends available offline while disabling live voice input", () => {
+    const container = document.createElement("div");
+    const onSend = vi.fn();
+    const onToggleVoice = vi.fn();
+
+    render(
+      renderChatRunControls(
+        createProps({
+          connected: false,
+          draft: "queue this offline",
+          onSend,
+          onToggleVoice,
+        }),
+      ),
+      container,
+    );
+
+    const sendButton = getButton(
+      container,
+      `button[aria-label="${t("chat.runControls.sendMessage")}"]`,
+    );
+    expect(sendButton.disabled).toBe(false);
+    sendButton.click();
+    expect(onSend).toHaveBeenCalledTimes(1);
+
+    render(renderChatRunControls(createProps({ connected: false, onToggleVoice })), container);
+    expect(getButton(container, 'button[aria-label="Start voice input"]').disabled).toBe(true);
   });
 
   it("keeps voice and generation stop actions available when both are active", () => {
@@ -296,15 +321,15 @@ describe("chat run controls", () => {
 });
 
 describe("chat status indicators", () => {
-  it("renders compact composer run statuses", () => {
+  it("renders only interrupted as a visible composer run status", () => {
     const container = document.createElement("div");
     const nowSpy = vi.spyOn(Date, "now");
     try {
       nowSpy.mockReturnValue(1_000);
+      // Working and Done have no composer chrome: the thread spark and content
+      // arriving cover them (the sr-only region announces them separately).
       render(renderChatRunStatusIndicator({ phase: "in-progress" }), container);
-      let indicator = container.querySelector(".agent-chat__run-status--in-progress");
-      expect(indicator?.textContent).toContain("In progress");
-      expect(indicator?.getAttribute("aria-label")).toBe("Run status: In progress");
+      expect(container.querySelector(".agent-chat__run-status")).toBeNull();
 
       render(
         renderChatRunStatusIndicator({
@@ -315,8 +340,7 @@ describe("chat status indicators", () => {
         }),
         container,
       );
-      indicator = container.querySelector(".agent-chat__run-status--done");
-      expect(indicator?.textContent).toContain("Done");
+      expect(container.querySelector(".agent-chat__run-status")).toBeNull();
 
       render(
         renderChatRunStatusIndicator({
@@ -327,20 +351,21 @@ describe("chat status indicators", () => {
         }),
         container,
       );
-      indicator = container.querySelector(".agent-chat__run-status--interrupted");
+      const indicator = container.querySelector(".agent-chat__run-status--interrupted");
       expect(indicator?.textContent).toContain("Interrupted");
+      expect(indicator?.getAttribute("aria-label")).toBe("Run status: Interrupted");
 
       nowSpy.mockReturnValue(7_000);
       render(
         renderChatRunStatusIndicator({
-          phase: "done",
+          phase: "interrupted",
           runId: "run-1",
           sessionKey: "main",
           occurredAt: 1_000,
         }),
         container,
       );
-      expect(container.querySelector(".agent-chat__run-status--done")).toBeNull();
+      expect(container.querySelector(".agent-chat__run-status--interrupted")).toBeNull();
     } finally {
       nowSpy.mockRestore();
     }
@@ -738,71 +763,5 @@ describe("context notice", () => {
       "Session context usage: ~190k of 200k (~95%)",
     );
     expect(container.querySelector(".context-ring__action")).toBeNull();
-  });
-});
-
-describe("side result render", () => {
-  it("renders, dismisses, and styles BTW side results outside transcript history", () => {
-    const container = document.createElement("div");
-    const onDismissSideResult = vi.fn();
-
-    render(
-      renderSideResult(
-        {
-          kind: "btw",
-          runId: "btw-run-1",
-          sessionKey: "main",
-          question: "what changed?",
-          text: "The web UI now renders **BTW** separately.",
-          isError: false,
-          ts: 2,
-        },
-        onDismissSideResult,
-      ),
-      container,
-    );
-
-    const sideResult = container.querySelector<HTMLElement>(".chat-side-result");
-    expect(sideResult).toBeInstanceOf(HTMLElement);
-    expect([...sideResult!.classList]).toEqual(["chat-side-result"]);
-    expect(sideResult!.getAttribute("aria-label")).toBe("BTW side result");
-    expect(sideResult!.querySelector(".chat-side-result__label")?.textContent).toBe("BTW");
-    expect(sideResult!.querySelector(".chat-side-result__meta")?.textContent).toBe(
-      "Not saved to chat history",
-    );
-    expect(sideResult!.querySelector(".chat-side-result__question")?.textContent).toBe(
-      "what changed?",
-    );
-    expect(
-      sideResult!
-        .querySelector(".chat-side-result__body")
-        ?.textContent?.trim()
-        .replaceAll("**", ""),
-    ).toBe("The web UI now renders BTW separately.");
-
-    const button = container.querySelector<HTMLButtonElement>(".chat-side-result__dismiss");
-    expect(button).toBeInstanceOf(HTMLButtonElement);
-    if (!(button instanceof HTMLButtonElement)) {
-      throw new Error("Expected side result dismiss button");
-    }
-    button.click();
-    expect(onDismissSideResult).toHaveBeenCalledTimes(1);
-
-    render(
-      renderSideResult({
-        kind: "btw",
-        runId: "btw-run-3",
-        sessionKey: "main",
-        question: "what failed?",
-        text: "The side question could not be answered.",
-        isError: true,
-        ts: 4,
-      }),
-      container,
-    );
-
-    const errorResult = container.querySelector<HTMLElement>(".chat-side-result--error");
-    expect(errorResult).toBeInstanceOf(HTMLElement);
-    expect([...errorResult!.classList]).toEqual(["chat-side-result", "chat-side-result--error"]);
   });
 });

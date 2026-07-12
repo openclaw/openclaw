@@ -9,9 +9,41 @@ export {
   type ClawHubTrustErrorDetails,
 } from "./clawhub-trust-error-details.js";
 import { Compile, type Validator as TypeBoxValidator } from "typebox/compile";
+import type { ValidationError } from "./validation-errors.js";
+export { formatValidationErrors, type ValidationError } from "./validation-errors.js";
+export type {
+  SessionCatalog,
+  SessionCatalogCapabilities,
+  SessionCatalogDescriptor,
+  SessionCatalogHost,
+  SessionCatalogSession,
+  SessionCatalogTranscriptItem,
+  SessionsCatalogArchiveParams,
+  SessionsCatalogArchiveResult,
+  SessionsCatalogContinueParams,
+  SessionsCatalogContinueResult,
+  SessionsCatalogListParams,
+  SessionsCatalogListResult,
+  SessionsCatalogReadParams,
+  SessionsCatalogReadResult,
+} from "./schema/sessions-catalog.js";
 import {
   type AgentEvent,
   AgentEventSchema,
+  type AuditActivityAgentRunV1,
+  AuditActivityAgentRunV1Schema,
+  type AuditActivityEventV1,
+  AuditActivityEventV1Schema,
+  type AuditActivityInboundMessageV1,
+  AuditActivityInboundMessageV1Schema,
+  type AuditActivityListParams,
+  AuditActivityListParamsSchema,
+  type AuditActivityListResult,
+  AuditActivityListResultSchema,
+  type AuditActivityOutboundMessageV1,
+  AuditActivityOutboundMessageV1Schema,
+  type AuditActivityToolActionV1,
+  AuditActivityToolActionV1Schema,
   type AuditEvent,
   AuditEventSchema,
   type AuditListParams,
@@ -165,6 +197,10 @@ import {
   type ChatInjectParams,
   ChatInjectParamsSchema,
   ChatSendParamsSchema,
+  type ChatToolTitlesParams,
+  type ChatToolTitlesResult,
+  ChatToolTitlesParamsSchema,
+  ChatToolTitlesResultSchema,
   type ConfigApplyParams,
   ConfigApplyParamsSchema,
   type ConfigGetParams,
@@ -185,6 +221,26 @@ import {
   UpdateStatusParamsSchema,
   type ConnectParams,
   ConnectParamsSchema,
+  type GatewaySuspendBlocker,
+  GatewaySuspendBlockerSchema,
+  type GatewaySuspendPrepareParams,
+  GatewaySuspendPrepareBusyResultSchema,
+  GatewaySuspendPrepareParamsSchema,
+  GatewaySuspendPrepareReadyResultSchema,
+  type GatewaySuspendPrepareResult,
+  GatewaySuspendPrepareResultSchema,
+  type GatewaySuspendResumeParams,
+  GatewaySuspendResumeParamsSchema,
+  type GatewaySuspendResumeResult,
+  GatewaySuspendResumeResultSchema,
+  type GatewaySuspendStatusParams,
+  GatewaySuspendStatusParamsSchema,
+  GatewaySuspendStatusReadyResultSchema,
+  type GatewaySuspendStatusResult,
+  GatewaySuspendStatusResultSchema,
+  GatewaySuspendStatusRunningResultSchema,
+  type GatewaySuspendTaskBlocker,
+  GatewaySuspendTaskBlockerSchema,
   type CronAddParams,
   CronAddParamsSchema,
   type CronAddResult,
@@ -225,6 +281,45 @@ import {
   DeviceTokenRevokeParamsSchema,
   type DeviceTokenRotateParams,
   DeviceTokenRotateParamsSchema,
+  type AllowedApprovalSnapshot,
+  AllowedApprovalSnapshotSchema,
+  isWellFormedApprovalId,
+  type ApprovalAllowDecision,
+  ApprovalAllowDecisionSchema,
+  type ApprovalDecision,
+  ApprovalDecisionSchema,
+  type ApprovalGetParams,
+  ApprovalGetParamsSchema,
+  type ApprovalGetResult,
+  ApprovalGetResultSchema,
+  type ApprovalKind,
+  ApprovalKindSchema,
+  type ApprovalPresentation,
+  ApprovalPresentationSchema,
+  type ApprovalResolveParams,
+  ApprovalResolveParamsSchema,
+  type ApprovalResolveResult,
+  ApprovalResolveResultSchema,
+  type ApprovalSnapshot,
+  ApprovalSnapshotSchema,
+  type ApprovalTerminalReason,
+  ApprovalTerminalReasonSchema,
+  type CancelledApprovalSnapshot,
+  CancelledApprovalSnapshotSchema,
+  type DeniedApprovalSnapshot,
+  DeniedApprovalSnapshotSchema,
+  type ExecApprovalPresentation,
+  ExecApprovalPresentationSchema,
+  type ExpiredApprovalSnapshot,
+  ExpiredApprovalSnapshotSchema,
+  type PendingApprovalSnapshot,
+  PendingApprovalSnapshotSchema,
+  type PluginApprovalPresentation,
+  PluginApprovalPresentationSchema,
+  type PluginApprovalSeverity,
+  PluginApprovalSeveritySchema,
+  type TerminalApprovalSnapshot,
+  TerminalApprovalSnapshotSchema,
   type ExecApprovalsGetParams,
   ExecApprovalsGetParamsSchema,
   type ExecApprovalsNodeGetParams,
@@ -282,6 +377,14 @@ import {
   ErrorCodes,
   type EnvironmentSummary,
   EnvironmentSummarySchema,
+  type EnvironmentsCreateParams,
+  EnvironmentsCreateParamsSchema,
+  type EnvironmentsCreateResult,
+  EnvironmentsCreateResultSchema,
+  type EnvironmentsDestroyParams,
+  EnvironmentsDestroyParamsSchema,
+  type EnvironmentsDestroyResult,
+  EnvironmentsDestroyResultSchema,
   type EnvironmentsListParams,
   EnvironmentsListParamsSchema,
   type EnvironmentsListResult,
@@ -292,6 +395,60 @@ import {
   EnvironmentsStatusResultSchema,
   type EnvironmentStatus,
   EnvironmentStatusSchema,
+  type WorkerEnvironmentMetadata,
+  WorkerEnvironmentMetadataSchema,
+  type WorkerEnvironmentState,
+  WorkerEnvironmentStateSchema,
+  type WorkerTunnelStatus,
+  WorkerTunnelStatusSchema,
+  type WorkerAdmissionHandshake,
+  WorkerAdmissionHandshakeSchema,
+  type WorkerAdmissionResponseFrame,
+  WorkerAdmissionResponseFrameSchema,
+  type WorkerAdmissionFailureReason,
+  WorkerAdmissionFailureReasonSchema,
+  type WorkerConnectParams,
+  type WorkerConnectRequestFrame,
+  WorkerConnectRequestFrameSchema,
+  type WorkerErrorShape,
+  type WorkerHeartbeatParams,
+  WorkerHeartbeatParamsSchema,
+  type WorkerHeartbeatRequestFrame,
+  WorkerHeartbeatRequestFrameSchema,
+  type WorkerHeartbeatResult,
+  type WorkerHeartbeatResponseFrame,
+  WorkerHeartbeatResponseFrameSchema,
+  type WorkerHelloOk,
+  type WorkerProtocolCloseReason,
+  WorkerProtocolCloseReasonSchema,
+  type WorkerTranscriptCommitErrorReason,
+  WorkerTranscriptCommitErrorReasonSchema,
+  type WorkerTranscriptCommitErrorShape,
+  WorkerTranscriptCommitErrorShapeSchema,
+  type WorkerTranscriptCommitParams,
+  WorkerTranscriptCommitParamsSchema,
+  type WorkerTranscriptCommitRequestFrame,
+  WorkerTranscriptCommitRequestFrameSchema,
+  type WorkerTranscriptCommitResponseFrame,
+  WorkerTranscriptCommitResponseFrameSchema,
+  type WorkerTranscriptCommitResult,
+  WorkerTranscriptCommitResultSchema,
+  type WorkerTranscriptMessage,
+  WorkerTranscriptMessageSchema,
+  WORKER_HEARTBEAT_INTERVAL_MS,
+  WORKER_PROTOCOL_FEATURES,
+  WORKER_PROTOCOL_MAX_FEATURE_LENGTH,
+  WORKER_PROTOCOL_MAX_FEATURES,
+  WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH,
+  WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH,
+  WORKER_PROTOCOL_MAX_METHOD_LENGTH,
+  WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
+  WORKER_PROTOCOL_METHODS,
+  WORKER_RPC_SET_VERSION,
+  WORKER_TRANSCRIPT_MAX_BATCH_MESSAGES,
+  WORKER_TRANSCRIPT_MAX_CONTENT_PARTS,
+  WORKER_TRANSCRIPT_MAX_JSON_DEPTH,
+  WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE,
   type SystemInfoParams,
   SystemInfoParamsSchema,
   type SystemInfoResult,
@@ -376,6 +533,14 @@ import {
   NodePairRejectParamsSchema,
   type NodePairRemoveParams,
   NodePairRemoveParamsSchema,
+  type NodePluginToolDescriptor,
+  NodePluginToolDescriptorSchema,
+  type NodePluginToolsUpdateParams,
+  NodePluginToolsUpdateParamsSchema,
+  type NodeSkillDescriptor,
+  NodeSkillDescriptorSchema,
+  type NodeSkillsUpdateParams,
+  NodeSkillsUpdateParamsSchema,
   type NodeRenameParams,
   NodeRenameParamsSchema,
   type PollParams,
@@ -397,7 +562,6 @@ import {
   WebPushTestParamsSchema,
   type PresenceEntry,
   PresenceEntrySchema,
-  ProtocolSchemas,
   type RequestFrame,
   RequestFrameSchema,
   type ResponseFrame,
@@ -456,16 +620,46 @@ import {
   SessionsGroupsPutParamsSchema,
   type SessionsGroupsRenameParams,
   SessionsGroupsRenameParamsSchema,
+  type SessionDiffFile,
+  SessionDiffFileSchema,
+  type SessionDiffFileStatus,
+  SessionDiffFileStatusSchema,
+  type SessionsDiffParams,
+  SessionsDiffParamsSchema,
+  type SessionsDiffResult,
+  SessionsDiffResultSchema,
   type SessionsFilesGetParams,
   SessionsFilesGetParamsSchema,
   type SessionsFilesGetResult,
   SessionsFilesGetResultSchema,
+  type SessionsFilesSetParams,
+  SessionsFilesSetParamsSchema,
+  type SessionsFilesSetResult,
+  SessionsFilesSetResultSchema,
   type SessionsFilesListParams,
   SessionsFilesListParamsSchema,
   type SessionsFilesListResult,
   SessionsFilesListResultSchema,
   type SessionsListParams,
   SessionsListParamsSchema,
+  SessionCatalogSchema,
+  SessionCatalogCapabilitiesSchema,
+  SessionCatalogDescriptorSchema,
+  SessionCatalogHostSchema,
+  SessionCatalogSessionSchema,
+  SessionCatalogTranscriptItemSchema,
+  type SessionsCatalogArchiveParams,
+  SessionsCatalogArchiveParamsSchema,
+  SessionsCatalogArchiveResultSchema,
+  type SessionsCatalogContinueParams,
+  SessionsCatalogContinueParamsSchema,
+  SessionsCatalogContinueResultSchema,
+  type SessionsCatalogListParams,
+  SessionsCatalogListParamsSchema,
+  SessionsCatalogListResultSchema,
+  type SessionsCatalogReadParams,
+  SessionsCatalogReadParamsSchema,
+  SessionsCatalogReadResultSchema,
   type SessionsMessagesSubscribeParams,
   SessionsMessagesSubscribeParamsSchema,
   type SessionsMessagesUnsubscribeParams,
@@ -618,10 +812,18 @@ import {
   CrestodianSetupDetectParamsSchema,
   type CrestodianSetupDetectResult,
   CrestodianSetupDetectResultSchema,
+  type CrestodianSetupVerifyParams,
+  CrestodianSetupVerifyParamsSchema,
+  type CrestodianSetupVerifyResult,
+  CrestodianSetupVerifyResultSchema,
   type CrestodianSetupActivateParams,
   CrestodianSetupActivateParamsSchema,
   type CrestodianSetupActivateResult,
   CrestodianSetupActivateResultSchema,
+  type CrestodianSetupAuthStartParams,
+  CrestodianSetupAuthStartParamsSchema,
+  type CrestodianSetupAuthStartResult,
+  CrestodianSetupAuthStartResultSchema,
   type WizardCancelParams,
   WizardCancelParamsSchema,
   type WizardNextParams,
@@ -662,21 +864,13 @@ import {
   WorktreeBranchSchema,
   type WorktreesBranchesResult,
   WorktreesBranchesResultSchema,
+  type FsDirEntry,
+  FsDirEntrySchema,
+  type FsListDirParams,
+  FsListDirParamsSchema,
+  type FsListDirResult,
+  FsListDirResultSchema,
 } from "./schema.js";
-
-/** Normalized validation error shape exposed by every protocol validator. */
-export type ValidationError = {
-  /** Failed schema keyword, when the validator can report one. */
-  keyword?: string;
-  /** JSON-pointer path to the failing data location. */
-  instancePath?: string;
-  /** JSON-pointer path to the failing schema location. */
-  schemaPath?: string;
-  /** Validator-specific keyword parameters for richer diagnostics. */
-  params?: Record<string, unknown>;
-  /** Human-readable validation message. */
-  message?: string;
-};
 
 /** Runtime validator shape shared by gateway clients and server handlers. */
 export type ProtocolValidator<T = unknown> = ((data: unknown) => data is T) & {
@@ -688,7 +882,10 @@ export type ProtocolValidator<T = unknown> = ((data: unknown) => data is T) & {
 
 // Defer TypeBox compilation until the first validation call. Importing this
 // module is common in CLIs/tests, so eager compilation would add startup cost.
-function lazyCompile<T = unknown>(schema: unknown): ProtocolValidator<T> {
+function lazyCompile<T = unknown>(
+  schema: unknown,
+  precheck?: (data: unknown) => ValidationError | undefined,
+): ProtocolValidator<T> {
   let compiled: TypeBoxValidator | undefined;
   let errors: ValidationError[] | null = null;
 
@@ -698,6 +895,11 @@ function lazyCompile<T = unknown>(schema: unknown): ProtocolValidator<T> {
   };
 
   const validate = ((data: unknown): data is T => {
+    const precheckError = precheck?.(data);
+    if (precheckError) {
+      errors = [precheckError];
+      return false;
+    }
     const current = getCompiled();
     const valid = current.Check(data);
     errors = valid ? null : ([...current.Errors(data)] as ValidationError[]);
@@ -728,6 +930,83 @@ function lazyCompile<T = unknown>(schema: unknown): ProtocolValidator<T> {
 // constants so call sites can pair validation with the wire contract directly.
 export const validateCommandsListParams = lazyCompile<CommandsListParams>(CommandsListParamsSchema);
 export const validateConnectParams = lazyCompile<ConnectParams>(ConnectParamsSchema);
+export const validateWorkerAdmissionHandshake = lazyCompile<WorkerAdmissionHandshake>(
+  WorkerAdmissionHandshakeSchema,
+);
+export const validateWorkerConnectRequestFrame = lazyCompile<WorkerConnectRequestFrame>(
+  WorkerConnectRequestFrameSchema,
+);
+export const validateWorkerHeartbeatParams = lazyCompile<WorkerHeartbeatParams>(
+  WorkerHeartbeatParamsSchema,
+);
+
+function checkWorkerTranscriptCommitJson(data: unknown): ValidationError | undefined {
+  const stack: Array<{ depth: number; value: unknown }> = [{ depth: 0, value: data }];
+  const seen = new WeakSet<object>();
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current) {
+      break;
+    }
+    if (current.depth > WORKER_TRANSCRIPT_MAX_JSON_DEPTH) {
+      return {
+        keyword: "maxDepth",
+        params: { limit: WORKER_TRANSCRIPT_MAX_JSON_DEPTH },
+        message: `must not exceed JSON nesting depth ${WORKER_TRANSCRIPT_MAX_JSON_DEPTH}`,
+      };
+    }
+    if (
+      current.value === null ||
+      typeof current.value === "string" ||
+      typeof current.value === "boolean"
+    ) {
+      continue;
+    }
+    if (typeof current.value === "number") {
+      if (!Number.isFinite(current.value)) {
+        return { keyword: "finite", message: "must contain only finite JSON numbers" };
+      }
+      continue;
+    }
+    if (typeof current.value !== "object") {
+      return { keyword: "jsonValue", message: "must contain only JSON values" };
+    }
+    if (seen.has(current.value)) {
+      return { keyword: "acyclic", message: "must be an acyclic JSON value" };
+    }
+    seen.add(current.value);
+    const values = Array.isArray(current.value)
+      ? current.value
+      : Object.values(current.value as Record<string, unknown>);
+    for (const value of values) {
+      stack.push({ depth: current.depth + 1, value });
+    }
+  }
+  return undefined;
+}
+
+export const validateWorkerTranscriptCommitParams = lazyCompile<WorkerTranscriptCommitParams>(
+  WorkerTranscriptCommitParamsSchema,
+  checkWorkerTranscriptCommitJson,
+);
+export const validateGatewaySuspendPrepareParams = lazyCompile<GatewaySuspendPrepareParams>(
+  GatewaySuspendPrepareParamsSchema,
+);
+export const validateGatewaySuspendPrepareResult = lazyCompile<GatewaySuspendPrepareResult>(
+  GatewaySuspendPrepareResultSchema,
+);
+export const validateGatewaySuspendStatusParams = lazyCompile<GatewaySuspendStatusParams>(
+  GatewaySuspendStatusParamsSchema,
+);
+export const validateGatewaySuspendStatusResult = lazyCompile<GatewaySuspendStatusResult>(
+  GatewaySuspendStatusResultSchema,
+);
+export const validateGatewaySuspendResumeParams = lazyCompile<GatewaySuspendResumeParams>(
+  GatewaySuspendResumeParamsSchema,
+);
+export const validateGatewaySuspendResumeResult = lazyCompile<GatewaySuspendResumeResult>(
+  GatewaySuspendResumeResultSchema,
+);
 export const validateRequestFrame = lazyCompile<RequestFrame>(RequestFrameSchema);
 export const validateResponseFrame = lazyCompile<ResponseFrame>(ResponseFrameSchema);
 export const validateEventFrame = lazyCompile<EventFrame>(EventFrameSchema);
@@ -736,6 +1015,9 @@ export const validateMessageActionParams =
 export const validateSendParams = lazyCompile(SendParamsSchema);
 export const validatePollParams = lazyCompile<PollParams>(PollParamsSchema);
 export const validateAgentParams = lazyCompile(AgentParamsSchema);
+export const validateAuditActivityListParams = lazyCompile<AuditActivityListParams>(
+  AuditActivityListParamsSchema,
+);
 export const validateAuditListParams = lazyCompile<AuditListParams>(AuditListParamsSchema);
 export const validateAgentIdentityParams =
   lazyCompile<AgentIdentityParams>(AgentIdentityParamsSchema);
@@ -757,6 +1039,7 @@ export const validateWorktreesGcParams = lazyCompile<WorktreesGcParams>(Worktree
 export const validateWorktreesBranchesParams = lazyCompile<WorktreesBranchesParams>(
   WorktreesBranchesParamsSchema,
 );
+export const validateFsListDirParams = lazyCompile<FsListDirParams>(FsListDirParamsSchema);
 export const validateAgentsCreateParams = lazyCompile<AgentsCreateParams>(AgentsCreateParamsSchema);
 export const validateAgentsUpdateParams = lazyCompile<AgentsUpdateParams>(AgentsUpdateParamsSchema);
 export const validateAgentsDeleteParams = lazyCompile<AgentsDeleteParams>(AgentsDeleteParamsSchema);
@@ -793,6 +1076,18 @@ export const validateNodePairRemoveParams = lazyCompile<NodePairRemoveParams>(
 );
 export const validateNodeRenameParams = lazyCompile<NodeRenameParams>(NodeRenameParamsSchema);
 export const validateNodeListParams = lazyCompile<NodeListParams>(NodeListParamsSchema);
+export const validateNodePluginToolsUpdateParams = lazyCompile<NodePluginToolsUpdateParams>(
+  NodePluginToolsUpdateParamsSchema,
+);
+export const validateNodeSkillsUpdateParams = lazyCompile<NodeSkillsUpdateParams>(
+  NodeSkillsUpdateParamsSchema,
+);
+export const validateEnvironmentsCreateParams = lazyCompile<EnvironmentsCreateParams>(
+  EnvironmentsCreateParamsSchema,
+);
+export const validateEnvironmentsDestroyParams = lazyCompile<EnvironmentsDestroyParams>(
+  EnvironmentsDestroyParamsSchema,
+);
 export const validateEnvironmentsListParams = lazyCompile<EnvironmentsListParams>(
   EnvironmentsListParamsSchema,
 );
@@ -838,6 +1133,18 @@ export const validateSecretsResolveResult = lazyCompile<SecretsResolveResult>(
   SecretsResolveResultSchema,
 );
 export const validateSessionsListParams = lazyCompile<SessionsListParams>(SessionsListParamsSchema);
+export const validateSessionsCatalogListParams = lazyCompile<SessionsCatalogListParams>(
+  SessionsCatalogListParamsSchema,
+);
+export const validateSessionsCatalogReadParams = lazyCompile<SessionsCatalogReadParams>(
+  SessionsCatalogReadParamsSchema,
+);
+export const validateSessionsCatalogContinueParams = lazyCompile<SessionsCatalogContinueParams>(
+  SessionsCatalogContinueParamsSchema,
+);
+export const validateSessionsCatalogArchiveParams = lazyCompile<SessionsCatalogArchiveParams>(
+  SessionsCatalogArchiveParamsSchema,
+);
 export const validateSessionsCleanupParams = lazyCompile<SessionsCleanupParams>(
   SessionsCleanupParamsSchema,
 );
@@ -856,6 +1163,10 @@ export const validateSessionsFilesListParams = lazyCompile<SessionsFilesListPara
 export const validateSessionsFilesGetParams = lazyCompile<SessionsFilesGetParams>(
   SessionsFilesGetParamsSchema,
 );
+export const validateSessionsFilesSetParams = lazyCompile<SessionsFilesSetParams>(
+  SessionsFilesSetParamsSchema,
+);
+export const validateSessionsDiffParams = lazyCompile<SessionsDiffParams>(SessionsDiffParamsSchema);
 export const validateSessionsCreateParams = lazyCompile<SessionsCreateParams>(
   SessionsCreateParamsSchema,
 );
@@ -938,8 +1249,14 @@ export const validateCrestodianChatParams = lazyCompile<CrestodianChatParams>(
 export const validateCrestodianSetupDetectParams = lazyCompile<CrestodianSetupDetectParams>(
   CrestodianSetupDetectParamsSchema,
 );
+export const validateCrestodianSetupVerifyParams = lazyCompile<CrestodianSetupVerifyParams>(
+  CrestodianSetupVerifyParamsSchema,
+);
 export const validateCrestodianSetupActivateParams = lazyCompile<CrestodianSetupActivateParams>(
   CrestodianSetupActivateParamsSchema,
+);
+export const validateCrestodianSetupAuthStartParams = lazyCompile<CrestodianSetupAuthStartParams>(
+  CrestodianSetupAuthStartParamsSchema,
 );
 export const validateWizardStartParams = lazyCompile<WizardStartParams>(WizardStartParamsSchema);
 export const validateWizardNextParams = lazyCompile<WizardNextParams>(WizardNextParamsSchema);
@@ -1105,6 +1422,53 @@ export const validateDeviceTokenRotateParams = lazyCompile<DeviceTokenRotatePara
 export const validateDeviceTokenRevokeParams = lazyCompile<DeviceTokenRevokeParams>(
   DeviceTokenRevokeParamsSchema,
 );
+export const validateApprovalKind = lazyCompile<ApprovalKind>(ApprovalKindSchema);
+export const validateApprovalDecision = lazyCompile<ApprovalDecision>(ApprovalDecisionSchema);
+export const validateApprovalAllowDecision = lazyCompile<ApprovalAllowDecision>(
+  ApprovalAllowDecisionSchema,
+);
+export const validateApprovalTerminalReason = lazyCompile<ApprovalTerminalReason>(
+  ApprovalTerminalReasonSchema,
+);
+export const validatePluginApprovalSeverity = lazyCompile<PluginApprovalSeverity>(
+  PluginApprovalSeveritySchema,
+);
+export const validateExecApprovalPresentation = lazyCompile<ExecApprovalPresentation>(
+  ExecApprovalPresentationSchema,
+);
+export const validatePluginApprovalPresentation = lazyCompile<PluginApprovalPresentation>(
+  PluginApprovalPresentationSchema,
+);
+export const validateApprovalPresentation = lazyCompile<ApprovalPresentation>(
+  ApprovalPresentationSchema,
+);
+export const validatePendingApprovalSnapshot = lazyCompile<PendingApprovalSnapshot>(
+  PendingApprovalSnapshotSchema,
+);
+export const validateAllowedApprovalSnapshot = lazyCompile<AllowedApprovalSnapshot>(
+  AllowedApprovalSnapshotSchema,
+);
+export const validateDeniedApprovalSnapshot = lazyCompile<DeniedApprovalSnapshot>(
+  DeniedApprovalSnapshotSchema,
+);
+export const validateExpiredApprovalSnapshot = lazyCompile<ExpiredApprovalSnapshot>(
+  ExpiredApprovalSnapshotSchema,
+);
+export const validateCancelledApprovalSnapshot = lazyCompile<CancelledApprovalSnapshot>(
+  CancelledApprovalSnapshotSchema,
+);
+export const validateApprovalSnapshot = lazyCompile<ApprovalSnapshot>(ApprovalSnapshotSchema);
+export const validateTerminalApprovalSnapshot = lazyCompile<TerminalApprovalSnapshot>(
+  TerminalApprovalSnapshotSchema,
+);
+export const validateApprovalGetParams = lazyCompile<ApprovalGetParams>(ApprovalGetParamsSchema);
+export const validateApprovalGetResult = lazyCompile<ApprovalGetResult>(ApprovalGetResultSchema);
+export const validateApprovalResolveParams = lazyCompile<ApprovalResolveParams>(
+  ApprovalResolveParamsSchema,
+);
+export const validateApprovalResolveResult = lazyCompile<ApprovalResolveResult>(
+  ApprovalResolveResultSchema,
+);
 export const validateExecApprovalsGetParams = lazyCompile<ExecApprovalsGetParams>(
   ExecApprovalsGetParamsSchema,
 );
@@ -1188,6 +1552,9 @@ export const validateTerminalEvent = lazyCompile<TerminalEvent>(TerminalEventSch
 export const validateChatHistoryParams = lazyCompile(ChatHistoryParamsSchema);
 export const validateChatMetadataParams = lazyCompile<ChatMetadataParams>(ChatMetadataParamsSchema);
 export const validateChatMessageGetParams = lazyCompile(ChatMessageGetParamsSchema);
+export const validateChatToolTitlesParams = lazyCompile<ChatToolTitlesParams>(
+  ChatToolTitlesParamsSchema,
+);
 export const validateChatSendParams = lazyCompile(ChatSendParamsSchema);
 export const validateChatAbortParams = lazyCompile<ChatAbortParams>(ChatAbortParamsSchema);
 export const validateChatInjectParams = lazyCompile<ChatInjectParams>(ChatInjectParamsSchema);
@@ -1199,77 +1566,22 @@ export const validateWebLoginStartParams =
   lazyCompile<WebLoginStartParams>(WebLoginStartParamsSchema);
 export const validateWebLoginWaitParams = lazyCompile<WebLoginWaitParams>(WebLoginWaitParamsSchema);
 
-function firstStringParam(value: unknown): string | undefined {
-  if (typeof value === "string" && value.trim()) {
-    return value;
-  }
-  if (Array.isArray(value)) {
-    return value.find(
-      (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
-    );
-  }
-  return undefined;
-}
-
-/** Convert validator errors into compact operator-facing failure text. */
-export function formatValidationErrors(errors: ValidationError[] | null | undefined) {
-  if (!errors?.length) {
-    return "unknown validation error";
-  }
-
-  const parts: string[] = [];
-
-  for (const err of errors) {
-    const keyword = typeof err?.keyword === "string" ? err.keyword : "";
-    const instancePath = typeof err?.instancePath === "string" ? err.instancePath : "";
-
-    if (keyword === "additionalProperties") {
-      const additionalProperty =
-        firstStringParam(err?.params?.additionalProperty) ??
-        firstStringParam(err?.params?.additionalProperties);
-      if (additionalProperty) {
-        const where = instancePath ? `at ${instancePath}` : "at root";
-        parts.push(`${where}: unexpected property '${additionalProperty}'`);
-        continue;
-      }
-    }
-    if (keyword === "required") {
-      const missingProperty =
-        firstStringParam(err?.params?.missingProperty) ??
-        firstStringParam(err?.params?.requiredProperties);
-      if (missingProperty) {
-        const where = instancePath ? `at ${instancePath}: ` : "";
-        parts.push(`${where}must have required property '${missingProperty}'`);
-        continue;
-      }
-    }
-
-    const failingKeyword =
-      typeof err?.params?.failingKeyword === "string" ? err.params.failingKeyword : "";
-    // TypeBox reports conditional required-property misses through if/then
-    // keywords, which otherwise hide the actionable missing-property context.
-    const message =
-      keyword === "then" || (keyword === "if" && failingKeyword === "then")
-        ? "must have required conditional properties"
-        : typeof err?.message === "string" && err.message.trim()
-          ? err.message
-          : "validation error";
-    const where = instancePath ? `at ${instancePath}: ` : "";
-    parts.push(`${where}${message}`);
-  }
-
-  // De-dupe while preserving order.
-  const unique = uniqueStrings(parts.filter((part) => part.trim()));
-  if (!unique.length) {
-    return "unknown validation error";
-  }
-  return unique.join("; ");
-}
-
 // Schema exports stay explicit to make additions/removals reviewable as public
 // protocol surface changes.
 export {
   ConnectParamsSchema,
+  GatewaySuspendTaskBlockerSchema,
+  GatewaySuspendBlockerSchema,
+  GatewaySuspendPrepareBusyResultSchema,
+  GatewaySuspendPrepareParamsSchema,
+  GatewaySuspendPrepareReadyResultSchema,
+  GatewaySuspendPrepareResultSchema,
+  GatewaySuspendStatusReadyResultSchema,
+  GatewaySuspendStatusRunningResultSchema,
+  GatewaySuspendStatusParamsSchema,
+  GatewaySuspendStatusResultSchema,
+  GatewaySuspendResumeParamsSchema,
+  GatewaySuspendResumeResultSchema,
   GATEWAY_SERVER_CAPS,
   HelloOkSchema,
   RequestFrameSchema,
@@ -1279,8 +1591,44 @@ export {
   PresenceEntrySchema,
   SnapshotSchema,
   ErrorShapeSchema,
+  WorkerAdmissionFailureReasonSchema,
+  WorkerAdmissionHandshakeSchema,
+  WorkerAdmissionResponseFrameSchema,
+  WorkerConnectRequestFrameSchema,
+  WorkerHeartbeatParamsSchema,
+  WorkerHeartbeatRequestFrameSchema,
+  WorkerHeartbeatResponseFrameSchema,
+  WorkerProtocolCloseReasonSchema,
+  WorkerTranscriptCommitErrorReasonSchema,
+  WorkerTranscriptCommitErrorShapeSchema,
+  WorkerTranscriptCommitParamsSchema,
+  WorkerTranscriptCommitRequestFrameSchema,
+  WorkerTranscriptCommitResponseFrameSchema,
+  WorkerTranscriptCommitResultSchema,
+  WorkerTranscriptMessageSchema,
+  WORKER_HEARTBEAT_INTERVAL_MS,
+  WORKER_PROTOCOL_FEATURES,
+  WORKER_PROTOCOL_MAX_FEATURE_LENGTH,
+  WORKER_PROTOCOL_MAX_FEATURES,
+  WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH,
+  WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH,
+  WORKER_PROTOCOL_MAX_METHOD_LENGTH,
+  WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
+  WORKER_PROTOCOL_METHODS,
+  WORKER_RPC_SET_VERSION,
+  WORKER_TRANSCRIPT_MAX_BATCH_MESSAGES,
+  WORKER_TRANSCRIPT_MAX_CONTENT_PARTS,
+  WORKER_TRANSCRIPT_MAX_JSON_DEPTH,
+  WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE,
   EnvironmentStatusSchema,
+  WorkerEnvironmentStateSchema,
+  WorkerTunnelStatusSchema,
+  WorkerEnvironmentMetadataSchema,
   EnvironmentSummarySchema,
+  EnvironmentsCreateParamsSchema,
+  EnvironmentsCreateResultSchema,
+  EnvironmentsDestroyParamsSchema,
+  EnvironmentsDestroyResultSchema,
   EnvironmentsListParamsSchema,
   EnvironmentsListResultSchema,
   EnvironmentsStatusParamsSchema,
@@ -1308,6 +1656,10 @@ export {
   NodePairRejectParamsSchema,
   NodePairRemoveParamsSchema,
   NodeListParamsSchema,
+  NodePluginToolDescriptorSchema,
+  NodePluginToolsUpdateParamsSchema,
+  NodeSkillDescriptorSchema,
+  NodeSkillsUpdateParamsSchema,
   NodePendingAckParamsSchema,
   NodeInvokeParamsSchema,
   NodeEventResultSchema,
@@ -1318,6 +1670,20 @@ export {
   NodePendingEnqueueParamsSchema,
   NodePendingEnqueueResultSchema,
   SessionsListParamsSchema,
+  SessionCatalogCapabilitiesSchema,
+  SessionCatalogDescriptorSchema,
+  SessionCatalogSessionSchema,
+  SessionCatalogHostSchema,
+  SessionCatalogSchema,
+  SessionCatalogTranscriptItemSchema,
+  SessionsCatalogListParamsSchema,
+  SessionsCatalogListResultSchema,
+  SessionsCatalogReadParamsSchema,
+  SessionsCatalogReadResultSchema,
+  SessionsCatalogContinueParamsSchema,
+  SessionsCatalogContinueResultSchema,
+  SessionsCatalogArchiveParamsSchema,
+  SessionsCatalogArchiveResultSchema,
   SessionsCleanupParamsSchema,
   SessionsPreviewParamsSchema,
   SessionsDescribeParamsSchema,
@@ -1329,8 +1695,14 @@ export {
   SessionFileRelevanceSchema,
   SessionsFilesGetParamsSchema,
   SessionsFilesGetResultSchema,
+  SessionsFilesSetParamsSchema,
+  SessionsFilesSetResultSchema,
   SessionsFilesListParamsSchema,
   SessionsFilesListResultSchema,
+  SessionDiffFileSchema,
+  SessionDiffFileStatusSchema,
+  SessionsDiffParamsSchema,
+  SessionsDiffResultSchema,
   SessionsCompactionListParamsSchema,
   SessionsCompactionGetParamsSchema,
   SessionsCompactionBranchParamsSchema,
@@ -1357,6 +1729,13 @@ export {
   ArtifactsListParamsSchema,
   ArtifactsGetParamsSchema,
   ArtifactsDownloadParamsSchema,
+  AuditActivityAgentRunV1Schema,
+  AuditActivityEventV1Schema,
+  AuditActivityInboundMessageV1Schema,
+  AuditActivityListParamsSchema,
+  AuditActivityListResultSchema,
+  AuditActivityOutboundMessageV1Schema,
+  AuditActivityToolActionV1Schema,
   AuditEventSchema,
   AuditListParamsSchema,
   AuditListResultSchema,
@@ -1391,8 +1770,12 @@ export {
   CrestodianChatResultSchema,
   CrestodianSetupDetectParamsSchema,
   CrestodianSetupDetectResultSchema,
+  CrestodianSetupVerifyParamsSchema,
+  CrestodianSetupVerifyResultSchema,
   CrestodianSetupActivateParamsSchema,
   CrestodianSetupActivateResultSchema,
+  CrestodianSetupAuthStartParamsSchema,
+  CrestodianSetupAuthStartResultSchema,
   WizardStartParamsSchema,
   WizardNextParamsSchema,
   WizardCancelParamsSchema,
@@ -1540,6 +1923,26 @@ export {
   TerminalDataEventSchema,
   TerminalExitEventSchema,
   TerminalEventSchema,
+  isWellFormedApprovalId,
+  ApprovalKindSchema,
+  ApprovalDecisionSchema,
+  ApprovalAllowDecisionSchema,
+  ApprovalTerminalReasonSchema,
+  PluginApprovalSeveritySchema,
+  ExecApprovalPresentationSchema,
+  PluginApprovalPresentationSchema,
+  ApprovalPresentationSchema,
+  PendingApprovalSnapshotSchema,
+  AllowedApprovalSnapshotSchema,
+  DeniedApprovalSnapshotSchema,
+  ExpiredApprovalSnapshotSchema,
+  CancelledApprovalSnapshotSchema,
+  ApprovalSnapshotSchema,
+  TerminalApprovalSnapshotSchema,
+  ApprovalGetParamsSchema,
+  ApprovalGetResultSchema,
+  ApprovalResolveParamsSchema,
+  ApprovalResolveResultSchema,
   ExecApprovalsGetParamsSchema,
   ExecApprovalsSetParamsSchema,
   ExecApprovalGetParamsSchema,
@@ -1549,6 +1952,8 @@ export {
   ChatMetadataParamsSchema,
   ChatSendParamsSchema,
   ChatInjectParamsSchema,
+  ChatToolTitlesParamsSchema,
+  ChatToolTitlesResultSchema,
   UpdateRunParamsSchema,
   TickEventSchema,
   ShutdownEventSchema,
@@ -1564,7 +1969,9 @@ export {
   WorktreesBranchesParamsSchema,
   WorktreeBranchSchema,
   WorktreesBranchesResultSchema,
-  ProtocolSchemas,
+  FsDirEntrySchema,
+  FsListDirParamsSchema,
+  FsListDirResultSchema,
   MIN_CLIENT_PROTOCOL_VERSION,
   MIN_NODE_PROTOCOL_VERSION,
   MIN_PROBE_PROTOCOL_VERSION,
@@ -1577,6 +1984,33 @@ export {
 export type {
   GatewayFrame,
   ConnectParams,
+  WorkerAdmissionFailureReason,
+  WorkerAdmissionHandshake,
+  WorkerAdmissionResponseFrame,
+  WorkerConnectParams,
+  WorkerConnectRequestFrame,
+  WorkerErrorShape,
+  WorkerHeartbeatParams,
+  WorkerHeartbeatRequestFrame,
+  WorkerHeartbeatResult,
+  WorkerHeartbeatResponseFrame,
+  WorkerHelloOk,
+  WorkerProtocolCloseReason,
+  WorkerTranscriptCommitErrorReason,
+  WorkerTranscriptCommitErrorShape,
+  WorkerTranscriptCommitParams,
+  WorkerTranscriptCommitRequestFrame,
+  WorkerTranscriptCommitResponseFrame,
+  WorkerTranscriptCommitResult,
+  WorkerTranscriptMessage,
+  GatewaySuspendTaskBlocker,
+  GatewaySuspendBlocker,
+  GatewaySuspendPrepareParams,
+  GatewaySuspendPrepareResult,
+  GatewaySuspendStatusParams,
+  GatewaySuspendStatusResult,
+  GatewaySuspendResumeParams,
+  GatewaySuspendResumeResult,
   HelloOk,
   RequestFrame,
   ResponseFrame,
@@ -1611,8 +2045,12 @@ export type {
   CrestodianChatResult,
   CrestodianSetupDetectParams,
   CrestodianSetupDetectResult,
+  CrestodianSetupVerifyParams,
+  CrestodianSetupVerifyResult,
   CrestodianSetupActivateParams,
   CrestodianSetupActivateResult,
+  CrestodianSetupAuthStartParams,
+  CrestodianSetupAuthStartResult,
   WizardStartParams,
   WizardNextParams,
   WizardCancelParams,
@@ -1685,6 +2123,12 @@ export type {
   SessionsFilesListResult,
   SessionsFilesGetParams,
   SessionsFilesGetResult,
+  SessionsFilesSetParams,
+  SessionsFilesSetResult,
+  SessionDiffFile,
+  SessionDiffFileStatus,
+  SessionsDiffParams,
+  SessionsDiffResult,
   ArtifactSummary,
   ArtifactsListParams,
   ArtifactsListResult,
@@ -1695,6 +2139,8 @@ export type {
   AgentsListParams,
   AgentsListResult,
   ChatMetadataParams,
+  ChatToolTitlesParams,
+  ChatToolTitlesResult,
   CommandsListParams,
   CommandsListResult,
   CommandEntry,
@@ -1750,7 +2196,14 @@ export type {
   SkillsInstallParams,
   SkillsUpdateParams,
   EnvironmentStatus,
+  WorkerEnvironmentState,
+  WorkerTunnelStatus,
+  WorkerEnvironmentMetadata,
   EnvironmentSummary,
+  EnvironmentsCreateParams,
+  EnvironmentsCreateResult,
+  EnvironmentsDestroyParams,
+  EnvironmentsDestroyResult,
   EnvironmentsListParams,
   EnvironmentsListResult,
   EnvironmentsStatusParams,
@@ -1760,6 +2213,10 @@ export type {
   NodePairRejectParams,
   NodePairRemoveParams,
   NodeListParams,
+  NodePluginToolDescriptor,
+  NodePluginToolsUpdateParams,
+  NodeSkillDescriptor,
+  NodeSkillsUpdateParams,
   NodeInvokeParams,
   NodeInvokeResultParams,
   NodeEventParams,
@@ -1784,6 +2241,13 @@ export type {
   SessionsDeleteParams,
   SessionsCompactParams,
   SessionsUsageParams,
+  AuditActivityAgentRunV1,
+  AuditActivityEventV1,
+  AuditActivityInboundMessageV1,
+  AuditActivityListParams,
+  AuditActivityListResult,
+  AuditActivityOutboundMessageV1,
+  AuditActivityToolActionV1,
   AuditEvent,
   AuditListParams,
   AuditListResult,
@@ -1817,6 +2281,25 @@ export type {
   CronRunParams,
   CronRunsParams,
   CronRunLogEntry,
+  ApprovalKind,
+  ApprovalDecision,
+  ApprovalAllowDecision,
+  ApprovalTerminalReason,
+  PluginApprovalSeverity,
+  ExecApprovalPresentation,
+  PluginApprovalPresentation,
+  ApprovalPresentation,
+  PendingApprovalSnapshot,
+  AllowedApprovalSnapshot,
+  DeniedApprovalSnapshot,
+  ExpiredApprovalSnapshot,
+  CancelledApprovalSnapshot,
+  ApprovalSnapshot,
+  TerminalApprovalSnapshot,
+  ApprovalGetParams,
+  ApprovalGetResult,
+  ApprovalResolveParams,
+  ApprovalResolveResult,
   ExecApprovalsGetParams,
   ExecApprovalsNodeSnapshot,
   ExecApprovalsSetParams,
@@ -1861,6 +2344,9 @@ export type {
   WorktreesBranchesParams,
   WorktreeBranch,
   WorktreesBranchesResult,
+  FsDirEntry,
+  FsListDirParams,
+  FsListDirResult,
   SessionGroup,
   SessionsGroupsListParams,
   SessionsGroupsListResult,
@@ -1869,9 +2355,6 @@ export type {
   SessionsGroupsDeleteParams,
   SessionsGroupsMutationResult,
 };
-function uniqueStrings(values: string[]): string[] {
-  return [...new Set(values)];
-}
 
 // The protocol package cannot import core session types. This local structural
 // result mirrors the wire contract and keeps the package independent of src/.
@@ -1892,5 +2375,13 @@ type SessionsPatchResult = {
 type GatewayAgentRuntime = {
   id: string;
   fallback?: "openclaw" | "none";
-  source: "env" | "agent" | "defaults" | "model" | "provider" | "implicit" | "session-key";
+  source:
+    | "env"
+    | "agent"
+    | "defaults"
+    | "model"
+    | "provider"
+    | "implicit"
+    | "session"
+    | "session-key";
 };

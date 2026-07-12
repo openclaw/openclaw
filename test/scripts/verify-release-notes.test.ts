@@ -4,11 +4,18 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  canonicalMainCommitMatches,
+  canonicalPullRequests,
   contaminatingPullRequestReferences,
   countTopLevelSectionBullets,
+  createGithubSnapshotState,
   cumulativeShippedPullRequests,
+  defaultGithubSnapshotPath,
+  githubApiWithSnapshot,
   highlightCountError,
+  persistGithubSnapshot,
   releaseNoteReferences,
+  standardRevertedHash,
   subtractShippedPullRequests,
   withoutExcludedContributionRecords,
 } from "../../.agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs";
@@ -32,6 +39,254 @@ function git(cwd: string, args: string[]): string {
 }
 
 describe("release-note verification", () => {
+  it("stores default GitHub snapshots in the shared Git common directory", () => {
+    const commonDir = resolve("/tmp/openclaw-shared-git");
+    expect(defaultGithubSnapshotPath("a".repeat(40), "b".repeat(40), commonDir)).toBe(
+      join(
+        commonDir,
+        "openclaw-release-cache",
+        `verify-release-notes-${"a".repeat(40)}-${"b".repeat(40)}.json`,
+      ),
+    );
+  });
+
+  it("uses the original main PR for explicit and uniquely matched backports", () => {
+    const mainCommit = {
+      authorEmail: "maintainer@example.com",
+      authorName: "Maintainer",
+      changedPaths: new Set(["src/channel.ts"]),
+      hash: "a".repeat(40),
+      subject: "fix(channel): preserve durable replies (#123)",
+    };
+    const explicitBackport = {
+      authorEmail: "other@example.com",
+      authorName: "Other",
+      body: `(cherry picked from commit ${mainCommit.hash})`,
+      changedPaths: new Set(["src/channel.ts"]),
+      hash: "b".repeat(40),
+      subject: "fix(channel): preserve durable replies",
+    };
+    const integratedBackport = {
+      authorEmail: mainCommit.authorEmail,
+      authorName: mainCommit.authorName,
+      body: "",
+      changedPaths: new Set(["src/channel.ts", "src/release.ts"]),
+      hash: "c".repeat(40),
+      subject: "fix(channel): preserve durable replies",
+    };
+
+    expect(canonicalMainCommitMatches(explicitBackport, [mainCommit])).toEqual([mainCommit.hash]);
+    expect(canonicalMainCommitMatches(integratedBackport, [mainCommit])).toEqual([mainCommit.hash]);
+    expect(canonicalPullRequests([456], [123])).toEqual([123]);
+  });
+
+  it("keeps the release PR without an unambiguous main forward-port", () => {
+    const releaseCommit = {
+      authorEmail: "maintainer@example.com",
+      authorName: "Maintainer",
+      body: "",
+      changedPaths: new Set(["src/channel.ts"]),
+      hash: "c".repeat(40),
+      subject: "fix(channel): preserve durable replies",
+    };
+    const ambiguousMainCommits = ["a", "b"].map((prefix) => ({
+      authorEmail: releaseCommit.authorEmail,
+      authorName: releaseCommit.authorName,
+      changedPaths: new Set(["src/channel.ts"]),
+      hash: prefix.repeat(40),
+      subject: "fix(channel): preserve durable replies (#123)",
+    }));
+
+    expect(canonicalMainCommitMatches(releaseCommit, ambiguousMainCommits)).toEqual([]);
+    expect(canonicalPullRequests([456], [])).toEqual([456]);
+  });
+
+  it("drops the release PR when the matching main forward-port is a direct commit", () => {
+    expect(canonicalPullRequests([456], [], true)).toEqual([]);
+  });
+
+  it("reuses exact-range GitHub GraphQL snapshots without caching REST reads", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "openclaw-release-notes-snapshot-"));
+    try {
+      const filePath = join(cwd, "snapshot.json");
+      let fetches = 0;
+      const fetchApi = (args: string[]) => {
+        fetches += 1;
+        return { data: { request: args, fetches } };
+      };
+      const first = createGithubSnapshotState({
+        base: "a".repeat(40),
+        filePath,
+        target: "b".repeat(40),
+      });
+
+      expect(githubApiWithSnapshot(["graphql", "-f", "query=one"], fetchApi, first)).toEqual({
+        data: {
+          request: ["graphql", "-f", "query=one"],
+          fetches: 1,
+        },
+      });
+      expect(
+        githubApiWithSnapshot(["repos/openclaw/openclaw/releases/tags/v1"], fetchApi, first),
+      ).toEqual({
+        data: {
+          request: ["repos/openclaw/openclaw/releases/tags/v1"],
+          fetches: 2,
+        },
+      });
+      persistGithubSnapshot(first);
+
+      const second = createGithubSnapshotState({
+        base: "a".repeat(40),
+        filePath,
+        target: "b".repeat(40),
+      });
+      expect(githubApiWithSnapshot(["graphql", "-f", "query=one"], fetchApi, second)).toEqual({
+        data: {
+          request: ["graphql", "-f", "query=one"],
+          fetches: 1,
+        },
+      });
+      expect(second.hits).toBe(1);
+      expect(second.misses).toBe(0);
+      expect(fetches).toBe(2);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("checkpoints successful GraphQL responses during long verification runs", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "openclaw-release-notes-snapshot-"));
+    try {
+      const filePath = join(cwd, "snapshot.json");
+      const state = createGithubSnapshotState({
+        base: "a".repeat(40),
+        checkpointEvery: 2,
+        filePath,
+        target: "b".repeat(40),
+      });
+      const fetchApi = (args: string[]) => ({ data: { request: args } });
+
+      githubApiWithSnapshot(["graphql", "-f", "query=one"], fetchApi, state);
+      expect(state.dirty).toBe(true);
+      expect(state.writesSincePersist).toBe(1);
+      githubApiWithSnapshot(["graphql", "-f", "query=two"], fetchApi, state);
+
+      expect(state.dirty).toBe(false);
+      expect(state.writesSincePersist).toBe(0);
+      expect(JSON.parse(readFileSync(filePath, "utf8")).responses).toHaveProperty(
+        JSON.stringify(["graphql", "-f", "query=two"]),
+      );
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("does not cache transient GraphQL errors", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "openclaw-release-notes-snapshot-"));
+    try {
+      const filePath = join(cwd, "snapshot.json");
+      const state = createGithubSnapshotState({
+        base: "a".repeat(40),
+        filePath,
+        target: "b".repeat(40),
+      });
+      let fetches = 0;
+      const fetchApi = () => {
+        fetches += 1;
+        return fetches === 1
+          ? { errors: [{ message: "rate limited" }] }
+          : { data: { repository: { id: "repository-id" } } };
+      };
+      const args = ["graphql", "-f", "query=one"];
+
+      expect(githubApiWithSnapshot(args, fetchApi, state)).toEqual({
+        errors: [{ message: "rate limited" }],
+      });
+      expect(state.dirty).toBe(false);
+      expect(state.responses).toEqual({});
+      expect(githubApiWithSnapshot(args, fetchApi, state)).toEqual({
+        data: { repository: { id: "repository-id" } },
+      });
+      expect(state.misses).toBe(2);
+      expect(fetches).toBe(2);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a snapshot bound to a different release target", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "openclaw-release-notes-snapshot-"));
+    try {
+      const filePath = join(cwd, "snapshot.json");
+      const state = createGithubSnapshotState({
+        base: "a".repeat(40),
+        filePath,
+        target: "b".repeat(40),
+      });
+      githubApiWithSnapshot(["graphql", "-f", "query=one"], () => ({ data: true }), state);
+      persistGithubSnapshot(state);
+
+      expect(() =>
+        createGithubSnapshotState({
+          base: "a".repeat(40),
+          filePath,
+          target: "c".repeat(40),
+        }),
+      ).toThrow("use --refresh-github-snapshot");
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores nested revert markers in squash-merge bodies", () => {
+    const nestedRevert = [
+      "feat(android): render display math (#101435)",
+      "",
+      "* feat(android): render display math",
+      "",
+      ' * Revert "docs(changelog): note display math"',
+      "",
+      `This reverts commit ${"a".repeat(40)}.`,
+    ].join("\n");
+    const topLevelRevert = [
+      'Revert "fix(qa): keep smoke profile on one channel (#101173)" (#101184)',
+      "",
+      `This reverts commit ${"b".repeat(40)}.`,
+    ].join("\n");
+    const squashRevert = [
+      "Revert chat session picker inline search (#85527)",
+      "",
+      '* Revert "fix(ui): keep chat session search inline (#85490)"',
+      "",
+      `This reverts commit ${"c".repeat(40)}.`,
+      "",
+      "* fix(ui): clear applied chat picker search on empty input",
+    ].join("\n");
+    const conventionalSquashRevert = [
+      "chore: revert dependency guard backfill machinery (#87867)",
+      "",
+      '* Revert "ci: isolate dependency guard backfill label (#87882)"',
+      "",
+      `This reverts commit ${"d".repeat(40)}.`,
+      "",
+      "* ci: preserve clawsweeper bot label filter",
+    ].join("\n");
+    const explainedTopLevelRevert = [
+      "revert: restore a provider default",
+      "",
+      "The replacement broke non-native endpoints.",
+      "",
+      `This reverts commit ${"e".repeat(40)}.`,
+    ].join("\n");
+
+    expect(standardRevertedHash(nestedRevert)).toBeUndefined();
+    expect(standardRevertedHash(topLevelRevert)).toBe("b".repeat(40));
+    expect(standardRevertedHash(squashRevert)).toBe("c".repeat(40));
+    expect(standardRevertedHash(conventionalSquashRevert)).toBe("d".repeat(40));
+    expect(standardRevertedHash(explainedTopLevelRevert)).toBe("e".repeat(40));
+  });
+
   it("counts only top-level Highlights bullets and enforces the 5-8 policy input", () => {
     const highlights = [
       "### Highlights",
@@ -204,6 +459,8 @@ describe("release-note verification", () => {
           "HEAD",
           "--target",
           "HEAD",
+          "--main-ref",
+          "HEAD",
           "--version",
           "2026.7.1",
           "--write-ledger",
@@ -218,6 +475,69 @@ describe("release-note verification", () => {
       expect(readFileSync(join(cwd, "CHANGELOG.md"), "utf8")).toContain(
         `This audited record covers the complete HEAD..${targetSha} history:`,
       );
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts a release-only base that shares history with canonical main", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "openclaw-release-notes-"));
+    try {
+      git(cwd, ["init", "-q"]);
+      writeFileSync(
+        join(cwd, "CHANGELOG.md"),
+        [
+          "# Changelog",
+          "",
+          "## 2026.7.1",
+          "",
+          "### Highlights",
+          "",
+          "- One.",
+          "- Two.",
+          "- Three.",
+          "- Four.",
+          "- Five.",
+          "",
+          "### Changes",
+          "",
+          "### Fixes",
+        ].join("\n"),
+      );
+      git(cwd, ["add", "CHANGELOG.md"]);
+      git(cwd, ["commit", "-qm", "initial"]);
+      const root = git(cwd, ["rev-parse", "HEAD"]);
+
+      writeFileSync(join(cwd, "main.txt"), "main\n");
+      git(cwd, ["add", "main.txt"]);
+      git(cwd, ["commit", "-qm", "main"]);
+      git(cwd, ["branch", "main-ref"]);
+
+      git(cwd, ["checkout", "-qb", "release", root]);
+      writeFileSync(join(cwd, "release.txt"), "release\n");
+      git(cwd, ["add", "release.txt"]);
+      git(cwd, ["commit", "-qm", "release"]);
+      git(cwd, ["tag", "beta-base"]);
+
+      const result = spawnSync(
+        process.execPath,
+        [
+          verifier,
+          "--base",
+          "beta-base",
+          "--target",
+          "HEAD",
+          "--main-ref",
+          "main-ref",
+          "--version",
+          "2026.7.1",
+          "--write-ledger",
+        ],
+        { cwd, encoding: "utf8" },
+      );
+
+      expect(result.stderr).toBe("");
+      expect(result.status).toBe(0);
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }
@@ -258,7 +578,17 @@ describe("release-note verification", () => {
 
       const result = spawnSync(
         process.execPath,
-        [verifier, "--base", "base-ref", "--target", "HEAD", "--version", "2026.7.1"],
+        [
+          verifier,
+          "--base",
+          "base-ref",
+          "--target",
+          "HEAD",
+          "--main-ref",
+          "HEAD",
+          "--version",
+          "2026.7.1",
+        ],
         { cwd, encoding: "utf8" },
       );
 

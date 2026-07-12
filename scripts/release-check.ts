@@ -1,7 +1,7 @@
 #!/usr/bin/env -S node --import tsx
 // Release Check script supports OpenClaw repository automation.
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, type ExecFileSyncOptions } from "node:child_process";
 import {
   copyFileSync,
   existsSync,
@@ -55,6 +55,10 @@ import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 import { listStaticExtensionAssetOutputs } from "./runtime-postbuild.mjs";
 import { sparkleBuildFloorsFromShortVersion, type SparkleBuildFloors } from "./sparkle-build.ts";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
+
+type ReleaseCheckExecOptions = ExecFileSyncOptions & {
+  windowsVerbatimArguments?: boolean;
+};
 
 export { collectBundledExtensionManifestErrors } from "./lib/bundled-extension-manifest.ts";
 export { packageNameFromSpecifier } from "./lib/plugin-package-dependencies.mjs";
@@ -211,7 +215,7 @@ export function runReleaseCheckCommand(
     timeoutMs?: number;
   },
 ): string {
-  const output = execFileSync(invocation.command, invocation.args, {
+  const execOptions: ReleaseCheckExecOptions = {
     cwd: options.cwd,
     encoding: options.encoding,
     env: invocation.env ?? options.env,
@@ -231,7 +235,12 @@ export function runReleaseCheckCommand(
         DEFAULT_RELEASE_CHECK_COMMAND_TIMEOUT_MS,
       ),
     windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-  }) as Buffer | string | null;
+  };
+  const output: Buffer | string | null = execFileSync(
+    invocation.command,
+    invocation.args,
+    execOptions,
+  );
   if (output == null) {
     return "";
   }
@@ -390,10 +399,11 @@ function runPackDry(): PackResult[] {
   return JSON.parse(raw) as PackResult[];
 }
 
-function runPack(packDestination: string): PackResult[] {
+function runPack(packDestination: string, cwd?: string): PackResult[] {
   const raw = execPnpm(
     ["--config.ignore-scripts=true", "pack", "--json", "--pack-destination", packDestination],
     {
+      cwd,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       maxBuffer: 1024 * 1024 * 100,
@@ -455,6 +465,25 @@ export function resolveReleaseCheckLocalPackageTarballs(
   return tarballs;
 }
 
+export function prepareReleaseCheckLocalPackageTarballs(params: {
+  tmpRoot: string;
+  tarballDir?: string;
+  packLocalAi?: (packDestination: string) => PackResult[];
+}): string[] {
+  if (params.tarballDir) {
+    return resolveReleaseCheckLocalPackageTarballs(params.tarballDir);
+  }
+
+  // The root tarball requires the exact sibling AI version. Never fall back to
+  // registry bytes, which could silently validate an older publication.
+  const packDir = join(params.tmpRoot, "ai-pack");
+  mkdirSync(packDir);
+  const packResults = params.packLocalAi
+    ? params.packLocalAi(packDir)
+    : runPack(packDir, resolve("packages/ai"));
+  return [resolvePackedTarballPath(packDir, packResults)];
+}
+
 export function createPackedTarballInstallArgs(prefixDir: string): string[] {
   return ["install", "--prefix", prefixDir, "--ignore-scripts", "--no-audit", "--no-fund"];
 }
@@ -464,17 +493,16 @@ export function writePackedTarballInstallManifest(
   tarballPath: string,
   localPackageTarballs: string[],
 ): void {
-  if (localPackageTarballs.length > 1) {
+  const aiTarball = localPackageTarballs[0];
+  if (localPackageTarballs.length !== 1 || !aiTarball) {
     throw new Error(
-      `release-check: packed install accepts at most one @openclaw/ai tarball; found ${localPackageTarballs.length}.`,
+      `release-check: packed install requires exactly one @openclaw/ai tarball; found ${localPackageTarballs.length}.`,
     );
   }
   const dependencies: Record<string, string> = {
+    "@openclaw/ai": pathToFileURL(aiTarball).href,
     openclaw: pathToFileURL(tarballPath).href,
   };
-  if (localPackageTarballs[0]) {
-    dependencies["@openclaw/ai"] = pathToFileURL(localPackageTarballs[0]).href;
-  }
   mkdirSync(prefixDir, { recursive: true });
   writeFileSync(
     join(prefixDir, "package.json"),
@@ -493,7 +521,7 @@ function installPackedTarball(
   prefixDir: string,
   tarballPath: string,
   cwd: string,
-  localPackageTarballs: string[] = [],
+  localPackageTarballs: string[],
 ): void {
   writePackedTarballInstallManifest(prefixDir, tarballPath, localPackageTarballs);
   execNpm(createPackedTarballInstallArgs(prefixDir), {
@@ -770,7 +798,7 @@ export function writePackedBundledPluginActivationConfig(homeDir: string): void 
       {
         agents: {
           defaults: {
-            model: { primary: "openai/gpt-5.5" },
+            model: { primary: "openai/gpt-5.6-luna" },
           },
         },
         channels: {
@@ -921,7 +949,10 @@ function runPackedBundledChannelEntrySmoke(): void {
     const packResults = runPack(packDir);
     const tarballPath = resolvePackedTarballPath(packDir, packResults);
     const prefixDir = join(tmpRoot, "prefix");
-    const localPackageTarballs = resolveReleaseCheckLocalPackageTarballs();
+    const localPackageTarballs = prepareReleaseCheckLocalPackageTarballs({
+      tmpRoot,
+      tarballDir: process.env[RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR_ENV],
+    });
     installPackedTarball(prefixDir, tarballPath, tmpRoot, localPackageTarballs);
 
     const packageRoot = join(prefixDir, "node_modules", "openclaw");
@@ -1085,6 +1116,7 @@ export function collectAppcastSparkleVersionErrors(xml: string): string[] {
     const title = extractTag(item, "title") ?? "unknown";
     const shortVersion = extractTag(item, "sparkle:shortVersionString");
     const sparkleVersion = extractTag(item, "sparkle:version");
+    const sparkleChannel = extractTag(item, "sparkle:channel");
 
     if (!sparkleVersion) {
       errors.push(`appcast item '${title}' is missing sparkle:version.`);
@@ -1097,6 +1129,9 @@ export function collectAppcastSparkleVersionErrors(xml: string): string[] {
 
     if (!shortVersion) {
       continue;
+    }
+    if (/(?:^|[.-])beta(?:[.-]|$)/i.test(shortVersion) && sparkleChannel !== "beta") {
+      errors.push(`appcast item '${title}' must set sparkle:channel to 'beta'.`);
     }
     const floors = sparkleBuildFloorsFromShortVersion(shortVersion);
     if (floors === null) {

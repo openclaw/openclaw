@@ -19,6 +19,21 @@ export type OutboundDeliveryResult = {
   meta?: Record<string, unknown>;
 };
 
+/** Count platform sends without double-counting equivalent receipt representations. */
+export function countPhysicalOutboundSends(results: readonly OutboundDeliveryResult[]): number {
+  return results.reduce((count, result) => {
+    const receipt = result.receipt;
+    if (!receipt) {
+      return count + 1;
+    }
+    // Parts and platform ids describe the same sends. Prefer parts so aggregate
+    // receipts preserve multiplicity without counting both representations.
+    const receiptCount =
+      receipt.parts.length > 0 ? receipt.parts.length : receipt.platformMessageIds.length;
+    return count + Math.max(1, receiptCount);
+  }, 0);
+}
+
 /** Reason a payload was intentionally not sent after normalization or hooks. */
 export type OutboundPayloadDeliverySuppressionReason =
   | "cancelled_by_message_sending_hook"
@@ -30,6 +45,29 @@ export type OutboundPayloadDeliverySuppressionReason =
 
 /** Delivery phase where a failure occurred. */
 export type OutboundDeliveryFailureStage = "platform_send" | "queue" | "unknown";
+export type OutboundPayloadDeliveryKind = "text" | "media" | "other";
+
+export const PLATFORM_MESSAGE_NOT_DISPATCHED_ERROR_CODE =
+  "OPENCLAW_PLATFORM_MESSAGE_NOT_DISPATCHED";
+
+/**
+ * Provider assertion that retrying cannot duplicate a recipient-visible send.
+ * Never use this after a finalization/send call returned an ambiguous result.
+ */
+export class PlatformMessageNotDispatchedError extends Error {
+  readonly code = PLATFORM_MESSAGE_NOT_DISPATCHED_ERROR_CODE;
+
+  constructor(message: string, options: { cause: unknown }) {
+    super(message, { cause: options.cause });
+    this.name = "PlatformMessageNotDispatchedError";
+  }
+}
+
+export function isPlatformMessageNotDispatchedError(
+  error: unknown,
+): error is PlatformMessageNotDispatchedError {
+  return error instanceof PlatformMessageNotDispatchedError;
+}
 
 /** Per-payload delivery status emitted to callers and channel send summaries. */
 export type OutboundPayloadDeliveryOutcome =
@@ -37,6 +75,8 @@ export type OutboundPayloadDeliveryOutcome =
       index: number;
       status: "sent";
       results: OutboundDeliveryResult[];
+      /** Effective post-hook, post-render payload kind. */
+      deliveryKind?: OutboundPayloadDeliveryKind;
     }
   | {
       index: number;
@@ -53,6 +93,10 @@ export type OutboundPayloadDeliveryOutcome =
       error: unknown;
       sentBeforeError: boolean;
       stage: OutboundDeliveryFailureStage;
+      /** Identified platform sends from this payload before its terminal failure. */
+      results?: OutboundDeliveryResult[];
+      /** Effective post-hook, post-render payload kind when platform delivery began. */
+      deliveryKind?: OutboundPayloadDeliveryKind;
     };
 
 /** Error carrying partial delivery results when an outbound send fails mid-batch. */

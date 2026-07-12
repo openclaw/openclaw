@@ -39,6 +39,7 @@ import { registerBrowserAgentActHookRoutes } from "./agent.act.hooks.js";
 import { canonicalizeActTargetIds, normalizeActRequest } from "./agent.act.normalize.js";
 import { type ActKind, isActKind } from "./agent.act.shared.js";
 import {
+  browserNavigationPolicyForProfile,
   readBody,
   requirePwAi,
   resolveTargetIdFromBody,
@@ -77,14 +78,16 @@ async function readExistingSessionLocationHref(params: ExistingSessionOperation)
 }
 
 async function assertExistingSessionPostInteractionNavigationAllowed(
-  params: ExistingSessionOperation & {
-    ssrfPolicy?: BrowserNavigationPolicyOptions["ssrfPolicy"];
-    listTabs: () => Promise<Array<{ targetId: string; url: string }>>;
-    initialTabTargetIds: ReadonlySet<string>;
-  },
+  params: ExistingSessionOperation &
+    BrowserNavigationPolicyOptions & {
+      listTabs: () => Promise<Array<{ targetId: string; url: string }>>;
+      initialTabTargetIds: ReadonlySet<string>;
+    },
 ): Promise<void> {
-  const ssrfPolicyOpts = withBrowserNavigationPolicy(params.ssrfPolicy);
-  if (!ssrfPolicyOpts.ssrfPolicy) {
+  const navigationPolicy = withBrowserNavigationPolicy(params.ssrfPolicy, {
+    browserProxyMode: params.browserProxyMode,
+  });
+  if (!navigationPolicy.ssrfPolicy && !navigationPolicy.browserProxyMode) {
     return;
   }
   const listTabs = params.listTabs;
@@ -98,7 +101,7 @@ async function assertExistingSessionPostInteractionNavigationAllowed(
       }
       await assertBrowserNavigationResultAllowed({
         url: tab.url,
-        ...ssrfPolicyOpts,
+        ...navigationPolicy,
       });
     }
   };
@@ -119,7 +122,7 @@ async function assertExistingSessionPostInteractionNavigationAllowed(
     }
     await assertBrowserNavigationResultAllowed({
       url: currentUrl,
-      ...ssrfPolicyOpts,
+      ...navigationPolicy,
     });
     if (currentUrl === lastObservedUrl) {
       sawStableAllowedUrl = true;
@@ -147,7 +150,7 @@ async function assertExistingSessionPostInteractionNavigationAllowed(
       const followUpUrl = await readExistingSessionLocationHref(params);
       await assertBrowserNavigationResultAllowed({
         url: followUpUrl,
-        ...ssrfPolicyOpts,
+        ...navigationPolicy,
       });
       if (followUpUrl === lastObservedUrl) {
         await assertNewTabsAllowed();
@@ -332,7 +335,7 @@ function getExistingSessionUnsupportedMessage(action: BrowserActRequest): string
         ? EXISTING_SESSION_LIMITS.act.waitNetworkIdle
         : null;
     case "evaluate":
-      return action.timeoutMs !== undefined ? EXISTING_SESSION_LIMITS.act.evaluateTimeout : null;
+      return null;
     case "batch":
       return EXISTING_SESSION_LIMITS.act.batch;
     case "resize":
@@ -390,9 +393,9 @@ export function registerBrowserAgentActRoutes(
         ctx,
         targetId,
         enforceCurrentUrlAllowed: shouldEnforceCurrentUrlForAct(action),
-        run: async ({ profileCtx, cdpUrl, tab, resolveTabUrl }) => {
+        run: async ({ profileCtx, cdpUrl, tab, signal, resolveTabUrl }) => {
           const evaluateEnabled = ctx.state().resolved.evaluateEnabled;
-          const ssrfPolicy = ctx.state().resolved.ssrfPolicy;
+          const navigationPolicy = browserNavigationPolicyForProfile(ctx, profileCtx);
           const isExistingSession = getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp;
           const requestedTimeoutMs =
             "timeoutMs" in action && typeof action.timeoutMs === "number"
@@ -400,10 +403,10 @@ export function registerBrowserAgentActRoutes(
               : undefined;
           const existingSessionCallOptions: ChromeMcpOperationOptions = {
             timeoutMs: requestedTimeoutMs ?? ctx.state().resolved.actionTimeoutMs,
-            signal: req.signal,
+            signal,
           };
           const hasNavigationResultPolicy = Boolean(
-            withBrowserNavigationPolicy(ssrfPolicy).ssrfPolicy,
+            navigationPolicy.ssrfPolicy || navigationPolicy.browserProxyMode,
           );
           const jsonOk = async (
             extra?: Record<string, unknown>,
@@ -463,7 +466,7 @@ export function registerBrowserAgentActRoutes(
               : new Set<string>();
             const existingSessionNavigationGuard = {
               ...existingSessionTarget,
-              ssrfPolicy,
+              ...navigationPolicy,
               listTabs: () => profileCtx.listTabs(existingSessionCallOptions),
               initialTabTargetIds,
             };
@@ -539,7 +542,7 @@ export function registerBrowserAgentActRoutes(
                     }),
                   guard: existingSessionNavigationGuard,
                 });
-                return await jsonOk();
+                return await jsonOk(undefined, { resolveCurrentTarget: true });
               case "scrollIntoView":
                 await runExistingSessionActionWithNavigationGuard({
                   execute: () =>
@@ -550,7 +553,7 @@ export function registerBrowserAgentActRoutes(
                     }),
                   guard: existingSessionNavigationGuard,
                 });
-                return await jsonOk();
+                return await jsonOk(undefined, { resolveCurrentTarget: true });
               case "drag":
                 await runExistingSessionActionWithNavigationGuard({
                   execute: () =>
@@ -561,7 +564,7 @@ export function registerBrowserAgentActRoutes(
                     }),
                   guard: existingSessionNavigationGuard,
                 });
-                return await jsonOk();
+                return await jsonOk(undefined, { resolveCurrentTarget: true });
               case "select":
                 await runExistingSessionActionWithNavigationGuard({
                   execute: () =>
@@ -572,7 +575,7 @@ export function registerBrowserAgentActRoutes(
                     }),
                   guard: existingSessionNavigationGuard,
                 });
-                return await jsonOk();
+                return await jsonOk(undefined, { resolveCurrentTarget: true });
               case "fill":
                 await runExistingSessionActionWithNavigationGuard({
                   execute: () =>
@@ -585,7 +588,7 @@ export function registerBrowserAgentActRoutes(
                     }),
                   guard: existingSessionNavigationGuard,
                 });
-                return await jsonOk();
+                return await jsonOk(undefined, { resolveCurrentTarget: true });
               case "resize":
                 await resizeChromeMcpPage({
                   ...existingSessionTarget,
@@ -618,7 +621,7 @@ export function registerBrowserAgentActRoutes(
                     }),
                   guard: existingSessionNavigationGuard,
                 });
-                return await jsonOk({ result });
+                return await jsonOk({ result }, { resolveCurrentTarget: true });
               }
               case "close":
                 await profileCtx.closeTab(tab.targetId, {
@@ -645,8 +648,8 @@ export function registerBrowserAgentActRoutes(
             action,
             targetId: tab.targetId,
             evaluateEnabled,
-            ssrfPolicy,
-            signal: req.signal,
+            ...navigationPolicy,
+            signal,
           });
           if (result.blockedByDialog) {
             return await jsonOk({
@@ -710,7 +713,7 @@ export function registerBrowserAgentActRoutes(
         ctx,
         targetId,
         enforceCurrentUrlAllowed: true,
-        run: async ({ profileCtx, cdpUrl, tab, resolveTabUrl }) => {
+        run: async ({ profileCtx, cdpUrl, tab, signal, resolveTabUrl }) => {
           if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
             return jsonError(res, 501, EXISTING_SESSION_LIMITS.responseBody);
           }
@@ -725,6 +728,7 @@ export function registerBrowserAgentActRoutes(
             timeoutMs: timeoutMs ?? undefined,
             maxChars: maxChars ?? undefined,
           });
+          signal.throwIfAborted();
           const currentUrl = await resolveTabUrl(tab.url);
           res.json({
             ok: true,
@@ -753,7 +757,7 @@ export function registerBrowserAgentActRoutes(
         ctx,
         targetId,
         enforceCurrentUrlAllowed: true,
-        run: async ({ profileCtx, cdpUrl, tab, resolveTabUrl }) => {
+        run: async ({ profileCtx, cdpUrl, tab, signal, resolveTabUrl }) => {
           const jsonOk = async () => {
             const currentUrl = await resolveTabUrl(tab.url);
             return res.json({
@@ -769,7 +773,7 @@ export function registerBrowserAgentActRoutes(
               targetId: tab.targetId,
               args: [ref],
               timeoutMs: ctx.state().resolved.actionTimeoutMs,
-              signal: req.signal,
+              signal,
               fn: `(el) => {
               if (!(el instanceof Element)) {
                 return false;

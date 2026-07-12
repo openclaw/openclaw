@@ -87,10 +87,9 @@ on:
       shared_image_policy:
         description: Shared Docker image transport for package acceptance
         required: true
-        default: allow-push
+        default: no-push-artifact
         type: choice
         options:
-          - allow-push
           - existing-only
           - no-push-artifact
       shared_image_artifact_namespace:
@@ -230,9 +229,9 @@ on:
         default: ""
         type: string
       shared_image_policy:
-        description: "Shared Docker image transport: allow-push, existing-only, or no-push-artifact"
+        description: "Shared Docker image transport: existing-only or no-push-artifact"
         required: false
-        default: allow-push
+        default: no-push-artifact
         type: string
       shared_image_artifact_namespace:
         description: Unique artifact namespace when shared_image_policy=no-push-artifact
@@ -864,13 +863,13 @@ jobs:
       FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
 
   docker_acceptance_registry:
-    name: Docker product acceptance (registry)
+    name: Docker product acceptance (existing registry images)
     needs: [resolve_package, package_integrity]
-    if: inputs.shared_image_policy != 'no-push-artifact'
+    if: inputs.shared_image_policy == 'existing-only'
     permissions:
       actions: read
       contents: read
-      packages: write
+      packages: read
       pull-requests: read
     uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
     with: *docker_acceptance_inputs

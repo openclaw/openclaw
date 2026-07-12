@@ -1,0 +1,211 @@
+/* Full-page new-session draft: target chips above the shared chat composer
+   shell (.agent-chat__input). Corner radii stay on the composer's radius
+   tokens so the draft picker matches the chat picker. */
+.new-session-page {
+  display: flex;
+  justify-content: center;
+  min-height: 100%;
+  padding: clamp(24px, 10vh, 96px) 20px 32px;
+}
+
+.new-session-page__inner {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(720px, 100%);
+}
+
+/* The draft page opens with the same hero as the chat welcome screen. The
+   shared .agent-chat__welcome sizing is built for a full-height chat pane,
+   so neutralize its stretch/centering inside this column. */
+.new-session-page .agent-chat__welcome {
+  flex: initial;
+  width: 100%;
+  margin: 0;
+  padding: 0 0 8px;
+  min-height: auto;
+}
+
+.new-session-page .agent-chat__recents,
+.new-session-page .agent-chat__suggestions {
+  align-self: center;
+  margin-top: 4px;
+}
+
+.new-session-page__targets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.new-session-page__target {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg-elevated) 70%, transparent);
+  font-size: 12px;
+  color: var(--text);
+}
+
+.new-session-page__target select,
+.new-session-page__target input[type="text"] {
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
+}
+
+.new-session-page__target--folder {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.new-session-page__target--folder input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.new-session-page__target-icon {
+  display: inline-flex;
+  color: var(--muted);
+}
+
+.new-session-page__target-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.new-session-page__branch {
+  width: 140px;
+}
+
+.new-session-page__browse,
+.new-session-page__browser-nav {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.new-session-page__browse:hover,
+.new-session-page__browser-nav:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  color: var(--text);
+}
+
+.new-session-page__browse svg,
+.new-session-page__browser-nav svg {
+  width: 14px;
+  height: 14px;
+}
+
+.new-session-page__browser-nav:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.new-session-page__browser {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+}
+
+.new-session-page__browser-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.new-session-page__browser-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.new-session-page__browser-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 240px;
+  padding: 4px;
+  overflow-y: auto;
+}
+
+.new-session-page__browser-entry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.new-session-page__browser-entry:hover {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+}
+
+.new-session-page__browser-entry--hidden {
+  color: var(--muted);
+}
+
+.new-session-page__browser-empty {
+  padding: 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.new-session-page__browser-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+}
+
+.new-session-page__error {
+  font-size: 12px;
+  color: var(--danger);
+}
+
+/* Larger draft box than the chat composer default; wins over the shared
+   .agent-chat__composer-combobox > textarea sizing by specificity. */
+.new-session-page__composer textarea.new-session-page__message {
+  min-height: 112px;
+  max-height: 40vh;
+}
+
+.new-session-page__browser-use {
+  padding: 6px 14px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: var(--accent);
+  color: var(--accent-contrast, #fff);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.new-session-page__browser-use:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

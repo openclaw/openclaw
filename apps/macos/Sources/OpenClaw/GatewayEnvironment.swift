@@ -13,12 +13,8 @@ struct Semver: Comparable, CustomStringConvertible {
     }
 
     static func < (lhs: Semver, rhs: Semver) -> Bool {
-        if lhs.major != rhs.major {
-            return lhs.major < rhs.major
-        }
-        if lhs.minor != rhs.minor {
-            return lhs.minor < rhs.minor
-        }
+        if lhs.major != rhs.major { return lhs.major < rhs.major }
+        if lhs.minor != rhs.minor { return lhs.minor < rhs.minor }
         return lhs.patch < rhs.patch
     }
 
@@ -44,6 +40,33 @@ struct Semver: Comparable, CustomStringConvertible {
     func compatible(with required: Semver) -> Bool {
         // Same major and not older than required.
         self.major == required.major && self >= required
+    }
+
+    static func satisfiesExpectedGatewayVersion(installed: String, expected: String?) -> Bool {
+        let installed = installed.trimmingCharacters(in: .whitespacesAndNewlines)
+        let expected = expected?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let installedVersion = Self.parse(installed) else { return false }
+        guard let expectedVersion = Self.parse(expected) else { return true }
+        if Self.isPrerelease(installed) || Self.isPrerelease(expected) {
+            return installed == expected
+        }
+        return installedVersion.compatible(with: expectedVersion)
+    }
+
+    static func isPrerelease(_ version: String?) -> Bool {
+        guard let version = version?.lowercased() else { return false }
+        let versionCore = version.split(
+            separator: "+",
+            maxSplits: 1,
+            omittingEmptySubsequences: false)[0]
+        if ["alpha", "beta"].contains(where: { lane in
+            versionCore.contains("-\(lane).") || versionCore.contains(".\(lane).")
+        }) {
+            return true
+        }
+        guard let separator = versionCore.firstIndex(of: "-") else { return false }
+        let suffix = versionCore[versionCore.index(after: separator)...]
+        return !suffix.split(separator: ".").allSatisfy { Int($0) != nil }
     }
 }
 
@@ -80,9 +103,7 @@ enum GatewayEnvironment {
     static func gatewayPort() -> Int {
         if let raw = ProcessInfo.processInfo.environment["OPENCLAW_GATEWAY_PORT"] {
             let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            if let parsed = Int(trimmed), parsed > 0 {
-                return parsed
-            }
+            if let parsed = Int(trimmed), parsed > 0 { return parsed }
         }
         if let configPort = OpenClawConfigFile.gatewayPort(), configPort > 0 {
             return configPort
@@ -95,10 +116,16 @@ enum GatewayEnvironment {
         Semver.parse(self.expectedGatewayVersionString())
     }
 
-    static func expectedGatewayVersionString() -> String? {
+    static func appVersionString() -> String? {
         let bundleVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
         let trimmed = bundleVersion?.trimmingCharacters(in: .whitespacesAndNewlines)
         return (trimmed?.isEmpty == false) ? trimmed : nil
+    }
+
+    static func expectedGatewayVersionString() -> String? {
+        CLIInstallPolicy.requiredGatewayVersionString(
+            appVersion: self.appVersionString(),
+            isDebug: CLIInstallBuild.isDebug)
     }
 
     /// Exposed for tests so we can inject fake version checks without rewriting bundle metadata.
@@ -142,24 +169,27 @@ enum GatewayEnvironment {
                     message: "openclaw CLI not found in PATH; install the CLI.")
             }
 
-            let installed = gatewayBin.flatMap { self.readGatewayVersion(binary: $0) }
+            let installedRaw = gatewayBin.flatMap { self.readGatewayVersion(binary: $0) }
                 ?? self.readLocalGatewayVersion(projectRoot: projectRoot)
+            let installed = Semver.parse(installedRaw)
 
-            if let expected, let installed, !installed.compatible(with: expected) {
+            if let expected, let installedRaw, installed != nil,
+               !Semver.satisfiesExpectedGatewayVersion(installed: installedRaw, expected: expectedString)
+            {
                 let expectedText = expectedString ?? expected.description
                 return GatewayEnvironmentStatus(
-                    kind: .incompatible(found: installed.description, required: expectedText),
+                    kind: .incompatible(found: installedRaw, required: expectedText),
                     nodeVersion: runtime.version.description,
-                    gatewayVersion: installed.description,
+                    gatewayVersion: installedRaw,
                     requiredGateway: expectedText,
                     message: """
-                    Gateway version \(installed.description) is incompatible with app \(expectedText);
+                    Gateway version \(installedRaw) is incompatible with app \(expectedText);
                     install or update the global package.
                     """)
             }
 
             let gatewayLabel = gatewayBin != nil ? "global" : "local"
-            let gatewayVersionText = installed?.description ?? "unknown"
+            let gatewayVersionText = installedRaw ?? "unknown"
             // Avoid repeating "(local)" twice; if using the local entrypoint, show the path once.
             let localPathHint = gatewayBin == nil && projectEntrypoint != nil
                 ? " (local: \(projectEntrypoint ?? "unknown"))"
@@ -312,7 +342,7 @@ enum GatewayEnvironment {
         return normalized
     }
 
-    private static func readGatewayVersion(binary: String) -> Semver? {
+    private static func readGatewayVersion(binary: String) -> String? {
         let start = Date()
         let process = Process()
         process.executableURL = URL(fileURLWithPath: binary)
@@ -339,7 +369,10 @@ enum GatewayEnvironment {
                     """)
             }
             let raw = String(data: data, encoding: .utf8)
-            return Semver.parse(self.normalizeGatewayVersionOutput(raw))
+            guard let normalized = self.normalizeGatewayVersionOutput(raw),
+                  Semver.parse(normalized) != nil
+            else { return nil }
+            return normalized
         } catch {
             let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
             self.logger.error(
@@ -352,13 +385,14 @@ enum GatewayEnvironment {
         }
     }
 
-    private static func readLocalGatewayVersion(projectRoot: URL) -> Semver? {
+    private static func readLocalGatewayVersion(projectRoot: URL) -> String? {
         let pkg = projectRoot.appendingPathComponent("package.json")
         guard let data = try? Data(contentsOf: pkg) else { return nil }
         guard
             let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             let version = json["version"] as? String
         else { return nil }
-        return Semver.parse(version)
+        guard Semver.parse(version) != nil else { return nil }
+        return version.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

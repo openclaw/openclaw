@@ -43,6 +43,11 @@ const SETTINGS_ROUTE_PATHS = [
   },
   { routeId: "worktrees", path: "/settings/worktrees", alias: "/worktrees" },
   { routeId: "ai-agents", path: "/settings/ai-agents", alias: "/ai-agents" },
+  {
+    routeId: "model-providers",
+    path: "/settings/model-providers",
+    alias: "/model-providers",
+  },
 ] as const satisfies readonly { routeId: RouteId; path: string; alias: string }[];
 
 const leadingSlashNormalizerCases = [
@@ -56,14 +61,13 @@ describe("navigationIconForRoute", () => {
       Object.fromEntries(ALL_ROUTES.map((routeId) => [routeId, navigationIconForRoute(routeId)])),
     ).toEqual({
       chat: "messageSquare",
-      overview: "barChart",
       activity: "activity",
       workboard: "kanban",
       worktrees: "folder",
       channels: "link",
-      instances: "radio",
+      connection: "radio",
       sessions: "fileText",
-      usage: "barChart",
+      usage: "coins",
       cron: "calendarClock",
       tasks: "listChecks",
       agents: "bot",
@@ -71,7 +75,6 @@ describe("navigationIconForRoute", () => {
       plugins: "puzzle",
       "skill-workshop": "wrench",
       nodes: "monitor",
-      dreams: "moon",
       config: "settings",
       profile: "lobster",
       communications: "send",
@@ -81,6 +84,7 @@ describe("navigationIconForRoute", () => {
       infrastructure: "globe",
       about: "fileText",
       "ai-agents": "brain",
+      "model-providers": "plug",
       debug: "bug",
       logs: "scrollText",
     });
@@ -99,12 +103,11 @@ describe("titleForRoute", () => {
       Object.fromEntries(ALL_ROUTES.map((routeId) => [routeId, titleForRoute(routeId)])),
     ).toEqual({
       chat: "Chat",
-      overview: "Overview",
       activity: "Activity",
       workboard: "Workboard",
       worktrees: "Worktrees",
       channels: "Channels",
-      instances: "Instances",
+      connection: "Connection",
       sessions: "Sessions",
       usage: "Usage",
       cron: "Cron Jobs",
@@ -113,8 +116,7 @@ describe("titleForRoute", () => {
       skills: "Skills",
       plugins: "Plugins",
       "skill-workshop": "Skill Workshop",
-      nodes: "Nodes",
-      dreams: "Dreaming",
+      nodes: "Devices",
       config: "Settings",
       profile: "Profile",
       communications: "Communications",
@@ -124,6 +126,7 @@ describe("titleForRoute", () => {
       infrastructure: "Infrastructure",
       about: "About",
       "ai-agents": "AI & Agents",
+      "model-providers": "Model Providers",
       debug: "Debug",
       logs: "Logs",
     });
@@ -136,12 +139,11 @@ describe("subtitleForRoute", () => {
       Object.fromEntries(ALL_ROUTES.map((routeId) => [routeId, subtitleForRoute(routeId)])),
     ).toEqual({
       chat: "Gateway chat for quick interventions.",
-      overview: "Status, entry points, health.",
       activity: "Browser-local tool activity summaries.",
       workboard: "Agent work queue and session handoff.",
       worktrees: "Isolated agent task checkouts and recovery snapshots.",
       channels: "Channels and settings.",
-      instances: "Connected clients and nodes.",
+      connection: "Gateway endpoint, credentials, and handshake status.",
       sessions: "Active sessions and defaults.",
       usage: "API usage and costs.",
       cron: "Wakeups and recurring runs.",
@@ -150,8 +152,7 @@ describe("subtitleForRoute", () => {
       skills: "Skills and API keys.",
       plugins: "Install and manage optional capabilities.",
       "skill-workshop": "Review, refine, and apply proposals before they become live skills.",
-      nodes: "Paired devices and commands.",
-      dreams: "Memory dreaming, consolidation, and reflection.",
+      nodes: "Paired devices, live connections, and commands.",
       config: "Edit openclaw.json.",
       profile: "Your agent's stats, streaks, and life in the reef.",
       communications: "Channels, messages, and audio settings.",
@@ -161,6 +162,7 @@ describe("subtitleForRoute", () => {
       infrastructure: "Gateway, web, browser, and media settings.",
       about: "Control UI and connected Gateway build identity.",
       "ai-agents": "Agents, models, skills, tools, memory, session.",
+      "model-providers": "Configured providers with plan, quota, and cost.",
       debug: "Snapshots, events, RPC.",
       logs: "Live gateway logs.",
     });
@@ -208,7 +210,7 @@ describe("normalizePath", () => {
 describe("pathForRoute", () => {
   it("returns correct path without base", () => {
     expect(pathForRoute("chat")).toBe("/chat");
-    expect(pathForRoute("overview")).toBe("/overview");
+    expect(pathForRoute("connection")).toBe("/settings/connection");
     expect(pathForRoute("debug")).toBe("/debug");
     expect(pathForRoute("logs")).toBe("/logs");
     expect(pathForRoute("plugins")).toBe("/settings/plugins");
@@ -223,13 +225,16 @@ describe("pathForRoute", () => {
 describe("routeIdFromPath", () => {
   it("returns tab for valid path", () => {
     expect(routeIdFromPath("/chat")).toBe("chat");
-    expect(routeIdFromPath("/overview")).toBe("overview");
+    expect(routeIdFromPath("/new")).toBe("new-session");
+    expect(routeIdFromPath("/overview")).toBeNull();
+    expect(routeIdFromPath("/settings/connection")).toBe("connection");
+    expect(routeIdFromPath("/connection")).toBeNull();
     expect(routeIdFromPath("/activity")).toBe("activity");
     expect(routeIdFromPath("/sessions")).toBe("sessions");
     expect(routeIdFromPath("/debug")).toBe("debug");
     expect(routeIdFromPath("/logs")).toBe("logs");
-    expect(routeIdFromPath("/dreaming")).toBe("dreams");
-    expect(routeIdFromPath("/dreams")).toBe("dreams");
+    expect(routeIdFromPath("/dreaming")).toBeNull();
+    expect(routeIdFromPath("/dreams")).toBeNull();
     expect(routeIdFromPath("/settings/plugins")).toBe("plugins");
     expect(routeIdFromPath("/plugins")).toBeNull();
     expect(routeIdFromPath("/settings/about")).toBe("about");
@@ -253,11 +258,12 @@ describe("routeIdFromPath", () => {
 
   it("returns null for unknown path", () => {
     expect(routeIdFromPath("/unknown")).toBeNull();
+    expect(routeIdFromPath("/instances")).toBeNull();
   });
 
   it("matches canonical route casing exactly", () => {
     expect(routeIdFromPath("/CHAT")).toBeNull();
-    expect(routeIdFromPath("/Overview")).toBeNull();
+    expect(routeIdFromPath("/Sessions")).toBeNull();
   });
 });
 
@@ -296,12 +302,10 @@ describe("inferBasePathFromPathname", () => {
 
   it("returns empty string for direct tab path", () => {
     expect(inferBasePathFromPathname("/chat")).toBe("");
-    expect(inferBasePathFromPathname("/overview")).toBe("");
+    expect(inferBasePathFromPathname("/settings/connection")).toBe("");
     expect(inferBasePathFromPathname("/settings/general")).toBe("");
     expect(inferBasePathFromPathname("/settings/appearance")).toBe("");
     expect(inferBasePathFromPathname("/appearance")).toBe("");
-    expect(inferBasePathFromPathname("/dreaming")).toBe("");
-    expect(inferBasePathFromPathname("/dreams")).toBe("");
     expect(inferBasePathFromPathname("/settings/plugins")).toBe("");
   });
 
@@ -361,15 +365,18 @@ describe("SIDEBAR_NAV_ROUTES", () => {
       "profile",
       "config",
       "appearance",
+      "connection",
       "channels",
       "communications",
       "ai-agents",
+      "model-providers",
       "automation",
       "mcp",
       "infrastructure",
       "worktrees",
       "debug",
       "logs",
+      "activity",
       "about",
     ]);
   });

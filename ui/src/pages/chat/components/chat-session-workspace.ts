@@ -1,6 +1,12 @@
 import { html, nothing, type TemplateResult } from "lit";
-import type { GatewayBrowserClient, GatewayHelloOk } from "../../../api/gateway.ts";
+import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
+import {
+  GatewayRequestError,
+  type GatewayBrowserClient,
+  type GatewayHelloOk,
+} from "../../../api/gateway.ts";
 import type { ArtifactDownloadResult, SessionWorkspaceListResult } from "../../../api/types.ts";
+import { hasOperatorAdminAccess } from "../../../app/operator-access.ts";
 import {
   normalizeChatWorkspaceDock,
   patchSettings,
@@ -11,17 +17,19 @@ import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
+import { isGatewayMethodAdvertised } from "../../../lib/gateway-methods.ts";
 import {
   scopedAgentParamsForSession,
   type SessionCapability,
   type SessionScopeHost,
+  type SessionScopeHostWithKey,
 } from "../../../lib/sessions/index.ts";
 import {
   resolveAgentIdFromSessionKey,
   normalizeAgentId,
 } from "../../../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../../../lib/string-coerce.ts";
-import type { SidebarContent } from "./chat-sidebar.ts";
+import { hasUniformLineEndings, type SidebarContent } from "./chat-sidebar.ts";
 
 export type SessionWorkspaceProps = {
   collapsed: boolean;
@@ -31,6 +39,9 @@ export type SessionWorkspaceProps = {
   error: string | null;
   activeId: string | null;
   dock: ChatWorkspaceDock;
+  /** Pane too narrow for a side rail: presentation forces the bottom dock
+   * (the persisted dock preference still applies once the pane widens). */
+  narrowLayout: boolean;
   dockDragging: boolean;
   dockDragZone: ChatWorkspaceDock | null;
   onToggleCollapsed: () => void;
@@ -43,6 +54,9 @@ export type SessionWorkspaceProps = {
   onSearch: (search: string) => void;
   onOpenArtifact: (artifactId: string) => void;
   onToggleTerminal?: () => void;
+  onToggleBrowser?: () => void;
+  /** Opens the session diff panel; absent when the gateway lacks sessions.diff. */
+  onOpenDiff?: () => void;
 };
 
 type SessionWorkspaceState = {
@@ -79,6 +93,7 @@ export type SessionWorkspaceHost = {
   connected: boolean;
   hello: GatewayHelloOk | null;
   terminalAvailable?: boolean;
+  browserPanelAvailable?: boolean;
   assistantAgentId?: string | null;
   agentsList?: SessionScopeHost["agentsList"];
   settings?: UiSettings;
@@ -88,7 +103,10 @@ export type SessionWorkspaceHost = {
   handleOpenSidebar: (content: SidebarContent) => void;
 };
 
-function workspaceAgentId(state: SessionWorkspaceHost): string {
+/** Agent owning the pane's current session: explicit key scope first, then the
+ * assistant/default agent. Shared by the workspace and background-tasks rails
+ * so both scope their gateway queries the same way. */
+export function paneSessionAgentId(state: SessionScopeHostWithKey): string {
   const normalizedKey = normalizeOptionalString(state.sessionKey)?.toLowerCase();
   const activeAgentId =
     normalizedKey === "global" ? null : resolveAgentIdFromSessionKey(state.sessionKey);
@@ -117,7 +135,7 @@ export function clearSessionWorkspaceTimers(state: SessionWorkspaceHost) {
 
 function getWorkspaceState(state: SessionWorkspaceHost): SessionWorkspaceState {
   const sessionKey = state.sessionKey;
-  const agentId = workspaceAgentId(state);
+  const agentId = paneSessionAgentId(state);
   const current = state.sessionWorkspaceState;
   if (current?.sessionKey === sessionKey && current.agentId === agentId) {
     return current;
@@ -325,7 +343,7 @@ function isCurrentOpenRequest(state: SessionWorkspaceHost, request: OpenRequest)
   const current = currentWorkspaceState(state);
   return (
     currentRequest?.id === request.id &&
-    currentRequest.agentId === workspaceAgentId(state) &&
+    currentRequest.agentId === paneSessionAgentId(state) &&
     currentRequest.itemId === request.itemId &&
     currentRequest.sessionKey === state.sessionKey &&
     current?.agentId === request.agentId &&
@@ -376,12 +394,13 @@ function openFile(
   path: string,
   opts: { line?: number | null; requestPath?: string } = {},
 ) {
+  const requestPath = opts.requestPath ?? path;
   openWorkspaceItem(
     state,
     workspace,
     `file:${path}`,
     (request) =>
-      state.sessions.getFile(request.sessionKey, opts.requestPath ?? path, {
+      state.sessions.getFile(request.sessionKey, requestPath, {
         agentId: request.agentId,
       }),
     (result) => {
@@ -397,6 +416,79 @@ function openFile(
           rawText: file.content,
         };
       }
+      const canEdit =
+        typeof file.hash === "string" &&
+        hasUniformLineEndings(file.content) &&
+        isGatewayMethodAdvertised(state, "sessions.files.set") !== false &&
+        hasOperatorAdminAccess(state.hello?.auth ?? null);
+      const edit = canEdit
+        ? {
+            hash: file.hash!,
+            save: async ({ content, expectedHash }: { content: string; expectedHash: string }) => {
+              try {
+                const saved = await state.sessions.setFile(
+                  result.sessionKey,
+                  requestPath,
+                  content,
+                  {
+                    agentId: workspace.agentId,
+                    expectedHash,
+                  },
+                );
+                const hash = saved?.file.hash;
+                const updatedAtMs = saved?.file.updatedAtMs;
+                return typeof hash === "string"
+                  ? {
+                      ok: true as const,
+                      hash,
+                      ...(typeof updatedAtMs === "number" ? { updatedAtMs } : {}),
+                    }
+                  : { ok: false as const, code: "error" as const, message: "Save failed." };
+              } catch (error) {
+                const details =
+                  error instanceof GatewayRequestError &&
+                  error.details &&
+                  typeof error.details === "object"
+                    ? (error.details as { type?: unknown; currentHash?: unknown })
+                    : null;
+                if (details?.type === "session_file_conflict") {
+                  return {
+                    ok: false as const,
+                    code: "conflict" as const,
+                    ...(typeof details.currentHash === "string"
+                      ? { currentHash: details.currentHash }
+                      : {}),
+                  };
+                }
+                return {
+                  ok: false as const,
+                  code: "error" as const,
+                  message: error instanceof Error ? error.message : String(error),
+                };
+              }
+            },
+            fetchLatest: async () => {
+              const latest = await state.sessions.getFile(result.sessionKey, requestPath, {
+                agentId: workspace.agentId,
+              });
+              const latestFile = latest?.file;
+              if (
+                !latestFile ||
+                typeof latestFile.content !== "string" ||
+                typeof latestFile.hash !== "string"
+              ) {
+                return null;
+              }
+              return {
+                content: latestFile.content,
+                hash: latestFile.hash,
+                // Reloaded content re-passes the uniform-endings gate so a
+                // conflict reload cannot smuggle mixed endings into edit mode.
+                editable: hasUniformLineEndings(latestFile.content),
+              };
+            },
+          }
+        : undefined;
       return {
         kind: "file",
         path: file.workspacePath || file.path || path,
@@ -406,6 +498,7 @@ function openFile(
         language: languageForFile(name),
         line: opts.line ?? null,
         rawText: file.content,
+        ...(edit ? { edit } : {}),
       };
     },
     `Failed to load ${path}`,
@@ -552,7 +645,10 @@ function openArtifact(
   );
 }
 
-export function createSessionWorkspaceProps(state: SessionWorkspaceHost): SessionWorkspaceProps {
+export function createSessionWorkspaceProps(
+  state: SessionWorkspaceHost,
+  options?: { narrowLayout?: boolean },
+): SessionWorkspaceProps {
   const workspace = getWorkspaceState(state);
   if (
     !workspace.collapsed &&
@@ -572,6 +668,7 @@ export function createSessionWorkspaceProps(state: SessionWorkspaceHost): Sessio
     error: workspace.error,
     activeId: workspace.activeId,
     dock: workspace.dock,
+    narrowLayout: options?.narrowLayout === true,
     dockDragging: workspace.dockDragging,
     dockDragZone: workspace.dockDragZone,
     onToggleCollapsed: () => toggleSessionWorkspace(state),
@@ -614,6 +711,32 @@ export function createSessionWorkspaceProps(state: SessionWorkspaceHost): Sessio
           );
         }
       : undefined,
+    onToggleBrowser: state.browserPanelAvailable
+      ? () => {
+          window.dispatchEvent(new CustomEvent("openclaw:browser-toggle", {}));
+        }
+      : undefined,
+    onOpenDiff:
+      isGatewayMethodAdvertised(state, "sessions.diff") === true && state.client
+        ? () => state.handleOpenSidebar(buildSessionDiffSidebarContent(state))
+        : undefined,
+  };
+}
+
+/** Sidebar payload whose loader refetches sessions.diff for the pane's session. */
+function buildSessionDiffSidebarContent(state: SessionWorkspaceHost): SidebarContent {
+  const sessionKey = state.sessionKey;
+  return {
+    kind: "session-diff",
+    load: async () => {
+      if (!state.client) {
+        throw new Error(t("chat.sessionDiff.disconnected"));
+      }
+      return await state.client.request<SessionsDiffResult>("sessions.diff", {
+        sessionKey,
+        ...scopedAgentParamsForSession(state, sessionKey),
+      });
+    },
   };
 }
 
@@ -663,7 +786,6 @@ export function sessionWorkspaceModifiedCount(
  * this button is the only pointer affordance (⇧⌘B still works). */
 export function renderSessionWorkspaceToggle(
   sessionWorkspace: SessionWorkspaceProps | undefined,
-  variant: "pane-header" | "floating",
 ): TemplateResult | typeof nothing {
   if (!sessionWorkspace) {
     return nothing;
@@ -674,9 +796,7 @@ export function renderSessionWorkspaceToggle(
   return html`
     <openclaw-tooltip .content=${`${label} (⇧⌘B)`}>
       <button
-        class="${variant === "pane-header"
-          ? "btn btn--ghost btn--icon"
-          : "btn btn--sm btn--icon chat-workspace-open"} chat-workspace-toggle"
+        class="btn btn--ghost btn--icon chat-icon-btn chat-workspace-toggle"
         type="button"
         aria-label=${label}
         aria-keyshortcuts="Meta+Shift+B"
@@ -694,6 +814,29 @@ export function renderSessionWorkspaceToggle(
   `;
 }
 
+/** Session diff button shown beside the workspace toggle; hidden when the
+ * gateway does not advertise sessions.diff. */
+export function renderSessionDiffToggle(
+  sessionWorkspace: SessionWorkspaceProps | undefined,
+): TemplateResult | typeof nothing {
+  if (!sessionWorkspace?.onOpenDiff) {
+    return nothing;
+  }
+  const label = t("chat.sessionDiff.show");
+  return html`
+    <openclaw-tooltip .content=${label}>
+      <button
+        class="btn btn--ghost btn--icon chat-icon-btn chat-session-diff-toggle"
+        type="button"
+        aria-label=${label}
+        @click=${sessionWorkspace.onOpenDiff}
+      >
+        ${icons.gitBranch}
+      </button>
+    </openclaw-tooltip>
+  `;
+}
+
 export function renderSessionWorkspaceRail(
   sessionWorkspace: SessionWorkspaceProps | undefined,
 ): TemplateResult | typeof nothing {
@@ -702,7 +845,9 @@ export function renderSessionWorkspaceRail(
   if (!sessionWorkspace || sessionWorkspace.collapsed) {
     return nothing;
   }
-  const dock = sessionWorkspace.dock;
+  // Narrow panes always present the rail as a bottom strip; a side column
+  // would crush the thread below its readable minimum.
+  const dock = sessionWorkspace.narrowLayout ? "bottom" : sessionWorkspace.dock;
   const terminalButton = sessionWorkspace.onToggleTerminal
     ? html`
         <openclaw-tooltip .content=${t("terminal.toggle")}>
@@ -713,6 +858,34 @@ export function renderSessionWorkspaceRail(
             @click=${sessionWorkspace.onToggleTerminal}
           >
             ${icons.terminal}
+          </button>
+        </openclaw-tooltip>
+      `
+    : nothing;
+  const browserButton = sessionWorkspace.onToggleBrowser
+    ? html`
+        <openclaw-tooltip .content=${t("browser.toggle")}>
+          <button
+            type="button"
+            class="chat-workspace-rail__terminal"
+            aria-label=${t("browser.toggle")}
+            @click=${sessionWorkspace.onToggleBrowser}
+          >
+            ${icons.globe}
+          </button>
+        </openclaw-tooltip>
+      `
+    : nothing;
+  const diffButton = sessionWorkspace.onOpenDiff
+    ? html`
+        <openclaw-tooltip .content=${t("chat.sessionDiff.show")}>
+          <button
+            type="button"
+            class="chat-workspace-rail__terminal chat-session-diff-toggle"
+            aria-label=${t("chat.sessionDiff.show")}
+            @click=${sessionWorkspace.onOpenDiff}
+          >
+            ${icons.gitBranch}
           </button>
         </openclaw-tooltip>
       `
@@ -996,31 +1169,38 @@ export function renderSessionWorkspaceRail(
         <!-- Grip: drag the rail onto the pane's right/bottom band to re-dock
              it (chat-view renders the drop zones while dragging). -->
         <div
-          class="chat-workspace-rail__title chat-workspace-rail__grip"
-          title=${t("chat.workspaceFiles.dragToDock")}
-          @pointerdown=${sessionWorkspace.onDockDragStart}
+          class="chat-workspace-rail__title ${sessionWorkspace.narrowLayout
+            ? ""
+            : "chat-workspace-rail__grip"}"
+          title=${sessionWorkspace.narrowLayout ? nothing : t("chat.workspaceFiles.dragToDock")}
+          @pointerdown=${sessionWorkspace.narrowLayout ? nothing : sessionWorkspace.onDockDragStart}
         >
           <span class="chat-workspace-rail__eyebrow">${t("chat.workspaceFiles.workspace")}</span>
           <strong>${t("chat.workspaceFiles.files")}</strong>
         </div>
         <div class="chat-workspace-rail__actions">
-          ${terminalButton}
-          <openclaw-tooltip
-            .content=${dock === "bottom"
-              ? t("chat.workspaceFiles.dockRight")
-              : t("chat.workspaceFiles.dockBottom")}
-          >
-            <button
-              class="btn btn--ghost btn--sm chat-workspace-rail__dock"
-              type="button"
-              aria-label=${dock === "bottom"
-                ? t("chat.workspaceFiles.dockRight")
-                : t("chat.workspaceFiles.dockBottom")}
-              @click=${() => sessionWorkspace.onSetDock(dock === "bottom" ? "right" : "bottom")}
-            >
-              ${dock === "bottom" ? icons.panelRightOpen : icons.panelBottomOpen}
-            </button>
-          </openclaw-tooltip>
+          ${diffButton} ${terminalButton} ${browserButton}
+          ${sessionWorkspace.narrowLayout
+            ? nothing
+            : html`
+                <openclaw-tooltip
+                  .content=${dock === "bottom"
+                    ? t("chat.workspaceFiles.dockRight")
+                    : t("chat.workspaceFiles.dockBottom")}
+                >
+                  <button
+                    class="btn btn--ghost btn--sm chat-workspace-rail__dock"
+                    type="button"
+                    aria-label=${dock === "bottom"
+                      ? t("chat.workspaceFiles.dockRight")
+                      : t("chat.workspaceFiles.dockBottom")}
+                    @click=${() =>
+                      sessionWorkspace.onSetDock(dock === "bottom" ? "right" : "bottom")}
+                  >
+                    ${dock === "bottom" ? icons.panelRightOpen : icons.panelBottomOpen}
+                  </button>
+                </openclaw-tooltip>
+              `}
           <openclaw-tooltip .content=${t("chat.workspaceFiles.refresh")}>
             <button
               class="btn btn--ghost btn--sm chat-workspace-rail__refresh"

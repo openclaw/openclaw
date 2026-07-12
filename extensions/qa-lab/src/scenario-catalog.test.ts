@@ -229,6 +229,9 @@ describe("qa scenario catalog", () => {
       throw new Error(`expected Playwright scenario, got ${scenario.execution.kind}`);
     }
     expect(scenario.execution.path).toBe("ui/src/e2e/chat-flow.e2e.test.ts");
+    expect(scenario.execution.testNamePattern).toBe(
+      "sends a chat turn through the GUI and renders the final Gateway event",
+    );
     expect(scenario.execution.flow).toBeUndefined();
     expect(scenario.coverage?.primary).toContain("ui.control");
     expect(uxMatrix.execution.kind).toBe("script");
@@ -257,11 +260,9 @@ describe("qa scenario catalog", () => {
       "gateway.openai-compatible-apis",
       "runtime.hosted-tool-use",
     ]);
-    expect(readQaScenarioById("openai-web-search-minimal").coverage?.secondary).toContain(
-      "runtime.reasoning-and-cache-controls",
-    );
-    expect(readQaScenarioById("openai-web-search-native-assertions").coverage?.secondary).toEqual(
+    expect(readQaScenarioById("openai-web-search-minimal").coverage?.secondary).toEqual(
       expect.arrayContaining([
+        "runtime.reasoning-and-cache-controls",
         "web-search.openai-native-web-search",
         "plugins.web-search-and-fetch",
       ]),
@@ -275,7 +276,6 @@ describe("qa scenario catalog", () => {
     const scenarioLanes = [
       ["openai-compatible-chat-tools", "openai-chat-tools"],
       ["openai-web-search-minimal", "openai-web-search-minimal"],
-      ["openai-web-search-native-assertions", "openai-web-search-minimal"],
       ["openwebui-openai-compatible", "openwebui"],
       ["plugin-lifecycle-probe", "plugin-lifecycle-matrix"],
       ["packaged-bundled-plugin-install-uninstall", "bundled-plugin-install-uninstall"],
@@ -579,9 +579,9 @@ describe("qa scenario catalog", () => {
     );
   });
 
-  it("includes the GPT-5.5 thinking visibility switch scenario", () => {
-    const scenario = readQaScenarioById("gpt55-thinking-visibility-switch");
-    const config = readQaScenarioExecutionConfig("gpt55-thinking-visibility-switch") as
+  it("includes the GPT-5.6 Luna thinking visibility switch scenario", () => {
+    const scenario = readQaScenarioById("luna-thinking-visibility-switch");
+    const config = readQaScenarioExecutionConfig("luna-thinking-visibility-switch") as
       | {
           requiredProvider?: string;
           requiredModel?: string;
@@ -591,9 +591,9 @@ describe("qa scenario catalog", () => {
         }
       | undefined;
 
-    expect(scenario.sourcePath).toBe("qa/scenarios/models/gpt55-thinking-visibility-switch.yaml");
+    expect(scenario.sourcePath).toBe("qa/scenarios/models/luna-thinking-visibility-switch.yaml");
     expect(config?.requiredProvider).toBe("openai");
-    expect(config?.requiredModel).toBe("gpt-5.5");
+    expect(config?.requiredModel).toBe("gpt-5.6-luna");
     expect(config?.offDirective).toBe("/think off");
     expect(config?.maxDirective).toBe("/think medium");
     expect(config?.reasoningDirective).toBe("/reasoning on");
@@ -624,10 +624,10 @@ describe("qa scenario catalog", () => {
       },
     });
     expect(config?.requiredProvider).toBe("openai");
-    expect(config?.requiredModel).toBe("gpt-5.5");
+    expect(config?.requiredModel).toBe("gpt-5.6-luna");
     expect(config?.expectedMarker).toBe("WEB-SEARCH-OK");
     expect(scenario.execution.flow?.steps.map((step) => step.name)).toEqual([
-      "confirms live OpenAI GPT-5.5 web search auto mode",
+      "confirms live OpenAI GPT-5.6 Luna web search auto mode",
       "searches official OpenAI News through the live model",
     ]);
   });
@@ -902,10 +902,12 @@ describe("qa scenario catalog", () => {
     }
   });
 
-  it("isolates channel baseline silence assertions from shared transport state", () => {
-    const scenario = requireFlowScenario(readQaScenarioById("channel-chat-baseline"));
+  it("isolates scenarios that own asynchronous transport state", () => {
+    const channelBaseline = requireFlowScenario(readQaScenarioById("channel-chat-baseline"));
+    const subagentFanout = requireFlowScenario(readQaScenarioById("subagent-fanout-synthesis"));
 
-    expect(scenario.execution.suiteIsolation).toBe("isolated");
+    expect(channelBaseline.execution.suiteIsolation).toBe("isolated");
+    expect(subagentFanout.execution.suiteIsolation).toBe("isolated");
   });
 
   it("adds a dreaming shadow trial report scenario", () => {

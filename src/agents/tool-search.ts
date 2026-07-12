@@ -11,7 +11,7 @@ import {
   uniqueStrings,
   uniqueValues,
 } from "@openclaw/normalization-core/string-normalization";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tools.js";
@@ -657,13 +657,16 @@ function classifyTool(tool: CatalogTool): {
 } {
   const meta = getPluginToolMeta(tool as AnyAgentTool);
   const pluginId = meta?.pluginId?.trim();
-  if (pluginId === "bundle-mcp") {
-    const mcp = meta?.mcp;
+  const mcp = meta?.mcp;
+  if (mcp) {
     return {
       source: "mcp",
-      sourceName: pluginId,
-      ...(mcp ? { mcp } : {}),
+      sourceName: mcp.safeServerName || pluginId || "mcp",
+      mcp,
     };
+  }
+  if (pluginId === "bundle-mcp") {
+    return { source: "mcp", sourceName: pluginId };
   }
   if (pluginId) {
     return { source: "openclaw", sourceName: pluginId };
@@ -2196,7 +2199,7 @@ function runCodeModeChild(params: {
       }
       const rejectOnExit = () => {
         const suffix = stderrTail.trim();
-        const detail = suffix ? `: ${suffix.slice(-500)}` : "";
+        const detail = suffix ? `: ${sliceUtf16Safe(suffix, -500)}` : "";
         settle(() =>
           reject(
             new Error(

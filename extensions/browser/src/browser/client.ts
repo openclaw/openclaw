@@ -20,7 +20,12 @@ import { DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS } from "./constants.js";
 import type { BrowserDoctorReport } from "./doctor.js";
 import type { AnnotationItem } from "./screenshot-annotate.js";
 
-export type { BrowserStatus, BrowserTab, BrowserTransport } from "./client.types.js";
+export type {
+  BrowserGraphicsDiagnostics,
+  BrowserStatus,
+  BrowserTab,
+  BrowserTransport,
+} from "./client.types.js";
 export type { BrowserDoctorCheck, BrowserDoctorReport } from "./doctor.js";
 
 const BROWSER_STATUS_REQUEST_TIMEOUT_MS = 7_500;
@@ -92,6 +97,22 @@ export type ProfileStatus = {
   isRemote: boolean;
   missingFromConfig?: boolean;
   reconcileReason?: string | null;
+};
+
+export type SystemProfileInfo = {
+  browser: "chrome" | "brave" | "edge" | "chromium";
+  id: string;
+  name: string;
+  hasCookies: boolean;
+};
+
+export type BrowserImportProfileResult = {
+  ok: true;
+  systemProfile: string;
+  into: string;
+  browser: SystemProfileInfo["browser"];
+  cookies: { total: number; imported: number; failed: number; skipped: number };
+  domains: string[];
 };
 
 /** Result returned when a managed browser profile directory is reset. */
@@ -183,6 +204,35 @@ export async function browserProfiles(
     },
   );
   return res.profiles ?? [];
+}
+
+/** List Chrome-family profiles available on the local macOS host. */
+export async function browserSystemProfiles(
+  baseUrl?: string,
+  opts?: { browser?: string; timeoutMs?: number },
+): Promise<SystemProfileInfo[]> {
+  const query = opts?.browser ? `?browser=${encodeURIComponent(opts.browser)}` : "";
+  const res = await fetchBrowserJson<{ systemProfiles: SystemProfileInfo[] }>(
+    withBaseUrl(baseUrl, `/system-profiles${query}`),
+    { timeoutMs: resolveBrowserClientTimeoutMs(opts, 3000) },
+  );
+  return res.systemProfiles ?? [];
+}
+
+/** Import system-profile cookies into a managed browser profile. */
+export async function browserImportProfile(
+  baseUrl: string | undefined,
+  opts: { browser?: string; systemProfile?: string; into?: string; domains?: string[] },
+): Promise<BrowserImportProfileResult> {
+  return await fetchBrowserJson<BrowserImportProfileResult>(
+    withBaseUrl(baseUrl, "/profiles/import"),
+    {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify(opts),
+      timeoutMs: 120_000,
+    },
+  );
 }
 
 /** Start the selected browser profile. */

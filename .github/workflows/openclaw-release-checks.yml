@@ -103,7 +103,7 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.15.0"
-  OPENCLAW_CI_OPENAI_MODEL: ${{ vars.OPENCLAW_CI_OPENAI_MODEL || 'openai/gpt-5.5' }}
+  OPENCLAW_CI_OPENAI_MODEL: ${{ vars.OPENCLAW_CI_OPENAI_MODEL || 'openai/gpt-5.6-luna' }}
 
 jobs:
   resolve_target:
@@ -652,10 +652,9 @@ jobs:
       actions: read
       contents: read
       packages: read
-    uses: ./.github/workflows/install-smoke.yml
+    uses: ./.github/workflows/install-smoke-reusable.yml
     with:
       ref: ${{ needs.resolve_target.outputs.revision }}
-      root_image_transport: no-push-artifact
       run_bun_global_install_smoke: true
 
   cross_os_release_checks:
@@ -678,7 +677,7 @@ jobs:
       candidate_sha256: ${{ needs.prepare_release_package.outputs.package_sha256 }}
       candidate_version: ${{ needs.prepare_release_package.outputs.package_version }}
       candidate_source_sha: ${{ needs.prepare_release_package.outputs.source_sha }}
-      openai_model: openai/gpt-5.5
+      openai_model: openai/gpt-5.6-luna
       ubuntu_runner: ubuntu-24.04
       windows_runner: windows-2025
       macos_runner: macos-26
@@ -948,7 +947,7 @@ jobs:
           case "${QA_PARITY_LANE}" in
             candidate)
               model="${OPENCLAW_CI_OPENAI_MODEL}"
-              alt_model="openai/gpt-5.5-alt"
+              alt_model="openai/gpt-5.6-luna-alt"
               ;;
             baseline)
               model="anthropic/claude-opus-4-8"
@@ -1159,7 +1158,7 @@ jobs:
             --parity-pack agentic \
             --concurrency "${QA_PARITY_CONCURRENCY}" \
             --model "${OPENCLAW_CI_OPENAI_MODEL}" \
-            --alt-model "openai/gpt-5.5-alt" \
+            --alt-model "openai/gpt-5.6-luna-alt" \
             --runtime-pair openclaw,codex \
             --output-dir ".artifacts/qa-e2e/runtime-parity"
 
@@ -1173,7 +1172,7 @@ jobs:
             --runtime-parity-tier standard \
             --concurrency "${QA_PARITY_CONCURRENCY}" \
             --model "${OPENCLAW_CI_OPENAI_MODEL}" \
-            --alt-model "openai/gpt-5.5-alt" \
+            --alt-model "openai/gpt-5.6-luna-alt" \
             --runtime-pair openclaw,codex \
             --output-dir ".artifacts/qa-e2e/runtime-parity-standard"
 
@@ -1187,7 +1186,7 @@ jobs:
             --runtime-parity-tier soak \
             --concurrency "${QA_PARITY_CONCURRENCY}" \
             --model "${OPENCLAW_CI_OPENAI_MODEL}" \
-            --alt-model "openai/gpt-5.5-alt" \
+            --alt-model "openai/gpt-5.6-luna-alt" \
             --runtime-pair openclaw,codex \
             --output-dir ".artifacts/qa-e2e/runtime-parity-soak"
 
@@ -1409,8 +1408,8 @@ jobs:
           matrix_args=(
             --repo-root . \
             --provider-mode mock-openai \
-            --model mock-openai/gpt-5.5 \
-            --alt-model mock-openai/gpt-5.5-alt \
+            --model mock-openai/gpt-5.6-luna \
+            --alt-model mock-openai/gpt-5.6-luna-alt \
             --profile fast \
             --fast
           )
@@ -1459,10 +1458,137 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
+  # The dispatched child owns Telegram evidence/status artifacts; this blocking job
+  # carries its exact conclusion into the parent summary without copying secrets or artifacts.
   qa_live_telegram_release_checks:
     name: Run QA Lab live Telegram lane
     needs: [resolve_target]
     if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_telegram_enabled == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 210
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Dispatch and await trusted Telegram QA
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_REF: ${{ needs.resolve_target.outputs.ref }}
+          TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          workflow="openclaw-release-telegram-qa.yml"
+          run_id=""
+          run_name=""
+
+          find_child_runs() {
+            RUN_NAME="$run_name" gh api -X GET \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs" \
+              -F event=workflow_dispatch \
+              -F branch=main \
+              -F per_page=100 \
+              --jq '[.workflow_runs[] | select(.display_title == env.RUN_NAME) | {id, head_sha}]'
+          }
+          cancel_child() {
+            if [[ -n "${run_id:-}" ]]; then
+              gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/cancel" >/dev/null 2>&1 || true
+            fi
+          }
+          cancel_child_on_failure() {
+            status="$?"
+            trap - EXIT
+            if [[ "$status" -ne 0 ]]; then
+              set +e
+              if [[ -z "${run_id:-}" && -n "${run_name:-}" ]]; then
+                # The nonce makes delayed discovery safe after an ambiguous dispatch response.
+                for _ in $(seq 1 6); do
+                  matches_json="$(find_child_runs 2>/dev/null)" || matches_json="[]"
+                  if [[ "$(jq 'length' <<<"$matches_json" 2>/dev/null)" == "1" ]]; then
+                    run_id="$(jq -r '.[0].id' <<<"$matches_json")"
+                    break
+                  fi
+                  sleep 2
+                done
+              fi
+              cancel_child
+            fi
+            exit "$status"
+          }
+          trap cancel_child_on_failure EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+
+          for dispatch_attempt in 1 2 3 4 5; do
+            expected_trusted_workflow_sha="$(
+              gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha
+            )"
+            dispatch_id="release-checks-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${dispatch_attempt}-$(openssl rand -hex 16)"
+            run_name="OpenClaw Release Telegram QA ${dispatch_id}"
+            run_id=""
+            child_head_sha=""
+
+            gh workflow run "$workflow" \
+              --repo "$GITHUB_REPOSITORY" \
+              --ref main \
+              -f dispatch_id="$dispatch_id" \
+              -f expected_trusted_workflow_sha="$expected_trusted_workflow_sha" \
+              -f target_ref="$TARGET_REF" \
+              -f target_sha="$TARGET_SHA"
+
+            for _ in $(seq 1 60); do
+              matches_json="$(find_child_runs)"
+              match_count="$(jq 'length' <<<"$matches_json")"
+              if ((match_count > 1)); then
+                echo "Multiple Telegram QA runs matched ${run_name}; refusing to guess." >&2
+                exit 1
+              fi
+              if ((match_count == 1)); then
+                run_id="$(jq -r '.[0].id' <<<"$matches_json")"
+                child_head_sha="$(jq -r '.[0].head_sha' <<<"$matches_json")"
+                break
+              fi
+              sleep 5
+            done
+            if [[ -z "$run_id" ]]; then
+              echo "Could not find exact dispatched Telegram QA run ${run_name}." >&2
+              exit 1
+            fi
+            if [[ "$child_head_sha" == "$expected_trusted_workflow_sha" ]]; then
+              break
+            fi
+            echo "Trusted main moved from ${expected_trusted_workflow_sha} to ${child_head_sha} during dispatch attempt ${dispatch_attempt}; retrying." >&2
+            cancel_child
+            run_id=""
+          done
+          if [[ -z "$run_id" ]]; then
+            echo "Trusted main kept moving during Telegram QA dispatch; refusing an unpinned child." >&2
+            exit 1
+          fi
+
+          child_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+          echo "Dispatched trusted Telegram QA: ${child_url}"
+          for _ in $(seq 1 1080); do
+            run_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}")"
+            status="$(jq -r .status <<<"$run_json")"
+            if [[ "$status" == "completed" ]]; then
+              conclusion="$(jq -r .conclusion <<<"$run_json")"
+              if [[ "$conclusion" != "success" ]]; then
+                echo "Trusted Telegram QA concluded ${conclusion}: ${child_url}" >&2
+                exit 1
+              fi
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Timed out awaiting trusted Telegram QA: ${child_url}" >&2
+          exit 1
+
+  qa_live_discord_release_checks:
+    name: Run QA Lab live Discord lane
+    needs: [resolve_target]
+    if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_discord_enabled == 'true'
     continue-on-error: true
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -1512,103 +1638,6 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=8192
         run: node scripts/build-all.mjs qaRuntime
 
-      - name: Run Telegram live lane
-        id: run_lane
-        shell: bash
-        env:
-          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
-          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
-          OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "1800000"
-          OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
-        run: |
-          set -euo pipefail
-
-          output_dir=".artifacts/qa-e2e/telegram-live-release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
-
-          for attempt in 1 2; do
-            attempt_output_dir="${output_dir}/attempt-${attempt}"
-            if pnpm openclaw qa telegram \
-              --repo-root . \
-              --output-dir "${attempt_output_dir}" \
-              --provider-mode mock-openai \
-              --model mock-openai/gpt-5.5 \
-              --alt-model mock-openai/gpt-5.5-alt \
-              --fast \
-              --credential-source convex \
-              --credential-role ci; then
-              exit 0
-            fi
-            if [[ "${attempt}" == "2" ]]; then
-              exit 1
-            fi
-            echo "Telegram live lane failed on attempt ${attempt}; retrying once..." >&2
-            sleep 10
-          done
-
-      - name: Upload Telegram QA artifacts
-        id: upload_telegram_qa_artifacts
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: release-qa-live-telegram-${{ needs.resolve_target.outputs.revision }}
-          path: .artifacts/qa-e2e/
-          retention-days: 14
-          if-no-files-found: error
-
-      - name: Record advisory status
-        if: always()
-        shell: bash
-        env:
-          RELEASE_CHECK_JOB: qa_live_telegram_release_checks
-          RELEASE_CHECK_TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
-          JOB_STATUS: ${{ job.status }}
-          RELEASE_CHECK_STEP_OUTCOMES: ${{ steps.run_lane.outcome }} ${{ steps.upload_telegram_qa_artifacts.outcome }}
-        run: *record_release_check_advisory_status
-
-      - name: Upload advisory status
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: release-check-status-qa-live-telegram-${{ needs.resolve_target.outputs.revision }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .artifacts/release-check-status/qa_live_telegram_release_checks-${{ github.run_id }}-${{ github.run_attempt }}.env
-          retention-days: 14
-          if-no-files-found: error
-
-  qa_live_discord_release_checks:
-    name: Run QA Lab live Discord lane
-    needs: [resolve_target]
-    if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_discord_enabled == 'true'
-    continue-on-error: true
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    permissions:
-      contents: read
-      pull-requests: read
-    environment: qa-live-shared
-    env:
-      OPENCLAW_BUILD_PRIVATE_QA: "1"
-      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
-    steps:
-      - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-        with:
-          persist-credentials: false
-          ref: ${{ needs.resolve_target.outputs.revision }}
-          fetch-depth: 1
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          install-bun: "true"
-
-      - *release_qa_required_credentials_step
-      - name: Build private QA runtime
-        env:
-          NODE_OPTIONS: --max-old-space-size=8192
-        run: node scripts/build-all.mjs qaRuntime
-
       - name: Run Discord live lane
         id: run_lane
         shell: bash
@@ -1629,8 +1658,8 @@ jobs:
               --repo-root . \
               --output-dir "${attempt_output_dir}" \
               --provider-mode mock-openai \
-              --model mock-openai/gpt-5.5 \
-              --alt-model mock-openai/gpt-5.5-alt \
+              --model mock-openai/gpt-5.6-luna \
+              --alt-model mock-openai/gpt-5.6-luna-alt \
               --fast \
               --credential-source convex \
               --credential-role ci; then
@@ -1729,8 +1758,8 @@ jobs:
               --repo-root . \
               --output-dir "${attempt_output_dir}" \
               --provider-mode mock-openai \
-              --model mock-openai/gpt-5.5 \
-              --alt-model mock-openai/gpt-5.5-alt \
+              --model mock-openai/gpt-5.6-luna \
+              --alt-model mock-openai/gpt-5.6-luna-alt \
               --fast \
               --credential-source convex \
               --credential-role ci; then
@@ -1826,8 +1855,8 @@ jobs:
               --repo-root . \
               --output-dir "${attempt_output_dir}" \
               --provider-mode mock-openai \
-              --model mock-openai/gpt-5.5 \
-              --alt-model mock-openai/gpt-5.5-alt \
+              --model mock-openai/gpt-5.6-luna \
+              --alt-model mock-openai/gpt-5.6-luna-alt \
               --fast \
               --credential-source convex \
               --credential-role ci; then
@@ -1907,6 +1936,7 @@ jobs:
       - name: Verify release check results
         shell: bash
         env:
+          RESOLVE_TARGET_RESULT: ${{ needs.resolve_target.result }}
           PREPARE_RELEASE_PACKAGE_RESULT: ${{ needs.prepare_release_package.result }}
           INSTALL_SMOKE_RELEASE_CHECKS_RESULT: ${{ needs.install_smoke_release_checks.result }}
           CROSS_OS_RELEASE_CHECKS_RESULT: ${{ needs.cross_os_release_checks.result }}
@@ -1920,6 +1950,7 @@ jobs:
           RUNTIME_TOOL_COVERAGE_RELEASE_CHECKS_RESULT: ${{ needs.runtime_tool_coverage_release_checks.result }}
           QA_LIVE_MATRIX_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_matrix_release_checks.result }}
           QA_LIVE_TELEGRAM_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_telegram_release_checks.result }}
+          QA_LIVE_TELEGRAM_SELECTED: ${{ contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_telegram_enabled == 'true' }}
           QA_LIVE_DISCORD_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_discord_release_checks.result }}
           QA_LIVE_WHATSAPP_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_whatsapp_release_checks.result }}
           QA_LIVE_SLACK_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_slack_release_checks.result }}
@@ -1931,6 +1962,7 @@ jobs:
           set -euo pipefail
           failed=0
           release_check_items=(
+            "resolve_target=${RESOLVE_TARGET_RESULT}"
             "prepare_release_package=${PREPARE_RELEASE_PACKAGE_RESULT}"
             "install_smoke_release_checks=${INSTALL_SMOKE_RELEASE_CHECKS_RESULT}"
             "cross_os_release_checks=${CROSS_OS_RELEASE_CHECKS_RESULT}"
@@ -1953,7 +1985,6 @@ jobs:
             "qa_lab_parity_report_release_checks=${QA_LAB_PARITY_REPORT_RELEASE_CHECKS_RESULT}"
             "qa_lab_runtime_parity_release_checks=${QA_LAB_RUNTIME_PARITY_RELEASE_CHECKS_RESULT}"
             "qa_live_matrix_release_checks=${QA_LIVE_MATRIX_RELEASE_CHECKS_RESULT}"
-            "qa_live_telegram_release_checks=${QA_LIVE_TELEGRAM_RELEASE_CHECKS_RESULT}"
             "qa_live_discord_release_checks=${QA_LIVE_DISCORD_RELEASE_CHECKS_RESULT}"
             "qa_live_whatsapp_release_checks=${QA_LIVE_WHATSAPP_RELEASE_CHECKS_RESULT}"
             "qa_live_slack_release_checks=${QA_LIVE_SLACK_RELEASE_CHECKS_RESULT}"
@@ -2056,6 +2087,7 @@ jobs:
             local saw=0
             local saw_failure=0
             local saw_cancelled=0
+            local saw_skipped=0
             local variants=()
             if [[ "$fallback" != "skipped" ]]; then
               if [[ "$name" == "qa_lab_parity_lane_release_checks" ]]; then
@@ -2077,7 +2109,8 @@ jobs:
               saw=1
               status="$(status_field "$file" status)" || status=""
               case "$status" in
-                success|skipped) ;;
+                success) ;;
+                skipped) saw_skipped=1 ;;
                 cancelled) saw_cancelled=1 ;;
                 failure|"") saw_failure=1 ;;
                 *) saw_failure=1 ;;
@@ -2091,6 +2124,8 @@ jobs:
               printf 'failure\n'
             elif [[ "$saw_cancelled" == "1" ]]; then
               printf 'cancelled\n'
+            elif [[ "$saw_skipped" == "1" ]]; then
+              printf 'skipped\n'
             elif [[ "$fallback" != "success" && "$fallback" != "skipped" ]]; then
               printf '%s\n' "$fallback"
             elif [[ "$saw" == "1" ]]; then
@@ -2103,7 +2138,7 @@ jobs:
           }
           advisory_status_override_allowed() {
             case "$1" in
-              qa_lab_parity_lane_release_checks|qa_lab_parity_report_release_checks|qa_lab_runtime_parity_release_checks|qa_live_matrix_release_checks|qa_live_telegram_release_checks|qa_live_discord_release_checks|qa_live_whatsapp_release_checks|qa_live_slack_release_checks)
+              qa_lab_parity_lane_release_checks|qa_lab_parity_report_release_checks|qa_lab_runtime_parity_release_checks|qa_live_matrix_release_checks|qa_live_discord_release_checks|qa_live_whatsapp_release_checks|qa_live_slack_release_checks)
                 return 0
                 ;;
               *)
@@ -2119,10 +2154,16 @@ jobs:
             else
               result="$raw_result"
             fi
-            if [[ "$result" != "success" && "$result" != "skipped" ]]; then
+            require_success=false
+            if [[ "$name" == "qa_live_telegram_release_checks" &&
+                  "$QA_LIVE_TELEGRAM_SELECTED" == "true" ]]; then
+              require_success=true
+            fi
+            if [[ "$result" != "success" &&
+                  ( "$result" != "skipped" || "$require_success" == "true" ) ]]; then
               if [[ "$tideclaw_alpha" == "true" ]]; then
                 case "$name" in
-                  prepare_release_package|install_smoke_release_checks|package_acceptance_release_checks) ;;
+                  resolve_target|prepare_release_package|install_smoke_release_checks|package_acceptance_release_checks) ;;
                   *)
                     echo "::warning::${name} ended with ${result}; Tideclaw alpha treats non-package-safety release-check lanes as advisory."
                     continue

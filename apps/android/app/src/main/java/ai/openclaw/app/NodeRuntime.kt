@@ -9,6 +9,7 @@ import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.chat.ChatThinkingLevelSelection
 import ai.openclaw.app.chat.ChatTranscriptCache
 import ai.openclaw.app.chat.MessageSpeechClient
 import ai.openclaw.app.chat.MessageSpeechController
@@ -356,6 +357,7 @@ class NodeRuntime private constructor(
   private val tlsFingerprintProbe: suspend (String, Int) -> GatewayTlsProbeResult,
   chatStores: AndroidChatStores,
   internal val mode: NodeRuntimeMode,
+  initialForeground: Boolean,
 ) {
   private val chatTranscriptCache = chatStores.transcriptCache
   private val chatCommandOutbox = chatStores.commandOutbox
@@ -393,6 +395,20 @@ class NodeRuntime private constructor(
     tlsFingerprintProbe = tlsFingerprintProbe,
     chatStores = openAndroidChatStores(context),
     mode = NodeRuntimeMode.Live,
+    initialForeground = true,
+  )
+
+  internal constructor(
+    context: Context,
+    prefs: SecurePrefs,
+    initialForeground: Boolean,
+  ) : this(
+    context = context,
+    prefs = prefs,
+    tlsFingerprintProbe = ::probeGatewayTlsFingerprint,
+    chatStores = openAndroidChatStores(context),
+    mode = NodeRuntimeMode.Live,
+    initialForeground = initialForeground,
   )
 
   internal constructor(
@@ -405,6 +421,7 @@ class NodeRuntime private constructor(
     tlsFingerprintProbe = ::probeGatewayTlsFingerprint,
     chatStores = openAndroidChatStores(context),
     mode = mode,
+    initialForeground = true,
   )
 
   internal constructor(
@@ -421,6 +438,7 @@ class NodeRuntime private constructor(
         commandOutbox = RoomChatCommandOutbox(ChatCacheDatabase.open(context.applicationContext)),
       ),
     mode = NodeRuntimeMode.Live,
+    initialForeground = true,
   )
 
   /**
@@ -698,6 +716,13 @@ class NodeRuntime private constructor(
   val seamColorArgb: StateFlow<Long> = _seamColorArgb.asStateFlow()
   private val _modelCatalog = MutableStateFlow<List<GatewayModelSummary>>(emptyList())
   val modelCatalog: StateFlow<List<GatewayModelSummary>> = _modelCatalog.asStateFlow()
+  private val _providerModelCatalog = MutableStateFlow<List<GatewayModelSummary>>(emptyList())
+  val providerModelCatalog: StateFlow<List<GatewayModelSummary>> = _providerModelCatalog.asStateFlow()
+  private val _providerModelCatalogRefreshing = MutableStateFlow(false)
+  val providerModelCatalogRefreshing: StateFlow<Boolean> = _providerModelCatalogRefreshing.asStateFlow()
+  private val _providerModelCatalogErrorText = MutableStateFlow<String?>(null)
+  val providerModelCatalogErrorText: StateFlow<String?> = _providerModelCatalogErrorText.asStateFlow()
+  private val providerModelCatalogRefreshGuard = LatestGatewayRefreshGuard()
   private val _modelAuthProviders = MutableStateFlow<List<GatewayModelProviderSummary>>(emptyList())
   val modelAuthProviders: StateFlow<List<GatewayModelProviderSummary>> = _modelAuthProviders.asStateFlow()
   private val _modelCatalogRefreshing = MutableStateFlow(false)
@@ -804,7 +829,7 @@ class NodeRuntime private constructor(
   private val _healthLogsErrorText = MutableStateFlow<String?>(null)
   val healthLogsErrorText: StateFlow<String?> = _healthLogsErrorText.asStateFlow()
 
-  private val _isForeground = MutableStateFlow(true)
+  private val _isForeground = MutableStateFlow(initialForeground)
   val isForeground: StateFlow<Boolean> = _isForeground.asStateFlow()
 
   private data class TalkPttOwnership(
@@ -900,6 +925,10 @@ class NodeRuntime private constructor(
     _gatewayAgents.value = emptyList()
     selectedChatAgentId = null
     _modelCatalog.value = emptyList()
+    providerModelCatalogRefreshGuard.invalidate()
+    _providerModelCatalog.value = emptyList()
+    _providerModelCatalogRefreshing.value = false
+    _providerModelCatalogErrorText.value = null
     _modelAuthProviders.value = emptyList()
     _modelCatalogRefreshing.value = false
     _modelCatalogErrorText.value = null
@@ -1395,6 +1424,7 @@ class NodeRuntime private constructor(
       refreshBrandingFromGateway()
       refreshAgentsFromGateway()
       refreshModelCatalogFromGateway()
+      refreshProviderModelsFromGateway()
       refreshTalkSetupReadinessFromGateway()
       refreshCronFromGateway()
       refreshUsageFromGateway()
@@ -1410,6 +1440,13 @@ class NodeRuntime private constructor(
     if (mode == NodeRuntimeMode.ScreenshotFixture) return
     scope.launch {
       refreshModelCatalogFromGateway()
+    }
+  }
+
+  fun refreshProviderModels() {
+    if (mode == NodeRuntimeMode.ScreenshotFixture) return
+    scope.launch {
+      refreshProviderModelsFromGateway()
     }
   }
 
@@ -1881,6 +1918,7 @@ class NodeRuntime private constructor(
   val chatError: StateFlow<String?> = chat.errorText
   val chatHealthOk: StateFlow<Boolean> = chat.healthOk
   val chatThinkingLevel: StateFlow<String> = chat.thinkingLevel
+  val chatThinkingLevelSelection: StateFlow<ChatThinkingLevelSelection> = chat.thinkingLevelSelection
   val chatSelectedModelRef: StateFlow<String?> = chat.selectedModelRef
   val chatModelCatalog: StateFlow<List<GatewayModelSummary>> = chat.modelCatalog
   val chatStreamingAssistantText: StateFlow<String?> = chat.streamingAssistantText
@@ -1902,6 +1940,7 @@ class NodeRuntime private constructor(
     _gatewayDefaultAgentId.value = "main"
     _gatewayAgents.value = AndroidScreenshotFixture.agents
     _modelCatalog.value = AndroidScreenshotFixture.models
+    _providerModelCatalog.value = AndroidScreenshotFixture.models
     _modelAuthProviders.value = AndroidScreenshotFixture.providers
     _talkSetupReadiness.value =
       GatewayTalkSetupReadiness(
@@ -1976,8 +2015,11 @@ class NodeRuntime private constructor(
         prefs.setVoiceWakeMode(VoiceWakeMode.Off)
       }
 
-      if (prefs.voiceMicEnabled.value) {
+      if (initialForeground && prefs.voiceMicEnabled.value) {
         setVoiceCaptureMode(VoiceCaptureMode.ManualMic, persistManualMic = false)
+      } else if (!initialForeground && prefs.voiceMicEnabled.value) {
+        // Process recovery without an Activity must not revive microphone capture.
+        prefs.setVoiceMicEnabled(false)
       }
 
       scope.launch(Dispatchers.Default) {
@@ -2231,9 +2273,15 @@ class NodeRuntime private constructor(
     prefs.setCanvasDebugStatusEnabled(value)
   }
 
-  fun setInstalledAppsSharingEnabled(value: Boolean) {
-    if (prefs.installedAppsSharingEnabled.value == value) return
-    prefs.setInstalledAppsSharingEnabled(value)
+  fun grantInstalledAppsDisclosureConsent() {
+    if (prefs.installedAppsSharingEnabled.value) return
+    prefs.grantInstalledAppsDisclosureConsent()
+    refreshNodeSurfaceAfterSharingChange()
+  }
+
+  fun revokeInstalledAppsDisclosureConsent() {
+    if (!prefs.installedAppsSharingEnabled.value) return
+    prefs.revokeInstalledAppsDisclosureConsent()
     refreshNodeSurfaceAfterSharingChange()
   }
 
@@ -3705,6 +3753,15 @@ class NodeRuntime private constructor(
       cronRefreshGuard.publishIfCurrent(refreshGeneration) { publish() }
     }
 
+  private inline fun publishProviderModelRefresh(
+    gatewayScope: GatewayDataScope,
+    refreshGeneration: Long,
+    crossinline publish: () -> Unit,
+  ): Boolean =
+    publishGatewayData(gatewayScope) {
+      providerModelCatalogRefreshGuard.publishIfCurrent(refreshGeneration) { publish() }
+    }
+
   private suspend fun refreshBrandingFromGateway() {
     val gatewayScope = captureGatewayDataScope() ?: return
     if (!gatewayConnectionDisplay.value.isConnected) return
@@ -3762,25 +3819,7 @@ class NodeRuntime private constructor(
       val root = json.parseToJsonElement(res).asObjectOrNull() ?: return
       val defaultAgentId = root["defaultId"].asStringOrNull()?.trim().orEmpty()
       val mainKey = normalizeMainKey(root["mainKey"].asStringOrNull())
-      val agents =
-        (root["agents"] as? JsonArray)?.mapNotNull { item ->
-          val obj = item.asObjectOrNull() ?: return@mapNotNull null
-          val id = obj["id"].asStringOrNull()?.trim().orEmpty()
-          if (id.isEmpty()) return@mapNotNull null
-          val name = obj["name"].asStringOrNull()?.trim()
-          val emoji =
-            obj["identity"]
-              .asObjectOrNull()
-              ?.get("emoji")
-              .asStringOrNull()
-              ?.trim()
-          GatewayAgentSummary(
-            id = id,
-            name = name?.takeIf { it.isNotEmpty() },
-            emoji = emoji?.takeIf { it.isNotEmpty() },
-            workspaceGit = (obj["workspaceGit"] as? JsonPrimitive)?.content?.toBooleanStrictOrNull() == true,
-          )
-        } ?: emptyList()
+      val agents = parseGatewayAgentSummaries(root)
 
       publishGatewayData(gatewayScope) {
         _gatewayDefaultAgentId.value = defaultAgentId.ifEmpty { null }
@@ -3811,18 +3850,83 @@ class NodeRuntime private constructor(
       val modelsRes = requestGatewayData(gatewayScope, "models.list", "{}")
       val modelsRoot = json.parseToJsonElement(modelsRes).asObjectOrNull()
       val models = parseGatewayModels(modelsRoot?.get("models") as? JsonArray)
-      val authRes = requestGatewayData(gatewayScope, "models.authStatus", "{}")
-      val authRoot = json.parseToJsonElement(authRes).asObjectOrNull()
-      val providers = parseGatewayModelProviders(authRoot?.get("providers") as? JsonArray)
       publishGatewayData(gatewayScope) {
         _modelCatalog.value = models
-        _modelAuthProviders.value = providers
       }
     } catch (_: Throwable) {
       publishGatewayData(gatewayScope) { _modelCatalogErrorText.value = "Could not load provider catalog." }
     } finally {
       publishGatewayData(gatewayScope) { _modelCatalogRefreshing.value = false }
     }
+  }
+
+  private suspend fun refreshProviderModelsFromGateway() {
+    val refreshGeneration = providerModelCatalogRefreshGuard.begin()
+    val gatewayScope = captureGatewayDataScope() ?: return
+    publishProviderModelRefresh(gatewayScope, refreshGeneration) {
+      _providerModelCatalogRefreshing.value = true
+      _providerModelCatalogErrorText.value = null
+    }
+    if (!operatorConnected) {
+      publishProviderModelRefresh(gatewayScope, refreshGeneration) {
+        _providerModelCatalog.value = emptyList()
+        _modelAuthProviders.value = emptyList()
+        _providerModelCatalogRefreshing.value = false
+      }
+      return
+    }
+    try {
+      try {
+        val models = requestProviderModelCatalog(gatewayScope)
+        publishProviderModelRefresh(gatewayScope, refreshGeneration) {
+          _providerModelCatalog.value = models
+        }
+      } catch (err: Throwable) {
+        publishProviderModelRefresh(gatewayScope, refreshGeneration) {
+          _providerModelCatalogErrorText.value =
+            if (err is ProviderModelConfigUnsupported) {
+              "Update your Gateway to view provider model config."
+            } else {
+              "Could not load provider model config."
+            }
+        }
+      }
+
+      // Keep readiness independent from the additive provider-config view so
+      // older Gateways still populate provider status while prompting an upgrade.
+      try {
+        val providers = requestModelAuthProviders(gatewayScope)
+        publishProviderModelRefresh(gatewayScope, refreshGeneration) {
+          _modelAuthProviders.value = providers
+        }
+      } catch (_: Throwable) {
+        publishProviderModelRefresh(gatewayScope, refreshGeneration) {
+          if (_providerModelCatalogErrorText.value == null) {
+            _providerModelCatalogErrorText.value =
+              "Provider models loaded, but readiness is unavailable."
+          }
+        }
+      }
+    } finally {
+      publishProviderModelRefresh(gatewayScope, refreshGeneration) {
+        _providerModelCatalogRefreshing.value = false
+      }
+    }
+  }
+
+  private suspend fun requestProviderModelCatalog(gatewayScope: GatewayDataScope): List<GatewayModelSummary> {
+    val modelsRes =
+      requestProviderModelConfig { paramsJson ->
+        requestGatewayData(gatewayScope, "models.list", paramsJson)
+      }
+    val modelsRoot = json.parseToJsonElement(modelsRes).asObjectOrNull()
+    return parseGatewayModels(modelsRoot?.get("models") as? JsonArray)
+  }
+
+  private suspend fun requestModelAuthProviders(gatewayScope: GatewayDataScope): List<GatewayModelProviderSummary> {
+    val authRes = requestGatewayData(gatewayScope, "models.authStatus", "{}")
+    val authRoot = json.parseToJsonElement(authRes).asObjectOrNull()
+    return parseGatewayModelProviders(authRoot?.get("providers") as? JsonArray)
   }
 
   private suspend fun refreshTalkSetupReadinessFromGateway() {
@@ -5623,13 +5727,6 @@ private enum class HomeCanvasGatewayState {
   Offline,
 }
 
-data class GatewayAgentSummary(
-  val id: String,
-  val name: String?,
-  val emoji: String?,
-  val workspaceGit: Boolean = false,
-)
-
 data class GatewayModelSummary(
   val id: String,
   val name: String,
@@ -5637,6 +5734,7 @@ data class GatewayModelSummary(
   val available: Boolean?,
   val supportsVision: Boolean,
   val supportsAudio: Boolean,
+  val supportsVideo: Boolean,
   val supportsDocuments: Boolean,
   val supportsReasoning: Boolean,
   val contextTokens: Long?,
@@ -5657,11 +5755,22 @@ internal fun parseGatewayModels(models: JsonArray?): List<GatewayModelSummary> =
         available = obj.optionalBoolean("available"),
         supportsVision = "image" in inputTypes,
         supportsAudio = "audio" in inputTypes,
+        supportsVideo = "video" in inputTypes,
         supportsDocuments = "document" in inputTypes,
         supportsReasoning = obj["reasoning"].toString().trim() == "true",
-        contextTokens = obj["contextWindow"].toString().toLongOrNull() ?: obj["contextTokens"].toString().toLongOrNull(),
+        contextTokens = obj["contextTokens"].toString().toLongOrNull() ?: obj["contextWindow"].toString().toLongOrNull(),
       )
     }.orEmpty()
+
+internal class ProviderModelConfigUnsupported : Exception()
+
+internal suspend fun requestProviderModelConfig(request: suspend (String) -> String): String =
+  try {
+    request("""{"view":"provider-config"}""")
+  } catch (err: GatewayRequestRejected) {
+    if (err.gatewayError.code != "INVALID_REQUEST") throw err
+    throw ProviderModelConfigUnsupported()
+  }
 
 data class GatewayModelProviderSummary(
   val id: String,

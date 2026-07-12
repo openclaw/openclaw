@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
-import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
+import { escapeRegExp, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
 import { closeQaHttpServer } from "../../bus-server.js";
 import { QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY } from "../../qa-web-search-provider.js";
@@ -61,7 +61,7 @@ type StreamEvent =
  * - Everything else (including empty strings) → `"unknown"`
  *
  * The `/v1/messages` route always feeds `body.model` straight through,
- * so an Anthropic request with an `openai/gpt-5.5` model string is still
+ * so an Anthropic request with an `openai/gpt-5.6-luna` model string is still
  * classified as `"openai"`. That matches the parity program's convention
  * where the provider label is the source of truth, not the HTTP route.
  */
@@ -86,7 +86,7 @@ export function resolveProviderVariant(model: string | undefined): MockOpenAiPro
     return "anthropic";
   }
   // Fall back to model-name prefix matching for bare model strings like
-  // `gpt-5.5` or `claude-opus-4-8`.
+  // `gpt-5.6-luna` or `claude-opus-4-8`.
   if (/^(?:gpt-|o1-|openai-)/.test(trimmed)) {
     return "openai";
   }
@@ -169,13 +169,13 @@ const QA_BLOCK_STREAMING_PROMPT_RE = /block streaming qa check/i;
 const QA_TOOL_PROGRESS_ERROR_PROMPT_RE = /tool progress error qa check/i;
 const QA_TOOL_PROGRESS_PROMPT_RE = /tool progress qa check/i;
 const QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE = /qa group visible reply tool check/i;
+const QA_A2A_MESSAGE_TOOL_MIRROR_PROMPT_RE = /qa a2a message-tool mirror check/i;
 const QA_GROUP_MESSAGE_UNAVAILABLE_FALLBACK_PROMPT_RE =
   /qa group message unavailable fallback check/i;
 const QA_STRANDED_FINAL_RECOVERY_PROMPT_RE = /qa stranded final recovery check/i;
 const QA_STRANDED_FINAL_RETRY_FAILURE_PROMPT_RE = /qa stranded final retry failure check/i;
 const QA_STRANDED_FINAL_RETRY_PROMPT_RE = /you did not call message\(action=send\)/i;
-const QA_STRANDED_FINAL_RETRY_FAILURE_MARKER =
-  "QA-STRANDED-RETRY-FAIL-RAW";
+const QA_STRANDED_FINAL_RETRY_FAILURE_MARKER = "QA-STRANDED-RETRY-FAIL-RAW";
 const QA_TELEGRAM_CURRENT_SESSION_STATUS_PROMPT_RE = /telegram current session_status qa check/i;
 const QA_TELEGRAM_STREAM_SINGLE_MARKER = "QA-TELEGRAM-STREAM-SINGLE-OK";
 const QA_TELEGRAM_LONG_FINAL_THREE_CHUNK_PROMPT_RE = /telegram long final three chunk qa check/i;
@@ -223,6 +223,9 @@ function isStrandedFinalRetryFailureRequest(allInputText: string): boolean {
   );
 }
 const QA_SUBAGENT_DIRECT_FALLBACK_MARKER = "QA-SUBAGENT-DIRECT-FALLBACK-OK";
+const QA_NATIVE_STOP_DELAY_PROMPT_RE =
+  /subagent recovery worker native command target proof\.\s*wait until stopped\./i;
+const QA_NATIVE_STOP_DELAY_MS = 180_000;
 const QA_IMAGE_GENERATION_PROMPT_RE =
   /image generation check|capability flip image check|\/tool\s+image_generate/i;
 const QA_REASONING_ONLY_RETRY_NEEDLE =
@@ -1292,6 +1295,26 @@ function buildExplicitSessionsSpawnArgs(text: string): Record<string, unknown> |
   };
 }
 
+function buildQaA2aMessageToolMirrorSessionsSendArgs(text: string): Record<string, unknown> | null {
+  if (!QA_A2A_MESSAGE_TOOL_MIRROR_PROMPT_RE.test(text)) {
+    return null;
+  }
+  const sessionKey =
+    extractQuotedToolArg(text, "sessionKey") ?? extractBareToolArg(text, "sessionKey");
+  if (!sessionKey) {
+    return null;
+  }
+  const marker =
+    extractExactMarkerDirective(text) ??
+    extractExactReplyDirective(text) ??
+    "QA-A2A-MESSAGE-TOOL-MIRROR-OK";
+  return {
+    sessionKey,
+    message: `qa group visible reply tool check. Use the visible room reply path. exact marker: \`${marker}\``,
+    timeoutSeconds: 0,
+  };
+}
+
 function extractToolErrorForNamedCall(params: {
   input: ResponsesInputItem[];
   name: string;
@@ -1690,7 +1713,7 @@ function buildAssistantText(
     ].join("\n");
   }
   if (toolOutput) {
-    const snippet = toolOutput.replace(/\s+/g, " ").trim().slice(0, 220);
+    const snippet = truncateUtf16Safe(toolOutput.replace(/\s+/g, " ").trim(), 220);
     return `Protocol note: I reviewed the requested material. Evidence snippet: ${snippet || "no content"}`;
   }
   if (finishExactlyDirective) {
@@ -2569,6 +2592,15 @@ async function buildResponsesPayload(
     }
     return buildAssistantEvents(buildStrandedFinalRecoveryText());
   }
+  if (QA_A2A_MESSAGE_TOOL_MIRROR_PROMPT_RE.test(prompt)) {
+    if (toolOutput) {
+      return buildAssistantEvents("");
+    }
+    const sessionsSendArgs = buildQaA2aMessageToolMirrorSessionsSendArgs(prompt);
+    if (sessionsSendArgs && hasDeclaredTool(body, "sessions_send")) {
+      return buildToolCallEventsWithArgs("sessions_send", sessionsSendArgs);
+    }
+  }
   if (QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE.test(allInputText)) {
     const marker = exactMarkerDirective ?? exactReplyDirective ?? "QA-GROUP-TOOL-OK";
     if (!toolOutput && hasDeclaredTool(body, "message")) {
@@ -3194,11 +3226,8 @@ async function buildResponsesPayload(
   if (isGroupChat && isBaselineUnmentionedChannelChatter && !toolOutput) {
     return buildAssistantEvents("NO_REPLY");
   }
-  if (
-    /subagent recovery worker/i.test(prompt) &&
-    !/interrupted by a gateway reload/i.test(prompt)
-  ) {
-    await sleep(60_000);
+  if (QA_NATIVE_STOP_DELAY_PROMPT_RE.test(prompt)) {
+    await sleep(QA_NATIVE_STOP_DELAY_MS);
   }
   return buildAssistantEvents(buildAssistantText(input, body, scenarioState));
 }
@@ -3208,7 +3237,7 @@ async function buildResponsesPayload(
 // ---------------------------------------------------------------------------
 //
 // The QA parity gate needs two comparable scenario runs: one against the
-// "candidate" (openai/gpt-5.5) and one against the "baseline"
+// "candidate" (openai/gpt-5.6-luna) and one against the "baseline"
 // (anthropic/claude-opus-4-8). The OpenAI mock above already dispatches all
 // the scenario prompt branches we care about. Rather than duplicating that
 // machinery, the /v1/messages route below translates Anthropic request
@@ -3727,8 +3756,8 @@ export async function startQaMockOpenAiServer(params?: {
       if (req.method === "GET" && url.pathname === "/v1/models") {
         writeJson(res, 200, {
           data: [
-            { id: "gpt-5.5", object: "model" },
-            { id: "gpt-5.5-alt", object: "model" },
+            { id: "gpt-5.6-luna", object: "model" },
+            { id: "gpt-5.6-luna-alt", object: "model" },
             { id: "gpt-image-1", object: "model" },
             { id: "gpt-4o-transcribe", object: "model" },
             { id: "text-embedding-3-small", object: "model" },
