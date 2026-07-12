@@ -36,7 +36,7 @@ const GAP = 3;
 const BANNER_WIDTH = MASCOT_WIDTH + GAP + 48;
 const ROWS = MASCOT_ART.length;
 
-export type ClawBannerOptions = {
+type ClawBannerOptions = {
   columns?: number;
   isTty?: boolean;
   rich?: boolean;
@@ -197,8 +197,3 @@ export async function printClawBanner(
   });
   (options.write ?? ((chunk: string) => process.stdout.write(chunk)))("\n");
 }
-
-export const testing = {
-  staticBannerLines,
-  BANNER_WIDTH,
-};

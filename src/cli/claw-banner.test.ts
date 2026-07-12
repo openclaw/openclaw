@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { printClawBanner, testing } from "./claw-banner.js";
+import { printClawBanner } from "./claw-banner.js";
 
 const runtimeStub = () => {
   const log = vi.fn();
@@ -22,6 +22,14 @@ async function runAnimated(rng: () => number) {
     write: (chunk) => chunks.push(chunk),
   });
   return chunks;
+}
+
+async function runStatic() {
+  const { runtime, log } = runtimeStub();
+  await printClawBanner(runtime, { columns: 120, isTty: false, env: {} });
+  return stripAnsi(String(log.mock.calls[0]?.[0]))
+    .split("\n")
+    .filter((row) => row.length > 0);
 }
 
 describe("printClawBanner", () => {
@@ -48,6 +56,7 @@ describe("printClawBanner", () => {
   });
 
   it("animates on a rich TTY and settles on the exact static banner", async () => {
+    const staticRows = await runStatic();
     const chunks = await runAnimated(() => 0);
     expect(chunks[0]).toBe("\x1b[?25l");
     expect(chunks).toContain("\x1b[?25h");
@@ -56,7 +65,7 @@ describe("printClawBanner", () => {
     const finalRows = stripAnsi(frames[frames.length - 1] ?? "")
       .split("\n")
       .filter((row) => row.length > 0);
-    expect(finalRows).toEqual(testing.staticBannerLines().map((line) => stripAnsi(line)));
+    expect(finalRows).toEqual(staticRows);
   });
 
   it("installs scoped signal handlers only while animating", async () => {
