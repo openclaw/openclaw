@@ -28,21 +28,27 @@
     <string name="native_010f6550a1c8f554" formatted="false">"Lampiran tidak didukung"</string>
     <string name="native_01267be21eb77392" formatted="false">"0 = tepat"</string>
     <string name="native_0174f83136630e7e">"%1$s accounts"</string>
+    <string name="native_01ac1c298e0cbd9a" formatted="false">"Cron changes require operator.admin. Setup codes intentionally do not grant it. Reconnect with the gateway\'s shared token or password to request admin access. If this device still lacks it, approve the pending scope upgrade from an existing admin client."</string>
     <string name="native_01bcfe7a9296b6d6" formatted="false">"Apply Patch"</string>
     <string name="native_01d937a18e381125" formatted="false">"Nyalakan suara speaker"</string>
     <string name="native_024f9605eda4caf4" formatted="false">"Consecutive Skips"</string>
     <string name="native_027d7c7db6d8b3ef" formatted="false">"Folder ini belum memiliki file."</string>
     <string name="native_0303e18246708180" formatted="false">"Not connected"</string>
+    <string name="native_031a8f0f659df890" formatted="false">"Failed"</string>
     <string name="native_03494b0d1f803522" formatted="false">"Kamera"</string>
     <string name="native_040435e3caaf64b1" formatted="false">"Kode penyiapan menggunakan ID zona IPv6. Gunakan alamat IPv6 tanpa cakupan atau nama host LAN."</string>
+    <string name="native_040d2b3689dd1d4c" formatted="false">"Attachment"</string>
     <string name="native_043d5c96a8cd2805" formatted="false">"Cron Jobs"</string>
     <string name="native_0562082491cc26a2">"%1$s · %2$s"</string>
     <string name="native_058617b3573b4e6d">"%1$s proposal?"</string>
     <string name="native_05dd0c51d15c5db7" formatted="false">"AGEN AKTIF"</string>
+    <string name="native_0621d308bb3df463" formatted="false">"1 scheduled"</string>
     <string name="native_0692ff7848b2cfc2" formatted="false">"Larik JSON argv perintah"</string>
+    <string name="native_06ee275ccdbbf862" formatted="false">"Could not read that image. Choose a clear screenshot or image of the QR from openclaw qr."</string>
     <string name="native_06fcc3f73af64b5b">"Could not %1$s Skill Workshop proposal."</string>
     <string name="native_0728ba404eb8f8bd" formatted="false">"Gateway mencatat persetujuan sekali."</string>
     <string name="native_073c1634c496cdb6" formatted="false">"status"</string>
+    <string name="native_07bcb0f3c324a358">"OpenClaw only checks location when your paired Gateway requests it. On the next Android screen, choose %1$s to allow checks while the app is in the background."</string>
     <string name="native_084e990a49ba65e6" formatted="false">"reject"</string>
     <string name="native_08795ba031bcd121" formatted="false">"Contrast"</string>
     <string name="native_088e0e5ebc96c6ac" formatted="false">"Ganti penyiapan gateway?"</string>
@@ -53,10 +59,12 @@
     <string name="native_0a708e7b03aaf1fa" formatted="false">"list pins"</string>
     <string name="native_0ab0e1629576aecf" formatted="false">"Hubungkan ke Gateway untuk memuat proposal Skill Workshop."</string>
     <string name="native_0b0c15d15d686c72" formatted="false">"Kode penyiapan tidak diterima"</string>
+    <string name="native_0b8ccd565be7d1c3" formatted="false">"Open cron job detail"</string>
     <string name="native_0b8d896d4967fbdd" formatted="false">"Realtime transcription provider is not configured."</string>
     <string name="native_0b914a09797ede88" formatted="false">"Tampilkan Aplikasi Sistem"</string>
     <string name="native_0bb9ff3a7312f664" formatted="false">"Update your Gateway to view provider model config."</string>
     <string name="native_0c079c05c9469ddb" formatted="false">"Sending dictation"</string>
+    <string name="native_0c3845dcd2f0f683" formatted="false">"Inspect this proposal to load its markdown."</string>
     <string name="native_0c3ea4e2f12153e7">"buka OpenClaw dan tanyakan %1$s"</string>
     <string name="native_0c79a9c222840ed0" formatted="false">"Diterapkan"</string>
     <string name="native_0c8056e18fdf290c" formatted="false">"Panggilan alat chat yang menunggu dalam sesi aktif tetap terlihat di sini."</string>
@@ -71,6 +79,7 @@
     <string name="native_0ee30822ed35a792">"%1$s queued"</string>
     <string name="native_0f4c8529742b31ea" formatted="false">"Mulai Chat"</string>
     <string name="native_0f56cc286a4f23d8" formatted="false">"Certificate review needed"</string>
+    <string name="native_0f822f33a3100b5c">"Monitoring · %1$s sessions"</string>
     <string name="native_0f8fe3a9688138a1" formatted="false">"Buka permukaan Canvas saat ini untuk memeriksa atau berinteraksi dengannya."</string>
     <string name="native_100ac08064a6d586" formatted="false">"Tidak ada sesi terbaru"</string>
     <string name="native_1039e92fa05c1279" formatted="false">"Status Gateway, kesiapan node ponsel, dan aliran log terbaru."</string>
@@ -83,9 +92,11 @@
     <string name="native_1196c7b1e0e55580" formatted="false">"reactions"</string>
     <string name="native_11a6767d5674c7e4" formatted="false">"Selesai"</string>
     <string name="native_11ac5b8f1c75423c">"This skill needs %1$s setup item(s). Android shows what is installed; setup/config changes stay on desktop or CLI."</string>
+    <string name="native_11e18d6748aa9128" formatted="false">"Version and update"</string>
     <string name="native_11f37f9652a47b5b" formatted="false">"OpenClaw akan menampilkan persetujuan, pekerjaan yang gagal, dan masalah saluran di sini."</string>
     <string name="native_1242bf5561713a98" formatted="false">"Terlalu banyak berbagi yang menunggu untuk ditambahkan."</string>
     <string name="native_1251aefc12b2b10e" formatted="false">"Hapus sesi?"</string>
+    <string name="native_12698ce1ea5cd4ab" formatted="false">"Skipped"</string>
     <string name="native_1291833ee42d8143" formatted="false">"Gunakan alamat LAN komputer Gateway atau nama host jarak jauh yang aman."</string>
     <string name="native_130011756125313c" formatted="false">"Aktif"</string>
     <string name="native_13798c3256e792c8" formatted="false">"Bicara Realtime"</string>
@@ -93,27 +104,33 @@
     <string name="native_13ba4cde12390943" formatted="false">"Persetujuan diizinkan sekali."</string>
     <string name="native_13e10588f9f959cd" formatted="false">"Penyiapan penyedia"</string>
     <string name="native_14638daf580b6ee0" formatted="false">"Panduan penyiapan Android"</string>
+    <string name="native_146c4d822cea4531">"%1$s apps blocked from forwarding."</string>
     <string name="native_1485bc093cdbef6d" formatted="false">"Perangkat yang Dipasangkan"</string>
     <string name="native_14d9bf289ff83113" formatted="false">"Konfigurasikan suara, transport, dan pemutaran."</string>
+    <string name="native_1520b570498730a0">"%1$s pending"</string>
     <string name="native_155106be1173d757" formatted="false">"Nama perangkat"</string>
     <string name="native_15b61974b2707a7b" formatted="false">"Lokasi"</string>
     <string name="native_16196f98cecd6839" formatted="false">"mis. America/New_York"</string>
     <string name="native_16524d7409d37507" formatted="false">"Target sesi"</string>
     <string name="native_16a0eeb0791b6c92" formatted="false">"snapshot"</string>
+    <string name="native_170421cc4a4c2f30" formatted="false">"Node host"</string>
     <string name="native_1709305c9fa966d1" formatted="false">"Level"</string>
     <string name="native_172b997ffbc8c9a7" formatted="false">"Tutup Pemilih Aplikasi"</string>
     <string name="native_1742f06a4acda42b" formatted="false">"Tempel token Gateway bersama atau token yang diterbitkan operator."</string>
     <string name="native_1765d50b68fd6687" formatted="false">"Diagnostik gateway disalin"</string>
+    <string name="native_1770865a7ea3f15c" formatted="false">"Audio error"</string>
     <string name="native_17ac6760df79656a" formatted="false">"Ganti penyiapan"</string>
     <string name="native_1810407f5ab7093c" formatted="false">"Tindakan cepat"</string>
     <string name="native_181553f2bfe78521" formatted="false">"Send failed: Chat failed before the run started; try again."</string>
     <string name="native_186352a881d0550e" formatted="false">"Mikrofon"</string>
+    <string name="native_187cb2576a1f78c4" formatted="false">"Chat is still checking Gateway health."</string>
     <string name="native_18889b74b0f24490" formatted="false">"Mengubah teks Android yang telah diterjemahkan OpenClaw. Layar dengan teks hanya bahasa Inggris tetap tidak berubah."</string>
     <string name="native_18e5a1a209b5873f">"+%1$s lagi"</string>
     <string name="native_18ebf1bbc5b1c317" formatted="false">"thread create"</string>
     <string name="native_18f2a0947f9d6523" formatted="false">"Diblokir"</string>
     <string name="native_1901b20a767ffb3b" formatted="false">"Could not load cron job."</string>
     <string name="native_194a05367fb28913">"%1$s/%2$s siap"</string>
+    <string name="native_199e261f8ee0e97f" formatted="false">"Connected (operator offline)"</string>
     <string name="native_19fc7a47df16fb1f" formatted="false">"Capability unapproved"</string>
     <string name="native_1a3421ff23362bbc" formatted="false">"Setujui akses node"</string>
     <string name="native_1a78d280d076b8ac" formatted="false">"Tidak ada pekerjaan terjadwal."</string>
@@ -139,14 +156,17 @@
     <string name="native_1f5bb9791a310e13" formatted="false">"hide"</string>
     <string name="native_1f64fff08d787e73" formatted="false">"runs"</string>
     <string name="native_1f7fb11b1887a589" formatted="false">"Kata sandi Gateway diperlukan. Masukkan lagi atau edit koneksi ini."</string>
+    <string name="native_2007bca1ca695a16" formatted="false">"This job changed while you were editing. Revert to the latest gateway version before saving."</string>
     <string name="native_205dac381e0872e8" formatted="false">"Teks kejadian"</string>
     <string name="native_20611c3780d1bae0" formatted="false">"Transkrip langsung"</string>
     <string name="native_2065cc867eba1b39" formatted="false">"Could not load provider model config."</string>
+    <string name="native_207ccb22d618db05">"%1$s app allowed to forward."</string>
     <string name="native_209b9e597963e7e1" formatted="false">"Penyiapan suara"</string>
     <string name="native_214d4932fc767e8f" formatted="false">" · Talk: Speaking"</string>
     <string name="native_217119a61e20f1f2" formatted="false">"Penggantian opsional"</string>
     <string name="native_21b111cbfe6e8fca" formatted="false">"Default"</string>
     <string name="native_21bddf13c6a8d4b3" formatted="false">"Persetujuan perintah"</string>
+    <string name="native_21c71243e8cba796" formatted="false">"The app and Gateway use incompatible protocol versions. Update OpenClaw on both, then retry."</string>
     <string name="native_21c9581b9057e228" formatted="false">"Segarkan Layar"</string>
     <string name="native_225d29f6201e1a63" formatted="false">"Dengarkan"</string>
     <string name="native_22965568d22a14ee" formatted="false">"Terhubung"</string>
@@ -162,17 +182,23 @@
     <string name="native_2419329067823cab" formatted="false">"search"</string>
     <string name="native_24c55f66c5795fc5" formatted="false">"Respons sebelumnya sudah mengizinkan perintah ini sekali."</string>
     <string name="native_24cacf5004bf68ae" formatted="false">"generate"</string>
+    <string name="native_24e1028cd7aef320" formatted="false">"Use only on a trusted private network."</string>
     <string name="native_255b076dd8285543" formatted="false">"Cari pengaturan"</string>
     <string name="native_255e7e69c14a57f0" formatted="false">"Talk is live"</string>
     <string name="native_25872d47f3f6a397" formatted="false">"Autentikasi Gateway belum dikonfigurasi. Edit koneksi ini dan coba lagi."</string>
     <string name="native_259ccea050255e4f" formatted="false">"Gagal: endpoint aman tercapai, tetapi verifikasi sidik jari TLS kehabisan waktu. Periksa Tailscale Serve atau TLS gateway, lalu coba lagi."</string>
     <string name="native_25ce1a09ddc1f2f0" formatted="false">"Dikte"</string>
     <string name="native_2600f92dfc174023" formatted="false">"Buka Pemilih Aplikasi"</string>
+    <string name="native_261de9be5f4a3b0a" formatted="false">"No pending approvals"</string>
     <string name="native_262121c5372be8af" formatted="false">"edit"</string>
     <string name="native_262c897a1f408b0b" formatted="false">"Hubungkan ke Gateway Anda"</string>
+    <string name="native_2682bd813a3bccbc" formatted="false">"Enter the setup code from openclaw qr."</string>
+    <string name="native_268f14bbfe119c1e" formatted="false">"Diagnostik"</string>
+    <string name="native_2748442ae65e27e8">"%1$s scheduled"</string>
     <string name="native_275976081ce1abf6" formatted="false">"react"</string>
     <string name="native_279b44d2ab4b40c0" formatted="false">"Agen"</string>
     <string name="native_27b80374e1151af6" formatted="false">"Menghubungkan kembali…"</string>
+    <string name="native_27bdae83e7cc0f6e" formatted="false">"Return to setup"</string>
     <string name="native_27ce1d1bf4270020" formatted="false">"send"</string>
     <string name="native_27d3187bb72ef714" formatted="false">"Tidak dapat menguji koneksi"</string>
     <string name="native_2821f0168d6dd9df" formatted="false">"Ubah perangkat ini menjadi node OpenClaw yang aman untuk chat, suara, kamera, dan alat perangkat."</string>
@@ -182,6 +208,7 @@
     <string name="native_29887a5ff9846ccc" formatted="false">"Bagikan"</string>
     <string name="native_29d5c526bab8bf50" formatted="false">"Kamera diaktifkan"</string>
     <string name="native_2a1446dd9ce169e9" formatted="false">"Telegram, WhatsApp, email, dan saluran lainnya muncul di sini setelah penyiapan."</string>
+    <string name="native_2a33d984de881573" formatted="false">"Network error"</string>
     <string name="native_2bc8446b79ad43f2">"Konfigurasikan penyedia %1$s di Gateway"</string>
     <string name="native_2bda9b4dfbabfdb1" formatted="false">"kill"</string>
     <string name="native_2bfc3471571e5c00" formatted="false">"Persetujuan"</string>
@@ -191,8 +218,10 @@
     <string name="native_2cad0766accc2d3f" formatted="false">"Ganti nama sesi"</string>
     <string name="native_2d4dfe885f84629e" formatted="false">"Izinkan akses pustaka foto."</string>
     <string name="native_2d6416405eb44982" formatted="false">"Respons sebelumnya sudah menyelesaikan persetujuan ini."</string>
+    <string name="native_2e0078a8322d6f1f" formatted="false">"Availability unknown"</string>
     <string name="native_2e1a9e093a59670c" formatted="false">"Set Up Talk"</string>
     <string name="native_2e4aaf05df1cbfb3" formatted="false">"Ekstra"</string>
+    <string name="native_2ea040935d961915" formatted="false">"Gateway paired. Waiting for operator access."</string>
     <string name="native_2eacc5e02758c0b0" formatted="false">"Lampirkan gambar"</string>
     <string name="native_2eb64d6399aaa0eb" formatted="false">"Pilih apa yang sampai ke OpenClaw."</string>
     <string name="native_2ed4c16262ebec9a" formatted="false">"Capability reapproval pending"</string>
@@ -209,8 +238,10 @@
     <string name="native_30e08bdeea992a84" formatted="false">"Session Status"</string>
     <string name="native_30e9bef4f7cdb531" formatted="false">"Buka pratinjau gambar"</string>
     <string name="native_310ff200149b44a3" formatted="false">"close"</string>
+    <string name="native_31347fbd80416902" formatted="false">"That looks like a setup code. Go back and choose Setup Gateway, then Use setup code."</string>
     <string name="native_31e392d1c0378bec" formatted="false">"Terapkan"</string>
     <string name="native_31fbef162594de01" formatted="false">"Lanjutkan"</string>
+    <string name="native_3217b0565007c0ae">"Monitoring · %1$s scheduled jobs"</string>
     <string name="native_3227aa9666253f7a" formatted="false">"Jelajahi"</string>
     <string name="native_32d3fedad4cfedcc" formatted="false">"tabs"</string>
     <string name="native_331551b0de4157c9" formatted="false">"Menunggu"</string>
@@ -233,6 +264,7 @@
     <string name="native_35af8190fbe6549c" formatted="false">"Selalu mengizinkan pemeriksaan lokasi yang diminta saat OpenClaw berjalan di latar belakang; Android menampilkan ini dalam notifikasi node persisten."</string>
     <string name="native_35bca7671ee6700b" formatted="false">"Kejadian sistem"</string>
     <string name="native_35cb408d8973ebba" formatted="false">"Hubungkan Gateway untuk melihat penyedia"</string>
+    <string name="native_35f2ff4f129d2a63" formatted="false">"Gateway paired. Waiting for node capability approval."</string>
     <string name="native_3643db520673cdf0" formatted="false">"Tutup Canvas"</string>
     <string name="native_364802f3894668df" formatted="false">"Tulis Kontak"</string>
     <string name="native_36c725ddb20f8bd3" formatted="false">"Penyiapan Penyedia Talk"</string>
@@ -253,12 +285,15 @@
     <string name="native_395407e069aaa185" formatted="false">"Microphone permission required"</string>
     <string name="native_3961dba0e09c90f4" formatted="false">"Connect the gateway to load Skill Workshop proposals."</string>
     <string name="native_39bd8d494d8df83b" formatted="false">"Semua sistem beroperasi"</string>
+    <string name="native_3a1f56623c408220" formatted="false">"Gateway unreachable"</string>
     <string name="native_3a386d2bb69adffc" formatted="false">"OC"</string>
     <string name="native_3a5ecca188c0579c" formatted="false">"Updated"</string>
+    <string name="native_3a65cf1204f18864" formatted="false">"Connected (node offline)"</string>
     <string name="native_3ace60b0a0c1b6c9" formatted="false">"restart"</string>
     <string name="native_3b28b535950f8175" formatted="false">"Dictation is listening"</string>
     <string name="native_3b851469ea31d489" formatted="false">"Pilih dan periksa asisten yang tersedia di gateway ini."</string>
     <string name="native_3be0085a6bd88cdd" formatted="false">"Mode bicara aktif"</string>
+    <string name="native_3bee4ede6bf4436c" formatted="false">"Working · 1 active run"</string>
     <string name="native_3c1427823ea079f9" formatted="false">"Could not load cron jobs."</string>
     <string name="native_3c6168bbf86e6e4b" formatted="false">"Setuju dan Aktifkan"</string>
     <string name="native_3d013d4e9cf973f9" formatted="false">"Coba Chat, Voice, Sessions, Providers, atau Settings."</string>
@@ -277,6 +312,7 @@
     <string name="native_4072c873764625e9" formatted="false">"Another cron action is still finishing."</string>
     <string name="native_407d5608bf93239d">"Cooldown %1$s"</string>
     <string name="native_4122a5c9825224af" formatted="false">"Attachments are too large to queue for one message; remove some and try again."</string>
+    <string name="native_4186107d2194d09a" formatted="false">"Secure connection is required for this host."</string>
     <string name="native_41df9f586511e084" formatted="false">"Ponsel dapat menjangkau Gateway"</string>
     <string name="native_41ed52921661c7f0" formatted="false">"Gateway"</string>
     <string name="native_4287d54ad5e78985" formatted="false">"Pekerjaan OpenClaw terjadwal dari gateway Anda."</string>
@@ -291,17 +327,21 @@
     <string name="native_4481c2190a1b4bca" formatted="false">"Ekspresi cron, mis. 0 9 * * *"</string>
     <string name="native_4499e7b7e1c9ddbc" formatted="false">"Kembali ke suara"</string>
     <string name="native_449f5a775762cdc5" formatted="false">"Bicara"</string>
+    <string name="native_45a64dc17588f2ca">"%1$s/%2$s online"</string>
+    <string name="native_45a8847c4a6b2c81">"%1$s apps allowed to forward."</string>
     <string name="native_460b3a7da007b7af" formatted="false">"Chat"</string>
     <string name="native_4632a2cfafca4e0d" formatted="false">"Akses mikrofon diperlukan."</string>
     <string name="native_464c4ffd019e1e96" formatted="false">"Edit"</string>
     <string name="native_46fa69e51b74768a" formatted="false">"Salin diagnostik"</string>
     <string name="native_4724f344c1c0e4a1" formatted="false">"Scheduled"</string>
     <string name="native_4759498ac2a719c6" formatted="false">"Buat"</string>
+    <string name="native_48b1f5bc8ba4e568">"Speech error (%1$s)"</string>
     <string name="native_48dc76dfa23ae03f" formatted="false">"Masalah"</string>
     <string name="native_4928615473a8ea60">"Account %1$s"</string>
     <string name="native_49bb137d12031cbc" formatted="false">"Suggest Task"</string>
     <string name="native_49c266baaaa70981" formatted="false">"Cari"</string>
     <string name="native_49c4605816cfbf30" formatted="false">"Mendengarkan"</string>
+    <string name="native_4a5f43178168662b" formatted="false">"A Gateway update is available. Run the update from the Web UI or CLI when you are ready."</string>
     <string name="native_4a81f093cd479494" formatted="false">"Tidak ada persetujuan gateway."</string>
     <string name="native_4a823118b9ba8baa" formatted="false">"Host"</string>
     <string name="native_4b0f0f4e5466515b" formatted="false">"Transkripsikan lalu kirim"</string>
@@ -323,13 +363,18 @@
     <string name="native_4e25d34a20313a61" formatted="false">"Izin diperlukan"</string>
     <string name="native_4e35d595e6975128" formatted="false">"Aktivitas sesi"</string>
     <string name="native_4ec30e9d85725d41" formatted="false">"Allowlist"</string>
+    <string name="native_4eeef3113a33ca1c" formatted="false">"Cron run finished."</string>
     <string name="native_4efca0d10c5feb8e" formatted="false">"Tentang"</string>
+    <string name="native_4f1bc100d1dccc1e" formatted="false">"No setup QR code was found in that image. Choose the QR generated by openclaw qr, or enter the setup code manually."</string>
     <string name="native_4fe3cdd404ea0290" formatted="false">"permissions"</string>
     <string name="native_5047cfb3b607e7d0" formatted="false">"Hubungkan gateway untuk memuat node dan perangkat yang dipasangkan."</string>
     <string name="native_5083cd4b96b0d09d" formatted="false">"Tidak ada Skills"</string>
     <string name="native_50bae925225d054b" formatted="false">"Balasan diputar dengan suara"</string>
     <string name="native_50c8b81faf51e7d1" formatted="false">"Tandai sebagai sudah dibaca"</string>
+    <string name="native_50eeec67b7dae6d1" formatted="false">"Node approval pending"</string>
     <string name="native_51391bf0ab33e827" formatted="false">"wake"</string>
+    <string name="native_51ad891dd2c5d288">"%1$s proposals"</string>
+    <string name="native_51bc9903f8056c05" formatted="false">"Gateway authentication needs attention."</string>
     <string name="native_51bfffbcdbcfbc00" formatted="false">"Detail koneksi"</string>
     <string name="native_522ff63cdfa8c9a7" formatted="false">"Milidetik"</string>
     <string name="native_526e0087cc3f254d" formatted="false">"Deskripsi"</string>
@@ -353,6 +398,7 @@
     <string name="native_544d9e42216c2ac0" formatted="false">"Repeating"</string>
     <string name="native_54b41550b1247912" formatted="false">"Cari OpenClaw"</string>
     <string name="native_54d5c8a4eb7898dc" formatted="false">"Sesi utama"</string>
+    <string name="native_54e08ca4a25fe3f1">"%1$s pending"</string>
     <string name="native_55546edf686ab168" formatted="false">"Tidak ada aplikasi yang dapat membagikan pesan ini"</string>
     <string name="native_55656b5e434f4c06" formatted="false">"Tutup pencarian"</string>
     <string name="native_557b3a39eaf032ea" formatted="false">"Perintah untuk dipantau"</string>
@@ -386,6 +432,7 @@
     <string name="native_5aed37ac02104e71" formatted="false">"Buka pekerjaan untuk memeriksa konfigurasi dan riwayat prosesnya. Koneksi dengan cakupan admin juga dapat menjalankan, mengedit, mengaktifkan, menonaktifkan, atau menghapusnya."</string>
     <string name="native_5b36e77f2018303f" formatted="false">"Kembalikan Perubahan"</string>
     <string name="native_5b4ddab77c412d6a" formatted="false">"Perintah persetujuan disalin"</string>
+    <string name="native_5b7bb1fa97159bc0" formatted="false">"Cron Job"</string>
     <string name="native_5b7c4c081e9c5810" formatted="false">"Delivery Status"</string>
     <string name="native_5ba2fce40231fd9c" formatted="false">"Kode QR tidak diterima"</string>
     <string name="native_5bc16f7d054b082e" formatted="false">"Your voice command center."</string>
@@ -405,10 +452,13 @@
     <string name="native_5ef0f6acc538715a" formatted="false">"OpenClaw speaking"</string>
     <string name="native_5f04ae9ed6a865bb" formatted="false">"Menghubungkan..."</string>
     <string name="native_5f09a378bea71719" formatted="false">" · Location: Always"</string>
+    <string name="native_5f2c3c8856593678" formatted="false">"Load from gateway"</string>
     <string name="native_5f9bbdd124f822a2" formatted="false">"Perlu"</string>
     <string name="native_5fa7aac5375c5815" formatted="false">"Siap"</string>
     <string name="native_5fc1927ca948f31c" formatted="false">"Diary sedang menunggu entri pertamanya."</string>
     <string name="native_600c9c27960112a6" formatted="false">"Halaman langsung"</string>
+    <string name="native_6053d3adaa5b8341" formatted="false">"Ready for chat and voice"</string>
+    <string name="native_60730b6ecdee4be7">"Connected (operator: %1$s)"</string>
     <string name="native_608b57eae065c589" formatted="false">"Pemasangan Gateway selesai. Setujui ponsel ini sebagai node agar OpenClaw dapat menggunakan kemampuan perangkat yang Anda aktifkan."</string>
     <string name="native_60ea1847c2ba5446" formatted="false">"Response aborted"</string>
     <string name="native_614b8348a2dbe46b">"%1$s ditahan"</string>
@@ -420,12 +470,14 @@
     <string name="native_62677f693c313cc7">"%1$s %2$s"</string>
     <string name="native_62a2fed3d6e08c44" formatted="false">"pending"</string>
     <string name="native_62bacf1d615ada7e" formatted="false">"Menyiapkan catatan suara…"</string>
+    <string name="native_63678608617bcb03" formatted="false">"Cron job is not due yet."</string>
     <string name="native_63734ae10b7e46e9" formatted="false">"Subsystem"</string>
     <string name="native_6386ffec7ad722df" formatted="false">"Saat perintah keluar"</string>
     <string name="native_639a40e82b9a96f0" formatted="false">"Koneksi"</string>
     <string name="native_642ef160a6d414e4" formatted="false">"Tambahkan gateway"</string>
     <string name="native_64f24041b18e3654" formatted="false">"Beberapa pemeriksaan status saluran tidak selesai."</string>
     <string name="native_64f46a7526a186d2" formatted="false">"pin"</string>
+    <string name="native_6516c565123b19ad">"Copy %1$s"</string>
     <string name="native_651db8587b40535e" formatted="false">"Dipasangkan"</string>
     <string name="native_65736a7308f38333" formatted="false">"This cron job already has a queued run."</string>
     <string name="native_65d45123f8f45969" formatted="false">"Rekam catatan suara"</string>
@@ -470,6 +522,7 @@
     <string name="native_6e56137e21d3222a" formatted="false">"Layar"</string>
     <string name="native_6e8a74ada297ff53" formatted="false">"Running Since"</string>
     <string name="native_6e917656866ca5b0" formatted="false">"ID zona IPv6 tidak didukung. Gunakan alamat IPv6 tanpa cakupan atau nama host LAN."</string>
+    <string name="native_6ea82f807eb2e4a3" formatted="false">"Sent — confirming delivery…"</string>
     <string name="native_6f277ebd346b79a6" formatted="false">"Kode penyiapan"</string>
     <string name="native_6f371721dd8088ad" formatted="false">"Segarkan chat"</string>
     <string name="native_6f45b0005e3b7c18" formatted="false">"Interval"</string>
@@ -509,6 +562,8 @@
     <string name="native_75081b593d15cf6e" formatted="false">"Dinonaktifkan"</string>
     <string name="native_752ae6f8d8349c75" formatted="false">"Masih menunggu persetujuan"</string>
     <string name="native_757bfc36ce2e0428" formatted="false">"Pastikan OpenClaw dapat berbicara dengan jelas di ponsel ini."</string>
+    <string name="native_75c4bbf668b72cbf">"Working · %1$s active runs"</string>
+    <string name="native_75db671fb2e8cca9" formatted="false">"Command working directory"</string>
     <string name="native_762ebb70ef0ea2e8" formatted="false">"Nama grup"</string>
     <string name="native_763abbaa7279da66" formatted="false">"Pilih dari galeri"</string>
     <string name="native_76900f1bfd16c8d4" formatted="false">"Kembali"</string>
@@ -529,10 +584,13 @@
     <string name="native_79a68a0d42388125" formatted="false">"Detail log gateway yang dapat dibaca."</string>
     <string name="native_79a7ab236717f90d" formatted="false">"Tinjau proposal skill yang dihasilkan sebelum menjadi Skills aktif."</string>
     <string name="native_79d3a1f108e8d9c3" formatted="false">"Dibundel"</string>
+    <string name="native_79d3d8a05bab3172">"%1$s available"</string>
     <string name="native_7a1058bb81879dbd" formatted="false">"Gateway Pending"</string>
     <string name="native_7a211017043ea5cb" formatted="false">"Authentication needed"</string>
     <string name="native_7ac362063b9f2046" formatted="false">"Node"</string>
     <string name="native_7adcb107d8b93c15" formatted="false">"OpenClaw is replying"</string>
+    <string name="native_7b18312f3818b69c">"%1$s ready"</string>
+    <string name="native_7bda957a27b2f876" formatted="false">"Queued — sends when reconnected"</string>
     <string name="native_7c5c9a83536e33d2" formatted="false">"Checking pairing access"</string>
     <string name="native_7cc20d4753b8fd45" formatted="false">"Menjalankan alat..."</string>
     <string name="native_7d2227b96bc40069" formatted="false">"Memeriksa persetujuan…"</string>
@@ -548,15 +606,19 @@
     <string name="native_7f1e323b6272c620" formatted="false">"Sehat"</string>
     <string name="native_7f816072c1c6a23b" formatted="false">"Argumen"</string>
     <string name="native_7fc04e3053dfde2a" formatted="false">"Install Options"</string>
+    <string name="native_7fe837d777c45948">"In %1$sh"</string>
+    <string name="native_8026a36a8868431c" formatted="false">"Gateway approval is pending. Run this on the gateway host:"</string>
     <string name="native_812fc837108361ba" formatted="false">"Akses admin diperlukan"</string>
     <string name="native_8193ee8a22d25208" formatted="false">"Sematkan model"</string>
     <string name="native_82250171708918de">"After %1$s"</string>
     <string name="native_82990a093599a9bb">"%1$s diterapkan"</string>
     <string name="native_8340dad4f3be30a8" formatted="false">"Belum ada diary mimpi."</string>
     <string name="native_83dc1b2237cff6af" formatted="false">"Memuat cron job…"</string>
+    <string name="native_844e5b02f3ef05ca">"%1$s is working"</string>
     <string name="native_846c75dca0b71591">"%1$s %2$s"</string>
     <string name="native_848123d14f84faa2" formatted="false">"Mentah"</string>
     <string name="native_848f54e89660cea4" formatted="false">"Berjalan"</string>
+    <string name="native_849ccb784cf30af6" formatted="false">"Run Now"</string>
     <string name="native_84aebc69a1bf739a" formatted="false">"Dikonfigurasi"</string>
     <string name="native_84db8228370efedd" formatted="false">"camera list"</string>
     <string name="native_84f9cb5c5662fa3b" formatted="false">"1 diterapkan"</string>
@@ -585,6 +647,7 @@
     <string name="native_893a3e37d71c4563" formatted="false">"Gateway mencatat penolakan."</string>
     <string name="native_895f1e14d75d1239" formatted="false">"Sesi yang diarsipkan akan muncul di sini."</string>
     <string name="native_8998824610d49175" formatted="false">"Tanyakan apa saja kepada OpenClaw"</string>
+    <string name="native_8a20f46d5276b474">"%1$s paired"</string>
     <string name="native_8a6ec210c09d2e1d" formatted="false">"Gateway offline"</string>
     <string name="native_8ad740f465465253" formatted="false">"OpenClaw node connection status"</string>
     <string name="native_8b0f09e8f3b1c389" formatted="false">"Peringatan tetap di ponsel ini."</string>
@@ -594,26 +657,32 @@
     <string name="native_8bf253a125f66985" formatted="false">"Pindai atau tempel kode penyiapan untuk menambahkan gateway lain."</string>
     <string name="native_8c28828d13dbb711" formatted="false">"Crestodian"</string>
     <string name="native_8c4a3896e8f06d27" formatted="false">"TLS timed out"</string>
+    <string name="native_8c93c68056cde54d" formatted="false">"Gateway paired. Checking node capability approval."</string>
     <string name="native_8cac4b77b9c54695" formatted="false">"Cron action failed."</string>
     <string name="native_8cb2bab2ce6a17b2" formatted="false">"Di komputer Gateway, jalankan:"</string>
     <string name="native_8cb650539ec84aa5" formatted="false">"Cari sesi"</string>
     <string name="native_8d0839802b4d6aca" formatted="false">"Segarkan Log"</string>
+    <string name="native_8d57374bc09c8756">"Voice note · %1$s"</string>
     <string name="native_8d59829c1e15afe1" formatted="false">"Penggunaan"</string>
     <string name="native_8d662be13d054ff8" formatted="false">"Cron job dimulai."</string>
+    <string name="native_8d99e5d18d734856">"Context %1$s%%"</string>
     <string name="native_8dd6857baf026850" formatted="false">"Bisukan"</string>
     <string name="native_8e19f962b0cd6587" formatted="false">"Mulai percakapan baru dan percakapan itu akan muncul di sini."</string>
     <string name="native_8e6feeb36a83a707" formatted="false">"Aktifkan speaker"</string>
     <string name="native_8e803d361324b459" formatted="false">"Teks Peristiwa Sistem"</string>
     <string name="native_8eb626078c16c726">"Sort: %1$s"</string>
     <string name="native_8ee2c23aee28789d">"Ini akan %1$s \"%2$s\" dan menyegarkan status Skill Workshop dari gateway."</string>
+    <string name="native_8ee374b2023b7124">"%1$s waiting"</string>
     <string name="native_8f4716e674b9f719" formatted="false">"Image Generation"</string>
     <string name="native_8f54b0d1e30092d5" formatted="false">"Catatan suara"</string>
     <string name="native_8fa196125b734940" formatted="false">"Tidak ada yang perlu Anda perhatikan"</string>
     <string name="native_8fce9ec6fd5432df">"OpenClaw memerlukan izin %1$s untuk melanjutkan."</string>
     <string name="native_90bf81305006e6ed" formatted="false">"Detail skill tidak tersedia dalam status skills saat ini."</string>
     <string name="native_90ca2dba8039f463" formatted="false">"Pilih apa yang dapat dibagikan ponsel ini."</string>
+    <string name="native_915e3e8e30068798" formatted="false">"No details"</string>
     <string name="native_9173ddee41742fe6" formatted="false">"Hubungkan Gateway Anda untuk melihat kesiapan penyedia."</string>
     <string name="native_9193a6bd2430c6df" formatted="false">"Waiting for pairing"</string>
+    <string name="native_91e9086800ed776e" formatted="false">"Tidak ada pekerjaan terjadwal"</string>
     <string name="native_920e413c7d411b61" formatted="false">"Status"</string>
     <string name="native_921ff8493d077a59" formatted="false">"OpenClaw Node · Connected"</string>
     <string name="native_92340695899bd2d8" formatted="false">"Aktif"</string>
@@ -628,6 +697,7 @@
     <string name="native_93d8874c8c86f0fc" formatted="false">"console"</string>
     <string name="native_942087cc2d41e013" formatted="false">"Coba lagi"</string>
     <string name="native_943a630198a15ae2" formatted="false">"Mulai chat dan percakapan OpenClaw aktif Anda akan muncul di sini."</string>
+    <string name="native_944946b3f36d1520" formatted="false">"Shell in the agent workspace"</string>
     <string name="native_947fd9b8681c972b">"%1$s aktif"</string>
     <string name="native_948cff139c5c153d" formatted="false">"Pilih izin perangkat"</string>
     <string name="native_94b917998807d655" formatted="false">"Last Duration"</string>
@@ -650,6 +720,10 @@
     <string name="native_9993673dd5851811" formatted="false">"Memory Search"</string>
     <string name="native_999e5fee2f7c2856">"%1$s provider"</string>
     <string name="native_99de26810ac48fba" formatted="false">"Could not load cron run history."</string>
+    <string name="native_99f818dd50c0dd7c">"%1$s/%2$s connected"</string>
+    <string name="native_9a0bf562e602f844" formatted="false">"Gateway restart recovery is still in progress."</string>
+    <string name="native_9a16d8b4110f4349" formatted="false">"Replacing the setup code clears this phone\'s saved setup credentials and device tokens before reconnecting. This phone may need node capability approval again; continue only when you mean to pair with a fresh gateway setup code."</string>
+    <string name="native_9a8794b9f929541c" formatted="false">"Context --"</string>
     <string name="native_9adab9e889c70409" formatted="false">"OpenClaw mobile"</string>
     <string name="native_9af83712957c0dcc" formatted="false">"Hubungkan gateway untuk memuat cron jobs."</string>
     <string name="native_9b233c8afd34ea09" formatted="false">"A2UI reset"</string>
@@ -677,12 +751,14 @@
     <string name="native_a135dd52de0ce45a" formatted="false">"Tutup pemberitahuan persetujuan"</string>
     <string name="native_a1794783aab72d20" formatted="false">"Offline"</string>
     <string name="native_a181b2c15994a7fc" formatted="false">"Penyedia ucapan"</string>
+    <string name="native_a190013f72efad35" formatted="false">"Gateway approval is in progress. OpenClaw will retry automatically."</string>
     <string name="native_a1b5653a9f1b842b" formatted="false">"Tidak ada sesi yang diarsipkan"</string>
     <string name="native_a1bca979bc69befb" formatted="false">"Cron changes require operator.admin access."</string>
     <string name="native_a20d12c5e9c428c3" formatted="false">"Berpikir"</string>
     <string name="native_a23967c129397864" formatted="false">"screen snapshot"</string>
     <string name="native_a2bbc7ffd69f9c49" formatted="false">"Tidak ada tindakan yang ditemukan"</string>
     <string name="native_a2f29836cda5ceb1" formatted="false">"Simpan &amp; Hubungkan"</string>
+    <string name="native_a2fcbab533267340" formatted="false">"Monitoring · 1 session"</string>
     <string name="native_a32789d2b53dc704" formatted="false">"Sesi saat ini"</string>
     <string name="native_a330395cc0a53ad1" formatted="false">"list"</string>
     <string name="native_a34f54e488b48e66" formatted="false">"Gateway mencatat persetujuan dan menyimpan pilihan tersebut."</string>
@@ -694,6 +770,7 @@
     <string name="native_a484bc216860979e" formatted="false">"Gunakan jaringan yang sama, atau URL Gateway jarak jauh yang aman."</string>
     <string name="native_a4ae750b610e875e" formatted="false">"Anchor"</string>
     <string name="native_a4fe65264ef7dbb3" formatted="false">"Bahasa"</string>
+    <string name="native_a52403af63fa3f46" formatted="false">"This app is older than the Gateway. Update OpenClaw on this device, then retry."</string>
     <string name="native_a52ace420f2175d0" formatted="false">"Semua"</string>
     <string name="native_a53a8b84da7bc600" formatted="false">"Gateway session in progress"</string>
     <string name="native_a61935d6be7b9f04" formatted="false">"Menunggu peninjauan"</string>
@@ -701,7 +778,10 @@
     <string name="native_a68658a5db8b891d">"Stagger %1$s"</string>
     <string name="native_a6bd489d95504499" formatted="false">"Lupakan"</string>
     <string name="native_a6cda369816c943c" formatted="false">"Tidak ada gateway yang dipasangkan."</string>
+    <string name="native_a757bc0928d19377">"%1$s · %2$s"</string>
+    <string name="native_a79bcff159841b0f">"%1$s issues"</string>
     <string name="native_a7b90ee8facf0aed" formatted="false">"OpenClaw"</string>
+    <string name="native_a89bac8b89022bde">"Listening · %1$s queued"</string>
     <string name="native_a8bbbd7231a6c191" formatted="false">"Ucapan asisten dibisukan"</string>
     <string name="native_a92f0449a9f7235b" formatted="false">"Bekerja"</string>
     <string name="native_a9624cf0b6ae80c1" formatted="false">"Mulai berbicara..."</string>
@@ -715,6 +795,7 @@
     <string name="native_abb34924b54b502e" formatted="false">"Token Gateway belum dikonfigurasi"</string>
     <string name="native_abc7e9892806b047" formatted="false">"File"</string>
     <string name="native_abccc78cc93c0793" formatted="false">"Izin"</string>
+    <string name="native_abd1b2fa48abb83a" formatted="false">"Could not start the camera. Choose a QR image from gallery or enter the setup code manually."</string>
     <string name="native_abefee79c9ed4bb3" formatted="false">"Ketuk untuk menyalin"</string>
     <string name="native_abf88bc4972bb194">"Menunggu %1$sm"</string>
     <string name="native_ac07bf982425811c">"%1$s."</string>
@@ -727,6 +808,7 @@
     <string name="native_ad1c341c65f84ede" formatted="false">"Jalankan perintah approve di komputer Gateway, lalu periksa lagi."</string>
     <string name="native_adca3171c270301a" formatted="false">"This gateway sign-in can list connected nodes, but it cannot approve new phone pairing. Pair new phones from a gateway admin session. Node capability approval is separate and still uses nodes approve &lt;request id&gt;."</string>
     <string name="native_ade9248e0132b411" formatted="false">"Percayai"</string>
+    <string name="native_ae27fa789a03c1db" formatted="false">"That QR code is not an OpenClaw setup QR. Generate a fresh code with openclaw qr, then try again."</string>
     <string name="native_ae86062126fc1a52">"Sesi dalam \"%1$s\" disimpan dan dipindahkan kembali ke Ungrouped."</string>
     <string name="native_aea4a04a80426ed8" formatted="false">"Ditolak"</string>
     <string name="native_aed306fbb63c0c68" formatted="false">"Sertakan paket Android dan latar belakang."</string>
@@ -739,6 +821,7 @@
     <string name="native_b140db2544c7f8f5" formatted="false">"OpenClaw is syncing back up"</string>
     <string name="native_b1b3f74fe7e32ae1" formatted="false">"Event stream interrupted; try refreshing."</string>
     <string name="native_b1c1be6b126d151f" formatted="false">"Could not load nodes and devices."</string>
+    <string name="native_b1ca9c582cbc1e96" formatted="false">"Cron job has an invalid configuration."</string>
     <string name="native_b205bb47f81a3096" formatted="false">"Buka sesi"</string>
     <string name="native_b2087b2e689f4946" formatted="false">"Hubungkan gateway untuk memuat skills."</string>
     <string name="native_b24d5be587b2d206" formatted="false">"Bicara gagal: Penyedia Realtime tertutup secara tidak terduga."</string>
@@ -747,6 +830,7 @@
     <string name="native_b2d672f21eed539a" formatted="false">"Token Gateway diperlukan"</string>
     <string name="native_b2e5f1e45872f947" formatted="false">"Paired device"</string>
     <string name="native_b3975aa73d16205c" formatted="false">"Perlu persetujuan ulang"</string>
+    <string name="native_b3e24789bf8dc89b" formatted="false">"Not scheduled"</string>
     <string name="native_b4739a4f08650db2" formatted="false">"Berpikir..."</string>
     <string name="native_b485a5fff49d5e50" formatted="false">"Your phone stays quiet until it is needed"</string>
     <string name="native_b4a6b1fff2ff63e3" formatted="false">"Mendengarkan · mengirim suara dalam antrean"</string>
@@ -756,6 +840,8 @@
     <string name="native_b58e4ff842e465b7" formatted="false">"Hapus Job"</string>
     <string name="native_b5af0517c02601fd" formatted="false">"Hubungkan gateway untuk memuat permintaan persetujuan di aplikasi."</string>
     <string name="native_b5c6a385b2498915">"%1$s disalin"</string>
+    <string name="native_b60782210142c119" formatted="false">"No apps selected. Nothing forwards until you add apps."</string>
+    <string name="native_b6321409601f2740">"%1$s %2$s"</string>
     <string name="native_b67f37162831380c" formatted="false">"This skill is disabled on the gateway. Android shows detail only; enable or configure it from desktop or CLI."</string>
     <string name="native_b6ac42d661636536" formatted="false">"Cron job updated."</string>
     <string name="native_b6c6d6aeafc3b04a" formatted="false">"Buka suara"</string>
@@ -766,13 +852,16 @@
     <string name="native_b8352b44a588721c" formatted="false">"Bahasa aplikasi"</string>
     <string name="native_b860c709e9ba7e6f" formatted="false">"Autentikasi yang disimpan tidak valid"</string>
     <string name="native_b864d76c8fcec3d9" formatted="false">"Hubungkan gateway untuk memuat log terbaru."</string>
+    <string name="native_b8ed5279e897be5d" formatted="false">"Mengirim…"</string>
     <string name="native_b906e4f5d8dd6128" formatted="false">"Belum ada agen yang dimuat."</string>
     <string name="native_b96a4e034aae9cd8" formatted="false">"Pairing needed"</string>
     <string name="native_b9cf97697898d132" formatted="false">"Active Runs"</string>
+    <string name="native_b9d5d026db17b9e4">"Failed — %1$s"</string>
     <string name="native_ba599a4fe4b45b36" formatted="false">"Koneksi antara ponsel ini dan OpenClaw."</string>
     <string name="native_bae9264d6d972b80" formatted="false">"summarize"</string>
     <string name="native_bb4069d372f67683" formatted="false">"Ini akan menghapus sesi dan transkripnya secara permanen."</string>
     <string name="native_bbe5fc3b9ef39f99" formatted="false">"Memulai…"</string>
+    <string name="native_bc19cec293228fb8" formatted="false">"Client error"</string>
     <string name="native_bcb06651437caa15">"%1$s %2$s"</string>
     <string name="native_bd3d62c4e3590d83" formatted="false">"Ini menghapus job terjadwal secara permanen dari gateway."</string>
     <string name="native_bd6719b455bcc898" formatted="false">"Memory Get"</string>
@@ -807,6 +896,7 @@
     <string name="native_c2eb8cd9d9564314" formatted="false">"Perhatian"</string>
     <string name="native_c31723ab330289fe" formatted="false">"Mencari…"</string>
     <string name="native_c35b21d6ca39aa7c" formatted="false">"pdf"</string>
+    <string name="native_c385951198c45d9c" formatted="false">"No channels"</string>
     <string name="native_c41ad84496b53420" formatted="false">"Realtime voice"</string>
     <string name="native_c420c647b0dce05a" formatted="false">"Tindakan reject dan quarantine Skill Workshop"</string>
     <string name="native_c49240206db14522" formatted="false">"Node &amp; Perangkat"</string>
@@ -830,6 +920,7 @@
     <string name="native_c646e41f7933c8e4" formatted="false">"Support Files"</string>
     <string name="native_c67415bcff328a59" formatted="false">"Ekspresi"</string>
     <string name="native_c6d5ed757b66bfd3" formatted="false">"Dream"</string>
+    <string name="native_c6dd061350fc69b8" formatted="false">"No apps blocked. Apps can forward unless you add blocks."</string>
     <string name="native_c759c34804a2aea6" formatted="false">"Kode Penyiapan"</string>
     <string name="native_c7985fa72daa6ea4">"Gateway tidak mengembalikan penyiapan %1$s"</string>
     <string name="native_c7b6dfd5c3a183c3" formatted="false">"Lupakan gateway?"</string>
@@ -840,15 +931,18 @@
     <string name="native_c8864e27d32de6c4" formatted="false">"Bagikan file"</string>
     <string name="native_c8cdbd2d94cf9a22" formatted="false">"Realtime"</string>
     <string name="native_c8e5998f6a3955c2" formatted="false">"API"</string>
+    <string name="native_c9877fdd246d84a7" formatted="false">"Cron job is already running."</string>
     <string name="native_c98e54e459aa271e" formatted="false">"Bagikan informasi aplikasi yang terpasang?"</string>
     <string name="native_c9e4f8f40d07909e" formatted="false">"Asisten default"</string>
     <string name="native_c9e9b24ded599d1b">"Pilih penyedia %1$s yang didukung di Gateway"</string>
+    <string name="native_ca184496974204a0" formatted="false">"Tidak tersedia"</string>
     <string name="native_ca1fd4548524cb2e" formatted="false">"Folder kosong"</string>
     <string name="native_ca31a3eb376626fb" formatted="false">"Ready on this gateway. Android detail is read-only; install, update, and configuration changes stay on desktop or CLI."</string>
     <string name="native_ca7981b46ecf2c17" formatted="false">"Nonaktif"</string>
     <string name="native_cab94aba84f97f7f" formatted="false">"Typography"</string>
     <string name="native_cae7d57bc067a514" formatted="false">"Hentikan"</string>
     <string name="native_cc4b66e7e22230c3" formatted="false">"This skill is installed but not currently eligible to run. Use desktop or CLI for configuration changes."</string>
+    <string name="native_cc5f45fb30a26e07" formatted="false">"Recognizer busy"</string>
     <string name="native_cc721e25d73938a6" formatted="false">"Home Gateway"</string>
     <string name="native_cc925e3c97ac7a35" formatted="false">"Could not load Skill Workshop proposals."</string>
     <string name="native_ccb4c324f516c633" formatted="false">"Jangan Sekarang"</string>
@@ -860,14 +954,18 @@
     <string name="native_cd010b6a4b98eacc" formatted="false">"Connect the gateway to browse workspace files."</string>
     <string name="native_cd0ebd38a41064aa">"%1$s melalui relay Gateway"</string>
     <string name="native_cd25377583885307" formatted="false">"Tidak dapat memuat katalog bicara Gateway"</string>
+    <string name="native_cd3b5f352ff80319" formatted="false">"Monitoring · 1 scheduled job"</string>
     <string name="native_cd6ab55bb453dd5f">"Every %1$sh"</string>
+    <string name="native_cd7cf3010b8c1095" formatted="false">"Screen surface"</string>
     <string name="native_cde2cb25263fd770">"Terjemahan OpenClaw · %1$s"</string>
     <string name="native_cdf742c6da3ba485" formatted="false">"Permintaan perintah"</string>
     <string name="native_ce29b7f85b9eaf7d" formatted="false">"Up to date"</string>
     <string name="native_ce4683e7013a18cd" formatted="false">"Saluran"</string>
     <string name="native_ce4ee4efc5e324fc" formatted="false">"Suarakan"</string>
     <string name="native_ce8bdd01ba43136f" formatted="false">"Menyiapkan audio…"</string>
+    <string name="native_cf0ee3547a4e51a5" formatted="false">"Soon"</string>
     <string name="native_d04fc7d7e19702f8" formatted="false">"Web Search"</string>
+    <string name="native_d051f9875caa2ccd" formatted="false">"Save or revert your edits before running, enabling, disabling, deleting, or refreshing this job."</string>
     <string name="native_d056177742e27cf5" formatted="false">"OpenClaw Aktif"</string>
     <string name="native_d0cda6559bb347db" formatted="false">"navigate"</string>
     <string name="native_d0d0de0039c7990b">"requested %1$s"</string>
@@ -887,6 +985,7 @@
     <string name="native_d2ee46edf00c8eb6">"... +%1$s lagi"</string>
     <string name="native_d31de1a5c5c8ba2a" formatted="false">"Browser"</string>
     <string name="native_d354ee936f59115e" formatted="false">"screen record"</string>
+    <string name="native_d3974fd6d3b6c81f" formatted="false">"Run Pending"</string>
     <string name="native_d3f75e24411053c4" formatted="false">"AI pribadi di perangkat Anda"</string>
     <string name="native_d406ade2958cb5b6" formatted="false">"Attach"</string>
     <string name="native_d4b1ea5708dd5329" formatted="false">"Ikhtisar"</string>
@@ -899,8 +998,10 @@
     <string name="native_d68f3aaa52604f24" formatted="false">"Wait for the current response to finish before starting a new chat."</string>
     <string name="native_d696a35bdd1883da" formatted="false">"Profil"</string>
     <string name="native_d6a99dbee26515ff" formatted="false">"Batas penyedia akan muncul di sini saat gateway Anda melaporkannya."</string>
+    <string name="native_d6bfda034106ecd6" formatted="false">"1 issue"</string>
     <string name="native_d70b9e24bca26b40" formatted="false">"Created"</string>
     <string name="native_d729f71dabe85839">"${device.tokens.count { !it.revoked }}/%1$s active tokens"</string>
+    <string name="native_d7f4aa113e00ae3c" formatted="false">"Open skill detail"</string>
     <string name="native_d82bd5d6c334fe2b" formatted="false">"Mulai Talk"</string>
     <string name="native_d876e657c0d9154a" formatted="false">"Tidak dapat memuat folder ini."</string>
     <string name="native_d8bf3a22f379d33e" formatted="false">"Kode QR tidak berisi kode penyiapan yang valid."</string>
@@ -912,6 +1013,7 @@
     <string name="native_d975ca28a64f8850" formatted="false">"Hubungkan Gateway"</string>
     <string name="native_d9be42d9b30ce057" formatted="false">"Baca Kalender"</string>
     <string name="native_d9f641e1a02807cb" formatted="false">"The overview refreshes on reconnect and when this screen opens."</string>
+    <string name="native_da0ebec9f64af585">"In %1$sm"</string>
     <string name="native_da23ce2ad9e797cf" formatted="false">"Baca SMS"</string>
     <string name="native_dafd69eb801901c4" formatted="false">"Hubungkan gateway untuk memuat penggunaan."</string>
     <string name="native_db0e960b68b57894" formatted="false">"Perlu persetujuan"</string>
@@ -927,12 +1029,15 @@
     <string name="native_dcc839a4015c4b7d" formatted="false">"Lihat"</string>
     <string name="native_dcd1d5223f73b3a9" formatted="false">"Nama"</string>
     <string name="native_dd9d24965dbedc02" formatted="false">"Cron"</string>
+    <string name="native_de356e01822d360d" formatted="false">"Setup code was not accepted. Generate a fresh code with openclaw qr."</string>
     <string name="native_de60af1d2f170722" formatted="false">"14 pesan · Android"</string>
     <string name="native_de67b9369f9812ea">"Transcription failed: %1$s"</string>
     <string name="native_de9f057a471cdb8d" formatted="false">"Selalu"</string>
     <string name="native_df0bf21d612f1c1c" formatted="false">"Could not load dreaming."</string>
     <string name="native_df796c655f6f5ed4" formatted="false">"Grup baru"</string>
+    <string name="native_dfe0c2e802b1ff63" formatted="false">"Server error"</string>
     <string name="native_dfe114ba9a41375d" formatted="false">"Video Generation"</string>
+    <string name="native_e008e2811a85cdb2" formatted="false">"Gateway approval is pending. Run openclaw devices list on the gateway host, approve this phone, then retry."</string>
     <string name="native_e01552d86737c78f" formatted="false">"Entri akan muncul setelah siklus dreaming menulis ringkasan naratif."</string>
     <string name="native_e024430c7706c72b" formatted="false">"Penyimpanan Memori"</string>
     <string name="native_e02b4aac2b335f6f" formatted="false">"Asisten sedang bekerja"</string>
@@ -946,12 +1051,17 @@
     <string name="native_e1db8571dfe6dfcf" formatted="false">"Permintaan persetujuan exec akan muncul di sini saat ponsel ini terhubung."</string>
     <string name="native_e1f641311f07fe31" formatted="false">" · Mikrofon: Tertunda"</string>
     <string name="native_e21f935f11d7e966" formatted="false">"Salin"</string>
+    <string name="native_e239ba88eeb137b0" formatted="false">"Cron run failed."</string>
     <string name="native_e2acabb2202be941" formatted="false">"Detail disalin"</string>
     <string name="native_e2d0a54968ead24e" formatted="false">"Hapus"</string>
     <string name="native_e31ab643c44f7a0e" formatted="false">"member"</string>
     <string name="native_e35e24d39a82aec2" formatted="false">"Could not load channels."</string>
+    <string name="native_e3cda2d4381e42cd">"In %1$sd"</string>
     <string name="native_e3d8e1685f141cba" formatted="false">"Consecutive Errors"</string>
+    <string name="native_e3f0caab85e62600" formatted="false">"Could not read a QR code from that image. Choose a clearer image or enter the setup code manually."</string>
+    <string name="native_e3f90d1d0b07fb04" formatted="false">"The Gateway is older than this app. Update OpenClaw on the Gateway host, then retry."</string>
     <string name="native_e4582b6fb1f57494" formatted="false">"Hubungkan ulang gateway"</string>
+    <string name="native_e482357257d6c2fd" formatted="false">"Review readiness"</string>
     <string name="native_e51aa2de89dcd71a" formatted="false">"Logo OpenClaw"</string>
     <string name="native_e52b3044724b9f4d" formatted="false">"Lepas sematan model"</string>
     <string name="native_e5584bc5057284ae" formatted="false">"Permukaan perpesanan yang terhubung ke gateway ini."</string>
@@ -959,8 +1069,10 @@
     <string name="native_e5c02424e511e1ef" formatted="false">"Perintah disalin"</string>
     <string name="native_e5c083cf41ff6472" formatted="false">"Pratinjau tidak tersedia"</string>
     <string name="native_e5c7478bbce26eb7" formatted="false">"Pindai kode QR"</string>
+    <string name="native_e5e4f854dcd3ffc6" formatted="false">"Command working directory · cannot clear"</string>
     <string name="native_e674447337e83c13" formatted="false">"Tersedia"</string>
     <string name="native_e7035f0b2b367b41" formatted="false">"Cron job dinonaktifkan."</string>
+    <string name="native_e7053d96b6704dbb">"%1$s today · %2$s total"</string>
     <string name="native_e7cf3ef4f17c3999" formatted="false">"Kata sandi"</string>
     <string name="native_e7e90bb5eb97b173" formatted="false">"Tidak ada pemberitahuan lisensi yang disertakan dalam build ini."</string>
     <string name="native_e86dd1c94dc8c000" formatted="false">"Berbicara…"</string>
@@ -977,6 +1089,7 @@
     <string name="native_eaf3a81a6411115f" formatted="false">"Filter Aplikasi"</string>
     <string name="native_eb814be3ca3b78c0" formatted="false">"Utama"</string>
     <string name="native_ec5ba0abb717da87" formatted="false">"Akses"</string>
+    <string name="native_ecf193ef6d31b8b1" formatted="false">"Cron scheduler is stopped."</string>
     <string name="native_ed077f3d8125d60d" formatted="false">"Buka"</string>
     <string name="native_ed112278453ffe77" formatted="false">"Pesan disalin"</string>
     <string name="native_ed5eb9a37e2d8231" formatted="false">"sekarang"</string>
@@ -986,11 +1099,13 @@
     <string name="native_eddc4738cc953030" formatted="false">"unpin"</string>
     <string name="native_edeead3f1961f9b8" formatted="false">"Session History"</string>
     <string name="native_ee3c716130546a45" formatted="false">"Lepas sematan"</string>
+    <string name="native_eeeef2e354ef12b9" formatted="false">"Cron run finished with an unknown status."</string>
     <string name="native_ef363b97b21cbfd6" formatted="false">"Alat sedang berjalan"</string>
     <string name="native_efb52e7172b77731" formatted="false">"Tema"</string>
     <string name="native_eff936b9e59f7d1b" formatted="false">"Gateway masih menampilkan persetujuan ini sebagai tertunda. Tinjau sebelum mencoba lagi."</string>
     <string name="native_effe3c323ebd1339" formatted="false">"Selesaikan catatan suara"</string>
     <string name="native_f0313397057d1c8f">"Dictation: %1$s"</string>
+    <string name="native_f0406a0e7eb17426" formatted="false">"Not allowed"</string>
     <string name="native_f0763ccb558be5df" formatted="false">"Pilih gambar lain"</string>
     <string name="native_f09247433bef8304" formatted="false">"Image preview"</string>
     <string name="native_f0aa6815d2a91947" formatted="false">"OpenClaw hanya mendengarkan saat Anda memulai Bicara atau Dikte."</string>
@@ -998,6 +1113,7 @@
     <string name="native_f142f869ebc131e9" formatted="false">"Periksa pekerjaan gateway terjadwal."</string>
     <string name="native_f14cc3ede97361fd">"%1$s tertunda"</string>
     <string name="native_f15bf83677856dfa" formatted="false">"Baca Log Panggilan"</string>
+    <string name="native_f197b44d96f9315f">"%1$s queued · waiting for gateway"</string>
     <string name="native_f2000dce9b5d40c8" formatted="false">"Persetujuan ditolak."</string>
     <string name="native_f200366d0c4352cb" formatted="false">"Could not inspect Skill Workshop proposal."</string>
     <string name="native_f20c879465551f0d" formatted="false">"Disematkan"</string>
@@ -1008,6 +1124,7 @@
     <string name="native_f28cb795c9721dd0" formatted="false">"Buka pemilih tingkat berpikir"</string>
     <string name="native_f2cb21c53a33f72c" formatted="false">"Tata letak: Terperinci"</string>
     <string name="native_f2da2e47cd31a5dd" formatted="false">"Gambar ini tidak dapat didekode."</string>
+    <string name="native_f2ecdaf77d1d98d3" formatted="false">"OpenClaw turns this phone into a clean mobile command surface for sessions, voice, providers, and Gateway."</string>
     <string name="native_f386c32c1bf437d9" formatted="false">"Agent workspace files"</string>
     <string name="native_f3c8edba540a8858" formatted="false">"Connect the gateway to manage cron jobs."</string>
     <string name="native_f41d9e8b7e09aa24" formatted="false">"Gunakan requestId dari perintah tertunda dalam perintah approve."</string>
@@ -1018,6 +1135,7 @@
     <string name="native_f4db1e48476f6075" formatted="false">"Akhiri"</string>
     <string name="native_f4ef7a41caa88dd1" formatted="false">"Tidak ada penyedia yang siap"</string>
     <string name="native_f502267deff4108d" formatted="false">"Belum ada sesi"</string>
+    <string name="native_f5171b47ebca6202">"%1$s app blocked from forwarding."</string>
     <string name="native_f532ee1f7288365e" formatted="false">"Tindakan pesan"</string>
     <string name="native_f5387f9bb6ed7031" formatted="false">"Jenis"</string>
     <string name="native_f584049cab5f523e" formatted="false">"Transcripts"</string>
@@ -1029,6 +1147,7 @@
     <string name="native_f6e82c3f136a6c5b" formatted="false">"Belum ada data penggunaan."</string>
     <string name="native_f6e94ebc86517b65" formatted="false">"Chat failed before the run started; try again."</string>
     <string name="native_f6f4688ff23d50c6" formatted="false">"Kirim"</string>
+    <string name="native_f701a65268ba6ea2" formatted="false">"Some shared images were omitted or could not be added."</string>
     <string name="native_f706757ef3473dbd" formatted="false">"Tulis Kalender"</string>
     <string name="native_f77d1bb58da886e3" formatted="false">"timeout"</string>
     <string name="native_f8019af406d12fad" formatted="false">"Daftar blokir"</string>
@@ -1040,6 +1159,7 @@
     <string name="native_f8c2745155505d39" formatted="false">"Timed out waiting for a reply; try again or refresh."</string>
     <string name="native_f92e2ad582c0e13f" formatted="false">"Menyegarkan"</string>
     <string name="native_f991ae9cb081e1f3" formatted="false">"Buka kamera dan posisikan kode dari openclaw qr dalam bingkai."</string>
+    <string name="native_f9ea3f1540eaa584" formatted="false">"No devices"</string>
     <string name="native_fa4f9ee12d15faec" formatted="false">"The gateway session is coming back online. Agent shortcuts should settle automatically in a moment."</string>
     <string name="native_fa8b0b30b80cd97e" formatted="false">"Izinkan lokasi latar belakang?"</string>
     <string name="native_faab0dc4735c1cfe" formatted="false">"Bootstrap"</string>
@@ -1051,10 +1171,14 @@
     <string name="native_fc0646722204f965" formatted="false">"OpenClaw sedang bekerja"</string>
     <string name="native_fc374cd61c135a9e" formatted="false">"Entri Log"</string>
     <string name="native_fc4153c54951d609" formatted="false">"Gagal: tidak dapat menjangkau endpoint gateway aman untuk host ini."</string>
+    <string name="native_fc5af920bc4a256d" formatted="false">"Gateway is offline. Fix the connection below or copy diagnostics."</string>
+    <string name="native_fc601f84a2d57d52" formatted="false">"Cron run skipped."</string>
     <string name="native_fcd589c1bc20cd2d" formatted="false">"Siaga"</string>
     <string name="native_fcdeb9947bc94101" formatted="false">"Tes tes 1 2 3"</string>
     <string name="native_fd0d57a020f908ec">"%1$s model yang dikonfigurasi"</string>
     <string name="native_fd175ecd65f7353d" formatted="false">"No prompt"</string>
+    <string name="native_fda8fc3b85420d14" formatted="false">"Open log entry"</string>
+    <string name="native_fdd0d769c49517c2" formatted="false">"Network timeout"</string>
     <string name="native_fe16ec77eefd5cd3" formatted="false">"Cron run masuk antrean."</string>
     <string name="native_ff1cee74414621d8" formatted="false">"Sematkan"</string>
     <string name="native_ff2670a0df18e148" formatted="false">"thread list"</string>
