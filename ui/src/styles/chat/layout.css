@@ -1175,7 +1175,12 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
 .chat-prs {
   display: grid;
   gap: 6px;
-  padding: 0 14px 8px;
+  /* Mirror .agent-chat__composer-shell sizing: the rows belong to the input
+     stack and must not read as a full-pane banner above a narrower composer. */
+  width: calc(100% - 36px);
+  max-width: 48rem;
+  margin: 0 auto;
+  padding: 0 0 8px;
 }
 
 .chat-pr {
