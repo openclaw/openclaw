@@ -329,7 +329,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
   if (opts.safe) {
     return await requestSafeGatewayRestart(opts);
   }
-  const json = Boolean(opts.json);
+  const jsonOutput = Boolean(opts.json);
   const service = resolveGatewayService();
   let restartedWithoutServiceManager = false;
   const restartIntent = resolveGatewayRestartIntentOptions(opts);
@@ -390,7 +390,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
 
         const diagnostics = renderGatewayPortHealthDiagnostics(health);
         const timeoutLine = `Timed out after ${restartWaitSeconds}s waiting for gateway port ${restartPort} to become healthy.`;
-        if (!json) {
+        if (!jsonOutput) {
           defaultRuntime.log(theme.warn(timeoutLine));
           for (const line of diagnostics) {
             defaultRuntime.log(theme.muted(line));
@@ -420,7 +420,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         // Gateway pids once, restart again, then re-run the same health proof.
         const staleMsg = `Found stale gateway process(es): ${health.staleGatewayPids.join(", ")}.`;
         warnings.push(staleMsg);
-        if (!json) {
+        if (!jsonOutput) {
           defaultRuntime.log(theme.warn(staleMsg));
           defaultRuntime.log(theme.muted("Stopping stale process(es) and retrying restart..."));
         }
@@ -453,7 +453,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         health.runtime.status === "running" && health.portUsage.status === "free"
           ? `Gateway process is running but port ${restartPort} is still free (startup hang/crash loop or very slow VM startup).`
           : null;
-      if (!json) {
+      if (!jsonOutput) {
         defaultRuntime.log(theme.warn(failure.statusLine));
         if (runningNoPortLine) {
           defaultRuntime.log(theme.warn(runningNoPortLine));
