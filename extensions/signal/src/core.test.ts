@@ -374,13 +374,12 @@ describe("signal outbound", () => {
 
     await expect(
       signalPlugin.outbound?.sendFormattedText?.({
-        cfg: {} as OpenClawConfig,
+        cfg: { channels: { signal: { replyToMode: "first" } } } as OpenClawConfig,
         to: "+15551234567",
         text: "a".repeat(5000),
         deps: { signal: send },
         replyToId: "1700000000004",
         replyToIdSource: "implicit",
-        replyToMode: "first",
         onDeliveryResult,
       }),
     ).rejects.toThrow("second Signal chunk failed");

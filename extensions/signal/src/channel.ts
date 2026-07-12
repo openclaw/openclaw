@@ -313,7 +313,13 @@ async function sendFormattedSignalText(ctx: {
   const nextReplyToId = createReplyToFanout({
     replyToId: ctx.replyToId,
     replyToIdSource: ctx.replyToIdSource,
-    replyToMode: ctx.replyToMode,
+    replyToMode:
+      ctx.replyToMode ??
+      resolveSignalReplyToMode({
+        cfg: ctx.cfg,
+        accountId: ctx.accountId,
+        chatType: inferSignalTargetChatType(to),
+      }),
   });
   const results = [];
   for (const chunk of chunks) {
