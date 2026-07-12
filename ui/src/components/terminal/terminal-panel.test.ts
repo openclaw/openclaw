@@ -1,8 +1,9 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
+import type { createIsolatedGhosttyTerminal } from "./terminal-runtime.ts";
 
 type CreateOptions = {
   parent: HTMLElement;
@@ -15,9 +16,10 @@ type CreateOptions = {
 // mock so retained imports and the current test graph share the same identity.
 const createGhosttyTerminalMock = vi.hoisted(() => {
   const scope = globalThis as typeof globalThis & {
-    __openclawTestCreateGhosttyTerminalMock?: ReturnType<typeof vi.fn>;
+    openclawTestCreateGhosttyTerminalMock?: Mock<typeof createIsolatedGhosttyTerminal>;
   };
-  return (scope.__openclawTestCreateGhosttyTerminalMock ??= vi.fn());
+  return (scope.openclawTestCreateGhosttyTerminalMock ??=
+    vi.fn<typeof createIsolatedGhosttyTerminal>());
 });
 
 function createTerminalController(dispose: () => void = vi.fn()) {
