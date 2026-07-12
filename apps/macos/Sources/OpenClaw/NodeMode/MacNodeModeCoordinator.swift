@@ -580,7 +580,7 @@ final class MacNodeModeCoordinator: NSObject {
                         payloadJSON: payload,
                         ifCurrentRoute: installedRoute)
                 }
-                self.presenceReporter.start { [weak self] event, payload in
+                await self.presenceReporter.start { [weak self] event, payload in
                     guard let self else { return false }
                     return await self.session.sendEvent(
                         event: event,
