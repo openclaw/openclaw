@@ -7,7 +7,7 @@ import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
-import { createInboundDebouncer } from "./inbound-debounce.js";
+import { createInboundDebouncer, flushAllInboundDebouncers } from "./inbound-debounce.js";
 import { resolveGroupRequireMention } from "./reply/groups.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
 import {
@@ -485,6 +485,128 @@ describe("inbound dedupe", () => {
 });
 
 describe("createInboundDebouncer", () => {
+  it("flushes all registered buffers exactly once", async () => {
+    vi.useFakeTimers();
+    const calls: string[][] = [];
+    try {
+      const first = createInboundDebouncer<{ key: string; id: string }>({
+        debounceMs: 10_000,
+        buildKey: (item) => item.key,
+        onFlush: async (items) => {
+          calls.push(items.map((item) => item.id));
+        },
+      });
+      const second = createInboundDebouncer<{ key: string; id: string }>({
+        debounceMs: 10_000,
+        buildKey: (item) => item.key,
+        onFlush: async (items) => {
+          calls.push(items.map((item) => item.id));
+        },
+      });
+
+      await first.enqueue({ key: "a", id: "1" });
+      await first.enqueue({ key: "a", id: "2" });
+      await second.enqueue({ key: "b", id: "3" });
+
+      await expect(flushAllInboundDebouncers()).resolves.toEqual({
+        drained: true,
+        flushed: 2,
+        remaining: 0,
+      });
+      await expect(flushAllInboundDebouncers()).resolves.toEqual({
+        drained: true,
+        flushed: 0,
+        remaining: 0,
+      });
+      expect(calls).toEqual([["1", "2"], ["3"]]);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(calls).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds the global sweep while live ingress keeps adding buffers", async () => {
+    type StreamItem = { key: string; id: number };
+    let continueIngress = true;
+    let nextId = 1;
+    const debouncer = createInboundDebouncer<StreamItem>({
+      debounceMs: 60_000,
+      buildKey: (item) => item.key,
+      onFlush: async () => {
+        if (continueIngress) {
+          const id = nextId++;
+          await debouncer.enqueue({ key: `stream-${id}`, id });
+        }
+      },
+    });
+
+    await debouncer.enqueue({ key: "stream-0", id: 0 });
+    const bounded = await flushAllInboundDebouncers();
+
+    expect(bounded.drained).toBe(false);
+    expect(bounded.flushed).toBeGreaterThan(0);
+    expect(bounded.remaining).toBeGreaterThan(0);
+
+    continueIngress = false;
+    await expect(flushAllInboundDebouncers()).resolves.toMatchObject({
+      drained: true,
+      remaining: 0,
+    });
+  });
+
+  it("reports drained when the final allowed pass empties the last buffer", async () => {
+    type StreamItem = { key: string; id: number };
+    let buffersLeftToAdd = 99;
+    const debouncer = createInboundDebouncer<StreamItem>({
+      debounceMs: 60_000,
+      buildKey: (item) => item.key,
+      onFlush: async () => {
+        if (buffersLeftToAdd > 0) {
+          const id = buffersLeftToAdd--;
+          await debouncer.enqueue({ key: `finite-${id}`, id });
+        }
+      },
+    });
+
+    await debouncer.enqueue({ key: "finite-start", id: 100 });
+
+    await expect(flushAllInboundDebouncers()).resolves.toEqual({
+      drained: true,
+      flushed: 100,
+      remaining: 0,
+    });
+  });
+
+  it("stops waiting for a slow callback at the supplied drain deadline", async () => {
+    vi.useFakeTimers();
+    let releaseFlush = () => {};
+    const flushGate = new Promise<void>((resolve) => {
+      releaseFlush = resolve;
+    });
+    try {
+      const debouncer = createInboundDebouncer<{ key: string }>({
+        debounceMs: 60_000,
+        buildKey: (item) => item.key,
+        onFlush: async () => await flushGate,
+      });
+      await debouncer.enqueue({ key: "slow" });
+
+      const pending = flushAllInboundDebouncers(100);
+      await vi.advanceTimersByTimeAsync(100);
+
+      await expect(pending).resolves.toEqual({
+        drained: false,
+        flushed: 1,
+        remaining: 1,
+      });
+      releaseFlush();
+      await Promise.resolve();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("debounces and combines items", async () => {
     vi.useFakeTimers();
     const calls: Array<string[]> = [];

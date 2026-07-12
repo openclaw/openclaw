@@ -10,6 +10,7 @@ import {
   retainGatewayRootWorkAdmissionContinuation,
   resetGatewayWorkAdmission,
   runWithGatewayIndependentRootWorkContinuation,
+  runWithGatewayRestartDrainContinuation,
   runWithGatewayRootWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
@@ -138,6 +139,50 @@ it("runs an admitted continuation when restart drain wins the handoff race", asy
   expect(getActiveGatewayRootWorkCount()).toBe(0);
 });
 
+it("preserves required ownership for a parentless continuation admitted before restart", async () => {
+  let releaseContinuation = () => {};
+  const continuationGate = new Promise<void>((resolve) => {
+    releaseContinuation = resolve;
+  });
+  let subordinateAdmissionClosed: boolean | undefined;
+  const continuation = runWithGatewayIndependentRootWorkContinuation(async () => {
+    await continuationGate;
+    subordinateAdmissionClosed = isGatewaySubordinateWorkAdmissionClosed();
+  });
+  expect(getActiveGatewayRootWorkCount()).toBe(1);
+
+  markGatewayRestartDraining();
+  await runWithGatewayRestartDrainContinuation(async () => {
+    releaseContinuation();
+    await continuation;
+  });
+
+  expect(subordinateAdmissionClosed).toBe(false);
+  expect(getActiveGatewayRootWorkCount()).toBe(0);
+});
+
+it("lets a reserved required continuation finish through a pending restart signal", async () => {
+  let releaseContinuation = () => {};
+  const continuationGate = new Promise<void>((resolve) => {
+    releaseContinuation = resolve;
+  });
+  let subordinateAdmissionClosed: boolean | undefined;
+  const continuation = runWithGatewayIndependentRootWorkContinuation(async () => {
+    await continuationGate;
+    subordinateAdmissionClosed = isGatewaySubordinateWorkAdmissionClosed();
+  });
+  expect(getActiveGatewayRootWorkCount()).toBe(1);
+
+  const pendingSignal = beginGatewayRestartSignalAdmission();
+  expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
+  releaseContinuation();
+  await continuation;
+
+  expect(subordinateAdmissionClosed).toBe(false);
+  expect(getActiveGatewayRootWorkCount()).toBe(0);
+  expect(pendingSignal.rollback()).toBe(true);
+});
+
 it("does not admit an unrelated continuation through restart drain", async () => {
   markGatewayRestartDraining();
   const ran = vi.fn();
@@ -148,6 +193,53 @@ it("does not admit an unrelated continuation through restart drain", async () =>
     }),
   ).rejects.toThrow("gateway is draining for restart");
   expect(ran).not.toHaveBeenCalled();
+});
+
+it("limits restart subordinate work to the tracked drain and its continuations", async () => {
+  const acceptedRoot = tryBeginGatewayRootWorkAdmission();
+  expect(acceptedRoot).not.toBeNull();
+  let releasePreexistingContinuation = () => {};
+  let preexistingContinuationObservedClosed: boolean | undefined;
+  const preexistingContinuationGate = new Promise<void>((resolve) => {
+    releasePreexistingContinuation = resolve;
+  });
+  let preexistingContinuation: Promise<void> | undefined;
+  await acceptedRoot?.run(async () => {
+    preexistingContinuation = runWithGatewayIndependentRootWorkContinuation(async () => {
+      await preexistingContinuationGate;
+      preexistingContinuationObservedClosed = isGatewaySubordinateWorkAdmissionClosed();
+    });
+  });
+  markGatewayRestartDraining();
+
+  let releaseDrain = () => {};
+  const drainGate = new Promise<void>((resolve) => {
+    releaseDrain = resolve;
+  });
+  const drain = runWithGatewayRestartDrainContinuation(async () => {
+    expect(isGatewaySubordinateWorkAdmissionClosed()).toBe(false);
+    await drainGate;
+  });
+
+  releasePreexistingContinuation();
+  await preexistingContinuation;
+  expect(preexistingContinuationObservedClosed).toBe(false);
+
+  await acceptedRoot?.run(async () => {
+    expect(isGatewaySubordinateWorkAdmissionClosed()).toBe(true);
+    await runWithGatewayIndependentRootWorkContinuation(async () => {
+      expect(isGatewaySubordinateWorkAdmissionClosed()).toBe(false);
+    });
+  });
+
+  releaseDrain();
+  await drain;
+  await acceptedRoot?.run(async () => {
+    await runWithGatewayIndependentRootWorkContinuation(async () => {
+      expect(isGatewaySubordinateWorkAdmissionClosed()).toBe(true);
+    });
+  });
+  acceptedRoot?.release();
 });
 
 it("does not let a stale suspension release clear restart drain", () => {

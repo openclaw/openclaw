@@ -3,6 +3,12 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  createInboundDebouncer,
+  flushAllInboundDebouncers,
+} from "../auto-reply/inbound-debounce.js";
+import {
+  beginGatewayRestartSignalAdmission,
+  runWithGatewayRestartDrainContinuation,
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "./gateway-work-admission.js";
@@ -847,6 +853,151 @@ describe("command queue", () => {
     await expect(
       enqueueCommandInLane(CommandLane.Main, async () => "blocked"),
     ).rejects.toBeInstanceOf(GatewayDrainingError);
+  });
+
+  it("admits command work only inside the core restart drain continuation", async () => {
+    markGatewayDraining();
+
+    await expect(
+      runWithGatewayRestartDrainContinuation(
+        async () => await enqueueCommandInLane(CommandLane.Main, async () => "drained"),
+      ),
+    ).resolves.toBe("drained");
+    await expect(
+      enqueueCommandInLane(CommandLane.Main, async () => "blocked"),
+    ).rejects.toBeInstanceOf(GatewayDrainingError);
+  });
+
+  it("rebinds a pre-created debounce callback to the core restart continuation", async () => {
+    const delivered: string[] = [];
+    const onError = vi.fn();
+    const debouncer = createInboundDebouncer<{ key: string; value: string }>({
+      debounceMs: 60_000,
+      buildKey: (item) => item.key,
+      onError,
+      onFlush: async (items) => {
+        const value = await enqueueCommandInLane(
+          CommandLane.Main,
+          async () => items[0]?.value ?? "",
+        );
+        delivered.push(value);
+      },
+    });
+
+    // Create the reserved buffer task inside an accepted inbound root, then
+    // release that original root before the restart drain flushes the buffer.
+    const inboundRoot = tryBeginGatewayRootWorkAdmission();
+    expect(inboundRoot).not.toBeNull();
+    await inboundRoot?.run(
+      async () => await debouncer.enqueue({ key: "accepted-before-restart", value: "delivered" }),
+    );
+    inboundRoot?.release();
+    markGatewayDraining();
+
+    await expect(
+      runWithGatewayRestartDrainContinuation(async () => await flushAllInboundDebouncers(1_000)),
+    ).resolves.toEqual({ drained: true, flushed: 1, remaining: 0 });
+    expect(delivered).toEqual(["delivered"]);
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it("lets a timer-started debounce callback enqueue through the pending signal fence", async () => {
+    vi.useFakeTimers();
+    const flushFinished = createDeferred();
+    const delivered: string[] = [];
+    const onError = vi.fn();
+    const debouncer = createInboundDebouncer<{ key: string; value: string }>({
+      debounceMs: 10,
+      buildKey: (item) => item.key,
+      onError,
+      onFlush: async (items) => {
+        try {
+          const value = await enqueueCommandInLane(
+            CommandLane.Main,
+            async () => items[0]?.value ?? "",
+          );
+          delivered.push(value);
+        } finally {
+          flushFinished.resolve();
+        }
+      },
+    });
+
+    const inboundRoot = tryBeginGatewayRootWorkAdmission();
+    expect(inboundRoot).not.toBeNull();
+    await inboundRoot?.run(
+      async () => await debouncer.enqueue({ key: "signal-gap", value: "delivered" }),
+    );
+    inboundRoot?.release();
+
+    const pendingSignal = beginGatewayRestartSignalAdmission();
+    vi.advanceTimersByTime(10);
+    await flushFinished.promise;
+
+    expect(delivered).toEqual(["delivered"]);
+    expect(onError).not.toHaveBeenCalled();
+    markGatewayDraining();
+    expect(pendingSignal.rollback()).toBe(false);
+    await expect(
+      runWithGatewayRestartDrainContinuation(async () => await flushAllInboundDebouncers(1_000)),
+    ).resolves.toEqual({ drained: true, flushed: 0, remaining: 0 });
+  });
+
+  it("tracks a timer-started debounce callback through restart drain settlement", async () => {
+    vi.useFakeTimers();
+    const flushStarted = createDeferred();
+    const allowCommandEnqueue = createDeferred();
+    const delivered: string[] = [];
+    const onError = vi.fn();
+    const debouncer = createInboundDebouncer<{ key: string; value: string }>({
+      debounceMs: 10,
+      buildKey: (item) => item.key,
+      onError,
+      onFlush: async (items) => {
+        flushStarted.resolve();
+        await allowCommandEnqueue.promise;
+        const value = await enqueueCommandInLane(
+          CommandLane.Main,
+          async () => items[0]?.value ?? "",
+        );
+        delivered.push(value);
+      },
+    });
+
+    const inboundRoot = tryBeginGatewayRootWorkAdmission();
+    expect(inboundRoot).not.toBeNull();
+    await inboundRoot?.run(
+      async () => await debouncer.enqueue({ key: "timer-boundary", value: "delivered" }),
+    );
+    inboundRoot?.release();
+    markGatewayDraining();
+
+    // Let the normal timer remove the buffer and enter onFlush before the
+    // global restart sweep snapshots pending debounce work.
+    vi.advanceTimersByTime(10);
+    await flushStarted.promise;
+
+    const restartDrain = runWithGatewayRestartDrainContinuation(
+      async () => await flushAllInboundDebouncers(1_000),
+    );
+    let drainSettled = false;
+    void restartDrain.then(
+      () => {
+        drainSettled = true;
+      },
+      () => {
+        drainSettled = true;
+      },
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(drainSettled).toBe(false);
+
+    allowCommandEnqueue.resolve();
+
+    await expect(restartDrain).resolves.toEqual({ drained: true, flushed: 0, remaining: 0 });
+    expect(delivered).toEqual(["delivered"]);
+    expect(onError).not.toHaveBeenCalled();
   });
 
   it("does not affect already-active tasks after markGatewayDraining", async () => {

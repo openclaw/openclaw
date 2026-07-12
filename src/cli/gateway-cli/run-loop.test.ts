@@ -54,6 +54,22 @@ const getInspectableActiveTaskRestartBlockers = vi.fn(
 );
 const markGatewayDraining = vi.fn();
 const waitForActiveTasks = vi.fn(async (_timeoutMs?: number) => ({ drained: true }));
+const flushAllInboundDebouncers = vi.fn(async (_timeoutMs?: number) => ({
+  drained: true,
+  flushed: 0,
+  remaining: 0,
+}));
+const waitForChannelRunQueueDrain = vi.fn(async (_timeoutMs?: number) => ({
+  drained: true,
+  remaining: 0,
+}));
+const waitForFollowupQueueDrain = vi.fn(async (_timeoutMs?: number) => ({
+  drained: true,
+  remaining: 0,
+}));
+const runWithGatewayRestartDrainContinuation = vi.fn(
+  async <T>(run: () => Promise<T>): Promise<T> => await run(),
+);
 const resetAllLanes = vi.fn();
 const advanceCronActiveJobGeneration = vi.fn();
 const resetCronActiveJobs = vi.fn();
@@ -165,6 +181,23 @@ vi.mock("../../process/command-queue.js", () => ({
   markGatewayDraining: () => markGatewayDraining(),
   waitForActiveTasks: (timeoutMs?: number) => waitForActiveTasks(timeoutMs),
   resetAllLanes: () => resetAllLanes(),
+}));
+
+vi.mock("../../process/gateway-work-admission.js", () => ({
+  runWithGatewayRestartDrainContinuation: <T>(run: () => Promise<T>) =>
+    runWithGatewayRestartDrainContinuation(run),
+}));
+
+vi.mock("../../auto-reply/inbound-debounce.js", () => ({
+  flushAllInboundDebouncers: (timeoutMs?: number) => flushAllInboundDebouncers(timeoutMs),
+}));
+
+vi.mock("../../auto-reply/reply/queue/drain-all.js", () => ({
+  waitForFollowupQueueDrain: (timeoutMs?: number) => waitForFollowupQueueDrain(timeoutMs),
+}));
+
+vi.mock("../../channels/run-queue-registry.js", () => ({
+  waitForChannelRunQueueDrain: (timeoutMs?: number) => waitForChannelRunQueueDrain(timeoutMs),
 }));
 
 vi.mock("../../cron/active-jobs.js", () => ({
@@ -326,6 +359,12 @@ function expectRestartCloseCall(
   const closeArgs = close.mock.calls[0]?.[0];
   expect(closeArgs?.drainTimeoutMs).toBeLessThanOrEqual(maxDrainTimeoutMs);
   expect(closeArgs?.drainTimeoutMs).toBeGreaterThanOrEqual(0);
+}
+
+function expectBoundedDrainTimeout(timeoutMs: number | undefined, maxTimeoutMs: number) {
+  expect(timeoutMs).toEqual(expect.any(Number));
+  expect(timeoutMs).toBeGreaterThanOrEqual(0);
+  expect(timeoutMs).toBeLessThanOrEqual(maxTimeoutMs);
 }
 
 function createSignaledStart(close: GatewayCloseFn) {
@@ -498,7 +537,7 @@ describe("runGatewayLoop", () => {
       expect(markGatewayDraining.mock.invocationCallOrder[0]).toBeLessThan(
         loadConfig.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
       );
-      expect(waitForActiveTasks).toHaveBeenCalledWith(90_000);
+      expectBoundedDrainTimeout(waitForActiveTasks.mock.calls[0]?.[0], 90_000);
       expectRestartCloseCall(closeFirst, 90_000);
       await startedSecond;
       expect(start).toHaveBeenCalledTimes(2);
@@ -512,6 +551,46 @@ describe("runGatewayLoop", () => {
         reason: "gateway stopping",
         restartExpectedMs: null,
       });
+    });
+  });
+
+  it("flushes inbound buffers and drains both queue layers behind closed admission", async () => {
+    vi.clearAllMocks();
+    consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({});
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { close, start, exited } = await createSignaledLoopHarness();
+      const sigterm = captureSignal("SIGTERM");
+      const sigint = captureSignal("SIGINT");
+
+      sigterm();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+
+      expect(runWithGatewayRestartDrainContinuation).toHaveBeenCalledOnce();
+      expect(flushAllInboundDebouncers).toHaveBeenCalledOnce();
+      expect(waitForChannelRunQueueDrain).toHaveBeenCalledOnce();
+      expect(waitForFollowupQueueDrain).toHaveBeenCalledOnce();
+      expect(markGatewayDraining.mock.invocationCallOrder[0]).toBeLessThan(
+        flushAllInboundDebouncers.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+      expect(flushAllInboundDebouncers.mock.invocationCallOrder[0]).toBeLessThan(
+        waitForChannelRunQueueDrain.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+      expect(waitForChannelRunQueueDrain.mock.invocationCallOrder[0]).toBeLessThan(
+        waitForFollowupQueueDrain.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+      expect(waitForFollowupQueueDrain.mock.invocationCallOrder[0]).toBeLessThan(
+        close.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+      expect(start).toHaveBeenCalledTimes(2);
+
+      sigint();
+      await expect(exited).resolves.toBe(0);
     });
   });
 
@@ -534,13 +613,59 @@ describe("runGatewayLoop", () => {
         setImmediate(resolve);
       });
 
-      expect(waitForActiveTasks).toHaveBeenCalledWith(2_500);
-      expect(waitForActiveEmbeddedRuns).toHaveBeenCalledWith(2_500);
+      const activeWorkDrainTimeoutMs = waitForActiveTasks.mock.calls[0]?.[0];
+      expectBoundedDrainTimeout(activeWorkDrainTimeoutMs, 2_500);
+      expect(waitForActiveEmbeddedRuns).toHaveBeenCalledWith(activeWorkDrainTimeoutMs);
       expect(start).toHaveBeenCalledTimes(2);
 
       sigint();
       await expect(exited).resolves.toBe(0);
     });
+  });
+
+  it("shares the remaining restart deadline after earlier queue drains", async () => {
+    vi.clearAllMocks();
+    consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({ waitMs: 100 });
+    getActiveTaskCount.mockReturnValueOnce(1).mockReturnValue(0);
+    getActiveEmbeddedRunCount.mockReturnValueOnce(1).mockReturnValue(0);
+    let now = 1_000;
+    const dateNowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    flushAllInboundDebouncers.mockImplementationOnce(async (timeoutMs) => {
+      expect(timeoutMs).toBe(100);
+      now += 35;
+      return { drained: true, flushed: 1, remaining: 0 };
+    });
+    waitForChannelRunQueueDrain.mockImplementationOnce(async (timeoutMs) => {
+      expect(timeoutMs).toBe(65);
+      now += 25;
+      return { drained: true, remaining: 0 };
+    });
+
+    try {
+      await withIsolatedSignals(async ({ captureSignal }) => {
+        const { close, start, exited } = await createSignaledLoopHarness();
+        const sigterm = captureSignal("SIGTERM");
+        const sigint = captureSignal("SIGINT");
+
+        sigterm();
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+
+        expect(waitForActiveTasks).toHaveBeenCalledWith(40);
+        expect(waitForActiveEmbeddedRuns).toHaveBeenCalledWith(40);
+        expectRestartCloseCall(close, 40);
+        expect(start).toHaveBeenCalledTimes(2);
+
+        sigint();
+        await expect(exited).resolves.toBe(0);
+      });
+    } finally {
+      dateNowSpy.mockRestore();
+    }
   });
 
   it("caps reply drain time for unbounded SIGTERM restarts", async () => {
@@ -670,8 +795,9 @@ describe("runGatewayLoop", () => {
         setImmediate(resolve);
       });
 
-      expect(waitForActiveTasks).toHaveBeenCalledWith(90_000);
-      expect(waitForActiveEmbeddedRuns).toHaveBeenCalledWith(90_000);
+      const activeWorkDrainTimeoutMs = waitForActiveTasks.mock.calls[0]?.[0];
+      expectBoundedDrainTimeout(activeWorkDrainTimeoutMs, 90_000);
+      expect(waitForActiveEmbeddedRuns).toHaveBeenCalledWith(activeWorkDrainTimeoutMs);
       expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, {
         mode: "compacting",
         reason: "restart",
@@ -915,8 +1041,9 @@ describe("runGatewayLoop", () => {
         mode: "compacting",
         reason: "restart",
       });
-      expect(waitForActiveTasks).toHaveBeenCalledWith(1_234);
-      expect(waitForActiveEmbeddedRuns).toHaveBeenCalledWith(1_234);
+      const activeWorkDrainTimeoutMs = waitForActiveTasks.mock.calls[0]?.[0];
+      expectBoundedDrainTimeout(activeWorkDrainTimeoutMs, 1_234);
+      expect(waitForActiveEmbeddedRuns).toHaveBeenCalledWith(activeWorkDrainTimeoutMs);
       expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, {
         mode: "all",
         reason: "restart",
@@ -1488,8 +1615,9 @@ describe("runGatewayLoop", () => {
         setImmediate(resolve);
       });
 
-      expect(waitForActiveTasks).toHaveBeenCalledWith(DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS);
-      expect(waitForActiveEmbeddedRuns).toHaveBeenCalledWith(DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS);
+      const activeWorkDrainTimeoutMs = waitForActiveTasks.mock.calls[0]?.[0];
+      expectBoundedDrainTimeout(activeWorkDrainTimeoutMs, DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS);
+      expect(waitForActiveEmbeddedRuns).toHaveBeenCalledWith(activeWorkDrainTimeoutMs);
       expect(markGatewayDraining).toHaveBeenCalledOnce();
       expect(start).toHaveBeenCalledTimes(2);
     });

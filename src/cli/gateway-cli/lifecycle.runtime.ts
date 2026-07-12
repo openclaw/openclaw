@@ -7,6 +7,9 @@ export {
   waitForActiveEmbeddedRuns,
 } from "../../agents/embedded-agent-runner/runs.js";
 export { markRestartAbortedMainSessions } from "../../agents/main-session-restart-recovery.js";
+export { flushAllInboundDebouncers } from "../../auto-reply/inbound-debounce.js";
+export { waitForFollowupQueueDrain } from "../../auto-reply/reply/queue/drain-all.js";
+export { waitForChannelRunQueueDrain } from "../../channels/run-queue-registry.js";
 export { getRuntimeConfig } from "../../config/config.js";
 export {
   respawnGatewayProcessForUpdate,
@@ -46,6 +49,7 @@ export {
   resetAllLanes,
   waitForActiveTasks,
 } from "../../process/command-queue.js";
+export { runWithGatewayRestartDrainContinuation } from "../../process/gateway-work-admission.js";
 export { getInspectableActiveTaskRestartBlockers } from "../../tasks/task-registry.maintenance.js";
 export { reloadTaskRuntimeStateFromStore } from "../../tasks/runtime-internal.js";
 export { abortPendingChannelReloads } from "../../gateway/server-reload-handlers.js";

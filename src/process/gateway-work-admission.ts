@@ -14,6 +14,8 @@ export class GatewayDrainingError extends Error {
 type GatewayRootWorkAdmission = {
   references: number;
   released: boolean;
+  allowSubordinateRestartWork: boolean;
+  requiredContinuation: boolean;
 };
 
 type GatewayWorkAdmissionState = {
@@ -25,6 +27,7 @@ type GatewayWorkAdmissionState = {
   suspendInvalidated?: () => void;
   activeRootWork: Set<GatewayRootWorkAdmission>;
   currentRootWork: AsyncLocalStorage<GatewayRootWorkAdmission>;
+  restartDrainContinuationDepth: number;
   suspendOpenWaiters: Set<() => void>;
 };
 
@@ -38,6 +41,7 @@ const GATEWAY_WORK_ADMISSION_STATE = resolveGlobalSingleton(
     suspendGeneration: 0,
     activeRootWork: new Set(),
     currentRootWork: new AsyncLocalStorage(),
+    restartDrainContinuationDepth: 0,
     suspendOpenWaiters: new Set(),
   }),
 );
@@ -58,8 +62,16 @@ export type GatewayRestartSignalAdmissionLease = {
   rollback: () => boolean;
 };
 
-function createGatewayRootWorkAdmission(): GatewayRootWorkAdmissionLease {
-  const admission: GatewayRootWorkAdmission = { references: 1, released: false };
+function createGatewayRootWorkAdmission(options?: {
+  allowSubordinateRestartWork?: boolean;
+  requiredContinuation?: boolean;
+}): GatewayRootWorkAdmissionLease {
+  const admission: GatewayRootWorkAdmission = {
+    references: 1,
+    released: false,
+    allowSubordinateRestartWork: options?.allowSubordinateRestartWork === true,
+    requiredContinuation: options?.requiredContinuation === true,
+  };
   GATEWAY_WORK_ADMISSION_STATE.activeRootWork.add(admission);
   const release = createGatewayRootWorkRelease(admission);
   return {
@@ -115,13 +127,21 @@ export function isGatewayWorkAdmissionClosed(): boolean {
 /** Existing admitted roots may finish spawning subordinate command/session work.
  * New async chains still see the global fence, preserving refuse-only suspension. */
 export function isGatewaySubordinateWorkAdmissionClosed(): boolean {
+  const current = GATEWAY_WORK_ADMISSION_STATE.currentRootWork.getStore();
   if (
     GATEWAY_WORK_ADMISSION_STATE.restartDraining ||
     GATEWAY_WORK_ADMISSION_STATE.restartSignalPending
   ) {
-    return true;
+    const requiredContinuationMayFinish =
+      current?.requiredContinuation === true &&
+      (GATEWAY_WORK_ADMISSION_STATE.restartSignalPending ||
+        (GATEWAY_WORK_ADMISSION_STATE.restartDrainContinuationDepth ?? 0) > 0);
+    return (
+      !current ||
+      current.released ||
+      (!current.allowSubordinateRestartWork && !requiredContinuationMayFinish)
+    );
   }
-  const current = GATEWAY_WORK_ADMISSION_STATE.currentRootWork.getStore();
   if (current) {
     // Reset/release retires inherited ALS descendants. They must explicitly
     // re-enter admission instead of spawning untracked subordinate work.
@@ -257,21 +277,73 @@ export async function runWithGatewayIndependentRootWorkAdmission<T>(
   }
 }
 
+async function runWithGatewayRequiredRootWorkAdmission<T>(run: () => Promise<T>): Promise<T> {
+  while (true) {
+    if (GATEWAY_WORK_ADMISSION_STATE.restartDraining) {
+      throw new Error("gateway is draining for restart");
+    }
+    if (
+      !GATEWAY_WORK_ADMISSION_STATE.restartSignalPending &&
+      GATEWAY_WORK_ADMISSION_STATE.suspendPhase === "accepting"
+    ) {
+      const admission = createGatewayRootWorkAdmission({ requiredContinuation: true });
+      try {
+        return await admission.run(run);
+      } finally {
+        admission.release();
+      }
+    }
+    await new Promise<void>((resolve) => {
+      GATEWAY_WORK_ADMISSION_STATE.suspendOpenWaiters.add(resolve);
+    });
+  }
+}
+
 /**
  * Detaches required follow-up from the current admitted transaction.
  * A live parent synchronously reserves a tracked root even after restart or
  * suspension closes admission; callers without a live parent use the normal
- * independent-root fence.
+ * independent-root fence while preserving required-continuation ownership.
  */
 export function runWithGatewayIndependentRootWorkContinuation<T>(
   run: () => Promise<T>,
 ): Promise<T> {
   const parent = GATEWAY_WORK_ADMISSION_STATE.currentRootWork.getStore();
   if (!parent || parent.released) {
-    return runWithGatewayIndependentRootWorkAdmission(run);
+    return runWithGatewayRequiredRootWorkAdmission(run);
   }
-  const admission = createGatewayRootWorkAdmission();
+  const allowSubordinateRestartWork =
+    parent.allowSubordinateRestartWork ||
+    (GATEWAY_WORK_ADMISSION_STATE.restartDraining &&
+      (GATEWAY_WORK_ADMISSION_STATE.restartDrainContinuationDepth ?? 0) > 0);
+  const admission = createGatewayRootWorkAdmission({
+    allowSubordinateRestartWork,
+    requiredContinuation: true,
+  });
   return admission.run(run).finally(admission.release);
+}
+
+/**
+ * Runs the core-owned restart drain as tracked root work after admission closes.
+ * Only this scope and required continuations reserved while it is live may
+ * enqueue subordinate command work through the restart fence.
+ */
+export async function runWithGatewayRestartDrainContinuation<T>(run: () => Promise<T>): Promise<T> {
+  if (!GATEWAY_WORK_ADMISSION_STATE.restartDraining) {
+    throw new Error("gateway restart drain continuation requires closed restart admission");
+  }
+  GATEWAY_WORK_ADMISSION_STATE.restartDrainContinuationDepth =
+    (GATEWAY_WORK_ADMISSION_STATE.restartDrainContinuationDepth ?? 0) + 1;
+  const admission = createGatewayRootWorkAdmission({ allowSubordinateRestartWork: true });
+  try {
+    return await admission.run(run);
+  } finally {
+    admission.release();
+    GATEWAY_WORK_ADMISSION_STATE.restartDrainContinuationDepth = Math.max(
+      0,
+      (GATEWAY_WORK_ADMISSION_STATE.restartDrainContinuationDepth ?? 1) - 1,
+    );
+  }
 }
 
 /** Transfers an admitted request root to work that intentionally outlives its handler. */
@@ -350,6 +422,7 @@ export function resetGatewayWorkAdmission(): void {
   GATEWAY_WORK_ADMISSION_STATE.activeRootWork.clear();
   GATEWAY_WORK_ADMISSION_STATE.restartDraining = false;
   GATEWAY_WORK_ADMISSION_STATE.restartSignalPending = false;
+  GATEWAY_WORK_ADMISSION_STATE.restartDrainContinuationDepth = 0;
   GATEWAY_WORK_ADMISSION_STATE.restartSignalGeneration += 1;
   if (GATEWAY_WORK_ADMISSION_STATE.suspendPhase !== "accepting") {
     invalidateSuspendAdmission();

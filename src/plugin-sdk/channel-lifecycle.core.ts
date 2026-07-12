@@ -1,5 +1,6 @@
 // Channel lifecycle core contracts define account lifecycle snapshots and sync hooks.
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.core.js";
+import { registerChannelRunQueue } from "../channels/run-queue-registry.js";
 import { createRunStateMachine, type RunStateStatusSink } from "../channels/run-state-machine.js";
 import { KeyedAsyncQueue } from "./keyed-async-queue.js";
 
@@ -55,6 +56,8 @@ export function createAccountStatusSink(params: {
  */
 export function createChannelRunQueue(params: ChannelRunQueueParams): ChannelRunQueue {
   const queue = new KeyedAsyncQueue();
+  let pendingCount = 0;
+  const unregisterQueue = registerChannelRunQueue({ getPendingCount: () => pendingCount });
   const runState = createRunStateMachine({
     setStatus: params.setStatus,
     abortSignal: params.abortSignal,
@@ -71,24 +74,38 @@ export function createChannelRunQueue(params: ChannelRunQueueParams): ChannelRun
   return {
     enqueue(key, task) {
       void queue
-        .enqueue(key, async () => {
-          if (!runState.isActive()) {
-            return;
-          }
-          runState.onRunStart();
-          try {
-            // Deactivation can happen while this key waited behind older work.
+        .enqueue(
+          key,
+          async () => {
             if (!runState.isActive()) {
               return;
             }
-            await task({ lifecycleSignal: params.abortSignal });
-          } finally {
-            runState.onRunEnd();
-          }
-        })
+            runState.onRunStart();
+            try {
+              // Deactivation can happen while this key waited behind older work.
+              if (!runState.isActive()) {
+                return;
+              }
+              await task({ lifecycleSignal: params.abortSignal });
+            } finally {
+              runState.onRunEnd();
+            }
+          },
+          {
+            onEnqueue: () => {
+              pendingCount += 1;
+            },
+            onSettle: () => {
+              pendingCount = Math.max(0, pendingCount - 1);
+            },
+          },
+        )
         .catch(reportError);
     },
-    deactivate: runState.deactivate,
+    deactivate() {
+      runState.deactivate();
+      unregisterQueue();
+    },
   };
 }
 
