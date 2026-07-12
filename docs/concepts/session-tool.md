@@ -71,6 +71,8 @@ Messages and A2A follow-up replies are marked as inter-session data in the recei
 
 After the target responds, OpenClaw can run a **reply-back loop** where the agents alternate messages (up to `session.agentToAgent.maxPingPongTurns`, range 0-20, default 5). The target agent can reply `REPLY_SKIP` to stop early.
 
+Pass `watch: true` to also register the sender as a state-change watcher of the target: when another actor later sends the target a direct human message or changes its goal, the sender receives a system notice pointing at `session_status` `changesSince` (see [Session state changes](/concepts/session-tool#session-state-changes)). Registration starts at the target's current state version, so only changes after the send produce notices. The result reports `watched: true` when registration succeeded; watches expire with normal signal-log retention and are cleared when the watcher session resets.
+
 ## Status and orchestration helpers
 
 `session_status` is the lightweight `/status`-equivalent tool for the current or another visible session. It reports usage, time, model/runtime state, and linked background-task context when present. Like `/status`, it can backfill sparse token/cache counters from the latest transcript usage entry, and `model=default` clears a per-session override. Use `sessionKey="current"` for the caller's current session; visible client labels such as `openclaw-tui` are not session keys.
