@@ -98,7 +98,7 @@ type MeetArtifactOptions = ResolveSpaceOptions & {
   output?: string;
 };
 
-export type GoogleMeetExportRequest = {
+type GoogleMeetExportRequest = {
   meeting?: string;
   conferenceRecord?: string;
   calendarEventId?: string;
@@ -113,7 +113,7 @@ export type GoogleMeetExportRequest = {
   earlyBeforeMinutes?: number;
 };
 
-export type GoogleMeetExportWarning = {
+type GoogleMeetExportWarning = {
   type:
     | "smart_notes"
     | "transcript_entries"
@@ -124,7 +124,7 @@ export type GoogleMeetExportWarning = {
   message: string;
 };
 
-export type GoogleMeetExportManifest = {
+type GoogleMeetExportManifest = {
   generatedAt: string;
   request?: GoogleMeetExportRequest;
   tokenSource?: "cached-access-token" | "refresh-token";
@@ -613,6 +613,7 @@ function writeRecoverCurrentTabResult(
         url: result.browser.browserUrl ?? result.tab?.url ?? "unknown",
         transport: result.transport,
         mode: "transcribe",
+        agentId: "main",
         state: "active",
         createdAt: "",
         updatedAt: "",
@@ -631,6 +632,17 @@ function writeRecoverCurrentTabResult(
       },
     });
   }
+}
+
+function writeLeaveResult(sessionId: string, result: { browserLeft?: boolean }): void {
+  if (result.browserLeft === false) {
+    writeStdoutLine(
+      "left %s, but the browser participant may still be in the call; check session notes",
+      sessionId,
+    );
+    return;
+  }
+  writeStdoutLine("left %s", sessionId);
 }
 
 function resolveMeetingInput(config: GoogleMeetConfig, value?: string): string {
@@ -2327,11 +2339,11 @@ export function registerGoogleMeetCli(params: {
         payload: { sessionId },
       });
       if (delegated.ok) {
-        const result = delegated.payload as { found?: boolean };
+        const result = delegated.payload as { found?: boolean; browserLeft?: boolean };
         if (!result.found) {
           throw new Error("session not found");
         }
-        writeStdoutLine("left %s", sessionId);
+        writeLeaveResult(sessionId, result);
         return;
       }
       const rt = await params.ensureRuntime();
@@ -2339,7 +2351,7 @@ export function registerGoogleMeetCli(params: {
       if (!result.found) {
         throw new Error("session not found");
       }
-      writeStdoutLine("left %s", sessionId);
+      writeLeaveResult(sessionId, result);
     });
 
   root

@@ -88,8 +88,8 @@ describe("startQaLiveLaneGateway", () => {
       transport: createStubTransport(),
       transportBaseUrl: "http://127.0.0.1:43123",
       providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.5",
-      alternateModel: "mock-openai/gpt-5.5-alt",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      alternateModel: "mock-openai/gpt-5.6-luna-alt",
       controlUiEnabled: false,
     });
 
@@ -110,8 +110,8 @@ describe("startQaLiveLaneGateway", () => {
       transport: createStubTransport(),
       transportBaseUrl: "http://127.0.0.1:43123",
       providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.5",
-      alternateModel: "mock-openai/gpt-5.5-alt",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      alternateModel: "mock-openai/gpt-5.6-luna-alt",
       controlUiEnabled: false,
     });
 
@@ -162,8 +162,8 @@ describe("startQaLiveLaneGateway", () => {
       transport: createStubTransport(),
       transportBaseUrl: "http://127.0.0.1:43123",
       providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.5",
-      alternateModel: "mock-openai/gpt-5.5-alt",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      alternateModel: "mock-openai/gpt-5.6-luna-alt",
       controlUiEnabled: false,
     });
 
@@ -178,8 +178,8 @@ describe("startQaLiveLaneGateway", () => {
       transport: createStubTransport(),
       transportBaseUrl: "http://127.0.0.1:43123",
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.5",
-      alternateModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.6-luna",
+      alternateModel: "openai/gpt-5.6-luna",
       controlUiEnabled: false,
     });
 
@@ -202,8 +202,8 @@ describe("startQaLiveLaneGateway", () => {
         transport: createStubTransport(),
         transportBaseUrl: "http://127.0.0.1:43123",
         providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.5",
-        alternateModel: "mock-openai/gpt-5.5-alt",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        alternateModel: "mock-openai/gpt-5.6-luna-alt",
         controlUiEnabled: false,
       }),
     ).rejects.toThrow("gateway failed");
@@ -221,8 +221,8 @@ describe("startQaLiveLaneGateway", () => {
         transport: createStubTransport(),
         transportBaseUrl: "http://127.0.0.1:43123",
         providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.5",
-        alternateModel: "mock-openai/gpt-5.5-alt",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        alternateModel: "mock-openai/gpt-5.6-luna-alt",
         controlUiEnabled: false,
       }),
     ).rejects.toThrow(
@@ -239,8 +239,8 @@ describe("startQaLiveLaneGateway", () => {
       transport: createStubTransport(),
       transportBaseUrl: "http://127.0.0.1:43123",
       providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.5",
-      alternateModel: "mock-openai/gpt-5.5-alt",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      alternateModel: "mock-openai/gpt-5.6-luna-alt",
       controlUiEnabled: false,
     });
 
@@ -259,13 +259,53 @@ describe("startQaLiveLaneGateway", () => {
       transport: createStubTransport(),
       transportBaseUrl: "http://127.0.0.1:43123",
       providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.5",
-      alternateModel: "mock-openai/gpt-5.5-alt",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      alternateModel: "mock-openai/gpt-5.6-luna-alt",
       controlUiEnabled: false,
     });
 
     await expect(harness.stop()).rejects.toThrow(
       "failed to stop QA live lane resources:\ngateway stop failed: gateway down\nmock provider stop failed: mock down",
     );
+  });
+
+  it("retries only mock cleanup after gateway preservation succeeds", async () => {
+    mockStop.mockRejectedValueOnce(new Error("mock down"));
+    const harness = await startQaLiveLaneGateway({
+      repoRoot: "/tmp/openclaw-repo",
+      transport: createStubTransport(),
+      transportBaseUrl: "http://127.0.0.1:43123",
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      alternateModel: "mock-openai/gpt-5.6-luna-alt",
+      controlUiEnabled: false,
+    });
+    const stopOptions = { preserveToDir: ".artifacts/qa-e2e/debug" };
+
+    await expect(harness.stop(stopOptions)).rejects.toThrow("mock provider stop failed: mock down");
+    await expect(harness.stop(stopOptions)).resolves.toBeUndefined();
+
+    expect(gatewayStop).toHaveBeenCalledTimes(1);
+    expect(gatewayStop).toHaveBeenCalledWith(stopOptions);
+    expect(mockStop).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries only gateway cleanup after mock shutdown succeeds", async () => {
+    gatewayStop.mockRejectedValueOnce(new Error("gateway down"));
+    const harness = await startQaLiveLaneGateway({
+      repoRoot: "/tmp/openclaw-repo",
+      transport: createStubTransport(),
+      transportBaseUrl: "http://127.0.0.1:43123",
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      alternateModel: "mock-openai/gpt-5.6-luna-alt",
+      controlUiEnabled: false,
+    });
+
+    await expect(harness.stop()).rejects.toThrow("gateway stop failed: gateway down");
+    await expect(harness.stop()).resolves.toBeUndefined();
+
+    expect(gatewayStop).toHaveBeenCalledTimes(2);
+    expect(mockStop).toHaveBeenCalledTimes(1);
   });
 });

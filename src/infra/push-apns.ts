@@ -7,6 +7,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../config/paths.js";
 import type { DeviceIdentity } from "./device-identity.js";
 import { formatErrorMessage, toErrorObject } from "./errors.js";
@@ -211,9 +212,9 @@ function parseReason(body: string): string | undefined {
     const parsed = JSON.parse(trimmed) as { reason?: unknown };
     return typeof parsed.reason === "string" && parsed.reason.trim().length > 0
       ? parsed.reason.trim()
-      : trimmed.slice(0, 200);
+      : truncateUtf16Safe(trimmed, 200);
   } catch {
-    return trimmed.slice(0, 200);
+    return truncateUtf16Safe(trimmed, 200);
   }
 }
 
@@ -930,7 +931,10 @@ function resolveExecApprovalAlertBody(): string {
   return EXEC_APPROVAL_GENERIC_ALERT_BODY;
 }
 
-function createExecApprovalAlertPayload(params: { nodeId: string; approvalId: string }): object {
+function createExecApprovalAlertPayload(params: {
+  approvalId: string;
+  gatewayDeviceId: string;
+}): object {
   return {
     aps: {
       alert: {
@@ -944,12 +948,16 @@ function createExecApprovalAlertPayload(params: { nodeId: string; approvalId: st
     openclaw: {
       kind: "exec.approval.requested",
       approvalId: params.approvalId,
+      gatewayDeviceId: params.gatewayDeviceId,
       ts: Date.now(),
     },
   };
 }
 
-function createExecApprovalResolvedPayload(params: { nodeId: string; approvalId: string }): object {
+function createExecApprovalResolvedPayload(params: {
+  approvalId: string;
+  gatewayDeviceId: string;
+}): object {
   return {
     aps: {
       "content-available": 1,
@@ -957,6 +965,7 @@ function createExecApprovalResolvedPayload(params: { nodeId: string; approvalId:
     openclaw: {
       kind: "exec.approval.resolved",
       approvalId: params.approvalId,
+      gatewayDeviceId: params.gatewayDeviceId,
       ts: Date.now(),
     },
   };
@@ -1012,6 +1021,7 @@ type RelayApnsBackgroundWakeParams = ApnsBackgroundWakeCommonParams & {
 type ApnsExecApprovalAlertCommonParams = {
   nodeId: string;
   approvalId: string;
+  gatewayDeviceId: string;
   timeoutMs?: number;
 };
 
@@ -1035,6 +1045,7 @@ type RelayApnsExecApprovalAlertParams = ApnsExecApprovalAlertCommonParams & {
 type ApnsExecApprovalResolvedCommonParams = {
   nodeId: string;
   approvalId: string;
+  gatewayDeviceId: string;
   timeoutMs?: number;
 };
 
@@ -1127,8 +1138,8 @@ export async function sendApnsExecApprovalAlert(
   params: DirectApnsExecApprovalAlertParams | RelayApnsExecApprovalAlertParams,
 ): Promise<ApnsPushAlertResult> {
   const payload = createExecApprovalAlertPayload({
-    nodeId: params.nodeId,
     approvalId: params.approvalId,
+    gatewayDeviceId: params.gatewayDeviceId,
   });
 
   if (params.registration.transport === "relay") {
@@ -1160,8 +1171,8 @@ export async function sendApnsExecApprovalResolvedWake(
   params: DirectApnsExecApprovalResolvedParams | RelayApnsExecApprovalResolvedParams,
 ): Promise<ApnsPushWakeResult> {
   const payload = createExecApprovalResolvedPayload({
-    nodeId: params.nodeId,
     approvalId: params.approvalId,
+    gatewayDeviceId: params.gatewayDeviceId,
   });
 
   if (params.registration.transport === "relay") {

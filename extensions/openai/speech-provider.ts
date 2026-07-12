@@ -1,4 +1,5 @@
 // Openai provider module implements model/runtime integration.
+import { isVoiceMessageCompatibleAudio } from "openclaw/plugin-sdk/media-runtime";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
   SpeechDirectiveTokenParseContext,
@@ -364,11 +365,14 @@ export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
         timeoutMs: req.timeoutMs,
         maxBytes: resolveGeneratedAudioMaxBytes(req),
       });
+      const fileExtension = responseFormatToFileExtension(responseFormat);
       return {
         audioBuffer,
         outputFormat: responseFormat,
-        fileExtension: responseFormatToFileExtension(responseFormat),
-        voiceCompatible: req.target === "voice-note" && responseFormat === "opus",
+        fileExtension,
+        voiceCompatible:
+          req.target === "voice-note" &&
+          isVoiceMessageCompatibleAudio({ fileName: `speech${fileExtension}` }),
       };
     },
     synthesizeTelephony: async (req) => {

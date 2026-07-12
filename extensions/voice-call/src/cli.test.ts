@@ -1,7 +1,8 @@
 // Voice Call tests cover cli plugin behavior.
+import { Command } from "commander";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import { describe, expect, it } from "vitest";
-import { testing } from "./cli.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { registerVoiceCallCli, testing } from "./cli.js";
 
 describe("voice-call CLI gateway fallback", () => {
   it("treats abnormal local gateway closes as standalone-runtime fallback candidates", () => {
@@ -77,5 +78,76 @@ describe("voice-call CLI timeout helpers", () => {
       testing.readGatewayPollTimeoutMs({ pollTimeoutMs: Number.MAX_SAFE_INTEGER }, 45_000),
     ).toBe(MAX_TIMER_TIMEOUT_MS);
     expect(testing.readGatewayPollTimeoutMs({ pollTimeoutMs: Number.NaN }, 45_000)).toBe(45_000);
+  });
+});
+
+function captureStdout() {
+  let output = "";
+  const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
+    output += String(chunk);
+    return true;
+  }) as typeof process.stdout.write);
+  return {
+    output: () => output,
+    restore: () => writeSpy.mockRestore(),
+  };
+}
+
+describe("voice-call CLI status fallback", () => {
+  afterEach(() => {
+    testing.setCallGatewayFromCliForTests(undefined);
+  });
+
+  function buildProgram(manager: Record<string, unknown>): Command {
+    const program = new Command();
+    registerVoiceCallCli({
+      program,
+      config: {} as never,
+      ensureRuntime: async () => ({ manager }) as never,
+      logger: { info() {}, warn() {}, error() {}, debug() {} } as never,
+    });
+    return program;
+  }
+
+  async function runStatusWithUnavailableGateway(
+    manager: Record<string, unknown>,
+  ): Promise<unknown> {
+    testing.setCallGatewayFromCliForTests(
+      vi.fn(async () => {
+        throw new Error("connect ECONNREFUSED 127.0.0.1:18789");
+      }) as never,
+    );
+    const program = buildProgram(manager);
+    const capturer = captureStdout();
+    try {
+      await program.parseAsync(["voicecall", "status", "--call-id", "call-1", "--json"], {
+        from: "user",
+      });
+    } finally {
+      capturer.restore();
+    }
+    return JSON.parse(capturer.output().trim());
+  }
+
+  it("uses the manager's persisted fallback when the gateway is unavailable", async () => {
+    const result = await runStatusWithUnavailableGateway({
+      getActiveCalls: () => [],
+      getCallFromMemoryOrStore: async () => ({
+        callId: "call-1",
+        providerCallId: "CA123",
+        state: "completed",
+        endReason: "completed",
+        endedAt: 1,
+      }),
+    });
+    expect(result).toMatchObject({ callId: "call-1", state: "completed" });
+  });
+
+  it("reports found:false when the call is neither active nor persisted", async () => {
+    const result = await runStatusWithUnavailableGateway({
+      getActiveCalls: () => [],
+      getCallFromMemoryOrStore: async () => undefined,
+    });
+    expect(result).toEqual({ found: false });
   });
 });

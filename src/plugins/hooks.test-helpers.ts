@@ -1,6 +1,7 @@
 // Provides shared helpers for plugin hook tests.
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { createHookRunner } from "./hooks.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistry } from "./registry.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 import type { PluginHookAgentContext, PluginHookRegistration } from "./types.js";
@@ -10,6 +11,8 @@ export function createMockPluginRegistry(
     hookName: string;
     handler: (...args: unknown[]) => unknown;
     pluginId?: string;
+    priority?: number;
+    timeoutMs?: number;
   }>,
 ): PluginRegistry {
   const pluginIds =
@@ -17,6 +20,7 @@ export function createMockPluginRegistry(
       ? uniqueStrings(hooks.map((hook) => hook.pluginId ?? "test-plugin"))
       : ["test-plugin"];
   return {
+    ...createEmptyPluginRegistry(),
     plugins: pluginIds.map((pluginId) =>
       createPluginRecord({
         id: pluginId,
@@ -30,40 +34,11 @@ export function createMockPluginRegistry(
       pluginId: h.pluginId ?? "test-plugin",
       hookName: h.hookName,
       handler: h.handler,
-      priority: 0,
+      priority: h.priority ?? 0,
+      ...(h.timeoutMs !== undefined ? { timeoutMs: h.timeoutMs } : {}),
       source: "test",
-    })),
-    tools: [],
-    channels: [],
-    channelSetups: [],
-    providers: [],
-    embeddingProviders: [],
-    speechProviders: [],
-    mediaUnderstandingProviders: [],
-    transcriptSourceProviders: [],
-    imageGenerationProviders: [],
-    videoGenerationProviders: [],
-    musicGenerationProviders: [],
-    webFetchProviders: [],
-    webSearchProviders: [],
-    migrationProviders: [],
-    codexAppServerExtensionFactories: [],
-    agentToolResultMiddlewares: [],
-    memoryEmbeddingProviders: [],
-    agentHarnesses: [],
-    httpRoutes: [],
-    gatewayHandlers: {},
-    cliRegistrars: [],
-    textTransforms: [],
-    reloads: [],
-    nodeHostCommands: [],
-    securityAuditCollectors: [],
-    services: [],
-    gatewayDiscoveryServices: [],
-    conversationBindingResolvedHandlers: [],
-    commands: [],
-    diagnostics: [],
-  } as unknown as PluginRegistry;
+    })) as PluginRegistry["typedHooks"],
+  };
 }
 
 export const TEST_PLUGIN_AGENT_CTX: PluginHookAgentContext = {
@@ -143,6 +118,8 @@ export function createHookRunnerWithRegistry(
     hookName: string;
     handler: (...args: unknown[]) => unknown;
     pluginId?: string;
+    priority?: number;
+    timeoutMs?: number;
   }>,
   options?: Parameters<typeof createHookRunner>[1],
 ) {

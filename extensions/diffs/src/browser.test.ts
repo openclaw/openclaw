@@ -208,6 +208,81 @@ describe("PlaywrightDiffScreenshotter", () => {
     expect(pages).toHaveLength(1);
     expect(pages[0]?.screenshot).toHaveBeenCalledTimes(0);
   });
+
+  it("wraps browser launch failures with Chromium installation guidance", async () => {
+    launchMock.mockRejectedValue(new Error("launch failed"));
+    const screenshotter = new PlaywrightDiffScreenshotter({
+      config: createConfig(),
+      browserIdleMs: 1_000,
+    });
+
+    await expect(
+      screenshotter.screenshotHtml({
+        html: '<html><head></head><body><main class="oc-frame"></main></body></html>',
+        outputPath,
+        theme: "dark",
+        image: {
+          format: "png",
+          qualityPreset: "standard",
+          scale: 2,
+          maxWidth: 960,
+          maxPixels: 8_000_000,
+        },
+      }),
+    ).rejects.toThrow("requires a Chromium-compatible browser");
+  });
+
+  it("wraps new-page failures with Chromium installation guidance", async () => {
+    const browser = createMockBrowser([]);
+    browser.newPage.mockRejectedValue(new Error("page creation failed"));
+    launchMock.mockResolvedValue(browser);
+    const screenshotter = new PlaywrightDiffScreenshotter({
+      config: createConfig(),
+      browserIdleMs: 1_000,
+    });
+
+    await expect(
+      screenshotter.screenshotHtml({
+        html: '<html><head></head><body><main class="oc-frame"></main></body></html>',
+        outputPath,
+        theme: "dark",
+        image: {
+          format: "png",
+          qualityPreset: "standard",
+          scale: 2,
+          maxWidth: 960,
+          maxPixels: 8_000_000,
+        },
+      }),
+    ).rejects.toThrow("requires a Chromium-compatible browser");
+  });
+
+  it("preserves render errors after a browser page has opened", async () => {
+    const browser = createMockBrowser([]);
+    const page = createMockPage();
+    page.waitForFunction.mockRejectedValue(new Error("hydration timeout"));
+    browser.newPage.mockResolvedValue(page);
+    launchMock.mockResolvedValue(browser);
+    const screenshotter = new PlaywrightDiffScreenshotter({
+      config: createConfig(),
+      browserIdleMs: 1_000,
+    });
+
+    await expect(
+      screenshotter.screenshotHtml({
+        html: '<html><head></head><body><main class="oc-frame"></main></body></html>',
+        outputPath,
+        theme: "dark",
+        image: {
+          format: "png",
+          qualityPreset: "standard",
+          scale: 2,
+          maxWidth: 960,
+          maxPixels: 8_000_000,
+        },
+      }),
+    ).rejects.toThrow("hydration timeout");
+  });
 });
 
 describe("diffs plugin registration", () => {
@@ -428,6 +503,7 @@ describe("diffs plugin registration", () => {
       [
         "When you need to show edits as a real diff, prefer the `diffs` tool instead of writing a manual summary.",
         "It accepts either `before` + `after` text or a unified `patch`.",
+        "Check `details.changed`: identical before/after input returns `false` without creating an artifact; rendered results return `true`.",
         "`mode=view` returns `details.viewerUrl` for canvas use; `mode=file` returns `details.filePath`; `mode=both` returns both.",
         "If you need to send the rendered file, use the `message` tool with `path` or `filePath`.",
         "Include `path` when you know the filename, and omit presentation overrides unless needed.",

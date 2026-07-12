@@ -1,17 +1,35 @@
 /**
  * Session lifecycle state derivation tests.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { SessionEntry } from "../config/sessions.js";
+
+const persistenceMocks = vi.hoisted(() => ({
+  loadSessionEntry: vi.fn(),
+  updateSessionEntry: vi.fn(),
+}));
+
+vi.mock("../config/sessions/session-accessor.js", () => ({
+  updateSessionEntry: persistenceMocks.updateSessionEntry,
+}));
+
+vi.mock("./session-utils.js", () => ({
+  loadSessionEntry: persistenceMocks.loadSessionEntry,
+}));
+
 import {
   deriveGatewaySessionLifecycleSnapshot,
   derivePersistedSessionLifecyclePatch,
   isStaleLifecycleEventForSession,
+  persistGatewaySessionLifecycleEvent,
 } from "./session-lifecycle-state.js";
 
 type PersistedLifecycleInput = Parameters<typeof derivePersistedSessionLifecyclePatch>[0];
 type PersistedLifecycleData = PersistedLifecycleInput["event"]["data"];
 type PersistedLifecyclePatch = NonNullable<ReturnType<typeof derivePersistedSessionLifecyclePatch>>;
 type PersistedLifecycleStatus = PersistedLifecyclePatch["status"];
+type UpdateSessionEntry =
+  typeof import("../config/sessions/session-accessor.js").updateSessionEntry;
 
 type PersistedLifecycleCase = {
   name: string;
@@ -19,6 +37,8 @@ type PersistedLifecycleCase = {
   status: PersistedLifecycleStatus;
   abortedLastRun: boolean;
 };
+
+const exactCronSessionKey = "agent:main:cron:job-1:run:cron-run-1";
 
 function terminalPatch(
   startedAt: number,
@@ -58,6 +78,55 @@ function expectPersistedLifecyclePatch(options: {
       },
     }),
   ).toEqual(options.expected);
+}
+
+function cronSessionEntry(
+  phase: "running" | "ready" | "continuing",
+  ownerRunId?: string,
+): SessionEntry {
+  return {
+    sessionId: "cron-session-id",
+    updatedAt: 1_000,
+    status: "running",
+    cronRunContinuation: {
+      lifecycleRevision: "revision-1",
+      phase,
+      ...(ownerRunId ? { ownerRunId } : {}),
+    },
+  };
+}
+
+async function persistExactCronLifecycle(options: {
+  entry: SessionEntry;
+  eventRunId: string;
+  eventSessionId?: string;
+}): Promise<SessionEntry | undefined> {
+  let currentEntry = structuredClone(options.entry);
+  persistenceMocks.loadSessionEntry.mockReset().mockReturnValue({
+    storePath: "/tmp/sessions.json",
+    canonicalKey: exactCronSessionKey,
+    entry: currentEntry,
+  });
+  persistenceMocks.updateSessionEntry
+    .mockReset()
+    .mockImplementation(async (...args: Parameters<UpdateSessionEntry>) => {
+      const [, update] = args;
+      const patch = await update(structuredClone(currentEntry));
+      if (patch) {
+        currentEntry = { ...currentEntry, ...patch };
+      }
+      return currentEntry;
+    });
+  await persistGatewaySessionLifecycleEvent({
+    sessionKey: exactCronSessionKey,
+    event: {
+      ts: 2_000,
+      sessionId: options.eventSessionId ?? "cron-session-id",
+      runId: options.eventRunId,
+      data: { phase: "end", startedAt: 1_300, endedAt: 1_950 },
+    },
+  });
+  return currentEntry;
 }
 
 describe("session lifecycle state", () => {
@@ -405,10 +474,70 @@ describe("session lifecycle state", () => {
       status: "timeout",
       abortedLastRun: false,
     },
+    {
+      name: "maps abandoned lifecycle ends to failed sessions",
+      data: {
+        phase: "end",
+        livenessState: "abandoned",
+        endedAt: 1_550,
+      },
+      status: "failed",
+      abortedLastRun: false,
+    },
   ])("$name", ({ data, status, abortedLastRun }) => {
     expectPersistedLifecyclePatch({
       data,
       expected: terminalPatch(1_050, 1_550, status, abortedLastRun),
+    });
+  });
+
+  it.each([
+    {
+      name: "accepts the initial owner while running",
+      entry: cronSessionEntry("running"),
+      eventRunId: "initial-run",
+      eventSessionId: "cron-session-id",
+      expectedStatus: "done",
+    },
+    {
+      name: "accepts the active continuation owner",
+      entry: cronSessionEntry("continuing", "continuation-run"),
+      eventRunId: "continuation-run",
+      eventSessionId: "cron-session-id",
+      expectedStatus: "done",
+    },
+    {
+      name: "ignores events once ready",
+      entry: cronSessionEntry("ready"),
+      eventRunId: "continuation-run",
+      eventSessionId: "cron-session-id",
+      expectedStatus: "running",
+    },
+    {
+      name: "ignores a stale continuation owner",
+      entry: cronSessionEntry("continuing", "current-owner"),
+      eventRunId: "stale-owner",
+      eventSessionId: "cron-session-id",
+      expectedStatus: "running",
+    },
+    {
+      name: "ignores a stale session id",
+      entry: cronSessionEntry("continuing", "continuation-run"),
+      eventRunId: "continuation-run",
+      eventSessionId: "stale-session-id",
+      expectedStatus: "running",
+    },
+  ])("direct persistence $name", async (testCase) => {
+    const persisted = await persistExactCronLifecycle(testCase);
+
+    expect(persisted?.status).toBe(testCase.expectedStatus);
+    // One exact-row write only. Continuation settlement owns base projection.
+    expect(persistenceMocks.updateSessionEntry).toHaveBeenCalledTimes(1);
+    expect(persistenceMocks.updateSessionEntry.mock.calls[0]?.[0]).toMatchObject({
+      sessionKey: exactCronSessionKey,
+    });
+    expect(persistenceMocks.updateSessionEntry.mock.calls[0]?.[2]).toMatchObject({
+      requireWriteSuccess: true,
     });
   });
 });

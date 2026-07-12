@@ -13,9 +13,16 @@ describe("configured model refs", () => {
         agents: {
           defaults: {
             model: { primary: "openai/gpt-5.5", fallbacks: ["anthropic/claude-sonnet-4-6"] },
+            utilityModel: "google/gemini-3.1-flash-lite-preview",
             compaction: { memoryFlush: { model: "openai/gpt-5.5-mini" } },
           },
-          list: [{ id: "custom", model: "xai/grok-4-fast" }],
+          list: [
+            {
+              id: "custom",
+              model: "xai/grok-4-fast",
+              utilityModel: "openai/gpt-5.5-nano",
+            },
+          ],
         },
         hooks: {
           mappings: [{ model: "openai/gpt-5.5-nano" }],
@@ -34,8 +41,13 @@ describe("configured model refs", () => {
     ).toEqual([
       { path: "agents.defaults.model.primary", value: "openai/gpt-5.5" },
       { path: "agents.defaults.model.fallbacks.0", value: "anthropic/claude-sonnet-4-6" },
+      {
+        path: "agents.defaults.utilityModel",
+        value: "google/gemini-3.1-flash-lite-preview",
+      },
       { path: "agents.defaults.compaction.memoryFlush.model", value: "openai/gpt-5.5-mini" },
       { path: "agents.list.0.model", value: "xai/grok-4-fast" },
+      { path: "agents.list.0.utilityModel", value: "openai/gpt-5.5-nano" },
       { path: "channels.modelByChannel.discord.guild", value: "anthropic/claude-opus-4-8" },
       { path: "hooks.mappings.0.model", value: "openai/gpt-5.5-nano" },
       { path: "messages.tts.summaryModel", value: "openai/gpt-5.5-mini" },

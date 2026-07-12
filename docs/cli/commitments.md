@@ -9,9 +9,9 @@ title: "`openclaw commitments`"
 
 List and manage inferred follow-up commitments.
 
-Commitments are opt-in, short-lived follow-up memories created from
-conversation context. See [Inferred commitments](/concepts/commitments) for the
-conceptual guide.
+Commitments are opt-in (`commitments.enabled`), short-lived follow-up memories
+created from conversation context and delivered by heartbeat. See
+[Inferred commitments](/concepts/commitments) for the conceptual guide and config.
 
 With no subcommand, `openclaw commitments` lists pending commitments.
 
@@ -28,8 +28,11 @@ openclaw commitments dismiss <id...> [--json]
 - `--all`: show all statuses instead of only pending commitments.
 - `--agent <id>`: filter to one agent id.
 - `--status <status>`: filter by status. Values: `pending`, `sent`,
-  `dismissed`, `snoozed`, or `expired`.
+  `dismissed`, `snoozed`, or `expired`. Unknown values exit with an error.
 - `--json`: output machine-readable JSON.
+
+`dismiss` marks the given commitment ids as `dismissed` so heartbeat will not
+deliver them.
 
 ## Examples
 
@@ -71,16 +74,18 @@ openclaw commitments --all --json
 
 ## Output
 
-Text output includes:
+Text output prints the commitment count, the store path, any active filters,
+and one row per commitment:
 
 - commitment id
 - status
-- kind
+- kind (`event_check_in`, `deadline_check`, `care_check_in`, or `open_loop`)
 - earliest due time
-- scope
+- scope (agent/channel/target)
 - suggested check-in text
 
-JSON output also includes the commitment store path and full stored records.
+JSON output includes the count, the active status and agent filters, the
+commitment store path, and the full stored records.
 
 ## Related
 

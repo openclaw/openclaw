@@ -135,13 +135,12 @@ describe("hydrateViewer", () => {
     fileDiffHydrateMock.mockImplementationOnce(() => {
       throw new Error("broken card");
     });
-    const { controllers, hydrateViewer } = await import("./viewer-client.js");
-    controllers.splice(0);
+    const { hydrateViewer } = await import("./viewer-client.js");
 
     await hydrateViewer();
 
     expect(fileDiffHydrateMock).toHaveBeenCalledTimes(2);
-    expect(controllers).toHaveLength(1);
+    expect(fileDiffRerenderMock).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith(
       "Skipping diff card that failed to hydrate",
       expect.any(Error),
@@ -157,14 +156,13 @@ describe("hydrateViewer", () => {
     fileDiffSetOptionsMock.mockImplementationOnce(() => {
       throw new Error("broken options");
     });
-    const { controllers, hydrateViewer } = await import("./viewer-client.js");
-    controllers.splice(0);
+    const { hydrateViewer } = await import("./viewer-client.js");
 
     await hydrateViewer();
 
     expect(fileDiffHydrateMock).toHaveBeenCalledTimes(2);
     expect(fileDiffSetOptionsMock).toHaveBeenCalledTimes(2);
-    expect(controllers).toHaveLength(1);
+    expect(fileDiffRerenderMock).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith(
       "Skipping diff card that failed to hydrate",
       expect.any(Error),
@@ -175,20 +173,22 @@ describe("hydrateViewer", () => {
 
   it("replaces stale controllers when hydrating the current cards again", async () => {
     renderCard();
-    const { controllers, hydrateViewer } = await import("./viewer-client.js");
-    controllers.splice(0);
+    const { hydrateViewer } = await import("./viewer-client.js");
 
     await hydrateViewer();
-    expect(controllers).toHaveLength(1);
-    const firstController = controllers[0];
 
     document.body.innerHTML = "";
     renderCard();
     await hydrateViewer();
 
-    expect(controllers).toHaveLength(1);
-    expect(controllers[0]).not.toBe(firstController);
     expect(fileDiffHydrateMock).toHaveBeenCalledTimes(2);
+    const currentOptions = fileDiffSetOptionsMock.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    const renderHeaderMetadata = currentOptions.renderHeaderMetadata as () => HTMLElement;
+    fileDiffRerenderMock.mockClear();
+
+    renderHeaderMetadata().querySelector<HTMLButtonElement>("button")?.click();
+
+    expect(fileDiffRerenderMock).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -387,6 +387,61 @@ describe("toolbar button toggles", () => {
       fileDiffSetOptionsMock.mock.calls.length - 1
     ]?.[0] as Record<string, unknown>;
     expect(lastOpts.disableBackground).toBe(true);
+  });
+});
+
+describe("header metadata", () => {
+  beforeEach(() => {
+    document.body.innerHTML = "";
+    delete document.body.dataset.theme;
+    vi.clearAllMocks();
+  });
+
+  type HeaderMetadataCallback = () => HTMLElement | null;
+
+  async function hydrateAndGetHeaderCallback(): Promise<HeaderMetadataCallback> {
+    const { hydrateViewer } = await import("./viewer-client.js");
+    await hydrateViewer();
+    const opts = fileDiffSetOptionsMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    return opts.renderHeaderMetadata as HeaderMetadataCallback;
+  }
+
+  it("renders the toolbar in viewer render mode", async () => {
+    document.body.insertAdjacentHTML(
+      "beforeend",
+      '<main class="oc-frame" data-render-mode="viewer"></main>',
+    );
+    renderCard();
+    const renderHeaderMetadata = await hydrateAndGetHeaderCallback();
+
+    const header = renderHeaderMetadata();
+
+    expect(header).not.toBeNull();
+    expect(header?.querySelectorAll("button")).toHaveLength(4);
+  });
+
+  it("drops the interactive toolbar in image render mode", async () => {
+    document.body.insertAdjacentHTML(
+      "beforeend",
+      '<main class="oc-frame" data-render-mode="image"></main>',
+    );
+    renderCard();
+    const renderHeaderMetadata = await hydrateAndGetHeaderCallback();
+
+    expect(renderHeaderMetadata()).toBeNull();
+  });
+
+  it("skips summary nav cards during hydration", async () => {
+    document.body.insertAdjacentHTML(
+      "beforeend",
+      '<nav class="oc-diff-card oc-diff-nav" aria-label="Changed files"><ol></ol></nav>',
+    );
+    renderCard();
+    const { hydrateViewer } = await import("./viewer-client.js");
+
+    await hydrateViewer();
+
+    expect(fileDiffHydrateMock).toHaveBeenCalledTimes(1);
   });
 });
 

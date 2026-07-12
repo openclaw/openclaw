@@ -9,15 +9,18 @@ struct IPadActivityScreen: View {
     @State private var isLoading = false
     @State private var loadErrorText: String?
     let headerLeadingAction: OpenClawSidebarHeaderAction?
+    let usesNativeNavigationChrome: Bool
     let openChat: () -> Void
     let openSettings: () -> Void
 
     init(
         headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
+        usesNativeNavigationChrome: Bool = false,
         openChat: @escaping () -> Void,
         openSettings: @escaping () -> Void)
     {
         self.headerLeadingAction = headerLeadingAction
+        self.usesNativeNavigationChrome = usesNativeNavigationChrome
         self.openChat = openChat
         self.openSettings = openSettings
     }
@@ -27,6 +30,7 @@ struct IPadActivityScreen: View {
             title: "Activity",
             subtitle: "Live device and gateway activity.",
             headerLeadingAction: self.headerLeadingAction,
+            usesNativeNavigationChrome: self.usesNativeNavigationChrome,
             gatewayAction: self.openSettings)
         {
             ProMetricGrid(metrics: self.metrics)
@@ -51,12 +55,12 @@ struct IPadActivityScreen: View {
                 icon: "person.2.fill",
                 title: "Agents",
                 value: self.gatewayConnected ? "\(self.appModel.gatewayAgents.count)" : "offline",
-                color: OpenClawBrand.accent),
+                color: OpenClawBrand.accentForeground),
             ProMetric(
                 icon: "bubble.left.and.text.bubble.right",
                 title: "Sessions",
                 value: self.isLoading ? "..." : "\(self.sessionRows.count)",
-                color: OpenClawBrand.accentHot),
+                color: OpenClawBrand.accentHotForeground),
         ]
     }
 
@@ -99,7 +103,7 @@ struct IPadActivityScreen: View {
                     title: "Share intake",
                     detail: self.appModel.lastShareEventText,
                     value: "iPad",
-                    color: OpenClawBrand.accent,
+                    color: OpenClawBrand.accentForeground,
                     actionTitle: nil,
                     action: nil)
 
@@ -110,7 +114,7 @@ struct IPadActivityScreen: View {
                         title: "Loading sessions",
                         detail: "Fetching recent activity from the gateway.",
                         value: "loading",
-                        color: OpenClawBrand.accent,
+                        color: OpenClawBrand.accentForeground,
                         actionTitle: nil,
                         action: nil)
                 } else if let loadErrorText {
@@ -184,7 +188,7 @@ struct IPadActivityScreen: View {
     }
 
     private var sessionsMode: String {
-        self.appModel.chatTransportModeID
+        self.appModel.chatViewModelIdentityID
     }
 
     private var sessionRows: [CommandCenterTab.WorkItem] {
@@ -204,7 +208,7 @@ struct IPadActivityScreen: View {
     private func refreshSessions() async {
         guard self.scenePhase == .active else { return }
         guard self.sessionsAvailable else {
-            self.sessions = []
+            self.sessions = await self.appModel.loadCachedChatSessions()
             self.loadErrorText = nil
             return
         }
@@ -217,16 +221,17 @@ struct IPadActivityScreen: View {
             let transport = self.appModel.makeChatTransport()
             let response = try await transport.listSessions(limit: CommandCenterTab.recentSessionsFetchLimit)
             self.sessions = response.sessions
+            await self.appModel.storeCachedChatSessions(response.sessions)
         } catch {
-            self.sessions = []
-            self.loadErrorText = "Try again after the gateway reconnects."
+            self.sessions = await self.appModel.loadCachedChatSessions()
+            self.loadErrorText = self.sessions.isEmpty ? "Try again after the gateway reconnects." : nil
         }
     }
 
     private func open(_ item: CommandCenterTab.WorkItem) {
         switch item.route {
         case let .chat(sessionKey):
-            self.appModel.openChat(sessionKey: sessionKey)
+            self.appModel.openChat(sessionKey: sessionKey, unread: item.isUnread)
             self.openChat()
         case .settings:
             self.openSettings()

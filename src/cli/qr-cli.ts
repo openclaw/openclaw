@@ -220,6 +220,7 @@ export function registerQrCli(program: Command) {
           defaultRuntime.writeJson({
             setupCode,
             gatewayUrl: resolved.payload.url,
+            ...(resolved.payload.urls ? { gatewayUrls: resolved.payload.urls } : {}),
             auth: resolved.authLabel,
             urlSource: resolved.urlSource,
           });
@@ -240,6 +241,8 @@ export function registerQrCli(program: Command) {
         lines.push(
           `${theme.muted("Setup code:")} ${setupCode}`,
           `${theme.muted("Gateway:")} ${resolved.payload.url}`,
+          ...(resolved.payload.urls?.slice(1).map((url) => `${theme.muted("Fallback:")} ${url}`) ??
+            []),
           `${theme.muted("Auth:")} ${resolved.authLabel}`,
           `${theme.muted("Source:")} ${resolved.urlSource}`,
           "",

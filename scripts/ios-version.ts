@@ -1,10 +1,10 @@
 // Ios Version script supports OpenClaw repository automation.
-import { resolveIosVersion } from "./lib/ios-version.ts";
+import { renderIosReleaseNotesForVersion, resolveIosVersion } from "./lib/ios-version.ts";
 import { parseVersionQueryArgs } from "./lib/version-script-args.ts";
 
 function printUsage(): void {
   process.stdout.write(
-    "Usage: node --import tsx scripts/ios-version.ts [--json|--shell] [--field name] [--root dir]\n\n",
+    "Usage: node --import tsx scripts/ios-version.ts [--json|--shell] [--field name] [--version YYYY.M.D] [--root dir]\n\n",
   );
 }
 
@@ -15,9 +15,19 @@ function main(argv = process.argv.slice(2)): number {
     return 0;
   }
 
-  const version = resolveIosVersion(options.rootDir);
+  const version = resolveIosVersion(options.rootDir, { releaseVersion: options.releaseVersion });
 
   if (options.field) {
+    if (options.field === "releaseNotes") {
+      process.stdout.write(
+        renderIosReleaseNotesForVersion({
+          releaseVersion: options.releaseVersion,
+          rootDir: options.rootDir,
+        }),
+      );
+      return 0;
+    }
+
     const value = version[options.field as keyof typeof version];
     if (value === undefined) {
       throw new Error(`Unknown iOS version field '${options.field}'.`);

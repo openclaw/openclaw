@@ -15,6 +15,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { kindFromMime, resolveOutboundAttachmentFromUrl } from "openclaw/plugin-sdk/media-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
+import { sleep as delay } from "openclaw/plugin-sdk/runtime-env";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { stripInlineDirectiveTagsForDelivery } from "openclaw/plugin-sdk/text-chunking";
 import { resolveIMessageAccount, type ResolvedIMessageAccount } from "./accounts.js";
@@ -24,7 +25,11 @@ import {
   type IMessageApprovalConversationKey,
   registerIMessageApprovalReactionTargetForOutboundMessage,
 } from "./approval-reactions.js";
-import { appendIMessageCliStderrTail, appendIMessageCliStdout } from "./cli-output.js";
+import {
+  appendIMessageCliStderrTail,
+  appendIMessageCliStdout,
+  listenForIMessageCliStreamErrors,
+} from "./cli-output.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
 import { DEFAULT_IMESSAGE_SEND_TIMEOUT_MS } from "./constants.js";
 import { extractMarkdownFormatRuns } from "./markdown-format.js";
@@ -63,6 +68,7 @@ type IMessageSendOpts = {
   client?: IMessageRpcClient;
   config: OpenClawConfig;
   account?: ResolvedIMessageAccount;
+  approvalKind?: "exec" | "plugin";
   resolveAttachmentImpl?: (
     mediaUrl: string,
     maxBytes: number,
@@ -85,7 +91,7 @@ type IMessageSendOpts = {
   }) => Promise<string | null> | string | null;
 };
 
-export type IMessageSendResult = {
+type IMessageSendResult = {
   /**
    * Generic identifier returned by the bridge. May be a GUID string, a
    * numeric ROWID stringified, or the literal "ok"/"unknown" placeholders
@@ -419,12 +425,6 @@ async function resolveApprovalBindingMessageGuid(params: {
   );
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
 async function resolveFallbackSentMessageGuid(params: {
   dbPath?: string;
   target: ParsedIMessageTarget;
@@ -652,6 +652,11 @@ async function runIMessageCliJson(
     child.stderr.on("data", (chunk) => {
       stderr = appendIMessageCliStderrTail(stderr, chunk);
     });
+    listenForIMessageCliStreamErrors({
+      child,
+      isSettled: () => settled,
+      fail,
+    });
     child.on("error", (error) => {
       if (settled) {
         clearTimers();
@@ -713,6 +718,16 @@ function resolvePendingPersistedEchoTtlMs(timeoutMs: number): number {
 function isAttachmentCommandFallbackError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /(?:unknown|unrecognized|invalid|unsupported)\s+(?:command|subcommand)|not a recognized command|send-attachment.*(?:not found|unsupported|unavailable)|private api bridge.*unavailable|requires the imsg private api bridge|run imsg launch/iu.test(
+    message,
+  );
+}
+
+// A threaded reply (reply_to) needs the private-API bridge transport; on an
+// AppleScript-only deployment imsg rejects it outright. Detect that specific
+// error so we can resend the message unthreaded instead of dropping it (#99638).
+function isThreadedReplyUnsupportedError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /reply_to requires bridge transport|cannot send threaded repl|threaded repl(?:y|ies)\b.*(?:unsupported|not supported|requires|unavailable)|requires bridge transport/iu.test(
     message,
   );
 }
@@ -908,7 +923,8 @@ export async function sendMessageIMessage(
       : typeof account.config.mediaMaxMb === "number"
         ? account.config.mediaMaxMb * 1024 * 1024
         : 16 * 1024 * 1024;
-  let message = text ? appendIMessageApprovalReactionHintForOutboundMessage(text) : "";
+  let message =
+    text && opts.approvalKind ? appendIMessageApprovalReactionHintForOutboundMessage(text) : text;
   let filePath: string | undefined;
   let mediaContentType: string | undefined;
 
@@ -951,6 +967,10 @@ export async function sendMessageIMessage(
   const echoText = resolveOutboundEchoText(message, filePath ? mediaContentType : undefined);
   const replyActionsEnabled = createActionGate(account.config.actions)("reply");
   const resolvedReplyToId = replyActionsEnabled ? sanitizeReplyToId(opts.replyToId) : undefined;
+  // The reply id actually delivered. The threaded-reply fallback below clears it
+  // so the receipt and approval binding report the unthreaded send it became,
+  // not the threaded reply the transport rejected (#99638).
+  let effectiveReplyToId = resolvedReplyToId;
   const runCliJson =
     opts.runCliJson ??
     ((args: readonly string[]) => runIMessageCliJson(cliPath, dbPath, args, timeoutMs));
@@ -1059,10 +1079,20 @@ export async function sendMessageIMessage(
         timeoutMs,
       });
     } catch (error) {
-      if (filePath || !isIMessageRpcSendTimeout(error)) {
+      if (resolvedReplyToId && isThreadedReplyUnsupportedError(error)) {
+        // #99638: the transport cannot deliver a threaded reply, so resend the
+        // message unthreaded rather than dropping it. Covers text and media
+        // replies alike (both carry reply_to through this send). One retry with
+        // reply_to stripped, keeping any file; a further failure propagates.
+        const plainParams = { ...params };
+        delete plainParams.reply_to;
+        result = await client.request<Record<string, unknown>>("send", plainParams, {
+          timeoutMs,
+        });
+        effectiveReplyToId = undefined;
+      } else if (filePath || !isIMessageRpcSendTimeout(error)) {
         throw error;
-      }
-      if (
+      } else if (
         !shouldRecoverApprovalPromptGuid({
           message,
           filePath,
@@ -1074,18 +1104,19 @@ export async function sendMessageIMessage(
         })
       ) {
         throw error;
-      }
-      const recoveredGuid = await resolveFallbackSentMessageGuid({
-        dbPath: chatDbLookupPath,
-        target,
-        text: message,
-        sentAfterMs: sendStartedAtMs,
-        resolveSentMessageGuidImpl: opts.resolveSentMessageGuidImpl,
-      });
-      if (recoveredGuid) {
-        result = { guid: recoveredGuid, status: "sent" };
       } else {
-        throw error;
+        const recoveredGuid = await resolveFallbackSentMessageGuid({
+          dbPath: chatDbLookupPath,
+          target,
+          text: message,
+          sentAfterMs: sendStartedAtMs,
+          resolveSentMessageGuidImpl: opts.resolveSentMessageGuidImpl,
+        });
+        if (recoveredGuid) {
+          result = { guid: recoveredGuid, status: "sent" };
+        } else {
+          throw error;
+        }
       }
     }
     const resolvedId = resolveMessageId(result);
@@ -1107,7 +1138,7 @@ export async function sendMessageIMessage(
       shouldRecoverApprovalPromptGuid({
         message,
         filePath,
-        replyToId: resolvedReplyToId,
+        replyToId: effectiveReplyToId,
       })
     ) {
       approvalBindingMessageId = await resolveFallbackSentMessageGuid({
@@ -1145,7 +1176,7 @@ export async function sendMessageIMessage(
         isFromMe: true,
       });
     }
-    if (message && approvalBindingMessageId) {
+    if (message && approvalBindingMessageId && opts.approvalKind) {
       const handleForKey =
         target.kind === "handle" ? normalizeIMessageHandle(target.to) : undefined;
       const conversation: IMessageApprovalConversationKey = {
@@ -1159,6 +1190,7 @@ export async function sendMessageIMessage(
         conversation,
         messageId: approvalBindingMessageId,
         text: message,
+        approvalKind: opts.approvalKind,
       });
     }
     return {
@@ -1170,7 +1202,7 @@ export async function sendMessageIMessage(
         messageId,
         target,
         kind: filePath ? "media" : "text",
-        ...(resolvedReplyToId ? { replyToId: resolvedReplyToId } : {}),
+        ...(effectiveReplyToId ? { replyToId: effectiveReplyToId } : {}),
       }),
     };
   } catch (error) {

@@ -302,7 +302,10 @@ export type ChannelSetupWizard = {
 /** Runtime options for selecting and configuring one or more channels. */
 export type SetupChannelsOptions = {
   allowDisable?: boolean;
+  allowIMessageInstall?: boolean;
   allowSignalInstall?: boolean;
+  /** Revalidate host authority immediately before an installer or other durable effect. */
+  beforePersistentEffect?: () => Promise<void>;
   onSelection?: (selection: ChannelId[]) => void;
   onPostWriteHook?: (hook: ChannelOnboardingPostWriteHook) => void;
   accountIds?: Partial<Record<ChannelId, string>>;

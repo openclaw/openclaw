@@ -17,7 +17,15 @@ export type GatewayAgentModel = {
 export type GatewayAgentRuntime = {
   id: string;
   fallback?: "openclaw" | "none";
-  source: "env" | "agent" | "defaults" | "model" | "provider" | "implicit" | "session-key";
+  source:
+    | "env"
+    | "agent"
+    | "defaults"
+    | "model"
+    | "provider"
+    | "implicit"
+    | "session"
+    | "session-key";
 };
 
 /** Thinking-level option exposed to UI clients. */
@@ -32,6 +40,7 @@ export type GatewayAgentRow = {
   name?: string;
   identity?: GatewayAgentIdentity;
   workspace?: string;
+  workspaceGit?: boolean;
   model?: GatewayAgentModel;
   agentRuntime?: GatewayAgentRuntime;
   thinkingLevels?: GatewayThinkingLevelOption[];

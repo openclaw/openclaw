@@ -270,6 +270,7 @@ function collectVideoGenerationModelProviderIds(params: {
 function isVideoGenerationProviderConfigured(params: {
   snapshot: Pick<PluginMetadataSnapshot, "index" | "plugins">;
   cfg: OpenClawConfig;
+  workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
   providerId: string;
@@ -285,6 +286,8 @@ function isVideoGenerationProviderConfigured(params: {
     }) ||
     hasAuthForProvider({
       provider: params.providerId,
+      cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
       agentDir: params.agentDir,
       authStore: params.authStore,
     })
@@ -347,6 +350,7 @@ function shouldExposeVideoReferenceAudioParams(params: {
       isVideoGenerationProviderConfigured({
         snapshot,
         cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
         agentDir: params.agentDir,
         authStore: params.authStore,
         providerId,
@@ -1129,8 +1133,9 @@ export function createVideoGenerateTool(options?: {
       // Attach roles to the loaded image assets (positional, by index into images[]).
       for (let i = 0; i < loadedReferenceImages.length; i++) {
         const role = imageRoles[i];
-        if (role) {
-          loadedReferenceImages[i].sourceAsset.role = role;
+        const asset = loadedReferenceImages.at(i);
+        if (role && asset) {
+          asset.sourceAsset.role = role;
         }
       }
       const loadedReferenceVideos = await loadReferenceAssets({
@@ -1142,8 +1147,9 @@ export function createVideoGenerateTool(options?: {
       });
       for (let i = 0; i < loadedReferenceVideos.length; i++) {
         const role = videoRoles[i];
-        if (role) {
-          loadedReferenceVideos[i].sourceAsset.role = role;
+        const asset = loadedReferenceVideos.at(i);
+        if (role && asset) {
+          asset.sourceAsset.role = role;
         }
       }
       const loadedReferenceAudios = await loadReferenceAssets({
@@ -1155,8 +1161,9 @@ export function createVideoGenerateTool(options?: {
       });
       for (let i = 0; i < loadedReferenceAudios.length; i++) {
         const role = audioRoles[i];
-        if (role) {
-          loadedReferenceAudios[i].sourceAsset.role = role;
+        const asset = loadedReferenceAudios.at(i);
+        if (role && asset) {
+          asset.sourceAsset.role = role;
         }
       }
       validateVideoGenerationCapabilities({

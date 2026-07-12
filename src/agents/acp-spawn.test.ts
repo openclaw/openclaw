@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AcpInitializeSessionInput } from "../acp/control-plane/manager.types.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -13,6 +13,7 @@ import {
   type SessionBindingPlacement,
   type SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
+import { resolveThinkingDefault } from "./model-selection.js";
 
 function createDefaultSpawnConfig(): OpenClawConfig {
   return {
@@ -686,6 +687,16 @@ function enableTelegramCurrentConversationBindings(): void {
 }
 
 describe("spawnAcpDirect", () => {
+  beforeAll(() => {
+    resolveThinkingDefault({
+      cfg: {
+        agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
+      },
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+    });
+  });
+
   beforeEach(() => {
     replaceSpawnConfig(createDefaultSpawnConfig());
     hoisted.areHeartbeatsEnabledMock.mockReset().mockReturnValue(true);
@@ -2753,9 +2764,9 @@ describe("spawnAcpDirect", () => {
             accountId: "default",
           },
           spawnedBy: "agent:main:subagent:parent",
-          spawnDepth: 2,
-          subagentRole: "leaf",
-          subagentControlScope: "none",
+          spawnDepth: 1,
+          subagentRole: "orchestrator",
+          subagentControlScope: "children",
         },
       };
       return new Proxy(store, {

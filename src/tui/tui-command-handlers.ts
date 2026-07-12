@@ -1,8 +1,9 @@
 // Implements TUI slash command handlers and backend action dispatch.
 import { randomUUID } from "node:crypto";
-import type { Component, SelectItem, TUI } from "@earendil-works/pi-tui";
+import type { Component, OverlayHandle, SelectItem, TUI } from "@earendil-works/pi-tui";
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { modelKey } from "../agents/model-ref-shared.js";
+import { shouldForwardModelCommandToServer } from "../auto-reply/commands-registry.shared.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
   formatGoalContinuationPrompt,
@@ -18,7 +19,7 @@ import {
 import { isChatStopCommandText } from "../gateway/chat-abort.js";
 import { formatRelativeTimestamp } from "../infra/format-time/format-relative.ts";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { helpText, parseCommand } from "./commands.js";
+import { helpText, isSharedTextCommand, parseCommand } from "./commands.js";
 import type { ChatLog } from "./components/chat-log.js";
 import {
   createFilterableSelectList,
@@ -26,6 +27,7 @@ import {
   createSettingsList,
 } from "./components/selectors.js";
 import type { TuiBackend, TuiSessionMutationResult } from "./tui-backend.js";
+import { addBlockedChatSubmitNotice } from "./tui-busy-notice.js";
 import { sanitizeRenderableText } from "./tui-formatters.js";
 import {
   TUI_RECENT_SESSIONS_ACTIVE_MINUTES,
@@ -51,12 +53,11 @@ type CommandHandlerContext = {
   opts: TuiOptions;
   state: TuiStateAccess;
   deliverDefault: boolean;
-  openOverlay: (component: Component) => void;
-  closeOverlay: () => void;
+  openOverlay: (component: Component) => OverlayHandle;
+  closeOverlay: (handle?: OverlayHandle) => void;
   refreshSessionInfo: () => Promise<void>;
-  loadHistory: () => Promise<void>;
+  loadHistory: () => Promise<unknown>;
   setSession: (key: string) => Promise<void>;
-  setEmptySession: (key: string) => Promise<void>;
   refreshAgents: () => Promise<void>;
   abortActive: (params?: { preferActive?: boolean }) => Promise<void>;
   setActivityStatus: (text: string) => void;
@@ -128,7 +129,6 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     refreshSessionInfo,
     loadHistory,
     setSession,
-    setEmptySession,
     refreshAgents,
     abortActive,
     setActivityStatus,
@@ -145,6 +145,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     runAuthFlow,
     requestExit,
   } = context;
+  let sessionCreationInFlight = false;
+
+  const addUnsupportedLocalCommand = (name: string) => {
+    chatLog.addSystem(`/${name} is not available in local embedded mode; message not sent`);
+  };
 
   const setAgent = async (id: string) => {
     state.currentAgentId = normalizeAgentId(id);
@@ -152,13 +157,16 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     chatLog.addSystem(`agent set to ${state.currentAgentId}; use /crestodian to return`);
   };
 
-  const closeOverlayAndRender = () => {
-    closeOverlay();
+  const closeOverlayAndRender = (handle: OverlayHandle) => {
+    closeOverlay(handle);
     tui.requestRender();
   };
 
   const hasTrackedAbortTarget = () =>
     Boolean(state.activeChatRunId || state.pendingChatRunId || state.pendingOptimisticUserMessage);
+
+  const hasUnsafeSessionRollover = () =>
+    hasTrackedAbortTarget() || state.activityStatus === "finishing context";
 
   const currentSessionPatchTarget = () => ({
     key: state.currentSessionKey,
@@ -175,11 +183,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     selector.onSelect = (item) => {
       void (async () => {
         await onSelect(item.value);
-        closeOverlayAndRender();
+        closeOverlayAndRender(overlayHandle);
       })();
     };
-    selector.onCancel = closeOverlayAndRender;
-    openOverlay(selector as Component);
+    selector.onCancel = () => closeOverlayAndRender(overlayHandle);
+    const overlayHandle: OverlayHandle = openOverlay(selector as Component);
     tui.requestRender();
   };
 
@@ -341,17 +349,22 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         tui.requestRender();
       },
       () => {
-        closeOverlay();
+        closeOverlay(overlayHandle);
         tui.requestRender();
       },
     );
-    openOverlay(settings);
+    const overlayHandle: OverlayHandle = openOverlay(settings);
     tui.requestRender();
   };
 
   const handleCommand = async (raw: string) => {
     const { name, args } = parseCommand(raw);
     if (!name) {
+      return;
+    }
+    if (sessionCreationInFlight && name !== "exit" && name !== "quit") {
+      chatLog.addSystem("session change in progress; wait for /new to finish");
+      tui.requestRender();
       return;
     }
     switch (name) {
@@ -361,6 +374,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
             local: opts.local,
             provider: state.sessionInfo.modelProvider,
             model: state.sessionInfo.model,
+            agentRuntime: state.sessionInfo.agentRuntime?.id,
           }),
         );
         break;
@@ -434,7 +448,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         await openAgentSelector();
         break;
       case "context":
-        if (!args) {
+        if (opts.local) {
+          addUnsupportedLocalCommand(name);
+        } else if (!args) {
           openContextModeSelector();
         } else {
           await sendMessage(raw);
@@ -461,6 +477,13 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           await sendMessage(raw);
         }
         break;
+      case "btw":
+        if (args) {
+          await sendMessage(raw);
+        } else {
+          chatLog.addSystem("Usage: /btw [side question]");
+        }
+        break;
       case "crestodian":
         chatLog.addSystem(
           args ? `returning to Crestodian with request: ${args}` : "returning to Crestodian",
@@ -481,7 +504,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         await openSessionSelector();
         break;
       case "model":
-        if (!args) {
+        if (shouldForwardModelCommandToServer(args)) {
+          await sendMessage(raw);
+        } else if (!args) {
           await openModelSelector();
         } else {
           try {
@@ -511,7 +536,13 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         if (!args) {
           const levels =
             state.sessionInfo.thinkingLevels?.map((level) => level.label).join("|") ||
-            formatThinkingLevels(state.sessionInfo.modelProvider, state.sessionInfo.model, "|");
+            formatThinkingLevels(
+              state.sessionInfo.modelProvider,
+              state.sessionInfo.model,
+              "|",
+              undefined,
+              state.sessionInfo.agentRuntime?.id,
+            );
           chatLog.addSystem(`usage: /think <${levels}>`);
           break;
         }
@@ -690,6 +721,12 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         break;
       }
       case "new":
+        if (hasUnsafeSessionRollover()) {
+          chatLog.addSystem("abort the current run before /new");
+          tui.requestRender();
+          break;
+        }
+        sessionCreationInFlight = true;
         try {
           // Clear token counts immediately to avoid stale display (#1523)
           state.sessionInfo.inputTokens = null;
@@ -697,14 +734,21 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           state.sessionInfo.totalTokens = null;
           tui.requestRender();
 
-          // Generate unique session key to isolate this TUI client (#39217)
-          // This ensures /new creates a fresh session that doesn't broadcast
-          // to other connected TUI clients sharing the original session key.
           const uniqueKey = `tui-${randomUUID()}`;
-          await setEmptySession(uniqueKey);
-          chatLog.addSystem(`new session: ${uniqueKey}`);
+          const result = await client.createSession({
+            key: uniqueKey,
+            agentId: state.currentAgentId,
+            ...(state.currentSessionId ? { parentSessionKey: state.currentSessionKey } : {}),
+          });
+          if (!result.key) {
+            throw new Error("sessions.create returned no session key");
+          }
+          await setSession(result.key);
+          chatLog.addSystem(`new session: ${result.key}`);
         } catch (err) {
           chatLog.addSystem(`new session failed: ${sanitizeRenderableText(String(err))}`);
+        } finally {
+          sessionCreationInFlight = false;
         }
         break;
       case "reset":
@@ -734,11 +778,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         await abortActive();
         break;
       case "stop":
-        if (hasTrackedAbortTarget()) {
-          await abortActive({ preferActive: true });
-          break;
-        }
-        await sendMessage(raw);
+        // Queued client runs can terminalize before the followup executes, so
+        // local run ids are not a complete stop target inventory.
+        await abortActive({ preferActive: true });
         break;
       case "settings":
         openSettings();
@@ -747,9 +789,14 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       case "quit":
         requestExit();
         break;
-      default:
+      default: {
+        if (opts.local && isSharedTextCommand(raw)) {
+          addUnsupportedLocalCommand(name);
+          break;
+        }
         await sendMessage(raw);
         break;
+      }
     }
     tui.requestRender();
   };
@@ -765,24 +812,26 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       tui.requestRender();
       return;
     }
+    if (sessionCreationInFlight) {
+      chatLog.addSystem("session change in progress; message not sent");
+      tui.requestRender();
+      return;
+    }
     const isBtw = isBtwCommand(text);
     const busy = Boolean(
       state.activeChatRunId || state.pendingChatRunId || state.pendingOptimisticUserMessage,
     );
     if (
-      hasTrackedAbortTarget() &&
-      (isSlashStopCommand(text) || (busy && isChatStopCommandText(text)))
+      isSlashStopCommand(text) ||
+      (hasTrackedAbortTarget() && busy && isChatStopCommandText(text))
     ) {
       await abortActive({ preferActive: true });
       return;
     }
-    if (
-      !isBtw &&
-      (state.pendingChatRunId ||
-        state.pendingOptimisticUserMessage ||
-        (opts.local !== true && state.activeChatRunId))
-    ) {
-      chatLog.addSystem("agent is busy — press Esc to abort before sending a new message");
+    // The Gateway owns queue policy. TUI only serializes pending RPC admission;
+    // an already-active run must not suppress steer/followup/collect/interrupt.
+    if (!isBtw && (state.pendingOptimisticUserMessage || state.pendingChatRunId)) {
+      addBlockedChatSubmitNotice(chatLog);
       tui.requestRender();
       return;
     }
@@ -899,7 +948,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       if (isBtw) {
         forgetLocalBtwRunId?.(runId);
       }
-      if (!isBtw && state.activeChatRunId) {
+      if (!isBtw && state.activeChatRunId && state.activeChatRunId === runId) {
         forgetLocalRunId?.(state.activeChatRunId);
       }
       if (!isBtw) {
@@ -908,7 +957,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       if (!isBtw) {
         state.pendingOptimisticUserMessage = false;
         state.pendingChatRunId = null;
-        state.activeChatRunId = null;
+        // Only clear the failed send's ownership. A queued run may have
+        // terminalized or handed ownership off while the RPC was pending.
+        if (state.activeChatRunId === runId) {
+          state.activeChatRunId = null;
+        }
         if (state.pendingSubmitDraft?.runId === runId) {
           state.pendingSubmitDraft = null;
         }

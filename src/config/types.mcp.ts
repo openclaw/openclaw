@@ -54,6 +54,8 @@ export type McpServerConfig = {
   auth?: "oauth";
   /** Optional OAuth client metadata overrides for HTTP MCP servers. */
   oauth?: {
+    /** Refresh-capable auth profile used to inject the current bearer token. */
+    authProfileId?: string;
     scope?: string;
     redirectUrl?: string;
     clientMetadataUrl?: string;
@@ -80,6 +82,14 @@ export type McpServerConfig = {
 export type McpConfig = {
   /** Named MCP server definitions managed by OpenClaw. */
   servers?: Record<string, McpServerConfig>;
+  /** Opt-in MCP Apps rendering and app-to-server bridge. */
+  apps?: {
+    enabled?: boolean;
+    /** Dedicated public origin that proxies to the sandbox listener. */
+    sandboxOrigin?: string;
+    /** Dedicated listener port. Defaults to the Gateway port plus one. */
+    sandboxPort?: number;
+  };
   /**
    * Idle TTL for session-scoped bundled MCP runtimes, in milliseconds.
    *

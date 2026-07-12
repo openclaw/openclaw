@@ -124,18 +124,17 @@ flow:
         - set: firstOutboundStartIndex
           value:
             expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
-        - call: injectInboundMessage
-          args:
-            - accountId: default
-              conversation:
-                id:
-                  expr: config.conversationId
-                kind: direct
-              senderId:
+        - sendInbound:
+            accountId: default
+            conversation:
+              id:
                 expr: config.conversationId
-              senderName: Control UI QA
-              text:
-                expr: config.textPrompt
+              kind: direct
+            senderId:
+              expr: config.conversationId
+            senderName: Control UI QA
+            text:
+              expr: config.textPrompt
         - call: waitForOutboundMessage
           saveAs: uiOutbound
           args:
@@ -208,25 +207,24 @@ flow:
         - set: secondOutboundStartIndex
           value:
             expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
-        - call: injectInboundMessage
-          args:
-            - accountId: default
-              conversation:
-                id:
-                  expr: config.conversationId
-                kind: direct
-              senderId:
+        - sendInbound:
+            accountId: default
+            conversation:
+              id:
                 expr: config.conversationId
-              senderName: Control UI QA
-              text:
-                expr: config.imagePrompt
-              attachments:
-                - kind: image
-                  mimeType: image/png
-                  fileName: red-top-blue-bottom.png
-                  altText: red on top blue on bottom
-                  contentBase64:
-                    expr: imageUnderstandingValidPngBase64
+              kind: direct
+            senderId:
+              expr: config.conversationId
+            senderName: Control UI QA
+            text:
+              expr: config.imagePrompt
+            attachments:
+              - kind: image
+                mimeType: image/png
+                fileName: red-top-blue-bottom.png
+                altText: red on top blue on bottom
+                contentBase64:
+                  expr: imageUnderstandingValidPngBase64
         - try:
             actions:
               - call: waitForOutboundMessage

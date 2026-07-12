@@ -5,6 +5,10 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelMessagingAdapter } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  appendTranscriptMessage,
+  upsertSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 
 const callGatewayMock = vi.fn();
@@ -496,6 +500,7 @@ describe("sessions tools", () => {
       params: {
         activeMinutes: undefined,
         agentId: "main",
+        archived: false,
         includeDerivedTitles: false,
         includeLastMessage: false,
         includeGlobal: true,
@@ -559,23 +564,29 @@ describe("sessions tools", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-list-preview-"));
     const storePath = path.join(tmpDir, "sessions.json");
     try {
-      fs.writeFileSync(
-        path.join(tmpDir, "visible.jsonl"),
-        [
-          JSON.stringify({ type: "session", id: "visible" }),
-          JSON.stringify({ message: { role: "user", content: "Visible project kickoff" } }),
-          JSON.stringify({ message: { role: "assistant", content: "Visible latest reply" } }),
-        ].join("\n"),
-        "utf-8",
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey: "agent:main:main", storePath },
+        { sessionId: "visible", updatedAt: 20 },
       );
-      fs.writeFileSync(
-        path.join(tmpDir, "hidden.jsonl"),
-        [
-          JSON.stringify({ type: "session", id: "hidden" }),
-          JSON.stringify({ message: { role: "user", content: "Hidden cross-agent topic" } }),
-          JSON.stringify({ message: { role: "assistant", content: "Hidden latest reply" } }),
-        ].join("\n"),
-        "utf-8",
+      await appendTranscriptMessage(
+        { agentId: "main", sessionId: "visible", sessionKey: "agent:main:main", storePath },
+        { cwd: tmpDir, message: { role: "user", content: "Visible project kickoff" } },
+      );
+      await appendTranscriptMessage(
+        { agentId: "main", sessionId: "visible", sessionKey: "agent:main:main", storePath },
+        { cwd: tmpDir, message: { role: "assistant", content: "Visible latest reply" } },
+      );
+      await upsertSessionEntry(
+        { agentId: "other", sessionKey: "agent:other:main", storePath },
+        { sessionId: "hidden", updatedAt: 21 },
+      );
+      await appendTranscriptMessage(
+        { agentId: "other", sessionId: "hidden", sessionKey: "agent:other:main", storePath },
+        { cwd: tmpDir, message: { role: "user", content: "Hidden cross-agent topic" } },
+      );
+      await appendTranscriptMessage(
+        { agentId: "other", sessionId: "hidden", sessionKey: "agent:other:main", storePath },
+        { cwd: tmpDir, message: { role: "assistant", content: "Hidden latest reply" } },
       );
 
       callGatewayMock.mockImplementation(async (opts: unknown) => {
@@ -631,6 +642,10 @@ describe("sessions tools", () => {
           channel: "unknown",
           origin: undefined,
           spawnedBy: undefined,
+          archived: false,
+          archivedAt: undefined,
+          pinned: false,
+          pinnedAt: undefined,
           label: undefined,
           displayName: undefined,
           derivedTitle: "Visible project kickoff",
@@ -1696,6 +1711,7 @@ describe("sessions tools", () => {
 
   it("sessions_send falls back from stranded cron run key to durable cron parent", async () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];
+    const requesterKey = "agent:main:cron:source-job:run:source-run";
     const runScopedCallerKey = "agent:leasing-ops:cron:monthly-utility:run:run-fast";
     const durableCronCallerKey = "agent:leasing-ops:cron:monthly-utility";
     const queueMessage = vi.fn(async () => {});
@@ -1714,14 +1730,33 @@ describe("sessions tools", () => {
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: unknown };
       calls.push(request);
+      if (request.method === "chat.history") {
+        const params = request.params as { sessionKey?: string } | undefined;
+        const text =
+          params?.sessionKey === durableCronCallerKey
+            ? "existing durable reply"
+            : "existing run reply";
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text }],
+              timestamp: 20,
+            },
+          ],
+        };
+      }
       if (request.method === "agent") {
         return { runId: "durable-fallback-run", status: "accepted", acceptedAt: 2000 };
+      }
+      if (request.method === "agent.wait") {
+        return { runId: "durable-fallback-run", status: "ok" };
       }
       return {};
     });
 
     const tool = createOpenClawTools({
-      agentSessionKey: "agent:re-portal:main",
+      agentSessionKey: requesterKey,
       agentChannel: "telegram",
       config: {
         ...TEST_CONFIG,
@@ -1752,6 +1787,25 @@ describe("sessions tools", () => {
     expect(params.sessionKey).toBe(durableCronCallerKey);
     expect(params.message).toContain("[Inter-session message]");
     expect(params.message).toContain("[TASK-COMPLETE] re-portal occupancy ready");
+    await waitForCalls(
+      () =>
+        countMatching(
+          calls,
+          (call) =>
+            call.method === "chat.history" &&
+            (call.params as { sessionKey?: string } | undefined)?.sessionKey ===
+              durableCronCallerKey,
+        ),
+      2,
+    );
+    const firstFallbackHistoryIndex = calls.findIndex(
+      (call) =>
+        call.method === "chat.history" &&
+        (call.params as { sessionKey?: string } | undefined)?.sessionKey === durableCronCallerKey,
+    );
+    const fallbackAgentIndex = calls.findIndex((call) => call.method === "agent");
+    expect(firstFallbackHistoryIndex).toBeLessThan(fallbackAgentIndex);
+    expect(calls.filter((call) => call.method === "agent")).toHaveLength(1);
   });
 
   it("sessions_send rejects non-cron run-looking keys without durable-session fallback", async () => {

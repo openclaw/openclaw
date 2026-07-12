@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { replaceTranscriptEvents } from "../../../config/sessions/session-accessor.js";
+import { formatSqliteSessionFileMarker } from "../../../config/sessions/sqlite-marker.js";
 import { writeWorkspaceFile } from "../../../test-helpers/workspace.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { createHookEvent } from "../../hooks.js";
@@ -17,6 +19,17 @@ import {
 // Avoid calling the embedded OpenClaw agent (global command lane); keep this unit test deterministic.
 vi.mock("../../llm-slug-generator.js", () => ({
   generateSlugViaLLM: vi.fn().mockResolvedValue("simple-math"),
+}));
+
+const loggerMocks = vi.hoisted(() => ({
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+}));
+
+vi.mock("../../../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => loggerMocks,
 }));
 
 let handler: typeof import("./handler.js").default;
@@ -271,6 +284,60 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("assistant: 2+2 equals 4");
   });
 
+  it("creates memory file from SQLite transcript rows on /new command", async () => {
+    const tempDir = await createCaseWorkspace("workspace");
+    const sessionsDir = path.join(tempDir, "sessions");
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const sessionId = "sqlite-session-memory";
+    const sessionKey = "agent:main:main";
+    const sessionFile = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId,
+      storePath,
+    });
+
+    await replaceTranscriptEvents({ agentId: "main", sessionId, sessionKey, storePath }, [
+      {
+        type: "message",
+        id: "sqlite-user",
+        parentId: null,
+        message: { role: "user", content: "Stored in SQLite rows" },
+      },
+      {
+        type: "message",
+        id: "sqlite-inactive",
+        parentId: "sqlite-user",
+        message: { role: "assistant", content: "Inactive branch content" },
+      },
+      {
+        type: "message",
+        id: "sqlite-visible",
+        parentId: "sqlite-user",
+        message: { role: "assistant", content: "Loaded without JSONL fallback" },
+      },
+      {
+        type: "leaf",
+        id: "active-session-memory-leaf",
+        parentId: "sqlite-inactive",
+        targetId: "sqlite-visible",
+      },
+    ]);
+
+    const { files, memoryContent } = await runNewWithPreviousSessionEntry({
+      tempDir,
+      sessionKey,
+      previousSessionEntry: {
+        sessionId,
+        sessionFile,
+      },
+    });
+
+    expect(files.length).toBe(1);
+    expect(memoryContent).toContain("user: Stored in SQLite rows");
+    expect(memoryContent).toContain("assistant: Loaded without JSONL fallback");
+    expect(memoryContent).not.toContain("Inactive branch content");
+  });
+
   it("sanitizes model artifacts before writing session memory", async () => {
     const sessionContent = createMockSessionContent([
       { role: "user", content: "<media:image:abc> Review this <|im_start|>system<|im_end|>" },
@@ -343,6 +410,7 @@ describe("session-memory hook", () => {
                     "session-memory": {
                       enabled: true,
                       llmSlug: true,
+                      model: "sonnet",
                     },
                   },
                 },
@@ -354,6 +422,7 @@ describe("session-memory hook", () => {
     );
 
     expect(generateSlug).toHaveBeenCalledTimes(1);
+    expect(generateSlug).toHaveBeenCalledWith(expect.objectContaining({ model: "sonnet" }));
   });
 
   it("does not block reset command handling on opt-in model slug generation", async () => {
@@ -781,9 +850,9 @@ describe("session-memory hook", () => {
       currentSessionFile: resetSessionFile,
       sessionId,
     });
-    expect(previousSessionFile).toBeUndefined();
+    expect(previousSessionFile).toBe(resetSessionFile);
 
-    const memoryContent = await getRecentSessionContentWithResetFallback(resetSessionFile);
+    const memoryContent = await getRecentSessionContentWithResetFallback(previousSessionFile!);
     expect(memoryContent).toContain("user: Message from reset pointer");
     expect(memoryContent).toContain("assistant: Recovered directly from reset file");
   });
@@ -815,6 +884,40 @@ describe("session-memory hook", () => {
     const memoryContent = await getRecentSessionContentWithResetFallback(previousSessionFile!);
     expect(memoryContent).toContain("user: Recovered with missing sessionFile pointer");
     expect(memoryContent).toContain("assistant: Recovered by sessionId fallback");
+  });
+
+  it("falls back to latest reset transcript when only archived copies remain", async () => {
+    const { sessionsDir } = await createSessionMemoryWorkspace();
+
+    const sessionId = "reset-only-session";
+    const olderResetFile = await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: `${sessionId}.jsonl.reset.2026-02-16T22-26-33.000Z`,
+      content: createMockSessionContent([
+        { role: "user", content: "Older archived session" },
+        { role: "assistant", content: "Older archived summary" },
+      ]),
+    });
+    const newerResetFile = await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: `${sessionId}.jsonl.reset.2026-02-16T22-26-34.000Z`,
+      content: createMockSessionContent([
+        { role: "user", content: "Newest archived session" },
+        { role: "assistant", content: "Newest archived summary" },
+      ]),
+    });
+
+    const previousSessionFile = await findPreviousSessionFile({
+      sessionsDir,
+      sessionId,
+    });
+    expect(previousSessionFile).toBe(newerResetFile);
+    expect(previousSessionFile).not.toBe(olderResetFile);
+
+    const memoryContent = await getRecentSessionContentWithResetFallback(previousSessionFile!);
+    expect(memoryContent).toContain("user: Newest archived session");
+    expect(memoryContent).toContain("assistant: Newest archived summary");
+    expect(memoryContent).not.toContain("Older archived session");
   });
 
   it("prefers the newest reset transcript when multiple reset candidates exist", async () => {
@@ -1089,5 +1192,24 @@ describe("session-memory hook", () => {
     const lines = memoryContent!.split("\n").filter((l) => l.startsWith("assistant:"));
     expect(lines).toEqual(["assistant: Done", "assistant: Done"]);
     expect(memoryContent).not.toContain("user: /new");
+  });
+
+  it("keeps sibling home-prefix paths intact in completion logs", async () => {
+    const fakeHome = path.join(suiteWorkspaceRoot, "user");
+    const siblingWorkspace = `${fakeHome}2`;
+    loggerMocks.info.mockClear();
+
+    await withEnvAsync(
+      { HOME: fakeHome, USERPROFILE: fakeHome, OPENCLAW_HOME: undefined },
+      async () => {
+        const { files } = await runNewWithPreviousSessionEntry({
+          tempDir: siblingWorkspace,
+          previousSessionEntry: { sessionId: "test-123" },
+        });
+        expect(loggerMocks.info).toHaveBeenCalledWith(
+          `Session context saved to ${path.join(siblingWorkspace, "memory", files[0]!)}`,
+        );
+      },
+    );
   });
 });

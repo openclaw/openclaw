@@ -204,7 +204,10 @@ import {
   resolveMemoryBackendConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { formatSessionTranscriptMemoryHitKey } from "openclaw/plugin-sdk/session-transcript-hit";
+import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import {
   configureMemoryCoreDreamingState,
   configureMemoryCoreDreamingStateForTests,
@@ -221,6 +224,41 @@ const originalQmdStateDir = process.env.OPENCLAW_STATE_DIR;
 
 function setQmdStateDir(stateDir: string): void {
   Reflect.set(process.env, "OPENCLAW_STATE_DIR", stateDir);
+}
+
+async function seedQmdSessionTranscript(params: {
+  agentId: string;
+  content: string;
+  sessionId: string;
+  stateDir: string;
+  sessionKey?: string;
+  timestamp?: number | string;
+}): Promise<void> {
+  const sessionsDir = path.join(params.stateDir, "agents", params.agentId, "sessions");
+  const storePath = path.join(sessionsDir, "sessions.json");
+  const sessionKey = params.sessionKey ?? `agent:${params.agentId}:qmd:${params.sessionId}`;
+  const timestamp =
+    typeof params.timestamp === "number"
+      ? params.timestamp
+      : Date.parse(params.timestamp ?? "2026-04-07T15:25:04.113Z");
+  await fs.mkdir(sessionsDir, { recursive: true });
+  await upsertSessionEntry({
+    agentId: params.agentId,
+    sessionKey,
+    storePath,
+    entry: { sessionId: params.sessionId, updatedAt: timestamp },
+  });
+  await appendSessionTranscriptMessageByIdentity({
+    agentId: params.agentId,
+    sessionId: params.sessionId,
+    sessionKey,
+    storePath,
+    message: {
+      role: "user",
+      content: params.content,
+      timestamp,
+    },
+  });
 }
 
 function restoreQmdStateDir(): void {
@@ -815,6 +853,7 @@ describe("QmdMemoryManager", () => {
     delete (globalThis as Record<PropertyKey, unknown>)[QMD_EMBED_QUEUE_KEY];
     delete (globalThis as Record<PropertyKey, unknown>)[MEMORY_EMBEDDING_PROVIDERS_KEY];
     resetMemoryCoreDreamingStateForTests();
+    closeOpenClawAgentDatabasesForTest();
   });
 
   it("debounces back-to-back sync calls", async () => {
@@ -4184,6 +4223,41 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("wraps non-JSON mcporter stdout as a typed error instead of a raw SyntaxError", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((cmd: string, args: string[]) => {
+      const child = createMockChild({ autoClose: false });
+      if (isMcporterCommand(cmd) && args[0] === "call") {
+        // mcporter exits 0 but prints non-JSON to stdout (daemon warning, truncated
+        // output, or CLI flag mismatch). Without the guard this throws a raw
+        // SyntaxError out of runQmdSearchViaMcporter; the guard wraps it.
+        emitAndClose(child, "stdout", "mcporter: daemon warning: connection unstable\n");
+        return child;
+      }
+      emitAndClose(child, "stdout", "[]");
+      return child;
+    });
+
+    const { manager } = await createManager();
+    await expect(
+      manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" }),
+    ).rejects.toThrow(/non-JSON stdout/i);
+    await manager.close();
+  });
+
   it("falls back to QMD <1.1 tool names when query tool is not found", async () => {
     // qmdMcpToolVersion is an instance field — each createManager() starts fresh.
 
@@ -4358,6 +4432,75 @@ describe("QmdMemoryManager", () => {
     ]);
 
     await manager.close();
+  });
+
+  it("keeps per-result and aggregate QMD snippet limits UTF-16 safe", async () => {
+    const expectedDocId = "unicode-boundary";
+    const snippet = "@@ -1,1\nabc😀tail";
+    spawnMock.mockImplementation((cmd: string, args: string[]) => {
+      const child = createMockChild({ autoClose: false });
+      if (isMcporterCommand(cmd) && args[0] === "call") {
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify({
+            results: [
+              {
+                docid: expectedDocId,
+                score: 0.91,
+                collection: "workspace-main",
+                snippet,
+              },
+            ],
+          }),
+        );
+        return child;
+      }
+      emitAndClose(child, "stdout", "[]");
+      return child;
+    });
+
+    const searchWithLimits = async (limits: {
+      maxSnippetChars: number;
+      maxInjectedChars: number;
+    }) => {
+      const testConfig = {
+        ...cfg,
+        memory: {
+          backend: "qmd",
+          qmd: {
+            includeDefaultMemory: false,
+            searchMode: "query",
+            update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+            paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+            limits,
+            mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
+          },
+        },
+      } as OpenClawConfig;
+      const { manager } = await createManager({ cfg: testConfig });
+      const inner = manager as unknown as {
+        db: { prepare: () => { all: () => unknown }; close: () => void };
+      };
+      inner.db = {
+        prepare: () => ({
+          all: () => [{ collection: "workspace-main", path: "notes/unicode.md" }],
+        }),
+        close: () => {},
+      };
+      const results = await manager.search("unicode", {
+        sessionKey: "agent:main:slack:dm:u123",
+      });
+      await manager.close();
+      return results;
+    };
+
+    await expect(searchWithLimits({ maxSnippetChars: 12, maxInjectedChars: 100 })).resolves.toEqual(
+      [expect.objectContaining({ snippet: "@@ -1,1\nabc" })],
+    );
+    await expect(searchWithLimits({ maxSnippetChars: 100, maxInjectedChars: 12 })).resolves.toEqual(
+      [expect.objectContaining({ snippet: "@@ -1,1\nabc" })],
+    );
   });
 
   it("uses snippet header width when mcporter only returns a start line", async () => {
@@ -5594,32 +5737,22 @@ describe("QmdMemoryManager", () => {
       },
     } as OpenClawConfig;
 
-    const sessionsDir = path.join(stateDir, "agents", agentId, "sessions");
-    await fs.mkdir(sessionsDir, { recursive: true });
-    await fs.writeFile(
-      path.join(sessionsDir, "actual-session-topic-thread.jsonl"),
-      '{"type":"message","message":{"role":"user","content":"hello mapped session"}}\n',
-      "utf-8",
-    );
-    await fs.writeFile(
-      path.join(sessionsDir, "sessions.json"),
-      JSON.stringify({
-        "agent:main:chat:thread": {
-          sessionFile: "actual-session-topic-thread.jsonl",
-          sessionId: "actual-session",
-        },
-      }),
-      "utf-8",
-    );
+    await seedQmdSessionTranscript({
+      agentId,
+      content: "hello mapped session",
+      sessionId: "actual-session",
+      stateDir,
+      sessionKey: "agent:main:chat:thread",
+    });
 
     const { manager } = await createManager({ mode: "status" });
     await (manager as unknown as { exportSessions: () => Promise<void> }).exportSessions();
     const indexPath = (manager as unknown as { indexPath: string }).indexPath;
     const identity = resolveQmdSessionArtifactIdentity({
-      artifactPath: "actual-session-topic-thread.md",
+      artifactPath: "actual-session.md",
       collection: "sessions-main",
       indexPath,
-      searchPath: "qmd/sessions-main/actual-session-topic-thread.md",
+      searchPath: "qmd/sessions-main/actual-session.md",
     });
 
     expect(identity).toEqual({
@@ -6012,15 +6145,8 @@ describe("QmdMemoryManager", () => {
   });
 
   it("reuses exported session markdown files when inputs are unchanged", async () => {
-    const sessionsDir = path.join(stateDir, "agents", agentId, "sessions");
-    await fs.mkdir(sessionsDir, { recursive: true });
-    const sessionFile = path.join(sessionsDir, "session-1.jsonl");
     const exportFile = path.join(stateDir, "agents", agentId, "qmd", "sessions", "session-1.md");
-    await fs.writeFile(
-      sessionFile,
-      '{"type":"message","message":{"role":"user","content":"hello"}}\n',
-      "utf-8",
-    );
+    await seedQmdSessionTranscript({ agentId, content: "hello", sessionId: "session-1", stateDir });
 
     const currentMemory = cfg.memory;
     cfg = {
@@ -6709,20 +6835,18 @@ describe("QmdMemoryManager", () => {
       },
     } as OpenClawConfig;
 
-    const sessionsDir = path.join(stateDir, "agents", agentId, "sessions");
-    await fs.mkdir(sessionsDir, { recursive: true });
-    await fs.writeFile(
-      path.join(sessionsDir, "live-session.jsonl"),
-      `${JSON.stringify({ type: "message", message: { role: "user", content: "live" } })}\n`,
-    );
-    await fs.writeFile(
-      path.join(sessionsDir, "team.checkpoint.notes.jsonl"),
-      `${JSON.stringify({ type: "message", message: { role: "user", content: "notes" } })}\n`,
-    );
-    await fs.writeFile(
-      path.join(sessionsDir, "live-session.checkpoint.11111111-1111-4111-8111-111111111111.jsonl"),
-      `${JSON.stringify({ type: "message", message: { role: "user", content: "checkpoint" } })}\n`,
-    );
+    await seedQmdSessionTranscript({
+      agentId,
+      content: "live",
+      sessionId: "live-session",
+      stateDir,
+    });
+    await seedQmdSessionTranscript({
+      agentId,
+      content: "notes",
+      sessionId: "team.checkpoint.notes",
+      stateDir,
+    });
 
     const { manager } = await createManager({ mode: "full" });
     const sessionExportDir = path.join(stateDir, "agents", agentId, "qmd", "sessions");

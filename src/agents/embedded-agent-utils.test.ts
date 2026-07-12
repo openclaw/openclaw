@@ -673,7 +673,7 @@ describe("formatReasoningMessage", () => {
 });
 
 describe("extractAssistantThinking", () => {
-  it("surfaces signed native reasoning even when the provider returns an empty summary", () => {
+  it("drops signature-only native reasoning blocks so no diagnostic bubble is surfaced", () => {
     const msg = makeAssistantMessage({
       role: "assistant",
       content: [
@@ -687,9 +687,8 @@ describe("extractAssistantThinking", () => {
       timestamp: Date.now(),
     });
 
-    expect(extractAssistantThinking(msg)).toBe(
-      "Native reasoning was produced; no summary text was returned.",
-    );
+    // Signature-only block (no summary text) yields "" so downstream .filter(Boolean) drops it.
+    expect(extractAssistantThinking(msg)).toBe("");
   });
 });
 

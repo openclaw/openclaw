@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Gateway node command policy.
 // Computes per-platform allowlists from built-in, plugin, runtime, and config inputs.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
@@ -5,10 +6,12 @@ import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/strin
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   NODE_BROWSER_PROXY_COMMAND,
+  NODE_EXEC_APPROVALS_COMMANDS,
+  NODE_MCP_TOOLS_CALL_COMMAND,
   NODE_SYSTEM_NOTIFY_COMMAND,
   NODE_SYSTEM_RUN_COMMANDS,
 } from "../infra/node-commands.js";
-import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
+import { getActivePluginGatewayNodePolicyRegistry } from "../plugins/runtime.js";
 import { normalizeDeviceMetadataForPolicy } from "./device-metadata-normalization.js";
 import type { NodeSession } from "./node-registry.js";
 
@@ -17,6 +20,10 @@ const CAMERA_DANGEROUS_COMMANDS = ["camera.snap", "camera.clip"];
 
 const SCREEN_COMMANDS = ["screen.snapshot"];
 const SCREEN_DANGEROUS_COMMANDS = ["screen.record"];
+
+// Desktop computer use (pointer/keyboard injection). Declarable at pairing on
+// macOS but invocable only with explicit allowCommands opt-in (arming).
+const COMPUTER_DANGEROUS_COMMANDS = ["computer.act"];
 
 const LOCATION_COMMANDS = ["location.get"];
 const NOTIFICATION_COMMANDS = ["notifications.list"];
@@ -54,12 +61,16 @@ const IOS_SYSTEM_COMMANDS = [NODE_SYSTEM_NOTIFY_COMMAND];
 
 const SYSTEM_COMMANDS = [
   ...NODE_SYSTEM_RUN_COMMANDS,
+  ...NODE_EXEC_APPROVALS_COMMANDS,
   NODE_SYSTEM_NOTIFY_COMMAND,
   NODE_BROWSER_PROXY_COMMAND,
+  NODE_MCP_TOOLS_CALL_COMMAND,
 ];
 const DESKTOP_HOST_COMMANDS = new Set<string>([
   ...NODE_SYSTEM_RUN_COMMANDS,
+  ...NODE_EXEC_APPROVALS_COMMANDS,
   NODE_BROWSER_PROXY_COMMAND,
+  NODE_MCP_TOOLS_CALL_COMMAND,
   ...SCREEN_COMMANDS,
 ]);
 const UNKNOWN_PLATFORM_COMMANDS = [
@@ -73,6 +84,7 @@ const UNKNOWN_PLATFORM_COMMANDS = [
 export const DEFAULT_DANGEROUS_NODE_COMMANDS = [
   ...CAMERA_DANGEROUS_COMMANDS,
   ...SCREEN_DANGEROUS_COMMANDS,
+  ...COMPUTER_DANGEROUS_COMMANDS,
   ...CONTACTS_DANGEROUS_COMMANDS,
   ...CALENDAR_DANGEROUS_COMMANDS,
   ...REMINDERS_DANGEROUS_COMMANDS,
@@ -91,6 +103,7 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
     ...MOTION_COMMANDS,
     ...IOS_SYSTEM_COMMANDS,
   ],
+  watchos: [...DEVICE_COMMANDS, ...IOS_SYSTEM_COMMANDS],
   android: [
     ...CAMERA_COMMANDS,
     ...LOCATION_COMMANDS,
@@ -115,6 +128,10 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
     ...MOTION_COMMANDS,
     ...SYSTEM_COMMANDS,
     ...SCREEN_COMMANDS,
+    // Dangerous: declarable at pairing so the surface gets approved once, but
+    // excluded from the runtime allowlist until explicitly armed (see
+    // resolveNodeCommandAllowlistInternal).
+    ...COMPUTER_DANGEROUS_COMMANDS,
   ],
   linux: [...SYSTEM_COMMANDS],
   windows: [
@@ -128,10 +145,11 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
   unknown: [...UNKNOWN_PLATFORM_COMMANDS],
 };
 
-type PlatformId = "ios" | "android" | "macos" | "windows" | "linux" | "unknown";
+type PlatformId = "ios" | "watchos" | "android" | "macos" | "windows" | "linux" | "unknown";
 
 const CANONICAL_PLATFORM_IDS = new Set<Exclude<PlatformId, "unknown">>([
   "ios",
+  "watchos",
   "android",
   "macos",
   "windows",
@@ -143,6 +161,7 @@ const DEVICE_FAMILY_TOKEN_RULES: ReadonlyArray<{
   tokens: readonly string[];
 }> = [
   { id: "ios", tokens: ["iphone", "ipad", "ios"] },
+  { id: "watchos", tokens: ["apple watch", "watchos"] },
   { id: "android", tokens: ["android"] },
   { id: "macos", tokens: ["mac"] },
   { id: "windows", tokens: ["windows"] },
@@ -163,6 +182,8 @@ function platformMatchesDeviceFamily(
   switch (platformId) {
     case "ios":
       return family === "" || /^(?:iphone|ipad|ios)$/.test(family);
+    case "watchos":
+      return family === "apple watch" || family === "watchos";
     case "android":
       return family === "" || family === "android";
     case "macos":
@@ -181,6 +202,9 @@ function resolvePlatformIdByNativeLabel(
 ): Exclude<PlatformId, "unknown"> | undefined {
   if (/^(?:ios|ipados) \d+(?:\.\d+){0,2}$/.test(platform)) {
     return /^(?:iphone|ipad|ios)$/.test(deviceFamily) ? "ios" : undefined;
+  }
+  if (/^watchos \d+(?:\.\d+){0,2}$/.test(platform)) {
+    return /^(?:apple watch|watchos)$/.test(deviceFamily) ? "watchos" : undefined;
   }
   if (/^macos \d+(?:\.\d+){0,2}$/.test(platform)) {
     return deviceFamily === "mac" ? "macos" : undefined;
@@ -221,15 +245,15 @@ function normalizePlatformId(platform?: string, deviceFamily?: string): Platform
 }
 
 export function listDangerousPluginNodeCommands(): string[] {
-  const registry = getActiveRuntimePluginRegistry();
+  const registry = getActivePluginGatewayNodePolicyRegistry();
   if (!registry) {
     return [];
   }
   const commands = [
-    ...(registry.nodeHostCommands ?? [])
+    ...registry.nodeHostCommands
       .filter((entry) => entry.command.dangerous === true)
       .map((entry) => entry.command.command),
-    ...(registry.nodeInvokePolicies ?? [])
+    ...registry.nodeInvokePolicies
       .filter((entry) => entry.policy.dangerous === true)
       .flatMap((entry) => entry.policy.commands),
   ];
@@ -237,22 +261,36 @@ export function listDangerousPluginNodeCommands(): string[] {
 }
 
 function listDefaultPluginNodeCommands(platformId: PlatformId): string[] {
-  const registry = getActiveRuntimePluginRegistry();
+  // The direct watch transport has a fixed, minimal command surface. Do not let
+  // generic plugin defaults silently expand it when plugins are installed.
+  if (platformId === "watchos") {
+    return [];
+  }
+  const registry = getActivePluginGatewayNodePolicyRegistry();
   if (!registry) {
     return [];
   }
-  const commands = (registry.nodeInvokePolicies ?? []).flatMap((entry) => {
+  const policyCommands = registry.nodeInvokePolicies.flatMap((entry) => {
     if (entry.policy.dangerous === true) {
       return [];
     }
     const defaults = entry.policy.defaultPlatforms ?? [];
     return defaults.includes(platformId) ? entry.policy.commands : [];
   });
-  return normalizeUniqueStringEntries(commands);
+  const nodeHostCommands = registry.nodeHostCommands
+    .filter((entry) => {
+      if (entry.command.dangerous === true) {
+        return false;
+      }
+      const defaults = entry.command.agentTool?.defaultPlatforms ?? [];
+      return defaults.includes(platformId);
+    })
+    .map((entry) => entry.command.command);
+  return normalizeUniqueStringEntries([...policyCommands, ...nodeHostCommands]);
 }
 
 export function isForegroundRestrictedPluginNodeCommand(command: string): boolean {
-  const registry = getActiveRuntimePluginRegistry();
+  const registry = getActivePluginGatewayNodePolicyRegistry();
   if (!registry) {
     return false;
   }
@@ -260,11 +298,37 @@ export function isForegroundRestrictedPluginNodeCommand(command: string): boolea
   if (!normalized) {
     return false;
   }
-  return (registry.nodeInvokePolicies ?? []).some(
+  return registry.nodeInvokePolicies.some(
     (entry) =>
       entry.policy.foregroundRestrictedOnIos === true &&
       entry.policy.commands.some((policyCommand) => policyCommand.trim() === normalized),
   );
+}
+
+export function filterLegacyNodeProtocolFeatures(params: {
+  caps: readonly string[];
+  commands: readonly string[];
+  pluginSurfaces: readonly string[];
+}): { caps: string[]; commands: string[] } {
+  // N-1 nodes predate plugin-hosted surfaces. Preserve their durable pairing
+  // declarations elsewhere, but hide unusable plugin features from this session.
+  const registry = getActivePluginGatewayNodePolicyRegistry();
+  if (!registry) {
+    return { caps: [...params.caps], commands: [...params.commands] };
+  }
+  const pluginIds = new Set([
+    ...registry.nodeHostCommands.map((entry) => entry.pluginId),
+    ...registry.nodeInvokePolicies.map((entry) => entry.pluginId),
+  ]);
+  const pluginCaps = new Set([...params.pluginSurfaces, ...pluginIds]);
+  const pluginCommands = new Set([
+    ...registry.nodeHostCommands.map((entry) => entry.command.command),
+    ...registry.nodeInvokePolicies.flatMap((entry) => entry.policy.commands),
+  ]);
+  return {
+    caps: params.caps.filter((cap) => !pluginCaps.has(cap)),
+    commands: params.commands.filter((command) => !pluginCommands.has(command)),
+  };
 }
 
 type NodeCommandPolicyNode = Pick<NodeSession, "platform" | "deviceFamily"> &
@@ -325,12 +389,14 @@ function hasTalkSurface(node?: NodeCommandPolicyNode): boolean {
 function resolveNodeCommandAllowlistInternal(
   cfg: OpenClawConfig,
   node?: NodeCommandPolicyNode,
-  options?: { includeDesktopHostCommands?: boolean },
+  options?: { includeDesktopHostCommands?: boolean; includeDangerousDefaults?: boolean },
 ): Set<string> {
   const platformId = normalizePlatformId(node?.platform, node?.deviceFamily);
   const base = filterDesktopHostCommandDefaults({
     platformId,
-    commands: PLATFORM_DEFAULTS[platformId] ?? PLATFORM_DEFAULTS.unknown,
+    commands:
+      expectDefined(PLATFORM_DEFAULTS[platformId], "platform defaults entry at platform id") ??
+      PLATFORM_DEFAULTS.unknown,
     includeDesktopHostCommands: options?.includeDesktopHostCommands,
   });
   const talkCommands = hasTalkSurface(node) ? TALK_PTT_COMMANDS : [];
@@ -342,12 +408,21 @@ function resolveNodeCommandAllowlistInternal(
   const extra = cfg.gateway?.nodes?.allowCommands ?? [];
   const deny = new Set(cfg.gateway?.nodes?.denyCommands ?? []);
   const dangerousPluginCommands = new Set(listDangerousPluginNodeCommands());
+  // Dangerous built-ins in PLATFORM_DEFAULTS (e.g. computer.act on macOS) stay
+  // declarable/approvable at pairing but never enter the runtime allowlist by
+  // default; the pairing variant opts in via includeDangerousDefaults.
+  const dangerousBuiltinCommands =
+    options?.includeDangerousDefaults === true
+      ? new Set<string>()
+      : new Set(DEFAULT_DANGEROUS_NODE_COMMANDS);
   // Dangerous plugin commands are excluded from plugin defaults. Explicit
   // gateway.nodes.allowCommands below can still opt them in for operators.
   const allow = new Set(
     [...base, ...talkCommands, ...pluginDefaults, ...approved, ...extra]
       .map((cmd) => cmd.trim())
-      .filter((cmd) => cmd && !dangerousPluginCommands.has(cmd)),
+      .filter(
+        (cmd) => cmd && !dangerousPluginCommands.has(cmd) && !dangerousBuiltinCommands.has(cmd),
+      ),
   );
   for (const cmd of extra) {
     const trimmed = cmd.trim();
@@ -355,9 +430,21 @@ function resolveNodeCommandAllowlistInternal(
       allow.add(trimmed);
     }
   }
+  // In pairing mode, denylisted dangerous defaults stay declarable so a node
+  // retains the surface it can later be armed for: arming removes them from
+  // denyCommands and adds them to allowCommands. Fresh setup seeds denyCommands
+  // with DEFAULT_DANGEROUS_NODE_COMMANDS, so without this exemption a declarable
+  // dangerous default (e.g. computer.act on macOS) would be stripped from the
+  // pairing surface and stay uninvocable even after arming, because the live
+  // node session never retained the command. Invoke-time policy still gates
+  // every call on the runtime allowlist, which honors deny in full.
+  const denyExemptDeclarable =
+    options?.includeDangerousDefaults === true
+      ? new Set(DEFAULT_DANGEROUS_NODE_COMMANDS)
+      : new Set<string>();
   for (const blocked of deny) {
     const trimmed = blocked.trim();
-    if (trimmed) {
+    if (trimmed && !denyExemptDeclarable.has(trimmed)) {
       allow.delete(trimmed);
     }
   }
@@ -377,6 +464,7 @@ export function resolveNodePairingCommandAllowlist(
 ): Set<string> {
   return resolveNodeCommandAllowlistInternal(cfg, node, {
     includeDesktopHostCommands: true,
+    includeDangerousDefaults: true,
   });
 }
 

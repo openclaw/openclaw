@@ -20,6 +20,7 @@ const {
   countActiveDescendantRunsMock,
   deliverOutboundPayloadsMock,
   ensureOutboundSessionEntryMock,
+  loadCronSessionEntryLatestMock,
   maybeApplyTtsToPayloadMock,
   retireSessionMcpRuntimeMock,
   resolveOutboundSessionRouteMock,
@@ -32,6 +33,7 @@ const {
   countActiveDescendantRunsMock: vi.fn().mockReturnValue(0),
   deliverOutboundPayloadsMock: vi.fn().mockResolvedValue([{ ok: true }]),
   ensureOutboundSessionEntryMock: vi.fn().mockResolvedValue(undefined),
+  loadCronSessionEntryLatestMock: vi.fn(),
   maybeApplyTtsToPayloadMock: vi.fn(async (params: { payload: unknown }) => params.payload),
   retireSessionMcpRuntimeMock: vi.fn().mockResolvedValue(true),
   resolveOutboundSessionRouteMock: vi.fn().mockResolvedValue(null),
@@ -106,12 +108,16 @@ vi.mock("../../config/sessions/transcript.runtime.js", () => ({
   appendAssistantMessageToSessionTranscript: appendAssistantMessageToSessionTranscriptMock,
 }));
 
+vi.mock("./session.js", () => ({
+  loadCronSessionEntryLatest: loadCronSessionEntryLatestMock,
+}));
+
 vi.mock("../../cli/outbound-send-deps.js", () => ({
   createOutboundSendDeps: vi.fn().mockReturnValue({}),
 }));
 
 vi.mock("../../gateway/call.runtime.js", () => ({
-  callGateway: vi.fn().mockResolvedValue({ status: "ok" }),
+  callGateway: vi.fn().mockResolvedValue({ ok: true, deleted: true }),
 }));
 
 vi.mock("../../logger.js", () => ({
@@ -225,6 +231,8 @@ function makeBaseParams(overrides: {
     agentSessionKey: "agent:main",
     runSessionKey: overrides.runSessionKey ?? "agent:main",
     sessionId: "test-session-id",
+    lifecycleRevision: "test-lifecycle-revision",
+    sessionUpdatedAt: 1_000,
     runStartedAt,
     runEndedAt: runStartedAt,
     timeoutMs: 30_000,
@@ -317,6 +325,10 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       ok: true,
       sessionFile: "session.jsonl",
       messageId: "mirror-message",
+    });
+    loadCronSessionEntryLatestMock.mockReturnValue({
+      sessionId: "test-session-id",
+      lifecycleRevision: "test-lifecycle-revision",
     });
     maybeApplyTtsToPayloadMock.mockReset().mockImplementation(async (params) => params.payload);
   });
@@ -1424,6 +1436,9 @@ describe("dispatchCronDelivery — double-announce guard", () => {
         key: "agent:main:cron:test-job",
         deleteTranscript: true,
         emitLifecycleHooks: false,
+        expectedSessionId: "test-session-id",
+        expectedLifecycleRevision: "test-lifecycle-revision",
+        expectedSessionUpdatedAt: 1_000,
       },
       timeoutMs: 10_000,
     });
@@ -1446,6 +1461,35 @@ describe("dispatchCronDelivery — double-announce guard", () => {
         key: "agent:main:cron:test-job",
         deleteTranscript: true,
         emitLifecycleHooks: false,
+        expectedSessionId: "test-session-id",
+        expectedLifecycleRevision: "test-lifecycle-revision",
+        expectedSessionUpdatedAt: 1_000,
+      },
+      timeoutMs: 10_000,
+    });
+  });
+
+  it("does not mirror into a self-deleting run session before guarded cleanup", async () => {
+    mockResolvedOutboundRoute({
+      sessionKey: "agent:main:cron:test-job",
+      baseSessionKey: "agent:main:cron:test-job",
+    });
+    const params = makeBaseParams({ synthesizedText: "Delivered report" });
+    params.agentSessionKey = "agent:main:cron:test-job";
+    (params.job as { deleteAfterRun?: boolean }).deleteAfterRun = true;
+
+    await dispatchCronDelivery(params);
+
+    expect(appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+    expect(callGateway).toHaveBeenCalledWith({
+      method: "sessions.delete",
+      params: {
+        key: "agent:main:cron:test-job",
+        deleteTranscript: true,
+        emitLifecycleHooks: false,
+        expectedSessionId: "test-session-id",
+        expectedLifecycleRevision: "test-lifecycle-revision",
+        expectedSessionUpdatedAt: 1_000,
       },
       timeoutMs: 10_000,
     });
@@ -1469,6 +1513,151 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       sessionId: "test-session-id",
       reason: "cron-delete-after-run-fallback",
     });
+  });
+
+  it("guards the deferred mirror when isolated cleanup only retires the runtime", async () => {
+    mockResolvedOutboundRoute({
+      sessionKey: "agent:main:cron:test-job",
+      baseSessionKey: "agent:main:cron:test-job",
+    });
+    vi.mocked(callGateway).mockRejectedValueOnce(new Error("gateway down"));
+
+    const params = makeBaseParams({ synthesizedText: "Delivered report" });
+    params.agentSessionKey = "agent:main:cron:test-job";
+    (params.job as { deleteAfterRun?: boolean }).deleteAfterRun = true;
+
+    await dispatchCronDelivery(params);
+
+    expect(retireSessionMcpRuntime).toHaveBeenCalledWith({
+      sessionId: "test-session-id",
+      reason: "cron-delete-after-run-fallback",
+    });
+    expect(appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:cron:test-job",
+        expectedSessionId: "test-session-id",
+        expectedLifecycleRevision: "test-lifecycle-revision",
+        text: "Delivered report",
+      }),
+    );
+  });
+
+  it("cancels deferred mirror admission when the cron run aborts during cleanup", async () => {
+    mockResolvedOutboundRoute({
+      sessionKey: "agent:main:cron:test-job",
+      baseSessionKey: "agent:main:cron:test-job",
+    });
+    const abortController = new AbortController();
+    vi.mocked(callGateway).mockImplementationOnce(async () => {
+      abortController.abort(new Error("cron run aborted"));
+      throw new Error("gateway down");
+    });
+
+    const params = makeBaseParams({ synthesizedText: "Delivered report" });
+    params.agentSessionKey = "agent:main:cron:test-job";
+    params.abortSignal = abortController.signal;
+    (params.job as { deleteAfterRun?: boolean }).deleteAfterRun = true;
+
+    await dispatchCronDelivery(params);
+
+    expect(appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+  });
+
+  it("does not retire a replacement runtime when guarded cleanup finds a changed session", async () => {
+    const changedError = new Error("session changed") as Error & {
+      gatewayCode: string;
+      details: { reason: string };
+    };
+    changedError.name = "GatewayClientRequestError";
+    changedError.gatewayCode = "INVALID_REQUEST";
+    changedError.details = { reason: "session-changed" };
+    vi.mocked(callGateway).mockRejectedValueOnce(changedError);
+
+    const params = makeBaseParams({ synthesizedText: SILENT_REPLY_TOKEN });
+    params.agentSessionKey = "agent:main:cron:test-job";
+    (params.job as { deleteAfterRun?: boolean }).deleteAfterRun = true;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.cronRunSessionCleanupAttempted).toBe(true);
+    expect(retireSessionMcpRuntime).not.toHaveBeenCalled();
+  });
+
+  it("does not retire a persistent session runtime when gateway cleanup fails", async () => {
+    vi.mocked(callGateway).mockRejectedValueOnce(new Error("gateway down"));
+
+    const params = makeBaseParams({
+      synthesizedText: SILENT_REPLY_TOKEN,
+      sessionTarget: "session:agent:main:cron:test-job",
+    });
+    params.agentSessionKey = "agent:main:cron:test-job";
+    (params.job as { deleteAfterRun?: boolean }).deleteAfterRun = true;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.cronRunSessionCleanupAttempted).toBe(true);
+    expect(retireSessionMcpRuntime).not.toHaveBeenCalled();
+  });
+
+  it("restores the guarded delivery mirror when a persistent session survives cleanup failure", async () => {
+    mockResolvedOutboundRoute({
+      sessionKey: "agent:main:cron:test-job",
+      baseSessionKey: "agent:main:cron:test-job",
+    });
+    vi.mocked(callGateway).mockRejectedValueOnce(new Error("gateway down"));
+
+    const params = makeBaseParams({
+      synthesizedText: "Delivered report",
+      sessionTarget: "session:agent:main:cron:test-job",
+    });
+    params.agentSessionKey = "agent:main:cron:test-job";
+    (params.job as { deleteAfterRun?: boolean }).deleteAfterRun = true;
+
+    await dispatchCronDelivery(params);
+
+    expect(appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:cron:test-job",
+        expectedSessionId: "test-session-id",
+        expectedLifecycleRevision: "test-lifecycle-revision",
+        text: "Delivered report",
+      }),
+    );
+  });
+
+  it("does not append the deferred mirror after archive wins the cleanup gap", async () => {
+    mockResolvedOutboundRoute({
+      sessionKey: "agent:main:cron:test-job",
+      baseSessionKey: "agent:main:cron:test-job",
+    });
+    const changedError = new Error("session changed") as Error & {
+      gatewayCode: string;
+      details: { reason: string };
+    };
+    changedError.name = "GatewayClientRequestError";
+    changedError.gatewayCode = "INVALID_REQUEST";
+    changedError.details = { reason: "session-changed" };
+    vi.mocked(callGateway).mockRejectedValueOnce(changedError);
+    loadCronSessionEntryLatestMock.mockReturnValue({
+      sessionId: "test-session-id",
+      lifecycleRevision: "test-lifecycle-revision",
+      archivedAt: Date.now(),
+    });
+
+    const params = makeBaseParams({
+      synthesizedText: "Delivered report",
+      sessionTarget: "session:agent:main:cron:test-job",
+    });
+    params.agentSessionKey = "agent:main:cron:test-job";
+    (params.job as { deleteAfterRun?: boolean }).deleteAfterRun = true;
+
+    await dispatchCronDelivery(params);
+
+    expect(loadCronSessionEntryLatestMock).toHaveBeenCalledWith(
+      expect.any(String),
+      "agent:main:cron:test-job",
+    );
+    expect(appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
   });
 
   it("skips deleteAfterRun cleanup for non-cron sessions", async () => {
@@ -1522,6 +1711,9 @@ describe("dispatchCronDelivery — double-announce guard", () => {
         key: "agent:main:cron:test-job",
         deleteTranscript: true,
         emitLifecycleHooks: false,
+        expectedSessionId: "test-session-id",
+        expectedLifecycleRevision: "test-lifecycle-revision",
+        expectedSessionUpdatedAt: 1_000,
       },
       timeoutMs: 10_000,
     });
@@ -1559,6 +1751,9 @@ describe("dispatchCronDelivery — double-announce guard", () => {
         key: "agent:main:cron:test-job",
         deleteTranscript: true,
         emitLifecycleHooks: false,
+        expectedSessionId: "test-session-id",
+        expectedLifecycleRevision: "test-lifecycle-revision",
+        expectedSessionUpdatedAt: 1_000,
       },
       timeoutMs: 10_000,
     });
@@ -2000,6 +2195,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       channel: "whatsapp",
       to: "+15551234567",
     });
+    loadCronSessionEntryLatestMock.mockReturnValue({ sessionId: "test-session-id" });
 
     const state = await dispatchCronDelivery(params);
 
@@ -2030,12 +2226,38 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
       sessionKey: "agent:main:whatsapp:direct:+15551234567",
       agentId: "main",
+      expectedSessionId: "test-session-id",
       text: "REPRO_TOKEN_K7M3X9",
       mediaUrls: undefined,
       storePath: expect.stringContaining("cron-mirror-sessions.json"),
       idempotencyKey: expect.stringContaining("test-job"),
       config: params.cfgWithAgentDefaults,
     });
+  });
+
+  it("does not mirror a direct delivery into an archived destination session", async () => {
+    mockResolvedOutboundRoute({
+      sessionKey: "agent:main:whatsapp:direct:+15551234567",
+      baseSessionKey: "agent:main:whatsapp:direct:+15551234567",
+      peer: { kind: "direct", id: "+15551234567" },
+      from: "whatsapp:+15551234567",
+      to: "+15551234567",
+    });
+    loadCronSessionEntryLatestMock.mockReturnValue({
+      sessionId: "archived-session-id",
+      archivedAt: Date.now(),
+    });
+
+    const params = makeBaseParams({ synthesizedText: "Delivered outside OpenClaw" });
+    params.resolvedDelivery = makeResolvedDelivery({
+      channel: "whatsapp",
+      to: "+15551234567",
+    });
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.delivered).toBe(true);
+    expect(appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
   });
 
   it("keeps successful direct delivery delivered when the transcript mirror append fails", async () => {
@@ -2095,6 +2317,8 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
       sessionKey: "agent:main:session:daily-report",
       agentId: "main",
+      expectedSessionId: "test-session-id",
+      expectedLifecycleRevision: "test-lifecycle-revision",
       text: "custom-session report",
       mediaUrls: undefined,
       storePath: expect.stringContaining("cron-custom-session-mirror.json"),
@@ -2142,6 +2366,9 @@ describe("dispatchCronDelivery — double-announce guard", () => {
         key: "agent:main:cron:test-job",
         deleteTranscript: true,
         emitLifecycleHooks: false,
+        expectedSessionId: "test-session-id",
+        expectedLifecycleRevision: "test-lifecycle-revision",
+        expectedSessionUpdatedAt: 1_000,
       },
       timeoutMs: 10_000,
     });
@@ -2199,6 +2426,9 @@ describe("dispatchCronDelivery — double-announce guard", () => {
         key: "agent:main:cron:test-job",
         deleteTranscript: true,
         emitLifecycleHooks: false,
+        expectedSessionId: "test-session-id",
+        expectedLifecycleRevision: "test-lifecycle-revision",
+        expectedSessionUpdatedAt: 1_000,
       },
       timeoutMs: 10_000,
     });
@@ -2248,6 +2478,9 @@ describe("dispatchCronDelivery — double-announce guard", () => {
         key: "agent:main:cron:test-job",
         deleteTranscript: true,
         emitLifecycleHooks: false,
+        expectedSessionId: "test-session-id",
+        expectedLifecycleRevision: "test-lifecycle-revision",
+        expectedSessionUpdatedAt: 1_000,
       },
       timeoutMs: 10_000,
     });

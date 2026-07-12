@@ -9,10 +9,10 @@ import {
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 /** Canonical config path for the Brave Search API key. */
-export const BRAVE_CREDENTIAL_PATH = "plugins.entries.brave.config.webSearch.apiKey";
+const BRAVE_CREDENTIAL_PATH = "plugins.entries.brave.config.webSearch.apiKey";
 
 /** Resolve legacy top-level Brave credentials from old web-search config. */
-export function resolveLegacyTopLevelBraveCredential(
+function resolveLegacyTopLevelBraveCredential(
   config: unknown,
 ): { path: string; value: unknown } | undefined {
   if (!isRecord(config)) {
@@ -39,7 +39,7 @@ function resolveBraveWebSearchPluginConfig(config: unknown): Record<string, unkn
 }
 
 /** Resolve Brave credentials from current plugin config or legacy fallback. */
-export function resolveConfiguredBraveCredential(config: unknown): unknown {
+function resolveConfiguredBraveCredential(config: unknown): unknown {
   return (
     resolveBraveWebSearchPluginConfig(config)?.apiKey ??
     resolveLegacyTopLevelBraveCredential(config)?.value

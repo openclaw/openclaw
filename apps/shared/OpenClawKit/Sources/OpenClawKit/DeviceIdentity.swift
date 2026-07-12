@@ -1,14 +1,20 @@
 import CryptoKit
 import Foundation
+#if canImport(Security)
+import Security
+#endif
 
 public enum GatewayDeviceIdentityProfile: String, Sendable {
     case primary
+    case node
     case shareExtension
 
     var identityFileName: String {
         switch self {
         case .primary:
             "device.json"
+        case .node:
+            "node-device.json"
         case .shareExtension:
             "share-device.json"
         }
@@ -18,6 +24,8 @@ public enum GatewayDeviceIdentityProfile: String, Sendable {
         switch self {
         case .primary:
             "device-auth.json"
+        case .node:
+            "node-device-auth.json"
         case .shareExtension:
             "share-device-auth.json"
         }
@@ -28,9 +36,9 @@ public struct DeviceIdentity: Codable, Sendable {
     public var deviceId: String
     public var publicKey: String
     public var privateKey: String
-    public var createdAtMs: Int
+    public var createdAtMs: Int64
 
-    public init(deviceId: String, publicKey: String, privateKey: String, createdAtMs: Int) {
+    public init(deviceId: String, publicKey: String, privateKey: String, createdAtMs: Int64) {
         self.deviceId = deviceId
         self.publicKey = publicKey
         self.privateKey = privateKey
@@ -41,11 +49,18 @@ public struct DeviceIdentity: Codable, Sendable {
 enum DeviceIdentityPaths {
     private static let stateDirEnv = ["OPENCLAW_STATE_DIR"]
 
+    /// Entitlements are baked into the code signature, so resolve the gate once per process.
+    /// Every identity load and DeviceAuthStore read/write resolves the state dir through here;
+    /// re-creating a SecTask each time is wasted work for a process-immutable fact.
+    private static let appGroupStateDirAvailable =
+        DeviceIdentityPaths.hasAppGroupEntitlement(OpenClawAppGroup.identifier)
+
     static func stateDirURL() -> URL {
         self.stateDirURL(
             overrideURL: self.stateDirOverrideURL(),
             legacyStateDirURL: self.legacyStateDirURL(),
             appGroupStateDirURL: self.appGroupStateDirURL(),
+            appGroupStateDirAvailable: self.appGroupStateDirAvailable,
             temporaryDirectory: FileManager.default.temporaryDirectory)
     }
 
@@ -53,12 +68,13 @@ enum DeviceIdentityPaths {
         overrideURL: URL?,
         legacyStateDirURL: URL?,
         appGroupStateDirURL: URL?,
+        appGroupStateDirAvailable: Bool = true,
         temporaryDirectory: URL) -> URL
     {
         if let overrideURL {
             return overrideURL
         }
-        if let appGroupStateDirURL {
+        if appGroupStateDirAvailable, let appGroupStateDirURL {
             return appGroupStateDirURL
         }
         if let legacyStateDirURL {
@@ -86,6 +102,30 @@ enum DeviceIdentityPaths {
         return nil
     }
 
+    private static func hasAppGroupEntitlement(_ identifier: String) -> Bool {
+        // macOS resolves containerURL(forSecurityApplicationGroupIdentifier:) even without the
+        // App Groups entitlement, but macOS 15+ gates actual access behind a user consent prompt.
+        // Unentitled builds (the shipped mac app) must not depend on that container. iOS requires
+        // the entitlement for containerURL to resolve at all, so the gate is macOS-only.
+        #if os(macOS) && canImport(Security)
+        guard
+            let task = SecTaskCreateFromSelf(nil),
+            let value = SecTaskCopyValueForEntitlement(
+                task,
+                "com.apple.security.application-groups" as CFString,
+                nil)
+        else {
+            return false
+        }
+        guard let groups = value as? [String] else {
+            return false
+        }
+        return groups.contains(identifier)
+        #else
+        return true
+        #endif
+    }
+
     private static func appGroupStateDirURL() -> URL? {
         guard
             let containerURL = FileManager.default
@@ -94,6 +134,45 @@ enum DeviceIdentityPaths {
             return nil
         }
         return containerURL.appendingPathComponent("OpenClaw", isDirectory: true)
+    }
+
+    /// Files a one-time fallback migration may carry from the App Group container into the
+    /// selected store. Stored device tokens are keyed by deviceId, so the identity file is
+    /// only useful together with its auth sibling; migrating one without the other forces
+    /// an unnecessary re-pair even though the deviceId survived.
+    struct AppGroupMigrationSource {
+        let identityURL: URL
+        let authURL: URL
+    }
+
+    static func appGroupMigrationSource(
+        profile: GatewayDeviceIdentityProfile) -> AppGroupMigrationSource?
+    {
+        self.appGroupMigrationSource(
+            appGroupStateDirURL: self.appGroupStateDirURL(),
+            appGroupStateDirAvailable: self.appGroupStateDirAvailable,
+            stateDirOverridden: self.stateDirOverrideURL() != nil,
+            profile: profile)
+    }
+
+    /// Non-nil only for unentitled builds whose store selection fell back to legacy storage;
+    /// entitled builds keep using the App Group container and must never migrate out of it.
+    /// An explicit OPENCLAW_STATE_DIR override selects a caller-chosen store, not the legacy
+    /// fallback; importing container identity/tokens there would leak the machine's real
+    /// pairing into unrelated stores (test dirs, relocated installs).
+    static func appGroupMigrationSource(
+        appGroupStateDirURL: URL?,
+        appGroupStateDirAvailable: Bool,
+        stateDirOverridden: Bool,
+        profile: GatewayDeviceIdentityProfile) -> AppGroupMigrationSource?
+    {
+        guard !stateDirOverridden, !appGroupStateDirAvailable, let appGroupStateDirURL else {
+            return nil
+        }
+        let identityDirURL = appGroupStateDirURL.appendingPathComponent("identity", isDirectory: true)
+        return AppGroupMigrationSource(
+            identityURL: identityDirURL.appendingPathComponent(profile.identityFileName, isDirectory: false),
+            authURL: identityDirURL.appendingPathComponent(profile.authFileName, isDirectory: false))
     }
 }
 
@@ -112,23 +191,98 @@ public enum DeviceIdentityStore {
     }
 
     public static func loadOrCreate(profile: GatewayDeviceIdentityProfile) -> DeviceIdentity {
-        self.loadOrCreate(fileURL: self.fileURL(profile: profile))
+        self.loadOrCreate(
+            fileURL: self.fileURL(profile: profile),
+            migrationSource: DeviceIdentityPaths.appGroupMigrationSource(profile: profile))
     }
 
-    static func loadOrCreate(fileURL url: URL) -> DeviceIdentity {
+    /// Loads or creates an identity, returning nil unless its key material was durably persisted.
+    public static func loadOrCreatePersisted(
+        profile: GatewayDeviceIdentityProfile = .primary) -> DeviceIdentity?
+    {
+        self.loadOrCreatePersisted(
+            fileURL: self.fileURL(profile: profile),
+            migrationSource: DeviceIdentityPaths.appGroupMigrationSource(profile: profile))
+    }
+
+    static func loadOrCreate(
+        fileURL url: URL,
+        migrationSource: DeviceIdentityPaths.AppGroupMigrationSource? = nil) -> DeviceIdentity
+    {
         if let data = try? Data(contentsOf: url) {
             switch self.decodeStoredIdentity(data) {
             case let .identity(decoded):
                 return decoded
-            case .recognizedInvalid:
+            case .recognizedInvalid, .unknown:
+                // Existing bytes may hold a newer schema or recoverable key material; never
+                // overwrite them. Callers run with a transient identity instead.
                 return self.generate()
-            case .unknown:
-                break
             }
+        }
+        if FileManager.default.fileExists(atPath: url.path) {
+            return self.generate()
+        }
+        if let migrated = self.migratedIdentity(from: migrationSource, to: url) {
+            return migrated
         }
         let identity = self.generate()
         self.save(identity, to: url)
         return identity
+    }
+
+    static func loadOrCreatePersisted(
+        fileURL url: URL,
+        migrationSource: DeviceIdentityPaths.AppGroupMigrationSource? = nil) -> DeviceIdentity?
+    {
+        let identity = self.loadOrCreate(fileURL: url, migrationSource: migrationSource)
+        guard let data = try? Data(contentsOf: url),
+              case let .identity(stored) = self.decodeStoredIdentity(data),
+              stored.deviceId == identity.deviceId,
+              stored.publicKey == identity.publicKey,
+              stored.privateKey == identity.privateKey
+        else {
+            return nil
+        }
+        return stored
+    }
+
+    /// One-time upgrade path for builds that lost App Group storage: it runs only while the
+    /// selected store has no identity file, so steady state never re-reads the old container.
+    private static func migratedIdentity(
+        from source: DeviceIdentityPaths.AppGroupMigrationSource?,
+        to destinationURL: URL) -> DeviceIdentity?
+    {
+        guard
+            let source,
+            let data = try? Data(contentsOf: source.identityURL),
+            case let .identity(identity) = self.decodeStoredIdentity(data)
+        else {
+            return nil
+        }
+        self.save(identity, to: destinationURL)
+        // Stored device tokens only load when their store's deviceId matches (DeviceAuthStore),
+        // so they must move together with the identity or the install re-pairs for no reason.
+        // A mismatched copy is inert behind that same check; no validation needed here.
+        self.copyAuthStoreFile(
+            from: source.authURL,
+            toDirectory: destinationURL.deletingLastPathComponent())
+        return identity
+    }
+
+    private static func copyAuthStoreFile(from sourceURL: URL, toDirectory directoryURL: URL) {
+        let fileManager = FileManager.default
+        let destinationURL = directoryURL
+            .appendingPathComponent(sourceURL.lastPathComponent, isDirectory: false)
+        guard
+            !fileManager.fileExists(atPath: destinationURL.path),
+            fileManager.fileExists(atPath: sourceURL.path)
+        else {
+            return
+        }
+        try? fileManager.copyItem(at: sourceURL, to: destinationURL)
+        try? fileManager.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: destinationURL.path)
     }
 
     private enum DecodeResult {
@@ -185,7 +339,7 @@ public enum DeviceIdentityStore {
             deviceId: deviceId,
             publicKey: publicKeyData.base64EncodedString(),
             privateKey: privateKeyData.base64EncodedString(),
-            createdAtMs: Int(Date().timeIntervalSince1970 * 1000))
+            createdAtMs: Int64(Date().timeIntervalSince1970 * 1000))
     }
 
     private static func base64UrlEncode(_ data: Data) -> String {
@@ -288,5 +442,5 @@ private struct PemDeviceIdentity: Codable {
     var deviceId: String
     var publicKeyPem: String
     var privateKeyPem: String
-    var createdAtMs: Int
+    var createdAtMs: Int64
 }

@@ -152,6 +152,22 @@ private struct LocationAccessSettings: View {
     }
 }
 
+extension Capability {
+    /// Importance order for permission lists: app control and context capture
+    /// first (they power most agent actions), voice/media next, location last.
+    /// Keep onboarding and Settings in the same order so users can cross-reference.
+    static let importanceOrdered: [Capability] = [
+        .appleScript,
+        .accessibility,
+        .screenRecording,
+        .notifications,
+        .microphone,
+        .speechRecognition,
+        .camera,
+        .location,
+    ]
+}
+
 struct PermissionStatusList: View {
     let status: [Capability: Bool]
     let refresh: () async -> Void
@@ -159,12 +175,12 @@ struct PermissionStatusList: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(Capability.allCases.enumerated()), id: \.element) { index, cap in
+            ForEach(Array(Capability.importanceOrdered.enumerated()), id: \.element) { index, cap in
                 PermissionRow(
                     capability: cap,
                     status: self.status[cap] ?? false,
                     isPending: self.pendingCapability == cap,
-                    showsDivider: index != Capability.allCases.count - 1)
+                    showsDivider: index != Capability.importanceOrdered.count - 1)
                 {
                     Task { await self.handle(cap) }
                 }
@@ -270,18 +286,22 @@ struct PermissionRow: View {
                             .frame(minWidth: self.compact ? 68 : 78, alignment: .trailing)
                     }
 
-                    if self.status {
-                        Text("Granted")
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(.green)
-                    } else if self.isPending {
-                        Text("Checking…")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        Text("Request access")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                    // Compact rows (onboarding) skip the caption so the full
+                    // permission list fits the fixed page without scrolling.
+                    if !self.compact {
+                        if self.status {
+                            Text("Granted")
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(.green)
+                        } else if self.isPending {
+                            Text("Checking…")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text("Request access")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
                 .frame(minWidth: self.compact ? 86 : 104, alignment: .trailing)

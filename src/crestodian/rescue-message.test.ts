@@ -74,37 +74,49 @@ const mockConfig = vi.hoisted(() => {
   };
 });
 
-vi.mock("../config/config.js", () => ({
-  clearConfigCache: vi.fn(),
-  mutateConfigFile: mockConfig.mutateConfigFile,
-  readConfigFileSnapshot: mockConfig.readConfigFileSnapshot,
-}));
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    clearConfigCache: vi.fn(),
+    mutateConfigFile: mockConfig.mutateConfigFile,
+    readConfigFileSnapshot: mockConfig.readConfigFileSnapshot,
+  };
+});
 
-vi.mock("../commands/models/shared.js", () => ({
-  applyDefaultModelPrimaryUpdate: ({
-    cfg,
-    modelRaw,
-    field,
-  }: {
-    cfg: TestConfig;
-    modelRaw: string;
-    field: "model" | "imageModel";
-  }) => ({
-    ...cfg,
-    agents: {
-      ...(cfg.agents as TestConfig | undefined),
-      defaults: {
-        ...(cfg.agents as { defaults?: TestConfig } | undefined)?.defaults,
-        [field]: { primary: modelRaw },
+vi.mock("../commands/models/shared.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../commands/models/shared.js")>();
+  return {
+    ...actual,
+    applyDefaultModelPrimaryUpdate: ({
+      cfg,
+      modelRaw,
+      field,
+    }: {
+      cfg: TestConfig;
+      modelRaw: string;
+      field: "model" | "imageModel";
+    }) => ({
+      ...cfg,
+      agents: {
+        ...(cfg.agents as TestConfig | undefined),
+        defaults: {
+          ...(cfg.agents as { defaults?: TestConfig } | undefined)?.defaults,
+          [field]: { primary: modelRaw },
+        },
       },
-    },
-  }),
-}));
+    }),
+  };
+});
 
-vi.mock("../config/model-input.js", () => ({
-  resolveAgentModelPrimaryValue: (model?: string | { primary?: string }) =>
-    typeof model === "string" ? model : model?.primary,
-}));
+vi.mock("../config/model-input.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/model-input.js")>();
+  return {
+    ...actual,
+    resolveAgentModelPrimaryValue: (model?: string | { primary?: string }) =>
+      typeof model === "string" ? model : model?.primary,
+  };
+});
 
 async function makeStateDir(prefix: string): Promise<string> {
   const dir = path.join(tempRoot, `${prefix}${tempDirId++}`);
@@ -207,6 +219,57 @@ describe("Crestodian rescue message", () => {
     expect(deps.runTui).not.toHaveBeenCalled();
   });
 
+  it("rejects natural language instead of guessing an operation", async () => {
+    const cfg: OpenClawConfig = { crestodian: { rescue: { enabled: true } } };
+    const deps = {
+      runGatewayStop: vi.fn(async () => {}),
+      runGatewayRestart: vi.fn(async () => {}),
+    };
+
+    // Questions must never become mutation plans (previously "why did my
+    // gateway stop" keyword-matched into a gateway-stop proposal).
+    await expect(
+      runRescue("/crestodian why did my gateway stop", cfg, commandContext(), deps),
+    ).resolves.toContain("I can run doctor/status/health");
+    await expect(
+      runRescue("/crestodian explain how restart gateway works", cfg, commandContext(), deps),
+    ).resolves.toContain("I can run doctor/status/health");
+    expect(deps.runGatewayStop).not.toHaveBeenCalled();
+    expect(deps.runGatewayRestart).not.toHaveBeenCalled();
+  });
+
+  it("refuses channel setup from remote rescue with a local pointer", async () => {
+    const cfg: OpenClawConfig = { crestodian: { rescue: { enabled: true } } };
+    await expect(runRescue("/crestodian connect telegram", cfg)).resolves.toContain(
+      "cannot host the interactive channel setup",
+    );
+  });
+
+  it("refuses model provider setup from remote rescue with a local pointer", async () => {
+    const cfg: OpenClawConfig = { crestodian: { rescue: { enabled: true } } };
+    const reply = await runRescue("/crestodian configure model provider", cfg);
+    expect(reply).toContain("cannot host model-provider credential setup");
+    expect(reply).toContain("openclaw onboard");
+  });
+
+  it("drops a pending rescue change on decline", async () => {
+    await withRescueStateDir("decline-", async () => {
+      const cfg: OpenClawConfig = { crestodian: { rescue: { enabled: true } } };
+      const deps = { runGatewayRestart: vi.fn(async () => {}) };
+
+      await expect(
+        runRescue("/crestodian restart gateway", cfg, commandContext(), deps),
+      ).resolves.toContain("Reply /crestodian yes to apply");
+      await expect(runRescue("/crestodian no", cfg, commandContext(), deps)).resolves.toContain(
+        "Dropped the pending Crestodian rescue change",
+      );
+      await expect(runRescue("/crestodian yes", cfg, commandContext(), deps)).resolves.toBe(
+        "No pending Crestodian rescue change is waiting for approval.",
+      );
+      expect(deps.runGatewayRestart).not.toHaveBeenCalled();
+    });
+  });
+
   it("refuses plugin install from remote rescue", async () => {
     const cfg: OpenClawConfig = { crestodian: { rescue: { enabled: true } } };
     const deps = {
@@ -251,17 +314,25 @@ describe("Crestodian rescue message", () => {
   it("queues and applies persistent writes through conversational approval", async () => {
     await withRescueStateDir("models-", async (tempDir) => {
       const cfg: OpenClawConfig = { crestodian: { rescue: { enabled: true } } };
+      const deps = {
+        verifyInferenceConfig: vi.fn(async () => ({
+          ok: true as const,
+          modelRef: "openai/gpt-5.2",
+          latencyMs: 17,
+        })),
+      };
       await expect(
-        runRescue("/crestodian set default model openai/gpt-5.2", cfg),
+        runRescue("/crestodian set default model openai/gpt-5.2", cfg, commandContext(), deps),
       ).resolves.toContain("Reply /crestodian yes to apply");
-      await expect(runRescue("/crestodian yes", cfg)).resolves.toContain(
+      await expect(runRescue("/crestodian yes", cfg, commandContext(), deps)).resolves.toContain(
         "Default model: openai/gpt-5.2",
       );
 
       const currentConfig = mockConfig.currentConfig() as {
-        agents?: { defaults?: { model?: { primary?: string } } };
+        agents?: { defaults?: { model?: string | { primary?: string } } };
       };
-      expect(currentConfig.agents?.defaults?.model?.primary).toBe("openai/gpt-5.2");
+      const model = currentConfig.agents?.defaults?.model;
+      expect(typeof model === "string" ? model : model?.primary).toBe("openai/gpt-5.2");
       const auditPath = path.join(tempDir, "audit", "crestodian.jsonl");
       const audit = JSON.parse((await fs.readFile(auditPath, "utf8")).trim()) as {
         details?: { rescue?: boolean; channel?: string; senderId?: string };

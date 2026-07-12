@@ -13,6 +13,7 @@ import {
   resetSkillsRefreshStateForTest,
 } from "../runtime/refresh-state.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
+import { renderProposalMarkdown } from "./frontmatter.js";
 import {
   applySkillProposal,
   inspectSkillProposal,
@@ -50,6 +51,17 @@ async function makeWorkspace(): Promise<string> {
 }
 
 describe("skill workshop proposals", () => {
+  it("renders proposal markdown with a terminal newline", () => {
+    expect(
+      renderProposalMarkdown({
+        name: "example",
+        description: "Example proposal",
+        content: "# Example",
+        date: "2026-07-05T00:00:00.000Z",
+      }).endsWith("\n"),
+    ).toBe(true);
+  });
+
   it("creates a pending proposal under the workshop and applies it as an active workspace skill", async () => {
     const workspaceDir = await makeWorkspace();
     const proposal = await proposeCreateSkill({

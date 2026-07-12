@@ -12,6 +12,19 @@ export type BrowserTab = {
   url?: string;
 };
 
+// Meet automation scripts match English UI labels ("Join now", "Turn off microphone").
+// hl=en pins the Meet page language regardless of account/browser locale; without it,
+// non-English profiles render localized labels and every DOM matcher goes blind.
+export function forceMeetEnglishUi(url: string): string {
+  try {
+    const parsed = new URL(url);
+    parsed.searchParams.set("hl", "en");
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
+
 export function normalizeMeetUrlForReuse(url: string | undefined): string | undefined {
   if (!url) {
     return undefined;
@@ -35,6 +48,22 @@ export function isSameMeetUrlForReuse(a: string | undefined, b: string | undefin
   const normalizedA = normalizeMeetUrlForReuse(a);
   const normalizedB = normalizeMeetUrlForReuse(b);
   return Boolean(normalizedA && normalizedB && normalizedA === normalizedB);
+}
+
+export function isEnglishMeetTab(url: string | undefined): boolean {
+  if (!url) {
+    return false;
+  }
+  try {
+    const parsed = new URL(url);
+    return (
+      parsed.protocol === "https:" &&
+      parsed.hostname.toLowerCase() === "meet.google.com" &&
+      parsed.searchParams.get("hl")?.toLowerCase() === "en"
+    );
+  } catch {
+    return false;
+  }
 }
 
 type GoogleMeetNodeInfo = {
@@ -192,6 +221,7 @@ export async function callBrowserProxyOnNode(params: {
       timeoutMs: params.timeoutMs,
     },
     timeoutMs: addTimerTimeoutGraceMs(params.timeoutMs) ?? 1,
+    scopes: ["operator.admin"],
   });
   return parseBrowserProxyResult(raw);
 }

@@ -3,16 +3,23 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
-import { clearConfigCache } from "../config/config.js";
+import { clearConfigCache, getRuntimeConfig } from "../config/config.js";
+import { appendTranscriptEvent, loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { invalidateSessionStoreCache } from "../config/sessions/store-cache.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
+import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
+import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
 import { createDeferred } from "../test-utils/deferred.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { setMaxChatHistoryMessagesBytesForTest } from "./server-constants.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/shared-types.js";
+import { pendingChatSendDedupeKey } from "./server-shared.js";
 import {
   connectOk,
   createGatewaySuiteHarness,
@@ -31,6 +38,7 @@ const FAST_WAIT_OPTS = { timeout: 2_000, interval: 5 } as const;
 type GatewayHarness = Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
 type GatewaySocket = Awaited<ReturnType<GatewayHarness["openWs"]>>;
 let harness: GatewayHarness;
+const autoCleanupTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 beforeAll(async () => {
   harness = await createGatewaySuiteHarness();
@@ -91,13 +99,12 @@ function testSessionFilePath(sessionDir: string, sessionId: string): string {
   return path.join(sessionDir, `${sessionId}.jsonl`);
 }
 
-async function writeMainSessionStore(sessionDir?: string, sessionId = "sess-main") {
+async function writeMainSessionStore(_sessionDir?: string, sessionId = "sess-main") {
   await writeSessionStore({
     entries: {
       main: {
         sessionId,
         updatedAt: futureFixtureUpdatedAt(),
-        ...(sessionDir ? { sessionFile: testSessionFilePath(sessionDir, sessionId) } : {}),
       },
     },
   });
@@ -130,16 +137,124 @@ async function writeGatewayConfig(config: Record<string, unknown>) {
 }
 
 async function writeMainSessionTranscript(
-  sessionDir: string,
+  _sessionDir: string,
   lines: string[],
   sessionId = "sess-main",
+  opts?: {
+    agentId?: string;
+    sessionKey?: string;
+  },
 ) {
-  await fs.writeFile(testSessionFilePath(sessionDir, sessionId), `${lines.join("\n")}\n`, "utf-8");
+  const storePath = testState.sessionStorePath;
+  if (!storePath) {
+    throw new Error("session store path was not initialized");
+  }
+  for (const line of lines) {
+    if (!line.trim()) {
+      continue;
+    }
+    await appendTranscriptEvent(
+      {
+        agentId: opts?.agentId ?? "main",
+        sessionId,
+        sessionKey: opts?.sessionKey ?? "agent:main:main",
+        storePath,
+      },
+      JSON.parse(line) as unknown,
+    );
+  }
 }
 
 async function removeTempDir(dir: string): Promise<void> {
   await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 }
+
+function createDirectChatContext(): GatewayRequestContext {
+  return {
+    loadGatewayModelCatalog: vi.fn().mockResolvedValue([]),
+    logGateway: {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    },
+    agentRunSeq: new Map(),
+    chatAbortControllers: new Map(),
+    chatAbortedRuns: new Map(),
+    chatRunBuffers: new Map(),
+    chatDeltaSentAt: new Map(),
+    chatDeltaLastBroadcastLen: new Map(),
+    chatDeltaLastBroadcastText: new Map(),
+    agentDeltaSentAt: new Map(),
+    bufferedAgentEvents: new Map(),
+    clearChatRunState: vi.fn(),
+    addChatRun: vi.fn(),
+    removeChatRun: vi.fn(),
+    broadcast: vi.fn(),
+    nodeSendToSession: vi.fn(),
+    registerToolEventRecipient: vi.fn(),
+    getRuntimeConfig: () => ({}),
+    dedupe: new Map(),
+  } as unknown as GatewayRequestContext;
+}
+
+test("chat.send replays a cached result after the session is archived", async () => {
+  const sessionDir = autoCleanupTempDirs.make("openclaw-gw-");
+  try {
+    dispatchInboundMessageMock.mockClear();
+    testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+          archivedAt: Date.now(),
+        },
+      },
+    });
+    const context = createDirectChatContext();
+    const runId = "idem-archived-cached-result";
+    const cachedPayload = { runId, status: "ok", summary: "already completed" };
+    context.dedupe.set(`chat:${runId}`, {
+      ts: Date.now(),
+      ok: true,
+      payload: cachedPayload,
+    });
+    const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown; meta?: unknown }> =
+      [];
+    const { chatHandlers } = await import("./server-methods/chat.js");
+
+    await chatHandlers["chat.send"]({
+      req: { type: "req", id: "cached", method: "chat.send" },
+      params: {
+        sessionKey: "main",
+        message: "retry completed send",
+        idempotencyKey: runId,
+      },
+      client: null,
+      isWebchatConnect: () => false,
+      respond: ((ok, payload, error, meta) => {
+        responses.push({ ok, payload, error, meta });
+      }) as RespondFn,
+      context,
+    });
+
+    expect(responses).toEqual([
+      {
+        ok: true,
+        payload: cachedPayload,
+        error: undefined,
+        meta: { cached: true },
+      },
+    ]);
+    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+  } finally {
+    dispatchInboundMessageMock.mockReset();
+    testState.sessionStorePath = undefined;
+    clearConfigCache();
+    await removeTempDir(sessionDir);
+  }
+});
 
 async function readTimelineEvents(filePath: string): Promise<Array<Record<string, unknown>>> {
   const raw = await fs.readFile(filePath, "utf-8");
@@ -501,11 +616,13 @@ describe("gateway server chat", () => {
         },
       });
       const catalog =
-        createDeferred<Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalog"]>>>();
+        createDeferred<
+          Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>>
+        >();
       const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
       const context = {
-        loadGatewayModelCatalog: vi
-          .fn<GatewayRequestContext["loadGatewayModelCatalog"]>()
+        loadGatewayModelCatalogSnapshot: vi
+          .fn<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>()
           .mockReturnValue(catalog.promise),
         logGateway: {
           info: vi.fn(),
@@ -535,7 +652,7 @@ describe("gateway server chat", () => {
         context,
       });
 
-      expect(context.loadGatewayModelCatalog).toHaveBeenCalledTimes(1);
+      expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledTimes(1);
       expect(responses).toHaveLength(1);
       expect(responses[0]?.ok).toBe(true);
       const payload = responses[0]?.payload as
@@ -552,6 +669,278 @@ describe("gateway server chat", () => {
       testState.sessionStorePath = undefined;
       await removeTempDir(sessionDir);
     }
+  });
+
+  test("chat.startup projects route thinking metadata per agent and session auth", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-gw-startup-routes-",
+        agentEnv: "main",
+        env: {
+          CHATGPT_OAUTH_TOKEN: undefined,
+          CODEX_API_KEY: undefined,
+          CODEX_HOME: "/__openclaw_gateway_startup_routes__/codex",
+          OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+          OPENAI_API_KEY: undefined,
+          OPENAI_BASE_URL: undefined,
+          OPENAI_OAUTH_TOKEN: undefined,
+        },
+      },
+      async (state) => {
+        const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+        try {
+          testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+          const config = {
+            agents: {
+              defaults: {
+                model: { primary: "openai/gpt-5.5" },
+                models: { "openai/gpt-5.5": {} },
+              },
+              list: [{ id: "main", default: true }, { id: "work" }],
+            },
+            auth: {
+              order: { openai: ["openai:api", "openai:chatgpt", "openai:expired"] },
+            },
+          };
+          await state.writeConfig(config);
+          clearConfigCache();
+          await writeSessionStore({
+            entries: {
+              "agent:work:main": {
+                sessionId: "sess-work",
+                modelProvider: "openai",
+                model: "gpt-5.5",
+                authProfileOverride: "openai:chatgpt",
+                authProfileOverrideSource: "user",
+                updatedAt: Date.now(),
+              },
+              "agent:work:auto": {
+                sessionId: "sess-work-auto",
+                modelProvider: "openai",
+                model: "gpt-5.5",
+                authProfileOverride: "openai:expired",
+                authProfileOverrideSource: "auto",
+                updatedAt: Date.now(),
+              },
+              "agent:work:auto-preferred": {
+                sessionId: "sess-work-auto-preferred",
+                modelProvider: "openai",
+                model: "gpt-5.5",
+                authProfileOverride: "openai:chatgpt",
+                authProfileOverrideSource: "auto",
+                updatedAt: Date.now(),
+              },
+              "agent:work:legacy-auto": {
+                sessionId: "sess-work-legacy-auto",
+                modelProvider: "openai",
+                model: "gpt-5.5",
+                authProfileOverride: "openai:expired",
+                authProfileOverrideCompactionCount: 0,
+                updatedAt: Date.now(),
+              },
+            },
+          });
+          await state.writeAuthProfiles({
+            version: 1,
+            profiles: {
+              "openai:chatgpt": {
+                type: "oauth",
+                provider: "openai",
+                access: "chatgpt-access",
+                refresh: "chatgpt-refresh",
+                expires: Date.now() + 30 * 60_000,
+              },
+            },
+          });
+          await state.writeAuthProfiles(
+            {
+              version: 1,
+              profiles: {
+                "openai:api": {
+                  type: "api_key",
+                  provider: "openai",
+                  key: "platform-api-key",
+                },
+                "openai:chatgpt": {
+                  type: "oauth",
+                  provider: "openai",
+                  access: "work-chatgpt-access",
+                  refresh: "work-chatgpt-refresh",
+                  expires: Date.now() + 30 * 60_000,
+                },
+                "openai:expired": {
+                  type: "oauth",
+                  provider: "openai",
+                  access: "expired-work-chatgpt-access",
+                  expires: Date.now() - 60_000,
+                },
+              },
+            },
+            "work",
+          );
+          const platformRoute = {
+            id: "gpt-5.5",
+            name: "GPT-5.5",
+            provider: "openai",
+            api: "openai-responses" as const,
+            baseUrl: "https://api.openai.com/v1",
+            contextWindow: 1_000_000,
+            reasoning: true,
+            compat: { supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh"] },
+          };
+          const subscriptionRoute = {
+            ...platformRoute,
+            api: "openai-chatgpt-responses" as const,
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+            contextWindow: 400_000,
+            reasoning: false,
+            compat: { supportedReasoningEfforts: ["low"] },
+            params: { apiKey: "private-route-token" },
+          };
+          const catalogSnapshot = {
+            entries: [subscriptionRoute],
+            routeVariants: [subscriptionRoute, platformRoute],
+          };
+          const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+          const context = {
+            loadGatewayModelCatalogSnapshot: vi
+              .fn<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>()
+              .mockResolvedValue(catalogSnapshot),
+            logGateway: {
+              info: vi.fn(),
+              warn: vi.fn(),
+              error: vi.fn(),
+              debug: vi.fn(),
+            },
+            chatAbortControllers: new Map(),
+            chatRunBuffers: new Map(),
+            getRuntimeConfig: () => config,
+          } as unknown as GatewayRequestContext;
+          const { createGatewayAgentModelCatalogProjector } =
+            await import("./server-methods/models-list-result.js");
+          const persistedConfig = getRuntimeConfig();
+          expect(persistedConfig.auth?.order?.openai).toEqual([
+            "openai:api",
+            "openai:chatgpt",
+            "openai:expired",
+          ]);
+          const expiredPreferenceEvaluation = await createGatewayAgentModelCatalogProjector({
+            cfg: persistedConfig,
+            agentId: "work",
+            snapshot: catalogSnapshot,
+            preferredProfileId: "openai:expired",
+          }).evaluateEntry(subscriptionRoute, catalogSnapshot.routeVariants);
+          expect(expiredPreferenceEvaluation).toMatchObject({
+            availability: true,
+            selectedProfileId: "openai:api",
+            selectedRoute: { authRequirement: "api-key" },
+          });
+          const { chatHandlers } = await import("./server-methods/chat.js");
+
+          await chatHandlers["chat.startup"]({
+            req: {
+              type: "req",
+              id: "startup-dual-route-catalog",
+              method: "chat.startup",
+              params: { sessionKey: "agent:work:main" },
+            },
+            params: { sessionKey: "agent:work:main" },
+            client: null,
+            isWebchatConnect: () => false,
+            respond: ((ok, payload, error) => {
+              responses.push({ ok, payload, error });
+            }) as RespondFn,
+            context,
+          });
+
+          expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledTimes(1);
+          expect(responses).toHaveLength(1);
+          expect(responses[0]?.ok).toBe(true);
+          const payload = responses[0]?.payload as
+            | {
+                metadata?: { models?: unknown[] };
+                sessionInfo?: { thinkingLevels?: Array<{ id?: string }> };
+                defaults?: { thinkingLevels?: Array<{ id?: string }> };
+                agentsList?: {
+                  agents?: Array<{ id?: string; thinkingLevels?: Array<{ id?: string }> }>;
+                };
+              }
+            | undefined;
+          expect(payload?.metadata?.models).toEqual([
+            {
+              id: "gpt-5.5",
+              name: "GPT-5.5",
+              provider: "openai",
+              contextWindow: 400_000,
+              reasoning: false,
+              available: true,
+            },
+          ]);
+          expect(payload?.sessionInfo?.thinkingLevels?.map((level) => level.id)).toEqual(["off"]);
+          expect(payload?.defaults?.thinkingLevels?.map((level) => level.id)).toEqual(["off"]);
+          const mainAgent = payload?.agentsList?.agents?.find((agent) => agent.id === "main");
+          const workAgent = payload?.agentsList?.agents?.find((agent) => agent.id === "work");
+          expect(mainAgent?.thinkingLevels?.map((level) => level.id)).toEqual(["off"]);
+          expect(workAgent?.thinkingLevels?.map((level) => level.id)).toContain("high");
+          const serialized = JSON.stringify(responses[0]?.payload);
+          expect(serialized).not.toContain("private-route-token");
+          expect(serialized).not.toContain("platform-api-key");
+          expect(serialized).not.toContain("chatgpt-access");
+          expect(serialized).not.toContain("supportedReasoningEfforts");
+          expect(serialized).not.toContain(platformRoute.baseUrl);
+          expect(serialized).not.toContain(subscriptionRoute.baseUrl);
+
+          for (const [index, [sessionKey, expectedRoute]] of [
+            ["agent:work:auto-preferred", "subscription"],
+            ["agent:work:auto", "platform"],
+            ["agent:work:legacy-auto", "platform"],
+          ].entries()) {
+            responses.length = 0;
+            await chatHandlers["chat.startup"]({
+              req: {
+                type: "req",
+                id: `startup-preferred-route-${index}`,
+                method: "chat.startup",
+                params: { sessionKey },
+              },
+              params: { sessionKey },
+              client: null,
+              isWebchatConnect: () => false,
+              respond: ((ok, responsePayload, error) => {
+                responses.push({ ok, payload: responsePayload, error });
+              }) as RespondFn,
+              context,
+            });
+
+            expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledTimes(index + 2);
+            expect(responses).toHaveLength(1);
+            expect(responses[0]?.ok).toBe(true);
+            const preferredPayload = responses[0]?.payload as
+              | {
+                  metadata?: { models?: Array<{ contextWindow?: number }> };
+                  sessionInfo?: { thinkingLevels?: Array<{ id?: string }> };
+                }
+              | undefined;
+            expect(preferredPayload?.metadata?.models?.[0]?.contextWindow, sessionKey).toBe(
+              expectedRoute === "subscription" ? 400_000 : 1_000_000,
+            );
+            const thinkingLevels = preferredPayload?.sessionInfo?.thinkingLevels?.map(
+              (level) => level.id,
+            );
+            if (expectedRoute === "subscription") {
+              expect(thinkingLevels, sessionKey).toEqual(["off"]);
+            } else {
+              expect(thinkingLevels, sessionKey).toContain("high");
+            }
+          }
+        } finally {
+          testState.sessionStorePath = undefined;
+          await removeTempDir(sessionDir);
+        }
+      },
+    );
   });
 
   test("chat.startup omits metadata when configured model visibility needs full discovery", async () => {
@@ -637,25 +1026,24 @@ describe("gateway server chat", () => {
       await writeGatewayConfig(config);
       const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
       const context = {
-        loadGatewayModelCatalog: vi
-          .fn<GatewayRequestContext["loadGatewayModelCatalog"]>()
+        loadGatewayModelCatalogSnapshot: vi
+          .fn<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>()
           .mockImplementation(async () => {
             await Promise.resolve();
             await Promise.resolve();
-            return [
+            const entries = [
               {
                 id: "gpt-main",
                 name: "GPT Main",
                 provider: "openai",
-                input: ["text"],
               },
               {
                 id: "MiniMax-M2.7-highspeed",
                 name: "MiniMax M2.7 Highspeed",
                 provider: "minimax",
-                input: ["text"],
               },
             ];
+            return { entries, routeVariants: entries };
           }),
         logGateway: {
           info: vi.fn(),
@@ -685,7 +1073,7 @@ describe("gateway server chat", () => {
         context,
       });
 
-      expect(context.loadGatewayModelCatalog).toHaveBeenCalledTimes(1);
+      expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledTimes(1);
       expect(responses).toHaveLength(1);
       expect(responses[0]?.ok).toBe(true);
       const payload = responses[0]?.payload as
@@ -1109,6 +1497,542 @@ describe("gateway server chat", () => {
     }
   });
 
+  test("chat.abort cancels chat.send while lifecycle admission waits", async () => {
+    const sessionDir = autoCleanupTempDirs.make("openclaw-gw-");
+    const releaseMutation = createDeferred();
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+      const mutationStarted = createDeferred();
+      const mutation = runExclusiveSessionLifecycleMutation({
+        scope: testState.sessionStorePath,
+        identities: ["sess-main"],
+        run: async () => {
+          mutationStarted.resolve();
+          await releaseMutation.promise;
+        },
+      });
+      await mutationStarted.promise;
+
+      const sendResponses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const abortResponses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const context = createDirectChatContext();
+      const runId = "idem-lifecycle-wait-abort";
+      const collidingFinalKey = `chat:pending:${runId}`;
+      const collidingFinalEntry = {
+        ts: Date.now(),
+        ok: true,
+        payload: { runId: `pending:${runId}`, status: "ok" },
+      };
+      context.dedupe.set(collidingFinalKey, collidingFinalEntry);
+      const params = {
+        sessionKey: "main",
+        message: "do not dispatch",
+        idempotencyKey: runId,
+      };
+      const client = {
+        connId: "conn-owner",
+        connect: {
+          device: { id: "dev-owner" },
+          scopes: ["operator.write"],
+        },
+      } as never;
+      const { chatHandlers } = await import("./server-methods/chat.js");
+      const send = Promise.resolve(
+        chatHandlers["chat.send"]({
+          req: { type: "req", id: "send", method: "chat.send", params },
+          params,
+          client,
+          isWebchatConnect: () => false,
+          respond: ((ok, payload, error) => {
+            sendResponses.push({ ok, payload, error });
+          }) as RespondFn,
+          context,
+        }),
+      );
+      await vi.waitFor(() => {
+        expect(context.dedupe.has(pendingChatSendDedupeKey(runId))).toBe(true);
+      }, FAST_WAIT_OPTS);
+      expect(context.dedupe.get(collidingFinalKey)).toBe(collidingFinalEntry);
+      expect(context.chatAbortControllers.has(runId)).toBe(false);
+
+      const retryResponses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      await chatHandlers["chat.send"]({
+        req: { type: "req", id: "retry", method: "chat.send", params },
+        params,
+        client,
+        isWebchatConnect: () => false,
+        respond: ((ok, payload, error) => {
+          retryResponses.push({ ok, payload, error });
+        }) as RespondFn,
+        context,
+      });
+      expect(retryResponses).toEqual([
+        {
+          ok: true,
+          payload: { runId, status: "in_flight" },
+          error: undefined,
+        },
+      ]);
+      expect(context.dedupe.has(pendingChatSendDedupeKey(runId))).toBe(true);
+
+      await chatHandlers["chat.abort"]({
+        req: {
+          type: "req",
+          id: "abort",
+          method: "chat.abort",
+          params: { sessionKey: "main", runId },
+        },
+        params: { sessionKey: "main", runId },
+        client,
+        isWebchatConnect: () => false,
+        respond: ((ok, payload, error) => {
+          abortResponses.push({ ok, payload, error });
+        }) as RespondFn,
+        context,
+      });
+      releaseMutation.resolve();
+      await mutation;
+      await send;
+
+      expect(abortResponses).toEqual([
+        {
+          ok: true,
+          payload: { ok: true, aborted: true, runIds: [runId] },
+          error: undefined,
+        },
+      ]);
+      expect(sendResponses).toEqual([
+        {
+          ok: true,
+          payload: {
+            runId,
+            status: "timeout",
+            summary: "aborted",
+            stopReason: "rpc",
+            endedAt: expect.any(Number),
+          },
+          error: undefined,
+        },
+      ]);
+      expect(context.dedupe.has(pendingChatSendDedupeKey(runId))).toBe(false);
+      expect(context.dedupe.get(collidingFinalKey)).toBe(collidingFinalEntry);
+      expect(context.chatAbortControllers.has(runId)).toBe(false);
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    } finally {
+      releaseMutation.resolve();
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await removeTempDir(sessionDir);
+    }
+  });
+
+  test("chat.send rejects stale lifecycle work after admission waits", async () => {
+    const sessionDir = autoCleanupTempDirs.make("openclaw-gw-");
+    const releaseMutation = createDeferred();
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+      const mutationStarted = createDeferred();
+      const mutation = runExclusiveSessionLifecycleMutation({
+        scope: testState.sessionStorePath,
+        identities: ["sess-main"],
+        run: async () => {
+          mutationStarted.resolve();
+          await releaseMutation.promise;
+        },
+      });
+      await mutationStarted.promise;
+
+      const sendResponses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const context = createDirectChatContext();
+      const runId = "idem-stale-lifecycle";
+      const params = {
+        sessionKey: "main",
+        message: "do not resume after restart",
+        idempotencyKey: runId,
+      };
+      const { chatHandlers } = await import("./server-methods/chat.js");
+      const send = Promise.resolve(
+        chatHandlers["chat.send"]({
+          req: { type: "req", id: "send", method: "chat.send", params },
+          params,
+          client: null,
+          isWebchatConnect: () => false,
+          respond: ((ok, payload, error) => {
+            sendResponses.push({ ok, payload, error });
+          }) as RespondFn,
+          context,
+        }),
+      );
+      await vi.waitFor(() => {
+        expect(context.dedupe.has(pendingChatSendDedupeKey(runId))).toBe(true);
+      }, FAST_WAIT_OPTS);
+
+      rotateAgentEventLifecycleGeneration();
+      releaseMutation.resolve();
+      await mutation;
+      await send;
+
+      expect(sendResponses).toEqual([
+        {
+          ok: true,
+          payload: {
+            runId,
+            status: "timeout",
+            summary: "aborted",
+            stopReason: "restart",
+            endedAt: expect.any(Number),
+          },
+          error: undefined,
+        },
+      ]);
+      expect(context.dedupe.has(pendingChatSendDedupeKey(runId))).toBe(false);
+      expect(context.chatAbortControllers.has(runId)).toBe(false);
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    } finally {
+      releaseMutation.resolve();
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await removeTempDir(sessionDir);
+    }
+  });
+
+  test("chat.send does not recreate a session deleted while admission waits", async () => {
+    const sessionDir = autoCleanupTempDirs.make("openclaw-gw-");
+    const performDeletion = createDeferred();
+    let mutation: Promise<void> | undefined;
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+      const [{ deleteSessionEntryLifecycle }, { loadSessionEntry: loadGatewaySessionEntry }] =
+        await Promise.all([
+          import("../config/sessions/session-accessor.js"),
+          import("./session-utils.js"),
+        ]);
+      const seededSession = loadGatewaySessionEntry("main");
+      const seededSessionId = seededSession.entry?.sessionId;
+      expect(seededSessionId).toBe("sess-main");
+      const mutationStarted = createDeferred();
+      mutation = runExclusiveSessionLifecycleMutation({
+        scope: seededSession.storePath,
+        identities: [seededSession.canonicalKey, seededSessionId],
+        run: async () => {
+          mutationStarted.resolve();
+          await performDeletion.promise;
+          // Use the resolved store target: writeSessionStore also rewrites the
+          // suite config, adding an unrelated config-watcher race to this test.
+          const deletion = await deleteSessionEntryLifecycle({
+            agentId: "main",
+            archiveTranscript: false,
+            expectedEntry: seededSession.entry,
+            expectedSessionId: seededSessionId,
+            requireWriteSuccess: true,
+            storePath: seededSession.storePath,
+            target: {
+              canonicalKey: seededSession.canonicalKey,
+              storeKeys: seededSession.storeKeys,
+            },
+          });
+          expect(deletion.deleted).toBe(true);
+        },
+      });
+      await mutationStarted.promise;
+
+      const sendResponses: Array<{
+        ok: boolean;
+        payload?: unknown;
+        error?: unknown;
+        meta?: unknown;
+      }> = [];
+      const context = createDirectChatContext();
+      const runId = "idem-deleted-during-admission";
+      const params = {
+        sessionKey: "main",
+        message: "do not recreate the deleted session",
+        idempotencyKey: runId,
+      };
+      const { chatHandlers } = await import("./server-methods/chat.js");
+      const send = Promise.resolve(
+        chatHandlers["chat.send"]({
+          req: { type: "req", id: "send", method: "chat.send", params },
+          params,
+          client: null,
+          isWebchatConnect: () => false,
+          respond: ((ok, payload, error, meta) => {
+            sendResponses.push({ ok, payload, error, meta });
+          }) as RespondFn,
+          context,
+        }),
+      );
+      await vi.waitFor(() => {
+        expect(context.dedupe.has(pendingChatSendDedupeKey(runId))).toBe(true);
+      }, FAST_WAIT_OPTS);
+
+      performDeletion.resolve();
+      await mutation;
+      await send;
+
+      expect(sendResponses).toEqual([
+        {
+          ok: false,
+          payload: undefined,
+          error: expect.objectContaining({
+            message: expect.stringMatching(/deleted while starting work/i),
+          }),
+          meta: undefined,
+        },
+      ]);
+      expect(context.chatAbortControllers.has(runId)).toBe(false);
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    } finally {
+      performDeletion.resolve();
+      await Promise.allSettled(mutation ? [mutation] : []);
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await removeTempDir(sessionDir);
+    }
+  });
+
+  test("chat.send does not enter a replacement session after reset while admission waits", async () => {
+    const sessionDir = autoCleanupTempDirs.make("openclaw-gw-");
+    const releaseMutation = createDeferred();
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-before-reset",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+      const mutationStarted = createDeferred();
+      const mutation = runExclusiveSessionLifecycleMutation({
+        scope: testState.sessionStorePath,
+        identities: ["agent:main:main", "sess-before-reset"],
+        run: async () => {
+          mutationStarted.resolve();
+          await releaseMutation.promise;
+        },
+      });
+      await mutationStarted.promise;
+
+      const sendResponses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const context = createDirectChatContext();
+      const runId = "idem-reset-during-admission";
+      const params = {
+        sessionKey: "main",
+        message: "do not enter the replacement session",
+        idempotencyKey: runId,
+      };
+      const { chatHandlers } = await import("./server-methods/chat.js");
+      const send = Promise.resolve(
+        chatHandlers["chat.send"]({
+          req: { type: "req", id: "send", method: "chat.send", params },
+          params,
+          client: null,
+          isWebchatConnect: () => false,
+          respond: ((ok, payload, error) => {
+            sendResponses.push({ ok, payload, error });
+          }) as RespondFn,
+          context,
+        }),
+      );
+      await vi.waitFor(() => {
+        expect(context.dedupe.has(pendingChatSendDedupeKey(runId))).toBe(true);
+      }, FAST_WAIT_OPTS);
+
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-after-reset",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+      releaseMutation.resolve();
+      await mutation;
+      await send;
+
+      expect(sendResponses).toHaveLength(1);
+      expect(sendResponses[0]?.ok).toBe(false);
+      expect(sendResponses[0]?.error).toMatchObject({
+        message: expect.stringMatching(/changed while starting work/i),
+      });
+      expect(context.chatAbortControllers.has(runId)).toBe(false);
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    } finally {
+      releaseMutation.resolve();
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await removeTempDir(sessionDir);
+    }
+  });
+
+  test("chat.send does not consume a replacement pending reservation", async () => {
+    const sessionDir = autoCleanupTempDirs.make("openclaw-gw-");
+    const releaseMutation = createDeferred();
+    const releaseTerminalMutation = createDeferred();
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+      const mutationStarted = createDeferred();
+      const mutation = runExclusiveSessionLifecycleMutation({
+        scope: testState.sessionStorePath,
+        identities: ["sess-main"],
+        run: async () => {
+          mutationStarted.resolve();
+          await releaseMutation.promise;
+        },
+      });
+      await mutationStarted.promise;
+
+      const sendResponses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const context = createDirectChatContext();
+      const runId = "idem-replaced-reservation";
+      const pendingKey = pendingChatSendDedupeKey(runId);
+      const params = {
+        sessionKey: "main",
+        message: "only the replacement may run",
+        idempotencyKey: runId,
+      };
+      const { chatHandlers } = await import("./server-methods/chat.js");
+      const send = Promise.resolve(
+        chatHandlers["chat.send"]({
+          req: { type: "req", id: "send", method: "chat.send", params },
+          params,
+          client: null,
+          isWebchatConnect: () => false,
+          respond: ((ok, payload, error) => {
+            sendResponses.push({ ok, payload, error });
+          }) as RespondFn,
+          context,
+        }),
+      );
+      await vi.waitFor(() => {
+        expect(context.dedupe.has(pendingKey)).toBe(true);
+      }, FAST_WAIT_OPTS);
+      const original = context.dedupe.get(pendingKey);
+      const originalPayload = original?.payload as Record<string, unknown>;
+      const replacement = {
+        ts: Date.now(),
+        ok: true,
+        payload: {
+          ...originalPayload,
+          attemptId: "replacement-attempt",
+          expiresAtMs: Date.now() + 120_000,
+        },
+      };
+      context.dedupe.set(pendingKey, replacement);
+
+      releaseMutation.resolve();
+      await mutation;
+      await send;
+
+      expect(sendResponses).toEqual([
+        {
+          ok: true,
+          payload: { runId, status: "in_flight" },
+          error: undefined,
+        },
+      ]);
+      expect(context.dedupe.get(pendingKey)).toBe(replacement);
+      expect(context.chatAbortControllers.has(runId)).toBe(false);
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+
+      const terminalMutationStarted = createDeferred();
+      const terminalMutation = runExclusiveSessionLifecycleMutation({
+        scope: testState.sessionStorePath,
+        identities: ["sess-main"],
+        run: async () => {
+          terminalMutationStarted.resolve();
+          await releaseTerminalMutation.promise;
+        },
+      });
+      await terminalMutationStarted.promise;
+      const terminalRunId = "idem-terminal-replacement";
+      const terminalPendingKey = pendingChatSendDedupeKey(terminalRunId);
+      const terminalParams = {
+        sessionKey: "main",
+        message: "preserve the replacement result",
+        idempotencyKey: terminalRunId,
+      };
+      const terminalResponses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const terminalSend = Promise.resolve(
+        chatHandlers["chat.send"]({
+          req: { type: "req", id: "terminal-send", method: "chat.send", params: terminalParams },
+          params: terminalParams,
+          client: null,
+          isWebchatConnect: () => false,
+          respond: ((ok, payload, error) => {
+            terminalResponses.push({ ok, payload, error });
+          }) as RespondFn,
+          context,
+        }),
+      );
+      await vi.waitFor(() => {
+        expect(context.dedupe.has(terminalPendingKey)).toBe(true);
+      }, FAST_WAIT_OPTS);
+      const terminalResult = {
+        ts: Date.now(),
+        ok: true,
+        payload: { runId: terminalRunId, status: "ok", summary: "replacement completed" },
+      };
+      context.dedupe.delete(terminalPendingKey);
+      context.dedupe.set(`chat:${terminalRunId}`, terminalResult);
+
+      releaseTerminalMutation.resolve();
+      await terminalMutation;
+      await terminalSend;
+
+      expect(terminalResponses).toEqual([
+        { ok: true, payload: terminalResult.payload, error: undefined },
+      ]);
+      expect(context.dedupe.get(`chat:${terminalRunId}`)).toBe(terminalResult);
+      expect(context.chatAbortedRuns.has(terminalRunId)).toBe(false);
+    } finally {
+      releaseMutation.resolve();
+      releaseTerminalMutation.resolve();
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await removeTempDir(sessionDir);
+    }
+  });
+
   test.each(configuredImageModelCases)(
     "chat.send preserves text-only image uploads as MediaPaths even with configured imageModel: $id",
     async ({ id, imageModel }) => {
@@ -1137,6 +2061,7 @@ describe("gateway server chat", () => {
         });
 
         const context = {
+          getRuntimeConfig,
           loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(
             async () => [
               {
@@ -1262,7 +2187,7 @@ describe("gateway server chat", () => {
     },
   );
 
-  test("chat.send reuses only active WebChat text sends with the same system context", async () => {
+  test("chat.send keeps matching WebChat text sends distinct by idempotency key", async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     const dispatchRelease = createDeferred();
     try {
@@ -1278,6 +2203,7 @@ describe("gateway server chat", () => {
 
       const responses: Array<{ id: string; ok: boolean; payload?: unknown; error?: unknown }> = [];
       const context = {
+        getRuntimeConfig,
         loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(),
         logGateway: {
           info: vi.fn(),
@@ -1305,7 +2231,12 @@ describe("gateway server chat", () => {
       dispatchInboundMessageMock.mockImplementation(async () => dispatchRelease.promise);
 
       const { chatHandlers } = await import("./server-methods/chat.js");
-      const callSend = (id: string, idempotencyKey: string, systemProvenanceReceipt?: string) =>
+      const callSend = (
+        id: string,
+        idempotencyKey: string,
+        systemProvenanceReceipt?: string,
+        thinking = "low",
+      ) =>
         chatHandlers["chat.send"]({
           req: {
             type: "req",
@@ -1315,6 +2246,7 @@ describe("gateway server chat", () => {
               sessionKey: "main",
               message: "?",
               idempotencyKey,
+              thinking,
               ...(systemProvenanceReceipt ? { systemProvenanceReceipt } : {}),
             },
           },
@@ -1322,6 +2254,7 @@ describe("gateway server chat", () => {
             sessionKey: "main",
             message: "?",
             idempotencyKey,
+            thinking,
             ...(systemProvenanceReceipt ? { systemProvenanceReceipt } : {}),
           },
           client: {
@@ -1362,31 +2295,40 @@ describe("gateway server chat", () => {
         { timeout: 2_000, interval: 5 },
       );
 
-      await callSend("duplicate", "idem-active-b");
+      const duplicate = Promise.resolve(callSend("duplicate", "idem-active-b"));
 
-      expect(responses).toEqual([
-        {
-          id: "first",
-          ok: true,
-          payload: expect.objectContaining({
-            runId: "idem-active-a",
-            status: "started",
-            serverTiming: {
-              receivedToAckMs: expect.any(Number),
-              loadSessionMs: expect.any(Number),
-            },
-          }),
-          error: undefined,
-        },
-        {
-          id: "duplicate",
-          ok: true,
-          payload: { runId: "idem-active-a", status: "in_flight" },
-          error: undefined,
-        },
-      ]);
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-      expect(context.addChatRun).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => {
+        expect(responses).toEqual([
+          {
+            id: "first",
+            ok: true,
+            payload: expect.objectContaining({
+              runId: "idem-active-a",
+              status: "started",
+              serverTiming: {
+                receivedToAckMs: expect.any(Number),
+                loadSessionMs: expect.any(Number),
+              },
+            }),
+            error: undefined,
+          },
+          {
+            id: "duplicate",
+            ok: true,
+            payload: expect.objectContaining({
+              runId: "idem-active-b",
+              status: "started",
+              serverTiming: {
+                receivedToAckMs: expect.any(Number),
+                loadSessionMs: expect.any(Number),
+              },
+            }),
+            error: undefined,
+          },
+        ]);
+      }, FAST_WAIT_OPTS);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
+      expect(context.addChatRun).toHaveBeenCalledTimes(2);
 
       const withSystemContext = Promise.resolve(
         callSend("system-context", "idem-active-c", "proposal=support-file-sampler-b"),
@@ -1411,7 +2353,14 @@ describe("gateway server chat", () => {
             {
               id: "duplicate",
               ok: true,
-              payload: { runId: "idem-active-a", status: "in_flight" },
+              payload: expect.objectContaining({
+                runId: "idem-active-b",
+                status: "started",
+                serverTiming: {
+                  receivedToAckMs: expect.any(Number),
+                  loadSessionMs: expect.any(Number),
+                },
+              }),
               error: undefined,
             },
             {
@@ -1431,11 +2380,113 @@ describe("gateway server chat", () => {
         },
         { timeout: 2_000, interval: 5 },
       );
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
-      expect(context.addChatRun).toHaveBeenCalledTimes(2);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(3);
+      expect(context.addChatRun).toHaveBeenCalledTimes(3);
+
+      const withDifferentThinking = Promise.resolve(
+        callSend("different-thinking", "idem-active-d", undefined, "high"),
+      );
+      await vi.waitFor(
+        () => {
+          expect(responses.at(-1)).toEqual({
+            id: "different-thinking",
+            ok: true,
+            payload: expect.objectContaining({
+              runId: "idem-active-d",
+              status: "started",
+              serverTiming: {
+                receivedToAckMs: expect.any(Number),
+                loadSessionMs: expect.any(Number),
+              },
+            }),
+            error: undefined,
+          });
+        },
+        { timeout: 2_000, interval: 5 },
+      );
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(4);
+      expect(context.addChatRun).toHaveBeenCalledTimes(4);
 
       dispatchRelease.resolve();
-      await Promise.all([first, withSystemContext]);
+      await Promise.all([first, duplicate, withSystemContext, withDifferentThinking]);
+      await vi.waitFor(() => {
+        expect(context.removeChatRun).toHaveBeenCalledTimes(4);
+      }, FAST_WAIT_OPTS);
+    } finally {
+      dispatchRelease.resolve();
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await removeTempDir(sessionDir);
+    }
+  });
+
+  test("chat.send keeps distinct sends independent when a session ID appears during the first turn", async () => {
+    const sessionDir = autoCleanupTempDirs.make("openclaw-gw-");
+    const dispatchRelease = createDeferred();
+    try {
+      const storePath = path.join(sessionDir, "sessions.json");
+      testState.sessionStorePath = storePath;
+      await writeSessionStore({ entries: {} });
+      const responses: Array<{ id: string; ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const context = createDirectChatContext();
+      dispatchInboundMessageMock.mockImplementation(async () => dispatchRelease.promise);
+      const { chatHandlers } = await import("./server-methods/chat.js");
+      const callSend = (id: string, idempotencyKey: string) => {
+        const params = {
+          sessionKey: "main",
+          message: "create this session once",
+          idempotencyKey,
+        };
+        return chatHandlers["chat.send"]({
+          req: { type: "req", id, method: "chat.send", params },
+          params,
+          client: null,
+          isWebchatConnect: () => false,
+          respond: ((ok, payload, error) => {
+            responses.push({ id, ok, payload, error });
+          }) as RespondFn,
+          context,
+        });
+      };
+
+      const first = Promise.resolve(callSend("first", "idem-new-session-a"));
+      await vi.waitFor(() => {
+        expect(responses[0]).toEqual({
+          id: "first",
+          ok: true,
+          payload: expect.objectContaining({
+            runId: "idem-new-session-a",
+            status: "started",
+          }),
+          error: undefined,
+        });
+      }, FAST_WAIT_OPTS);
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          main: {
+            sessionId: "sess-created-during-run",
+            updatedAt: Date.now(),
+          },
+        }),
+        "utf8",
+      );
+      invalidateSessionStoreCache(storePath);
+
+      const duplicate = Promise.resolve(callSend("duplicate", "idem-new-session-b"));
+      await vi.waitFor(() => {
+        expect(responses.at(-1)).toEqual({
+          id: "duplicate",
+          ok: true,
+          payload: expect.objectContaining({ runId: "idem-new-session-b", status: "started" }),
+          error: undefined,
+        });
+      }, FAST_WAIT_OPTS);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
+
+      dispatchRelease.resolve();
+      await Promise.all([first, duplicate]);
       await vi.waitFor(() => {
         expect(context.removeChatRun).toHaveBeenCalledTimes(2);
       }, FAST_WAIT_OPTS);
@@ -1444,7 +2495,6 @@ describe("gateway server chat", () => {
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;
       clearConfigCache();
-      await removeTempDir(sessionDir);
     }
   });
 
@@ -1463,6 +2513,7 @@ describe("gateway server chat", () => {
 
       const responses: Array<{ id: string; ok: boolean; payload?: unknown; error?: unknown }> = [];
       const context = {
+        getRuntimeConfig,
         loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(),
         logGateway: {
           info: vi.fn(),
@@ -1578,6 +2629,7 @@ describe("gateway server chat", () => {
 
       const responses: Array<{ id: string; ok: boolean; payload?: unknown; error?: unknown }> = [];
       const context = {
+        getRuntimeConfig,
         loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(),
         logGateway: {
           info: vi.fn(),
@@ -1697,6 +2749,229 @@ describe("gateway server chat", () => {
     }
   });
 
+  test("chat.send terminalizes the client run when a followup is queued", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+
+      const broadcast = vi.fn((_event: string, _payload: unknown) => undefined);
+      const context = {
+        loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(),
+        logGateway: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+          debug: vi.fn(),
+        },
+        agentRunSeq: new Map<string, number>(),
+        chatAbortControllers: new Map(),
+        chatAbortedRuns: new Map(),
+        chatQueuedTurns: new Map(),
+        chatRunBuffers: new Map(),
+        chatDeltaSentAt: new Map(),
+        chatDeltaLastBroadcastLen: new Map(),
+        chatDeltaLastBroadcastText: new Map(),
+        agentDeltaSentAt: new Map(),
+        bufferedAgentEvents: new Map(),
+        clearChatRunState: vi.fn(),
+        addChatRun: vi.fn(),
+        removeChatRun: vi.fn(),
+        broadcast,
+        broadcastToConnIds: vi.fn(),
+        nodeSendToSession: vi.fn(),
+        registerToolEventRecipient: vi.fn(),
+        getRuntimeConfig: () => ({}),
+        dedupe: new Map(),
+      } as unknown as GatewayRequestContext;
+      let queuedLifecycle: GetReplyOptions["queuedFollowupLifecycle"];
+      const dispatchRelease = createDeferred();
+      dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
+        queuedLifecycle = (args as { replyOptions?: GetReplyOptions }).replyOptions
+          ?.queuedFollowupLifecycle;
+        queuedLifecycle?.onEnqueued?.();
+        await dispatchRelease.promise;
+        return {};
+      });
+
+      const { chatHandlers } = await import("./server-methods/chat.js");
+      await chatHandlers["chat.send"]({
+        req: {
+          type: "req",
+          id: "queued-followup",
+          method: "chat.send",
+          params: {
+            sessionKey: "main",
+            message: "queued prompt",
+            idempotencyKey: "idem-queued-followup",
+          },
+        },
+        params: {
+          sessionKey: "main",
+          message: "queued prompt",
+          idempotencyKey: "idem-queued-followup",
+        },
+        client: {
+          connId: "conn-tui",
+          connect: {
+            client: {
+              id: GATEWAY_CLIENT_NAMES.TUI,
+              mode: GATEWAY_CLIENT_MODES.UI,
+            },
+            scopes: ["operator.write", "operator.admin"],
+          },
+        } as never,
+        isWebchatConnect: () => true,
+        respond: vi.fn() as RespondFn,
+        context,
+      });
+
+      await vi.waitFor(() => expect(queuedLifecycle).toBeDefined(), FAST_WAIT_OPTS);
+      expect(queuedLifecycle?.ownerKey).toBe("connection:conn-tui");
+      expect(broadcast).not.toHaveBeenCalledWith(
+        "chat",
+        expect.objectContaining({ runId: "idem-queued-followup", state: "final" }),
+      );
+      dispatchRelease.resolve();
+      await vi.waitFor(() => {
+        expect(broadcast).toHaveBeenCalledWith(
+          "chat",
+          expect.objectContaining({
+            runId: "idem-queued-followup",
+            sessionKey: "agent:main:main",
+            state: "final",
+          }),
+        );
+      }, FAST_WAIT_OPTS);
+      const finalEvents = broadcast.mock.calls.filter(
+        ([event, payload]) =>
+          event === "chat" &&
+          (payload as { runId?: string; state?: string }).runId === "idem-queued-followup" &&
+          (payload as { state?: string }).state === "final",
+      );
+      expect(finalEvents).toHaveLength(1);
+      expect(context.chatQueuedTurns.has("idem-queued-followup")).toBe(true);
+
+      context.dedupe.delete("chat:idem-queued-followup");
+      const replayRespond = vi.fn() as RespondFn;
+      await chatHandlers["chat.send"]({
+        req: {
+          type: "req",
+          id: "queued-followup-replay",
+          method: "chat.send",
+          params: {
+            sessionKey: "main",
+            message: "queued prompt",
+            idempotencyKey: "idem-queued-followup",
+          },
+        },
+        params: {
+          sessionKey: "main",
+          message: "queued prompt",
+          idempotencyKey: "idem-queued-followup",
+        },
+        client: {
+          connId: "conn-tui",
+          connect: {
+            client: { id: GATEWAY_CLIENT_NAMES.TUI, mode: GATEWAY_CLIENT_MODES.UI },
+            scopes: ["operator.write", "operator.admin"],
+          },
+        } as never,
+        isWebchatConnect: () => true,
+        respond: replayRespond,
+        context,
+      });
+      expect(replayRespond).toHaveBeenCalledWith(
+        true,
+        { runId: "idem-queued-followup", status: "in_flight" },
+        undefined,
+        { cached: true, runId: "idem-queued-followup" },
+      );
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+
+      const queuedEntry = context.chatQueuedTurns.get("idem-queued-followup");
+      expect(queuedEntry).toBeDefined();
+      queuedEntry?.controller.abort();
+      expect(context.chatQueuedTurns.has("idem-queued-followup")).toBe(false);
+
+      queuedLifecycle?.onComplete?.();
+      expect(context.chatQueuedTurns.has("idem-queued-followup")).toBe(false);
+      await vi.waitFor(
+        () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
+        FAST_WAIT_OPTS,
+      );
+
+      let failedDispatchLifecycle: GetReplyOptions["queuedFollowupLifecycle"];
+      dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
+        failedDispatchLifecycle = (args as { replyOptions?: GetReplyOptions }).replyOptions
+          ?.queuedFollowupLifecycle;
+        failedDispatchLifecycle?.onEnqueued?.();
+        throw new Error("post-enqueue bookkeeping failed");
+      });
+      await chatHandlers["chat.send"]({
+        req: {
+          type: "req",
+          id: "queued-followup-post-error",
+          method: "chat.send",
+          params: {
+            sessionKey: "main",
+            message: "accepted before dispatch error",
+            idempotencyKey: "idem-queued-followup-post-error",
+          },
+        },
+        params: {
+          sessionKey: "main",
+          message: "accepted before dispatch error",
+          idempotencyKey: "idem-queued-followup-post-error",
+        },
+        client: {
+          connId: "conn-tui",
+          connect: {
+            client: {
+              id: GATEWAY_CLIENT_NAMES.TUI,
+              mode: GATEWAY_CLIENT_MODES.UI,
+            },
+            scopes: ["operator.write", "operator.admin"],
+          },
+        } as never,
+        isWebchatConnect: () => true,
+        respond: vi.fn() as RespondFn,
+        context,
+      });
+
+      await vi.waitFor(
+        () => expect(context.removeChatRun).toHaveBeenCalledTimes(2),
+        FAST_WAIT_OPTS,
+      );
+      const acceptedErrorEvents = broadcast.mock.calls.filter(
+        ([event, payload]) =>
+          event === "chat" &&
+          (payload as { runId?: string }).runId === "idem-queued-followup-post-error",
+      );
+      expect(acceptedErrorEvents).toHaveLength(1);
+      expect(acceptedErrorEvents[0]?.[1]).toMatchObject({ state: "final" });
+      expect(context.dedupe.get("chat:idem-queued-followup-post-error")).toMatchObject({
+        ok: true,
+        payload: { status: "ok" },
+      });
+      expect(context.chatQueuedTurns.has("idem-queued-followup-post-error")).toBe(true);
+      failedDispatchLifecycle?.onComplete?.();
+      expect(context.chatQueuedTurns.has("idem-queued-followup-post-error")).toBe(false);
+    } finally {
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await removeTempDir(sessionDir);
+    }
+  });
+
   test("chat.send emits operator-only post-ACK server timing milestones", async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     try {
@@ -1713,6 +2988,7 @@ describe("gateway server chat", () => {
       const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
       const broadcastToConnIds = vi.fn();
       const context = {
+        getRuntimeConfig,
         loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(),
         logGateway: {
           info: vi.fn(),
@@ -1865,6 +3141,7 @@ describe("gateway server chat", () => {
       const broadcast = vi.fn();
       const broadcastToConnIds = vi.fn();
       const context = {
+        getRuntimeConfig,
         loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(),
         logGateway: {
           info: vi.fn(),
@@ -2320,12 +3597,13 @@ describe("gateway server chat", () => {
       if (!sessionStorePath) {
         throw new Error("expected session store path");
       }
-      const stored = JSON.parse(await fs.readFile(sessionStorePath, "utf-8")) as Record<
-        string,
-        { lastChannel?: string; lastTo?: string } | undefined
-      >;
-      expect(stored["agent:main:main"]?.lastChannel).toBe("whatsapp");
-      expect(stored["agent:main:main"]?.lastTo).toBe("+1555");
+      const stored = loadSessionEntry({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        storePath: sessionStorePath,
+      });
+      expect(stored?.lastChannel).toBe("whatsapp");
+      expect(stored?.lastTo).toBe("+1555");
 
       await vi.waitFor(async () => {
         const completed = await rpcReq<{ status?: string }>(ws, "chat.send", {
@@ -2679,8 +3957,13 @@ describe("gateway server chat", () => {
             role: "assistant",
             timestamp: Date.now(),
             content: [{ type: "text", text: "hello" }],
-            usage: { input: 12, output: 5, totalTokens: 17 },
-            cost: { total: 0.0123 },
+            usage: {
+              input: 12,
+              output: 5,
+              totalTokens: 17,
+              cost: { input: 0.002, output: 0.01, cacheRead: 0.0003, cacheWrite: 0, total: 0.0123 },
+            },
+            cost: { input: 0.002, output: 0.01, cacheRead: 0.0003, cacheWrite: 0, total: 0.0123 },
             details: { debug: true },
           },
         }),
@@ -2690,15 +3973,105 @@ describe("gateway server chat", () => {
       expect(messages).toHaveLength(1);
       const message = messages[0] as {
         role?: string;
-        usage?: { input?: number; output?: number; totalTokens?: number };
-        cost?: { total?: number };
+        usage?: {
+          input?: number;
+          output?: number;
+          totalTokens?: number;
+          cost?: Record<string, number>;
+        };
+        cost?: Record<string, number>;
       };
       expect(message.role).toBe("assistant");
       expect(message.usage?.input).toBe(12);
       expect(message.usage?.output).toBe(5);
       expect(message.usage?.totalTokens).toBe(17);
+      expect(message.usage?.cost).toEqual({
+        input: 0.002,
+        output: 0.01,
+        cacheRead: 0.0003,
+        cacheWrite: 0,
+        total: 0.0123,
+      });
+      expect(message.cost).toEqual({
+        input: 0.002,
+        output: 0.01,
+        cacheRead: 0.0003,
+        cacheWrite: 0,
+        total: 0.0123,
+      });
       expect(message.cost?.total).toBe(0.0123);
       expect(messages[0]).not.toHaveProperty("details");
+    });
+  });
+
+  test("chat.history preserves canonical parallel tool calls and bounded result diffs", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      const fullDiff = `-12 old line\n+12 ${"new line ".repeat(20)}`;
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "call-edit",
+                name: "edit",
+                arguments: { path: "src/a.ts", oldText: "old line", newText: "new line" },
+              },
+              {
+                type: "toolCall",
+                id: "call-read",
+                name: "read",
+                arguments: { path: "src/b.ts" },
+              },
+            ],
+            timestamp: 1,
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "toolResult",
+            toolCallId: "call-edit",
+            toolName: "edit",
+            content: [{ type: "text", text: "Updated src/a.ts" }],
+            details: { diff: fullDiff, internal: "not for display" },
+            timestamp: 2,
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "toolResult",
+            toolCallId: "call-read",
+            toolName: "read",
+            content: [{ type: "text", text: "contents of b" }],
+            timestamp: 3,
+          },
+        }),
+      ]);
+
+      const messages = await fetchHistoryMessages(ws, { maxChars: 48 });
+      expect(messages).toHaveLength(3);
+      const callMessage = messages[0] as {
+        content?: Array<{ id?: string; name?: string }>;
+      };
+      expect(callMessage.content?.map((block) => [block.id, block.name])).toEqual([
+        ["call-edit", "edit"],
+        ["call-read", "read"],
+      ]);
+      const editResult = messages[1] as {
+        toolCallId?: string;
+        details?: Record<string, unknown>;
+      };
+      expect(editResult.toolCallId).toBe("call-edit");
+      expect(editResult.details).toEqual({ diff: expect.any(String) });
+      const projectedDiff = editResult.details?.diff;
+      expect(typeof projectedDiff).toBe("string");
+      expect(projectedDiff).toContain("-12 old line");
+      expect(projectedDiff).toContain("...(truncated)...");
+      expect((projectedDiff as string).length).toBeLessThanOrEqual(
+        48 + "\n...(truncated)...".length,
+      );
     });
   });
 
@@ -2937,21 +4310,25 @@ describe("gateway server chat", () => {
       await connectOk(ws);
       const sessionDir = await createSessionDir();
       await writeSessionStore({
+        agentId: "work",
         entries: {
           global: { sessionId: "sess-global", updatedAt: Date.now() },
         },
       });
-      await fs.writeFile(
-        path.join(sessionDir, "sess-global.jsonl"),
-        `${JSON.stringify({
-          id: "msg-global-agent",
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "global agent content" }],
-            timestamp: Date.now(),
-          },
-        })}\n`,
-        "utf-8",
+      await writeMainSessionTranscript(
+        sessionDir,
+        [
+          JSON.stringify({
+            id: "msg-global-agent",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "global agent content" }],
+              timestamp: Date.now(),
+            },
+          }),
+        ],
+        "sess-global",
+        { agentId: "work", sessionKey: "global" },
       );
 
       const full = await fetchChatMessage(ws, {
@@ -2964,9 +4341,10 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.message.get reports oversized transcript entries as unavailable", async () => {
+  test("chat.message.get reports oversized archive transcript entries as unavailable", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      const sessionId = "sess-oversized-archive";
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir, sessionId });
       const oversizedLine = JSON.stringify({
         id: "msg-oversized",
         message: {
@@ -2975,7 +4353,11 @@ describe("gateway server chat", () => {
           timestamp: Date.now(),
         },
       });
-      await writeMainSessionTranscript(sessionDir, [oversizedLine]);
+      await fs.writeFile(
+        `${testSessionFilePath(sessionDir, sessionId)}.reset.2026-02-16T22-26-34.000Z`,
+        [JSON.stringify({ type: "session", version: 1, id: sessionId }), oversizedLine].join("\n"),
+        "utf-8",
+      );
 
       const full = await fetchChatMessage(ws, {
         sessionKey: "main",
@@ -2984,6 +4366,30 @@ describe("gateway server chat", () => {
       expect(full.ok).toBe(false);
       expect(full.unavailableReason).toBe("oversized");
       expect(full.message).toBeUndefined();
+    });
+  });
+
+  test("chat.message.get returns active SQLite oversized transcript entries", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      const oversizedText = "x".repeat(300 * 1024);
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          id: "msg-oversized-sqlite",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: oversizedText }],
+            timestamp: Date.now(),
+          },
+        }),
+      ]);
+
+      const full = await fetchChatMessage(ws, {
+        sessionKey: "main",
+        messageId: "msg-oversized-sqlite",
+      });
+      expect(full.ok).toBe(true);
+      expect(JSON.stringify(full.message)).toContain(oversizedText.slice(0, 256));
     });
   });
 

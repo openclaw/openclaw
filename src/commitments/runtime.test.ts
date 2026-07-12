@@ -190,6 +190,43 @@ describe("commitment extraction runtime", () => {
     expect(store.commitments[0]).not.toHaveProperty("sourceAssistantText");
   });
 
+  it("partitions extraction batches by agent", async () => {
+    const cfg = await createConfig();
+    const extractBatch = vi.fn(async (_params: { items: CommitmentExtractionItem[] }) => ({
+      candidates: [],
+    }));
+    configureCommitmentExtractionRuntime({
+      forceInTests: true,
+      extractBatch,
+      setTimer: () => ({ unref() {} }) as ReturnType<typeof setTimeout>,
+      clearTimer: () => undefined,
+    });
+
+    for (const [index, agentId] of ["alpha", "beta", "alpha", "beta"].entries()) {
+      expect(
+        enqueueCommitmentExtraction({
+          cfg,
+          nowMs: nowMs + index,
+          agentId,
+          sessionKey: `agent:${agentId}:telegram:user-1`,
+          channel: "telegram",
+          sourceMessageId: `m${index}`,
+          userText: `Commitment candidate ${index}`,
+          assistantText: "I will follow up.",
+        }),
+      ).toBe(true);
+    }
+
+    await expect(drainCommitmentExtractionQueue()).resolves.toBe(4);
+    expect(extractBatch).toHaveBeenCalledTimes(2);
+    expect(
+      extractBatch.mock.calls.map(([params]) => params.items.map((item) => item.agentId)),
+    ).toEqual([
+      ["alpha", "alpha"],
+      ["beta", "beta"],
+    ]);
+  });
+
   it("uses the configured agent model for the hidden extractor run", async () => {
     const cfg = await createConfig();
     cfg.agents = {
@@ -568,6 +605,58 @@ describe("commitment extraction runtime", () => {
     expect(extractBatch).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps other agents queued after a terminal extraction failure", async () => {
+    const cfg = await createConfig();
+    const scheduled: Array<() => void> = [];
+    const extractBatch = vi.fn(async ({ items }: { items: CommitmentExtractionItem[] }) => {
+      if (items[0]?.agentId === "alpha") {
+        throw new Error('No API key found for provider "openai".');
+      }
+      return { candidates: [] };
+    });
+    configureCommitmentExtractionRuntime({
+      forceInTests: true,
+      extractBatch,
+      setTimer: (callback) => {
+        scheduled.push(callback);
+        return { unref() {} } as ReturnType<typeof setTimeout>;
+      },
+      clearTimer: () => undefined,
+    });
+
+    for (const agentId of ["alpha", "beta"]) {
+      expect(
+        enqueueCommitmentExtraction({
+          cfg,
+          nowMs,
+          agentId,
+          sessionKey: `agent:${agentId}:telegram:user-1`,
+          channel: "telegram",
+          userText: "I have an interview tomorrow.",
+          assistantText: "Good luck.",
+        }),
+      ).toBe(true);
+    }
+
+    expect(scheduled).toHaveLength(1);
+    scheduled[0]?.();
+    await vi.waitFor(() => {
+      expect(extractBatch).toHaveBeenCalledTimes(1);
+    });
+    await vi.waitFor(() => {
+      expect(scheduled).toHaveLength(2);
+    });
+
+    scheduled[1]?.();
+    await vi.waitFor(() => {
+      expect(extractBatch).toHaveBeenCalledTimes(2);
+    });
+    expect(extractBatch.mock.calls.map(([params]) => params.items[0]?.agentId)).toEqual([
+      "alpha",
+      "beta",
+    ]);
+  });
+
   it("schedules a retry when a non-terminal failure leaves the queue full", async () => {
     const cfg = await createConfig();
     const scheduled: Array<() => void> = [];
@@ -698,12 +787,11 @@ describe("commitment extraction runtime", () => {
     await vi.waitFor(() => {
       expect(extractBatch).toHaveBeenCalledTimes(2);
     });
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
+    await vi.waitFor(async () => {
+      const store = await loadCommitmentStore();
+      expect(store.commitments.map((commitment) => commitment.dedupeKey)).toEqual(["event:m1"]);
     });
 
-    const store = await loadCommitmentStore();
-    expect(store.commitments.map((commitment) => commitment.dedupeKey)).toEqual(["event:m1"]);
     // The successful drain empties the queue, so no further retry is armed.
     expect(scheduled).toHaveLength(2);
   });

@@ -17,6 +17,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveGlobalSingleton,
   resolveStateDir,
+  truncateUtf16Safe,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
@@ -1719,7 +1720,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       if (!doc) {
         continue;
       }
-      const snippet = entry.snippet?.slice(0, this.qmd.limits.maxSnippetChars) ?? "";
+      const snippet = truncateUtf16Safe(entry.snippet ?? "", this.qmd.limits.maxSnippetChars);
       const lines = this.resolveSnippetLines(entry, snippet);
       const score = typeof entry.score === "number" ? entry.score : 0;
       const minScore = opts?.minScore ?? 0;
@@ -1766,7 +1767,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   async sync(params?: MemorySyncParams): Promise<void> {
     if (
       params?.sessions?.some((session) => session.sessionId.trim().length > 0) ||
-      params?.sessionFiles?.some((sessionFile) => sessionFile.trim().length > 0)
+      params?.archiveFiles?.some((sessionFile) => sessionFile.trim().length > 0)
     ) {
       log.debug("qmd sync ignoring targeted session hint; running regular update");
     }
@@ -2719,7 +2720,21 @@ export class QmdMemoryManager implements MemorySearchManager {
       throw err;
     }
 
-    const parsedUnknown: unknown = JSON.parse(result.stdout);
+    let parsedUnknown: unknown;
+    try {
+      parsedUnknown = JSON.parse(result.stdout);
+    } catch {
+      // mcporter (subprocess) can emit non-JSON stdout when output is truncated
+      // by maxOutputChars, a daemon warning bleeds onto stdout, or the CLI is
+      // killed early. Wrap the failure so callers get a typed domain error.
+      // The thrown Error and its cause both carry generic messages on purpose:
+      // errors.ts formatErrorMessage walks the .cause chain into the user-visible
+      // path, so the JSON.parse SyntaxError (whose message embeds a raw stdout
+      // snippet) must not sit on .cause, or that snippet leaks to the user.
+      throw new Error("qmd mcporter returned non-JSON stdout", {
+        cause: new Error("mcporter stdout was not valid JSON"),
+      });
+    }
     const parsedRecord = asRecord(parsedUnknown);
     const structuredContent = parsedRecord ? asRecord(parsedRecord.structuredContent) : null;
     const structured: unknown = structuredContent ?? parsedUnknown;
@@ -2857,6 +2872,8 @@ export class QmdMemoryManager implements MemorySearchManager {
       const entry = await buildSessionEntry(sessionFile, {
         generatedByDreamingNarrative: corpusEntry.generatedByDreamingNarrative === true,
         generatedByCronRun: corpusEntry.generatedByCronRun === true,
+        ...(corpusEntry.sessionKey ? { sessionKey: corpusEntry.sessionKey } : {}),
+        ...(corpusEntry.updatedAtMs !== undefined ? { updatedAtMs: corpusEntry.updatedAtMs } : {}),
       });
       if (!entry) {
         continue;
@@ -2864,7 +2881,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       if (cutoff && entry.mtimeMs < cutoff) {
         continue;
       }
-      const targetName = `${path.basename(sessionFile, ".jsonl")}.md`;
+      const targetName = `${this.sessionExportStem(corpusEntry)}.md`;
       const target = path.join(exportDir, targetName);
       tracked.add(sessionFile);
       const identity = this.buildSessionArtifactMapping(
@@ -2943,6 +2960,12 @@ export class QmdMemoryManager implements MemorySearchManager {
     };
   }
 
+  private sessionExportStem(corpusEntry: SessionTranscriptCorpusEntry): string {
+    return corpusEntry.transcriptSource === "sqlite"
+      ? corpusEntry.sessionId
+      : path.basename(corpusEntry.sessionFile, ".jsonl");
+  }
+
   private refreshSessionArtifactDocIds(): void {
     if (!this.sessionExporter) {
       return;
@@ -2958,7 +2981,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private renderSessionMarkdown(entry: SessionFileEntry): string {
-    const header = `# Session ${path.basename(entry.absPath, path.extname(entry.absPath))}`;
+    const header = `# Session ${path.basename(entry.path, path.extname(entry.path))}`;
     const body = entry.content?.trim().length ? entry.content.trim() : "(empty)";
     return `${header}\n\n${body}\n`;
   }
@@ -3512,7 +3535,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         clamped.push(entry);
         remaining -= snippet.length;
       } else {
-        const trimmed = snippet.slice(0, Math.max(0, remaining));
+        const trimmed = truncateUtf16Safe(snippet, remaining);
         clamped.push(copyQmdSessionArtifactHit(entry, { ...entry, snippet: trimmed }));
         break;
       }

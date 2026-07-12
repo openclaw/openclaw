@@ -1225,6 +1225,24 @@ describe("resolveDiscordChannelInfo", () => {
     expect(fetchChannel).toHaveBeenCalledTimes(1);
   });
 
+  it("caps cached channel info entries", async () => {
+    const cacheEntryLimit = 1000;
+    const fetchChannel = vi.fn(async (channelId: string) => ({
+      type: ChannelType.GuildText,
+      name: `name-${channelId}`,
+    }));
+    const client = { fetchChannel } as unknown as Client;
+
+    for (let index = 0; index <= cacheEntryLimit; index += 1) {
+      await resolveDiscordChannelInfo(client, `channel-${index}`);
+    }
+    await resolveDiscordChannelInfo(client, "channel-0");
+    await resolveDiscordChannelInfo(client, `channel-${cacheEntryLimit}`);
+
+    expect(fetchChannel).toHaveBeenCalledTimes(cacheEntryLimit + 2);
+    expect(fetchChannel).toHaveBeenNthCalledWith(cacheEntryLimit + 2, "channel-0");
+  });
+
   it("negative-caches missing channels", async () => {
     const fetchChannel = vi.fn().mockResolvedValue(null);
     const client = { fetchChannel } as unknown as Client;

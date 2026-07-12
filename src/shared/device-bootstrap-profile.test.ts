@@ -2,9 +2,12 @@
 import { describe, expect, test } from "vitest";
 import {
   BOOTSTRAP_HANDOFF_OPERATOR_SCOPES,
+  NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  isNodePairingSetupBootstrapProfile,
   isPairingSetupBootstrapProfile,
   normalizeDeviceBootstrapHandoffProfile,
+  normalizeDeviceBootstrapProfile,
   resolveBootstrapProfileScopesForRole,
   resolveBootstrapProfileScopesForRoles,
 } from "./device-bootstrap-profile.js";
@@ -36,6 +39,7 @@ describe("device bootstrap profile", () => {
           "node.exec",
           "operator.admin",
           "operator.approvals",
+          "operator.pairing",
           "operator.read",
           "operator.talk.secrets",
           "operator.write",
@@ -61,10 +65,23 @@ describe("device bootstrap profile", () => {
           "operator.talk.secrets",
           "operator.write",
         ],
+        purpose: "control-ui",
       }),
     ).toEqual({
       roles: ["node", "operator"],
       scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+      purpose: "control-ui",
+    });
+  });
+
+  test("drops unknown bootstrap purpose codes", () => {
+    expect(
+      normalizeDeviceBootstrapProfile(
+        JSON.parse('{"roles":["operator"],"scopes":["operator.read"],"purpose":"status"}'),
+      ),
+    ).toEqual({
+      roles: ["operator"],
+      scopes: ["operator.read"],
     });
   });
 
@@ -73,6 +90,12 @@ describe("device bootstrap profile", () => {
       roles: ["node", "operator"],
       scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
     });
+  });
+
+  test("node setup profile carries no operator access", () => {
+    expect(NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE).toEqual({ roles: ["node"], scopes: [] });
+    expect(isNodePairingSetupBootstrapProfile(NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE)).toBe(true);
+    expect(isPairingSetupBootstrapProfile(NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE)).toBe(false);
   });
 
   test("recognizes only the current setup profile", () => {

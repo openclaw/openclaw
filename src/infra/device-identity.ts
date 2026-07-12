@@ -3,6 +3,16 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import {
+  base64UrlDecode,
+  deriveEd25519PublicKeyRaw,
+  ed25519PrivateKeyPemFromRaw,
+  ed25519PublicKeyPemFromRaw,
+  normalizeEd25519PublicKeyBase64Url,
+  publicKeyRawBase64UrlFromEd25519Pem,
+  signEd25519Payload,
+  verifyEd25519Signature,
+} from "./ed25519-signature.js";
 import { privateFileStoreSync } from "./private-file-store.js";
 
 /** Gateway/device Ed25519 identity used for APNs relay and gateway authentication. */
@@ -31,51 +41,12 @@ function resolveDefaultIdentityPath(): string {
   return path.join(resolveStateDir(), "identity", "device.json");
 }
 
-const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
-const ED25519_PKCS8_PRIVATE_PREFIX = Buffer.from("302e020100300506032b657004220420", "hex");
-
-function base64UrlEncode(buf: Buffer): string {
-  return buf.toString("base64").replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/g, "");
-}
-
-function base64UrlDecode(input: string): Buffer {
-  const normalized = input.replaceAll("-", "+").replaceAll("_", "/");
-  const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
-  return Buffer.from(padded, "base64");
-}
-
-function pemEncode(label: "PUBLIC KEY" | "PRIVATE KEY", der: Buffer): string {
-  const body =
-    der
-      .toString("base64")
-      .match(/.{1,64}/g)
-      ?.join("\n") ?? "";
-  return `-----BEGIN ${label}-----\n${body}\n-----END ${label}-----\n`;
-}
-
 // Swift stores raw Ed25519 key bytes; Node crypto needs DER/PEM wrappers around them.
-function publicKeyPemFromRaw(publicKeyRaw: Buffer): string {
-  return pemEncode("PUBLIC KEY", Buffer.concat([ED25519_SPKI_PREFIX, publicKeyRaw]));
-}
-
-function privateKeyPemFromRaw(privateKeyRaw: Buffer): string {
-  return pemEncode("PRIVATE KEY", Buffer.concat([ED25519_PKCS8_PRIVATE_PREFIX, privateKeyRaw]));
-}
-
-function derivePublicKeyRaw(publicKeyPem: string): Buffer {
-  const key = crypto.createPublicKey(publicKeyPem);
-  const spki = key.export({ type: "spki", format: "der" }) as Buffer;
-  if (
-    spki.length === ED25519_SPKI_PREFIX.length + 32 &&
-    spki.subarray(0, ED25519_SPKI_PREFIX.length).equals(ED25519_SPKI_PREFIX)
-  ) {
-    return spki.subarray(ED25519_SPKI_PREFIX.length);
-  }
-  return spki;
-}
+const publicKeyPemFromRaw = ed25519PublicKeyPemFromRaw;
+const privateKeyPemFromRaw = ed25519PrivateKeyPemFromRaw;
 
 function fingerprintPublicKey(publicKeyPem: string): string {
-  const raw = derivePublicKeyRaw(publicKeyPem);
+  const raw = deriveEd25519PublicKeyRaw(publicKeyPem);
   return crypto.createHash("sha256").update(raw).digest("hex");
 }
 
@@ -244,6 +215,10 @@ export function loadOrCreateDeviceIdentity(
       // Avoid overwriting recognizable but invalid identity files; callers can still use a fresh key.
       return generateIdentity();
     }
+    if (identityFileExists(filePath)) {
+      // Unrecognized existing files may hold a newer schema; never overwrite them either.
+      return generateIdentity();
+    }
   } catch {
     if (identityFileExists(filePath)) {
       return generateIdentity();
@@ -261,6 +236,23 @@ export function loadOrCreateDeviceIdentity(
   privateFileStoreSync(path.dirname(filePath)).writeJson(path.basename(filePath), stored, {
     trailingNewline: true,
   });
+  return identity;
+}
+
+let processDeviceIdentity: { filePath: string; identity: DeviceIdentity } | undefined;
+
+/**
+ * Keep one identity stable for the lifetime of the active state-dir process.
+ * Recognizable invalid stores yield transient keys, so independent reloads would split gateway ownership.
+ */
+export function loadOrCreateProcessDeviceIdentity(
+  filePath: string = resolveDefaultIdentityPath(),
+): DeviceIdentity {
+  if (processDeviceIdentity?.filePath === filePath) {
+    return processDeviceIdentity.identity;
+  }
+  const identity = loadOrCreateDeviceIdentity(filePath);
+  processDeviceIdentity = { filePath, identity };
   return identity;
 }
 
@@ -284,32 +276,19 @@ export function loadDeviceIdentityIfPresent(
 
 /** Sign a UTF-8 payload with a PEM Ed25519 private key and return base64url bytes. */
 export function signDevicePayload(privateKeyPem: string, payload: string): string {
-  const key = crypto.createPrivateKey(privateKeyPem);
-  const sig = crypto.sign(null, Buffer.from(payload, "utf8"), key);
-  return base64UrlEncode(sig);
+  return signEd25519Payload(privateKeyPem, payload);
 }
 
 /** Normalize PEM or raw base64/base64url public keys to canonical raw base64url bytes. */
 export function normalizeDevicePublicKeyBase64Url(publicKey: string): string | null {
-  try {
-    if (publicKey.includes("BEGIN")) {
-      return base64UrlEncode(derivePublicKeyRaw(publicKey));
-    }
-    const raw = base64UrlDecode(publicKey);
-    if (raw.length === 0) {
-      return null;
-    }
-    return base64UrlEncode(raw);
-  } catch {
-    return null;
-  }
+  return normalizeEd25519PublicKeyBase64Url(publicKey);
 }
 
 /** Derive the stable device id from PEM or raw base64/base64url public key material. */
 export function deriveDeviceIdFromPublicKey(publicKey: string): string | null {
   try {
     const raw = publicKey.includes("BEGIN")
-      ? derivePublicKeyRaw(publicKey)
+      ? deriveEd25519PublicKeyRaw(publicKey)
       : base64UrlDecode(publicKey);
     if (raw.length === 0) {
       return null;
@@ -322,7 +301,7 @@ export function deriveDeviceIdFromPublicKey(publicKey: string): string | null {
 
 /** Export a PEM Ed25519 public key as canonical raw base64url bytes. */
 export function publicKeyRawBase64UrlFromPem(publicKeyPem: string): string {
-  return base64UrlEncode(derivePublicKeyRaw(publicKeyPem));
+  return publicKeyRawBase64UrlFromEd25519Pem(publicKeyPem);
 }
 
 /** Verify a UTF-8 payload signature against PEM or raw base64/base64url public key material. */
@@ -331,23 +310,5 @@ export function verifyDeviceSignature(
   payload: string,
   signatureBase64Url: string,
 ): boolean {
-  try {
-    const key = publicKey.includes("BEGIN")
-      ? crypto.createPublicKey(publicKey)
-      : crypto.createPublicKey({
-          key: Buffer.concat([ED25519_SPKI_PREFIX, base64UrlDecode(publicKey)]),
-          type: "spki",
-          format: "der",
-        });
-    const sig = (() => {
-      try {
-        return base64UrlDecode(signatureBase64Url);
-      } catch {
-        return Buffer.from(signatureBase64Url, "base64");
-      }
-    })();
-    return crypto.verify(null, Buffer.from(payload, "utf8"), key, sig);
-  } catch {
-    return false;
-  }
+  return verifyEd25519Signature({ publicKey, payload, signatureBase64Url });
 }

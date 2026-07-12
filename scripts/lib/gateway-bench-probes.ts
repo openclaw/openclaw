@@ -37,7 +37,7 @@ export async function requestProbeStatus(
   }
 }
 
-export function classifyProbeErrorKind(error: unknown): string {
+function classifyProbeErrorKind(error: unknown): string {
   if (typeof error === "object" && error !== null) {
     const code = (error as { code?: unknown }).code;
     if (typeof code === "string" && code.trim()) {

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readLocalFileSafely, root, walkDirectory } from "../../infra/fs-safe.js";
@@ -231,7 +232,10 @@ export async function resolvePendingSkillProposal(input: {
       .join(", ");
     throw new Error(`Multiple pending skill proposals matched ${name}: ${candidates}`);
   }
-  const matched = await readRequiredProposal(matches[0].id, input.workspaceDir);
+  const matched = await readRequiredProposal(
+    expectDefined(matches[0], "matches capture group 0").id,
+    input.workspaceDir,
+  );
   if (matched.record.status !== "pending") {
     throw new Error(
       `Only pending proposals can be revised. Current status: ${matched.record.status}.`,
@@ -302,6 +306,40 @@ export async function proposeCreateSkill(
     },
   });
   return { record, content: proposalContent };
+}
+
+/** Summary of a workspace skill the workshop is allowed to write. */
+export type WritableWorkspaceSkillSummary = {
+  name: string;
+  description?: string;
+  filePath: string;
+};
+
+/**
+ * Lists the workspace skills the workshop can target with update proposals, using the same
+ * status discovery as `proposeUpdateSkill` so callers that route corrections to existing
+ * skills stay in lockstep with what an update can actually write.
+ */
+export function listWritableWorkspaceSkillSummaries(
+  workspaceDir: string,
+  opts?: { config?: OpenClawConfig; agentId?: string },
+): WritableWorkspaceSkillSummary[] {
+  const status = buildWorkspaceSkillStatus(workspaceDir, {
+    config: opts?.config,
+    agentId: opts?.agentId,
+  });
+  const summaries: WritableWorkspaceSkillSummary[] = [];
+  for (const skill of status.skills) {
+    if (!WRITABLE_WORKSPACE_SOURCES.has(skill.source)) {
+      continue;
+    }
+    summaries.push(
+      skill.description
+        ? { name: skill.skillKey, description: skill.description, filePath: skill.filePath }
+        : { name: skill.skillKey, filePath: skill.filePath },
+    );
+  }
+  return summaries;
 }
 
 export async function proposeUpdateSkill(

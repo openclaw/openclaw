@@ -14,6 +14,7 @@ describe("model catalog normalization", () => {
             headers: {
               "x-provider": "openai",
             },
+            defaultUtilityModel: " gpt-5.6-luna ",
             models: [
               {
                 id: "gpt-5.4",
@@ -28,6 +29,12 @@ describe("model catalog normalization", () => {
                 contextWindow: 256000,
                 contextTokens: 200000,
                 maxTokens: 128000,
+                thinkingLevelMap: {
+                  off: null,
+                  minimal: " low ",
+                  max: "max",
+                  adaptive: "high",
+                },
                 cost: {
                   input: 1.25,
                   output: 10,
@@ -61,6 +68,7 @@ describe("model catalog normalization", () => {
                   sendSessionIdHeader: false,
                   supportsEagerToolInputStreaming: false,
                   supportsLongCacheRetention: true,
+                  requiresReasoningContentOnAssistantMessages: true,
                   supportsStore: "yes",
                   thinkingFormat: "together",
                   unknownFlag: true,
@@ -118,6 +126,7 @@ describe("model catalog normalization", () => {
           headers: {
             "x-provider": "openai",
           },
+          defaultUtilityModel: "gpt-5.6-luna",
           models: [
             {
               id: "gpt-5.4",
@@ -132,6 +141,7 @@ describe("model catalog normalization", () => {
               contextWindow: 256000,
               contextTokens: 200000,
               maxTokens: 128000,
+              thinkingLevelMap: { off: null, minimal: "low", max: "max" },
               cost: {
                 input: 1.25,
                 output: 10,
@@ -156,6 +166,7 @@ describe("model catalog normalization", () => {
                 sendSessionIdHeader: false,
                 supportsEagerToolInputStreaming: false,
                 supportsLongCacheRetention: true,
+                requiresReasoningContentOnAssistantMessages: true,
                 thinkingFormat: "together",
               },
               status: "preview",

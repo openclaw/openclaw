@@ -376,6 +376,38 @@ describe("feishu websocket cleanup", () => {
     expect(errorMessage).not.toContain("secret_token");
   });
 
+  it("keeps websocket close error logs UTF-16 safe at the truncation boundary", async () => {
+    const wsClient = createWsClient();
+    wsClient.close.mockImplementationOnce(() => {
+      throw new Error(`${"x".repeat(499)}😀tail`);
+    });
+    createFeishuWSClientMock.mockReturnValue(wsClient);
+
+    const abortController = new AbortController();
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+    const monitorPromise = monitorWebSocket({
+      account: createAccount("close-error-utf16"),
+      accountId: "close-error-utf16",
+      runtime,
+      abortSignal: abortController.signal,
+      eventDispatcher: {} as never,
+    });
+
+    await vi.waitFor(() => {
+      expect(wsClient.start).toHaveBeenCalledTimes(1);
+    });
+    abortController.abort();
+    await monitorPromise;
+
+    expect(firstRuntimeError(runtime)).toBe(
+      `feishu[close-error-utf16]: error closing WebSocket client: ${"x".repeat(499)}...`,
+    );
+  });
+
   it("closes targeted websocket clients during stop cleanup", async () => {
     const alphaClient = createWsClient();
     const betaClient = createWsClient();

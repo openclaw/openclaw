@@ -1,7 +1,11 @@
 // Workboard plugin module implements command behavior.
 import type { OpenClawPluginApi } from "../api.js";
 import { resolveWorkboardCardByIdOrPrefix } from "./card-lookup.js";
-import { dispatchAndStartWorkboardCards, type WorkboardSubagentRuntime } from "./dispatcher.js";
+import {
+  dispatchAndStartWorkboardCards,
+  type WorkboardSubagentRuntime,
+  type WorkboardWorktreeRuntime,
+} from "./dispatcher.js";
 import type { WorkboardStore } from "./store.js";
 import type { WorkboardCard } from "./types.js";
 
@@ -11,6 +15,7 @@ const WRITE_SCOPE = "operator.write";
 type WorkboardCommandApi = {
   runtime: {
     subagent: WorkboardSubagentRuntime;
+    worktrees: WorkboardWorktreeRuntime;
   };
 };
 
@@ -127,6 +132,12 @@ export async function handleWorkboardCommand(params: {
     const result = await dispatchAndStartWorkboardCards({
       store: params.store,
       subagent: params.api.runtime.subagent,
+      worktrees: params.api.runtime.worktrees,
+      options: {
+        allowManagedWorktrees: params.gatewayClientScopes
+          ? params.gatewayClientScopes.includes(ADMIN_SCOPE)
+          : params.senderIsOwner === true,
+      },
     });
     return {
       text: [

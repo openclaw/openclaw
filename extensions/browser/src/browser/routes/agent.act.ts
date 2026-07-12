@@ -4,11 +4,11 @@
  * Dispatches normalized actions to either Playwright-backed OpenClaw browser
  * control or Chrome MCP existing-session operations with navigation guards.
  */
+import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   clickChromeMcpElement,
   clickChromeMcpCoords,
-  closeChromeMcpTab,
   dragChromeMcpElement,
   evaluateChromeMcpScript,
   fillChromeMcpElement,
@@ -16,6 +16,7 @@ import {
   hoverChromeMcpElement,
   pressChromeMcpKey,
   resizeChromeMcpPage,
+  type ChromeMcpOperationOptions,
   type ChromeMcpProfileOptions,
 } from "../chrome-mcp.js";
 import type { BrowserActRequest } from "../client-actions.types.js";
@@ -35,9 +36,10 @@ import {
   jsonActError,
 } from "./agent.act.errors.js";
 import { registerBrowserAgentActHookRoutes } from "./agent.act.hooks.js";
-import { normalizeActRequest, validateBatchTargetIds } from "./agent.act.normalize.js";
+import { canonicalizeActTargetIds, normalizeActRequest } from "./agent.act.normalize.js";
 import { type ActKind, isActKind } from "./agent.act.shared.js";
 import {
+  browserNavigationPolicyForProfile,
   readBody,
   requirePwAi,
   resolveTargetIdFromBody,
@@ -51,25 +53,18 @@ import { readRoutePositiveInteger, readRouteTimerTimeoutMs } from "./route-numer
 import type { BrowserRouteRegistrar } from "./types.js";
 import { asyncBrowserRoute, jsonError, toStringOrEmpty } from "./utils.js";
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
 const EXISTING_SESSION_INTERACTION_NAVIGATION_RECHECK_DELAYS_MS = [0, 250, 500] as const;
 
-async function readExistingSessionLocationHref(params: {
+type ExistingSessionOperation = ChromeMcpOperationOptions & {
   profileName: string;
   profile?: ChromeMcpProfileOptions;
   userDataDir?: string;
   targetId: string;
-}): Promise<string> {
+};
+
+async function readExistingSessionLocationHref(params: ExistingSessionOperation): Promise<string> {
   const currentUrl = await evaluateChromeMcpScript({
-    profileName: params.profileName,
-    profile: params.profile,
-    userDataDir: params.userDataDir,
-    targetId: params.targetId,
+    ...params,
     fn: "() => window.location.href",
   });
   if (typeof currentUrl !== "string") {
@@ -82,17 +77,17 @@ async function readExistingSessionLocationHref(params: {
   return normalizedUrl;
 }
 
-async function assertExistingSessionPostInteractionNavigationAllowed(params: {
-  profileName: string;
-  profile?: ChromeMcpProfileOptions;
-  userDataDir?: string;
-  targetId: string;
-  ssrfPolicy?: BrowserNavigationPolicyOptions["ssrfPolicy"];
-  listTabs: () => Promise<Array<{ targetId: string; url: string }>>;
-  initialTabTargetIds: ReadonlySet<string>;
-}): Promise<void> {
-  const ssrfPolicyOpts = withBrowserNavigationPolicy(params.ssrfPolicy);
-  if (!ssrfPolicyOpts.ssrfPolicy) {
+async function assertExistingSessionPostInteractionNavigationAllowed(
+  params: ExistingSessionOperation &
+    BrowserNavigationPolicyOptions & {
+      listTabs: () => Promise<Array<{ targetId: string; url: string }>>;
+      initialTabTargetIds: ReadonlySet<string>;
+    },
+): Promise<void> {
+  const navigationPolicy = withBrowserNavigationPolicy(params.ssrfPolicy, {
+    browserProxyMode: params.browserProxyMode,
+  });
+  if (!navigationPolicy.ssrfPolicy && !navigationPolicy.browserProxyMode) {
     return;
   }
   const listTabs = params.listTabs;
@@ -106,7 +101,7 @@ async function assertExistingSessionPostInteractionNavigationAllowed(params: {
       }
       await assertBrowserNavigationResultAllowed({
         url: tab.url,
-        ...ssrfPolicyOpts,
+        ...navigationPolicy,
       });
     }
   };
@@ -115,18 +110,19 @@ async function assertExistingSessionPostInteractionNavigationAllowed(params: {
   let sawStableAllowedUrl = false;
   for (const delayMs of EXISTING_SESSION_INTERACTION_NAVIGATION_RECHECK_DELAYS_MS) {
     if (delayMs > 0) {
-      await sleep(delayMs);
+      await sleep(delayMs, undefined, { signal: params.signal });
     }
     let currentUrl: string;
     try {
       currentUrl = await readExistingSessionLocationHref(params);
     } catch {
+      params.signal?.throwIfAborted();
       sawStableAllowedUrl = false;
       continue;
     }
     await assertBrowserNavigationResultAllowed({
       url: currentUrl,
-      ...ssrfPolicyOpts,
+      ...navigationPolicy,
     });
     if (currentUrl === lastObservedUrl) {
       sawStableAllowedUrl = true;
@@ -149,18 +145,19 @@ async function assertExistingSessionPostInteractionNavigationAllowed(params: {
       EXISTING_SESSION_INTERACTION_NAVIGATION_RECHECK_DELAYS_MS[
         EXISTING_SESSION_INTERACTION_NAVIGATION_RECHECK_DELAYS_MS.length - 1
       ];
-    await sleep(lastDelay);
+    await sleep(lastDelay, undefined, { signal: params.signal });
     try {
       const followUpUrl = await readExistingSessionLocationHref(params);
       await assertBrowserNavigationResultAllowed({
         url: followUpUrl,
-        ...ssrfPolicyOpts,
+        ...navigationPolicy,
       });
       if (followUpUrl === lastObservedUrl) {
         await assertNewTabsAllowed();
         return;
       }
     } catch {
+      params.signal?.throwIfAborted();
       // Probe failed — fall through to throw
     }
   }
@@ -222,22 +219,19 @@ function buildExistingSessionWaitPredicate(params: {
   return checks.length === 1 ? checks[0] : checks.map((check) => `(${check})`).join(" && ");
 }
 
-async function waitForExistingSessionCondition(params: {
-  profileName: string;
-  profile?: ChromeMcpProfileOptions;
-  userDataDir?: string;
-  targetId: string;
-  timeMs?: number;
-  text?: string;
-  textGone?: string;
-  selector?: string;
-  url?: string;
-  loadState?: "load" | "domcontentloaded" | "networkidle";
-  fn?: string;
-  timeoutMs?: number;
-}): Promise<void> {
+async function waitForExistingSessionCondition(
+  params: ExistingSessionOperation & {
+    timeMs?: number;
+    text?: string;
+    textGone?: string;
+    selector?: string;
+    url?: string;
+    loadState?: "load" | "domcontentloaded" | "networkidle";
+    fn?: string;
+  },
+): Promise<void> {
   if (params.timeMs && params.timeMs > 0) {
-    await sleep(params.timeMs);
+    await sleep(params.timeMs, undefined, { signal: params.signal });
   }
   const predicate = buildExistingSessionWaitPredicate(params);
   if (!predicate && !params.url) {
@@ -250,20 +244,14 @@ async function waitForExistingSessionCondition(params: {
     if (predicate) {
       ready = Boolean(
         await evaluateChromeMcpScript({
-          profileName: params.profileName,
-          profile: params.profile,
-          userDataDir: params.userDataDir,
-          targetId: params.targetId,
+          ...params,
           fn: `async () => ${predicate}`,
         }),
       );
     }
     if (ready && params.url) {
       const currentUrl = await evaluateChromeMcpScript({
-        profileName: params.profileName,
-        profile: params.profile,
-        userDataDir: params.userDataDir,
-        targetId: params.targetId,
+        ...params,
         fn: "() => window.location.href",
       });
       ready = typeof currentUrl === "string" && matchBrowserUrlPattern(params.url, currentUrl);
@@ -271,7 +259,7 @@ async function waitForExistingSessionCondition(params: {
     if (ready) {
       return;
     }
-    await sleep(250);
+    await sleep(250, undefined, { signal: params.signal });
   }
   throw new Error("Timed out waiting for condition");
 }
@@ -347,7 +335,7 @@ function getExistingSessionUnsupportedMessage(action: BrowserActRequest): string
         ? EXISTING_SESSION_LIMITS.act.waitNetworkIdle
         : null;
     case "evaluate":
-      return action.timeoutMs !== undefined ? EXISTING_SESSION_LIMITS.act.evaluateTimeout : null;
+      return null;
     case "batch":
       return EXISTING_SESSION_LIMITS.act.batch;
     case "resize":
@@ -405,12 +393,20 @@ export function registerBrowserAgentActRoutes(
         ctx,
         targetId,
         enforceCurrentUrlAllowed: shouldEnforceCurrentUrlForAct(action),
-        run: async ({ profileCtx, cdpUrl, tab, resolveTabUrl }) => {
+        run: async ({ profileCtx, cdpUrl, tab, signal, resolveTabUrl }) => {
           const evaluateEnabled = ctx.state().resolved.evaluateEnabled;
-          const ssrfPolicy = ctx.state().resolved.ssrfPolicy;
+          const navigationPolicy = browserNavigationPolicyForProfile(ctx, profileCtx);
           const isExistingSession = getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp;
+          const requestedTimeoutMs =
+            "timeoutMs" in action && typeof action.timeoutMs === "number"
+              ? action.timeoutMs
+              : undefined;
+          const existingSessionCallOptions: ChromeMcpOperationOptions = {
+            timeoutMs: requestedTimeoutMs ?? ctx.state().resolved.actionTimeoutMs,
+            signal,
+          };
           const hasNavigationResultPolicy = Boolean(
-            withBrowserNavigationPolicy(ssrfPolicy).ssrfPolicy,
+            navigationPolicy.ssrfPolicy || navigationPolicy.browserProxyMode,
           );
           const jsonOk = async (
             extra?: Record<string, unknown>,
@@ -422,7 +418,7 @@ export function registerBrowserAgentActRoutes(
               ? await resolveTargetIdAfterNavigate({
                   oldTargetId: tab.targetId,
                   navigatedUrl: tab.url,
-                  listTabs: () => profileCtx.listTabs(),
+                  listTabs: () => profileCtx.listTabs(existingSessionCallOptions),
                 })
               : tab.targetId;
             const url =
@@ -433,6 +429,7 @@ export function registerBrowserAgentActRoutes(
                     profileCtx,
                     targetId: responseTargetId,
                     fallbackUrl: tab.url,
+                    ...(isExistingSession ? existingSessionCallOptions : {}),
                   });
             return res.json({
               ok: true,
@@ -441,25 +438,36 @@ export function registerBrowserAgentActRoutes(
               ...extra,
             });
           };
-          if (action.targetId && action.targetId !== tab.targetId) {
-            return jsonActError(
-              res,
-              403,
-              ACT_ERROR_CODES.targetIdMismatch,
-              "action targetId must match request targetId",
-            );
+          // Nested batch aliases can differ from the request alias, so prefixes
+          // must stay unique across the full tab set before canonicalization.
+          const actionTabs =
+            action.kind === "batch" && !isExistingSession ? await profileCtx.listTabs() : [tab];
+          if (!actionTabs.some((candidate) => candidate.targetId === tab.targetId)) {
+            actionTabs.unshift(tab);
+          }
+          const targetIdError = canonicalizeActTargetIds(action, tab, actionTabs);
+          if (targetIdError) {
+            return jsonActError(res, 403, ACT_ERROR_CODES.targetIdMismatch, targetIdError);
           }
           const profileName = profileCtx.profile.name;
           if (isExistingSession) {
-            const initialTabTargetIds = hasNavigationResultPolicy
-              ? new Set((await profileCtx.listTabs()).map((currentTab) => currentTab.targetId))
-              : new Set<string>();
-            const existingSessionNavigationGuard = {
+            const existingSessionTarget: ExistingSessionOperation = {
               profileName,
               profile: profileCtx.profile,
               targetId: tab.targetId,
-              ssrfPolicy,
-              listTabs: () => profileCtx.listTabs(),
+              ...existingSessionCallOptions,
+            };
+            const initialTabTargetIds = hasNavigationResultPolicy
+              ? new Set(
+                  (await profileCtx.listTabs(existingSessionCallOptions)).map(
+                    (currentTab) => currentTab.targetId,
+                  ),
+                )
+              : new Set<string>();
+            const existingSessionNavigationGuard = {
+              ...existingSessionTarget,
+              ...navigationPolicy,
+              listTabs: () => profileCtx.listTabs(existingSessionCallOptions),
               initialTabTargetIds,
             };
             const unsupportedMessage = getExistingSessionUnsupportedMessage(action);
@@ -476,13 +484,9 @@ export function registerBrowserAgentActRoutes(
                 await runExistingSessionActionWithNavigationGuard({
                   execute: () =>
                     clickChromeMcpElement({
-                      profileName,
-                      profile: profileCtx.profile,
-                      targetId: tab.targetId,
+                      ...existingSessionTarget,
                       uid: action.ref!,
                       doubleClick: action.doubleClick ?? false,
-                      timeoutMs: action.timeoutMs,
-                      signal: req.signal,
                     }),
                   guard: existingSessionNavigationGuard,
                 });
@@ -491,9 +495,7 @@ export function registerBrowserAgentActRoutes(
                 await runExistingSessionActionWithNavigationGuard({
                   execute: () =>
                     clickChromeMcpCoords({
-                      profileName,
-                      profile: profileCtx.profile,
-                      targetId: tab.targetId,
+                      ...existingSessionTarget,
                       x: action.x,
                       y: action.y,
                       doubleClick: action.doubleClick ?? false,
@@ -507,17 +509,13 @@ export function registerBrowserAgentActRoutes(
                 await runExistingSessionActionWithNavigationGuard({
                   execute: async () => {
                     await fillChromeMcpElement({
-                      profileName,
-                      profile: profileCtx.profile,
-                      targetId: tab.targetId,
+                      ...existingSessionTarget,
                       uid: action.ref!,
                       value: action.text,
                     });
                     if (action.submit) {
                       await pressChromeMcpKey({
-                        profileName,
-                        profile: profileCtx.profile,
-                        targetId: tab.targetId,
+                        ...existingSessionTarget,
                         key: "Enter",
                       });
                     }
@@ -529,9 +527,7 @@ export function registerBrowserAgentActRoutes(
                 await runExistingSessionActionWithNavigationGuard({
                   execute: () =>
                     pressChromeMcpKey({
-                      profileName,
-                      profile: profileCtx.profile,
-                      targetId: tab.targetId,
+                      ...existingSessionTarget,
                       key: action.key,
                     }),
                   guard: existingSessionNavigationGuard,
@@ -541,60 +537,50 @@ export function registerBrowserAgentActRoutes(
                 await runExistingSessionActionWithNavigationGuard({
                   execute: () =>
                     hoverChromeMcpElement({
-                      profileName,
-                      profile: profileCtx.profile,
-                      targetId: tab.targetId,
+                      ...existingSessionTarget,
                       uid: action.ref!,
                     }),
                   guard: existingSessionNavigationGuard,
                 });
-                return await jsonOk();
+                return await jsonOk(undefined, { resolveCurrentTarget: true });
               case "scrollIntoView":
                 await runExistingSessionActionWithNavigationGuard({
                   execute: () =>
                     evaluateChromeMcpScript({
-                      profileName,
-                      profile: profileCtx.profile,
-                      targetId: tab.targetId,
+                      ...existingSessionTarget,
                       fn: `(el) => { el.scrollIntoView({ block: "center", inline: "center" }); return true; }`,
                       args: [action.ref!],
                     }),
                   guard: existingSessionNavigationGuard,
                 });
-                return await jsonOk();
+                return await jsonOk(undefined, { resolveCurrentTarget: true });
               case "drag":
                 await runExistingSessionActionWithNavigationGuard({
                   execute: () =>
                     dragChromeMcpElement({
-                      profileName,
-                      profile: profileCtx.profile,
-                      targetId: tab.targetId,
+                      ...existingSessionTarget,
                       fromUid: action.startRef!,
                       toUid: action.endRef!,
                     }),
                   guard: existingSessionNavigationGuard,
                 });
-                return await jsonOk();
+                return await jsonOk(undefined, { resolveCurrentTarget: true });
               case "select":
                 await runExistingSessionActionWithNavigationGuard({
                   execute: () =>
                     fillChromeMcpElement({
-                      profileName,
-                      profile: profileCtx.profile,
-                      targetId: tab.targetId,
+                      ...existingSessionTarget,
                       uid: action.ref!,
                       value: action.values[0] ?? "",
                     }),
                   guard: existingSessionNavigationGuard,
                 });
-                return await jsonOk();
+                return await jsonOk(undefined, { resolveCurrentTarget: true });
               case "fill":
                 await runExistingSessionActionWithNavigationGuard({
                   execute: () =>
                     fillChromeMcpForm({
-                      profileName,
-                      profile: profileCtx.profile,
-                      targetId: tab.targetId,
+                      ...existingSessionTarget,
                       elements: action.fields.map((field) => ({
                         uid: field.ref,
                         value: String(field.value ?? ""),
@@ -602,21 +588,17 @@ export function registerBrowserAgentActRoutes(
                     }),
                   guard: existingSessionNavigationGuard,
                 });
-                return await jsonOk();
+                return await jsonOk(undefined, { resolveCurrentTarget: true });
               case "resize":
                 await resizeChromeMcpPage({
-                  profileName,
-                  profile: profileCtx.profile,
-                  targetId: tab.targetId,
+                  ...existingSessionTarget,
                   width: action.width,
                   height: action.height,
                 });
                 return await jsonOk();
               case "wait":
                 await waitForExistingSessionCondition({
-                  profileName,
-                  profile: profileCtx.profile,
-                  targetId: tab.targetId,
+                  ...existingSessionTarget,
                   timeMs: action.timeMs,
                   text: action.text,
                   textGone: action.textGone,
@@ -624,16 +606,13 @@ export function registerBrowserAgentActRoutes(
                   url: action.url,
                   loadState: action.loadState,
                   fn: action.fn,
-                  timeoutMs: action.timeoutMs,
                 });
                 return await jsonOk();
               case "evaluate": {
                 const result = await runExistingSessionActionWithNavigationGuard({
                   execute: () =>
                     evaluateChromeMcpScript({
-                      profileName,
-                      profile: profileCtx.profile,
-                      targetId: tab.targetId,
+                      ...existingSessionTarget,
                       fn: normalizeBrowserEvaluateFunctionSource(
                         action.fn,
                         action.ref ? { argumentName: "el" } : undefined,
@@ -642,10 +621,13 @@ export function registerBrowserAgentActRoutes(
                     }),
                   guard: existingSessionNavigationGuard,
                 });
-                return await jsonOk({ result });
+                return await jsonOk({ result }, { resolveCurrentTarget: true });
               }
               case "close":
-                await closeChromeMcpTab(profileName, tab.targetId, profileCtx.profile);
+                await profileCtx.closeTab(tab.targetId, {
+                  ...existingSessionCallOptions,
+                  exactTargetId: true,
+                });
                 return await jsonOk();
               case "batch":
                 return jsonActError(
@@ -661,19 +643,13 @@ export function registerBrowserAgentActRoutes(
           if (!pw) {
             return;
           }
-          if (action.kind === "batch") {
-            const targetIdError = validateBatchTargetIds(action.actions, tab.targetId);
-            if (targetIdError) {
-              return jsonActError(res, 403, ACT_ERROR_CODES.targetIdMismatch, targetIdError);
-            }
-          }
           const result = await pw.executeActViaPlaywright({
             cdpUrl,
             action,
             targetId: tab.targetId,
             evaluateEnabled,
-            ssrfPolicy,
-            signal: req.signal,
+            ...navigationPolicy,
+            signal,
           });
           if (result.blockedByDialog) {
             return await jsonOk({
@@ -681,21 +657,29 @@ export function registerBrowserAgentActRoutes(
               browserState: result.browserState,
             });
           }
+          const downloads = result.downloads;
           switch (action.kind) {
             case "batch":
               return await jsonOk(
-                { results: result.results ?? [] },
+                { results: result.results ?? [], ...(downloads ? { downloads } : {}) },
                 { resolveCurrentTarget: true },
               );
             case "evaluate":
-              return await jsonOk({ result: result.result }, { resolveCurrentTarget: true });
+              return await jsonOk(
+                { result: result.result, ...(downloads ? { downloads } : {}) },
+                { resolveCurrentTarget: true },
+              );
             case "click":
             case "clickCoords":
-              return await jsonOk(undefined, { resolveCurrentTarget: true });
+              return await jsonOk(downloads ? { downloads } : undefined, {
+                resolveCurrentTarget: true,
+              });
             case "resize":
-              return await jsonOk();
+              return await jsonOk(downloads ? { downloads } : undefined);
             default:
-              return await jsonOk(undefined, { resolveCurrentTarget: true });
+              return await jsonOk(downloads ? { downloads } : undefined, {
+                resolveCurrentTarget: true,
+              });
           }
         },
       });
@@ -729,7 +713,7 @@ export function registerBrowserAgentActRoutes(
         ctx,
         targetId,
         enforceCurrentUrlAllowed: true,
-        run: async ({ profileCtx, cdpUrl, tab, resolveTabUrl }) => {
+        run: async ({ profileCtx, cdpUrl, tab, signal, resolveTabUrl }) => {
           if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
             return jsonError(res, 501, EXISTING_SESSION_LIMITS.responseBody);
           }
@@ -744,6 +728,7 @@ export function registerBrowserAgentActRoutes(
             timeoutMs: timeoutMs ?? undefined,
             maxChars: maxChars ?? undefined,
           });
+          signal.throwIfAborted();
           const currentUrl = await resolveTabUrl(tab.url);
           res.json({
             ok: true,
@@ -772,7 +757,7 @@ export function registerBrowserAgentActRoutes(
         ctx,
         targetId,
         enforceCurrentUrlAllowed: true,
-        run: async ({ profileCtx, cdpUrl, tab, resolveTabUrl }) => {
+        run: async ({ profileCtx, cdpUrl, tab, signal, resolveTabUrl }) => {
           const jsonOk = async () => {
             const currentUrl = await resolveTabUrl(tab.url);
             return res.json({
@@ -787,6 +772,8 @@ export function registerBrowserAgentActRoutes(
               profile: profileCtx.profile,
               targetId: tab.targetId,
               args: [ref],
+              timeoutMs: ctx.state().resolved.actionTimeoutMs,
+              signal,
               fn: `(el) => {
               if (!(el instanceof Element)) {
                 return false;

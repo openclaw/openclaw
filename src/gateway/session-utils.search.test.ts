@@ -3,15 +3,25 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, beforeAll, describe, expect, test } from "vitest";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
 } from "../agents/subagent-registry.test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import {
+  appendTranscriptMessageSync,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
-import { buildGatewaySessionInfo, listSessionsFromStore } from "./session-utils.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  buildGatewaySessionInfo,
+  filterAndSortSessionEntries,
+  listSessionsFromStore,
+} from "./session-utils.js";
 
 const MAIN_SESSION_KEY = "agent:main:main";
 const MAIN_SESSION_ID = "sess-main";
@@ -62,6 +72,11 @@ function createModelDefaultsConfig(params: {
   } as OpenClawConfig;
 }
 
+function closeSessionSqliteDatabasesForTest(): void {
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
+}
+
 function createLegacyRuntimeListConfig(
   models?: Record<string, Record<string, never>>,
 ): OpenClawConfig {
@@ -79,6 +94,17 @@ function createLegacyRuntimeStore(model: string): Record<string, SessionEntry> {
       model,
     } as SessionEntry,
   };
+}
+
+function buildLegacyRuntimeRow(cfg: OpenClawConfig, model: string) {
+  const store = createLegacyRuntimeStore(model);
+  return buildGatewaySessionInfo({
+    cfg,
+    storePath: "/tmp/sessions.json",
+    store,
+    key: MAIN_SESSION_KEY,
+    entry: store[MAIN_SESSION_KEY],
+  });
 }
 
 function createOpenAiPricingConfig(params: {
@@ -109,41 +135,65 @@ function createOpenAiPricingConfig(params: {
 type DefaultTranscriptFixtureParams<T> = {
   prefix: string;
   transcriptId?: string;
-  run: (fixture: { storePath: string; now: number }) => T;
+  run: (fixture: { storePath: string; now: number }) => Promise<T> | T;
 };
 
-function withTranscriptFixture<T>(
+function appendUsageTranscriptMessage(params: {
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+  usage: TranscriptUsageFixture;
+}) {
+  appendTranscriptMessageSync(
+    {
+      agentId: "main",
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    },
+    {
+      message: {
+        role: "assistant",
+        provider: params.usage.provider,
+        model: params.usage.model,
+        usage: {
+          input: params.usage.input,
+          output: params.usage.output,
+          cacheRead: params.usage.cacheRead,
+          cost: { total: params.usage.costTotal },
+        },
+      },
+    },
+  );
+}
+
+async function withTranscriptFixture<T>(
   usage: TranscriptUsageFixture,
   params: DefaultTranscriptFixtureParams<T>,
-): T {
+): Promise<T> {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), params.prefix));
   const storePath = path.join(tmpDir, "sessions.json");
   const transcriptId = params.transcriptId ?? MAIN_SESSION_ID;
   const now = Date.now();
-  fs.writeFileSync(
-    path.join(tmpDir, `${transcriptId}.jsonl`),
-    [
-      JSON.stringify({ type: "session", version: 1, id: transcriptId }),
-      JSON.stringify({
-        message: {
-          role: "assistant",
-          provider: usage.provider,
-          model: usage.model,
-          usage: {
-            input: usage.input,
-            output: usage.output,
-            cacheRead: usage.cacheRead,
-            cost: { total: usage.costTotal },
-          },
-        },
-      }),
-    ].join("\n"),
-    "utf-8",
-  );
 
   try {
-    return params.run({ storePath, now });
+    await replaceSessionEntry(
+      {
+        agentId: "main",
+        sessionKey: MAIN_SESSION_KEY,
+        storePath,
+      },
+      { sessionId: transcriptId, updatedAt: now },
+    );
+    appendUsageTranscriptMessage({
+      sessionId: transcriptId,
+      sessionKey: MAIN_SESSION_KEY,
+      storePath,
+      usage,
+    });
+    return await params.run({ storePath, now });
   } finally {
+    closeSessionSqliteDatabasesForTest();
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 }
@@ -325,9 +375,40 @@ function childTranscriptEntry(sessionId: string, now: number): SessionEntry {
 }
 
 describe("listSessionsFromStore search", () => {
+  beforeAll(() => {
+    listSessionsFromStore({
+      cfg: createModelDefaultsConfig({ primary: "anthropic/claude-sonnet-4-6" }),
+      store: {
+        "agent:main:warm-runtime": {
+          sessionId: "sess-warm-runtime",
+          updatedAt: Date.now(),
+        } as SessionEntry,
+      },
+      storePath: "/tmp/openclaw-session-search-warm.json",
+      opts: { search: "anthropic" },
+    });
+  });
+
+  beforeAll(() => {
+    listSessionsFromStore({
+      cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+      storePath: "/tmp/sessions.json",
+      store: {
+        "agent:main:main": {
+          sessionId: "sess-main",
+          updatedAt: 1,
+          modelProvider: "openai",
+          model: "gpt-5.4",
+        },
+      },
+      opts: { search: "openai" },
+    });
+  });
+
   afterEach(() => {
     resetSubagentRegistryForTests();
     resetAgentRunContextForTest();
+    closeSessionSqliteDatabasesForTest();
   });
 
   const baseCfg = {
@@ -444,14 +525,14 @@ describe("listSessionsFromStore search", () => {
     ] as const;
 
     for (const testCase of cases) {
-      const result = listSearchSessions({
+      const entries = filterAndSortSessionEntries({
         cfg,
         store,
         opts: { search: testCase.search },
+        now,
       });
 
-      expect(result.sessions.map((session) => session.key)).toEqual([testCase.expectedKey]);
-      expect(result.totalCount).toBe(1);
+      expect(entries.map(([key]) => key)).toEqual([testCase.expectedKey]);
     }
   });
 
@@ -523,14 +604,10 @@ describe("listSessionsFromStore search", () => {
       expectedProvider: "vercel-ai-gateway",
     },
   ])("$name", ({ cfg, runtimeModel, expectedProvider }) => {
-    const result = listSearchSessions({
-      cfg,
-      store: createLegacyRuntimeStore(runtimeModel),
-      opts: {},
-    });
+    const row = buildLegacyRuntimeRow(cfg, runtimeModel);
 
-    expect(result.sessions[0]?.modelProvider).toBe(expectedProvider);
-    expect(result.sessions[0]?.model).toBe(runtimeModel);
+    expect(row.modelProvider).toBe(expectedProvider);
+    expect(row.model).toBe(runtimeModel);
   });
 
   test("exposes unknown totals when freshness is stale or missing", () => {
@@ -593,8 +670,8 @@ describe("listSessionsFromStore search", () => {
     expect(result.sessions[0]?.estimatedCostUsd).toBeCloseTo(TRANSCRIPT_COST_USD, 8);
   });
 
-  test("prefers persisted estimated session cost from the store", () => {
-    withAnthropicTranscriptFixture({
+  test("prefers persisted estimated session cost from the store", async () => {
+    await withAnthropicTranscriptFixture({
       prefix: "openclaw-session-utils-store-cost-",
       run: ({ storePath, now }) => {
         const result = listMainSession({
@@ -624,8 +701,8 @@ describe("listSessionsFromStore search", () => {
     expect(result.sessions[0]?.estimatedCostUsd).toBe(0);
   });
 
-  test("falls back to transcript usage for totalTokens and zero estimatedCostUsd", () => {
-    withFreeOpenAiTranscriptFixture({
+  test("falls back to transcript usage for totalTokens and zero estimatedCostUsd", async () => {
+    await withFreeOpenAiTranscriptFixture({
       prefix: "openclaw-session-utils-zero-cost-",
       run: ({ storePath, now }) => {
         const result = listMainSession({
@@ -644,8 +721,8 @@ describe("listSessionsFromStore search", () => {
     });
   });
 
-  test("falls back to transcript usage for totalTokens and estimatedCostUsd, and derives contextTokens from the resolved model", () => {
-    withAnthropicTranscriptFixture({
+  test("falls back to transcript usage for totalTokens and estimatedCostUsd, and derives contextTokens from the resolved model", async () => {
+    await withAnthropicTranscriptFixture({
       prefix: "openclaw-session-utils-",
       run: ({ storePath, now }) => {
         const result = listMainSession({
@@ -662,10 +739,26 @@ describe("listSessionsFromStore search", () => {
     });
   });
 
-  test("chat history session metadata keeps model-derived contextTokens without transcript usage", () => {
-    withAnthropicTranscriptFixture({
+  test("chat history session metadata keeps model context and projects a catalog-pinned harness", async () => {
+    await withAnthropicTranscriptFixture({
       prefix: "openclaw-session-info-context-",
       run: ({ storePath, now }) => {
+        const entry: SessionEntry = {
+          sessionId: MAIN_SESSION_ID,
+          updatedAt: now,
+          modelProvider: "local-test",
+          model: "test-model",
+          agentHarnessId: "codex",
+          modelSelectionLocked: true,
+          pluginExtensions: {
+            codex: {
+              supervision: {
+                sourceThreadId: "019f-codex-thread",
+                modelLocked: true,
+              },
+            },
+          },
+        };
         const row = buildGatewaySessionInfo({
           cfg: {
             models: {
@@ -678,26 +771,22 @@ describe("listSessionsFromStore search", () => {
           } as unknown as OpenClawConfig,
           storePath,
           key: MAIN_SESSION_KEY,
-          store: {
-            [MAIN_SESSION_KEY]: {
-              sessionId: MAIN_SESSION_ID,
-              updatedAt: now,
-              modelProvider: "local-test",
-              model: "test-model",
-            } as SessionEntry,
-          },
+          entry,
+          store: { [MAIN_SESSION_KEY]: entry },
         });
 
         expect(row.totalTokens).toBeUndefined();
         expect(row.totalTokensFresh).toBe(false);
         expect(row.estimatedCostUsd).toBeUndefined();
         expect(row.contextTokens).toBe(123_456);
+        expect(row.modelSelectionLocked).toBe(true);
+        expect(row.agentRuntime).toEqual({ id: "codex", source: "session" });
       },
     });
   });
 
-  test("uses subagent run model immediately for child sessions while transcript usage fills live totals", () => {
-    withAnthropicTranscriptFixture({
+  test("uses subagent run model immediately for child sessions while transcript usage fills live totals", async () => {
+    await withAnthropicTranscriptFixture({
       prefix: "openclaw-session-utils-subagent-",
       transcriptId: "sess-child",
       run: ({ storePath, now }) => {
@@ -726,8 +815,8 @@ describe("listSessionsFromStore search", () => {
     });
   });
 
-  test("keeps a running subagent model when transcript fallback still reflects an older run", () => {
-    withAnthropicTranscriptFixture({
+  test("keeps a running subagent model when transcript fallback still reflects an older run", async () => {
+    await withAnthropicTranscriptFixture({
       prefix: "openclaw-session-utils-subagent-stale-model-",
       transcriptId: "sess-child-stale",
       run: ({ storePath, now }) => {
@@ -756,8 +845,8 @@ describe("listSessionsFromStore search", () => {
     });
   });
 
-  test("keeps the selected override model when runtime identity was intentionally cleared", () => {
-    withAnthropicTranscriptFixture({
+  test("keeps the selected override model when runtime identity was intentionally cleared", async () => {
+    await withAnthropicTranscriptFixture({
       prefix: "openclaw-session-utils-cleared-runtime-model-",
       transcriptId: "sess-override",
       run: ({ storePath, now }) => {
@@ -776,8 +865,8 @@ describe("listSessionsFromStore search", () => {
     });
   });
 
-  test("does not replace the current runtime model when transcript fallback is only for missing pricing", () => {
-    withAnthropicTranscriptFixture({
+  test("does not replace the current runtime model when transcript fallback is only for missing pricing", async () => {
+    await withAnthropicTranscriptFixture({
       prefix: "openclaw-session-utils-pricing-",
       transcriptId: "sess-pricing",
       run: ({ storePath, now }) => {

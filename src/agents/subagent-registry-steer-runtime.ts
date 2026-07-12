@@ -1,3 +1,4 @@
+import type { AgentRunSessionTarget } from "./run-session-target.js";
 /**
  * Late-bound steer hooks for the subagent registry.
  *
@@ -11,14 +12,21 @@ type ReplaceSubagentRunAfterSteerParams = {
   fallback?: SubagentRunRecord;
   runTimeoutSeconds?: number;
   preserveFrozenResultFallback?: boolean;
-  transcriptFile?: string;
+  transcriptTarget?: AgentRunSessionTarget;
+  /**
+   * Optional task override for the replacement run.  Callers that dispatched a
+   * new message (steer, descendant wake, orphan resume) should pass the text
+   * actually sent so that restart-redispatch reconstructs the correct prompt
+   * after a gateway crash.  When omitted, the previous run's `task` is carried
+   * over untouched.
+   */
+  task?: string;
 };
 
 type ReplaceSubagentRunAfterSteerFn = (params: ReplaceSubagentRunAfterSteerParams) => boolean;
 
 type FinalizeInterruptedSubagentRunParams = {
-  runId?: string;
-  childSessionKey?: string;
+  runId: string;
   error: string;
   endedAt?: number;
 };
@@ -44,7 +52,7 @@ export function replaceSubagentRunAfterSteer(params: ReplaceSubagentRunAfterStee
   return replaceSubagentRunAfterSteerImpl?.(params) ?? false;
 }
 
-/** Finalizes interrupted runs through the installed registry hook. */
+/** Finalizes one interrupted run generation through the installed registry hook. */
 export async function finalizeInterruptedSubagentRun(params: FinalizeInterruptedSubagentRunParams) {
   return (await finalizeInterruptedSubagentRunImpl?.(params)) ?? 0;
 }

@@ -1,3 +1,4 @@
+import type { Static } from "typebox";
 // Gateway Protocol schema module defines protocol validation shapes.
 import { Type } from "typebox";
 import { NonEmptyString } from "./primitives.js";
@@ -11,7 +12,7 @@ import { NonEmptyString } from "./primitives.js";
  */
 const MAX_PLUGIN_APPROVAL_TIMEOUT_MS = 600_000;
 const PLUGIN_APPROVAL_TITLE_MAX_LENGTH = 80;
-const PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH = 256;
+const PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH = 512;
 
 /** Approval request raised by a plugin before a sensitive tool action proceeds. */
 export const PluginApprovalRequestParamsSchema = Type.Object(
@@ -30,6 +31,12 @@ export const PluginApprovalRequestParamsSchema = Type.Object(
     ),
     agentId: Type.Optional(Type.String()),
     sessionKey: Type.Optional(Type.String()),
+    approvalReviewerDeviceIds: Type.Optional(
+      Type.Array(NonEmptyString, {
+        description:
+          "Trusted approval-runtime metadata naming operator devices that may review this approval; ordinary Gateway clients may send the field, but the Gateway only binds it for internal approval-runtime requests.",
+      }),
+    ),
     turnSourceChannel: Type.Optional(Type.String()),
     turnSourceTo: Type.Optional(Type.String()),
     turnSourceAccountId: Type.Optional(Type.String()),
@@ -48,3 +55,8 @@ export const PluginApprovalResolveParamsSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+// Owner-local wire types derived directly from local schema consts so the
+// public plugin-sdk declaration graph never pulls in the ProtocolSchemas registry.
+export type PluginApprovalRequestParams = Static<typeof PluginApprovalRequestParamsSchema>;
+export type PluginApprovalResolveParams = Static<typeof PluginApprovalResolveParamsSchema>;

@@ -116,17 +116,29 @@ describe("enqueueKeyedTask", () => {
 });
 
 describe("KeyedAsyncQueue", () => {
-  it("exposes tail map for observability", async () => {
+  it("serializes tasks while preserving their return values", async () => {
     const queue = new KeyedAsyncQueue();
     const gate = createDeferred();
-    const run = queue.enqueue("actor", async () => {
+    const order: string[] = [];
+    const first = queue.enqueue("actor", async () => {
+      order.push("first:start");
       await gate.promise;
       return 1;
     });
-    expect(queue.getTailMapForTesting().has("actor")).toBe(true);
-    gate.resolve();
-    await run;
+    const second = queue.enqueue("actor", async () => {
+      order.push("second:start");
+      return 2;
+    });
     await Promise.resolve();
-    expect(queue.getTailMapForTesting().has("actor")).toBe(false);
+    await Promise.resolve();
+    expect(order).toEqual(["first:start"]);
+    gate.resolve();
+    await expect(Promise.all([first, second])).resolves.toEqual([1, 2]);
+    expect(order).toEqual(["first:start", "second:start"]);
+  });
+
+  it("retains the deprecated tail-map accessor for Plugin SDK compatibility", () => {
+    const queue = new KeyedAsyncQueue();
+    expect(queue.getTailMapForTesting()).toBeInstanceOf(Map);
   });
 });

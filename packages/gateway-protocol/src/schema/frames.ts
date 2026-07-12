@@ -1,7 +1,13 @@
 // Gateway Protocol schema module defines protocol validation shapes.
+import type { Static } from "typebox";
 import { Type } from "typebox";
 import { GatewayClientIdSchema, GatewayClientModeSchema, NonEmptyString } from "./primitives.js";
 import { SnapshotSchema, StateVersionSchema } from "./snapshot.js";
+
+export const GATEWAY_SERVER_CAPS = {
+  CHAT_SEND_ROUTING_CONTRACT: "chat-send-routing-contract",
+  CRESTODIAN_SETUP_MODEL_REF: "crestodian-setup-model-ref",
+} as const;
 
 /**
  * Top-level gateway frame schemas.
@@ -97,10 +103,29 @@ export const HelloOkSchema = Type.Object(
       {
         methods: Type.Array(NonEmptyString),
         events: Type.Array(NonEmptyString),
+        capabilities: Type.Optional(Type.Array(NonEmptyString)),
       },
       { additionalProperties: false },
     ),
     snapshot: SnapshotSchema,
+    // Additive: plugin-declared Control UI tabs (surface "tab" descriptors).
+    controlUiTabs: Type.Optional(
+      Type.Array(
+        Type.Object(
+          {
+            pluginId: NonEmptyString,
+            id: NonEmptyString,
+            label: NonEmptyString,
+            description: Type.Optional(Type.String()),
+            icon: Type.Optional(Type.String()),
+            path: Type.Optional(Type.String()),
+            group: Type.Optional(Type.Union([Type.Literal("control"), Type.Literal("agent")])),
+            order: Type.Optional(Type.Number()),
+          },
+          { additionalProperties: false },
+        ),
+      ),
+    ),
     pluginSurfaceUrls: Type.Optional(Type.Record(NonEmptyString, NonEmptyString)),
     auth: Type.Object(
       {
@@ -190,3 +215,18 @@ export const GatewayFrameSchema = Type.Union(
   [RequestFrameSchema, ResponseFrameSchema, EventFrameSchema],
   { discriminator: "type" },
 );
+
+// Frame types are owner-local because they cross the public client/plugin SDK.
+// Keeping them off the aggregate registry avoids retaining every RPC schema.
+export type ConnectParams = Static<typeof ConnectParamsSchema>;
+export type HelloOk = Static<typeof HelloOkSchema>;
+export type ErrorShape = Static<typeof ErrorShapeSchema>;
+export type RequestFrame = Static<typeof RequestFrameSchema>;
+export type ResponseFrame = Static<typeof ResponseFrameSchema>;
+export type EventFrame = Static<typeof EventFrameSchema>;
+export type GatewayFrame = Static<typeof GatewayFrameSchema>;
+
+// Wire types derive directly from local schema consts so public d.ts graphs never
+// pull in the ProtocolSchemas registry.
+export type TickEvent = Static<typeof TickEventSchema>;
+export type ShutdownEvent = Static<typeof ShutdownEventSchema>;

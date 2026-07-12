@@ -1,9 +1,6 @@
 // Codex tests cover run attemptynamic tools plugin behavior.
 import path from "node:path";
-import {
-  onAgentEvent,
-  type AgentEventPayload,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { onAgentEvent, type AgentEventPayload } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   emitTrustedDiagnosticEvent,
   onInternalDiagnosticEvent,
@@ -56,6 +53,49 @@ function activeDiagnosticToolKeys(events: DiagnosticEventPayload[]): Set<string>
 setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt dynamic tools", () => {
+  it.each(["cancelled", "timed_out"] as const)(
+    "preserves the %s terminal reason in trusted tool diagnostics",
+    async (terminalReason) => {
+      const diagnosticEvents: DiagnosticEventPayload[] = [];
+      const unsubscribeDiagnostics = onInternalDiagnosticEvent((event) =>
+        diagnosticEvents.push(event),
+      );
+      const call = {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: `call-${terminalReason}`,
+        namespace: null,
+        tool: "lookup",
+        arguments: {},
+      } satisfies CodexDynamicToolCallParams;
+      try {
+        emitDynamicToolStartedDiagnostic({
+          call,
+          agentId: "agent-terminal-reason",
+          runId: "run-terminal-reason",
+        });
+        emitDynamicToolTerminalDiagnostic({
+          call,
+          agentId: "agent-terminal-reason",
+          runId: "run-terminal-reason",
+          durationMs: 1,
+          response: {
+            success: false,
+            diagnosticTerminalReason: terminalReason,
+            contentItems: [{ type: "inputText", text: "not persisted by audit" }],
+          },
+        });
+        await flushDiagnosticEvents();
+      } finally {
+        unsubscribeDiagnostics();
+      }
+
+      expect(diagnosticEvents.find((event) => event.type === "tool.execution.error")).toMatchObject(
+        { agentId: "agent-terminal-reason", terminalReason },
+      );
+    },
+  );
+
   it("passes the live run session key to Codex dynamic tools when sandbox policy uses another key", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);

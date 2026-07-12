@@ -2,12 +2,13 @@
  * File chooser, dialog, and download helpers for Playwright-backed browser
  * tools.
  */
-import crypto from "node:crypto";
 import path from "node:path";
 import type { Page } from "playwright-core";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-import { writeExternalFileWithinOutputRoot } from "./output-files.js";
+import { DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS } from "./constants.js";
+import type { BrowserDownloadResult } from "./download-types.js";
 import { resolveStrictExistingUploadPaths } from "./paths.js";
+import { createDownloadCaptureForPage } from "./pw-download-capture.js";
 import {
   armObservedDialogResponseOnPage,
   ensurePageState,
@@ -23,114 +24,30 @@ import {
   requireRef,
   toAIFriendlyError,
 } from "./pw-tools-core.shared.js";
-import { sanitizeUntrustedFileName } from "./safe-filename.js";
 
-function buildTempDownloadPath(fileName: string): string {
-  const id = crypto.randomUUID();
-  const safeName = sanitizeUntrustedFileName(fileName, "download.bin");
-  return path.join(resolvePreferredOpenClawTmpDir(), "downloads", `${id}-${safeName}`);
-}
-
-function createPageDownloadWaiter(page: Page, timeoutMs: number) {
-  const state = ensurePageState(page);
-  // Depth tracks active download waiters so page teardown can distinguish an
-  // expected download transition from an unobserved lost event.
-  state.downloadWaiterDepth += 1;
-  let done = false;
-  let timer: NodeJS.Timeout | undefined;
-  let handler: ((download: unknown) => void) | undefined;
-  let depthReleased = false;
-
-  const cleanup = () => {
-    if (!depthReleased) {
-      depthReleased = true;
-      state.downloadWaiterDepth = Math.max(0, state.downloadWaiterDepth - 1);
-    }
-    if (timer) {
-      clearTimeout(timer);
-    }
-    timer = undefined;
-    if (handler) {
-      page.off("download", handler as never);
-      handler = undefined;
-    }
-  };
-
-  const promise = new Promise<unknown>((resolve, reject) => {
-    handler = (download: unknown) => {
-      if (done) {
-        return;
-      }
-      done = true;
-      cleanup();
-      resolve(download);
-    };
-
-    page.on("download", handler as never);
-    timer = setTimeout(() => {
-      if (done) {
-        return;
-      }
-      done = true;
-      cleanup();
-      reject(new Error("Timeout waiting for download"));
-    }, timeoutMs);
-  });
-
-  return {
-    promise,
-    cancel: () => {
-      if (done) {
-        return;
-      }
-      done = true;
-      cleanup();
-    },
-  };
-}
-
-type DownloadPayload = {
-  url?: () => string;
-  suggestedFilename?: () => string;
-  saveAs?: (outPath: string) => Promise<void>;
-};
-
-async function saveDownloadPayload(download: DownloadPayload, outPath: string, rootDir?: string) {
-  const suggested = download.suggestedFilename?.() || "download.bin";
-  const requestedPath = outPath?.trim();
-  const resolvedOutPath = path.resolve(requestedPath || buildTempDownloadPath(suggested));
-  const finalPath = await writeExternalFileWithinOutputRoot({
-    rootDir,
-    path: resolvedOutPath,
-    write: async (tempPath) => {
-      await download.saveAs?.(tempPath);
-    },
-  });
-
-  return {
-    url: download.url?.() || "",
-    suggestedFilename: suggested,
-    path: finalPath,
-  };
-}
-
-async function awaitDownloadPayload(params: {
-  waiter: ReturnType<typeof createPageDownloadWaiter>;
+function createExplicitDownloadCapture(params: {
+  page: Page;
   state: ReturnType<typeof ensurePageState>;
-  armId: number;
+  timeoutMs: number;
   outPath?: string;
   rootDir?: string;
 }) {
-  try {
-    const download = (await params.waiter.promise) as DownloadPayload;
-    if (params.state.armIdDownload !== params.armId) {
-      throw new Error("Download was superseded by another waiter");
-    }
-    return await saveDownloadPayload(download, params.outPath ?? "", params.rootDir);
-  } catch (err) {
-    params.waiter.cancel();
-    throw err;
-  }
+  params.state.armIdDownload = bumpDownloadArmId();
+  const armId = params.state.armIdDownload;
+  return createDownloadCaptureForPage(params.page, params.state, params.timeoutMs, {
+    mode: "explicit",
+    outputPath: params.outPath,
+    outputRoot: params.rootDir,
+    beforeSave: () => {
+      if (params.state.armIdDownload !== armId) {
+        throw new Error("Download was superseded by another waiter");
+      }
+    },
+  });
+}
+
+function resolveImplicitDownloadRoot(): string {
+  return path.join(resolvePreferredOpenClawTmpDir(), "downloads");
 }
 
 /** Arms the next page file chooser and fills it with strict existing paths. */
@@ -142,7 +59,7 @@ export async function armFileUploadViaPlaywright(opts: {
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   const state = ensurePageState(page);
-  const timeout = normalizeTimeoutMs(opts.timeoutMs, 120_000);
+  const timeout = normalizeTimeoutMs(opts.timeoutMs, DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS);
 
   state.armIdUpload = bumpUploadArmId();
   const armId = state.armIdUpload;
@@ -176,20 +93,6 @@ export async function armFileUploadViaPlaywright(opts: {
         return;
       }
       await fileChooser.setFiles(uploadPathsResult.paths);
-      try {
-        const input =
-          typeof fileChooser.element === "function"
-            ? await Promise.resolve(fileChooser.element())
-            : null;
-        if (input) {
-          await input.evaluate((el) => {
-            el.dispatchEvent(new Event("input", { bubbles: true }));
-            el.dispatchEvent(new Event("change", { bubbles: true }));
-          });
-        }
-      } catch {
-        // Best-effort for sites that don't react to setFiles alone.
-      }
     })
     .catch(() => {
       // Ignore timeouts; the chooser may never appear.
@@ -206,7 +109,7 @@ export async function armDialogViaPlaywright(opts: {
   timeoutMs?: number;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
-  const timeout = normalizeTimeoutMs(opts.timeoutMs, 120_000);
+  const timeout = normalizeTimeoutMs(opts.timeoutMs, DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS);
   try {
     await respondToObservedDialogOnPage({
       page,
@@ -237,26 +140,24 @@ export async function waitForDownloadViaPlaywright(opts: {
   path?: string;
   rootDir?: string;
   timeoutMs?: number;
-}): Promise<{
-  url: string;
-  suggestedFilename: string;
-  path: string;
-}> {
+}): Promise<BrowserDownloadResult> {
   const page = await getPageForTargetId(opts);
   const state = ensurePageState(page);
   const timeout = normalizeTimeoutMs(opts.timeoutMs, 120_000);
 
-  state.armIdDownload = bumpDownloadArmId();
-  const armId = state.armIdDownload;
-
-  const waiter = createPageDownloadWaiter(page, timeout);
-  return await awaitDownloadPayload({
-    waiter,
+  const capture = createExplicitDownloadCapture({
+    page,
     state,
-    armId,
+    timeoutMs: timeout,
     outPath: opts.path,
-    rootDir: opts.rootDir,
+    rootDir: opts.path?.trim() ? opts.rootDir : (opts.rootDir ?? resolveImplicitDownloadRoot()),
   });
+  try {
+    return await capture.promise;
+  } catch (err) {
+    capture.cancel();
+    throw err;
+  }
 }
 
 /** Clicks an element ref and saves the download triggered by that click. */
@@ -267,11 +168,7 @@ export async function downloadViaPlaywright(opts: {
   path: string;
   rootDir?: string;
   timeoutMs?: number;
-}): Promise<{
-  url: string;
-  suggestedFilename: string;
-  path: string;
-}> {
+}): Promise<BrowserDownloadResult> {
   const page = await getPageForTargetId(opts);
   const state = ensurePageState(page);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
@@ -283,10 +180,13 @@ export async function downloadViaPlaywright(opts: {
     throw new Error("path is required");
   }
 
-  state.armIdDownload = bumpDownloadArmId();
-  const armId = state.armIdDownload;
-
-  const waiter = createPageDownloadWaiter(page, timeout);
+  const capture = createExplicitDownloadCapture({
+    page,
+    state,
+    timeoutMs: timeout,
+    outPath,
+    rootDir: opts.rootDir,
+  });
   try {
     const locator = refLocator(page, ref);
     try {
@@ -294,15 +194,9 @@ export async function downloadViaPlaywright(opts: {
     } catch (err) {
       throw toAIFriendlyError(err, ref);
     }
-    return await awaitDownloadPayload({
-      waiter,
-      state,
-      armId,
-      outPath,
-      rootDir: opts.rootDir,
-    });
+    return await capture.promise;
   } catch (err) {
-    waiter.cancel();
+    capture.cancel();
     throw err;
   }
 }

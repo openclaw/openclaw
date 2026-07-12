@@ -1,10 +1,10 @@
-// Provider tool helpers expose shared tool-call payload contracts for provider plugins.
-import type { TSchema } from "typebox";
 import {
   cleanSchemaForGemini,
   GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS,
-} from "../agents/schema/clean-for-gemini.js";
-import { stripUnsupportedSchemaKeywords } from "../shared/schema-keyword-strip.js";
+  stripUnsupportedSchemaKeywords,
+} from "@openclaw/ai/internal/openai";
+// Provider tool helpers expose shared tool-call payload contracts for provider plugins.
+import type { TSchema } from "typebox";
 import type {
   AnyAgentTool,
   ProviderNormalizeToolSchemasContext,
