@@ -135,16 +135,28 @@ function captureAuthStoreMutationLineage(
   authStores: PreparedSecretsRuntimeSnapshot["authStores"],
 ): typeof activeSnapshotLineageAuthMutations {
   const storesByAgentDir = new Map<string, AuthProfileStore>();
+  const profileOwnersByAgentDir = new Map<
+    string,
+    Map<string, "external" | "inherited" | "local">
+  >();
   for (const entry of authStores) {
     const existing = storesByAgentDir.get(entry.agentDir);
+    const profileOwners = profileOwnersByAgentDir.get(entry.agentDir) ?? new Map();
     const localProfileIds = new Set(existing?.runtimeLocalProfileIds ?? []);
     for (const profileId of Object.keys(entry.store.profiles)) {
-      if (entry.store.runtimeLocalProfileIds?.includes(profileId)) {
+      const owner = entry.store.runtimeExternalProfileIds?.includes(profileId)
+        ? "external"
+        : entry.store.runtimeLocalProfileIds?.includes(profileId)
+          ? "local"
+          : "inherited";
+      profileOwners.set(profileId, owner);
+      if (owner === "local") {
         localProfileIds.add(profileId);
       } else {
         localProfileIds.delete(profileId);
       }
     }
+    profileOwnersByAgentDir.set(entry.agentDir, profileOwners);
     storesByAgentDir.set(
       entry.agentDir,
       existing
@@ -169,11 +181,7 @@ function captureAuthStoreMutationLineage(
         },
         profiles: Object.fromEntries(
           Object.keys(store.profiles).map((profileId) => {
-            const owner = store.runtimeExternalProfileIds?.includes(profileId)
-              ? "external"
-              : store.runtimeLocalProfileIds?.includes(profileId)
-                ? "local"
-                : "inherited";
+            const owner = profileOwnersByAgentDir.get(agentDir)?.get(profileId) ?? "inherited";
             return [
               profileId,
               {
@@ -433,6 +441,7 @@ function mergeRollbackAuthStoreCredentials(
     ...Object.keys(current),
   ]);
   for (const agentDir of agentDirs) {
+    let invalidateStore = false;
     const baselineStore = baseline[agentDir];
     const candidateStore = candidate[agentDir];
     const currentStore = current[agentDir];
@@ -485,17 +494,20 @@ function mergeRollbackAuthStoreCredentials(
         mutationLineage,
       });
       const profileMutated = profileMutationStatus === "mutated";
-      let credential =
-        profileMutationStatus === "unknown"
-          ? isDeepStrictEqual(baselineCredential, candidateCredential) ||
-            !isDeepStrictEqual(currentCredential, candidateCredential)
+      let credential: AuthProfileCredential | undefined;
+      if (profileMutationStatus === "unknown") {
+        if (isDeepStrictEqual(baselineCredential, candidateCredential)) {
+          credential = currentCredential;
+        } else {
+          invalidateStore = true;
+        }
+      } else {
+        credential = isDeepStrictEqual(currentCredential, candidateCredential)
+          ? profileMutated
             ? currentCredential
-            : undefined
-          : isDeepStrictEqual(currentCredential, candidateCredential)
-            ? profileMutated
-              ? currentCredential
-              : baselineCredential
-            : currentCredential;
+            : baselineCredential
+          : currentCredential;
+      }
       const baselineRef = credentialSecretRef(baselineCredential);
       const candidateRef = credentialSecretRef(candidateCredential);
       const currentRef = credentialSecretRef(currentCredential);
@@ -524,6 +536,12 @@ function mergeRollbackAuthStoreCredentials(
       if (credential) {
         profiles[profileId] = structuredClone(credential);
       }
+    }
+    if (invalidateStore) {
+      // Exact persisted ownership was evicted. Remove the runtime store so the
+      // next auth load reads durable truth instead of publishing a partial clone.
+      delete next[agentDir];
+      continue;
     }
     if (!baselineStore && Object.keys(profiles).length === 0) {
       delete next[agentDir];
