@@ -4,8 +4,9 @@ import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CostDailyEntry, UsageAggregates, UsageSessionEntry, UsageTotals } from "./types.ts";
 import {
-  renderDailyChartCompact,
   renderCostWindowComparison,
+  renderDailyChartCompact,
+  renderFilterChips,
   renderSessionsCard,
   renderUsageInsights,
 } from "./view-overview.ts";
@@ -448,5 +449,30 @@ describe("renderSessionsCard", () => {
       el.textContent?.trim(),
     );
     expect(titles.slice(0, 2)).toEqual(["Day winner", "All time winner"]);
+  });
+});
+
+describe("renderFilterChips", () => {
+  it("does not split UTF-16 surrogate pairs in the single unknown session chip", () => {
+    const container = document.createElement("div");
+    render(
+      renderFilterChips(
+        [],
+        [],
+        ["agent:main:telegram:direct:12345😀67890"],
+        [],
+        () => {},
+        () => {},
+        () => {},
+        () => {},
+      ),
+      container,
+    );
+    const label = container.querySelector(".filter-chip-label")?.textContent ?? "";
+    expect(() => encodeURIComponent(label)).not.toThrow();
+    expect(label).toContain("…");
+    expect(label).not.toMatch(
+      /[\uD800-\uDFFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/,
+    );
   });
 });
