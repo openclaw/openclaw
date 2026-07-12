@@ -36,6 +36,8 @@ const GATEWAY_TEST_ENV_KEYS = [
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_GATEWAY_TOKEN",
+  "OPENCLAW_TEST_GATEWAY_OVERRIDE_TOKEN",
+  "OPENCLAW_TEST_RUNTIME_OVERRIDE_TOKEN",
   "OPENCLAW_SKIP_CHANNELS",
   "OPENCLAW_SKIP_GMAIL_WATCHER",
   "OPENCLAW_SKIP_CRON",
@@ -184,7 +186,7 @@ describe("gateway e2e", () => {
     ({ createConfigIO } = await import("../config/config.js"));
   });
 
-  it.each(["generated", "explicit-override", "runtime-overrides"] as const)(
+  it.each(["generated", "explicit-override", "secret-ref-override", "runtime-overrides"] as const)(
     "preserves %s auth across a safe direct gateway reload",
     async (authSource) => {
       const { envSnapshot, tempHome } = await setupGatewayTempHome({
@@ -195,7 +197,21 @@ describe("gateway e2e", () => {
       const overrideToken = nextGatewayId("direct-override-token");
       const initialConfig: OpenClawConfig = {
         ...(authSource !== "generated"
-          ? { gateway: { auth: { mode: "token", token: fileToken } } }
+          ? {
+              gateway: {
+                auth: {
+                  mode: "token",
+                  token:
+                    authSource === "secret-ref-override"
+                      ? {
+                          source: "env" as const,
+                          provider: "default",
+                          id: "OPENCLAW_TEST_MISSING_DISK_TOKEN",
+                        }
+                      : fileToken,
+                },
+              },
+            }
           : {}),
         ...(authSource === "runtime-overrides"
           ? { channels: { whatsapp: { dmPolicy: "pairing" as const } } }
@@ -206,8 +222,18 @@ describe("gateway e2e", () => {
       setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
       const configIO = createConfigIO({ configPath });
       await configIO.writeConfigFile(initialConfig);
+      if (authSource === "secret-ref-override") {
+        setTestEnvValue("OPENCLAW_TEST_GATEWAY_OVERRIDE_TOKEN", overrideToken);
+      }
       if (authSource === "runtime-overrides") {
-        expect(setConfigOverride("gateway.auth.token", overrideToken).ok).toBe(true);
+        setTestEnvValue("OPENCLAW_TEST_RUNTIME_OVERRIDE_TOKEN", overrideToken);
+        expect(
+          setConfigOverride("gateway.auth.token", {
+            source: "env",
+            provider: "default",
+            id: "OPENCLAW_TEST_RUNTIME_OVERRIDE_TOKEN",
+          }).ok,
+        ).toBe(true);
         expect(
           setConfigOverride("channels.whatsapp", { dmPolicy: "open", allowFrom: ["*"] }).ok,
         ).toBe(true);
@@ -219,7 +245,16 @@ describe("gateway e2e", () => {
               token: overrideToken,
               rateLimit: { maxAttempts: 7 },
             }
-          : undefined;
+          : authSource === "secret-ref-override"
+            ? {
+                mode: "token",
+                token: {
+                  source: "env",
+                  provider: "default",
+                  id: "OPENCLAW_TEST_GATEWAY_OVERRIDE_TOKEN",
+                },
+              }
+            : undefined;
       const callerTailscaleOverride: GatewayTailscaleConfig | undefined =
         authSource === "explicit-override"
           ? { mode: "off" as const, serviceName: "svc:startup" }
@@ -268,6 +303,17 @@ describe("gateway e2e", () => {
         if (authSource === "runtime-overrides") {
           expect(getRuntimeConfig().channels?.whatsapp?.dmPolicy).toBe("open");
           expect(getRuntimeConfig().channels?.whatsapp?.allowFrom).toEqual(["*"]);
+
+          resetConfigOverrides();
+          await configIO.writeConfigFile({
+            ...initialConfig,
+            logging: { level: "warn" },
+          });
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 50);
+          });
+          expect(getRuntimeConfig().gateway?.auth?.token).toBe(expectedToken);
+          expect(getRuntimeConfig().logging?.level).toBe("debug");
 
           const acceptedPort = getRuntimeConfig().gateway?.port;
           await configIO.writeConfigFile({

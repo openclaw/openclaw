@@ -391,7 +391,12 @@ type ManagedGatewayConfigReloaderParams = Omit<
   prepareConfigCandidate?: (params: {
     runtimeConfig: OpenClawConfig;
     sourceConfig: OpenClawConfig;
-  }) => { runtimeConfig: OpenClawConfig; compareConfig: OpenClawConfig };
+  }) => {
+    runtimeConfig: OpenClawConfig;
+    compareConfig: OpenClawConfig;
+    reapplyRuntimeOverlays?: (config: OpenClawConfig) => OpenClawConfig;
+    reapplyCompareOverlays?: (config: OpenClawConfig) => OpenClawConfig;
+  };
   /** Reapplies fixed process-lifetime overlays before secrets preparation. */
   applyRuntimeConfigOverrides?: (config: OpenClawConfig) => OpenClawConfig;
   resolveSharedGatewaySessionGenerationForConfig: (config: OpenClawConfig) => string | undefined;
@@ -1460,9 +1465,11 @@ export function startManagedGatewayConfigReloader(
   const prepareRuntimeCandidate = (
     runtimeConfig: OpenClawConfig,
     sourceConfig: OpenClawConfig,
+    ownership?: GatewayConfigReloadTransactionOwnership,
   ): OpenClawConfig => {
     const canonicalConfig = restoreCanonicalSecretRefs(runtimeConfig, sourceConfig);
-    return params.applyRuntimeConfigOverrides?.(canonicalConfig) ?? canonicalConfig;
+    const candidateConfig = ownership?.reapplyRuntimeOverlays(canonicalConfig) ?? canonicalConfig;
+    return params.applyRuntimeConfigOverrides?.(candidateConfig) ?? candidateConfig;
   };
   const applyRuntimeConfigOverrides = (config: OpenClawConfig): OpenClawConfig =>
     params.applyRuntimeConfigOverrides?.(config) ?? config;
@@ -1559,7 +1566,7 @@ export function startManagedGatewayConfigReloader(
         );
         const previousRequired = params.sharedGatewaySessionGenerationState.required;
         const prepared = await params.activateRuntimeSecrets(
-          prepareRuntimeCandidate(nextConfig, sourceConfig),
+          prepareRuntimeCandidate(nextConfig, sourceConfig, transactionOwnership),
           {
             reason: "restart-check",
             activate: false,
@@ -1606,7 +1613,7 @@ export function startManagedGatewayConfigReloader(
         debtConfig: sourceConfig,
         prepareRuntimeConfig: async () => {
           const prepared = await params.activateRuntimeSecrets(
-            prepareRuntimeCandidate(preparedRuntimeConfig, sourceConfig),
+            prepareRuntimeCandidate(preparedRuntimeConfig, sourceConfig, transactionOwnership),
             {
               reason: "restart-check",
               activate: false,
@@ -1667,8 +1674,36 @@ export function startManagedGatewayConfigReloader(
       assertReloadPlanHasRecoveryOwner(plan, params.restartRecoveryAvailable);
       params.prepareTerminalConfig(plan, applyRuntimeConfigOverrides(nextConfig));
     },
-    onConfigAccepted: async (nextConfig, transactionOwnership, sourceConfig) => {
+    onConfigAccepted: async (nextConfig, transactionOwnership, sourceConfig, acceptance) => {
+      const recordRestartTarget = () =>
+        recordAcceptedRestartTarget({
+          runtimeConfig: prepareRuntimeCandidate(nextConfig, sourceConfig, transactionOwnership),
+          sourceConfig,
+          prepareRuntimeConfig: async () => {
+            const prepared = await params.activateRuntimeSecrets(
+              prepareRuntimeCandidate(nextConfig, sourceConfig, transactionOwnership),
+              {
+                reason: "restart-check",
+                activate: false,
+              },
+            );
+            if (!transactionOwnership.isCurrent()) {
+              throw new GatewayConfigReloadSupersededError();
+            }
+            return prepared.config;
+          },
+        });
       const acceptedRestart = acceptRestartConfig(sourceConfig);
+      if (!acceptance.runtimeApplied) {
+        // acceptRestartConfig leaves returned debt in its paused/conservative owner.
+        // This candidate explicitly skipped runtime application, so a later
+        // runtime-applied acceptance—not this source-only write—may rearm it.
+        recordRestartTarget();
+        params.acceptTerminalConfig({
+          retireRejectedRestart: acceptedRestart.retireRejectedRestart,
+        });
+        return;
+      }
       if (acceptedRestart.debt) {
         await runManagedRestart(
           acceptedRestart.debt.plan,
@@ -1680,23 +1715,7 @@ export function startManagedGatewayConfigReloader(
           },
         );
       }
-      recordAcceptedRestartTarget({
-        runtimeConfig: applyRuntimeConfigOverrides(nextConfig),
-        sourceConfig,
-        prepareRuntimeConfig: async () => {
-          const prepared = await params.activateRuntimeSecrets(
-            prepareRuntimeCandidate(nextConfig, sourceConfig),
-            {
-              reason: "restart-check",
-              activate: false,
-            },
-          );
-          if (!transactionOwnership.isCurrent()) {
-            throw new GatewayConfigReloadSupersededError();
-          }
-          return prepared.config;
-        },
-      });
+      recordRestartTarget();
       params.acceptTerminalConfig({
         retireRejectedRestart: acceptedRestart.retireRejectedRestart,
       });
@@ -1709,7 +1728,7 @@ export function startManagedGatewayConfigReloader(
         }
         const previousSnapshotRevision = getActiveSecretsRuntimeSnapshotRevision();
         const prepared = await params.activateRuntimeSecrets(
-          prepareRuntimeCandidate(nextConfig, sourceConfig),
+          prepareRuntimeCandidate(nextConfig, sourceConfig, transactionOwnership),
           {
             reason: "reload",
             activate: false,
@@ -1756,7 +1775,7 @@ export function startManagedGatewayConfigReloader(
         );
         const previousSharedGatewaySessionGeneration = previousGenerationOwnership.generation;
         const prepared = await params.activateRuntimeSecrets(
-          prepareRuntimeCandidate(nextConfig, sourceConfig),
+          prepareRuntimeCandidate(nextConfig, sourceConfig, transactionOwnership),
           {
             reason: "reload",
             activate: false,
@@ -1783,7 +1802,7 @@ export function startManagedGatewayConfigReloader(
             sourceConfig,
             prepareRestartRuntimeConfig: async () => {
               const restartPrepared = await params.activateRuntimeSecrets(
-                prepareRuntimeCandidate(prepared.config, sourceConfig),
+                prepareRuntimeCandidate(prepared.config, sourceConfig, transactionOwnership),
                 {
                   reason: "restart-check",
                   activate: false,

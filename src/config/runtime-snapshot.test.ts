@@ -6,6 +6,7 @@ import {
   getRuntimeConfigSnapshotMetadata,
   getRuntimeConfigSourceSnapshot,
   getRuntimeConfigSnapshot,
+  preflightManagedRuntimeConfigWrite,
   loadPinnedRuntimeConfig,
   notifyRuntimeConfigWriteListeners,
   registerRuntimeConfigWriteListener,
@@ -345,6 +346,28 @@ describe("runtime snapshot state", () => {
     expect(hasManagedRuntimeConfigWriteOwner("/tmp/a.json")).toBe(false);
     expect(hasManagedRuntimeConfigWriteOwner("/tmp/b.json")).toBe(true);
     releaseB();
+  });
+
+  it("keeps prepared candidates scoped to each managed owner", async () => {
+    const candidateA = { runtimeConfig: { identity: { name: "a" } }, compareConfig: {} };
+    const candidateB = { runtimeConfig: { identity: { name: "b" } }, compareConfig: {} };
+    const releaseA = registerManagedRuntimeConfigWriteOwner(
+      "/tmp/scoped.json",
+      async () => candidateA,
+    );
+    const releaseB = registerManagedRuntimeConfigWriteOwner(
+      "/tmp/scoped.json",
+      async () => candidateB,
+    );
+
+    try {
+      const prepared = await preflightManagedRuntimeConfigWrite("/tmp/scoped.json", {});
+      expect(prepared.get(releaseA.ownerId)).toBe(candidateA);
+      expect(prepared.get(releaseB.ownerId)).toBe(candidateB);
+    } finally {
+      releaseA();
+      releaseB();
+    }
   });
 
   it("defers raw runtime activation to a managed write owner", async () => {

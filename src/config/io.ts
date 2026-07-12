@@ -115,6 +115,7 @@ import {
   loadPinnedRuntimeConfig,
   notifyRuntimeConfigWriteListeners,
   preflightRuntimeSnapshotWrite,
+  preflightManagedRuntimeConfigWrite,
   registerRuntimeConfigWriteListener,
   registerManagedRuntimeConfigWriteOwner,
   resetConfigRuntimeState as resetConfigRuntimeStateState,
@@ -125,6 +126,7 @@ import {
   setRuntimeConfigSnapshotRefreshHandler as setRuntimeConfigSnapshotRefreshHandlerState,
   type ConfigWriteAfterWrite,
   type RuntimeConfigSnapshotRefreshOptions,
+  type RuntimeConfigWritePreparedCandidate,
   type RuntimeConfigWriteNotification,
 } from "./runtime-snapshot.js";
 export { projectConfigOntoRuntimeSourceSnapshot } from "./runtime-source-projection.js";
@@ -2785,12 +2787,33 @@ export function clearConfigCache(): void {
 
 export function registerConfigWriteListener(
   listener: (event: ConfigWriteNotification) => void,
-  options: { ownsRuntimeActivationFor?: string } = {},
+  options: {
+    ownsRuntimeActivationFor?: string;
+    preCommitRuntimePreflight?: (
+      sourceConfig: OpenClawConfig,
+    ) => Promise<RuntimeConfigWritePreparedCandidate>;
+  } = {},
 ): () => void {
-  const unregisterListener = registerRuntimeConfigWriteListener(listener);
   const unregisterOwner = options.ownsRuntimeActivationFor
-    ? registerManagedRuntimeConfigWriteOwner(options.ownsRuntimeActivationFor)
+    ? registerManagedRuntimeConfigWriteOwner(
+        options.ownsRuntimeActivationFor,
+        options.preCommitRuntimePreflight,
+      )
     : undefined;
+  const unregisterListener = registerRuntimeConfigWriteListener((event) => {
+    const {
+      preparedCandidate: _preparedCandidate,
+      preparedCandidatesByOwner: _preparedCandidatesByOwner,
+      ...baseEvent
+    } = event;
+    const preparedCandidate = unregisterOwner
+      ? event.preparedCandidatesByOwner?.get(unregisterOwner.ownerId)
+      : undefined;
+    listener({
+      ...baseEvent,
+      ...(preparedCandidate ? { preparedCandidate } : {}),
+    });
+  });
   return () => {
     unregisterListener();
     unregisterOwner?.();
@@ -2965,7 +2988,9 @@ export async function writeConfigFile(
       }
     : await io.readConfigFileSnapshotWithPluginMetadata();
   const baseSnapshot = baseSnapshotRead.snapshot;
+  const deferRuntimeActivation = hasManagedRuntimeConfigWriteOwner(io.configPath);
   let runtimePreflightResult: unknown;
+  let managedPreparedCandidates = new Map<symbol, RuntimeConfigWritePreparedCandidate>();
   const writeResult = await io.writeConfigFile(nextCfg, {
     baseSnapshot,
     basePluginMetadataSnapshot: baseSnapshotRead.pluginMetadataSnapshot,
@@ -2988,18 +3013,29 @@ export async function writeConfigFile(
     skipPluginValidation: options.skipPluginValidation,
     preservedLegacyRootKeys: options.preservedLegacyRootKeys,
     lastTouchedVersionOverride: options.lastTouchedVersionOverride,
-    preCommitRuntimePreflight: async (sourceConfig) => {
-      runtimePreflightResult = await preflightRuntimeSnapshotWrite({
-        nextSourceConfig: sourceConfig,
-        refreshOptions: options.runtimeRefresh,
-        formatRefreshError: (error) => formatErrorMessage(error),
-        createRefreshError: (detail, cause) =>
-          new ConfigRuntimeRefreshError(
-            `Config write blocked before committing ${io.configPath}: active SecretRef resolution failed: ${detail}`,
-            { cause },
-          ),
-      });
-    },
+    ...(deferRuntimeActivation
+      ? {
+          preCommitRuntimePreflight: async (sourceConfig: OpenClawConfig) => {
+            managedPreparedCandidates = await preflightManagedRuntimeConfigWrite(
+              io.configPath,
+              sourceConfig,
+            );
+          },
+        }
+      : {
+          preCommitRuntimePreflight: async (sourceConfig: OpenClawConfig) => {
+            runtimePreflightResult = await preflightRuntimeSnapshotWrite({
+              nextSourceConfig: sourceConfig,
+              refreshOptions: options.runtimeRefresh,
+              formatRefreshError: (error) => formatErrorMessage(error),
+              createRefreshError: (detail, cause) =>
+                new ConfigRuntimeRefreshError(
+                  `Config write blocked before committing ${io.configPath}: active SecretRef resolution failed: ${detail}`,
+                  { cause },
+                ),
+            });
+          },
+        }),
   });
   if (
     options.skipRuntimeSnapshotRefresh &&
@@ -3036,7 +3072,6 @@ export async function writeConfigFile(
   } finally {
     envAfterCanonicalRead = snapshotEnv(process.env);
   }
-  const deferRuntimeActivation = hasManagedRuntimeConfigWriteOwner(io.configPath);
   const notifyCommittedWrite = () => {
     const currentRuntimeConfig = getRuntimeConfigSnapshotState();
     const notificationRuntimeConfig = deferRuntimeActivation
@@ -3045,6 +3080,18 @@ export async function writeConfigFile(
     if (!notificationRuntimeConfig) {
       return;
     }
+    const notificationPreparedCandidates = new Map(
+      [...managedPreparedCandidates].map(([ownerId, candidate]) => [
+        ownerId,
+        {
+          ...candidate,
+          runtimeConfig:
+            candidate.reapplyRuntimeOverlays?.(canonicalRuntimeConfig) ?? candidate.runtimeConfig,
+          compareConfig:
+            candidate.reapplyCompareOverlays?.(canonicalSourceConfig) ?? candidate.compareConfig,
+        },
+      ]),
+    );
     notifyRuntimeConfigWriteListeners(
       createRuntimeConfigWriteNotification({
         configPath: io.configPath,
@@ -3052,6 +3099,9 @@ export async function writeConfigFile(
         runtimeConfig: notificationRuntimeConfig,
         persistedHash: writeResult.persistedHash,
         afterWrite: options.afterWrite,
+        ...(notificationPreparedCandidates.size > 0
+          ? { preparedCandidatesByOwner: notificationPreparedCandidates }
+          : {}),
       }),
     );
   };

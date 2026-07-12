@@ -79,6 +79,15 @@ export type RuntimeConfigWriteNotification = {
   sourceFingerprint: string | null;
   writtenAtMs: number;
   afterWrite?: ConfigWriteAfterWrite;
+  preparedCandidate?: RuntimeConfigWritePreparedCandidate;
+  preparedCandidatesByOwner?: ReadonlyMap<symbol, RuntimeConfigWritePreparedCandidate>;
+};
+
+export type RuntimeConfigWritePreparedCandidate = {
+  runtimeConfig: OpenClawConfig;
+  compareConfig: OpenClawConfig;
+  reapplyRuntimeOverlays?: (config: OpenClawConfig) => OpenClawConfig;
+  reapplyCompareOverlays?: (config: OpenClawConfig) => OpenClawConfig;
 };
 
 export type RuntimeConfigSnapshotMetadata = {
@@ -93,7 +102,13 @@ let runtimeConfigSourceSnapshot: OpenClawConfig | null = null;
 let runtimeConfigSnapshotMetadata: RuntimeConfigSnapshotMetadata | null = null;
 let runtimeConfigSnapshotRevision = 0;
 let runtimeConfigSnapshotRefreshHandler: RuntimeConfigSnapshotRefreshHandler | null = null;
-const managedRuntimeConfigWriteOwners = new Map<string, number>();
+type ManagedRuntimeConfigWritePreflight = (
+  sourceConfig: OpenClawConfig,
+) => MaybePromise<RuntimeConfigWritePreparedCandidate>;
+const managedRuntimeConfigWriteOwners = new Map<
+  string,
+  Set<{ id: symbol; preflight?: ManagedRuntimeConfigWritePreflight }>
+>();
 const runtimeConfigWriteListeners = new Set<(event: RuntimeConfigWriteNotification) => void>();
 
 function stableConfigStringify(value: unknown): string {
@@ -185,6 +200,8 @@ export function createRuntimeConfigWriteNotification(params: {
   persistedHash: string;
   writtenAtMs?: number;
   afterWrite?: ConfigWriteAfterWrite;
+  preparedCandidate?: RuntimeConfigWritePreparedCandidate;
+  preparedCandidatesByOwner?: ReadonlyMap<symbol, RuntimeConfigWritePreparedCandidate>;
 }): RuntimeConfigWriteNotification {
   const metadata =
     params.runtimeConfig === runtimeConfigSnapshot && runtimeConfigSnapshotMetadata
@@ -205,6 +222,10 @@ export function createRuntimeConfigWriteNotification(params: {
     sourceFingerprint: metadata.sourceFingerprint,
     writtenAtMs: params.writtenAtMs ?? Date.now(),
     afterWrite: params.afterWrite,
+    ...(params.preparedCandidate ? { preparedCandidate: params.preparedCandidate } : {}),
+    ...(params.preparedCandidatesByOwner
+      ? { preparedCandidatesByOwner: params.preparedCandidatesByOwner }
+      : {}),
   };
 }
 
@@ -253,24 +274,46 @@ export function registerRuntimeConfigWriteListener(
   };
 }
 
-export function registerManagedRuntimeConfigWriteOwner(configPath: string): () => void {
-  managedRuntimeConfigWriteOwners.set(
-    configPath,
-    (managedRuntimeConfigWriteOwners.get(configPath) ?? 0) + 1,
-  );
+export function registerManagedRuntimeConfigWriteOwner(
+  configPath: string,
+  preflight?: ManagedRuntimeConfigWritePreflight,
+): (() => void) & { ownerId: symbol } {
+  const owner = preflight
+    ? { id: Symbol("managed-runtime-config-write-owner"), preflight }
+    : { id: Symbol("managed-runtime-config-write-owner") };
+  const owners = managedRuntimeConfigWriteOwners.get(configPath) ?? new Set();
+  owners.add(owner);
+  managedRuntimeConfigWriteOwners.set(configPath, owners);
   let released = false;
-  return () => {
+  const unregister = () => {
     if (released) {
       return;
     }
     released = true;
-    const remaining = (managedRuntimeConfigWriteOwners.get(configPath) ?? 1) - 1;
-    if (remaining > 0) {
-      managedRuntimeConfigWriteOwners.set(configPath, remaining);
-    } else {
+    const currentOwners = managedRuntimeConfigWriteOwners.get(configPath);
+    currentOwners?.delete(owner);
+    if (!currentOwners || currentOwners.size === 0) {
       managedRuntimeConfigWriteOwners.delete(configPath);
     }
   };
+  return Object.assign(unregister, { ownerId: owner.id });
+}
+
+export async function preflightManagedRuntimeConfigWrite(
+  configPath: string,
+  sourceConfig: OpenClawConfig,
+): Promise<Map<symbol, RuntimeConfigWritePreparedCandidate>> {
+  const owners = managedRuntimeConfigWriteOwners.get(configPath);
+  if (!owners) {
+    return new Map();
+  }
+  const preparedCandidates = new Map<symbol, RuntimeConfigWritePreparedCandidate>();
+  for (const owner of owners) {
+    if (owner.preflight) {
+      preparedCandidates.set(owner.id, await owner.preflight(sourceConfig));
+    }
+  }
+  return preparedCandidates;
 }
 
 export function hasManagedRuntimeConfigWriteOwner(configPath: string): boolean {

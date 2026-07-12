@@ -740,6 +740,7 @@ function createReloaderHarness(
       nextConfig: OpenClawConfig,
       ownership: GatewayConfigReloadTransactionOwnership,
       sourceConfig: OpenClawConfig,
+      acceptance: { runtimeApplied: boolean },
     ) => void | Promise<void>;
     onConfigApplied?: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
     onConfigChange?: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
@@ -1813,7 +1814,8 @@ describe("startGatewayConfigReloader", () => {
       sourceFingerprint: `source-${persistedHash}`,
       writtenAtMs: Date.now(),
     });
-    const harness = createReloaderHarness(vi.fn(), { initialConfig });
+    let watcherSnapshot = makeSnapshot({ config: initialConfig, hash: "initial" });
+    const harness = createReloaderHarness(async () => watcherSnapshot, { initialConfig });
     const restartOnlyConfig: OpenClawConfig = {
       ...initialConfig,
       gateway: {
@@ -1824,6 +1826,9 @@ describe("startGatewayConfigReloader", () => {
 
     harness.emitWrite(makeWrite(restartOnlyConfig, "restart-only"));
     await vi.runAllTimersAsync();
+    watcherSnapshot = makeSnapshot({ config: restartOnlyConfig, hash: "restart-only" });
+    harness.watcher.emit("change");
+    await vi.runAllTimersAsync();
     harness.emitWrite(
       makeWrite({ ...restartOnlyConfig, logging: { level: "debug" } }, "safe-after-restart"),
     );
@@ -1832,6 +1837,10 @@ describe("startGatewayConfigReloader", () => {
     expect(harness.onNoopConfigCommit).not.toHaveBeenCalled();
     expect(harness.onHotReload).not.toHaveBeenCalled();
     expect(harness.onRestart).not.toHaveBeenCalled();
+    expect(harness.onConfigAccepted.mock.calls.map((call) => call[3])).toEqual([
+      { runtimeApplied: false },
+      { runtimeApplied: false },
+    ]);
     expect(harness.log.warn).toHaveBeenCalledTimes(2);
     expect(harness.log.warn).toHaveBeenLastCalledWith(
       expect.stringContaining("gateway.auth.token"),
@@ -2526,7 +2535,12 @@ describe("startGatewayConfigReloader", () => {
 
     const [, hotConfig] = getOnlyHotReloadCall(harness);
     expect(hotConfig).toEqual(freshConfig);
-    expect(harness.onConfigAccepted).toHaveBeenCalledWith(freshConfig, expect.any(Object));
+    expect(harness.onConfigAccepted).toHaveBeenCalledWith(
+      freshConfig,
+      expect.any(Object),
+      freshConfig,
+      { runtimeApplied: true },
+    );
     expect(harness.log.info).not.toHaveBeenCalledWith(
       "config reload skipped by writer intent (stale resolved intent)",
     );
@@ -2576,7 +2590,12 @@ describe("startGatewayConfigReloader", () => {
     harness.watcher.emit("change");
     await vi.runAllTimersAsync();
 
-    expect(harness.onConfigAccepted).toHaveBeenCalledWith(runtimeConfig, expect.any(Object));
+    expect(harness.onConfigAccepted).toHaveBeenCalledWith(
+      runtimeConfig,
+      expect.any(Object),
+      sourceConfig,
+      { runtimeApplied: false },
+    );
     expect(harness.onRestart).not.toHaveBeenCalled();
     expect(harness.onHotReload).not.toHaveBeenCalled();
     expect(harness.log.info).toHaveBeenCalledWith(
