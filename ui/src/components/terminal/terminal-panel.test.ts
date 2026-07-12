@@ -18,9 +18,8 @@ const createGhosttyTerminalMock = vi.hoisted(() => {
   const scope = globalThis as typeof globalThis & {
     openclawTestCreateGhosttyTerminalMock?: CreateGhosttyTerminalMock;
   };
-  return (scope.openclawTestCreateGhosttyTerminalMock ??= vi.fn<
-    (options: CreateOptions) => Promise<unknown>
-  >());
+  return (scope.openclawTestCreateGhosttyTerminalMock ??=
+    vi.fn<(options: CreateOptions) => Promise<unknown>>());
 });
 
 function createTerminalController(dispose: () => void = vi.fn()) {
