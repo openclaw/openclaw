@@ -23,6 +23,7 @@ const { cleanupOpenClawOwnedAcpxProcessTreeMock } = vi.hoisted(() => ({
     async (): Promise<{
       inspectedPids: number[];
       terminatedPids: number[];
+      survivingPids?: number[];
       skippedReason?: string;
     }> => ({
       inspectedPids: [],
@@ -35,6 +36,7 @@ const { reapStaleOpenClawOwnedAcpxOrphansMock } = vi.hoisted(() => ({
     async (): Promise<{
       inspectedPids: number[];
       terminatedPids: number[];
+      survivingPids?: number[];
       skippedReason?: string;
     }> => ({
       inspectedPids: [],
@@ -421,6 +423,42 @@ describe("createAcpxRuntimeService", () => {
     await service.stop?.(ctx);
   });
 
+  it("fails ACPX startup when a stale owned lease does not drain", async () => {
+    const workspaceDir = await makeTempDir();
+    const ctx = createServiceContext(workspaceDir);
+    const runtime = createMockRuntime();
+    const wrapperRoot = path.join(ctx.stateDir, "acpx");
+    await openGatewayInstanceStore(ctx).register(ACPX_GATEWAY_INSTANCE_KEY, {
+      instanceId: "gw-test",
+      createdAt: 1,
+    });
+    const lease: AcpxProcessLease = {
+      leaseId: "lease-survivor",
+      gatewayInstanceId: "gw-test",
+      sessionKey: "agent:claude:acp:test",
+      wrapperRoot,
+      wrapperPath: path.join(wrapperRoot, "claude-agent-acp-wrapper.mjs"),
+      rootPid: 301,
+      commandHash: "hash",
+      startedAt: 1,
+      state: "open",
+    };
+    await openProcessLeaseStore(ctx).register(lease.leaseId, lease);
+    cleanupOpenClawOwnedAcpxProcessTreeMock.mockResolvedValueOnce({
+      inspectedPids: [301, 302],
+      terminatedPids: [301, 302],
+      survivingPids: [302],
+    });
+    const service = createAcpxRuntimeService(ctx, {
+      runtimeFactory: () => runtime as never,
+    });
+
+    await expect(service.start(ctx)).rejects.toThrow(
+      "ACPX process containment failed to drain 1 stale process lease(s) during startup",
+    );
+    expect(getAcpRuntimeBackend("acpx")).toBeUndefined();
+  });
+
   it("runs wrapper-root orphan cleanup before dropping pending ACPX leases", async () => {
     const workspaceDir = await makeTempDir();
     const ctx = createServiceContext(workspaceDir);
@@ -464,6 +502,42 @@ describe("createAcpxRuntimeService", () => {
     await expect(openProcessLeaseStore(ctx).lookup("lease-pending")).resolves.toBeUndefined();
 
     await service.stop?.(ctx);
+  });
+
+  it("fails ACPX startup when broad cleanup leaves a pending-lease orphan alive", async () => {
+    const workspaceDir = await makeTempDir();
+    const ctx = createServiceContext(workspaceDir);
+    const runtime = createMockRuntime();
+    const runtimeFactory = vi.fn(() => runtime as never);
+    const wrapperRoot = path.join(ctx.stateDir, "acpx");
+    await openGatewayInstanceStore(ctx).register(ACPX_GATEWAY_INSTANCE_KEY, {
+      instanceId: "gw-test",
+      createdAt: 1,
+    });
+    const lease: AcpxProcessLease = {
+      leaseId: "lease-pending-survivor",
+      gatewayInstanceId: "gw-test",
+      sessionKey: "agent:codex:acp:test",
+      wrapperRoot,
+      wrapperPath: path.join(wrapperRoot, "codex-acp-wrapper.mjs"),
+      rootPid: 0,
+      commandHash: "hash",
+      startedAt: 1,
+      state: "open",
+    };
+    await openProcessLeaseStore(ctx).register(lease.leaseId, lease);
+    reapStaleOpenClawOwnedAcpxOrphansMock.mockResolvedValueOnce({
+      inspectedPids: [211],
+      terminatedPids: [],
+      survivingPids: [211],
+    });
+    const service = createAcpxRuntimeService(ctx, { runtimeFactory });
+
+    await expect(service.start(ctx)).rejects.toThrow(
+      "ACPX process containment failed to drain 1 stale process lease(s) during startup",
+    );
+    expect(runtimeFactory).not.toHaveBeenCalled();
+    expect(getAcpRuntimeBackend("acpx")).toBeUndefined();
   });
 
   it("keeps startup quiet when no process leases are open", async () => {

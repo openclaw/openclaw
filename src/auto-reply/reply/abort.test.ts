@@ -752,6 +752,13 @@ describe("abort detection", () => {
     });
 
     expect(result.handled).toBe(true);
+    expect(result).toMatchObject({
+      aborted: false,
+      rejectionReason: "containment-failed",
+    });
+    expect(formatAbortReplyText(undefined, result.rejectionReason)).toContain(
+      "ACP process cleanup could not be verified",
+    );
     expect(getFollowupQueueDepth(sessionKey)).toBe(0);
     expectSessionLaneCleared(sessionKey);
   });

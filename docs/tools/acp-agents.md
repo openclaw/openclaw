@@ -155,9 +155,10 @@ Quick `/acp` flow from chat:
     - Task maintenance closes terminal or orphaned parent-owned one-shot ACP sessions. Persistent ACP sessions are preserved while an active conversation binding remains; stale persistent sessions without an active binding are closed so they cannot be silently resumed after the owning task is done or its task record is gone.
     - Bound follow-up messages go directly to the ACP session until the binding is closed, unfocused, reset, or expired.
     - Gateway commands stay local. `/acp ...`, `/status`, and `/unfocus` are never sent as normal prompt text to a bound ACP harness.
-    - `cancel` aborts the active turn when the backend supports cancellation; it does not delete the binding or session metadata.
+    - `cancel` aborts the active turn, starts protocol interruption without letting it gate containment, closes the live runtime handle, and keeps the binding/session metadata available so a later turn can reopen or resume safely.
     - `close` ends the ACP session from OpenClaw's point of view and removes the binding. A harness may still keep its own upstream history if it supports resume.
-    - The acpx plugin cleans up OpenClaw-owned wrapper and adapter process trees after `close`, and reaps stale OpenClaw-owned ACPX orphans during Gateway startup.
+    - The acpx plugin cleans up OpenClaw-owned wrapper, adapter, and detached descendant processes after `cancel` or `close`. Cleanup combines the live parent tree with inherited lease/gateway identity, escalates from `SIGTERM` to `SIGKILL`, and fails the cancellation instead of reporting success when ownership cannot be verified or drained. The same lease cleanup runs for stale ACPX work during Gateway startup.
+    - When ACP cleanup cannot be verified, `/stop` reports a containment failure instead of the normal “Agent was aborted” success text. Inspect the Gateway logs and stop the remaining owned process before continuing that session.
     - Idle runtime workers are eligible for cleanup after `acp.runtime.ttlMinutes`; stored session metadata remains available for `/acp sessions`.
 
   </Accordion>

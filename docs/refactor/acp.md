@@ -290,7 +290,7 @@ the next release window should eventually retire the fallback.
 
 - Closing an old or stale ACPX session cannot kill another Gateway's process.
 - Parent death does not leave stubborn adapter grandchildren running.
-- `cancel` aborts the active turn without closing reusable sessions.
+- `cancel` aborts the active turn, drains its process lease, and closes the live runtime handle while preserving resumable session metadata.
 - `sessions_list` can show requester-owned cross-agent ACP children under both
   `tree` and `all`.
 - Startup cleanup is driven by leases, not broad command-string scans.

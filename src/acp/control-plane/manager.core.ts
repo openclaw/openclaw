@@ -336,6 +336,7 @@ export class AcpSessionManager {
       withSessionActor: this.withSessionActor.bind(this),
       resolveSession: this.resolveSession.bind(this),
       ensureRuntimeHandle: this.ensureRuntimeHandle.bind(this),
+      runtimeHandles: this.runtimeHandles,
       setSessionState: this.setSessionState.bind(this),
     });
   }
