@@ -1031,7 +1031,7 @@ describe("openclaw agent database", () => {
     expect(journalMode?.journal_mode?.toLowerCase()).toBe("wal");
   });
 
-  it("replaces the v4 session lookup index during migration", () => {
+  it("replaces the main v5 session indexes during migration", () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const database = openOpenClawAgentDatabase({ agentId: "worker-1", env });
@@ -1046,7 +1046,7 @@ describe("openclaw agent database", () => {
         DROP INDEX idx_agent_transcript_event_sequence;
         CREATE INDEX idx_agent_session_entries_session_id
           ON session_entries(session_id);
-        PRAGMA user_version = 4;
+        PRAGMA user_version = 5;
       `);
     } finally {
       legacy.close();
