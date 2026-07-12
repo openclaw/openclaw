@@ -1,6 +1,6 @@
 // Reasoning tag tests cover parsing and stripping reasoning tag blocks.
 import { describe, expect, it } from "vitest";
-import { stripReasoningTagsFromText } from "./reasoning-tags.js";
+import { stripPlainTextReasoningBlock, stripReasoningTagsFromText } from "./reasoning-tags.js";
 
 describe("stripReasoningTagsFromText", () => {
   function expectStrippedCase(params: {
@@ -343,5 +343,87 @@ describe("stripReasoningTagsFromText", () => {
     { input: "E <think>x</think> F", expected: "E  F" },
   ] as const)("does not leak regex state across repeated calls: %j", (testCase) => {
     expectStrippedCase(testCase);
+  });
+});
+
+describe("stripPlainTextReasoningBlock", () => {
+  describe("strips reasoning blocks", () => {
+    it("strips entire text when it is all reasoning", () => {
+      const input = "Reasoning:\nマスターが「補足おねがい」と言っている。\nスクショを見ると...";
+      expect(stripPlainTextReasoningBlock(input)).toBe("");
+    });
+
+    it("strips reasoning block and preserves text after paragraph break", () => {
+      const input = "Reasoning:\n思考内容...\n分析中...\n\nこれが実際の回答です。";
+      expect(stripPlainTextReasoningBlock(input)).toBe("これが実際の回答です。");
+    });
+
+    it("strips reasoning block with italic lines (formatReasoningMessage style)", () => {
+      const input = "Reasoning:\n_思考内容_\n_分析中_\n\n回答テキスト";
+      expect(stripPlainTextReasoningBlock(input)).toBe("回答テキスト");
+    });
+
+    it("strips entire text when no paragraph break follows", () => {
+      const input = "Reasoning:\n全てが思考内容\n最後まで";
+      expect(stripPlainTextReasoningBlock(input)).toBe("");
+    });
+  });
+
+  describe("false positive protection", () => {
+    it("preserves inline 'Reasoning:' with space (no newline)", () => {
+      const input = "Reasoning: このアプローチが最適です。";
+      expect(stripPlainTextReasoningBlock(input)).toBe(input);
+    });
+
+    it("preserves 'Reasoning:' inside a fenced code block", () => {
+      const input = "Example:\n```\nReasoning:\nsome code\n```\nDone!";
+      expect(stripPlainTextReasoningBlock(input)).toBe(input);
+    });
+
+    it("preserves bare 'Reasoning:' without newline", () => {
+      const input = "Reasoning:";
+      expect(stripPlainTextReasoningBlock(input)).toBe(input);
+    });
+  });
+
+  describe("mid-text and multi-block", () => {
+    it("strips reasoning block in the middle of text", () => {
+      const input = "Hello\nReasoning:\n思考内容\n\nWorld";
+      expect(stripPlainTextReasoningBlock(input)).toBe("Hello\nWorld");
+    });
+
+    it("strips multiple reasoning blocks", () => {
+      const input = "Reasoning:\nfirst\n\nvisible\nReasoning:\nsecond\n\nfinal";
+      expect(stripPlainTextReasoningBlock(input)).toBe("visible\nfinal");
+    });
+
+    it("continues block through italic paragraphs", () => {
+      const input = "Reasoning:\n_line1_\n\n_line2_\n\nActual reply";
+      expect(stripPlainTextReasoningBlock(input)).toBe("Actual reply");
+    });
+  });
+
+  describe("negative matching", () => {
+    it("does not strip mid-line Reasoning:", () => {
+      const input = "Some text Reasoning:\nshould not strip";
+      expect(stripPlainTextReasoningBlock(input)).toBe(input);
+    });
+
+    it("handles empty reasoning body before paragraph break", () => {
+      const input = "Reasoning:\n\n\ntext";
+      expect(stripPlainTextReasoningBlock(input)).toBe("text");
+    });
+  });
+
+  describe("edge cases", () => {
+    it("handles empty and null-ish inputs", () => {
+      expect(stripPlainTextReasoningBlock("")).toBe("");
+      expect(stripPlainTextReasoningBlock(null as unknown as string)).toBe(null);
+    });
+
+    it("handles text with no Reasoning: at all", () => {
+      const input = "Just a normal message without any reasoning.";
+      expect(stripPlainTextReasoningBlock(input)).toBe(input);
+    });
   });
 });

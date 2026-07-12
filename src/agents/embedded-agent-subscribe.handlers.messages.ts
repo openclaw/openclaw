@@ -20,6 +20,7 @@ import {
   resolveAssistantMessagePhase,
   type AssistantPhase,
 } from "../shared/chat-message-content.js";
+import { stripPlainTextReasoningBlock } from "../shared/text/reasoning-tags.js";
 import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
@@ -1013,6 +1014,9 @@ export function handleMessageUpdate(
       final: evtType === "text_end",
     });
   }
+  // Strip plain-text reasoning blocks that bypass XML tag filtering.
+  // Models sometimes output reasoning as "Reasoning:\n..." instead of <think> tags.
+  next = stripPlainTextReasoningBlock(next);
   if (next) {
     if (
       !suppressMessageToolOnlySourceReplyOutput &&

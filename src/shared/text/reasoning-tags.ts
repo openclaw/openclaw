@@ -168,3 +168,88 @@ export function stripReasoningTagsFromText(
 
   return trimmedResult;
 }
+
+/**
+ * Strip plain-text reasoning blocks that bypass XML tag filtering.
+ *
+ * Detects `Reasoning:\n` (colon + newline) at the start of text or after blank lines,
+ * and removes everything until the next paragraph break followed by a non-italic line,
+ * or end-of-text.
+ *
+ * `Reasoning: inline text` (colon + space + same-line content) is NOT stripped
+ * to avoid false positives on legitimate use of the word.
+ *
+ * Content inside fenced/inline code blocks is protected.
+ */
+export function stripPlainTextReasoningBlock(text: string): string {
+  if (!text) {
+    return text;
+  }
+
+  // Quick check: must contain "Reasoning:" followed by a newline somewhere
+  if (!text.includes("Reasoning:\n")) {
+    return text;
+  }
+
+  const codeRegions = findCodeRegions(text);
+
+  // Match "Reasoning:\n" that is either at the start of text or preceded by a newline
+  const pattern = /(?:^|\n)(Reasoning:\n)/g;
+
+  // Collect all valid (non-code) reasoning block ranges
+  const blocks: Array<{ start: number; end: number }> = [];
+
+  for (const match of text.matchAll(pattern)) {
+    const fullMatchStart = match.index;
+    // The "Reasoning:\n" portion starts after the optional \n prefix
+    const reasoningStart = fullMatchStart + match[0].length - match[1].length;
+
+    if (isInsideCode(reasoningStart, codeRegions)) {
+      continue;
+    }
+
+    // Find the end of this reasoning block.
+    // Block ends at: \n\n followed by a non-italic line (not starting with _)
+    // or at end of text.
+    // NOTE: The italic continuation heuristic (?!_) is coupled with
+    // formatReasoningMessage() which wraps reasoning lines in _..._.
+    const afterHeader = reasoningStart + match[1].length; // position after "Reasoning:\n"
+    const rest = text.slice(afterHeader);
+    const endPattern = /\n\n(?!_)/g;
+    let blockEnd = text.length; // default: rest of text
+
+    for (const endMatch of rest.matchAll(endPattern)) {
+      // blockEnd is the absolute position past the \n\n delimiter
+      blockEnd = afterHeader + endMatch.index + 2;
+      break;
+    }
+
+    blocks.push({ start: reasoningStart, end: blockEnd });
+  }
+
+  if (blocks.length === 0) {
+    return text;
+  }
+
+  // Merge overlapping blocks (shouldn't normally happen, but be safe)
+  const merged: Array<{ start: number; end: number }> = [blocks[0]];
+  for (let i = 1; i < blocks.length; i++) {
+    const prev = merged[merged.length - 1];
+    if (blocks[i].start <= prev.end) {
+      prev.end = Math.max(prev.end, blocks[i].end);
+    } else {
+      merged.push(blocks[i]);
+    }
+  }
+
+  // Build result by skipping the merged block ranges
+  let result = "";
+  let cursor = 0;
+  for (const block of merged) {
+    result += text.slice(cursor, block.start);
+    cursor = block.end;
+  }
+  result += text.slice(cursor);
+
+  return applyTrim(result, "both");
+}

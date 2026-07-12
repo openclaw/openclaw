@@ -68,6 +68,7 @@ import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { POLL_CREATION_PARAM_DEFS, SHARED_POLL_CREATION_PARAM_NAMES } from "../../poll-params.js";
 import { normalizeAccountId, parseSessionDeliveryRoute } from "../../routing/session-key.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
+import { stripPlainTextReasoningBlock } from "../../shared/text/reasoning-tags.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { listAllChannelSupportedActions, listChannelSupportedActions } from "../channel-tools.js";
@@ -240,7 +241,10 @@ function sanitizeUserVisibleToolTextResult(
 } {
   const normalized = normalizeEscapedLineBreaksForVisibleText(text);
   const strippedReasoning = stripFormattedReasoningMessage(normalized);
-  const strippedInternal = stripInternalRuntimeContext(strippedReasoning);
+  // rin overlay: also strip plain-text <think>…</think> reasoning blocks that
+  // models emit outside the formatted-reasoning wrapper (Aegis defense-in-depth).
+  const strippedPlainReasoning = stripPlainTextReasoningBlock(strippedReasoning);
+  const strippedInternal = stripInternalRuntimeContext(strippedPlainReasoning);
   const strippedBoot = stripBootEchoFromOutboundText(strippedInternal, bootPrompt);
   const strippedInbound = hasInboundMetadataSentinel(strippedBoot)
     ? stripInboundMetadata(strippedBoot)
