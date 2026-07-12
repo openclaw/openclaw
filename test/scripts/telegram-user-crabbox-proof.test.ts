@@ -617,7 +617,9 @@ setInterval(() => {}, 1000);
           return false;
         }
         descendantPid = Number.parseInt(fs.readFileSync(descendantPidPath, "utf8"), 10);
-        return Number.isInteger(descendantPid) && descendantPid > 1 && isProcessAlive(descendantPid);
+        return (
+          Number.isInteger(descendantPid) && descendantPid > 1 && isProcessAlive(descendantPid)
+        );
       });
       expect(Number.isInteger(descendantPid)).toBe(true);
       await waitFor(() => fs.existsSync(commandSettledPath));
