@@ -3296,6 +3296,12 @@ export const th: TranslationMap = {
         activityErrorMany: "กิจกรรม: เครื่องมือ {count} รายการ มีข้อผิดพลาดรวมอยู่ด้วย",
       },
     },
+    workRun: {
+      workedFor: "ทำงานเป็นเวลา {duration}",
+      worked: "ทำงานแล้ว",
+      workedForError: "ทำงานเป็นเวลา {duration} โดยมีข้อผิดพลาด",
+      workedError: "ทำงานแล้ว โดยมีข้อผิดพลาด",
+    },
     backgroundTasks: {
       label: "งานเบื้องหลัง",
       title: "งานเบื้องหลัง",

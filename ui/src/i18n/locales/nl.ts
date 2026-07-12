@@ -3363,6 +3363,12 @@ export const nl: TranslationMap = {
         activityErrorMany: "Activiteit: {count} tools, bevat fouten.",
       },
     },
+    workRun: {
+      workedFor: "Gewerkt gedurende {duration}",
+      worked: "Gewerkt",
+      workedForError: "Gewerkt gedurende {duration}, bevat fouten.",
+      workedError: "Gewerkt, bevat fouten.",
+    },
     backgroundTasks: {
       label: "Achtergrondtaken",
       title: "Achtergrondtaken",

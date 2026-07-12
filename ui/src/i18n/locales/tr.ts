@@ -3370,6 +3370,12 @@ export const tr: TranslationMap = {
         activityErrorMany: "Etkinlik: {count} araç, hatalar içeriyor.",
       },
     },
+    workRun: {
+      workedFor: "{duration} boyunca çalıştı",
+      worked: "Çalıştı",
+      workedForError: "{duration} boyunca çalıştı, hatalar içeriyor.",
+      workedError: "Çalıştı, hatalar içeriyor.",
+    },
     backgroundTasks: {
       label: "Arka plan görevleri",
       title: "Arka plan görevleri",

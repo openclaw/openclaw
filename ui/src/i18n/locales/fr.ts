@@ -3403,6 +3403,12 @@ export const fr: TranslationMap = {
         activityErrorMany: "Activité : {count} outils, contient des erreurs.",
       },
     },
+    workRun: {
+      workedFor: "A travaillé pendant {duration}",
+      worked: "A travaillé",
+      workedForError: "A travaillé pendant {duration}, avec des erreurs.",
+      workedError: "A travaillé, avec des erreurs.",
+    },
     backgroundTasks: {
       label: "Tâches en arrière-plan",
       title: "Tâches en arrière-plan",

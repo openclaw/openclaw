@@ -3383,6 +3383,12 @@ export const it: TranslationMap = {
         activityErrorMany: "Attività: {count} strumenti, include errori.",
       },
     },
+    workRun: {
+      workedFor: "Ha lavorato per {duration}",
+      worked: "Ha lavorato",
+      workedForError: "Ha lavorato per {duration}, con errori.",
+      workedError: "Ha lavorato, con errori.",
+    },
     backgroundTasks: {
       label: "Attività in background",
       title: "Attività in background",

@@ -3359,6 +3359,12 @@ export const ja_JP: TranslationMap = {
         activityErrorMany: "アクティビティ: {count} 個のツール、エラーを含みます。",
       },
     },
+    workRun: {
+      workedFor: "{duration}作業しました",
+      worked: "作業しました",
+      workedForError: "{duration}作業しました（エラーを含みます）。",
+      workedError: "作業しました（エラーを含みます）。",
+    },
     backgroundTasks: {
       label: "バックグラウンドタスク",
       title: "バックグラウンドタスク",
