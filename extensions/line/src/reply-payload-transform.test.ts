@@ -163,6 +163,25 @@ describe("parseLineDirectives", () => {
         expect(result.text, testCase.name).toBe(testCase.expectedText);
       }
     });
+
+    it("skips the confirm template when a required field is blank (#105511)", () => {
+      const cases = [
+        { name: "blank question", text: "[[confirm:  | Yes | No]]" },
+        { name: "blank yes label", text: "[[confirm: Proceed? |  | No]]" },
+        { name: "blank no label", text: "[[confirm: Proceed? | Yes | ]]" },
+      ] as const;
+
+      for (const testCase of cases) {
+        const result = parseLineDirectives({ text: testCase.text });
+        expect(getLineData(result).templateMessage, testCase.name).toBeUndefined();
+      }
+    });
+
+    it("preserves surrounding text instead of dropping the message on a blank confirm (#105511)", () => {
+      const result = parseLineDirectives({ text: "Please decide: [[confirm:  | Yes | No]]" });
+      expect(getLineData(result).templateMessage).toBeUndefined();
+      expect(result.text).toBe("Please decide:");
+    });
   });
 
   describe("buttons", () => {
@@ -227,6 +246,18 @@ describe("parseLineDirectives", () => {
             testCase.expectedActionCount,
           );
         }
+      }
+    });
+
+    it("skips the buttons template when title or text is blank (#105511)", () => {
+      const cases = [
+        { name: "blank title", text: "[[buttons:  | Choose an option | Opt1:d1]]" },
+        { name: "blank text", text: "[[buttons: Menu |  | Opt1:d1]]" },
+      ] as const;
+
+      for (const testCase of cases) {
+        const result = parseLineDirectives({ text: testCase.text });
+        expect(getLineData(result).templateMessage, testCase.name).toBeUndefined();
       }
     });
   });

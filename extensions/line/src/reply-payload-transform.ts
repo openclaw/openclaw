@@ -92,15 +92,20 @@ export function parseLineDirectives(payload: ReplyPayload): ReplyPayload {
         ? noPart.split(":").map((s) => s.trim())
         : [noPart, normalizeLowercaseStringOrEmpty(noPart)];
 
-      lineData.templateMessage = {
-        type: "confirm",
-        text: question,
-        confirmLabel: yesLabel,
-        confirmData: yesData,
-        cancelLabel: noLabel,
-        cancelData: noData,
-        altText: question,
-      };
+      // LINE rejects a confirm template whose text or either action label is
+      // empty (HTTP 400), which drops the whole message. Skip building it when a
+      // required field is blank so the rest of the reply still sends (#105511).
+      if (question && yesLabel && noLabel) {
+        lineData.templateMessage = {
+          type: "confirm",
+          text: question,
+          confirmLabel: yesLabel,
+          confirmData: yesData,
+          cancelLabel: noLabel,
+          cancelData: noData,
+          altText: question,
+        };
+      }
     }
     text = text.replace(confirmMatch[0], "").trim();
   }
@@ -145,7 +150,10 @@ export function parseLineDirectives(payload: ReplyPayload): ReplyPayload {
         return { type: "message" as const, label, data: data || label };
       });
 
-      if (actions.length > 0) {
+      // LINE rejects a buttons template with an empty title or text (HTTP 400),
+      // which drops the whole message. Require both (alongside at least one
+      // action) so a blank required field degrades to plain text (#105511).
+      if (actions.length > 0 && title && bodyText) {
         lineData.templateMessage = {
           type: "buttons",
           title,
