@@ -469,6 +469,15 @@ function isOpenClawBridgeCommand(command: string | undefined): boolean {
 }
 
 function isCodexAcpCommand(command: string | undefined): boolean {
+  if (command?.includes("codex-acp-wrapper.mjs")) {
+    return true;
+  }
+  if (command) {
+    const parts = unwrapEnvCommand(splitCommandParts(command.trim()));
+    if (basename(parts[0] ?? "") === "node" && basename(parts[1] ?? "") === "codex-acp-wrapper.mjs") {
+      return true;
+    }
+  }
   return isAcpCommand(command, {
     packageName: "@zed-industries/codex-acp",
     executableName: "codex-acp",
@@ -948,6 +957,7 @@ export class AcpxRuntime implements AcpRuntime {
   private async withCodexWrapperDiagnostics<T>(params: {
     command: string | undefined;
     fallbackCode: AcpRuntimeErrorCode;
+    sessionKey: string;
     run: () => Promise<T>;
   }): Promise<T> {
     try {
@@ -956,9 +966,8 @@ export class AcpxRuntime implements AcpRuntime {
       if (!isCodexAcpCommand(params.command) || !isGenericInternalAcpError(error)) {
         throw error;
       }
-      const stderrTail = await readCodexWrapperStderrTail({
-        wrapperRoot: this.wrapperRoot,
-        leaseId: this.launchLeaseScope.getStore()?.leaseId,
+      const stderrTail = await this.readCurrentCodexLaunchFailureStderr({
+        sessionKey: params.sessionKey,
       });
       if (!stderrTail) {
         throw error;
@@ -967,6 +976,30 @@ export class AcpxRuntime implements AcpRuntime {
         cause: error,
       });
     }
+  }
+
+  private async readCurrentCodexLaunchFailureStderr(params: {
+    sessionKey: string;
+  }): Promise<string> {
+    const launch = this.launchLeaseScope.getStore();
+    const activeTail = await readCodexWrapperStderrTail({
+      wrapperRoot: this.wrapperRoot,
+      leaseId: launch?.leaseId,
+    });
+    if (activeTail) {
+      return activeTail;
+    }
+    if (!this.gatewayInstanceId || !this.processLeaseStore) {
+      return "";
+    }
+    const lease = selectCurrentSessionLease({
+      leases: await this.processLeaseStore.listOpen(this.gatewayInstanceId),
+      sessionKeys: [params.sessionKey],
+    });
+    return readCodexWrapperStderrTail({
+      wrapperRoot: this.wrapperRoot,
+      leaseId: lease?.leaseId,
+    });
   }
 
   private async readCodexTurnFailureStderr(params: { handle: AcpRuntimeHandle }): Promise<string> {
@@ -1093,6 +1126,7 @@ export class AcpxRuntime implements AcpRuntime {
           this.withCodexWrapperDiagnostics({
             command: stableLaunchCommand,
             fallbackCode: "ACP_SESSION_INIT_FAILED",
+            sessionKey: ensureInput.sessionKey,
             run: () => ensureDelegateSessionWithModelFallback(delegate, ensureInput),
           }),
       });
@@ -1113,6 +1147,7 @@ export class AcpxRuntime implements AcpRuntime {
           this.withCodexWrapperDiagnostics({
             command: stableLaunchCommand,
             fallbackCode: "ACP_SESSION_INIT_FAILED",
+            sessionKey: normalizedInput.sessionKey,
             run: () => delegate.ensureSession(withAcpxSessionOptions(normalizedInput)),
           }),
         ),

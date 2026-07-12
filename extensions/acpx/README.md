@@ -26,6 +26,10 @@ Use the ACP docs for harness-specific setup, permission modes, and model/runtime
 - https://docs.openclaw.ai/tools/acp-agents-setup
 - https://docs.openclaw.ai/tools/acp-agents
 
+For Grok Build coding work, use the ACPX target id `grok-build`. ACPX launches
+`grok agent stdio`; Grok still owns provider auth, cached login, `XAI_API_KEY`
+handling, and native model selection.
+
 ## Package
 
 - Plugin id: `acpx`

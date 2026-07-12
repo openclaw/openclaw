@@ -101,6 +101,7 @@ With the `acpx` backend, use these ids as `/acp spawn <id>` or
 | `droid`      | Factory Droid CLI                              | Requires Factory/Droid auth or `FACTORY_API_KEY` in the harness environment.        |
 | `fast-agent` | fast-agent-mcp ACP adapter                     | Fetched on demand with `uvx`.                                                       |
 | `gemini`     | Gemini CLI ACP adapter                         | Requires Gemini CLI auth or API key setup.                                          |
+| `grok-build` | Grok Build ACP (`grok agent stdio`)            | Requires Grok Build CLI auth or `XAI_API_KEY` on the Gateway host.                  |
 | `iflow`      | iFlow CLI                                      | Adapter availability and model control depend on the installed CLI.                 |
 | `kilocode`   | Kilo Code CLI                                  | Adapter availability and model control depend on the installed CLI.                 |
 | `kimi`       | Kimi/Moonshot CLI                              | Requires Kimi/Moonshot auth on the host.                                            |
@@ -139,6 +140,8 @@ Quick `/acp` flow from chat:
   <Step title="Tune">
     `/acp model <provider/model>`, `/acp permissions <profile>`,
     `/acp timeout <seconds>`.
+    For Grok Build coding work, spawn the `grok-build` ACPX target instead of
+    treating Grok Build as a portable `/acp model` id.
   </Step>
   <Step title="Steer">
     Without replacing context: `/acp steer tighten logging and continue`.
@@ -814,11 +817,15 @@ including custom per-agent `session.store` roots.
 | `/acp set <key> <value>`     | generic                              | `key=cwd` uses the cwd override path.                                                                                                                                                                      |
 | `/acp reset-options`         | clears all runtime overrides         | -                                                                                                                                                                                                          |
 
+For Grok Build coding sessions, use the ACPX target id `grok-build`. ACPX
+launches `grok agent stdio`; Grok remains responsible for its own auth, cached
+login, `XAI_API_KEY` handling, and native model selection.
+
 ## acpx harness, plugin setup, and permissions
 
-For acpx harness configuration (Claude Code / Codex / Gemini CLI aliases),
-the plugin-tools and OpenClaw-tools MCP bridges, and ACP permission modes,
-see [ACP agents - setup](/tools/acp-agents-setup).
+For acpx harness configuration (Claude Code / Codex / Gemini CLI / Grok Build
+aliases), the plugin-tools and OpenClaw-tools MCP bridges, and ACP permission
+modes, see [ACP agents - setup](/tools/acp-agents-setup).
 
 ## Troubleshooting
 

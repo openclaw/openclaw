@@ -1,7 +1,7 @@
 ---
 summary: "Setting up ACP agents: acpx harness config, plugin setup, permissions"
 read_when:
-  - Installing or configuring the acpx harness for Claude Code / Codex / Gemini CLI
+  - Installing or configuring the acpx harness for Claude Code / Codex / Gemini CLI / Grok Build
   - Enabling the plugin-tools or OpenClaw-tools MCP bridge
   - Configuring ACP permission modes
 title: "ACP agents — setup"
@@ -38,6 +38,7 @@ Built-in acpx harness aliases (from the pinned `acpx` dependency):
 | `droid`      | [Factory Droid](https://www.factory.ai)                                                                         |
 | `fast-agent` | [fast-agent](https://fast-agent.ai)                                                                             |
 | `gemini`     | [Gemini CLI](https://github.com/google/gemini-cli)                                                              |
+| `grok-build` | [Grok Build](https://docs.x.ai/build/overview) (`grok agent stdio`)                                             |
 | `iflow`      | [iFlow CLI](https://github.com/iflow-ai/iflow-cli)                                                              |
 | `kilocode`   | [Kilocode](https://kilocode.ai)                                                                                 |
 | `kimi`       | [Kimi CLI](https://github.com/MoonshotAI/kimi-cli)                                                              |
@@ -81,6 +82,7 @@ Core ACP baseline:
       "cursor",
       "droid",
       "gemini",
+      "grok-build",
       "iflow",
       "kilocode",
       "kimi",

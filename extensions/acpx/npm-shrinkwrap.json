@@ -10,7 +10,7 @@
       "dependencies": {
         "@agentclientprotocol/claude-agent-acp": "0.55.0",
         "@zed-industries/codex-acp": "0.16.0",
-        "acpx": "0.11.2",
+        "acpx": "0.12.0",
         "zod": "4.4.3"
       }
     },
@@ -827,15 +827,15 @@
       }
     },
     "node_modules/acpx": {
-      "version": "0.11.2",
-      "resolved": "https://registry.npmjs.org/acpx/-/acpx-0.11.2.tgz",
-      "integrity": "sha512-ksTmfJDVqUAJJXsNDamEno03AMZ/aAZzXk/h5nt61VsLc/jcpoDMfCVpErzuYNJjwCd0V6Zm5o6F8OoqxsjQWA==",
+      "version": "0.12.0",
+      "resolved": "https://registry.npmjs.org/acpx/-/acpx-0.12.0.tgz",
+      "integrity": "sha512-APYpN04XFWrCGuSBvM4HTKWWFH8uSIuzc+qI7aCGeVdP9o4euZeBosFEkmNUHvBOop0XBemg6d8RsNvzXN3Mgw==",
       "license": "MIT",
       "dependencies": {
-        "@agentclientprotocol/sdk": "^0.28.1",
+        "@agentclientprotocol/sdk": "^1.1.0",
         "commander": "^15.0.0",
         "skillflag": "^0.2.0",
-        "tsx": "^4.22.4",
+        "tsx": "^4.23.0",
         "zod": "^4.4.3"
       },
       "bin": {
@@ -843,15 +843,6 @@
       },
       "engines": {
         "node": ">=22.13.0"
-      }
-    },
-    "node_modules/acpx/node_modules/@agentclientprotocol/sdk": {
-      "version": "0.28.1",
-      "resolved": "https://registry.npmjs.org/@agentclientprotocol/sdk/-/sdk-0.28.1.tgz",
-      "integrity": "sha512-Z2Frs6YtPhnZZ+XwFXyQkRDXY0fn8FjCalEs0W4yUhQnY4TztmNq0/RnfzWdFN3vqT3h0jTz5klzYbZHGxCDyQ==",
-      "license": "Apache-2.0",
-      "peerDependencies": {
-        "zod": "^3.25.0 || ^4.0.0"
       }
     },
     "node_modules/ajv": {
@@ -2167,9 +2158,9 @@
       "license": "MIT"
     },
     "node_modules/tsx": {
-      "version": "4.22.4",
-      "resolved": "https://registry.npmjs.org/tsx/-/tsx-4.22.4.tgz",
-      "integrity": "sha512-X8EX+XV4QR5xCsrgxaED954zTDfY8KqlDtskKEL0cHhyS/P8b4IFOvGDQpsC9Q1XnLq915wEfwwY/zzskCtmhg==",
+      "version": "4.23.0",
+      "resolved": "https://registry.npmjs.org/tsx/-/tsx-4.23.0.tgz",
+      "integrity": "sha512-eUdUIaCr963q2h5u3+QwvYp0+eqPvn+egeqZUm0hwERCqqx1E3kK5ehbGCvqSE5MQAULr67ww0cA3jKc3YkM1w==",
       "license": "MIT",
       "dependencies": {
         "esbuild": "~0.28.0"
