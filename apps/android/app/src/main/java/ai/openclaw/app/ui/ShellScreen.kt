@@ -1743,7 +1743,10 @@ private fun usageSummaryText(count: Int): String =
 
 /** Reports how many gateway skills are enabled, eligible, and dependency-complete. */
 private fun skillsSummaryText(skills: List<GatewaySkillSummary>): String {
-  val ready = skills.count { !it.disabled && it.eligible && it.missingCount == 0 }
+  val ready =
+    skills.count {
+      !it.disabled && it.eligible && !it.blockedByAllowlist && !it.blockedByAgentFilter && it.missingCount == 0
+    }
   return if (skills.isEmpty()) {
     nativeString("No skills")
   } else {
@@ -1755,7 +1758,11 @@ private fun skillsSummaryText(skills: List<GatewaySkillSummary>): String {
 private fun skillsStatus(skills: List<GatewaySkillSummary>): Boolean? =
   when {
     skills.isEmpty() -> null
-    skills.any { it.blockedByAllowlist || (!it.disabled && (!it.eligible || it.missingCount > 0)) } -> false
+    skills.any {
+      it.blockedByAllowlist ||
+        it.blockedByAgentFilter ||
+        (!it.disabled && (!it.eligible || it.missingCount > 0))
+    } -> false
     else -> true
   }
 

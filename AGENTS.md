@@ -125,6 +125,7 @@ Skills own workflows; root owns hard policy and routing.
 - Extension tests: `pnpm test:extensions`, `pnpm test extensions`, `pnpm test extensions/<id>`.
 - Typecheck: `tsgo` lanes only (`pnpm tsgo*`, `pnpm check:test-types`); never add `tsc --noEmit`, `typecheck`, `check:types`.
 - Formatting: `oxfmt`, not Prettier. Use repo wrappers (`pnpm format:*`, `scripts/run-oxlint.mjs`; full `pnpm lint:*` only when scope requires).
+- SDK surface gate: `pnpm plugin-sdk:surface:check`; no `plugin-sdk:surface-report` script.
 - Build before push when build output, packaging, lazy/module boundaries, dynamic imports, or published surfaces can change; agent builds default to the selected remote box unless platform-specific proof requires another remote host.
 
 ## Validation
@@ -166,6 +167,9 @@ Skills own workflows; root owns hard policy and routing.
 - GitHub Actions: resolve workflow files from `.github/workflows` or API; never infer filenames from display names.
 - zsh: quote command globs; unmatched patterns abort before the tool runs.
 - `scripts/pr` artifacts: preserve template enum values; validate before prepare.
+- `scripts/pr` subcommands require a PR number; no subcommand `--help` placeholder.
+- `scripts/pr` review: checkout main baseline, then PR, before artifact validation.
+- `rg`: options before `--`; use `--` before patterns starting with `-`.
 - Bare issue/PR URL/number: inspect live and take the efficient maintainer path; switch branches/refs when useful.
 - No unsolicited PR labels/retitles/rebases/fixups/landing. Comments/reviews ok only for reviewable findings, pre-merge proof, or close/duplicate reason after explicit close/sweep/landing request.
 - Maintainer decision closes the cluster: if deciding reported behavior/proposed fix is not planned, comment+close all directly associated open issues/PRs unless explicitly told to keep one open. Associated means linked PRs/issues, duplicates, companion workaround PRs, and the canonical issue for the rejected behavior.
