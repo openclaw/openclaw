@@ -116,7 +116,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       const pinnedItems = sidebar.locator(".sidebar-nav > .nav-section__items > .nav-item");
       await expect
         .poll(() => trimmedTextContents(pinnedItems))
-        .toEqual(["Usage", "Cron Jobs", "Plugins"]);
+        .toEqual(["Usage", "Automations", "Plugins"]);
       await expect.poll(() => sidebar.locator(".sidebar-brand").count()).toBe(1);
       // Desktop renders no topbar row: the sidebar owns navigation.
       await expect.poll(() => page.locator(".topbar").isVisible()).toBe(false);
@@ -279,15 +279,15 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await captureUiProof(page, "02-customize-menu.png");
 
       await usageItem.click();
-      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Cron Jobs", "Plugins"]);
+      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Automations", "Plugins"]);
       await sessionsItem.click();
       await expect
         .poll(() => trimmedTextContents(pinnedItems))
-        .toEqual(["Cron Jobs", "Plugins", "Sessions"]);
+        .toEqual(["Automations", "Plugins", "Sessions"]);
       await page.reload();
       await expect
         .poll(() => trimmedTextContents(pinnedItems))
-        .toEqual(["Cron Jobs", "Plugins", "Sessions"]);
+        .toEqual(["Automations", "Plugins", "Sessions"]);
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("true");
       await expect
         .poll(() =>
@@ -302,7 +302,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await menu.getByRole("menuitem", { name: "Reset pinned items" }).click();
       await expect
         .poll(() => trimmedTextContents(pinnedItems))
-        .toEqual(["Usage", "Cron Jobs", "Plugins"]);
+        .toEqual(["Usage", "Automations", "Plugins"]);
 
       // The sidebar search field is the command palette entry point.
       const searchButton = sidebar.locator(".sidebar-search");
