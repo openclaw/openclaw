@@ -17,8 +17,8 @@ class ConnectionPage extends OpenClawLightDomElement {
 
   @state() private settings: UiSettings = loadSettings();
   @state() private password = "";
-  @state() private showGatewayToken = false;
-  @state() private showGatewayPassword = false;
+  @state() private gatewayTokenVisible = false;
+  @state() private gatewayPasswordVisible = false;
 
   // Distinguishes an operator-edited session key from the stored selection so
   // Connect only overrides the per-gateway selection after an explicit edit.
@@ -52,8 +52,8 @@ class ConnectionPage extends OpenClawLightDomElement {
   }
 
   private resetSensitiveUi() {
-    this.showGatewayToken = false;
-    this.showGatewayPassword = false;
+    this.gatewayTokenVisible = false;
+    this.gatewayPasswordVisible = false;
   }
 
   private resetDraft(gateway: ApplicationContext["gateway"]) {
@@ -98,8 +98,8 @@ class ConnectionPage extends OpenClawLightDomElement {
       password: this.password,
       lastError: gateway.lastError,
       lastChannelsRefresh: this.context.channels.state.channelsLastSuccess,
-      showGatewayToken: this.showGatewayToken,
-      showGatewayPassword: this.showGatewayPassword,
+      showGatewayToken: this.gatewayTokenVisible,
+      showGatewayPassword: this.gatewayPasswordVisible,
       onConnectionChange: (patch) => {
         this.settings = { ...this.settings, ...patch };
       },
@@ -113,10 +113,10 @@ class ConnectionPage extends OpenClawLightDomElement {
         };
       },
       onToggleGatewayTokenVisibility: () => {
-        this.showGatewayToken = !this.showGatewayToken;
+        this.gatewayTokenVisible = !this.gatewayTokenVisible;
       },
       onToggleGatewayPasswordVisibility: () => {
-        this.showGatewayPassword = !this.showGatewayPassword;
+        this.gatewayPasswordVisible = !this.gatewayPasswordVisible;
       },
       onConnect: () => this.connect(),
       onRefresh: () => void this.context.channels.refresh(false),

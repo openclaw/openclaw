@@ -88,14 +88,11 @@ export function renderConnection(props: ConnectionProps) {
           <input
             .value=${props.settings.gatewayUrl}
             @input=${(e: Event) => {
+              const settings = props.settings;
               const v = (e.target as HTMLInputElement).value;
               props.onConnectionChange({
                 gatewayUrl: v,
-                token: resolveGatewayTokenForUrlEdit(
-                  props.settings.gatewayUrl,
-                  v,
-                  props.settings.token,
-                ),
+                token: resolveGatewayTokenForUrlEdit(settings.gatewayUrl, v, settings.token),
               });
             }}
             placeholder="ws://100.x.y.z:18789"
