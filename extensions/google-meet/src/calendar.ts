@@ -2,10 +2,10 @@ import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 // Google Meet plugin module implements calendar behavior.
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { googleApiError } from "./google-api-errors.js";
+import { normalizeMeetUrl } from "./meet-url.js";
 
 const GOOGLE_CALENDAR_API_BASE_URL = "https://www.googleapis.com/calendar/v3";
 const GOOGLE_CALENDAR_API_HOST = "www.googleapis.com";
-const GOOGLE_MEET_URL_HOST = "meet.google.com";
 const GOOGLE_CALENDAR_EVENTS_SCOPE = "https://www.googleapis.com/auth/calendar.events.readonly";
 const GOOGLE_CALENDAR_REQUEST_TIMEOUT_MS = 30_000;
 
@@ -70,19 +70,11 @@ function normalizeGoogleMeetCalendarUri(value: string | undefined): string | und
   if (!value?.trim()) {
     return undefined;
   }
-  let url: URL;
   try {
-    url = new URL(value.trim());
+    return normalizeMeetUrl(value);
   } catch {
     return undefined;
   }
-  if (url.protocol !== "https:" || url.hostname.toLowerCase() !== GOOGLE_MEET_URL_HOST) {
-    return undefined;
-  }
-  if (!/^\/[a-z]{3}-[a-z]{4}-[a-z]{3}(?:$|[/?#])/i.test(url.pathname)) {
-    return undefined;
-  }
-  return url.toString();
 }
 
 function extractGoogleMeetUriFromText(value: string | undefined): string | undefined {

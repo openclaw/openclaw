@@ -59,6 +59,11 @@ describe("Google Meet calendar URL extraction", () => {
     ).toBeUndefined();
     expect(
       extractGoogleMeetUriFromCalendarEvent({
+        hangoutLink: "https://example.com/abc-defg-hij",
+      }),
+    ).toBeUndefined();
+    expect(
+      extractGoogleMeetUriFromCalendarEvent({
         hangoutLink: "https://meet.google.com/not-a-code",
       }),
     ).toBeUndefined();
