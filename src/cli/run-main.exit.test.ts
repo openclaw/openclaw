@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { expectDefined } from "@openclaw/normalization-core";
 import { CommanderError } from "commander";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
@@ -2028,6 +2029,26 @@ describe("runCli exit behavior", () => {
     expect(closeActiveMemorySearchManagersMock).not.toHaveBeenCalled();
   });
 
+  it("propagates precomputed help metadata failures", async () => {
+    outputPrecomputedSecretsHelpTextMock.mockImplementationOnce(() => {
+      throw new Error("startup metadata failed");
+    });
+
+    await expect(runCli(["node", "openclaw", "secrets", "--help"])).rejects.toThrow(
+      "startup metadata failed",
+    );
+  });
+
+  it("propagates nodes live-config probe failures", async () => {
+    loadRootHelpRenderOptionsForConfigSensitivePluginsMock.mockRejectedValueOnce(
+      new Error("live config failed"),
+    );
+
+    await expect(runCli(["node", "openclaw", "nodes", "--help"])).rejects.toThrow(
+      "live config failed",
+    );
+  });
+
   it("keeps root help on the precomputed path without proxy bootstrap", async () => {
     outputPrecomputedRootHelpTextMock.mockReturnValueOnce(true);
 
@@ -3652,10 +3673,16 @@ describe("runCli exit behavior", () => {
     expect(ensureGlobalUndiciEnvProxyDispatcherMock).toHaveBeenCalledTimes(1);
     expect(launchTuiCliMock).toHaveBeenCalledOnce();
     expect(ensureGlobalUndiciEnvProxyDispatcherMock.mock.invocationCallOrder[0]).toBeLessThan(
-      probeGatewayConfiguredModelMock.mock.invocationCallOrder[0],
+      expectDefined(
+        probeGatewayConfiguredModelMock.mock.invocationCallOrder[0],
+        "probeGatewayConfiguredModelMock.mock.invocationCallOrder[0] test invariant",
+      ),
     );
     expect(ensureGlobalUndiciEnvProxyDispatcherMock.mock.invocationCallOrder[0]).toBeLessThan(
-      launchTuiCliMock.mock.invocationCallOrder[0],
+      expectDefined(
+        launchTuiCliMock.mock.invocationCallOrder[0],
+        "launchTuiCliMock.mock.invocationCallOrder[0] test invariant",
+      ),
     );
   });
 

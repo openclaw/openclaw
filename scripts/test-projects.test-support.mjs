@@ -56,6 +56,7 @@ import {
   detectChangedLanes,
   listChangedPathsFromGit as listChangedPathsFromGitSource,
 } from "./changed-lanes.mjs";
+import { getChangedPathFacts } from "./lib/changed-path-facts.mjs";
 import { isCiLikeEnv, resolveLocalFullSuiteProfile } from "./lib/vitest-local-scheduling.mjs";
 import {
   DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS,
@@ -290,6 +291,7 @@ const BROAD_TOOLING_SCRIPT_TEST_PATTERNS = new Set([
   "test/scripts/*.test.ts",
 ]);
 const BROAD_TOOLING_SCRIPT_TEST_TARGET_CHUNK_SIZE = 60;
+const FULL_SUITE_AGENTS_CORE_TEST_TARGET_CHUNK_COUNT = 6;
 const FULL_SUITE_TOOLING_TEST_TARGET_CHUNK_SIZE = 2;
 const FULL_SUITE_UNIT_FAST_TEST_TARGET_CHUNK_SIZE = 70;
 const TUI_VITEST_CONFIG = "test/vitest/vitest.tui.config.ts";
@@ -2337,7 +2339,11 @@ const RUNNABLE_VITEST_CONFIG_TARGETS = new Set([
   ...Object.values(VITEST_CONFIG_BY_KIND),
   ...fullSuiteVitestShards.flatMap((shard) => [shard.config, ...shard.projects]),
 ]);
-const CHANNEL_CONTRACT_CONFIG_PATTERNS = new Map([
+// Duplicates the per-config pattern arrays in test/vitest/vitest.contracts-shared.ts
+// because this file must stay loader-free plain JS. Drift silently drops
+// contract files from lane routing, so test/scripts/test-projects.test.ts
+// asserts both enumerations stay identical.
+export const CHANNEL_CONTRACT_CONFIG_PATTERNS = new Map([
   [
     CONTRACTS_CHANNEL_SURFACE_VITEST_CONFIG,
     [
@@ -2508,6 +2514,18 @@ function listToolingFullSuiteTestTargets(cwd) {
 function listUnitFastFullSuiteTestTargets() {
   const timerTargets = new Set(getUnitFastTimerTestFiles());
   return getUnitFastTestFiles().filter((file) => !timerTargets.has(file));
+}
+
+function listAgentsCoreFullSuiteTestTargets(cwd) {
+  const agentsDir = path.join(cwd, "src/agents");
+  if (!fs.existsSync(agentsDir)) {
+    return [];
+  }
+  return fs
+    .readdirSync(agentsDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".test.ts"))
+    .map((entry) => `src/agents/${entry.name}`)
+    .toSorted((left, right) => left.localeCompare(right));
 }
 
 function createBroadToolingScriptPlans({ config, forwardedArgs, includePatterns, watchMode, cwd }) {
@@ -3465,7 +3483,13 @@ function isRoutableChangedTarget(changedPath) {
   if (changedPath.endsWith(".live.test.ts")) {
     return false;
   }
-  return /^(?:src|test|extensions|ui|packages)(?:\/|$)/u.test(changedPath);
+  const surface = getChangedPathFacts(changedPath).surface;
+  return (
+    ["source", "package", "extension", "rootTest"].includes(surface) ||
+    changedPath === "ui" ||
+    changedPath.startsWith("ui/") ||
+    ["src", "test", "extensions", "packages"].includes(changedPath)
+  );
 }
 
 function resolveSiblingTestTarget(changedPath, cwd) {
@@ -3519,7 +3543,15 @@ function resolvePreciseChangedTestTargets(changedPath, options) {
   if (options.skipImportGraph === true) {
     return null;
   }
-  if (/^(?:src|test\/helpers|extensions|packages|ui\/src|ui\/config)\//u.test(changedPath)) {
+  const facts = getChangedPathFacts(changedPath);
+  if (
+    facts.surface === "source" ||
+    facts.surface === "package" ||
+    facts.surface === "extension" ||
+    changedPath.startsWith("test/helpers/") ||
+    changedPath.startsWith("ui/src/") ||
+    changedPath.startsWith("ui/config/")
+  ) {
     const affectedTests = resolveAffectedTestsFromImportGraph(changedPath, cwd, {
       forceFull: options.forceFullImportGraph === true,
     });
@@ -3667,7 +3699,7 @@ function classifyTarget(arg, cwd) {
   if (relative === "extensions") {
     return "extensionFull";
   }
-  if (relative.startsWith("extensions/")) {
+  if (getChangedPathFacts(relative).surface === "extension") {
     const extensionRoot = relative.split("/").slice(0, 2).join("/");
     const splitChannelShard = resolveSplitChannelExtensionShard(extensionRoot);
     if (splitChannelShard) {
@@ -4213,7 +4245,14 @@ export function buildFullSuiteVitestRunPlans(args, cwd = process.cwd()) {
     return configs.flatMap((config) => {
       if (expandShard && targetArgs.length === 0) {
         let chunks = [];
-        if (config === UNIT_FAST_VITEST_CONFIG) {
+        if (config === AGENTS_CORE_VITEST_CONFIG) {
+          // A single non-isolated agents-core process grows until its worker can
+          // exit under the full-suite memory load. Bound each process lifetime.
+          chunks = splitTargetChunks(
+            listAgentsCoreFullSuiteTestTargets(cwd),
+            FULL_SUITE_AGENTS_CORE_TEST_TARGET_CHUNK_COUNT,
+          );
+        } else if (config === UNIT_FAST_VITEST_CONFIG) {
           const targets = listUnitFastFullSuiteTestTargets();
           const chunkCount = Math.ceil(
             targets.length / FULL_SUITE_UNIT_FAST_TEST_TARGET_CHUNK_SIZE,

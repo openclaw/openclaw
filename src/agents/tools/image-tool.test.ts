@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isInboundPathAllowed } from "@openclaw/media-core/inbound-path-policy";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
@@ -302,7 +303,7 @@ function readJpegDimensions(buffer: Buffer): { width: number; height: number } {
       offset += 1;
       continue;
     }
-    const marker = buffer[offset + 1];
+    const marker = expectDefined(buffer[offset + 1], "buffer[offset + 1] test invariant");
     offset += 2;
     if (marker === 0xd8 || marker === 0xd9 || (marker >= 0xd0 && marker <= 0xd7)) {
       continue;
@@ -1759,9 +1760,7 @@ describe("image tool implicit imageModel config", () => {
       });
       const tool = createImageTool({ config: cfg, agentDir, modelHasVision: true });
       expect(typeof tool?.execute).toBe("function");
-      expect(tool?.description).toContain(
-        "Only use this tool when images were NOT already provided",
-      );
+      expect(tool?.description).toContain("use only for images not provided");
     });
   });
 

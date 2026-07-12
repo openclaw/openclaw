@@ -88,6 +88,7 @@ function createRecordingStream(recorder: WireRecorder, fault?: StreamWriteFault)
       applyFault("stream.update", { text });
       recorder.recordWireCall({ method: "stream.update", payload: { text } });
     },
+    clearText(): void {},
     async close(): Promise<unknown> {
       applyFault("stream.close");
       recorder.recordWireCall({ method: "stream.close", result: { id: "stream-final" } });
@@ -307,6 +308,9 @@ function setupMSTeamsTrace(recorder: WireRecorder, traceCase: MSTeamsTraceCase) 
         await created.markDispatchIdle();
         break;
       case "wire-fault":
+        // The shared write-error fault vocabulary covers this shape, but a
+        // scripted step records a new IN event and would change the committed
+        // goldens; write-count arming at setup replays the same wire bytes.
         throw new Error("msteams trace scenarios arm stream write faults at setup instead");
     }
   };

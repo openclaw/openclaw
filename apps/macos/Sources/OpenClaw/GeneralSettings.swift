@@ -1,7 +1,6 @@
 import AppKit
 import Observation
 import OpenClawDiscovery
-import OpenClawIPC
 import OpenClawKit
 import SwiftUI
 
@@ -74,8 +73,11 @@ struct GeneralSettings: View {
             SettingsCardGroup("App") {
                 SettingsCardToggleRow(
                     title: "Launch at login",
-                    subtitle: "Automatically start OpenClaw after you sign in.",
+                    subtitle: self.state.bundleLocationAllowsPersistentIntegration
+                        ? "Automatically start OpenClaw after you sign in."
+                        : "Move OpenClaw to Applications before enabling launch at login.",
                     binding: self.$state.launchAtLogin)
+                    .disabled(!self.state.bundleLocationAllowsPersistentIntegration && !self.state.launchAtLogin)
 
                 SettingsCardToggleRow(
                     title: "Show Dock icon",

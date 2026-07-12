@@ -625,6 +625,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       "hello_payload_prepared",
       "ready",
     ]);
+    expect(upsertPresenceMock).not.toHaveBeenCalled();
   });
 
   it("does not mark local backend self-pairing clients as approval runtimes", async () => {
@@ -957,6 +958,43 @@ describe("resolvePinnedClientMetadata", () => {
         claimedPlatform: "macOS 26.5.2",
         claimedDeviceFamily: "Mac",
         pairedPlatform: "macOS 26.5.1",
+        pairedDeviceFamily: "Mac",
+      }),
+    ).toEqual({
+      platformMismatch: false,
+      deviceFamilyMismatch: false,
+      pinnedPlatform: "macOS 26.5.2",
+      pinnedDeviceFamily: "Mac",
+      refreshPairedPlatform: "macOS 26.5.2",
+    });
+  });
+
+  it("accepts a node-host macOS alias against the shared Mac app platform pin", () => {
+    expect(
+      testing.resolvePinnedClientMetadata({
+        clientId: "node-host",
+        clientMode: "node",
+        claimedPlatform: "macos",
+        claimedDeviceFamily: "Mac",
+        pairedPlatform: "macOS 26.5.2",
+        pairedDeviceFamily: "Mac",
+      }),
+    ).toEqual({
+      platformMismatch: false,
+      deviceFamilyMismatch: false,
+      pinnedPlatform: "macOS 26.5.2",
+      pinnedDeviceFamily: "Mac",
+    });
+  });
+
+  it("refreshes a shared node-host macOS pin from the native Mac app", () => {
+    expect(
+      testing.resolvePinnedClientMetadata({
+        clientId: "openclaw-macos",
+        clientMode: "ui",
+        claimedPlatform: "macOS 26.5.2",
+        claimedDeviceFamily: "Mac",
+        pairedPlatform: "macos",
         pairedDeviceFamily: "Mac",
       }),
     ).toEqual({

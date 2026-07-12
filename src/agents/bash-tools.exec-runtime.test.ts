@@ -3,7 +3,10 @@
  * Covers target resolution, cursor mode tracking, exit outcome classification,
  * system events, and process lifecycle behavior.
  */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
 import type { RunExit } from "../process/supervisor/types.js";
 import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../utils/timer-delay.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
@@ -80,10 +83,29 @@ function createDeferred<T>() {
 }
 
 function prepareSuspension(requestId: string) {
+  // This test owns only the background-exec registry. Other process-global
+  // activity counters may legitimately stay busy in the non-isolated suite.
+  const inspect: GatewayActiveWorkInspectors = {
+    getQueueSize: () => 0,
+    getPendingReplies: () => 0,
+    getEmbeddedRuns: () => 0,
+    getBackgroundExecSessions: getActiveBackgroundExecSessionCount,
+    getCronRuns: () => 0,
+    getActiveTasks: () => 0,
+    getTaskBlockers: () => [],
+    getRootRequests: () => 0,
+    getSessionAdmissions: () => 0,
+    getSessionMutations: () => 0,
+    getChatRuns: () => 0,
+    getQueuedTurns: () => 0,
+    getTerminalPersistence: () => 0,
+    getTerminalSessions: () => 0,
+  };
   return prepareGatewaySuspend({
     requestId,
     pauseScheduling: vi.fn(),
     resumeScheduling: vi.fn(),
+    inspect,
   });
 }
 
@@ -852,7 +874,10 @@ describe("runExecProcess POSIX command wrapper", () => {
     void ignoredRun;
 
     expect(supervisorMock.spawn).toHaveBeenCalledTimes(1);
-    const spawnCall = supervisorMock.spawn.mock.calls[0][0];
+    const spawnCall = expectDefined(
+      supervisorMock.spawn.mock.calls[0],
+      "supervisorMock.spawn.mock.calls[0] test invariant",
+    )[0];
 
     const commandStr = spawnCall.argv.join(" ");
     expect(commandStr).toContain(
@@ -896,7 +921,10 @@ describe("runExecProcess POSIX command wrapper", () => {
     void ignoredRun;
 
     expect(supervisorMock.spawn).toHaveBeenCalledTimes(1);
-    const spawnCall = supervisorMock.spawn.mock.calls[0][0];
+    const spawnCall = expectDefined(
+      supervisorMock.spawn.mock.calls[0],
+      "supervisorMock.spawn.mock.calls[0] test invariant",
+    )[0];
 
     const commandStr = spawnCall.argv.join(" ");
     expect(commandStr).not.toContain("export PATH=");

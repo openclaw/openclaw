@@ -66,13 +66,13 @@ const sessionStoreRuntimeFileBackedCompatNames = new Set([
 ]);
 const embeddedAgentSessionFileRuntimeNames = new Set(["resolveSessionFilePath"]);
 
+// Shipped beta.5 official plugins import these deprecated helpers during
+// doctor migrations. Remove this ratchet with the compatibility bridge once
+// beta.5 is outside the supported upgrade window; do not add runtime callers.
 export const allowedSessionStoreRuntimeFileBackedCompatExports = new Set([
   "loadSessionStore",
-  "readLatestAssistantTextFromSessionTranscript",
-  "resolveAndPersistSessionFile",
   "resolveSessionFilePath",
   "resolveSessionStoreEntry",
-  "saveSessionStore",
   "updateSessionStore",
 ]);
 

@@ -14,10 +14,6 @@ enum CommandResolver {
         return nil
     }
 
-    static func runtimeResolution() -> Result<RuntimeResolution, RuntimeResolutionError> {
-        RuntimeLocator.resolve(searchPaths: self.preferredPaths())
-    }
-
     static func runtimeResolution(searchPaths: [String]?) -> Result<RuntimeResolution, RuntimeResolutionError> {
         RuntimeLocator.resolve(searchPaths: searchPaths ?? self.preferredPaths())
     }
@@ -244,29 +240,6 @@ enum CommandResolver {
         #endif
     }
 
-    static func nodeCliPath() -> String? {
-        let root = self.projectRoot()
-        let candidates = [
-            root.appendingPathComponent("openclaw.mjs").path,
-            root.appendingPathComponent("bin/openclaw.js").path,
-        ]
-        for candidate in candidates where FileManager().isReadableFile(atPath: candidate) {
-            return candidate
-        }
-        return nil
-    }
-
-    static func hasAnyOpenClawInvoker(searchPaths: [String]? = nil) -> Bool {
-        if self.openclawExecutable(searchPaths: searchPaths) != nil { return true }
-        if self.findExecutable(named: "pnpm", searchPaths: searchPaths) != nil { return true }
-        if self.findExecutable(named: "node", searchPaths: searchPaths) != nil,
-           self.nodeCliPath() != nil
-        {
-            return true
-        }
-        return false
-    }
-
     static func openclawNodeCommand(
         subcommand: String,
         extraArgs: [String] = [],
@@ -317,7 +290,7 @@ enum CommandResolver {
         switch runtimeResult {
         case .success:
             let missingEntry = """
-            openclaw entrypoint missing (looked for dist/index.js or openclaw.mjs); run pnpm build.
+            openclaw CLI not found. Install the CLI, or run pnpm build in an OpenClaw source checkout.
             """
             return self.errorCommand(with: missingEntry)
         case let .failure(error):

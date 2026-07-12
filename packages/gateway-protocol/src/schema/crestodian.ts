@@ -1,6 +1,8 @@
 // Gateway Protocol schema module defines Crestodian chat payloads.
+import type { Static } from "typebox";
 import { Type } from "typebox";
 import { NonEmptyString } from "./primitives.js";
+import { WizardStartResultSchema } from "./wizard.js";
 
 /**
  * Crestodian chat lets clients (macOS app onboarding, future UIs) hold the
@@ -105,7 +107,24 @@ export const CrestodianSetupDetectResultSchema = Type.Object(
         { additionalProperties: false },
       ),
     ),
+    /** Provider-owned browser and device-code login methods. */
+    authOptions: Type.Optional(
+      Type.Array(
+        Type.Object(
+          {
+            id: NonEmptyString,
+            label: NonEmptyString,
+            hint: Type.Optional(Type.String()),
+            groupLabel: Type.Optional(Type.String()),
+            kind: Type.Union([Type.Literal("oauth"), Type.Literal("device-code")]),
+            featured: Type.Boolean(),
+          },
+          { additionalProperties: false },
+        ),
+      ),
+    ),
     workspace: NonEmptyString,
+    codexAppServerDetected: Type.Optional(Type.Boolean()),
     configuredModel: Type.Optional(Type.String()),
     setupComplete: Type.Boolean(),
   },
@@ -170,3 +189,29 @@ export const CrestodianSetupActivateResultSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+/** Starts one provider-owned interactive login as a gateway wizard session. */
+export const CrestodianSetupAuthStartParamsSchema = Type.Object(
+  {
+    /** Client-generated so cancellation remains possible if the start reply is lost. */
+    sessionId: NonEmptyString,
+    authChoice: NonEmptyString,
+    workspace: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export const CrestodianSetupAuthStartResultSchema = WizardStartResultSchema;
+
+// Wire types derive directly from local schema consts so public d.ts graphs never
+// pull in the ProtocolSchemas registry.
+export type CrestodianChatParams = Static<typeof CrestodianChatParamsSchema>;
+export type CrestodianChatResult = Static<typeof CrestodianChatResultSchema>;
+export type CrestodianSetupDetectParams = Static<typeof CrestodianSetupDetectParamsSchema>;
+export type CrestodianSetupDetectResult = Static<typeof CrestodianSetupDetectResultSchema>;
+export type CrestodianSetupActivateParams = Static<typeof CrestodianSetupActivateParamsSchema>;
+export type CrestodianSetupActivateResult = Static<typeof CrestodianSetupActivateResultSchema>;
+export type CrestodianSetupVerifyParams = Static<typeof CrestodianSetupVerifyParamsSchema>;
+export type CrestodianSetupVerifyResult = Static<typeof CrestodianSetupVerifyResultSchema>;
+export type CrestodianSetupAuthStartParams = Static<typeof CrestodianSetupAuthStartParamsSchema>;
+export type CrestodianSetupAuthStartResult = Static<typeof CrestodianSetupAuthStartResultSchema>;

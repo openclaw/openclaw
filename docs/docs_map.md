@@ -530,6 +530,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Text formatting
   - H2: Context fields
+  - H2: Outbound payloads
   - H2: Channel notes
   - H2: Related
 
@@ -538,14 +539,10 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /channels/matrix-migration
 - Headings:
   - H2: What the migration does automatically
-  - H2: What the migration cannot do automatically
+  - H2: Upgrading from OpenClaw releases older than 2026.4
   - H2: Recommended upgrade flow
-  - H2: How encrypted migration works
   - H2: Common messages and what they mean
-  - H3: Upgrade and detection messages
-  - H3: Encrypted-state recovery messages
   - H3: Manual recovery messages
-  - H3: Custom plugin install messages
   - H2: If encrypted history still does not come back
   - H2: If you want to start fresh for future messages
   - H2: Related
@@ -1495,6 +1492,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Structured health checks
   - H2: Check selection
   - H2: Post-upgrade mode
+  - H2: Shared state SQLite compaction
+  - H2: Session SQLite migration
+  - H3: Downgrading After Session SQLite Migration
   - H2: Notes
   - H2: macOS: launchctl env overrides
   - H2: Related
@@ -1508,10 +1508,16 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Tenant IDs
   - H2: fleet create
   - H3: Create options
+  - H3: Pinning by digest
+  - H3: Disk limits
+  - H3: Egress policy
   - H2: fleet list
   - H2: fleet status
+  - H2: fleet logs
   - H2: fleet start, fleet stop, and fleet restart
   - H2: fleet upgrade
+  - H2: fleet backup and fleet restore
+  - H2: fleet doctor
   - H2: fleet rm
   - H2: Storage and container layout
   - H2: Security profile
@@ -1647,6 +1653,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: OAuth workflow
   - H3: Streamable HTTP transport
   - H2: Control UI
+  - H2: MCP Apps
   - H2: Current limits
   - H2: Related
 
@@ -2718,13 +2725,14 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Producers (where presence comes from)
   - H3: 1) Gateway self entry
   - H3: 2) WebSocket connect
-  - H4: Why one-off CLI commands do not show up
+  - H4: Why ephemeral control-plane connections do not show up
   - H3: 3) system-event beacons
   - H3: 4) Node connects (role: node)
   - H2: Merge + dedupe rules (why instanceId matters)
   - H2: TTL and bounded size
   - H2: Remote/tunnel caveat (loopback IPs)
   - H2: Consumers
+  - H3: Control UI Devices page
   - H3: macOS Instances tab
   - H2: Debugging tips
   - H2: Related
@@ -2851,6 +2859,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Further reading
   - H2: Related
 
+## concepts/session-search.md
+
+- Route: /concepts/session-search
+- Headings:
+  - H1: Session search
+  - H2: Visibility and output
+  - H2: Index lifecycle
+  - H2: Session search vs. memory search
+
 ## concepts/session-tool.md
 
 - Route: /concepts/session-tool
@@ -2859,6 +2876,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Listing and reading sessions
   - H2: Sending cross-session messages
   - H2: Status and orchestration helpers
+  - H2: Session state changes
   - H2: Spawning sub-agents
   - H2: Visibility
   - H2: Further reading
@@ -3025,6 +3043,20 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Where logs go
   - H2: Extract logs
   - H2: Notes
+  - H2: Related
+
+## gateway/audit.md
+
+- Route: /gateway/audit
+- Headings:
+  - H1: Audit history
+  - H2: Record families
+  - H2: Message lifecycle events
+  - H3: Conversation-kind classification
+  - H2: Privacy model
+  - H2: Coverage and proof limits
+  - H2: Storage, retention, and migration
+  - H2: Querying
   - H2: Related
 
 ## gateway/authentication.md
@@ -3654,6 +3686,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Transport and framing
   - H2: Handshake
+  - H3: Worker role and closed protocol
   - H3: Client capabilities
   - H3: Node connect example
   - H2: Roles and scopes
@@ -3946,6 +3979,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Auth detail codes quick map
   - H2: Gateway service not running
   - H2: macOS gateway silently stops responding, then resumes when you touch the dashboard
+  - H2: macOS launchd supervisor loop with duplicate gateway/node LaunchAgents
   - H2: Gateway exits during high memory use
   - H2: Gateway rejected invalid config
   - H2: Gateway probe warnings
@@ -4838,6 +4872,18 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Notes
   - H2: Related
 
+## nodes/presence.md
+
+- Route: /nodes/presence
+- Headings:
+  - H2: Requirements
+  - H2: Check the active computer
+  - H2: How activity becomes presence
+  - H2: Privacy and model context
+  - H2: How connection alerts are routed
+  - H2: Troubleshooting
+  - H2: Related
+
 ## nodes/talk.md
 
 - Route: /nodes/talk
@@ -4917,6 +4963,16 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Milestones
   - H2: Open questions
 
+## plan/path3-sqlite-session-artifact-family.md
+
+- Route: /plan/path3-sqlite-session-artifact-family
+- Headings:
+  - H1: Path 3 SQLite Session Artifact Family
+  - H2: Authoritative family
+  - H2: Non-family artifacts after the flip
+  - H2: Patch points
+  - H2: Focused tests
+
 ## plan/ui-channels.md
 
 - Route: /plan/ui-channels
@@ -4961,6 +5017,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H4: Gateway Canvas Host (recommended for web content)
   - H3: 8. Voice + expanded Android command surface
   - H3: 9. Workspace files (read-only)
+  - H2: Review command approvals
   - H2: Assistant entrypoints
   - H2: Notification forwarding
   - H2: Related
@@ -4999,6 +5056,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: What it does
   - H2: Requirements
   - H2: Quick start (pair + connect)
+  - H2: Review command approvals
   - H2: Optional direct Apple Watch node
   - H2: Relay-backed push for official builds
   - H2: Background alive beacons
@@ -7059,6 +7117,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: What core still owns
   - H3: Harness-owned auth bootstrap
   - H3: Verified setup runtime artifacts
+  - H3: Request-transport contract
   - H2: Register a harness
   - H3: Delegated execution
   - H2: Selection policy
@@ -7912,6 +7971,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Usage and cost tracking
   - H2: Quick choice
   - H2: Naming map
+  - H2: Implicit agent runtime
   - H2: GPT-5.6 limited preview
   - H2: OpenClaw feature coverage
   - H2: Memory embeddings
@@ -8261,6 +8321,38 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Static Bans
   - H2: Done Criteria
 
+## refactor/operator-approvals.md
+
+- Route: /refactor/operator-approvals
+- Headings:
+  - H1: Multi-surface operator approvals
+  - H2: Goals
+  - H2: Non-goals
+  - H2: Pre-rollout baseline and evidence map
+  - H2: Prior art
+  - H2: Architecture and ownership
+  - H2: Persistent record
+  - H2: State machine and compare-and-set
+  - H2: Gateway API
+  - H2: Events and portable actions
+  - H2: Control UI
+  - H2: Authorization and privacy
+  - H2: Audience projection
+  - H2: Delivered-surface convergence
+  - H2: Restart, timeout, and route semantics
+  - H2: Compatibility plan
+  - H2: Rollout
+  - H3: PR 1: durable lifecycle
+  - H3: PR 2: typed actions and channel callbacks
+  - H3: PR 3: Control UI deep link
+  - H3: PR 4: native clients
+  - H3: PR 5: ancestor lifecycle propagation
+  - H3: PR 6: fail-closed behavior
+  - H3: Follow-up: durable remote-message cleanup
+  - H2: Tests
+  - H2: Observability
+  - H2: Open decisions
+
 ## reference/AGENTS.default.md
 
 - Route: /reference/AGENTS.default
@@ -8428,6 +8520,19 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Design contract
   - H2: Subpath exports
 
+## reference/path3-live-sqlite-e2e-harness.md
+
+- Route: /reference/path3-live-sqlite-e2e-harness
+- Headings:
+  - H2: Command shape
+  - H2: Isolated built-CLI proof
+  - H2: Preflight
+  - H2: Agent-driven scenario
+  - H2: Per-step assertions
+  - H2: Evidence artifact
+  - H2: Safety rules
+  - H2: Passing result
+
 ## reference/prompt-caching.md
 
 - Route: /reference/prompt-caching
@@ -8517,11 +8622,12 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Two persistence layers
   - H2: On-disk locations
   - H2: Store maintenance and disk controls
+  - H3: Downgrading After The SQLite Flip
   - H2: Cron sessions and run logs
   - H2: Session keys (sessionKey)
   - H2: Session ids (sessionId)
-  - H2: Session store schema (sessions.json)
-  - H2: Transcript structure (.jsonl)
+  - H2: Session store schema
+  - H2: Transcript event structure
   - H2: Context windows vs tracked tokens
   - H2: Compaction: what it is
   - H3: Chunk boundaries and tool pairing
@@ -9360,6 +9466,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Plugin approval forwarding
   - H3: Same-chat approvals on any channel
   - H3: Native approval delivery
+  - H3: Official mobile operator apps
   - H3: macOS IPC flow
   - H2: FAQ
   - H3: When would accountId and threadId be used on an approval target?
@@ -9921,7 +10028,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Access
   - H2: What gets recorded
   - H2: Bundle files
-  - H2: Capture location
+  - H2: Capture storage
   - H2: Disable capture
   - H2: Tune flush timeout
   - H2: Privacy and limits
@@ -10062,7 +10169,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Content security policy
   - H2: Avatar route auth
   - H2: Assistant media route auth
-  - H2: Building the UI
+  - H2: Approval links
   - H2: Blank Control UI page
   - H2: Debugging/testing: dev server + remote Gateway
   - H2: Related
