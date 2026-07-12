@@ -238,7 +238,9 @@ describe("UrbitSSEClient", () => {
 
     describe("stream buffer bounding", () => {
       it("rejects oversized stream buffer before unbounded accumulation", async () => {
-        const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
+        const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123", {
+          autoReconnect: false,
+        });
         const oneMb = 1024 * 1024;
         const megaChunk = "x".repeat(oneMb);
 
@@ -266,7 +268,9 @@ describe("UrbitSSEClient", () => {
         const secondChunk = `\nid: 1\ndata: {"json":{"value":"${nextValue}"}}\n\n`;
         expect(Buffer.byteLength(firstChunk + secondChunk, "utf8")).toBeGreaterThan(cap);
 
-        const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
+        const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123", {
+          autoReconnect: false,
+        });
         const handler = vi.fn();
         client.eventHandlers.set(1, { event: handler });
         const stream = Readable.from([firstChunk, secondChunk]);
@@ -287,7 +291,9 @@ describe("UrbitSSEClient", () => {
           encoded.subarray(emojiStart + 2, -1),
           encoded.subarray(-1),
         ]);
-        const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
+        const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123", {
+          autoReconnect: false,
+        });
         const handler = vi.fn();
         client.eventHandlers.set(1, { event: handler });
 
@@ -295,14 +301,25 @@ describe("UrbitSSEClient", () => {
         expect(handler).toHaveBeenCalledWith({ text: "😀" });
       });
 
-      it("preserves surrogate pairs split across string chunks", async () => {
-        const stream = Readable.from(['id: 1\ndata: {"json":{"text":"\uD83D', '\uDE00"}}\n', "\n"]);
-        const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
+      it("counts a boundary-sized surrogate pair split across string chunks once", async () => {
+        const cap = 16 * 1024 * 1024;
+        const prefix = 'id: 1\ndata: {"json":{"text":"';
+        const suffix = '"}}';
+        const padLen = cap - Buffer.byteLength(prefix + "😀" + suffix, "utf8");
+        const stream = Readable.from([
+          prefix + "a".repeat(padLen) + "\uD83D",
+          `\uDE00${suffix}\n\n`,
+        ]);
+        const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123", {
+          autoReconnect: false,
+        });
         const handler = vi.fn();
         client.eventHandlers.set(1, { event: handler });
 
         await client.processStream(stream);
-        expect(handler).toHaveBeenCalledWith({ text: "😀" });
+        const payload = handler.mock.calls[0]?.[0] as { text?: string } | undefined;
+        expect(payload?.text).toHaveLength(padLen + 2);
+        expect(payload?.text?.endsWith("😀")).toBe(true);
       });
     });
 

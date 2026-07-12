@@ -242,7 +242,17 @@ export class UrbitSSEClient {
     let bufferBytes = 0;
 
     const appendPending = (text: string) => {
-      const nextBytes = bufferBytes + Buffer.byteLength(text, "utf8");
+      const previousCodeUnit = buffer.charCodeAt(buffer.length - 1);
+      const firstCodeUnit = text.charCodeAt(0);
+      const joinsSurrogatePair =
+        previousCodeUnit >= 0xd800 &&
+        previousCodeUnit <= 0xdbff &&
+        firstCodeUnit >= 0xdc00 &&
+        firstCodeUnit <= 0xdfff;
+      // Buffer.byteLength counts either lone surrogate as three bytes. When
+      // chunks join a pair, correct the retained total to the combined four bytes.
+      const nextBytes =
+        bufferBytes + Buffer.byteLength(text, "utf8") - (joinsSurrogatePair ? 2 : 0);
       if (nextBytes > MAX_SSE_PAYLOAD_BYTES) {
         throw new Error("Tlon Urbit SSE stream buffer exceeded 16 MiB limit");
       }
