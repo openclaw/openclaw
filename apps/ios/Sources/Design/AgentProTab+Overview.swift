@@ -420,9 +420,9 @@ extension AgentProTab {
 
     func metricTileContent(
         icon: String,
-        title: String,
+        title: OpenClawTextValue,
         value: String,
-        detail: String,
+        detail: OpenClawTextValue,
         color: Color,
         showsChevron: Bool) -> some View
     {

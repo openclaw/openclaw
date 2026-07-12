@@ -345,13 +345,13 @@ struct AgentProDreamingDestination: View {
     }
 
     private func dreamingEntriesList(
-        title: String,
+        title: OpenClawTextValue,
         entries: [DreamingEntryLite],
-        emptyTitle: String,
-        emptyDetail: String) -> some View
+        emptyTitle: OpenClawTextValue,
+        emptyDetail: OpenClawTextValue) -> some View
     {
         VStack(alignment: .leading, spacing: 8) {
-            ProSectionHeader(title: .localized(title))
+            ProSectionHeader(title: title)
             ProCard(padding: 0) {
                 if entries.isEmpty {
                     self.emptyDetailRow(
@@ -467,13 +467,17 @@ struct AgentProDreamingDestination: View {
         .padding(.horizontal, 14)
     }
 
-    private func emptyDetailRow(icon: String, title: String, detail: String) -> some View {
+    private func emptyDetailRow(
+        icon: String,
+        title: OpenClawTextValue,
+        detail: OpenClawTextValue) -> some View
+    {
         HStack(spacing: 12) {
             ProIconBadge(systemName: icon, color: .secondary)
             VStack(alignment: .leading, spacing: 3) {
-                Text(title)
+                title.text
                     .font(OpenClawType.subheadSemiBold)
-                Text(detail)
+                detail.text
                     .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
