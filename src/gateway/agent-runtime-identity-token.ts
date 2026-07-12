@@ -11,6 +11,11 @@ import type { AgentRuntimeMessageActionContext } from "./message-action-turn-cap
 const AGENT_RUNTIME_IDENTITY_TOKEN_CONTEXT = "openclaw:gateway-agent-runtime-identity-token:v1";
 const AGENT_RUNTIME_IDENTITY_TOKEN_KIND = "agent-runtime";
 
+// Every real caller produces a payloadPart of ~200 base64url characters. 4096 is
+// a generous safety margin that rejects oversized input before any Buffer
+// allocation inside decodePayload, which runs before HMAC signature verification.
+const MAX_BASE64URL_PAYLOAD_LENGTH = 4096;
+
 export type AgentRuntimeIdentity = {
   kind: "agentRuntime";
   agentId: string;
@@ -202,6 +207,9 @@ export function verifyAgentRuntimeIdentityToken(
   }
   const [payloadPart, signature, ...extra] = token.split(".");
   if (!payloadPart || !signature || extra.length > 0) {
+    return undefined;
+  }
+  if (payloadPart.length > MAX_BASE64URL_PAYLOAD_LENGTH) {
     return undefined;
   }
   const payload = decodePayload(payloadPart, nowMs);
