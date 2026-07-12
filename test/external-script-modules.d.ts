@@ -159,6 +159,12 @@ declare module "*openclaw-live-updater/scripts/update-main.mjs" {
     home: string,
     stateDir?: string,
   ): string | null;
+  export function replaceLaunchAgentProgramArgument(
+    programArguments: unknown,
+    index: number,
+    expected: string,
+    replacement: string,
+  ): string[];
   export function repointManagedGatewayDeployment(
     checkout: string,
     deployment: GatewayDeployment,

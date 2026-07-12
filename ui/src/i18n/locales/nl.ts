@@ -3477,9 +3477,12 @@ export const nl: TranslationMap = {
       refresh: "Vernieuwen",
       refreshing: "Vernieuwen...",
       paused: "Gepauzeerd",
+      tasksTab: "Automatiseringen",
+      activityTab: "Uitvoeringsgeschiedenis",
     },
     suggestions: {
       title: "Automatiseringsideeën",
+      add: "Toevoegen",
       schedules: {
         weekdayMornings: "Op weekdagen om 9:00 uur",
         everyMorning: "Dagelijks om 8:00 uur",
@@ -3528,16 +3531,18 @@ export const nl: TranslationMap = {
     stats: {
       scheduler: "Planner",
       tasks: "Taken",
+      failing: "Mislukt",
       nextWake: "Volgende activering",
     },
     detail: {
       newTitle: "Nieuwe geplande taak",
       newSubtitle: "Beschrijf wat OpenClaw moet doen en kies wanneer het wordt uitgevoerd.",
-      overviewTitle: "Recente activiteit",
-      overviewSubtitle: "Laatste uitvoeringen van alle geplande taken.",
+      back: "Alle automatiseringen",
+      settingsTab: "Instellingen",
       historyTitle: "Uitvoeringsgeschiedenis",
       detailsSection: "Details",
       frequencySection: "Frequentie",
+      active: "Actief",
       paused: "Gepauzeerd",
     },
     actions: {
@@ -3574,6 +3579,8 @@ export const nl: TranslationMap = {
       allStatuses: "Alle statussen",
       allDelivery: "Alle leveringen",
       noMatching: "Geen overeenkomende runs.",
+      emptyTitle: "Nog geen uitvoeringen",
+      emptyHint: "Uitvoeringen verschijnen hier zodra een automatisering wordt geactiveerd.",
       loadMore: "Meer runs laden",
       runStatusOk: "OK",
       runStatusError: "Fout",

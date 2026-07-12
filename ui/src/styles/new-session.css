@@ -60,6 +60,15 @@ openclaw-new-session-page {
   padding: 0 2px;
 }
 
+/* The worktree toggle and its branch/name fields wrap as one unit so the
+   dependent fields never land on a different line than their toggle. */
+.new-session-page__target-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: inherit;
+}
+
 .new-session-page__target {
   display: inline-flex;
   align-items: center;
@@ -250,4 +259,33 @@ openclaw-new-session-page {
 .new-session-page__browser-use:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+/* Phones (and short landscape): match the chat thread's mobile inset and
+   condense the target rows in DOM order — the folder chip flexes next to
+   Where and the worktree group wraps below as a unit, so visual, reading,
+   and tab order stay aligned at every phone width. */
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .new-session-page__scroll {
+    padding: 12px 8px;
+  }
+
+  .new-session-page__targets {
+    gap: 4px 12px;
+  }
+
+  .new-session-page__target--folder {
+    flex: 1 1 140px;
+    min-width: 140px;
+  }
+
+  .new-session-page__target--folder input {
+    flex: 1 1 auto;
+    width: 0;
+    max-width: none;
+  }
+
+  .new-session-page__branch {
+    width: 110px;
+  }
 }

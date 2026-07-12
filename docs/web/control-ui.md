@@ -201,7 +201,7 @@ A **Search** field at the top of the sidebar opens the command palette (⌘K). C
 
   </Accordion>
   <Accordion title="Cron, tasks, plugins, skills, devices, exec approvals">
-    - Automations (cron jobs): a task list with All/Active/Paused tabs, search, and starter suggestions next to a detail pane that edits the selected task inline (prompt, details, frequency, advanced overrides) with per-task run history; with no selection the pane shows recent activity across all tasks (`cron.*`).
+    - Automations (cron jobs): stat cards (automation count, failing count, scheduler state, next wake) above an Automations/Run history tab switch; the Automations tab lists jobs in a filterable table (All/Active/Paused, search, schedule and last-run filters, per-row action menu) with starter suggestions below, and the Run history tab shows recent runs across all automations (`cron.*`).
     - Tasks: live active and recent background task ledger with linked sessions and cancellation (`tasks.*`).
     - Plugins: browse the installed inventory and curated store, search ClawHub, install and remove plugin code, and enable or disable installed plugins (`plugins.*`); MCP server rows edit `mcp.servers` through the config methods.
     - Skills: status, enable/disable, install, API key updates (`skills.*`).
@@ -238,8 +238,8 @@ A **Search** field at the top of the sidebar opens the command palette (⌘K). C
 
   </Accordion>
   <Accordion title="Automations panel notes">
-    - Selecting a task opens it directly in the detail pane for inline editing; Run now, pause/resume, clone, and remove live in the pane header.
-    - Suggestions under the task list prefill the create form with an editable prompt and schedule.
+    - Selecting a row opens a full-page detail view with an Active/Paused switch and Run now in the header (run-if-due, clone, and remove in its menu); the Settings tab edits the automation inline (prompt, details, frequency, advanced overrides) and the Run history tab shows that automation's runs.
+    - Starter automations under the table prefill the create form with an editable prompt and schedule.
     - For isolated tasks, delivery defaults to announce summary; switch to none for internal-only runs.
     - Channel/target fields appear when announce is selected.
     - Webhook mode uses `delivery.mode = "webhook"` with `delivery.to` set to a valid HTTP(S) webhook URL.

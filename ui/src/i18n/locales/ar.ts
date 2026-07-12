@@ -3436,9 +3436,12 @@ export const ar: TranslationMap = {
       refresh: "تحديث",
       refreshing: "جارٍ التحديث...",
       paused: "متوقف مؤقتًا",
+      tasksTab: "عمليات الأتمتة",
+      activityTab: "سجل التشغيل",
     },
     suggestions: {
       title: "أفكار للأتمتة",
+      add: "إضافة",
       schedules: {
         weekdayMornings: "أيام الأسبوع الساعة 9:00 ص",
         everyMorning: "يوميًا الساعة 8:00 ص",
@@ -3487,16 +3490,18 @@ export const ar: TranslationMap = {
     stats: {
       scheduler: "المجدول",
       tasks: "المهام",
+      failing: "متعطّلة",
       nextWake: "التشغيل التالي",
     },
     detail: {
       newTitle: "مهمة مجدولة جديدة",
       newSubtitle: "صِف ما ينبغي أن يفعله OpenClaw، ثم اختر وقت تشغيله.",
-      overviewTitle: "النشاط الأخير",
-      overviewSubtitle: "أحدث عمليات التشغيل عبر جميع المهام المجدولة.",
+      back: "كل عمليات الأتمتة",
+      settingsTab: "الإعدادات",
       historyTitle: "سجل التشغيل",
       detailsSection: "التفاصيل",
       frequencySection: "التكرار",
+      active: "نشط",
       paused: "متوقف مؤقتًا",
     },
     actions: {
@@ -3533,6 +3538,8 @@ export const ar: TranslationMap = {
       allStatuses: "كل الحالات",
       allDelivery: "كل عمليات التسليم",
       noMatching: "لا توجد تشغيلات مطابقة.",
+      emptyTitle: "لا توجد عمليات تشغيل بعد",
+      emptyHint: "ستظهر عمليات التشغيل هنا بمجرد بدء إحدى عمليات الأتمتة.",
       loadMore: "تحميل المزيد من التشغيلات",
       runStatusOk: "حسنًا",
       runStatusError: "خطأ",
