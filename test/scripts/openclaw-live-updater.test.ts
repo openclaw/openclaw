@@ -29,6 +29,7 @@ import {
   prepareGatewaySuspension,
   replaceLaunchAgentProgramArgument,
   repointManagedGatewayDeployment,
+  resolveConfiguredPluginLoadPaths,
   resolveManagedGatewayEntrypoint,
   runBuiltGatewayCall,
   verifyGatewayReadiness,
@@ -406,6 +407,17 @@ describe("openclaw live updater", () => {
     expect(
       parseGatewayLogAudit(output, Date.parse("2026-07-11T08:00:02.000Z"), sourceRoot, null),
     ).toMatchObject({ entries: 5, errorCount: 5 });
+  });
+
+  test("resolves configured plugin paths without requiring a service working directory", () => {
+    expect(resolveConfiguredPluginLoadPaths([], undefined)).toEqual([]);
+    expect(resolveConfiguredPluginLoadPaths(["/opt/openclaw-plugin"], undefined)).toEqual([
+      "/opt/openclaw-plugin",
+    ]);
+    expect(resolveConfiguredPluginLoadPaths(["./plugins/example"], undefined)).toBeNull();
+    expect(resolveConfiguredPluginLoadPaths(["./plugins/example"], "/srv/openclaw")).toEqual([
+      "/srv/openclaw/plugins/example",
+    ]);
   });
 
   test("retries bounded Gateway readiness after restart", () => {

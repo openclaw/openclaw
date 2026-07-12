@@ -1672,9 +1672,6 @@ function readConfiguredPluginLoadPaths(checkout, deployment) {
   } catch {
     return null;
   }
-  if (!managedDeployment.workingDirectory) {
-    return null;
-  }
   try {
     const output = runBuiltGatewayCli(
       checkout,
@@ -1682,16 +1679,10 @@ function readConfiguredPluginLoadPaths(checkout, deployment) {
       managedDeployment,
       { stderr: "pipe" },
     );
-    const paths = JSON.parse(output)?.paths;
-    return Array.isArray(paths)
-      ? paths
-          .filter((entry) => typeof entry === "string")
-          .map((entry) =>
-            path.isAbsolute(entry)
-              ? entry
-              : path.resolve(managedDeployment.workingDirectory, entry),
-          )
-      : [];
+    return resolveConfiguredPluginLoadPaths(
+      JSON.parse(output)?.paths,
+      managedDeployment.workingDirectory,
+    );
   } catch (error) {
     const errorOutput = [error?.stdout, error?.stderr, error?.message]
       .filter((entry) => typeof entry === "string" || Buffer.isBuffer(entry))
@@ -1702,6 +1693,19 @@ function readConfiguredPluginLoadPaths(checkout, deployment) {
     }
     return null;
   }
+}
+
+export function resolveConfiguredPluginLoadPaths(paths, workingDirectory) {
+  if (!Array.isArray(paths)) {
+    return [];
+  }
+  const entries = paths.filter((entry) => typeof entry === "string");
+  if (!workingDirectory && entries.some((entry) => !path.isAbsolute(entry))) {
+    return null;
+  }
+  return entries.map((entry) =>
+    path.isAbsolute(entry) ? entry : path.resolve(workingDirectory, entry),
+  );
 }
 
 function defaultAuditGatewayLogs(checkout, sinceMs, deployment = null) {
