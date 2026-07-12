@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -886,6 +886,46 @@ describe("channel ingress queue", () => {
       });
     });
 
+    it("does not tombstone a corrupt actively claimed row on duplicate enqueue", async () => {
+      await withTempState(async (stateDir) => {
+        const queue = createChannelIngressQueue<{ text: string }>({
+          channelId: "test",
+          accountId: "account",
+          stateDir,
+        });
+        insertCorruptRow(stateDir, '["test","account"]', "dup-claimed-bad", {
+          payload_json: "{corrupt",
+          status: "claimed",
+          claim_token: "test-token-placeholder",
+          claim_owner: "active-worker",
+          claimed_at: 200,
+        });
+
+        await expect(queue.enqueue("dup-claimed-bad", { text: "late" })).rejects.toThrow(
+          "Corrupt payload_json in claimed channel ingress event",
+        );
+
+        const { db } = openOpenClawStateDatabase({
+          env: createStateDirEnv(stateDir),
+        });
+        const row = executeSqliteQueryTakeFirstSync(
+          db,
+          getNodeSqliteKysely<ChannelIngressTestDatabase>(db)
+            .selectFrom("channel_ingress_events")
+            .select(["status", "payload_json", "claim_token", "claim_owner", "claimed_at"])
+            .where("queue_name", "=", '["test","account"]')
+            .where("event_id", "=", "dup-claimed-bad"),
+        );
+        expect(row).toEqual({
+          status: "claimed",
+          payload_json: "{corrupt",
+          claim_token: "test-token-placeholder",
+          claim_owner: "active-worker",
+          claimed_at: 200,
+        });
+      });
+    });
+
     it("tombstones corrupt claimed rows during stale recovery", async () => {
       await withTempState(async (stateDir) => {
         const queue = createChannelIngressQueue<{ text: string }>({
@@ -926,6 +966,48 @@ describe("channel ingress queue", () => {
         expect(row?.claim_token).toBeNull();
         expect(row?.claimed_at).toBeNull();
         await expect(queue.recoverStaleClaims({ staleMs: Date.now() - oldTime })).resolves.toBe(0);
+      });
+    });
+
+    it("does not bypass recovery policy for a corrupt stale claim", async () => {
+      await withTempState(async (stateDir) => {
+        const queue = createChannelIngressQueue<{ text: string }>({
+          channelId: "test",
+          accountId: "account",
+          stateDir,
+        });
+        insertCorruptRow(stateDir, '["test","account"]', "stale-policy-bad", {
+          payload_json: "{corrupt",
+          status: "claimed",
+          claim_token: "test-token-placeholder",
+          claim_owner: "active-worker",
+          claimed_at: 10,
+        });
+        const shouldRecover = vi.fn(() => true);
+
+        await expect(
+          queue.recoverStaleClaims({ staleMs: 10, now: 20, shouldRecover }),
+        ).resolves.toBe(0);
+        expect(shouldRecover).not.toHaveBeenCalled();
+
+        const { db } = openOpenClawStateDatabase({
+          env: createStateDirEnv(stateDir),
+        });
+        const row = executeSqliteQueryTakeFirstSync(
+          db,
+          getNodeSqliteKysely<ChannelIngressTestDatabase>(db)
+            .selectFrom("channel_ingress_events")
+            .select(["status", "payload_json", "claim_token", "claim_owner", "claimed_at"])
+            .where("queue_name", "=", '["test","account"]')
+            .where("event_id", "=", "stale-policy-bad"),
+        );
+        expect(row).toEqual({
+          status: "claimed",
+          payload_json: "{corrupt",
+          claim_token: "test-token-placeholder",
+          claim_owner: "active-worker",
+          claimed_at: 10,
+        });
       });
     });
   });

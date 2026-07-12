@@ -474,12 +474,19 @@ export function createChannelIngressQueue<
         }
         const dup = rowToEnqueueResult<TPayload, TMetadata, TCompletedMetadata>(row);
         if (dup === null) {
-          const expectedStatus = row.status === "claimed" ? "claimed" : "pending";
+          // A live claimant may already be producing external side effects.
+          // Duplicate enqueue cannot prove ownership is stale, so leave claimed
+          // corruption for the ownership-aware recovery path.
+          if (row.status === "claimed") {
+            throw new Error(
+              `Corrupt payload_json in claimed channel ingress event ${queueName}/${eventId}`,
+            );
+          }
           if (
             !tombstoneCorruptPayloadRow({
               db: tx.db,
               row,
-              expectedStatus,
+              expectedStatus: "pending",
               failedAt: updatedAt,
             })
           ) {
@@ -814,6 +821,12 @@ export function createChannelIngressQueue<
     for (const row of claimedRows) {
       const claimRec = claimedRecord<TPayload, TMetadata>(row);
       if (claimRec === null) {
+        // The recovery predicate owns liveness decisions, but a corrupt payload
+        // cannot be materialized into its callback contract. Preserve the claim
+        // instead of bypassing caller policy and racing an active worker.
+        if (recoverOptions?.shouldRecover) {
+          continue;
+        }
         const tombstoned = runOpenClawStateWriteTransaction(
           (tx) =>
             tombstoneCorruptPayloadRow({
