@@ -125,9 +125,12 @@ export async function sweepCronRunSessions(params: {
   } catch (err) {
     params.log.warn({ err: String(err) }, "cron-reaper: failed to sweep session store");
     return { swept: false, pruned: 0 };
+  } finally {
+    // Always update the throttle timestamp, even on error, to prevent
+    // unbounded retry loops when the store has a persistent problem
+    // (e.g. EACCES, disk full).
+    lastSweepAtMsByStore.set(storePath, now);
   }
-
-  lastSweepAtMsByStore.set(storePath, now);
 
   if (transcriptCleanupError) {
     params.log.warn(
