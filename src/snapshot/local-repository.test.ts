@@ -312,7 +312,7 @@ describe("local SQLite snapshot repository", () => {
     const originalMkdtemp = fs.mkdtemp.bind(fs);
     const prefixes: string[] = [];
     const mkdtempSpy = vi.spyOn(fs, "mkdtemp").mockImplementation(async (prefix, options) => {
-      prefixes.push(String(prefix));
+      prefixes.push(prefix);
       return await originalMkdtemp(prefix, options);
     });
 

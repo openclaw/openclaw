@@ -1366,13 +1366,13 @@ function windowsSecurityEntryToAclEntry(
   if ((entry.rightsMask & ~WINDOWS_KNOWN_FILE_RIGHTS_MASK) !== 0) {
     rights.push("UNKNOWN");
   }
-  const inheritanceFlags = entry.inheritanceFlags.split(",").map((flag) => flag.trim());
-  const propagationFlags = entry.propagationFlags.split(",").map((flag) => flag.trim());
+  const inheritanceFlags = new Set(entry.inheritanceFlags.split(",").map((flag) => flag.trim()));
+  const propagationFlags = new Set(entry.propagationFlags.split(",").map((flag) => flag.trim()));
   const rawFlags = [
-    inheritanceFlags.includes("ObjectInherit") ? "(OI)" : "",
-    inheritanceFlags.includes("ContainerInherit") ? "(CI)" : "",
-    propagationFlags.includes("NoPropagateInherit") ? "(NP)" : "",
-    propagationFlags.includes("InheritOnly") ? "(IO)" : "",
+    inheritanceFlags.has("ObjectInherit") ? "(OI)" : "",
+    inheritanceFlags.has("ContainerInherit") ? "(CI)" : "",
+    propagationFlags.has("NoPropagateInherit") ? "(NP)" : "",
+    propagationFlags.has("InheritOnly") ? "(IO)" : "",
   ].join("");
   return {
     principal: entry.principal,
