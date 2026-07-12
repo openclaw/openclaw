@@ -235,4 +235,37 @@ describe("config backup rotation", () => {
       await expectPathMissing(`${configPath}.pre-update`);
     });
   });
+
+  it("createPreUpdateConfigSnapshot retries after a transient read failure", async () => {
+    await withTempHome(async () => {
+      const configPath = resolveConfigPathFromTempState();
+      const content = JSON.stringify({ version: "retry-me" });
+      await fs.writeFile(configPath, content, { mode: 0o600 });
+
+      const { existsSync } = await import("node:fs");
+      let readAttempts = 0;
+      const flakyReadFile = async (filePath: string, encoding: "utf-8") => {
+        readAttempts += 1;
+        if (readAttempts === 1) {
+          throw new Error("transient read failure");
+        }
+        return fs.readFile(filePath, encoding);
+      };
+
+      await createPreUpdateConfigSnapshot({
+        configPath,
+        fs: { writeFile: fs.writeFile, readFile: flakyReadFile, existsSync },
+      });
+      await expectPathMissing(`${configPath}.pre-update`);
+
+      await createPreUpdateConfigSnapshot({
+        configPath,
+        fs: { writeFile: fs.writeFile, readFile: flakyReadFile, existsSync },
+      });
+
+      const snapshotPath = `${configPath}.pre-update`;
+      await expect(fs.readFile(snapshotPath, "utf-8")).resolves.toBe(content);
+      expect(readAttempts).toBe(2);
+    });
+  });
 });
