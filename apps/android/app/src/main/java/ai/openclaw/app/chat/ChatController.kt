@@ -3131,13 +3131,16 @@ internal fun parseChatMessageContent(el: JsonElement): ChatMessageContent? {
         text = obj["text"].asStringOrNull() ?: obj["content"].asStringOrNull(),
       )
 
-    "image", "audio" ->
+    "image", "audio" -> {
+      val type = obj["type"].asStringOrNull() ?: "image"
+      val inlineContent = obj["content"].asStringOrNull()?.takeIf { it.isNotBlank() }
       ChatMessageContent(
-        type = obj["type"].asStringOrNull() ?: "image",
+        type = type,
         mimeType = obj["mimeType"].asStringOrNull(),
         fileName = obj["fileName"].asStringOrNull(),
-        base64 = obj["content"].asStringOrNull()?.takeIf { it.isNotBlank() },
+        base64 = inlineContent?.takeIf { type != "image" || it.length <= CHAT_IMAGE_MAX_BASE64_CHARS },
       )
+    }
 
     "attachment" -> {
       val attachment = obj["attachment"].asObjectOrNull() ?: return null
