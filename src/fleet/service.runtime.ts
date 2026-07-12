@@ -640,10 +640,10 @@ export function createFleetService(options: FleetServiceOptions = {}) {
                 wasRunning: inspection.running,
                 checkpoint,
               });
-            } catch {
+            } catch (restoreError) {
               throw new Error(
                 `Fleet upgrade failed for ${record.tenantId}; the previous container could not be restored.`,
-                { cause: error },
+                { cause: restoreError },
               );
             }
             throw new Error(
