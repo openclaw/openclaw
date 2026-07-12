@@ -11,7 +11,7 @@ function createConnectionProps(overrides: Partial<ConnectionProps> = {}): Connec
     hello: null,
     settings: {
       gatewayUrl: "ws://127.0.0.1:18789",
-      token: "secret-token",
+      token: "tok",
       sessionKey: "main",
       lastActiveSessionKey: "main",
       theme: "claw",
