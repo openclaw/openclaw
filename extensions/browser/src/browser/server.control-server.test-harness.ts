@@ -225,6 +225,7 @@ const pwMocks = vi.hoisted(() => {
     })),
     resizeViewportViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
     selectOptionViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
+    setGeolocationViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
     setInputFilesViaPlaywright: vi.fn(async () => {}),
     snapshotAiViaPlaywright: vi.fn(async () => ({ snapshot: "ok" })),
     snapshotRoleViaPlaywright: vi.fn(async () => ({

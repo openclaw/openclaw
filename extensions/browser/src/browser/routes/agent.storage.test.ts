@@ -193,18 +193,17 @@ describe("browser storage route parsing", () => {
       });
     });
 
-    it("allows clearing without coordinates", () => {
+    it("allows clearing without parsing unused geolocation fields", () => {
       expect(
         parseGeolocationOptions({
           clear: true,
-          latitude: "",
-          longitude: "",
+          latitude: "not-used",
+          longitude: "not-used",
           accuracy: "not-used",
-          origin: " https://example.com ",
+          origin: "not a url",
         }),
       ).toEqual({
         clear: true,
-        origin: "https://example.com",
       });
     });
 
@@ -283,5 +282,30 @@ describe("browser storage route parsing", () => {
         expect(pwMocks.setGeolocationViaPlaywright).not.toHaveBeenCalled();
       },
     );
+
+    it("clears geolocation even when unused origin is malformed", async () => {
+      const { response, profileCtx } = await callSetGeolocation({
+        clear: true,
+        latitude: "not-used",
+        longitude: "not-used",
+        origin: "not a url",
+        targetId: "geo-tab",
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.body).toStrictEqual({ ok: true, targetId: "geo-tab" });
+      expect(profileCtx.ensureTabAvailable).toHaveBeenCalledWith("geo-tab", {
+        allowPlaywrightFallback: true,
+        signal: expect.any(AbortSignal),
+        timeoutMs: 5_000,
+      });
+      expect(pwMocks.setGeolocationViaPlaywright).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cdpUrl: "http://127.0.0.1:18800",
+          targetId: "geo-tab",
+          clear: true,
+        }),
+      );
+    });
   });
 });

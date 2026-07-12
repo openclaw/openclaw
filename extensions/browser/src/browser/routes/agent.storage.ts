@@ -147,10 +147,10 @@ export function parseCookieSetOptions(cookie: Record<string, unknown>): CookieSe
 /** Parse geolocation override options accepted by context mutation routes. */
 export function parseGeolocationOptions(body: Record<string, unknown>): GeolocationOptions {
   const clear = toBoolean(body.clear) ?? false;
-  const origin = readOptionalHttpOrigin(body.origin);
   if (clear) {
-    return { clear, origin };
+    return { clear };
   }
+  const origin = readOptionalHttpOrigin(body.origin);
   const latitude = assertRange(
     readRouteFiniteNumber(body.latitude, "latitude"),
     "latitude",
