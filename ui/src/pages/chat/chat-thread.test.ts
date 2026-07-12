@@ -192,6 +192,27 @@ describe("collapseCompletedTurnWork", () => {
     expect(items.some((item) => item.kind === "divider")).toBe(true);
   });
 
+  it("keeps search matches visible instead of folding them into a rollup", () => {
+    const items = collapseCompletedTurnWork(
+      coalesceStreamRuns(
+        buildChatItems(
+          createProps({
+            messages: [
+              { role: "user", content: "do it", timestamp: 1_000 },
+              toolResult("call-1", 2_000),
+              { role: "assistant", content: "All done.", timestamp: 3_000 },
+            ],
+            searchOpen: true,
+            searchQuery: "ok",
+          }),
+        ),
+      ),
+      { runWorking: false, searchActive: true },
+    );
+
+    expect(items.some((item) => item.kind === "work-group")).toBe(false);
+  });
+
   it("collapses each completed turn independently", () => {
     const items = collapsedItems({
       messages: [

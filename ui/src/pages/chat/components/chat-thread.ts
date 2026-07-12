@@ -942,6 +942,7 @@ export function renderChatThread(props: ChatThreadProps) {
             return repeat(
               collapseCompletedTurnWork(coalesceStreamRuns(chatItems), {
                 runWorking: Boolean(props.runWorking),
+                searchActive: state.searchOpen && Boolean(state.searchQuery.trim()),
               }),
               (item) => item.key,
               (item) => {

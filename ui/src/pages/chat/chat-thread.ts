@@ -1464,6 +1464,10 @@ function isCollapsibleWorkGroup(item: TurnRenderItem): item is MessageGroup {
   return role === "tool" || (role === "assistant" && !assistantGroupIsForwardedBoundary(item));
 }
 
+// History carries no final-vs-commentary marker (commentary exists only as
+// live stream segments), so the last assistant text group stands in for the
+// final reply. Turns whose last text is commentary merely collapse less;
+// the visible reply is never folded away.
 function isFinalReplyGroup(item: TurnRenderItem): boolean {
   return (
     isCollapsibleWorkGroup(item) &&
@@ -1501,8 +1505,13 @@ function workGroupHasError(groups: MessageGroup[]): boolean {
  */
 export function collapseCompletedTurnWork(
   items: TurnRenderItem[],
-  opts: { runWorking: boolean },
+  opts: { runWorking: boolean; searchActive?: boolean },
 ): Array<TurnRenderItem | WorkGroupRenderItem> {
+  // Chat search filters the thread to matching messages; folding a match into
+  // a collapsed rollup would hide the very row the query found.
+  if (opts.searchActive) {
+    return items;
+  }
   const turns: TurnRenderItem[][] = [];
   let currentTurn: TurnRenderItem[] = [];
   for (const item of items) {
