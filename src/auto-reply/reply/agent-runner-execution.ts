@@ -3062,7 +3062,13 @@ async function runAgentTurnWithFallbackInternal(
         : isFailoverError(err)
           ? err.reason === "billing"
           : isBillingErrorMessage(message);
-      const isContextOverflow = !isBilling && isLikelyContextOverflowError(message);
+      // Prefer structured FailoverError reasons over message-text heuristics so
+      // typed context-overflow/transient failures are not misclassified when the
+      // error string lacks overflow/HTTP status tokens.
+      const isContextOverflow =
+        !isBilling &&
+        ((isFailoverError(err) && err.reason === "context_overflow") ||
+          isLikelyContextOverflowError(message));
       const isCompactionFailure = !isBilling && isCompactionFailureError(message);
       // OAuth/auth-profile failures must reach buildExternalRunFailureReply so
       // the targeted re-auth/failover copy is surfaced instead of the generic
@@ -3077,7 +3083,12 @@ async function runAgentTurnWithFallbackInternal(
         !shouldSurfaceToControlUi
           ? classifyProviderRequestError(err)
           : undefined;
-      const isTransientHttp = isTransientHttpError(message);
+      const isTransientHttp =
+        isTransientHttpError(message) ||
+        (isFailoverError(err) &&
+          (err.reason === "timeout" ||
+            err.reason === "server_error" ||
+            err.reason === "overloaded"));
 
       // Drain/restart aborts stay silent and defer to post-restart
       // main-session recovery, which resumes the interrupted turn (or emits its
