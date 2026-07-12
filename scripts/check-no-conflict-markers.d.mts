@@ -8,31 +8,24 @@ export function findConflictMarkerLines(content: string): number[];
  */
 export function listTrackedFiles(cwd?: string): string[];
 /**
- * Scans files for merge conflict markers, skipping binary content and
- * reading each file in bounded chunks to avoid unbounded memory use.
+ * Scans a list of files for merge conflict markers, skipping binary content.
+ * Intended for direct/small-scale use; the tracked-files path uses git grep
+ * directly to avoid reading large files into memory.
  */
 export function findConflictMarkersInFiles(
   filePaths: string[],
-  statSync?: (filePath: string) => { size: number },
-  warn?: (message: string) => void,
-  maxScanBytes?: number,
-  openSync?: (filePath: string, flags: string) => number,
-  readSync?: (
-    fd: number,
-    buffer: Buffer,
-    offset: number,
-    length: number,
-    position: number,
-  ) => number,
-  closeSync?: (fd: number) => void,
+  readFile?: (path: string) => string | Buffer,
 ): {
   filePath: string;
   lines: number[];
 }[];
 /**
- * Finds merge conflict markers in tracked repository files.
+ * Uses git grep to find exact conflict-marker matches in tracked files.
  */
-export function findConflictMarkersInTrackedFiles(cwd?: string): {
+export function findConflictMarkersInTrackedFiles(
+  cwd?: string,
+  run?: typeof import("node:child_process").spawnSync,
+): {
   filePath: string;
   lines: number[];
 }[];

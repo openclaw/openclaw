@@ -7,7 +7,6 @@ import {
   findConflictMarkerLines,
   findConflictMarkersInFiles,
   findConflictMarkersInTrackedFiles,
-  listTrackedFiles,
 } from "../../scripts/check-no-conflict-markers.mjs";
 import { createScriptTestHarness } from "./test-helpers.js";
 
@@ -63,63 +62,17 @@ describe("check-no-conflict-markers", () => {
     ]);
   });
 
-  it("finds conflict markers in files larger than the scan byte limit", () => {
-    const rootDir = createTempDir("openclaw-conflict-markers-");
-    const largeFile = path.join(rootDir, "large-generated.txt");
-
-    // Use a small chunk size for fast tests; the production limit is 50 MiB.
-    const maxScanBytes = 1024;
-    const markerLine = ">>>>>>> branch";
-    const filler = "a".repeat(maxScanBytes);
-    // The marker starts one byte after the first chunk boundary so the second
-    // chunk is required to detect it.
-    fs.writeFileSync(largeFile, `${filler}\n${markerLine}\n`);
-
-    const violations = findConflictMarkersInFiles([largeFile], fs.statSync, () => {}, maxScanBytes);
-
-    expect(violations).toEqual([
-      {
-        filePath: largeFile,
-        lines: [2],
-      },
-    ]);
-  });
-
-  it("finds conflict markers that cross a chunk boundary", () => {
-    const rootDir = createTempDir("openclaw-conflict-markers-");
-    const crossBoundaryFile = path.join(rootDir, "cross-boundary.txt");
-
-    // Split "<<<<<<< HEAD" so the first seven characters end the first chunk
-    // and the rest begins the second chunk.
-    const maxScanBytes = 7;
-    const content = "<<<<<<< HEAD\nleft\n=======\nright\n>>>>>>> branch\n";
-    fs.writeFileSync(crossBoundaryFile, content);
-
-    const violations = findConflictMarkersInFiles(
-      [crossBoundaryFile],
-      fs.statSync,
-      () => {},
-      maxScanBytes,
-    );
-
-    expect(violations).toEqual([
-      {
-        filePath: crossBoundaryFile,
-        lines: [1, 3, 5],
-      },
-    ]);
-  });
-
-  it("finds conflict markers in tracked script files", () => {
+  it("finds conflict markers in tracked files using git grep", () => {
     const rootDir = createTempDir("openclaw-conflict-markers-");
     git(rootDir, "init", "-q");
     git(rootDir, "config", "user.email", "test@example.com");
     git(rootDir, "config", "user.name", "Test User");
 
-    const scriptFile = path.join(rootDir, "scripts", "bundled-plugin-metadata-runtime.mjs");
-    fs.mkdirSync(path.dirname(scriptFile), { recursive: true });
+    const scriptFile = "scripts/bundled-plugin-metadata-runtime.mjs";
+    const scriptPath = path.join(rootDir, scriptFile);
+    fs.mkdirSync(path.dirname(scriptPath), { recursive: true });
     fs.writeFileSync(
-      scriptFile,
+      scriptPath,
       [
         "<<<<<<< HEAD",
         'const left = "left";',
@@ -128,14 +81,7 @@ describe("check-no-conflict-markers", () => {
         ">>>>>>> branch",
       ].join("\n"),
     );
-    git(rootDir, "add", "scripts/bundled-plugin-metadata-runtime.mjs");
-
-    expect(findConflictMarkersInFiles(listTrackedFiles(rootDir))).toEqual([
-      {
-        filePath: scriptFile,
-        lines: [1, 3, 5],
-      },
-    ]);
+    git(rootDir, "add", scriptFile);
 
     const violations = findConflictMarkersInTrackedFiles(rootDir);
 
@@ -147,18 +93,80 @@ describe("check-no-conflict-markers", () => {
     ]);
   });
 
-  it("reports conflict markers in a large tracked file without reading it whole", () => {
+  it("returns no violations when tracked files have no conflict markers", () => {
     const rootDir = createTempDir("openclaw-conflict-markers-");
     git(rootDir, "init", "-q");
     git(rootDir, "config", "user.email", "test@example.com");
     git(rootDir, "config", "user.name", "Test User");
 
-    const largeFile = path.join(rootDir, "big-file.txt");
-    const fillerLine = "x".repeat(1024);
-    const fillerLines = Array.from({ length: 1024 }, () => fillerLine);
-    const markerLines = ["<<<<<<< HEAD", "left", "=======", "right", ">>>>>>> branch"];
-    fs.writeFileSync(largeFile, [...fillerLines, ...markerLines].join("\n"));
-    git(rootDir, "add", "big-file.txt");
+    const cleanFile = "src/clean.ts";
+    const cleanPath = path.join(rootDir, cleanFile);
+    fs.mkdirSync(path.dirname(cleanPath), { recursive: true });
+    fs.writeFileSync(cleanPath, "const x = 1;\n");
+    git(rootDir, "add", cleanFile);
+
+    expect(findConflictMarkersInTrackedFiles(rootDir)).toEqual([]);
+  });
+
+  it("skips binary tracked files via git grep binary exclusion", () => {
+    const rootDir = createTempDir("openclaw-conflict-markers-");
+    git(rootDir, "init", "-q");
+    git(rootDir, "config", "user.email", "test@example.com");
+    git(rootDir, "config", "user.name", "Test User");
+
+    const binaryFile = "assets/image.png";
+    const binaryPath = path.join(rootDir, binaryFile);
+    fs.mkdirSync(path.dirname(binaryPath), { recursive: true });
+    // Marker-like bytes inside a binary file should not be reported because
+    // git grep -I skips binary files.
+    fs.writeFileSync(
+      binaryPath,
+      Buffer.from([0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x20, 0x00]),
+    );
+    git(rootDir, "add", binaryFile);
+
+    expect(findConflictMarkersInTrackedFiles(rootDir)).toEqual([]);
+  });
+
+  it("handles tracked files with spaces and unusual characters in paths", () => {
+    const rootDir = createTempDir("openclaw-conflict-markers-");
+    git(rootDir, "init", "-q");
+    git(rootDir, "config", "user.email", "test@example.com");
+    git(rootDir, "config", "user.name", "Test User");
+
+    const weirdFile = "docs/weird name (v2).md";
+    const weirdPath = path.join(rootDir, weirdFile);
+    fs.mkdirSync(path.dirname(weirdPath), { recursive: true });
+    fs.writeFileSync(
+      weirdPath,
+      "before\n<<<<<<< HEAD\nleft\n=======\nright\n>>>>>>> branch\nafter\n",
+    );
+    git(rootDir, "add", weirdFile);
+
+    const violations = findConflictMarkersInTrackedFiles(rootDir);
+
+    expect(violations).toEqual([
+      {
+        filePath: weirdFile,
+        lines: [2, 4, 6],
+      },
+    ]);
+  });
+
+  it("detects markers in a file larger than the previous scan byte limit without reading it whole", () => {
+    const rootDir = createTempDir("openclaw-conflict-markers-");
+    git(rootDir, "init", "-q");
+    git(rootDir, "config", "user.email", "test@example.com");
+    git(rootDir, "config", "user.name", "Test User");
+
+    const largeFile = "generated/large.txt";
+    const largePath = path.join(rootDir, largeFile);
+    fs.mkdirSync(path.dirname(largePath), { recursive: true });
+    // 10 MiB of filler with a marker near the end; git grep reports the line
+    // number without us buffering the entire file.
+    const filler = ("a".repeat(10240) + "\n").repeat(1024);
+    fs.writeFileSync(largePath, filler + "<<<<<<< HEAD\nleft\n=======\nright\n>>>>>>> branch\n");
+    git(rootDir, "add", largeFile);
 
     const violations = findConflictMarkersInTrackedFiles(rootDir);
 
