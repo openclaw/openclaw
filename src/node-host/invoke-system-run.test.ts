@@ -3616,6 +3616,74 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     });
   });
 
+  it.runIf(process.platform !== "win32")(
+    "denies dispatch when a denylist rule targeting the resolved executable path is added while the approval is pending",
+    async () => {
+      await withPathTokenCommand({
+        tmpPrefix: "openclaw-denylist-resolved-path-",
+        run: async ({ expected }) => {
+          await withTempApprovalsHome({
+            approvals: {
+              version: 1,
+              defaults: {
+                security: "allowlist",
+                ask: "off",
+                askFallback: "deny",
+              },
+              agents: {
+                main: {
+                  allowlist: [{ pattern: expected }],
+                },
+              },
+            },
+            run: async () => {
+              // Simulate an operator adding a STOP rule that matches ONLY the
+              // RESOLVED canonical executable path (never the PATH-token
+              // command text) between policy evaluation and the locked
+              // pre-dispatch commit. The dispatch argv is pinned to the
+              // canonical path, so the rule must revoke the pending authority.
+              const commitAuthorization: HandleSystemRunInvokeOptions["commitExecAuthorization"] =
+                async (params) => {
+                  fs.writeFileSync(
+                    resolveExecApprovalsPath(),
+                    JSON.stringify({
+                      version: 1,
+                      defaults: {
+                        security: "allowlist",
+                        ask: "off",
+                        askFallback: "deny",
+                        denylist: [{ pattern: `${expected} *`, reason: "tightened mid-approval" }],
+                      },
+                      agents: {
+                        main: {
+                          allowlist: [{ pattern: expected }],
+                        },
+                      },
+                    }),
+                  );
+                  await commitExecAuthorizationLocked(params);
+                };
+
+              const { runCommand, sendInvokeResult } = await runSystemInvoke({
+                preferMacAppExecHost: false,
+                command: ["poccmd", "-n", "SAFE"],
+                security: "allowlist",
+                ask: "off",
+                commitExecAuthorization: commitAuthorization,
+              });
+
+              expect(runCommand).not.toHaveBeenCalled();
+              expectInvokeErrorMessage(sendInvokeResult, {
+                message: "SYSTEM_RUN_DENIED: approval state could not be persisted",
+                exact: true,
+              });
+            },
+          });
+        },
+      });
+    },
+  );
+
   it("denies dispatch when tools.exec.denylist tightens while node approval is pending", async () => {
     await withTempApprovalsHome({
       approvals: {

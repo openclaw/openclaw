@@ -2146,6 +2146,56 @@ describe("exec approvals store helpers", () => {
     ).rejects.toThrow("Exec approval changed before execution");
   });
 
+  it("rejects a commit when a denylist rule added mid-wait matches only the resolved dispatch argv", async () => {
+    createHomeDir();
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "full", ask: "off" },
+      agents: { main: {} },
+    });
+    // The binding carries the RESOLVED absolute dispatch argv alongside the
+    // bare request segments; the command text itself stays unresolved.
+    const denylistBinding = {
+      command: "printf ok",
+      segments: [{ argv: ["printf", "ok"] }, { argv: ["/usr/bin/printf", "ok"] }],
+      analysisOk: true,
+      configDenylist: [],
+      approvedRuleKeys: [],
+    };
+
+    // Operator adds a STOP rule that matches ONLY the resolved executable
+    // path while the approval waits; the bare command text never matches it.
+    await updateExecApprovals({
+      update: (current) => ({
+        ...current,
+        defaults: { ...current.defaults, denylist: [{ pattern: "/usr/bin/printf *" }] },
+      }),
+    });
+
+    // Snapshot matches the post-tightening policy so the denylist provenance
+    // gate, not the snapshot comparison, is the code under test.
+    const policySnapshot = createExecApprovalPolicySnapshot({
+      file: readExecApprovalsSnapshot().file,
+      agentId: "main",
+    });
+
+    await expect(
+      commitExecAuthorization({
+        agentId: "main",
+        matches: [],
+        command: "printf ok",
+        authorization: {
+          source: "explicit-approval",
+          security: "full",
+          ask: "off",
+          allowlistSatisfied: false,
+          policySnapshot,
+          denylistBinding,
+        },
+      }),
+    ).rejects.toThrow("Exec approval changed before execution");
+  });
+
   it("rejects a commit when the config denylist resolver tightens during approval", async () => {
     createHomeDir();
     saveExecApprovals({

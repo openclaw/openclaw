@@ -1714,6 +1714,47 @@ struct ExecApprovalsStoreRefactorTests {
     }
 
     @Test
+    func `execution commit rejects resolved-path denylist rule added while approval was pending`() async throws {
+        try await self.withTempStateDir { _ in
+            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
+                entry.security = .full
+                entry.ask = .off
+            }.get()
+            let policySnapshot = ExecApprovalPolicySnapshot(
+                resolved: ExecApprovalsStore.resolve(agentId: "main"))
+            // Approval-time provenance: no STOP rules were effective anywhere.
+            let binding = ExecHostDenylistAuthorizationSnapshot(
+                command: "printf ok",
+                analysisOk: true,
+                configDenylist: [],
+                approvedRuleKeys: [],
+                denylisted: false)
+            // Race: the operator adds a STOP rule that matches ONLY the
+            // RESOLVED executable path while the approval prompt is pending.
+            // The commit is bound to the actual dispatch argv, so the bare
+            // command text must not shield the resolved path from the rule.
+            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
+                entry.denylist = [ExecHostDenylistEntry(pattern: "/usr/bin/printf *", reason: "stop")]
+            }.get()
+
+            let result = ExecApprovalsStore.commitExecution(ExecApprovalExecutionCommit(
+                agentId: "main",
+                command: "printf ok",
+                executionCommand: ["/usr/bin/printf", "ok"],
+                denylistBinding: binding,
+                authorization: .explicitOnce(
+                    evaluatedSecurity: .full,
+                    policySnapshot: policySnapshot),
+                uses: []))
+
+            guard case .failure(.unavailable) = result else {
+                Issue.record("expected resolved-path denylist rule added mid-approval to fail the commit")
+                return
+            }
+        }
+    }
+
+    @Test
     func `execution commit accepts local approvals file denylist rule screened at approval time`() async throws {
         try await self.withTempStateDir { _ in
             _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in

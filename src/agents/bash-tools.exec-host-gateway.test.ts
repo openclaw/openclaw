@@ -1025,6 +1025,64 @@ describe("processGatewayAllowlist", () => {
     );
   });
 
+  it("screens the enforced dispatch command text in the denylist binding", async () => {
+    const command = "head -c 16";
+    const authorizationPlan = await planShellAuthorization({
+      command,
+      env: { PATH: "/usr/bin:/bin" },
+    });
+    expect(authorizationPlan.ok).toBe(true);
+    if (!authorizationPlan.ok) {
+      throw new Error(authorizationPlan.reason);
+    }
+    const enforced = buildAuthorizedShellCommandFromPlan({
+      plan: authorizationPlan,
+      mode: "enforced",
+      segmentSatisfiedBy: ["safeBins"],
+    });
+    expect(enforced.ok).toBe(true);
+    if (!enforced.ok || !enforced.command) {
+      throw new Error("enforced command unavailable");
+    }
+    // The enforced dispatch text pins a resolved executable path the raw
+    // command text does not carry.
+    expect(enforced.command).not.toBe(command);
+    requiresExecApprovalMock.mockReturnValue(false);
+    evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
+      allowlistMatches: [],
+      analysisOk: true,
+      allowlistSatisfied: true,
+      segments: [{ raw: command, resolution: null, argv: ["head", "-c", "16"] }],
+      segmentAllowlistEntries: [],
+      segmentSatisfiedBy: ["safeBins"],
+      authorizationPlan,
+    });
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "allowlist",
+      hostAsk: "off",
+      askFallback: "deny",
+    });
+
+    const result = await runGatewayAllowlist({ command, ask: "off" });
+
+    expect(result).toEqual({ execCommandOverride: enforced.command });
+    // A STOP rule written against the resolved path must be able to see the
+    // enforced dispatch text at the locked commit, not just the raw request
+    // command, so the binding must carry it as a raw screened segment.
+    expect(commitExecAuthorizationMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authorization: expect.objectContaining({
+          denylistBinding: expect.objectContaining({
+            command,
+            analysisOk: true,
+            segments: expect.arrayContaining([{ argv: [], raw: enforced.command }]),
+          }),
+        }),
+      }),
+    );
+  });
+
   it("does not bind current policy to redundant exact-command trust", async () => {
     const command = "cd .";
     const authorizationPlan = await planShellAuthorization({
