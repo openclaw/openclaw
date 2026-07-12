@@ -274,7 +274,7 @@ private struct WatchControlSurfaceView: View {
                     title: "Loading approval",
                     subtitle: self.store.execApprovalReviewStatusText ?? "Waiting for your iPhone",
                     accessory: "Syncing")
-            } else if self.approvalCount > 0 {
+            } else if self.approvalCount > 0 || self.store.shouldShowExecApprovalReviewStatus {
                 WatchHeroCard(
                     label: "Unavailable",
                     title: "Approval not loaded",

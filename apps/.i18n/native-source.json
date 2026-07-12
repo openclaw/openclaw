@@ -20211,7 +20211,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 245,
+      "line": 244,
       "path": "apps/macos/Sources/OpenClaw/MenuSessionsInjector.swift",
       "source": "Loading devices...",
       "surface": "apple",
@@ -20219,7 +20219,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 245,
+      "line": 244,
       "path": "apps/macos/Sources/OpenClaw/MenuSessionsInjector.swift",
       "source": "No devices yet",
       "surface": "apple",
@@ -20227,7 +20227,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1004,
+      "line": 1002,
       "path": "apps/macos/Sources/OpenClaw/MenuSessionsInjector.swift",
       "source": "No",
       "surface": "apple",
@@ -20235,7 +20235,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1004,
+      "line": 1002,
       "path": "apps/macos/Sources/OpenClaw/MenuSessionsInjector.swift",
       "source": "Yes",
       "surface": "apple",
@@ -20243,7 +20243,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1060,
+      "line": 1058,
       "path": "apps/macos/Sources/OpenClaw/MenuSessionsInjector.swift",
       "source": "Update thinking failed",
       "surface": "apple",
@@ -20251,7 +20251,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1078,
+      "line": 1076,
       "path": "apps/macos/Sources/OpenClaw/MenuSessionsInjector.swift",
       "source": "Update verbose failed",
       "surface": "apple",
@@ -20259,7 +20259,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1098,
+      "line": 1096,
       "path": "apps/macos/Sources/OpenClaw/MenuSessionsInjector.swift",
       "source": "Reset session?",
       "surface": "apple",
@@ -20267,7 +20267,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1099,
+      "line": 1097,
       "path": "apps/macos/Sources/OpenClaw/MenuSessionsInjector.swift",
       "source": "Starts a new session id for “\\(key)”.",
       "surface": "apple",
@@ -20275,7 +20275,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1107,
+      "line": 1105,
       "path": "apps/macos/Sources/OpenClaw/MenuSessionsInjector.swift",
       "source": "Reset failed",
       "surface": "apple",
@@ -20283,7 +20283,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1117,
+      "line": 1115,
       "path": "apps/macos/Sources/OpenClaw/MenuSessionsInjector.swift",
       "source": "Compact session log?",
       "surface": "apple",
@@ -20291,7 +20291,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1118,
+      "line": 1116,
       "path": "apps/macos/Sources/OpenClaw/MenuSessionsInjector.swift",
       "source": "Keeps the last 400 lines; archives the old file.",
       "surface": "apple",
@@ -20299,7 +20299,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1126,
+      "line": 1124,
       "path": "apps/macos/Sources/OpenClaw/MenuSessionsInjector.swift",
       "source": "Compact failed",
       "surface": "apple",
@@ -20307,7 +20307,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1136,
+      "line": 1134,
       "path": "apps/macos/Sources/OpenClaw/MenuSessionsInjector.swift",
       "source": "Delete session?",
       "surface": "apple",
@@ -20315,7 +20315,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1137,
+      "line": 1135,
       "path": "apps/macos/Sources/OpenClaw/MenuSessionsInjector.swift",
       "source": "Deletes the “\\(key)” entry and archives its transcript.",
       "surface": "apple",
@@ -20323,7 +20323,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1145,
+      "line": 1143,
       "path": "apps/macos/Sources/OpenClaw/MenuSessionsInjector.swift",
       "source": "Delete failed",
       "surface": "apple",
@@ -23515,7 +23515,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 65,
+      "line": 58,
       "path": "apps/macos/Sources/OpenClaw/UsageData.swift",
       "source": "\\(hours)h",
       "surface": "apple",
@@ -23523,7 +23523,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 65,
+      "line": 58,
       "path": "apps/macos/Sources/OpenClaw/UsageData.swift",
       "source": "\\(hours)h \\(mins)m",
       "surface": "apple",
@@ -25155,7 +25155,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 547,
+      "line": 545,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/OpenClawMascotView.swift",
       "source": "z",
       "surface": "apple",
