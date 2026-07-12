@@ -3,7 +3,10 @@ import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plu
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { SignalReactionNotificationMode } from "openclaw/plugin-sdk/config-contracts";
+import type {
+  ReplyToMode,
+  SignalReactionNotificationMode,
+} from "openclaw/plugin-sdk/config-contracts";
 import {
   detectMime,
   estimateBase64DecodedBytes,
@@ -17,6 +20,7 @@ import {
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import {
   chunkTextWithMode,
+  createReplyReferencePlanner,
   resolveChunkMode,
   resolveTextChunkLimit,
 } from "openclaw/plugin-sdk/reply-runtime";
@@ -37,7 +41,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
-import { resolveSignalAccount } from "./accounts.js";
+import { resolveSignalAccount, resolveSignalReplyToMode } from "./accounts.js";
 import { isSignalNativeApprovalHandlerConfigured } from "./approval-native.js";
 import {
   addSignalApprovalReactionHintToStructuredPayload,
@@ -49,9 +53,11 @@ import { isSignalSenderAllowed, type resolveSignalSender } from "./identity.js";
 import { createSignalEventHandler } from "./monitor/event-handler.js";
 import type {
   SignalAttachment,
+  SignalNativeReplyContext,
   SignalReactionMessage,
   SignalReactionTarget,
 } from "./monitor/event-handler.types.js";
+import { materializeSignalPresentationFallback } from "./presentation-fallback.js";
 import { sendMessageSignal } from "./send.js";
 import { runSignalSseLoop } from "./sse-reconnect.js";
 
@@ -87,10 +93,10 @@ function resolveRuntime(opts: MonitorSignalOpts): RuntimeEnv {
 function createSignalMonitorTaskRunner(runtime: RuntimeEnv) {
   const inFlight = new Set<Promise<void>>();
   return {
-    runEventTask(task: () => Promise<void>): void {
+    runTask(task: () => Promise<void>): void {
       const trackedTask = Promise.resolve()
         .then(task)
-        .catch((err: unknown) => runtime.error?.(`event handler failed: ${String(err)}`))
+        .catch((err: unknown) => runtime.error?.(`signal monitor task failed: ${String(err)}`))
         .finally(() => inFlight.delete(trackedTask));
       inFlight.add(trackedTask);
     },
@@ -150,6 +156,11 @@ function createSignalDaemonLifecycle(params: { abortSignal?: AbortSignal }) {
   const mergedAbort = mergeAbortSignals(params.abortSignal, daemonAbortController.signal);
   const stop = () => {
     daemonStopRequested = true;
+    if (!daemonAbortController.signal.aborted) {
+      daemonAbortController.abort(
+        params.abortSignal?.reason ?? new Error("Signal monitor stopped"),
+      );
+    }
     daemonHandle?.stop();
   };
   const attach = (handle: SignalDaemonHandle) => {
@@ -364,29 +375,54 @@ export async function deliverReplies(params: {
   target: string;
   baseUrl: string;
   account?: string;
+  accountUuid?: string;
   accountId?: string;
   runtime: RuntimeEnv;
   maxBytes: number;
   textLimit: number;
   chunkMode: "length" | "newline";
+  replyContext?: SignalNativeReplyContext;
+  chatType?: "direct" | "group";
 }) {
-  const { replies, target, baseUrl, account, accountId, runtime, maxBytes, textLimit, chunkMode } =
-    params;
+  const {
+    replies,
+    target,
+    baseUrl,
+    account,
+    accountUuid,
+    accountId,
+    runtime,
+    maxBytes,
+    textLimit,
+    chunkMode,
+  } = params;
+  const replyToMode = resolveSignalReplyToMode({
+    cfg: params.cfg,
+    accountId,
+    chatType: params.chatType,
+  });
   for (const payload of replies) {
     const deliveryResults: Array<{
       channel: "signal";
       messageId: string;
       meta: { signalVisibleText: string };
     }> = [];
+    const presentationPayload = materializeSignalPresentationFallback(payload);
     const deliveredPayload =
       addSignalApprovalReactionHintToStructuredPayload({
         cfg: params.cfg,
         accountId,
         to: target,
-        payload,
+        payload: presentationPayload,
         targetAuthor: account,
-      }) ?? payload;
+        targetAuthorUuid: accountUuid,
+      }) ?? presentationPayload;
     const reply = resolveSendableOutboundReplyParts(deliveredPayload);
+    const nextNativeReply = createSignalNativeReplyResolver({
+      payload: deliveredPayload,
+      replyContext: params.replyContext,
+      replyToMode,
+    });
     const recordDeliveryResult = (
       result: Awaited<ReturnType<typeof sendMessageSignal>>,
       visibleText: string,
@@ -415,6 +451,7 @@ export async function deliverReplies(params: {
             account,
             maxBytes,
             accountId,
+            ...nextNativeReply(),
           }),
           chunk,
         );
@@ -429,6 +466,7 @@ export async function deliverReplies(params: {
             mediaUrl,
             maxBytes,
             accountId,
+            ...nextNativeReply(),
           }),
           visibleText,
         );
@@ -445,10 +483,76 @@ export async function deliverReplies(params: {
         payload: deliveredPayload,
         results: deliveryResults,
         targetAuthor: account,
+        targetAuthorUuid: accountUuid,
       });
       runtime.log?.(`delivered reply to ${target}`);
     }
   }
+}
+
+function resolveSignalNativeReplyOptions(params: {
+  payload: ReplyPayload;
+  replyContext?: SignalNativeReplyContext;
+}): Pick<Parameters<typeof sendMessageSignal>[2], "replyToId" | "replyToAuthor" | "replyToBody"> {
+  if (params.payload.replyToCurrent === false) {
+    return {};
+  }
+  const payloadReplyToId = normalizeOptionalString(params.payload.replyToId);
+  const contextReplyToId = normalizeOptionalString(params.replyContext?.replyToId);
+  if (!payloadReplyToId || !contextReplyToId || payloadReplyToId !== contextReplyToId) {
+    return {};
+  }
+  const replyToAuthor = normalizeOptionalString(params.replyContext?.author);
+  if (!replyToAuthor) {
+    return { replyToId: payloadReplyToId };
+  }
+  return {
+    replyToId: payloadReplyToId,
+    replyToAuthor,
+    replyToBody: params.replyContext?.body ?? "",
+  };
+}
+
+function isSignalStatusNoticePayload(payload: ReplyPayload): boolean {
+  return Boolean(payload.isCompactionNotice || payload.isFallbackNotice || payload.isStatusNotice);
+}
+
+function createSignalNativeReplyResolver(params: {
+  payload: ReplyPayload;
+  replyContext?: SignalNativeReplyContext;
+  replyToMode: ReplyToMode;
+}): () => Pick<
+  Parameters<typeof sendMessageSignal>[2],
+  "replyToId" | "replyToAuthor" | "replyToBody"
+> {
+  const nativeReply = resolveSignalNativeReplyOptions(params);
+  if (!nativeReply.replyToId) {
+    return () => ({});
+  }
+  const isExplicitReply =
+    params.payload.replyToTag === true || params.payload.replyToCurrent === true;
+  const isStatusNotice = isSignalStatusNoticePayload(params.payload);
+  if (isStatusNotice && params.replyToMode === "off") {
+    return () => ({});
+  }
+  if (isExplicitReply) {
+    return () => nativeReply;
+  }
+  if (isStatusNotice) {
+    return () => nativeReply;
+  }
+  const planner = createReplyReferencePlanner({
+    replyToMode: params.replyToMode,
+    existingId: nativeReply.replyToId,
+    hasReplied: params.replyContext?.state?.hasReplied,
+  });
+  return () => {
+    const replyToId = planner.use();
+    if (params.replyContext?.state && !isStatusNotice) {
+      params.replyContext.state.hasReplied = planner.hasReplied();
+    }
+    return replyToId ? { ...nativeReply, replyToId } : {};
+  };
 }
 
 export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promise<void> {
@@ -581,6 +685,8 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
 
     const handleEvent = createSignalEventHandler({
       runtime,
+      abortSignal: daemonLifecycle.abortSignal,
+      runTrackedTask: (task) => monitorTaskRunner.runTask(task),
       cfg,
       baseUrl,
       account,
@@ -618,7 +724,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       apiMode: configuredApiMode,
       policy: opts.reconnectPolicy,
       onEvent: (event) => {
-        monitorTaskRunner.runEventTask(() => handleEvent(event));
+        monitorTaskRunner.runTask(() => handleEvent(event));
       },
     });
     const daemonExitError = daemonLifecycle.getExitError();
@@ -632,9 +738,11 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
     }
     throw err;
   } finally {
+    // Stop first: pending retry delays observe abort, while retries that already
+    // started remain in the task runner and drain before monitor teardown.
+    daemonLifecycle.stop();
     await monitorTaskRunner.waitForIdle();
     daemonLifecycle.dispose();
     opts.abortSignal?.removeEventListener("abort", onAbort);
-    daemonLifecycle.stop();
   }
 }

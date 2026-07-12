@@ -213,7 +213,7 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
     expect(commands.find((entry) => entry.skillName === "hidden-skill")).toBeUndefined();
   });
 
-  it("truncates descriptions and preserves tool-dispatch metadata", async () => {
+  it("preserves descriptions and tool-dispatch metadata", async () => {
     const workspaceDir = await makeWorkspace();
     const longDescription =
       "This is a very long description that exceeds Discord's 100 character limit for slash command descriptions and should be truncated";
@@ -243,8 +243,7 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
     const shortCmd = commands.find((entry) => entry.skillName === "short-desc");
     const cmd = commands.find((entry) => entry.skillName === "tool-dispatch");
 
-    expect(longCmd?.description.length).toBeLessThanOrEqual(100);
-    expect(longCmd?.description.endsWith("…")).toBe(true);
+    expect(longCmd?.description).toBe(longDescription);
     expect(shortCmd?.description).toBe("Short description");
     expect(cmd?.dispatch).toEqual({ kind: "tool", toolName: "sessions_send", argMode: "raw" });
     expect(cmd?.skillSource).toBe("workspace");

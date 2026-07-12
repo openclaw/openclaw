@@ -9,14 +9,13 @@ import {
   validatePluginApprovalResolveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
+import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "../../infra/plugin-approval-canonical-decisions.js";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
-import {
-  resolvePluginApprovalRequestAllowedDecisions,
-  resolvePluginApprovalTimeoutMs,
-} from "../../infra/plugin-approvals.js";
+import { resolvePluginApprovalTimeoutMs } from "../../infra/plugin-approvals.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import {
   bindApprovalRequesterMetadata,
+  bindApprovalReviewerDeviceIds,
   buildRequestedApprovalEvent,
   handleApprovalResolve,
   handleApprovalWaitDecision,
@@ -60,6 +59,7 @@ export function createPluginApprovalHandlers(
         allowedDecisions?: string[] | null;
         agentId?: string | null;
         sessionKey?: string | null;
+        approvalReviewerDeviceIds?: string[];
         turnSourceChannel?: string | null;
         turnSourceTo?: string | null;
         turnSourceAccountId?: string | null;
@@ -82,7 +82,7 @@ export function createPluginApprovalHandlers(
         toolCallId: p.toolCallId ?? null,
         ...(Array.isArray(p.allowedDecisions)
           ? {
-              allowedDecisions: resolvePluginApprovalRequestAllowedDecisions({
+              allowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions({
                 allowedDecisions: p.allowedDecisions,
               }),
             }
@@ -99,12 +99,19 @@ export function createPluginApprovalHandlers(
       // Kind-prefix so /approve routing can distinguish plugin vs exec IDs deterministically.
       const record = manager.create(request, timeoutMs, `plugin:${randomUUID()}`);
       bindApprovalRequesterMetadata({ record, client });
+      if (client?.internal?.approvalRuntime === true) {
+        bindApprovalReviewerDeviceIds({
+          record,
+          deviceIds: p.approvalReviewerDeviceIds,
+        });
+      }
 
       const decisionPromise = registerPendingApprovalRecord({
         manager,
         record,
         timeoutMs,
         respond,
+        context,
       });
       if (!decisionPromise) {
         return;
@@ -168,12 +175,14 @@ export function createPluginApprovalHandlers(
         client,
         exposeAmbiguousPrefixError: false,
         validateDecision: (snapshot) =>
-          resolvePluginApprovalRequestAllowedDecisions(snapshot.request).includes(decision)
+          resolveCanonicalPluginApprovalRequestAllowedDecisions(snapshot.request).includes(decision)
             ? null
             : {
                 message: `${decision} is unavailable for this plugin approval`,
                 details: {
-                  allowedDecisions: resolvePluginApprovalRequestAllowedDecisions(snapshot.request),
+                  allowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions(
+                    snapshot.request,
+                  ),
                 },
               },
         resolvedEventName: "plugin.approval.resolved",

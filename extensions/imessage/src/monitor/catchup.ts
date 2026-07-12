@@ -1,5 +1,6 @@
 // Imessage plugin module implements catchup behavior.
 import { createHash } from "node:crypto";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getIMessageRuntime } from "../runtime.js";
 
@@ -29,9 +30,9 @@ const MAX_FAILURE_RETRY_MAP_JSON_BYTES = 48_000;
 const textEncoder = new TextEncoder();
 export const IMESSAGE_CATCHUP_CURSOR_NAMESPACE = "imessage.catchup-cursors";
 export const IMESSAGE_CATCHUP_CURSOR_MAX_ENTRIES = 256;
-const cursorWriteQueues = new Map<string, Promise<unknown>>();
+const cursorWriteQueue = new KeyedAsyncQueue();
 
-export type IMessageCatchupConfig = {
+type IMessageCatchupConfig = {
   enabled?: boolean;
   maxAgeMinutes?: number;
   perRunLimit?: number;
@@ -119,17 +120,7 @@ function updateCatchupCursorStore(
 
 function enqueueCursorWrite<T>(accountId: string, fn: () => Promise<T>): Promise<T> {
   const key = resolveIMessageCatchupCursorKey(accountId);
-  const prev = cursorWriteQueues.get(key) ?? Promise.resolve();
-  const next = prev.then(fn, fn);
-  cursorWriteQueues.set(key, next);
-  next
-    .finally(() => {
-      if (cursorWriteQueues.get(key) === next) {
-        cursorWriteQueues.delete(key);
-      }
-    })
-    .catch(() => {});
-  return next;
+  return cursorWriteQueue.enqueue(key, fn);
 }
 
 function sanitizeFailureRetriesInput(raw: unknown): Record<string, number> {
@@ -242,8 +233,7 @@ export function capFailureRetriesMap(
   // debugging).
   entries.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
   const capped: Record<string, number> = {};
-  for (let i = 0; i < entries.length && i < maxSize; i++) {
-    const [guid, count] = entries[i];
+  for (const [guid, count] of entries.slice(0, maxSize)) {
     capped[guid] = count;
     if (textEncoder.encode(JSON.stringify(capped)).byteLength > maxBytes) {
       delete capped[guid];
@@ -320,7 +310,7 @@ export type CatchupFetchFn = (params: {
 
 export type CatchupDispatchFn = (row: IMessageCatchupRow) => Promise<{ ok: boolean }>;
 
-export type PerformCatchupParams = {
+type PerformCatchupParams = {
   accountId: string;
   config: ResolvedCatchupConfig;
   now?: number;

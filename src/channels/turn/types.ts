@@ -370,6 +370,11 @@ export type AssembledChannelTurn = {
   botLoopProtection?: ChannelBotLoopProtectionFacts;
   log?: (event: ChannelTurnLogEvent) => void;
   messageId?: string;
+  /**
+   * Observes turn adoption without waiting for settle. Threaded into
+   * replyOptions for the agent runner (after recovery persist attempt).
+   */
+  onTurnAdopted?: () => void | Promise<void>;
 };
 
 /** Channel turn with dispatch runner already prepared. */
@@ -416,7 +421,7 @@ export type ChannelTurnStage =
 /** Structured channel turn log event. */
 export type ChannelTurnLogEvent = {
   stage: ChannelTurnStage;
-  event: "start" | "done" | "drop" | "handled" | "error";
+  event: "start" | "done" | "drop" | "handled" | "error" | "warning";
   channel: string;
   accountId?: string;
   messageId?: string;
@@ -473,4 +478,10 @@ export type RunChannelTurnParams<TRaw, TDispatchResult = DispatchFromConfigResul
   raw: TRaw;
   adapter: ChannelTurnAdapter<TRaw, TDispatchResult>;
   log?: (event: ChannelTurnLogEvent) => void;
+  /**
+   * Observes turn adoption without waiting for settle. Fired after the
+   * recovery-context persist attempt (context may be absent when source
+   * delivery is suppressed). Default callers still await full settle.
+   */
+  onTurnAdopted?: () => void | Promise<void>;
 };

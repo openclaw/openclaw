@@ -14,14 +14,14 @@ import { createHash } from "node:crypto";
 import { createClaimableDedupe, type ClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 import type { IMessagePayload } from "./types.js";
 
-export const IMESSAGE_INBOUND_DEDUPE_PLUGIN_ID = "imessage";
-export const IMESSAGE_INBOUND_DEDUPE_NAMESPACE_PREFIX = "imessage.inbound-dedupe";
+const IMESSAGE_INBOUND_DEDUPE_PLUGIN_ID = "imessage";
+const IMESSAGE_INBOUND_DEDUPE_NAMESPACE_PREFIX = "imessage.inbound-dedupe";
 // 4h recency window: long enough to absorb a reconnect/restart burst that
 // re-emits recently dispatched rows, short enough that a genuinely-new message
 // reusing a stale composite key after hours is not wrongly suppressed.
-export const IMESSAGE_INBOUND_DEDUPE_TTL_MS = 4 * 60 * 60 * 1000;
-export const IMESSAGE_INBOUND_DEDUPE_MEMORY_MAX = 5_000;
-export const IMESSAGE_INBOUND_DEDUPE_STATE_MAX_ENTRIES = 10_000;
+const IMESSAGE_INBOUND_DEDUPE_TTL_MS = 4 * 60 * 60 * 1000;
+const IMESSAGE_INBOUND_DEDUPE_MEMORY_MAX = 5_000;
+const IMESSAGE_INBOUND_DEDUPE_STATE_MAX_ENTRIES = 10_000;
 
 // Drop a LIVE inbound row whose send date is older than this relative to
 // arrival. Stale backlog Apple flushes after a Push recovery carries old send

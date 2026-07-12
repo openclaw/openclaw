@@ -44,6 +44,7 @@ function statfsFixture(type: number): ReturnType<typeof fs.statfsSync> {
     bfree: 1,
     bavail: 1,
     files: 0,
+    frsize: 1024,
     ffree: 0,
   };
 }
@@ -1007,6 +1008,47 @@ describe("WorkboardStore", () => {
     expect(released.metadata?.claim).toBeUndefined();
   });
 
+  it("reports an active claim after a dependency-backed card starts running", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const parent = await store.create({ title: "Parent", status: "done" });
+    const child = await store.create({ title: "Child", parents: [parent.id] });
+
+    await store.claim(child.id, { ownerId: "main", ttlSeconds: 60 });
+
+    await expect(store.claim(child.id, { ownerId: "other" })).rejects.toThrow(
+      "card already claimed by main.",
+    );
+  });
+
+  it("preserves scheduled and retry-budget errors when a claim is active", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000);
+      const store = new WorkboardStore(createMemoryStore());
+      const scheduled = await store.create({ title: "Scheduled", status: "ready" });
+      await store.claim(scheduled.id, { ownerId: "main", ttlSeconds: 60 });
+      await store.update(scheduled.id, { status: "scheduled", scheduledAt: 10_000 });
+
+      const exhausted = await store.create({
+        title: "Exhausted",
+        status: "ready",
+        maxRetries: 1,
+        metadata: { failureCount: 1 },
+      });
+      await store.claim(exhausted.id, { ownerId: "main", ttlSeconds: 60 });
+      await store.update(exhausted.id, { metadata: { failureCount: 2 } });
+
+      await expect(store.claim(scheduled.id, { ownerId: "other" })).rejects.toThrow(
+        "card is scheduled for later.",
+      );
+      await expect(store.claim(exhausted.id, { ownerId: "other" })).rejects.toThrow(
+        "card exhausted its retry budget.",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("caps oversized claim TTL seconds to a valid Date timestamp", async () => {
     vi.useFakeTimers();
     try {
@@ -1937,6 +1979,24 @@ describe("WorkboardStore", () => {
     await expect(store.buildWorkerContext(card.id)).resolves.toContain("Failure screenshot");
   });
 
+  it("keeps worker-context text bounds UTF-16 safe", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({
+      title: "Bound context",
+      metadata: {
+        comments: [
+          {
+            id: "comment-1",
+            body: `${"x".repeat(398)}🚀tail`,
+            createdAt: 10,
+          },
+        ],
+      },
+    });
+
+    await expect(store.buildWorkerContext(card.id)).resolves.toContain(`- ${"x".repeat(398)}…`);
+  });
+
   it("scopes idempotent creates and stats by board", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const ops = await store.create({
@@ -1957,6 +2017,8 @@ describe("WorkboardStore", () => {
 
     expect(repeatedOps.id).toBe(ops.id);
     expect(product.id).not.toBe(ops.id);
+    expect(ops.position).toBe(1000);
+    expect(product.position).toBe(1000);
     await expect(store.list({ boardId: "ops" })).resolves.toHaveLength(1);
     await expect(store.listBoards()).resolves.toMatchObject({
       boards: expect.arrayContaining([
@@ -1970,13 +2032,24 @@ describe("WorkboardStore", () => {
       byStatus: { todo: 1 },
     });
     const prototypeAgentId = ["__", "proto__"].join("");
-    await store.create({
+    const secondProduct = await store.create({
       title: "Prototype safe",
       boardId: "product",
       agentId: prototypeAgentId,
     });
+    expect(secondProduct.position).toBe(2000);
     const stats = await store.stats({ boardId: "product" });
     expect(stats.byAgent[prototypeAgentId]).toBe(1);
+    const metadataBoardFirst = await store.create({
+      title: "Metadata board first",
+      metadata: { automation: { boardId: "metadata-board" } },
+    });
+    const metadataBoardSecond = await store.create({
+      title: "Metadata board second",
+      metadata: { automation: { boardId: "metadata-board" } },
+    });
+    expect(metadataBoardFirst.position).toBe(1000);
+    expect(metadataBoardSecond.position).toBe(2000);
   });
 
   it("rejects completed manifests for cards not created from the parent", async () => {

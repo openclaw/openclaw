@@ -209,50 +209,119 @@ describe("createNodesTool screen_record duration guardrails", () => {
     expect(schema.properties?.invokeTimeoutMs).toMatchObject({ type: "integer", minimum: 1 });
   });
 
-  it("clamps screen_record durationMs argument to 300000 before gateway invoke", async () => {
-    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
+  it("guides node discovery before describe", () => {
     const tool = createNodesTool();
+    const schema = tool.parameters as {
+      properties?: { node?: { description?: string } };
+    };
 
-    await tool.execute("call-1", {
-      action: "screen_record",
-      node: "macbook",
-      durationMs: 900_000,
-    });
-
-    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledTimes(1);
-    const call = gatewayMocks.callGatewayTool.mock.calls[0] as
-      | [string, unknown, { params?: { durationMs?: unknown } }]
-      | undefined;
-    if (!call) {
-      throw new Error("expected callGatewayTool to be called");
-    }
-    expect(call[0]).toBe("node.invoke");
-    expect(call[1]).toStrictEqual({});
-    expect(call[2].params?.durationMs).toBe(300_000);
+    expect(tool.description).toContain("Paired nodes: status/list");
+    expect(tool.description).toContain("pass node to describe/control");
+    expect(schema.properties?.node?.description).toBe(
+      "Node ID, name, or IP. Required for describe and node-targeted actions; use status to discover nodes.",
+    );
   });
 
-  it("clamps camera_clip durationMs argument to 300000 before gateway invoke", async () => {
-    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
-    nodesCameraMocks.parseCameraClipPayload.mockReturnValue({
-      base64: "ZmFrZQ==",
-      format: "mp4",
-      durationMs: 300_000,
-      hasAudio: true,
+  it("advertises typed executable lookup instead of requiring raw invoke JSON", () => {
+    const tool = createNodesTool();
+    const schema = tool.parameters as {
+      properties?: {
+        action?: { enum?: string[] };
+        bins?: {
+          type?: string;
+          minItems?: number;
+          maxItems?: number;
+          items?: { type?: string; minLength?: number };
+          description?: string;
+        };
+      };
+    };
+
+    expect(tool.description).toContain("executable lookup (which + bins)");
+    expect(schema.properties?.action?.enum).toContain("which");
+    expect(schema.properties?.bins).toMatchObject({
+      type: "array",
+      minItems: 1,
+      maxItems: 64,
+      items: { type: "string", minLength: 1 },
+      description: "which: executable names to resolve on the selected node.",
     });
-    nodesCameraMocks.writeCameraClipPayloadToFile.mockResolvedValue("/tmp/clip.mp4");
+  });
+
+  it("requires an explicit node for describe and points to status", async () => {
     const tool = createNodesTool();
 
-    await tool.execute("call-clip", {
-      action: "camera_clip",
+    await expect(tool.execute("call-describe", { action: "describe" })).rejects.toThrow(
+      'node required for describe; call nodes with action="status" to list nodes, then retry with node',
+    );
+    expect(nodeUtilsMocks.resolveNodeId).not.toHaveBeenCalled();
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("resolves and describes the explicit node", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({ nodeId: "node-1" });
+    const tool = createNodesTool();
+
+    await tool.execute("call-describe", { action: "describe", node: "Office Mac" });
+
+    expect(nodeUtilsMocks.resolveNodeId).toHaveBeenCalledWith({}, "Office Mac");
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.describe",
+      {},
+      {
+        nodeId: "node-1",
+      },
+    );
+  });
+
+  it.each(["screen_record", "camera_clip"])(
+    "clamps %s to the tool duration limit and budgets both timeout layers",
+    async (action) => {
+      gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
+      nodesCameraMocks.parseCameraClipPayload.mockReturnValue({
+        base64: "ZmFrZQ==",
+        format: "mp4",
+        durationMs: 300_000,
+        hasAudio: true,
+      });
+      nodesCameraMocks.writeCameraClipPayloadToFile.mockResolvedValue("/tmp/clip.mp4");
+      const tool = createNodesTool();
+
+      await tool.execute(`call-${action}`, {
+        action,
+        node: "macbook",
+        durationMs: 900_000,
+      });
+
+      const call = gatewayMocks.callGatewayTool.mock.calls[0] as
+        | [string, unknown, { params?: { durationMs?: unknown }; timeoutMs?: unknown }]
+        | undefined;
+      expect(call?.[0]).toBe("node.invoke");
+      expect(call?.[1]).toStrictEqual({ timeoutMs: 360_000 });
+      expect(call?.[2].params?.durationMs).toBe(300_000);
+      expect(call?.[2].timeoutMs).toBe(330_000);
+    },
+  );
+
+  it("preserves independent explicit transport and node invoke timeouts", async () => {
+    gatewayMocks.readGatewayCallOptions.mockReturnValueOnce({ timeoutMs: 5_000 });
+    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
+    const tool = createNodesTool();
+
+    await tool.execute("call-explicit-timeout", {
+      action: "screen_record",
       node: "macbook",
-      durationMs: 900_000,
+      durationMs: 60_000,
+      timeoutMs: 5_000,
+      invokeTimeoutMs: 10_000,
     });
 
     const call = gatewayMocks.callGatewayTool.mock.calls[0] as
-      | [string, unknown, { params?: { durationMs?: unknown } }]
+      | [string, unknown, { timeoutMs?: unknown }]
       | undefined;
     expect(call?.[0]).toBe("node.invoke");
-    expect(call?.[2].params?.durationMs).toBe(300_000);
+    expect(call?.[1]).toStrictEqual({ timeoutMs: 5_000 });
+    expect(call?.[2].timeoutMs).toBe(10_000);
   });
 
   it.each([
@@ -559,6 +628,46 @@ describe("createNodesTool screen_record duration guardrails", () => {
     expect(result.content).toEqual([{ type: "text", text: "null" }]);
   });
 
+  it("forwards typed which bins to system.which", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({
+      payload: { bins: ["hostname"], paths: { hostname: "/bin/hostname" } },
+    });
+    const tool = createNodesTool();
+
+    const result = await tool.execute("call-which", {
+      action: "which",
+      node: "macbook",
+      bins: ["hostname"],
+    });
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      {},
+      {
+        nodeId: "node-1",
+        command: "system.which",
+        params: { bins: ["hostname"] },
+        idempotencyKey: expect.any(String),
+      },
+    );
+    expect(result.details).toEqual({
+      bins: ["hostname"],
+      paths: { hostname: "/bin/hostname" },
+    });
+  });
+
+  it("rejects which without bins before gateway invoke", async () => {
+    const tool = createNodesTool();
+
+    await expect(
+      tool.execute("call-which-missing-bins", {
+        action: "which",
+        node: "macbook",
+      }),
+    ).rejects.toThrow("bins required");
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
   it("uses operator.pairing plus operator.admin to approve exec-capable node pair requests", async () => {
     mockNodePairApproveFlow({
       requiredApproveScopes: ["operator.pairing", "operator.admin"],
@@ -625,6 +734,20 @@ describe("createNodesTool screen_record duration guardrails", () => {
         invokeCommand: "system.run",
       }),
     ).rejects.toThrow('invokeCommand "system.run" is reserved for shell execution');
+  });
+
+  it("blocks raw computer.act so desktop input uses the dedicated safety contract", async () => {
+    const tool = createNodesTool();
+
+    await expect(
+      tool.execute("call-1", {
+        action: "invoke",
+        node: "macbook",
+        invokeCommand: "computer.act",
+        invokeParamsJson: '{"action":"left_click","x":1,"y":1}',
+      }),
+    ).rejects.toThrow("use the dedicated computer tool");
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
   });
 
   it("redirects file-transfer invoke commands to the dedicated file-transfer tool", async () => {

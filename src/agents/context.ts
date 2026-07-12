@@ -30,6 +30,8 @@ import { normalizeProviderId } from "./model-selection.js";
 export {
   ANTHROPIC_CONTEXT_1M_TOKENS,
   ANTHROPIC_FABLE_CONTEXT_TOKENS,
+  ANTHROPIC_MYTHOS_5_CONTEXT_TOKENS,
+  ANTHROPIC_SONNET_5_CONTEXT_TOKENS,
   ANTHROPIC_VERTEX_CONTEXT_1M_TOKENS,
 } from "./context-resolution.js";
 export { resetContextWindowCacheForTest } from "./context-runtime-state.js";
@@ -184,7 +186,7 @@ function primeConfiguredContextWindows(): OpenClawConfig | undefined {
   }
 }
 
-export function ensureContextWindowCacheLoaded(): Promise<void> {
+export function ensureContextWindowCacheLoaded(cfgOverride?: OpenClawConfig): Promise<void> {
   const generation = CONTEXT_WINDOW_RUNTIME_STATE.generation;
   if (
     CONTEXT_WINDOW_RUNTIME_STATE.loadPromise &&
@@ -193,7 +195,9 @@ export function ensureContextWindowCacheLoaded(): Promise<void> {
     return CONTEXT_WINDOW_RUNTIME_STATE.loadPromise;
   }
 
-  const cfg = primeConfiguredContextWindows();
+  const cfg = cfgOverride
+    ? primeConfiguredContextWindowsFromConfig(cfgOverride)
+    : primeConfiguredContextWindows();
   if (!cfg) {
     return Promise.resolve();
   }
@@ -240,6 +244,38 @@ export function ensureContextWindowCacheLoaded(): Promise<void> {
     });
   CONTEXT_WINDOW_RUNTIME_STATE.loadGeneration = generation;
   return CONTEXT_WINDOW_RUNTIME_STATE.loadPromise;
+}
+
+export async function waitForContextWindowCacheLoad(options?: {
+  timeoutMs?: number;
+}): Promise<"idle" | "loaded" | "timeout"> {
+  const promise = CONTEXT_WINDOW_RUNTIME_STATE.loadPromise;
+  if (
+    !promise ||
+    CONTEXT_WINDOW_RUNTIME_STATE.loadGeneration !== CONTEXT_WINDOW_RUNTIME_STATE.generation
+  ) {
+    return "idle";
+  }
+
+  const timeoutMs = Math.max(0, Math.trunc(options?.timeoutMs ?? 250));
+  if (timeoutMs === 0) {
+    return "timeout";
+  }
+
+  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race([
+      promise.then(() => "loaded" as const),
+      new Promise<"timeout">((resolve) => {
+        timeoutHandle = setTimeout(() => resolve("timeout"), timeoutMs);
+        (timeoutHandle as ReturnType<typeof setTimeout> & { unref?: () => void }).unref?.();
+      }),
+    ]);
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+  }
 }
 
 /** Replace cached model context metadata for the active runtime configuration. */

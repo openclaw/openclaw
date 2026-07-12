@@ -1,6 +1,7 @@
 // Mock OpenAI-compatible server for broader E2E scenarios.
 import { createHash } from "node:crypto";
 import http from "node:http";
+import { escapeRegExp } from "../lib/regexp.mjs";
 import { readTcpPortEnv } from "./lib/env-limits.mjs";
 import {
   boundedRequestLogBody,
@@ -195,7 +196,7 @@ function writeImageGeneration(res) {
 }
 
 function resolveResponseText(bodyText) {
-  const matches = Array.from(bodyText.matchAll(/\bOPENCLAW_E2E_OK(?:_\d+)?\b/gu));
+  const matches = Array.from(bodyText.matchAll(/\bOPENCLAW_E2E_[A-Z0-9]+(?:_[A-Z0-9]+)*\b/gu));
   return matches.at(-1)?.[0] ?? successMarker;
 }
 
@@ -244,9 +245,7 @@ function collectFunctionCallOutputText(body) {
 }
 
 function hasDeclaredTool(bodyText, name) {
-  return new RegExp(`"name"\\s*:\\s*"${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`, "u").test(
-    bodyText,
-  );
+  return new RegExp(`"name"\\s*:\\s*"${escapeRegExp(name)}"`, "u").test(bodyText);
 }
 
 function mcpCodeModeApiFileEvents(body, bodyText) {
@@ -300,7 +299,7 @@ const server = http.createServer((req, res) => {
     if (req.method === "GET" && url.pathname === "/v1/models") {
       writeJson(res, 200, {
         object: "list",
-        data: [{ id: "gpt-5.5", object: "model", owned_by: "openclaw-e2e" }],
+        data: [{ id: "gpt-5.6-luna", object: "model", owned_by: "openclaw-e2e" }],
       });
       return;
     }

@@ -1,5 +1,6 @@
 // Tests session export command packaging, filesystem writes, and prompt bundle capture.
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HandleCommandsParams } from "./commands-types.js";
 
@@ -20,12 +21,19 @@ const hoisted = await vi.hoisted(async () => {
     ),
     mkdirMock: vi.fn(async (_filePath: string, _options?: { recursive?: boolean }) => undefined),
     accessMock: vi.fn(async (_filePath: string) => undefined),
-    pathExistsMock: vi.fn(async (_filePath: string) => true),
     migrateSessionEntriesMock: vi.fn((_entries: unknown[]) => undefined),
+    readAcpSessionMetaForEntryMock: vi.fn<
+      (params: { sessionKey: string; entry?: { sessionId?: string } }) => unknown
+    >(() => undefined),
+    loadTranscriptEventsMock: vi.fn(async (): Promise<unknown[]> => []),
     exportHtmlTemplateContents: new Map<string, string>(),
-    sessionTranscriptContent: "",
+    sessionTranscriptEvents: [] as unknown[],
   };
 });
+
+vi.mock("../../acp/runtime/session-meta.js", () => ({
+  readAcpSessionMetaForEntry: hoisted.readAcpSessionMetaForEntryMock,
+}));
 
 vi.mock("../../config/sessions/paths.js", () => ({
   resolveDefaultSessionStorePath: hoisted.resolveDefaultSessionStorePathMock,
@@ -37,12 +45,14 @@ vi.mock("../../config/sessions/store.js", () => ({
   loadSessionStore: hoisted.loadSessionStoreMock,
 }));
 
-vi.mock("./commands-system-prompt.js", () => ({
-  resolveCommandsSystemPromptBundle: hoisted.resolveCommandsSystemPromptBundleMock,
+vi.mock("../../config/sessions/session-accessor.js", () => ({
+  loadSessionEntry: (scope: { storePath?: string; sessionKey: string }) =>
+    (hoisted.loadSessionStoreMock(scope.storePath) as Record<string, unknown>)[scope.sessionKey],
+  loadTranscriptEvents: hoisted.loadTranscriptEventsMock,
 }));
 
-vi.mock("../../infra/fs-safe.js", () => ({
-  pathExists: hoisted.pathExistsMock,
+vi.mock("./commands-system-prompt.js", () => ({
+  resolveCommandsSystemPromptBundle: hoisted.resolveCommandsSystemPromptBundleMock,
 }));
 
 vi.mock("../../agents/sessions/session-manager.js", async (importOriginal) => {
@@ -83,9 +93,6 @@ vi.mock("node:fs/promises", async () => {
     mkdir: hoisted.mkdirMock,
     writeFile: hoisted.writeFileMock,
     readFile: vi.fn(async (filePath: string, encoding?: BufferEncoding) => {
-      if (filePath === "/tmp/target-store/session.jsonl") {
-        return hoisted.sessionTranscriptContent;
-      }
       for (const [suffix, contents] of hoisted.exportHtmlTemplateContents) {
         if (filePath.endsWith(suffix)) {
           return contents;
@@ -164,6 +171,18 @@ function writtenHtml(): string {
   return value;
 }
 
+function sessionDataFromHtml(html: string): Record<string, unknown> {
+  const match = html.match(/id="session-data"[^>]*>([^<]+)</);
+  if (!match) {
+    throw new Error("Expected session-data script in exported HTML");
+  }
+  return JSON.parse(
+    Buffer.from(expectDefined(match[1], "match[1] test invariant").trim(), "base64").toString(
+      "utf-8",
+    ),
+  );
+}
+
 describe("buildExportSessionReply", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -191,9 +210,12 @@ describe("buildExportSessionReply", () => {
       sandboxRuntime: { sandboxed: false, mode: "off" },
     });
     hoisted.accessMock.mockResolvedValue(undefined);
-    hoisted.pathExistsMock.mockResolvedValue(true);
+    hoisted.readAcpSessionMetaForEntryMock.mockReturnValue(undefined);
+    hoisted.loadTranscriptEventsMock.mockImplementation(
+      async () => hoisted.sessionTranscriptEvents,
+    );
     hoisted.exportHtmlTemplateContents.clear();
-    hoisted.sessionTranscriptContent = "";
+    hoisted.sessionTranscriptEvents = [];
   });
 
   it("resolves store and transcript paths from the target session agent", async () => {
@@ -220,9 +242,7 @@ describe("buildExportSessionReply", () => {
     });
 
     expect(hoisted.resolveDefaultSessionStorePathMock).not.toHaveBeenCalled();
-    expect(hoisted.loadSessionStoreMock).toHaveBeenCalledWith("/tmp/custom-store/sessions.json", {
-      skipCache: true,
-    });
+    expect(hoisted.loadSessionStoreMock).toHaveBeenCalledWith("/tmp/custom-store/sessions.json");
     expect(hoisted.resolveSessionFilePathOptionsMock).toHaveBeenCalledWith({
       agentId: "target",
       storePath: "/tmp/custom-store/sessions.json",
@@ -243,8 +263,14 @@ describe("buildExportSessionReply", () => {
     });
 
     expect(reply.text).toContain("✅ Session exported!");
-    const [[systemPromptBundleParams]] = hoisted.resolveCommandsSystemPromptBundleMock.mock
-      .calls as unknown as Array<[{ sessionEntry?: { sessionId?: string; updatedAt?: number } }]>;
+    const [systemPromptBundleParams] = expectDefined(
+      (
+        hoisted.resolveCommandsSystemPromptBundleMock.mock.calls as unknown as Array<
+          [{ sessionEntry?: { sessionId?: string; updatedAt?: number } }]
+        >
+      )[0],
+      "(hoisted.resolveCommandsSystemPromptBundleMock.mock.calls as unknown as Array<\n        [{ sessionEntry?: { sessionId?: string; updatedAt?: number } }]\n      >)[0] test invariant",
+    );
     expect(systemPromptBundleParams?.sessionEntry?.sessionId).toBe("session-from-store");
     expect(systemPromptBundleParams?.sessionEntry?.updatedAt).toBe(2);
   });
@@ -298,7 +324,7 @@ describe("buildExportSessionReply", () => {
         targetId: "active-tail",
       },
     ];
-    hoisted.sessionTranscriptContent = entries.map((entry) => JSON.stringify(entry)).join("\n");
+    hoisted.sessionTranscriptEvents = entries;
 
     await buildExportSessionReply(makeParams());
 
@@ -347,7 +373,7 @@ describe("buildExportSessionReply", () => {
         message: { role: "assistant", content: "replacement" },
       },
     ];
-    hoisted.sessionTranscriptContent = rawEntries.map((entry) => JSON.stringify(entry)).join("\n");
+    hoisted.sessionTranscriptEvents = rawEntries;
 
     await buildExportSessionReply(makeParams());
 
@@ -399,7 +425,7 @@ describe("buildExportSessionReply", () => {
         targetId: "active-tail",
       },
     ];
-    hoisted.sessionTranscriptContent = rawEntries.map((entry) => JSON.stringify(entry)).join("\n");
+    hoisted.sessionTranscriptEvents = rawEntries;
 
     await buildExportSessionReply(makeParams());
 
@@ -444,7 +470,7 @@ describe("buildExportSessionReply", () => {
         parentId: "inactive-tail",
       },
     ];
-    hoisted.sessionTranscriptContent = entries.map((entry) => JSON.stringify(entry)).join("\n");
+    hoisted.sessionTranscriptEvents = entries;
 
     await buildExportSessionReply(makeParams());
 
@@ -515,39 +541,237 @@ describe("buildExportSessionReply", () => {
     expect(html).toContain("const highlightMarker = '$&$1';");
   });
 
-  it("reports malformed transcript rows without leaking parser details", async () => {
-    hoisted.sessionTranscriptContent = [
-      JSON.stringify({ type: "session", version: 3, id: "session-1" }),
-      '{"type":"message",',
-      JSON.stringify({
+  it("exports marker-backed sessions by identity without requiring the marker as a file", async () => {
+    hoisted.resolveSessionFilePathMock.mockReturnValue(
+      "sqlite:target:session-1:/tmp/target-store/openclaw-agent.sqlite",
+    );
+    hoisted.loadSessionStoreMock.mockReturnValue({
+      "agent:target:session": {
+        sessionFile: "sqlite:target:session-1:/tmp/target-store/openclaw-agent.sqlite",
+        sessionId: "session-1",
+        updatedAt: 1,
+      },
+    });
+    hoisted.sessionTranscriptEvents = [
+      {
         type: "message",
         id: "entry-1",
         timestamp: "2026-05-16T00:00:00.000Z",
         message: { role: "user", content: "valid user" },
-      }),
-      JSON.stringify({
-        type: "message",
-        id: "entry-2",
-        timestamp: "2026-05-16T00:00:01.000Z",
-        message: { content: "missing role" },
-      }),
-      JSON.stringify({
+      },
+      {
         type: "message",
         id: "entry-3",
         timestamp: "2026-05-16T00:00:02.000Z",
         message: { role: "assistant", content: "valid assistant" },
-      }),
-    ].join("\n");
+      },
+    ];
+
+    const reply = await buildExportSessionReply(makeParams());
+
+    expect(reply.text).toContain("📊 Entries: 2");
+    expect(hoisted.loadTranscriptEventsMock).toHaveBeenCalledWith({
+      agentId: "target",
+      sessionId: "session-1",
+      sessionKey: "agent:target:session",
+      storePath: "/tmp/target-store/sessions.json",
+    });
+  });
+
+  it("skips invalid loaded transcript events before exporting", async () => {
+    hoisted.sessionTranscriptEvents = [
+      {
+        type: "message",
+        id: "entry-1",
+        timestamp: "2026-05-16T00:00:00.000Z",
+        message: { role: "user", content: "valid user" },
+      },
+      {
+        type: "message",
+        id: "entry-2",
+        timestamp: "2026-05-16T00:00:01.000Z",
+        message: { content: "missing role" },
+      },
+      {
+        type: "message",
+        id: "entry-3",
+        timestamp: "2026-05-16T00:00:02.000Z",
+        message: { role: "assistant", content: "valid assistant" },
+      },
+    ];
 
     const reply = await buildExportSessionReply(makeParams());
 
     expect(reply.text).toContain("📊 Entries: 2");
     expect(reply.text).toContain(
-      "⚠️ Skipped 1 malformed transcript row that was not valid JSON. rows 2",
+      "⚠️ Skipped 1 malformed transcript row that was not a session entry. rows 2",
     );
-    expect(reply.text).toContain(
-      "⚠️ Skipped 1 malformed transcript row that was not a session entry. rows 4",
-    );
-    expect(reply.text).not.toMatch(/Unexpected|SyntaxError|position/i);
+  });
+
+  it("warns when the session only contains user messages (backend-delegated transcript)", async () => {
+    hoisted.loadSessionStoreMock.mockReturnValue({
+      "agent:target:session": {
+        sessionId: "session-1",
+        updatedAt: 1,
+        cliSessionBindings: {
+          "claude-cli": { sessionId: "backend-session-1" },
+        },
+      },
+    });
+    hoisted.sessionTranscriptEvents = [
+      {
+        type: "message",
+        id: "entry-1",
+        timestamp: "2026-05-16T00:00:00.000Z",
+        message: { role: "user", content: "hello" },
+      },
+      {
+        type: "message",
+        id: "entry-2",
+        timestamp: "2026-05-16T00:00:01.000Z",
+        message: { role: "user", content: "world" },
+      },
+    ];
+
+    const reply = await buildExportSessionReply(makeParams());
+
+    expect(reply.text).toContain("backend runtime");
+    expect(reply.text).toContain("not included in this export");
+    const data = sessionDataFromHtml(writtenHtml());
+    expect(typeof data.warning).toBe("string");
+    expect(data.warning).toContain("backend runtime");
+  });
+
+  it("warns when persisted ACP metadata is stored outside the session entry", async () => {
+    hoisted.readAcpSessionMetaForEntryMock.mockReturnValue({
+      backend: "acpx",
+      mode: "persistent",
+      agent: "claude",
+      runtimeSessionName: "backend-session-1",
+      state: "idle",
+      lastActivityAt: 1,
+    });
+    hoisted.sessionTranscriptEvents = [
+      {
+        type: "message",
+        id: "entry-1",
+        timestamp: "2026-05-16T00:00:00.000Z",
+        message: { role: "user", content: "hello" },
+      },
+    ];
+
+    const reply = await buildExportSessionReply(makeParams());
+
+    expect(hoisted.readAcpSessionMetaForEntryMock).toHaveBeenCalledWith({
+      sessionKey: "agent:target:session",
+      entry: {
+        sessionId: "session-1",
+        updatedAt: 1,
+      },
+    });
+    expect(reply.text).toContain("backend runtime");
+    expect(sessionDataFromHtml(writtenHtml()).warning).toContain("backend runtime");
+  });
+
+  it("continues exporting when persisted ACP metadata cannot be read", async () => {
+    hoisted.readAcpSessionMetaForEntryMock.mockImplementation(() => {
+      throw new Error("state database unavailable");
+    });
+    hoisted.sessionTranscriptEvents = [
+      {
+        type: "message",
+        id: "entry-1",
+        timestamp: "2026-05-16T00:00:00.000Z",
+        message: { role: "user", content: "hello" },
+      },
+    ];
+
+    const reply = await buildExportSessionReply(makeParams());
+
+    expect(reply.text).toContain("Session exported");
+    expect(reply.text).not.toContain("backend runtime");
+    expect(sessionDataFromHtml(writtenHtml()).warning).toBeUndefined();
+  });
+
+  it("does not warn for a normal user-only transcript without backend session metadata", async () => {
+    hoisted.sessionTranscriptEvents = [
+      {
+        type: "message",
+        id: "entry-1",
+        timestamp: "2026-05-16T00:00:00.000Z",
+        message: { role: "user", content: "hello" },
+      },
+    ];
+
+    const reply = await buildExportSessionReply(makeParams());
+
+    expect(reply.text).not.toContain("backend runtime");
+    expect(sessionDataFromHtml(writtenHtml()).warning).toBeUndefined();
+  });
+
+  it("ignores malformed persisted backend session metadata", async () => {
+    hoisted.loadSessionStoreMock.mockReturnValue({
+      "agent:target:session": {
+        sessionId: "session-1",
+        updatedAt: 1,
+        claudeCliSessionId: 123,
+        cliSessionBindings: {
+          "claude-cli": null,
+        },
+        cliSessionIds: {
+          acpx: 123,
+        },
+      },
+    } as never);
+    hoisted.sessionTranscriptEvents = [
+      {
+        type: "message",
+        id: "entry-1",
+        timestamp: "2026-05-16T00:00:00.000Z",
+        message: { role: "user", content: "hello" },
+      },
+    ];
+
+    const reply = await buildExportSessionReply(makeParams());
+
+    expect(reply.text).not.toContain("backend runtime");
+    expect(sessionDataFromHtml(writtenHtml()).warning).toBeUndefined();
+  });
+
+  it("does not warn when the transcript includes assistant messages", async () => {
+    hoisted.loadSessionStoreMock.mockReturnValue({
+      "agent:target:session": {
+        sessionId: "session-1",
+        updatedAt: 1,
+        acp: {
+          backend: "acpx",
+          mode: "persistent",
+          agent: "claude",
+          runtimeSessionName: "backend-session-1",
+          state: "idle",
+          lastActivityAt: 1,
+        },
+      },
+    });
+    hoisted.sessionTranscriptEvents = [
+      {
+        type: "message",
+        id: "entry-1",
+        timestamp: "2026-05-16T00:00:00.000Z",
+        message: { role: "user", content: "hello" },
+      },
+      {
+        type: "message",
+        id: "entry-2",
+        timestamp: "2026-05-16T00:00:01.000Z",
+        message: { role: "assistant", content: "hi" },
+      },
+    ];
+
+    const reply = await buildExportSessionReply(makeParams());
+
+    expect(reply.text).not.toContain("backend runtime");
+    expect(reply.text).not.toContain("not included in this export");
+    expect(sessionDataFromHtml(writtenHtml()).warning).toBeUndefined();
   });
 });

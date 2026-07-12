@@ -118,10 +118,12 @@ function collectCodeFiles(relativeDir: string): string[] {
 }
 
 function collectCoreReferenceFiles(relativeDir: string): string[] {
-  return collectCodeFiles(relativeDir).filter((file) => {
-    const source = fs.readFileSync(resolve(REPO_ROOT, file), "utf8");
-    return source.includes("../../../../src/") || source.includes("../../../src/");
-  });
+  return collectCodeFiles(relativeDir)
+    .filter((file) => !file.endsWith(".test.ts"))
+    .filter((file) => {
+      const source = fs.readFileSync(resolve(REPO_ROOT, file), "utf8");
+      return source.includes("../../../../src/") || source.includes("../../../src/");
+    });
 }
 
 function collectOpenClawRuntimeDirectImportFiles(relativeDir: string): string[] {
@@ -195,6 +197,7 @@ describe("opt-in extension package boundaries", () => {
     expect(tsconfig.compilerOptions?.outDir).toBe("dist");
     expect(tsconfig.compilerOptions?.rootDir).toBe("../..");
     expect(tsconfig.include).toEqual([
+      "../../packages/ai/src/**/*.ts",
       "../../packages/markdown-core/src/**/*.ts",
       "../../packages/media-core/src/**/*.ts",
       "../../packages/media-generation-core/src/**/*.ts",

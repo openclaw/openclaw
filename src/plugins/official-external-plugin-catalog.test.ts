@@ -1,18 +1,28 @@
+import crypto from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import officialExternalPluginCatalog from "../../scripts/lib/official-external-plugin-catalog.json" with { type: "json" };
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PAYLOAD_TYPE,
+  createOfficialExternalPluginCatalogEnvelopePayload,
+  createOfficialExternalPluginCatalogEnvelopeSigningInput,
+  type OfficialExternalPluginCatalogSignedEnvelope,
+} from "./official-external-plugin-catalog-envelope.js";
 import { createSqliteHostedOfficialExternalPluginCatalogSnapshotStore } from "./official-external-plugin-catalog-snapshot-store.js";
 import {
   type OfficialExternalPluginCatalogEntry,
   DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_URL,
   createInMemoryHostedOfficialExternalPluginCatalogSnapshotStore,
   getOfficialExternalPluginCatalogEntry,
+  getOfficialExternalPluginCatalogManifest,
   isOfficialExternalPluginCatalogFeed,
   filterOfficialExternalPluginCatalogEntriesBySourceRefs,
   listOfficialExternalPluginCatalogEntries,
+  loadConfiguredHostedOfficialExternalPluginCatalogEntries,
   loadHostedOfficialExternalPluginCatalogEntries,
   parseOfficialExternalPluginCatalogEntries,
   resolveOfficialExternalProviderContractPluginIds,
@@ -21,7 +31,9 @@ import {
   resolveOfficialExternalWebProviderContractPluginIdsForEnv,
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall,
+  resolveOfficialExternalPluginCatalogProfileConfigFromConfig,
   validateOfficialExternalPluginCatalogEntrySourceRefs,
+  type OfficialExternalPluginCatalogFeed,
 } from "./official-external-plugin-catalog.js";
 
 function expectCatalogEntry(id: string): OfficialExternalPluginCatalogEntry {
@@ -34,6 +46,70 @@ function expectCatalogEntry(id: string): OfficialExternalPluginCatalogEntry {
 
 function expectRequestUrl(input: RequestInfo | URL): string {
   return typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+}
+
+function signedHostedCatalogFeed(params?: {
+  feed?: OfficialExternalPluginCatalogFeed;
+  keyId?: string;
+  privateKeyPem?: string;
+}): {
+  body: string;
+  publicKeyPem: string;
+  privateKeyPem: string;
+} {
+  const { publicKey, privateKey } =
+    params?.privateKeyPem === undefined
+      ? crypto.generateKeyPairSync("ed25519", {
+          publicKeyEncoding: { type: "spki", format: "pem" },
+          privateKeyEncoding: { type: "pkcs8", format: "pem" },
+        })
+      : {
+          publicKey: crypto
+            .createPublicKey(params.privateKeyPem)
+            .export({ type: "spki", format: "pem" }) as string,
+          privateKey: params.privateKeyPem,
+        };
+  const payload = createOfficialExternalPluginCatalogEnvelopePayload(
+    params?.feed ?? {
+      schemaVersion: 1,
+      id: "openclaw-official-external-plugins",
+      generatedAt: "2026-06-22T00:00:00.000Z",
+      sequence: 8,
+      entries: [
+        {
+          name: "@openclaw/signed-refresh-proof",
+          kind: "plugin",
+          openclaw: {
+            plugin: { id: "signed-refresh-proof" },
+            install: { sourceRef: "acme-npm", npmSpec: "@openclaw/signed-refresh-proof" },
+          },
+        },
+      ],
+    },
+  );
+  const signingInput = createOfficialExternalPluginCatalogEnvelopeSigningInput({
+    payloadType: OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PAYLOAD_TYPE,
+    payloadBytes: Buffer.from(payload, "base64"),
+  });
+  const envelope: OfficialExternalPluginCatalogSignedEnvelope = {
+    schemaVersion: 1,
+    payloadType: OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PAYLOAD_TYPE,
+    payload,
+    signatures: [
+      {
+        keyId: params?.keyId ?? "acme-root",
+        algorithm: "ed25519",
+        signature: crypto
+          .sign(null, signingInput, crypto.createPrivateKey(privateKey))
+          .toString("base64url"),
+      },
+    ],
+  };
+  return {
+    body: JSON.stringify(envelope),
+    publicKeyPem: publicKey,
+    privateKeyPem: privateKey,
+  };
 }
 
 describe("official external plugin catalog", () => {
@@ -55,6 +131,28 @@ describe("official external plugin catalog", () => {
       sequence: 1,
     });
     expect(officialExternalPluginCatalog.entries.length).toBeGreaterThan(0);
+  });
+
+  it("curates featured external plugins with ClawHub install alternatives", () => {
+    const featured = [
+      ["diffs", "@openclaw/diffs", 40],
+      ["lobster", "@openclaw/lobster", 50],
+      ["tokenjuice", "@openclaw/tokenjuice", 60],
+      ["memory-lancedb", "@openclaw/memory-lancedb", 70],
+    ] as const;
+
+    for (const [id, npmSpec, order] of featured) {
+      const entry = expectCatalogEntry(id);
+      expect(getOfficialExternalPluginCatalogManifest(entry)?.catalog).toEqual({
+        featured: true,
+        order,
+      });
+      expect(resolveOfficialExternalPluginInstall(entry)).toMatchObject({
+        clawhubSpec: `clawhub:${npmSpec}`,
+        npmSpec,
+        defaultChoice: "npm",
+      });
+    }
   });
 
   it("does not allow malformed feed wrappers to count as feed documents", () => {
@@ -457,11 +555,56 @@ describe("official external plugin catalog", () => {
 
     expect(result.source).toBe("hosted");
     expect(result.entries.map((entry) => entry.id)).toEqual(["@openclaw/live-feed-proof"]);
-    expect(resolveOfficialExternalPluginInstall(result.entries[0])).toEqual({
+    expect(
+      resolveOfficialExternalPluginInstall(
+        expectDefined(result.entries[0], "result.entries[0] test invariant"),
+      ),
+    ).toEqual({
       clawhubSpec: "clawhub:@openclaw/live-feed-proof@1.0.0",
       defaultChoice: "clawhub",
       expectedIntegrity: "sha256-s1XdoEQDvsqri7qwaf0eewV4Ji50WeWYzFsZYVtb2rk=",
     });
+  });
+
+  it("loads hosted catalog profiles from OpenClaw config", async () => {
+    const config = {
+      marketplaces: {
+        feeds: { acme: { url: "https://packages.acme.example/openclaw/feed" } },
+        sources: { "acme-npm": { type: "npm" as const } },
+      },
+    };
+    const body = JSON.stringify({
+      schemaVersion: 1,
+      id: "openclaw-official-external-plugins",
+      generatedAt: "2026-06-22T00:00:00.000Z",
+      sequence: 14,
+      entries: [
+        {
+          name: "@acme/config-profile-proof",
+          kind: "plugin",
+          openclaw: {
+            plugin: { id: "config-profile-proof" },
+            install: { sourceRef: "acme-npm", npmSpec: "@acme/config-profile-proof" },
+          },
+        },
+      ],
+    });
+
+    expect(resolveOfficialExternalPluginCatalogProfileConfigFromConfig(config)).toBe(
+      config.marketplaces,
+    );
+
+    const result = await loadConfiguredHostedOfficialExternalPluginCatalogEntries(config, {
+      feedProfile: "acme",
+      fetchImpl: vi.fn(async (url: RequestInfo | URL) => {
+        expect(expectRequestUrl(url)).toBe("https://packages.acme.example/openclaw/feed");
+        return new Response(body, { status: 200 });
+      }),
+      snapshotStore: null,
+    });
+
+    expect(result.source).toBe("hosted");
+    expect(result.entries.map((entry) => entry.name)).toEqual(["@acme/config-profile-proof"]);
   });
 
   it("allows named local feed profiles to authorize their configured HTTPS host", async () => {
@@ -509,6 +652,299 @@ describe("official external plugin catalog", () => {
     expect(result.entries.map((entry) => entry.name)).toEqual(["@acme/private-proof"]);
   });
 
+  it("loads and snapshots a signed hosted feed profile after envelope verification", async () => {
+    const snapshotStore = createInMemoryHostedOfficialExternalPluginCatalogSnapshotStore();
+    const writeSpy = vi.spyOn(snapshotStore, "write");
+    const signed = signedHostedCatalogFeed();
+
+    const result = await loadHostedOfficialExternalPluginCatalogEntries({
+      feedProfile: "acme",
+      catalogConfig: {
+        feeds: {
+          acme: {
+            url: "https://packages.acme.example/openclaw/feed",
+            verification: {
+              mode: "signed",
+              keys: [
+                {
+                  keyId: "acme-root",
+                  publicKey: signed.publicKeyPem,
+                },
+              ],
+            },
+          },
+        },
+        sources: { "acme-npm": { type: "npm", registry: "https://packages.acme.example/npm/" } },
+      },
+      fetchImpl: vi.fn(async () => new Response(signed.body, { status: 200 })),
+      now: () => new Date("2026-06-22T04:05:06.000Z"),
+      snapshotStore,
+    });
+
+    expect(result.source).toBe("hosted");
+    expect(result.entries.map((entry) => entry.name)).toEqual(["@openclaw/signed-refresh-proof"]);
+    if (result.source === "hosted") {
+      expect(result.trust).toEqual({
+        mode: "signed",
+        signedBy: "acme-root",
+        signatureCount: 1,
+        threshold: 1,
+        verifiedAt: "2026-06-22T04:05:06.000Z",
+      });
+    }
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    await expect(
+      snapshotStore.read("https://packages.acme.example/openclaw/feed"),
+    ).resolves.toMatchObject({
+      body: signed.body,
+      trust: {
+        mode: "signed",
+        signedBy: "acme-root",
+        signatureCount: 1,
+        threshold: 1,
+        verifiedAt: "2026-06-22T04:05:06.000Z",
+      },
+    });
+  });
+
+  it("rejects signed hosted feed rollback before replacing snapshots", async () => {
+    const snapshotStore = createInMemoryHostedOfficialExternalPluginCatalogSnapshotStore();
+    const newer = signedHostedCatalogFeed({
+      feed: {
+        schemaVersion: 1,
+        id: "openclaw-official-external-plugins",
+        generatedAt: "2026-06-22T00:00:10.000Z",
+        sequence: 10,
+        entries: [
+          {
+            name: "@openclaw/signed-refresh-proof-v10",
+            kind: "plugin",
+            openclaw: {
+              plugin: { id: "signed-refresh-proof-v10" },
+              install: { sourceRef: "acme-npm", npmSpec: "@openclaw/signed-refresh-proof-v10" },
+            },
+          },
+        ],
+      },
+    });
+    const older = signedHostedCatalogFeed({
+      privateKeyPem: newer.privateKeyPem,
+      feed: {
+        schemaVersion: 1,
+        id: "openclaw-official-external-plugins",
+        generatedAt: "2026-06-22T00:00:09.000Z",
+        sequence: 9,
+        entries: [
+          {
+            name: "@openclaw/signed-refresh-proof-v9",
+            kind: "plugin",
+            openclaw: {
+              plugin: { id: "signed-refresh-proof-v9" },
+              install: { sourceRef: "acme-npm", npmSpec: "@openclaw/signed-refresh-proof-v9" },
+            },
+          },
+        ],
+      },
+    });
+    const catalogConfig = {
+      feeds: {
+        acme: {
+          url: "https://packages.acme.example/openclaw/feed",
+          verification: {
+            mode: "signed" as const,
+            keys: [{ keyId: "acme-root", publicKey: newer.publicKeyPem }],
+          },
+        },
+      },
+      sources: {
+        "acme-npm": { type: "npm" as const, registry: "https://packages.acme.example/npm/" },
+      },
+    };
+
+    await loadHostedOfficialExternalPluginCatalogEntries({
+      feedProfile: "acme",
+      catalogConfig,
+      fetchImpl: vi.fn(async () => new Response(newer.body, { status: 200 })),
+      snapshotStore,
+    });
+    const writeSpy = vi.spyOn(snapshotStore, "write");
+
+    const result = await loadHostedOfficialExternalPluginCatalogEntries({
+      feedProfile: "acme",
+      catalogConfig,
+      fetchImpl: vi.fn(async () => new Response(older.body, { status: 200 })),
+      snapshotStore,
+    });
+
+    expect(result.source).toBe("hosted-snapshot");
+    expect(result.entries.map((entry) => entry.name)).toEqual([
+      "@openclaw/signed-refresh-proof-v10",
+    ]);
+    if (result.source === "hosted-snapshot") {
+      expect(result.error).toContain("signed feed sequence is older");
+      expect(result.feed.sequence).toBe(10);
+    }
+    expect(writeSpy).not.toHaveBeenCalled();
+  });
+
+  it("keeps signed SQLite snapshot replacement monotonic under concurrent writes", async () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-signed-snapshot-race-"));
+    const url = "https://packages.acme.example/openclaw/feed";
+    const newer = signedHostedCatalogFeed({
+      feed: {
+        schemaVersion: 1,
+        id: "openclaw-official-external-plugins",
+        generatedAt: "2026-06-22T00:00:10.000Z",
+        sequence: 10,
+        entries: [
+          {
+            name: "@openclaw/signed-refresh-proof-v10",
+            kind: "plugin",
+            openclaw: { plugin: { id: "signed-refresh-proof-v10" } },
+          },
+        ],
+      },
+    });
+    const older = signedHostedCatalogFeed({
+      privateKeyPem: newer.privateKeyPem,
+      feed: {
+        schemaVersion: 1,
+        id: "openclaw-official-external-plugins",
+        generatedAt: "2026-06-22T00:00:09.000Z",
+        sequence: 9,
+        entries: [
+          {
+            name: "@openclaw/signed-refresh-proof-v9",
+            kind: "plugin",
+            openclaw: { plugin: { id: "signed-refresh-proof-v9" } },
+          },
+        ],
+      },
+    });
+    const snapshotStore = createSqliteHostedOfficialExternalPluginCatalogSnapshotStore({
+      stateDir: tempDir,
+    });
+    const trust = {
+      mode: "signed" as const,
+      signedBy: "acme-root",
+      signatureCount: 1,
+      threshold: 1,
+      verifiedAt: "2026-06-22T04:05:06.000Z",
+    };
+    const snapshotFor = (body: string, sequence: number, generatedAt: string) => ({
+      body,
+      metadata: {
+        url,
+        status: 200,
+        checksum: "sha256:" + crypto.createHash("sha256").update(body).digest("hex"),
+      },
+      savedAt: "2026-06-22T04:05:06.000Z",
+      trust,
+      monotonic: { mode: "signed-feed" as const, sequence, generatedAt },
+    });
+
+    try {
+      await Promise.allSettled([
+        snapshotStore.write(snapshotFor(older.body, 9, "2026-06-22T00:00:09.000Z")),
+        snapshotStore.write(snapshotFor(newer.body, 10, "2026-06-22T00:00:10.000Z")),
+      ]);
+
+      const snapshot = await snapshotStore.read(url);
+      expect(snapshot?.body).toBe(newer.body);
+      expect(snapshot?.trust).toMatchObject(trust);
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed when a signed feed profile receives unsigned JSON", async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            schemaVersion: 1,
+            id: "openclaw-official-external-plugins",
+            generatedAt: "2026-06-22T00:00:00.000Z",
+            sequence: 8,
+            entries: [],
+          }),
+          { status: 200 },
+        ),
+    );
+
+    const result = await loadHostedOfficialExternalPluginCatalogEntries({
+      feedProfile: "acme",
+      catalogConfig: {
+        feeds: {
+          acme: {
+            url: "https://packages.acme.example/openclaw/feed",
+            verification: {
+              mode: "signed",
+              keys: [
+                {
+                  keyId: "acme-root",
+                  publicKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                },
+              ],
+            },
+          },
+        },
+      },
+      fetchImpl,
+      snapshotStore: createInMemoryHostedOfficialExternalPluginCatalogSnapshotStore(),
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(result.source).toBe("bundled-fallback");
+    expect(result.entries).toEqual([]);
+    if (result.source === "bundled-fallback") {
+      expect(result.error).toContain("signed envelope is malformed");
+    }
+  });
+
+  it("preserves signed feed profile verification for direct URL overrides", async () => {
+    const signed = signedHostedCatalogFeed();
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            schemaVersion: 1,
+            id: "openclaw-official-external-plugins",
+            generatedAt: "2026-06-22T00:00:00.000Z",
+            sequence: 8,
+            entries: [],
+          }),
+          { status: 200 },
+        ),
+    );
+
+    const result = await loadHostedOfficialExternalPluginCatalogEntries({
+      feedProfile: "acme",
+      feedUrl: "https://clawhub.ai/v1/feeds/plugins",
+      catalogConfig: {
+        feeds: {
+          acme: {
+            url: "https://packages.acme.example/openclaw/feed",
+            verification: {
+              mode: "signed",
+              keys: [{ keyId: "acme-root", publicKey: signed.publicKeyPem }],
+            },
+          },
+        },
+      },
+      fetchImpl,
+      snapshotStore: createInMemoryHostedOfficialExternalPluginCatalogSnapshotStore(),
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(result.source).toBe("bundled-fallback");
+    expect(result.entries).toEqual([]);
+    if (result.source === "bundled-fallback") {
+      expect(result.error).toContain("signed envelope is malformed");
+    }
+  });
+
   it("keeps direct hosted feed URL overrides constrained to the public allowlist", async () => {
     const fetchImpl = vi.fn(async () => new Response("{}", { status: 200 }));
 
@@ -522,6 +958,43 @@ describe("official external plugin catalog", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
     if (result.source === "bundled-fallback") {
       expect(result.error).toContain("hostname is not allowed");
+    }
+  });
+
+  it("rejects credential-bearing direct hosted feed URL overrides", async () => {
+    const fetchImpl = vi.fn(async () => new Response("{}", { status: 200 }));
+
+    const result = await loadHostedOfficialExternalPluginCatalogEntries({
+      feedUrl: "https://user:secret@clawhub.ai/v1/feeds/plugins",
+      fetchImpl,
+      snapshotStore: null,
+    });
+
+    expect(result.source).toBe("bundled-fallback");
+    expect(fetchImpl).not.toHaveBeenCalled();
+    if (result.source === "bundled-fallback") {
+      expect(result.error).toContain("must not include credentials");
+    }
+  });
+
+  it("rejects query or fragment-bearing direct hosted feed URL overrides", async () => {
+    for (const feedUrl of [
+      "https://clawhub.ai/v1/feeds/plugins?token=secret",
+      "https://clawhub.ai/v1/feeds/plugins#fragment",
+    ]) {
+      const fetchImpl = vi.fn(async () => new Response("{}", { status: 200 }));
+
+      const result = await loadHostedOfficialExternalPluginCatalogEntries({
+        feedUrl,
+        fetchImpl,
+        snapshotStore: null,
+      });
+
+      expect(result.source).toBe("bundled-fallback");
+      expect(fetchImpl).not.toHaveBeenCalled();
+      if (result.source === "bundled-fallback") {
+        expect(result.error).toContain("must not include query strings or fragments");
+      }
     }
   });
 
@@ -569,6 +1042,83 @@ describe("official external plugin catalog", () => {
     ]);
   });
 
+  it("preserves default feed manifest installs for direct default hosted feed URL refreshes", async () => {
+    const body = JSON.stringify({
+      schemaVersion: 1,
+      id: "openclaw-official-external-plugins",
+      generatedAt: "2026-06-22T00:00:00.000Z",
+      sequence: 14,
+      entries: [
+        {
+          name: "@openclaw/direct-default-missing-source-ref",
+          kind: "plugin",
+          openclaw: {
+            plugin: { id: "direct-default-missing-source-ref" },
+            install: { npmSpec: "@openclaw/direct-default-missing-source-ref" },
+          },
+        },
+      ],
+    });
+
+    const result = await loadHostedOfficialExternalPluginCatalogEntries({
+      feedUrl: "https://clawhub.ai/v1/feeds/plugins",
+      fetchImpl: vi.fn(async (url: RequestInfo | URL) => {
+        expect(expectRequestUrl(url)).toBe("https://clawhub.ai/v1/feeds/plugins");
+        return new Response(body, { status: 200 });
+      }),
+      snapshotStore: null,
+    });
+
+    expect(result.source).toBe("hosted");
+    expect(result.entries.map((entry) => entry.name)).toEqual([
+      "@openclaw/direct-default-missing-source-ref",
+    ]);
+  });
+
+  it("requires manifest install source refs for non-default direct hosted feed URL overrides", async () => {
+    const body = JSON.stringify({
+      schemaVersion: 1,
+      id: "openclaw-official-external-plugins",
+      generatedAt: "2026-06-22T00:00:00.000Z",
+      sequence: 15,
+      entries: [
+        {
+          name: "@acme/direct-url-missing-source-ref",
+          kind: "plugin",
+          openclaw: {
+            plugin: { id: "direct-url-missing-source-ref" },
+            install: { npmSpec: "@acme/direct-url-missing-source-ref" },
+          },
+        },
+        {
+          name: "@acme/direct-url-known-source-ref",
+          kind: "plugin",
+          openclaw: {
+            plugin: { id: "direct-url-known-source-ref" },
+            install: { sourceRef: "acme-npm", npmSpec: "@acme/direct-url-known-source-ref" },
+          },
+        },
+      ],
+    });
+
+    const result = await loadHostedOfficialExternalPluginCatalogEntries({
+      feedUrl: "https://clawhub.ai/v1/feeds/acme",
+      catalogConfig: {
+        sources: { "acme-npm": { type: "npm", registry: "https://packages.acme.example/npm/" } },
+      },
+      fetchImpl: vi.fn(async (url: RequestInfo | URL) => {
+        expect(expectRequestUrl(url)).toBe("https://clawhub.ai/v1/feeds/acme");
+        return new Response(body, { status: 200 });
+      }),
+      snapshotStore: null,
+    });
+
+    expect(result.source).toBe("hosted");
+    expect(result.entries.map((entry) => entry.name)).toEqual([
+      "@acme/direct-url-known-source-ref",
+    ]);
+  });
+
   it("requires manifest install source refs for custom local feed profiles", async () => {
     const missingManifestSourceRef = {
       name: "@acme/missing-manifest-source-ref",
@@ -576,6 +1126,17 @@ describe("official external plugin catalog", () => {
       openclaw: {
         plugin: { id: "missing-manifest-source-ref" },
         install: { npmSpec: "@acme/missing-manifest-source-ref" },
+      },
+    };
+    const knownManifestSourceRef = {
+      name: "@acme/known-manifest-source-ref",
+      kind: "plugin",
+      openclaw: {
+        plugin: { id: "known-manifest-source-ref" },
+        install: {
+          sourceRef: "acme-npm",
+          npmSpec: "@acme/known-manifest-source-ref",
+        },
       },
     };
     const implicitNameInstall = {
@@ -592,14 +1153,6 @@ describe("official external plugin catalog", () => {
       openclaw: {
         plugin: { id: "top-level-candidate-only" },
         install: { npmSpec: "@acme/top-level-candidate-only" },
-      },
-    };
-    const knownManifestSourceRef = {
-      name: "@acme/known-manifest-source-ref",
-      kind: "plugin",
-      openclaw: {
-        plugin: { id: "known-manifest-source-ref" },
-        install: { npmSpec: "@acme/known-manifest-source-ref", sourceRef: "acme-npm" },
       },
     };
     const body = JSON.stringify({
@@ -815,6 +1368,193 @@ describe("official external plugin catalog", () => {
     expect(snapshot?.metadata.checksum).toMatch(/^sha256:[0-9a-f]{64}$/);
   });
 
+  it("fails explicit refreshes when required snapshot persistence fails", async () => {
+    const body = JSON.stringify({
+      schemaVersion: 1,
+      id: "openclaw-official-external-plugins",
+      generatedAt: "2026-06-22T00:00:00.000Z",
+      sequence: 4,
+      entries: [
+        {
+          name: "@openclaw/snapshot-write-fail-proof",
+          kind: "plugin",
+          openclaw: { plugin: { id: "snapshot-write-fail-proof" } },
+        },
+      ],
+    });
+    const snapshotStore = {
+      read: vi.fn(async () => null),
+      write: vi.fn(async () => {
+        throw new Error("state database is read-only");
+      }),
+    };
+
+    await expect(
+      loadHostedOfficialExternalPluginCatalogEntries({
+        snapshotStore,
+        requireSnapshotWrite: true,
+        fetchImpl: vi.fn(async () => new Response(body, { status: 200 })),
+      }),
+    ).rejects.toThrow("state database is read-only");
+
+    expect(snapshotStore.write).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads the latest accepted snapshot in offline mode without fetching", async () => {
+    const snapshotStore = createInMemoryHostedOfficialExternalPluginCatalogSnapshotStore();
+    const body = JSON.stringify({
+      schemaVersion: 1,
+      id: "openclaw-official-external-plugins",
+      generatedAt: "2026-06-22T00:00:00.000Z",
+      sequence: 5,
+      entries: [
+        {
+          name: "@openclaw/offline-snapshot-proof",
+          kind: "plugin",
+          openclaw: { plugin: { id: "offline-snapshot-proof" } },
+        },
+      ],
+    });
+    const seedFetch = vi.fn(
+      async () =>
+        new Response(body, {
+          status: 200,
+          headers: { etag: '"offline"' },
+        }),
+    );
+    const seeded = await loadHostedOfficialExternalPluginCatalogEntries({
+      snapshotStore,
+      fetchImpl: seedFetch,
+    });
+    if (seeded.source !== "hosted") {
+      throw new Error("expected seeded hosted feed");
+    }
+
+    const offlineFetch = vi.fn(async () => new Response(null, { status: 500 }));
+    const result = await loadHostedOfficialExternalPluginCatalogEntries({
+      snapshotStore,
+      fetchImpl: offlineFetch,
+      offline: true,
+    });
+
+    expect(offlineFetch).not.toHaveBeenCalled();
+    expect(result.source).toBe("hosted-snapshot");
+    expect(result.entries.map((entry) => entry.name)).toEqual(["@openclaw/offline-snapshot-proof"]);
+    if (result.source === "hosted-snapshot") {
+      expect(result.error).toBe("hosted catalog feed offline mode");
+      expect(result.metadata.checksum).toBe(seeded.metadata.checksum);
+    }
+  });
+
+  it("re-verifies a signed snapshot before using it in offline mode", async () => {
+    const signed = signedHostedCatalogFeed();
+    const snapshotStore = createInMemoryHostedOfficialExternalPluginCatalogSnapshotStore([
+      {
+        body: signed.body,
+        metadata: {
+          url: "https://packages.acme.example/openclaw/feed",
+          status: 200,
+          checksum: `sha256:${crypto.createHash("sha256").update(signed.body).digest("hex")}`,
+        },
+        savedAt: "2026-06-22T04:05:06.000Z",
+        trust: {
+          mode: "signed",
+          signedBy: "acme-root",
+          signatureCount: 1,
+          threshold: 1,
+          verifiedAt: "2026-06-22T04:05:06.000Z",
+        },
+      },
+    ]);
+
+    const result = await loadHostedOfficialExternalPluginCatalogEntries({
+      feedProfile: "acme",
+      catalogConfig: {
+        feeds: {
+          acme: {
+            url: "https://packages.acme.example/openclaw/feed",
+            verification: {
+              mode: "signed",
+              keys: [{ keyId: "acme-root", publicKey: signed.publicKeyPem }],
+            },
+          },
+        },
+        sources: { "acme-npm": { type: "npm", registry: "https://packages.acme.example/npm/" } },
+      },
+      snapshotStore,
+      offline: true,
+      fetchImpl: vi.fn(),
+    });
+
+    expect(result.source).toBe("hosted-snapshot");
+    expect(result.entries.map((entry) => entry.name)).toEqual(["@openclaw/signed-refresh-proof"]);
+    if (result.source === "hosted-snapshot") {
+      expect(result.trust).toMatchObject({
+        mode: "signed",
+        signedBy: "acme-root",
+        signatureCount: 1,
+        threshold: 1,
+      });
+    }
+  });
+
+  it("does not use an old unsigned snapshot for a signed feed profile", async () => {
+    const unsignedBody = JSON.stringify({
+      schemaVersion: 1,
+      id: "openclaw-official-external-plugins",
+      generatedAt: "2026-06-22T00:00:00.000Z",
+      sequence: 9,
+      entries: [
+        {
+          name: "@openclaw/unsigned-snapshot-proof",
+          kind: "plugin",
+          openclaw: { plugin: { id: "unsigned-snapshot-proof" } },
+        },
+      ],
+    });
+    const snapshotStore = createInMemoryHostedOfficialExternalPluginCatalogSnapshotStore([
+      {
+        body: unsignedBody,
+        metadata: {
+          url: "https://packages.acme.example/openclaw/feed",
+          status: 200,
+          checksum: `sha256:${crypto.createHash("sha256").update(unsignedBody).digest("hex")}`,
+        },
+        savedAt: "2026-06-22T04:05:06.000Z",
+      },
+    ]);
+
+    const result = await loadHostedOfficialExternalPluginCatalogEntries({
+      feedProfile: "acme",
+      catalogConfig: {
+        feeds: {
+          acme: {
+            url: "https://packages.acme.example/openclaw/feed",
+            verification: {
+              mode: "signed",
+              keys: [
+                {
+                  keyId: "acme-root",
+                  publicKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                },
+              ],
+            },
+          },
+        },
+      },
+      snapshotStore,
+      offline: true,
+      fetchImpl: vi.fn(),
+    });
+
+    expect(result.source).toBe("bundled-fallback");
+    expect(result.entries).toEqual([]);
+    if (result.source === "bundled-fallback") {
+      expect(result.error).toContain("snapshot fallback failed");
+      expect(result.error).toContain("signed envelope is malformed");
+    }
+  });
+
   it("persists hosted feed snapshots in OpenClaw state for HTTP 304 reuse", async () => {
     const stateDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-hosted-catalog-"));
     try {
@@ -899,6 +1639,13 @@ describe("official external plugin catalog", () => {
           checksum: "sha256:second",
         },
         savedAt: "2026-06-22T03:04:05.000Z",
+        trust: {
+          mode: "signed",
+          signedBy: "acme-root",
+          signatureCount: 1,
+          threshold: 1,
+          verifiedAt: "2026-06-22T03:04:05.000Z",
+        },
       });
 
       await expect(store.read(url)).resolves.toMatchObject({
@@ -910,6 +1657,13 @@ describe("official external plugin catalog", () => {
           checksum: "sha256:second",
         },
         savedAt: "2026-06-22T03:04:05.000Z",
+        trust: {
+          mode: "signed",
+          signedBy: "acme-root",
+          signatureCount: 1,
+          threshold: 1,
+          verifiedAt: "2026-06-22T03:04:05.000Z",
+        },
       });
     } finally {
       closeOpenClawStateDatabaseForTest();
@@ -1263,6 +2017,83 @@ describe("official external plugin catalog", () => {
     }
   });
 
+  it("rejects non-streaming hosted feeds before buffering underreported bodies", async () => {
+    const oversized = "x".repeat(8192);
+    const response = new Response(oversized, {
+      status: 200,
+      headers: { "content-length": "1" },
+    });
+    Object.defineProperty(response, "body", { value: null });
+    const arrayBuffer = vi.fn(response.arrayBuffer.bind(response));
+    Object.defineProperty(response, "arrayBuffer", { value: arrayBuffer });
+
+    const result = await loadHostedOfficialExternalPluginCatalogEntries({
+      snapshotStore: null,
+      maxBytes: 4096,
+      fetchImpl: vi.fn(async () => response),
+    });
+
+    expect(result.source).toBe("bundled-fallback");
+    if (result.source === "bundled-fallback") {
+      expect(result.error).toContain("streaming response body unavailable");
+    }
+    expect(arrayBuffer).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-streaming hosted feeds without content-length", async () => {
+    const body = JSON.stringify({
+      schemaVersion: 1,
+      id: "openclaw-official-external-plugins",
+      generatedAt: "2026-06-22T00:00:00.000Z",
+      sequence: 1,
+      entries: [],
+    });
+    const response = new Response(body, { status: 200 });
+    Object.defineProperty(response, "body", { value: null });
+
+    const result = await loadHostedOfficialExternalPluginCatalogEntries({
+      snapshotStore: null,
+      fetchImpl: vi.fn(async () => response),
+    });
+
+    expect(result.source).toBe("bundled-fallback");
+    if (result.source === "bundled-fallback") {
+      expect(result.error).toContain("streaming response body unavailable");
+    }
+  });
+
+  it("rejects oversized streaming hosted feeds incrementally", async () => {
+    const chunk = new Uint8Array(512 * 1024).fill("x".charCodeAt(0));
+    let emitted = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (emitted >= 3) {
+          controller.close();
+          return;
+        }
+        emitted += 1;
+        controller.enqueue(chunk);
+      },
+    });
+
+    const result = await loadHostedOfficialExternalPluginCatalogEntries({
+      snapshotStore: null,
+      maxBytes: 1024 * 1024,
+      fetchImpl: vi.fn(
+        async () =>
+          new Response(body, {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    });
+
+    expect(result.source).toBe("bundled-fallback");
+    if (result.source === "bundled-fallback") {
+      expect(result.error).toContain("exceeds 1048576 bytes");
+    }
+  });
+
   it("prefers feed install candidates before legacy install metadata", () => {
     expect(
       resolveOfficialExternalPluginInstall({
@@ -1313,7 +2144,10 @@ describe("official external plugin catalog", () => {
         },
         { catalogConfig: { sources: { "acme-npm": { type: "npm" } } } },
       ),
-    ).toEqual({ npmSpec: "@acme/private-package@4.5.6", defaultChoice: "npm" });
+    ).toEqual({
+      npmSpec: "@acme/private-package@4.5.6",
+      defaultChoice: "npm",
+    });
 
     expect(
       resolveOfficialExternalPluginInstall(
@@ -1391,6 +2225,7 @@ describe("official external plugin catalog", () => {
       ["deepinfra", "@openclaw/deepinfra-provider"],
       ["deepseek", "@openclaw/deepseek-provider"],
       ["groq", "@openclaw/groq-provider"],
+      ["longcat", "@openclaw/longcat-provider"],
       ["kilocode", "@openclaw/kilocode-provider"],
       ["kimi", "@openclaw/kimi-provider"],
       ["qianfan", "@openclaw/qianfan-provider"],
@@ -1419,6 +2254,7 @@ describe("official external plugin catalog", () => {
       ["vercel-ai-gateway", "@openclaw/vercel-ai-gateway-provider"],
       ["zai", "@openclaw/zai-provider"],
     ] as const;
+    const currentExternalized = [["featherless", "@openclaw/featherless-provider"]] as const;
 
     for (const [id, npmSpec] of [...providers, ...plugins]) {
       expect(resolveOfficialExternalPluginInstall(expectCatalogEntry(id))).toEqual({
@@ -1434,6 +2270,14 @@ describe("official external plugin catalog", () => {
         npmSpec,
         defaultChoice: "npm",
         minHostVersion: ">=2026.6.9",
+      });
+    }
+    for (const [id, npmSpec] of currentExternalized) {
+      expect(resolveOfficialExternalPluginInstall(expectCatalogEntry(id))).toEqual({
+        clawhubSpec: `clawhub:${npmSpec}`,
+        npmSpec,
+        defaultChoice: "npm",
+        minHostVersion: ">=2026.6.11",
       });
     }
   });
@@ -1511,12 +2355,27 @@ describe("official external plugin catalog", () => {
     });
   });
 
+  it("lists LongCat as an official external provider", () => {
+    const longcat = expectCatalogEntry("longcat");
+
+    expect(resolveOfficialExternalPluginId(longcat)).toBe("longcat");
+    expect(getOfficialExternalPluginCatalogEntry("meituan-longcat")).toBe(longcat);
+    expect(resolveOfficialExternalPluginInstall(longcat)).toEqual({
+      clawhubSpec: "clawhub:@openclaw/longcat-provider",
+      npmSpec: "@openclaw/longcat-provider",
+      defaultChoice: "npm",
+      minHostVersion: ">=2026.6.8",
+    });
+  });
+
   it("resolves external provider aliases beyond the primary provider id", () => {
     const qwen = expectCatalogEntry("qwen");
 
     expect(getOfficialExternalPluginCatalogEntry("modelstudio")).toBe(qwen);
     expect(getOfficialExternalPluginCatalogEntry("qwen-oauth")).toBe(qwen);
     expect(getOfficialExternalPluginCatalogEntry("qwen-portal")).toBe(qwen);
+    expect(getOfficialExternalPluginCatalogEntry("qwen-token-plan")).toBe(qwen);
+    expect(getOfficialExternalPluginCatalogEntry("bailian-token-plan")).toBe(qwen);
   });
 
   it("maps external speech and web-fetch contracts to plugin owners", () => {
@@ -1572,7 +2431,9 @@ describe("official external plugin catalog", () => {
         CLOUDFLARE_AI_GATEWAY_API_KEY: "cloudflare-key",
         DEEPINFRA_API_KEY: "deepinfra-key",
         DEEPSEEK_API_KEY: "deepseek-key",
+        FEATHERLESS_API_KEY: "featherless-key",
         GROQ_API_KEY: "groq-key",
+        LONGCAT_API_KEY: "longcat-key",
         KILOCODE_API_KEY: "kilocode-key",
         KIMICODE_API_KEY: "kimi-key",
         KIMI_API_KEY: "moonshot-kimi-key",
@@ -1582,6 +2443,7 @@ describe("official external plugin catalog", () => {
         STEPFUN_API_KEY: "stepfun-key",
         FIREWORKS_API_KEY: "fireworks-key",
         TOKENHUB_API_KEY: "tokenhub-key",
+        TOKENPLAN_API_KEY: "tokenplan-key",
         VENICE_API_KEY: "venice-key",
         AI_GATEWAY_API_KEY: "gateway-key",
         ZAI_API_KEY: "zai-key",
@@ -1593,10 +2455,12 @@ describe("official external plugin catalog", () => {
       "cloudflare-ai-gateway",
       "deepinfra",
       "deepseek",
+      "featherless",
       "fireworks",
       "groq",
       "kilocode",
       "kimi",
+      "longcat",
       "moonshot",
       "qianfan",
       "qwen",
@@ -1607,6 +2471,32 @@ describe("official external plugin catalog", () => {
       "zai",
     ]);
     expect(resolveOfficialExternalProviderPluginIdsForEnv({ GROQ_API_KEY: " " })).toEqual([]);
+    expect(resolveOfficialExternalProviderPluginIdsForEnv({ LONGCAT_API_KEY: " " })).toEqual([]);
+  });
+
+  it("keeps Tencent auth choices available through the cold-install auth catalog", () => {
+    const tencent = expectCatalogEntry("tencent");
+    const tokenHub = tencent.openclaw?.providers?.find(
+      (provider) => provider.id === "tencent-tokenhub",
+    );
+    const tokenPlan = tencent.openclaw?.providers?.find(
+      (provider) => provider.id === "tencent-tokenplan",
+    );
+
+    expect(tokenHub?.envVars).toEqual(["TOKENHUB_API_KEY"]);
+    expect(tokenHub?.authChoices).toEqual([
+      expect.objectContaining({
+        choiceId: "tokenhub-api-key",
+        optionKey: "tokenhubApiKey",
+        cliFlag: "--tokenhub-api-key",
+      }),
+    ]);
+    expect(tokenPlan?.envVars).toEqual(["TOKENPLAN_API_KEY"]);
+    expect(tokenPlan?.authChoices?.[0]).toMatchObject({
+      choiceId: "tokenplan-api-key",
+      optionKey: "tokenplanApiKey",
+      cliFlag: "--tokenplan-api-key",
+    });
   });
 
   it("keeps Groq available through the cold-install auth catalog", () => {

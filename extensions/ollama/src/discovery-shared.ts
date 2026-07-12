@@ -24,6 +24,9 @@ export type OllamaPluginConfig = {
   discovery?: {
     enabled?: boolean;
   };
+  nodeInference?: {
+    enabled?: boolean;
+  };
 };
 
 type OllamaDiscoveryContext = {
@@ -129,6 +132,9 @@ function isIpv4PrivateRange(host: string): boolean {
     return false;
   }
   const [a, b] = octets;
+  if (a === undefined || b === undefined) {
+    return false;
+  }
   return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
 }
 

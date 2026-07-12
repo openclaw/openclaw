@@ -1,4 +1,6 @@
 // Imessage plugin module implements the same-sender inbound debounce merge.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { IMessagePayload } from "./types.js";
 
 // Keep the merge contract narrow (caps, ID tracking, reply-context preference)
@@ -76,7 +78,7 @@ export function shouldCombineIMessagePayloadBucket(
   return true;
 }
 
-export type CoalescedIMessagePayload = IMessagePayload & {
+type CoalescedIMessagePayload = IMessagePayload & {
   /**
    * Source GUIDs folded into this merged payload, in arrival order. Includes
    * GUIDs from entries that were dropped by the entry cap so downstream
@@ -103,12 +105,12 @@ export function combineIMessagePayloads(payloads: IMessagePayload[]): CoalescedI
   if (payloads.length === 0) {
     throw new Error("combineIMessagePayloads: cannot combine empty payloads");
   }
+  const first = expectDefined(payloads[0], "first iMessage payload to coalesce");
   if (payloads.length === 1) {
-    return payloads[0];
+    return first;
   }
 
-  const first = payloads[0];
-  const last = payloads[payloads.length - 1];
+  const last = expectDefined(payloads.at(-1), "last iMessage payload to coalesce");
 
   // Cap entries: keep first (preserves command/context) + most recent
   // (preserves latest payload) when a flood exceeds the cap.
@@ -136,7 +138,7 @@ export function combineIMessagePayloads(payloads: IMessagePayload[]): CoalescedI
   }
   let combinedText = textParts.join(" ");
   if (combinedText.length > MAX_COALESCED_TEXT_CHARS) {
-    combinedText = `${combinedText.slice(0, MAX_COALESCED_TEXT_CHARS)}…[truncated]`;
+    combinedText = `${sliceUtf16Safe(combinedText, 0, MAX_COALESCED_TEXT_CHARS)}…[truncated]`;
   }
 
   // Merge attachments across bounded entries, capped to keep downstream media

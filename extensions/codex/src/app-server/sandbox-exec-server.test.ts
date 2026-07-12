@@ -102,19 +102,6 @@ describe("OpenClaw Codex sandbox exec-server", () => {
     expect(client.request).not.toHaveBeenCalled();
   });
 
-  it("rejects Codex app-server versions before the sandbox exec-server environment contract", async () => {
-    const sandbox = createSandboxContext({});
-    const client = createClient({ serverVersion: "0.131.0" });
-
-    await expect(
-      ensureCodexSandboxExecServerEnvironment({
-        client: client as never,
-        sandbox,
-      }),
-    ).rejects.toThrow("Codex app-server 0.132.0 or newer is required");
-    expect(client.request).not.toHaveBeenCalled();
-  });
-
   it("registers a sandbox-backed Codex environment and routes process execution through it", async () => {
     const buildExecSpec = vi.fn(async () => ({
       argv: [process.execPath, "-e", "process.stdout.write('sandbox-process-ok\\n')"],

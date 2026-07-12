@@ -45,6 +45,14 @@ export type ToolPolicyPipelineStep = {
   unavailableCoreToolReason?: string;
 };
 
+/** One policy application, exposed for diagnostics that need exclusion provenance. */
+export type ToolPolicyFilterEvent = {
+  step: ToolPolicyPipelineStep;
+  policy: ToolPolicyLike;
+  before: readonly AnyAgentTool[];
+  after: readonly AnyAgentTool[];
+};
+
 /** Builds the default profile, provider, agent, group, and sender policy layers. */
 export function buildDefaultToolPolicyPipelineSteps(params: {
   profilePolicy?: ToolPolicyLike;
@@ -131,6 +139,7 @@ export function applyToolPolicyPipeline(params: {
   steps: ToolPolicyPipelineStep[];
   auditLogLevel?: ToolPolicyAuditLogLevel;
   declaredToolAllowlist?: DeclaredToolAllowlistContext;
+  onFilter?: (event: ToolPolicyFilterEvent) => void;
 }): AnyAgentTool[] {
   const coreToolNames = new Set(
     params.tools
@@ -203,6 +212,7 @@ export function applyToolPolicyPipeline(params: {
     }
     const before = filtered;
     filtered = filterToolsByPolicy(before, expanded);
+    params.onFilter?.({ step, policy: expanded, before, after: filtered });
     auditToolPolicyFilter({
       stepLabel: step.label,
       policy: expanded,

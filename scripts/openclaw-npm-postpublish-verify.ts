@@ -24,7 +24,9 @@ import {
   win32 as pathWin32,
 } from "node:path";
 import { pathToFileURL } from "node:url";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { formatErrorMessage } from "../src/infra/errors.ts";
+import { ALWAYS_ALLOWED_RUNTIME_DIR_NAMES } from "../src/plugin-sdk/facade-activation-contract.ts";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-paths.ts";
 import { readBoundedResponseText } from "./lib/bounded-response.ts";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
@@ -93,13 +95,13 @@ type DistJavaScriptFileListResult =
   | { files: string[]; limitExceeded: false }
   | { files: string[]; limit: number; limitExceeded: true };
 
-export type PublishedInstallScenario = {
+type PublishedInstallScenario = {
   name: string;
   installSpecs: string[];
   expectedVersion: string;
 };
 
-export type OpenClawNpmPostpublishVerifyArgs =
+type OpenClawNpmPostpublishVerifyArgs =
   | {
       help: false;
       version: string;
@@ -409,11 +411,31 @@ export function collectInstalledPackageErrors(params: {
   }
 
   errors.push(...collectInstalledBundledExtensionManifestErrors(params.packageRoot));
+  errors.push(...collectInstalledAlwaysAllowedRuntimeFacadeErrors(params.packageRoot));
   errors.push(...collectInstalledContextEngineRuntimeErrors(params.packageRoot));
   errors.push(...collectInstalledPluginSdkZodArtifactErrors(params.packageRoot));
   errors.push(...collectInstalledPluginSdkDeclarationErrors(params.packageRoot));
   errors.push(...collectInstalledRootDependencyManifestErrors(params.packageRoot));
 
+  return errors;
+}
+
+export function collectInstalledAlwaysAllowedRuntimeFacadeErrors(packageRoot: string): string[] {
+  const errors: string[] = [];
+  const activationRuntimePath = "dist/facade-activation-check.runtime.js";
+  if (!existsSync(join(packageRoot, activationRuntimePath))) {
+    errors.push(
+      `installed package is missing required facade activation runtime: ${activationRuntimePath}`,
+    );
+  }
+  for (const dirName of ALWAYS_ALLOWED_RUNTIME_DIR_NAMES) {
+    const relativePath = `dist/extensions/${dirName}/runtime-api.js`;
+    if (!existsSync(join(packageRoot, relativePath))) {
+      errors.push(
+        `installed package allows bundled runtime facade ${dirName}/runtime-api.js but is missing required runtime sidecar: ${relativePath}.`,
+      );
+    }
+  }
   return errors;
 }
 
@@ -438,7 +460,10 @@ export function collectInstalledBundledRuntimeSidecarPaths(packageRoot: string):
   const installedExtensionIds = collectInstalledBundledExtensionIds(packageRoot);
   return PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS.filter((relativePath) => {
     const match = /^dist\/extensions\/([^/]+)\//u.exec(relativePath);
-    return match !== null && installedExtensionIds.has(match[1]);
+    return (
+      match !== null &&
+      installedExtensionIds.has(expectDefined(match[1], "bundled runtime extension id"))
+    );
   });
 }
 
@@ -623,7 +648,7 @@ export function collectInstalledPluginSdkZodArtifactErrors(packageRoot: string):
   return [];
 }
 
-export function collectInstalledPluginSdkDeclarationErrors(packageRoot: string): string[] {
+function collectInstalledPluginSdkDeclarationErrors(packageRoot: string): string[] {
   const pluginSdkDistRoot = join(packageRoot, "dist", "plugin-sdk");
   const errors: string[] = [];
   const forbiddenPrivateWorkspaceSpecifiers = ["@openclaw/llm-core"];
@@ -875,7 +900,7 @@ function collectExpectedBundledExtensionPackageIds(): ReadonlySet<string> {
   for (const relativePath of listBundledPluginPackArtifacts()) {
     const match = /^dist\/extensions\/([^/]+)\/package\.json$/u.exec(relativePath);
     if (match) {
-      ids.add(match[1]);
+      ids.add(expectDefined(match[1], "bundled package extension id"));
     }
   }
   return ids;

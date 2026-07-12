@@ -134,19 +134,7 @@ export function stringifyNonErrorCause(value: unknown): string {
   }
 }
 
-export function toErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}
+export { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 
 export function formatUncaughtError(err: unknown): string {
   if (extractErrorCode(err) === "INVALID_CONFIG") {
@@ -157,43 +145,4 @@ export function formatUncaughtError(err: unknown): string {
     return redactSensitiveText(stack);
   }
   return formatErrorMessage(err);
-}
-
-export type ErrorKind = "refusal" | "timeout" | "rate_limit" | "context_length" | "unknown";
-
-export function detectErrorKind(err: unknown): ErrorKind | undefined {
-  if (err === undefined) {
-    return undefined;
-  }
-  const message = formatErrorMessage(err).toLowerCase();
-  const code = extractErrorCode(err)?.toLowerCase();
-
-  if (
-    message.includes("refusal") ||
-    message.includes("content_filter") ||
-    message.includes("sensitive") ||
-    message.includes("unhandled stop reason: refusal_policy")
-  ) {
-    return "refusal";
-  }
-  if (message.includes("timeout") || code === "etimedout" || code === "timeout") {
-    return "timeout";
-  }
-  if (
-    message.includes("rate limit") ||
-    message.includes("too many requests") ||
-    message.includes("429") ||
-    code === "429"
-  ) {
-    return "rate_limit";
-  }
-  if (
-    message.includes("context length") ||
-    message.includes("too many tokens") ||
-    message.includes("token limit") ||
-    message.includes("context_window")
-  ) {
-    return "context_length";
-  }
-  return undefined;
 }

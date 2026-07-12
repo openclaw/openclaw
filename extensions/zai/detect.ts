@@ -1,5 +1,6 @@
 // Zai plugin module implements detect behavior.
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   ZAI_CN_BASE_URL,
   ZAI_CODING_CN_BASE_URL,
@@ -35,6 +36,9 @@ type ProbeCandidate = ZaiDetectedEndpoint & {
 };
 
 const UNSUPPORTED_MODEL_ERROR_CODES = new Set(["1211", "1311"]);
+
+/** Cap for the Z.AI probe error body; bounds untrusted error responses to avoid unbounded buffering/OOM. */
+const ZAI_DETECT_ERROR_BODY_MAX_BYTES = 16 * 1024 * 1024;
 
 function isUnsupportedModelResult(result: ProbeResult): boolean {
   if (result.ok) {
@@ -106,7 +110,11 @@ async function probeZaiChatCompletions(params: {
     let errorCode: string | undefined;
     let errorMessage: string | undefined;
     try {
-      const json = (await res.json()) as {
+      const bytes = await readResponseWithLimit(res, ZAI_DETECT_ERROR_BODY_MAX_BYTES, {
+        onOverflow: ({ maxBytes }) =>
+          new Error(`Z.AI probe error body exceeded size limit (${maxBytes} bytes)`),
+      });
+      const json = JSON.parse(new TextDecoder().decode(bytes)) as {
         error?: { code?: unknown; message?: unknown };
         code?: unknown;
         msg?: unknown;

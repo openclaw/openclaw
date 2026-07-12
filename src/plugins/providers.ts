@@ -518,10 +518,6 @@ function resolveModelSupportMatchKind(
   return undefined;
 }
 
-function dedupeSortedPluginIds(values: Iterable<string>): string[] {
-  return sortUniqueStrings(values);
-}
-
 function classifyProviderRefOwnership(pluginIds: string[] | undefined): ProviderRefOwnership {
   if (!pluginIds || pluginIds.length === 0) {
     return { status: "unowned" };
@@ -542,7 +538,7 @@ function listNormalizedOwnerMapPluginIds(
       matched.push(...pluginIds);
     }
   }
-  return dedupeSortedPluginIds(matched);
+  return sortUniqueStrings(matched);
 }
 
 function resolveOwningPluginIdsForProviderFromSnapshot(
@@ -560,7 +556,7 @@ function resolveOwningPluginIdsForProviderFromSnapshot(
     const plugin = snapshot.byPluginId.get(pluginId);
     return plugin ? pluginOwnsProviderRef(plugin, normalizedProvider) : false;
   });
-  const pluginIds = dedupeSortedPluginIds([...directOwners, ...aliasOwners]);
+  const pluginIds = sortUniqueStrings([...directOwners, ...aliasOwners]);
   return pluginIds.length > 0 ? pluginIds : undefined;
 }
 
@@ -571,7 +567,7 @@ function resolvePreferredManifestPluginIds(
   if (matchedPluginIds.length === 0) {
     return undefined;
   }
-  const uniquePluginIds = dedupeSortedPluginIds(matchedPluginIds);
+  const uniquePluginIds = sortUniqueStrings(matchedPluginIds);
   if (uniquePluginIds.length <= 1) {
     return uniquePluginIds;
   }
@@ -691,7 +687,7 @@ function resolveOwningPluginIdsForCliBackend(params: {
     )
     .map((plugin) => plugin.id);
 
-  const deduped = dedupeSortedPluginIds(pluginIds);
+  const deduped = sortUniqueStrings(pluginIds);
   return deduped.length > 0 ? deduped : undefined;
 }
 
@@ -804,7 +800,7 @@ export function resolveOwningPluginIdsForModelRefs(params: {
 }): string[] {
   const registry = params.manifestRegistry ? undefined : loadProviderRegistrySnapshot(params);
   const manifestRegistry = params.manifestRegistry;
-  return dedupeSortedPluginIds(
+  return sortUniqueStrings(
     params.models.flatMap(
       (model) =>
         resolveOwningPluginIdsForModelRef({
@@ -854,6 +850,54 @@ export function resolveCatalogHookProviderPluginIds(params: {
     ...params,
     manifestRegistry,
   }).filter((pluginId) => runtimeAugmentPluginIds.has(pluginId));
-  return dedupeSortedPluginIds([...enabledProviderPluginIds, ...bundledCompatPluginIds]);
+  return sortUniqueStrings([...enabledProviderPluginIds, ...bundledCompatPluginIds]);
+}
+
+export type UsageHookProviderPluginContract = {
+  pluginId: string;
+  providerIds: string[];
+};
+
+export function resolveUsageHookProviderPluginContracts(params: {
+  config?: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env?: PluginLoadOptions["env"];
+}): UsageHookProviderPluginContract[] {
+  const registry = loadProviderRegistrySnapshot(params);
+  const manifestRegistry = resolveManifestRegistry({
+    ...params,
+    registry,
+    includeDisabled: true,
+  });
+  const usagePluginIds = new Set(
+    manifestRegistry.plugins.flatMap((plugin) =>
+      plugin.contracts?.usageProviders?.length ? [plugin.id] : [],
+    ),
+  );
+  const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);
+  const enabledPluginIds = listRegistryPluginIds(
+    registry,
+    (plugin) =>
+      usagePluginIds.has(plugin.pluginId) &&
+      resolveEffectiveRegistryPluginActivation({
+        plugin,
+        normalizedConfig,
+        rootConfig: params.config,
+      }).activated,
+  );
+  const bundledCompatPluginIds = resolveBundledProviderCompatPluginIds({
+    ...params,
+    manifestRegistry,
+  }).filter((pluginId) => usagePluginIds.has(pluginId));
+  const pluginIds = sortUniqueStrings([...enabledPluginIds, ...bundledCompatPluginIds]);
+  const manifestsById = new Map(manifestRegistry.plugins.map((plugin) => [plugin.id, plugin]));
+  return pluginIds.flatMap((pluginId) => {
+    const providerIds = sortUniqueStrings(
+      (manifestsById.get(pluginId)?.contracts?.usageProviders ?? [])
+        .map(normalizeProviderId)
+        .filter(Boolean),
+    );
+    return providerIds.length > 0 ? [{ pluginId, providerIds }] : [];
+  });
 }
 export { testing as __testing };

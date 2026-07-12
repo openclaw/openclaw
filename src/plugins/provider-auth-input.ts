@@ -1,8 +1,10 @@
+import { expectDefined } from "@openclaw/normalization-core";
 /** Normalizes provider auth input metadata collected from plugin setup flows. */
 import {
   normalizeOptionalLowercaseString,
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { isMalformedApiKeyInput } from "../agents/auth-profiles/credential-state.js";
 import { resolveEnvApiKey } from "../agents/model-auth-env.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { SecretInput } from "../config/types.secrets.js";
@@ -40,7 +42,9 @@ export function normalizeApiKeyInput(raw: string): string {
   const assignmentMatch = normalizedPaste.match(
     /^(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=\s*(.+)$/,
   );
-  const valuePart = assignmentMatch ? assignmentMatch[1].trim() : normalizedPaste;
+  const valuePart = assignmentMatch
+    ? expectDefined(assignmentMatch[1], "assignment match capture group 1").trim()
+    : normalizedPaste;
   const withoutSemicolon = valuePart.endsWith(";") ? valuePart.slice(0, -1).trim() : valuePart;
 
   const unquoted =
@@ -55,8 +59,16 @@ export function normalizeApiKeyInput(raw: string): string {
 }
 
 /** Validates required API-key input for setup prompts. */
-export const validateApiKeyInput = (value: string) =>
-  normalizeApiKeyInput(value).length > 0 ? undefined : "Required";
+export const validateApiKeyInput = (value: string) => {
+  const normalized = normalizeApiKeyInput(value);
+  if (!normalized) {
+    return "Required";
+  }
+  if (isMalformedApiKeyInput(normalized)) {
+    return "Paste the API key value, not an OpenClaw onboarding command.";
+  }
+  return undefined;
+};
 
 /** Formats a redacted API-key preview for setup confirmation prompts. */
 export function formatApiKeyPreview(
@@ -105,6 +117,7 @@ export async function maybeApplyApiKeyFromOption(params: {
   secretInputMode?: SecretInputMode;
   expectedProviders: string[];
   normalize: (value: string) => string;
+  validate?: (value: string) => string | undefined;
   setCredential: (apiKey: SecretInput, mode?: SecretInputMode) => Promise<void>;
 }): Promise<string | undefined> {
   const tokenProvider = normalizeTokenProviderInput(params.tokenProvider);
@@ -115,6 +128,10 @@ export async function maybeApplyApiKeyFromOption(params: {
     return undefined;
   }
   const apiKey = params.normalize(params.token);
+  const validationError = params.validate?.(apiKey);
+  if (validationError) {
+    throw new Error(validationError);
+  }
   await params.setCredential(apiKey, params.secretInputMode);
   return apiKey;
 }
@@ -143,6 +160,7 @@ export async function ensureApiKeyFromOptionEnvOrPrompt(params: {
     secretInputMode: params.secretInputMode,
     expectedProviders: params.expectedProviders,
     normalize: params.normalize,
+    validate: params.validate,
     setCredential: params.setCredential,
   });
   if (optionApiKey) {

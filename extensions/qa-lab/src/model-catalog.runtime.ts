@@ -53,7 +53,7 @@ function splitModelKey(key: string) {
   };
 }
 
-export function selectQaRunnerModelOptions(rows: ModelRow[]): QaRunnerModelOption[] {
+function selectQaRunnerModelOptions(rows: ModelRow[]): QaRunnerModelOption[] {
   const options = rows
     .filter((row) => row.available === true && !row.missing)
     .map((row) => {
@@ -93,7 +93,7 @@ function isModelRow(value: unknown): value is ModelRow {
   );
 }
 
-export function parseQaRunnerModelOptionsOutput(stdout: string): QaRunnerModelOption[] {
+function parseQaRunnerModelOptionsOutput(stdout: string): QaRunnerModelOption[] {
   let payload: unknown;
   try {
     payload = JSON.parse(stdout) as unknown;
@@ -173,7 +173,12 @@ async function waitForProcessTreeExit(pid: number | undefined, timeoutMs: number
   return !processTreeIsAlive(pid);
 }
 
-export async function loadQaRunnerModelOptions(params: { repoRoot: string; signal?: AbortSignal }) {
+export async function loadQaRunnerModelOptions(params: {
+  repoRoot: string;
+  signal?: AbortSignal;
+  abortKillGraceMs?: number;
+}) {
+  const abortKillGraceMs = Math.max(1, params.abortKillGraceMs ?? CATALOG_ABORT_KILL_GRACE_MS);
   const tempRoot = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-qa-model-catalog-"),
   );
@@ -240,9 +245,7 @@ export async function loadQaRunnerModelOptions(params: { repoRoot: string; signa
       const finishAbortedCatalogLoad = async () => {
         cleanupAbortListener();
         const graceRemainingMs =
-          forceKillAt === undefined
-            ? CATALOG_ABORT_KILL_GRACE_MS
-            : Math.max(0, forceKillAt - Date.now());
+          forceKillAt === undefined ? abortKillGraceMs : Math.max(0, forceKillAt - Date.now());
         if (graceRemainingMs > 0) {
           await waitForProcessTreeExit(child.pid, graceRemainingMs);
         }
@@ -252,18 +255,18 @@ export async function loadQaRunnerModelOptions(params: { repoRoot: string; signa
         }
         if (processTreeIsAlive(child.pid)) {
           killProcessTree(child.pid, "SIGKILL");
-          await waitForProcessTreeExit(child.pid, CATALOG_ABORT_KILL_GRACE_MS);
+          await waitForProcessTreeExit(child.pid, abortKillGraceMs);
         }
         forceKillAt = undefined;
       };
       const abortCatalogLoad = () => {
         aborted = true;
         killProcessTree(child.pid, "SIGTERM");
-        forceKillAt = Date.now() + CATALOG_ABORT_KILL_GRACE_MS;
+        forceKillAt = Date.now() + abortKillGraceMs;
         forceKillTimer ??= setTimeout(() => {
           forceKillAt = undefined;
           killProcessTree(child.pid, "SIGKILL");
-        }, CATALOG_ABORT_KILL_GRACE_MS);
+        }, abortKillGraceMs);
         forceKillTimer.unref();
       };
       if (aborted) {

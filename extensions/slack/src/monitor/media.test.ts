@@ -1,8 +1,8 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Slack tests cover media plugin behavior.
 import type { WebClient } from "@slack/web-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  fetchWithSlackAuth,
   resolveSlackAttachmentContent,
   resolveSlackMedia,
   resolveSlackThreadHistory,
@@ -245,172 +245,6 @@ async function expectPrivateDownloadRedirect(params: {
   expect(getRequestHeader(0, "Authorization")).toBe("Bearer xoxb-test-token");
   expect(getRequestHeader(1, "Authorization")).toBe(params.secondAuthorization);
 }
-
-describe("fetchWithSlackAuth", () => {
-  beforeEach(() => {
-    // Create a new mock for each test
-    mockFetch = vi.fn<FetchMock>(
-      async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(),
-    );
-    globalThis.fetch = withFetchPreconnect(mockFetch);
-  });
-
-  afterEach(() => {
-    // Restore original fetch
-    globalThis.fetch = originalFetch;
-  });
-
-  it("sends Authorization header on initial request with manual redirect", async () => {
-    // Simulate direct 200 response (no redirect)
-    const mockResponse = new Response(Buffer.from("image data"), {
-      status: 200,
-      headers: { "content-type": "image/jpeg" },
-    });
-    mockFetch.mockResolvedValueOnce(mockResponse);
-
-    const result = await fetchWithSlackAuth("https://files.slack.com/test.jpg", "xoxb-test-token");
-
-    expect(result).toBe(mockResponse);
-
-    // Verify fetch was called with correct params
-    expect(mockFetch).toHaveBeenCalledTimes(1);
-    expect(mockFetch).toHaveBeenCalledWith("https://files.slack.com/test.jpg", {
-      headers: { Authorization: "Bearer xoxb-test-token" },
-      redirect: "manual",
-    });
-  });
-
-  it("rejects non-Slack hosts to avoid leaking tokens", async () => {
-    await expect(
-      fetchWithSlackAuth("https://example.com/test.jpg", "xoxb-test-token"),
-    ).rejects.toThrow(/non-Slack host|non-Slack/i);
-
-    // Should fail fast without attempting a fetch.
-    expect(mockFetch).not.toHaveBeenCalled();
-  });
-
-  it("strips Authorization header on cross-origin redirects", async () => {
-    // First call: redirect response from Slack
-    const redirectResponse = new Response("redirect body", {
-      status: 302,
-      headers: { location: "https://cdn.slack-edge.com/presigned-url?sig=abc123" },
-    });
-    const cancel = vi.spyOn(redirectResponse.body!, "cancel").mockResolvedValue(undefined);
-
-    // Second call: actual file content from CDN
-    const fileResponse = new Response(Buffer.from("actual image data"), {
-      status: 200,
-      headers: { "content-type": "image/jpeg" },
-    });
-
-    mockFetch.mockResolvedValueOnce(redirectResponse).mockResolvedValueOnce(fileResponse);
-
-    const result = await fetchWithSlackAuth("https://files.slack.com/test.jpg", "xoxb-test-token");
-
-    expect(result).toBe(fileResponse);
-    expect(mockFetch).toHaveBeenCalledTimes(2);
-
-    // First call should have Authorization header and manual redirect
-    expect(mockFetch).toHaveBeenNthCalledWith(1, "https://files.slack.com/test.jpg", {
-      headers: { Authorization: "Bearer xoxb-test-token" },
-      redirect: "manual",
-    });
-
-    // Second call should follow the redirect without Authorization
-    expect(mockFetch).toHaveBeenNthCalledWith(
-      2,
-      "https://cdn.slack-edge.com/presigned-url?sig=abc123",
-      { redirect: "follow" },
-    );
-    expect(cancel).toHaveBeenCalledOnce();
-  });
-
-  it("preserves Authorization header on same-origin redirects", async () => {
-    const redirectResponse = new Response("redirect body", {
-      status: 302,
-      headers: { location: "/files/redirect-target" },
-    });
-    const cancel = vi.spyOn(redirectResponse.body!, "cancel").mockResolvedValue(undefined);
-
-    const fileResponse = new Response(Buffer.from("image data"), {
-      status: 200,
-      headers: { "content-type": "image/jpeg" },
-    });
-
-    mockFetch.mockResolvedValueOnce(redirectResponse).mockResolvedValueOnce(fileResponse);
-
-    await fetchWithSlackAuth("https://files.slack.com/original.jpg", "xoxb-test-token");
-
-    expect(mockFetch).toHaveBeenNthCalledWith(2, "https://files.slack.com/files/redirect-target", {
-      headers: { Authorization: "Bearer xoxb-test-token" },
-      redirect: "follow",
-    });
-    expect(cancel).toHaveBeenCalledOnce();
-  });
-
-  it("returns redirect response when no location header is provided", async () => {
-    // Redirect without location header
-    const redirectResponse = new Response(null, {
-      status: 302,
-      // No location header
-    });
-
-    mockFetch.mockResolvedValueOnce(redirectResponse);
-
-    const result = await fetchWithSlackAuth("https://files.slack.com/test.jpg", "xoxb-test-token");
-
-    // Should return the redirect response directly
-    expect(result).toBe(redirectResponse);
-    expect(mockFetch).toHaveBeenCalledTimes(1);
-  });
-
-  it("returns redirect response when location header is malformed", async () => {
-    const redirectResponse = new Response(null, {
-      status: 302,
-      headers: { location: "http://[::1" },
-    });
-
-    mockFetch.mockResolvedValueOnce(redirectResponse);
-
-    const result = await fetchWithSlackAuth("https://files.slack.com/test.jpg", "xoxb-test-token");
-
-    expect(result).toBe(redirectResponse);
-    expect(mockFetch).toHaveBeenCalledTimes(1);
-  });
-
-  it("returns 4xx/5xx responses directly without following", async () => {
-    const errorResponse = new Response("Not Found", {
-      status: 404,
-    });
-
-    mockFetch.mockResolvedValueOnce(errorResponse);
-
-    const result = await fetchWithSlackAuth("https://files.slack.com/test.jpg", "xoxb-test-token");
-
-    expect(result).toBe(errorResponse);
-    expect(mockFetch).toHaveBeenCalledTimes(1);
-  });
-
-  it("handles 301 permanent redirects", async () => {
-    const redirectResponse = new Response(null, {
-      status: 301,
-      headers: { location: "https://cdn.slack.com/new-url" },
-    });
-
-    const fileResponse = new Response(Buffer.from("image data"), {
-      status: 200,
-    });
-
-    mockFetch.mockResolvedValueOnce(redirectResponse).mockResolvedValueOnce(fileResponse);
-
-    await fetchWithSlackAuth("https://files.slack.com/test.jpg", "xoxb-test-token");
-
-    expect(mockFetch).toHaveBeenCalledTimes(2);
-    expect(mockFetch).toHaveBeenNthCalledWith(2, "https://cdn.slack.com/new-url", {
-      redirect: "follow",
-    });
-  });
-});
 
 describe("resolveSlackMedia", () => {
   beforeEach(() => {
@@ -861,10 +695,12 @@ describe("resolveSlackMedia", () => {
 
     const media = expectSlackMediaResult(result);
     expect(media).toHaveLength(2);
-    expect(media[0].path).toBe("/tmp/a.jpg");
-    expect(media[0].placeholder).toBe("[Slack file: a.jpg (fileId: FA)]");
-    expect(media[1].path).toBe("/tmp/b.png");
-    expect(media[1].placeholder).toBe("[Slack file: b.png (fileId: FB)]");
+    const first = expectDefined(media[0], "first Slack media result");
+    const second = expectDefined(media[1], "second Slack media result");
+    expect(first.path).toBe("/tmp/a.jpg");
+    expect(first.placeholder).toBe("[Slack file: a.jpg (fileId: FA)]");
+    expect(second.path).toBe("/tmp/b.png");
+    expect(second.placeholder).toBe("[Slack file: b.png (fileId: FB)]");
   });
 
   it("caps downloads to 8 files for large multi-attachment messages", async () => {
@@ -1164,6 +1000,55 @@ describe("resolveSlackThreadHistory", () => {
     ]);
   });
 
+  it("returns no thread history when pagination exceeds the bounded fetched window", async () => {
+    vi.mocked(logVerbose).mockClear();
+    const replies = vi
+      .fn()
+      .mockResolvedValueOnce({
+        messages: Array.from({ length: 200 }, (_, i) => ({
+          text: `msg-${i + 1}`,
+          user: "U1",
+          ts: `${i + 1}.000`,
+        })),
+        response_metadata: { next_cursor: "cursor-2" },
+      })
+      .mockResolvedValueOnce({
+        messages: Array.from({ length: 200 }, (_, i) => ({
+          text: `msg-${i + 201}`,
+          user: "U1",
+          ts: `${i + 201}.000`,
+        })),
+        response_metadata: { next_cursor: "cursor-3" },
+      })
+      .mockResolvedValueOnce({
+        messages: Array.from({ length: 200 }, (_, i) => ({
+          text: `msg-${i + 401}`,
+          user: "U1",
+          ts: `${i + 401}.000`,
+        })),
+        response_metadata: { next_cursor: "cursor-4" },
+      });
+    const client = {
+      conversations: { replies },
+    } as unknown as Parameters<typeof resolveSlackThreadHistory>[0]["client"];
+
+    const result = await resolveSlackThreadHistory({
+      channelId: "C1",
+      threadTs: "1.000",
+      client,
+      limit: 3,
+    });
+
+    expect(replies).toHaveBeenCalledTimes(3);
+    expect(requireMockCall(replies, 2, "conversations.replies")[0]).toMatchObject({
+      cursor: "cursor-3",
+      limit: 200,
+    });
+    expect(result).toEqual([]);
+    expectVerboseLogContains("slack thread history capped");
+    expectVerboseLogContains("channel=C1");
+  });
+
   it("includes file-only messages and drops empty-only entries", async () => {
     const replies = vi.fn().mockResolvedValueOnce({
       messages: [
@@ -1187,6 +1072,126 @@ describe("resolveSlackThreadHistory", () => {
     expect(result).toHaveLength(2);
     expect(result[0]?.text).toBe("[attached: screenshot.png (fileId: FSCREEN)]");
     expect(result[1]?.text).toBe("hello");
+  });
+
+  it("extracts thread text from Slack attachment and block surfaces", async () => {
+    const replies = vi.fn().mockResolvedValueOnce({
+      messages: [
+        {
+          text: "  ",
+          bot_id: "BMONITOR",
+          ts: "1.000",
+          attachments: [
+            {
+              title: "Filesystem on /dev/sda1 has only 14.93% available space left.",
+              fallback: "Alert: filesystem space is low",
+              fields: [{ title: "Host", value: "dc2.ipa.mgt" }],
+            },
+          ],
+        },
+        {
+          text: "  ",
+          bot_id: "BMONITOR",
+          ts: "2.000",
+          blocks: [{ type: "section", text: { type: "mrkdwn", text: "Pod restart rate is high" } }],
+        },
+        {
+          text: "  ",
+          bot_id: "BMONITOR",
+          ts: "3.000",
+          attachments: [
+            {
+              blocks: [
+                { type: "header", text: { type: "plain_text", text: "Alert firing" } },
+                {
+                  type: "section",
+                  fields: [
+                    { type: "mrkdwn", text: "*host:* dc2.ipa.mgt" },
+                    { type: "mrkdwn", text: "*device:* /dev/sda1" },
+                  ],
+                },
+                {
+                  type: "section",
+                  text: { type: "mrkdwn", text: "Free space below threshold" },
+                },
+              ],
+            },
+          ],
+        },
+        {
+          text: "  line one\nline two  ",
+          ts: "4.000",
+        },
+      ],
+      response_metadata: { next_cursor: "" },
+    });
+    const client = {
+      conversations: { replies },
+    } as unknown as Parameters<typeof resolveSlackThreadHistory>[0]["client"];
+
+    const result = await resolveSlackThreadHistory({
+      channelId: "C1",
+      threadTs: "1.000",
+      client,
+      limit: 10,
+    });
+
+    expect(result.map((entry) => entry.text)).toEqual([
+      "Filesystem on /dev/sda1 has only 14.93% available space left.\nAlert: filesystem space is low\nHost\ndc2.ipa.mgt",
+      "Pod restart rate is high",
+      "Alert firing\n*host:* dc2.ipa.mgt\n*device:* /dev/sda1\nFree space below threshold",
+      "line one\nline two",
+    ]);
+    expect(result.map((entry) => entry.botId)).toEqual([
+      "BMONITOR",
+      "BMONITOR",
+      "BMONITOR",
+      undefined,
+    ]);
+  });
+
+  it("keeps native chart values with top-level text in thread history", async () => {
+    const replies = vi.fn().mockResolvedValueOnce({
+      messages: [
+        {
+          text: "Latency report",
+          bot_id: "BMONITOR",
+          ts: "1.000",
+          blocks: [
+            {
+              type: "data_visualization",
+              title: "Weekly latency",
+              chart: {
+                type: "line",
+                series: [{ name: "p95", data: [{ label: "Mon", value: 250 }] }],
+                axis_config: { categories: ["Mon"] },
+              },
+            },
+          ],
+        },
+      ],
+      response_metadata: { next_cursor: "" },
+    });
+    const client = {
+      conversations: { replies },
+    } as unknown as Parameters<typeof resolveSlackThreadHistory>[0]["client"];
+
+    const result = await resolveSlackThreadHistory({
+      channelId: "C1",
+      threadTs: "1.000",
+      client,
+      limit: 10,
+    });
+
+    expect(result).toEqual([
+      {
+        text: "Latency report\nWeekly latency (line chart)\n- p95: Mon: 250",
+        userId: undefined,
+        botId: "BMONITOR",
+        ts: "1.000",
+        files: undefined,
+      },
+    ]);
   });
 
   it("returns empty when limit is zero without calling Slack API", async () => {
@@ -1270,6 +1275,43 @@ describe("resolveSlackThreadStarter", () => {
     });
 
     expect(result).toBeNull();
+    expect(vi.mocked(logVerbose)).not.toHaveBeenCalled();
+  });
+
+  it("returns the starter text from Slack attachments when bot message text is empty", async () => {
+    const replies = vi.fn().mockResolvedValueOnce({
+      messages: [
+        {
+          text: "   ",
+          bot_id: "BMONITOR",
+          ts: "1.000",
+          attachments: [
+            {
+              pretext: "[FIRING:1] HostFilesystemSpaceLow",
+              title: "Filesystem on /dev/sda1 has only 14.93% available space left.",
+              fallback: "dc2.ipa.mgt /dev/sda1 low free space",
+            },
+          ],
+        },
+      ],
+    });
+    const client = {
+      conversations: { replies },
+    } as unknown as Parameters<typeof resolveSlackThreadStarter>[0]["client"];
+
+    const result = await resolveSlackThreadStarter({
+      channelId: "C1",
+      threadTs: "1.000",
+      client,
+    });
+
+    expect(result).toEqual({
+      text: "[FIRING:1] HostFilesystemSpaceLow\nFilesystem on /dev/sda1 has only 14.93% available space left.\ndc2.ipa.mgt /dev/sda1 low free space",
+      userId: undefined,
+      botId: "BMONITOR",
+      ts: "1.000",
+      files: undefined,
+    });
     expect(vi.mocked(logVerbose)).not.toHaveBeenCalled();
   });
 

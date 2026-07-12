@@ -169,9 +169,13 @@ export function extractGatewayMessageText(message: Record<string, unknown>) {
       continue;
     }
     const nestedText = readNonEmptyString(block.content);
+    const normalizedType = readNonEmptyString(block.type)?.toLowerCase().replace(/_/g, "");
     if (
       nestedText &&
-      (block.type === "output_text" || block.type === "text" || block.type === "message")
+      (normalizedType === "outputtext" ||
+        normalizedType === "text" ||
+        normalizedType === "message" ||
+        normalizedType === "toolresult")
     ) {
       parts.push(nestedText);
     }

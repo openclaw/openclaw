@@ -167,12 +167,10 @@ describe("gateway tool restart continuation", () => {
     const tool = createGatewayTool();
 
     expect(tool.description).toContain("replacePaths");
-    expect(tool.description).toContain("post-restart work must continue internally");
-    expect(tool.description).toContain(
-      "visible follow-up from that turn must use the message tool",
-    );
+    expect(tool.description).toContain("Internal continuation: one-shot continuationMessage");
+    expect(tool.description).toContain("visible follow-up uses message tool");
     expect(tool.description).toContain("continuationMessage");
-    expect(tool.description).toContain("Do not write restart sentinel files directly");
+    expect(tool.description).toContain("Never write restart sentinel directly");
   });
 
   it("writes an agentTurn continuation into the restart sentinel", async () => {
@@ -222,6 +220,20 @@ describe("gateway tool restart continuation", () => {
       emitHooksQueued: true,
       continuationQueued: true,
     });
+  });
+
+  it("keeps the bounded restart reason UTF-16 well-formed", async () => {
+    const tool = createGatewayTool({
+      agentSessionKey: "agent:main:main",
+      config: {},
+    });
+
+    await tool.execute?.("tool-call-utf16", {
+      action: "restart",
+      reason: `${"x".repeat(199)}🚀tail`,
+    });
+
+    expect(requireScheduledRestartArgs().reason).toBe("x".repeat(199));
   });
 
   it("uses the runtime session, not model-supplied params, for scheduler ownership and sentinel routing (#86742)", async () => {

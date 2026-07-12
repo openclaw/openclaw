@@ -95,6 +95,7 @@ export async function startGatewayEarlyRuntime(params: {
   logHealth: GatewayMaintenanceParams["logHealth"];
   dedupe: GatewayMaintenanceParams["dedupe"];
   chatAbortControllers: GatewayMaintenanceParams["chatAbortControllers"];
+  chatQueuedTurns: GatewayMaintenanceParams["chatQueuedTurns"];
   restartRecoveryCandidates: GatewayMaintenanceParams["restartRecoveryCandidates"];
   chatRunState: GatewayMaintenanceParams["chatRunState"];
   chatRunBuffers: GatewayMaintenanceParams["chatRunBuffers"];
@@ -110,12 +111,26 @@ export async function startGatewayEarlyRuntime(params: {
   getRuntimeConfig: () => OpenClawConfig;
   startupTrace?: GatewayStartupTrace;
 }) {
+  if (!params.minimalTestGateway) {
+    await measureStartup(params.startupTrace, "runtime.early.task-state", async () => {
+      const { ensureTaskRuntimeStateReady } = await import("../tasks/runtime-internal.js");
+      ensureTaskRuntimeStateReady();
+    });
+  }
   const bonjourStop = await measureStartup(params.startupTrace, "runtime.early.discovery", () =>
     startGatewayPluginDiscovery(params),
   );
   let getActiveTaskCount = () => 0;
 
   if (!params.minimalTestGateway) {
+    void import("../agents/context.js")
+      .then(({ ensureContextWindowCacheLoaded }) =>
+        ensureContextWindowCacheLoaded(params.cfgAtStart),
+      )
+      .catch((err: unknown) => {
+        params.log.warn(`Context-window cache warmup failed to start: ${String(err)}`);
+      });
+
     const [{ primeRemoteSkillsCache, setSkillsRemoteRegistry }, taskRegistryMaintenance] =
       await measureStartup(params.startupTrace, "runtime.early.lazy-runtime-imports", () =>
         Promise.all([
@@ -179,6 +194,7 @@ export async function startGatewayEarlyRuntime(params: {
         logHealth: params.logHealth,
         dedupe: params.dedupe,
         chatAbortControllers: params.chatAbortControllers,
+        chatQueuedTurns: params.chatQueuedTurns,
         restartRecoveryCandidates: params.restartRecoveryCandidates,
         chatRunState: params.chatRunState,
         chatRunBuffers: params.chatRunBuffers,
@@ -187,6 +203,7 @@ export async function startGatewayEarlyRuntime(params: {
         removeChatRun: params.removeChatRun,
         agentRunSeq: params.agentRunSeq,
         nodeSendToSession: params.nodeSendToSession,
+        enableSkillCurator: true,
         ...(typeof params.mediaCleanupTtlMs === "number"
           ? { mediaCleanupTtlMs: params.mediaCleanupTtlMs }
           : {}),

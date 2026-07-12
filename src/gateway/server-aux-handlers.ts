@@ -1,8 +1,14 @@
 // Gateway auxiliary method handlers.
 // Wires reload, secrets, exec approval, and plugin approval RPC handlers.
+import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js";
+import {
+  resolveExecApprovalRequestAllowedDecisions,
+  type ExecApprovalRequestPayload,
+} from "../infra/exec-approvals.js";
+import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "../infra/plugin-approval-canonical-decisions.js";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import {
   resolveCommandSecretsFromActiveRuntimeSnapshot,
@@ -12,6 +18,8 @@ import {
   getActiveSecretsRuntimeSnapshot,
   type PreparedSecretsRuntimeSnapshot,
 } from "../secrets/runtime-state.js";
+import { createLazyPromise } from "../shared/lazy-runtime.js";
+import { resolveApprovalSessionAudienceWithFallback } from "./approval-session-audience.js";
 import { diffConfigPaths } from "./config-diff.js";
 import {
   buildGatewayReloadPlan,
@@ -19,7 +27,15 @@ import {
   type GatewayReloadPlan,
 } from "./config-reload-plan.js";
 import { createExecApprovalIosPushDelivery } from "./exec-approval-ios-push.js";
-import { ExecApprovalManager } from "./exec-approval-manager.js";
+import {
+  ExecApprovalManager,
+  type OperatorApprovalLifecycleEvent,
+} from "./exec-approval-manager.js";
+import {
+  closeOrphanedOperatorApprovals,
+  pruneTerminalOperatorApprovals,
+} from "./operator-approval-store.js";
+import type { ChannelAutostartSuppression } from "./server-channels.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./server-methods/types.js";
 import {
   disconnectStaleSharedGatewayAuthClients,
@@ -71,30 +87,79 @@ export function createGatewayAuxHandlers(params: {
   clients: Iterable<SharedGatewayAuthClient>;
   startChannel: (name: ChannelKind) => Promise<void>;
   stopChannel: (name: ChannelKind) => Promise<void>;
+  getChannelAutostartSuppression?: () => ChannelAutostartSuppression | null;
   logChannels: { info: (msg: string) => void };
+  onApprovalLifecycle?: (event: OperatorApprovalLifecycleEvent) => void;
 }) {
-  const execApprovalManager = new ExecApprovalManager();
+  // Both approval kinds share one durable first-answer-wins registry and
+  // Gateway-lifetime epoch while retaining separate in-process waiter maps.
+  // A newly constructed Gateway cannot resume the prior lifetime's waiters.
+  const approvalPersistence = { runtimeEpoch: randomUUID() };
+  const approvalStartupNowMs = Date.now();
+  closeOrphanedOperatorApprovals({
+    runtimeEpoch: approvalPersistence.runtimeEpoch,
+    nowMs: approvalStartupNowMs,
+  });
+  pruneTerminalOperatorApprovals({ nowMs: approvalStartupNowMs });
+
+  const execApprovalManager = new ExecApprovalManager<ExecApprovalRequestPayload>({
+    approvalKind: "exec",
+    persistence: approvalPersistence,
+    resolveAudienceSessionKeys: resolveApprovalSessionAudienceWithFallback,
+    resolveAllowedDecisions: resolveExecApprovalRequestAllowedDecisions,
+    onLifecycle: params.onApprovalLifecycle,
+    onError: (error, context) => {
+      params.log.error?.(
+        `${context.approvalKind} approval ${context.operation} failed for ${context.approvalId}: ${String(error)}`,
+      );
+    },
+  });
   const execApprovalForwarder = createExecApprovalForwarder();
   const execApprovalIosPushDelivery = createExecApprovalIosPushDelivery({ log: params.log });
-  let execApprovalHandlersPromise: Promise<GatewayRequestHandlers> | null = null;
-  const loadExecApprovalHandlers = () =>
-    (execApprovalHandlersPromise ??= import("./server-methods/exec-approval.js").then(
-      ({ createExecApprovalHandlers }) =>
+  const loadExecApprovalHandlers = createLazyPromise(
+    () =>
+      import("./server-methods/exec-approval.js").then(({ createExecApprovalHandlers }) =>
         createExecApprovalHandlers(execApprovalManager, {
           forwarder: execApprovalForwarder,
           iosPushDelivery: execApprovalIosPushDelivery,
         }),
-    ));
+      ),
+    { cacheRejections: true },
+  );
   const buildReloadPlan = params.buildReloadPlan ?? buildGatewayReloadPlan;
-  const pluginApprovalManager = new ExecApprovalManager<PluginApprovalRequestPayload>();
-  let pluginApprovalHandlersPromise: Promise<GatewayRequestHandlers> | null = null;
-  const loadPluginApprovalHandlers = () =>
-    (pluginApprovalHandlersPromise ??= import("./server-methods/plugin-approval.js").then(
-      ({ createPluginApprovalHandlers }) =>
+  const pluginApprovalManager = new ExecApprovalManager<PluginApprovalRequestPayload>({
+    approvalKind: "plugin",
+    persistence: approvalPersistence,
+    resolveAudienceSessionKeys: resolveApprovalSessionAudienceWithFallback,
+    resolveAllowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions,
+    onLifecycle: params.onApprovalLifecycle,
+    onError: (error, context) => {
+      params.log.error?.(
+        `${context.approvalKind} approval ${context.operation} failed for ${context.approvalId}: ${String(error)}`,
+      );
+    },
+  });
+  const loadPluginApprovalHandlers = createLazyPromise(
+    () =>
+      import("./server-methods/plugin-approval.js").then(({ createPluginApprovalHandlers }) =>
         createPluginApprovalHandlers(pluginApprovalManager, {
           forwarder: execApprovalForwarder,
         }),
-    ));
+      ),
+    { cacheRejections: true },
+  );
+  const loadApprovalHandlers = createLazyPromise(
+    () =>
+      import("./server-methods/approval.js").then(({ createApprovalHandlers }) =>
+        createApprovalHandlers({
+          execApprovalManager,
+          pluginApprovalManager,
+          forwarder: execApprovalForwarder,
+          iosPushDelivery: execApprovalIosPushDelivery,
+        }),
+      ),
+    { cacheRejections: true },
+  );
   // Serialize the entire `secrets.reload` path (activation + channel restart)
   // so concurrent callers cannot overlap the stop/start loop and so the
   // "before" snapshot used for the reload-plan diff is always the snapshot
@@ -116,10 +181,9 @@ export function createGatewayAuxHandlers(params: {
     reloadInFlight = run;
     return run;
   };
-  let secretsHandlersPromise: Promise<GatewayRequestHandlers> | null = null;
-  const loadSecretsHandlers = () =>
-    (secretsHandlersPromise ??= import("./server-methods/secrets.js").then(
-      ({ createSecretsHandlers }) =>
+  const loadSecretsHandlers = createLazyPromise(
+    () =>
+      import("./server-methods/secrets.js").then(({ createSecretsHandlers }) =>
         createSecretsHandlers({
           reloadSecrets: () =>
             runExclusiveReload(async () => {
@@ -173,6 +237,11 @@ export function createGatewayAuxHandlers(params: {
                   ) {
                     throw new Error(
                       `secrets.reload requires restarting channels: ${restartChannels.join(", ")}`,
+                    );
+                  }
+                  if (params.getChannelAutostartSuppression?.()) {
+                    throw new Error(
+                      `secrets.reload requires restarting channels but channel autostart is suppressed by crash-loop breaker: ${restartChannels.join(", ")}`,
                     );
                   }
                   const restartFailures: ChannelKind[] = [];
@@ -262,10 +331,13 @@ export function createGatewayAuxHandlers(params: {
             return { assignments, diagnostics, inactiveRefPaths };
           },
         }),
-    ));
+      ),
+    { cacheRejections: true },
+  );
 
   return {
     execApprovalManager,
+    forwardPluginApprovalRequest: execApprovalForwarder.handlePluginApprovalRequested,
     pluginApprovalManager,
     extraHandlers: {
       "exec.approval.get": createLazyHandler("exec.approval.get", loadExecApprovalHandlers),
@@ -289,6 +361,8 @@ export function createGatewayAuxHandlers(params: {
         "plugin.approval.resolve",
         loadPluginApprovalHandlers,
       ),
+      "approval.get": createLazyHandler("approval.get", loadApprovalHandlers),
+      "approval.resolve": createLazyHandler("approval.resolve", loadApprovalHandlers),
       "secrets.reload": createLazyHandler("secrets.reload", loadSecretsHandlers),
       "secrets.resolve": createLazyHandler("secrets.resolve", loadSecretsHandlers),
     },

@@ -317,6 +317,21 @@ describe("buildInboundMediaNote", () => {
     expect(note).toBe("[media attached: /tmp/document.pdf]");
   });
 
+  it("strips transcribed MPEG-2 audio by extension", () => {
+    const note = buildInboundMediaNote({
+      MediaPaths: ["/tmp/recording.m2a", "/tmp/document.pdf"],
+      MediaUnderstanding: [
+        {
+          kind: "audio.transcription",
+          attachmentIndex: 0,
+          text: "Transcribed audio content",
+          provider: "whisper",
+        },
+      ],
+    });
+    expect(note).toBe("[media attached: /tmp/document.pdf]");
+  });
+
   it("keeps audio attachments when no transcription is available", () => {
     const note = buildInboundMediaNote({
       MediaPaths: ["/tmp/voice.ogg"],

@@ -1,12 +1,5 @@
 // Gateway Client module implements client behavior.
 import { randomUUID } from "node:crypto";
-import type {
-  ConnectParams,
-  EventFrame,
-  HelloOk,
-  RequestFrame,
-  ResponseFrame,
-} from "@openclaw/gateway-protocol";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -21,6 +14,15 @@ import {
   readPairingConnectErrorDetails,
   type ConnectErrorRecoveryAdvice,
 } from "@openclaw/gateway-protocol/connect-error-details";
+import {
+  type ConnectParams,
+  type ErrorShape,
+  type EventFrame,
+  type HelloOk,
+  isGatewayEventFrame,
+  isGatewayResponseFrame,
+  type RequestFrame,
+} from "@openclaw/gateway-protocol/frame-guards";
 import { resolveGatewayStartupRetryAfterMs } from "@openclaw/gateway-protocol/startup-unavailable";
 import { MIN_CLIENT_PROTOCOL_VERSION, PROTOCOL_VERSION } from "@openclaw/gateway-protocol/version";
 import ipaddr from "ipaddr.js";
@@ -76,63 +78,6 @@ function normalizeOptionalString(value: unknown): string | undefined {
   }
   const trimmed = value.trim();
   return trimmed || undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
-}
-
-function isNonNegativeInteger(value: unknown): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0;
-}
-
-function isGatewayClientErrorShape(value: unknown): boolean {
-  if (!isRecord(value)) {
-    return false;
-  }
-  if (!isNonEmptyString(value.code) || !isNonEmptyString(value.message)) {
-    return false;
-  }
-  if (value.retryable !== undefined && typeof value.retryable !== "boolean") {
-    return false;
-  }
-  if (value.retryAfterMs !== undefined && !isNonNegativeInteger(value.retryAfterMs)) {
-    return false;
-  }
-  return true;
-}
-
-function isGatewayEventFrame(value: unknown): value is EventFrame {
-  if (!isRecord(value) || value.type !== "event" || !isNonEmptyString(value.event)) {
-    return false;
-  }
-  return value.seq === undefined || isNonNegativeInteger(value.seq);
-}
-
-function isGatewayResponseFrame(value: unknown): value is ResponseFrame {
-  if (
-    !isRecord(value) ||
-    value.type !== "res" ||
-    !isNonEmptyString(value.id) ||
-    typeof value.ok !== "boolean"
-  ) {
-    return false;
-  }
-  return value.error === undefined || isGatewayClientErrorShape(value.error);
-}
-
-function validateClientRequestFrame(frame: RequestFrame): string | null {
-  if (!isNonEmptyString(frame.id)) {
-    return "id must be a non-empty string";
-  }
-  if (!isNonEmptyString(frame.method)) {
-    return "method must be a non-empty string";
-  }
-  return null;
 }
 
 function normalizeLowercaseStringOrEmpty(value: unknown): string {
@@ -314,14 +259,6 @@ export type GatewayClientRequestOptions = {
   onAccepted?: (payload: unknown) => void;
 };
 
-type GatewayClientErrorShape = {
-  code?: string;
-  message?: string;
-  details?: unknown;
-  retryable?: boolean;
-  retryAfterMs?: number;
-};
-
 type SelectedConnectAuth = {
   authToken?: string;
   authBootstrapToken?: string;
@@ -376,7 +313,7 @@ export class GatewayClientRequestError extends Error {
   readonly retryable: boolean;
   readonly retryAfterMs?: number;
 
-  constructor(error: GatewayClientErrorShape) {
+  constructor(error: Partial<ErrorShape>) {
     super(formatConnectErrorMessage({ message: error.message, details: error.details }));
     this.name = "GatewayClientRequestError";
     this.gatewayCode = error.code ?? "UNAVAILABLE";
@@ -416,9 +353,8 @@ export function isGatewayConnectAssemblyError(value: unknown): value is Error {
 
 export type GatewayClientOptions = {
   url?: string; // ws://127.0.0.1:18789
+  origin?: string;
   connectChallengeTimeoutMs?: number;
-  /** @deprecated Use connectChallengeTimeoutMs. */
-  connectDelayMs?: number;
   /**
    * Server-side pre-auth handshake budget. Config-derived local clients use
    * this to keep the connect-challenge watchdog aligned with the gateway.
@@ -460,6 +396,13 @@ export type GatewayClientOptions = {
   onGap?: (info: { expected: number; received: number }) => void;
 };
 
+export type GatewayClientConnectionMetadata = {
+  clientName?: GatewayClientName;
+  hasDeviceIdentity: boolean;
+  mode?: GatewayClientMode;
+  preauthHandshakeTimeoutMs?: number;
+};
+
 export const GATEWAY_CLOSE_CODE_HINTS: Readonly<Record<number, string>> = {
   1000: "normal closure",
   1006: "abnormal closure (no close frame)",
@@ -473,16 +416,13 @@ export function describeGatewayCloseCode(code: number): string | undefined {
 }
 
 function readConnectChallengeTimeoutOverride(
-  opts: Pick<GatewayClientOptions, "connectChallengeTimeoutMs" | "connectDelayMs">,
+  opts: Pick<GatewayClientOptions, "connectChallengeTimeoutMs">,
 ): number | undefined {
   if (
     typeof opts.connectChallengeTimeoutMs === "number" &&
     Number.isFinite(opts.connectChallengeTimeoutMs)
   ) {
     return opts.connectChallengeTimeoutMs;
-  }
-  if (typeof opts.connectDelayMs === "number" && Number.isFinite(opts.connectDelayMs)) {
-    return opts.connectDelayMs;
   }
   return undefined;
 }
@@ -505,7 +445,7 @@ function formatGatewayClientErrorForLog(err: unknown): string {
 export function resolveGatewayClientConnectChallengeTimeoutMs(
   opts: Pick<
     GatewayClientOptions,
-    "connectChallengeTimeoutMs" | "connectDelayMs" | "env" | "preauthHandshakeTimeoutMs"
+    "connectChallengeTimeoutMs" | "env" | "preauthHandshakeTimeoutMs"
   >,
 ): number {
   return resolveConnectChallengeTimeoutMs(readConnectChallengeTimeoutOverride(opts), {
@@ -594,6 +534,15 @@ export class GatewayClient {
         : 30_000;
   }
 
+  getConnectionMetadata(): GatewayClientConnectionMetadata {
+    return {
+      clientName: this.opts.clientName,
+      hasDeviceIdentity: Boolean(this.opts.deviceIdentity),
+      mode: this.opts.mode,
+      preauthHandshakeTimeoutMs: this.opts.preauthHandshakeTimeoutMs,
+    };
+  }
+
   start() {
     if (this.closed) {
       return;
@@ -637,6 +586,7 @@ export class GatewayClient {
     this.deps.beforeConnect();
     const wsOptions: FingerprintCheckingClientOptions = {
       maxPayload: 25 * 1024 * 1024,
+      ...(this.opts.origin ? { origin: this.opts.origin } : {}),
     };
     if (url.startsWith("wss://") && this.opts.tlsFingerprint) {
       wsOptions.rejectUnauthorized = false;
@@ -849,10 +799,14 @@ export class GatewayClient {
     if (this.pendingStop?.ws === ws) {
       return this.pendingStop;
     }
-    let resolve!: () => void;
+    const resolvers: Array<() => void> = [];
     const promise = new Promise<void>((res) => {
-      resolve = res;
+      resolvers.push(res);
     });
+    const resolve = resolvers.at(0);
+    if (!resolve) {
+      throw new Error("pending stop promise did not initialize its resolver");
+    }
     this.pendingStop = { ws, promise, resolve };
     return this.pendingStop;
   }
@@ -1582,7 +1536,12 @@ export class GatewayClient {
       if (!this.lastTick) {
         return;
       }
-      if (this.pending.size > 0) {
+      const allPendingRequestsHaveTimeouts =
+        this.pending.size > 0 &&
+        [...this.pending.values()].every((pending) => pending.timeout !== null);
+      // Finite requests own their deadline. One unbounded request keeps the
+      // transport watchdog active so a dead socket cannot strand it forever.
+      if (allPendingRequestsHaveTimeouts) {
         return;
       }
       const gap = Date.now() - this.lastTick;
@@ -1637,12 +1596,11 @@ export class GatewayClient {
     if (opts?.signal?.aborted) {
       throw createGatewayRequestAbortError(method);
     }
+    if (typeof method !== "string" || method.length === 0) {
+      throw new Error("invalid request frame: method must be a non-empty string");
+    }
     const id = randomUUID();
     const frame: RequestFrame = { type: "req", id, method, params };
-    const requestFrameError = validateClientRequestFrame(frame);
-    if (requestFrameError) {
-      throw new Error(`invalid request frame: ${requestFrameError}`);
-    }
     const expectFinal = opts?.expectFinal === true;
     const timeoutMs =
       opts?.timeoutMs === null

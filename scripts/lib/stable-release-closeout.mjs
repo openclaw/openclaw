@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { escapeRegExp } from "./regexp.mjs";
 
 const STABLE_RELEASE_TAG_RE = /^v(?<version>\d{4}\.\d{1,2}\.\d{1,2})(?:-[1-9]\d*)?$/u;
 const MAX_ROLLBACK_DRILL_AGE_MS = 90 * 24 * 60 * 60 * 1000;
@@ -12,10 +13,6 @@ function parseStableReleaseTagDetails(tag) {
     baseVersion: match.groups.version,
     tagVersion: tag.slice(1),
   };
-}
-
-function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
 function sha256(value) {
@@ -103,6 +100,13 @@ export function verifyStableMainCloseout(params) {
     tagVersion !== baseVersion && mainVersion === baseVersion && tagPackageVersion === baseVersion;
   const version = fallbackCorrection ? baseVersion : tagVersion;
 
+  const fullReleaseValidationRunAttempt = params.fullReleaseValidationRunAttempt ?? "";
+  if (!/^[1-9]\d*$/u.test(fullReleaseValidationRunAttempt)) {
+    errors.push(
+      `full release validation run attempt is invalid: ${fullReleaseValidationRunAttempt || "<missing>"}.`,
+    );
+  }
+
   if (mainVersion && mainVersion !== version) {
     errors.push(
       `main package.json version is ${mainVersion}, expected shipped version ${version}.`,
@@ -168,7 +172,7 @@ export function verifyStableMainCloseout(params) {
   return {
     errors,
     manifest: {
-      version: 1,
+      version: 2,
       releaseTag: params.tag,
       releaseVersion: version,
       releaseTagSha: params.releaseTagSha,
@@ -178,6 +182,7 @@ export function verifyStableMainCloseout(params) {
       changelogSha256: sha256(mainChangelog),
       appcastSha256: sha256(params.mainAppcast),
       fullReleaseValidationRunId: params.fullReleaseValidationRunId,
+      fullReleaseValidationRunAttempt,
       releasePublishRunId: params.releasePublishRunId,
       rollbackDrill: {
         id: params.rollbackDrillId,

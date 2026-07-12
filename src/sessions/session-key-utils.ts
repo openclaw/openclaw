@@ -23,6 +23,11 @@ export type ParsedSessionDeliveryRoute = {
   threadId?: string;
 };
 
+export type ParsedCronRunScopeSuffix = {
+  baseSessionKey: string | undefined;
+  runId: string | undefined;
+};
+
 export type RawSessionConversationRef = {
   channel: string;
   kind: "group" | "channel";
@@ -289,6 +294,32 @@ export function isCronRunSessionKey(sessionKey: string | undefined | null): bool
   return /^cron:[^:]+:run:[^:]+(?::|$)/.test(parsed.rest);
 }
 
+/**
+ * Splits the terminal per-run `:run:<id>` scope off an isolated cron session key
+ * (`agent:<id>:cron:<job>:run:<runId>`), yielding the cache-stable base key.
+ * The run scope is only ever appended to cron keys, so this is gated to that exact
+ * shape: any other key (including channel ids that embed a `:run:` segment) is returned
+ * unchanged with `runId` undefined, never truncating an unrelated session identity.
+ */
+export function parseCronRunScopeSuffix(
+  sessionKey: string | undefined | null,
+): ParsedCronRunScopeSuffix {
+  const raw = normalizeOptionalString(sessionKey);
+  if (!raw) {
+    return { baseSessionKey: undefined, runId: undefined };
+  }
+  const parsed = parseAgentSessionKey(raw);
+  if (!parsed || !/^cron:[^:]+:run:[^:]+$/.test(parsed.rest)) {
+    return { baseSessionKey: raw, runId: undefined };
+  }
+  const runMarker = ":run:";
+  const markerIndex = raw.toLowerCase().lastIndexOf(runMarker);
+  return {
+    baseSessionKey: raw.slice(0, markerIndex),
+    runId: raw.slice(markerIndex + runMarker.length),
+  };
+}
+
 export function isCronSessionKey(sessionKey: string | undefined | null): boolean {
   const parsed = parseAgentSessionKey(sessionKey);
   if (!parsed) {
@@ -314,7 +345,11 @@ export function getSubagentDepth(sessionKey: string | undefined | null): number 
   if (!raw) {
     return 0;
   }
-  return raw.split(":subagent:").length - 1;
+
+  const scoped = parseAgentSessionKey(raw)?.rest ?? raw;
+  const normalized = scoped.toLowerCase();
+  const matches = normalized.match(/(^|:)subagent:/g);
+  return matches?.length ?? 0;
 }
 
 export function isAcpSessionKey(sessionKey: string | undefined | null): boolean {

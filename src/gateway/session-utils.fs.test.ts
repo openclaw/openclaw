@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
@@ -126,7 +127,11 @@ function appendBlockedUserMessage(
       },
     },
   } as Parameters<typeof sessionManager.appendMessage>[0]);
-  (sessionManager as unknown as { rewriteFile?: () => void }).rewriteFile?.();
+  (
+    sessionManager as unknown as {
+      replacePersistedTranscript?: () => void;
+    }
+  ).replacePersistedTranscript?.();
   return messageId;
 }
 
@@ -691,6 +696,32 @@ describe("readSessionMessages", () => {
     });
   });
 
+  test("surfaces persisted user idempotency keys in __openclaw metadata (#79844)", async () => {
+    const sessionId = "test-session-idempotency-key";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      {
+        id: "entry-user-1",
+        message: {
+          role: "user",
+          content: "pending optimistic turn",
+          idempotencyKey: "client-turn-1",
+        },
+      },
+    ]);
+
+    const result = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+      maxMessages: 5,
+      maxBytes: 2048,
+    });
+
+    expect(result).toHaveLength(1);
+    expectMessageFields(result[0], {
+      content: "pending optimistic turn",
+      openclaw: { id: "entry-user-1", idempotencyKey: "client-turn-1" },
+    });
+  });
+
   test("honors byte caps for async recent-message reads", async () => {
     const sessionId = "test-session-recent-async-byte-cap";
     const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
@@ -1250,7 +1281,7 @@ describe("readSessionMessages", () => {
     ]);
   });
 
-  test("keeps async active branch rows when imported parent links are incomplete", async () => {
+  test("keeps async rows when imported parent links are incomplete without leaf control", async () => {
     const sessionId = "test-session-tree-async-incomplete-parent";
     writeTranscript(tmpDir, sessionId, [
       { type: "session", version: 3, id: sessionId },
@@ -1280,9 +1311,13 @@ describe("readSessionMessages", () => {
     });
 
     expect(messages.map((message) => (message as { content?: unknown }).content)).toEqual([
+      "legacy prompt",
+      "tree reply",
       "reachable orphan tail",
     ]);
-    expectMessageFields(messages[0], { openclaw: { id: "orphan-tail", seq: 1 } });
+    expectMessageFields(messages[0], { openclaw: { id: "legacy-user", seq: 1 } });
+    expectMessageFields(messages[1], { openclaw: { id: "tree-assistant", seq: 2 } });
+    expectMessageFields(messages[2], { openclaw: { id: "orphan-tail", seq: 3 } });
   });
 
   test("keeps legacy async parents when tree transcripts reference pre-v3 rows", async () => {
@@ -1411,7 +1446,17 @@ describe("readSessionMessages", () => {
     writeTranscript(tmpDir, sessionId, [
       { type: "session", version: 1, id: sessionId },
       { message: { role: "assistant", content: "older", usage: { input: 50, output: 5 } } },
-      { message: { role: "assistant", content: "latest", usage: { input: 70, output: 9 } } },
+      {
+        message: {
+          role: "assistant",
+          content: "latest",
+          usage: {
+            input: 70,
+            output: 9,
+            contextUsage: { state: "unavailable" },
+          },
+        },
+      },
     ]);
 
     const aggregate = await readRecentSessionUsageFromTranscriptAsync(
@@ -1429,8 +1474,89 @@ describe("readSessionMessages", () => {
       2048,
     );
 
+    expectUsageFields(aggregate, {
+      inputTokens: 120,
+      outputTokens: 14,
+      contextUsage: { state: "unavailable" },
+    });
+    expect(aggregate).not.toHaveProperty("totalTokens");
+    expect(aggregate).not.toHaveProperty("totalTokensFresh");
+    expectUsageFields(latest, {
+      inputTokens: 70,
+      outputTokens: 9,
+      contextUsage: { state: "unavailable" },
+      trailingBytes: 0,
+    });
+  });
+
+  test("counts transcript bytes appended after the latest usage snapshot", async () => {
+    const sessionId = "test-session-latest-usage-trailing-bytes";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      {
+        message: {
+          role: "assistant",
+          content: "latest",
+          usage: {
+            input: 70,
+            output: 9,
+            contextUsage: {
+              state: "available",
+              promptTokens: 70,
+              totalTokens: 79,
+            },
+          },
+        },
+      },
+      { message: { role: "tool", content: "appended tool result" } },
+    ]);
+
+    const latest = await readLatestRecentSessionUsageFromTranscriptAsync(
+      sessionId,
+      storePath,
+      undefined,
+      undefined,
+      2048,
+    );
+
+    expectUsageFields(latest, {
+      contextUsage: {
+        state: "available",
+        promptTokens: 70,
+        totalTokens: 79,
+      },
+    });
+    expect(latest?.trailingBytes).toBeGreaterThan(0);
+  });
+
+  test("clears an older context marker when aggregate usage has a newer plain snapshot", async () => {
+    const sessionId = "test-session-aggregate-clears-context-marker";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      {
+        message: {
+          role: "assistant",
+          content: "older",
+          usage: {
+            input: 50,
+            output: 5,
+            contextUsage: { state: "unavailable" },
+          },
+        },
+      },
+      { message: { role: "assistant", content: "latest", usage: { input: 70, output: 9 } } },
+    ]);
+
+    const aggregate = await readRecentSessionUsageFromTranscriptAsync(
+      sessionId,
+      storePath,
+      undefined,
+      undefined,
+      2048,
+    );
+
     expectUsageFields(aggregate, { inputTokens: 120, outputTokens: 14 });
-    expectUsageFields(latest, { inputTokens: 70, outputTokens: 9 });
+    expect(aggregate).not.toHaveProperty("contextUsage");
   });
 
   test("tails transcript lines for manual compaction without loading the whole file", () => {
@@ -1762,7 +1888,7 @@ describe("readSessionMessages", () => {
       })),
     ).toEqual([
       { role: "user", text: "hello" },
-      { role: "assistant", text: "hi" },
+      { role: "assistant", text: [{ type: "text", text: "hi" }] },
       { role: "user", text: [{ type: "text", text: "Blocked by HITL test hook." }] },
     ]);
     expect(JSON.stringify(out)).not.toContain("[hitl:block] hello");
@@ -1889,6 +2015,20 @@ describe("readSessionPreviewItemsFromTranscript", () => {
     expect(result).toHaveLength(1);
     expect(result[0]?.text.length).toBe(24);
     expect(result[0]?.text.endsWith("...")).toBe(true);
+  });
+
+  test("keeps preview text valid when the limit bisects an emoji", () => {
+    const sessionId = "preview-truncate-utf16";
+    const lines = [
+      JSON.stringify({
+        message: { role: "assistant", content: `${"t".repeat(196)}🚀xyz` },
+      }),
+    ];
+    writeTranscriptLines(sessionId, lines);
+
+    expect(readPreview(sessionId, 1, 200)).toEqual([
+      { role: "assistant", text: `${"t".repeat(196)}...` },
+    ]);
   });
 
   test("strips inline directives from preview items", () => {
@@ -2405,7 +2545,7 @@ describe("archiveSessionTranscripts", () => {
         expect(archived).toHaveLength(1);
         expect(archived[0]).toContain(".reset.");
         expect(fs.existsSync(transcriptPath)).toBe(false);
-        expect(fs.existsSync(archived[0])).toBe(true);
+        expect(fs.existsSync(expectDefined(archived[0], "archived[0] test invariant"))).toBe(true);
       });
     },
   );
@@ -2651,7 +2791,11 @@ describe("oversized transcript line guards", () => {
         timestamp,
         id: "oversized-child",
         parentId: "root-msg",
-        message: { role: "assistant", content: oversizedContent },
+        message: {
+          role: "assistant",
+          content: oversizedContent,
+          idempotencyKey: "oversized-key",
+        },
       }),
     ];
     fs.writeFileSync(transcriptPath, `${lines.join("\n")}\n`, "utf-8");
@@ -2670,6 +2814,7 @@ describe("oversized transcript line guards", () => {
     // id is preserved in __openclaw transcript metadata
     const meta = (oversized as Record<string, Record<string, unknown>>)["__openclaw"];
     expect(meta?.id).toBe("oversized-child");
+    expect(meta?.idempotencyKey).toBe("oversized-key");
     expect(meta?.recordTimestampMs).toBe(Date.parse(timestamp));
     // parentId extraction is proven by the record being included:
     // if parentId was not extracted, the tree would orphan this node.

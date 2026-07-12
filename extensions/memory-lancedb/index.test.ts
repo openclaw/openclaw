@@ -11,6 +11,7 @@
 import { Buffer } from "node:buffer";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import {
   clearMemoryPluginState,
@@ -2518,8 +2519,13 @@ describe("memory plugin e2e", () => {
 
       expect(loadLanceDbModule).toHaveBeenCalledTimes(1);
       expect(ensureGlobalUndiciEnvProxyDispatcher).toHaveBeenCalledOnce();
-      expect(ensureGlobalUndiciEnvProxyDispatcher.mock.invocationCallOrder[0]).toBeLessThan(
-        embeddingsCreate.mock.invocationCallOrder[0],
+      expect(
+        expectDefined(
+          ensureGlobalUndiciEnvProxyDispatcher.mock.invocationCallOrder[0],
+          "LanceDB proxy dispatcher invocation",
+        ),
+      ).toBeLessThan(
+        expectDefined(embeddingsCreate.mock.invocationCallOrder[0], "LanceDB embedding invocation"),
       );
       expect(embeddingsCreate).toHaveBeenCalledWith({
         model: "text-embedding-3-small",
@@ -2955,7 +2961,7 @@ describe("memory plugin e2e", () => {
     const fakeRows = [
       {
         id: fakeUuid1,
-        text: "User prefers dark mode",
+        text: `${"x".repeat(59)}🚀tail`,
         category: "preference",
         vector: [0.1],
         importance: 0.8,
@@ -3035,6 +3041,8 @@ describe("memory plugin e2e", () => {
       const text = result.content?.[0]?.text ?? "";
       expect(text).toContain(fakeUuid1);
       expect(text).toContain(fakeUuid2);
+      expect(text).toContain(`- [${fakeUuid1}] ${"x".repeat(59)}...`);
+      expect(text).not.toContain("\uD83D");
       // Ensure truncated 8-char prefix alone is NOT the format used
       expect(text).not.toMatch(/\[890e1fae\]/);
       expect(text).not.toMatch(/\[a1b2c3d4\]/);

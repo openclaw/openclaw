@@ -2,6 +2,8 @@
 // model resolution.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { lookupCachedContextWindow, providerContextTokenCacheKey } from "./context-cache.js";
+import { CONTEXT_WINDOW_RUNTIME_STATE } from "./context-runtime-state.js";
 
 type DiscoveredModel = {
   id: string;
@@ -342,6 +344,71 @@ describe("lookupContextTokens", () => {
       readOnly: true,
     });
     expect(lookupContextTokens("anthropic/claude-opus-4.7-20260219")).toBe(1_048_576);
+  });
+
+  it("uses caller config when gateway startup starts cache warming", async () => {
+    const config = createContextOverrideConfig("anthropic", "claude-opus-4.7-20260219", 200_000);
+    mockDiscoveryDeps([
+      {
+        id: "anthropic/claude-opus-4.7-20260219",
+        provider: "anthropic",
+        contextWindow: 200_000,
+      },
+    ]);
+
+    const { ensureContextWindowCacheLoaded, lookupContextTokens } = await importContextModule();
+    await ensureContextWindowCacheLoaded(config);
+
+    expect(contextTestState.loadModelCatalog).toHaveBeenCalledWith({
+      config,
+      readOnly: true,
+    });
+    expect(
+      lookupContextTokens("anthropic/claude-opus-4.7-20260219", { allowAsyncLoad: false }),
+    ).toBe(1_048_576);
+  });
+
+  it("warms fresh caches instead of reusing a pre-generation load promise", async () => {
+    const legacyLoadPromise = Promise.resolve();
+    CONTEXT_WINDOW_RUNTIME_STATE.loadPromise = legacyLoadPromise;
+    CONTEXT_WINDOW_RUNTIME_STATE.loadGeneration = null;
+    CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig = createContextOverrideConfig(
+      "fresh-provider",
+      "fresh-model",
+      123_456,
+    );
+
+    await contextModule.ensureContextWindowCacheLoaded();
+
+    expect(
+      lookupCachedContextWindow(providerContextTokenCacheKey("fresh-provider", "fresh-model")),
+    ).toBe(123_456);
+    expect(CONTEXT_WINDOW_RUNTIME_STATE.loadPromise).not.toBe(legacyLoadPromise);
+    expect(CONTEXT_WINDOW_RUNTIME_STATE.loadGeneration).toBe(
+      CONTEXT_WINDOW_RUNTIME_STATE.generation,
+    );
+  });
+
+  it("status waits for pending context warmup but releases on timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      contextTestState.loadModelCatalog.mockImplementationOnce(
+        () => new Promise<DiscoveredModel[]>(() => {}),
+      );
+
+      const { ensureContextWindowCacheLoaded, waitForContextWindowCacheLoad } =
+        await importContextModule();
+      void ensureContextWindowCacheLoaded(
+        createContextOverrideConfig("anthropic", "claude", 200_000),
+      );
+
+      const waitResult = waitForContextWindowCacheLoad({ timeoutMs: 5 });
+      await vi.advanceTimersByTimeAsync(5);
+
+      await expect(waitResult).resolves.toBe("timeout");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("warms context metadata from bundled provider static catalogs", async () => {

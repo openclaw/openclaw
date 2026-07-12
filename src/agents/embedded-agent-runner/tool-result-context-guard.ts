@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 /**
  * Installs context guards for oversized tool-result histories.
  */
@@ -5,6 +6,7 @@ import type {
   ContextEngine,
   ContextEngineRuntimeContext,
   ContextEngineRuntimeSettings,
+  ContextEngineSessionTarget,
 } from "../../context-engine/types.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
@@ -164,8 +166,8 @@ function truncateTextToBudget(text: string, maxChars: number): string {
     cutPoint = newline;
   }
 
-  const omittedChars = text.length - cutPoint;
-  return text.slice(0, cutPoint) + formatContextLimitTruncationNotice(omittedChars);
+  const prefix = truncateUtf16Safe(text, cutPoint);
+  return prefix + formatContextLimitTruncationNotice(text.length - prefix.length);
 }
 
 function replaceToolResultText(msg: AgentMessage, text: string): AgentMessage {
@@ -328,6 +330,7 @@ export function installContextEngineLoopHook(params: {
   contextEngine: ContextEngine;
   sessionId: string;
   sessionKey?: string;
+  sessionTarget?: ContextEngineSessionTarget;
   sessionFile: string;
   tokenBudget?: number;
   modelId: string;
@@ -397,6 +400,7 @@ export function installContextEngineLoopHook(params: {
         await contextEngine.afterTurn({
           sessionId,
           sessionKey,
+          sessionTarget: params.sessionTarget,
           sessionFile,
           messages: transcriptMessages,
           prePromptMessageCount,

@@ -13,15 +13,11 @@ import {
 } from "../plugins/install-security-scan.js";
 import { PLUGIN_MANIFEST_FILENAME } from "../plugins/manifest.js";
 import type { InstallPolicySource } from "../security/install-policy.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { parseFrontmatter } from "./frontmatter.js";
 
-let hookInstallRuntimePromise: Promise<typeof import("./install.runtime.js")> | undefined;
-
-async function loadHookInstallRuntime() {
-  hookInstallRuntimePromise ??= import("./install.runtime.js");
-  return hookInstallRuntimePromise;
-}
+const loadHookInstallRuntime = createLazyRuntimeModule(() => import("./install.runtime.js"));
 
 /** Logger contract used by hook install and update operations. */
 export type HookInstallLogger = {
@@ -51,6 +47,13 @@ export type InstallHooksResult =
       error: string;
       code?: string;
     };
+
+export const HOOK_INSTALL_ERROR_CODE = {
+  MISSING_OPENCLAW_HOOKS: "missing_openclaw_hooks",
+  EMPTY_OPENCLAW_HOOKS: "empty_openclaw_hooks",
+} as const;
+
+type HookInstallErrorCode = (typeof HOOK_INSTALL_ERROR_CODE)[keyof typeof HOOK_INSTALL_ERROR_CODE];
 
 /** Integrity drift payload surfaced when npm metadata no longer matches an install record. */
 export type HookNpmIntegrityDriftParams = {
@@ -223,16 +226,26 @@ export function resolveHookInstallDir(hookId: string, hooksDir?: string): string
   return targetDirResult.path;
 }
 
-async function ensureOpenClawHooks(manifest: HookPackageManifest) {
+function resolveOpenClawHooks(
+  manifest: HookPackageManifest,
+): { ok: true; entries: string[] } | { ok: false; error: string; code: HookInstallErrorCode } {
   const hooks = manifest[MANIFEST_KEY]?.hooks;
   if (!Array.isArray(hooks)) {
-    throw new Error("package.json missing openclaw.hooks");
+    return {
+      ok: false,
+      error: "package.json missing openclaw.hooks",
+      code: HOOK_INSTALL_ERROR_CODE.MISSING_OPENCLAW_HOOKS,
+    };
   }
   const list = normalizeTrimmedStringList(hooks);
   if (list.length === 0) {
-    throw new Error("package.json openclaw.hooks is empty");
+    return {
+      ok: false,
+      error: "package.json openclaw.hooks is empty",
+      code: HOOK_INSTALL_ERROR_CODE.EMPTY_OPENCLAW_HOOKS,
+    };
   }
-  return list;
+  return { ok: true, entries: list };
 }
 
 function resolveHookPackageKind(
@@ -390,12 +403,11 @@ async function installHookPackageFromDir(
     return { ok: false, error: `invalid package.json: ${String(err)}` };
   }
 
-  let hookEntries: string[];
-  try {
-    hookEntries = await ensureOpenClawHooks(manifest);
-  } catch (err) {
-    return { ok: false, error: String(err) };
+  const hookManifest = resolveOpenClawHooks(manifest);
+  if (!hookManifest.ok) {
+    return hookManifest;
   }
+  const hookEntries = hookManifest.entries;
 
   const pkgName = typeof manifest.name === "string" ? manifest.name : "";
   const hookPackId = pkgName ? unscopedPackageName(pkgName) : path.basename(params.packageDir);

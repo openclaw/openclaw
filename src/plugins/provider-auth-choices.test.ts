@@ -48,7 +48,6 @@ vi.resetModules();
 
 const {
   resolveManifestDeprecatedProviderAuthChoice,
-  resolveManifestProviderApiKeyChoice,
   resolveManifestProviderAuthChoice,
   resolveManifestProviderAuthChoices,
   resolveManifestProviderOnboardAuthFlags,
@@ -322,6 +321,7 @@ describe("provider auth choice manifest helpers", () => {
             optionKey: "openaiApiKey",
             cliFlag: "--openai-api-key",
             cliOption: "--openai-api-key <key>",
+            appGuidedSecret: true,
           },
         ],
       },
@@ -338,6 +338,15 @@ describe("provider auth choice manifest helpers", () => {
             optionKey: "openaiApiKey",
             cliFlag: "--openai-api-key",
             cliOption: "--openai-api-key <key>",
+          },
+          {
+            provider: "evil-openai",
+            method: "api-key",
+            choiceId: "evil-openai-api-key",
+            choiceLabel: "Evil OpenAI API key",
+            optionKey: "evilOpenaiApiKey",
+            cliFlag: "--evil-openai-api-key",
+            cliOption: "--evil-openai-api-key <key>",
           },
         ],
       },
@@ -357,6 +366,7 @@ describe("provider auth choice manifest helpers", () => {
         optionKey: "openaiApiKey",
         cliFlag: "--openai-api-key",
         cliOption: "--openai-api-key <key>",
+        appGuidedSecret: true,
       },
     ]);
     expect(
@@ -364,6 +374,22 @@ describe("provider auth choice manifest helpers", () => {
         includeUntrustedWorkspacePlugins: false,
       })?.providerId,
     ).toBe("openai");
+    const enabledWorkspaceConfig = {
+      plugins: { entries: { "evil-openai-hijack": { enabled: true } } },
+    };
+    expect(
+      resolveManifestProviderAuthChoices({
+        config: enabledWorkspaceConfig,
+        includeUntrustedWorkspacePlugins: false,
+      }).map((choice) => choice.choiceId),
+    ).toContain("evil-openai-api-key");
+    expect(
+      resolveManifestProviderAuthChoices({
+        config: enabledWorkspaceConfig,
+        includeUntrustedWorkspacePlugins: false,
+        includeWorkspacePlugins: false,
+      }).map((choice) => choice.choiceId),
+    ).not.toContain("evil-openai-api-key");
     expect(
       resolveManifestProviderOnboardAuthFlags({
         includeUntrustedWorkspacePlugins: false,
@@ -670,7 +696,7 @@ describe("provider auth choice manifest helpers", () => {
     ]);
   });
 
-  it("resolves api-key choices through manifest-owned provider auth aliases", () => {
+  it("resolves manifest-owned provider auth aliases", () => {
     setManifestPlugins([
       {
         id: "fixture-provider",
@@ -695,10 +721,5 @@ describe("provider auth choice manifest helpers", () => {
     const resolvedProviderId = resolveProviderIdForAuth("fixture-provider-plan");
     expect(pluginRegistryMocks.loadPluginMetadataSnapshot).toHaveBeenCalled();
     expect(resolvedProviderId).toBe("fixture-provider");
-    expect(
-      resolveManifestProviderApiKeyChoice({
-        providerId: "fixture-provider-plan",
-      })?.choiceId,
-    ).toBe("fixture-provider-api-key");
   });
 });

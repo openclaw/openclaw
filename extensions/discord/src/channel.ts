@@ -24,7 +24,8 @@ import {
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveTargetsWithOptionalToken } from "openclaw/plugin-sdk/target-resolver-runtime";
 import {
-  listDiscordAccountIds,
+  listEnabledDiscordAccounts,
+  resolveDefaultDiscordAccountId,
   resolveDiscordAccount,
   resolveDiscordAccountAllowFrom,
   type ResolvedDiscordAccount,
@@ -82,6 +83,7 @@ import { discordSetupAdapter } from "./setup-adapter.js";
 import { createDiscordPluginBase, discordConfigAdapter } from "./shared.js";
 import { collectDiscordStatusIssues } from "./status-issues.js";
 import { parseDiscordTarget } from "./target-parsing.js";
+import { defaultTopLevelPlacement } from "./thread-binding-api.js";
 
 const DISCORD_ACCOUNT_STARTUP_STAGGER_MS = 10_000;
 const discordMessageAdapter = createChannelMessageAdapterFromOutbound({
@@ -95,7 +97,7 @@ const discordMessageAdapter = createChannelMessageAdapterFromOutbound({
     },
     finalizer: {
       capabilities: {
-        finalEdit: true,
+        finalEdit: false,
         normalFallback: true,
         discardPending: true,
       },
@@ -221,15 +223,28 @@ const discordMessageActions = {
   },
 };
 
+function resolveDiscordStartupAccountIds(cfg: OpenClawConfig): string[] {
+  const startupAccountIds = listEnabledDiscordAccounts(cfg)
+    .filter(
+      (candidate) =>
+        resolveConfiguredFromCredentialStatuses(candidate) ??
+        Boolean(normalizeOptionalString(candidate.token)),
+    )
+    .map((candidate) => candidate.accountId);
+  const defaultAccountId = resolveDefaultDiscordAccountId(cfg);
+  // Promote only a gateway-eligible account; otherwise a disabled or unconfigured
+  // default would waste the immediate startup slot while a real bot waits.
+  if (!startupAccountIds.includes(defaultAccountId)) {
+    return startupAccountIds;
+  }
+  return [
+    defaultAccountId,
+    ...startupAccountIds.filter((candidateId) => candidateId !== defaultAccountId),
+  ];
+}
+
 function resolveDiscordStartupDelayMs(cfg: OpenClawConfig, accountId: string): number {
-  const startupAccountIds = listDiscordAccountIds(cfg).filter((candidateId) => {
-    const candidate = resolveDiscordAccount({ cfg, accountId: candidateId });
-    return (
-      candidate.enabled &&
-      (resolveConfiguredFromCredentialStatuses(candidate) ??
-        Boolean(normalizeOptionalString(candidate.token)))
-    );
-  });
+  const startupAccountIds = resolveDiscordStartupAccountIds(cfg);
   const startupIndex = startupAccountIds.findIndex((candidateId) => candidateId === accountId);
   return startupIndex <= 0 ? 0 : startupIndex * DISCORD_ACCOUNT_STARTUP_STAGGER_MS;
 }
@@ -352,17 +367,17 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
           looksLikeId: looksLikeDiscordTargetId,
           hint: "<channelId|user:ID|channel:ID>",
           resolveTarget: async ({ cfg, accountId, input, normalized, preferredKind }) => {
+            const defaultKind =
+              preferredKind === "user" || normalized.startsWith("user:")
+                ? "user"
+                : preferredKind === "channel" ||
+                    preferredKind === "group" ||
+                    normalized.startsWith("channel:")
+                  ? "channel"
+                  : undefined;
             const resolved = await (
               await loadDiscordTargetResolverModule()
-            ).resolveDiscordTarget(
-              input,
-              { cfg, accountId },
-              preferredKind === "user"
-                ? { defaultKind: "user" }
-                : preferredKind === "channel" || preferredKind === "group"
-                  ? { defaultKind: "channel" }
-                  : {},
-            );
+            ).resolveDiscordTarget(input, { cfg, accountId }, defaultKind ? { defaultKind } : {});
             if (!resolved) {
               return null;
             }
@@ -465,7 +480,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
       },
       conversationBindings: {
         supportsCurrentConversationBinding: true,
-        defaultTopLevelPlacement: "child",
+        defaultTopLevelPlacement,
         createManager: async ({ cfg, accountId }) =>
           (await loadDiscordThreadBindingsManagerModule()).createThreadBindingManager({
             cfg,
@@ -742,6 +757,23 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
         resolveAccount: (cfg, accountId) => resolveDiscordAccount({ cfg, accountId }),
         resolveReplyToMode: (account) => account.config.replyToMode,
         fallback: "off",
+      },
+      buildToolContext: ({ context, hasRepliedRef }) => {
+        const currentMessagingTarget = normalizeOptionalString(context.To);
+        const currentChatType =
+          context.ChatType === "direct" ||
+          context.ChatType === "group" ||
+          context.ChatType === "channel"
+            ? context.ChatType
+            : undefined;
+        return {
+          currentChannelId:
+            normalizeOptionalString(context.NativeChannelId) ?? currentMessagingTarget,
+          currentChatType,
+          currentMessagingTarget,
+          currentMessageId: context.CurrentMessageId,
+          hasRepliedRef,
+        };
       },
     },
     outbound: {

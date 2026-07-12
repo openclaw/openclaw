@@ -8,6 +8,7 @@ type FakeFsEntry = { kind: "file"; content: string } | { kind: "dir" };
 const state = vi.hoisted(() => ({
   entries: new Map<string, FakeFsEntry>(),
   realpaths: new Map<string, string>(),
+  runCommandWithTimeout: vi.fn(),
 }));
 
 const abs = (p: string) => path.resolve(p);
@@ -69,7 +70,11 @@ vi.mock("./openclaw-root.js", () => ({
   resolveOpenClawPackageRoot: vi.fn(async () => null),
   resolveOpenClawPackageRootSync: vi.fn(() => null),
 }));
+vi.mock("../process/exec.js", () => ({
+  runCommandWithTimeout: state.runCommandWithTimeout,
+}));
 
+let ensureControlUiAssetsBuilt: typeof import("./control-ui-assets.js").ensureControlUiAssetsBuilt;
 let resolveControlUiRepoRoot: typeof import("./control-ui-assets.js").resolveControlUiRepoRoot;
 let resolveControlUiDistIndexPath: typeof import("./control-ui-assets.js").resolveControlUiDistIndexPath;
 let resolveControlUiDistIndexHealth: typeof import("./control-ui-assets.js").resolveControlUiDistIndexHealth;
@@ -81,6 +86,7 @@ let openclawRoot: typeof import("./openclaw-root.js");
 describe("control UI assets helpers (fs-mocked)", () => {
   beforeAll(async () => {
     ({
+      ensureControlUiAssetsBuilt,
       resolveControlUiRepoRoot,
       resolveControlUiDistIndexPath,
       resolveControlUiDistIndexHealth,
@@ -94,6 +100,7 @@ describe("control UI assets helpers (fs-mocked)", () => {
   beforeEach(() => {
     state.entries.clear();
     state.realpaths.clear();
+    state.runCommandWithTimeout.mockReset();
     vi.clearAllMocks();
   });
 
@@ -177,6 +184,43 @@ describe("control UI assets helpers (fs-mocked)", () => {
       indexPath,
       exists: true,
     });
+  });
+
+  it("keeps a truncated build failure diagnostic within its UTF-16 limit", async () => {
+    const root = abs("fixtures/build-failure");
+    const argv1 = path.join(root, "src", "index.ts");
+    const originalArgv1 = process.argv[1];
+    setFile(path.join(root, "ui", "vite.config.ts"), "export {};\n");
+    setFile(path.join(root, "scripts", "ui.js"), "");
+    state.runCommandWithTimeout.mockResolvedValueOnce({
+      stdout: "",
+      stderr: `${"y".repeat(238)}🚀xx`,
+      code: 1,
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
+    process.argv[1] = argv1;
+
+    try {
+      const result = await ensureControlUiAssetsBuilt({
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        built: false,
+        message: `Control UI build failed: ${"y".repeat(238)}…`,
+      });
+    } finally {
+      if (originalArgv1 === undefined) {
+        process.argv.splice(1, 1);
+      } else {
+        process.argv[1] = originalArgv1;
+      }
+    }
   });
 
   it("resolves control-ui root from override file or directory", () => {

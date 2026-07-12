@@ -464,19 +464,31 @@ jobs:
               return;
             }
 
-            if (existing) {
-              await github.rest.issues.updateComment({
+            const writeComment = async () => {
+              if (existing) {
+                await github.rest.issues.updateComment({
+                  owner,
+                  repo,
+                  comment_id: existing.id,
+                  body,
+                });
+                return;
+              }
+
+              await github.rest.issues.createComment({
                 owner,
                 repo,
-                comment_id: existing.id,
+                issue_number: livePull.data.number,
                 body,
               });
-              return;
-            }
+            };
 
-            await github.rest.issues.createComment({
-              owner,
-              repo,
-              issue_number: livePull.data.number,
-              body,
-            });
+            try {
+              await writeComment();
+            } catch (error) {
+              if (error && typeof error === "object" && error.status === 403) {
+                core.warning(`Skipping Periphery PR comment for #${pr.number}; GitHub token cannot write issue comments for this workflow_run.`);
+                return;
+              }
+              throw error;
+            }

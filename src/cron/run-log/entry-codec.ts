@@ -17,6 +17,7 @@ const CRON_FAILOVER_REASONS = new Set<FailoverReason>([
   "timeout",
   "model_not_found",
   "session_expired",
+  "context_overflow",
   "empty_response",
   "no_error_details",
   "unclassified",
@@ -80,6 +81,7 @@ export function parseCronRunLogEntryObject(
     runAtMs: entryObj.runAtMs,
     durationMs: entryObj.durationMs,
     nextRunAtMs: entryObj.nextRunAtMs,
+    triggerFired: entryObj.triggerFired === true ? true : undefined,
     model: typeof entryObj.model === "string" && entryObj.model.trim() ? entryObj.model : undefined,
     provider: normalizedProvider,
     usage: usage

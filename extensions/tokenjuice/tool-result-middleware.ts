@@ -5,6 +5,7 @@ import type {
   AgentToolResultMiddlewareEvent,
   OpenClawAgentToolResult,
 } from "openclaw/plugin-sdk/agent-harness";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createTokenjuiceOpenClawEmbeddedExtension } from "./runtime-api.js";
 
 type TokenjuiceToolResultHandler = (
@@ -17,10 +18,6 @@ type TokenjuiceToolResultHandler = (
   },
   ctx: { cwd: string },
 ) => Promise<Partial<OpenClawAgentToolResult> | void> | Partial<OpenClawAgentToolResult> | void;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function readCwd(event: AgentToolResultMiddlewareEvent): string {
   if (event.cwd?.trim()) {

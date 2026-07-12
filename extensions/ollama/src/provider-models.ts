@@ -1,8 +1,8 @@
 // Ollama provider module implements model/runtime integration.
 import { createHash } from "node:crypto";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-onboard";
-import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   OLLAMA_DEFAULT_BASE_URL,
@@ -22,6 +22,7 @@ export type OllamaTagModel = {
   details?: {
     family?: string;
     parameter_size?: string;
+    quantization_level?: string;
   };
 };
 
@@ -113,7 +114,11 @@ export function parseOllamaNumCtxParameter(parameters: unknown): number | undefi
     if (!match) {
       continue;
     }
-    const parsed = Number.parseInt(match[1], 10);
+    const rawValue = match[1];
+    if (!rawValue) {
+      continue;
+    }
+    const parsed = Number.parseInt(rawValue, 10);
     if (Number.isFinite(parsed) && parsed > 0) {
       lastValue = parsed;
     }

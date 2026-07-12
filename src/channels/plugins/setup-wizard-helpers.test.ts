@@ -1,4 +1,5 @@
 // Setup wizard helper tests cover channel setup step formatting and config writes.
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   resolveSetupWizardAllowFromEntries,
   resolveSetupWizardGroupAllowlist,
@@ -12,7 +13,6 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import {
-  applySingleTokenPromptResult,
   buildSingleChannelSecretPromptState,
   createAccountScopedAllowFromSection,
   createAccountScopedGroupAccessSection,
@@ -110,7 +110,9 @@ function resolveMatrixSingleAccountPromotionTarget(params: {
     );
   }
   const namedAccounts = collectNamedAccountIds(accounts);
-  return namedAccounts.length === 1 ? namedAccounts[0] : DEFAULT_ACCOUNT_ID;
+  return namedAccounts.length === 1
+    ? expectDefined(namedAccounts[0], "namedAccounts[0] test invariant")
+    : DEFAULT_ACCOUNT_ID;
 }
 
 beforeEach(() => {
@@ -158,7 +160,9 @@ function createTokenPrompter(params: { confirms: boolean[]; texts: string[] }) {
   const texts = [...params.texts];
   return {
     confirm: vi.fn(async () => confirms.shift() ?? true),
-    text: vi.fn(async () => texts.shift() ?? ""),
+    text: vi.fn<(textParams: { sensitive?: boolean }) => Promise<string>>(
+      async () => texts.shift() ?? "",
+    ),
   };
 }
 
@@ -519,6 +523,11 @@ describe("promptSingleChannelToken", () => {
     });
     expect(result).toEqual(expected);
     expect(prompter.text).toHaveBeenCalledTimes(expectTextCalls);
+    // Token entry is a credential: masked in terminals, and the Crestodian
+    // chat bridge refuses plain-text secrets based on this flag.
+    for (const call of prompter.text.mock.calls) {
+      expect(call[0]).toMatchObject({ sensitive: true });
+    }
   });
 });
 
@@ -588,35 +597,6 @@ describe("promptSingleChannelSecretInput", () => {
 
     expect(result).toEqual({ action: "keep" });
     expect(prompter.text).not.toHaveBeenCalled();
-  });
-});
-
-describe("applySingleTokenPromptResult", () => {
-  it("writes env selection as an empty patch on target account", () => {
-    const next = applySingleTokenPromptResult({
-      cfg: {},
-      channel: "discord",
-      accountId: "work",
-      tokenPatchKey: "token",
-      tokenResult: { useEnv: true, token: null },
-    });
-
-    expect(next.channels?.discord?.enabled).toBe(true);
-    expect(next.channels?.discord?.accounts?.work?.enabled).toBe(true);
-    expect(next.channels?.discord?.accounts?.work?.token).toBeUndefined();
-  });
-
-  it("writes provided token under requested key", () => {
-    const next = applySingleTokenPromptResult({
-      cfg: {},
-      channel: "telegram",
-      accountId: DEFAULT_ACCOUNT_ID,
-      tokenPatchKey: "botToken",
-      tokenResult: { useEnv: false, token: "abc" },
-    });
-
-    expect(next.channels?.telegram?.enabled).toBe(true);
-    expect(next.channels?.telegram?.botToken).toBe("abc");
   });
 });
 

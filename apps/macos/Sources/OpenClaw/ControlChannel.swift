@@ -245,7 +245,8 @@ final class ControlChannel {
     func request(
         method: String,
         params: [String: AnyHashable]? = nil,
-        timeoutMs: Double? = nil) async throws -> Data
+        timeoutMs: Double? = nil,
+        retryTransportFailures: Bool = true) async throws -> Data
     {
         do {
             let rawParams = params?.reduce(into: [String: OpenClawKit.AnyCodable]()) {
@@ -254,7 +255,8 @@ final class ControlChannel {
             let data = try await GatewayConnection.shared.request(
                 method: method,
                 params: rawParams,
-                timeoutMs: timeoutMs)
+                timeoutMs: timeoutMs,
+                retryTransportFailures: retryTransportFailures)
             self.setStateThrottled(.connected)
             return data
         } catch {
@@ -526,5 +528,4 @@ final class ControlChannel {
 
 extension Notification.Name {
     static let controlHeartbeat = Notification.Name("openclaw.control.heartbeat")
-    static let controlAgentEvent = Notification.Name("openclaw.control.agent")
 }

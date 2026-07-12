@@ -133,11 +133,23 @@ describe("info command handlers", () => {
     });
   });
 
-  it("only lets owners export trajectory bundles", async () => {
+  it("ignores trajectory export requests from unauthorized senders", async () => {
     const params = buildInfoParams("/export-trajectory", {
       commands: { text: true },
     } as OpenClawConfig);
     params.command.isAuthorizedSender = false;
+
+    const result = await handleExportTrajectoryCommand(params, true);
+
+    expect(result).toEqual({ shouldContinue: false });
+    expect(buildExportTrajectoryCommandReplyMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks authorized non-owners from exporting trajectory bundles", async () => {
+    const params = buildInfoParams("/export-trajectory", {
+      commands: { text: true },
+    } as OpenClawConfig);
+    params.command.senderIsOwner = false;
 
     const result = await handleExportTrajectoryCommand(params, true);
 

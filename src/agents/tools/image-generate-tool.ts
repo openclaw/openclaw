@@ -3,9 +3,12 @@
  *
  * Loads references, resolves providers/options, saves generated images, and supports detached background runs.
  */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { Type } from "typebox";
+import { findCapabilityProviderById } from "../../../packages/media-generation-core/src/capability-model-ref.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveImageGenerationMaxInputImages } from "../../image-generation/capabilities.js";
 import { parseImageGenerationModelRef } from "../../image-generation/model-ref.js";
 import {
   generateImage,
@@ -26,6 +29,7 @@ import type {
 } from "../../image-generation/types.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { resolveCapabilityModelCandidates } from "../../media-generation/runtime-shared.js";
 import {
   resolveConfiguredMediaMaxBytes,
   resolveGeneratedMediaMaxBytes,
@@ -108,7 +112,8 @@ import {
 
 const DEFAULT_COUNT = 1;
 const MAX_COUNT = 4;
-const MAX_INPUT_IMAGES = 10;
+const DEFAULT_MAX_INPUT_IMAGES = 10;
+const MAX_REFERENCE_IMAGE_INPUTS = 14;
 const DEFAULT_RESOLUTION: ImageGenerationResolution = "1K";
 const SUPPORTED_QUALITIES = ["low", "medium", "high", "auto"] as const;
 const SUPPORTED_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
@@ -118,6 +123,9 @@ const SUPPORTED_FAL_CREATIVITY = ["raw", "low", "medium", "high"] as const;
 type FalCreativity = (typeof SUPPORTED_FAL_CREATIVITY)[number];
 const SUPPORTED_ASPECT_RATIOS = new Set([
   "1:1",
+  "2:1",
+  "20:9",
+  "19.5:9",
   "2:3",
   "3:2",
   "2.35:1",
@@ -126,8 +134,11 @@ const SUPPORTED_ASPECT_RATIOS = new Set([
   "4:5",
   "5:4",
   "9:16",
+  "9:19.5",
+  "9:20",
   "16:9",
   "21:9",
+  "1:2",
   "4:1",
   "1:4",
   "8:1",
@@ -150,7 +161,7 @@ const ImageGenerateToolSchema = Type.Object({
   ),
   images: Type.Optional(
     Type.Array(Type.String(), {
-      description: `Reference images for edit or style reference; max ${MAX_INPUT_IMAGES}.`,
+      description: `Reference images for edit or style reference; max ${MAX_REFERENCE_IMAGE_INPUTS}.`,
     }),
   ),
   model: Type.Optional(
@@ -172,7 +183,7 @@ const ImageGenerateToolSchema = Type.Object({
   aspectRatio: Type.Optional(
     Type.String({
       description:
-        "Aspect ratio: 1:1, 2:3, 3:2, 2.35:1, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9, 4:1, 1:4, 8:1, 1:8.",
+        "Aspect ratio: 1:1, 2:1, 20:9, 19.5:9, 2:3, 3:2, 2.35:1, 3:4, 4:3, 4:5, 5:4, 9:16, 9:19.5, 9:20, 16:9, 21:9, 1:2, 4:1, 1:4, 8:1, 1:8.",
     }),
   ),
   resolution: Type.Optional(
@@ -298,7 +309,7 @@ function normalizeAspectRatio(raw: string | undefined): string | undefined {
     return normalized;
   }
   throw new ToolInputError(
-    "aspectRatio must be one of 1:1, 2:3, 3:2, 2.35:1, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9, 4:1, 1:4, 8:1, or 1:8",
+    "aspectRatio must be one of 1:1, 2:1, 20:9, 19.5:9, 2:3, 3:2, 2.35:1, 3:4, 4:3, 4:5, 5:4, 9:16, 9:19.5, 9:20, 16:9, 21:9, 1:2, 4:1, 1:4, 8:1, or 1:8",
   );
 }
 
@@ -418,18 +429,18 @@ function normalizeReferenceImages(args: Record<string, unknown>): string[] {
     args,
     singularKey: "image",
     pluralKey: "images",
-    maxCount: MAX_INPUT_IMAGES,
+    maxCount: MAX_REFERENCE_IMAGE_INPUTS,
     label: "reference images",
   });
 }
 
 function resolveSelectedImageGenerationProvider(params: {
-  config?: OpenClawConfig;
+  providers: ImageGenerationProvider[];
   imageGenerationModelConfig: ToolModelConfig;
   modelOverride?: string;
 }): ImageGenerationProvider | undefined {
   return resolveSelectedCapabilityProvider({
-    providers: listRuntimeImageGenerationProviders({ config: params.config }),
+    providers: params.providers,
     modelConfig: params.imageGenerationModelConfig,
     modelOverride: params.modelOverride,
     parseModelRef: parseImageGenerationModelRef,
@@ -461,8 +472,37 @@ function resolveSelectedImageGenerationModelId(params: {
   return params.imageGenerationModelConfig.primary ?? params.selectedProvider?.defaultModel;
 }
 
-function isFalKreaImageModel(provider: ImageGenerationProvider | undefined, modelId?: string) {
-  return provider?.id === "fal" && modelId?.startsWith("krea/v2/") === true;
+function resolveReachableImageGenerationMaxInputImages(params: {
+  providers: ImageGenerationProvider[];
+  candidates: readonly { provider: string; model: string }[];
+}): number | undefined {
+  const limits = params.candidates.flatMap((candidate) => {
+    const provider = findCapabilityProviderById({
+      providers: params.providers,
+      providerId: candidate.provider,
+      normalizeProviderId,
+    });
+    if (!provider?.capabilities.edit.enabled) {
+      return [];
+    }
+    return [
+      resolveImageGenerationMaxInputImages({
+        provider,
+        model: candidate.model,
+      }) ?? DEFAULT_MAX_INPUT_IMAGES,
+    ];
+  });
+  return limits.length > 0 ? Math.max(...limits) : undefined;
+}
+
+function modelDisablesImageResolution(
+  provider: ImageGenerationProvider | undefined,
+  modelId?: string,
+) {
+  if (!provider || !modelId) {
+    return false;
+  }
+  return provider.capabilities.geometry?.resolutionsByModel?.[modelId]?.length === 0;
 }
 
 function formatIgnoredImageGenerationOverride(override: ImageGenerationIgnoredOverride): string {
@@ -505,6 +545,7 @@ function validateImageGenerationCapabilities(params: {
   provider: ImageGenerationProvider | undefined;
   count: number;
   inputImageCount: number;
+  maxInputImages?: number;
   size?: string;
   aspectRatio?: string;
   resolution?: ImageGenerationResolution;
@@ -527,7 +568,10 @@ function validateImageGenerationCapabilities(params: {
     if (!provider.capabilities.edit.enabled) {
       throw new ToolInputError(`${provider.id} does not support reference-image edits.`);
     }
-    const maxInputImages = provider.capabilities.edit.maxInputImages ?? MAX_INPUT_IMAGES;
+    const maxInputImages =
+      params.maxInputImages ??
+      provider.capabilities.edit.maxInputImages ??
+      DEFAULT_MAX_INPUT_IMAGES;
     if (params.inputImageCount > maxInputImages) {
       throw new ToolInputError(
         `${provider.id} edit supports at most ${maxInputImages} reference image${maxInputImages === 1 ? "" : "s"}.`,
@@ -693,6 +737,7 @@ async function executeImageGenerationJob(params: {
   size?: string;
   aspectRatio?: string;
   resolution?: ImageGenerationResolution;
+  inferredResolution?: ImageGenerationResolution;
   quality?: ImageGenerationQuality;
   outputFormat?: ImageGenerationOutputFormat;
   background?: ImageGenerationBackground;
@@ -721,6 +766,7 @@ async function executeImageGenerationJob(params: {
     size: params.size,
     aspectRatio: params.aspectRatio,
     resolution: params.resolution,
+    inferredResolution: params.inferredResolution,
     quality: params.quality,
     outputFormat: params.outputFormat,
     background: params.background,
@@ -760,6 +806,7 @@ async function executeImageGenerationJob(params: {
     result.metadata.normalizedResolution.trim()
       ? result.metadata.normalizedResolution
       : undefined);
+  const appliedResolution = result.appliedResolution ?? normalizedResolution;
   const sizeTranslatedToAspectRatio =
     result.normalization?.aspectRatio?.derivedFrom === "size" ||
     (!normalizedSize &&
@@ -820,9 +867,7 @@ async function executeImageGenerationJob(params: {
         pluralKey: "images",
         getResolvedInput: (entry) => entry.resolvedImage,
       }),
-      ...(normalizedResolution || params.resolution
-        ? { resolution: normalizedResolution ?? params.resolution }
-        : {}),
+      ...(appliedResolution ? { resolution: appliedResolution } : {}),
       ...(normalizedSize || (params.size && !sizeTranslatedToAspectRatio)
         ? { size: normalizedSize ?? params.size }
         : {}),
@@ -884,7 +929,7 @@ export function createImageGenerateTool(options?: {
     label: "Image Generation",
     name: "image_generate",
     description:
-      'Create/edit images. Session chats: background task; do not call image_generate again for same request; wait completion, then report through the current visible-reply contract with generated media attached using structured media fields. Transparent: outputFormat="png" or "webp" + background="transparent"; OpenAI also supports openai.background and routes default model to gpt-image-1.5. Use action="list" for providers/models/readiness/auth, "status" for active task.',
+      'Create/edit images. Session chat runs background: call once/request, await completion, then visible reply with structured media attachment. Transparent: outputFormat png|webp + background="transparent"; OpenAI also openai.background, default gpt-image-1.5. action=list providers/models/readiness/auth; status active task.',
     parameters: ImageGenerateToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -939,8 +984,11 @@ export function createImageGenerateTool(options?: {
       const outputFormat = normalizeOutputFormat(readStringParam(params, "outputFormat"));
       const background = normalizeBackground(readStringParam(params, "background"));
       const providerOptions = normalizeProviderOptions(params);
-      const selectedProvider = resolveSelectedImageGenerationProvider({
+      const imageGenerationProviders = listRuntimeImageGenerationProviders({
         config: effectiveCfg,
+      });
+      const selectedProvider = resolveSelectedImageGenerationProvider({
+        providers: imageGenerationProviders,
         imageGenerationModelConfig,
         modelOverride: model,
       });
@@ -952,6 +1000,19 @@ export function createImageGenerateTool(options?: {
         modelOverride: model,
         explicitModelRef,
         primaryModelRef,
+      });
+      const imageGenerationCandidates = resolveCapabilityModelCandidates({
+        cfg: effectiveCfg,
+        modelConfig: effectiveCfg.agents?.defaults?.imageGenerationModel,
+        modelOverride: model,
+        parseModelRef: parseImageGenerationModelRef,
+        agentDir: options?.agentDir,
+        listProviders: () => imageGenerationProviders,
+        autoProviderFallback: explicitModelConfig ? false : undefined,
+      });
+      const maxInputImages = resolveReachableImageGenerationMaxInputImages({
+        providers: imageGenerationProviders,
+        candidates: imageGenerationCandidates,
       });
       const count = resolveRequestedCount(params);
       const requestKey = buildMediaGenerationRequestKey({
@@ -986,6 +1047,7 @@ export function createImageGenerateTool(options?: {
         provider: selectedProvider,
         count,
         inputImageCount: imageInputs.length,
+        maxInputImages,
         size,
         aspectRatio,
         resolution: explicitResolution,
@@ -1004,21 +1066,23 @@ export function createImageGenerateTool(options?: {
         inputImages.length > 0
           ? selectedProvider?.capabilities.edit
           : selectedProvider?.capabilities.generate;
-      const suppressInferredResolution =
-        inputImages.length > 0 &&
-        !explicitResolution &&
-        isFalKreaImageModel(selectedProvider, selectedModelId);
-      const resolution =
-        explicitResolution ??
-        (size || suppressInferredResolution || modeCaps?.supportsResolution === false
+      const inferredResolution =
+        size || explicitResolution
           ? undefined
           : inputImages.length > 0
             ? await inferResolutionFromInputImages(inputImages)
-            : undefined);
+            : undefined;
+      const resolution =
+        explicitResolution ??
+        (modeCaps?.supportsResolution === false ||
+        modelDisablesImageResolution(selectedProvider, selectedModelId)
+          ? undefined
+          : inferredResolution);
       validateImageGenerationCapabilities({
         provider: selectedProvider,
         count,
         inputImageCount: inputImages.length,
+        maxInputImages,
         size,
         aspectRatio,
         resolution,
@@ -1062,7 +1126,8 @@ export function createImageGenerateTool(options?: {
               model,
               size,
               aspectRatio,
-              resolution,
+              resolution: explicitResolution,
+              inferredResolution,
               quality,
               outputFormat,
               background,
@@ -1119,7 +1184,8 @@ export function createImageGenerateTool(options?: {
           model,
           size,
           aspectRatio,
-          resolution,
+          resolution: explicitResolution,
+          inferredResolution,
           quality,
           outputFormat,
           background,

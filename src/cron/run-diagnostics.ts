@@ -1,5 +1,8 @@
 /** Builds bounded, redacted diagnostics for cron run logs and UI surfaces. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { isToolAllowedByPolicyName } from "../agents/tool-policy-match.js";
+import { normalizeToolName as normalizePolicyToolName } from "../agents/tool-policy.js";
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import type {
@@ -13,6 +16,20 @@ const MAX_ENTRIES = 10;
 const MAX_ENTRY_CHARS = 1_000;
 const MAX_SUMMARY_CHARS = 2_000;
 const EXEC_DIAGNOSTIC_TAIL_CHARS = 2_000;
+const WEB_SEARCH_TOOL_NAME = "web_search";
+
+export const MISSING_WEB_SEARCH_PROVIDER_DIAGNOSTIC_MESSAGE =
+  "web_search tool requested in toolsAllow but no web search provider is selected. Configure one with: openclaw configure --section web, or set tools.web.search.provider.";
+
+export function toolsAllowRequestsWebSearch(toolsAllow?: string[]): boolean {
+  const explicitAllow = (toolsAllow ?? []).filter(
+    (entry) => normalizePolicyToolName(entry) !== "*",
+  );
+  return (
+    explicitAllow.length > 0 &&
+    isToolAllowedByPolicyName(WEB_SEARCH_TOOL_NAME, { allow: explicitAllow })
+  );
+}
 
 function normalizeSeverity(value: unknown): CronRunDiagnosticSeverity {
   return value === "info" || value === "warn" || value === "error" ? value : "error";
@@ -70,7 +87,7 @@ function tailText(value: string, maxChars: number): string {
   }
   // Exec output often ends with the actionable failure; keep the tail when
   // bounding diagnostic text for run logs and control surfaces.
-  return value.slice(value.length - maxChars);
+  return sliceUtf16Safe(value, -maxChars);
 }
 
 function normalizeDiagnosticMessage(value: unknown): { message?: string; truncated?: boolean } {
@@ -85,7 +102,7 @@ function normalizeDiagnosticMessage(value: unknown): { message?: string; truncat
   if (redacted.length <= MAX_ENTRY_CHARS) {
     return { message: redacted };
   }
-  return { message: `${redacted.slice(0, MAX_ENTRY_CHARS - 1)}…`, truncated: true };
+  return { message: `${truncateUtf16Safe(redacted, MAX_ENTRY_CHARS - 1)}…`, truncated: true };
 }
 
 function trimSummary(value: string | undefined): string | undefined {
@@ -96,7 +113,7 @@ function trimSummary(value: string | undefined): string | undefined {
   if (normalized.length <= MAX_SUMMARY_CHARS) {
     return normalized;
   }
-  return `${normalized.slice(0, MAX_SUMMARY_CHARS - 1)}…`;
+  return `${truncateUtf16Safe(normalized, MAX_SUMMARY_CHARS - 1)}…`;
 }
 
 /** Returns the operator-facing summary for persisted cron diagnostics. */
@@ -230,8 +247,37 @@ export function createCronRunDiagnosticsFromError(
   );
 }
 
+/** Reports a cron preflight warning for an explicitly allowed web_search with no provider. */
+export function createCronRunDiagnosticsFromMissingWebSearchProvider(params: {
+  toolsAllow?: string[];
+  hasWebSearchProvider: boolean;
+  nowMs?: () => number;
+}): CronRunDiagnostics | undefined {
+  if (params.hasWebSearchProvider || !params.toolsAllow || params.toolsAllow.length === 0) {
+    return undefined;
+  }
+  if (!toolsAllowRequestsWebSearch(params.toolsAllow)) {
+    return undefined;
+  }
+  return normalizeCronRunDiagnostics(
+    {
+      summary: MISSING_WEB_SEARCH_PROVIDER_DIAGNOSTIC_MESSAGE,
+      entries: [
+        {
+          ts: params.nowMs?.() ?? Date.now(),
+          source: "cron-preflight",
+          severity: "warn",
+          message: MISSING_WEB_SEARCH_PROVIDER_DIAGNOSTIC_MESSAGE,
+          toolName: WEB_SEARCH_TOOL_NAME,
+        },
+      ],
+    },
+    { nowMs: params.nowMs },
+  );
+}
+
 /** Extracts failed exec details from tool metadata into cron diagnostics. */
-export function createCronRunDiagnosticsFromExecDetails(
+function createCronRunDiagnosticsFromExecDetails(
   details: unknown,
   opts?: {
     nowMs?: () => number;
@@ -273,7 +319,7 @@ export function createCronRunDiagnosticsFromExecDetails(
 }
 
 /** Extracts tool-call failure diagnostics from an agent reply payload. */
-export function createCronRunDiagnosticsFromToolPayload(
+function createCronRunDiagnosticsFromToolPayload(
   payload: unknown,
   opts?: { nowMs?: () => number; finalStatus?: "ok" | "error" | "skipped" },
 ): CronRunDiagnostics | undefined {

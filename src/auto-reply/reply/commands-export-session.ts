@@ -2,15 +2,19 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readAcpSessionMetaForEntry } from "../../acp/runtime/session-meta.js";
 import {
   migrateSessionEntries,
   type FileEntry as SessionFileEntry,
   type SessionEntry as AgentSessionEntry,
   type SessionHeader,
+  type SessionMessageEntry,
 } from "../../agents/sessions/session-manager.js";
+import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import { scanSessionTranscriptTree } from "../../config/sessions/transcript-tree.js";
-import { pathExists } from "../../infra/fs-safe.js";
+import type { SessionEntry as StoredSessionEntry } from "../../config/sessions/types.js";
 import type { ReplyPayload } from "../types.js";
 import {
   isReplyPayload,
@@ -30,15 +34,68 @@ interface SessionData {
   hasLeafControl: boolean;
   systemPrompt?: string;
   tools?: Array<{ name: string; description?: string; parameters?: unknown }>;
+  warning?: string;
 }
 
-type SessionExportJsonlWarning = {
-  code: "invalid-session-json" | "invalid-session-row";
+const BACKEND_DELEGATED_WARNING =
+  "This session was handled by a backend runtime (e.g. CLI/ACP). Assistant replies, tool calls, and usage data are stored in the backend transcript and are not included in this export.";
+
+function hasNonEmptyString(value: unknown): boolean {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function hasBackendSession(entry: StoredSessionEntry, hasStoredAcpSession: boolean): boolean {
+  return (
+    hasStoredAcpSession ||
+    hasNonEmptyString(entry.claudeCliSessionId) ||
+    Object.values(entry.cliSessionBindings ?? {}).some((binding) =>
+      hasNonEmptyString(binding?.sessionId),
+    ) ||
+    Object.values(entry.cliSessionIds ?? {}).some(hasNonEmptyString)
+  );
+}
+
+function hasPersistedAcpSession(params: {
+  sessionKey: string;
+  entry: StoredSessionEntry;
+}): boolean {
+  if (params.entry.acp) {
+    return true;
+  }
+  try {
+    return Boolean(readAcpSessionMetaForEntry(params));
+  } catch {
+    return false;
+  }
+}
+
+function isBackendDelegatedSession(
+  entry: StoredSessionEntry,
+  entries: AgentSessionEntry[],
+  hasStoredAcpSession: boolean,
+): boolean {
+  if (!hasBackendSession(entry, hasStoredAcpSession)) {
+    return false;
+  }
+  if (entries.length === 0) {
+    return false;
+  }
+  const messages = entries.filter(
+    (transcriptEntry): transcriptEntry is SessionMessageEntry => transcriptEntry.type === "message",
+  );
+  return (
+    messages.length > 0 &&
+    messages.every((transcriptEntry) => transcriptEntry.message.role === "user")
+  );
+}
+
+type SessionExportEventWarning = {
+  code: "invalid-session-row";
   row: number;
 };
 
 type SessionExportWarningSummary = {
-  code: SessionExportJsonlWarning["code"];
+  code: "invalid-session-json" | "invalid-session-row";
   count: number;
   rows: number[];
 };
@@ -135,7 +192,15 @@ async function generateHtml(sessionData: SessionData): Promise<string> {
     ["MARKED_JS", markedJs],
     ["HIGHLIGHT_JS", hljsJs],
     ["JS", templateJs],
-  ].reduce((html, [name, value]) => replaceHtmlPlaceholder(html, name, value), template);
+  ].reduce(
+    (html, [name, value]) =>
+      replaceHtmlPlaceholder(
+        html,
+        expectDefined(name, "commands export session name"),
+        expectDefined(value, "commands export session value"),
+      ),
+    template,
+  );
 }
 
 function addCollisionSuffix(filePath: string, suffix: number): string {
@@ -171,36 +236,26 @@ function isSessionFileEntry(value: unknown): value is SessionFileEntry {
   return isRecord(message) && typeof message.role === "string";
 }
 
-function parseSessionEntriesWithWarnings(content: string): {
+function filterSessionEntriesWithWarnings(events: unknown[]): {
   entries: SessionFileEntry[];
-  warnings: SessionExportJsonlWarning[];
+  warnings: SessionExportEventWarning[];
 } {
   const entries: SessionFileEntry[] = [];
-  const warnings: SessionExportJsonlWarning[] = [];
-  const rows = content.split(/\r?\n/u);
-  for (const [index, rawLine] of rows.entries()) {
-    const line = rawLine.trim();
-    if (!line) {
+  const warnings: SessionExportEventWarning[] = [];
+  for (const [index, event] of events.entries()) {
+    if (isSessionFileEntry(event)) {
+      entries.push(event);
       continue;
     }
-    try {
-      const parsed = JSON.parse(line) as unknown;
-      if (!isSessionFileEntry(parsed)) {
-        warnings.push({ code: "invalid-session-row", row: index + 1 });
-        continue;
-      }
-      entries.push(parsed);
-    } catch {
-      warnings.push({ code: "invalid-session-json", row: index + 1 });
-    }
+    warnings.push({ code: "invalid-session-row", row: index + 1 });
   }
   return { entries, warnings };
 }
 
 function summarizeSessionExportWarnings(
-  warnings: SessionExportJsonlWarning[],
+  warnings: SessionExportEventWarning[],
 ): SessionExportWarningSummary[] {
-  const summaries = new Map<SessionExportJsonlWarning["code"], SessionExportWarningSummary>();
+  const summaries = new Map<SessionExportEventWarning["code"], SessionExportWarningSummary>();
   for (const warning of warnings) {
     const summary = summaries.get(warning.code);
     if (summary) {
@@ -238,15 +293,33 @@ function formatSessionExportWarning(summary: SessionExportWarningSummary): strin
   return unreachable;
 }
 
-async function readSessionDataFromTranscript(sessionFile: string): Promise<{
+async function readSessionDataFromIdentity(params: {
+  agentId: string;
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+}): Promise<{
   header: SessionHeader | null;
   entries: AgentSessionEntry[];
   leafId: string | null;
   hasLeafControl: boolean;
   warnings: SessionExportWarningSummary[];
 }> {
-  const raw = await fsp.readFile(sessionFile, "utf-8");
-  const { entries: fileEntries, warnings } = parseSessionEntriesWithWarnings(raw);
+  const events = await loadTranscriptEvents(params);
+  const { entries, warnings } = filterSessionEntriesWithWarnings(events);
+  return readSessionDataFromEntries(entries, summarizeSessionExportWarnings(warnings));
+}
+
+function readSessionDataFromEntries(
+  fileEntries: SessionFileEntry[],
+  warnings: SessionExportWarningSummary[],
+): {
+  header: SessionHeader | null;
+  entries: AgentSessionEntry[];
+  leafId: string | null;
+  hasLeafControl: boolean;
+  warnings: SessionExportWarningSummary[];
+} {
   migrateSessionEntries(fileEntries);
   const header =
     fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
@@ -268,7 +341,7 @@ async function readSessionDataFromTranscript(sessionFile: string): Promise<{
     entries,
     leafId: tree.leafId,
     hasLeafControl,
-    warnings: summarizeSessionExportWarnings(warnings),
+    warnings,
   };
 }
 
@@ -284,15 +357,16 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
   if (isReplyPayload(sessionTarget)) {
     return sessionTarget;
   }
-  const { entry, sessionFile } = sessionTarget;
+  const { entry } = sessionTarget;
 
-  if (!(await pathExists(sessionFile))) {
-    return { text: `❌ Session file not found: ${sessionFile}` };
-  }
-
-  // 2. Load session entries
-  const { entries, header, leafId, hasLeafControl, warnings } =
-    await readSessionDataFromTranscript(sessionFile);
+  // Active exports run after startup migration, so SQLite rows are canonical.
+  // Do not read sessionFile here; a SQLite marker is an identifier, not a path.
+  const { entries, header, leafId, hasLeafControl, warnings } = await readSessionDataFromIdentity({
+    agentId: sessionTarget.agentId,
+    sessionId: sessionTarget.sessionId,
+    sessionKey: sessionTarget.sessionKey,
+    storePath: sessionTarget.storePath,
+  });
 
   // 3. Build full system prompt
   const { systemPrompt, tools } = await resolveCommandsSystemPromptBundle({
@@ -301,6 +375,13 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
   });
 
   // 4. Prepare session data
+  const hasStoredAcpSession = hasPersistedAcpSession({
+    sessionKey: params.sessionKey,
+    entry,
+  });
+  const backendWarning = isBackendDelegatedSession(entry, entries, hasStoredAcpSession)
+    ? BACKEND_DELEGATED_WARNING
+    : undefined;
   const sessionData: SessionData = {
     header,
     entries,
@@ -312,6 +393,7 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
       description: t.description,
       parameters: t.parameters,
     })),
+    warning: backendWarning,
   };
 
   // 5. Generate HTML
@@ -349,6 +431,7 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
       `📄 File: ${displayPath}`,
       `📊 Entries: ${entries.length}`,
       ...warnings.map(formatSessionExportWarning),
+      ...(backendWarning ? [`⚠️ ${backendWarning}`] : []),
       `🧠 System prompt: ${systemPrompt.length.toLocaleString()} chars`,
       `🔧 Tools: ${tools.length}`,
     ].join("\n"),

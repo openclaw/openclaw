@@ -5,6 +5,7 @@
  */
 import { normalizeInboundPathRoots } from "@openclaw/media-core/inbound-path-policy";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { parseBoolean } from "@openclaw/normalization-core/boolean-coercion";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -470,20 +471,7 @@ export function readBooleanToolParam(
   params: Record<string, unknown>,
   key: string,
 ): boolean | undefined {
-  const raw = readSnakeCaseParamRaw(params, key);
-  if (typeof raw === "boolean") {
-    return raw;
-  }
-  if (typeof raw === "string") {
-    const normalized = normalizeOptionalLowercaseString(raw);
-    if (normalized === "true") {
-      return true;
-    }
-    if (normalized === "false") {
-      return false;
-    }
-  }
-  return undefined;
+  return parseBoolean(readSnakeCaseParamRaw(params, key));
 }
 
 /**
@@ -684,7 +672,17 @@ export async function resolveModelRuntimeApiKey(params: {
     model: params.model,
     cfg: params.cfg,
     agentDir: params.agentDir,
+    secretSentinels: true,
   });
+  // Bedrock's runtime client owns AWS credential-chain resolution. Keep the
+  // empty sentinel out of auth storage and pass it through to the stream.
+  if (
+    !apiKeyInfo.apiKey?.trim() &&
+    apiKeyInfo.mode === "aws-sdk" &&
+    params.model.api === "bedrock-converse-stream"
+  ) {
+    return "";
+  }
   const apiKey = requireApiKey(apiKeyInfo, params.model.provider);
   params.authStorage.setRuntimeApiKey(params.model.provider, apiKey);
   return apiKey;

@@ -1,4 +1,6 @@
 // Verifies session tool-result guard inserts, truncates, and repairs tool results.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { describe, expect, it } from "vitest";
@@ -457,8 +459,12 @@ describe("installSessionToolResultGuard", () => {
 
   it("blocks persistence when before_message_write returns block=true", () => {
     const sm = SessionManager.inMemory();
+    const blockedUserMessages: AgentMessage[] = [];
     installSessionToolResultGuard(sm, {
       beforeMessageWriteHook: () => ({ block: true }),
+      onUserMessageBlocked: (message) => {
+        blockedUserMessages.push(message);
+      },
     });
 
     sm.appendMessage(
@@ -470,6 +476,8 @@ describe("installSessionToolResultGuard", () => {
     );
 
     expect(getPersistedMessages(sm)).toHaveLength(0);
+    expect(blockedUserMessages).toHaveLength(1);
+    expect(blockedUserMessages[0]).toMatchObject({ role: "user", content: "hidden" });
   });
 
   it("applies before_message_write message mutations before persistence", () => {
@@ -531,7 +539,9 @@ describe("installSessionToolResultGuard", () => {
       };
     };
     const serializedToolResult = JSON.stringify(toolResult);
-    expect(toolResult.content[0].text).not.toContain("sk-abcdef1234567890xyz");
+    expect(
+      expectDefined(toolResult.content[0], "toolResult.content[0] test invariant").text,
+    ).not.toContain("sk-abcdef1234567890xyz");
     expect(serializedToolResult).not.toContain("plainsecretvalue123");
     expect(serializedToolResult).not.toContain("hunter2");
     expect(serializedToolResult).not.toContain("nestedplainsecret123");

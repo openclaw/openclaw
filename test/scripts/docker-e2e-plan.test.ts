@@ -1,14 +1,21 @@
 // Docker E2E Plan tests cover docker e2e plan script behavior.
-import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
+import { copyFileSync, mkdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   DEFAULT_LIVE_RETRIES,
   RELEASE_PATH_PROFILE,
   parseLaneSelection,
   resolveDockerE2ePlan,
 } from "../../scripts/lib/docker-e2e-plan.mjs";
-import { BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS } from "../../scripts/lib/docker-e2e-scenarios.mjs";
+import {
+  allReleasePathLanes,
+  BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS,
+} from "../../scripts/lib/docker-e2e-scenarios.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const orderLanes = <T>(lanes: T[]) => lanes;
 const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
   scripts?: Record<string, string>;
@@ -97,6 +104,93 @@ function bundledPluginSweepLane(index: number): ReturnType<typeof summarizeLane>
 }
 
 describe("scripts/lib/docker-e2e-plan", () => {
+  it("routes live Docker scripts through the nested trusted release harness", () => {
+    const sourceLane = allReleasePathLanes({ releaseProfile: "beta" }).find(
+      (candidate) => candidate.name === "live-codex-npm-plugin",
+    );
+    const tempRoot = tempDirs.make("openclaw-release-harness-");
+    const nestedModule = join(
+      tempRoot,
+      ".release-harness",
+      "scripts",
+      "lib",
+      "docker-e2e-scenarios.mjs",
+    );
+
+    expect(sourceLane?.command).toContain(
+      'harness="${OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR:-.}"',
+    );
+
+    mkdirSync(dirname(nestedModule), { recursive: true });
+    copyFileSync("scripts/lib/docker-e2e-scenarios.mjs", nestedModule);
+
+    const laneJson = execFileSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        `
+            import { pathToFileURL } from "node:url";
+            const scenarios = await import(pathToFileURL(process.argv[1]).href);
+            const lane = scenarios
+              .allReleasePathLanes({ releaseProfile: "beta" })
+              .find((candidate) => candidate.name === "live-codex-npm-plugin");
+            process.stdout.write(JSON.stringify(lane));
+          `,
+        nestedModule,
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_DOCKER_E2E_REPO_ROOT: tempRoot,
+        },
+      },
+    );
+    const lane = JSON.parse(laneJson) as { command: string };
+
+    expect(lane.command).toContain(
+      'harness="${OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR:-.release-harness}"',
+    );
+    expect(lane.command).toContain('bash "$harness/scripts/e2e/codex-npm-plugin-live-docker.sh"');
+  });
+
+  it("plans package-backed Compose and package artifact proofs", () => {
+    const plan = planFor({
+      selectedLaneNames: ["compose-setup", "docker-package-install"],
+    });
+
+    expect(plan.lanes.map(summarizeLane)).toEqual([
+      {
+        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:compose-setup",
+        imageKind: "functional",
+        live: false,
+        name: "compose-setup",
+        resources: ["docker", "service"],
+        stateScenario: "empty",
+        timeoutMs: 1_200_000,
+        weight: 3,
+      },
+      {
+        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:package-install",
+        imageKind: "bare",
+        live: false,
+        name: "docker-package-install",
+        resources: ["docker", "npm"],
+        stateScenario: "empty",
+        timeoutMs: 1_200_000,
+        weight: 3,
+      },
+    ]);
+    expect(plan.needs).toEqual({
+      bareImage: true,
+      e2eImage: true,
+      functionalImage: true,
+      liveImage: false,
+      package: true,
+    });
+  });
+
   it("plans the full release path against package-backed e2e images", () => {
     const plan = planFor({
       includeOpenWebUI: false,
@@ -145,7 +239,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     });
 
     expect(withoutOpenWebUI.lanes.map((lane) => lane.name)).not.toContain("openwebui");
-    expect(withOpenWebUI.lanes.map((lane) => lane.name)).toContain("openwebui");
+    expect(withOpenWebUI.lanes.filter((lane) => lane.name === "openwebui")).toHaveLength(1);
   });
 
   it("keeps beta release-path coverage to install, provider, and update proof lanes", () => {
@@ -227,6 +321,11 @@ describe("scripts/lib/docker-e2e-plan", () => {
       includeOpenWebUI: true,
       profile: RELEASE_PATH_PROFILE,
       releaseChunk: "plugins-runtime-services",
+    });
+    const openWebUI = planFor({
+      includeOpenWebUI: true,
+      profile: RELEASE_PATH_PROFILE,
+      releaseChunk: "openwebui",
     });
     const pluginsRuntimeInstallA = planFor({
       includeOpenWebUI: true,
@@ -421,6 +520,8 @@ describe("scripts/lib/docker-e2e-plan", () => {
         timeoutMs: 1_200_000,
         weight: 3,
       },
+    ]);
+    expect(openWebUI.lanes.map(summarizeLane)).toEqual([
       {
         command:
           "OPENCLAW_OPENWEBUI_MODEL=openai/gpt-5.4-mini OPENCLAW_OPENWEBUI_PROVIDER_TIMEOUT_SECONDS=300 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui",
@@ -486,10 +587,9 @@ describe("scripts/lib/docker-e2e-plan", () => {
     const scripts = packageJson.scripts ?? {};
     const missing = plan.lanes
       .flatMap((lane) =>
-        Array.from(lane.command.matchAll(/\bpnpm\s+(test:docker:[\w:-]+)/gu), (match) => ({
-          lane: lane.name,
-          script: match[1],
-        })),
+        Array.from(lane.command.matchAll(/\bpnpm\s+(test:docker:[\w:-]+)/gu)).flatMap((match) =>
+          match[1] === undefined ? [] : [{ lane: lane.name, script: match[1] }],
+        ),
       )
       .filter(({ script }) => !scripts[script]);
 
@@ -554,6 +654,34 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "plugin-update",
       "openwebui",
     ]);
+  });
+
+  it("includes OpenWebUI exactly once in each legacy plugin aggregate", () => {
+    for (const releaseChunk of [
+      "plugins-runtime-core",
+      "plugins-runtime",
+      "plugins-integrations",
+    ]) {
+      const withOpenWebUI = planFor({
+        includeOpenWebUI: true,
+        profile: RELEASE_PATH_PROFILE,
+        releaseChunk,
+      });
+      const withoutOpenWebUI = planFor({
+        includeOpenWebUI: false,
+        profile: RELEASE_PATH_PROFILE,
+        releaseChunk,
+      });
+
+      expect(
+        withOpenWebUI.lanes.filter((lane) => lane.name === "openwebui"),
+        releaseChunk,
+      ).toHaveLength(1);
+      expect(
+        withoutOpenWebUI.lanes.map((lane) => lane.name),
+        releaseChunk,
+      ).not.toContain("openwebui");
+    }
   });
 
   it("expands the published upgrade survivor lane across deduped baselines", () => {
@@ -963,7 +1091,6 @@ describe("scripts/lib/docker-e2e-plan", () => {
         "cron-mcp-cleanup",
         "agent-bundle-mcp-tools",
         "crestodian-first-run",
-        "crestodian-planner",
         "crestodian-rescue",
         "config-reload",
         "plugin-update",
@@ -993,7 +1120,6 @@ describe("scripts/lib/docker-e2e-plan", () => {
       { name: "cron-mcp-cleanup", stateScenario: "empty" },
       { name: "agent-bundle-mcp-tools", stateScenario: "empty" },
       { name: "crestodian-first-run", stateScenario: "empty" },
-      { name: "crestodian-planner", stateScenario: "empty" },
       { name: "crestodian-rescue", stateScenario: "empty" },
       { name: "config-reload", stateScenario: "empty" },
       { name: "plugin-update", stateScenario: "empty" },

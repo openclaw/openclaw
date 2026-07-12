@@ -68,7 +68,10 @@ vi.mock("./agent-runner-execution.js", () => ({
 }));
 
 vi.mock("./agent-runner-memory.js", () => ({
-  runMemoryFlushIfNeeded: async ({ sessionEntry }: { sessionEntry?: unknown }) => sessionEntry,
+  runMemoryFlushIfNeeded: async ({ sessionEntry }: { sessionEntry?: unknown }) => ({
+    sessionEntry,
+    outcome: "skipped",
+  }),
   runPreflightCompactionIfNeeded: async ({ sessionEntry }: { sessionEntry?: unknown }) =>
     sessionEntry,
 }));
@@ -102,7 +105,11 @@ const { runReplyAgent } = await import("./agent-runner.js");
 function createReplyOperation(): ReplyOperation {
   return {
     result: undefined,
+    startedAtMs: Date.now(),
+    lastActivityAtMs: Date.now(),
+    recordActivity: vi.fn(),
     setPhase: vi.fn(),
+    freezeAbort: vi.fn(),
     fail: vi.fn(),
     complete: vi.fn(),
     completeThen: vi.fn(),

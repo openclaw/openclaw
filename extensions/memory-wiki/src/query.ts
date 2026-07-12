@@ -831,8 +831,9 @@ function buildDigestCandidatePaths(params: {
           (left, right) =>
             scoreDigestClaimMatch(right, queryLower) - scoreDigestClaimMatch(left, queryLower),
         );
-      if (matchingClaims.length > 0) {
-        score += scoreDigestClaimMatch(matchingClaims[0], queryLower);
+      const [bestMatchingClaim] = matchingClaims;
+      if (bestMatchingClaim) {
+        score += scoreDigestClaimMatch(bestMatchingClaim, queryLower);
         score += Math.min(10, (matchingClaims.length - 1) * 2);
       }
       score += scoreDigestSearchModeBoost({
@@ -936,8 +937,9 @@ function scorePage(page: QueryableWikiPage, query: string, mode: WikiSearchMode)
       queryLower,
     });
   const matchingClaims = getMatchingClaims(page, queryLower);
-  if (matchingClaims.length > 0) {
-    score += rankClaimMatch(page, matchingClaims[0], queryLower, queryTokens);
+  const [bestMatchingClaim] = matchingClaims;
+  if (bestMatchingClaim) {
+    score += rankClaimMatch(page, bestMatchingClaim, queryLower, queryTokens);
     score += Math.min(10, (matchingClaims.length - 1) * 2);
   }
   score += scorePageSearchModeBoost({
@@ -1077,6 +1079,16 @@ async function resolveActiveMemoryManager(params: {
   } catch {
     return null;
   }
+}
+
+// Registered managers come from the active memory plugin; nothing enforces
+// the MemorySearchManager contract at runtime, so a partial manager would
+// otherwise surface as "... is not a function" from inside the bundle.
+function buildMemoryManagerContractError(method: "search" | "readFile"): Error {
+  return new Error(
+    `The active memory plugin's search manager does not implement ${method}() from the MemorySearchManager contract. ` +
+      `Set search.backend to "local" for wiki-only access, or use a memory plugin that implements the contract.`,
+  );
 }
 
 function buildMemorySearchTitle(resultPath: string): string {
@@ -1498,6 +1510,9 @@ export async function searchMemoryWiki(params: {
         agentSessionKey: params.agentSessionKey,
       })
     : null;
+  if (sharedMemoryManager && typeof sharedMemoryManager.search !== "function") {
+    throw buildMemoryManagerContractError("search");
+  }
   let rawMemoryResults = sharedMemoryManager
     ? await sharedMemoryManager.search(params.query, { maxResults })
     : [];
@@ -1594,6 +1609,9 @@ export async function getMemoryWikiPage(params: {
   });
   if (!manager) {
     return null;
+  }
+  if (typeof manager.readFile !== "function") {
+    throw buildMemoryManagerContractError("readFile");
   }
 
   const lookupCandidates = buildLookupCandidates(params.lookup);

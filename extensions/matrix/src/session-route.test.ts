@@ -2,7 +2,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { saveSessionStore, type SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "./runtime-api.js";
 import { resolveMatrixOutboundSessionRoute } from "./session-route.js";
@@ -32,7 +33,9 @@ async function createTempStore(entries: Record<string, SessionEntry>): Promise<s
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-session-route-"));
   tempDirs.add(tempDir);
   const storePath = path.join(tempDir, "sessions.json");
-  await saveSessionStore(storePath, entries, { skipMaintenance: true });
+  for (const [sessionKey, entry] of Object.entries(entries)) {
+    await upsertSessionEntry({ sessionKey, storePath, entry });
+  }
   return storePath;
 }
 
@@ -155,6 +158,7 @@ function expectCurrentDmRoomRoute(route: ReturnType<typeof resolveMatrixOutbound
   expect(currentRoute.chatType).toBe("direct");
   expect(currentRoute.from).toBe("matrix:@alice:example.org");
   expect(currentRoute.to).toBe("room:!dm:example.org");
+  expect(currentRoute.recipientSessionExact).toBe(true);
 }
 
 function expectFallbackUserRoute(
@@ -172,6 +176,7 @@ function expectFallbackUserRoute(
   expect(fallbackRoute.chatType).toBe("direct");
   expect(fallbackRoute.from).toBe(`matrix:${userId}`);
   expect(fallbackRoute.to).toBe(`room:${userId}`);
+  expect(fallbackRoute.recipientSessionExact).toBe(false);
 }
 
 function expectRoute(route: ReturnType<typeof resolveMatrixOutboundSessionRoute>) {
@@ -292,6 +297,26 @@ describe("resolveMatrixOutboundSessionRoute", () => {
     expect(channelRoute.threadId).toBe("$RootEvent:Example.Org");
   });
 
+  it("does not claim room aliases as canonical inbound session ids", () => {
+    const route = resolveMatrixOutboundSessionRoute({
+      cfg: {},
+      agentId: "main",
+      target: "#ops:example.org",
+    });
+
+    expect(route?.recipientSessionExact).toBe(false);
+  });
+
+  it("does not claim room ids when DMs are keyed by user identity", () => {
+    const route = resolveMatrixOutboundSessionRoute({
+      cfg: {},
+      agentId: "main",
+      target: "!ops:example.org",
+    });
+
+    expect(route?.recipientSessionExact).toBe(false);
+  });
+
   it("resolves per-room DM metadata from the base key when currentSessionKey has a thread suffix", async () => {
     const storedSession = createStoredDirectDmSession();
     const route = resolveUserRoute({
@@ -340,5 +365,6 @@ describe("resolveMatrixOutboundSessionRoute", () => {
     expect(dmRoute.sessionKey).toBe("agent:main:main");
     expect(dmRoute.baseSessionKey).toBe("agent:main:main");
     expect(dmRoute.threadId).toBeUndefined();
+    expect(dmRoute.recipientSessionExact).toBe(true);
   });
 });

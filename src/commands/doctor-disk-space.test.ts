@@ -1,6 +1,12 @@
 // Doctor disk-space tests cover byte formatting, warning generation, and note rendering.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import { buildDiskSpaceWarnings, formatBytes, noteDiskSpace } from "./doctor-disk-space.js";
+import {
+  buildDiskSpaceWarnings,
+  collectDiskSpaceHealthFindings,
+  formatBytes,
+  noteDiskSpace,
+} from "./doctor-disk-space.js";
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: vi.fn(),
@@ -121,7 +127,10 @@ describe("noteDiskSpace", () => {
     });
 
     expect(mockNote).toHaveBeenCalledOnce();
-    const [message, title] = vi.mocked(mockNote).mock.calls[0];
+    const [message, title] = expectDefined(
+      vi.mocked(mockNote).mock.calls[0],
+      "vi.mocked(mockNote).mock.calls[0] test invariant",
+    );
     expect(title).toBe("Disk space");
     expect(message).toContain("Low disk space");
   });
@@ -136,7 +145,10 @@ describe("noteDiskSpace", () => {
     });
 
     expect(mockNote).toHaveBeenCalledOnce();
-    const [message] = vi.mocked(mockNote).mock.calls[0];
+    const [message] = expectDefined(
+      vi.mocked(mockNote).mock.calls[0],
+      "vi.mocked(mockNote).mock.calls[0] test invariant",
+    );
     expect(message).toContain("CRITICAL");
   });
 
@@ -162,5 +174,63 @@ describe("noteDiskSpace", () => {
     });
 
     expect(mockNote).not.toHaveBeenCalled();
+  });
+});
+
+describe("collectDiskSpaceHealthFindings", () => {
+  it("returns a low-space warning finding", () => {
+    const findings = collectDiskSpaceHealthFindings({ gateway: { mode: "local" } } as never, {
+      env: { HOME: "/home/test" },
+      readDiskSpace: () => ({ availableBytes: 300 * 1024 * 1024 }),
+    });
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/disk-space",
+        severity: "warning",
+        message: "Low disk space: 300 MB free on the partition containing /home/test/.openclaw.",
+        path: "/home/test/.openclaw",
+        target: "300 MB",
+        requirement: "low-free-space",
+        fixHint: expect.stringContaining("prevent future config/session write failures"),
+      }),
+    ]);
+  });
+
+  it("returns a critical-space warning finding", () => {
+    const findings = collectDiskSpaceHealthFindings({ gateway: { mode: "local" } } as never, {
+      env: { HOME: "/home/test" },
+      readDiskSpace: () => ({ availableBytes: 50 * 1024 * 1024 }),
+    });
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/disk-space",
+        severity: "warning",
+        message: "CRITICAL: only 50 MB free on the partition containing /home/test/.openclaw.",
+        path: "/home/test/.openclaw",
+        target: "50 MB",
+        requirement: "critical-free-space",
+        fixHint: expect.stringContaining("avoid data loss"),
+      }),
+    ]);
+  });
+
+  it("returns no finding when space is sufficient", () => {
+    const findings = collectDiskSpaceHealthFindings({ gateway: { mode: "local" } } as never, {
+      env: { HOME: "/home/test" },
+      readDiskSpace: () => ({ availableBytes: 10 * 1024 * 1024 * 1024 }),
+    });
+
+    expect(findings).toEqual([]);
+  });
+
+  it("returns no finding when disk space cannot be read", () => {
+    const findings = collectDiskSpaceHealthFindings({ gateway: { mode: "local" } } as never, {
+      env: { HOME: "/home/test" },
+      readDiskSpace: () => null,
+    });
+
+    expect(findings).toEqual([]);
   });
 });
