@@ -631,7 +631,19 @@ describe("gateway session utils", () => {
     expect(row.thinkingLevels?.map((level) => level.id)).toContain("xhigh");
   });
 
-  test("session defaults and rows expose bundled startup-lazy provider thinking without catalog", () => {
+  test("session defaults and rows consume provider-policy thinking without catalog", () => {
+    providerArtifactMocks.resolveBundledProviderPolicySurface.mockReturnValue({
+      resolveThinkingProfile: () => ({
+        levels: [
+          { id: "off" },
+          { id: "minimal" },
+          { id: "low" },
+          { id: "medium" },
+          { id: "high" },
+          { id: "xhigh" },
+        ],
+      }),
+    });
     const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.5" });
 
     const defaults = getSessionDefaults(cfg);
