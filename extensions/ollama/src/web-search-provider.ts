@@ -14,11 +14,11 @@ import {
   resolveProviderWebSearchPluginConfig,
   resolveSearchCount,
   resolveSiteName,
+  resolveWebSearchProviderCredential,
   truncateText,
   wrapWebContent,
   type WebSearchProviderPlugin,
 } from "openclaw/plugin-sdk/provider-web-search";
-import { resolveSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
@@ -68,11 +68,6 @@ type OllamaWebSearchAttempt = {
   apiKey?: string;
 };
 
-type ConfiguredOllamaWebSearchApiKeyResult =
-  | { status: "available"; apiKey: string }
-  | { status: "blocked"; message: string }
-  | { status: "missing" };
-
 async function readOllamaWebSearchResponse(response: Response): Promise<OllamaWebSearchResponse> {
   return await readProviderJsonResponse<OllamaWebSearchResponse>(response, "Ollama web search");
 }
@@ -86,57 +81,38 @@ function isOllamaCloudBaseUrl(baseUrl: string): boolean {
   }
 }
 
-function resolveConfiguredOllamaWebSearchApiKeyResult(
-  config?: OpenClawConfig,
-): ConfiguredOllamaWebSearchApiKeyResult {
-  const resolved = resolveSecretInputString({
-    value: config?.models?.providers?.ollama?.apiKey,
-    defaults: config?.secrets?.defaults,
-    path: "models.providers.ollama.apiKey",
-    mode: "inspect",
-  });
-  if (resolved.status === "missing") {
-    return { status: "missing" };
-  }
-  if (resolved.status === "configured_unavailable") {
-    if (resolved.ref.source !== "env") {
-      // This sync web-search path can only materialize env refs locally.
-      // A configured non-env ref still owns the credential slot, so do not
-      // replace it with ambient env auth from a different account.
-      return {
-        status: "blocked",
-        message:
-          "models.providers.ollama.apiKey SecretRef cannot be resolved by Ollama web search. Use an env SecretRef for this path.",
-      };
-    }
-    const envApiKey = normalizeOptionalSecretInput(process.env[resolved.ref.id]);
-    return envApiKey && !isNonSecretApiKeyMarker(envApiKey)
-      ? { status: "available", apiKey: envApiKey }
-      : {
-          status: "blocked",
-          message: `models.providers.ollama.apiKey env SecretRef ${resolved.ref.id} is not available for Ollama web search.`,
-        };
-  }
-
-  const providerApiKey = normalizeOptionalSecretInput(resolved.value);
-  return providerApiKey && !isNonSecretApiKeyMarker(providerApiKey)
-    ? { status: "available", apiKey: providerApiKey }
-    : { status: "missing" };
+function normalizeOllamaWebSearchApiKey(value: unknown): string | undefined {
+  const apiKey = normalizeOptionalSecretInput(value);
+  return apiKey && !isNonSecretApiKeyMarker(apiKey) ? apiKey : undefined;
 }
 
 function resolveEnvOllamaWebSearchApiKey(): string | undefined {
-  return resolveEnvApiKey("ollama")?.apiKey;
+  return normalizeOllamaWebSearchApiKey(resolveEnvApiKey("ollama")?.apiKey);
+}
+
+function createOllamaWebSearchCredentialError(ref: { source: string; id: string }): Error {
+  return new Error(
+    ref.source === "env"
+      ? `models.providers.ollama.apiKey env SecretRef ${ref.id} is not available for Ollama web search.`
+      : "models.providers.ollama.apiKey SecretRef cannot be resolved by Ollama web search. Use an env SecretRef for this path.",
+  );
+}
+
+function resolveConfiguredOllamaWebSearchApiKey(config?: OpenClawConfig): string | undefined {
+  return resolveWebSearchProviderCredential({
+    credentialValue: config?.models?.providers?.ollama?.apiKey,
+    defaults: config?.secrets?.defaults,
+    path: "models.providers.ollama.apiKey",
+    envVars: [],
+    normalizeCredential: normalizeOllamaWebSearchApiKey,
+    onUnavailableConfiguredRef: (ref) => {
+      throw createOllamaWebSearchCredentialError(ref);
+    },
+  });
 }
 
 function resolveOllamaWebSearchApiKey(config?: OpenClawConfig): string | undefined {
-  const configured = resolveConfiguredOllamaWebSearchApiKeyResult(config);
-  if (configured.status === "available") {
-    return configured.apiKey;
-  }
-  if (configured.status === "blocked") {
-    throw new Error(configured.message);
-  }
-  return resolveEnvOllamaWebSearchApiKey();
+  return resolveConfiguredOllamaWebSearchApiKey(config) ?? resolveEnvOllamaWebSearchApiKey();
 }
 
 function resolveOllamaWebSearchBaseUrl(config?: OpenClawConfig): string {
@@ -215,14 +191,8 @@ async function runOllamaWebSearch(params: {
   }
 
   const baseUrl = resolveOllamaWebSearchBaseUrl(params.config);
-  const configuredApiKeyResult = resolveConfiguredOllamaWebSearchApiKeyResult(params.config);
-  if (configuredApiKeyResult.status === "blocked") {
-    throw new Error(configuredApiKeyResult.message);
-  }
-  const configuredAuth =
-    configuredApiKeyResult.status === "available" ? configuredApiKeyResult.apiKey : undefined;
-  const envAuth =
-    configuredApiKeyResult.status === "missing" ? resolveEnvOllamaWebSearchApiKey() : undefined;
+  const configuredAuth = resolveConfiguredOllamaWebSearchApiKey(params.config);
+  const envAuth = configuredAuth ? undefined : resolveEnvOllamaWebSearchApiKey();
   const count = resolveSearchCount(params.count, DEFAULT_OLLAMA_WEB_SEARCH_COUNT);
   const startedAt = Date.now();
   const body = JSON.stringify({ query, max_results: count });
