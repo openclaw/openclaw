@@ -20,7 +20,6 @@ const PACKAGE_ACCEPTANCE = ".github/workflows/package-acceptance.yml";
 const PLUGIN_PRERELEASE = ".github/workflows/plugin-prerelease.yml";
 const LIVE_E2E = ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml";
 const INSTALL_SMOKE = ".github/workflows/install-smoke.yml";
-const INSTALL_SMOKE_REUSABLE = ".github/workflows/install-smoke-reusable.yml";
 const SHARED_IMAGE_PUBLISHER = ".github/workflows/openclaw-shared-image-publish-reusable.yml";
 const SCHEDULED_LIVE = ".github/workflows/openclaw-scheduled-live-checks.yml";
 const DOCKER_RELEASE = ".github/workflows/docker-release.yml";
@@ -99,7 +98,7 @@ function permissionScopes(...permissions: Array<PermissionMap | undefined>): str
       }
     }
   }
-  return [...scopes].sort();
+  return [...scopes].toSorted();
 }
 
 function reusablePermissionViolations(
@@ -189,6 +188,23 @@ function expectReadOnlyPackagePermission(workflowJob: WorkflowJob): void {
 }
 
 describe("release validation no-push transport", () => {
+  it("builds planned live images locally without entering pull fallback", () => {
+    const workflow = readWorkflow(LIVE_E2E);
+    for (const jobName of [
+      "validate_docker_e2e",
+      "validate_docker_lanes",
+      "validate_docker_openwebui",
+    ]) {
+      const job = workflow.jobs?.[jobName];
+      const runStep = job?.steps?.find((candidate) =>
+        candidate.run?.includes("test-live-build-docker.sh"),
+      );
+
+      expect(runStep?.run, jobName).toContain("OPENCLAW_SKIP_DOCKER_BUILD=0");
+      expect(runStep?.run, jobName).not.toContain("OPENCLAW_DOCKER_BUILD_ON_MISSING=1");
+    }
+  });
+
   it("keeps every local reusable-workflow permission request within its caller ceiling", () => {
     const readOnlyCalls = [
       [PLUGIN_PRERELEASE, "plugin-prerelease-docker-suite"],

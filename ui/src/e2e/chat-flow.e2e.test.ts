@@ -1045,7 +1045,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
     try {
       await page.goto(`${server.baseUrl}chat`);
-      await page.locator(".chat-workspace-open").click();
+      await page.locator(".chat-workspace-toggle").click();
       await page.getByText("AGENTS.md").waitFor({ timeout: 10_000 });
 
       await page.getByRole("button", { name: "Copy path" }).click();
@@ -1116,7 +1116,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.goto(`${server.baseUrl}chat`);
       // Collapsed rails render nothing; the floating opener (with the
       // changed-file badge) is the only pointer affordance.
-      const opener = page.locator(".chat-workspace-open");
+      const opener = page.locator(".chat-workspace-toggle");
       await opener.waitFor({ timeout: 10_000 });
       expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
       expect(await page.locator(".chat-workspace-rail").count()).toBe(0);
@@ -1188,7 +1188,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
     try {
       await page.goto(`${server.baseUrl}chat`);
-      await page.locator(".chat-workspace-open").click();
+      await page.locator(".chat-workspace-toggle").click();
       await page.locator(".chat-workspace-rail__file-name", { hasText: "file-60.ts" }).waitFor({
         timeout: 10_000,
       });
@@ -1826,6 +1826,65 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         .toBeLessThanOrEqual(4);
 
       await gateway.resolveDeferred("chat.send", { runId, status: "started" });
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
+  it("overlays the scroll-to-bottom affordance without shrinking the transcript", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const baseTs = Date.now() - 100_000;
+    const historyMessages = Array.from({ length: 50 }, (_, index) => ({
+      content: [
+        {
+          text: `Scrollable history ${index}\n${"extra transcript line\n".repeat(4)}`,
+          type: "text",
+        },
+      ],
+      role: index % 2 === 0 ? "assistant" : "user",
+      timestamp: baseTs + index,
+    }));
+    await installMockGateway(page, { historyMessages });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await page.getByText("Scrollable history 49").waitFor({ timeout: 10_000 });
+      await waitForChatScrollIdle(page);
+
+      const readLayout = () =>
+        page.locator(".chat-main").evaluate((container) => {
+          const thread = container.querySelector<HTMLElement>(".chat-thread");
+          const composer = container.querySelector<HTMLElement>(".agent-chat__composer-shell");
+          const button = container.querySelector<HTMLElement>(".chat-scroll-to-bottom");
+          if (!thread || !composer) {
+            throw new Error("expected chat thread and composer");
+          }
+          const threadRect = thread.getBoundingClientRect();
+          const composerRect = composer.getBoundingClientRect();
+          const buttonRect = button?.getBoundingClientRect();
+          return {
+            buttonBottom: buttonRect ? Math.round(buttonRect.bottom) : null,
+            composerTop: Math.round(composerRect.top),
+            threadBottom: Math.round(threadRect.bottom),
+          };
+        });
+
+      const before = await readLayout();
+      expect(before.buttonBottom).toBeNull();
+
+      await scrollChatThreadToTop(page);
+      await page.getByRole("button", { name: "Scroll to latest" }).waitFor({ timeout: 10_000 });
+      const after = await readLayout();
+
+      expect(after.threadBottom).toBe(before.threadBottom);
+      expect(after.composerTop).toBe(before.composerTop);
+      expect(after.buttonBottom).not.toBeNull();
+      expect(after.buttonBottom!).toBeLessThan(after.composerTop);
     } finally {
       await closeBrowserContext(context);
     }
@@ -2550,6 +2609,32 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         text: label.textContent,
       }));
       expect(layout.scrollWidth, JSON.stringify(layout)).toBeGreaterThan(layout.clientWidth);
+
+      await recentRow.dispatchEvent("mouseenter");
+      await page.waitForTimeout(250);
+      expect(await recentLabel.evaluate((label) => label.classList.value)).not.toContain(
+        "hover-marquee--scrolling",
+      );
+      await recentRow.dispatchEvent("mouseleave");
+      await page.waitForTimeout(300);
+      expect(await recentLabel.evaluate((label) => label.classList.value)).not.toContain(
+        "hover-marquee--scrolling",
+      );
+      await recentRow.dispatchEvent("mouseenter");
+      await expect
+        .poll(() => recentLabel.evaluate((label) => label.classList.value), { timeout: 1_500 })
+        .toContain("hover-marquee--scrolling");
+      await recentRow.dispatchEvent("mouseleave");
+      await expect
+        .poll(
+          () =>
+            recentLabel.evaluate((label) => ({
+              textIndent: getComputedStyle(label).textIndent,
+              textOverflow: getComputedStyle(label).textOverflow,
+            })),
+          { timeout: 1_500 },
+        )
+        .toEqual({ textIndent: "0px", textOverflow: "ellipsis" });
 
       await recentRow.locator("a.sidebar-recent-session__link").dispatchEvent("click", {
         button: 0,

@@ -8,7 +8,7 @@ import {
   normalizeGatewayClientName,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { listBundledChannelCatalogEntries } from "../channels/bundled-channel-catalog-read.js";
-import { getChatChannelMeta } from "../channels/chat-meta.js";
+import { findChatChannelMeta } from "../channels/chat-meta.js";
 import { getRegisteredChannelPluginMeta, normalizeChatChannelId } from "../channels/registry.js";
 export {
   isDeliverableMessageChannel,
@@ -50,6 +50,20 @@ export function isGatewayCliClient(client?: GatewayClientInfoLike | null): boole
   return normalizeGatewayClientMode(client?.mode) === GATEWAY_CLIENT_MODES.CLI;
 }
 
+/**
+ * Return whether a Gateway client is an ephemeral control-plane connection.
+ * Test-mode clients stay excluded from this list: suites use them as stand-ins
+ * for real clients and assert presence propagation through the full pipeline.
+ */
+export function isEphemeralGatewayClient(client?: GatewayClientInfoLike | null): boolean {
+  const mode = normalizeGatewayClientMode(client?.mode);
+  return (
+    mode === GATEWAY_CLIENT_MODES.CLI ||
+    mode === GATEWAY_CLIENT_MODES.BACKEND ||
+    mode === GATEWAY_CLIENT_MODES.PROBE
+  );
+}
+
 /** Return whether a client is one of the operator UI clients. */
 export function isOperatorUiClient(client?: GatewayClientInfoLike | null): boolean {
   const clientId = normalizeGatewayClientName(client?.id);
@@ -89,7 +103,7 @@ export function isMarkdownCapableMessageChannel(raw?: string | null): boolean {
   }
   const builtInChannel = normalizeChatChannelId(channel);
   if (builtInChannel) {
-    const builtInMeta = getChatChannelMeta(builtInChannel);
+    const builtInMeta = findChatChannelMeta(builtInChannel);
     if (builtInMeta) {
       return builtInMeta.markdownCapable === true;
     }

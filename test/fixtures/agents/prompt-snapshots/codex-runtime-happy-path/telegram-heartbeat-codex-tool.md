@@ -41,7 +41,6 @@
   "agents": {
     "defaults": {
       "heartbeat": {
-        "enabled": true,
         "every": "30m"
       }
     }
@@ -49,23 +48,6 @@
   "messages": {
     "groupChat": {
       "visibleReplies": "message_tool"
-    }
-  },
-  "tools": {
-    "profiles": {
-      "coding": {
-        "allow": [
-          "message",
-          "heartbeat_respond",
-          "sessions_spawn",
-          "sessions_list",
-          "sessions_yield",
-          "cron",
-          "memory_search",
-          "memory_get",
-          "session_status"
-        ]
-      }
     }
   }
 }
@@ -98,6 +80,7 @@
     "gateway",
     "sessions_list",
     "sessions_history",
+    "sessions_search",
     "sessions_send",
     "subagents",
     "session_status",
@@ -226,20 +209,20 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 54624,
-    "roughTokens": 13656
+    "chars": 56211,
+    "roughTokens": 14053
   },
   "openClawDeveloperInstructions": {
-    "chars": 2155,
-    "roughTokens": 539
+    "chars": 2172,
+    "roughTokens": 543
   },
   "totalTextOnly": {
-    "chars": 27195,
-    "roughTokens": 6799
+    "chars": 27212,
+    "roughTokens": 6803
   },
   "totalWithDynamicToolsJson": {
-    "chars": 81821,
-    "roughTokens": 20456
+    "chars": 83425,
+    "roughTokens": 20857
   },
   "userInputText": {
     "chars": 1271,
@@ -426,7 +409,7 @@ Approval policy is currently never. Do not provide the `sandbox_permissions` for
 ````text
 You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.
 
-Deferred searchable OpenClaw dynamic tools available: cron, gateway, heartbeat_respond, nodes, session_status, sessions_history, sessions_list, sessions_send, subagents, tts, web_fetch, web_search. Use `tool_search` to load exact callable specs before use.
+Deferred searchable OpenClaw dynamic tools available: cron, gateway, heartbeat_respond, nodes, session_status, sessions_history, sessions_list, sessions_search, sessions_send, subagents, tts, web_fetch, web_search. Use `tool_search` to load exact callable specs before use.
 
 Use Codex native `spawn_agent` for Codex subagents. `spawn_agent` and the other native collaboration tools may be deferred: when `spawn_agent` is not directly listed, load it with `tool_search` before spawning. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent`.
 
@@ -555,6 +538,7 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
   "gateway",
   "sessions_list",
   "sessions_history",
+  "sessions_search",
   "sessions_send",
   "subagents",
   "session_status",

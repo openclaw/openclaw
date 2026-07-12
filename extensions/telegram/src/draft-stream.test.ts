@@ -2,7 +2,11 @@
 import type { Bot } from "grammy";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTelegramDraftStream } from "./draft-stream.js";
-import { renderTelegramHtmlText, telegramHtmlToPlainTextFallback } from "./format.js";
+import {
+  markdownToTelegramChunks,
+  renderTelegramHtmlText,
+  telegramHtmlToPlainTextFallback,
+} from "./format.js";
 import { buildTelegramRichMarkdown, type TelegramInputRichMessage } from "./rich-message.js";
 
 type TelegramDraftStreamParams = Parameters<typeof createTelegramDraftStream>[0];
@@ -1277,6 +1281,77 @@ describe("createTelegramDraftStream", () => {
       sourceTextMode: "html",
     });
   });
+
+  // Send funnel parity (extensions/telegram/CLAUDE.md): streamed FINAL pages must
+  // land on the exact chunk boundaries the durable reply funnel produces
+  // (delivery.replies.ts buildChunkTextResolver -> markdownToTelegramChunks), so
+  // pagination never splits mid-word, inside an HTML entity, or inside a tag.
+  it.each([
+    {
+      boundary: "mid-word",
+      maxChars: 96,
+      text: Array.from(
+        { length: 18 },
+        (_, index) => `sesquipedalian${index} incontrovertible counterrevolutionaries`,
+      ).join(" "),
+    },
+    {
+      boundary: "mid-entity",
+      maxChars: 96,
+      text: Array.from({ length: 24 }, (_, index) => `alpha & beta < gamma > delta ${index}`).join(
+        "\n",
+      ),
+    },
+    {
+      boundary: "mid-tag",
+      maxChars: 112,
+      text: Array.from(
+        { length: 16 },
+        (_, index) =>
+          `**bold span ${index}** plus [link ${index}](https://example.com/p${index}) and \`code${index}\``,
+      ).join("\n"),
+    },
+    {
+      boundary: "code-block",
+      maxChars: 128,
+      text: [
+        "Intro paragraph before the fence.",
+        "```ts",
+        ...Array.from({ length: 20 }, (_, index) => `const value${index} = compute(${index});`),
+        "```",
+        "Closing paragraph after the fence.",
+      ].join("\n"),
+    },
+  ])(
+    "shares durable chunk boundaries with final draft pagination ($boundary)",
+    async ({ maxChars, text }) => {
+      const api = createMockDraftApi();
+      const expectedChunks = markdownToTelegramChunks(text, maxChars);
+      // Guard the table: a case that fits in one page proves nothing about boundaries.
+      expect(expectedChunks.length).toBeGreaterThan(1);
+      const retainedPageTexts: string[] = [];
+      const stream = createDraftStream(api, {
+        maxChars,
+        onRetainedPage: (page) => retainedPageTexts.push(page.textSnapshot),
+        renderText: (value) => ({
+          text: renderTelegramHtmlText(value),
+          parseMode: "HTML",
+          markdownSource: { text: value },
+        }),
+      });
+
+      stream.update(text);
+      await stream.stop();
+
+      const pages = api.sendMessage.mock.calls.map((call) => call[1]);
+      expect(pages).toEqual(expectedChunks.map((chunk) => chunk.html));
+      // Plain-fallback parity: each page must carry the durable funnel's plainText
+      // projection so an HTML-parse 400 degrades both funnels to identical text.
+      expect([...retainedPageTexts, stream.currentMessageSnapshot?.()?.text]).toEqual(
+        expectedChunks.map((chunk) => chunk.text),
+      );
+    },
+  );
 
   it("paginates one rendered rich-code plan without reparsing Markdown tails", async () => {
     const api = createMockDraftApi();

@@ -662,6 +662,39 @@ describe("waitForAgentJob", () => {
 });
 
 describe("augmentChatHistoryWithCanvasBlocks", () => {
+  it("projects sanitized MCP App detail previews without changing tool content", () => {
+    const preview = {
+      kind: "canvas",
+      view: {
+        id: "cv_app",
+      },
+      presentation: { target: "assistant_message", sandbox: "scripts" },
+      mcpApp: { viewId: "cv_app" },
+    };
+    const toolMessage = {
+      role: "toolResult",
+      toolName: "demo__show",
+      content: [{ type: "text", text: "original tool text" }],
+      details: { mcpAppPreview: preview, secret: "drop-me" },
+    };
+    const assistantMessage = { role: "assistant", content: "Done" };
+
+    const sanitized = sanitizeChatHistoryMessages([toolMessage]);
+    expect(sanitized[0]).toMatchObject({
+      content: [{ type: "text", text: "original tool text" }],
+      details: { mcpAppPreview: preview },
+    });
+    expect(JSON.stringify(sanitized)).not.toContain("drop-me");
+
+    const augmented = augmentChatHistoryWithCanvasBlocks([sanitized[0], assistantMessage]);
+    expect(augmented[1]).toMatchObject({
+      content: [
+        { type: "text", text: "Done" },
+        { type: "canvas", preview: { mcpApp: { viewId: "cv_app" } } },
+      ],
+    });
+  });
+
   it("ignores user messages that merely contain canvas-shaped text", () => {
     const previewJson = JSON.stringify({
       kind: "canvas",
@@ -3716,8 +3749,7 @@ describe("exec approval handlers", () => {
     expect(mockCallArg(resolveRespond)).toBe(false);
     expect(mockCallArg(resolveRespond, 0, 1)).toBeUndefined();
     expectRecordFields(mockCallArg(resolveRespond, 0, 2), {
-      message:
-        "allow-always is unavailable because the effective policy requires approval every time",
+      message: "allow-always is unavailable for this command",
     });
 
     const denyRespond = vi.fn();
@@ -3759,8 +3791,7 @@ describe("exec approval handlers", () => {
     expect(mockCallArg(resolveRespond)).toBe(false);
     expect(mockCallArg(resolveRespond, 0, 1)).toBeUndefined();
     expectRecordFields(mockCallArg(resolveRespond, 0, 2), {
-      message:
-        "allow-always is unavailable because the effective policy requires approval every time",
+      message: "allow-always is unavailable for this command",
     });
 
     const allowOnceRespond = vi.fn();

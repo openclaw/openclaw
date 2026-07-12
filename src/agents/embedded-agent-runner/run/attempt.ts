@@ -16,8 +16,11 @@ import { resolveStorePath } from "../../../config/sessions/paths.js";
 import {
   listSessionEntries,
   loadSessionEntry,
+  loadTranscriptEvents,
+  resolveSessionTranscriptRuntimeReadTarget,
   updateSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
+import { parseSqliteSessionFileMarker } from "../../../config/sessions/sqlite-marker.js";
 import { resolveQuotaSuspensionEntryMaintenance } from "../../../config/sessions/store-maintenance.js";
 import {
   bindOwnedSessionTranscriptWrites,
@@ -26,6 +29,7 @@ import {
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
 import type { SessionEntry as ConfigSessionEntry } from "../../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   assertContextEngineHostSupport,
   OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
@@ -77,7 +81,7 @@ import {
   resolveProviderTextTransforms,
   transformProviderSystemPrompt,
 } from "../../../plugins/provider-runtime.js";
-import { getPluginToolMeta } from "../../../plugins/tools.js";
+import { copyPluginToolMeta, getPluginToolMeta } from "../../../plugins/tools.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
@@ -117,12 +121,16 @@ import {
   toClientToolDefinitions,
   toToolDefinitions,
 } from "../../agent-tool-definition-adapter.js";
-import { recordStructuredReplayTrustForToolCall } from "../../agent-tools.before-tool-call.js";
+import {
+  copyBeforeToolCallHookMarker,
+  recordStructuredReplayTrustForToolCall,
+} from "../../agent-tools.before-tool-call.js";
 import {
   createOpenClawCodingTools,
   resolveProcessToolScopeKey,
   resolveToolLoopDetectionConfig,
 } from "../../agent-tools.js";
+import { getActiveAgentRingZeroTools } from "../../agent-tools.ring-zero-context.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import {
@@ -147,11 +155,13 @@ import {
 } from "../../bootstrap-routing.js";
 import { createCacheTrace } from "../../cache-trace.js";
 import {
+  copyChannelAgentToolMeta,
   getChannelAgentToolMeta,
   listChannelSupportedActions,
   resolveChannelMessageToolHints,
   resolveChannelReactionGuidance,
 } from "../../channel-tools.js";
+import { copyCodeModeControlToolIdentity } from "../../code-mode-control-tools.js";
 import {
   addClientToolsToCodeModeCatalog,
   applyCodeModeCatalog,
@@ -241,7 +251,11 @@ import {
   buildEmptyExplicitToolAllowlistError,
   collectExplicitToolAllowlistSources,
 } from "../../tool-allowlist-guard.js";
-import { collectReplaySafeToolNames, isAgentToolReplaySafe } from "../../tool-replay-safety.js";
+import {
+  collectReplaySafeToolNames,
+  isAgentToolReplaySafe,
+  isAgentToolRestartSafe,
+} from "../../tool-replay-safety.js";
 import { filterRuntimeCompatibleTools } from "../../tool-schema-projection.js";
 import { logRuntimeToolSchemaQuarantine } from "../../tool-schema-quarantine.js";
 import {
@@ -262,6 +276,7 @@ import {
   type ToolSearchCatalogToolExecutor,
   type ToolSearchTargetTranscriptProjection,
 } from "../../tool-search.js";
+import { copyToolTerminalPresentation } from "../../tool-terminal-presentation.js";
 import {
   invalidateComputerFrameIfMissing,
   type ComputerContextEpoch,
@@ -536,6 +551,7 @@ import {
   buildRuntimeContextCustomMessage,
   resolveRuntimeContextPromptParts,
 } from "./runtime-context-prompt.js";
+import { clearToolActivityRun, notifyToolActivity } from "./tool-activity-heartbeat.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 type PreflightRecoveryBudgetSnapshot = Pick<
@@ -682,8 +698,14 @@ function sessionMessagesContainIdempotencyKey(
   );
 }
 
-function flushSessionManagerFile(sessionManager: ReturnType<typeof guardSessionManager>): void {
-  (sessionManager as unknown as { rewriteFile?: () => void }).rewriteFile?.();
+function flushSessionManagerTranscript(
+  sessionManager: ReturnType<typeof guardSessionManager>,
+): void {
+  (
+    sessionManager as unknown as {
+      replacePersistedTranscript?: () => void;
+    }
+  ).replacePersistedTranscript?.();
 }
 
 type OrphanRepairSessionManager = Pick<
@@ -986,6 +1008,91 @@ async function loadAttemptSessionEntryAfterQuotaMaintenance(params: {
   return updated ?? entry;
 }
 
+async function resolveAttemptTrajectorySessionFile(params: {
+  agentId: string;
+  config?: OpenClawConfig;
+  sessionFile: string;
+  sessionId: string;
+  sessionKey?: string;
+  sessionTarget?: EmbeddedRunAttemptParams["sessionTarget"];
+}): Promise<string> {
+  const storePath =
+    params.sessionTarget?.storePath ??
+    resolveStorePath(params.config?.session?.store, { agentId: params.agentId });
+  if (!storePath || !params.sessionKey) {
+    return params.sessionFile;
+  }
+  return (
+    await resolveSessionTranscriptRuntimeReadTarget({
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      storePath,
+    })
+  ).sessionFile;
+}
+
+type ExistingAttemptTranscriptState = {
+  hasBootstrapTranscriptState: boolean;
+  hasFileTranscriptState: boolean;
+};
+
+function isTranscriptMessageEvent(event: unknown): boolean {
+  return (
+    typeof event === "object" &&
+    event !== null &&
+    "type" in event &&
+    (event as { type?: unknown }).type === "message"
+  );
+}
+
+async function resolveExistingAttemptTranscriptState(params: {
+  agentId: string;
+  config?: OpenClawConfig;
+  sessionFile: string;
+  sessionId: string;
+  sessionKey?: string;
+  sessionTarget?: EmbeddedRunAttemptParams["sessionTarget"];
+}): Promise<ExistingAttemptTranscriptState> {
+  const storePath =
+    params.sessionTarget?.storePath ??
+    resolveStorePath(params.config?.session?.store, { agentId: params.agentId });
+  const sqliteMarker = parseSqliteSessionFileMarker(params.sessionFile);
+  let hasBootstrapTranscriptState = false;
+  if (storePath && params.sessionKey) {
+    try {
+      const sqliteEvents = await loadTranscriptEvents({
+        agentId: params.agentId,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        storePath,
+      });
+      hasBootstrapTranscriptState = sqliteEvents.some(isTranscriptMessageEvent);
+      if (sqliteMarker) {
+        return {
+          hasBootstrapTranscriptState,
+          hasFileTranscriptState: false,
+        };
+      }
+    } catch {
+      if (sqliteMarker) {
+        return {
+          hasBootstrapTranscriptState: false,
+          hasFileTranscriptState: false,
+        };
+      }
+    }
+  }
+  const hasFileTranscriptState = await fs
+    .stat(params.sessionFile)
+    .then(() => true)
+    .catch(() => false);
+  return {
+    hasBootstrapTranscriptState: hasBootstrapTranscriptState || hasFileTranscriptState,
+    hasFileTranscriptState,
+  };
+}
+
 export async function runEmbeddedAttempt(
   params: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
@@ -1049,6 +1156,7 @@ export async function runEmbeddedAttempt(
     params.sandboxSessionKey?.trim() || params.sessionKey?.trim() || params.sessionId;
   const sandbox = await resolveSandboxContext({
     config: params.config,
+    execOverrides: params.execOverrides,
     sessionKey: sandboxSessionKey,
     workspaceDir: resolvedWorkspace,
   });
@@ -1364,6 +1472,7 @@ export async function runEmbeddedAttempt(
       },
     );
     const toolsEnabled = supportsModelTools(params.model);
+    const ringZeroToolRun = getActiveAgentRingZeroTools().length > 0;
     const toolConstructionPlan = resolveEmbeddedAttemptToolConstructionPlan({
       disableTools: params.disableTools,
       isRawModelRun,
@@ -1381,12 +1490,14 @@ export async function runEmbeddedAttempt(
     const toolSearchConfig = resolveToolSearchConfig(toolSearchRuntimeConfig);
     const codeModeControlsEnabledForRun =
       toolsEnabled &&
+      !ringZeroToolRun &&
       params.disableTools !== true &&
       !isRawModelRun &&
       params.toolsAllow?.length !== 0 &&
       codeModeConfig.enabled;
     const toolSearchControlsEnabledForRun =
       toolsEnabled &&
+      !ringZeroToolRun &&
       params.disableTools !== true &&
       !isRawModelRun &&
       params.toolsAllow?.length !== 0 &&
@@ -1477,12 +1588,29 @@ export async function runEmbeddedAttempt(
       forceMessageTool: params.forceMessageTool,
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     });
-    const toolsRaw = !shouldConstructTools
+    const replaySafetyOptions = {
+      declaredReplaySafe: (candidate: { name?: string }) => {
+        const pluginMeta = getPluginToolMeta(candidate as Parameters<typeof getPluginToolMeta>[0]);
+        if (pluginMeta) {
+          return pluginMeta.replaySafe === true;
+        }
+        return getChannelAgentToolMeta(candidate as never) ? false : undefined;
+      },
+    };
+    const restartSafetyOptions = {
+      declaredReplaySafe: (candidate: { name?: string }) => {
+        const pluginMeta = getPluginToolMeta(candidate as Parameters<typeof getPluginToolMeta>[0]);
+        if (pluginMeta?.mcp) {
+          return false;
+        }
+        return replaySafetyOptions.declaredReplaySafe(candidate);
+      },
+    };
+    const constructedToolsRaw = !shouldConstructTools
       ? []
       : (() => {
           const allTools = createOpenClawCodingTools({
             agentId: sessionAgentId,
-            ...(params.crestodianTool ? { crestodianTool: params.crestodianTool } : {}),
             ...buildEmbeddedAttemptToolRunContext({ ...params, trace: runTrace }),
             messageChannel: params.messageChannel,
             clientCaps: params.clientCaps,
@@ -1598,6 +1726,16 @@ export async function runEmbeddedAttempt(
           corePluginToolStages.mark("attempt:tools-allow");
           return filteredTools;
         })();
+    // A reconstructed turn may finish with normal tools instead of Code Mode.
+    // Filter the concrete run catalog so the recovery policy cannot be bypassed.
+    const toolsRaw = params.forceRestartSafeTools
+      ? constructedToolsRaw.filter((tool) => isAgentToolRestartSafe(tool, restartSafetyOptions))
+      : constructedToolsRaw;
+    if (params.forceRestartSafeTools) {
+      log.info(
+        `restart-safe recovery tool policy retained ${toolsRaw.length}/${constructedToolsRaw.length} concrete tools`,
+      );
+    }
     prepStages.mark("core-plugin-tools");
     emitCorePluginToolStageSummary("core-plugin-tools", corePluginToolStages.snapshot());
     const bootstrapHasFileAccess = toolsEnabled && toolsRaw.some((tool) => tool.name === "read");
@@ -1770,12 +1908,17 @@ export async function runEmbeddedAttempt(
           sessionId: params.sessionId,
         }),
     });
-    const clientTools = toolsEnabled && !isRawModelRun ? params.clientTools : undefined;
-    const bundleMcpEnabled = shouldCreateBundleMcpRuntimeForAttempt({
-      toolsEnabled,
-      disableTools: params.disableTools || isRawModelRun,
-      toolsAllow: params.toolsAllow,
-    });
+    const clientTools =
+      toolsEnabled && !isRawModelRun && !params.forceRestartSafeTools
+        ? params.clientTools
+        : undefined;
+    const bundleMcpEnabled =
+      !params.forceRestartSafeTools &&
+      shouldCreateBundleMcpRuntimeForAttempt({
+        toolsEnabled,
+        disableTools: params.disableTools || isRawModelRun,
+        toolsAllow: params.toolsAllow,
+      });
     const bundleMcpSessionRuntime = bundleMcpEnabled
       ? await getOrCreateSessionMcpRuntime({
           sessionId: params.sessionId,
@@ -1794,11 +1937,13 @@ export async function runEmbeddedAttempt(
           ],
         })
       : undefined;
-    const bundleLspEnabled = shouldCreateBundleLspRuntimeForAttempt({
-      toolsEnabled,
-      disableTools: params.disableTools || isRawModelRun,
-      toolsAllow: params.toolsAllow,
-    });
+    const bundleLspEnabled =
+      !params.forceRestartSafeTools &&
+      shouldCreateBundleLspRuntimeForAttempt({
+        toolsEnabled,
+        disableTools: params.disableTools || isRawModelRun,
+        toolsAllow: params.toolsAllow,
+      });
     bundleLspRuntime = bundleLspEnabled
       ? await createBundleLspToolRuntime({
           workspaceDir: effectiveWorkspace,
@@ -1910,6 +2055,7 @@ export async function runEmbeddedAttempt(
           runId: params.runId,
           catalogRef: toolSearchCatalogRef,
           abortSignal: runAbortController.signal,
+          forceRestartSafeTools: params.forceRestartSafeTools,
           executeTool: (toolParams) => {
             if (!toolSearchCatalogExecutor) {
               throw new Error("Code Mode catalog executor is unavailable for this run.");
@@ -1993,6 +2139,35 @@ export async function runEmbeddedAttempt(
       sessionId: params.sessionId,
     });
     effectiveTools = [...toolSearchSchemaProjection.tools];
+    effectiveTools = effectiveTools.map((tool) => {
+      const originalExecute = tool.execute;
+      const wrappedTool = {
+        ...tool,
+        execute: (async (...args: Parameters<typeof originalExecute>) => {
+          // Heartbeat every 60s during execution so the 120s idle watchdog
+          // never expires for long-running tools (web_fetch, exec, etc.).
+          const interval = setInterval(() => notifyToolActivity(params.runId), 60_000);
+          interval.unref?.();
+          try {
+            notifyToolActivity(params.runId);
+            const result = await originalExecute(...args);
+            return result;
+          } finally {
+            clearInterval(interval);
+            notifyToolActivity(params.runId);
+          }
+        }) as typeof originalExecute,
+      };
+      // Preserve plugin/channel/before-tool-call/terminal metadata that lives
+      // in WeakMaps keyed by tool object identity. The spread above copies own
+      // enumerable properties but loses these associations.
+      copyPluginToolMeta(tool, wrappedTool);
+      copyChannelAgentToolMeta(tool as never, wrappedTool as never);
+      copyBeforeToolCallHookMarker(tool, wrappedTool);
+      copyToolTerminalPresentation(tool, wrappedTool as never);
+      copyCodeModeControlToolIdentity(tool as never, wrappedTool as never);
+      return wrappedTool;
+    });
     if (toolSearch.compacted && !toolSearch.catalogReused) {
       prepStages.mark(codeModeControlsEnabledForRun ? "code-mode" : "tool-search");
       log.info(
@@ -2032,12 +2207,14 @@ export async function runEmbeddedAttempt(
     const replayAllowedToolNames = toolSearchRunPlan.replayAllowedToolNames;
     const liveAllowedToolNames = toolSearchRunPlan.liveAllowedToolNames;
     const capabilityToolNames = toolSearchRunPlan.capabilityToolNames;
-    const emptyExplicitToolAllowlistError = buildEmptyExplicitToolAllowlistError({
-      sources: explicitToolAllowlistSources,
-      callableToolNames: toolSearchRunPlan.emptyAllowlistCallableNames,
-      toolsEnabled,
-      disableTools: params.disableTools,
-    });
+    const emptyExplicitToolAllowlistError = params.forceRestartSafeTools
+      ? null
+      : buildEmptyExplicitToolAllowlistError({
+          sources: explicitToolAllowlistSources,
+          callableToolNames: toolSearchRunPlan.emptyAllowlistCallableNames,
+          toolsEnabled,
+          disableTools: params.disableTools,
+        });
     logAgentRuntimeToolDiagnostics({
       runtimePlan: params.runtimePlan,
       tools: effectiveTools,
@@ -2387,10 +2564,14 @@ export async function runEmbeddedAttempt(
       ) {
         invalidateSessionFileRepairCache(params.sessionFile);
       }
-      const hadSessionFile = await fs
-        .stat(params.sessionFile)
-        .then(() => true)
-        .catch(() => false);
+      const transcriptState = await resolveExistingAttemptTranscriptState({
+        agentId: sessionAgentId,
+        config: params.config,
+        sessionFile: params.sessionFile,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        sessionTarget: params.sessionTarget,
+      });
 
       const transcriptPolicy = resolveAttemptTranscriptPolicy({
         runtimePlan: params.runtimePlan,
@@ -2445,10 +2626,11 @@ export async function runEmbeddedAttempt(
 
       await withOwnedSessionWriteLock(async () => {
         await runAttemptContextEngineBootstrap({
-          hadSessionFile,
+          hadSessionFile: transcriptState.hasBootstrapTranscriptState,
           contextEngine: activeContextEngine,
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
+          sessionTarget: params.sessionTarget,
           sessionFile: params.sessionFile,
           sessionManager,
           runtimeContext: buildAfterTurnRuntimeContext({
@@ -2471,6 +2653,7 @@ export async function runEmbeddedAttempt(
               contextEngine: contextParams.contextEngine as never,
               sessionId: contextParams.sessionId,
               sessionKey: contextParams.sessionKey,
+              sessionTarget: contextParams.sessionTarget,
               sessionFile: contextParams.sessionFile,
               reason: contextParams.reason,
               sessionManager: contextParams.sessionManager as never,
@@ -2485,7 +2668,7 @@ export async function runEmbeddedAttempt(
         await prepareSessionManagerForRun({
           sessionManager,
           sessionFile: params.sessionFile,
-          hadSessionFile,
+          hadSessionFile: transcriptState.hasFileTranscriptState,
           sessionId: params.sessionId,
           cwd: effectiveCwd,
         });
@@ -2588,17 +2771,6 @@ export async function runEmbeddedAttempt(
         isPluginTool: (tool) =>
           Boolean(getPluginToolMeta(tool as Parameters<typeof getPluginToolMeta>[0])),
       });
-      const replaySafetyOptions = {
-        declaredReplaySafe: (candidate: { name?: string }) => {
-          const pluginMeta = getPluginToolMeta(
-            candidate as Parameters<typeof getPluginToolMeta>[0],
-          );
-          if (pluginMeta) {
-            return pluginMeta.replaySafe === true;
-          }
-          return getChannelAgentToolMeta(candidate as never) ? false : undefined;
-        },
-      };
       const isReplaySafeTool = (tool: { name?: string }) =>
         isAgentToolReplaySafe(tool, replaySafetyOptions);
       const replaySafeTools = new Set(uncompactedEffectiveTools.filter(isReplaySafeTool));
@@ -2737,6 +2909,19 @@ export async function runEmbeddedAttempt(
                 const hydratedTool = definition ? wrapToolDefinition(definition) : undefined;
                 if (hydratedTool) {
                   log.info(`tool-search: hydrated deferred directory tool ${toolCall.name}`);
+                  const originalExecute = hydratedTool.execute;
+                  hydratedTool.execute = (async (...args: Parameters<typeof originalExecute>) => {
+                    const interval = setInterval(() => notifyToolActivity(params.runId), 60_000);
+                    interval.unref?.();
+                    try {
+                      notifyToolActivity(params.runId);
+                      const result = await originalExecute(...args);
+                      return result;
+                    } finally {
+                      clearInterval(interval);
+                      notifyToolActivity(params.runId);
+                    }
+                  }) as typeof originalExecute;
                 }
                 return hydratedTool;
               }
@@ -2924,6 +3109,7 @@ export async function runEmbeddedAttempt(
           contextEngine: activeContextEngine,
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
+          sessionTarget: params.sessionTarget,
           sessionFile: params.sessionFile,
           tokenBudget: params.contextTokenBudget,
           modelId: params.modelId,
@@ -3018,13 +3204,21 @@ export async function runEmbeddedAttempt(
         modelApi: params.model.api,
         workspaceDir: params.workspaceDir,
       });
+      const trajectorySessionFile = await resolveAttemptTrajectorySessionFile({
+        agentId: sessionAgentId,
+        config: params.config,
+        sessionFile: params.sessionFile,
+        sessionId: activeSession.sessionId,
+        sessionKey: params.sessionKey,
+        sessionTarget: params.sessionTarget,
+      });
       trajectoryRecorder = createTrajectoryRuntimeRecorder({
         cfg: params.config,
         env: process.env,
         runId: params.runId,
         sessionId: activeSession.sessionId,
         sessionKey: params.sessionKey,
-        sessionFile: params.sessionFile,
+        sessionFile: trajectorySessionFile,
         provider: params.provider,
         modelId: params.modelId,
         modelApi: params.model.api,
@@ -3428,6 +3622,7 @@ export async function runEmbeddedAttempt(
           activeSession.agent.streamFn,
           idleTimeoutMs,
           (error) => idleTimeoutTrigger?.(error),
+          { runId: params.runId },
         );
       } else if (firstEventTimeoutMs > 0) {
         // Local providers opt out of gap policing, but the transport first-event
@@ -3437,7 +3632,7 @@ export async function runEmbeddedAttempt(
           activeSession.agent.streamFn,
           firstEventTimeoutMs,
           (error) => idleTimeoutTrigger?.(error),
-          { scope: "creation-only" },
+          { runId: params.runId, scope: "creation-only" },
         );
       }
       if (firstEventTimeoutMs > 0) {
@@ -4037,6 +4232,7 @@ export async function runEmbeddedAttempt(
             result,
             timestamp: Date.now(),
           });
+          notifyToolActivity(params.runId);
           return result;
         } catch (error) {
           const message = formatErrorMessage(error);
@@ -4052,6 +4248,7 @@ export async function runEmbeddedAttempt(
             isError: true,
             timestamp: Date.now(),
           });
+          notifyToolActivity(params.runId);
           throw error;
         }
       };
@@ -4714,7 +4911,7 @@ export async function runEmbeddedAttempt(
                 activeSessionManager.appendMessage(
                   redactedUserMessage as Parameters<typeof activeSessionManager.appendMessage>[0],
                 );
-                flushSessionManagerFile(activeSessionManager);
+                flushSessionManagerTranscript(activeSessionManager);
               });
               activeSession.agent.state.messages =
                 activeSessionManager.buildSessionContext().messages;
@@ -5590,9 +5787,9 @@ export async function runEmbeddedAttempt(
           }
 
           if (activeContextEngine && !beforeAgentFinalizeRevisionReason) {
-            // Context-engine afterTurn hooks may reconcile against the jsonl, so
-            // materialize the active turn before finalization reads from disk.
-            flushSessionManagerFile(activeSessionManager);
+            // Context-engine afterTurn hooks may reconcile against persisted
+            // transcript state, so materialize the active turn first.
+            flushSessionManagerTranscript(activeSessionManager);
           }
         });
 
@@ -5617,6 +5814,7 @@ export async function runEmbeddedAttempt(
             yieldAborted,
             sessionIdUsed,
             sessionKey: params.sessionKey,
+            sessionTarget: params.sessionTarget,
             sessionFile: params.sessionFile,
             messagesSnapshot,
             prePromptMessageCount: contextEngineAfterTurnCheckpoint ?? prePromptMessageCount,
@@ -5633,6 +5831,7 @@ export async function runEmbeddedAttempt(
                 contextEngine: contextParams.contextEngine as never,
                 sessionId: contextParams.sessionId,
                 sessionKey: contextParams.sessionKey,
+                sessionTarget: contextParams.sessionTarget,
                 sessionFile: contextParams.sessionFile,
                 reason: contextParams.reason,
                 sessionManager: contextParams.sessionManager as never,
@@ -6287,6 +6486,7 @@ export async function runEmbeddedAttempt(
     }
   } finally {
     removeExternalAbortSignalListener?.();
+    clearToolActivityRun(params.runId);
     if (!sessionCleanupOwnsEmbeddedResources) {
       try {
         await cleanupEmbeddedPrepResourcesAfterEarlyExit();

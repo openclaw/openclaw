@@ -250,6 +250,50 @@ describe("resolve_pr_gates_remote_mode", () => {
   });
 });
 
+describe("prepare gate changed-file plan", () => {
+  it.each([
+    { paths: [] as string[], docsOnly: false, changelogOnly: false },
+    { paths: ["docs/guide.md"], docsOnly: true, changelogOnly: false },
+    { paths: ["CHANGELOG.md"], docsOnly: true, changelogOnly: true },
+    { paths: ["src/index.ts"], docsOnly: false, changelogOnly: false },
+    {
+      paths: ["docs/guide.md", "src/index.ts"],
+      docsOnly: false,
+      changelogOnly: false,
+    },
+  ])("derives the coupled plan for $paths", ({ paths, docsOnly, changelogOnly }) => {
+    const gitStub =
+      paths.length === 0
+        ? "git() { :; }"
+        : `git() { printf '%s\\n' ${paths.map((path) => `'${path}'`).join(" ")}; }`;
+    const result = runGatesBash(
+      [
+        gitStub,
+        "derive_prepare_gate_change_plan",
+        'printf "%s\\t%s\\t%s\\t%s\\n" "$PREPARE_GATE_CHANGED_FILES" "$PREPARE_GATE_DOCS_ONLY" "$PREPARE_GATE_CHANGELOG_ONLY" "$PREPARE_GATE_CHANGELOG_REQUIRED"',
+      ].join("\n"),
+    );
+
+    expect(result.status).toBe(0);
+    const fields = result.stdout.trimEnd().split("\t");
+    expect(fields).toEqual([paths.join("\n"), String(docsOnly), String(changelogOnly), "false"]);
+  });
+
+  it("carries the changelog policy decision into the plan", () => {
+    const result = runGatesBash(
+      [
+        "git() { printf 'src/index.ts\\n'; }",
+        "changelog_required_for_changed_files() { return 0; }",
+        "derive_prepare_gate_change_plan",
+        'printf "%s\\n" "$PREPARE_GATE_CHANGELOG_REQUIRED"',
+      ].join("\n"),
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe("true");
+  });
+});
+
 describe("remote testbox gate delegation", () => {
   it("runs the full pnpm test through the worktree crabbox wrapper", () => {
     const dir = makeTempDir("openclaw-pr-gates-remote-");
@@ -539,6 +583,39 @@ describe("prepare gate stamp transitions", () => {
     expect(result.stdout).toContain(`ARG:${repoRoot}/scripts/verify-pr-hosted-gates.mjs`);
     expect(result.stdout).toContain("ARG:--pr\nARG:100606");
     expect(result.stdout).toContain("ARG:--recent-sha\nARG:cafebabe");
+  });
+
+  it.each([
+    ["CHANGELOG.md", true],
+    ["changed.ts", false],
+  ])("derives recent parent evidence for a %s commit: %s", (path, expected) => {
+    const { repoDir, headSha: parentSha } = makeRetryRepo();
+    writeFileSync(join(repoDir, path), "change\n");
+    spawnSync("git", ["add", path], { cwd: repoDir });
+    spawnSync(
+      "git",
+      ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "change"],
+      { cwd: repoDir },
+    );
+    const currentHead = spawnSync("git", ["rev-parse", "HEAD"], {
+      cwd: repoDir,
+      encoding: "utf8",
+    }).stdout.trim();
+    const result = runGatesBash(
+      [
+        `gh() { if [ "$1" = pr ]; then printf '${currentHead}\\n'; else printf 'openclaw/openclaw\\n'; fi; }`,
+        "run_quiet_logged() { printf 'ARG:%s\\n' \"$@\"; }",
+        `run_hosted_prepare_gates 100606 ${currentHead} false`,
+      ].join("\n"),
+      { cwd: repoDir },
+    );
+
+    expect(result.status).toBe(0);
+    if (expected) {
+      expect(result.stdout).toContain(`ARG:--recent-sha\nARG:${parentSha}`);
+    } else {
+      expect(result.stdout).not.toContain("ARG:--recent-sha");
+    }
   });
 
   it("clears remote stamps when fresh docs-only gates do not reuse prior proof", () => {

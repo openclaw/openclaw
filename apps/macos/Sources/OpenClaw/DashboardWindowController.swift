@@ -114,7 +114,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         splitViewController.splitView.autosaveName = DashboardWindowLayout.linkBrowserSplitAutosaveName
 
         let dashboardViewController = NSViewController()
-        dashboardViewController.view = self.webView
+        dashboardViewController.view = BrowserProfileImportBannerView.makeDashboardPane(webView: self.webView)
         let dashboardItem = NSSplitViewItem(viewController: dashboardViewController)
         dashboardItem.minimumThickness = DashboardWindowLayout.mainBrowserMinWidth
 
@@ -376,11 +376,13 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             return
         }
         // Eligibility is cached at window setup, but update.channel or launchd
-        // ownership can change while the dashboard stays open. Revalidate here;
-        // dropping the bridge makes the Control UI's next click fall back to
-        // the direct gateway update flow.
+        // ownership can change while the dashboard stays open. Revalidate here.
         guard DashboardManager.updateBridgeEnabled(mode: AppStateStore.shared.connectionMode) else {
             self.setUpdateBridgeEnabled(false)
+            // JS treated its posted message as handled; return this click to
+            // the gateway updater after withdrawing the native bridge.
+            self.webView.evaluateJavaScript(
+                "window.dispatchEvent(new CustomEvent('openclaw:native-update-declined'))")
             return
         }
         updater.checkForUpdates(nil)
@@ -465,11 +467,20 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         Self.installNativeAuthScript(into: controller, url: url, auth: auth)
     }
 
-    /// Back/forward buttons next to the traffic lights. The window has no
-    /// native toolbar (full-size content view with the web UI's own chrome), so
-    /// a leading titlebar accessory is the only native slot for them.
+    /// Sidebar toggle plus back/forward buttons next to the traffic lights
+    /// (Safari's ordering). The window has no native toolbar (full-size content
+    /// view with the web UI's own chrome), so a leading titlebar accessory is
+    /// the only native slot for them.
     private func installNavigationControls() {
         guard let window = self.window else { return }
+        let sidebar = Self.makeNavigationButton(
+            symbolName: "sidebar.leading",
+            label: "Toggle Sidebar",
+            action: #selector(self.toggleNavigationSidebar(_:)),
+            target: self)
+        // Unlike back/forward there is no readiness state to observe; the web
+        // UI ignores the toggle event on surfaces without a collapsible nav.
+        sidebar.isEnabled = true
         let back = Self.makeNavigationButton(
             symbolName: "chevron.left",
             label: "Back",
@@ -483,11 +494,13 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.backButton = back
         self.forwardButton = forward
 
-        let stack = NSStackView(views: [back, forward])
+        let stack = NSStackView(views: [sidebar, back, forward])
         stack.orientation = .horizontal
-        stack.spacing = 4
-        stack.edgeInsets = NSEdgeInsets(top: 0, left: 8, bottom: 0, right: 0)
-        stack.setFrameSize(NSSize(width: 68, height: 28))
+        stack.spacing = 12
+        stack.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 0)
+        // Fixed accessory frame: 12 leading inset + three ~27pt buttons + two
+        // 12pt gaps. Keep in sync with `spacing`/`edgeInsets` above.
+        stack.setFrameSize(NSSize(width: 116, height: 28))
 
         let accessory = NSTitlebarAccessoryViewController()
         accessory.view = stack
@@ -535,12 +548,38 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         return button
     }
 
+    func navigateBack() {
+        self.activeNavigationWebView.goBack()
+    }
+
+    func navigateForward() {
+        self.activeNavigationWebView.goForward()
+    }
+
     @objc private func navigateBack(_: Any?) {
         self.webView.goBack()
     }
 
     @objc private func navigateForward(_: Any?) {
         self.webView.goForward()
+    }
+
+    /// Named to avoid AppKit's standard `toggleSidebar(_:)` responder action,
+    /// which would otherwise reach the split view controller and collapse the
+    /// native link-browser pane instead of the web UI's navigation sidebar.
+    @objc private func toggleNavigationSidebar(_: Any?) {
+        self.webView.evaluateJavaScript(
+            "window.dispatchEvent(new CustomEvent('openclaw:native-toggle-sidebar'))")
+    }
+
+    private var activeNavigationWebView: WKWebView {
+        guard let linkWebView = self.linkBrowser.activeWebView,
+              let firstResponder = self.window?.firstResponder as? NSView,
+              firstResponder === linkWebView || firstResponder.isDescendant(of: linkWebView)
+        else {
+            return self.webView
+        }
+        return linkWebView
     }
 
     private static func makeWindow(contentView: NSView) -> NSWindow {
@@ -628,7 +667,10 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             const style = document.createElement("style");
             style.id = "openclaw-native-macos-chrome";
             style.textContent = \(Self.jsStringLiteral(css));
-            document.documentElement.classList.add("openclaw-native-macos");
+            // openclaw-native-nav advertises the titlebar sidebar toggle so a
+            // matching Control UI hides its in-page expand/collapse buttons;
+            // older web bundles ignore the class and keep their own controls.
+            document.documentElement.classList.add("openclaw-native-macos", "openclaw-native-nav");
             document.head.appendChild(style);
           } catch {}
         })();
@@ -1033,6 +1075,19 @@ extension DashboardWindowController {
 
     var _testAllowsBackForwardGestures: Bool {
         self.webView.allowsBackForwardNavigationGestures
+    }
+
+    var _testNavigationWebViewIdentity: ObjectIdentifier {
+        ObjectIdentifier(self.activeNavigationWebView)
+    }
+
+    var _testDashboardWebViewIdentity: ObjectIdentifier {
+        ObjectIdentifier(self.webView)
+    }
+
+    func _testFocusLinkBrowser() -> Bool {
+        guard let webView = self.linkBrowser.activeWebView else { return false }
+        return self.window?.makeFirstResponder(webView) == true
     }
 }
 #endif

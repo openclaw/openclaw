@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { tryReadJsonSync } from "../../../infra/json-files.js";
 import {
   normalizeBundledPluginStringList,
@@ -24,6 +25,7 @@ export type BundledPluginContractSnapshot = {
   cliBackendIds: string[];
   providerIds: string[];
   providerEnvVars: Record<string, string[]>;
+  workerProviderIds: string[];
   embeddingProviderIds: string[];
   speechProviderIds: string[];
   realtimeTranscriptionProviderIds: string[];
@@ -128,6 +130,7 @@ export function buildBundledPluginContractSnapshot(
     cliBackendIds: uniqueStrings(manifest.cliBackends, (value) => value.trim()),
     providerIds: uniqueStrings(manifest.providers, (value) => value.trim()),
     providerEnvVars: normalizeSetupProviderEnvVars(manifest.setup),
+    workerProviderIds: uniqueStrings(manifest.contracts?.workerProviders, (value) => value.trim()),
     embeddingProviderIds: uniqueStrings(manifest.contracts?.embeddingProviders, (value) =>
       value.trim(),
     ),
@@ -184,6 +187,7 @@ export function hasBundledPluginContractSnapshotCapabilities(
   return (
     entry.cliBackendIds.length > 0 ||
     entry.providerIds.length > 0 ||
+    entry.workerProviderIds.length > 0 ||
     entry.embeddingProviderIds.length > 0 ||
     entry.speechProviderIds.length > 0 ||
     entry.realtimeTranscriptionProviderIds.length > 0 ||
@@ -221,7 +225,11 @@ export const BUNDLED_AUTO_ENABLE_PROVIDER_PLUGIN_IDS = Object.fromEntries(
       providerId,
       manifest.id,
     ]),
-  ).toSorted(([left], [right]) => left.localeCompare(right)),
+  ).toSorted(([left], [right]) =>
+    expectDefined(left, "bundled capability metadata left").localeCompare(
+      expectDefined(right, "bundled capability metadata right"),
+    ),
+  ),
 ) as Readonly<Record<string, string>>;
 
 type BundledContractIdSnapshotKey = Exclude<

@@ -6,6 +6,7 @@ import { escapeRegExp, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utilit
 import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
 import { closeQaHttpServer } from "../../bus-server.js";
 import { QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY } from "../../qa-web-search-provider.js";
+import { parseQaDebugRequestCursor } from "../shared/debug-request-cursor.js";
 import { writeJson } from "../shared/http-json.js";
 
 type ResponsesInputItem = Record<string, unknown>;
@@ -61,7 +62,7 @@ type StreamEvent =
  * - Everything else (including empty strings) → `"unknown"`
  *
  * The `/v1/messages` route always feeds `body.model` straight through,
- * so an Anthropic request with an `openai/gpt-5.5` model string is still
+ * so an Anthropic request with an `openai/gpt-5.6-luna` model string is still
  * classified as `"openai"`. That matches the parity program's convention
  * where the provider label is the source of truth, not the HTTP route.
  */
@@ -86,7 +87,7 @@ export function resolveProviderVariant(model: string | undefined): MockOpenAiPro
     return "anthropic";
   }
   // Fall back to model-name prefix matching for bare model strings like
-  // `gpt-5.5` or `claude-opus-4-8`.
+  // `gpt-5.6-luna` or `claude-opus-4-8`.
   if (/^(?:gpt-|o1-|openai-)/.test(trimmed)) {
     return "openai";
   }
@@ -97,6 +98,7 @@ export function resolveProviderVariant(model: string | undefined): MockOpenAiPro
 }
 
 type MockOpenAiRequestSnapshot = {
+  cursor: number;
   raw: string;
   body: Record<string, unknown>;
   prompt: string;
@@ -112,6 +114,8 @@ type MockOpenAiRequestSnapshot = {
   toolOutputCallId?: string;
   toolOutputStructuredError?: true;
 };
+
+type MockOpenAiRequestSnapshotInput = Omit<MockOpenAiRequestSnapshot, "cursor">;
 
 // Runtime-context delimiters are owned by src/agents/internal-runtime-context.ts.
 // This mock mirrors the wire shape so delimiter drift fails through QA timeouts.
@@ -223,6 +227,9 @@ function isStrandedFinalRetryFailureRequest(allInputText: string): boolean {
   );
 }
 const QA_SUBAGENT_DIRECT_FALLBACK_MARKER = "QA-SUBAGENT-DIRECT-FALLBACK-OK";
+const QA_NATIVE_STOP_DELAY_PROMPT_RE =
+  /subagent recovery worker native command target proof\.\s*wait until stopped\./i;
+const QA_NATIVE_STOP_DELAY_MS = 180_000;
 const QA_IMAGE_GENERATION_PROMPT_RE =
   /image generation check|capability flip image check|\/tool\s+image_generate/i;
 const QA_REASONING_ONLY_RETRY_NEEDLE =
@@ -236,6 +243,8 @@ const QA_RELEASE_AUDIT_PROMPT_RE = /release readiness audit for the small projec
 const QA_TOOL_SEARCH_PROMPT_RE = /tool search qa check/i;
 const QA_TOOL_SEARCH_FAILURE_PROMPT_RE = /tool search qa failure/i;
 const QA_MCP_CODE_MODE_PROMPT_RE = /mcp code mode qa check/i;
+const QA_RESTART_CODE_MODE_WAIT_PROMPT_RE = /code mode restart wait qa check/i;
+const QA_RESTART_RECOVERY_PROMPT_RE = /previous turn was interrupted by a gateway restart/i;
 const QA_AUDIO_TRANSCRIPTION_TEXT =
   "Reply with only this exact marker: WHATSAPP_QA_AUDIO_TRANSCRIPT_OK";
 const QA_GROUP_AUDIO_TRANSCRIPTION_TEXT =
@@ -389,15 +398,15 @@ function extractEmbeddingInputTexts(input: unknown): string[] {
 function buildDeterministicEmbedding(text: string, dimensions = 16) {
   const values = Array.from({ length: dimensions }, () => 0);
   for (let index = 0; index < text.length; index += 1) {
-    values[index % dimensions] += text.charCodeAt(index) / 255;
+    const embeddingIndex = index % dimensions;
+    values[embeddingIndex] = (values[embeddingIndex] ?? 0) + text.charCodeAt(index) / 255;
   }
   const magnitude = Math.hypot(...values) || 1;
   return values.map((value) => Number((value / magnitude).toFixed(8)));
 }
 
 function extractLastUserText(input: ResponsesInputItem[]) {
-  for (let index = input.length - 1; index >= 0; index -= 1) {
-    const item = input[index];
+  for (const item of input.toReversed()) {
     if (item.role !== "user" || !Array.isArray(item.content)) {
       continue;
     }
@@ -410,16 +419,12 @@ function extractLastUserText(input: ResponsesInputItem[]) {
 }
 
 function findLastUserIndex(input: ResponsesInputItem[]) {
-  for (let index = input.length - 1; index >= 0; index -= 1) {
-    const item = input[index];
-    if (item.role !== "user" || !Array.isArray(item.content)) {
-      continue;
-    }
-    if (!isInternalRuntimeContextCarrierText(extractInputText(item.content))) {
-      return index;
-    }
-  }
-  return -1;
+  return input.findLastIndex(
+    (item) =>
+      item.role === "user" &&
+      Array.isArray(item.content) &&
+      !isInternalRuntimeContextCarrierText(extractInputText(item.content)),
+  );
 }
 
 function isInternalRuntimeContextCarrierText(text: string) {
@@ -521,19 +526,17 @@ function functionCallOutputIsStructuredError(item: ResponsesInputItem) {
 
 function extractToolOutput(input: ResponsesInputItem[]) {
   const lastUserIndex = findLastUserIndex(input);
-  for (let index = input.length - 1; index > lastUserIndex; index -= 1) {
-    const item = input[index];
+  for (const item of input.slice(lastUserIndex + 1).toReversed()) {
     const output = extractFunctionCallOutputText(item);
     if (output) {
       return output;
     }
   }
-  for (let index = input.length - 1; index >= 0; index -= 1) {
-    const item = input[index];
-    const output = extractFunctionCallOutputText(item);
+  for (const [candidateIndex, candidateItem] of Array.from(input.entries()).toReversed()) {
+    const output = extractFunctionCallOutputText(candidateItem);
     if (output) {
       const laterUserTexts = input
-        .slice(index + 1)
+        .slice(candidateIndex + 1)
         .filter((laterItem) => laterItem.role === "user" && Array.isArray(laterItem.content))
         .map((laterItem) => extractInputText(laterItem.content as unknown[]))
         .filter(Boolean);
@@ -551,19 +554,17 @@ function extractToolOutput(input: ResponsesInputItem[]) {
 
 function extractToolOutputStructuredError(input: ResponsesInputItem[]) {
   const lastUserIndex = findLastUserIndex(input);
-  for (let index = input.length - 1; index > lastUserIndex; index -= 1) {
-    const item = input[index];
+  for (const item of input.slice(lastUserIndex + 1).toReversed()) {
     const output = extractFunctionCallOutputText(item);
     if (output) {
       return functionCallOutputIsStructuredError(item);
     }
   }
-  for (let index = input.length - 1; index >= 0; index -= 1) {
-    const item = input[index];
-    const output = extractFunctionCallOutputText(item);
+  for (const [candidateIndex, candidateItem] of Array.from(input.entries()).toReversed()) {
+    const output = extractFunctionCallOutputText(candidateItem);
     if (output) {
       const laterUserTexts = input
-        .slice(index + 1)
+        .slice(candidateIndex + 1)
         .filter((laterItem) => laterItem.role === "user" && Array.isArray(laterItem.content))
         .map((laterItem) => extractInputText(laterItem.content as unknown[]))
         .filter(Boolean);
@@ -571,7 +572,7 @@ function extractToolOutputStructuredError(input: ResponsesInputItem[]) {
         laterUserTexts.length > 0 &&
         laterUserTexts.every((text) => isToolOutputContinuationText(text))
       ) {
-        return functionCallOutputIsStructuredError(item);
+        return functionCallOutputIsStructuredError(candidateItem);
       }
     }
   }
@@ -580,19 +581,17 @@ function extractToolOutputStructuredError(input: ResponsesInputItem[]) {
 
 function extractToolOutputCallId(input: ResponsesInputItem[]) {
   const lastUserIndex = findLastUserIndex(input);
-  for (let index = input.length - 1; index > lastUserIndex; index -= 1) {
-    const item = input[index];
+  for (const item of input.slice(lastUserIndex + 1).toReversed()) {
     const output = extractFunctionCallOutputText(item);
     if (output) {
       return extractFunctionCallOutputCallId(item);
     }
   }
-  for (let index = input.length - 1; index >= 0; index -= 1) {
-    const item = input[index];
-    const output = extractFunctionCallOutputText(item);
+  for (const [candidateIndex, candidateItem] of Array.from(input.entries()).toReversed()) {
+    const output = extractFunctionCallOutputText(candidateItem);
     if (output) {
       const laterUserTexts = input
-        .slice(index + 1)
+        .slice(candidateIndex + 1)
         .filter((laterItem) => laterItem.role === "user" && Array.isArray(laterItem.content))
         .map((laterItem) => extractInputText(laterItem.content as unknown[]))
         .filter(Boolean);
@@ -600,7 +599,7 @@ function extractToolOutputCallId(input: ResponsesInputItem[]) {
         laterUserTexts.length > 0 &&
         laterUserTexts.every((text) => isToolOutputContinuationText(text))
       ) {
-        return extractFunctionCallOutputCallId(item);
+        return extractFunctionCallOutputCallId(candidateItem);
       }
     }
   }
@@ -608,8 +607,7 @@ function extractToolOutputCallId(input: ResponsesInputItem[]) {
 }
 
 function extractLatestToolOutput(input: ResponsesInputItem[]) {
-  for (let index = input.length - 1; index >= 0; index -= 1) {
-    const item = input[index];
+  for (const item of input.toReversed()) {
     const output = extractFunctionCallOutputText(item);
     if (output) {
       return output;
@@ -626,13 +624,9 @@ function extractAllToolOutputText(input: ResponsesInputItem[]) {
 }
 
 function extractUserTextAfterLatestToolOutput(input: ResponsesInputItem[]) {
-  let latestToolOutputIndex = -1;
-  for (let index = input.length - 1; index >= 0; index -= 1) {
-    if (extractFunctionCallOutputText(input[index])) {
-      latestToolOutputIndex = index;
-      break;
-    }
-  }
+  const latestToolOutputIndex = input.findLastIndex((item) =>
+    Boolean(extractFunctionCallOutputText(item)),
+  );
   if (latestToolOutputIndex < 0) {
     return "";
   }
@@ -1242,6 +1236,12 @@ function hasDeclaredTool(body: Record<string, unknown>, name: string) {
     return true;
   }
   return false;
+}
+
+function hasToolDefinition(body: Record<string, unknown>, name: string) {
+  const tools = Array.isArray(body.tools) ? body.tools : [];
+  const dynamicTools = Array.isArray(body.dynamicTools) ? body.dynamicTools : [];
+  return [...tools, ...dynamicTools].some((tool) => toolDefinitionMentionsName(tool, name));
 }
 
 function toolDefinitionMentionsName(value: unknown, name: string, depth = 0): boolean {
@@ -1983,10 +1983,11 @@ function buildAssistantEvents(specsOrText: MockAssistantMessageSpec[] | string):
           },
         ]
       : specsOrText;
-  const output = specs.map((spec) => buildAssistantOutputItem(spec));
+  const renderedSpecs = specs.map((spec) => ({ spec, item: buildAssistantOutputItem(spec) }));
+  const output = renderedSpecs.map(({ item }) => item);
   const events: StreamEvent[] = [];
 
-  for (const [outputIndex, spec] of specs.entries()) {
+  for (const [outputIndex, { spec, item }] of renderedSpecs.entries()) {
     events.push({
       type: "response.output_item.added",
       item: {
@@ -2018,7 +2019,7 @@ function buildAssistantEvents(specsOrText: MockAssistantMessageSpec[] | string):
     }
     events.push({
       type: "response.output_item.done",
-      item: output[outputIndex],
+      item,
     });
   }
 
@@ -2223,6 +2224,39 @@ async function buildResponsesPayload(
     if (targetTool && (hasDeclaredTool(body, targetTool) || isQaToolSearchFixture(allInputText))) {
       return buildToolCallEventsWithArgs(targetTool, plannedArgs);
     }
+  }
+  if (QA_RESTART_CODE_MODE_WAIT_PROMPT_RE.test(allInputText)) {
+    if (QA_RESTART_RECOVERY_PROMPT_RE.test(allInputText)) {
+      if (toolOutput.includes("unsafe-probe-executed")) {
+        return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
+      }
+      if (hasToolDefinition(body, "qa_restart_unsafe_probe")) {
+        return buildToolCallEventsWithArgs("qa_restart_unsafe_probe", {});
+      }
+      return buildAssistantEvents(exactReplyDirective ?? "RESTART-CODE-MODE-WAIT-OK");
+    }
+    if (toolJson?.status === "completed" && toolJson.value === "RESTART-CODE-MODE-WAIT-OK") {
+      return buildAssistantEvents(exactReplyDirective ?? "RESTART-CODE-MODE-WAIT-OK");
+    }
+    if (
+      toolJson?.status === "waiting" &&
+      typeof toolJson.runId === "string" &&
+      hasDeclaredTool(body, "wait")
+    ) {
+      return buildToolCallEventsWithArgs("wait", { runId: toolJson.runId });
+    }
+    if (!toolOutput && hasDeclaredTool(body, "exec")) {
+      return buildToolCallEventsWithArgs("exec", {
+        language: "javascript",
+        restartSafe: true,
+        code: [
+          'const matches = await tools.search("qa_restart_wait");',
+          "await tools.call(matches[0].id, {});",
+          'return "RESTART-CODE-MODE-WAIT-OK";',
+        ].join("\n"),
+      });
+    }
+    return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
   }
   if (
     QA_MCP_CODE_MODE_API_FILE_PROMPT_RE.test(allInputText) ||
@@ -3223,11 +3257,8 @@ async function buildResponsesPayload(
   if (isGroupChat && isBaselineUnmentionedChannelChatter && !toolOutput) {
     return buildAssistantEvents("NO_REPLY");
   }
-  if (
-    /subagent recovery worker/i.test(prompt) &&
-    !/interrupted by a gateway reload/i.test(prompt)
-  ) {
-    await sleep(60_000);
+  if (QA_NATIVE_STOP_DELAY_PROMPT_RE.test(prompt)) {
+    await sleep(QA_NATIVE_STOP_DELAY_MS);
   }
   return buildAssistantEvents(buildAssistantText(input, body, scenarioState));
 }
@@ -3237,7 +3268,7 @@ async function buildResponsesPayload(
 // ---------------------------------------------------------------------------
 //
 // The QA parity gate needs two comparable scenario runs: one against the
-// "candidate" (openai/gpt-5.5) and one against the "baseline"
+// "candidate" (openai/gpt-5.6-luna) and one against the "baseline"
 // (anthropic/claude-opus-4-8). The OpenAI mock above already dispatches all
 // the scenario prompt branches we care about. Rather than duplicating that
 // machinery, the /v1/messages route below translates Anthropic request
@@ -3743,6 +3774,16 @@ export async function startQaMockOpenAiServer(params?: {
   };
   let lastRequest: MockOpenAiRequestSnapshot | null = null;
   const requests: MockOpenAiRequestSnapshot[] = [];
+  let nextRequestCursor = 1;
+  const recordRequest = (snapshot: MockOpenAiRequestSnapshotInput) => {
+    const recorded = { ...snapshot, cursor: nextRequestCursor++ };
+    lastRequest = recorded;
+    requests.push(recorded);
+    if (requests.length > MOCK_OPENAI_DEBUG_REQUEST_LIMIT) {
+      requests.splice(0, requests.length - MOCK_OPENAI_DEBUG_REQUEST_LIMIT);
+    }
+    return recorded;
+  };
   const inflightRequests = new Map<number, { prompt: string; allInputText: string }>();
   let nextInflightRequestId = 1;
   const imageGenerationRequests: Array<Record<string, unknown>> = [];
@@ -3756,8 +3797,8 @@ export async function startQaMockOpenAiServer(params?: {
       if (req.method === "GET" && url.pathname === "/v1/models") {
         writeJson(res, 200, {
           data: [
-            { id: "gpt-5.5", object: "model" },
-            { id: "gpt-5.5-alt", object: "model" },
+            { id: "gpt-5.6-luna", object: "model" },
+            { id: "gpt-5.6-luna-alt", object: "model" },
             { id: "gpt-image-1", object: "model" },
             { id: "gpt-4o-transcribe", object: "model" },
             { id: "text-embedding-3-small", object: "model" },
@@ -3771,8 +3812,45 @@ export async function startQaMockOpenAiServer(params?: {
         writeJson(res, 200, lastRequest ?? { ok: false, error: "no request recorded" });
         return;
       }
+      if (req.method === "GET" && url.pathname === "/debug/request-cursor") {
+        writeJson(res, 200, { cursor: nextRequestCursor - 1 });
+        return;
+      }
       if (req.method === "GET" && url.pathname === "/debug/requests") {
-        writeJson(res, 200, requests);
+        const afterText = url.searchParams.get("after");
+        if (afterText === null) {
+          writeJson(res, 200, requests);
+          return;
+        }
+        const after = parseQaDebugRequestCursor(afterText);
+        if (after === null) {
+          writeJson(res, 400, { error: "after must be a non-negative safe integer" });
+          return;
+        }
+        const latestCursor = nextRequestCursor - 1;
+        const oldestCursor = requests[0]?.cursor ?? nextRequestCursor;
+        if (after > latestCursor) {
+          writeJson(res, 409, {
+            error: "request cursor is ahead of the latest recorded request",
+            after,
+            latestCursor,
+          });
+          return;
+        }
+        if (after < oldestCursor - 1) {
+          writeJson(res, 409, {
+            error: "request cursor expired",
+            after,
+            oldestCursor,
+            latestCursor,
+          });
+          return;
+        }
+        writeJson(
+          res,
+          200,
+          requests.filter((request) => request.cursor > after),
+        );
         return;
       }
       if (req.method === "GET" && url.pathname === "/debug/inflight-requests") {
@@ -3856,7 +3934,7 @@ export async function startQaMockOpenAiServer(params?: {
           inflightRequests.delete(inflightRequestId);
         }
         const resolvedModel = typeof body.model === "string" ? body.model : "";
-        lastRequest = {
+        recordRequest({
           raw,
           body,
           prompt,
@@ -3871,11 +3949,7 @@ export async function startQaMockOpenAiServer(params?: {
           plannedToolArgs: extractPlannedToolArgs(events),
           toolOutputCallId: extractToolOutputCallId(input) || undefined,
           ...(extractToolOutputStructuredError(input) ? { toolOutputStructuredError: true } : {}),
-        };
-        requests.push(lastRequest);
-        if (requests.length > MOCK_OPENAI_DEBUG_REQUEST_LIMIT) {
-          requests.splice(0, requests.length - MOCK_OPENAI_DEBUG_REQUEST_LIMIT);
-        }
+        });
         if (body.stream === false) {
           const completion = events.at(-1);
           if (!completion || completion.type !== "response.completed") {
@@ -3918,7 +3992,7 @@ export async function startQaMockOpenAiServer(params?: {
         // is what lets a single parity run diff assertions across both lanes.
         // Reuse the normalized model so an empty-string body.model no longer
         // leaks through to `lastRequest.model`.
-        lastRequest = {
+        recordRequest({
           raw,
           body: body as Record<string, unknown>,
           prompt: extractLastUserText(input),
@@ -3932,11 +4006,7 @@ export async function startQaMockOpenAiServer(params?: {
           plannedToolArgs: extractPlannedToolArgs(events),
           toolOutputCallId: extractToolOutputCallId(input) || undefined,
           ...(extractToolOutputStructuredError(input) ? { toolOutputStructuredError: true } : {}),
-        };
-        requests.push(lastRequest);
-        if (requests.length > MOCK_OPENAI_DEBUG_REQUEST_LIMIT) {
-          requests.splice(0, requests.length - MOCK_OPENAI_DEBUG_REQUEST_LIMIT);
-        }
+        });
         if (body.stream === true) {
           writeAnthropicSse(res, streamEvents);
           return;

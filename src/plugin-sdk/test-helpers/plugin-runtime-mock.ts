@@ -18,7 +18,7 @@ import {
 import type { PluginRuntime } from "../testing.js";
 
 const DEFAULT_PROVIDER = "openai";
-const DEFAULT_MODEL = "gpt-5.5";
+const DEFAULT_MODEL = "gpt-5.6-sol";
 
 type DeepPartial<T> = {
   [K in keyof T]?: T[K] extends (...args: never[]) => unknown
@@ -484,9 +484,6 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
             };
           },
         ) as PluginRuntime["agent"]["session"]["createSessionEntry"],
-        loadSessionStore: vi.fn(
-          () => ({}),
-        ) as unknown as PluginRuntime["agent"]["session"]["loadSessionStore"],
         getSessionEntry: vi.fn(
           () => undefined,
         ) as unknown as PluginRuntime["agent"]["session"]["getSessionEntry"],
@@ -506,24 +503,11 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         runWithWorkAdmission: vi.fn(
           async (_params, run) => await run(new AbortController().signal),
         ) as PluginRuntime["agent"]["session"]["runWithWorkAdmission"],
-        saveSessionStore: vi
-          .fn()
-          .mockResolvedValue(
-            undefined,
-          ) as unknown as PluginRuntime["agent"]["session"]["saveSessionStore"],
-        updateSessionStore: vi
-          .fn()
-          .mockResolvedValue(
-            undefined,
-          ) as unknown as PluginRuntime["agent"]["session"]["updateSessionStore"],
         updateSessionStoreEntry: vi
           .fn()
           .mockResolvedValue(
             null,
           ) as unknown as PluginRuntime["agent"]["session"]["updateSessionStoreEntry"],
-        resolveSessionFilePath: vi.fn(
-          (sessionId: string) => `/tmp/${sessionId}.json`,
-        ) as unknown as PluginRuntime["agent"]["session"]["resolveSessionFilePath"],
       },
     },
     system: {
