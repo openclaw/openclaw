@@ -236,6 +236,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     replacePersistedTranscript: vi.fn(),
     flushPendingToolResults: vi.fn(),
     clearPendingToolResults: vi.fn(),
+    clearNextUserMessagePersistenceSuppression: vi.fn(),
     removeTrailingEntries: vi.fn(() => 0),
   };
   return {

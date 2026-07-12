@@ -1341,6 +1341,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       tempPaths,
       attemptOverrides: {
         prompt: "visible ask",
+        suppressNextUserMessagePersistence: true,
       },
       sessionPrompt: async (session, prompt) => {
         seen.prompt = prompt;
@@ -1371,6 +1372,9 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(JSON.stringify(seen.messages)).not.toContain("dynamic hook context");
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain("dynamic hook tail");
     expect(hoisted.sessionManager.branch).toHaveBeenCalledWith("parent-leaf");
+    expect(
+      hoisted.sessionManager.clearNextUserMessagePersistenceSuppression,
+    ).toHaveBeenCalledOnce();
   });
 
   it("targets the latest active prompt after orphan repair reaches the embedded provider", async () => {
