@@ -61,6 +61,50 @@ struct WatchChatStatusLocalizationTests {
         #expect(rendered != "Connect iPhone chat to read messages")
     }
 
+    @Test func `payload parser preserves legacy text for unknown semantic statuses`() throws {
+        var payload = Self.semanticPayload()
+        payload["gatewayStatus"] = ["code": "futureGateway"]
+        payload["gatewayStatusText"] = "Future gateway state"
+        payload["gatewayConnected"] = true
+        payload["talkStatus"] = ["code": "futureTalk"]
+        payload["talkStatusText"] = "Future talk state"
+        payload["talkSpeaking"] = true
+
+        let snapshot = try #require(WatchAppSnapshotMessage.parsePayload(payload))
+
+        #expect(snapshot.gatewayStatus.code == .legacy)
+        #expect(snapshot.gatewayStatus.verbatim == "Future gateway state")
+        #expect(snapshot.talkStatus.code == .legacy)
+        #expect(snapshot.talkStatus.verbatim == "Future talk state")
+    }
+
+    @Test func `persisted snapshot preserves legacy text for unknown semantic statuses`() throws {
+        let json = """
+        {
+          "gatewayStatus": {"code": "futureGateway"},
+          "gatewayStatusText": "Future gateway state",
+          "gatewayConnected": true,
+          "agentName": "Main",
+          "sessionKey": "main",
+          "talkStatus": {"code": "futureTalk"},
+          "talkStatusText": "Future talk state",
+          "talkEnabled": true,
+          "talkListening": false,
+          "talkSpeaking": true,
+          "pendingApprovalCount": 0
+        }
+        """
+
+        let snapshot = try JSONDecoder().decode(
+            WatchAppSnapshotMessage.self,
+            from: Data(json.utf8))
+
+        #expect(snapshot.gatewayStatus.code == .legacy)
+        #expect(snapshot.gatewayStatus.verbatim == "Future gateway state")
+        #expect(snapshot.talkStatus.code == .legacy)
+        #expect(snapshot.talkStatus.verbatim == "Future talk state")
+    }
+
     @Test func `persisted semantic command status follows current watch locale`() {
         let status = WatchAppCommandStatus(command: .sendChat, code: .sent)
         let english = status.localizedText(localize: Self.english)

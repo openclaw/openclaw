@@ -518,7 +518,9 @@ struct WatchAppSnapshotMessage: Codable, Equatable {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let chatItems = (payload["chatItems"] as? [Any])?.compactMap(Self.parseChatItem)
         return Self(
-            gatewayStatus: Self.parseStatus(payload["gatewayStatus"])
+            gatewayStatus: Self.parseStatus(
+                payload["gatewayStatus"],
+                fallbackText: payload["gatewayStatusText"] as? String)
                 ?? Self.decodeLegacyGatewayStatus(
                     text: payload["gatewayStatusText"] as? String,
                     connected: gatewayConnected),
@@ -528,7 +530,9 @@ struct WatchAppSnapshotMessage: Codable, Equatable {
             agentAvatarText: agentAvatarText?.isEmpty == false ? agentAvatarText : nil,
             sessionKey: sessionKey.isEmpty ? "main" : sessionKey,
             gatewayStableID: gatewayStableID,
-            talkStatus: Self.parseStatus(payload["talkStatus"])
+            talkStatus: Self.parseStatus(
+                payload["talkStatus"],
+                fallbackText: payload["talkStatusText"] as? String)
                 ?? Self.decodeLegacyTalkStatus(
                     text: payload["talkStatusText"] as? String,
                     enabled: talkEnabled,
@@ -539,7 +543,9 @@ struct WatchAppSnapshotMessage: Codable, Equatable {
             talkSpeaking: talkSpeaking,
             pendingApprovalCount: max(0, pendingApprovalCount),
             chatItems: chatItems,
-            chatStatus: Self.parseStatus(payload["chatStatus"])
+            chatStatus: Self.parseStatus(
+                payload["chatStatus"],
+                fallbackText: payload["chatStatusText"] as? String)
                 ?? Self.decodeLegacyChatStatus(
                     code: payload["chatStatusCode"] as? String,
                     text: payload["chatStatusText"] as? String),
@@ -607,18 +613,42 @@ struct WatchAppSnapshotMessage: Codable, Equatable {
         let talkStatusText = try container.decodeIfPresent(String.self, forKey: .talkStatusText)
         let chatStatusCode = try container.decodeIfPresent(String.self, forKey: .chatStatusCode)
         let chatStatusText = try container.decodeIfPresent(String.self, forKey: .chatStatusText)
-        self.gatewayStatus = (try? container.decode(
+        if let gatewayStatus = try? container.decode(
             OpenClawWatchAppStatus.self,
-            forKey: .gatewayStatus)) ?? Self.decodeLegacyGatewayStatus(
-            text: gatewayStatusText,
-            connected: self.gatewayConnected)
-        self.talkStatus = (try? container.decode(
+            forKey: .gatewayStatus)
+        {
+            self.gatewayStatus = gatewayStatus
+        } else if container.contains(.gatewayStatus),
+                  let gatewayStatusText,
+                  !gatewayStatusText.isEmpty
+        {
+            self.gatewayStatus = OpenClawWatchAppStatus(
+                code: .legacy,
+                verbatim: gatewayStatusText)
+        } else {
+            self.gatewayStatus = Self.decodeLegacyGatewayStatus(
+                text: gatewayStatusText,
+                connected: self.gatewayConnected)
+        }
+        if let talkStatus = try? container.decode(
             OpenClawWatchAppStatus.self,
-            forKey: .talkStatus)) ?? Self.decodeLegacyTalkStatus(
-            text: talkStatusText,
-            enabled: self.talkEnabled,
-            listening: self.talkListening,
-            speaking: self.talkSpeaking)
+            forKey: .talkStatus)
+        {
+            self.talkStatus = talkStatus
+        } else if container.contains(.talkStatus),
+                  let talkStatusText,
+                  !talkStatusText.isEmpty
+        {
+            self.talkStatus = OpenClawWatchAppStatus(
+                code: .legacy,
+                verbatim: talkStatusText)
+        } else {
+            self.talkStatus = Self.decodeLegacyTalkStatus(
+                text: talkStatusText,
+                enabled: self.talkEnabled,
+                listening: self.talkListening,
+                speaking: self.talkSpeaking)
+        }
         self.chatStatus = (try? container.decode(
             OpenClawWatchAppStatus.self,
             forKey: .chatStatus)) ?? Self.decodeLegacyChatStatus(
@@ -646,7 +676,10 @@ struct WatchAppSnapshotMessage: Codable, Equatable {
         try container.encodeIfPresent(self.snapshotId, forKey: .snapshotId)
     }
 
-    private static func parseStatus(_ value: Any?) -> OpenClawWatchAppStatus? {
+    private static func parseStatus(
+        _ value: Any?,
+        fallbackText: String? = nil) -> OpenClawWatchAppStatus?
+    {
         guard let payload = value as? [String: Any],
               let rawCode = payload["code"] as? String
         else {
@@ -654,8 +687,9 @@ struct WatchAppSnapshotMessage: Codable, Equatable {
         }
         let verbatim = payload["verbatim"] as? String
         guard let code = OpenClawWatchAppStatusCode(rawValue: rawCode) else {
-            guard let verbatim, !verbatim.isEmpty else { return nil }
-            return OpenClawWatchAppStatus(code: .legacy, verbatim: verbatim)
+            let legacyText = verbatim?.isEmpty == false ? verbatim : fallbackText
+            guard let legacyText, !legacyText.isEmpty else { return nil }
+            return OpenClawWatchAppStatus(code: .legacy, verbatim: legacyText)
         }
         return OpenClawWatchAppStatus(
             code: code,
