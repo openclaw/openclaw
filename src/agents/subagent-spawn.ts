@@ -1309,19 +1309,24 @@ export async function spawnSubagentDirect(
     }
   };
 
+  const inheritedToolAllow = normalizeInheritedToolAllowlist(ctx.inheritedToolAllowlist);
   const initialChildSessionPatch: Record<string, unknown> = {
     spawnDepth: childDepth,
     subagentRole: childCapabilities.role === "main" ? null : childCapabilities.role,
     subagentControlScope: childCapabilities.controlScope,
-    ...inheritedToolAllowPatch([
-      ...(ctx.inheritedToolAllowlist ?? []),
-      ...(Array.isArray(cfg.tools?.subagents?.tools?.alsoAllow)
-        ? cfg.tools.subagents.tools.alsoAllow
-        : []),
-      ...(Array.isArray(targetAgentConfig?.tools?.alsoAllow)
-        ? targetAgentConfig.tools.alsoAllow
-        : []),
-    ]),
+    ...inheritedToolAllowPatch(
+      inheritedToolAllow.length > 0
+        ? [
+            ...inheritedToolAllow,
+            ...(Array.isArray(cfg.tools?.subagents?.tools?.alsoAllow)
+              ? cfg.tools.subagents.tools.alsoAllow
+              : []),
+            ...(Array.isArray(targetAgentConfig?.tools?.alsoAllow)
+              ? targetAgentConfig.tools.alsoAllow
+              : []),
+          ]
+        : undefined,
+    ),
     ...inheritedToolDenyPatch(ctx.inheritedToolDenylist),
     ...plan.initialSessionPatch,
   };

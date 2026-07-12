@@ -162,7 +162,7 @@ describe("subagent spawn depth + child limits", () => {
     expect(childSession.inheritedToolDeny).toEqual(["exec", "read"]);
   });
 
-  it("persists configured subagent alsoAllow entries on spawned child sessions", async () => {
+  it("does not persist global subagent alsoAllow for an unrestricted parent", async () => {
     hoisted.configOverride = createSubagentSpawnTestConfig("/tmp/workspace-main", {
       tools: {
         subagents: {
@@ -188,7 +188,6 @@ describe("subagent spawn depth + child limits", () => {
       {
         agentSessionKey: "agent:main:main",
         workspaceDir: "/tmp/workspace-main",
-        inheritedToolAllowlist: ["sessions_spawn", "read"],
       },
     );
 
@@ -197,14 +196,10 @@ describe("subagent spawn depth + child limits", () => {
     if (!childSession) {
       throw new Error("Expected persisted child session");
     }
-    expect(childSession.inheritedToolAllow).toEqual([
-      "sessions_spawn",
-      "read",
-      "custom_plugin_tool",
-    ]);
+    expect(childSession.inheritedToolAllow).toBeUndefined();
   });
 
-  it("persists target agent alsoAllow entries on spawned child sessions", async () => {
+  it("does not persist target agent tool config for an unrestricted parent", async () => {
     hoisted.configOverride = createSubagentSpawnTestConfig("/tmp/workspace-main", {
       agents: {
         defaults: {
@@ -219,7 +214,7 @@ describe("subagent spawn depth + child limits", () => {
             id: "dennis-ritchie",
             workspace: "/tmp/workspace-main",
             tools: {
-              profile: "coding",
+              profile: "full",
               alsoAllow: ["gbrain_readonly"],
             },
           },
@@ -239,7 +234,7 @@ describe("subagent spawn depth + child limits", () => {
       {
         agentSessionKey: "agent:main:main",
         workspaceDir: "/tmp/workspace-main",
-        inheritedToolAllowlist: ["sessions_spawn", "read"],
+        inheritedToolAllowlist: [],
       },
     );
 
@@ -248,7 +243,66 @@ describe("subagent spawn depth + child limits", () => {
     if (!childSession) {
       throw new Error("Expected persisted child session");
     }
-    expect(childSession.inheritedToolAllow).toEqual(["sessions_spawn", "read", "gbrain_readonly"]);
+    expect(childSession.inheritedToolAllow).toBeUndefined();
+  });
+
+  it("appends normalized global and target extras for a restrictive parent", async () => {
+    hoisted.configOverride = createSubagentSpawnTestConfig("/tmp/workspace-main", {
+      tools: {
+        subagents: {
+          tools: {
+            alsoAllow: ["custom_plugin_tool", ""],
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          workspace: "/tmp/workspace-main",
+          subagents: {
+            allowAgents: ["dennis-ritchie"],
+            maxSpawnDepth: 2,
+          },
+        },
+        list: [
+          {
+            id: "dennis-ritchie",
+            workspace: "/tmp/workspace-main",
+            tools: {
+              profile: "coding",
+              alsoAllow: ["gbrain_readonly", "custom_plugin_tool", ""],
+            },
+          },
+        ],
+      },
+    });
+    hoisted.resolveAgentConfigMock.mockImplementation(
+      (cfg: { agents?: { list?: Array<Record<string, unknown>> } }, agentId: string) =>
+        cfg.agents?.list?.find((agent) => agent.id === agentId),
+    );
+
+    const result = await spawnSubagentDirect(
+      {
+        agentId: "dennis-ritchie",
+        task: "hello",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        workspaceDir: "/tmp/workspace-main",
+        inheritedToolAllowlist: ["sessions_spawn", "read", ""],
+      },
+    );
+
+    const accepted = expectAccepted(result, "run-1");
+    const childSession = persistedStore?.[accepted.childSessionKey];
+    if (!childSession) {
+      throw new Error("Expected persisted child session");
+    }
+    expect(childSession.inheritedToolAllow).toEqual([
+      "sessions_spawn",
+      "read",
+      "custom_plugin_tool",
+      "gbrain_readonly",
+    ]);
   });
 
   it("rejects callers when stored spawn depth is already at the configured max", async () => {
