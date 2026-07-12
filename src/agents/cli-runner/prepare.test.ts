@@ -277,10 +277,14 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
           models: {
             providers: {
               "fixture-anthropic": {
+                baseUrl: "https://api.anthropic.com",
                 models: [
                   {
                     id: "claude-opus-4-7",
                     name: "Claude Opus 4.7",
+                    reasoning: false,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                     contextWindow: 200_000,
                     maxTokens: 8_192,
                     contextTokens: 100_000,
@@ -293,7 +297,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       });
 
       expect(context.backendResolved.modelProvider).toBe("fixture-anthropic");
-      expect(context.contextWindowInfo.tokens).toBe(100_000);
+      expect(context.contextWindowInfo?.tokens).toBe(100_000);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
