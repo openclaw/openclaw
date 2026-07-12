@@ -113,8 +113,9 @@ struct RuntimeLocalizationSourceGuardTests {
         }
         #expect(phoneControlHub.contains("String(localized: \"Default Agent\")"))
         #expect(proComponents.contains("OpenClawStatusBadge(label: .verbatim(self.title)"))
-        #expect(skillWorkshop.contains("String(localized: \"Default agent\")"))
-        #expect(workboard.components(separatedBy: "String(localized: \"Default agent\")").count - 1 == 2)
+        #expect(
+            skillWorkshop.components(separatedBy: "String(localized: \"Default agent\")").count - 1 == 2)
+        #expect(workboard.components(separatedBy: "String(localized: \"Default agent\")").count - 1 == 4)
         #expect(!workboard.contains("?? \"Default agent\""))
         #expect(talkPro.contains("if title.isEmpty { return String(localized: \"Not active\") }"))
         #expect(talkManager.contains(
