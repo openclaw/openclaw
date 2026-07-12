@@ -1,6 +1,11 @@
 /**
  * Resolves MCP transport command, environment, and timeout configuration.
  */
+import {
+  clampPositiveTimerTimeoutMs,
+  finiteSecondsToTimerSafeMilliseconds,
+  MAX_TIMER_TIMEOUT_SECONDS,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveOpenClawMcpTransportAlias } from "../config/mcp-config-normalize.js";
@@ -69,11 +74,11 @@ function getPositiveNumber(rawServer: unknown, keys: readonly string[]): number 
 function getConnectionTimeoutMs(rawServer: unknown): number {
   const milliseconds = getPositiveNumber(rawServer, ["connectionTimeoutMs"]);
   if (milliseconds) {
-    return Math.floor(milliseconds);
+    return clampPositiveTimerTimeoutMs(milliseconds) ?? DEFAULT_CONNECTION_TIMEOUT_MS;
   }
   const seconds = getPositiveNumber(rawServer, ["connectTimeout", "connect_timeout"]);
   if (seconds) {
-    return Math.floor(seconds * 1_000);
+    return finiteSecondsToTimerSafeMilliseconds(Math.min(seconds, MAX_TIMER_TIMEOUT_SECONDS)) ?? 1;
   }
   return DEFAULT_CONNECTION_TIMEOUT_MS;
 }
@@ -81,11 +86,11 @@ function getConnectionTimeoutMs(rawServer: unknown): number {
 function getRequestTimeoutMs(rawServer: unknown): number {
   const milliseconds = getPositiveNumber(rawServer, ["requestTimeoutMs"]);
   if (milliseconds) {
-    return Math.floor(milliseconds);
+    return clampPositiveTimerTimeoutMs(milliseconds) ?? DEFAULT_REQUEST_TIMEOUT_MS;
   }
   const seconds = getPositiveNumber(rawServer, ["timeout"]);
   if (seconds) {
-    return Math.floor(seconds * 1_000);
+    return finiteSecondsToTimerSafeMilliseconds(Math.min(seconds, MAX_TIMER_TIMEOUT_SECONDS)) ?? 1;
   }
   return DEFAULT_REQUEST_TIMEOUT_MS;
 }

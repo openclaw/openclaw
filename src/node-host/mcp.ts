@@ -3,6 +3,11 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { ErrorCode, type CallToolResult, type Tool } from "@modelcontextprotocol/sdk/types.js";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import {
+  clampPositiveTimerTimeoutMs,
+  finiteSecondsToTimerSafeMilliseconds,
+  MAX_TIMER_TIMEOUT_SECONDS,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/schema/nodes.js";
@@ -273,21 +278,18 @@ async function listAllTools(
 }
 
 function resolveCallTimeoutMs(value: number | undefined): number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : NODE_MCP_TOOL_CALL_TIMEOUT_MS;
+  return clampPositiveTimerTimeoutMs(value) ?? NODE_MCP_TOOL_CALL_TIMEOUT_MS;
 }
 
 function resolveServerToolCallTimeoutMs(config: McpServerConfig): number {
-  if (
-    typeof config.requestTimeoutMs === "number" &&
-    Number.isFinite(config.requestTimeoutMs) &&
-    config.requestTimeoutMs > 0
-  ) {
-    return Math.floor(config.requestTimeoutMs);
+  const requestTimeoutMs = clampPositiveTimerTimeoutMs(config.requestTimeoutMs);
+  if (requestTimeoutMs) {
+    return requestTimeoutMs;
   }
   if (typeof config.timeout === "number" && Number.isFinite(config.timeout) && config.timeout > 0) {
-    return Math.floor(config.timeout * 1_000);
+    return (
+      finiteSecondsToTimerSafeMilliseconds(Math.min(config.timeout, MAX_TIMER_TIMEOUT_SECONDS)) ?? 1
+    );
   }
   return NODE_MCP_TOOL_CALL_TIMEOUT_MS;
 }
