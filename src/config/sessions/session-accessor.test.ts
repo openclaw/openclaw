@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
@@ -1835,7 +1836,13 @@ describe("session accessor seam", () => {
       .filter((file) => file.startsWith("previous-session.jsonl.reset."));
     expect(archivedPreviousTranscripts).toHaveLength(1);
     const [archivedPreviousTranscriptName] = archivedPreviousTranscripts;
-    const archivedPreviousTranscript = path.join(tempDir, archivedPreviousTranscriptName);
+    const archivedPreviousTranscript = path.join(
+      tempDir,
+      expectDefined(
+        archivedPreviousTranscriptName,
+        "archivedPreviousTranscriptName test invariant",
+      ),
+    );
     expect(fs.readFileSync(archivedPreviousTranscript, "utf-8")).toContain(
       '"id":"previous-session"',
     );

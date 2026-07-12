@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.js";
 import {
@@ -111,6 +112,10 @@ describe("worker environment service", () => {
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
+
+  function getDevelopmentProfile() {
+    return expectDefined(config.cloudWorkers?.profiles?.development, "development worker profile");
+  }
 
   function createService(
     provider: WorkerProvider,
@@ -280,7 +285,7 @@ describe("worker environment service", () => {
             lifetime: { idleTimeoutMinutes: 10 },
           },
         });
-        config.cloudWorkers!.profiles!.development.settings = { region: "mutated" };
+        getDevelopmentProfile().settings = { region: "mutated" };
         expect(profile).toEqual({ region: "test" });
         return { leaseId: "lease-1", ssh: SSH_ENDPOINT };
       },
@@ -902,7 +907,9 @@ describe("worker environment service", () => {
   });
 
   it("rejects plaintext secret fields before persisting intent", async () => {
-    config.cloudWorkers!.profiles!.development.settings = { keyRef: "not-a-secret-ref" };
+    getDevelopmentProfile().settings = {
+      keyRef: "not-a-secret-ref",
+    };
     const provision = vi.fn(createProvider().provision);
 
     await expect(
@@ -925,7 +932,7 @@ describe("worker environment service", () => {
     await expect(workerService.create("development", "request-invalid")).rejects.toMatchObject({
       code: "invalid_profile",
     } satisfies Partial<WorkerEnvironmentServiceError>);
-    const record = store.list()[0];
+    const record = expectDefined(store.list()[0], "store.list()[0] test invariant");
     expect(record).toMatchObject({ state: "failed", lastError: "region is required" });
 
     await workerService.reconcileOnce();
@@ -1205,10 +1212,10 @@ describe("worker environment service", () => {
   });
 
   it("uses the snapshotted npm selection after live config changes", async () => {
-    config.cloudWorkers!.profiles!.development.install = "npm";
+    getDevelopmentProfile().install = "npm";
     const provider = createProvider({
       provision: async () => {
-        config.cloudWorkers!.profiles!.development.install = "bundle";
+        getDevelopmentProfile().install = "bundle";
         return { leaseId: "lease-npm", ssh: SSH_ENDPOINT };
       },
     });
