@@ -530,6 +530,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Text formatting
   - H2: Context fields
+  - H2: Outbound payloads
   - H2: Channel notes
   - H2: Related
 
