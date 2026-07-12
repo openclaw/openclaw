@@ -10434,6 +10434,11 @@
       "translated": "Cronjobs"
     },
     {
+      "id": "native.apple.57587fec1ca582ec",
+      "source": "Default Agent",
+      "translated": "Standaardagent"
+    },
+    {
       "id": "native.apple.e0e99a802f07cc68",
       "source": "Gateway",
       "translated": "Gateway"
@@ -12214,6 +12219,11 @@
       "translated": "Not loaded"
     },
     {
+      "id": "native.apple.d3ccb092936551fc",
+      "source": "Not active",
+      "translated": "Niet actief"
+    },
+    {
       "id": "native.apple.1620f7cb3deea133",
       "source": "Open Gateway Settings",
       "translated": "Gateway-instellingen openen"
@@ -13984,6 +13994,11 @@
       "translated": "Uit"
     },
     {
+      "id": "native.apple.4a39ea14013488e9",
+      "source": "Not active",
+      "translated": "Niet actief"
+    },
+    {
       "id": "native.apple.50a5c93daef52545",
       "source": "Requesting permissions…",
       "translated": "Toestemmingen aanvragen…"
@@ -14159,9 +14174,19 @@
       "translated": "OpenClaw niet beschikbaar"
     },
     {
+      "id": "native.apple.f703391677039fa3",
+      "source": "iOS Speech + TTS",
+      "translated": "iOS-spraak + TTS"
+    },
+    {
       "id": "native.apple.794c5c98f3a4238d",
       "source": "Listening",
       "translated": "Luistert"
+    },
+    {
+      "id": "native.apple.7b59ddc5cb1e921a",
+      "source": "iOS Speech fallback",
+      "translated": "iOS-spraak als terugvaloptie"
     },
     {
       "id": "native.apple.465b84d5ff3f3717",
@@ -14192,6 +14217,11 @@
       "id": "native.apple.c014fe216584eb70",
       "source": "Approval requested",
       "translated": "Goedkeuring aangevraagd"
+    },
+    {
+      "id": "native.apple.7876a473b7c3c245",
+      "source": "Realtime unavailable",
+      "translated": "Realtime niet beschikbaar"
     },
     {
       "id": "native.apple.2970f0510ac6b396",

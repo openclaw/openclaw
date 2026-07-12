@@ -16250,7 +16250,7 @@
       "id": "native.apple.155107659d31d314"
     },
     {
-      "kind": "conditional-branch",
+      "kind": "ui-localized-call",
       "line": 1285,
       "path": "apps/ios/Sources/Design/IPadWorkboardScreen.swift",
       "source": "Default agent",
@@ -16578,7 +16578,7 @@
       "id": "native.apple.20d011936ab5cd30"
     },
     {
-      "kind": "conditional-branch",
+      "kind": "ui-localized-call",
       "line": 663,
       "path": "apps/ios/Sources/Design/OpenClawProComponents.swift",
       "source": "Online",
@@ -16586,7 +16586,7 @@
       "id": "native.apple.72baecec6cf1b462"
     },
     {
-      "kind": "conditional-branch",
+      "kind": "ui-localized-call",
       "line": 665,
       "path": "apps/ios/Sources/Design/OpenClawProComponents.swift",
       "source": "Connecting",
@@ -16594,7 +16594,7 @@
       "id": "native.apple.ca9dfb05d9034ff7"
     },
     {
-      "kind": "conditional-branch",
+      "kind": "ui-localized-call",
       "line": 667,
       "path": "apps/ios/Sources/Design/OpenClawProComponents.swift",
       "source": "Attention",
@@ -16602,7 +16602,7 @@
       "id": "native.apple.d7a3d53412e23e88"
     },
     {
-      "kind": "conditional-branch",
+      "kind": "ui-localized-call",
       "line": 669,
       "path": "apps/ios/Sources/Design/OpenClawProComponents.swift",
       "source": "Offline",
@@ -16690,6 +16690,14 @@
       "id": "native.apple.9eb33a11fb81796b"
     },
     {
+      "kind": "ui-localized-call",
+      "line": 284,
+      "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
+      "source": "Default Agent",
+      "surface": "apple",
+      "id": "native.apple.57587fec1ca582ec"
+    },
+    {
       "kind": "ui-call",
       "line": 299,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
@@ -16714,7 +16722,7 @@
       "id": "native.apple.ab0a315f69e3d5df"
     },
     {
-      "kind": "conditional-branch",
+      "kind": "ui-localized-call",
       "line": 323,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
       "source": "Online",
@@ -16722,7 +16730,7 @@
       "id": "native.apple.01ad746119fbc27d"
     },
     {
-      "kind": "conditional-branch",
+      "kind": "ui-localized-call",
       "line": 324,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
       "source": "Connecting",
@@ -16730,7 +16738,7 @@
       "id": "native.apple.e253ef19f6e53371"
     },
     {
-      "kind": "conditional-branch",
+      "kind": "ui-localized-call",
       "line": 325,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
       "source": "Attention",
@@ -16738,7 +16746,7 @@
       "id": "native.apple.6f28b07ebdc2b25d"
     },
     {
-      "kind": "conditional-branch",
+      "kind": "ui-localized-call",
       "line": 326,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
       "source": "Offline",
@@ -19538,6 +19546,14 @@
       "id": "native.apple.877fb5c1abfaafa1"
     },
     {
+      "kind": "ui-localized-call",
+      "line": 257,
+      "path": "apps/ios/Sources/Design/TalkProTab.swift",
+      "source": "Not active",
+      "surface": "apple",
+      "id": "native.apple.d3ccb092936551fc"
+    },
+    {
       "kind": "conditional-branch",
       "line": 435,
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
@@ -21530,7 +21546,7 @@
       "id": "native.apple.9e781c0183b79a76"
     },
     {
-      "kind": "conditional-branch",
+      "kind": "ui-localized-call",
       "line": 352,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Online",
@@ -21538,7 +21554,7 @@
       "id": "native.apple.f4eea6473f43388d"
     },
     {
-      "kind": "conditional-branch",
+      "kind": "ui-localized-call",
       "line": 354,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Connecting",
@@ -21546,7 +21562,7 @@
       "id": "native.apple.9e2aea6088887f1f"
     },
     {
-      "kind": "conditional-branch",
+      "kind": "ui-localized-call",
       "line": 356,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Needs attention",
@@ -21554,7 +21570,7 @@
       "id": "native.apple.3624978c7d43335a"
     },
     {
-      "kind": "conditional-branch",
+      "kind": "ui-localized-call",
       "line": 358,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Offline",
@@ -21690,7 +21706,7 @@
       "id": "native.apple.e5c9d5012c42a604"
     },
     {
-      "kind": "conditional-branch",
+      "kind": "ui-localized-call",
       "line": 64,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Chat",
@@ -21698,7 +21714,7 @@
       "id": "native.apple.a29418bbb3169404"
     },
     {
-      "kind": "conditional-branch",
+      "kind": "ui-localized-call",
       "line": 65,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Talk",
@@ -21706,7 +21722,7 @@
       "id": "native.apple.febca7528af94342"
     },
     {
-      "kind": "conditional-branch",
+      "kind": "ui-localized-call",
       "line": 66,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Overview",
@@ -21714,7 +21730,7 @@
       "id": "native.apple.e26bbe303d8a9544"
     },
     {
-      "kind": "conditional-branch",
+      "kind": "ui-localized-call",
       "line": 67,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Activity",
@@ -21722,7 +21738,7 @@
       "id": "native.apple.1bae45caee11d1a4"
     },
     {
-      "kind": "conditional-branch",
+      "kind": "ui-localized-call",
       "line": 68,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Agents",
@@ -21730,7 +21746,7 @@
       "id": "native.apple.dea6129f5908f494"
     },
     {
-      "kind": "conditional-branch",
+      "kind": "ui-localized-call",
       "line": 69,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Workboard",
@@ -21738,7 +21754,7 @@
       "id": "native.apple.1b9a298ab6e87f5f"
     },
     {
-      "kind": "conditional-branch",
+      "kind": "ui-localized-call",
       "line": 70,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Skill Workshop",
@@ -21746,7 +21762,7 @@
       "id": "native.apple.2492086244fda7c6"
     },
     {
-      "kind": "conditional-branch",
+      "kind": "ui-localized-call",
       "line": 71,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Instances",
@@ -21754,7 +21770,7 @@
       "id": "native.apple.7482f18faae25219"
     },
     {
-      "kind": "conditional-branch",
+      "kind": "ui-localized-call",
       "line": 72,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Sessions",
@@ -21762,7 +21778,7 @@
       "id": "native.apple.3579cf2750470a22"
     },
     {
-      "kind": "conditional-branch",
+      "kind": "ui-localized-call",
       "line": 73,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Files",
@@ -21770,7 +21786,7 @@
       "id": "native.apple.253cb2debeb51859"
     },
     {
-      "kind": "conditional-branch",
+      "kind": "ui-localized-call",
       "line": 74,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Dreaming",
@@ -21778,7 +21794,7 @@
       "id": "native.apple.f7e04202c3e37bd8"
     },
     {
-      "kind": "conditional-branch",
+      "kind": "ui-localized-call",
       "line": 75,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Usage",
@@ -21786,7 +21802,7 @@
       "id": "native.apple.006c21319c07c995"
     },
     {
-      "kind": "conditional-branch",
+      "kind": "ui-localized-call",
       "line": 76,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Cron Jobs",
@@ -21794,7 +21810,7 @@
       "id": "native.apple.0b4e807d2449e93f"
     },
     {
-      "kind": "conditional-branch",
+      "kind": "ui-localized-call",
       "line": 77,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Terminal",
@@ -21802,7 +21818,7 @@
       "id": "native.apple.b3b5114b91a8db8f"
     },
     {
-      "kind": "conditional-branch",
+      "kind": "ui-localized-call",
       "line": 78,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Docs",
@@ -21810,7 +21826,7 @@
       "id": "native.apple.584dfce592c64899"
     },
     {
-      "kind": "conditional-branch",
+      "kind": "ui-localized-call",
       "line": 79,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Settings",
@@ -21818,7 +21834,7 @@
       "id": "native.apple.32f7a12fd39a135c"
     },
     {
-      "kind": "conditional-branch",
+      "kind": "ui-localized-call",
       "line": 80,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Settings / Gateway",
@@ -21826,7 +21842,7 @@
       "id": "native.apple.65ed76ea0b539052"
     },
     {
-      "kind": "conditional-branch",
+      "kind": "ui-localized-call",
       "line": 86,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Connection",
@@ -22371,6 +22387,14 @@
     },
     {
       "kind": "ui-localized-call",
+      "line": 828,
+      "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
+      "source": "Not active",
+      "surface": "apple",
+      "id": "native.apple.4a39ea14013488e9"
+    },
+    {
+      "kind": "ui-localized-call",
       "line": 1005,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Requesting permissions…",
@@ -22651,11 +22675,27 @@
     },
     {
       "kind": "ui-localized-call",
+      "line": 3814,
+      "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
+      "source": "iOS Speech + TTS",
+      "surface": "apple",
+      "id": "native.apple.f703391677039fa3"
+    },
+    {
+      "kind": "ui-localized-call",
       "line": 3816,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Listening",
       "surface": "apple",
       "id": "native.apple.794c5c98f3a4238d"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 3820,
+      "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
+      "source": "iOS Speech fallback",
+      "surface": "apple",
+      "id": "native.apple.7b59ddc5cb1e921a"
     },
     {
       "kind": "ui-localized-call",
@@ -22704,6 +22744,14 @@
       "source": "Approval requested",
       "surface": "apple",
       "id": "native.apple.c014fe216584eb70"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 4613,
+      "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
+      "source": "Realtime unavailable",
+      "surface": "apple",
+      "id": "native.apple.7876a473b7c3c245"
     },
     {
       "kind": "ui-localized-call",

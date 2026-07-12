@@ -1710,7 +1710,8 @@
       "source": "Default Agent",
       "translations": [
         "Varsayılan Agent",
-        "Varsayılan Ajan"
+        "Varsayılan Ajan",
+        "Varsayılan Temsilci"
       ]
     },
     {
@@ -1734,7 +1735,8 @@
       "source": "Default Agent",
       "translations": [
         "預設 Agent",
-        "預設代理"
+        "預設代理",
+        "預設代理程式"
       ]
     },
     {
@@ -4099,6 +4101,46 @@
       "translations": [
         "ยังไม่ใช่ตอนนี้",
         "ไม่ใช่ตอนนี้"
+      ]
+    },
+    {
+      "locale": "fa",
+      "source": "Not active",
+      "translations": [
+        "غیرفعال",
+        "فعال نیست"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "Not active",
+      "translations": [
+        "비활성",
+        "활성 상태 아님"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Not active",
+      "translations": [
+        "Nieaktywne",
+        "Nieaktywny"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "Not active",
+      "translations": [
+        "Неактивний",
+        "Неактивно"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Not active",
+      "translations": [
+        "未启用",
+        "未激活"
       ]
     },
     {
