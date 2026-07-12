@@ -3,9 +3,11 @@
  * access through the active OpenClaw sandbox backend.
  */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
 import { SsrFBlockedError, isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { WebSocket } from "ws";
 import type { JsonObject, JsonValue } from "../protocol.js";
 import { readHttpHeaders, requireNumber, requireObject, requireString } from "./json-rpc.js";
@@ -176,6 +178,10 @@ function readStreamingSandboxHttpResponse(params: {
     let lastBodySeq = 0;
     let stdoutBuffer = "";
     let stderr = "";
+    const stderrDecoder = new StringDecoder("utf8");
+    const appendStderr = (text: string) => {
+      stderr = sliceUtf16Safe(`${stderr}${text}`, -4096);
+    };
     const finalize = async (status: "completed" | "failed", exitCode: number | null) => {
       await params.finalizeExec?.({
         status,
@@ -247,7 +253,7 @@ function readStreamingSandboxHttpResponse(params: {
       }
     });
     params.child.stderr.on("data", (chunk: Buffer) => {
-      stderr = `${stderr}${chunk.toString("utf8")}`.slice(-4096);
+      appendStderr(stderrDecoder.write(chunk));
     });
     params.child.once("error", (error) => {
       // ChildProcess error can precede close while the helper is still alive.
@@ -255,6 +261,7 @@ function readStreamingSandboxHttpResponse(params: {
       childFailure ??= error.message;
     });
     params.child.once("close", (code) => {
+      appendStderr(stderrDecoder.end());
       const exitCode = code ?? 1;
       if (failed) {
         return;

@@ -264,6 +264,84 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
     socket.close();
   });
 
+  it("preserves UTF-16 boundaries in streaming HTTP stderr tails", async () => {
+    const sandbox = createSandboxContext({
+      buildExecSpec: async () => ({
+        argv: [
+          process.execPath,
+          "-e",
+          ['process.stderr.write("X" + "😀" + "B".repeat(4095));', "process.exitCode = 1;"].join(
+            "",
+          ),
+        ],
+        env: testExecEnv(),
+        stdinMode: "pipe-closed",
+      }),
+    });
+    const client = createClient();
+    await ensureCodexSandboxExecServerEnvironment({
+      client: client as never,
+      sandbox,
+    });
+    const socket = await openSocket(execServerUrlFromClient(client));
+    await rpc(socket, "initialize", { clientName: "test" });
+    socket.send(JSON.stringify({ method: "initialized" }));
+
+    let failure: unknown;
+    try {
+      await rpc(socket, "http/request", {
+        requestId: "http-stream-stderr-unicode",
+        method: "GET",
+        url: "https://example.test/sse",
+        streamResponse: true,
+      });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toBe("B".repeat(4095));
+    socket.close();
+  });
+
+  it("decodes split UTF-8 streaming HTTP stderr chunks", async () => {
+    const sandbox = createSandboxContext({
+      buildExecSpec: async () => ({
+        argv: [
+          process.execPath,
+          "-e",
+          [
+            "process.stderr.write(Buffer.from([0x41, 0xf0, 0x9f]));",
+            "setTimeout(() => {",
+            "process.stderr.write(Buffer.from([0x98, 0x80, 0x42]));",
+            "process.exitCode = 1;",
+            "}, 50);",
+          ].join(""),
+        ],
+        env: testExecEnv(),
+        stdinMode: "pipe-closed",
+      }),
+    });
+    const client = createClient();
+    await ensureCodexSandboxExecServerEnvironment({
+      client: client as never,
+      sandbox,
+    });
+    const socket = await openSocket(execServerUrlFromClient(client));
+    await rpc(socket, "initialize", { clientName: "test" });
+    socket.send(JSON.stringify({ method: "initialized" }));
+
+    await expect(
+      rpc(socket, "http/request", {
+        requestId: "http-stream-stderr-split-utf8",
+        method: "GET",
+        url: "https://example.test/sse",
+        streamResponse: true,
+      }),
+    ).rejects.toThrow("A😀B");
+    socket.close();
+  });
+
   it("terminates streaming HTTP subprocesses when the exec-server socket closes", async () => {
     const finalizeExec = vi.fn(async () => undefined);
     const sandbox = createSandboxContext({
