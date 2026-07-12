@@ -1,4 +1,5 @@
 // Temporary QA probe captures a redacted real Slack file-upload event sequence.
+import { createHash } from "node:crypto";
 import { App, LogLevel } from "@slack/bolt";
 import { WebClient } from "@slack/web-api";
 import {
@@ -141,6 +142,8 @@ try {
   });
 
   const web = new WebClient(credential.sutBotToken);
+  const auth = await web.auth.test();
+  const teamIdHash = createHash("sha256").update(auth.team_id ?? "").digest("hex");
   const upload = (await web.filesUploadV2({
     channel_id: credential.channelId,
     initial_comment: marker,
@@ -165,6 +168,7 @@ try {
     `${JSON.stringify(
       {
         source: "real Slack Socket Mode event stream",
+        teamIdHash,
         uploadMethod: "WebClient.filesUploadV2",
         fileUploadCount: 2,
         eventCount: trace.length,
