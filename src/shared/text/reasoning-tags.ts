@@ -200,9 +200,12 @@ export function stripPlainTextReasoningBlock(text: string): string {
   const blocks: Array<{ start: number; end: number }> = [];
 
   for (const match of text.matchAll(pattern)) {
-    const fullMatchStart = match.index;
+    const header = match[1];
+    if (header === undefined) {
+      continue;
+    }
     // The "Reasoning:\n" portion starts after the optional \n prefix
-    const reasoningStart = fullMatchStart + match[0].length - match[1].length;
+    const reasoningStart = match.index + match[0].length - header.length;
 
     if (isInsideCode(reasoningStart, codeRegions)) {
       continue;
@@ -213,7 +216,7 @@ export function stripPlainTextReasoningBlock(text: string): string {
     // or at end of text.
     // NOTE: The italic continuation heuristic (?!_) is coupled with
     // formatReasoningMessage() which wraps reasoning lines in _..._.
-    const afterHeader = reasoningStart + match[1].length; // position after "Reasoning:\n"
+    const afterHeader = reasoningStart + header.length; // position after "Reasoning:\n"
     const rest = text.slice(afterHeader);
     const endPattern = /\n\n(?!_)/g;
     let blockEnd = text.length; // default: rest of text
@@ -232,13 +235,13 @@ export function stripPlainTextReasoningBlock(text: string): string {
   }
 
   // Merge overlapping blocks (shouldn't normally happen, but be safe)
-  const merged: Array<{ start: number; end: number }> = [blocks[0]];
-  for (let i = 1; i < blocks.length; i++) {
+  const merged: Array<{ start: number; end: number }> = [];
+  for (const block of blocks) {
     const prev = merged[merged.length - 1];
-    if (blocks[i].start <= prev.end) {
-      prev.end = Math.max(prev.end, blocks[i].end);
+    if (prev && block.start <= prev.end) {
+      prev.end = Math.max(prev.end, block.end);
     } else {
-      merged.push(blocks[i]);
+      merged.push({ ...block });
     }
   }
 
