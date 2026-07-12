@@ -1247,7 +1247,7 @@ export function resolvePluginTools(params: {
     }
   }
   for (const [pluginId, entry] of Object.entries(normalizedPlugins.entries)) {
-    if (entry.enabled === true) {
+    if (entry.enabled !== false) {
       explicitlyConfiguredPluginIds.add(pluginId);
     }
   }
