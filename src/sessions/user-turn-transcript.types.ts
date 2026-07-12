@@ -55,6 +55,8 @@ type UserTurnTranscriptPersistenceTarget = {
 export type UserTurnTranscriptTarget = UserTurnTranscriptPersistenceTarget;
 
 export type UserTurnTranscriptPersistResult = {
+  /** True only when this call inserted the transcript message. */
+  appended?: boolean;
   sessionFile: string;
   sessionEntry: UserTurnSessionEntry | undefined;
   messageId: string;

@@ -3,6 +3,7 @@ import path from "node:path";
 import { mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.js";
+import type { SessionTranscriptTurnLifecyclePatch } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { applyInputProvenanceToUserMessage, normalizeInputProvenance } from "./input-provenance.js";
 import type {
@@ -58,6 +59,7 @@ type PersistUserTurnTranscriptParams = {
   config?: unknown;
   updateMode?: UserTurnTranscriptUpdateMode;
   beforeMessageWrite?: UserTurnBeforeMessageWrite;
+  sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
 };
 
 type UserTurnInputResolver = () => UserTurnInput | undefined | Promise<UserTurnInput | undefined>;
@@ -72,6 +74,7 @@ type CreateUserTurnTranscriptRecorderParams = {
   errorContext?: string;
   onPersistenceError?: (error: unknown) => void;
   onMessagePersisted?: (message: PersistedUserTurnMessage) => void | Promise<void>;
+  sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
 };
 
 type ResolvePersistedUserTurnTextOptions = {
@@ -473,6 +476,9 @@ export async function persistUserTurnTranscript(
       ...(params.cwd ? { cwd: params.cwd } : {}),
       ...(params.config ? { config: params.config as OpenClawConfig } : {}),
       ...(params.expectedSessionId ? { expectedSessionId: params.expectedSessionId } : {}),
+      ...(params.sessionLifecyclePatch
+        ? { sessionLifecyclePatch: params.sessionLifecyclePatch }
+        : {}),
       updateMode: params.updateMode ?? "inline",
       messages: [
         {
@@ -489,6 +495,7 @@ export async function persistUserTurnTranscript(
   );
   const appended = turn.messages[0] as
     | {
+        appended: boolean;
         messageId: string;
         message: PersistedUserTurnMessage;
       }
@@ -631,6 +638,9 @@ export function createUserTurnTranscriptRecorder(
         await persistUserTurnTranscript({
           ...resolvedTarget,
           message: candidate,
+          ...(params.sessionLifecyclePatch
+            ? { sessionLifecyclePatch: params.sessionLifecyclePatch }
+            : {}),
           updateMode: candidateUpdateMode,
           ...(params.beforeMessageWrite ? { beforeMessageWrite: params.beforeMessageWrite } : {}),
         });

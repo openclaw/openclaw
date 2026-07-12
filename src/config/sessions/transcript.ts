@@ -29,6 +29,7 @@ import {
   readLatestTranscriptAssistantText,
   updateSessionEntry,
   type SessionTranscriptTurnWriteContext,
+  type SessionTranscriptTurnExpectedState,
 } from "./session-accessor.js";
 import { parseSqliteSessionFileMarker, type SqliteSessionFileMarker } from "./sqlite-marker.js";
 import { resolveSessionStoreEntry } from "./store.js";
@@ -457,6 +458,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
   sessionKey: string;
   expectedSessionId?: string;
   expectedLifecycleRevision?: string;
+  expectedSessionState?: SessionTranscriptTurnExpectedState;
   text?: string;
   mediaUrls?: string[];
   idempotencyKey?: string;
@@ -487,6 +489,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
     ...(params.expectedLifecycleRevision
       ? { expectedLifecycleRevision: params.expectedLifecycleRevision }
       : {}),
+    ...(params.expectedSessionState ? { expectedSessionState: params.expectedSessionState } : {}),
     storePath: params.storePath,
     idempotencyKey: params.idempotencyKey,
     updateMode: params.updateMode,
@@ -524,6 +527,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   sessionKey: string;
   expectedSessionId?: string;
   expectedLifecycleRevision?: string;
+  expectedSessionState?: SessionTranscriptTurnExpectedState;
   message: SessionTranscriptAssistantMessage;
   idempotencyKey?: string;
   storePath?: string;
@@ -618,6 +622,9 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
         ...(params.expectedSessionId ? { expectedSessionId: params.expectedSessionId } : {}),
         ...(params.expectedLifecycleRevision !== undefined
           ? { expectedLifecycleRevision: params.expectedLifecycleRevision }
+          : {}),
+        ...(params.expectedSessionState
+          ? { expectedSessionState: params.expectedSessionState }
           : {}),
         ...(params.config ? { config: params.config } : {}),
         updateMode: params.updateMode ?? "inline",

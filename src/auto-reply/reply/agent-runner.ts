@@ -34,6 +34,7 @@ import {
   resolveSessionPluginTraceLines,
   type SessionEntry,
 } from "../../config/sessions.js";
+import { buildRestartRecoveryClaimCleanupPatch } from "../../config/sessions/restart-recovery-state.js";
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
   formatSqliteSessionFileMarker,
@@ -1527,13 +1528,34 @@ export async function runReplyAgent(params: {
     shouldDrainQueuedFollowupsAfterClear = true;
     return value;
   };
-  const restartRecoveryDeliveryRunId = crypto.randomUUID();
-  let trackedRestartRecoveryDeliveryContext = false;
-  const persistRestartRecoveryDeliveryContext = async (): Promise<void> => {
+  let restartRecoveryDeliveryRunId: string = crypto.randomUUID();
+  let restartRecoveryDeliverySourceRunId: string | undefined;
+  let trackedRestartRecoveryDeliveryClaim = false;
+  const persistRestartRecoveryDeliveryClaim = async (): Promise<void> => {
     if (!sessionKey || !storePath) {
       return;
     }
     const entry = activeSessionStore?.[sessionKey] ?? activeSessionEntry;
+    const admittedRunId = normalizeOptionalString(sessionCtx.MessageSid);
+    const activeClaimRunId = normalizeOptionalString(entry?.restartRecoveryDeliveryRunId);
+    if (
+      admittedRunId &&
+      entry &&
+      entry.restartRecoveryDeliveryContext === undefined &&
+      activeClaimRunId === admittedRunId
+    ) {
+      // Control UI admission already committed this transcript-only claim.
+      // Adopt it before route resolution so WebChat cannot overwrite its owner.
+      restartRecoveryDeliveryRunId = admittedRunId;
+      restartRecoveryDeliverySourceRunId = normalizeOptionalString(
+        entry.restartRecoveryDeliverySourceRunId,
+      );
+      trackedRestartRecoveryDeliveryClaim = true;
+      return;
+    }
+    if (activeClaimRunId) {
+      return;
+    }
     const deliveryContext = resolveReplyRunDeliveryContext({
       cfg,
       sessionCtx,
@@ -1549,35 +1571,8 @@ export async function runReplyAgent(params: {
     const patch: Partial<SessionEntry> = {
       restartRecoveryDeliveryContext: deliveryContext,
       restartRecoveryDeliveryRunId,
+      restartRecoveryDeliverySourceRunId: undefined,
       updatedAt,
-    };
-    const persisted = await updateSessionEntry(
-      {
-        storePath,
-        sessionKey,
-      },
-      async (current) =>
-        current.sessionId === replyOperation.sessionId && current.abortedLastRun !== true
-          ? patch
-          : null,
-    );
-    if (persisted) {
-      activeSessionEntry = persisted;
-      if (activeSessionStore) {
-        activeSessionStore[sessionKey] = persisted;
-      }
-      trackedRestartRecoveryDeliveryContext =
-        persisted.restartRecoveryDeliveryRunId === restartRecoveryDeliveryRunId;
-    }
-  };
-  const clearRestartRecoveryDeliveryContext = async (): Promise<void> => {
-    if (!trackedRestartRecoveryDeliveryContext || !sessionKey || !storePath) {
-      return;
-    }
-    const patch: Partial<SessionEntry> = {
-      restartRecoveryDeliveryContext: undefined,
-      restartRecoveryDeliveryRunId: undefined,
-      updatedAt: Date.now(),
     };
     const persisted = await updateSessionEntry(
       {
@@ -1587,8 +1582,47 @@ export async function runReplyAgent(params: {
       async (current) =>
         current.sessionId === replyOperation.sessionId &&
         current.abortedLastRun !== true &&
-        current.restartRecoveryDeliveryRunId === restartRecoveryDeliveryRunId
+        current.restartRecoveryDeliveryRunId === undefined
           ? patch
+          : null,
+    );
+    if (persisted) {
+      activeSessionEntry = persisted;
+      if (activeSessionStore) {
+        activeSessionStore[sessionKey] = persisted;
+      }
+      trackedRestartRecoveryDeliveryClaim =
+        persisted.restartRecoveryDeliveryRunId === restartRecoveryDeliveryRunId;
+    }
+  };
+  const clearRestartRecoveryDeliveryClaim = async (): Promise<void> => {
+    if (!trackedRestartRecoveryDeliveryClaim || !sessionKey || !storePath) {
+      return;
+    }
+    if (
+      replyOperation.result?.kind === "aborted" &&
+      replyOperation.result.code === "aborted_for_restart"
+    ) {
+      // Restart recovery adopts this exact claim after process startup. Other
+      // terminal aborts must release it so a later turn can claim the session.
+      return;
+    }
+    const persisted = await updateSessionEntry(
+      {
+        storePath,
+        sessionKey,
+      },
+      async (current) =>
+        current.sessionId === replyOperation.sessionId &&
+        current.restartRecoveryDeliveryRunId === restartRecoveryDeliveryRunId
+          ? {
+              ...buildRestartRecoveryClaimCleanupPatch({
+                entry: current,
+                recordTerminalSource: true,
+                terminalSourceRunId: restartRecoveryDeliverySourceRunId,
+              }),
+              updatedAt: Date.now(),
+            }
           : null,
     );
     if (persisted) {
@@ -1599,7 +1633,7 @@ export async function runReplyAgent(params: {
     }
   };
   const isRestartRecoveryArmed = (): boolean => {
-    if (!trackedRestartRecoveryDeliveryContext || !sessionKey || !storePath) {
+    if (!trackedRestartRecoveryDeliveryClaim || !sessionKey || !storePath) {
       return false;
     }
     const persisted = loadSessionEntry({
@@ -1750,7 +1784,7 @@ export async function runReplyAgent(params: {
 
     replyOperation.setPhase("running");
     const runStartedAt = Date.now();
-    await persistRestartRecoveryDeliveryContext();
+    await persistRestartRecoveryDeliveryClaim();
     // Adoption marks run start and must never be spool-replayed (would re-run tools).
     // Suppressed delivery has no recovery state to persist; crashed suppressed runs die
     // silently. When a delivery context is resolvable, this still runs after its persist.
@@ -2820,7 +2854,7 @@ export async function runReplyAgent(params: {
     throw error;
   } finally {
     try {
-      await clearRestartRecoveryDeliveryContext();
+      await clearRestartRecoveryDeliveryClaim();
     } catch (error) {
       logVerbose(
         `failed to clear restart recovery delivery context for ${sessionKey ?? "unknown"}: ${String(

@@ -1852,14 +1852,36 @@ export async function appendSqliteTranscriptEvents(
 }
 
 /** Appends a guarded transcript turn and touches its session row in one queued write. */
+type SessionTranscriptTurnExpectedState = {
+  abortedLastRun: SessionEntry["abortedLastRun"];
+  restartRecoveryDeliveryRunId: SessionEntry["restartRecoveryDeliveryRunId"];
+  restartRecoveryDeliverySourceRunId: SessionEntry["restartRecoveryDeliverySourceRunId"];
+  status: SessionEntry["status"];
+  updatedAt: SessionEntry["updatedAt"];
+};
+
+type SessionTranscriptTurnLifecyclePatch = {
+  abortedLastRun?: SessionEntry["abortedLastRun"];
+  endedAt?: SessionEntry["endedAt"];
+  restartRecoveryDeliveryContext?: SessionEntry["restartRecoveryDeliveryContext"];
+  restartRecoveryDeliveryRunId?: SessionEntry["restartRecoveryDeliveryRunId"];
+  restartRecoveryDeliverySourceRunId?: SessionEntry["restartRecoveryDeliverySourceRunId"];
+  runtimeMs?: SessionEntry["runtimeMs"];
+  startedAt?: SessionEntry["startedAt"];
+  status?: SessionEntry["status"];
+  updatedAt?: SessionEntry["updatedAt"];
+};
+
 export async function appendSqliteExpectedSessionTranscriptTurn(
   scope: SessionTranscriptWriteScope,
   options: {
     config?: import("../types.openclaw.js").OpenClawConfig;
     cwd?: string;
     expectedLifecycleRevision?: string;
+    expectedSessionState?: SessionTranscriptTurnExpectedState;
     expectedSessionId: string;
     messages: readonly SessionTranscriptTurnMessageAppend[];
+    sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
     sessionFile: string;
     touchSessionEntry?: boolean;
   },
@@ -1913,11 +1935,18 @@ export async function appendSqliteExpectedSessionTranscriptTurn(
       const touchUpdatedAt =
         options.touchSessionEntry === true && appendedCount > 0 ? Date.now() : undefined;
       const sessionPatch: Partial<SessionEntry> = {
+        ...(appendedCount > 0 ? options.sessionLifecyclePatch : undefined),
         ...(fresh.entry.sessionFile === options.sessionFile
           ? {}
           : { sessionFile: options.sessionFile }),
         ...(touchUpdatedAt !== undefined
-          ? { updatedAt: Math.max(fresh.entry.updatedAt ?? 0, touchUpdatedAt) }
+          ? {
+              updatedAt: Math.max(
+                fresh.entry.updatedAt ?? 0,
+                options.sessionLifecyclePatch?.updatedAt ?? 0,
+                touchUpdatedAt,
+              ),
+            }
           : {}),
       };
       const next =
@@ -1944,13 +1973,26 @@ export async function appendSqliteExpectedSessionTranscriptTurn(
 
 function sqliteSessionMatchesExpectedTranscriptTurn(
   selected: ResolvedSessionEntryRow | undefined,
-  expected: { expectedLifecycleRevision?: string; expectedSessionId: string },
+  expected: {
+    expectedLifecycleRevision?: string;
+    expectedSessionState?: SessionTranscriptTurnExpectedState;
+    expectedSessionId: string;
+  },
 ): selected is ResolvedSessionEntryRow {
+  const expectedState = expected.expectedSessionState;
   return Boolean(
     selected &&
     selected.entry.sessionId === expected.expectedSessionId &&
     (expected.expectedLifecycleRevision === undefined ||
-      selected.entry.lifecycleRevision === expected.expectedLifecycleRevision),
+      selected.entry.lifecycleRevision === expected.expectedLifecycleRevision) &&
+    (expectedState === undefined ||
+      (selected.entry.abortedLastRun === expectedState.abortedLastRun &&
+        selected.entry.restartRecoveryDeliveryRunId ===
+          expectedState.restartRecoveryDeliveryRunId &&
+        selected.entry.restartRecoveryDeliverySourceRunId ===
+          expectedState.restartRecoveryDeliverySourceRunId &&
+        selected.entry.status === expectedState.status &&
+        selected.entry.updatedAt === expectedState.updatedAt)),
   );
 }
 

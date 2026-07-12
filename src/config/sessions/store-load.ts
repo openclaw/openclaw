@@ -12,6 +12,7 @@ import {
   normalizeSessionDeliveryFields,
 } from "../../utils/delivery-context.shared.js";
 import { getFileStatSnapshot } from "../cache-utils.js";
+import { normalizeRestartRecoveryTerminalRunIds } from "./restart-recovery-state.js";
 import { hydrateSessionStoreSkillPromptRefs } from "./skill-prompt-blobs.js";
 import {
   cloneSessionStoreRecord,
@@ -115,6 +116,13 @@ function sameDeliveryContext(
   );
 }
 
+function sameOptionalStringArray(left: unknown, right: string[] | undefined): boolean {
+  if (!Array.isArray(left) || !right) {
+    return left === undefined && right === undefined;
+  }
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
 function normalizePendingFinalDeliveryFields(entry: SessionEntry): SessionEntry {
   let next = entry;
 
@@ -171,6 +179,18 @@ function normalizePendingFinalDeliveryFields(entry: SessionEntry): SessionEntry 
     "restartRecoveryDeliveryRunId",
     normalizeOptionalString(entry.restartRecoveryDeliveryRunId),
   );
+  assign(
+    "restartRecoveryDeliverySourceRunId",
+    normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId),
+  );
+  const restartRecoveryTerminalRunIds = normalizeRestartRecoveryTerminalRunIds(
+    entry.restartRecoveryTerminalRunIds,
+  );
+  if (
+    !sameOptionalStringArray(entry.restartRecoveryTerminalRunIds, restartRecoveryTerminalRunIds)
+  ) {
+    assign("restartRecoveryTerminalRunIds", restartRecoveryTerminalRunIds);
+  }
 
   return next;
 }

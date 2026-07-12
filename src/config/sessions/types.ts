@@ -430,8 +430,12 @@ export type SessionEntry = {
   pendingFinalDeliveryIntentId?: string | null;
   /** Current visible run delivery context used only for restart recovery. */
   restartRecoveryDeliveryContext?: DeliveryContext;
-  /** Active run id that owns restartRecoveryDeliveryContext cleanup. */
+  /** Active run delivery claim; a missing context explicitly means transcript-only. */
   restartRecoveryDeliveryRunId?: string;
+  /** Original client run id retained while restart recovery may rebind the active run. */
+  restartRecoveryDeliverySourceRunId?: string;
+  /** Bounded durable idempotency tombstones for admitted Control UI turns that settled. */
+  restartRecoveryTerminalRunIds?: string[];
   /**
    * Whether totalTokens reflects a fresh context snapshot for the latest run.
    * Undefined means legacy/unknown freshness; false forces consumers to treat

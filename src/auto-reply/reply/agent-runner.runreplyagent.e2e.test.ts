@@ -858,6 +858,100 @@ describe("runReplyAgent pending final delivery capture", () => {
     expect(stored.restartRecoveryDeliveryRunId).toBeUndefined();
   });
 
+  it("adopts and clears a transcript-only restart recovery claim", async () => {
+    const sessionEntry: SessionEntry = {
+      restartRecoveryDeliveryRunId: "msg",
+      restartRecoveryDeliverySourceRunId: "control-ui-run",
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      const storedDuringRun = await readStoredMainSession(storePath);
+      expect(storedDuringRun.restartRecoveryDeliveryContext).toBeUndefined();
+      expect(typeof storedDuringRun.restartRecoveryDeliveryRunId).toBe("string");
+      expect(storedDuringRun.restartRecoveryDeliverySourceRunId).toBe("control-ui-run");
+      return {
+        payloads: [{ text: "visible final" }],
+        meta: {},
+      };
+    });
+
+    const { run } = createMinimalRun({
+      sessionCtx: {
+        Provider: "webchat",
+        OriginatingChannel: "webchat",
+      },
+      runOverrides: { messageProvider: "webchat" },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+
+    await run();
+
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+    expect(sessionStore.main.restartRecoveryTerminalRunIds).toEqual(["control-ui-run"]);
+    const stored = await readStoredMainSession(storePath);
+    expect(stored.restartRecoveryDeliveryContext).toBeUndefined();
+    expect(stored.restartRecoveryDeliveryRunId).toBeUndefined();
+    expect(stored.restartRecoveryDeliverySourceRunId).toBeUndefined();
+    expect(stored.restartRecoveryTerminalRunIds).toEqual(["control-ui-run"]);
+  });
+
+  it("clears an adopted transcript-only claim after user cancellation", async () => {
+    const sessionEntry: SessionEntry = {
+      restartRecoveryDeliveryRunId: "msg",
+      restartRecoveryDeliverySourceRunId: "control-ui-run",
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    const replyOperation = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "session",
+      resetTriggered: false,
+    });
+    replyOperation.setPhase("running");
+    state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      expect(replyOperation.abortByUser()).toBe(true);
+      const current = await readStoredMainSession(storePath);
+      await replaceSessionEntry(
+        { storePath, sessionKey: "main" },
+        { ...current, abortedLastRun: true, status: "killed", updatedAt: Date.now() },
+      );
+      throw new Error("cancelled");
+    });
+
+    try {
+      const { run } = createMinimalRun({
+        replyOperation,
+        sessionCtx: {
+          Provider: "webchat",
+          OriginatingChannel: "webchat",
+        },
+        runOverrides: { messageProvider: "webchat" },
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+      });
+
+      await run();
+
+      const stored = await readStoredMainSession(storePath);
+      expect(stored.abortedLastRun).toBe(true);
+      expect(stored.restartRecoveryDeliveryRunId).toBeUndefined();
+      expect(stored.restartRecoveryDeliverySourceRunId).toBeUndefined();
+      expect(stored.restartRecoveryTerminalRunIds).toEqual(["control-ui-run"]);
+    } finally {
+      replyOperation.complete();
+    }
+  });
+
   it("fires onTurnAdopted after restart recovery delivery context persist completes", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",

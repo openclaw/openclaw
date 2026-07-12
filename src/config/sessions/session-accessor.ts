@@ -379,6 +379,10 @@ export type SessionTranscriptTurnPersistOptions = {
   expectedSessionId?: string;
   /** Rejects the turn when lifecycle ownership changed without rotating the session id. */
   expectedLifecycleRevision?: string;
+  /** Rejects the turn unless the persisted row still has this exact lifecycle owner state. */
+  expectedSessionState?: SessionTranscriptTurnExpectedState;
+  /** Lifecycle metadata committed only when the guarded turn inserts a message. */
+  sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
   /** Message rows to append under one transcript write lock. */
   messages: readonly SessionTranscriptTurnMessageAppend[];
   /** Controls whether the update event includes the last appended message. */
@@ -392,6 +396,26 @@ export type SessionTranscriptTurnPersistOptions = {
    * after that transaction commits.
    */
   touchSessionEntry?: boolean;
+};
+
+export type SessionTranscriptTurnExpectedState = {
+  abortedLastRun: SessionEntry["abortedLastRun"];
+  restartRecoveryDeliveryRunId: SessionEntry["restartRecoveryDeliveryRunId"];
+  restartRecoveryDeliverySourceRunId: SessionEntry["restartRecoveryDeliverySourceRunId"];
+  status: SessionEntry["status"];
+  updatedAt: SessionEntry["updatedAt"];
+};
+
+export type SessionTranscriptTurnLifecyclePatch = {
+  abortedLastRun?: SessionEntry["abortedLastRun"];
+  endedAt?: SessionEntry["endedAt"];
+  restartRecoveryDeliveryContext?: SessionEntry["restartRecoveryDeliveryContext"];
+  restartRecoveryDeliveryRunId?: SessionEntry["restartRecoveryDeliveryRunId"];
+  restartRecoveryDeliverySourceRunId?: SessionEntry["restartRecoveryDeliverySourceRunId"];
+  runtimeMs?: SessionEntry["runtimeMs"];
+  startedAt?: SessionEntry["startedAt"];
+  status?: SessionEntry["status"];
+  updatedAt?: SessionEntry["updatedAt"];
 };
 
 export type SessionTranscriptTurnPersistResult = {
@@ -2636,6 +2660,9 @@ export async function persistSessionTranscriptTurn(
   if (expectedSessionId) {
     return await persistExpectedSessionTranscriptTurn(scope, { ...options, expectedSessionId });
   }
+  if (options.sessionLifecyclePatch) {
+    throw new Error("Cannot patch session lifecycle without an expected session id");
+  }
   const target = await resolveTranscriptTurnTarget(scope);
   const appendedMessages = await runWithOwnedSessionTranscriptWriteLock(
     {
@@ -2773,8 +2800,10 @@ async function persistExpectedSessionTranscriptTurn(
           config: options.config,
           cwd: options.cwd,
           expectedLifecycleRevision: options.expectedLifecycleRevision,
+          expectedSessionState: options.expectedSessionState,
           expectedSessionId,
           messages: options.messages,
+          sessionLifecyclePatch: options.sessionLifecyclePatch,
           sessionFile: target.sessionFile,
           touchSessionEntry: options.touchSessionEntry,
         },

@@ -19,10 +19,12 @@ import {
   resolveSessionFilePath,
   resolveSessionTranscriptPathInDir,
 } from "../config/sessions.js";
+import { buildRestartRecoveryClaimCleanupPatch } from "../config/sessions/restart-recovery-state.js";
 import {
   applySessionEntryReplacements,
   listSessionEntries,
 } from "../config/sessions/session-accessor.js";
+import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { readSessionMessagesAsync } from "../gateway/session-transcript-readers.js";
@@ -696,17 +698,29 @@ function buildResumeMessage(pendingFinalDeliveryText?: string | null): string {
 }
 
 async function markSessionFailed(params: {
+  expectedRecoveryRunId?: string;
+  expectedRecoverySourceRunId?: string;
+  expectedSessionId: string;
   storePath: string;
   sessionKey: string;
   reason: string;
-}): Promise<void> {
-  await applySessionEntryReplacements({
+}): Promise<boolean> {
+  const marked = await applySessionEntryReplacements({
     storePath: params.storePath,
     update: (entries) => {
       const current = entries.find((entry) => entry.sessionKey === params.sessionKey);
       const entry = current?.entry;
-      if (!entry || entry.status !== "running") {
-        return { result: undefined };
+      if (
+        !entry ||
+        entry.sessionId !== params.expectedSessionId ||
+        entry.status !== "running" ||
+        entry.abortedLastRun !== true ||
+        normalizeOptionalString(entry.restartRecoveryDeliveryRunId) !==
+          params.expectedRecoveryRunId ||
+        normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) !==
+          params.expectedRecoverySourceRunId
+      ) {
+        return { result: false };
       }
       entry.status = "failed";
       entry.abortedLastRun = true;
@@ -719,50 +733,48 @@ async function markSessionFailed(params: {
       entry.pendingFinalDeliveryAttemptCount = undefined;
       entry.pendingFinalDeliveryLastError = undefined;
       entry.pendingFinalDeliveryContext = undefined;
-      entry.restartRecoveryDeliveryContext = undefined;
-      entry.restartRecoveryDeliveryRunId = undefined;
+      Object.assign(
+        entry,
+        buildRestartRecoveryClaimCleanupPatch({
+          entry,
+          recordTerminalSource: true,
+        }),
+      );
       return {
-        result: undefined,
+        result: true,
         replacements: [{ sessionKey: params.sessionKey, entry }],
       };
     },
   });
-  log.warn(`marked interrupted main session failed: ${params.sessionKey} (${params.reason})`);
+  if (marked) {
+    log.warn(`marked interrupted main session failed: ${params.sessionKey} (${params.reason})`);
+  }
+  return marked;
 }
 
 async function sendUnresumableSessionNotice(params: {
-  cfg?: OpenClawConfig;
+  deliveryContext: DeliveryContext;
   entry: SessionEntry;
   reason: string;
   sessionKey: string;
-}): Promise<boolean> {
-  const deliveryContext = resolveRestartRecoveryDeliveryContext({
-    cfg: params.cfg,
-    entry: params.entry,
-    includeSessionDeliveryFallback: true,
-    sessionKey: params.sessionKey,
-  });
-  if (!deliveryContext) {
-    return false;
-  }
-
+}): Promise<void> {
   const messageParams: Record<string, unknown> = {
-    to: deliveryContext.to,
+    to: params.deliveryContext.to,
     message: UNRESUMABLE_SESSION_NOTICE,
     bestEffort: true,
   };
-  if (deliveryContext?.threadId != null) {
-    messageParams.threadId = deliveryContext.threadId;
+  if (params.deliveryContext.threadId != null) {
+    messageParams.threadId = params.deliveryContext.threadId;
   }
   const actionParams: Record<string, unknown> = {
-    channel: deliveryContext.channel,
+    channel: params.deliveryContext.channel,
     action: "send",
     sessionKey: params.sessionKey,
     sessionId: params.entry.sessionId,
-    idempotencyKey: `main-session-restart-recovery:${params.entry.sessionId}:failed-notice`,
+    idempotencyKey: buildUnresumableSessionNoticeIdempotencyKey(params.entry),
     params: messageParams,
   };
-  const accountId = normalizeOptionalString(deliveryContext?.accountId);
+  const accountId = normalizeOptionalString(params.deliveryContext.accountId);
   if (accountId) {
     actionParams.accountId = accountId;
   }
@@ -778,13 +790,71 @@ async function sendUnresumableSessionNotice(params: {
     log.info(
       `sent interrupted main session recovery notice: ${params.sessionKey} (${params.reason})`,
     );
-    return true;
   } catch (err) {
     log.warn(
       `failed to send interrupted main session recovery notice ${params.sessionKey}: ${String(err)}`,
     );
-    return false;
   }
+}
+
+async function writeUnresumableSessionNotice(params: {
+  entry: SessionEntry;
+  sessionKey: string;
+  storePath: string;
+}): Promise<void> {
+  const result = await appendAssistantMessageToSessionTranscript({
+    agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+    sessionKey: params.sessionKey,
+    expectedSessionId: params.entry.sessionId,
+    expectedSessionState: {
+      abortedLastRun: params.entry.abortedLastRun,
+      restartRecoveryDeliveryRunId: params.entry.restartRecoveryDeliveryRunId,
+      restartRecoveryDeliverySourceRunId: params.entry.restartRecoveryDeliverySourceRunId,
+      status: params.entry.status,
+      updatedAt: params.entry.updatedAt,
+    },
+    storePath: params.storePath,
+    text: UNRESUMABLE_SESSION_NOTICE,
+    idempotencyKey: buildUnresumableSessionNoticeIdempotencyKey(params.entry),
+  }).catch((error: unknown) => ({ ok: false as const, reason: String(error) }));
+  if (!result.ok) {
+    log.warn(
+      `failed to write interrupted main session notice ${params.sessionKey}: ${result.reason}`,
+    );
+  }
+}
+
+function buildUnresumableSessionNoticeIdempotencyKey(entry: SessionEntry): string {
+  const interruptedRunId =
+    normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) ??
+    normalizeOptionalString(entry.restartRecoveryDeliveryRunId) ??
+    entry.sessionId;
+  return `main-session-restart-recovery:${interruptedRunId}:failed-notice`;
+}
+
+async function deliverUnresumableSessionNotice(params: {
+  cfg?: OpenClawConfig;
+  entry: SessionEntry;
+  reason: string;
+  sessionKey: string;
+  storePath: string;
+}): Promise<void> {
+  const deliveryContext = resolveRestartRecoveryDeliveryContext({
+    cfg: params.cfg,
+    entry: params.entry,
+    includeSessionDeliveryFallback: true,
+    sessionKey: params.sessionKey,
+  });
+  if (!deliveryContext) {
+    await writeUnresumableSessionNotice(params);
+    return;
+  }
+  await sendUnresumableSessionNotice({
+    deliveryContext,
+    entry: params.entry,
+    reason: params.reason,
+    sessionKey: params.sessionKey,
+  });
 }
 
 function resolveRestartRecoveryDeliveryContext(params: {
@@ -793,10 +863,19 @@ function resolveRestartRecoveryDeliveryContext(params: {
   includeSessionDeliveryFallback?: boolean;
   sessionKey: string;
 }): DeliveryContext | undefined {
+  const activeRunDeliveryContext = normalizeDeliveryContext(
+    params.entry.restartRecoveryDeliveryContext,
+  );
+  // Presence of the claim distinguishes an intentional transcript-only run
+  // from legacy rows that still need session-route fallback.
+  const hasActiveRunDeliveryClaim =
+    normalizeOptionalString(params.entry.restartRecoveryDeliveryRunId) !== undefined;
   const deliveryContext =
     normalizeDeliveryContext(params.entry.pendingFinalDeliveryContext) ??
-    normalizeDeliveryContext(params.entry.restartRecoveryDeliveryContext) ??
-    (params.includeSessionDeliveryFallback ? deliveryContextFromSession(params.entry) : undefined);
+    activeRunDeliveryContext ??
+    (params.includeSessionDeliveryFallback && !hasActiveRunDeliveryClaim
+      ? deliveryContextFromSession(params.entry)
+      : undefined);
   const channel = normalizeOptionalString(deliveryContext?.channel);
   const to = normalizeOptionalString(deliveryContext?.to);
   if (!channel || !to || !isDeliverableMessageChannel(channel)) {
@@ -821,6 +900,110 @@ function resolveRestartRecoveryDeliveryContext(params: {
   };
 }
 
+type RestartRecoveryTerminalStatus = "error" | "ok" | "timeout";
+
+function normalizeRestartRecoveryTerminalStatus(
+  value: unknown,
+): RestartRecoveryTerminalStatus | undefined {
+  return value === "error" || value === "ok" || value === "timeout" ? value : undefined;
+}
+
+async function probeRestartRecoveryTerminalStatus(
+  runId: string,
+): Promise<RestartRecoveryTerminalStatus | undefined> {
+  try {
+    const result = await callGateway<{
+      endedAt?: unknown;
+      status?: unknown;
+    }>({
+      method: "agent.wait",
+      params: { runId, timeoutMs: 0 },
+      timeoutMs: 2_000,
+    });
+    const status = normalizeRestartRecoveryTerminalStatus(result.status);
+    // A zero-time wait also reports "timeout" for active or unknown work.
+    return status === "timeout" && typeof result.endedAt !== "number" ? undefined : status;
+  } catch {
+    return undefined;
+  }
+}
+
+async function settleRestartRecoveryDispatch(params: {
+  expectedRecoveryRunId: string;
+  expectedRecoverySourceRunId?: string;
+  expectedSessionId: string;
+  pendingFinalDeliveryText: string;
+  sessionKey: string;
+  storePath: string;
+  terminalStatus?: RestartRecoveryTerminalStatus;
+}): Promise<void> {
+  await applySessionEntryReplacements({
+    storePath: params.storePath,
+    update: (entries) => {
+      const current = entries.find((entry) => entry.sessionKey === params.sessionKey);
+      const entry = current?.entry;
+      if (
+        !entry ||
+        entry.sessionId !== params.expectedSessionId ||
+        normalizeOptionalString(entry.restartRecoveryDeliveryRunId) !==
+          params.expectedRecoveryRunId ||
+        normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) !==
+          params.expectedRecoverySourceRunId
+      ) {
+        return { result: undefined };
+      }
+      const now = Date.now();
+      if (params.terminalStatus) {
+        entry.abortedLastRun = params.terminalStatus !== "ok";
+        entry.status =
+          params.terminalStatus === "ok"
+            ? "done"
+            : params.terminalStatus === "timeout"
+              ? "timeout"
+              : "failed";
+        entry.endedAt = now;
+        const startedAt = normalizeFiniteTimestamp(entry.startedAt);
+        if (startedAt !== undefined) {
+          entry.runtimeMs = Math.max(0, now - startedAt);
+        }
+        entry.restartRecoveryForceSafeTools = undefined;
+        Object.assign(
+          entry,
+          buildRestartRecoveryClaimCleanupPatch({
+            entry,
+            recordTerminalSource: true,
+            terminalSourceRunId: params.expectedRecoverySourceRunId,
+          }),
+        );
+      } else {
+        entry.abortedLastRun = false;
+      }
+      entry.updatedAt = now;
+      if (entry.pendingFinalDelivery || entry.pendingFinalDeliveryText) {
+        if (params.pendingFinalDeliveryText) {
+          entry.pendingFinalDeliveryLastAttemptAt = now;
+          entry.pendingFinalDeliveryAttemptCount =
+            (entry.pendingFinalDeliveryAttemptCount ?? 0) + 1;
+          entry.pendingFinalDeliveryLastError = null;
+          entry.pendingFinalDeliveryText = params.pendingFinalDeliveryText;
+        } else {
+          entry.pendingFinalDelivery = undefined;
+          entry.pendingFinalDeliveryText = undefined;
+          entry.pendingFinalDeliveryCreatedAt = undefined;
+          entry.pendingFinalDeliveryLastAttemptAt = undefined;
+          entry.pendingFinalDeliveryAttemptCount = undefined;
+          entry.pendingFinalDeliveryLastError = undefined;
+          entry.pendingFinalDeliveryContext = undefined;
+        }
+      }
+      return {
+        result: undefined,
+        replacements: [{ sessionKey: params.sessionKey, entry }],
+      };
+    },
+  });
+}
+
 async function resumeMainSession(params: {
   cfg?: OpenClawConfig;
   entry: SessionEntry;
@@ -838,25 +1021,41 @@ async function resumeMainSession(params: {
     entry: params.entry,
     sessionKey: params.sessionKey,
   });
+  const claimedRunId = normalizeOptionalString(params.entry.restartRecoveryDeliveryRunId);
+  const sourceRunId = normalizeOptionalString(params.entry.restartRecoveryDeliverySourceRunId);
+  const recoveryRunId =
+    claimedRunId && claimedRunId !== sourceRunId ? claimedRunId : crypto.randomUUID();
+  const reusingRecoveryRunId = recoveryRunId === claimedRunId;
   try {
-    const recoveryRunId = crypto.randomUUID();
-    if (params.forceRestartSafeTools) {
-      await applySessionEntryReplacements({
-        storePath: params.storePath,
-        update: (entries) => {
-          const current = entries.find((entry) => entry.sessionKey === params.sessionKey);
-          const entry = current?.entry;
-          if (!entry) {
-            return { result: undefined };
-          }
+    // Persist one stable RPC id before dispatch. A transport rejection is
+    // ambiguous; retries must reuse this id so an accepted run cannot duplicate.
+    const recoveryStatePrepared = await applySessionEntryReplacements({
+      storePath: params.storePath,
+      update: (entries) => {
+        const current = entries.find((entry) => entry.sessionKey === params.sessionKey);
+        const entry = current?.entry;
+        if (
+          !entry ||
+          entry.sessionId !== params.entry.sessionId ||
+          entry.status !== "running" ||
+          entry.abortedLastRun !== true ||
+          normalizeOptionalString(entry.restartRecoveryDeliveryRunId) !== claimedRunId
+        ) {
+          return { result: false };
+        }
+        entry.restartRecoveryDeliveryRunId = recoveryRunId;
+        if (params.forceRestartSafeTools) {
           entry.restartRecoveryForceSafeTools = true;
-          entry.updatedAt = Date.now();
-          return {
-            result: undefined,
-            replacements: [{ sessionKey: params.sessionKey, entry }],
-          };
-        },
-      });
+        }
+        entry.updatedAt = Date.now();
+        return {
+          result: true,
+          replacements: [{ sessionKey: params.sessionKey, entry }],
+        };
+      },
+    });
+    if (!recoveryStatePrepared) {
+      throw new Error("restart recovery session ownership changed before dispatch");
     }
     const agentParams: Record<string, unknown> = {
       message: buildResumeMessage(sanitizedPendingText),
@@ -880,44 +1079,23 @@ async function resumeMainSession(params: {
     if (params.forceRestartSafeTools) {
       log.info(`dispatching restart-safe recovery for ${params.sessionKey}`);
     }
-    await callGateway<{ runId: string }>({
+    const dispatchResult = await callGateway<{ runId: string; status?: unknown }>({
       method: "agent",
       params: agentParams,
       timeoutMs: 10_000,
     });
-    await applySessionEntryReplacements({
+    let terminalStatus = normalizeRestartRecoveryTerminalStatus(dispatchResult.status);
+    if (!terminalStatus && reusingRecoveryRunId && dispatchResult.status === "accepted") {
+      terminalStatus = await probeRestartRecoveryTerminalStatus(recoveryRunId);
+    }
+    await settleRestartRecoveryDispatch({
+      expectedRecoveryRunId: recoveryRunId,
+      expectedRecoverySourceRunId: sourceRunId,
+      expectedSessionId: params.entry.sessionId,
+      pendingFinalDeliveryText: sanitizedPendingText,
+      sessionKey: params.sessionKey,
       storePath: params.storePath,
-      update: (entries) => {
-        const current = entries.find((entry) => entry.sessionKey === params.sessionKey);
-        const entry = current?.entry;
-        if (!entry) {
-          return { result: undefined };
-        }
-        const now = Date.now();
-        entry.abortedLastRun = false;
-        entry.updatedAt = now;
-        if (entry.pendingFinalDelivery || entry.pendingFinalDeliveryText) {
-          if (sanitizedPendingText) {
-            entry.pendingFinalDeliveryLastAttemptAt = now;
-            entry.pendingFinalDeliveryAttemptCount =
-              (entry.pendingFinalDeliveryAttemptCount ?? 0) + 1;
-            entry.pendingFinalDeliveryLastError = null;
-            entry.pendingFinalDeliveryText = sanitizedPendingText;
-          } else {
-            entry.pendingFinalDelivery = undefined;
-            entry.pendingFinalDeliveryText = undefined;
-            entry.pendingFinalDeliveryCreatedAt = undefined;
-            entry.pendingFinalDeliveryLastAttemptAt = undefined;
-            entry.pendingFinalDeliveryAttemptCount = undefined;
-            entry.pendingFinalDeliveryLastError = undefined;
-            entry.pendingFinalDeliveryContext = undefined;
-          }
-        }
-        return {
-          result: undefined,
-          replacements: [{ sessionKey: params.sessionKey, entry }],
-        };
-      },
+      terminalStatus,
     });
     log.info(
       `resumed interrupted main session: ${params.sessionKey}${
@@ -926,6 +1104,22 @@ async function resumeMainSession(params: {
     );
     return true;
   } catch (err) {
+    if (reusingRecoveryRunId && err instanceof Error && err.name === "GatewayClientRequestError") {
+      const terminalStatus = await probeRestartRecoveryTerminalStatus(recoveryRunId);
+      if (terminalStatus) {
+        await settleRestartRecoveryDispatch({
+          expectedRecoveryRunId: recoveryRunId,
+          expectedRecoverySourceRunId: sourceRunId,
+          expectedSessionId: params.entry.sessionId,
+          pendingFinalDeliveryText: sanitizedPendingText,
+          sessionKey: params.sessionKey,
+          storePath: params.storePath,
+          terminalStatus,
+        });
+        log.info(`settled completed restart recovery for ${params.sessionKey}`);
+        return true;
+      }
+    }
     log.warn(`failed to resume interrupted main session ${params.sessionKey}: ${String(err)}`);
     return false;
   }
@@ -1159,18 +1353,28 @@ async function recoverStore(params: {
         transcriptResumePolicy.forceRestartSafeTools,
     };
     if (resumePolicy.blockReason) {
-      await sendUnresumableSessionNotice({
+      await deliverUnresumableSessionNotice({
         cfg: params.cfg,
         entry,
-        sessionKey,
         reason: resumePolicy.blockReason,
+        sessionKey,
+        storePath: params.storePath,
       });
-      await markSessionFailed({
+      const failed = await markSessionFailed({
+        expectedRecoveryRunId: normalizeOptionalString(entry.restartRecoveryDeliveryRunId),
+        expectedRecoverySourceRunId: normalizeOptionalString(
+          entry.restartRecoveryDeliverySourceRunId,
+        ),
+        expectedSessionId: entry.sessionId,
         storePath: params.storePath,
         sessionKey,
         reason: resumePolicy.blockReason,
       });
-      result.failed++;
+      if (failed) {
+        result.failed++;
+      } else {
+        result.skipped++;
+      }
       continue;
     }
 

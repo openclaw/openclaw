@@ -8,6 +8,7 @@ import {
   appendTranscriptMessage,
   listSessionEntries,
   loadSessionEntry,
+  loadTranscriptEvents,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { callGateway } from "../gateway/call.js";
@@ -840,14 +841,17 @@ describe("main-session-restart-recovery", () => {
     });
   });
 
-  it("does not infer restart delivery from historical session routes", async () => {
+  it("reuses a transcript-only claim without inferring historical session routes", async () => {
     const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
     await writeStore(sessionsDir, {
       "agent:main:discord:direct:123": {
         sessionId: "main-session",
         updatedAt: Date.now() - 10_000,
         status: "running",
         abortedLastRun: true,
+        restartRecoveryDeliveryRunId: "control-ui-run",
+        restartRecoveryDeliverySourceRunId: "control-ui-run",
         deliveryContext: {
           channel: "discord",
           to: "discord:dm:stale",
@@ -860,11 +864,137 @@ describe("main-session-restart-recovery", () => {
       { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "exec" }] },
       { role: "toolResult", content: "done" },
     ]);
+    let claimAtDispatch: string | undefined;
+    let sourceClaimAtDispatch: string | undefined;
+    vi.mocked(callGateway).mockImplementationOnce(async ({ params }) => {
+      const entry = loadSessionEntry({
+        sessionKey: "agent:main:discord:direct:123",
+        storePath,
+      });
+      claimAtDispatch = entry?.restartRecoveryDeliveryRunId;
+      sourceClaimAtDispatch = entry?.restartRecoveryDeliverySourceRunId;
+      return { runId: String((params as { idempotencyKey?: unknown }).idempotencyKey) };
+    });
 
     const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
 
     expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
-    expect(firstGatewayParams().deliver).toBe(false);
+    const resumeParams = firstGatewayParams();
+    expect(resumeParams.deliver).toBe(false);
+    expect(claimAtDispatch).toBe(resumeParams.idempotencyKey);
+    expect(claimAtDispatch).not.toBe("control-ui-run");
+    expect(sourceClaimAtDispatch).toBe("control-ui-run");
+  });
+
+  it("retains one stable transcript-only claim across ambiguous dispatch rejection", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryDeliveryRunId: "control-ui-run",
+        restartRecoveryDeliverySourceRunId: "control-ui-run",
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "run the tool" },
+      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "exec" }] },
+      { role: "toolResult", content: "done" },
+    ]);
+    vi.mocked(callGateway).mockRejectedValueOnce(new Error("gateway unavailable"));
+
+    await expect(recoverRestartAbortedMainSessions({ stateDir: tmpDir })).resolves.toEqual({
+      recovered: 0,
+      failed: 1,
+      skipped: 0,
+    });
+
+    const firstRecoveryRunId = (
+      vi.mocked(callGateway).mock.calls[0]?.[0].params as { idempotencyKey?: unknown } | undefined
+    )?.idempotencyKey;
+    expect(firstRecoveryRunId).toEqual(expect.any(String));
+    expect(firstRecoveryRunId).not.toBe("control-ui-run");
+    const pending = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
+    expect(pending).toMatchObject({
+      abortedLastRun: true,
+      restartRecoveryDeliveryRunId: firstRecoveryRunId,
+      restartRecoveryDeliverySourceRunId: "control-ui-run",
+      sessionId: "main-session",
+      status: "running",
+    });
+
+    await expect(recoverRestartAbortedMainSessions({ stateDir: tmpDir })).resolves.toEqual({
+      recovered: 1,
+      failed: 0,
+      skipped: 0,
+    });
+    const runIds = vi
+      .mocked(callGateway)
+      .mock.calls.map(
+        ([request]) => (request.params as { idempotencyKey?: unknown }).idempotencyKey,
+      );
+    expect(runIds).toEqual([firstRecoveryRunId, firstRecoveryRunId]);
+    expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+      abortedLastRun: false,
+      restartRecoveryDeliveryRunId: firstRecoveryRunId,
+      restartRecoveryDeliverySourceRunId: "control-ui-run",
+      status: "running",
+    });
+  });
+
+  it("settles a reused recovery RPC whose accepted cache already completed", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryDeliveryRunId: "recovery-run",
+        restartRecoveryDeliverySourceRunId: "control-ui-run",
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "run the tool" },
+      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "exec" }] },
+      { role: "toolResult", content: "done" },
+    ]);
+    vi.mocked(callGateway)
+      .mockResolvedValueOnce({
+        runId: "recovery-run",
+        status: "accepted",
+      })
+      .mockResolvedValueOnce({
+        runId: "recovery-run",
+        status: "ok",
+        endedAt: Date.now(),
+      });
+
+    await expect(recoverRestartAbortedMainSessions({ stateDir: tmpDir })).resolves.toEqual({
+      recovered: 1,
+      failed: 0,
+      skipped: 0,
+    });
+
+    expect(firstGatewayParams().idempotencyKey).toBe("recovery-run");
+    expect(vi.mocked(callGateway).mock.calls[1]?.[0]).toMatchObject({
+      method: "agent.wait",
+      params: { runId: "recovery-run", timeoutMs: 0 },
+    });
+    expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+      abortedLastRun: false,
+      endedAt: expect.any(Number),
+      restartRecoveryTerminalRunIds: ["control-ui-run"],
+      sessionId: "main-session",
+      status: "done",
+    });
+    const settled = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
+    expect(settled?.restartRecoveryDeliveryRunId).toBeUndefined();
+    expect(settled?.restartRecoveryDeliverySourceRunId).toBeUndefined();
   });
 
   it("does not deliver restart recovery when session send policy denies sends", async () => {
@@ -1407,6 +1537,12 @@ describe("main-session-restart-recovery", () => {
       });
       expect(entry?.abortedLastRun).toBe(false);
     });
+    const runIds = vi
+      .mocked(callGateway)
+      .mock.calls.map(
+        ([request]) => (request.params as { idempotencyKey?: unknown }).idempotencyKey,
+      );
+    expect(new Set(runIds).size).toBe(1);
     expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 
@@ -1493,6 +1629,176 @@ describe("main-session-restart-recovery", () => {
 
     expect(result).toEqual({ recovered: 0, failed: 1, skipped: 0 });
     expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("keeps an unresumable Control UI notice in history despite a stale external route", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryDeliveryRunId: "control-ui-run",
+        restartRecoveryDeliverySourceRunId: "control-ui-run",
+        lastChannel: "whatsapp",
+        lastTo: "+15551234567",
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "do the thing" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "partial answer" }],
+        stopReason: "aborted",
+      },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 0, failed: 1, skipped: 0 });
+    expect(callGateway).not.toHaveBeenCalled();
+    const events = await loadTranscriptEvents({
+      agentId: "main",
+      sessionId: "main-session",
+      sessionKey: "agent:main:main",
+      storePath,
+    });
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "message",
+          message: expect.objectContaining({
+            role: "assistant",
+            idempotencyKey: "main-session-restart-recovery:control-ui-run:failed-notice",
+            content: expect.arrayContaining([
+              expect.objectContaining({
+                type: "text",
+                text: expect.stringContaining("couldn't safely resume"),
+              }),
+            ]),
+          }),
+        }),
+      ]),
+    );
+    expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+      status: "failed",
+      abortedLastRun: true,
+      restartRecoveryTerminalRunIds: ["control-ui-run"],
+    });
+
+    const failedEntry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
+    if (!failedEntry) {
+      throw new Error("expected failed recovery entry");
+    }
+    await replaceSessionEntry(
+      { sessionKey: "agent:main:main", storePath },
+      {
+        ...failedEntry,
+        status: "running",
+        abortedLastRun: true,
+        endedAt: undefined,
+        restartRecoveryDeliveryRunId: "control-ui-run-2",
+        restartRecoveryDeliverySourceRunId: "control-ui-run-2",
+        updatedAt: Date.now(),
+      },
+    );
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "do another thing" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "another partial answer" }],
+        stopReason: "aborted",
+      },
+    ]);
+
+    await expect(recoverRestartAbortedMainSessions({ stateDir: tmpDir })).resolves.toEqual({
+      recovered: 0,
+      failed: 1,
+      skipped: 0,
+    });
+    const noticeIds = (
+      await loadTranscriptEvents({
+        agentId: "main",
+        sessionId: "main-session",
+        sessionKey: "agent:main:main",
+        storePath,
+      })
+    )
+      .map((event) => {
+        const record = event as {
+          type?: unknown;
+          message?: { idempotencyKey?: unknown };
+        };
+        return record.type === "message" && typeof record.message?.idempotencyKey === "string"
+          ? record.message.idempotencyKey
+          : undefined;
+      })
+      .filter((id): id is string => id?.endsWith(":failed-notice") === true);
+    expect(noticeIds).toEqual([
+      "main-session-restart-recovery:control-ui-run:failed-notice",
+      "main-session-restart-recovery:control-ui-run-2:failed-notice",
+    ]);
+    expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+      restartRecoveryTerminalRunIds: ["control-ui-run", "control-ui-run-2"],
+    });
+  });
+
+  it("does not fail a replacement session after unresumable notice delivery yields", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const sessionKey = "agent:main:discord:direct:123";
+    await writeStore(sessionsDir, {
+      [sessionKey]: {
+        sessionId: "interrupted-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryDeliveryRunId: "interrupted-run",
+        restartRecoveryDeliverySourceRunId: "control-ui-run",
+        restartRecoveryDeliveryContext: {
+          channel: "discord",
+          to: "discord:dm:123",
+        },
+      },
+    });
+    await writeTranscript(sessionsDir, "interrupted-session", [
+      { role: "user", content: "do the thing" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "partial answer" }],
+        stopReason: "aborted",
+      },
+    ]);
+    vi.mocked(callGateway).mockImplementationOnce(async () => {
+      await replaceSessionEntry(
+        { sessionKey, storePath },
+        {
+          sessionId: "replacement-session",
+          updatedAt: Date.now(),
+          status: "running",
+          abortedLastRun: false,
+          restartRecoveryDeliveryRunId: "replacement-run",
+          restartRecoveryDeliverySourceRunId: "replacement-source",
+        },
+      );
+      return { status: "ok" };
+    });
+
+    await expect(recoverRestartAbortedMainSessions({ stateDir: tmpDir })).resolves.toEqual({
+      recovered: 0,
+      failed: 0,
+      skipped: 1,
+    });
+
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+      sessionId: "replacement-session",
+      status: "running",
+      abortedLastRun: false,
+      restartRecoveryDeliveryRunId: "replacement-run",
+      restartRecoveryDeliverySourceRunId: "replacement-source",
+    });
   });
 
   it("sends a visible notice through the legacy route when no resumable transcript survives", async () => {
