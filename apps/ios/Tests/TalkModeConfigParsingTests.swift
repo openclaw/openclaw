@@ -584,6 +584,19 @@ struct TalkModeManagerTests {
         #expect(TalkModeManager._test_realtimeRestartDelayNanoseconds(attempt: 3) == nil)
     }
 
+    @Test func `speech restart clears only the error status it owns`() {
+        let errorStatus = String(
+            format: String(localized: "Speech error: %@"),
+            "Network unavailable")
+
+        #expect(TalkModeManager._test_listeningStatusAfterSpeechErrorRestart(
+            currentStatus: errorStatus,
+            pendingErrorStatus: errorStatus) == String(localized: "Listening"))
+        #expect(TalkModeManager._test_listeningStatusAfterSpeechErrorRestart(
+            currentStatus: String(localized: "Speaking…"),
+            pendingErrorStatus: errorStatus) == nil)
+    }
+
     @Test func `keeps provider web socket realtime transport on gateway relay`() {
         let config: [String: Any] = [
             "talk": [

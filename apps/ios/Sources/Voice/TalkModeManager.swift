@@ -1519,10 +1519,11 @@ final class TalkModeManager: NSObject {
             try self.configureOwnedAudioSession()
             try self.startRecognition()
             self.isListening = true
-            if let pendingStatus = self.speechErrorStatusPendingRestart,
-               self.statusText == pendingStatus
+            if let restartStatus = Self.listeningStatusAfterSpeechErrorRestart(
+                currentStatus: self.statusText,
+                pendingErrorStatus: self.speechErrorStatusPendingRestart)
             {
-                self.statusText = String(localized: "Listening")
+                self.statusText = restartStatus
             }
             self.speechErrorStatusPendingRestart = nil
             GatewayDiagnostics.log("talk speech: recognition restarted")
@@ -1542,6 +1543,14 @@ final class TalkModeManager: NSObject {
             self.realtimeSession == nil &&
             self.realtimeRelaySession == nil &&
             self.realtimeRelayStartGeneration == nil
+    }
+
+    private static func listeningStatusAfterSpeechErrorRestart(
+        currentStatus: String,
+        pendingErrorStatus: String?) -> String?
+    {
+        guard let pendingErrorStatus, currentStatus == pendingErrorStatus else { return nil }
+        return String(localized: "Listening")
     }
 
     private func stopRecognition() {
@@ -4443,6 +4452,15 @@ extension TalkModeManager {
         return self.captureMode == .pushToTalk &&
             !self.isListening &&
             self.statusText == String(localized: "Listening (PTT)")
+    }
+
+    static func _test_listeningStatusAfterSpeechErrorRestart(
+        currentStatus: String,
+        pendingErrorStatus: String?) -> String?
+    {
+        self.listeningStatusAfterSpeechErrorRestart(
+            currentStatus: currentStatus,
+            pendingErrorStatus: pendingErrorStatus)
     }
 
     func _test_prepareRealtimeRelayStart() {
