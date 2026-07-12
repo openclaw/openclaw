@@ -23,6 +23,13 @@ describe("approval callback data", () => {
     );
   });
 
+  it("rewrites allow-always callbacks separated by any whitespace", () => {
+    const approvalId = `plugin:${"a".repeat(36)}`;
+    expect(rewriteTelegramApprovalDecisionAlias(`/approve\t${approvalId}\tallow-always`)).toBe(
+      `/approve\t${approvalId}\talways`,
+    );
+  });
+
   it("keeps rewritten allow-always callbacks when canonical form would overflow", () => {
     const approvalId = `plugin:${"a".repeat(36)}`;
     expect(sanitizeTelegramCallbackData(`/approve ${approvalId} allow-always`)).toBe(

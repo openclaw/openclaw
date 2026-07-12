@@ -78,9 +78,6 @@ export function parseTelegramApprovalCallbackData(
 }
 
 export function rewriteTelegramApprovalDecisionAlias(value: string): string {
-  if (!value.endsWith(" allow-always")) {
-    return value;
-  }
   if (!TELEGRAM_APPROVE_ALLOW_ALWAYS_PATTERN.test(value)) {
     return value;
   }
