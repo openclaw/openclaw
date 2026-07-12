@@ -684,6 +684,45 @@ describe("tool-cards", () => {
     expect(sidebar.docId).toBe("cv_sidebar");
     expect(sidebar.entryUrl).toBe("/__openclaw__/canvas/documents/cv_sidebar/index.html");
   });
+
+  it("keeps an expanded MCP App preview visible alongside text output", () => {
+    const container = document.createElement("div");
+    const root = document.documentElement;
+    const previousTicket = root.getAttribute("data-openclaw-mcp-app-sandbox-ticket");
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(() => new Promise(() => {}));
+    root.setAttribute("data-openclaw-mcp-app-sandbox-ticket", "test-ticket");
+
+    try {
+      render(
+        renderToolCard(
+          {
+            id: "msg:mcp-app:1",
+            name: "diagrams_create_view",
+            outputText: "rendered",
+            preview: {
+              kind: "mcp-app",
+              serverName: "diagrams",
+              title: "Diagram",
+              viewId: "mcpview_0123456789ABCDEFGHJKMNPQRSTVWXYZ",
+            },
+          },
+          { expanded: true, onToggleExpanded: vi.fn() },
+        ),
+        container,
+      );
+
+      expect(container.querySelector('[data-kind="mcp-app"]')).not.toBeNull();
+      expect(container.querySelector(".chat-tool-card__raw-toggle")).not.toBeNull();
+    } finally {
+      fetchMock.mockRestore();
+      if (previousTicket === null) {
+        root.removeAttribute("data-openclaw-mcp-app-sandbox-ticket");
+      } else {
+        root.setAttribute("data-openclaw-mcp-app-sandbox-ticket", previousTicket);
+      }
+    }
+  });
+
   describe("isToolErrorOutput", () => {
     it("flags JSON payloads that carry a top-level error string", () => {
       expect(

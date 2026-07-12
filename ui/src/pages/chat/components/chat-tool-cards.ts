@@ -939,21 +939,20 @@ export function renderExpandedToolCardContent(
               text: card.inputText!,
             })
         : nothing}
+      ${card.preview ? visiblePreview : nothing}
       ${hasOutput
         ? card.preview
-          ? html`${visiblePreview} ${renderRawOutputToggle(card.outputText!)}`
+          ? renderRawOutputToggle(card.outputText!)
           : renderToolDataBlock({
               label: t(isError ? "chat.toolCards.toolError" : "chat.toolCards.toolOutput"),
               text: card.outputText!,
             })
-        : card.preview
-          ? visiblePreview
-          : isError
-            ? renderToolDataBlock({
-                label: t("chat.toolCards.toolError"),
-                text: t("chat.toolCards.noOutputFailed"),
-              })
-            : nothing}
+        : !card.preview && isError
+          ? renderToolDataBlock({
+              label: t("chat.toolCards.toolError"),
+              text: t("chat.toolCards.noOutputFailed"),
+            })
+          : nothing}
     </div>
   `;
 }
