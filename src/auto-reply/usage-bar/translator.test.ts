@@ -37,6 +37,13 @@ describe("usage-bar verbs", () => {
     expect(render([{ text: "{cost|fixed:4}" }], { cost: "nope" })).toBe("");
   });
 
+  it("fixed — rejects non-integer and out-of-range precision", () => {
+    expect(render([{ text: "{cost|fixed:20}" }], { cost: 0.5 })).toBe("0.50000000000000000000");
+    for (const digits of ["-1", "21", "1e2", "2junk"]) {
+      expect(render([{ text: `{cost|fixed:${digits}}` }], { cost: 0.5 })).toBe("");
+    }
+  });
+
   it("dur — seconds to reset", () => {
     expect(render([{ text: "{x|dur}" }], { x: 14820 })).toBe("4h07m");
     expect(render([{ text: "{x|dur}" }], { x: 449280 })).toBe("5.2d");
@@ -58,6 +65,13 @@ describe("usage-bar verbs", () => {
     expect(render([{ text: "{x|meter:1:moon}" }], { x: 0 })).toBe("🌑");
     expect(render([{ text: "{x|meter:1:moon}" }], { x: 50 })).toBe("🌗");
     expect(render([{ text: "{x|meter:1:moon}" }], { x: 100 })).toBe("🌕");
+  });
+
+  it("meter — rejects non-integer and out-of-range widths", () => {
+    expect(render([{ text: "{x|meter:100:braille}" }], { x: 50 })).toHaveLength(100);
+    for (const width of ["0", "101", "1e2", "12junk"]) {
+      expect(render([{ text: `{x|meter:${width}:braille}` }], { x: 50 })).toBe("");
+    }
   });
 
   it("alias — listed shortens, unlisted echoes through", () => {

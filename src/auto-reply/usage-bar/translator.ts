@@ -1,4 +1,4 @@
-import { expectDefined } from "@openclaw/normalization-core";
+import { expectDefined, parseStrictInteger } from "@openclaw/normalization-core";
 export type UsageBarTemplate = Record<string, unknown>;
 export type UsageContract = Record<string, unknown>;
 type Vocab = Record<string, unknown>;
@@ -117,13 +117,21 @@ function meter(value: unknown, width: number, scale: unknown): string {
 
 const VERB_NAMES = new Set(["num", "fixed", "dur", "pct", "inv", "alias", "meter"]);
 
+function parseBoundedIntegerArg(
+  raw: string | undefined,
+  bounds: { defaultValue: number; min: number; max: number },
+): number | undefined {
+  const value = raw === undefined ? bounds.defaultValue : parseStrictInteger(raw);
+  return value !== undefined && value >= bounds.min && value <= bounds.max ? value : undefined;
+}
+
 function applyVerb(name: string, args: string[], value: unknown, vocab: Vocab): unknown {
   switch (name) {
     case "num":
       return num(value);
     case "fixed": {
-      const digits = args[0] ? Number.parseInt(args[0], 10) || 0 : 2;
-      return fixed(value, digits);
+      const digits = parseBoundedIntegerArg(args[0], { defaultValue: 2, min: 0, max: 20 });
+      return digits === undefined ? "" : fixed(value, digits);
     }
     case "dur":
       return dur(value);
@@ -143,7 +151,10 @@ function applyVerb(name: string, args: string[], value: unknown, vocab: Vocab): 
       return Object.hasOwn(table, lower) ? table[lower] : value;
     }
     case "meter": {
-      const width = args[0] ? Number.parseInt(args[0], 10) || 5 : 5;
+      const width = parseBoundedIntegerArg(args[0], { defaultValue: 5, min: 1, max: 100 });
+      if (width === undefined) {
+        return "";
+      }
       const scale = args.length > 1 ? vocab[expectDefined(args[1], "args entry at 1")] : undefined;
       return meter(value, width, scale);
     }
