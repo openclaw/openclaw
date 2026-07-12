@@ -314,6 +314,37 @@ describe("runtime parity", () => {
     ]);
   });
 
+  it("preserves missing image results when capture sources disagree on call count", () => {
+    const resolved = __testing.resolveRuntimeParityToolCalls({
+      mockToolCalls: [
+        {
+          tool: "image_generate",
+          argsHash: "first-args",
+          resultHash: "mock-missing",
+          errorClass: "tool-result-missing",
+        },
+      ],
+      transcriptToolCalls: [
+        {
+          tool: "image_generate",
+          argsHash: "first-args",
+          resultHash: "first-success",
+        },
+        {
+          tool: "image_generate",
+          argsHash: "second-args",
+          resultHash: "second-missing",
+          errorClass: "tool-result-missing",
+        },
+      ],
+      terminalImageResultProven: true,
+    });
+
+    expect(resolved).toEqual([
+      expect.objectContaining({ errorClass: "tool-result-missing", resultHash: "mock-missing" }),
+    ]);
+  });
+
   it("scopes process-global mock requests to the parent session prompt", () => {
     const scoped = __testing.filterMockRequestsForParentPrompt(
       [

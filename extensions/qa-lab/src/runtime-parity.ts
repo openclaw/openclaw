@@ -788,6 +788,18 @@ function resolveRuntimeParityToolCalls(params: {
   transcriptToolCalls: RuntimeParityToolCall[];
   terminalImageResultProven?: boolean;
 }): RuntimeParityToolCall[] {
+  const mockImageCalls = (params.mockToolCalls ?? []).filter(
+    (toolCall) => toolCall.tool === "image_generate",
+  );
+  const transcriptImageCalls = params.transcriptToolCalls.filter(
+    (toolCall) => toolCall.tool === "image_generate",
+  );
+  const imageCaptureIsUnambiguous =
+    mockImageCalls.length <= 1 &&
+    transcriptImageCalls.length <= 1 &&
+    (mockImageCalls.length === 0 ||
+      transcriptImageCalls.length === 0 ||
+      compareToolCallShape(mockImageCalls, transcriptImageCalls) === undefined);
   let selected: RuntimeParityToolCall[];
   if (!params.mockToolCalls) {
     selected = params.transcriptToolCalls;
@@ -801,7 +813,7 @@ function resolveRuntimeParityToolCalls(params: {
     selected = params.mockToolCalls;
   }
   const imageCalls = selected.filter((toolCall) => toolCall.tool === "image_generate");
-  if (params.terminalImageResultProven && imageCalls.length === 1) {
+  if (params.terminalImageResultProven && imageCaptureIsUnambiguous && imageCalls.length === 1) {
     selected = selected.map((toolCall) => {
       if (
         toolCall.tool !== "image_generate" ||
