@@ -286,6 +286,7 @@ function claimedRecord<TPayload, TMetadata>(
 }
 
 function corruptClaimRecord(row: ChannelIngressRow): ChannelIngressQueueCorruptClaim {
+  const claimValue = row.claim_token ?? "";
   return {
     id: row.event_id,
     channelId: row.channel_id,
@@ -294,7 +295,7 @@ function corruptClaimRecord(row: ChannelIngressRow): ChannelIngressQueueCorruptC
     ...(row.lane_key === null ? {} : { laneKey: row.lane_key }),
     reason: "corrupt_payload",
     claim: {
-      token: row.claim_token ?? "",
+      token: claimValue,
       ownerId: row.claim_owner ?? "",
       claimedAt: row.claimed_at ?? 0,
     },
