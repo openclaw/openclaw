@@ -348,6 +348,11 @@ describe("release Telegram QA workflow", () => {
   });
 
   it("binds dispatched and legacy reusable OIDC identity to the resolved main SHA", () => {
+    expect(
+      workflowStep(workflowJob("trusted_identity"), "Verify dispatched-main identity").env
+        ?.TARGET_REF,
+    ).toBe("${{ inputs.target_ref }}");
+
     const trustedSha = "b".repeat(40);
     const success = runIdentityVerification({
       expectedTrustedWorkflowSha: trustedSha,

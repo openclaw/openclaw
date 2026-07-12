@@ -72,6 +72,7 @@ jobs:
           CALLER_WORKFLOW_SHA: ${{ github.workflow_sha }}
           EXPECTED_TRUSTED_WORKFLOW_SHA: ${{ inputs.expected_trusted_workflow_sha }}
           JOB_CONTEXT: ${{ toJSON(job) }}
+          TARGET_REF: ${{ inputs.target_ref }}
           TARGET_SHA: ${{ inputs.target_sha }}
           WORKFLOW_REF: ${{ github.workflow_ref }}
           WORKFLOW_SHA: ${{ github.workflow_sha }}
