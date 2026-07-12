@@ -476,6 +476,7 @@ export const es: TranslationMap = {
     noEvents: "No events yet.",
   },
   quickSettings: {
+    language: "Idioma",
     appearance: {
       lobsterVisits: "Visitas de la langosta",
       lobsterVisitsOn: "Pasa de vez en cuando",
@@ -610,10 +611,10 @@ export const es: TranslationMap = {
   tabs: {
     agents: "Agentes",
     activity: "Actividad",
-    overview: "Resumen",
     workboard: "Panel de trabajo",
     worktrees: "Worktrees",
     channels: "Canales",
+    connection: "Conexión",
     sessions: "Sesiones",
     usage: "Uso",
     cron: "Tareas Cron",
@@ -640,10 +641,10 @@ export const es: TranslationMap = {
   subtitles: {
     agents: "Gestionar espacios de trabajo, herramientas e identidades de agentes.",
     activity: "Resúmenes de actividad de herramientas locales del navegador.",
-    overview: "Estado de la puerta de enlace, puntos de entrada y lectura rápida de salud.",
     workboard: "Cola de trabajo del agente y traspaso de sesión.",
     worktrees: "Checkouts aislados de tareas de agentes y snapshots de recuperación.",
     channels: "Gestionar canales y ajustes.",
+    connection: "Endpoint del Gateway, credenciales y estado del protocolo de enlace.",
     sessions: "Inspeccionar sesiones activas y ajustar valores predeterminados por sesión.",
     usage: "Monitorear uso de API y costes.",
     cron: "Programar despertares y ejecuciones recurrentes de agentes.",
@@ -1293,18 +1294,22 @@ export const es: TranslationMap = {
     eventUnarchived: "Desarchivado",
     eventStale: "Sesión obsoleta",
   },
-  overview: {
+  connection: {
+    lostTitle: "Conexión con Gateway perdida",
+    reconnecting: "Reconectando…",
+    offlineHint:
+      "Las actualizaciones en vivo y las acciones están pausadas hasta que se restablezca la conexión.",
+    retryNow: "Reintentar ahora",
     access: {
-      title: "Acceso a la puerta de enlace",
+      title: "Acceso al Gateway",
       subtitle: "Dónde se conecta el panel y cómo se autentica.",
       wsUrl: "URL de WebSocket",
-      token: "Token de la puerta de enlace",
-      password: "Contraseña (no se guarda)",
+      token: "Token del Gateway",
+      password: "Contraseña (no se almacena)",
       passwordPlaceholder: "contraseña del sistema o compartida",
       sessionKey: "Clave de sesión predeterminada",
-      language: "Idioma",
       connectHint: "Haz clic en Conectar para aplicar los cambios de conexión.",
-      trustedProxy: "Autenticado mediante proxy de confianza.",
+      trustedProxy: "Autenticado mediante un proxy de confianza.",
       showToken: "Mostrar token",
       hideToken: "Ocultar token",
       toggleTokenVisibility: "Alternar visibilidad del token",
@@ -1314,134 +1319,54 @@ export const es: TranslationMap = {
     },
     snapshot: {
       title: "Instantánea",
-      subtitle: "Información más reciente del saludo con la puerta de enlace.",
+      subtitle: "Información más reciente del protocolo de enlace del Gateway.",
       status: "Estado",
       uptime: "Tiempo de actividad",
-      tickInterval: "Intervalo de tick",
+      tickInterval: "Intervalo de actualización",
       lastChannelsRefresh: "Última actualización de canales",
-      channelsHint: "Usa Canales para vincular WhatsApp, Telegram, Discord, Signal o iMessage.",
     },
-    stats: {
-      instances: "Instancias",
-      instancesHint: "Balizas de presencia en los últimos 5 minutos.",
-      sessions: "Sesiones",
-      sessionsHint: "Claves de sesión recientes rastreadas por la puerta de enlace.",
-      cron: "Cron",
-      cronNext: "Próximo despertar {time}",
-    },
-    notes: {
-      title: "Notas",
-      subtitle: "Recordatorios rápidos para configuraciones de control remoto.",
-      tailscaleTitle: "Tailscale serve",
-      tailscaleText:
-        "Prefiere el modo serve para mantener la puerta de enlace en loopback con autenticación tailnet.",
-      sessionTitle: "Higiene de sesión",
-      sessionText: "Usa /new o sessions.patch para reiniciar el contexto.",
-      cronTitle: "Recordatorios de Cron",
-      cronText: "Usa sesiones aisladas para ejecuciones recurrentes.",
-    },
-    auth: {
-      required:
-        "Esta puerta de enlace requiere autenticación. Añade un token o contraseña y haz clic en Conectar.",
-      failed:
-        "Autenticación fallida. Vuelve a copiar una URL con token mediante {command}, o actualiza el token y haz clic en Conectar.",
-    },
-    pairing: {
-      hint: "Este dispositivo necesita aprobación de emparejamiento del host de la puerta de enlace.",
-      scopeUpgradeTitle: "Ampliación del alcance pendiente de aprobación.",
-      scopeUpgradeSummary:
-        "Este dispositivo ya está emparejado, pero el alcance más amplio solicitado está pendiente de aprobación.",
-      roleUpgradeTitle: "Actualización del rol pendiente de aprobación.",
-      roleUpgradeSummary:
-        "Este dispositivo ya está emparejado, pero el cambio de rol solicitado está pendiente de aprobación.",
-      metadataUpgradeTitle: "Cambio de metadatos del dispositivo pendiente de aprobación.",
-      metadataUpgradeSummary:
-        "Este dispositivo ya está emparejado, pero el cambio de metadatos está pendiente de aprobación.",
-      mobileHint:
-        "¿En el móvil? Copia la URL completa (incluyendo #token=...) desde openclaw dashboard --no-open en tu escritorio.",
-      docsTitle: "Documentación de emparejamiento de dispositivos (se abre en una pestaña nueva)",
-      docsLink: "Documentación: Emparejamiento de dispositivos",
-    },
-    insecure: {
-      hint: "Esta página es HTTP, por lo que el navegador bloquea el acceso a la identidad del dispositivo. Usa HTTPS (Tailscale Serve) o abre {url} en el equipo host.",
-      stayHttp: "Si debes permanecer en HTTP, utiliza {config} (solo token).",
-    },
-    connection: {
+    help: {
       title: "Cómo conectarse",
-      step1: "Inicia el gateway en tu máquina host:",
+      step1: "Inicia el Gateway en tu equipo host:",
       step2: "Obtén una URL del panel con token:",
-      step3: "Pega la URL de WebSocket y el token arriba, o abre directamente la URL con token.",
-      step4: "O genera un token reutilizable:",
-      docsHint: "Para el acceso remoto, se recomienda Tailscale Serve. ",
+      step3: "Pega arriba la URL de WebSocket y el token, o abre directamente la URL con token.",
       docsLink: "Leer la documentación →",
-      authDocsTitle: "Documentación de autenticación de Control UI (se abre en una pestaña nueva)",
-      authDocsLink: "Documentación: Autenticación de Control UI",
-      tailscaleDocsTitle: "Documentación de Tailscale Serve (se abre en una pestaña nueva)",
-      tailscaleDocsLink: "Documentación: Tailscale Serve",
-      insecureHttpDocsTitle: "Documentación de HTTP inseguro (se abre en una pestaña nueva)",
-      insecureHttpDocsLink: "Documentación: HTTP inseguro",
       copyCommand: "Copiar comando",
       copyCommandAria: "Copiar comando: {command}",
     },
-    cards: {
-      cost: "Costo",
+  },
+  attention: {
+    cronFailed: "{count} tarea(s) cron con errores",
+    cronOverdue: "{count} tarea(s) cron atrasada(s)",
+    modelAuthExpired: "La autenticación del modelo ha caducado: {providers}",
+    modelAuthExpiring: "La autenticación del modelo está a punto de caducar: {providers}",
+  },
+  palette: {
+    placeholder: "Buscar chats y comandos…",
+    noResults: "Sin resultados",
+    categories: {
+      search: "Buscar",
+      navigation: "Navegación",
       skills: "Skills",
-      recentSessions: "Sesiones recientes",
-      modelAuth: "Autenticación del modelo",
-      modelAuthOk: "{count} ok",
-      modelAuthExpired: "{count} caducadas",
-      modelAuthExpiring: "{count} por caducar",
-      modelAuthProviders: "{count} proveedores",
-      modelAuthUsageLeft: "{pct}% restante",
-      modelAuthExpiresIn: "caduca {when}",
-      modelAuthAttentionExpiredTitle: "La autenticación del modelo ha caducado",
-      modelAuthAttentionExpiringTitle: "La autenticación del modelo caducará pronto",
-      modelAuthAttentionExpiredDesc: "{providers} — vuelve a autenticarte con openclaw models auth",
-      modelAuthAttentionExpiringEntry: "{provider} ({when})",
     },
-    attention: {
-      title: "Atención",
+    items: {
+      sessions: "Sesiones",
+      scheduled: "Programado",
+      skills: "Skills",
+      plugins: "Plugins",
+      settings: "Configuración",
+      agents: "Agentes",
+      shellCommand: "Comando de shell",
+      debugMode: "Modo de depuración",
     },
-    eventLog: {
-      title: "Registro de eventos",
+    descriptions: {
+      shellCommand: "Ejecutar shell",
+      debugMode: "Activar o desactivar la depuración",
     },
-    logTail: {
-      title: "Logs de Gateway",
-    },
-    quickActions: {
-      newSession: "Nueva sesión",
-      automation: "Automatización",
-      refreshAll: "Actualizar todo",
-      terminal: "Terminal",
-    },
-    palette: {
-      placeholder: "Escribe un comando…",
-      noResults: "Sin resultados",
-      categories: {
-        search: "Buscar",
-        navigation: "Navegación",
-        skills: "Skills",
-      },
-      items: {
-        overview: "Resumen",
-        sessions: "Sesiones",
-        scheduled: "Programado",
-        skills: "Skills",
-        plugins: "Plugins",
-        settings: "Configuración",
-        agents: "Agentes",
-        shellCommand: "Comando de shell",
-        debugMode: "Modo de depuración",
-      },
-      descriptions: {
-        shellCommand: "Ejecutar shell",
-        debugMode: "Alternar depuración",
-      },
-      footer: {
-        navigate: "navegar",
-        select: "seleccionar",
-        close: "cerrar",
-      },
+    footer: {
+      navigate: "navegar",
+      select: "seleccionar",
+      close: "cerrar",
     },
   },
   dreaming: {
@@ -1956,13 +1881,6 @@ export const es: TranslationMap = {
           "Vuelve a abrir el dashboard con openclaw dashboard --no-open para copiar la URL y los detalles de autenticación actuales.",
       },
     },
-  },
-  connection: {
-    lostTitle: "Conexión con Gateway perdida",
-    reconnecting: "Reconectando…",
-    offlineHint:
-      "Las actualizaciones en vivo y las acciones están pausadas hasta que se restablezca la conexión.",
-    retryNow: "Reintentar ahora",
   },
   chat: {
     disconnected: "Desconectado de la puerta de enlace.",

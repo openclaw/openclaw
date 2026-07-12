@@ -476,6 +476,7 @@ export const uk: TranslationMap = {
     noEvents: "No events yet.",
   },
   quickSettings: {
+    language: "Мова",
     appearance: {
       lobsterVisits: "Візити омара",
       lobsterVisitsOn: "Час від часу заходить",
@@ -609,10 +610,10 @@ export const uk: TranslationMap = {
   tabs: {
     agents: "Агенти",
     activity: "Активність",
-    overview: "Огляд",
     workboard: "Робоча дошка",
     worktrees: "Worktrees",
     channels: "Канали",
+    connection: "Підключення",
     sessions: "Сеанси",
     usage: "Використання",
     cron: "Завдання Cron",
@@ -639,10 +640,10 @@ export const uk: TranslationMap = {
   subtitles: {
     agents: "Робочі простори, інструменти, ідентичності.",
     activity: "Підсумки активності інструментів, локальні для браузера.",
-    overview: "Стан, точки входу, справність.",
     workboard: "Черга завдань агента та передавання сеансів.",
     worktrees: "Ізольовані копії для завдань агентів і знімки для відновлення.",
     channels: "Канали та налаштування.",
+    connection: "Кінцева точка Gateway, облікові дані та стан рукостискання.",
     sessions: "Активні сеанси та типові значення.",
     usage: "Використання API та витрати.",
     cron: "Пробудження та повторювані запуски.",
@@ -1287,18 +1288,21 @@ export const uk: TranslationMap = {
     eventUnarchived: "Розархівовано",
     eventStale: "Застарілий сеанс",
   },
-  overview: {
+  connection: {
+    lostTitle: "З’єднання з Gateway втрачено",
+    reconnecting: "Повторне підключення…",
+    offlineHint: "Оновлення в реальному часі та дії призупинено, доки з’єднання не відновиться.",
+    retryNow: "Повторити зараз",
     access: {
-      title: "Доступ до шлюзу",
+      title: "Доступ до Gateway",
       subtitle: "Куди підключається панель керування та як вона автентифікується.",
-      wsUrl: "URL WebSocket",
-      token: "Токен шлюзу",
+      wsUrl: "URL-адреса WebSocket",
+      token: "Токен Gateway",
       password: "Пароль (не зберігається)",
       passwordPlaceholder: "системний або спільний пароль",
-      sessionKey: "Типовий ключ сеансу",
-      language: "Мова",
-      connectHint: "Натисніть «Підключити», щоб застосувати зміни підключення.",
-      trustedProxy: "Автентифіковано через довірений проксі.",
+      sessionKey: "Ключ сеансу за замовчуванням",
+      connectHint: "Натисніть «Підключитися», щоб застосувати зміни підключення.",
+      trustedProxy: "Автентифіковано через довірений проксі-сервер.",
       showToken: "Показати токен",
       hideToken: "Приховати токен",
       toggleTokenVisibility: "Перемкнути видимість токена",
@@ -1307,137 +1311,55 @@ export const uk: TranslationMap = {
       togglePasswordVisibility: "Перемкнути видимість пароля",
     },
     snapshot: {
-      title: "Знімок",
-      subtitle: "Остання інформація рукостискання шлюзу.",
+      title: "Знімок стану",
+      subtitle: "Остання інформація про рукостискання з Gateway.",
       status: "Статус",
       uptime: "Час роботи",
-      tickInterval: "Інтервал тіку",
+      tickInterval: "Інтервал оновлення",
       lastChannelsRefresh: "Останнє оновлення каналів",
-      channelsHint:
-        "Використовуйте «Канали», щоб прив’язати WhatsApp, Telegram, Discord, Signal або iMessage.",
     },
-    stats: {
-      instances: "Екземпляри",
-      instancesHint: "Маячки присутності за останні 5 хвилин.",
-      sessions: "Сеанси",
-      sessionsHint: "Нещодавні ключі сеансів, які відстежує шлюз.",
-      cron: "Cron",
-      cronNext: "Наступне пробудження {time}",
-    },
-    notes: {
-      title: "Нотатки",
-      subtitle: "Швидкі нагадування для налаштувань віддаленого керування.",
-      tailscaleTitle: "Tailscale serve",
-      tailscaleText:
-        "Надавайте перевагу режиму serve, щоб шлюз залишався на loopback з автентифікацією tailnet.",
-      sessionTitle: "Гігієна сеансів",
-      sessionText: "Використовуйте /new або sessions.patch, щоб скинути контекст.",
-      cronTitle: "Нагадування Cron",
-      cronText: "Використовуйте ізольовані сеанси для повторюваних запусків.",
-    },
-    auth: {
-      required:
-        "Цей шлюз потребує автентифікації. Додайте токен або пароль, а потім натисніть «Підключити».",
-      failed:
-        "Автентифікація не вдалася. Знову скопіюйте URL з токеном за допомогою {command} або оновіть токен, а потім натисніть «Підключити».",
-    },
-    pairing: {
-      hint: "Цей пристрій потребує схвалення спарювання від хоста шлюзу.",
-      scopeUpgradeTitle: "Розширення області дії очікує на схвалення.",
-      scopeUpgradeSummary:
-        "Цей пристрій уже сполучено, але запитуване ширше охоплення очікує на схвалення.",
-      roleUpgradeTitle: "Зміна ролі очікує на схвалення.",
-      roleUpgradeSummary:
-        "Цей пристрій уже сполучено, але запитувана зміна ролі очікує на схвалення.",
-      metadataUpgradeTitle: "Зміна метаданих пристрою очікує на схвалення.",
-      metadataUpgradeSummary:
-        "Цей пристрій уже сполучено, але зміна метаданих очікує на схвалення.",
-      mobileHint:
-        "На мобільному? Скопіюйте повний URL (включно з #token=...) з openclaw dashboard --no-open на вашому комп’ютері.",
-      docsTitle: "Документація щодо сполучення пристроїв (відкривається в новій вкладці)",
-      docsLink: "Документація: Сполучення пристроїв",
-    },
-    insecure: {
-      hint: "Ця сторінка використовує HTTP, тому браузер блокує ідентичність пристрою. Використовуйте HTTPS (Tailscale Serve) або відкрийте {url} на хості шлюзу.",
-      stayHttp: "Якщо вам потрібно залишитися на HTTP, установіть {config} (лише токен).",
-    },
-    connection: {
+    help: {
       title: "Як підключитися",
-      step1: "Запустіть шлюз на вашому хості:",
+      step1: "Запустіть Gateway на вашому хост-комп’ютері:",
       step2: "Отримайте URL панелі керування з токеном:",
-      step3: "Вставте URL WebSocket і токен вище або відкрийте URL з токеном напряму.",
-      step4: "Або згенеруйте багаторазовий токен:",
-      docsHint: "Для віддаленого доступу рекомендовано Tailscale Serve. ",
+      step3: "Вставте URL WebSocket і токен вище або безпосередньо відкрийте URL із токеном.",
       docsLink: "Читати документацію →",
-      authDocsTitle: "Документація щодо автентифікації Control UI (відкривається в новій вкладці)",
-      authDocsLink: "Документація: автентифікація Control UI",
-      tailscaleDocsTitle: "Документація щодо Tailscale Serve (відкривається в новій вкладці)",
-      tailscaleDocsLink: "Документація: Tailscale Serve",
-      insecureHttpDocsTitle: "Документація щодо незахищеного HTTP (відкривається в новій вкладці)",
-      insecureHttpDocsLink: "Документація: незахищений HTTP",
       copyCommand: "Копіювати команду",
       copyCommandAria: "Копіювати команду: {command}",
     },
-    cards: {
-      cost: "Вартість",
-      skills: "Навички",
-      recentSessions: "Нещодавні сеанси",
-      modelAuth: "Авторизація моделей",
-      modelAuthOk: "{count} в нормі",
-      modelAuthExpired: "{count} прострочено",
-      modelAuthExpiring: "{count} скоро спливає",
-      modelAuthProviders: "{count} провайдерів",
-      modelAuthUsageLeft: "Залишилося {pct}%",
-      modelAuthExpiresIn: "спливає {when}",
-      modelAuthAttentionExpiredTitle: "Авторизація моделей прострочена",
-      modelAuthAttentionExpiringTitle: "Термін авторизації моделей скоро спливає",
-      modelAuthAttentionExpiredDesc:
-        "{providers} — повторно виконайте авторизацію через openclaw models auth",
-      modelAuthAttentionExpiringEntry: "{provider} ({when})",
+  },
+  attention: {
+    cronFailed: "Невдалі завдання cron: {count}",
+    cronOverdue: "Прострочені завдання cron: {count}",
+    modelAuthExpired: "Термін автентифікації моделі минув: {providers}",
+    modelAuthExpiring: "Термін автентифікації моделі спливає: {providers}",
+  },
+  palette: {
+    placeholder: "Пошук чатів і команд…",
+    noResults: "Нічого не знайдено",
+    categories: {
+      search: "Пошук",
+      navigation: "Навігація",
+      skills: "Skills",
     },
-    attention: {
-      title: "Увага",
+    items: {
+      sessions: "Сеанси",
+      scheduled: "Заплановані",
+      skills: "Skills",
+      plugins: "Плагіни",
+      settings: "Налаштування",
+      agents: "Агенти",
+      shellCommand: "Команда оболонки",
+      debugMode: "Режим налагодження",
     },
-    eventLog: {
-      title: "Журнал подій",
+    descriptions: {
+      shellCommand: "Запустити оболонку",
+      debugMode: "Перемкнути режим налагодження",
     },
-    logTail: {
-      title: "Журнали шлюзу",
-    },
-    quickActions: {
-      newSession: "Новий сеанс",
-      automation: "Автоматизація",
-      refreshAll: "Оновити все",
-      terminal: "Термінал",
-    },
-    palette: {
-      placeholder: "Введіть команду…",
-      noResults: "Немає результатів",
-      categories: {
-        search: "Пошук",
-        navigation: "Навігація",
-        skills: "Навички",
-      },
-      items: {
-        overview: "Огляд",
-        sessions: "Сеанси",
-        scheduled: "Заплановано",
-        skills: "Навички",
-        plugins: "Плагіни",
-        settings: "Налаштування",
-        agents: "Агенти",
-        shellCommand: "Команда оболонки",
-        debugMode: "Режим налагодження",
-      },
-      descriptions: {
-        shellCommand: "Запустити оболонку",
-        debugMode: "Перемкнути налагодження",
-      },
-      footer: {
-        navigate: "навігація",
-        select: "вибрати",
-        close: "закрити",
-      },
+    footer: {
+      navigate: "навігація",
+      select: "вибрати",
+      close: "закрити",
     },
   },
   dreaming: {
@@ -1945,12 +1867,6 @@ export const uk: TranslationMap = {
           "Знову відкрийте dashboard через openclaw dashboard --no-open, щоб повторно скопіювати поточний URL і деталі auth.",
       },
     },
-  },
-  connection: {
-    lostTitle: "З’єднання з Gateway втрачено",
-    reconnecting: "Повторне підключення…",
-    offlineHint: "Оновлення в реальному часі та дії призупинено, доки з’єднання не відновиться.",
-    retryNow: "Повторити зараз",
   },
   chat: {
     disconnected: "Відключено від шлюзу.",

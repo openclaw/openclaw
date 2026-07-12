@@ -477,6 +477,7 @@ export const pl: TranslationMap = {
     noEvents: "No events yet.",
   },
   quickSettings: {
+    language: "Język",
     appearance: {
       lobsterVisits: "Wizyty homara",
       lobsterVisitsOn: "Wpada od czasu do czasu",
@@ -611,10 +612,10 @@ export const pl: TranslationMap = {
   tabs: {
     agents: "Agenci",
     activity: "Aktywność",
-    overview: "Przegląd",
     workboard: "Tablica pracy",
     worktrees: "Worktree",
     channels: "Kanały",
+    connection: "Połączenie",
     sessions: "Sesje",
     usage: "Użycie",
     cron: "Zadania Cron",
@@ -641,10 +642,10 @@ export const pl: TranslationMap = {
   subtitles: {
     agents: "Obszary robocze, narzędzia, tożsamości.",
     activity: "Podsumowania aktywności narzędzi lokalne dla przeglądarki.",
-    overview: "Status, punkty dostępu, stan.",
     workboard: "Kolejka zadań agenta i przekazywanie sesji.",
     worktrees: "Izolowane kopie robocze zadań agentów i migawki do odzyskiwania.",
     channels: "Kanały i ustawienia.",
+    connection: "Punkt końcowy Gateway, dane uwierzytelniające i stan uzgadniania połączenia.",
     sessions: "Aktywne sesje i ustawienia domyślne.",
     usage: "Zużycie API i koszty.",
     cron: "Wybudzenia i cykliczne uruchomienia.",
@@ -1294,18 +1295,21 @@ export const pl: TranslationMap = {
     eventUnarchived: "Przywrócono z archiwum",
     eventStale: "Nieaktualna sesja",
   },
-  overview: {
+  connection: {
+    lostTitle: "Utracono połączenie z Gateway",
+    reconnecting: "Ponowne łączenie…",
+    offlineHint: "Aktualizacje na żywo i działania są wstrzymane do czasu przywrócenia połączenia.",
+    retryNow: "Spróbuj ponownie teraz",
     access: {
       title: "Dostęp do Gateway",
-      subtitle: "Gdzie panel się łączy i jak się uwierzytelnia.",
-      wsUrl: "URL WebSocket",
+      subtitle: "Miejsce, z którym łączy się panel, oraz sposób uwierzytelniania.",
+      wsUrl: "Adres URL WebSocket",
       token: "Token Gateway",
       password: "Hasło (nie jest przechowywane)",
       passwordPlaceholder: "hasło systemowe lub współdzielone",
       sessionKey: "Domyślny klucz sesji",
-      language: "Język",
       connectHint: "Kliknij Połącz, aby zastosować zmiany połączenia.",
-      trustedProxy: "Uwierzytelniono przez zaufany serwer proxy.",
+      trustedProxy: "Uwierzytelniono za pomocą zaufanego serwera proxy.",
       showToken: "Pokaż token",
       hideToken: "Ukryj token",
       toggleTokenVisibility: "Przełącz widoczność tokenu",
@@ -1315,135 +1319,55 @@ export const pl: TranslationMap = {
     },
     snapshot: {
       title: "Migawka",
-      subtitle: "Najnowsze informacje z uzgadniania połączenia z Gateway.",
+      subtitle: "Najnowsze informacje o uzgadnianiu połączenia z Gateway.",
       status: "Status",
       uptime: "Czas działania",
-      tickInterval: "Interwał tyknięcia",
+      tickInterval: "Interwał aktualizacji",
       lastChannelsRefresh: "Ostatnie odświeżenie kanałów",
-      channelsHint: "Użyj Kanałów, aby połączyć WhatsApp, Telegram, Discord, Signal lub iMessage.",
     },
-    stats: {
-      instances: "Instancje",
-      instancesHint: "Sygnały obecności z ostatnich 5 minut.",
-      sessions: "Sesje",
-      sessionsHint: "Ostatnie klucze sesji śledzone przez Gateway.",
-      cron: "Cron",
-      cronNext: "Następne wybudzenie {time}",
-    },
-    notes: {
-      title: "Notatki",
-      subtitle: "Szybkie przypomnienia dotyczące zdalnych konfiguracji sterowania.",
-      tailscaleTitle: "Tailscale serve",
-      tailscaleText:
-        "Preferuj tryb serve, aby utrzymać Gateway na loopback z uwierzytelnianiem tailnet.",
-      sessionTitle: "Higiena sesji",
-      sessionText: "Użyj /new lub sessions.patch, aby zresetować kontekst.",
-      cronTitle: "Przypomnienia Cron",
-      cronText: "Używaj odizolowanych sesji do cyklicznych uruchomień.",
-    },
-    auth: {
-      required:
-        "Ten Gateway wymaga uwierzytelnienia. Dodaj token lub hasło, a następnie kliknij Połącz.",
-      failed:
-        "Uwierzytelnianie nie powiodło się. Ponownie skopiuj URL z tokenem za pomocą {command} lub zaktualizuj token, a następnie kliknij Połącz.",
-    },
-    pairing: {
-      hint: "To urządzenie wymaga zatwierdzenia parowania przez host Gateway.",
-      scopeUpgradeTitle: "Rozszerzenie zakresu oczekuje na zatwierdzenie.",
-      scopeUpgradeSummary:
-        "To urządzenie jest już sparowane, ale żądane rozszerzenie zakresu oczekuje na zatwierdzenie.",
-      roleUpgradeTitle: "Zmiana roli oczekuje na zatwierdzenie.",
-      roleUpgradeSummary:
-        "To urządzenie jest już sparowane, ale żądana zmiana roli oczekuje na zatwierdzenie.",
-      metadataUpgradeTitle: "Zmiana metadanych urządzenia oczekuje na zatwierdzenie.",
-      metadataUpgradeSummary:
-        "To urządzenie jest już sparowane, ale zmiana metadanych oczekuje na zatwierdzenie.",
-      mobileHint:
-        "Na urządzeniu mobilnym? Skopiuj pełny URL (w tym #token=...) z openclaw dashboard --no-open na komputerze.",
-      docsTitle: "Dokumentacja parowania urządzeń (otwiera się w nowej karcie)",
-      docsLink: "Dokumentacja: Parowanie urządzeń",
-    },
-    insecure: {
-      hint: "Ta strona używa HTTP, więc przeglądarka blokuje tożsamość urządzenia. Użyj HTTPS (Tailscale Serve) lub otwórz {url} na hoście Gateway.",
-      stayHttp: "Jeśli musisz pozostać przy HTTP, ustaw {config} (tylko token).",
-    },
-    connection: {
+    help: {
       title: "Jak się połączyć",
       step1: "Uruchom Gateway na komputerze hosta:",
-      step2: "Uzyskaj URL panelu z tokenem:",
-      step3: "Wklej powyżej URL WebSocket i token albo otwórz bezpośrednio URL z tokenem.",
-      step4: "Lub wygeneruj token wielokrotnego użytku:",
-      docsHint: "Do zdalnego dostępu zalecany jest Tailscale Serve. ",
+      step2: "Uzyskaj adres URL panelu z tokenem:",
+      step3:
+        "Wklej powyżej adres URL WebSocket i token lub otwórz bezpośrednio adres URL z tokenem.",
       docsLink: "Przeczytaj dokumentację →",
-      authDocsTitle: "Dokumentacja uwierzytelniania Control UI (otwiera się w nowej karcie)",
-      authDocsLink: "Dokumentacja: Uwierzytelnianie Control UI",
-      tailscaleDocsTitle: "Dokumentacja Tailscale Serve (otwiera się w nowej karcie)",
-      tailscaleDocsLink: "Dokumentacja: Tailscale Serve",
-      insecureHttpDocsTitle: "Dokumentacja niezabezpieczonego HTTP (otwiera się w nowej karcie)",
-      insecureHttpDocsLink: "Dokumentacja: Niezabezpieczone HTTP",
       copyCommand: "Kopiuj polecenie",
       copyCommandAria: "Kopiuj polecenie: {command}",
     },
-    cards: {
-      cost: "Koszt",
+  },
+  attention: {
+    cronFailed: "Nieudane zadania cron: {count}",
+    cronOverdue: "Zaległe zadania cron: {count}",
+    modelAuthExpired: "Uwierzytelnienie modelu wygasło: {providers}",
+    modelAuthExpiring: "Uwierzytelnienie modelu wkrótce wygaśnie: {providers}",
+  },
+  palette: {
+    placeholder: "Szukaj czatów i poleceń…",
+    noResults: "Brak wyników",
+    categories: {
+      search: "Szukaj",
+      navigation: "Nawigacja",
       skills: "Skills",
-      recentSessions: "Ostatnie sesje",
-      modelAuth: "Uwierzytelnianie modeli",
-      modelAuthOk: "{count} ok",
-      modelAuthExpired: "{count} wygasło",
-      modelAuthExpiring: "{count} wkrótce wygaśnie",
-      modelAuthProviders: "{count} dostawców",
-      modelAuthUsageLeft: "Pozostało {pct}%",
-      modelAuthExpiresIn: "wygasa {when}",
-      modelAuthAttentionExpiredTitle: "Uwierzytelnianie modeli wygasło",
-      modelAuthAttentionExpiringTitle: "Uwierzytelnianie modeli wkrótce wygaśnie",
-      modelAuthAttentionExpiredDesc:
-        "{providers} — uwierzytelnij ponownie za pomocą openclaw models auth",
-      modelAuthAttentionExpiringEntry: "{provider} ({when})",
     },
-    attention: {
-      title: "Uwaga",
+    items: {
+      sessions: "Sesje",
+      scheduled: "Zaplanowane",
+      skills: "Skills",
+      plugins: "Wtyczki",
+      settings: "Ustawienia",
+      agents: "Agenci",
+      shellCommand: "Polecenie powłoki",
+      debugMode: "Tryb debugowania",
     },
-    eventLog: {
-      title: "Dziennik zdarzeń",
+    descriptions: {
+      shellCommand: "Uruchom powłokę",
+      debugMode: "Przełącz debugowanie",
     },
-    logTail: {
-      title: "Logi Gateway",
-    },
-    quickActions: {
-      newSession: "Nowa sesja",
-      automation: "Automatyzacja",
-      refreshAll: "Odśwież wszystko",
-      terminal: "Terminal",
-    },
-    palette: {
-      placeholder: "Wpisz polecenie…",
-      noResults: "Brak wyników",
-      categories: {
-        search: "Szukaj",
-        navigation: "Nawigacja",
-        skills: "Skills",
-      },
-      items: {
-        overview: "Przegląd",
-        sessions: "Sesje",
-        scheduled: "Zaplanowane",
-        skills: "Skills",
-        plugins: "Wtyczki",
-        settings: "Ustawienia",
-        agents: "Agenci",
-        shellCommand: "Polecenie powłoki",
-        debugMode: "Tryb debugowania",
-      },
-      descriptions: {
-        shellCommand: "Uruchom powłokę",
-        debugMode: "Przełącz debugowanie",
-      },
-      footer: {
-        navigate: "nawiguj",
-        select: "wybierz",
-        close: "zamknij",
-      },
+    footer: {
+      navigate: "nawiguj",
+      select: "wybierz",
+      close: "zamknij",
     },
   },
   dreaming: {
@@ -1955,12 +1879,6 @@ export const pl: TranslationMap = {
           "Otwórz ponownie dashboard przez openclaw dashboard --no-open, aby skopiować bieżący URL i szczegóły auth.",
       },
     },
-  },
-  connection: {
-    lostTitle: "Utracono połączenie z Gateway",
-    reconnecting: "Ponowne łączenie…",
-    offlineHint: "Aktualizacje na żywo i działania są wstrzymane do czasu przywrócenia połączenia.",
-    retryNow: "Spróbuj ponownie teraz",
   },
   chat: {
     disconnected: "Rozłączono z Gateway.",
