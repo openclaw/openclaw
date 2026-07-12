@@ -2,7 +2,10 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { describe, expect, it } from "vitest";
-import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
+import {
+  installSessionToolResultGuard,
+  redactPersistedDetailString,
+} from "./session-tool-result-guard.js";
 import { castAgentMessage } from "./test-helpers/agent-message-fixtures.js";
 import { redactTranscriptMessage } from "./transcript-redact.js";
 
@@ -815,5 +818,43 @@ describe("installSessionToolResultGuard", () => {
       (m) => (m as { toolCallId?: string }).toolCallId === "call_error",
     );
     expect(syntheticForError).toHaveLength(0);
+  });
+});
+
+describe("redactPersistedDetailString", () => {
+  it("does not split UTF-16 surrogate pairs at the truncation boundary", () => {
+    // 517 ASCII chars followed by an astral emoji place code-unit 520 inside the surrogate pair.
+    const value = `${"x".repeat(517)}😀${"y".repeat(1_000)}`;
+    const result = redactPersistedDetailString(value, 520);
+
+    // Any isolated surrogate half would make encodeURIComponent throw.
+    expect(() => encodeURIComponent(result)).not.toThrow();
+    expect(result).toContain("truncated");
+    expect(result).not.toMatch(
+      /[\uD800-\uDFFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/,
+    );
+  });
+
+  it("keeps short astral strings intact", () => {
+    const value = "start 🌍 end";
+    const result = redactPersistedDetailString(value, 2_000);
+    expect(result).toBe(value);
+    expect(() => encodeURIComponent(result)).not.toThrow();
+  });
+
+  it("emits well-formed output when the value is mostly astral characters", () => {
+    const value = "🎉".repeat(3_000);
+    const result = redactPersistedDetailString(value, 600);
+    expect(() => encodeURIComponent(result)).not.toThrow();
+    expect(result).toContain("truncated");
+    expect(result.length).toBeLessThan(value.length);
+  });
+
+  it("preserves ASCII truncation behavior", () => {
+    const value = "a".repeat(10_000);
+    const result = redactPersistedDetailString(value, 520);
+    expect(result).toContain("truncated");
+    expect(result).toMatch(/\[OpenClaw persisted detail truncated: \d+ original chars omitted\]$/);
+    expect(() => encodeURIComponent(result)).not.toThrow();
   });
 });

@@ -5,6 +5,7 @@
  */
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   boundedJsonUtf8Bytes,
   firstEnumerableOwnKeys,
@@ -151,7 +152,7 @@ function originalDetailsSizeFields(size: BoundedJsonUtf8Bytes): Record<string, n
     : { originalDetailsBytesAtLeast: size.bytes };
 }
 
-function redactPersistedDetailString(
+export function redactPersistedDetailString(
   value: string,
   maxChars = MAX_PERSISTED_DETAIL_STRING_CHARS,
   redactionConfig?: ToolResultDetailRedactionConfig,
@@ -160,9 +161,11 @@ function redactPersistedDetailString(
     return redactToolPayloadTextWithConfig(value, redactionConfig);
   }
 
-  const scan = `${value.slice(0, maxChars)}${PERSISTED_DETAIL_REDACTION_BOUNDARY}${value.slice(
-    maxChars,
-    maxChars + MAX_PERSISTED_DETAIL_REDACTION_LOOKAHEAD_CHARS,
+  const initialPrefix = sliceUtf16Safe(value, 0, maxChars);
+  const scan = `${initialPrefix}${PERSISTED_DETAIL_REDACTION_BOUNDARY}${sliceUtf16Safe(
+    value,
+    initialPrefix.length,
+    initialPrefix.length + MAX_PERSISTED_DETAIL_REDACTION_LOOKAHEAD_CHARS,
   )}`;
   const redactedScan = redactToolPayloadTextWithConfig(scan, redactionConfig);
   const boundaryIndex = redactedScan.indexOf(PERSISTED_DETAIL_REDACTION_BOUNDARY);
@@ -174,7 +177,7 @@ function redactPersistedDetailString(
     0,
     maxChars - Math.min(maxChars, MAX_PERSISTED_DETAIL_BOUNDARY_OVERLAP_CHARS),
   );
-  const initialPersistedPrefix = redactedPrefix.slice(0, safePrefixChars);
+  const initialPersistedPrefix = sliceUtf16Safe(redactedPrefix, 0, safePrefixChars);
   const persistedPrefix =
     PARTIAL_STRUCTURED_SECRET_VALUE_RE.test(initialPersistedPrefix) ||
     PARTIAL_PRIVATE_KEY_BLOCK_RE.test(initialPersistedPrefix)
