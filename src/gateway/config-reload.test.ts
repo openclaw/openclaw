@@ -204,6 +204,21 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartReasons).toContain("gateway.port");
   });
 
+  it("restarts the gateway when MCP Apps listener config changes", () => {
+    const plan = buildGatewayReloadPlan([
+      "mcp.apps.enabled",
+      "mcp.apps.sandboxPort",
+      "mcp.apps.sandboxOrigin",
+    ]);
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toEqual([
+      "mcp.apps.enabled",
+      "mcp.apps.sandboxPort",
+      "mcp.apps.sandboxOrigin",
+    ]);
+    expect(plan.disposeMcpRuntimes).toBe(false);
+  });
+
   it("restarts the gateway for operator terminal config changes", () => {
     // The terminal drives the Control UI CSP + bootstrap (both document-load
     // time) and live PTYs, none of which hot-update a connected client, so a
