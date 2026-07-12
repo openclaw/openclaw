@@ -5,6 +5,40 @@ import Testing
 
 @Suite(.serialized)
 struct DeviceIdentityStoreTests {
+    @Test
+    func `task scoped state directories isolate concurrent identity stores`() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let stateDirectories = [
+            root.appendingPathComponent("a", isDirectory: true),
+            root.appendingPathComponent("b", isDirectory: true),
+        ]
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let observed = await withTaskGroup(of: String.self) { group in
+            for stateDirectory in stateDirectories {
+                group.addTask {
+                    await DeviceIdentityStore.withStateDirectory(stateDirectory) {
+                        let identity = DeviceIdentityStore.loadOrCreate()
+                        await Task.yield()
+                        #expect(DeviceIdentityStore.loadOrCreate().deviceId == identity.deviceId)
+                        return identity.deviceId
+                    }
+                }
+            }
+            return await group.reduce(into: Set<String>()) { result, deviceId in
+                result.insert(deviceId)
+            }
+        }
+
+        #expect(observed.count == stateDirectories.count)
+        for stateDirectory in stateDirectories {
+            #expect(FileManager.default.fileExists(
+                atPath: stateDirectory.appendingPathComponent("identity/device.json").path))
+        }
+    }
+
     @Test(.stateDirectoryIsolated)
     func `device auth store reports failed durable writes`() throws {
         let tempDir = FileManager.default.temporaryDirectory
@@ -105,6 +139,108 @@ struct DeviceIdentityStoreTests {
         DeviceAuthStore.clearToken(deviceId: deviceID, role: "node")
         #expect(DeviceAuthStore.loadToken(deviceId: deviceID, role: "node") == nil)
         #expect(DeviceAuthStore.loadToken(deviceId: deviceID, role: "node", gatewayID: "gateway-a") == nil)
+    }
+
+    @Test(.stateDirectoryIsolated)
+    func `device auth owners preserve exact unicode bytes`() throws {
+        let deviceID = "exact-owner-device"
+        let composedOwner = "gateway-\u{00E9}"
+        let decomposedOwner = "gateway-e\u{0301}"
+        let nextLineOwner = "\u{0085}gateway"
+        #expect(composedOwner == decomposedOwner)
+        #expect(!DeviceAuthStore.storeTokenPersisted(
+            deviceId: deviceID,
+            role: "node",
+            token: "must-not-become-unscoped",
+            gatewayID: ""))
+        #expect(DeviceAuthStore.loadToken(deviceId: deviceID, role: "node") == nil)
+
+        for (owner, token) in [
+            (composedOwner, "composed-token"),
+            (decomposedOwner, "decomposed-token"),
+            (nextLineOwner, "next-line-token"),
+        ] {
+            #expect(DeviceAuthStore.storeTokenPersisted(
+                deviceId: deviceID,
+                role: "node",
+                token: token,
+                gatewayID: owner))
+        }
+
+        #expect(DeviceAuthStore.loadToken(
+            deviceId: deviceID,
+            role: "node",
+            gatewayID: composedOwner)?.token == "composed-token")
+        #expect(DeviceAuthStore.loadToken(
+            deviceId: deviceID,
+            role: "node",
+            gatewayID: decomposedOwner)?.token == "decomposed-token")
+        #expect(DeviceAuthStore.loadToken(
+            deviceId: deviceID,
+            role: "node",
+            gatewayID: nextLineOwner)?.token == "next-line-token")
+
+        let stateDirPath = try #require(getenv("OPENCLAW_STATE_DIR").map { String(cString: $0) })
+        let authURL = URL(fileURLWithPath: stateDirPath, isDirectory: true)
+            .appendingPathComponent("identity", isDirectory: true)
+            .appendingPathComponent("device-auth.json", isDirectory: false)
+        let raw = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: authURL)) as? [String: Any])
+        let tokens = try #require(raw["tokens"] as? [String: Any])
+        #expect(tokens.count == 3)
+
+        DeviceAuthStore.clearToken(deviceId: deviceID, role: "node", gatewayID: decomposedOwner)
+        #expect(DeviceAuthStore.loadToken(
+            deviceId: deviceID,
+            role: "node",
+            gatewayID: composedOwner)?.token == "composed-token")
+        #expect(DeviceAuthStore.loadToken(
+            deviceId: deviceID,
+            role: "node",
+            gatewayID: decomposedOwner) == nil)
+    }
+
+    @Test(.stateDirectoryIsolated)
+    func `legacy raw owner keys migrate without canonical aliasing`() throws {
+        let deviceID = "legacy-exact-owner-device"
+        let composedOwner = "gateway-\u{00E9}"
+        let decomposedOwner = "gateway-e\u{0301}"
+        let stateDirPath = try #require(getenv("OPENCLAW_STATE_DIR").map { String(cString: $0) })
+        let identityURL = URL(fileURLWithPath: stateDirPath, isDirectory: true)
+            .appendingPathComponent("identity", isDirectory: true)
+        let authURL = identityURL.appendingPathComponent("device-auth.json", isDirectory: false)
+        try FileManager.default.createDirectory(at: identityURL, withIntermediateDirectories: true)
+        let legacy: [String: Any] = [
+            "version": 1,
+            "deviceId": deviceID,
+            "tokens": [
+                "\(composedOwner)\u{1F}node": [
+                    "token": "legacy-composed-token",
+                    "role": "node",
+                    "scopes": [],
+                    "updatedAtMs": 1,
+                    "gatewayID": composedOwner,
+                ],
+            ],
+        ]
+        try JSONSerialization.data(withJSONObject: legacy).write(to: authURL, options: [.atomic])
+
+        #expect(DeviceAuthStore.loadToken(
+            deviceId: deviceID,
+            role: "node",
+            gatewayID: composedOwner)?.token == "legacy-composed-token")
+        #expect(DeviceAuthStore.storeTokenPersisted(
+            deviceId: deviceID,
+            role: "node",
+            token: "new-decomposed-token",
+            gatewayID: decomposedOwner))
+        #expect(DeviceAuthStore.loadToken(
+            deviceId: deviceID,
+            role: "node",
+            gatewayID: composedOwner)?.token == "legacy-composed-token")
+        #expect(DeviceAuthStore.loadToken(
+            deviceId: deviceID,
+            role: "node",
+            gatewayID: decomposedOwner)?.token == "new-decomposed-token")
     }
 
     @Test(.stateDirectoryIsolated)

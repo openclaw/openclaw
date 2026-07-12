@@ -16,6 +16,7 @@ import {
 } from "../../components/markdown.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { SLASH_COMMANDS } from "../../lib/chat/commands.ts";
 import { createSessionCapability, type SessionCapability } from "../../lib/sessions/index.ts";
 import {
   createModelCatalog,
@@ -58,33 +59,40 @@ const refreshVisibleToolsEffectiveForCurrentSessionMock = vi.hoisted(() =>
   }),
 );
 const buildChatItemsMock = vi.hoisted(() =>
-  vi.fn((props: { messages: unknown[]; stream: string | null; streamStartedAt: number | null }) => {
-    if (
-      props.messages.some(
-        (message) =>
-          typeof message === "object" &&
-          message !== null &&
-          (message as { __testDivider?: unknown })["__testDivider"] === true,
-      )
-    ) {
-      return [
-        {
-          kind: "divider",
-          key: "divider:compaction:test",
-          label: "Compacted history",
-          description:
-            "The compacted transcript is preserved as a checkpoint. Open session checkpoints to branch or restore from that compacted view.",
-          action: {
-            kind: "session-checkpoints",
-            label: "Open checkpoints",
+  vi.fn(
+    (props: {
+      messages: unknown[];
+      stream: string | null;
+      streamStartedAt: number | null;
+      runWorking?: boolean;
+      loading?: boolean;
+    }) => {
+      if (
+        props.messages.some(
+          (message) =>
+            typeof message === "object" &&
+            message !== null &&
+            (message as { __testDivider?: unknown })["__testDivider"] === true,
+        )
+      ) {
+        return [
+          {
+            kind: "divider",
+            key: "divider:compaction:test",
+            label: "Compacted history",
+            description:
+              "The compacted transcript is preserved as a checkpoint. Open session checkpoints to branch or restore from that compacted view.",
+            action: {
+              kind: "session-checkpoints",
+              label: "Open checkpoints",
+            },
+            timestamp: 1,
           },
-          timestamp: 1,
-        },
-      ];
-    }
-    if (props.messages.length > 0) {
-      return [
-        {
+        ];
+      }
+      const items: unknown[] = [];
+      if (props.messages.length > 0) {
+        items.push({
           kind: "group",
           key: "group:assistant:test",
           role: "assistant",
@@ -94,24 +102,33 @@ const buildChatItemsMock = vi.hoisted(() =>
           })),
           timestamp: 1,
           isStreaming: false,
-        },
-      ];
-    }
-    if (props.stream !== null) {
-      return props.stream
-        ? [
-            {
-              kind: "stream",
-              key: "stream:test",
-              text: props.stream,
-              startedAt: props.streamStartedAt ?? 1,
-              isStreaming: true,
-            },
-          ]
-        : [{ kind: "reading-indicator", key: "reading:test" }];
-    }
-    return [];
-  }),
+        });
+      }
+      // Mirrors buildChatItems: streamed text renders as a stream item; an
+      // empty stream or a working run with no stream shows the reading
+      // indicator (working spark), except on the initial empty load where
+      // the skeleton owns the thread.
+      if (props.stream !== null) {
+        items.push(
+          props.stream
+            ? {
+                kind: "stream",
+                key: "stream:test",
+                text: props.stream,
+                startedAt: props.streamStartedAt ?? 1,
+                isStreaming: true,
+              }
+            : { kind: "reading-indicator", key: "reading:test" },
+        );
+      } else if (
+        props.runWorking === true &&
+        !(props.loading === true && props.messages.length === 0)
+      ) {
+        items.push({ kind: "reading-indicator", key: "reading:test" });
+      }
+      return items;
+    },
+  ),
 );
 const renderMessageGroupMock = vi.hoisted(() =>
   vi.fn(
@@ -407,7 +424,7 @@ function createChatHeaderState(
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 280,
-      sidebarPinnedRoutes: ["overview"],
+      sidebarPinnedRoutes: [],
       sidebarMoreExpanded: false,
       chatShowThinking: false,
       chatShowToolCalls: true,
@@ -566,7 +583,7 @@ function createChatProps(
     compactionStatus: null,
     fallbackStatus: null,
     messages: [],
-    sideResult: null,
+    sideChatTurns: [],
     toolMessages: [],
     streamSegments: [],
     stream: null,
@@ -611,7 +628,8 @@ function createChatProps(
     onAbort: () => undefined,
     onQueueRemove: () => undefined,
     onQueueSteer: () => undefined,
-    onDismissSideResult: () => undefined,
+    onSideChatClose: () => undefined,
+    onSideChatClear: () => undefined,
     onNewSession: () => undefined,
     onClearHistory: () => undefined,
     onOpenSessionCheckpoints: () => undefined,
@@ -683,6 +701,19 @@ describe("chat compaction divider", () => {
     button!.click();
 
     expect(onOpenSessionCheckpoints).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("chat conversation width", () => {
+  it("applies a configured width once to the centered transcript frame", () => {
+    const container = renderChatView({
+      chatMessageMaxWidth: "82%",
+      messages: [{ role: "assistant", content: "hello", timestamp: 1 }],
+    });
+    const chat = container.querySelector<HTMLElement>(".chat");
+
+    expect(chat?.style.getPropertyValue("--chat-thread-max-width")).toBe("82%");
+    expect(chat?.style.getPropertyValue("--chat-message-max-width")).toBe("100%");
   });
 });
 
@@ -1277,6 +1308,48 @@ describe("chat goal status", () => {
   });
 });
 
+describe("chat scroll-to-bottom affordance", () => {
+  it("renders a centered icon button above the composer when the transcript is away from latest", () => {
+    const onScrollToBottom = vi.fn();
+    const container = renderChatView({ showNewMessages: true, onScrollToBottom });
+
+    const button = container.querySelector<HTMLButtonElement>(".chat-scroll-to-bottom");
+    const wrapper = button?.closest(".chat-scroll-to-bottom-wrap");
+    expect(button?.getAttribute("aria-label")).toBe("Scroll to latest");
+    expect(wrapper?.previousElementSibling?.classList.contains("chat-thread")).toBe(true);
+    expect(wrapper?.nextElementSibling?.classList.contains("agent-chat__composer-shell")).toBe(
+      true,
+    );
+    expect(button?.textContent?.trim()).toBe("");
+    expect(container.querySelector(".chat-new-messages")).toBeNull();
+
+    button?.click();
+
+    expect(onScrollToBottom).toHaveBeenCalledWith({ smooth: true });
+  });
+
+  it("keeps the button above a variable-height footer stack", () => {
+    const container = renderChatView({
+      showNewMessages: true,
+      queue: [
+        { id: "queued-1", text: "first queued message", createdAt: 1 },
+        { id: "queued-2", text: "second queued message", createdAt: 2 },
+      ],
+    });
+
+    const wrapper = container.querySelector(".chat-scroll-to-bottom-wrap");
+    const queue = container.querySelector(".chat-queue");
+    expect(wrapper?.nextElementSibling).toBe(queue);
+    expect(queue?.nextElementSibling?.classList.contains("agent-chat__composer-shell")).toBe(true);
+  });
+
+  it("hides the scroll-to-bottom button when the transcript is already latest", () => {
+    const container = renderChatView({ showNewMessages: false });
+
+    expect(container.querySelector(".chat-scroll-to-bottom")).toBeNull();
+  });
+});
+
 describe("chat composer workbench", () => {
   it("queues ordinary input offline while keeping live commands disabled", () => {
     const onSend = vi.fn();
@@ -1578,6 +1651,37 @@ describe("chat composer workbench", () => {
     expect(container.querySelector(".chat-workspace-rail__grip")).toBeNull();
   });
 
+  it("moves the background-tasks rail to a bottom strip on narrow panes", () => {
+    const backgroundTasks = {
+      agentId: "main",
+      collapsed: false,
+      narrowLayout: false,
+      connected: true,
+      canCancel: false,
+      loading: false,
+      error: null,
+      tasks: [],
+      cancellingTaskIds: new Set<string>(),
+      finishedCollapsed: false,
+      onToggleCollapsed: () => undefined,
+      onToggleFinished: () => undefined,
+      onRefresh: () => undefined,
+      onCancel: () => undefined,
+      onOpenSession: () => undefined,
+    };
+
+    const wide = renderChatView({ backgroundTasks });
+    const wideWorkbench = wide.querySelector(".chat-workbench");
+    expect(wideWorkbench?.classList.contains("chat-workbench--tasks-open")).toBe(true);
+    expect(wideWorkbench?.classList.contains("chat-workbench--tasks-dock-bottom")).toBe(false);
+
+    const narrow = renderChatView({ backgroundTasks: { ...backgroundTasks, narrowLayout: true } });
+    const narrowWorkbench = narrow.querySelector(".chat-workbench");
+    expect(narrowWorkbench?.classList.contains("chat-workbench--tasks-open")).toBe(false);
+    expect(narrowWorkbench?.classList.contains("chat-workbench--tasks-dock-bottom")).toBe(true);
+    expect(narrow.querySelector(".chat-tasks-rail")).not.toBeNull();
+  });
+
   it("keeps the secondary New session and Export controls suppressed in the composer", () => {
     const container = renderChatView({
       messages: [{ role: "assistant", content: "ready" }],
@@ -1769,7 +1873,7 @@ describe("chat loading skeleton", () => {
     expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
   });
 
-  it("does not keep the reading indicator after an assistant response has rendered", () => {
+  it("keeps the working spark below a rendered response while the run continues", () => {
     const container = renderChatView({
       canAbort: true,
       messages: [
@@ -1782,8 +1886,32 @@ describe("chat loading skeleton", () => {
       stream: null,
     });
 
-    expect(container.querySelector(".chat-reading-indicator")).toBeNull();
+    // canAbort with no terminal status means the run is still working (e.g.
+    // between tool steps); the spark stays as the "still working" signal.
+    expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
     expect(container.querySelector(".chat-group")?.textContent?.trim()).toBe("Finished answer");
+  });
+
+  it("drops the working spark once the run reaches a terminal status", () => {
+    const container = renderChatView({
+      canAbort: true,
+      runStatus: {
+        phase: "done",
+        runId: "run-1",
+        sessionKey: "main",
+        occurredAt: Date.now(),
+      },
+      messages: [
+        {
+          role: "assistant",
+          content: "Finished answer",
+          timestamp: 1,
+        },
+      ],
+      stream: null,
+    });
+
+    expect(container.querySelector(".chat-reading-indicator")).toBeNull();
   });
 
   it("keeps existing messages visible without the skeleton during a background reload", () => {
@@ -1861,15 +1989,15 @@ describe("chat loading skeleton", () => {
       },
     });
 
-    const status = container.querySelector(
-      ".agent-chat__composer-run-status .agent-chat__run-status--in-progress",
-    );
+    // The composer shows no working chrome; the thread spark is the visible
+    // signal and the sr-only region carries the phase announcement.
     const context = container.querySelector(".context-ring");
     const contextUsage = context?.closest(".context-usage");
-    expect(status).toBeInstanceOf(HTMLElement);
-    expect(status?.textContent).toContain("Sending message");
-    expect(status?.closest(".agent-chat__composer-controls")).not.toBeNull();
-    expect(status?.closest(".agent-chat__composer-footer")).not.toBeNull();
+    expect(container.querySelector(".agent-chat__run-status")).toBeNull();
+    expect(container.querySelector(".agent-chat__run-status-announcement")?.textContent).toContain(
+      "Sending message",
+    );
+    expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
     expect(contextUsage?.closest(".agent-chat__composer-meta")).not.toBeNull();
   });
 
@@ -1936,7 +2064,7 @@ describe("chat loading skeleton", () => {
     expect(usageLink?.getAttribute("href")).toBe("/rosita/usage");
   });
 
-  it("does not show prompt-bar progress for another session send", () => {
+  it("does not announce progress for another session send", () => {
     const container = renderChatView({
       sessionKey: "session-b",
       sending: true,
@@ -1952,10 +2080,13 @@ describe("chat loading skeleton", () => {
       ],
     });
 
-    expect(container.querySelector(".agent-chat__run-status--in-progress")).toBeNull();
+    expect(
+      container.querySelector(".agent-chat__run-status-announcement")?.textContent?.trim(),
+    ).toBe("");
+    expect(container.querySelector(".chat-reading-indicator")).toBeNull();
   });
 
-  it("shows prompt-bar progress while the current session send waits for model switching", () => {
+  it("shows the working spark while the current session send waits for model switching", () => {
     const container = renderChatView({
       queue: [
         {
@@ -1969,9 +2100,10 @@ describe("chat loading skeleton", () => {
       ],
     });
 
-    const status = container.querySelector(".agent-chat__run-status--in-progress");
-    expect(status).toBeInstanceOf(HTMLElement);
-    expect(status?.textContent).toContain("Preparing model");
+    expect(container.querySelector(".agent-chat__run-status-announcement")?.textContent).toContain(
+      "Preparing model",
+    );
+    expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
   });
 
   it("shows active model-switch progress over the previous run's terminal status", () => {
@@ -1994,8 +2126,10 @@ describe("chat loading skeleton", () => {
       ],
     });
 
-    expect(container.querySelector(".agent-chat__run-status--in-progress")).not.toBeNull();
-    expect(container.querySelector(".agent-chat__run-status--done")).toBeNull();
+    expect(container.querySelector(".agent-chat__run-status-announcement")?.textContent).toContain(
+      "Preparing model",
+    );
+    expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
   });
 
   it("keeps terminal status for the submitted run while its acknowledgement is pending", () => {
@@ -2019,11 +2153,13 @@ describe("chat loading skeleton", () => {
       ],
     });
 
-    expect(container.querySelector(".agent-chat__run-status--done")).not.toBeNull();
-    expect(container.querySelector(".agent-chat__run-status--in-progress")).toBeNull();
+    expect(
+      container.querySelector(".agent-chat__run-status-announcement")?.textContent?.trim(),
+    ).toBe("Done");
+    expect(container.querySelector(".chat-reading-indicator")).toBeNull();
   });
 
-  it("does not show prompt-bar progress for reconnect-waiting sends", () => {
+  it("does not announce progress for reconnect-waiting sends", () => {
     const container = renderChatView({
       queue: [
         {
@@ -2037,7 +2173,10 @@ describe("chat loading skeleton", () => {
       ],
     });
 
-    expect(container.querySelector(".agent-chat__run-status--in-progress")).toBeNull();
+    expect(
+      container.querySelector(".agent-chat__run-status-announcement")?.textContent?.trim(),
+    ).toBe("");
+    expect(container.querySelector(".chat-reading-indicator")).toBeNull();
   });
 
   it("lets terminal run status win over stale abortable session UI", () => {
@@ -2071,12 +2210,38 @@ describe("chat loading skeleton", () => {
         onCompact: () => undefined,
       });
 
-      expect(container.querySelector(".agent-chat__run-status--done")?.textContent).toContain(
-        "Done",
-      );
-      expect(container.querySelector(".agent-chat__run-status--in-progress")).toBeNull();
+      expect(
+        container.querySelector(".agent-chat__run-status-announcement")?.textContent?.trim(),
+      ).toBe("Done");
+      expect(container.querySelector(".agent-chat__run-status")).toBeNull();
       expect(container.querySelector(".chat-reading-indicator")).toBeNull();
       expect(container.querySelector(".chat-send-btn--stop")).toBeNull();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("shows the interrupted toast in the composer footer", () => {
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    try {
+      const container = renderChatView({
+        composerControls: html`<button class="chat-settings-chip" type="button">Settings</button>`,
+        runStatus: {
+          phase: "interrupted",
+          runId: "run-1",
+          sessionKey: "main",
+          occurredAt: 1_000,
+        },
+      });
+
+      const toast = container.querySelector(
+        ".agent-chat__composer-run-status .agent-chat__run-status--interrupted",
+      );
+      expect(toast?.textContent).toContain("Interrupted");
+      expect(
+        container.querySelector(".agent-chat__run-status-announcement")?.textContent?.trim(),
+      ).toBe("Interrupted");
+      expect(container.querySelector(".chat-reading-indicator")).toBeNull();
     } finally {
       nowSpy.mockRestore();
     }
@@ -3231,6 +3396,32 @@ describe("chat slash menu accessibility", () => {
     expect(announcementText).toBe(expectedAnnouncement);
   });
 
+  it("uses the localized command description in the live announcement", async () => {
+    const clearCommand = SLASH_COMMANDS.find((command) => command.name === "clear");
+    if (!clearCommand) {
+      throw new Error("Expected the clear slash command");
+    }
+    const originalDescriptionKey = clearCommand.descriptionKey;
+    clearCommand.descriptionKey = "common.health";
+    await i18n.setLocale("zh-CN");
+    try {
+      let draft = "";
+      const onDraftChange = vi.fn((next: string) => {
+        draft = next;
+      });
+      let container = renderChatView({ draft, onDraftChange });
+
+      inputDraft(container, "/clear");
+      container = renderChatView({ draft, onDraftChange });
+
+      const status = container.querySelector<HTMLElement>("#chat-single-slash-active-announcement");
+      expect(status?.textContent?.trim()).toBe(`/clear ${t("common.health")}`);
+    } finally {
+      clearCommand.descriptionKey = originalDescriptionKey;
+      await i18n.setLocale("en");
+    }
+  });
+
   it("wires fixed argument suggestions with command-and-argument option ids", () => {
     let draft = "";
     const onDraftChange = vi.fn((next: string) => {
@@ -3592,6 +3783,10 @@ describe("chat welcome", () => {
   function renderWelcome(params: {
     assistantAvatar: string | null;
     assistantAvatarUrl?: string | null;
+    sessions?: SessionsListResult | null;
+    sessionKey?: string;
+    sessionHost?: { assistantAgentId?: string | null } | null;
+    onOpenSession?: (sessionKey: string) => void;
   }) {
     const container = document.createElement("div");
     render(
@@ -3599,6 +3794,10 @@ describe("chat welcome", () => {
         assistantName: "Val",
         assistantAvatar: params.assistantAvatar,
         assistantAvatarUrl: params.assistantAvatarUrl,
+        sessions: params.sessions,
+        sessionKey: params.sessionKey,
+        sessionHost: params.sessionHost,
+        onOpenSession: params.onOpenSession,
         onDraftChange: () => undefined,
         onSend: () => undefined,
       }),
@@ -3607,7 +3806,7 @@ describe("chat welcome", () => {
     return container;
   }
 
-  it("renders configured assistant avatars and fallback in the welcome state", () => {
+  it("renders configured assistant avatars and the animated Clawd fallback", () => {
     let container = renderWelcome({ assistantAvatar: "VC", assistantAvatarUrl: null });
 
     const avatar = container.querySelector<HTMLElement>(".agent-chat__avatar");
@@ -3626,23 +3825,97 @@ describe("chat welcome", () => {
 
     container = renderWelcome({ assistantAvatar: null, assistantAvatarUrl: null });
 
-    const fallbackAvatar = container.querySelector<HTMLImageElement>(
-      ".agent-chat__avatar--logo img",
-    );
-    expect(fallbackAvatar?.getAttribute("src")).toBe("apple-touch-icon.png");
-    expect(fallbackAvatar?.getAttribute("alt")).toBe("Val");
+    const clawd = container.querySelector(".agent-chat__welcome-clawd");
+    expect(clawd).not.toBeNull();
+    expect(clawd?.querySelector(".lobster-pet__svg")).not.toBeNull();
+    expect(container.querySelector(".agent-chat__badge")).toBeNull();
   });
 
   it("renders welcome text from the active locale", async () => {
     await i18n.setLocale("zh-CN");
     const container = renderWelcome({ assistantAvatar: "VC", assistantAvatarUrl: null });
 
-    expect(container.querySelector(".agent-chat__badge")?.textContent?.trim()).toBe(
-      t("chat.welcome.ready"),
-    );
     expect(container.querySelector(".agent-chat__suggestion")?.textContent?.trim()).toBe(
       t("chat.welcome.suggestions.whatCanYouDo"),
     );
+  });
+
+  it("lists recent user chats instead of suggestions when any exist", () => {
+    const opened: string[] = [];
+    const container = renderWelcome({
+      assistantAvatar: null,
+      assistantAvatarUrl: null,
+      sessionKey: "agent:main:dashboard:current",
+      sessions: createSessionsResultFromRows([
+        {
+          key: "agent:main:dashboard:current",
+          kind: "direct",
+          updatedAt: 50,
+          label: "Current chat",
+        },
+        {
+          key: "agent:main:dashboard:older",
+          kind: "direct",
+          updatedAt: 10,
+          label: "Older chat",
+          pinned: true,
+          pinnedAt: 5,
+        },
+        {
+          key: "agent:main:discord:group:g-1456",
+          kind: "group",
+          channel: "discord",
+          updatedAt: 90,
+        },
+        { key: "agent:main:dashboard:newer", kind: "direct", updatedAt: 40, label: "Newer chat" },
+      ]),
+      onOpenSession: (key) => opened.push(key),
+    });
+
+    expect(container.querySelector(".agent-chat__suggestion")).toBeNull();
+    const rows = [...container.querySelectorAll<HTMLButtonElement>(".agent-chat__recent")];
+    expect(
+      rows.map((row) => row.querySelector(".agent-chat__recent-name")?.textContent?.trim()),
+    ).toEqual(["Newer chat", "Older chat"]);
+
+    rows[0].click();
+    expect(opened).toEqual(["agent:main:dashboard:newer"]);
+  });
+
+  it("keeps suggestions when only channel-bound sessions exist", () => {
+    const container = renderWelcome({
+      assistantAvatar: null,
+      assistantAvatarUrl: null,
+      sessionKey: "agent:main:dashboard:current",
+      sessions: createSessionsResultFromRows([
+        {
+          key: "agent:main:discord:group:g-1456",
+          kind: "group",
+          channel: "discord",
+          updatedAt: 90,
+        },
+        { key: "agent:main:telegram:direct:42", kind: "direct", channel: "telegram", updatedAt: 5 },
+      ]),
+    });
+
+    expect(container.querySelector(".agent-chat__recent")).toBeNull();
+    expect(container.querySelectorAll(".agent-chat__suggestion").length).toBeGreaterThan(0);
+  });
+
+  it("scopes recents to the selected agent for bare global session keys", () => {
+    const container = renderWelcome({
+      assistantAvatar: null,
+      assistantAvatarUrl: null,
+      sessionKey: "global",
+      sessionHost: { assistantAgentId: "beta" },
+      sessions: createSessionsResultFromRows([
+        { key: "agent:beta:dashboard:one", kind: "direct", updatedAt: 20, label: "Beta chat" },
+        { key: "agent:main:dashboard:two", kind: "direct", updatedAt: 30, label: "Main chat" },
+      ]),
+    });
+
+    const rows = [...container.querySelectorAll(".agent-chat__recent-name")];
+    expect(rows.map((row) => row.textContent?.trim())).toEqual(["Beta chat"]);
   });
 });
 

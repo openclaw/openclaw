@@ -17,6 +17,7 @@ import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cach
 import type { PluginRegistry } from "../plugins/registry.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
+import { sweepSessionStateWatchNotices } from "../sessions/session-state-events.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
@@ -635,7 +636,7 @@ async function prewarmConfiguredPrimaryModelWithTimeout(
   params: {
     cfg: OpenClawConfig;
     workspaceDir?: string;
-    log: { warn: (msg: string) => void };
+    log: { warn: (msg: string) => void; debug?: (msg: string) => void };
     timeoutMs?: number;
   },
   prewarm: typeof prewarmConfiguredPrimaryModel = prewarmConfiguredPrimaryModel,
@@ -652,7 +653,7 @@ async function prewarmConfiguredPrimaryModelWithTimeout(
     ref: false,
   }).then(() => {
     if (!settled) {
-      params.log.warn(
+      params.log.debug?.(
         `startup model warmup timed out after ${params.timeoutMs ?? PRIMARY_MODEL_PREWARM_TIMEOUT_MS}ms; continuing without waiting`,
       );
     }
@@ -664,7 +665,7 @@ function schedulePrimaryModelPrewarm(
   params: {
     cfg: OpenClawConfig;
     workspaceDir?: string;
-    log: { warn: (msg: string) => void };
+    log: { warn: (msg: string) => void; debug?: (msg: string) => void };
     startupTrace?: GatewayStartupTrace;
   },
   prewarm: typeof prewarmConfiguredPrimaryModel = prewarmConfiguredPrimaryModel,
@@ -1390,6 +1391,10 @@ export async function startGatewayPostAttachRuntime(
         log: params.log,
         refreshLatestUpdateRestartSentinel: runtimeDeps.refreshLatestUpdateRestartSentinel,
       });
+      const sessionStateSweepHandle = setImmediate(() => {
+        sweepSessionStateWatchNotices();
+      });
+      sessionStateSweepHandle.unref?.();
       if (!hasGatewayStartHooks(sidecarsResult.pluginRegistry)) {
         return;
       }

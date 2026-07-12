@@ -1216,6 +1216,7 @@
                 "group": "Sessions and memory",
                 "pages": [
                   "concepts/session",
+                  "concepts/session-search",
                   "concepts/channel-docking",
                   "concepts/session-pruning",
                   "concepts/session-tool",
@@ -1618,6 +1619,7 @@
                       "gateway/health",
                       "gateway/heartbeat",
                       "gateway/doctor",
+                      "gateway/audit",
                       "logging",
                       "gateway/opentelemetry",
                       "gateway/prometheus",
@@ -1695,6 +1697,7 @@
                 "group": "Nodes and media",
                 "pages": [
                   "nodes/index",
+                  "nodes/presence",
                   "nodes/troubleshooting",
                   {
                     "group": "Media capabilities",

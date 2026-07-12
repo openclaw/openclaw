@@ -936,6 +936,21 @@ function blacksmithTestboxPrivateKeyPath(id) {
   return resolve(crabboxConfigDir(), "testboxes", id, "id_ed25519");
 }
 
+// Crabbox claims bind raw Testbox ids to one repo before remote execution.
+// Check the same sidecar so a dependency exit bug cannot make refusal green.
+function blacksmithTestboxClaimRepoRoot(id) {
+  const configuredStateRoot = process.env.XDG_STATE_HOME?.trim();
+  const stateDir = configuredStateRoot
+    ? resolve(configuredStateRoot, "crabbox")
+    : resolve(crabboxConfigDir(), "state");
+  const claimPath = resolve(stateDir, "claims", `${id}.json`);
+  if (!pathExists(claimPath)) {
+    return "";
+  }
+  const claim = JSON.parse(readFileSync(claimPath, "utf8"));
+  return typeof claim.repoRoot === "string" ? claim.repoRoot : "";
+}
+
 function enforceCrabboxOwnedBlacksmithLease(commandArgs) {
   if (commandArgs[0] !== "run") {
     return;
@@ -949,18 +964,24 @@ function enforceCrabboxOwnedBlacksmithLease(commandArgs) {
   }
 
   const keyPath = blacksmithTestboxPrivateKeyPath(id);
-  if (pathExists(keyPath)) {
-    return;
+  if (!pathExists(keyPath)) {
+    console.error(
+      [
+        `[crabbox] provider=blacksmith-testbox --id ${id} has no Crabbox SSH key at ${userDisplayPath(keyPath)}.`,
+        "[crabbox] create reusable Testboxes through Crabbox before reusing them: node scripts/crabbox-wrapper.mjs warmup --provider blacksmith-testbox --idle-timeout 90m",
+        "[crabbox] direct `blacksmith testbox warmup` leases can be used with `blacksmith testbox run`, but Crabbox cannot sync or run them by id.",
+      ].join("\n"),
+    );
+    process.exit(2);
   }
 
-  console.error(
-    [
-      `[crabbox] provider=blacksmith-testbox --id ${id} has no Crabbox SSH key at ${userDisplayPath(keyPath)}.`,
-      "[crabbox] create reusable Testboxes through Crabbox before reusing them: node scripts/crabbox-wrapper.mjs warmup --provider blacksmith-testbox --idle-timeout 90m",
-      "[crabbox] direct `blacksmith testbox warmup` leases can be used with `blacksmith testbox run`, but Crabbox cannot sync or run them by id.",
-    ].join("\n"),
-  );
-  process.exit(2);
+  const claimRepoRoot = blacksmithTestboxClaimRepoRoot(id);
+  if (claimRepoRoot && claimRepoRoot !== repoRoot && !hasOption(commandArgs, "--reclaim")) {
+    console.error(
+      `[crabbox] lease ${id} is claimed by repo ${claimRepoRoot}; use --reclaim to claim it for ${repoRoot}`,
+    );
+    process.exit(2);
+  }
 }
 
 function preserveTemporaryCrabboxRuns() {
@@ -3441,6 +3462,11 @@ if (fullCheckout) {
   }
 }
 const childInvocation = spawnInvocation(binary, childArgs, childEnv, process.platform);
+// Fast-fail hint context: run --id reuse dies in under a second when the
+// lease hit its idle timeout, with only a bare nonzero exit from the binary.
+const reusedRunLeaseId = normalizedArgs[0] === "run" ? optionValue(normalizedArgs, "--id") : "";
+const childStartedAtMs = Date.now();
+const FAST_FAIL_HINT_WINDOW_MS = 15_000;
 const child = spawn(childInvocation.command, childInvocation.args, {
   cwd: childCwd,
   stdio: "inherit",
@@ -3503,7 +3529,17 @@ child.on("exit", (code, signal) => {
     process.exit(signalExitCodes.get(signal) ?? 1);
     return;
   }
-  process.exit(fullCheckoutAvailable ? (exitCode ?? 1) : 1);
+  const finalExitCode = fullCheckoutAvailable ? (exitCode ?? 1) : 1;
+  if (
+    finalExitCode !== 0 &&
+    reusedRunLeaseId &&
+    Date.now() - childStartedAtMs < FAST_FAIL_HINT_WINDOW_MS
+  ) {
+    console.error(
+      `[crabbox] run --id ${reusedRunLeaseId} failed fast; reusable leases expire after their idle timeout and rejected flags also exit immediately. Check the first error line above, verify the lease with \`node scripts/crabbox-wrapper.mjs list\`, or warm a fresh one with \`node scripts/crabbox-wrapper.mjs warmup\`.`,
+    );
+  }
+  process.exit(finalExitCode);
 });
 
 child.on("error", (error) => {

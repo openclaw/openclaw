@@ -30,6 +30,10 @@ import {
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { uniqueValues } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  resolveMemoryCoreLocalServiceHostIdentity,
+  type MemoryCoreAcquireLocalService,
+} from "./embedding-local-service.js";
+import {
   createEmbeddingProvider,
   resolveEmbeddingProviderAdapterTransport,
   type EmbeddingProvider,
@@ -242,12 +246,14 @@ function resolveMemoryIndexManagerCacheKey(params: {
   settings: ResolvedMemorySearchConfig;
   providerRequirement: MemoryEmbeddingProviderRequirement;
   purpose: MemoryIndexManagerPurpose;
+  acquireLocalService?: MemoryCoreAcquireLocalService;
 }): string {
   return [
     params.agentId,
     params.workspaceDir,
     JSON.stringify(params.settings),
     JSON.stringify(params.providerRequirement),
+    resolveMemoryCoreLocalServiceHostIdentity(params.acquireLocalService),
     params.purpose,
   ].join(":");
 }
@@ -294,6 +300,7 @@ async function closeMemoryIndexManagersForScope(params: {
 export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements MemorySearchManager {
   private readonly cacheKey: string;
   private readonly purpose: MemoryIndexManagerPurpose;
+  protected override readonly acquireLocalService?: MemoryCoreAcquireLocalService;
   protected readonly cfg: OpenClawConfig;
   protected readonly agentId: string;
   protected readonly workspaceDir: string;
@@ -356,7 +363,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   >();
   private sessionWarm = new Set<string>();
   private syncing: Promise<void> | null = null;
-  private queuedSessionFiles = new Set<string>();
+  private queuedArchiveFiles = new Set<string>();
   private queuedSessions = new Map<string, MemorySessionSyncTarget>();
   private queuedSessionSync: Promise<void> | null = null;
   private readonlyRecoveryAttempts = 0;
@@ -372,10 +379,12 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     cfg: OpenClawConfig;
     agentId: string;
     settings: ResolvedMemorySearchConfig;
+    acquireLocalService?: MemoryCoreAcquireLocalService;
   }): Promise<EmbeddingProviderResult> {
     return await createEmbeddingProvider({
       config: params.cfg,
       agentDir: resolveAgentDir(params.cfg, params.agentId),
+      ...(params.acquireLocalService ? { acquireLocalService: params.acquireLocalService } : {}),
       ...resolveMemoryPrimaryProviderRequest({ settings: params.settings }),
     });
   }
@@ -384,6 +393,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     cfg: OpenClawConfig;
     agentId: string;
     purpose?: MemoryIndexManagerPurpose;
+    acquireLocalService?: MemoryCoreAcquireLocalService;
   }): Promise<MemoryIndexManager | null> {
     const { cfg, agentId } = params;
     const settings = resolveMemorySearchConfig(cfg, agentId);
@@ -404,6 +414,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       settings,
       providerRequirement,
       purpose,
+      acquireLocalService: params.acquireLocalService,
     });
     const transient = purpose === "status" || purpose === "cli";
     if (!transient) {
@@ -428,6 +439,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           settings,
           providerRequirement,
           purpose: params.purpose,
+          acquireLocalService: params.acquireLocalService,
         });
         // Lightweight dirty-file detection for status mode: check for unindexed
         // session files on disk without triggering a full sync. This runs before
@@ -454,10 +466,12 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     providerRequirement: MemoryEmbeddingProviderRequirement;
     providerResult?: EmbeddingProviderResult;
     purpose?: MemoryIndexManagerPurpose;
+    acquireLocalService?: MemoryCoreAcquireLocalService;
   }) {
     super();
     const effectiveSettings = resolveEffectiveMemorySearchSettings(params.settings);
     this.cacheKey = params.cacheKey;
+    this.acquireLocalService = params.acquireLocalService;
     this.purpose =
       params.purpose === "status" || params.purpose === "cli" ? params.purpose : "default";
     this.cfg = params.cfg;
@@ -550,6 +564,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           cfg: this.cfg,
           agentId: this.agentId,
           settings: this.settings,
+          acquireLocalService: this.acquireLocalService,
         });
         this.applyProviderResult(providerResult);
         this.providerKey = this.computeProviderKey();
@@ -1259,13 +1274,13 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   }
 
   private enqueueTargetedSessionSync(
-    targets?: Pick<MemorySyncParams, "sessions" | "sessionFiles">,
+    targets?: Pick<MemorySyncParams, "sessions" | "archiveFiles">,
   ): Promise<void> {
     return enqueueMemoryTargetedSessionSync(
       {
         isClosed: () => this.closed,
         getSyncing: () => this.syncing,
-        getQueuedSessionFiles: () => this.queuedSessionFiles,
+        getQueuedArchiveFiles: () => this.queuedArchiveFiles,
         getQueuedSessions: () => this.queuedSessions,
         getQueuedSessionSync: () => this.queuedSessionSync,
         setQueuedSessionSync: (value) => {
@@ -1637,7 +1652,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
 function hasTargetedSessionSyncParams(params: MemorySyncParams | undefined): boolean {
   return Boolean(
     params?.sessions?.some((session) => session.sessionId.trim().length > 0) ||
-    params?.sessionFiles?.some((sessionFile) => sessionFile.trim().length > 0),
+    params?.archiveFiles?.some((sessionFile) => sessionFile.trim().length > 0),
   );
 }
 

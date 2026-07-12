@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
@@ -21,10 +22,12 @@ import {
 import type { SessionEntry } from "../config/sessions.js";
 import { saveSessionStore } from "../config/sessions.js";
 import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
+import { resolveAgentsDirFromSessionStorePath } from "../config/sessions/paths.js";
 import { normalizePersistedSessionEntryShape } from "../config/sessions/store-entry-shape.js";
 import {
   listConfiguredSessionStoreAgentIds,
   resolveAllAgentSessionStoreTargetsSync,
+  resolveSessionStoreTargets,
 } from "../config/sessions/targets.js";
 import type { SessionScope } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -1169,12 +1172,13 @@ async function migrateLegacyTaskRunsSidecar(params: {
           "terminal_outcome",
         ];
         for (const row of taskRows) {
+          const taskId = legacyKeyValue(expectDefined(row.task_id, "task migration row key"));
           const existing = db
             .prepare(`SELECT ${taskColumns.join(", ")} FROM task_runs WHERE task_id = ?`)
-            .get(legacyKeyValue(row.task_id));
+            .get(taskId);
           if (existing) {
             if (!legacyRowsMatch(existing as Record<string, unknown>, row, taskColumns)) {
-              conflicts.push(legacyKeyValue(row.task_id));
+              conflicts.push(taskId);
             }
             continue;
           }
@@ -1183,20 +1187,19 @@ async function migrateLegacyTaskRunsSidecar(params: {
         }
         const deliveryColumns = ["requester_origin_json", "last_notified_event_at"];
         for (const row of deliveryRows) {
+          const taskId = legacyKeyValue(expectDefined(row.task_id, "delivery migration row key"));
           const existing = db
             .prepare(
               `SELECT requester_origin_json, last_notified_event_at FROM task_delivery_state WHERE task_id = ?`,
             )
-            .get(legacyKeyValue(row.task_id));
+            .get(taskId);
           if (existing) {
             if (!legacyRowsMatch(existing as Record<string, unknown>, row, deliveryColumns)) {
-              conflicts.push(`${legacyKeyValue(row.task_id)}/delivery`);
+              conflicts.push(`${taskId}/delivery`);
             }
             continue;
           }
-          const taskExists = db
-            .prepare("SELECT 1 FROM task_runs WHERE task_id = ?")
-            .get(legacyKeyValue(row.task_id));
+          const taskExists = db.prepare("SELECT 1 FROM task_runs WHERE task_id = ?").get(taskId);
           if (!taskExists) {
             skippedOrphanDeliveryStates++;
             continue;
@@ -1294,12 +1297,13 @@ async function migrateLegacyFlowRunsSidecar(params: {
           "ended_at",
         ];
         for (const row of rows) {
+          const flowId = legacyKeyValue(expectDefined(row.flow_id, "flow migration row key"));
           const existing = db
             .prepare(`SELECT ${columns.join(", ")} FROM flow_runs WHERE flow_id = ?`)
-            .get(legacyKeyValue(row.flow_id));
+            .get(flowId);
           if (existing) {
             if (!legacyRowsMatch(existing as Record<string, unknown>, row, columns)) {
-              conflicts.push(legacyKeyValue(row.flow_id));
+              conflicts.push(flowId);
             }
             continue;
           }
@@ -4411,7 +4415,13 @@ export async function detectLegacyStateMigrations(params: {
     );
   }
   if (stateSchemaMigrations.length > 0) {
-    preview.push("- Shared SQLite schema: agent database registry primary key → agent_id,path");
+    for (const migration of stateSchemaMigrations) {
+      preview.push(
+        migration.kind === "agent-databases-composite-primary-key"
+          ? "- Shared SQLite schema: agent database registry primary key → agent_id,path"
+          : "- Shared SQLite schema: audit event ledger → versioned message lifecycle schema",
+      );
+    }
     preview.push(
       "- Rerun doctor after shared SQLite schema repair to detect plugin state migrations",
     );
@@ -5533,7 +5543,7 @@ async function migrateLegacyAcpSessionMetadata(params: {
     : params.cfg;
   // Reuse the validated resolver for every declared owner. Owner multiplicity
   // is restored below as metadata without re-adding rejected raw paths.
-  const targets = resolveAllAgentSessionStoreTargetsSync(discoveryCfg, { env });
+  const targets = resolveLegacyAcpMetadataSessionStoreTargets(discoveryCfg, env);
   const mainKey = normalizeMainKey(params.cfg.session?.mainKey);
   const scope = params.cfg.session?.scope as SessionScope | undefined;
   const storeGroups: Array<{
@@ -5679,6 +5689,78 @@ async function migrateLegacyAcpSessionMetadata(params: {
   }
 
   return { changes, warnings };
+}
+
+// Doctor migration must read legacy session stores even before a per-agent
+// SQLite DB exists; active runtime discovery remains SQLite-validated.
+function resolveLegacyAcpMetadataSessionStoreTargets(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+): Array<{ agentId: string; storePath: string }> {
+  const stateDir = resolveStateDir(env);
+  const agentsDirs = new Set<string>([path.join(stateDir, "agents")]);
+  const targets = new Map<string, { agentId: string; storePath: string }>();
+  const addTarget = (agentId: string, storePath: string) => {
+    if (!isManagedLegacySessionStorePathSafe(storePath)) {
+      return;
+    }
+    const agentsDir = resolveAgentsDirFromSessionStorePath(storePath);
+    if (agentsDir) {
+      agentsDirs.add(agentsDir);
+    }
+    if (!targets.has(storePath)) {
+      targets.set(storePath, { agentId, storePath });
+    }
+  };
+
+  for (const target of resolveAllAgentSessionStoreTargetsSync(cfg, { env })) {
+    addTarget(target.agentId, target.storePath);
+  }
+  for (const target of resolveSessionStoreTargets(cfg, { allAgents: true }, { env })) {
+    addTarget(target.agentId, target.storePath);
+  }
+
+  for (const agentsDir of agentsDirs) {
+    if (!existsDir(agentsDir)) {
+      continue;
+    }
+    for (const entry of safeReadDir(agentsDir)) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      const agentId = normalizeAgentId(entry.name);
+      const normalizedDirName = normalizeLowercaseStringOrEmpty(entry.name);
+      if (agentId === DEFAULT_AGENT_ID && normalizedDirName !== agentId) {
+        continue;
+      }
+      addTarget(agentId, path.join(agentsDir, entry.name, "sessions", "sessions.json"));
+    }
+  }
+  return [...targets.values()];
+}
+
+function isManagedLegacySessionStorePathSafe(storePath: string): boolean {
+  const resolvedStorePath = path.resolve(storePath);
+  const agentsDir = resolveAgentsDirFromSessionStorePath(resolvedStorePath);
+  if (!agentsDir) {
+    return true;
+  }
+  if (!fileExists(resolvedStorePath)) {
+    return true;
+  }
+
+  try {
+    const stat = fs.lstatSync(resolvedStorePath);
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      return false;
+    }
+    const resolvedAgentsDir = path.resolve(agentsDir);
+    const realStorePath = fs.realpathSync.native(resolvedStorePath);
+    const realAgentsDir = fs.realpathSync.native(resolvedAgentsDir);
+    return isWithinDir(realAgentsDir, realStorePath);
+  } catch {
+    return false;
+  }
 }
 
 function resolveStorePathFromTemplate(
@@ -5913,6 +5995,15 @@ export async function autoMigrateLegacyState(params: {
   const stateSchema = repairOpenClawStateDatabaseSchema({
     env: { ...env, OPENCLAW_STATE_DIR: stateDir },
   });
+  if (stateSchema.warnings.length > 0) {
+    return {
+      migrated: stateDirResult.migrated || stateSchema.changes.length > 0,
+      skipped: false,
+      changes: [...stateDirResult.changes, ...stateSchema.changes],
+      warnings: [...stateDirResult.warnings, ...stateSchema.warnings],
+      ...(stateDirResult.notices?.length ? { notices: stateDirResult.notices } : {}),
+    };
+  }
   const pluginDoctorConfig = params.pluginDoctorConfig ?? params.cfg;
   const pluginSessionStoreAgentIds = listPluginDoctorSessionStoreAgentIds({
     config: pluginDoctorConfig,

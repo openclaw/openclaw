@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { ContentBlock } from "@modelcontextprotocol/sdk/types.js";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -32,12 +33,13 @@ import {
   extractShellWrapperCommand,
   isShellWrapperInvocation,
 } from "../infra/exec-wrapper-resolution.js";
+import { listHostDirectories } from "../infra/host-directory-listing.js";
 import {
   inspectHostExecEnvOverrides,
   sanitizeHostExecEnv,
   sanitizeSystemRunEnvOverrides,
 } from "../infra/host-env-security.js";
-import { NODE_MCP_TOOLS_CALL_COMMAND } from "../infra/node-commands.js";
+import { NODE_FS_LIST_DIR_COMMAND, NODE_MCP_TOOLS_CALL_COMMAND } from "../infra/node-commands.js";
 import {
   decodeWindowsOutputBuffer,
   resolveWindowsConsoleEncoding,
@@ -58,6 +60,7 @@ import type {
 } from "./invoke-types.js";
 import { NodeHostMcpError, type NodeHostMcpManager } from "./mcp.js";
 import { invokeRegisteredNodeHostCommand } from "./plugin-node-host.js";
+import { resolveNodeHostedSkillDirectory } from "./skills.js";
 
 const OUTPUT_CAP = 200_000;
 const MCP_TEXT_CONTENT_MAX_BYTES = 1024 * 1024;
@@ -109,6 +112,16 @@ type SystemRunPrepareEnv =
       ok: false;
       message: string;
     };
+
+function resolveNodeSkillCwdParam<T extends { cwd?: unknown }>(params: T, nodeId: string): T {
+  if (typeof params.cwd !== "string") {
+    return params;
+  }
+  // Resolve before approval planning so the plan, policy, and spawn all bind
+  // the same canonical node-local directory instead of trusting a URI at exec time.
+  const resolved = resolveNodeHostedSkillDirectory(params.cwd, nodeId);
+  return resolved ? { ...params, cwd: resolved } : params;
+}
 
 function buildEnvOverrideRejectionMessage(params: {
   rejectedOverrideBlockedKeys: string[];
@@ -344,7 +357,7 @@ async function runCommand(
     // node result because runner.ts intentionally dispatches invokes with `void`.
     let child: ReturnType<typeof spawn>;
     try {
-      child = spawn(argv[0], argv.slice(1), {
+      child = spawn(expectDefined(argv[0], "argv entry at 0"), argv.slice(1), {
         cwd,
         env,
         stdio: ["ignore", "pipe", "pipe"],
@@ -752,6 +765,19 @@ async function dispatchInvoke(
     return;
   }
 
+  if (command === NODE_FS_LIST_DIR_COMMAND) {
+    try {
+      const params = decodeParams<{ path?: unknown }>(frame.paramsJSON);
+      if (params.path !== undefined && typeof params.path !== "string") {
+        throw new Error("INVALID_REQUEST: path must be a string");
+      }
+      await sendJsonPayloadResult(client, frame, await listHostDirectories(params.path));
+    } catch (err) {
+      await sendInvalidRequestResult(client, frame, err);
+    }
+    return;
+  }
+
   if (command === NODE_MCP_TOOLS_CALL_COMMAND) {
     await handleMcpToolsCall(frame, client, mcpManager);
     return;
@@ -770,7 +796,10 @@ async function dispatchInvoke(
 
   if (command === "system.run.prepare") {
     try {
-      const params = decodeParams<SystemRunPrepareParams>(frame.paramsJSON);
+      const params = resolveNodeSkillCwdParam(
+        decodeParams<SystemRunPrepareParams>(frame.paramsJSON),
+        frame.nodeId,
+      );
       const prepared = buildSystemRunApprovalPlan(params);
       if (!prepared.ok) {
         await sendErrorResult(client, frame, "INVALID_REQUEST", prepared.message);
@@ -826,7 +855,10 @@ async function dispatchInvoke(
 
   let params: SystemRunParams;
   try {
-    params = decodeParams<SystemRunParams>(frame.paramsJSON);
+    params = resolveNodeSkillCwdParam(
+      decodeParams<SystemRunParams>(frame.paramsJSON),
+      frame.nodeId,
+    );
   } catch (err) {
     await sendInvalidRequestResult(client, frame, err);
     return;

@@ -53,7 +53,7 @@ struct OnboardingModeSelectionSections: View {
                     .font(OpenClawType.subheadSemiBold)
             }
             .disabled(self.selectedMode == nil || self.isConnecting)
-            .buttonStyle(OpenClawPrimaryActionButtonStyle(height: 48, cornerRadius: 16))
+            .buttonStyle(OpenClawPrimaryActionButtonStyle(height: 48))
             .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
             .listRowBackground(Color.clear)
             .listRowSeparator(.hidden)
@@ -213,7 +213,7 @@ struct OnboardingStagedGatewaySetupSection: View {
 struct OnboardingDiscoveredGatewaysSection: View {
     let gateways: [GatewayDiscoveryModel.DiscoveredGateway]
     let gatewayController: GatewayConnectionController
-    let connectingGatewayID: String?
+    let connectingGateway: OnboardingGatewayConnectionAttempt?
     let onConnect: (GatewayDiscoveryModel.DiscoveredGateway) -> Void
     let onRestartDiscovery: () -> Void
 
@@ -243,7 +243,7 @@ struct OnboardingDiscoveredGatewaysSection: View {
                                 Button {
                                     self.onConnect(gateway)
                                 } label: {
-                                    if self.connectingGatewayID == gateway.id {
+                                    if self.connectingGateway == .gateway(gateway.id) {
                                         ProgressView()
                                             .progressViewStyle(.circular)
                                     } else {
@@ -252,7 +252,7 @@ struct OnboardingDiscoveredGatewaysSection: View {
                                     }
                                 }
                                 .font(OpenClawType.subheadSemiBold)
-                                .disabled(self.connectingGatewayID != nil)
+                                .disabled(self.connectingGateway != nil)
                             } else {
                                 Text(availability.actionTitle)
                                     .font(OpenClawType.subheadSemiBold)
@@ -275,7 +275,7 @@ struct OnboardingDiscoveredGatewaysSection: View {
                     .font(OpenClawType.subheadSemiBold)
             }
             .font(OpenClawType.subheadSemiBold)
-            .disabled(self.connectingGatewayID != nil)
+            .disabled(self.connectingGateway != nil)
         } header: {
             Text("Discovered Gateways")
                 .font(OpenClawType.footnoteSemiBold)

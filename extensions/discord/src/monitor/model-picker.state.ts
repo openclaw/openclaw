@@ -1,5 +1,7 @@
 // Discord plugin module implements model picker.state behavior.
+import { createHash } from "node:crypto";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { ModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
 import { parseStrictInteger, parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
@@ -56,6 +58,7 @@ export type DiscordModelPickerState = {
   page: number;
   providerPage?: number;
   modelIndex?: number;
+  modelToken?: string;
   recentSlot?: number;
   /**
    * Letter-range bucket label (e.g. "a-g") when the provider/model count
@@ -76,6 +79,14 @@ export const DISCORD_MODEL_PICKER_BUCKET_THRESHOLD = DISCORD_COMPONENT_MAX_SELEC
 
 /** Target items per alpha bucket. Discord caps selects at 25 options. */
 export const DISCORD_MODEL_PICKER_BUCKET_TARGET_SIZE = 20;
+const DISCORD_MODEL_PICKER_MODEL_TOKEN_PATTERN = /^[A-Za-z0-9_-]{8}$/u;
+
+export function createDiscordModelPickerModelToken(provider: string, model: string): string {
+  return createHash("sha256")
+    .update(JSON.stringify([normalizeProviderId(provider), model]), "utf8")
+    .digest("base64url")
+    .slice(0, 8);
+}
 
 export type DiscordModelPickerBucket = {
   /** Stable lowercase id, e.g. "a-g". Used in customId encoding. */
@@ -200,6 +211,7 @@ export function buildDiscordModelPickerCustomId(params: {
   page?: number;
   providerPage?: number;
   modelIndex?: number;
+  modelToken?: string;
   recentSlot?: number;
   providerBucket?: string;
   modelBucket?: string;
@@ -223,6 +235,10 @@ export function buildDiscordModelPickerCustomId(params: {
     typeof params.recentSlot === "number" && Number.isFinite(params.recentSlot)
       ? Math.max(1, Math.floor(params.recentSlot))
       : undefined;
+  const modelToken = params.modelToken?.trim();
+  if (modelToken && !DISCORD_MODEL_PICKER_MODEL_TOKEN_PATTERN.test(modelToken)) {
+    throw new Error("Discord model picker model token is invalid");
+  }
 
   const parts = [
     `${DISCORD_MODEL_PICKER_CUSTOM_ID_KEY}:c=${encodeCustomIdComponent(params.command)}`,
@@ -248,11 +264,17 @@ export function buildDiscordModelPickerCustomId(params: {
   if (providerPage) {
     parts.push(`pp=${String(providerPage)}`);
   }
-  if (modelIndex) {
-    parts.push(`mi=${String(modelIndex)}`);
-  }
-  if (recentSlot) {
-    parts.push(`rs=${String(recentSlot)}`);
+  if (modelToken) {
+    parts.push(`m=${modelToken}`);
+  } else {
+    // Legacy positional state is accepted until the next render. New model
+    // components use the stable token so catalog reordering cannot retarget them.
+    if (modelIndex) {
+      parts.push(`mi=${String(modelIndex)}`);
+    }
+    if (recentSlot) {
+      parts.push(`rs=${String(recentSlot)}`);
+    }
   }
   const providerBucket = params.providerBucket?.trim().toLowerCase();
   if (providerBucket) {
@@ -312,6 +334,10 @@ export function parseDiscordModelPickerData(data: ComponentData): DiscordModelPi
   const page = parseRawPage(data.g ?? data.pg);
   const providerPage = parseRawPositiveInt(data.pp);
   const modelIndex = parseRawPositiveInt(data.mi);
+  const modelTokenRaw = coerceString(data.m).trim();
+  const modelToken = DISCORD_MODEL_PICKER_MODEL_TOKEN_PATTERN.test(modelTokenRaw)
+    ? modelTokenRaw
+    : undefined;
   const recentSlot = parseRawPositiveInt(data.rs);
   const providerBucketRaw = decodeCustomIdComponent(coerceString(data.pb)).trim().toLowerCase();
   const modelBucketRaw = decodeCustomIdComponent(coerceString(data.mb)).trim().toLowerCase();
@@ -339,6 +365,7 @@ export function parseDiscordModelPickerData(data: ComponentData): DiscordModelPi
     page,
     ...(typeof providerPage === "number" ? { providerPage } : {}),
     ...(typeof modelIndex === "number" ? { modelIndex } : {}),
+    ...(modelToken ? { modelToken } : {}),
     ...(typeof recentSlot === "number" ? { recentSlot } : {}),
     ...(providerBucketRaw ? { providerBucket: providerBucketRaw } : {}),
     ...(modelBucketRaw ? { modelBucket: modelBucketRaw } : {}),
@@ -372,9 +399,8 @@ export function computeAlphaBuckets(sortedItems: string[]): DiscordModelPickerBu
   }
 
   const firstLetter = (value: string): string => value.charAt(0).toLowerCase();
-  const allSamePrefix = sortedItems.every(
-    (item) => firstLetter(item) === firstLetter(sortedItems[0]),
-  );
+  const firstItem = expectDefined(sortedItems.at(0), "non-empty sorted model picker items");
+  const allSamePrefix = sortedItems.every((item) => firstLetter(item) === firstLetter(firstItem));
   if (allSamePrefix) {
     return chunkBucketsByCount(sortedItems);
   }
@@ -392,13 +418,16 @@ export function computeAlphaBuckets(sortedItems: string[]): DiscordModelPickerBu
     let end = Math.min(sortedItems.length, start + target);
     // Extend `end` so we don't split a letter group across two buckets.
     if (end < sortedItems.length) {
-      const last = firstLetter(sortedItems[end - 1]);
-      while (end < sortedItems.length && firstLetter(sortedItems[end]) === last) {
+      const last = firstLetter(expectDefined(sortedItems[end - 1], "bucket end predecessor"));
+      while (
+        end < sortedItems.length &&
+        firstLetter(expectDefined(sortedItems[end], "bucket extension index")) === last
+      ) {
         end += 1;
       }
     }
-    const startLetter = firstLetter(sortedItems[start]);
-    const endLetter = firstLetter(sortedItems[end - 1]);
+    const startLetter = firstLetter(expectDefined(sortedItems[start], "bucket start index"));
+    const endLetter = firstLetter(expectDefined(sortedItems[end - 1], "bucket end predecessor"));
     const id = startLetter === endLetter ? startLetter : `${startLetter}-${endLetter}`;
     const label =
       startLetter === endLetter
@@ -451,9 +480,12 @@ function resolveBucket(
     return null;
   }
   if (!id) {
-    return buckets[0];
+    return expectDefined(buckets.at(0), "non-empty model picker buckets");
   }
-  return buckets.find((bucket) => bucket.id === id) ?? buckets[0];
+  return (
+    buckets.find((bucket) => bucket.id === id) ??
+    expectDefined(buckets.at(0), "non-empty model picker buckets")
+  );
 }
 
 /**

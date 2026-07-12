@@ -524,8 +524,7 @@ function renderContainerStyledText(
     ...new Set([0, text.length, ...spans.flatMap((span) => [span.start, span.end])]),
   ].toSorted((a, b) => a - b);
   let rendered = "";
-  for (let i = 0; i < positions.length; i += 1) {
-    const pos = positions[i];
+  for (const [index, pos] of positions.entries()) {
     for (const span of spans
       .filter((candidate) => candidate.end === pos)
       .toSorted((a, b) => b.start - a.start)) {
@@ -536,7 +535,7 @@ function renderContainerStyledText(
       .toSorted((a, b) => b.end - a.end)) {
       rendered += span.marker;
     }
-    const next = positions[i + 1];
+    const next = positions[index + 1];
     if (next !== undefined && next > pos) {
       rendered += escapeContainerStyledText(text.slice(pos, next));
     }
@@ -779,9 +778,12 @@ export async function containerRpcRequest<T = unknown>(
               : [];
 
       const textStylesRaw = p["text-style"] as string[] | undefined;
-      const textStyles = textStylesRaw?.map((s) => {
+      const textStyles = textStylesRaw?.flatMap((s) => {
         const [start, length, style] = s.split(":");
-        return { start: Number(start), length: Number(length), style };
+        if (start === undefined || length === undefined || style === undefined) {
+          return [];
+        }
+        return [{ start: Number(start), length: Number(length), style }];
       });
 
       const quoteTimestamp = normalizeContainerQuoteTimestamp(

@@ -1,5 +1,5 @@
 // Codex plugin module implements thread lifecycle behavior.
-import crypto from "node:crypto";
+import * as crypto from "node:crypto";
 import {
   buildSkillWorkshopPromptSection,
   embeddedAgentLog,
@@ -76,6 +76,7 @@ import {
 } from "./protocol.js";
 import {
   assertCodexBindingMayBeReplaced,
+  hashCodexAppServerBindingFingerprint,
   isCodexAppServerNativeAuthProfile,
   normalizeCodexAppServerBindingModelProvider,
   reclaimCurrentCodexSessionGeneration,
@@ -445,8 +446,12 @@ export async function startOrResumeThread(params: {
       ...params.timing,
       enabled: params.timing?.enabled ?? isCodexAppServerProfilerEnabled(params.params.config),
     });
+    const legacyDynamicToolsFingerprint = lifecycleTiming.measureSync(
+      "legacy-dynamic-tools-fingerprint",
+      () => legacyFingerprintDynamicTools(params.dynamicTools),
+    );
     const dynamicToolsFingerprint = lifecycleTiming.measureSync("dynamic-tools-fingerprint", () =>
-      fingerprintDynamicTools(params.dynamicTools),
+      hashCodexAppServerBindingFingerprint(legacyDynamicToolsFingerprint),
     );
     const dynamicToolsContainDeferred = flattenCodexDynamicToolFunctions(params.dynamicTools).some(
       (tool) => tool.deferLoading === true,
@@ -478,6 +483,8 @@ export async function startOrResumeThread(params: {
                 error: formatErrorMessage(error),
               }),
           });
+    const legacyUserMcpServersFingerprint =
+      legacyFingerprintUserMcpServersConfigPatch(userMcpServersConfigPatch);
     const userMcpServersFingerprint =
       fingerprintUserMcpServersConfigPatch(userMcpServersConfigPatch);
     const environmentSelectionFingerprint = fingerprintEnvironmentSelection(
@@ -824,7 +831,14 @@ export async function startOrResumeThread(params: {
         rotatedContextEngineBinding = true;
       }
     }
-    if (binding?.threadId && binding.userMcpServersFingerprint !== userMcpServersFingerprint) {
+    if (
+      binding?.threadId &&
+      !areUserMcpServersFingerprintsCompatible({
+        previous: binding.userMcpServersFingerprint,
+        next: userMcpServersFingerprint,
+        nextLegacy: legacyUserMcpServersFingerprint,
+      })
+    ) {
       embeddedAgentLog.debug("codex app-server user MCP config changed; starting a new thread", {
         threadId: binding.threadId,
       });
@@ -922,12 +936,13 @@ export async function startOrResumeThread(params: {
         !areDynamicToolFingerprintsCompatible(
           binding.dynamicToolsFingerprint,
           dynamicToolsFingerprint,
+          legacyDynamicToolsFingerprint,
         )
       ) {
         assertCodexBindingMayBeReplaced(binding, "changing the dynamic tool catalog");
         preserveExistingBinding = shouldStartTransientNoToolThread({
           previous: binding.dynamicToolsFingerprint,
-          next: dynamicToolsFingerprint,
+          nextHasDynamicTools: params.dynamicTools.length > 0,
         });
         if (preserveExistingBinding) {
           embeddedAgentLog.debug(
@@ -2849,24 +2864,41 @@ export function codexDynamicToolsFingerprint(dynamicTools: CodexDynamicToolSpec[
   return fingerprintDynamicTools(dynamicTools);
 }
 
+export function codexLegacyDynamicToolsFingerprint(dynamicTools: CodexDynamicToolSpec[]): string {
+  return legacyFingerprintDynamicTools(dynamicTools);
+}
+
 export function areCodexDynamicToolFingerprintsCompatible(params: {
   previous?: string;
   next: string;
+  nextLegacy?: string;
 }): boolean {
-  return areDynamicToolFingerprintsCompatible(params.previous, params.next);
+  return areDynamicToolFingerprintsCompatible(params.previous, params.next, params.nextLegacy);
 }
 
 function fingerprintDynamicTools(dynamicTools: CodexDynamicToolSpec[]): string {
+  return hashCodexAppServerBindingFingerprint(legacyFingerprintDynamicTools(dynamicTools));
+}
+
+function legacyFingerprintDynamicTools(dynamicTools: CodexDynamicToolSpec[]): string {
   return JSON.stringify(
     dynamicTools.map(fingerprintDynamicToolSpec).toSorted(compareJsonFingerprint),
   );
+}
+
+function legacyFingerprintUserMcpServersConfigPatch(
+  configPatch: JsonObject | undefined,
+): string | undefined {
+  return configPatch ? JSON.stringify(stabilizeJsonValue(configPatch)) : undefined;
 }
 
 function fingerprintUserMcpServersConfigPatch(
   configPatch: JsonObject | undefined,
 ): string | undefined {
   return configPatch
-    ? JSON.stringify(stabilizeJsonValue(redactUserMcpServersFingerprintSecrets(configPatch)))
+    ? hashCodexAppServerBindingFingerprint(
+        JSON.stringify(stabilizeJsonValue(redactUserMcpServersFingerprintSecrets(configPatch))),
+      )
     : undefined;
 }
 
@@ -2959,20 +2991,49 @@ function readActiveCodexTurnIds(thread: unknown): string[] {
     .filter((turnId) => turnId.trim().length > 0);
 }
 
-const EMPTY_DYNAMIC_TOOLS_FINGERPRINT = JSON.stringify([]);
+const LEGACY_EMPTY_DYNAMIC_TOOLS_FINGERPRINT = legacyFingerprintDynamicTools([]);
+const EMPTY_DYNAMIC_TOOLS_FINGERPRINT = hashCodexAppServerBindingFingerprint(
+  LEGACY_EMPTY_DYNAMIC_TOOLS_FINGERPRINT,
+);
 
-function areDynamicToolFingerprintsCompatible(previous: string | undefined, next: string): boolean {
-  return !previous || previous === next;
+function areDynamicToolFingerprintsCompatible(
+  previous: string | undefined,
+  next: string,
+  nextLegacy?: string,
+): boolean {
+  return !previous || previous === next || previous === nextLegacy;
+}
+
+function areUserMcpServersFingerprintsCompatible(params: {
+  previous?: string;
+  next?: string;
+  nextLegacy?: string;
+}): boolean {
+  // Beta 5 stored raw stabilized JSON, while doctor hashes those exact bytes.
+  // A successful resume rewrites either legacy form to the current redacted hash.
+  return (
+    params.previous === params.next ||
+    params.previous === params.nextLegacy ||
+    (params.nextLegacy !== undefined &&
+      params.previous === hashCodexAppServerBindingFingerprint(params.nextLegacy))
+  );
 }
 
 function shouldStartTransientNoToolThread(params: {
   previous: string | undefined;
-  next: string;
+  nextHasDynamicTools: boolean;
 }): boolean {
   return Boolean(
     params.previous &&
-    params.previous !== EMPTY_DYNAMIC_TOOLS_FINGERPRINT &&
-    params.next === EMPTY_DYNAMIC_TOOLS_FINGERPRINT,
+    !isEmptyDynamicToolsFingerprint(params.previous) &&
+    !params.nextHasDynamicTools,
+  );
+}
+
+function isEmptyDynamicToolsFingerprint(fingerprint: string): boolean {
+  return (
+    fingerprint === EMPTY_DYNAMIC_TOOLS_FINGERPRINT ||
+    fingerprint === LEGACY_EMPTY_DYNAMIC_TOOLS_FINGERPRINT
   );
 }
 

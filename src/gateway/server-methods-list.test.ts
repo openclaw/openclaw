@@ -17,6 +17,10 @@ describe("GATEWAY_EVENTS", () => {
     expect(GATEWAY_EVENTS).not.toContain("talk.realtime.relay");
     expect(GATEWAY_EVENTS).not.toContain("talk.transcription.relay");
   });
+
+  it("advertises node presence activity updates", () => {
+    expect(GATEWAY_EVENTS).toContain("node.presence");
+  });
 });
 
 describe("listGatewayMethods", () => {
@@ -32,6 +36,11 @@ describe("listGatewayMethods", () => {
     expect(listGatewayMethods()).toContain("node.skills.update");
   });
 
+  it("advertises unified approval lookup and resolution", () => {
+    expect(listGatewayMethods()).toContain("approval.get");
+    expect(listGatewayMethods()).toContain("approval.resolve");
+  });
+
   it("advertises ClawHub skill trust methods", () => {
     const methods = listGatewayMethods();
     expect(methods).toContain("skills.securityVerdicts");
@@ -45,7 +54,9 @@ describe("listGatewayMethods", () => {
   it("advertises Crestodian setup methods with their dispatch policy", () => {
     const methods = listGatewayMethods();
     expect(methods).toContain("crestodian.setup.verify");
+    expect(methods).toContain("crestodian.setup.auth.start");
     expect(coreGatewayHandlers["crestodian.setup.verify"]).toEqual(expect.any(Function));
+    expect(coreGatewayHandlers["crestodian.setup.auth.start"]).toEqual(expect.any(Function));
     expect(
       CORE_GATEWAY_METHOD_SPECS.find((spec) => spec.name === "crestodian.setup.verify")
         ?.controlPlaneWrite,
@@ -60,11 +71,21 @@ describe("listGatewayMethods", () => {
     expect(methods.indexOf("crestodian.setup.verify")).toBeGreaterThan(
       methods.indexOf("tts.speak"),
     );
-    expect(methods.indexOf("wizard.start")).toBe(methods.indexOf("crestodian.setup.activate") + 1);
+    expect(methods.indexOf("crestodian.setup.auth.start")).toBe(
+      methods.indexOf("crestodian.setup.activate") + 1,
+    );
+    expect(methods.indexOf("wizard.start")).toBe(
+      methods.indexOf("crestodian.setup.auth.start") + 1,
+    );
   });
 
   it("advertises Control UI session pull request detection", () => {
     expect(listGatewayMethods()).toContain("controlUi.sessionPullRequests");
+  });
+
+  it("advertises the versioned activity audit method", () => {
+    expect(listGatewayMethods()).toContain("audit.activity.list");
+    expect(coreGatewayHandlers["audit.activity.list"]).toBeTypeOf("function");
   });
 
   it("does not advertise hidden core handlers", () => {
@@ -77,6 +98,7 @@ describe("listGatewayMethods", () => {
 
   it("preserves the legacy advertised method order", () => {
     const methods = listGatewayMethods();
+    const coreMethods = listCoreGatewayMethodNames();
     expect(methods.slice(0, 5)).toEqual([
       "health",
       "diagnostics.stability",
@@ -92,6 +114,15 @@ describe("listGatewayMethods", () => {
       "exec.approval.get",
     ]);
     expect(methods).toContain("tts.speak");
+    expect(coreMethods.slice(-5)).toEqual([
+      "sessions.catalog.continue",
+      "sessions.catalog.archive",
+      "approval.get",
+      "approval.resolve",
+      "sessions.search",
+    ]);
+    expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
+    expect(methods.indexOf("approval.resolve")).toBe(methods.indexOf("approval.get") + 1);
   });
 
   it("advertises the versioned Talk session RPCs", () => {

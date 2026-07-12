@@ -5,6 +5,7 @@ import {
   type FleetCreateOptions,
   type FleetHealthResult,
   type FleetLifecycleAction,
+  type FleetLogsOptions,
 } from "../../fleet/service.runtime.js";
 import { defaultRuntime } from "../../runtime.js";
 
@@ -24,6 +25,77 @@ export async function runFleetCreateCommand(
   defaultRuntime.log(`Token: ${result.token}`);
   defaultRuntime.log(result.tokenNote);
   defaultRuntime.log(`Next: ${result.nextStep}`);
+}
+
+export async function runFleetBackupCommand(options: {
+  tenant: string;
+  out?: string;
+  maxBytes?: number;
+  json: boolean;
+}): Promise<void> {
+  const result = await fleetService.backup(options);
+  if (options.json) {
+    defaultRuntime.writeJson(result);
+    return;
+  }
+  defaultRuntime.log(`Archive: ${result.archivePath}`);
+  if (result.skippedSymlinks > 0 || result.skippedSpecial > 0) {
+    defaultRuntime.log(
+      `Skipped ${result.skippedSymlinks} symlink(s) and ${result.skippedSpecial} special file(s); Fleet archives regular files and directories only.`,
+    );
+  }
+  defaultRuntime.log(result.note);
+}
+
+export async function runFleetRestoreCommand(options: {
+  tenant: string;
+  from: string;
+  force: boolean;
+  maxBytes?: number;
+  json: boolean;
+}): Promise<void> {
+  const result = await fleetService.restore(options);
+  if (options.json) {
+    defaultRuntime.writeJson(result);
+    return;
+  }
+  defaultRuntime.log(`Tenant: ${result.tenant}`);
+  defaultRuntime.log(`Token: ${result.token}`);
+  defaultRuntime.log(result.tokenNote);
+}
+
+export async function runFleetDoctorCommand(options: {
+  tenant?: string;
+  json: boolean;
+}): Promise<void> {
+  const reports = await fleetService.doctor(options.tenant);
+  if (options.json) {
+    defaultRuntime.writeJson(reports);
+  } else {
+    for (const report of reports) {
+      defaultRuntime.log(`${report.tenant}:`);
+      const nonPass = report.findings.filter((entry) => entry.status !== "pass");
+      if (nonPass.length === 0) {
+        defaultRuntime.log("  ok");
+      } else {
+        for (const entry of nonPass) {
+          defaultRuntime.log(`  [${entry.status}] ${entry.check}: ${entry.detail}`);
+        }
+      }
+    }
+    const failures = reports
+      .flatMap((report) => report.findings)
+      .filter((entry) => entry.status === "fail").length;
+    const warnings = reports
+      .flatMap((report) => report.findings)
+      .filter((entry) => entry.status === "warn").length;
+    defaultRuntime.log(
+      `Summary: ${reports.length} cell(s), ${failures} failure(s), ${warnings} warning(s).`,
+    );
+  }
+  if (reports.some((report) => report.findings.some((entry) => entry.status === "fail"))) {
+    process.exitCode = 1;
+  }
 }
 
 export async function runFleetListCommand(options: { json: boolean }): Promise<void> {
@@ -84,6 +156,10 @@ export async function runFleetStatusCommand(options: {
   defaultRuntime.log(`Created: ${result.created}`);
   defaultRuntime.log(`Data: ${result.dataDir}`);
   defaultRuntime.log(`Health: ${formatHealth(result.health)}`);
+}
+
+export async function runFleetLogsCommand(options: FleetLogsOptions): Promise<void> {
+  await fleetService.logs(options);
 }
 
 export async function runFleetLifecycleCommand(options: {
