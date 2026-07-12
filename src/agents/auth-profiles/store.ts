@@ -615,11 +615,25 @@ function markRuntimePersistedProfiles(
 function setRuntimeLocalProfileMetadata(
   store: AuthProfileStore,
   localProfileIds: Iterable<string>,
+  runtimeInheritsMainState = false,
 ): AuthProfileStore {
   return {
     ...store,
     runtimeLocalProfileIds: [...new Set(localProfileIds)].toSorted(),
+    ...(runtimeInheritsMainState ? { runtimeInheritsMainState: true } : {}),
   };
+}
+
+function runtimeStoreInheritsMainState(
+  store: AuthProfileStore,
+  localStore: AuthProfileStore,
+): boolean {
+  const state = ({ order, lastGood, usageStats }: AuthProfileStore) => ({
+    order,
+    lastGood,
+    usageStats,
+  });
+  return !isDeepStrictEqual(state(store), state(localStore));
 }
 
 function listRuntimeLocalProfileIds(
@@ -928,17 +942,16 @@ export function loadAuthProfileStoreForRuntime(
   }
 
   const mainStore = loadAuthProfileStoreForAgent(undefined, options);
+  const mergedStore = mergeAuthProfileStores(mainStore, store, {
+    preserveBaseRuntimeExternalProfiles: true,
+  });
   return setRuntimeLocalProfileMetadata(
-    overlayExternalAuthProfiles(
-      mergeAuthProfileStores(mainStore, store, {
-        preserveBaseRuntimeExternalProfiles: true,
-      }),
-      {
-        agentDir,
-        ...externalCli,
-      },
-    ),
+    overlayExternalAuthProfiles(mergedStore, {
+      agentDir,
+      ...externalCli,
+    }),
     listRuntimeLocalProfileIds(store, mainStore),
+    runtimeStoreInheritsMainState(mergedStore, store),
   );
 }
 
@@ -977,13 +990,13 @@ export function loadAuthProfileStoreWithoutExternalProfiles(
   }
 
   const mainStore = loadAuthProfileStoreForAgent(undefined, options);
+  const mergedStore = mergeAuthProfileStores(mainStore, store, {
+    preserveBaseRuntimeExternalProfiles: true,
+  });
   return setRuntimeLocalProfileMetadata(
-    stripRuntimeExternalProfileMetadata(
-      mergeAuthProfileStores(mainStore, store, {
-        preserveBaseRuntimeExternalProfiles: true,
-      }),
-    ),
+    stripRuntimeExternalProfileMetadata(mergedStore),
     listRuntimeLocalProfileIds(store, mainStore),
+    runtimeStoreInheritsMainState(mergedStore, store),
   );
 }
 

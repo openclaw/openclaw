@@ -130,5 +130,6 @@ describe("runtime auth profile snapshots", () => {
     const counts = testing.getPersistedMutationRecordCounts();
     expect(counts.owners).toBeLessThanOrEqual(testing.MAX_PERSISTED_MUTATION_OWNERS);
     expect(counts.profiles).toBeLessThanOrEqual(testing.MAX_PERSISTED_MUTATION_PROFILES_PER_OWNER);
+    testing.resetPersistedMutationLineage();
   });
 });

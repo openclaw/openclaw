@@ -147,6 +147,8 @@ export type AuthProfileStore = AuthProfileSecretsStore &
     runtimePersistedProfileIds?: string[];
     /** Runtime-only profile ids owned by the requested store rather than inherited from main. */
     runtimeLocalProfileIds?: string[];
+    /** Whether effective runtime selection state contains values inherited from main. */
+    runtimeInheritsMainState?: boolean;
     /** Runtime-only provenance for external OAuth profiles overlaid onto this store. */
     runtimeExternalProfileIds?: string[];
     /** True when the runtime external profile set was freshly resolved, even if empty. */

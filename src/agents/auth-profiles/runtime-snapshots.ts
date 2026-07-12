@@ -17,7 +17,9 @@ const MAX_PERSISTED_MUTATION_PROFILES_PER_OWNER = 256;
 
 type PersistedMutationRecord = {
   credentialRevision: number;
+  credentialRevisionKnown: boolean;
   stateRevision: number;
+  stateRevisionKnown: boolean;
   mutationFloor: number;
   profileRevisions: Map<string, number>;
 };
@@ -44,7 +46,9 @@ function getOrCreatePersistedMutationRecord(ownerKey: string): PersistedMutation
   }
   const record: PersistedMutationRecord = {
     credentialRevision: evictedOwnerMutationFloor,
+    credentialRevisionKnown: evictedOwnerMutationFloor === 0,
     stateRevision: evictedOwnerMutationFloor,
+    stateRevisionKnown: evictedOwnerMutationFloor === 0,
     mutationFloor: evictedOwnerMutationFloor,
     profileRevisions: new Map(),
   };
@@ -62,8 +66,6 @@ function getOrCreatePersistedMutationRecord(ownerKey: string): PersistedMutation
       evictedOwnerMutationFloor = Math.max(evictedOwnerMutationFloor, maxMutationRevision(oldest));
     }
   }
-  record.credentialRevision = Math.max(record.credentialRevision, evictedOwnerMutationFloor);
-  record.stateRevision = Math.max(record.stateRevision, evictedOwnerMutationFloor);
   record.mutationFloor = Math.max(record.mutationFloor, evictedOwnerMutationFloor);
   return record;
 }
@@ -88,14 +90,6 @@ function setProfileMutationRevision(
 
 function getPersistedMutationRecord(ownerKey: string): PersistedMutationRecord | undefined {
   return persistedMutationRecords.get(ownerKey);
-}
-
-function getProfileMutationRevision(ownerKey: string, profileId: string): number {
-  const record = getPersistedMutationRecord(ownerKey);
-  if (!record) {
-    return evictedOwnerMutationFloor;
-  }
-  return record.profileRevisions.get(profileId) ?? record.mutationFloor;
 }
 
 function credentialState(
@@ -219,12 +213,14 @@ export function noteRuntimeAuthProfileStorePersistedMutation(
   const record = getOrCreatePersistedMutationRecord(ownerKey);
   if (mutation.credentialsChanged) {
     record.credentialRevision = persistedMutationRevision;
+    record.credentialRevisionKnown = true;
     for (const profileId of mutation.profileIds) {
       setProfileMutationRevision(record, profileId, persistedMutationRevision);
     }
   }
   if (mutation.stateChanged) {
     record.stateRevision = persistedMutationRevision;
+    record.stateRevisionKnown = true;
   }
   const mainKey = resolveRuntimeStoreKey(undefined);
   if (ownerKey !== mainKey) {
@@ -243,24 +239,78 @@ export function getRuntimeAuthProfileStoreCredentialMutationRevision(
   profileId?: string,
   options?: { includeMain?: boolean },
 ): number {
+  return getRuntimeAuthProfileStoreCredentialMutationToken(agentDir, profileId, options).revision;
+}
+
+export type RuntimeAuthProfileStoreMutationToken = {
+  revision: number;
+  known: boolean;
+};
+
+function combineMutationTokens(
+  tokens: RuntimeAuthProfileStoreMutationToken[],
+): RuntimeAuthProfileStoreMutationToken {
+  return {
+    revision: Math.max(0, ...tokens.map((token) => token.revision)),
+    known: tokens.every((token) => token.known),
+  };
+}
+
+/** Bounded persisted credential lineage; unknown means its exact token was evicted. */
+export function getRuntimeAuthProfileStoreCredentialMutationToken(
+  agentDir?: string,
+  profileId?: string,
+  options?: { includeMain?: boolean },
+): RuntimeAuthProfileStoreMutationToken {
   const requestedKey = resolveRuntimeStoreKey(agentDir);
   if (!profileId) {
-    return (
-      getPersistedMutationRecord(requestedKey)?.credentialRevision ?? evictedOwnerMutationFloor
-    );
+    const record = getPersistedMutationRecord(requestedKey);
+    return record
+      ? { revision: record.credentialRevision, known: record.credentialRevisionKnown }
+      : { revision: evictedOwnerMutationFloor, known: evictedOwnerMutationFloor === 0 };
   }
   const mainKey = resolveRuntimeStoreKey(undefined);
   const keys =
     requestedKey === mainKey || options?.includeMain !== true
       ? [requestedKey]
       : [requestedKey, mainKey];
-  return Math.max(0, ...keys.map((key) => getProfileMutationRevision(key, profileId)));
+  return combineMutationTokens(
+    keys.map((key) => {
+      const record = getPersistedMutationRecord(key);
+      if (!record) {
+        return { revision: evictedOwnerMutationFloor, known: evictedOwnerMutationFloor === 0 };
+      }
+      const revision = record.profileRevisions.get(profileId);
+      return revision === undefined
+        ? { revision: record.mutationFloor, known: record.mutationFloor === 0 }
+        : { revision, known: true };
+    }),
+  );
 }
 
 /** Persisted mutation token for non-secret selection state in one owner store. */
+export function getRuntimeAuthProfileStoreStateMutationToken(
+  agentDir?: string,
+  options?: { includeMain?: boolean },
+): RuntimeAuthProfileStoreMutationToken {
+  const requestedKey = resolveRuntimeStoreKey(agentDir);
+  const mainKey = resolveRuntimeStoreKey(undefined);
+  const keys =
+    requestedKey === mainKey || options?.includeMain !== true
+      ? [requestedKey]
+      : [requestedKey, mainKey];
+  return combineMutationTokens(
+    keys.map((key) => {
+      const record = getPersistedMutationRecord(key);
+      return record
+        ? { revision: record.stateRevision, known: record.stateRevisionKnown }
+        : { revision: evictedOwnerMutationFloor, known: evictedOwnerMutationFloor === 0 };
+    }),
+  );
+}
+
 export function getRuntimeAuthProfileStoreStateMutationRevision(agentDir?: string): number {
-  const ownerKey = resolveRuntimeStoreKey(agentDir);
-  return getPersistedMutationRecord(ownerKey)?.stateRevision ?? evictedOwnerMutationFloor;
+  return getRuntimeAuthProfileStoreStateMutationToken(agentDir).revision;
 }
 
 /** Stable token for credential ownership without coupling to usage bookkeeping. */
@@ -279,5 +329,10 @@ export const testing = {
         ...Array.from(persistedMutationRecords.values(), (record) => record.profileRevisions.size),
       ),
     };
+  },
+  resetPersistedMutationLineage(): void {
+    persistedMutationRecords.clear();
+    persistedMutationRevision = 0;
+    evictedOwnerMutationFloor = 0;
   },
 };

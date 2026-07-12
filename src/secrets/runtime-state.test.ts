@@ -6,6 +6,7 @@ import {
   getRuntimeAuthProfileStoreSnapshot,
   noteRuntimeAuthProfileStorePersistedMutation,
   setRuntimeAuthProfileStoreSnapshot,
+  testing as runtimeSnapshotsTesting,
 } from "../agents/auth-profiles/runtime-snapshots.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -31,6 +32,7 @@ describe("secrets runtime state", () => {
 
   afterEach(() => {
     clearSecretsRuntimeSnapshot();
+    runtimeSnapshotsTesting.resetPersistedMutationLineage();
     envSnapshot.restore();
   });
 
@@ -526,6 +528,7 @@ describe("secrets runtime state", () => {
       stateChanged: false,
       profileIds: ["openai:default"],
     });
+    setRuntimeAuthProfileStoreSnapshot(candidate.authStores[0]!.store, agentDir);
 
     expect(
       restoreSecretsRuntimeSnapshotStateIfCurrent({
@@ -542,39 +545,216 @@ describe("secrets runtime state", () => {
   });
 
   it.each([
+    { current: "sk-candidate", expected: "sk-old" },
+    { current: "sk-external-refresh", expected: "sk-external-refresh" },
+  ])("keeps external profile ownership separate from main mutations", ({ current, expected }) => {
+    const agentDir = `/tmp/openclaw-auth-external-owner-${current}`;
+    const snapshot = (key: string, port: number): PreparedSecretsRuntimeSnapshot => ({
+      sourceConfig: {},
+      config: { gateway: { port } },
+      authStores: [
+        {
+          agentDir,
+          store: {
+            version: 1,
+            profiles: {
+              "openai:external": { type: "api_key", provider: "openai", key },
+            },
+            runtimeExternalProfileIds: ["openai:external"],
+          },
+        },
+      ],
+      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
+      warnings: [],
+      webTools: {
+        search: { providerSource: "none", diagnostics: [] },
+        fetch: { providerSource: "none", diagnostics: [] },
+        diagnostics: [],
+      },
+    });
+    activateSecretsRuntimeSnapshotState({
+      snapshot: snapshot("sk-old", 19_001),
+      refreshContext: null,
+      refreshHandler: null,
+    });
+    const previous = getActiveSecretsRuntimeSnapshot()!;
+    const candidate = snapshot("sk-candidate", 19_002);
+    expect(
+      activateSecretsRuntimeSnapshotStateIfCurrent({
+        snapshot: candidate,
+        expectedRevision: getActiveSecretsRuntimeSnapshotRevision(),
+        refreshContext: null,
+        refreshHandler: null,
+      }),
+    ).toBe(true);
+    noteRuntimeAuthProfileStorePersistedMutation(undefined, {
+      credentialsChanged: true,
+      stateChanged: false,
+      profileIds: ["openai:external"],
+    });
+    setRuntimeAuthProfileStoreSnapshot(snapshot(current, 19_002).authStores[0]!.store, agentDir);
+
+    expect(
+      restoreSecretsRuntimeSnapshotStateIfCurrent({
+        snapshot: previous,
+        expectedRevision: getActiveSecretsRuntimeSnapshotRevision(),
+        ownedSnapshot: candidate,
+        refreshContext: null,
+        refreshHandler: null,
+      }),
+    ).toBe(true);
+    expect(getRuntimeAuthProfileStoreSnapshot(agentDir)?.profiles["openai:external"]).toMatchObject(
+      {
+        key: expected,
+      },
+    );
+  });
+
+  it("removes a rejected candidate credential when its bounded lineage was evicted", () => {
+    const agentDir = "/tmp/openclaw-auth-evicted-lineage";
+    const snapshot = (key: string, port: number): PreparedSecretsRuntimeSnapshot => ({
+      sourceConfig: {},
+      config: { gateway: { port } },
+      authStores: [
+        {
+          agentDir,
+          store: {
+            version: 1,
+            profiles: {
+              "openai:default": { type: "api_key", provider: "openai", key },
+              "anthropic:stable": {
+                type: "api_key",
+                provider: "anthropic",
+                key: "sk-stable",
+              },
+            },
+            runtimeLocalProfileIds: ["anthropic:stable", "openai:default"],
+          },
+        },
+      ],
+      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
+      warnings: [],
+      webTools: {
+        search: { providerSource: "none", diagnostics: [] },
+        fetch: { providerSource: "none", diagnostics: [] },
+        diagnostics: [],
+      },
+    });
+    activateSecretsRuntimeSnapshotState({
+      snapshot: snapshot("sk-old", 19_001),
+      refreshContext: null,
+      refreshHandler: null,
+    });
+    const previous = getActiveSecretsRuntimeSnapshot()!;
+    const candidate = snapshot("sk-candidate", 19_002);
+    expect(
+      activateSecretsRuntimeSnapshotStateIfCurrent({
+        snapshot: candidate,
+        expectedRevision: getActiveSecretsRuntimeSnapshotRevision(),
+        refreshContext: null,
+        refreshHandler: null,
+      }),
+    ).toBe(true);
+    for (let index = 0; index < 300; index += 1) {
+      noteRuntimeAuthProfileStorePersistedMutation(agentDir, {
+        credentialsChanged: true,
+        stateChanged: false,
+        profileIds: [`openai:unrelated-${index}`],
+      });
+    }
+
+    expect(
+      restoreSecretsRuntimeSnapshotStateIfCurrent({
+        snapshot: previous,
+        expectedRevision: getActiveSecretsRuntimeSnapshotRevision(),
+        ownedSnapshot: candidate,
+        refreshContext: null,
+        refreshHandler: null,
+      }),
+    ).toBe(true);
+    expect(
+      getRuntimeAuthProfileStoreSnapshot(agentDir)?.profiles["openai:default"],
+    ).toBeUndefined();
+    expect(
+      getRuntimeAuthProfileStoreSnapshot(agentDir)?.profiles["anthropic:stable"],
+    ).toMatchObject({ key: "sk-stable" });
+  });
+
+  it.each([
     {
       label: "candidate-owned omission",
       mutationOwner: "none",
       profileId: "",
       stateOnly: false,
+      inheritsMainProfile: false,
+      inheritsMainState: false,
+      expectMissing: false,
     },
     {
       label: "persisted external removal",
       mutationOwner: "custom",
       profileId: "openai:default",
       stateOnly: false,
+      inheritsMainProfile: false,
+      inheritsMainState: false,
+      expectMissing: true,
     },
     {
       label: "state-only bookkeeping write",
       mutationOwner: "custom",
       profileId: "",
       stateOnly: true,
+      inheritsMainProfile: false,
+      inheritsMainState: false,
+      expectMissing: true,
     },
     {
       label: "unrelated main-store write",
       mutationOwner: "main",
       profileId: "anthropic:main",
       stateOnly: false,
+      inheritsMainProfile: true,
+      inheritsMainState: false,
+      expectMissing: false,
+    },
+    {
+      label: "unrelated main bookkeeping write",
+      mutationOwner: "main",
+      profileId: "",
+      stateOnly: true,
+      inheritsMainProfile: false,
+      inheritsMainState: false,
+      expectMissing: false,
+    },
+    {
+      label: "inherited main bookkeeping write",
+      mutationOwner: "main",
+      profileId: "",
+      stateOnly: true,
+      inheritsMainProfile: true,
+      inheritsMainState: true,
+      expectMissing: true,
     },
     {
       label: "related main-store write",
       mutationOwner: "main",
       profileId: "openai:default",
       stateOnly: false,
+      inheritsMainProfile: true,
+      inheritsMainState: false,
+      expectMissing: true,
     },
   ] as const)(
     "handles whole-store $label after candidate omission",
-    ({ label, mutationOwner, profileId, stateOnly }) => {
+    ({
+      label,
+      mutationOwner,
+      profileId,
+      stateOnly,
+      inheritsMainProfile,
+      inheritsMainState,
+      expectMissing,
+    }) => {
       const agentDir = `/tmp/openclaw-auth-store-removal-${label}`;
       const snapshot = (includeStore: boolean, port: number): PreparedSecretsRuntimeSnapshot => ({
         sourceConfig: {},
@@ -592,6 +772,8 @@ describe("secrets runtime state", () => {
                       key: "sk-old",
                     },
                   },
+                  runtimeLocalProfileIds: inheritsMainProfile ? [] : ["openai:default"],
+                  runtimeInheritsMainState: inheritsMainState,
                 },
               },
             ]
@@ -639,10 +821,7 @@ describe("secrets runtime state", () => {
           refreshHandler: null,
         }),
       ).toBe(true);
-      if (
-        mutationOwner === "custom" ||
-        (mutationOwner === "main" && profileId === "openai:default")
-      ) {
+      if (expectMissing) {
         expect(getRuntimeAuthProfileStoreSnapshot(agentDir)).toBeUndefined();
       } else {
         expect(

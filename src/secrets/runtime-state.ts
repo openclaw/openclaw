@@ -3,12 +3,13 @@ import { isDeepStrictEqual } from "node:util";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   getRuntimeAuthProfileStoreSnapshot,
-  getRuntimeAuthProfileStoreCredentialMutationRevision,
+  getRuntimeAuthProfileStoreCredentialMutationToken,
   getRuntimeAuthProfileStoreCredentialsRevision,
-  getRuntimeAuthProfileStoreStateMutationRevision,
+  getRuntimeAuthProfileStoreStateMutationToken,
   listRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "../agents/auth-profiles/runtime-snapshots.js";
+import type { RuntimeAuthProfileStoreMutationToken } from "../agents/auth-profiles/runtime-snapshots.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -57,9 +58,15 @@ let activeSnapshotLineageAuthStores: PreparedSecretsRuntimeSnapshot["authStores"
 let activeSnapshotLineageAuthMutations: Record<
   string,
   {
-    store: number;
-    state: number;
-    profiles: Record<string, { revision: number; includeMain: boolean }>;
+    store: RuntimeAuthProfileStoreMutationToken;
+    state: { token: RuntimeAuthProfileStoreMutationToken; includeMain: boolean };
+    profiles: Record<
+      string,
+      {
+        token: RuntimeAuthProfileStoreMutationToken;
+        owner: "external" | "inherited" | "local";
+      }
+    >;
   }
 > = {};
 let activeRefreshContext: SecretsRuntimeRefreshContext | null = null;
@@ -153,20 +160,30 @@ function captureAuthStoreMutationLineage(
     [...storesByAgentDir].map(([agentDir, store]) => [
       agentDir,
       {
-        store: getRuntimeAuthProfileStoreCredentialMutationRevision(agentDir),
-        state: getRuntimeAuthProfileStoreStateMutationRevision(agentDir),
+        store: getRuntimeAuthProfileStoreCredentialMutationToken(agentDir),
+        state: {
+          token: getRuntimeAuthProfileStoreStateMutationToken(agentDir, {
+            includeMain: store.runtimeInheritsMainState === true,
+          }),
+          includeMain: store.runtimeInheritsMainState === true,
+        },
         profiles: Object.fromEntries(
           Object.keys(store.profiles).map((profileId) => {
-            const includeMain = !store.runtimeLocalProfileIds?.includes(profileId);
+            const owner = store.runtimeExternalProfileIds?.includes(profileId)
+              ? "external"
+              : store.runtimeLocalProfileIds?.includes(profileId)
+                ? "local"
+                : "inherited";
             return [
               profileId,
               {
-                revision: getRuntimeAuthProfileStoreCredentialMutationRevision(
-                  agentDir,
-                  profileId,
-                  { includeMain },
-                ),
-                includeMain,
+                token:
+                  owner === "external"
+                    ? { revision: 0, known: true }
+                    : getRuntimeAuthProfileStoreCredentialMutationToken(agentDir, profileId, {
+                        includeMain: owner === "inherited",
+                      }),
+                owner,
               },
             ];
           }),
@@ -371,28 +388,34 @@ function credentialSecretRef(credential: AuthProfileCredential | undefined): Sec
   return null;
 }
 
-function getProfileMutationLineage(params: {
+function compareMutationTokens(
+  captured: RuntimeAuthProfileStoreMutationToken,
+  current: RuntimeAuthProfileStoreMutationToken,
+): "mutated" | "unchanged" | "unknown" {
+  if (!captured.known || !current.known) {
+    return "unknown";
+  }
+  return captured.revision === current.revision ? "unchanged" : "mutated";
+}
+
+function getProfileMutationStatus(params: {
   agentDir: string;
   profileId: string;
-  stores: Array<AuthProfileStore | undefined>;
   mutationLineage: typeof activeSnapshotLineageAuthMutations;
-}): { current: number; captured: number } {
+}): "mutated" | "unchanged" | "unknown" {
   const captured = params.mutationLineage[params.agentDir]?.profiles[params.profileId];
-  const includeMain =
-    captured?.includeMain ??
-    !params.stores.some((store) => store?.runtimeLocalProfileIds?.includes(params.profileId));
-  return {
-    current: getRuntimeAuthProfileStoreCredentialMutationRevision(
-      params.agentDir,
-      params.profileId,
-      { includeMain },
-    ),
-    captured:
-      captured?.revision ??
-      getRuntimeAuthProfileStoreCredentialMutationRevision(params.agentDir, params.profileId, {
-        includeMain,
-      }),
-  };
+  if (!captured) {
+    return "mutated";
+  }
+  if (captured.owner === "external") {
+    return "unchanged";
+  }
+  return compareMutationTokens(
+    captured.token,
+    getRuntimeAuthProfileStoreCredentialMutationToken(params.agentDir, params.profileId, {
+      includeMain: captured.owner === "inherited",
+    }),
+  );
 }
 
 function mergeRollbackAuthStoreCredentials(
@@ -413,27 +436,30 @@ function mergeRollbackAuthStoreCredentials(
     const baselineStore = baseline[agentDir];
     const candidateStore = candidate[agentDir];
     const currentStore = current[agentDir];
-    const storeMutated =
-      getRuntimeAuthProfileStoreCredentialMutationRevision(agentDir) !==
-      (mutationLineage[agentDir]?.store ?? 0);
-    const stateMutated =
-      getRuntimeAuthProfileStoreStateMutationRevision(agentDir) !==
-      (mutationLineage[agentDir]?.state ?? 0);
+    const storeMutationStatus = compareMutationTokens(
+      mutationLineage[agentDir]?.store ?? { revision: 0, known: true },
+      getRuntimeAuthProfileStoreCredentialMutationToken(agentDir),
+    );
+    const stateMutationStatus = compareMutationTokens(
+      mutationLineage[agentDir]?.state.token ?? { revision: 0, known: true },
+      getRuntimeAuthProfileStoreStateMutationToken(agentDir, {
+        includeMain: mutationLineage[agentDir]?.state.includeMain === true,
+      }),
+    );
     const baselineProfileMutated = Object.keys(baselineStore?.profiles ?? {}).some((profileId) => {
-      const revisions = getProfileMutationLineage({
+      const status = getProfileMutationStatus({
         agentDir,
         profileId,
-        stores: [baselineStore, candidateStore, currentStore],
         mutationLineage,
       });
-      return revisions.current !== revisions.captured;
+      return status !== "unchanged";
     });
     if (!currentStore) {
       if (
         !candidateStore &&
         baselineStore &&
-        !storeMutated &&
-        !stateMutated &&
+        storeMutationStatus === "unchanged" &&
+        stateMutationStatus === "unchanged" &&
         !baselineProfileMutated
       ) {
         next[agentDir] = structuredClone(baselineStore);
@@ -453,23 +479,28 @@ function mergeRollbackAuthStoreCredentials(
       const baselineCredential = baselineStore?.profiles[profileId];
       const candidateCredential = candidateStore?.profiles[profileId];
       const currentCredential = currentStore.profiles[profileId];
-      const profileRevisions = getProfileMutationLineage({
+      const profileMutationStatus = getProfileMutationStatus({
         agentDir,
         profileId,
-        stores: [baselineStore, candidateStore, currentStore],
         mutationLineage,
       });
-      const profileMutated = profileRevisions.current !== profileRevisions.captured;
-      let credential = isDeepStrictEqual(currentCredential, candidateCredential)
-        ? profileMutated
-          ? currentCredential
-          : baselineCredential
-        : currentCredential;
+      const profileMutated = profileMutationStatus === "mutated";
+      let credential =
+        profileMutationStatus === "unknown"
+          ? isDeepStrictEqual(baselineCredential, candidateCredential) ||
+            !isDeepStrictEqual(currentCredential, candidateCredential)
+            ? currentCredential
+            : undefined
+          : isDeepStrictEqual(currentCredential, candidateCredential)
+            ? profileMutated
+              ? currentCredential
+              : baselineCredential
+            : currentCredential;
       const baselineRef = credentialSecretRef(baselineCredential);
       const candidateRef = credentialSecretRef(candidateCredential);
       const currentRef = credentialSecretRef(currentCredential);
       if (
-        !profileMutated &&
+        profileMutationStatus === "unchanged" &&
         candidateRef &&
         currentRef &&
         isDeepStrictEqual(candidateRef, currentRef) &&
@@ -480,6 +511,7 @@ function mergeRollbackAuthStoreCredentials(
         credential = baselineCredential;
       }
       if (
+        profileMutationStatus !== "unknown" &&
         baselineRef &&
         candidateRef &&
         currentRef &&
