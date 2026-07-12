@@ -3705,7 +3705,7 @@ describe("CodexAppServerEventProjector", () => {
 
       expect(onToolResult).toHaveBeenCalledTimes(1);
       expect(onToolResult).toHaveBeenCalledWith({
-        text: `🛠️ \`bash\`\n\`\`\`txt\n${expectedChunk}...(truncated)...\n\`\`\``,
+        text: `🛠️ Bash\n\`\`\`txt\n${expectedChunk}...(truncated)...\n\`\`\``,
       });
       const text = (mockCallArg(onToolResult, 0, 0, "onToolResult") as { text?: string }).text;
       expect(text).not.toMatch(
