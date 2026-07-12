@@ -4,11 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
 import { getActiveBackgroundExecSessionCount } from "../agents/bash-process-registry.js";
 import { refreshContextWindowCache } from "../agents/context.js";
-import {
-  getActiveEmbeddedRunCount,
-  listActiveEmbeddedRunSessionIds,
-  listActiveEmbeddedRunSessionKeys,
-} from "../agents/embedded-agent-runner/run-state.js";
+import { getActiveEmbeddedRunCount } from "../agents/embedded-agent-runner/run-state.js";
 import { loadModelCatalog, resetModelCatalogCache } from "../agents/model-catalog.js";
 import {
   clearCurrentProviderAuthState,
@@ -18,7 +14,6 @@ import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.
 import type { CliDeps } from "../cli/deps.types.js";
 import { isRestartEnabled } from "../config/commands.flags.js";
 import { getConfigValueAtPath } from "../config/config-paths.js";
-import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef } from "../config/types.secrets.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -409,28 +404,6 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     const omitted = blockers.length - shown.length;
     return omitted > 0 ? `${shown.join("; ")}; +${omitted} more` : shown.join("; ");
   };
-  const collectActiveRestartSessionKeys = () => {
-    return new Set<string>(listActiveEmbeddedRunSessionKeys());
-  };
-  const collectActiveRestartSessionIds = () => {
-    return new Set<string>(listActiveEmbeddedRunSessionIds());
-  };
-  const markActiveMainSessionsForRestart = async (nextConfig: OpenClawConfig, reason: string) => {
-    const sessionKeys = collectActiveRestartSessionKeys();
-    const sessionIds = collectActiveRestartSessionIds();
-    if (sessionKeys.size === 0 && sessionIds.size === 0) {
-      return;
-    }
-    const { markRestartAbortedMainSessions } =
-      await import("../agents/main-session-restart-recovery.js");
-    await markRestartAbortedMainSessions({
-      cfg: nextConfig,
-      additionalCfgs: [getRuntimeConfig()],
-      sessionKeys,
-      sessionIds,
-      reason,
-    });
-  };
   const waitForActiveWorkBeforeChannelReload = async (
     channels: Iterable<ChannelKind>,
     nextConfig: OpenClawConfig,
@@ -493,7 +466,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     nextConfig: OpenClawConfig,
     publication?: GatewayHotReloadPublication,
   ): Promise<void> => {
-    const isTransactionCurrent = publication?.isCurrent ?? (() => true);
+    const isTransactionCurrent = () => !restartRetryStopped && (publication?.isCurrent?.() ?? true);
     const state = params.getState();
     const nextState = { ...state };
 
@@ -593,6 +566,10 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     };
     const scheduleRecoveryRestart = (surface: string, err?: unknown) => {
       const detail = err === undefined ? "" : `: ${formatErrorMessage(err)}`;
+      if (restartRetryStopped) {
+        params.logReload.warn(`${surface} failed during gateway shutdown${detail}`);
+        return;
+      }
       const recoveryPlan = {
         ...plan,
         restartGateway: true,
@@ -950,6 +927,9 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
   };
   let restartRequestDetails: RestartRequestDetails | null = null;
   let pausedRestartDebt: RestartRequestDetails | null = null;
+  // Post-commit recovery is satisfied only by an accepted restart emission.
+  // Keep it separate from config-owned debt that later baselines may retire.
+  let conservativeRestartDebt: RestartRequestDetails | null = null;
   let latestAcceptedRestartTarget: AcceptedRestartTarget | null = null;
 
   const recordAcceptedRestartTarget = (target: AcceptedRestartTarget) => {
@@ -978,7 +958,25 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     nextConfig: OpenClawConfig,
     options?: GatewayRestartRequestOptions,
   ) => {
-    pausedRestartDebt = createRestartRequestDetails(plan, nextConfig, options);
+    const details = createRestartRequestDetails(plan, nextConfig, options);
+    if (details.retainDebtAcrossConfigChanges) {
+      conservativeRestartDebt = details;
+    } else {
+      pausedRestartDebt = details;
+    }
+  };
+
+  const preserveRestartDebt = (details: RestartRequestDetails) => {
+    if (details.retainDebtAcrossConfigChanges) {
+      conservativeRestartDebt = details;
+    } else {
+      pausedRestartDebt = details;
+    }
+  };
+
+  const markRestartEmissionSettled = () => {
+    restartEmissionSettled = true;
+    conservativeRestartDebt = null;
   };
 
   const isCurrentRestartRetry = (retry: { requestGeneration: number }) =>
@@ -1003,6 +1001,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
   const stopRestartRetries = () => {
     restartRetryStopped = true;
     pausedRestartDebt = null;
+    conservativeRestartDebt = null;
     supersedeRestartRequest();
   };
 
@@ -1036,7 +1035,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         }
         const emitResult = params.requestRecoveryRestart?.(retry.reason, retry.intent);
         if (emitResult && emitResult.status !== "failed") {
-          restartEmissionSettled = true;
+          markRestartEmissionSettled();
         }
         if (!emitResult || emitResult.status === "failed") {
           scheduleRestartEmissionRetry(retry);
@@ -1055,29 +1054,33 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       return { retireRejectedRestart: false };
     }
     const rejectedDebt = !restartEmissionSettled ? restartRequestDetails : null;
+    if (rejectedDebt) {
+      preserveRestartDebt(rejectedDebt);
+    }
     supersedeRestartRequest();
-    const debt = rejectedDebt ?? pausedRestartDebt;
-    const retainsRestartDebt =
-      debt &&
+    const configDebt = pausedRestartDebt;
+    const retainsConfigDebt =
+      configDebt &&
       acceptedConfig &&
-      (debt.retainDebtAcrossConfigChanges ||
-        debt.restartOwnedPaths.every((path) =>
-          isDeepStrictEqual(
-            getConfigValueAtPath(
-              debt.nextConfig as unknown as Record<string, unknown>,
-              path.split("."),
-            ),
-            getConfigValueAtPath(
-              acceptedConfig as unknown as Record<string, unknown>,
-              path.split("."),
-            ),
+      configDebt.restartOwnedPaths.every((path) =>
+        isDeepStrictEqual(
+          getConfigValueAtPath(
+            configDebt.nextConfig as unknown as Record<string, unknown>,
+            path.split("."),
           ),
-        ));
-    if (retainsRestartDebt) {
-      pausedRestartDebt = debt;
+          getConfigValueAtPath(
+            acceptedConfig as unknown as Record<string, unknown>,
+            path.split("."),
+          ),
+        ),
+      );
+    if (!retainsConfigDebt) {
+      pausedRestartDebt = null;
+    }
+    const debt = (retainsConfigDebt ? configDebt : null) ?? conservativeRestartDebt;
+    if (debt) {
       return { retireRejectedRestart: false, debt };
     }
-    pausedRestartDebt = null;
     return { retireRejectedRestart: true };
   };
   const retireRejectedRestartRequest = () => acceptRestartConfig().retireRejectedRestart;
@@ -1090,7 +1093,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       restartRequestTransaction?.state !== "pending" &&
       restartRequestDetails
     ) {
-      pausedRestartDebt = restartRequestDetails;
+      preserveRestartDebt(restartRequestDetails);
     }
     supersedeRestartRequest();
     const transaction = { state: "pending" as GatewayRestartTransactionState };
@@ -1141,7 +1144,6 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         }
         emissionPrepared = true;
         setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(preparedConfig) });
-        await markActiveMainSessionsForRestart(preparedConfig, "config reload forced restart");
         return requestGeneration === restartRequestGeneration;
       } catch (err) {
         emissionPrepared = false;
@@ -1199,7 +1201,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             }
             const emitResult = requestRecoveryRestart(resolvedReason, intent);
             if (emitResult.status !== "failed") {
-              restartEmissionSettled = true;
+              markRestartEmissionSettled();
             }
             failedEmission =
               emitResult.status === "failed" ? { reason: resolvedReason, intent } : undefined;
@@ -1262,7 +1264,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     // atomically promotes it to one-way restart drain.
     const emitResult = requestRecoveryRestart(restartReason);
     if (emitResult.status !== "failed") {
-      restartEmissionSettled = true;
+      markRestartEmissionSettled();
     }
     if (emitResult.status === "failed") {
       params.logReload.warn("gateway restart recovery emission failed");
@@ -1285,6 +1287,9 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     nextConfig: OpenClawConfig,
     options?: GatewayRestartRequestOptions,
   ): GatewayRestartTransactionResult => {
+    if (restartRetryStopped) {
+      return { status: "recovery-pending", settle: () => {} };
+    }
     // Only another restart requirement supersedes accepted restart work. A
     // duplicate, hot-only, or failed config transaction must preserve it.
     supersedeRestartRequest();
@@ -1390,6 +1395,13 @@ export function startManagedGatewayConfigReloader(
     sourceConfig: OpenClawConfig,
     restartOptions?: GatewayRestartRequestOptions,
   ) => {
+    const isCurrent = () => !stopped && transactionOwnership.isCurrent();
+    const assertCurrent = () => {
+      if (!isCurrent()) {
+        throw new GatewayConfigReloadSupersededError();
+      }
+    };
+    assertCurrent();
     const restartLifecycle = beginGatewayRestartLifecycle();
     let preparation:
       | {
@@ -1402,9 +1414,7 @@ export function startManagedGatewayConfigReloader(
       | undefined;
     try {
       for (;;) {
-        if (!transactionOwnership.isCurrent()) {
-          throw new GatewayConfigReloadSupersededError();
-        }
+        assertCurrent();
         const previousSnapshotRevision = getActiveSecretsRuntimeSnapshotRevision();
         const ownership = captureSharedGatewaySessionGenerationOwnership(
           params.sharedGatewaySessionGenerationState,
@@ -1417,9 +1427,7 @@ export function startManagedGatewayConfigReloader(
             activate: false,
           },
         );
-        if (!transactionOwnership.isCurrent()) {
-          throw new GatewayConfigReloadSupersededError();
-        }
+        assertCurrent();
         const snapshotChanged =
           getActiveSecretsRuntimeSnapshotRevision() !== previousSnapshotRevision;
         const generationChanged = !isSharedGatewaySessionGenerationOwnershipCurrent(
@@ -1452,7 +1460,9 @@ export function startManagedGatewayConfigReloader(
     let restartTransaction: GatewayRestartTransactionResult | undefined;
     let requiredOwnership: SharedGatewaySessionGenerationOwnership | null = null;
     try {
+      assertCurrent();
       params.reconcileTerminalSessions(plan, preparedRuntimeConfig);
+      assertCurrent();
       restartTransaction = requestGatewayRestart(plan, preparedRuntimeConfig, {
         ...restartOptions,
         debtConfig: sourceConfig,
@@ -1464,9 +1474,7 @@ export function startManagedGatewayConfigReloader(
               activate: false,
             },
           );
-          if (!transactionOwnership.isCurrent()) {
-            throw new GatewayConfigReloadSupersededError();
-          }
+          assertCurrent();
           return prepared.config;
         },
       });
@@ -1567,7 +1575,7 @@ export function startManagedGatewayConfigReloader(
           throw new GatewayConfigReloadSupersededError();
         }
         const activateIfCurrent = params.activateRuntimeSecrets.activatePreparedSnapshotIfCurrent;
-        const publishTerminalConfig = async () => {
+        const publishTerminalConfig = () => {
           transactionOwnership.markRuntimeCommitted(prepared.config, plan);
           params.reconcileTerminalSessions(plan, prepared.config);
         };

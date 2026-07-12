@@ -192,6 +192,26 @@ export function startGatewayConfigReloader(opts: {
     opts.initialPluginInstallRecords ?? loadInstalledPluginIndexInstallRecordsSync();
   const readPluginInstallRecords =
     opts.readPluginInstallRecords ?? loadInstalledPluginIndexInstallRecords;
+  const flushPendingRuntimeApplication = async () => {
+    const pendingPlan = pendingRuntimeApplicationPlan;
+    if (!pendingPlan) {
+      return;
+    }
+    await opts.onConfigApplied?.(pendingPlan, currentConfig);
+    if (pendingRuntimeApplicationPlan === pendingPlan) {
+      pendingRuntimeApplicationPlan = null;
+    }
+  };
+  const applyCurrentRuntimePlan = async (
+    plan: GatewayReloadPlan,
+    nextRuntimeConfig: OpenClawConfig,
+  ) => {
+    if (pendingRuntimeApplicationPlan === plan) {
+      await flushPendingRuntimeApplication();
+      return;
+    }
+    await opts.onConfigApplied?.(plan, nextRuntimeConfig);
+  };
 
   const scheduleAfter = (wait: number) => {
     if (stopped) {
@@ -319,7 +339,17 @@ export function startGatewayConfigReloader(opts: {
       ...configPluginInstallWholeRecordPaths,
       ...pluginInstallRecordWholeRecordPaths,
     ];
+    // Publication can be superseded after its runtime commit but before its
+    // lifecycle owner is applied. Finish that owner before the next candidate
+    // prepares state that acceptance or restart policy may discard.
+    await flushPendingRuntimeApplication();
+    assertCurrent();
     const commitReloadBaseline = async () => {
+      assertCurrent();
+      // A prior transaction may publish runtime state immediately before a
+      // newer write supersedes it. Commit that runtime owner before accepting
+      // a baseline-only candidate, which can discard prepared lifecycle state.
+      await flushPendingRuntimeApplication();
       assertCurrent();
       await opts.onConfigAccepted?.(
         committedRuntimeConfig ?? nextConfig,
@@ -333,13 +363,8 @@ export function startGatewayConfigReloader(opts: {
       settings = committedRuntimeConfig
         ? resolveGatewayReloadSettings(committedRuntimeConfig)
         : nextSettings;
-      pendingRuntimeApplicationPlan = null;
     };
     if (changedPaths.length === 0) {
-      if (pendingRuntimeApplicationPlan) {
-        await opts.onConfigApplied?.(pendingRuntimeApplicationPlan, currentConfig);
-        pendingRuntimeApplicationPlan = null;
-      }
       await commitReloadBaseline();
       return;
     }
@@ -376,7 +401,7 @@ export function startGatewayConfigReloader(opts: {
       // marking applied so getRuntimeConfig() readers do not stay stale until restart.
       await opts.onNoopConfigCommit(plan, nextConfig, ownership, nextCompareConfig);
       assertCurrent();
-      await opts.onConfigApplied?.(plan, nextConfig);
+      await applyCurrentRuntimePlan(plan, nextConfig);
       await commitReloadBaseline();
       return;
     }
@@ -417,7 +442,7 @@ export function startGatewayConfigReloader(opts: {
     await opts.onConfigChange?.(plan, nextConfig);
     await opts.onHotReload(plan, nextConfig, ownership, nextCompareConfig);
     assertCurrent();
-    await opts.onConfigApplied?.(plan, nextConfig);
+    await applyCurrentRuntimePlan(plan, nextConfig);
     await commitReloadBaseline();
   };
 
@@ -553,15 +578,19 @@ export function startGatewayConfigReloader(opts: {
         lastAppliedWriteHash = null;
       }
       if (lastAppliedWriteHash && typeof snapshot.hash === "string") {
-        if (snapshot.valid && snapshot.hash === lastAppliedWriteHash) {
+        const matchesAcceptedEffectiveConfig =
+          snapshot.valid &&
+          snapshot.hash === lastAppliedWriteHash &&
+          diffConfigPaths(currentCompareConfig, snapshot.sourceConfig).length === 0;
+        if (matchesAcceptedEffectiveConfig) {
           const ownership: GatewayConfigReloadTransactionOwnership = {
             isCurrent: () => configWriteEpoch === transactionEpoch,
             markRuntimeCommitted: () => {},
           };
           await runAcceptedTransaction(async () => {
-            if (pendingRuntimeApplicationPlan) {
-              await opts.onConfigApplied?.(pendingRuntimeApplicationPlan, currentConfig);
-              pendingRuntimeApplicationPlan = null;
+            await flushPendingRuntimeApplication();
+            if (!ownership.isCurrent()) {
+              throw new GatewayConfigReloadSupersededError();
             }
             await opts.onConfigAccepted?.(currentConfig, ownership, currentCompareConfig);
             if (!ownership.isCurrent()) {

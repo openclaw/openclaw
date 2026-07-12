@@ -37,6 +37,7 @@ import {
   resolveGatewayReloadSettings,
   startGatewayConfigReloader,
 } from "./config-reload.js";
+import { createTerminalLaunchPolicy } from "./terminal/launch.js";
 
 describe("diffConfigPaths", () => {
   it("captures nested config changes", () => {
@@ -736,6 +737,8 @@ function createReloaderHarness(
       ownership: GatewayConfigReloadTransactionOwnership,
       sourceConfig: OpenClawConfig,
     ) => void | Promise<void>;
+    onConfigApplied?: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
+    onConfigChange?: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
     onNoopConfigCommit?: (
       plan: GatewayReloadPlan,
       nextConfig: OpenClawConfig,
@@ -758,9 +761,12 @@ function createReloaderHarness(
 ) {
   const watcher = createWatcherMock();
   vi.spyOn(chokidar, "watch").mockReturnValue(watcher as unknown as never);
-  const onConfigChange = vi.fn(async (_plan: GatewayReloadPlan, _nextConfig: OpenClawConfig) => {});
+  const onConfigChange = vi.fn(
+    options.onConfigChange ?? (async (_plan: GatewayReloadPlan, _nextConfig: OpenClawConfig) => {}),
+  );
   const onConfigApplied = vi.fn(
-    async (_plan: GatewayReloadPlan, _nextConfig: OpenClawConfig) => {},
+    options.onConfigApplied ??
+      (async (_plan: GatewayReloadPlan, _nextConfig: OpenClawConfig) => {}),
   );
   const onConfigAccepted = vi.fn(options.onConfigAccepted ?? (async () => {}));
   const onNoopConfigCommit = vi.fn(
@@ -939,6 +945,190 @@ describe("startGatewayConfigReloader", () => {
     expect(harness.onConfigAccepted).toHaveBeenCalledOnce();
     expect(harness.onHotReload).not.toHaveBeenCalled();
     expect(harness.onRestart).not.toHaveBeenCalled();
+
+    await harness.reloader.stop();
+  });
+
+  it("revalidates changed effective config when the persisted root hash is unchanged", async () => {
+    const initialConfig = {
+      gateway: { reload: { debounceMs: 0 }, port: 18_789 },
+    } satisfies OpenClawConfig;
+    const unavailableSecret = {
+      source: "env" as const,
+      provider: "default",
+      id: "INCLUDED_GATEWAY_TOKEN",
+    };
+    const effectiveConfig = {
+      gateway: {
+        reload: { debounceMs: 0 },
+        port: 19_001,
+        auth: { mode: "token" as const, token: unavailableSecret },
+      },
+    } satisfies OpenClawConfig;
+    const readSnapshot = vi.fn(async () =>
+      makeSnapshot({
+        config: effectiveConfig,
+        sourceConfig: effectiveConfig,
+        runtimeConfig: effectiveConfig,
+        hash: "unchanged-root-hash",
+      }),
+    );
+    const onRestart = vi.fn(async () => {
+      throw new Error("required SecretRef INCLUDED_GATEWAY_TOKEN is unavailable");
+    });
+    const harness = createReloaderHarness(readSnapshot, {
+      initialConfig,
+      initialCompareConfig: initialConfig,
+      initialInternalWriteHash: "unchanged-root-hash",
+      onRestart,
+    });
+
+    harness.watcher.emit("change");
+    await vi.runAllTimersAsync();
+
+    expect(onRestart).toHaveBeenCalledOnce();
+    expect(onRestart.mock.calls[0]?.[3]).toEqual(effectiveConfig);
+    expect(harness.onConfigAccepted).not.toHaveBeenCalled();
+    expect(harness.log.error).toHaveBeenCalledWith(
+      "config reload failed: Error: required SecretRef INCLUDED_GATEWAY_TOKEN is unavailable",
+    );
+
+    await harness.reloader.stop();
+  });
+
+  it("applies a superseded runtime plan before baseline-only acceptance", async () => {
+    const initialConfig = {
+      gateway: { reload: { debounceMs: 0 }, terminal: { enabled: true } },
+      agents: { defaults: { sandbox: { mode: "off" as const } } },
+    } satisfies OpenClawConfig;
+    const appliedConfig = {
+      gateway: { reload: { debounceMs: 0 }, terminal: { enabled: true } },
+      agents: { defaults: { sandbox: { mode: "all" as const } } },
+    } satisfies OpenClawConfig;
+    const terminalPolicy = createTerminalLaunchPolicy(initialConfig);
+    const events: string[] = [];
+    const onNoopConfigCommit = async (
+      plan: GatewayReloadPlan,
+      nextConfig: OpenClawConfig,
+      ownership: GatewayConfigReloadTransactionOwnership,
+    ) => {
+      terminalPolicy.prepareConfig(nextConfig, { restartPending: false });
+      ownership.markRuntimeCommitted(nextConfig, plan);
+      harness.emitWrite({
+        configPath: "/tmp/openclaw.json",
+        sourceConfig: initialConfig,
+        runtimeConfig: initialConfig,
+        persistedHash: "baseline-only-b",
+        revision: 2,
+        fingerprint: "runtime-baseline-only-b",
+        sourceFingerprint: "source-baseline-only-b",
+        writtenAtMs: Date.now(),
+        afterWrite: { mode: "none", reason: "baseline-only acceptance" },
+      });
+    };
+    const harness = createReloaderHarness(vi.fn(), {
+      initialConfig,
+      initialCompareConfig: initialConfig,
+      onNoopConfigCommit,
+      onConfigApplied: () => {
+        events.push("applied");
+        terminalPolicy.commitConfig();
+      },
+      onConfigAccepted: () => {
+        events.push("accepted");
+        terminalPolicy.acceptConfig({ retireRejectedRestart: false });
+      },
+    });
+
+    harness.emitWrite({
+      configPath: "/tmp/openclaw.json",
+      sourceConfig: appliedConfig,
+      runtimeConfig: appliedConfig,
+      persistedHash: "runtime-a",
+      revision: 1,
+      fingerprint: "runtime-a",
+      sourceFingerprint: "source-a",
+      writtenAtMs: Date.now(),
+    });
+    await vi.runAllTimersAsync();
+
+    expect(events).toEqual(["applied", "accepted"]);
+    expect(terminalPolicy.resolve()).toMatchObject({
+      ok: false,
+      block: { kind: "sandboxed", mode: "all" },
+    });
+
+    await harness.reloader.stop();
+  });
+
+  it("applies a superseded runtime owner before preparing a restart candidate", async () => {
+    const initialConfig = {
+      gateway: { reload: { debounceMs: 0 }, terminal: { enabled: true } },
+      agents: { defaults: { sandbox: { mode: "off" as const } } },
+    } satisfies OpenClawConfig;
+    const appliedConfig = {
+      gateway: { reload: { debounceMs: 0 }, terminal: { enabled: true } },
+      agents: { defaults: { sandbox: { mode: "all" as const } } },
+    } satisfies OpenClawConfig;
+    const restartConfig = {
+      ...initialConfig,
+      gateway: { ...initialConfig.gateway, port: 19_001 },
+    } satisfies OpenClawConfig;
+    const terminalPolicy = createTerminalLaunchPolicy(initialConfig);
+    const events: string[] = [];
+    const onNoopConfigCommit = async (
+      plan: GatewayReloadPlan,
+      nextConfig: OpenClawConfig,
+      ownership: GatewayConfigReloadTransactionOwnership,
+    ) => {
+      terminalPolicy.prepareConfig(nextConfig, { restartPending: false });
+      ownership.markRuntimeCommitted(nextConfig, plan);
+      harness.emitWrite({
+        configPath: "/tmp/openclaw.json",
+        sourceConfig: restartConfig,
+        runtimeConfig: restartConfig,
+        persistedHash: "restart-b",
+        revision: 2,
+        fingerprint: "runtime-restart-b",
+        sourceFingerprint: "source-restart-b",
+        writtenAtMs: Date.now(),
+      });
+    };
+    const harness = createReloaderHarness(vi.fn(), {
+      initialConfig,
+      initialCompareConfig: initialConfig,
+      onNoopConfigCommit,
+      onConfigApplied: () => {
+        events.push("applied");
+        terminalPolicy.commitConfig();
+      },
+      onConfigChange: (plan, nextConfig) => {
+        events.push("prepared");
+        terminalPolicy.prepareConfig(nextConfig, { restartPending: plan.restartGateway });
+      },
+      onConfigAccepted: () => {
+        events.push("accepted");
+        terminalPolicy.acceptConfig({ retireRejectedRestart: false });
+      },
+    });
+
+    harness.emitWrite({
+      configPath: "/tmp/openclaw.json",
+      sourceConfig: appliedConfig,
+      runtimeConfig: appliedConfig,
+      persistedHash: "runtime-a-before-restart",
+      revision: 1,
+      fingerprint: "runtime-a-before-restart",
+      sourceFingerprint: "source-a-before-restart",
+      writtenAtMs: Date.now(),
+    });
+    await vi.runAllTimersAsync();
+
+    expect(events).toEqual(["applied", "prepared", "accepted"]);
+    expect(terminalPolicy.resolve()).toMatchObject({
+      ok: false,
+      block: { kind: "sandboxed", mode: "all" },
+    });
 
     await harness.reloader.stop();
   });

@@ -731,6 +731,7 @@ describe("runGatewayLoop", () => {
     getActiveEmbeddedRunCount.mockReturnValueOnce(1).mockReturnValue(0);
     listActiveEmbeddedRunSessionIds.mockReturnValueOnce(["session-deferral-timeout"]);
     listActiveEmbeddedRunSessionKeys.mockReturnValueOnce(["agent:main:deferral-timeout"]);
+    markRestartAbortedMainSessions.mockRejectedValueOnce(new Error("store read-only"));
 
     await withIsolatedSignals(async ({ captureSignal }) => {
       const { close, start, exited } = await createSignaledLoopHarness();
@@ -768,6 +769,9 @@ describe("runGatewayLoop", () => {
         sessionKeys: new Set(["agent:main:deferral-timeout"]),
         reason: "gateway restart drain",
       });
+      expect(gatewayLog.warn).toHaveBeenCalledWith(
+        "failed to mark interrupted main sessions for restart recovery: Error: store read-only",
+      );
       expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledOnce();
       expectRestartCloseCall(close, 0);
       expect(start).toHaveBeenCalledTimes(2);
