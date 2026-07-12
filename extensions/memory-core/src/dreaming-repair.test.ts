@@ -441,12 +441,12 @@ describe("dreaming artifact repair", () => {
         workspaceDir,
         entries: [
           {
-            key: "main:heartbeat-session",
-            value: { scope: "main", index: 0, hashes: ["heartbeat"] },
+            key: "main:heartbeat-session:0",
+            value: { scope: "main:heartbeat-session", index: 0, hashes: ["heartbeat"] },
           },
           {
-            key: "main:other",
-            value: { scope: "main", index: 0, hashes: ["other"] },
+            key: "main:other:0",
+            value: { scope: "main:other", index: 0, hashes: ["other"] },
           },
         ],
       }),
@@ -474,8 +474,8 @@ describe("dreaming artifact repair", () => {
       namespace: DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
       workspaceDir,
     });
-    expect(seenEntries.some((entry) => entry.key === "main:heartbeat-session")).toBe(false);
-    expect(seenEntries.some((entry) => entry.key === "main:other")).toBe(true);
+    expect(seenEntries.some((entry) => entry.key === "main:heartbeat-session:0")).toBe(false);
+    expect(seenEntries.some((entry) => entry.key === "main:other:0")).toBe(true);
   });
 
   it("does not remove fallback sentence by text without heartbeat provenance linkage", async () => {
