@@ -1014,6 +1014,7 @@ describe("startGatewayConfigReloader", () => {
       writtenAtMs: Date.now(),
     });
     await vi.runAllTimersAsync();
+    harness.onConfigAccepted.mockClear();
 
     harness.watcher.emit("change");
     await vi.runAllTimersAsync();
