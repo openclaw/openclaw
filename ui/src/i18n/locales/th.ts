@@ -306,6 +306,8 @@ export const th: TranslationMap = {
     archived: "เก็บถาวรแล้ว",
     pinned: "ปักหมุดแล้ว",
     unread: "Unread",
+    worktreeSession: "Worktree session",
+    automationAttached: "Automation attached",
     renameSession: "เปลี่ยนชื่อเซสชัน",
     renameSessionPrompt: "เปลี่ยนชื่อเซสชัน",
     renameSessionMenu: "Rename…",

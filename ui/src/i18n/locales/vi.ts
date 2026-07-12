@@ -308,6 +308,8 @@ export const vi: TranslationMap = {
     archived: "Đã lưu trữ",
     pinned: "Đã ghim",
     unread: "Unread",
+    worktreeSession: "Worktree session",
+    automationAttached: "Automation attached",
     renameSession: "Đổi tên phiên",
     renameSessionPrompt: "Đổi tên phiên",
     renameSessionMenu: "Rename…",

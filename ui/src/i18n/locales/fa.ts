@@ -309,6 +309,8 @@ export const fa: TranslationMap = {
     archived: "بایگانی‌شده",
     pinned: "سنجاق‌شده",
     unread: "Unread",
+    worktreeSession: "Worktree session",
+    automationAttached: "Automation attached",
     renameSession: "تغییر نام نشست",
     renameSessionPrompt: "تغییر نام نشست",
     renameSessionMenu: "Rename…",

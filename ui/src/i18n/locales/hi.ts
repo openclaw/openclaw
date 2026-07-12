@@ -308,6 +308,8 @@ export const hi: TranslationMap = {
     archived: "आर्काइव किया गया",
     pinned: "पिन किया गया",
     unread: "Unread",
+    worktreeSession: "Worktree session",
+    automationAttached: "Automation attached",
     renameSession: "सत्र का नाम बदलें",
     renameSessionPrompt: "सत्र का नाम बदलें",
     renameSessionMenu: "Rename…",

@@ -311,6 +311,8 @@ export const ru: TranslationMap = {
     archived: "В архиве",
     pinned: "Закреплено",
     unread: "Unread",
+    worktreeSession: "Worktree session",
+    automationAttached: "Automation attached",
     renameSession: "Переименовать сеанс",
     renameSessionPrompt: "Переименовать сеанс",
     renameSessionMenu: "Rename…",

@@ -311,6 +311,8 @@ export const nl: TranslationMap = {
     archived: "Gearchiveerd",
     pinned: "Vastgezet",
     unread: "Unread",
+    worktreeSession: "Worktree session",
+    automationAttached: "Automation attached",
     renameSession: "Sessie hernoemen",
     renameSessionPrompt: "Sessie hernoemen",
     renameSessionMenu: "Rename…",

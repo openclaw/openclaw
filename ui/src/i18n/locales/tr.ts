@@ -312,6 +312,8 @@ export const tr: TranslationMap = {
     archived: "Arşivlendi",
     pinned: "Sabitlenmiş",
     unread: "Unread",
+    worktreeSession: "Worktree session",
+    automationAttached: "Automation attached",
     renameSession: "Oturumu yeniden adlandır",
     renameSessionPrompt: "Oturumu yeniden adlandır",
     renameSessionMenu: "Rename…",

@@ -308,6 +308,8 @@ export const id: TranslationMap = {
     archived: "Diarsipkan",
     pinned: "Disematkan",
     unread: "Unread",
+    worktreeSession: "Worktree session",
+    automationAttached: "Automation attached",
     renameSession: "Ganti nama sesi",
     renameSessionPrompt: "Ganti nama sesi",
     renameSessionMenu: "Rename…",
