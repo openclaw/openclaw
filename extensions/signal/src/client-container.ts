@@ -27,11 +27,6 @@ type ContainerRpcOptions = {
   maxAttachmentBytes?: number;
 };
 
-type TimedFetchResponse = {
-  response: Response;
-  release: () => void;
-};
-
 type ContainerWebSocketMessage = {
   envelope?: {
     syncMessage?: unknown;
@@ -93,11 +88,7 @@ function normalizeBaseUrl(url: string): string {
   return `${parsed.protocol}//${parsed.host}${pathname}`;
 }
 
-async function fetchWithTimeout(
-  url: string,
-  init: RequestInit,
-  timeoutMs: number,
-): Promise<TimedFetchResponse> {
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number) {
   const fetchImpl = resolveFetch();
   if (!fetchImpl) {
     throw new Error("fetch is not available");
@@ -105,21 +96,10 @@ async function fetchWithTimeout(
   const safeTimeoutMs = resolveTimerTimeoutMs(timeoutMs, DEFAULT_TIMEOUT_MS);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), safeTimeoutMs);
-  let released = false;
-  const release = () => {
-    if (released) {
-      return;
-    }
-    released = true;
-    clearTimeout(timer);
-  };
   try {
-    const response = await fetchImpl(url, { ...init, signal: controller.signal });
-    release();
-    return { response, release };
-  } catch (err) {
-    release();
-    throw err;
+    return await fetchImpl(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -192,11 +172,8 @@ export async function containerCheck(
 ): Promise<{ ok: boolean; status?: number | null; error?: string | null }> {
   const normalized = normalizeBaseUrl(baseUrl);
   let res: Response | undefined;
-  let releaseTimeout: (() => void) | undefined;
   try {
-    const request = await fetchWithTimeout(`${normalized}/v1/about`, { method: "GET" }, timeoutMs);
-    res = request.response;
-    releaseTimeout = request.release;
+    res = await fetchWithTimeout(`${normalized}/v1/about`, { method: "GET" }, timeoutMs);
     if (!res.ok) {
       return { ok: false, status: res.status, error: `HTTP ${res.status}` };
     }
@@ -213,7 +190,6 @@ export async function containerCheck(
     };
   } finally {
     await releaseUnreadResponseBody(res);
-    releaseTimeout?.();
   }
 }
 
@@ -305,36 +281,31 @@ export async function containerRestRequest<T = unknown>(
 
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const bodyIdleTimeoutMs = resolveTimerTimeoutMs(timeoutMs, DEFAULT_TIMEOUT_MS);
-  const request = await fetchWithTimeout(url, init, timeoutMs);
-  const res = request.response;
+  const res = await fetchWithTimeout(url, init, timeoutMs);
+
+  if (res.status === 204) {
+    return undefined as T;
+  }
+
+  if (!res.ok) {
+    // Bound the error body: signal-cli-rest-api is an untrusted external container,
+    // and a hostile/buggy response must not let an error path buffer an unbounded body.
+    const errorText = await readSignalRestErrorText(res, bodyIdleTimeoutMs).catch(() => "");
+    throw new Error(`Signal REST ${res.status}: ${errorText || res.statusText}`);
+  }
+
+  // Bound the success body under the shared 16 MiB provider cap before JSON.parse so a
+  // malicious/runaway container response cannot OOM the runtime (send/typing/version all
+  // funnel through here). Reuse the same bounded reader family as the attachment path.
+  const text = await readSignalRestText(res, bodyIdleTimeoutMs);
+  if (!text) {
+    return undefined as T;
+  }
 
   try {
-    if (res.status === 204) {
-      return undefined as T;
-    }
-
-    if (!res.ok) {
-      // Bound the error body: signal-cli-rest-api is an untrusted external container,
-      // and a hostile/buggy response must not let an error path buffer an unbounded body.
-      const errorText = await readSignalRestErrorText(res, bodyIdleTimeoutMs).catch(() => "");
-      throw new Error(`Signal REST ${res.status}: ${errorText || res.statusText}`);
-    }
-
-    // Bound the success body under the shared 16 MiB provider cap before JSON.parse so a
-    // malicious/runaway container response cannot OOM the runtime (send/typing/version all
-    // funnel through here). Reuse the same bounded reader family as the attachment path.
-    const text = await readSignalRestText(res, bodyIdleTimeoutMs);
-    if (!text) {
-      return undefined as T;
-    }
-
-    try {
-      return JSON.parse(text) as T;
-    } catch {
-      throw new Error("Signal REST returned malformed JSON");
-    }
-  } finally {
-    request.release();
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Error("Signal REST returned malformed JSON");
   }
 }
 
@@ -348,14 +319,11 @@ export async function containerFetchAttachment(
   const baseUrl = normalizeBaseUrl(opts.baseUrl);
   const url = `${baseUrl}/v1/attachments/${encodeURIComponent(attachmentId)}`;
   let res: Response | undefined;
-  let releaseTimeout: (() => void) | undefined;
 
   try {
     const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const bodyIdleTimeoutMs = resolveTimerTimeoutMs(timeoutMs, DEFAULT_TIMEOUT_MS);
-    const request = await fetchWithTimeout(url, { method: "GET" }, timeoutMs);
-    res = request.response;
-    releaseTimeout = request.release;
+    res = await fetchWithTimeout(url, { method: "GET" }, timeoutMs);
 
     if (!res.ok) {
       return null;
@@ -368,7 +336,6 @@ export async function containerFetchAttachment(
     );
   } finally {
     await releaseUnreadResponseBody(res);
-    releaseTimeout?.();
   }
 }
 
