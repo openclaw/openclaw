@@ -87,13 +87,13 @@ export function findConflictMarkersInFiles(filePaths, readFile = fs.readFileSync
  */
 function parseGitGrepConflictMarkerOutput(stdout) {
   const byPath = new Map();
-  const lines = stdout.toString("utf8").split("\n");
+  const outputLines = stdout.toString("utf8").split("\n");
 
-  for (const line of lines) {
-    if (line.length === 0) {
+  for (const outputLine of outputLines) {
+    if (outputLine.length === 0) {
       continue;
     }
-    const fields = line.split("\0");
+    const fields = outputLine.split("\0");
     if (fields.length < 3) {
       continue;
     }
@@ -111,11 +111,11 @@ function parseGitGrepConflictMarkerOutput(stdout) {
   }
 
   const violations = [];
-  for (const [relativePath, lines] of byPath) {
-    lines.sort((a, b) => a - b);
+  for (const [relativePath, lineNumbers] of byPath) {
+    lineNumbers.sort((a, b) => a - b);
     violations.push({
       filePath: relativePath,
-      lines,
+      lines: lineNumbers,
     });
   }
   violations.sort((a, b) => a.filePath.localeCompare(b.filePath));
