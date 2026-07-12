@@ -168,6 +168,7 @@ Skills own workflows; root owns hard policy and routing.
 - zsh: quote command globs; unmatched patterns abort before the tool runs.
 - `scripts/pr` artifacts: preserve template enum values; validate before prepare.
 - `scripts/pr` subcommands require a PR number; no subcommand `--help` placeholder.
+- `scripts/pr` review: checkout main baseline, then PR, before artifact validation.
 - `rg` patterns starting with `-`: put `--` before the pattern.
 - Bare issue/PR URL/number: inspect live and take the efficient maintainer path; switch branches/refs when useful.
 - No unsolicited PR labels/retitles/rebases/fixups/landing. Comments/reviews ok only for reviewable findings, pre-merge proof, or close/duplicate reason after explicit close/sweep/landing request.
