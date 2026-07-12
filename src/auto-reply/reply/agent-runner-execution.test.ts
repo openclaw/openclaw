@@ -7867,10 +7867,6 @@ describe("runAgentTurnWithFallback", () => {
       reason: "timeout" as const,
       message: "provider request timed out without status token",
     },
-    {
-      reason: "overloaded" as const,
-      message: "provider capacity exhausted briefly",
-    },
   ])(
     "retries once for structured FailoverError $reason without leading HTTP status text",
     async ({ reason, message }) => {

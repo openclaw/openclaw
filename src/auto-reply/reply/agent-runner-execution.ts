@@ -3083,12 +3083,11 @@ async function runAgentTurnWithFallbackInternal(
         !shouldSurfaceToControlUi
           ? classifyProviderRequestError(err)
           : undefined;
+      // Typed overloaded failures stay out of the transient retry: they surface
+      // dedicated overloaded copy immediately instead of being retried silently.
       const isTransientHttp =
         isTransientHttpError(message) ||
-        (isFailoverError(err) &&
-          (err.reason === "timeout" ||
-            err.reason === "server_error" ||
-            err.reason === "overloaded"));
+        (isFailoverError(err) && (err.reason === "timeout" || err.reason === "server_error"));
 
       // Drain/restart aborts stay silent and defer to post-restart
       // main-session recovery, which resumes the interrupted turn (or emits its
