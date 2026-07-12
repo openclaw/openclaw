@@ -41,6 +41,12 @@ enum TalkPhase: Equatable {
     }
 }
 
+enum TalkWatchPresentation: Equatable {
+    case localized(String)
+    case phase
+    case verbatim(String)
+}
+
 private struct FinishingPushToTalk {
     let captureId: String
     let generation: UInt64
@@ -68,7 +74,11 @@ private struct ChatCompletionResult {
 private final class TranscriptStreamingOwner {
     var task: Task<Void, Never>?
     var speechGeneration: Int?
-    var terminalStatus: (text: String, phase: TalkPhase)?
+    var terminalStatus: (
+        text: String,
+        phase: TalkPhase,
+        watchPresentation: TalkWatchPresentation
+    )?
     /// Subscribed before chat.send so a fast terminal cannot outrun its owner.
     var completionEvents: AsyncStream<EventFrame>?
 }
@@ -129,6 +139,7 @@ final class TalkModeManager: NSObject {
     var isUserSpeechDetected: Bool = false
     var isPushToTalkActive: Bool = false
     private(set) var phase: TalkPhase = .idle
+    private(set) var watchPresentation: TalkWatchPresentation = .phase
     var statusText: String = "Off" {
         didSet {
             self.statusRevision &+= 1
@@ -328,8 +339,13 @@ final class TalkModeManager: NSObject {
     }
 
     @discardableResult
-    private func setStatus(_ text: String, phase: TalkPhase) -> UInt64 {
+    private func setStatus(
+        _ text: String,
+        phase: TalkPhase,
+        watchPresentation: TalkWatchPresentation = .phase) -> UInt64
+    {
         self.phase = phase
+        self.watchPresentation = watchPresentation
         self.statusText = text
         return self.statusRevision
     }
@@ -639,7 +655,10 @@ final class TalkModeManager: NSObject {
                 + "elapsedMs=\(Self.elapsedMs(since: permissionStartedAt))")
         guard micOk else {
             self.logger.warning("start blocked: microphone permission denied")
-            self.setStatus(String(localized: "Microphone permission denied"), phase: .idle)
+            self.setStatus(
+                String(localized: "Microphone permission denied"),
+                phase: .idle,
+                watchPresentation: .localized("Microphone permission denied"))
             return
         }
         guard self.isCurrentStartAttempt(attemptID) else { return }
@@ -714,7 +733,10 @@ final class TalkModeManager: NSObject {
         guard self.captureMode != .pushToTalk else { return false }
         guard self.finishingPushToTalk == nil else { return false }
         guard self.foregroundAudioCaptureAllowed else {
-            self.setStatus(String(localized: "Paused"), phase: .idle)
+            self.setStatus(
+                String(localized: "Paused"),
+                phase: .idle,
+                watchPresentation: .localized("Paused"))
             GatewayDiagnostics.log("talk start ignored: app backgrounded")
             return false
         }
@@ -844,7 +866,10 @@ final class TalkModeManager: NSObject {
         self.isListening = false
         self.isPushToTalkActive = false
         self.captureMode = .idle
-        self.setStatus(String(localized: "Paused"), phase: .idle)
+        self.setStatus(
+            String(localized: "Paused"),
+            phase: .idle,
+            watchPresentation: .localized("Paused"))
         self.gatewayTalkActiveModeTitle = "Paused"
         self.gatewayTalkActiveModeSubtitle = nil
         self.lastTranscript = ""
@@ -974,7 +999,10 @@ final class TalkModeManager: NSObject {
                 let micOk = await Self.requestMicrophonePermission()
                 try self.ensurePushToTalkStartCurrent(captureId: captureId, canStartCapture: canStartCapture)
                 guard micOk else {
-                    self.setStatus(String(localized: "Microphone permission denied"), phase: .idle)
+                    self.setStatus(
+                        String(localized: "Microphone permission denied"),
+                        phase: .idle,
+                        watchPresentation: .localized("Microphone permission denied"))
                     throw NSError(domain: "TalkMode", code: 4, userInfo: [
                         NSLocalizedDescriptionKey: "Microphone permission denied",
                     ])
@@ -1016,11 +1044,13 @@ final class TalkModeManager: NSObject {
                 if isCancelled {
                     self.setStatus(String(localized: "Ready"), phase: .idle)
                 } else if !isPermissionError {
+                    let status = String(
+                        format: String(localized: "Start failed: %@"),
+                        error.localizedDescription)
                     self.setStatus(
-                        String(
-                            format: String(localized: "Start failed: %@"),
-                            error.localizedDescription),
-                        phase: .idle)
+                        status,
+                        phase: .idle,
+                        watchPresentation: .verbatim(status))
                 }
             }
             let shouldResume = self.isEnabled
@@ -1524,7 +1554,8 @@ final class TalkModeManager: NSObject {
                         msg)
                     self.speechErrorStatusRevisionPendingRestart = self.setStatus(
                         errorStatus,
-                        phase: .idle)
+                        phase: .idle,
+                        watchPresentation: .verbatim(errorStatus))
                 }
             } else {
                 let errorStatus = String(
@@ -1532,7 +1563,8 @@ final class TalkModeManager: NSObject {
                     msg)
                 self.speechErrorStatusRevisionPendingRestart = self.setStatus(
                     errorStatus,
-                    phase: .idle)
+                    phase: .idle,
+                    watchPresentation: .verbatim(errorStatus))
             }
         }
         self.logger.debug("speech recognition error: \(msg, privacy: .public)")
@@ -1797,7 +1829,10 @@ final class TalkModeManager: NSObject {
         if self.isCurrentTranscriptProcessing(generation),
            let terminalStatus = streamingOwner.terminalStatus
         {
-            self.setStatus(terminalStatus.text, phase: terminalStatus.phase)
+            self.setStatus(
+                terminalStatus.text,
+                phase: terminalStatus.phase,
+                watchPresentation: terminalStatus.watchPresentation)
         }
         let shouldResume = restartAfter &&
             self.isEnabled &&
@@ -1876,7 +1911,8 @@ final class TalkModeManager: NSObject {
                     normalizedStatus == "error"
                         ? String(localized: "Chat error")
                         : String(localized: "Aborted"),
-                    .idle)
+                    .idle,
+                    .localized(normalizedStatus == "error" ? "Chat error" : "Aborted"))
                 self.logger.warning(
                     """
                     chat.send terminal ack runId=\(runId, privacy: .public) \
@@ -1897,17 +1933,16 @@ final class TalkModeManager: NSObject {
             else { return }
             guard self.isCurrentTranscriptProcessing(generation) else { return }
             if completedSuccessfully, !self.isEnabled {
-                streamingOwner.terminalStatus = (String(localized: "Ready"), .idle)
+                streamingOwner.terminalStatus = (String(localized: "Ready"), .idle, .phase)
             }
         } catch is CancellationError {
             return
         } catch {
             guard self.isCurrentTranscriptProcessing(generation) else { return }
-            streamingOwner.terminalStatus = (
-                String(
-                    format: String(localized: "Talk failed: %@"),
-                    error.localizedDescription),
-                .idle)
+            let status = String(
+                format: String(localized: "Talk failed: %@"),
+                error.localizedDescription)
+            streamingOwner.terminalStatus = (status, .idle, .verbatim(status))
             self.logger.error("finalize failed: \(error.localizedDescription, privacy: .public)")
             GatewayDiagnostics.log("talk: failed error=\(error.localizedDescription)")
         }
@@ -1964,7 +1999,10 @@ final class TalkModeManager: NSObject {
                 streamingOwner.task?.cancel()
                 await self.finishIncrementalSpeech()
                 guard self.isCurrentTranscriptProcessing(generation) else { return nil }
-                streamingOwner.terminalStatus = (String(localized: "Aborted"), .idle)
+                streamingOwner.terminalStatus = (
+                    String(localized: "Aborted"),
+                    .idle,
+                    .localized("Aborted"))
                 return nil
             } else if completion.state == .error {
                 self.logger.warning("chat completion error runId=\(runId, privacy: .public)")
@@ -1972,7 +2010,10 @@ final class TalkModeManager: NSObject {
                 streamingOwner.task?.cancel()
                 await self.finishIncrementalSpeech()
                 guard self.isCurrentTranscriptProcessing(generation) else { return nil }
-                streamingOwner.terminalStatus = (String(localized: "Chat error"), .idle)
+                streamingOwner.terminalStatus = (
+                    String(localized: "Chat error"),
+                    .idle,
+                    .localized("Chat error"))
                 return nil
             }
         }
@@ -2000,7 +2041,10 @@ final class TalkModeManager: NSObject {
             streamingOwner.task?.cancel()
             await self.finishIncrementalSpeech()
             guard self.isCurrentTranscriptProcessing(generation) else { return nil }
-            streamingOwner.terminalStatus = (String(localized: "No reply"), .idle)
+            streamingOwner.terminalStatus = (
+                String(localized: "No reply"),
+                .idle,
+                .localized("No reply"))
             return nil
         }
         self.logger.info("assistant text ok chars=\(assistantText.count, privacy: .public)")
@@ -2089,7 +2133,10 @@ final class TalkModeManager: NSObject {
             return .unavailable(realtimeIssue(message: "Gateway not connected", phase: "start"))
         }
         guard self.foregroundAudioCaptureAllowed else {
-            self.setStatus(String(localized: "Paused"), phase: .idle)
+            self.setStatus(
+                String(localized: "Paused"),
+                phase: .idle,
+                watchPresentation: .localized("Paused"))
             GatewayDiagnostics.log("talk realtime ignored: app backgrounded")
             return .ignored
         }
@@ -2539,11 +2586,13 @@ final class TalkModeManager: NSObject {
                     try await self.playSystemVoice(text: cleaned, language: language)
                 } catch {
                     guard !Task.isCancelled, self.speechGeneration == speechGeneration else { return }
+                    let status = String(
+                        format: String(localized: "Speak failed: %@"),
+                        error.localizedDescription)
                     self.setStatus(
-                        String(
-                            format: String(localized: "Speak failed: %@"),
-                            error.localizedDescription),
-                        phase: .idle)
+                        status,
+                        phase: .idle,
+                        watchPresentation: .verbatim(status))
                     self.logger.error("system voice failed: \(error.localizedDescription, privacy: .public)")
                 }
             }
@@ -2642,11 +2691,13 @@ final class TalkModeManager: NSObject {
                 try await self.playSystemVoice(text: cleaned, language: language)
             } catch {
                 guard !Task.isCancelled, self.speechGeneration == speechGeneration else { return }
+                let status = String(
+                    format: String(localized: "Speak failed: %@"),
+                    error.localizedDescription)
                 self.setStatus(
-                    String(
-                        format: String(localized: "Speak failed: %@"),
-                        error.localizedDescription),
-                    phase: .idle)
+                    status,
+                    phase: .idle,
+                    watchPresentation: .verbatim(status))
                 self.logger.error("system voice failed: \(error.localizedDescription, privacy: .public)")
             }
         }
@@ -4538,7 +4589,12 @@ extension TalkModeManager {
     }
 
     func _test_markSpeechErrorStatusPendingRestart(_ text: String) {
-        self.speechErrorStatusRevisionPendingRestart = self.setStatus(text, phase: .idle)
+        self.isEnabled = true
+        self.gatewayConnected = true
+        self.speechErrorStatusRevisionPendingRestart = self.setStatus(
+            text,
+            phase: .idle,
+            watchPresentation: .verbatim(text))
     }
 
     func _test_restoreListeningStatusAfterSpeechErrorRestart() {

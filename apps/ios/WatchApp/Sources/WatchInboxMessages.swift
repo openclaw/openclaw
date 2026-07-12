@@ -857,7 +857,7 @@ extension OpenClawWatchAppStatus {
         case .talkAPIKeyMissing:
             localize(.apiKeyMissing)
         case .talkFailure:
-            self.verbatim ?? localize(.unavailable)
+            self.localizedPresentation(localize: localizePresentation)
         case .chatConnectIPhone:
             localize(.connectIPhoneChat)
         case .chatNoMessages:

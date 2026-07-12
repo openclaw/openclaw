@@ -82,6 +82,8 @@ extension AgentProTab {
     }
 
     private static func tokenCountText(_ count: Int) -> String {
-        String(AttributedString(localized: "^[\(count) token](inflect: true)").characters)
+        String(
+            format: String(localized: "%@ tokens"),
+            self.compactNumber(count))
     }
 }

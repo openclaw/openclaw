@@ -4,6 +4,37 @@ import Photos
 import SwiftUI
 import UIKit
 
+private enum PrivacyPermissionStatus {
+    case addOnly
+    case allowed
+    case limited
+    case notAllowed
+    case notSet
+    case unknown
+
+    var resource: LocalizedStringResource {
+        switch self {
+        case .addOnly: LocalizedStringResource("Add-Only")
+        case .allowed: LocalizedStringResource("Allowed")
+        case .limited: LocalizedStringResource("Limited")
+        case .notAllowed: LocalizedStringResource("Not Allowed")
+        case .notSet: LocalizedStringResource("Not Set")
+        case .unknown: LocalizedStringResource("Unknown")
+        }
+    }
+
+    var tone: OpenClawStatusTone {
+        switch self {
+        case .allowed, .limited:
+            .ok
+        case .addOnly, .notSet:
+            .warn
+        case .notAllowed, .unknown:
+            .danger
+        }
+    }
+}
+
 struct PrivacyAccessSectionView: View {
     @Environment(GatewayConnectionController.self) private var gatewayController
     @State private var contactsStatus: CNAuthorizationStatus = CNContactStore.authorizationStatus(for: .contacts)
@@ -16,41 +47,46 @@ struct PrivacyAccessSectionView: View {
     var body: some View {
         DisclosureGroup {
             self.permissionRow(
+                identifier: "contacts",
                 title: "Contacts",
                 icon: "person.crop.circle",
-                status: self.statusText(for: self.contactsStatus),
+                status: self.permissionStatus(for: self.contactsStatus),
                 detail: "Search and add contacts from the assistant.",
                 actionTitle: self.actionTitle(for: self.contactsStatus),
                 action: self.handleContactsAction)
 
             self.permissionRow(
+                identifier: "photos",
                 title: "Photos",
                 icon: "photo.on.rectangle",
-                status: self.photosStatusText,
+                status: self.photosPermissionStatus,
                 detail: self.photosDetail,
                 actionTitle: self.photosActionTitle,
                 action: self.handlePhotosAction)
 
             self.permissionRow(
+                identifier: "calendar-add",
                 title: "Calendar (Add Events)",
                 icon: "calendar.badge.plus",
-                status: self.calendarWriteStatusText,
+                status: self.calendarWritePermissionStatus,
                 detail: "Add events with least privilege.",
                 actionTitle: self.calendarWriteActionTitle,
                 action: self.handleCalendarWriteAction)
 
             self.permissionRow(
+                identifier: "calendar-view",
                 title: "Calendar (View Events)",
                 icon: "calendar",
-                status: self.calendarReadStatusText,
+                status: self.calendarReadPermissionStatus,
                 detail: "List and read calendar events.",
                 actionTitle: self.calendarReadActionTitle,
                 action: self.handleCalendarReadAction)
 
             self.permissionRow(
+                identifier: "reminders",
                 title: "Reminders",
                 icon: "checklist",
-                status: self.remindersStatusText,
+                status: self.remindersPermissionStatus,
                 detail: "List, add, and complete reminders.",
                 actionTitle: self.remindersActionTitle,
                 action: self.handleRemindersAction)
@@ -68,102 +104,96 @@ struct PrivacyAccessSectionView: View {
     }
 
     private func permissionRow(
-        title: String,
+        identifier: String,
+        title: LocalizedStringResource,
         icon: String,
-        status: String,
-        detail: String,
-        actionTitle: String?,
+        status: PrivacyPermissionStatus,
+        detail: LocalizedStringResource,
+        actionTitle: LocalizedStringResource?,
         action: (() -> Void)?) -> some View
     {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Label(LocalizedStringKey(title), systemImage: icon)
+                Label {
+                    Text(title)
+                } icon: {
+                    Image(systemName: icon)
+                }
                     .font(OpenClawType.subheadSemiBold)
                 Spacer()
-                OpenClawStatusBadge(label: .localized(status), tone: self.statusTone(for: status))
-                    .accessibilityIdentifier("privacy-access-\(title)-status")
+                OpenClawStatusBadge(
+                    label: .verbatim(String(localized: status.resource)),
+                    tone: status.tone)
+                    .accessibilityIdentifier("privacy-access-\(identifier)-status")
             }
-            Text(LocalizedStringKey(detail))
+            Text(detail)
                 .font(OpenClawType.footnote)
                 .foregroundStyle(.secondary)
             if let actionTitle, let action {
                 Button(action: action) {
-                    Text(LocalizedStringKey(actionTitle))
+                    Text(actionTitle)
                         .font(OpenClawType.footnoteSemiBold)
                 }
                 .buttonStyle(.bordered)
-                .accessibilityIdentifier("privacy-access-\(title)-action")
+                .accessibilityIdentifier("privacy-access-\(identifier)-action")
             }
         }
         .padding(.vertical, 2)
     }
 
-    private func statusTone(for status: String) -> OpenClawStatusTone {
-        switch status {
-        case "Allowed", "Limited":
-            .ok
-        case "Not Set":
-            .warn
-        case "Add-Only":
-            .warn
-        default:
-            .danger
-        }
-    }
-
-    private func statusText(for cnStatus: CNAuthorizationStatus) -> String {
+    private func permissionStatus(for cnStatus: CNAuthorizationStatus) -> PrivacyPermissionStatus {
         switch cnStatus {
         case .authorized, .limited:
-            "Allowed"
+            .allowed
         case .notDetermined:
-            "Not Set"
+            .notSet
         case .denied, .restricted:
-            "Not Allowed"
+            .notAllowed
         @unknown default:
-            "Unknown"
+            .unknown
         }
     }
 
-    private func actionTitle(for cnStatus: CNAuthorizationStatus) -> String? {
+    private func actionTitle(for cnStatus: CNAuthorizationStatus) -> LocalizedStringResource? {
         switch cnStatus {
         case .notDetermined:
-            "Request Access"
+            LocalizedStringResource("Request Access")
         case .denied, .restricted:
-            "Open Settings"
+            LocalizedStringResource("Open Settings")
         default:
             nil
         }
     }
 
-    private var photosStatusText: String {
+    private var photosPermissionStatus: PrivacyPermissionStatus {
         switch self.photosStatus {
         case .authorized:
-            "Allowed"
+            .allowed
         case .limited:
-            "Limited"
+            .limited
         case .notDetermined:
-            "Not Set"
+            .notSet
         case .denied, .restricted:
-            "Not Allowed"
+            .notAllowed
         @unknown default:
-            "Unknown"
+            .unknown
         }
     }
 
-    private var photosDetail: String {
+    private var photosDetail: LocalizedStringResource {
         self.photosStatus == .limited
-            ? "Read photos you select for the assistant."
-            : "Read recent photos for the assistant."
+            ? LocalizedStringResource("Read photos you select for the assistant.")
+            : LocalizedStringResource("Read recent photos for the assistant.")
     }
 
-    private var photosActionTitle: String? {
+    private var photosActionTitle: LocalizedStringResource? {
         switch self.photosStatus {
         case .notDetermined:
-            "Request Access"
+            LocalizedStringResource("Request Access")
         case .limited:
-            "Manage Access"
+            LocalizedStringResource("Manage Access")
         case .denied, .restricted:
-            "Open Settings"
+            LocalizedStringResource("Open Settings")
         default:
             nil
         }
@@ -207,25 +237,25 @@ struct PrivacyAccessSectionView: View {
         }
     }
 
-    private var calendarWriteStatusText: String {
+    private var calendarWritePermissionStatus: PrivacyPermissionStatus {
         switch self.calendarStatus {
         case .authorized, .fullAccess, .writeOnly:
-            "Allowed"
+            .allowed
         case .notDetermined:
-            "Not Set"
+            .notSet
         case .denied, .restricted:
-            "Not Allowed"
+            .notAllowed
         @unknown default:
-            "Unknown"
+            .unknown
         }
     }
 
-    private var calendarWriteActionTitle: String? {
+    private var calendarWriteActionTitle: LocalizedStringResource? {
         switch self.calendarStatus {
         case .notDetermined:
-            "Request Access"
+            LocalizedStringResource("Request Access")
         case .denied, .restricted:
-            "Open Settings"
+            LocalizedStringResource("Open Settings")
         default:
             nil
         }
@@ -250,29 +280,29 @@ struct PrivacyAccessSectionView: View {
         }
     }
 
-    private var calendarReadStatusText: String {
+    private var calendarReadPermissionStatus: PrivacyPermissionStatus {
         switch self.calendarStatus {
         case .authorized, .fullAccess:
-            "Allowed"
+            .allowed
         case .writeOnly:
-            "Add-Only"
+            .addOnly
         case .notDetermined:
-            "Not Set"
+            .notSet
         case .denied, .restricted:
-            "Not Allowed"
+            .notAllowed
         @unknown default:
-            "Unknown"
+            .unknown
         }
     }
 
-    private var calendarReadActionTitle: String? {
+    private var calendarReadActionTitle: LocalizedStringResource? {
         switch self.calendarStatus {
         case .notDetermined:
-            "Request Full Access"
+            LocalizedStringResource("Request Full Access")
         case .writeOnly:
-            "Upgrade to Full Access"
+            LocalizedStringResource("Upgrade to Full Access")
         case .denied, .restricted:
-            "Open Settings"
+            LocalizedStringResource("Open Settings")
         default:
             nil
         }
@@ -297,29 +327,29 @@ struct PrivacyAccessSectionView: View {
         }
     }
 
-    private var remindersStatusText: String {
+    private var remindersPermissionStatus: PrivacyPermissionStatus {
         switch self.remindersStatus {
         case .authorized, .fullAccess:
-            "Allowed"
+            .allowed
         case .writeOnly:
-            "Add-Only"
+            .addOnly
         case .notDetermined:
-            "Not Set"
+            .notSet
         case .denied, .restricted:
-            "Not Allowed"
+            .notAllowed
         @unknown default:
-            "Unknown"
+            .unknown
         }
     }
 
-    private var remindersActionTitle: String? {
+    private var remindersActionTitle: LocalizedStringResource? {
         switch self.remindersStatus {
         case .notDetermined:
-            "Request Access"
+            LocalizedStringResource("Request Access")
         case .writeOnly:
-            "Upgrade to Full Access"
+            LocalizedStringResource("Upgrade to Full Access")
         case .denied, .restricted:
-            "Open Settings"
+            LocalizedStringResource("Open Settings")
         default:
             nil
         }

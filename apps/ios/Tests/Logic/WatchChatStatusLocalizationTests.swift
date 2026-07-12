@@ -78,12 +78,19 @@ struct WatchChatStatusLocalizationTests {
         let backendOverride = OpenClawWatchAppStatus(
             code: .gatewayProblem,
             verbatim: "Gateway says update channel beta")
+        let localizedTalkFailure = OpenClawWatchAppStatus(
+            code: .talkFailure,
+            localizationKey: "Paused")
 
         #expect(localized.localizedText(
             localizePresentation: { key, _ in
                 key == "Gateway update required" ? "Mise à jour requise" : key
             }) == "Mise à jour requise")
         #expect(backendOverride.localizedText() == "Gateway says update channel beta")
+        #expect(localizedTalkFailure.localizedText(
+            localizePresentation: { key, _ in
+                key == "Paused" ? "En pause" : key
+            }) == "En pause")
     }
 
     private static func semanticPayload() -> [String: Any] {

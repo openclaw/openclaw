@@ -1287,13 +1287,13 @@ extension GatewayConnectionController {
                     Verify Tailscale Serve is enabled and publishes this Gateway.
                     """),
                     host,
-                    port.formatted())
+                    String(port))
             } else {
                 String(
                     format: String(
                         localized: "Can't reach gateway at %1$@:%2$@. Check Tailscale or LAN."),
                     host,
-                    port.formatted())
+                    String(port))
             }
         case .tlsHandshakeTimeout:
             String(
@@ -1302,7 +1302,7 @@ extension GatewayConnectionController {
                 Secure endpoint was reached, but TLS did not finish in time.
                 """),
                 host,
-                port.formatted())
+                String(port))
         case .tlsUnavailable:
             String(
                 format: String(localized: """
@@ -1311,13 +1311,13 @@ extension GatewayConnectionController {
                 with Unencrypted selected.
                 """),
                 host,
-                port.formatted())
+                String(port))
         case .certificateUnavailable:
             String(
                 format: String(
                     localized: "Could not read the TLS certificate from %1$@:%2$@."),
                 host,
-                port.formatted())
+                String(port))
         }
     }
 

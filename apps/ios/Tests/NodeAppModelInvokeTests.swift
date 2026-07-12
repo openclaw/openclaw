@@ -4712,6 +4712,50 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(watchService.lastSentAppSnapshot?.gatewayStatus.code == .gatewayOffline)
     }
 
+    @Test @MainActor func `watch app snapshot preserves gateway connection progress`() async throws {
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(watchMessagingService: watchService)
+        appModel.gatewayStatusText = "Connecting…"
+
+        watchService.emitAppSnapshotRequest(
+            WatchAppSnapshotRequestEvent(
+                requestId: "app-snapshot-connecting",
+                sentAtMs: 123,
+                transport: "sendMessage"))
+        for _ in 0..<20 {
+            if watchService.lastSentAppSnapshot != nil {
+                break
+            }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        let status = try #require(watchService.lastSentAppSnapshot?.gatewayStatus)
+        #expect(status.code == .legacy)
+        #expect(status.verbatim == "Connecting…")
+    }
+
+    @Test @MainActor func `watch app snapshot preserves talk failures`() async throws {
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(watchMessagingService: watchService)
+        appModel.talkMode._test_markSpeechErrorStatusPendingRestart("Speech error: denied")
+
+        watchService.emitAppSnapshotRequest(
+            WatchAppSnapshotRequestEvent(
+                requestId: "app-snapshot-talk-failure",
+                sentAtMs: 123,
+                transport: "sendMessage"))
+        for _ in 0..<20 {
+            if watchService.lastSentAppSnapshot != nil {
+                break
+            }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        let status = try #require(watchService.lastSentAppSnapshot?.talkStatus)
+        #expect(status.code == .talkFailure)
+        #expect(status.verbatim == "Speech error: denied")
+    }
+
     @Test @MainActor func `watch app snapshot publishes online when operator reconnects`() async {
         let watchService = MockWatchMessagingService()
         let appModel = NodeAppModel(watchMessagingService: watchService)

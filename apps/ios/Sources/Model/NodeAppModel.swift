@@ -6037,6 +6037,12 @@ extension NodeAppModel {
         if let problem = self.lastGatewayProblem {
             return Self.makeWatchGatewayProblemStatus(problem)
         }
+        let statusText = self.gatewayStatusText == "Connected"
+            ? self.operatorStatusText
+            : self.gatewayStatusText
+        if statusText != "Offline" {
+            return OpenClawWatchAppStatus(code: .legacy, verbatim: statusText)
+        }
         return OpenClawWatchAppStatus(code: .gatewayOffline)
     }
 
@@ -6099,6 +6105,14 @@ extension NodeAppModel {
             return OpenClawWatchAppStatus(code: .talkFailure, verbatim: message)
         case .apiKeyMissing:
             return OpenClawWatchAppStatus(code: .talkAPIKeyMissing)
+        }
+        switch self.talkMode.watchPresentation {
+        case let .localized(key):
+            return OpenClawWatchAppStatus(code: .talkFailure, localizationKey: key)
+        case .phase:
+            break
+        case let .verbatim(value):
+            return OpenClawWatchAppStatus(code: .talkFailure, verbatim: value)
         }
         return switch self.talkMode.phase {
         case .connecting:
