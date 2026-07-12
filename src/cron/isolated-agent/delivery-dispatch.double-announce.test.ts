@@ -1845,6 +1845,8 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     expect(first.delivered).toBe(false);
     expect(second.delivered).toBe(false);
+    expect(first.deliveryError).toBe("payload failed");
+    expect(second.deliveryError).toBe("payload failed");
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(2);
     expect(appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
   });
@@ -1980,7 +1982,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
   });
 
-  it("ignores structured direct delivery failures when best-effort is enabled", async () => {
+  it("records structured direct delivery failures when best-effort is enabled", async () => {
     vi.mocked(deliverOutboundPayloads).mockRejectedValue(new Error("boom"));
 
     const params = makeBaseParams({ synthesizedText: "Report attached." }) as Record<
@@ -1995,6 +1997,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.result).toBeUndefined();
     expect(state.delivered).toBe(false);
     expect(state.deliveryAttempted).toBe(true);
+    expect(state.deliveryError).toBe("boom");
   });
 
   it("no delivery requested means deliveryAttempted stays false and no delivery is sent", async () => {

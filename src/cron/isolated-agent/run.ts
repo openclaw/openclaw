@@ -1375,6 +1375,7 @@ async function finalizeCronRun(params: {
   const resolveRunOutcome = (result?: {
     delivered?: boolean;
     deliveryAttempted?: boolean;
+    deliveryError?: string;
     delivery?: CronDeliveryTrace;
   }) =>
     prepared.withRunSession({
@@ -1386,16 +1387,20 @@ async function finalizeCronRun(params: {
       outputText,
       delivered: result?.delivered,
       deliveryAttempted: result?.deliveryAttempted,
+      deliveryError: result?.deliveryError,
       delivery: result?.delivery,
-      diagnostics: hasFatalErrorPayload
-        ? mergeCronRunDiagnostics(
-            runDiagnostics,
-            createCronRunDiagnosticsFromError(
+      diagnostics: mergeCronRunDiagnostics(
+        runDiagnostics,
+        hasFatalErrorPayload
+          ? createCronRunDiagnosticsFromError(
               "agent-run",
               embeddedRunError ?? "cron isolated run returned an error payload",
-            ),
-          )
-        : runDiagnostics,
+            )
+          : undefined,
+        result?.deliveryError
+          ? createCronRunDiagnosticsFromError("delivery", result.deliveryError)
+          : undefined,
+      ),
       ...telemetry,
     });
   const failPendingPresentationWarningUnlessDelivered = (delivered?: boolean) => {
@@ -1557,6 +1562,7 @@ async function finalizeCronRun(params: {
   return resolveRunOutcome({
     delivered: deliveryResult.delivered,
     deliveryAttempted: deliveryResult.deliveryAttempted,
+    deliveryError: deliveryResult.deliveryError,
     delivery: deliveryTrace,
   });
 }

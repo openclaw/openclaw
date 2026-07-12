@@ -1959,4 +1959,53 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
       severity: "error",
     });
   });
+
+  it("keeps a best-effort delivery error on a successful isolated turn", async () => {
+    mockRunCronFallbackPassthrough();
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "Cron report" }],
+      meta: { agentMeta: {} },
+    });
+    resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
+    resolveCronPayloadOutcomeMock.mockReturnValue({
+      summary: "Cron report",
+      outputText: "Cron report",
+      synthesizedText: "Cron report",
+      deliveryPayload: { text: "Cron report" },
+      deliveryPayloads: [{ text: "Cron report" }],
+      deliveryPayloadHasStructuredContent: false,
+      hasFatalErrorPayload: false,
+      hasFatalStructuredErrorPayload: false,
+      embeddedRunError: undefined,
+    });
+    dispatchCronDeliveryMock.mockResolvedValueOnce({
+      delivered: false,
+      deliveryAttempted: true,
+      deliveryError: "Message failed",
+      summary: "Cron report",
+      outputText: "Cron report",
+      synthesizedText: "Cron report",
+      deliveryPayloads: [{ text: "Cron report" }],
+    });
+
+    const result = await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: makeAnnounceMessageToolJob({ delivery: { bestEffort: true } }),
+    });
+
+    expect(result).toMatchObject({
+      status: "ok",
+      delivered: false,
+      deliveryAttempted: true,
+      deliveryError: "Message failed",
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.diagnostics?.entries).toEqual([
+      expect.objectContaining({
+        source: "delivery",
+        severity: "error",
+        message: "Message failed",
+      }),
+    ]);
+  });
 });
