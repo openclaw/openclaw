@@ -6,14 +6,13 @@ Docs: https://docs.openclaw.ai
 
 ### Highlights
 
-- **Conversational onboarding:** Crestodian now runs a real agent-loop setup across the CLI, web install, and macOS app, with AI-guided provider setup, model-judged approvals bound to exact operations, masked credential prompts, and deterministic fallback when no model is available. (#99935, #100029, #100656, #101887) Thanks @fuller-stack-dev.
-- **ClawRouter routing and quotas:** add the bundled ClawRouter provider with credential-scoped dynamic model discovery, OpenAI-compatible and native Anthropic/Gemini transports, auth-profile model resolution, and managed usage and budget reporting. (#99658, #99759)
+- **New models and providers:** add Featherless, Claude Sonnet 5 and Mythos 5, Meta Muse Spark 1.1, and ClawRouter; make GPT-5.6 the new-setup default with `/think ultra` for Sol and Terra plus `max` for Luna, honor Z.AI `max`, and refresh model availability after OAuth renewal. (#101092, #98254, #101238, #102873, #103070, #103163, #99658, #99759, #98333, #103581, #98021, #104778, #102289) Thanks @vincentkoc, @vortexopenclaw, @HamidShojanazeri, @davemorin, @Solvely-Colin, @jalehman, @steipete-oai, @bdjben, @obviyus, @sallyom, @anyech, @100yenadmin, and @fuller-stack-dev.
 - **Control UI and native macOS chat:** make sessions primary with a minimal searchable sidebar, compact context ring, reasoning-effort slider, cleaner dashboard chrome, and a native macOS session browser with model and thinking pickers, slash commands, transcript export, and context usage. (#99289, #99838, #100386, #101103, #101497)
+- **Conversational onboarding:** Crestodian now runs a real agent-loop setup across the CLI, web install, and macOS app, with AI-guided provider setup, model-judged approvals bound to exact operations, masked credential prompts, and deterministic fallback when no model is available. (#99935, #100029, #100656, #101887) Thanks @fuller-stack-dev.
 - **Offline and spoken mobile chat:** iOS and Android now pre-paint bounded per-gateway session and transcript caches offline; Apple Watch gains full voice turns, and iOS can speak replies through configured Gateway TTS with on-device fallback. (#100219, #100227, #100283, #100770, #100771)
 - **Session organization and generated titles:** generate concise session titles through utility-model routing and add Gateway-backed groups, unread state, rename, fork, archive, and delete controls, plus group management across web, iOS, and Android. (#87643, #100814, #101117, #101234) Thanks @zhangguiping-xydt and @Juliangsm.
-- **OpenAI GPT-5.6 support:** recognize the Sol, Terra, and Luna model family across API-key, ChatGPT/Codex OAuth, simple-completion, and Codex app-server paths, with correct context and pricing metadata plus `max` reasoning support. (#98333) Thanks @steipete-oai and @vincentkoc.
-- **External harness attachment:** `openclaw attach` launches Claude Code against an existing Gateway session with scoped, revocable, TTL-bound MCP grants, temporary configuration cleanup, and automatic revoke-on-exit. (#96454) Thanks @anagnorisis2peripeteia and @obviyus.
-- **Telegram Codex workflows:** Telegram can pair Codex through private `/login`, steer active runs with `/steer` and `/tell`, and recover final sends across rejected rich entities, captions, quotes, and flood waits. (#98006, #98126, #98786) Thanks @100yenadmin, @Kyzcreig, and @obviyus.
+- **Telegram and Codex continuity:** pair Codex through private `/login`, steer active runs with `/steer` and `/tell`, preserve messages when transcript acknowledgement is missing, adopt durable turns safely, and recover final sends across Telegram formatting and flood-wait failures. (#98006, #98126, #98786, #103664, #103916) Thanks @100yenadmin, @Kyzcreig, @obviyus, and @jalehman.
+- **Startup and upgrade recovery:** run container migrations before Gateway readiness, stop recoverable legacy state from blocking startup, and enter control-plane-safe mode after repeated unclean boots instead of restart flapping. (#101881, #104529) Fixes #98565 Thanks @sallyom, @jacobtomlinson, @bdjben, @obviyus, and @shakkernerd.
 
 ### Changes
 
@@ -197,7 +196,7 @@ Docs: https://docs.openclaw.ai
 
 ### Complete contribution record
 
-This audited record covers the complete 66e676d29b92d040716376a75aca32bad655cfac..4441be967a97b85e0508a72511ce2b38d6145962 history: 1490 merged PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
+This audited record covers the complete 66e676d29b92d040716376a75aca32bad655cfac..35b438d6f5c3b6bfcdf9245a4b8e4c802acc943c history: 1523 merged PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
 
 Shipped baseline exclusions: v2026.6.11 (10 PRs: #87298, #89949, #90811, #92020, #92657, #93466, #93650, #93767, #93810, #97118).
 
@@ -1693,7 +1692,39 @@ Shipped baseline exclusions: v2026.6.11 (10 PRs: #87298, #89949, #90811, #92020,
 - **PR #104162** improve(release): reuse exact-SHA validation evidence. Related #104161. Thanks @vincentkoc.
 - **PR #103222** fix(release): validate GitHub notes before publish.
 - **PR #104186** fix: current-tree package checks support unreleased versions.
-
+- **PR #103581** feat(openai): default new setups to GPT-5.6. Related #103234. Thanks @bdjben and @obviyus and @sallyom.
+- **PR #103281** fix(codex): prevent startup hangs after binding migration. Thanks @bdjben and @obviyus and @sallyom.
+- **PR #104529** fix: startup migrations block on recoverable legacy state. Thanks @sallyom and @bdjben and @obviyus.
+- **PR #103760** fix(ci): align OpenAI auth contract with provider default. Related #103750. Thanks @bdjben and @obviyus and @sallyom.
+- **PR #104555** fix: clear remaining release validation blockers. Thanks @bdjben and @obviyus and @sallyom.
+- **PR #102780** fix(infra): converge legacy state migrations on archive collisions. Related #102749. Thanks @obviyus and @bdjben and @sallyom.
+- **PR #104491** fix(node-pairing): require operator.admin to approve browser.proxy nodes. Thanks @yetval.
+- **PR #104441** fix(agents): preserve UTF-16 boundaries in block chunks. Thanks @mushuiyu886.
+- **PR #102948** fix(feishu): add 30 s request timeout to streaming-card API calls. Thanks @hugenshen and @sallyom.
+- **PR #104433** fix(openrouter): Fusion prompt corrupts boundary emoji in model IDs. Thanks @zhangguiping-xydt and @vincentkoc.
+- **PR #104230** fix(discord): keep voice diagnostics bounded when ffmpeg errors are multibyte. Thanks @qingminglong.
+- **PR #102087** fix(agents): keep tool-result truncation UTF-16 safe. Thanks @chengzhichao-xydt.
+- **PR #102610** fix(agents): keep prompt history append-only mid-session for prompt-cache stability. Related #99495. Thanks @ugiezzz.
+- **PR #99756** fix: preserve tool-result text across media fallback and context pressure. Thanks @AcosX and @Solvely-Colin.
+- **PR #104714** fix(providers): complete repaired tool call streams.
+- **PR #103916** fix: preserve messages when Codex steering lacks transcript acknowledgement. Thanks @jalehman.
+- **PR #104722** test(qa): follow canonical frontier defaults.
+- **PR #102289** fix(gateway): refresh model availability after OAuth renewal. Thanks @fuller-stack-dev.
+- **PR #104750** test(live): align July GPT-5.6 defaults.
+- **PR #102344** fix: surface OpenAI chat-completions refusal as assistant text. Related #102321. Thanks @wuqxuan and @yetval.
+- **PR #103132** fix(cli): reduce plugins list startup memory. Related #103131.
+- **PR #103157** fix: release startup migration lease before exit. Related #103145.
+- **PR #103596** fix(discord): recover from failed gateway resumes. Related #99681. Thanks @meepbot-oss.
+- **PR #104706** fix(telegram): preserve Codex login profile identity. Related #104704. Thanks @100yenadmin.
+- **PR #104504** fix(codex): bound app-server binding fingerprints. Related #104503. Thanks @100yenadmin.
+- **PR #104778** fix(zai): honor max thinking through gateway. Related #104716. Thanks @vincentkoc and @100yenadmin.
+- **PR #104848** fix(codex): preserve MCP bindings after beta5 upgrades. Thanks @vincentkoc.
+- **PR #98021** feat: support GPT-5.6 Ultra across OpenClaw and Codex runtimes. Thanks @anyech.
+- **PR #104939** test(live): harden GPT-5.6 nonce retries for July.
+- **PR #102980** fix(ci): retry known live tool nonce misses.
+- **PR #104892** fix(release): preserve original PRs for named backports. Thanks @vincentkoc.
+- **PR #104975** fix(release): restore pnpm package artifacts.
+- **PR #104957** fix(release): verify named backport provenance. Thanks @vincentkoc.
 ## 2026.6.11
 
 We heard the feedback. v2026.6.11 focuses on the rough edges that make OpenClaw feel less dependable, with fixes for misplaced replies, stuck sends, reconnects, model setup failures, and safer admin defaults.
