@@ -157,8 +157,13 @@ describe("bundled provider manifest↔runtime auth literal parity", () => {
 
       const provider = findRegisteredProvider(captured.providers, parityCase.providerId);
       if (!provider) {
-        // Capability-only plugins (video/image onboard flags) declare CLI keys in
-        // the manifest without a text ProviderPlugin.auth surface to compare.
+        // Capability-only plugins (video/image onboard flags) register no text
+        // providers at all. A plugin that registers text providers but not the
+        // manifest-declared id has drifted — the exact mismatch this test guards.
+        expect(
+          captured.providers.map((entry) => entry.id),
+          `${parityCase.pluginId} manifest declares provider ${parityCase.providerId} but runtime registers different providers`,
+        ).toEqual([]);
         return;
       }
 
