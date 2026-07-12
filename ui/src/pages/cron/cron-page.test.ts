@@ -214,8 +214,8 @@ describe("CronPage editor state sync", () => {
     const gateway = createGateway(client, true);
     const page = createPage(createContext(gateway), { render: true });
 
-    await vi.waitFor(() => expect(page.querySelector(".cron-task")).not.toBeNull());
-    (page.querySelector(".cron-task") as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(page.querySelector(".cron-table__row")).not.toBeNull());
+    (page.querySelector(".cron-table__row") as HTMLElement).click();
     await vi.waitFor(() => expect(page.cron.cronEditingJobId).toBe("job-1"));
     expect(page.cron.cronRunsScope).toBe("job");
     expect(page.cron.cronForm.enabled).toBe(true);

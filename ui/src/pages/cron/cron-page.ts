@@ -36,7 +36,7 @@ import { searchForSession } from "../../lib/sessions/index.ts";
 import { sortUniqueStrings } from "../../lib/string-coerce.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import { renderCron } from "./view.ts";
+import { renderCron, type CronDetailTab, type CronListTab } from "./view.ts";
 
 const THINKING_SUGGESTIONS = ["off", "minimal", "low", "medium", "high"];
 const TIMEZONE_SUGGESTIONS = [
@@ -61,6 +61,8 @@ class CronPage extends OpenClawLightDomElement {
   @state() private cron = createInitialCronState();
   @state() private agentsList: AgentsListResult | null = null;
   @state() private cronModelSuggestions: string[] = [];
+  @state() private listTab: CronListTab = "tasks";
+  @state() private detailTab: CronDetailTab = "settings";
 
   private modelSuggestionsState: CronState | null = null;
   private gatewaySource?: ApplicationContext["gateway"];
@@ -169,9 +171,8 @@ class CronPage extends OpenClawLightDomElement {
   private lastPanelKey: string | null = null;
 
   override updated() {
-    // Reset the detail pane scroll when the panel switches target; the scroll
-    // container survives re-renders, so a long editor would otherwise open
-    // mid-scroll.
+    // Switching between list and detail (or between two jobs) keeps the same
+    // page scroller alive, so reset scroll and the detail tab per target.
     const mode = this.cron.cronEditingJobId
       ? "job"
       : this.cron.cronCreateOpen
@@ -180,7 +181,8 @@ class CronPage extends OpenClawLightDomElement {
     const panelKey = `${mode}:${this.cron.cronEditingJobId ?? ""}`;
     if (panelKey !== this.lastPanelKey) {
       this.lastPanelKey = panelKey;
-      const scroller = this.querySelector(".cron-detail-scroll");
+      this.detailTab = "settings";
+      const scroller = this.closest(".content");
       if (scroller instanceof HTMLElement && typeof scroller.scrollTo === "function") {
         scroller.scrollTo({ top: 0 });
       }
@@ -387,6 +389,8 @@ class CronPage extends OpenClawLightDomElement {
           jobsSortDir: this.cron.cronJobsSortDir,
           editingJobId: this.cron.cronEditingJobId,
           createOpen: this.cron.cronCreateOpen,
+          listTab: this.listTab,
+          detailTab: this.detailTab,
           error: this.cron.cronError,
           busy: this.cron.cronBusy,
           form: this.cron.cronForm,
@@ -411,6 +415,12 @@ class CronPage extends OpenClawLightDomElement {
           timezoneSuggestions: TIMEZONE_SUGGESTIONS,
           deliveryToSuggestions: suggestions.deliveryToSuggestions,
           accountSuggestions: suggestions.accountTargets,
+          onListTabChange: (tab) => {
+            this.listTab = tab;
+          },
+          onDetailTabChange: (tab) => {
+            this.detailTab = tab;
+          },
           onFormChange: (patch) => this.patchForm(patch),
           onRefresh: () => void this.refreshCron({ tableFilters: true }),
           onSubmit: () => this.submitForm(),
@@ -473,7 +483,6 @@ class CronPage extends OpenClawLightDomElement {
           onNavigateToChat: (sessionKey) =>
             this.context.navigate("chat", { search: searchForSession(sessionKey) }),
         }),
-        { fillHeight: true },
       )}
     `;
   }
