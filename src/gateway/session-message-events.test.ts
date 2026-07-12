@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
+import type { RawData } from "ws";
 import {
   loadTranscriptEvents,
   persistSessionTranscriptTurn,
@@ -16,6 +17,7 @@ import {
   clearAgentRunContext,
   emitAgentEvent,
 } from "../infra/agent-events.js";
+import { rawDataToString } from "../infra/ws.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import * as transcriptEvents from "../sessions/transcript-events.js";
 import {
@@ -1258,6 +1260,22 @@ describe("session.message websocket events", () => {
       startupOwners: new Map([[identity.environmentId, 4]]),
     });
     const ws = await harness.openWs();
+    const workerChats: Record<string, unknown>[] = [];
+    const collectWorkerChats = (data: RawData) => {
+      const message = JSON.parse(rawDataToString(data)) as {
+        type?: string;
+        event?: string;
+        payload?: Record<string, unknown>;
+      };
+      if (
+        message.type === "event" &&
+        message.event === "chat" &&
+        message.payload?.runId === "worker"
+      ) {
+        workerChats.push(message.payload);
+      }
+    };
+    ws.on("message", collectWorkerChats);
     try {
       await connectOk(ws, { scopes: ["operator.read"] });
       const subscribeRes = await rpcReq(ws, "sessions.messages.subscribe", { key: sessionKey });
@@ -1335,6 +1353,13 @@ describe("session.message websocket events", () => {
         }),
       ]);
       const workerChat = requireRecord(workerEvent.payload, "worker chat");
+      await expectNoMessageWithin({
+        watch: (timeoutMs) => waitForChat("worker", timeoutMs),
+        action: () => {
+          expect(push()).toEqual({ ok: true, result: { ackedSeq: 1 } });
+        },
+      });
+      expect(workerChats).toHaveLength(1);
 
       claimAgentRunContext("local", {
         sessionKey,
@@ -1361,6 +1386,7 @@ describe("session.message websocket events", () => {
     } finally {
       receiver.clear();
       clearAgentRunContext("local");
+      ws.off("message", collectWorkerChats);
       ws.close();
     }
   });

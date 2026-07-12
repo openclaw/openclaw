@@ -534,8 +534,6 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       }
     }
     if (activeRunCount >= maxActiveRuns) {
-      // Reset the cumulative cursor rather than wedging the unskippable tail.
-      clearWindow(window);
       return capacityExceeded();
     }
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
@@ -607,13 +605,35 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
   const drain = (
     window: LiveEventWindow,
     first: WorkerLiveEventParams,
+    firstPending?: PendingLiveEvent,
   ): WorkerLiveEventApplicationResult => {
     let request: WorkerLiveEventParams | undefined = first;
+    let buffered = firstPending;
     let publishedPrefix = false;
     while (request) {
       const failed = publish(window, request);
       if (failed) {
+        if (failed.details.reason === "capacity-exceeded" && buffered) {
+          // Keep the ordered tail retryable while the active prefix claim drains.
+          // Later gaps still hit windowSize/maxPendingBytes and force normal resync.
+          return { ok: true, result: { ackedSeq: window.ackedSeq } };
+        }
+        if (buffered) {
+          if (window.pending.delete(request.seq)) {
+            window.pendingBytes -= buffered.sizeBytes;
+          }
+        }
+        if (failed.details.reason === "capacity-exceeded" && !publishedPrefix) {
+          // A fresh head cannot advance. Reset its cursor and release every claim.
+          clearWindow(window);
+          return failed;
+        }
         return publishedPrefix ? { ok: true, result: { ackedSeq: window.ackedSeq } } : failed;
+      }
+      if (buffered) {
+        if (window.pending.delete(request.seq)) {
+          window.pendingBytes -= buffered.sizeBytes;
+        }
       }
       window.ackedSeq = request.seq;
       publishedPrefix = true;
@@ -629,9 +649,8 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       if (!next) {
         break;
       }
-      window.pending.delete(next.request.seq);
-      window.pendingBytes -= next.sizeBytes;
       request = next.request;
+      buffered = next;
     }
     return { ok: true, result: { ackedSeq: window.ackedSeq } };
   };
@@ -657,15 +676,16 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       return window;
     }
     const { seq } = params.request;
-    if (window.pending.has(seq)) {
-      return { ok: true, result: { ackedSeq: window.ackedSeq } };
-    }
     const expectedSeq = window.ackedSeq + 1;
     if (seq > window.ackedSeq + windowSize) {
       return resyncWindow(window);
     }
     if (seq === expectedSeq) {
-      return drain(window, params.request);
+      const pending = window.pending.get(seq);
+      return drain(window, pending?.request ?? params.request, pending);
+    }
+    if (window.pending.has(seq)) {
+      return { ok: true, result: { ackedSeq: window.ackedSeq } };
     }
     const sizeBytes = Buffer.byteLength(JSON.stringify(params.request.event), "utf8");
     if (window.pendingBytes + sizeBytes > maxPendingBytes) {

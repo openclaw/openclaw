@@ -247,6 +247,58 @@ describe("worker live events", () => {
     expect(deltas()).toEqual(["first", "second"]);
   });
 
+  it("retains a buffered capacity tail until the active run releases", () => {
+    start({ maxActiveRuns: 1 });
+    const first = msg(1, "first", 0, "run-prefix");
+    const second = msg(2, "second", 0, "run-buffered");
+    const retry = msg(2, "replacement", 1, second.runId);
+
+    ack(second, 0);
+    ack(first);
+    expect(getAgentRunContext(first.runId)).toBeDefined();
+    expect(getAgentRunContext(second.runId)).toBeUndefined();
+    expect(events.map((event) => event.runId)).toEqual([first.runId]);
+
+    ack(retry, 1);
+    expect(getAgentRunContext(first.runId)).toBeDefined();
+    expect(events.map((event) => event.runId)).toEqual([first.runId]);
+
+    const firstEvent = events[0];
+    clearAgentRunContext(first.runId, firstEvent?.lifecycleGeneration, firstEvent?.contextClaimId);
+    expect(getAgentRunContext(first.runId)).toBeUndefined();
+
+    ack(retry);
+    ack(retry);
+    expect(events.map((event) => event.runId)).toEqual([first.runId, second.runId]);
+    expect(deltas()).toEqual(["first", "second"]);
+  });
+
+  it("bounds a retained capacity tail with normal resync", () => {
+    const first = msg(1, "first", 0, "run-prefix");
+    const second = msg(2, "second", 0, "run-buffered");
+    start({
+      maxActiveRuns: 1,
+      maxPendingBytes: Buffer.byteLength(JSON.stringify(second.event), "utf8"),
+    });
+
+    ack(second, 0);
+    ack(first);
+    expect(
+      rx.apply({
+        identity: ID,
+        request: msg(3, "overflow", 1, "run-overflow"),
+      }),
+    ).toEqual({
+      ok: false,
+      details: { reason: "resync-required", ackedSeq: 1, expectedSeq: 2 },
+    });
+
+    const firstEvent = events[0];
+    clearAgentRunContext(first.runId, firstEvent?.lifecycleGeneration, firstEvent?.contextClaimId);
+    ack(msg(2, "fresh", 1, second.runId));
+    expect(deltas()).toEqual(["first", "fresh"]);
+  });
+
   it("clears speculative pending events on in-window resync", () => {
     start({ windowSize: 2 });
     ack(msg(2, "stale"), 0);
@@ -261,6 +313,22 @@ describe("worker live events", () => {
   it("resets after capacity failure", () => {
     start({ maxActiveRuns: 1 });
     ack(msg(1, "active", 0, "run-active"));
+    fail(msg(2, "overlap", 1, "run-overlap"), "capacity-exceeded");
+    fail(msg(2, "stale", 1, "run-overlap"), "resync-required");
+    ack(msg(1, "fresh", 0, "run-overlap"));
+  });
+
+  it("does not reserve a pending terminal for an unbuffered head", () => {
+    start({ maxActiveRuns: 1 });
+    const activeRunId = "run-active";
+    ack(msg(1, "active", 0, activeRunId));
+    ack(
+      {
+        ...live(3, lifecycle({ phase: "end", endedAt: 200 }), activeRunId),
+        lastAckedSeq: 1,
+      },
+      1,
+    );
     fail(msg(2, "overlap", 1, "run-overlap"), "capacity-exceeded");
     fail(msg(2, "stale", 1, "run-overlap"), "resync-required");
     ack(msg(1, "fresh", 0, "run-overlap"));
