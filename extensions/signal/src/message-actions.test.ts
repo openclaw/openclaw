@@ -61,7 +61,7 @@ describe("signalMessageActions", () => {
     );
   });
 
-  it("skips send for plugin dispatch", () => {
+  it("supports only reactions for plugin dispatch", () => {
     expect(signalMessageActions.supportsAction?.({ action: "send" })).toBe(false);
     expect(signalMessageActions.supportsAction?.({ action: "react" })).toBe(true);
     expect(signalMessageActions.supportsAction?.({ action: "delete" })).toBe(false);
