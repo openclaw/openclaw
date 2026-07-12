@@ -180,7 +180,6 @@ export async function uploadViaPlaywright(
   if (controller.signal.aborted) {
     rejectOnAbort();
   }
-  let active!: ActiveAtomicUpload;
   const execution = Promise.resolve().then(async () => {
     // Preserve the full predecessor cleanup chain even when this caller aborts
     // while queued; later owners must never skip an older in-flight click.
@@ -300,7 +299,7 @@ export async function uploadViaPlaywright(
     () => {},
     () => {},
   );
-  active = { controller, settled };
+  const active = { controller, settled };
   activeAtomicUploads.set(key, active);
   previous?.controller.abort(new Error("File upload was superseded by another waiter"));
   void settled.then(() => {
