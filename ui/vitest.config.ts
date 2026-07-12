@@ -57,6 +57,7 @@ const sharedUiTestConfig = {
   pool: resolveDefaultVitestPool(),
 } as const;
 const nodeDrivenBrowserLayoutTests = [
+  "src/ui/chat/sidebar-session-picker.browser.test.ts",
   "src/ui/chat/chat-responsive.browser.test.ts",
   "src/ui/form-controls.browser.test.ts",
   "src/ui/views/sessions.browser.test.ts",

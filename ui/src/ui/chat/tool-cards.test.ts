@@ -2,6 +2,7 @@
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import { icons } from "../icons.ts";
 import {
   formatCollapsedToolPreviewText,
   formatCollapsedToolSummaryText,
@@ -23,6 +24,12 @@ function requireFirstMockArg(
     throw new Error(`expected ${label} payload`);
   }
   return arg;
+}
+
+function expectErrorActionIcon(action: Element | null) {
+  const expected = document.createElement("div");
+  render(icons.x, expected);
+  expect(action?.querySelector("svg")?.outerHTML).toBe(expected.querySelector("svg")?.outerHTML);
 }
 
 describe("tool-cards", () => {
@@ -511,7 +518,7 @@ describe("tool-cards", () => {
     expect(card?.classList.contains("chat-tool-card--error")).toBe(true);
     expect(action?.classList.contains("chat-tool-card__action--error")).toBe(true);
     expect(action?.textContent).toContain("View error");
-    expect(action?.textContent).not.toContain("✓");
+    expectErrorActionIcon(action);
   });
 
   it("marks Tool not found sidebar output as an error instead of View with a checkmark", () => {
@@ -531,7 +538,7 @@ describe("tool-cards", () => {
     const action = container.querySelector(".chat-tool-card__action");
     expect(container.querySelector(".chat-tool-card--error")).not.toBeNull();
     expect(action?.textContent).toContain("View error");
-    expect(action?.textContent).not.toContain("✓");
+    expectErrorActionIcon(action);
   });
 
   it("marks status-only sidebar output as an error instead of View with a checkmark", () => {
@@ -551,7 +558,7 @@ describe("tool-cards", () => {
     const action = container.querySelector(".chat-tool-card__action");
     expect(container.querySelector(".chat-tool-card--error")).not.toBeNull();
     expect(action?.textContent).toContain("View error");
-    expect(action?.textContent).not.toContain("✓");
+    expectErrorActionIcon(action);
   });
 
   it("keeps Tool output labelling for successful results", () => {
