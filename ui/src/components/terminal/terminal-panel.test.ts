@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
 
@@ -13,11 +13,14 @@ type CreateOptions = {
 
 // Vitest resets this test module but can retain terminal-panel.ts. Reuse one
 // mock so retained imports and the current test graph share the same identity.
+type CreateGhosttyTerminalMock = Mock<(options: CreateOptions) => Promise<unknown>>;
 const createGhosttyTerminalMock = vi.hoisted(() => {
   const scope = globalThis as typeof globalThis & {
-    __openclawTestCreateGhosttyTerminalMock?: ReturnType<typeof vi.fn>;
+    openclawTestCreateGhosttyTerminalMock?: CreateGhosttyTerminalMock;
   };
-  return (scope.__openclawTestCreateGhosttyTerminalMock ??= vi.fn());
+  return (scope.openclawTestCreateGhosttyTerminalMock ??= vi.fn<
+    (options: CreateOptions) => Promise<unknown>
+  >());
 });
 
 function createTerminalController(dispose: () => void = vi.fn()) {
