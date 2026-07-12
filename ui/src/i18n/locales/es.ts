@@ -171,16 +171,6 @@ export const es: TranslationMap = {
       node: "Nodo",
     },
   },
-  instances: {
-    title: "Instancias conectadas",
-    subtitle: "Balizas de presencia del Gateway y los clientes.",
-    showHosts: "Mostrar hosts e IP",
-    hideHosts: "Ocultar hosts e IP",
-    toggleHostVisibility: "Alternar visibilidad de hosts",
-    noInstances: "Aún no se informó ninguna instancia.",
-    lastInput: "Última entrada {time}",
-    reason: "Motivo {reason}",
-  },
   worktrees: {
     newWorktree: "Nuevo worktree",
     owner: "Propietario",
@@ -390,6 +380,7 @@ export const es: TranslationMap = {
       skills: "Skills",
       channels: "Channels",
       cronJobs: "Cron Jobs",
+      memory: "Memoria",
     },
     context: {
       title: "Agent Context",
@@ -623,7 +614,6 @@ export const es: TranslationMap = {
     workboard: "Panel de trabajo",
     worktrees: "Worktrees",
     channels: "Canales",
-    instances: "Instancias",
     sessions: "Sesiones",
     usage: "Uso",
     cron: "Tareas Cron",
@@ -645,7 +635,6 @@ export const es: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "Depuración",
     logs: "Registros",
-    dreams: "Sueños",
     plugin: "Plugin",
   },
   subtitles: {
@@ -655,7 +644,6 @@ export const es: TranslationMap = {
     workboard: "Cola de trabajo del agente y traspaso de sesión.",
     worktrees: "Checkouts aislados de tareas de agentes y snapshots de recuperación.",
     channels: "Gestionar canales y ajustes.",
-    instances: "Balizas de presencia de clientes y nodos conectados.",
     sessions: "Inspeccionar sesiones activas y ajustar valores predeterminados por sesión.",
     usage: "Monitorear uso de API y costes.",
     cron: "Programar despertares y ejecuciones recurrentes de agentes.",
@@ -678,8 +666,10 @@ export const es: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "Instantáneas de la puerta de enlace, eventos y llamadas RPC manuales.",
     logs: "Seguimiento en vivo de los registros de la puerta de enlace.",
-    dreams: "Consolidación de la memoria durante el sueño.",
     plugin: "Panel proporcionado por el plugin.",
+  },
+  mcpPage: {
+    manageServersLink: "Gestiona los servidores en la página de Plugins.",
   },
   pluginsPage: {
     searchLabel: "Buscar plugins",
@@ -1598,10 +1588,6 @@ export const es: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "Agente",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "Escena",
       diary: "Diario",
@@ -2203,9 +2189,9 @@ export const es: TranslationMap = {
       workSessions: "Trabajo",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "Chats recientes",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",
@@ -2375,6 +2361,8 @@ export const es: TranslationMap = {
       finished: "Finalizadas ({count})",
       stopTask: "Detener {title}",
       viewTranscript: "Ver transcripción",
+      toolUseOne: "1 uso de herramienta",
+      toolUseMany: "{count} usos de herramientas",
     },
     sessionDiff: {
       title: "Cambios",

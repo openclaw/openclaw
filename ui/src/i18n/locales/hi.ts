@@ -170,16 +170,6 @@ export const hi: TranslationMap = {
       node: "नोड",
     },
   },
-  instances: {
-    title: "कनेक्टेड इंस्टेंस",
-    subtitle: "गेटवे और क्लाइंट्स से उपस्थिति बीकन।",
-    showHosts: "होस्ट और IP दिखाएँ",
-    hideHosts: "होस्ट और IP छिपाएँ",
-    toggleHostVisibility: "होस्ट दृश्यता टॉगल करें",
-    noInstances: "अभी तक कोई इंस्टेंस रिपोर्ट नहीं किया गया है।",
-    lastInput: "अंतिम इनपुट {time}",
-    reason: "कारण {reason}",
-  },
   worktrees: {
     newWorktree: "नया worktree",
     owner: "स्वामी",
@@ -389,6 +379,7 @@ export const hi: TranslationMap = {
       skills: "स्किल्स",
       channels: "चैनल",
       cronJobs: "Cron Jobs",
+      memory: "मेमोरी",
     },
     context: {
       title: "एजेंट संदर्भ",
@@ -620,7 +611,6 @@ export const hi: TranslationMap = {
     workboard: "वर्कबोर्ड",
     worktrees: "Worktrees",
     channels: "चैनल",
-    instances: "इंस्टेंस",
     sessions: "सत्र",
     usage: "उपयोग",
     cron: "Cron Jobs",
@@ -642,7 +632,6 @@ export const hi: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "डीबग",
     logs: "लॉग्स",
-    dreams: "ड्रीमिंग",
     plugin: "प्लगइन",
   },
   subtitles: {
@@ -652,7 +641,6 @@ export const hi: TranslationMap = {
     workboard: "एजेंट कार्य कतार और सेशन हैंडऑफ़।",
     worktrees: "पृथक agent task checkouts और recovery snapshots.",
     channels: "चैनल और सेटिंग्स।",
-    instances: "कनेक्टेड क्लाइंट्स और नोड्स।",
     sessions: "सक्रिय सेशन और डिफ़ॉल्ट्स।",
     usage: "API उपयोग और लागतें।",
     cron: "वेकअप्स और आवर्ती रन।",
@@ -674,8 +662,10 @@ export const hi: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "स्नैपशॉट, इवेंट, RPC।",
     logs: "लाइव gateway लॉग।",
-    dreams: "मेमोरी ड्रीमिंग, कंसॉलिडेशन, और रिफ्लेक्शन।",
     plugin: "प्लगइन द्वारा उपलब्ध कराया गया पैनल।",
+  },
+  mcpPage: {
+    manageServersLink: "Plugins पेज पर सर्वर प्रबंधित करें।",
   },
   pluginsPage: {
     searchLabel: "प्लगइन खोजें",
@@ -1582,10 +1572,6 @@ export const hi: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "एजेंट",
-      ariaLabel: "ड्रीमिंग एजेंट",
-    },
     tabs: {
       scene: "दृश्य",
       diary: "डायरी",
@@ -2167,9 +2153,9 @@ export const hi: TranslationMap = {
       workSessions: "कार्य",
     },
     welcome: {
-      ready: "चैट के लिए तैयार",
       hintBeforeShortcut: "नीचे संदेश टाइप करें ·",
       hintAfterShortcut: "कमांड के लिए",
+      recentSessions: "हाल की चैट",
       suggestions: {
         whatCanYouDo: "आप क्या कर सकते हैं?",
         summarizeRecentSessions: "मेरे हाल के सेशन का सारांश दें",
@@ -2334,6 +2320,8 @@ export const hi: TranslationMap = {
       finished: "समाप्त ({count})",
       stopTask: "{title} रोकें",
       viewTranscript: "ट्रांसक्रिप्ट देखें",
+      toolUseOne: "1 टूल उपयोग",
+      toolUseMany: "{count} टूल उपयोग",
     },
     sessionDiff: {
       title: "परिवर्तन",

@@ -173,16 +173,6 @@ export const fr: TranslationMap = {
       node: "Nœud",
     },
   },
-  instances: {
-    title: "Instances connectées",
-    subtitle: "Balises de présence du gateway et des clients.",
-    showHosts: "Afficher les hôtes et les IP",
-    hideHosts: "Masquer les hôtes et les IP",
-    toggleHostVisibility: "Basculer la visibilité des hôtes",
-    noInstances: "Aucune instance signalée pour le moment.",
-    lastInput: "Dernière entrée {time}",
-    reason: "Raison {reason}",
-  },
   worktrees: {
     newWorktree: "Nouveau worktree",
     owner: "Propriétaire",
@@ -396,6 +386,7 @@ export const fr: TranslationMap = {
       skills: "Skills",
       channels: "Canaux",
       cronJobs: "Tâches cron",
+      memory: "Mémoire",
     },
     context: {
       title: "Agent Context",
@@ -629,7 +620,6 @@ export const fr: TranslationMap = {
     workboard: "Tableau de travail",
     worktrees: "Worktrees",
     channels: "Canaux",
-    instances: "Instances",
     sessions: "Sessions",
     usage: "Utilisation",
     cron: "Tâches cron",
@@ -651,7 +641,6 @@ export const fr: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "Débogage",
     logs: "Journaux",
-    dreams: "Rêves",
     plugin: "Plugin",
   },
   subtitles: {
@@ -661,7 +650,6 @@ export const fr: TranslationMap = {
     workboard: "File de travail de l’agent et transfert de session.",
     worktrees: "Checkouts de tâches d’agent isolés et instantanés de récupération.",
     channels: "Canaux et paramètres.",
-    instances: "Clients et nœuds connectés.",
     sessions: "Sessions actives et valeurs par défaut.",
     usage: "Utilisation de l’API et coûts.",
     cron: "Réveils et exécutions récurrentes.",
@@ -684,8 +672,10 @@ export const fr: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "Captures, événements, RPC.",
     logs: "Journaux Gateway en direct.",
-    dreams: "Consolidation de la mémoire pendant le sommeil.",
     plugin: "Panneau fourni par le plugin.",
+  },
+  mcpPage: {
+    manageServersLink: "Gérez les serveurs sur la page Plugins.",
   },
   pluginsPage: {
     searchLabel: "Rechercher des plugins",
@@ -1613,10 +1603,6 @@ export const fr: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "Agent",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "Scène",
       diary: "Journal",
@@ -2222,9 +2208,9 @@ export const fr: TranslationMap = {
       workSessions: "Travail",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "Conversations récentes",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",
@@ -2393,6 +2379,8 @@ export const fr: TranslationMap = {
       finished: "Terminées ({count})",
       stopTask: "Arrêter {title}",
       viewTranscript: "Afficher la transcription",
+      toolUseOne: "1 utilisation d’outil",
+      toolUseMany: "{count} utilisations d’outils",
     },
     sessionDiff: {
       title: "Modifications",

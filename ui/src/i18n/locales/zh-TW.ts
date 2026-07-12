@@ -168,16 +168,6 @@ export const zh_TW: TranslationMap = {
       node: "節點",
     },
   },
-  instances: {
-    title: "已連線的實例",
-    subtitle: "來自 Gateway 和用戶端的存在信標。",
-    showHosts: "顯示主機和 IP",
-    hideHosts: "隱藏主機和 IP",
-    toggleHostVisibility: "切換主機可見性",
-    noInstances: "尚未回報任何實例。",
-    lastInput: "上次輸入 {time}",
-    reason: "原因 {reason}",
-  },
   worktrees: {
     newWorktree: "新增 worktree",
     owner: "擁有者",
@@ -387,6 +377,7 @@ export const zh_TW: TranslationMap = {
       skills: "Skills",
       channels: "Channels",
       cronJobs: "Cron Jobs",
+      memory: "記憶",
     },
     context: {
       title: "Agent Context",
@@ -618,7 +609,6 @@ export const zh_TW: TranslationMap = {
     workboard: "工作板",
     worktrees: "Worktrees",
     channels: "頻道",
-    instances: "實例",
     sessions: "工作階段",
     usage: "使用情況",
     cron: "定時任務",
@@ -640,7 +630,6 @@ export const zh_TW: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "調試",
     logs: "日誌",
-    dreams: "夢境",
     plugin: "外掛程式",
   },
   subtitles: {
@@ -650,7 +639,6 @@ export const zh_TW: TranslationMap = {
     workboard: "代理工作佇列與工作階段交接。",
     worktrees: "隔離的代理程式任務簽出與復原快照。",
     channels: "頻道和設置。",
-    instances: "已連接客戶端和節點。",
     sessions: "活動會話和默認設置。",
     usage: "API 使用情況和成本。",
     cron: "喚醒和重複運行。",
@@ -672,8 +660,10 @@ export const zh_TW: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "快照、事件、RPC。",
     logs: "實時網關日誌。",
-    dreams: "睡眠期間的記憶整合。",
     plugin: "外掛程式提供的面板。",
+  },
+  mcpPage: {
+    manageServersLink: "在外掛程式頁面管理伺服器。",
   },
   pluginsPage: {
     searchLabel: "搜尋外掛程式",
@@ -1572,10 +1562,6 @@ export const zh_TW: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "代理",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "場景",
       diary: "日誌",
@@ -2143,9 +2129,9 @@ export const zh_TW: TranslationMap = {
       workSessions: "工作",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "最近的聊天",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",
@@ -2308,6 +2294,8 @@ export const zh_TW: TranslationMap = {
       finished: "已完成 ({count})",
       stopTask: "停止 {title}",
       viewTranscript: "檢視文字記錄",
+      toolUseOne: "使用 1 次工具",
+      toolUseMany: "使用 {count} 次工具",
     },
     sessionDiff: {
       title: "變更",

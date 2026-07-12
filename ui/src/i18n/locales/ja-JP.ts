@@ -174,16 +174,6 @@ export const ja_JP: TranslationMap = {
       node: "ノード",
     },
   },
-  instances: {
-    title: "接続済みインスタンス",
-    subtitle: "Gateway とクライアントからのプレゼンスビーコン。",
-    showHosts: "ホストと IP を表示",
-    hideHosts: "ホストと IP を非表示",
-    toggleHostVisibility: "ホスト表示を切り替え",
-    noInstances: "まだインスタンスは報告されていません。",
-    lastInput: "最後の入力 {time}",
-    reason: "理由 {reason}",
-  },
   worktrees: {
     newWorktree: "新しいワークツリー",
     owner: "所有者",
@@ -395,6 +385,7 @@ export const ja_JP: TranslationMap = {
       skills: "Skills",
       channels: "チャンネル",
       cronJobs: "Cron ジョブ",
+      memory: "メモリ",
     },
     context: {
       title: "Agent Context",
@@ -628,7 +619,6 @@ export const ja_JP: TranslationMap = {
     workboard: "ワークボード",
     worktrees: "ワークツリー",
     channels: "チャンネル",
-    instances: "インスタンス",
     sessions: "セッション",
     usage: "使用状況",
     cron: "Cron ジョブ",
@@ -650,7 +640,6 @@ export const ja_JP: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "デバッグ",
     logs: "ログ",
-    dreams: "Dreaming",
     plugin: "プラグイン",
   },
   subtitles: {
@@ -660,7 +649,6 @@ export const ja_JP: TranslationMap = {
     workboard: "エージェントの作業キューとセッションの引き継ぎ。",
     worktrees: "分離されたエージェントタスクのチェックアウトと復旧スナップショット。",
     channels: "チャンネルと設定。",
-    instances: "接続されたクライアントとノード。",
     sessions: "アクティブなセッションとデフォルト。",
     usage: "API 使用量とコスト。",
     cron: "ウェイクアップと定期実行。",
@@ -682,8 +670,10 @@ export const ja_JP: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "スナップショット、イベント、RPC。",
     logs: "ライブ Gateway ログ。",
-    dreams: "スリープ中のメモリ統合。",
     plugin: "プラグインが提供するパネル。",
+  },
+  mcpPage: {
+    manageServersLink: "プラグインページでサーバーを管理します。",
   },
   pluginsPage: {
     searchLabel: "プラグインを検索",
@@ -1602,10 +1592,6 @@ export const ja_JP: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "エージェント",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "Scene",
       diary: "Diary",
@@ -2199,9 +2185,9 @@ export const ja_JP: TranslationMap = {
       workSessions: "作業",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "最近のチャット",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",
@@ -2367,6 +2353,8 @@ export const ja_JP: TranslationMap = {
       finished: "完了（{count}）",
       stopTask: "{title}を停止",
       viewTranscript: "トランスクリプトを表示",
+      toolUseOne: "ツール使用 1 回",
+      toolUseMany: "ツール使用 {count} 回",
     },
     sessionDiff: {
       title: "変更",

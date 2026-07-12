@@ -172,16 +172,6 @@ export const ru: TranslationMap = {
       node: "Узел",
     },
   },
-  instances: {
-    title: "Подключенные экземпляры",
-    subtitle: "Сигналы присутствия от шлюза и клиентов.",
-    showHosts: "Показать хосты и IP-адреса",
-    hideHosts: "Скрыть хосты и IP-адреса",
-    toggleHostVisibility: "Переключить видимость хостов",
-    noInstances: "Экземпляры пока не передавались.",
-    lastInput: "Последний ввод {time}",
-    reason: "Причина {reason}",
-  },
   worktrees: {
     newWorktree: "Новое рабочее дерево",
     owner: "Владелец",
@@ -393,6 +383,7 @@ export const ru: TranslationMap = {
       skills: "Навыки",
       channels: "Каналы",
       cronJobs: "Cron Jobs",
+      memory: "Память",
     },
     context: {
       title: "Контекст агента",
@@ -626,7 +617,6 @@ export const ru: TranslationMap = {
     workboard: "Рабочая доска",
     worktrees: "Рабочие деревья",
     channels: "Каналы",
-    instances: "Экземпляры",
     sessions: "Сеансы",
     usage: "Использование",
     cron: "Задания Cron",
@@ -648,7 +638,6 @@ export const ru: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "Отладка",
     logs: "Журналы",
-    dreams: "Сновидения",
     plugin: "Плагин",
   },
   subtitles: {
@@ -658,7 +647,6 @@ export const ru: TranslationMap = {
     workboard: "Очередь задач агента и передача сеанса.",
     worktrees: "Изолированные копии для задач агентов и снимки восстановления.",
     channels: "Каналы и настройки.",
-    instances: "Подключенные клиенты и узлы.",
     sessions: "Активные сеансы и значения по умолчанию.",
     usage: "Использование API и расходы.",
     cron: "Пробуждения и повторяющиеся запуски.",
@@ -681,8 +669,10 @@ export const ru: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "Снимки, события, RPC.",
     logs: "Живые журналы шлюза.",
-    dreams: "Сновидения памяти, консолидация и рефлексия.",
     plugin: "Панель, предоставленная плагином.",
+  },
+  mcpPage: {
+    manageServersLink: "Управляйте серверами на странице плагинов.",
   },
   pluginsPage: {
     searchLabel: "Поиск плагинов",
@@ -1601,10 +1591,6 @@ export const ru: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "Агент",
-      ariaLabel: "Агент Dreaming",
-    },
     tabs: {
       scene: "Сцена",
       diary: "Дневник",
@@ -2206,9 +2192,9 @@ export const ru: TranslationMap = {
       workSessions: "Работа",
     },
     welcome: {
-      ready: "Готово к чату",
       hintBeforeShortcut: "Введите сообщение ниже ·",
       hintAfterShortcut: "для команд",
+      recentSessions: "Недавние чаты",
       suggestions: {
         whatCanYouDo: "Что вы умеете?",
         summarizeRecentSessions: "Суммируйте мои недавние сеансы",
@@ -2375,6 +2361,8 @@ export const ru: TranslationMap = {
       finished: "Завершены ({count})",
       stopTask: "Остановить {title}",
       viewTranscript: "Просмотреть расшифровку",
+      toolUseOne: "1 использование инструмента",
+      toolUseMany: "{count} использований инструментов",
     },
     sessionDiff: {
       title: "Изменения",

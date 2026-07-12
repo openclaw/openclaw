@@ -170,16 +170,6 @@ export const pt_BR: TranslationMap = {
       node: "Nó",
     },
   },
-  instances: {
-    title: "Instâncias conectadas",
-    subtitle: "Sinalizadores de presença do gateway e dos clientes.",
-    showHosts: "Mostrar hosts e IPs",
-    hideHosts: "Ocultar hosts e IPs",
-    toggleHostVisibility: "Alternar visibilidade do host",
-    noInstances: "Nenhuma instância reportada ainda.",
-    lastInput: "Última entrada {time}",
-    reason: "Motivo {reason}",
-  },
   worktrees: {
     newWorktree: "Novo worktree",
     owner: "Proprietário",
@@ -389,6 +379,7 @@ export const pt_BR: TranslationMap = {
       skills: "Skills",
       channels: "Channels",
       cronJobs: "Cron Jobs",
+      memory: "Memória",
     },
     context: {
       title: "Agent Context",
@@ -620,7 +611,6 @@ export const pt_BR: TranslationMap = {
     workboard: "Quadro de trabalho",
     worktrees: "Worktrees",
     channels: "Canais",
-    instances: "Instâncias",
     sessions: "Sessões",
     usage: "Uso",
     cron: "Tarefas Cron",
@@ -642,7 +632,6 @@ export const pt_BR: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "Depuração",
     logs: "Logs",
-    dreams: "Sonhos",
     plugin: "Plugin",
   },
   subtitles: {
@@ -652,7 +641,6 @@ export const pt_BR: TranslationMap = {
     workboard: "Fila de trabalho do agente e transferência de sessão.",
     worktrees: "Checkouts isolados de tarefas de agentes e snapshots de recuperação.",
     channels: "Canais e configurações.",
-    instances: "Clientes e nós conectados.",
     sessions: "Sessões ativas e padrões.",
     usage: "Uso e custos da API.",
     cron: "Despertares e execuções.",
@@ -674,8 +662,10 @@ export const pt_BR: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "Snapshots, eventos, RPC.",
     logs: "Logs ao vivo do gateway.",
-    dreams: "Consolidação de memória durante o sono.",
     plugin: "Painel fornecido pelo plugin.",
+  },
+  mcpPage: {
+    manageServersLink: "Gerencie os servidores na página Plugins.",
   },
   pluginsPage: {
     searchLabel: "Pesquisar plugins",
@@ -1594,10 +1584,6 @@ export const pt_BR: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "Agente",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "Cena",
       diary: "Diário",
@@ -2193,9 +2179,9 @@ export const pt_BR: TranslationMap = {
       workSessions: "Trabalho",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "Conversas recentes",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",
@@ -2364,6 +2350,8 @@ export const pt_BR: TranslationMap = {
       finished: "Concluídas ({count})",
       stopTask: "Parar {title}",
       viewTranscript: "Ver transcrição",
+      toolUseOne: "1 uso de ferramenta",
+      toolUseMany: "{count} usos de ferramentas",
     },
     sessionDiff: {
       title: "Alterações",

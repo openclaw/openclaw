@@ -172,16 +172,6 @@ export const it: TranslationMap = {
       node: "Nodo",
     },
   },
-  instances: {
-    title: "Istanze connesse",
-    subtitle: "Beacon di presenza dal gateway e dai client.",
-    showHosts: "Mostra host e IP",
-    hideHosts: "Nascondi host e IP",
-    toggleHostVisibility: "Attiva/disattiva visibilità host",
-    noInstances: "Nessuna istanza segnalata ancora.",
-    lastInput: "Ultimo input {time}",
-    reason: "Motivo {reason}",
-  },
   worktrees: {
     newWorktree: "Nuovo worktree",
     owner: "Proprietario",
@@ -393,6 +383,7 @@ export const it: TranslationMap = {
       skills: "Skills",
       channels: "Canali",
       cronJobs: "Processi cron",
+      memory: "Memoria",
     },
     context: {
       title: "Contesto agente",
@@ -630,7 +621,6 @@ export const it: TranslationMap = {
     workboard: "Bacheca di lavoro",
     worktrees: "Worktree",
     channels: "Canali",
-    instances: "Istanze",
     sessions: "Sessioni",
     usage: "Utilizzo",
     cron: "Processi cron",
@@ -652,7 +642,6 @@ export const it: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "Debug",
     logs: "Log",
-    dreams: "Sogni",
     plugin: "Plugin",
   },
   subtitles: {
@@ -662,7 +651,6 @@ export const it: TranslationMap = {
     workboard: "Coda di lavoro degli agenti e passaggio di sessione.",
     worktrees: "Checkout isolati delle attività degli agenti e snapshot di ripristino.",
     channels: "Canali e impostazioni.",
-    instances: "Client e nodi connessi.",
     sessions: "Sessioni attive e valori predefiniti.",
     usage: "Utilizzo API e costi.",
     cron: "Risvegli ed esecuzioni ricorrenti.",
@@ -684,8 +672,10 @@ export const it: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "Snapshot, eventi, RPC.",
     logs: "Log gateway live.",
-    dreams: "Sogni della memoria, consolidamento e riflessione.",
     plugin: "Pannello fornito dal plugin.",
+  },
+  mcpPage: {
+    manageServersLink: "Gestisci i server nella pagina Plugin.",
   },
   pluginsPage: {
     searchLabel: "Cerca plugin",
@@ -1604,10 +1594,6 @@ export const it: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "Agente",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "Scena",
       diary: "Diario",
@@ -2209,9 +2195,9 @@ export const it: TranslationMap = {
       workSessions: "Lavoro",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "Chat recenti",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",
@@ -2380,6 +2366,8 @@ export const it: TranslationMap = {
       finished: "Completate ({count})",
       stopTask: "Interrompi {title}",
       viewTranscript: "Visualizza trascrizione",
+      toolUseOne: "1 utilizzo di strumenti",
+      toolUseMany: "{count} utilizzi di strumenti",
     },
     sessionDiff: {
       title: "Modifiche",

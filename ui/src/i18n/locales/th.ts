@@ -168,16 +168,6 @@ export const th: TranslationMap = {
       node: "โหนด",
     },
   },
-  instances: {
-    title: "อินสแตนซ์ที่เชื่อมต่อ",
-    subtitle: "สัญญาณแสดงสถานะจากเกตเวย์และไคลเอนต์",
-    showHosts: "แสดงโฮสต์และ IP",
-    hideHosts: "ซ่อนโฮสต์และ IP",
-    toggleHostVisibility: "สลับการแสดงโฮสต์",
-    noInstances: "ยังไม่มีการรายงานอินสแตนซ์",
-    lastInput: "อินพุตล่าสุด {time}",
-    reason: "เหตุผล {reason}",
-  },
   worktrees: {
     newWorktree: "Worktree ใหม่",
     owner: "เจ้าของ",
@@ -387,6 +377,7 @@ export const th: TranslationMap = {
       skills: "ทักษะ",
       channels: "ช่องทาง",
       cronJobs: "งาน Cron",
+      memory: "หน่วยความจำ",
     },
     context: {
       title: "Agent Context",
@@ -618,7 +609,6 @@ export const th: TranslationMap = {
     workboard: "กระดานงาน",
     worktrees: "Worktrees",
     channels: "ช่องทาง",
-    instances: "อินสแตนซ์",
     sessions: "เซสชัน",
     usage: "การใช้งาน",
     cron: "งาน Cron",
@@ -640,7 +630,6 @@ export const th: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "ดีบัก",
     logs: "บันทึก",
-    dreams: "การฝัน",
     plugin: "ปลั๊กอิน",
   },
   subtitles: {
@@ -650,7 +639,6 @@ export const th: TranslationMap = {
     workboard: "คิวงานของ Agent และการส่งต่อเซสชัน",
     worktrees: "การ checkout งานของเอเจนต์แบบแยก และสแนปช็อตสำหรับการกู้คืน",
     channels: "ช่องทางและการตั้งค่า",
-    instances: "ไคลเอนต์และโหนดที่เชื่อมต่อ",
     sessions: "เซสชันที่ใช้งานอยู่และค่าเริ่มต้น",
     usage: "การใช้งาน API และค่าใช้จ่าย",
     cron: "การปลุกและการทำงานตามรอบ",
@@ -672,8 +660,10 @@ export const th: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "สแนปช็อต เหตุการณ์ และ RPC",
     logs: "บันทึกเกตเวย์แบบสด",
-    dreams: "การฝันของหน่วยความจำ การรวมข้อมูล และการสะท้อนคิด",
     plugin: "แผงที่ปลั๊กอินจัดเตรียมไว้",
+  },
+  mcpPage: {
+    manageServersLink: "จัดการเซิร์ฟเวอร์ในหน้าปลั๊กอิน",
   },
   pluginsPage: {
     searchLabel: "ค้นหาปลั๊กอิน",
@@ -1573,10 +1563,6 @@ export const th: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "เอเจนต์",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "ฉาก",
       diary: "ไดอารี",
@@ -2147,9 +2133,9 @@ export const th: TranslationMap = {
       workSessions: "งาน",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "แชทล่าสุด",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",
@@ -2313,6 +2299,8 @@ export const th: TranslationMap = {
       finished: "เสร็จสิ้น ({count})",
       stopTask: "หยุด {title}",
       viewTranscript: "ดูบันทึกการสนทนา",
+      toolUseOne: "ใช้เครื่องมือ 1 ครั้ง",
+      toolUseMany: "ใช้เครื่องมือ {count} ครั้ง",
     },
     sessionDiff: {
       title: "การเปลี่ยนแปลง",

@@ -170,16 +170,6 @@ export const vi: TranslationMap = {
       node: "Nút",
     },
   },
-  instances: {
-    title: "Phiên bản đã kết nối",
-    subtitle: "Beacon hiện diện từ gateway và các máy khách.",
-    showHosts: "Hiển thị máy chủ và IP",
-    hideHosts: "Ẩn máy chủ và IP",
-    toggleHostVisibility: "Bật/tắt hiển thị máy chủ",
-    noInstances: "Chưa có phiên bản nào được báo cáo.",
-    lastInput: "Đầu vào gần nhất {time}",
-    reason: "Lý do {reason}",
-  },
   worktrees: {
     newWorktree: "Worktree mới",
     owner: "Chủ sở hữu",
@@ -389,6 +379,7 @@ export const vi: TranslationMap = {
       skills: "Skills",
       channels: "Kênh",
       cronJobs: "Cron Jobs",
+      memory: "Bộ nhớ",
     },
     context: {
       title: "Ngữ cảnh agent",
@@ -622,7 +613,6 @@ export const vi: TranslationMap = {
     workboard: "Bảng công việc",
     worktrees: "Worktree",
     channels: "Kênh",
-    instances: "Phiên bản",
     sessions: "Phiên",
     usage: "Mức sử dụng",
     cron: "Tác vụ Cron",
@@ -644,7 +634,6 @@ export const vi: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "Gỡ lỗi",
     logs: "Nhật ký",
-    dreams: "Đang mơ",
     plugin: "Plugin",
   },
   subtitles: {
@@ -654,7 +643,6 @@ export const vi: TranslationMap = {
     workboard: "Hàng đợi công việc của tác nhân và bàn giao phiên.",
     worktrees: "Các bản checkout tác vụ agent được cô lập và snapshot khôi phục.",
     channels: "Kênh và cài đặt.",
-    instances: "Máy khách và nút đã kết nối.",
     sessions: "Phiên đang hoạt động và mặc định.",
     usage: "Mức sử dụng API và chi phí.",
     cron: "Đánh thức và chạy định kỳ.",
@@ -677,8 +665,10 @@ export const vi: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "Ảnh chụp, sự kiện, RPC.",
     logs: "Nhật ký gateway trực tiếp.",
-    dreams: "Mơ bộ nhớ, hợp nhất và phản chiếu.",
     plugin: "Bảng điều khiển do plugin cung cấp.",
+  },
+  mcpPage: {
+    manageServersLink: "Quản lý máy chủ trên trang Plugin.",
   },
   pluginsPage: {
     searchLabel: "Tìm kiếm plugin",
@@ -1589,10 +1579,6 @@ export const vi: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "Agent",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "Cảnh",
       diary: "Nhật ký",
@@ -2180,9 +2166,9 @@ export const vi: TranslationMap = {
       workSessions: "Công việc",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "Các cuộc trò chuyện gần đây",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",
@@ -2348,6 +2334,8 @@ export const vi: TranslationMap = {
       finished: "Đã hoàn tất ({count})",
       stopTask: "Dừng {title}",
       viewTranscript: "Xem bản ghi",
+      toolUseOne: "1 lần sử dụng công cụ",
+      toolUseMany: "{count} lần sử dụng công cụ",
     },
     sessionDiff: {
       title: "Thay đổi",

@@ -171,16 +171,6 @@ export const fa: TranslationMap = {
       node: "گره",
     },
   },
-  instances: {
-    title: "نمونه‌های متصل",
-    subtitle: "چراغ‌های حضور از Gateway و کلاینت‌ها.",
-    showHosts: "نمایش میزبان‌ها و IPها",
-    hideHosts: "پنهان کردن میزبان‌ها و IPها",
-    toggleHostVisibility: "تغییر نمایش میزبان",
-    noInstances: "هنوز هیچ نمونه‌ای گزارش نشده است.",
-    lastInput: "آخرین ورودی {time}",
-    reason: "دلیل {reason}",
-  },
   worktrees: {
     newWorktree: "worktree جدید",
     owner: "مالک",
@@ -390,6 +380,7 @@ export const fa: TranslationMap = {
       skills: "Skills",
       channels: "کانال‌ها",
       cronJobs: "Cron Jobs",
+      memory: "حافظه",
     },
     context: {
       title: "زمینه عامل",
@@ -622,7 +613,6 @@ export const fa: TranslationMap = {
     workboard: "تابلوی کار",
     worktrees: "Worktreeها",
     channels: "کانال‌ها",
-    instances: "نمونه‌ها",
     sessions: "نشست‌ها",
     usage: "مصرف",
     cron: "کارهای Cron",
@@ -644,7 +634,6 @@ export const fa: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "اشکال‌زدایی",
     logs: "گزارش‌ها",
-    dreams: "رؤیاپردازی",
     plugin: "افزونه",
   },
   subtitles: {
@@ -654,7 +643,6 @@ export const fa: TranslationMap = {
     workboard: "صف کار عامل و واگذاری جلسه.",
     worktrees: "checkoutهای ایزولهٔ وظایف عامل و snapshotهای بازیابی.",
     channels: "کانال‌ها و تنظیمات.",
-    instances: "کلاینت‌ها و گره‌های متصل.",
     sessions: "نشست‌های فعال و پیش‌فرض‌ها.",
     usage: "مصرف و هزینه‌های API.",
     cron: "بیدارباش‌ها و اجراهای تکرارشونده.",
@@ -676,8 +664,10 @@ export const fa: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "نماهای لحظه‌ای، رویدادها، RPC.",
     logs: "گزارش‌های زنده Gateway.",
-    dreams: "رؤیاپردازی حافظه، یکپارچه‌سازی و بازتاب.",
     plugin: "پنل ارائه‌شده توسط افزونه.",
+  },
+  mcpPage: {
+    manageServersLink: "سرورها را در صفحه افزونه‌ها مدیریت کنید.",
   },
   pluginsPage: {
     searchLabel: "جستجوی افزونه‌ها",
@@ -1591,10 +1581,6 @@ export const fa: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "عامل",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "صحنه",
       diary: "دفترچه",
@@ -2188,9 +2174,9 @@ export const fa: TranslationMap = {
       workSessions: "کار",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "گفت‌وگوهای اخیر",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",
@@ -2356,6 +2342,8 @@ export const fa: TranslationMap = {
       finished: "پایان‌یافته ({count})",
       stopTask: "توقف {title}",
       viewTranscript: "مشاهدهٔ رونوشت",
+      toolUseOne: "۱ بار استفاده از ابزار",
+      toolUseMany: "{count} بار استفاده از ابزار",
     },
     sessionDiff: {
       title: "تغییرات",

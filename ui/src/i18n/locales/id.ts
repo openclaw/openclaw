@@ -170,16 +170,6 @@ export const id: TranslationMap = {
       node: "Node",
     },
   },
-  instances: {
-    title: "Instance Terhubung",
-    subtitle: "Beacon kehadiran dari gateway dan klien.",
-    showHosts: "Tampilkan host dan IP",
-    hideHosts: "Sembunyikan host dan IP",
-    toggleHostVisibility: "Alihkan visibilitas host",
-    noInstances: "Belum ada instance yang dilaporkan.",
-    lastInput: "Input terakhir {time}",
-    reason: "Alasan {reason}",
-  },
   worktrees: {
     newWorktree: "Worktree baru",
     owner: "Pemilik",
@@ -390,6 +380,7 @@ export const id: TranslationMap = {
       skills: "Skills",
       channels: "Saluran",
       cronJobs: "Tugas Cron",
+      memory: "Memori",
     },
     context: {
       title: "Agent Context",
@@ -623,7 +614,6 @@ export const id: TranslationMap = {
     workboard: "Workboard",
     worktrees: "Worktree",
     channels: "Saluran",
-    instances: "Instans",
     sessions: "Sesi",
     usage: "Penggunaan",
     cron: "Tugas Cron",
@@ -645,7 +635,6 @@ export const id: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "Debug",
     logs: "Log",
-    dreams: "Mimpi",
     plugin: "Plugin",
   },
   subtitles: {
@@ -655,7 +644,6 @@ export const id: TranslationMap = {
     workboard: "Antrean kerja agen dan serah terima sesi.",
     worktrees: "Checkout tugas agen terisolasi dan snapshot pemulihan.",
     channels: "Saluran dan pengaturan.",
-    instances: "Klien dan node yang terhubung.",
     sessions: "Sesi aktif dan default.",
     usage: "Penggunaan API dan biaya.",
     cron: "Bangun dan proses berulang.",
@@ -677,8 +665,10 @@ export const id: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "Snapshot, peristiwa, RPC.",
     logs: "Log Gateway langsung.",
-    dreams: "Konsolidasi memori saat tidur.",
     plugin: "Panel yang disediakan plugin.",
+  },
+  mcpPage: {
+    manageServersLink: "Kelola server di halaman Plugin.",
   },
   pluginsPage: {
     searchLabel: "Cari plugin",
@@ -1594,10 +1584,6 @@ export const id: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "Agen",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "Scene",
       diary: "Diary",
@@ -2192,9 +2178,9 @@ export const id: TranslationMap = {
       workSessions: "Pekerjaan",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "Obrolan terbaru",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",
@@ -2360,6 +2346,8 @@ export const id: TranslationMap = {
       finished: "Selesai ({count})",
       stopTask: "Hentikan {title}",
       viewTranscript: "Lihat transkrip",
+      toolUseOne: "1 penggunaan alat",
+      toolUseMany: "{count} penggunaan alat",
     },
     sessionDiff: {
       title: "Perubahan",

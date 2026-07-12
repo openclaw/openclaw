@@ -171,16 +171,6 @@ export const pl: TranslationMap = {
       node: "Węzeł",
     },
   },
-  instances: {
-    title: "Połączone instancje",
-    subtitle: "Sygnały obecności z Gateway i klientów.",
-    showHosts: "Pokaż hosty i adresy IP",
-    hideHosts: "Ukryj hosty i adresy IP",
-    toggleHostVisibility: "Przełącz widoczność hostów",
-    noInstances: "Nie zgłoszono jeszcze żadnych instancji.",
-    lastInput: "Ostatnie wejście {time}",
-    reason: "Powód {reason}",
-  },
   worktrees: {
     newWorktree: "Nowy worktree",
     owner: "Właściciel",
@@ -391,6 +381,7 @@ export const pl: TranslationMap = {
       skills: "Skills",
       channels: "Kanały",
       cronJobs: "Zadania Cron",
+      memory: "Pamięć",
     },
     context: {
       title: "Agent Context",
@@ -624,7 +615,6 @@ export const pl: TranslationMap = {
     workboard: "Tablica pracy",
     worktrees: "Worktree",
     channels: "Kanały",
-    instances: "Instancje",
     sessions: "Sesje",
     usage: "Użycie",
     cron: "Zadania Cron",
@@ -646,7 +636,6 @@ export const pl: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "Debug",
     logs: "Logi",
-    dreams: "Sny",
     plugin: "Wtyczka",
   },
   subtitles: {
@@ -656,7 +645,6 @@ export const pl: TranslationMap = {
     workboard: "Kolejka zadań agenta i przekazywanie sesji.",
     worktrees: "Izolowane kopie robocze zadań agentów i migawki do odzyskiwania.",
     channels: "Kanały i ustawienia.",
-    instances: "Połączone klienty i węzły.",
     sessions: "Aktywne sesje i ustawienia domyślne.",
     usage: "Zużycie API i koszty.",
     cron: "Wybudzenia i cykliczne uruchomienia.",
@@ -678,8 +666,10 @@ export const pl: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "Migawki, zdarzenia, RPC.",
     logs: "Logi Gateway na żywo.",
-    dreams: "Konsolidacja pamięci podczas snu.",
     plugin: "Panel udostępniany przez wtyczkę.",
+  },
+  mcpPage: {
+    manageServersLink: "Zarządzaj serwerami na stronie wtyczek.",
   },
   pluginsPage: {
     searchLabel: "Szukaj wtyczek",
@@ -1601,10 +1591,6 @@ export const pl: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "Agent",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "Scena",
       diary: "Dziennik",
@@ -2202,9 +2188,9 @@ export const pl: TranslationMap = {
       workSessions: "Praca",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "Ostatnie czaty",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",
@@ -2371,6 +2357,8 @@ export const pl: TranslationMap = {
       finished: "Ukończone ({count})",
       stopTask: "Zatrzymaj {title}",
       viewTranscript: "Wyświetl transkrypcję",
+      toolUseOne: "1 użycie narzędzia",
+      toolUseMany: "{count} użyć narzędzi",
     },
     sessionDiff: {
       title: "Zmiany",

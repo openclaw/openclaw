@@ -172,16 +172,6 @@ export const tr: TranslationMap = {
       node: "Düğüm",
     },
   },
-  instances: {
-    title: "Bağlı Örnekler",
-    subtitle: "Gateway ve istemcilerden gelen varlık işaretçileri.",
-    showHosts: "Ana bilgisayarları ve IP'leri göster",
-    hideHosts: "Ana bilgisayarları ve IP'leri gizle",
-    toggleHostVisibility: "Ana bilgisayar görünürlüğünü değiştir",
-    noInstances: "Henüz bildirilmiş örnek yok.",
-    lastInput: "Son giriş {time}",
-    reason: "Neden {reason}",
-  },
   worktrees: {
     newWorktree: "Yeni worktree",
     owner: "Sahip",
@@ -393,6 +383,7 @@ export const tr: TranslationMap = {
       skills: "Skills",
       channels: "Kanallar",
       cronJobs: "Cron İşleri",
+      memory: "Bellek",
     },
     context: {
       title: "Agent Context",
@@ -625,7 +616,6 @@ export const tr: TranslationMap = {
     workboard: "Çalışma panosu",
     worktrees: "Worktree'ler",
     channels: "Kanallar",
-    instances: "Örnekler",
     sessions: "Oturumlar",
     usage: "Kullanım",
     cron: "Cron İşleri",
@@ -647,7 +637,6 @@ export const tr: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "Hata Ayıklama",
     logs: "Günlükler",
-    dreams: "Düşler",
     plugin: "Eklenti",
   },
   subtitles: {
@@ -657,7 +646,6 @@ export const tr: TranslationMap = {
     workboard: "Ajan iş kuyruğu ve oturum devri.",
     worktrees: "Yalıtılmış aracı görev checkout'ları ve kurtarma anlık görüntüleri.",
     channels: "Kanallar ve ayarlar.",
-    instances: "Bağlı istemciler ve düğümler.",
     sessions: "Etkin oturumlar ve varsayılanlar.",
     usage: "API kullanımı ve maliyetler.",
     cron: "Uyandırmalar ve yinelenen çalıştırmalar.",
@@ -680,8 +668,10 @@ export const tr: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "Anlık görüntüler, olaylar, RPC.",
     logs: "Canlı Gateway günlükleri.",
-    dreams: "Uyku sırasında bellek birleştirme.",
     plugin: "Eklenti tarafından sağlanan panel.",
+  },
+  mcpPage: {
+    manageServersLink: "Sunucuları Eklentiler sayfasından yönetin.",
   },
   pluginsPage: {
     searchLabel: "Eklentileri ara",
@@ -1607,10 +1597,6 @@ export const tr: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "Aracı",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "Sahne",
       diary: "Günlük",
@@ -2205,9 +2191,9 @@ export const tr: TranslationMap = {
       workSessions: "Çalışma",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "Son sohbetler",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",
@@ -2374,6 +2360,8 @@ export const tr: TranslationMap = {
       finished: "Tamamlandı ({count})",
       stopTask: "{title} öğesini durdur",
       viewTranscript: "Transkripti görüntüle",
+      toolUseOne: "1 araç kullanımı",
+      toolUseMany: "{count} araç kullanımı",
     },
     sessionDiff: {
       title: "Değişiklikler",

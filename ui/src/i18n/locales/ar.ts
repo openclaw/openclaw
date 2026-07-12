@@ -169,16 +169,6 @@ export const ar: TranslationMap = {
       node: "العقدة",
     },
   },
-  instances: {
-    title: "المثيلات المتصلة",
-    subtitle: "إشارات الحضور من Gateway والعملاء.",
-    showHosts: "إظهار المضيفين وعناوين IP",
-    hideHosts: "إخفاء المضيفين وعناوين IP",
-    toggleHostVisibility: "تبديل إظهار المضيف",
-    noInstances: "لم يتم الإبلاغ عن أي مثيلات بعد.",
-    lastInput: "آخر إدخال {time}",
-    reason: "السبب {reason}",
-  },
   worktrees: {
     newWorktree: "شجرة عمل جديدة",
     owner: "المالك",
@@ -388,6 +378,7 @@ export const ar: TranslationMap = {
       skills: "Skills",
       channels: "القنوات",
       cronJobs: "مهام Cron",
+      memory: "الذاكرة",
     },
     context: {
       title: "سياق الوكيل",
@@ -620,7 +611,6 @@ export const ar: TranslationMap = {
     workboard: "لوحة العمل",
     worktrees: "مساحات العمل",
     channels: "القنوات",
-    instances: "المثيلات",
     sessions: "الجلسات",
     usage: "الاستخدام",
     cron: "مهام Cron",
@@ -642,7 +632,6 @@ export const ar: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "تصحيح الأخطاء",
     logs: "السجلات",
-    dreams: "الحلم",
     plugin: "المكوّن الإضافي",
   },
   subtitles: {
@@ -652,7 +641,6 @@ export const ar: TranslationMap = {
     workboard: "قائمة عمل الوكيل وتسليم الجلسات.",
     worktrees: "نسخ معزولة لمهام الوكلاء ولقطات استرداد.",
     channels: "القنوات والإعدادات.",
-    instances: "العملاء والعقد المتصلة.",
     sessions: "الجلسات النشطة والافتراضيات.",
     usage: "استخدام API والتكاليف.",
     cron: "الإيقاظات والتشغيلات المتكررة.",
@@ -674,8 +662,10 @@ export const ar: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "اللقطات، والأحداث، وRPC.",
     logs: "سجلات Gateway المباشرة.",
-    dreams: "حلم الذاكرة، والدمج، والتأمل.",
     plugin: "لوحة مقدمة من المكوّن الإضافي.",
+  },
+  mcpPage: {
+    manageServersLink: "يمكنك إدارة الخوادم في صفحة الإضافات.",
   },
   pluginsPage: {
     searchLabel: "البحث في المكوّنات الإضافية",
@@ -1579,10 +1569,6 @@ export const ar: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "الوكيل",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "المشهد",
       diary: "اليوميات",
@@ -2166,9 +2152,9 @@ export const ar: TranslationMap = {
       workSessions: "العمل",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "المحادثات الأخيرة",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",
@@ -2334,6 +2320,8 @@ export const ar: TranslationMap = {
       finished: "مكتملة ({count})",
       stopTask: "إيقاف {title}",
       viewTranscript: "عرض النص",
+      toolUseOne: "استخدام واحد لأداة",
+      toolUseMany: "{count} استخدامات للأدوات",
     },
     sessionDiff: {
       title: "التغييرات",

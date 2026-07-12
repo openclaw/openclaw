@@ -169,16 +169,6 @@ export const ko: TranslationMap = {
       node: "노드",
     },
   },
-  instances: {
-    title: "연결된 인스턴스",
-    subtitle: "Gateway와 클라이언트의 프레즌스 비콘입니다.",
-    showHosts: "호스트 및 IP 표시",
-    hideHosts: "호스트 및 IP 숨기기",
-    toggleHostVisibility: "호스트 표시 전환",
-    noInstances: "아직 보고된 인스턴스가 없습니다.",
-    lastInput: "마지막 입력 {time}",
-    reason: "사유 {reason}",
-  },
   worktrees: {
     newWorktree: "새 worktree",
     owner: "소유자",
@@ -388,6 +378,7 @@ export const ko: TranslationMap = {
       skills: "Skills",
       channels: "채널",
       cronJobs: "Cron 작업",
+      memory: "메모리",
     },
     context: {
       title: "Agent Context",
@@ -620,7 +611,6 @@ export const ko: TranslationMap = {
     workboard: "워크보드",
     worktrees: "Worktree",
     channels: "채널",
-    instances: "인스턴스",
     sessions: "세션",
     usage: "사용량",
     cron: "Cron 작업",
@@ -642,7 +632,6 @@ export const ko: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "디버그",
     logs: "로그",
-    dreams: "드리밍",
     plugin: "플러그인",
   },
   subtitles: {
@@ -652,7 +641,6 @@ export const ko: TranslationMap = {
     workboard: "에이전트 작업 대기열 및 세션 인계.",
     worktrees: "격리된 에이전트 작업 체크아웃 및 복구 스냅샷입니다.",
     channels: "채널 및 설정.",
-    instances: "연결된 클라이언트와 노드.",
     sessions: "활성 세션 및 기본값.",
     usage: "API 사용량 및 비용.",
     cron: "웨이크업 및 반복 실행.",
@@ -674,8 +662,10 @@ export const ko: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "스냅샷, 이벤트, RPC.",
     logs: "실시간 Gateway 로그.",
-    dreams: "수면 중 메모리 통합.",
     plugin: "플러그인이 제공하는 패널입니다.",
+  },
+  mcpPage: {
+    manageServersLink: "플러그인 페이지에서 서버를 관리하세요.",
   },
   pluginsPage: {
     searchLabel: "플러그인 검색",
@@ -1591,10 +1581,6 @@ export const ko: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "에이전트",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "장면",
       diary: "일지",
@@ -2181,9 +2167,9 @@ export const ko: TranslationMap = {
       workSessions: "작업",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "최근 채팅",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",
@@ -2351,6 +2337,8 @@ export const ko: TranslationMap = {
       finished: "완료됨({count})",
       stopTask: "{title} 중지",
       viewTranscript: "트랜스크립트 보기",
+      toolUseOne: "도구 사용 1회",
+      toolUseMany: "도구 사용 {count}회",
     },
     sessionDiff: {
       title: "변경 사항",
