@@ -54,7 +54,11 @@ let defaultMatrixCryptoRuntimeEnsurePromise: Promise<void> | null = null;
 
 function sliceUtf8OutputTail(buffer: Buffer): Buffer {
   let start = Math.max(0, buffer.byteLength - MATRIX_COMMAND_OUTPUT_TAIL_BYTES);
-  while (start < buffer.byteLength && (buffer[start] & 0xc0) === 0x80) {
+  while (start < buffer.byteLength) {
+    const byte = buffer[start];
+    if (byte === undefined || (byte & 0xc0) !== 0x80) {
+      break;
+    }
     start++;
   }
   return buffer.subarray(start);
@@ -101,8 +105,8 @@ export async function runFixedCommandWithTimeout(params: {
       stdio: ["ignore", "pipe", "pipe"],
     });
 
-    let stdout = Buffer.alloc(0);
-    let stderr = Buffer.alloc(0);
+    let stdout: Buffer = Buffer.alloc(0);
+    let stderr: Buffer = Buffer.alloc(0);
     let settled = false;
     let timer: NodeJS.Timeout | null = null;
     let streamKillTimer: NodeJS.Timeout | null = null;
