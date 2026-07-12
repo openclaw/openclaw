@@ -1560,7 +1560,8 @@ export function collapseCompletedTurnWork(
     }
     let finalReplyIndex = -1;
     for (let index = turn.length - 1; index >= 0; index -= 1) {
-      if (isFinalReplyGroup(turn[index])) {
+      const candidate = turn[index];
+      if (candidate && isFinalReplyGroup(candidate)) {
         finalReplyIndex = index;
         break;
       }
@@ -1573,28 +1574,32 @@ export function collapseCompletedTurnWork(
     }
     const segmentEnd = finalReplyIndex === -1 ? turn.length - 1 : finalReplyIndex - 1;
     let segmentStart = segmentEnd + 1;
-    while (segmentStart > 0 && isCollapsibleWorkGroup(turn[segmentStart - 1])) {
-      segmentStart -= 1;
+    for (let index = segmentEnd; index >= 0; index -= 1) {
+      const candidate = turn[index];
+      if (!candidate || !isCollapsibleWorkGroup(candidate)) {
+        break;
+      }
+      segmentStart = index;
     }
     const groups = turn.slice(segmentStart, segmentEnd + 1) as MessageGroup[];
-    if (groups.length === 0) {
+    const firstGroup = groups[0];
+    const lastGroup = groups[groups.length - 1];
+    if (!firstGroup || !lastGroup) {
       result.push(...turn);
       continue;
     }
     const boundary = turn[0];
     const startTimestamp =
-      boundary.kind === "group" && isTurnBoundaryGroup(boundary)
+      boundary && boundary.kind === "group" && isTurnBoundaryGroup(boundary)
         ? boundary.timestamp
-        : groups[0].timestamp;
-    const endTimestamp =
-      finalReplyIndex >= 0
-        ? (turn[finalReplyIndex] as MessageGroup).timestamp
-        : groupLastTimestamp(groups[groups.length - 1]);
+        : firstGroup.timestamp;
+    const finalReply = finalReplyIndex >= 0 ? (turn[finalReplyIndex] as MessageGroup) : null;
+    const endTimestamp = finalReply ? finalReply.timestamp : groupLastTimestamp(lastGroup);
     const durationMs = endTimestamp > startTimestamp ? endTimestamp - startTimestamp : null;
     result.push(...turn.slice(0, segmentStart));
     result.push({
       kind: "work-group",
-      key: `work:${groups[0].key}`,
+      key: `work:${firstGroup.key}`,
       groups,
       durationMs,
       hasError: workGroupHasError(groups),
