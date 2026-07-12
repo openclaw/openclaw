@@ -209,7 +209,9 @@ describe("startSshPortForward", () => {
   it.each(["active", "teardown"] as const)(
     "does not crash when stderr errors while the tunnel is %s",
     async (phase) => {
-      vi.useFakeTimers();
+      // Real timers are required: startSshPortForward uses waitForLocalListener
+      // which polls with Date.now() + setTimeout(50). Fake timers freeze both
+      // and cause a deadlock that hits the 120 s Vitest timeout.
       spawnFakeSshListening();
 
       const tunnel = await startSshPortForward({
