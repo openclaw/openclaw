@@ -42,7 +42,6 @@ type OwnedLiveRun = {
   claimId: string;
   controlUiVisible: boolean;
   lifecycleGeneration: string;
-  pendingProjections: Set<Promise<void>>;
 };
 
 type LiveEventTarget = {
@@ -268,20 +267,13 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     return false;
   };
 
-  const releaseRun = (window: LiveEventWindow, runId: string, afterProjections = false): void => {
+  const releaseRun = (window: LiveEventWindow, runId: string): void => {
     const owned = window.activeRuns.get(runId);
     if (!owned) {
       return;
     }
     window.activeRuns.delete(runId);
-    const release = () => releaseAgentRunContext(runId, owned.claimId);
-    if (afterProjections && owned.pendingProjections.size > 0) {
-      // Capacity reset may follow a synchronous emit while Gateway projection is
-      // still deferred. Keep its claim valid until every emitted event settles.
-      void Promise.allSettled(owned.pendingProjections).then(release);
-      return;
-    }
-    release();
+    releaseAgentRunContext(runId, owned.claimId);
   };
 
   const fenceReleasedRun = (window: LiveEventWindow, runId: string): void => {
@@ -291,10 +283,10 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     releaseRun(window, runId);
   };
 
-  const clearWindow = (window: LiveEventWindow, afterProjections = false): void => {
+  const clearWindow = (window: LiveEventWindow): void => {
     windows.delete(window.sessionId);
     for (const runId of window.activeRuns.keys()) {
-      releaseRun(window, runId, afterProjections);
+      releaseRun(window, runId);
     }
     window.pending.clear();
     window.pendingBytes = 0;
@@ -543,8 +535,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     }
     if (activeRunCount >= maxActiveRuns) {
       // Reset the cumulative cursor rather than wedging the unskippable tail.
-      // Already-emitted events keep their claims until deferred projection settles.
-      clearWindow(window, true);
+      clearWindow(window);
       return capacityExceeded();
     }
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
@@ -582,7 +573,6 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       claimId,
       controlUiVisible,
       lifecycleGeneration,
-      pendingProjections: new Set<Promise<void>>(),
     };
     window.activeRuns.set(runId, claimed);
     return claimed;
@@ -602,7 +592,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       // Fence first so terminal delivery cannot reopen the run ID.
       window.terminalRuns.set(request.runId, request.seq);
     }
-    const projection = emitAgentEventForOwner(
+    emitAgentEventForOwner(
       {
         runId: request.runId,
         stream: request.event.kind,
@@ -610,11 +600,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       },
       owned.claimId,
     );
-    if (projection) {
-      owned.pendingProjections.add(projection);
-      void projection.then(() => owned.pendingProjections.delete(projection));
-    }
-    // Projection owns release so detach can revoke deferred terminal delivery.
+    // Gateway handler owns cleanup so detach can revoke deferred terminal delivery.
     return undefined;
   };
 
@@ -633,7 +619,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       publishedPrefix = true;
       const oldestRetainedSeq = window.ackedSeq - windowSize;
       for (const [runId, terminalSeq] of window.terminalRuns) {
-        // Active terminal claims stay fenced until projection cleanup. Released run IDs
+        // Active terminal claims stay fenced until owner cleanup. Released run IDs
         // age out after windowSize later events and may then start a fresh claim.
         if (!window.activeRuns.has(runId) && terminalSeq <= oldestRetainedSeq) {
           window.terminalRuns.delete(runId);

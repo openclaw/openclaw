@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type {
   WorkerLiveEventErrorDetails as ErrorDetails,
   WorkerLiveEventParams as Params,
@@ -14,7 +14,6 @@ import {
   emitAgentEvent,
   getAgentRunContext,
   onAgentEvent,
-  onAgentEventProjection,
   sweepStaleRunContexts,
   type AgentEventPayload as Event,
 } from "../../infra/agent-events.js";
@@ -245,34 +244,6 @@ describe("worker live events", () => {
     fail(second, "invalid-event");
     clearAgentRunContext(second.runId);
     ack(second);
-    expect(deltas()).toEqual(["first", "second"]);
-  });
-
-  it("keeps a published prefix claim until buffered capacity projection settles", async () => {
-    start({ maxActiveRuns: 1 });
-    const first = msg(1, "first", 0, "run-prefix");
-    const second = msg(2, "second", 0, "run-buffered");
-    let settleProjection = () => {};
-    const projection = new Promise<void>((resolve) => {
-      settleProjection = resolve;
-    });
-    const stopProjection = onAgentEventProjection((event) =>
-      event.runId === first.runId ? projection : Promise.resolve(),
-    );
-    try {
-      ack(second, 0);
-      ack(first);
-      expect(getAgentRunContext(first.runId)).toBeDefined();
-
-      fail({ ...second, lastAckedSeq: 1 }, "resync-required");
-      settleProjection();
-      await vi.waitFor(() => expect(getAgentRunContext(first.runId)).toBeUndefined());
-      ack({ ...second, lastAckedSeq: 0, seq: 1 });
-    } finally {
-      settleProjection();
-      stopProjection();
-    }
-
     expect(deltas()).toEqual(["first", "second"]);
   });
 

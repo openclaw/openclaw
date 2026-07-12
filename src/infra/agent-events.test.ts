@@ -13,7 +13,6 @@ import {
   listAgentRunsForSession,
   onAgentAuditEvent,
   onAgentEvent,
-  onAgentEventProjection,
   registerAgentRunContext,
   releaseAgentRunContext,
   resetAgentEventsForTest,
@@ -212,48 +211,16 @@ describe("agent-events sequencing", () => {
     });
 
     emitAgentEvent(event("local"));
-    void emitAgentEventForOwner(event("worker"), claimId);
+    emitAgentEventForOwner(event("worker"), claimId);
 
     clearAgentRunContext("exclusive-run", lifecycleGeneration);
 
     expect(getAgentRunContext("exclusive-run")?.sessionKey).toBe("worker");
     releaseAgentRunContext("exclusive-run", claimId);
     expect(getAgentRunContext("exclusive-run")).toBeUndefined();
-    void emitAgentEventForOwner(event("late"), claimId);
+    emitAgentEventForOwner(event("late"), claimId);
     stop();
     expect(seen).toEqual(["worker"]);
-  });
-
-  test("reports completion of the Gateway-owned event projection", async () => {
-    let settleProjection = () => {};
-    const projection = new Promise<void>((resolve) => {
-      settleProjection = resolve;
-    });
-    const stop = onAgentEventProjection(() => projection);
-    const claimId = claimAgentRunContext(
-      "projected-run",
-      { sessionKey: "worker" },
-      { exclusive: true, trackOwner: true },
-    )!;
-
-    const settled = emitAgentEventForOwner(
-      { runId: "projected-run", stream: "assistant", data: { text: "pending" } },
-      claimId,
-    );
-    if (!settled) {
-      throw new Error("expected projection completion");
-    }
-    let completed = false;
-    void settled.then(() => {
-      completed = true;
-    });
-    await Promise.resolve();
-    expect(completed).toBe(false);
-
-    settleProjection();
-    await expect(settled).resolves.toBeUndefined();
-    stop();
-    releaseAgentRunContext("projected-run", claimId);
   });
 
   test("full event reset clears tracked ownership", () => {
