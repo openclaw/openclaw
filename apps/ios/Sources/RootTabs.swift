@@ -616,13 +616,13 @@ struct RootTabs: View {
         if self.isSidebarVisible {
             return OpenClawSidebarHeaderAction(
                 systemName: "sidebar.left",
-                accessibilityLabel: "Hide Sidebar",
+                accessibilityLabel: .localized("Hide Sidebar"),
                 accessibilityIdentifier: Self.sidebarHideButtonAccessibilityIdentifier,
                 action: { self.hideSidebar() })
         }
         return OpenClawSidebarHeaderAction(
             systemName: "sidebar.left",
-            accessibilityLabel: "Show Sidebar",
+            accessibilityLabel: .localized("Show Sidebar"),
             accessibilityIdentifier: Self.sidebarShowButtonAccessibilityIdentifier,
             action: { self.showSidebar() })
     }
