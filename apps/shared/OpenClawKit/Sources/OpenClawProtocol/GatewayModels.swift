@@ -13118,11 +13118,11 @@ public struct ChatInjectBashExecutionParams: Codable, Sendable {
         agentid: String? = nil,
         command: String,
         output: String,
-        exitcode: Int?,
-        cancelled: Bool?,
-        truncated: Bool?,
-        fulloutputpath: String?,
-        excludefromcontext: Bool?)
+        exitcode: Int? = nil,
+        cancelled: Bool? = nil,
+        truncated: Bool? = nil,
+        fulloutputpath: String? = nil,
+        excludefromcontext: Bool? = nil)
     {
         self.sessionkey = sessionkey
         self.agentid = agentid
