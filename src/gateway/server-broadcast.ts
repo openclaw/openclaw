@@ -73,7 +73,7 @@ function serializeFrameField(name: "payload" | "stateVersion", value: unknown): 
 }
 
 function hasEventScope(client: GatewayWsClient, event: string): boolean {
-  if (client.connectionKind === "worker") {
+  if (client.connectionKind === "worker" || (client.connect.role ?? "operator") === "member") {
     return false;
   }
   const required = EVENT_SCOPE_GUARDS[event];

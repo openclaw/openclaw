@@ -101,6 +101,26 @@ afterAll(() => {
 });
 
 describe("host-bound plugin Teams API", () => {
+  it("does not invoke a plugin tool callback when its signal is already aborted", () => {
+    const controller = new AbortController();
+    controller.abort();
+    const run = vi.fn();
+
+    expect(() =>
+      withPluginToolAuthorizationInvocation(
+        {
+          pluginId: "workspaces",
+          toolName: "workspace_get",
+          toolCallId: "aborted-call",
+          context: {},
+          signal: controller.signal,
+        },
+        run,
+      ),
+    ).toThrow(/aborted/i);
+    expect(run).not.toHaveBeenCalled();
+  });
+
   it("fails closed without a trusted authorization request", () => {
     const teams = createPluginTeamsApi({ pluginId: "workspaces" });
     expect(() => teams.context.require()).toThrow(/trusted.*authorization context/i);
@@ -129,6 +149,65 @@ describe("host-bound plugin Teams API", () => {
           idempotencyKey: "create-tab-1",
         }),
       ).rejects.toThrow(/trusted teams request context/i);
+    });
+  });
+
+  it("rechecks additional resource permissions for the active gateway request", async () => {
+    const database = createDatabase();
+    seed(database);
+    putAuthorizationPrincipal({ ...member, database });
+    addIsolationDomainMember({
+      domainId: "domain-1",
+      principalId: member.id,
+      addedByPrincipalId: owner.id,
+      database,
+    });
+    bindAuthorizationResource({
+      domainId: "domain-1",
+      resource: tab,
+      parent: workspace,
+      ownerPrincipalId: owner.id,
+      database,
+    });
+    for (const permission of ["workspaces.tab.read", "workspaces.tab.write"]) {
+      grantAuthorizationPermission({
+        domainId: "domain-1",
+        principalId: member.id,
+        resource: tab,
+        permission,
+        grantedByPrincipalId: owner.id,
+        database,
+      });
+    }
+    const teams = createPluginTeamsApi({ pluginId: "workspaces", database });
+    const trusted = Object.freeze({
+      principalId: member.id,
+      principalKind: "human" as const,
+      principal: member.principal,
+      domain: Object.freeze({ id: "domain-1" }),
+      method: "workspaces.tab.get",
+      permission: "workspaces.tab.read",
+      resources: Object.freeze([tab]),
+      pluginId: "workspaces",
+      requestId: "request-capabilities-1",
+    });
+
+    await withGatewayAuthorizationContext(trusted, async () => {
+      const context = teams.context.require();
+      await expect(
+        teams.authorization.decide({
+          context,
+          permission: "workspaces.tab.write",
+          resources: [tab],
+        }),
+      ).resolves.toMatchObject({ allowed: true });
+      await expect(
+        teams.authorization.decide({
+          context,
+          permission: "workspaces.tab.changeRequest.create",
+          resources: [tab],
+        }),
+      ).resolves.toEqual({ allowed: false });
     });
   });
 

@@ -29,6 +29,31 @@ function getAuthorizationKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<AuthorizationDatabase>(db);
 }
 
+/** Resolves the canonical server-owned identity for an authorization principal id. */
+export function getAuthorizationPrincipalById(
+  input: AuthorizationDatabaseInput & { id: string },
+): GatewayPrincipal | undefined {
+  const id = requiredIdentifier(input.id, "principal id");
+  const { db } = openOpenClawStateDatabase(input.database);
+  const row = executeSqliteQueryTakeFirstSync(
+    db,
+    getAuthorizationKysely(db)
+      .selectFrom("authorization_principals")
+      .select(["issuer", "subject", "kind"])
+      .where("principal_id", "=", id),
+  );
+  if (
+    !row ||
+    (row.kind !== "human" &&
+      row.kind !== "service" &&
+      row.kind !== "device" &&
+      row.kind !== "shared")
+  ) {
+    return undefined;
+  }
+  return Object.freeze({ issuer: row.issuer, subject: row.subject, kind: row.kind });
+}
+
 function requiredIdentifier(value: string, label: string): string {
   const normalized = value.trim();
   if (!normalized) {

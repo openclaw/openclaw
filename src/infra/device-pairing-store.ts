@@ -49,6 +49,7 @@ const APPROVAL_KIND_MEMBERS = {
   silent: true,
   "trusted-cidr": true,
   "ssh-verified": true,
+  "teams-session": true,
   bootstrap: true,
 } satisfies Record<PairedDeviceApprovalKind, true>;
 const APPROVAL_KINDS = new Set(Object.keys(APPROVAL_KIND_MEMBERS));

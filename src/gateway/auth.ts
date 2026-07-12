@@ -46,6 +46,7 @@ export type GatewayAuthResult = {
     | "tailscale"
     | "device-token"
     | "bootstrap-token"
+    | "teams-session"
     | "trusted-proxy";
   /** `issuer` identifies the OpenClaw authenticator, not an upstream IdP claim. */
   principal?: GatewayPrincipal;

@@ -63,6 +63,7 @@ export type RegisteredTeamsLocalAccountFromInvite = Readonly<{
   account: TeamsLocalAccount;
   invite: TeamsInvite;
   session: CreatedTeamsSession;
+  validation?: unknown;
 }>;
 
 type RedeemableInvite = Readonly<{
@@ -503,6 +504,7 @@ export async function registerTeamsLocalAccountFromInvite(
     loginLabel: string;
     password: string;
     sessionTtlMs: number;
+    validateInvite?: (invite: TeamsInvite) => unknown;
     now?: number;
   },
 ): Promise<RegisteredTeamsLocalAccountFromInvite> {
@@ -522,6 +524,11 @@ export async function registerTeamsLocalAccountFromInvite(
   return runOpenClawStateWriteTransaction(({ db }) => {
     const kysely = getTeamsInviteKysely(db);
     const invite = loadRedeemableInvite(db, codeDigest, now);
+    const loadedInvite = loadInvite(db, invite.invite_id);
+    if (!loadedInvite) {
+      throw new Error(INVITE_UNAVAILABLE_MESSAGE);
+    }
+    const validation = input.validateInvite?.(loadedInvite);
     const existing = executeSqliteQueryTakeFirstSync(
       db,
       kysely
@@ -602,7 +609,12 @@ export async function registerTeamsLocalAccountFromInvite(
       database: input.database,
     });
     const account = Object.freeze({ id: accountId, principalId, loginLabel, createdAt: now });
-    return Object.freeze({ account, invite: redeemedInvite, session });
+    return Object.freeze({
+      account,
+      invite: redeemedInvite,
+      session,
+      ...(input.validateInvite ? { validation } : {}),
+    });
   }, input.database);
 }
 

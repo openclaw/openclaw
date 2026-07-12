@@ -7,7 +7,9 @@ import {
 import type { GatewayResourceRef } from "./contracts.js";
 import { createAuthorizationDelegation, revokeAuthorizationDelegation } from "./delegations.js";
 import {
+  getAuthorizationResourceParent,
   getAuthorizationResourceOwner,
+  listAuthorizationResourceChildren,
   prepareAuthorizationResourceRegistration,
   prepareAuthorizationResourceRetirement,
   replayAuthorizationResourceOperation,
@@ -76,6 +78,111 @@ describe("authorization resource operations", () => {
     expect(getAuthorizationResourceOwner({ domainId: "domain-2", resource, database })).toEqual({
       principalId: secondOwner.id,
     });
+  });
+
+  it("returns only the active resource parent in the requested domain", () => {
+    const database = createDatabase();
+    putAuthorizationPrincipal({ ...firstOwner, database });
+    createIsolationDomain({ id: "domain-1", ownerPrincipalId: firstOwner.id, database });
+    const workspace = {
+      namespace: "workspaces",
+      type: "workspace",
+      id: "workspace-1",
+    } as const;
+    bindAuthorizationResource({
+      domainId: "domain-1",
+      resource: workspace,
+      ownerPrincipalId: firstOwner.id,
+      database,
+    });
+    bindAuthorizationResource({
+      domainId: "domain-1",
+      resource,
+      parent: workspace,
+      ownerPrincipalId: firstOwner.id,
+      database,
+    });
+
+    expect(getAuthorizationResourceParent({ domainId: "domain-1", resource, database })).toEqual(
+      workspace,
+    );
+    expect(
+      getAuthorizationResourceParent({ domainId: "missing-domain", resource, database }),
+    ).toBeUndefined();
+    expect(
+      getAuthorizationResourceParent({ domainId: "domain-1", resource: workspace, database }),
+    ).toBeNull();
+    retireAuthorizationResource({
+      domainId: "domain-1",
+      resource,
+      retiredByPrincipalId: firstOwner.id,
+      database,
+    });
+    expect(
+      getAuthorizationResourceParent({ domainId: "domain-1", resource, database }),
+    ).toBeUndefined();
+  });
+
+  it("lists exact active children and parent-binds retirement through replay", () => {
+    const database = createDatabase();
+    putAuthorizationPrincipal({ ...firstOwner, database });
+    createIsolationDomain({ id: "domain-1", ownerPrincipalId: firstOwner.id, database });
+    const workspace = { namespace: "workspaces", type: "workspace", id: "workspace-1" } as const;
+    const otherWorkspace = { ...workspace, id: "workspace-2" };
+    for (const parent of [workspace, otherWorkspace]) {
+      bindAuthorizationResource({
+        domainId: "domain-1",
+        resource: parent,
+        ownerPrincipalId: firstOwner.id,
+        database,
+      });
+    }
+    bindAuthorizationResource({
+      domainId: "domain-1",
+      resource,
+      parent: workspace,
+      ownerPrincipalId: firstOwner.id,
+      database,
+    });
+
+    expect(
+      listAuthorizationResourceChildren({
+        domainId: "domain-1",
+        parent: workspace,
+        type: "tab",
+        database,
+      }),
+    ).toEqual([resource]);
+    expect(() =>
+      prepareAuthorizationResourceRetirement({
+        operationScope: "plugin:workspaces",
+        idempotencyKey: "retire-wrong-parent",
+        domainId: "domain-1",
+        resource,
+        parent: otherWorkspace,
+        actorPrincipalId: firstOwner.id,
+        database,
+      }),
+    ).toThrow(/parent does not match/i);
+
+    const prepared = prepareAuthorizationResourceRetirement({
+      operationScope: "plugin:workspaces",
+      idempotencyKey: "retire-tab-1",
+      domainId: "domain-1",
+      resource,
+      parent: workspace,
+      actorPrincipalId: firstOwner.id,
+      database,
+    });
+    replayAuthorizationResourceOperation({
+      domainId: "domain-1",
+      operationScope: "plugin:workspaces",
+      operationId: prepared.operationId,
+      database,
+    });
+    expect(
+      listAuthorizationResourceChildren({ domainId: "domain-1", parent: workspace, database }),
+    ).toEqual([]);
   });
 
   it("deduplicates an exact registration intent without binding the resource", () => {

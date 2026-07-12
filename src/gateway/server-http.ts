@@ -110,6 +110,8 @@ const getSessionKillHttpModule = createLazyRuntimeModule(() => import("./session
 
 const getToolsInvokeHttpModule = createLazyRuntimeModule(() => import("./tools-invoke-http.js"));
 
+const getTeamsHttpModule = createLazyRuntimeModule(() => import("./teams-http.js"));
+
 const getPluginNodeCapabilityAuthModule = createLazyRuntimeModule(
   () => import("./server/plugin-node-capability-auth.js"),
 );
@@ -195,6 +197,18 @@ function isSessionKillPath(pathname: string): boolean {
 
 function isSessionHistoryPath(pathname: string): boolean {
   return /^\/sessions\/[^/]+\/history$/.test(pathname);
+}
+
+function isTeamsAccountPath(pathname: string): boolean {
+  return (
+    pathname === "/api/teams/login" ||
+    pathname === "/api/teams/logout" ||
+    pathname === "/api/teams/session" ||
+    pathname === "/api/teams/invites/accept" ||
+    pathname === "/api/teams/invite-presets" ||
+    pathname === "/api/teams/invites" ||
+    /^\/api\/teams\/invites\/[^/]+$/.test(pathname)
+  );
 }
 
 function shouldEnforceDefaultPluginGatewayAuth(pathContext: PluginRoutePathContext): boolean {
@@ -579,6 +593,20 @@ export function createGatewayHttpServer(opts: {
           run: () => handleHooksRequest(req, res),
         },
       ];
+      if (isTeamsAccountPath(scopedRequestPath)) {
+        requestStages.push({
+          name: "teams-account-session",
+          run: async () =>
+            await runWithGatewayHttpWorkAdmission(res, async () =>
+              (await getTeamsHttpModule()).handleTeamsHttpRequest(req, res, {
+                allowedOrigins: configSnapshot.gateway?.controlUi?.allowedOrigins,
+                trustedProxies,
+                allowRealIpFallback,
+                rateLimiter,
+              }),
+            ),
+        });
+      }
       if (opts.handleWatchNodeRequest && scopedRequestPath.startsWith("/api/nodes/watch/")) {
         requestStages.push({
           name: "watch-node",

@@ -30,6 +30,7 @@ import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import {
   inheritGatewayClientAuthorizationDelegation,
   inheritGatewayClientAuthorizationDomain,
+  inheritGatewayClientTeamsSession,
 } from "./authorization/client-domain.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import { normalizeOperatorScopeList, type OperatorScope } from "./operator-scopes.js";
@@ -284,6 +285,7 @@ function mergeGatewayClientInternal(
   };
   inheritGatewayClientAuthorizationDomain(client, merged);
   inheritGatewayClientAuthorizationDelegation(client, merged);
+  inheritGatewayClientTeamsSession(client, merged);
   return merged;
 }
 

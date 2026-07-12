@@ -19,6 +19,10 @@ import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../skills/run
 import { isEphemeralGatewayClient } from "../../../utils/message-channel.js";
 import { resolveRuntimeServiceVersion } from "../../../version.js";
 import { verifyAgentRuntimeIdentityToken } from "../../agent-runtime-identity-token.js";
+import {
+  bindGatewayClientAuthorizationDomain,
+  bindGatewayClientTeamsSession,
+} from "../../authorization/client-domain.js";
 import { APPROVALS_SCOPE } from "../../method-scopes.js";
 import { isOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
 import {
@@ -119,6 +123,7 @@ export async function attachAuthenticatedGatewayConnect(
     pairingLocality,
     sessionUsesSharedGatewayAuth,
     sessionSharedGatewaySessionGeneration,
+    teamsSession,
   } = state;
   if (!(await prepareGatewayNodeConnect(context, state))) {
     return;
@@ -237,6 +242,14 @@ export async function attachAuthenticatedGatewayConnect(
       ? { pluginNodeCapabilitySurfaces }
       : {}),
   };
+  if (teamsSession) {
+    bindGatewayClientAuthorizationDomain(nextClient, { id: teamsSession.domainId });
+    bindGatewayClientTeamsSession(nextClient, {
+      id: teamsSession.id,
+      principalId: teamsSession.principalId,
+      domainId: teamsSession.domainId,
+    });
+  }
   for (const entry of pendingPluginNodeCapabilities) {
     setClientPluginNodeCapability({
       client: nextClient,

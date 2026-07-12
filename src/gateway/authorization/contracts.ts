@@ -55,6 +55,8 @@ export type GatewayMethodAccessPolicy =
   | Readonly<{ kind: "public" }>
   | Readonly<{
       kind: "resource";
+      /** Explicit plugin opt-in for scope-less Teams member sessions. */
+      member?: boolean;
       permission: string;
       resolveResources: (
         input: GatewayResourceResolutionInput,

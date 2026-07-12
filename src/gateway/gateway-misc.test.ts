@@ -402,6 +402,32 @@ describe("gateway broadcaster", () => {
     expect(workerSocket.send).not.toHaveBeenCalled();
   });
 
+  it("never sends gateway-global events to Teams members", () => {
+    const memberSocket = makeRecordingSocket();
+    const operatorSocket = makeRecordingSocket();
+    const clients = new Set<GatewayWsClient>([
+      makeGatewayWsClient("c-member", memberSocket, {
+        role: "member",
+        scopes: [],
+      } as unknown as GatewayWsClient["connect"]),
+      makeOperatorWsClient("c-operator", operatorSocket, ["operator.read"]),
+    ]);
+    const { broadcast } = createGatewayBroadcaster({ clients });
+
+    for (const event of ["presence", "health", "heartbeat", "tick", "update.available"]) {
+      broadcast(event, { marker: "other-domain" });
+    }
+
+    expect(memberSocket.sent).toEqual([]);
+    expect(sentEvents(operatorSocket)).toEqual([
+      "presence",
+      "health",
+      "heartbeat",
+      "tick",
+      "update.available",
+    ]);
+  });
+
   it("filters approval and pairing events by scope", () => {
     const approvalsSocket: TestSocket = {
       bufferedAmount: 0,

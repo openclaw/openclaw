@@ -14,6 +14,7 @@ import type {
   OpenClawPluginTeamsToolCallContext,
 } from "./teams-types.js";
 import {
+  hasPluginToolAuthorizationSubject,
   requireCurrentPluginToolAuthorizationInvocation,
   requirePluginToolAuthorizationInvocation,
   type PluginToolAuthorizationInvocation,
@@ -160,6 +161,7 @@ export function createPluginTeamsApi(input: {
   }) as OpenClawPluginTeamsApi["context"]["require"];
 
   const contextApi: OpenClawPluginTeamsApi["context"] = {
+    isBound: hasPluginToolAuthorizationSubject,
     require: requireContext,
   };
 
@@ -167,11 +169,19 @@ export function createPluginTeamsApi(input: {
     context: contextApi,
     authorization: {
       decide: async ({ context, permission: rawPermission, resources: rawResources }) => {
-        const invocation = trustedToolCalls.get(context);
-        if (!invocation || invocation.toolCallId !== context.callId || !invocation.subject) {
-          throw new Error("an active trusted Teams tool call context is required");
+        const invocation = trustedToolCalls.get(context as OpenClawPluginTeamsToolCallContext);
+        const gatewayContext = invocation
+          ? undefined
+          : requireTrustedContext(context as OpenClawPluginTeamsRequestContext);
+        if (invocation) {
+          if (
+            invocation.toolCallId !== (context as OpenClawPluginTeamsToolCallContext).callId ||
+            !invocation.subject
+          ) {
+            throw new Error("an active trusted Teams tool call context is required");
+          }
+          requireCurrentPluginToolAuthorizationInvocation(invocation);
         }
-        requireCurrentPluginToolAuthorizationInvocation(invocation);
         const permission = requiredIdentifier(rawPermission, "Teams permission");
         if (!Array.isArray(rawResources) || rawResources.length === 0) {
           throw new Error("Teams authorization requires at least one resource");
@@ -188,37 +198,86 @@ export function createPluginTeamsApi(input: {
             import("../gateway/authorization/kernel.js"),
             import("../gateway/authorization/state-provider.js"),
           ]);
-        requireCurrentPluginToolAuthorizationInvocation(invocation);
+        let principal;
+        let domain;
+        let delegation;
+        let agentSession;
+        let requestId;
+        if (invocation) {
+          requireCurrentPluginToolAuthorizationInvocation(invocation);
+          principal = invocation.subject!.principal;
+          domain = invocation.subject!.domain;
+          delegation = invocation.subject!.delegation;
+          agentSession = invocation.subject!.agentSession;
+          requestId = invocation.toolCallId;
+        } else {
+          requireTrustedContext(context as OpenClawPluginTeamsRequestContext);
+          const { getAuthorizationPrincipalById } =
+            await import("../gateway/authorization/state-store.js");
+          requireTrustedContext(context as OpenClawPluginTeamsRequestContext);
+          principal = getAuthorizationPrincipalById({
+            id: gatewayContext!.principalId,
+            database: input.database,
+          });
+          if (!principal || principal.kind !== gatewayContext!.principalKind) {
+            throw new Error("the trusted Teams request principal is unavailable");
+          }
+          domain = gatewayContext!.domain;
+          delegation = gatewayContext!.delegation;
+          requestId = gatewayContext!.requestId!;
+        }
         const outcome = await authorizeGatewayAccess({
           runtime: createStateGatewayAuthorizationRuntime({ database: input.database }),
           policy: { kind: "resource", permission, resolveResources: () => resources },
-          principal: invocation.subject.principal,
-          domain: invocation.subject.domain,
-          delegation: invocation.subject.delegation,
-          agentSession: invocation.subject.agentSession,
-          method: `plugin-tool:${pluginId}:${invocation.toolName}`,
+          principal,
+          domain,
+          ...(delegation ? { delegation } : {}),
+          ...(agentSession ? { agentSession } : {}),
+          method: invocation
+            ? `plugin-tool:${pluginId}:${invocation.toolName}`
+            : `plugin-capability:${pluginId}`,
           params: undefined,
           getConfig: () => ({}),
         });
-        requireCurrentPluginToolAuthorizationInvocation(invocation);
+        if (invocation) {
+          requireCurrentPluginToolAuthorizationInvocation(invocation);
+        } else {
+          requireTrustedContext(context as OpenClawPluginTeamsRequestContext);
+        }
         if (!outcome.allowed || !outcome.security) {
           return { allowed: false };
         }
         const trusted = Object.freeze({
           ...outcome.security,
           pluginId,
-          requestId: invocation.toolCallId,
+          requestId,
         });
         const requestContext = projectRequestContext(trusted);
-        trustedContexts.set(requestContext, {
-          kind: "tool",
-          authorization: trusted,
-          invocation,
-        });
+        trustedContexts.set(
+          requestContext,
+          invocation
+            ? { kind: "tool", authorization: trusted, invocation }
+            : { kind: "gateway", authorization: trusted },
+        );
         return { allowed: true, context: requestContext };
       },
     },
     resources: {
+      listChildren: async ({ context, parent: rawParent, requiredAction, type }) => {
+        const trusted = requireTrustedContext(context);
+        const parent = normalizeResource(rawParent);
+        requirePluginResourceNamespace(parent, pluginId);
+        requireAuthorizedAction(trusted, requiredAction, parent);
+        const { listAuthorizationResourceChildren } =
+          await import("../gateway/authorization/resource-operations.js");
+        requireTrustedContext(context);
+        return listAuthorizationResourceChildren({
+          domainId: trusted.domain.id,
+          parent,
+          ...(type ? { type: requiredIdentifier(type, "resource child type") } : {}),
+          database: input.database,
+        });
+      },
       prepareRegister: async ({
         context,
         resource: rawResource,
@@ -257,11 +316,21 @@ export function createPluginTeamsApi(input: {
         });
         return prepared.operationId;
       },
-      prepareRetire: async ({ context, resource: rawResource, requiredAction, idempotencyKey }) => {
+      prepareRetire: async ({
+        context,
+        resource: rawResource,
+        parent: rawParent,
+        requiredAction,
+        idempotencyKey,
+      }) => {
         const trusted = requireTrustedContext(context);
         const resource = normalizeResource(rawResource);
+        const parent = rawParent ? normalizeResource(rawParent) : undefined;
         requirePluginResourceNamespace(resource, pluginId);
-        requireAuthorizedAction(trusted, requiredAction, resource);
+        if (parent) {
+          requirePluginResourceNamespace(parent, pluginId);
+        }
+        requireAuthorizedAction(trusted, requiredAction, parent ?? resource);
         const { prepareAuthorizationResourceRetirement } =
           await import("../gateway/authorization/resource-operations.js");
         requireTrustedContext(context);
@@ -270,6 +339,7 @@ export function createPluginTeamsApi(input: {
           idempotencyKey,
           domainId: trusted.domain.id,
           resource,
+          ...(parent ? { parent } : {}),
           actorPrincipalId: trusted.principalId,
           database: input.database,
         });

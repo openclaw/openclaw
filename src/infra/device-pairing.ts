@@ -786,7 +786,7 @@ export async function approveDevicePairing(
     accessMetadata?: DevicePairingAccessMetadata;
     approvedVia?: Extract<
       PairedDeviceApprovalKind,
-      "owner" | "silent" | "trusted-cidr" | "ssh-verified"
+      "owner" | "silent" | "trusted-cidr" | "ssh-verified" | "teams-session"
     >;
   },
   baseDir?: string,
@@ -799,7 +799,7 @@ export async function approveDevicePairing(
         accessMetadata?: DevicePairingAccessMetadata;
         approvedVia?: Extract<
           PairedDeviceApprovalKind,
-          "owner" | "silent" | "trusted-cidr" | "ssh-verified"
+          "owner" | "silent" | "trusted-cidr" | "ssh-verified" | "teams-session"
         >;
       }
     | string,

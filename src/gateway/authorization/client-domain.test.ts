@@ -3,10 +3,13 @@ import type { GatewayClient } from "../server-methods/types.js";
 import {
   bindGatewayClientAuthorizationDelegation,
   bindGatewayClientAuthorizationDomain,
+  bindGatewayClientTeamsSession,
   getGatewayClientAuthorizationDelegation,
   getGatewayClientAuthorizationDomain,
+  getGatewayClientTeamsSession,
   inheritGatewayClientAuthorizationDelegation,
   inheritGatewayClientAuthorizationDomain,
+  inheritGatewayClientTeamsSession,
 } from "./client-domain.js";
 
 function client(): GatewayClient {
@@ -25,6 +28,14 @@ function serviceClient(): GatewayClient {
   return {
     ...client(),
     principal: { issuer: "core", subject: "agent:main", kind: "service" },
+  };
+}
+
+function humanClient(): GatewayClient {
+  return {
+    ...client(),
+    connect: { ...client().connect, role: "member", scopes: [] },
+    principal: { issuer: "local", subject: "member@example.com", kind: "human" },
   };
 }
 
@@ -61,6 +72,41 @@ describe("server-owned gateway client domain", () => {
     expect(getGatewayClientAuthorizationDomain(target)).toBeUndefined();
     inheritGatewayClientAuthorizationDomain(source, target);
     expect(getGatewayClientAuthorizationDomain(target)).toEqual({ id: "domain-1" });
+  });
+});
+
+describe("server-owned gateway client Teams session", () => {
+  it("binds privately, rejects rebinding, and inherits only across the same human domain", () => {
+    const source = humanClient();
+    const target = { ...source };
+    bindGatewayClientAuthorizationDomain(source, { id: "domain-1" });
+    bindGatewayClientTeamsSession(source, {
+      id: "session-1",
+      principalId: "principal-member",
+      domainId: "domain-1",
+    });
+    (source as GatewayClient & { teamsSessionId?: string }).teamsSessionId = "forged";
+
+    expect(getGatewayClientTeamsSession(source)).toEqual({
+      id: "session-1",
+      principalId: "principal-member",
+      domainId: "domain-1",
+    });
+    expect(() =>
+      bindGatewayClientTeamsSession(source, {
+        id: "session-2",
+        principalId: "principal-member",
+        domainId: "domain-1",
+      }),
+    ).toThrow(/already bound differently/i);
+    expect(getGatewayClientTeamsSession(target)).toBeUndefined();
+    inheritGatewayClientAuthorizationDomain(source, target);
+    inheritGatewayClientTeamsSession(source, target);
+    expect(getGatewayClientTeamsSession(target)?.id).toBe("session-1");
+
+    const different = { ...source, principal: { ...source.principal!, subject: "other" } };
+    bindGatewayClientAuthorizationDomain(different, { id: "domain-1" });
+    expect(() => inheritGatewayClientTeamsSession(source, different)).toThrow(/cannot cross/i);
   });
 });
 

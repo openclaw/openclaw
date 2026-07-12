@@ -52,14 +52,16 @@ export type DeviceAuthToken = {
  * silently and cannot collide with another machine's records. "trusted-cidr"
  * and "ssh-verified" are also non-interactive but cross hosts, so they are
  * never pruned automatically (display metadata is not a machine identity).
- * "owner" and "bootstrap" approvals required a user action and are never
- * pruned.
+ * "teams-session" is bound to a current human account session and may cross
+ * hosts, so it is never pruned automatically. "owner" and "bootstrap"
+ * approvals required a user action and are never pruned.
  */
 export type PairedDeviceApprovalKind =
   | "owner"
   | "silent"
   | "trusted-cidr"
   | "ssh-verified"
+  | "teams-session"
   | "bootstrap";
 
 /**
