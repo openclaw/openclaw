@@ -765,6 +765,56 @@ export function registerWorkspaceGatewayMethods(options: WorkspaceGatewayMethodO
     { scope: APPROVE_SCOPE },
   );
 
+  // The browser parent calls these on behalf of a sandboxed custom widget. The
+  // parent supplies the widget id from its trusted render context; iframe input
+  // is never allowed to select another widget's state record.
+  api.registerGatewayMethod(
+    "workspaces.widget.state.get",
+    async ({ params: requestParams, respond }) => {
+      try {
+        const params = readParams(requestParams, ["widgetId"]);
+        const widgetId = readWidgetId(params, "widgetId");
+        const record = store.readWidgetState(widgetId);
+        respond(true, record ?? { state: null, version: 0 });
+      } catch (error) {
+        respondError(respond, error);
+      }
+    },
+    { scope: READ_SCOPE },
+  );
+
+  api.registerGatewayMethod(
+    "workspaces.widget.state.set",
+    async (opts) => {
+      try {
+        const params = readParams(opts.params, ["widgetId", "state", "expectedVersion"]);
+        const widgetId = readWidgetId(params, "widgetId");
+        if (!Object.hasOwn(params, "state")) {
+          throw new Error("state is required");
+        }
+        let expectedVersion: number | undefined;
+        if (params.expectedVersion !== undefined) {
+          if (
+            typeof params.expectedVersion !== "number" ||
+            !Number.isInteger(params.expectedVersion) ||
+            params.expectedVersion < 0
+          ) {
+            throw new Error("expectedVersion must be a non-negative integer");
+          }
+          expectedVersion = params.expectedVersion;
+        }
+        const { version } = store.writeWidgetState(widgetId, params.state as JsonValue, {
+          expectedVersion,
+        });
+        opts.context.broadcast("plugin.workspaces.widget-state.changed", { widgetId, version });
+        opts.respond(true, { widgetId, version });
+      } catch (error) {
+        respondError(opts.respond, error);
+      }
+    },
+    { scope: WRITE_SCOPE },
+  );
+
   api.registerGatewayMethod(
     "workspaces.replace",
     async (opts) => {

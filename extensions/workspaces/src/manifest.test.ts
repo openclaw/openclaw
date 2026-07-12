@@ -36,6 +36,21 @@ const VALID_MANIFEST = {
 };
 
 describe("validateWidgetManifest", () => {
+  it("accepts the state:persist capability", () => {
+    expect(
+      validateWidgetManifest(
+        {
+          schemaVersion: 1,
+          name: "chart",
+          title: "Chart",
+          entrypoint: "index.html",
+          bindings: [],
+          capabilities: ["state:persist"],
+        },
+        "chart",
+      ).capabilities,
+    ).toEqual(["state:persist"]);
+  });
   it("accepts a well-formed manifest", () => {
     expect(validateWidgetManifest(VALID_MANIFEST)).toEqual(VALID_MANIFEST);
   });

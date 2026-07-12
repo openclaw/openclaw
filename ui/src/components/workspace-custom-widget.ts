@@ -160,7 +160,8 @@ export async function loadWidgetManifestView(
       bindings[parsedBinding.id] = parsedBinding.binding;
     }
     const capabilities = (Array.isArray(record.capabilities) ? record.capabilities : []).filter(
-      (cap): cap is WorkspaceWidgetCapability => cap === "data:read" || cap === "prompt:send",
+      (cap): cap is WorkspaceWidgetCapability =>
+        cap === "data:read" || cap === "prompt:send" || cap === "state:persist",
     );
     // The approval gate hashes the manifest's declared entrypoint. Loading a
     // different file would mount code the operator never approved.
@@ -236,6 +237,39 @@ export function attachWidgetBridge(params: {
           deliver: false,
           idempotencyKey: generateUUID(),
         });
+      },
+      getWidgetState: async () => {
+        if (!context.client) {
+          throw new Error("Not connected.");
+        }
+        const payload = (await context.client.request("workspaces.widget.state.get", {
+          widgetId: widget.id,
+        })) as { state?: unknown; version?: unknown } | null;
+        const version = payload?.version;
+        return {
+          state: payload?.state ?? null,
+          ...(typeof version === "number" && Number.isInteger(version) && version >= 0
+            ? { version }
+            : {}),
+        };
+      },
+      setWidgetState: async (state, expectedVersion) => {
+        if (!context.client) {
+          throw new Error("Not connected.");
+        }
+        const payload = (await context.client.request("workspaces.widget.state.set", {
+          widgetId: widget.id,
+          state,
+          ...(expectedVersion !== undefined ? { expectedVersion } : {}),
+        })) as { version?: unknown } | null;
+        if (
+          typeof payload?.version !== "number" ||
+          !Number.isInteger(payload.version) ||
+          payload.version < 1
+        ) {
+          throw new Error("Invalid widget state response.");
+        }
+        return { version: payload.version };
       },
     });
 
