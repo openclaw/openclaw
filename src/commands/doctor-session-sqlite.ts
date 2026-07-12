@@ -27,6 +27,7 @@ import { compactDoctorSessionSqliteTarget } from "./doctor-session-sqlite-compac
 import {
   assertSafeSessionSqliteMigrationDirectory,
   assertSafeSessionSqliteMigrationMove,
+  canonicalMigrationFilePath,
   createSessionSqliteMigrationRun,
   recordCompletedMigrationMove,
   recordCompletedMigrationMoves,
@@ -1168,8 +1169,8 @@ function canonicalFilePath(filePath: string): string {
 function createMigrationTargetInput(target: SessionStoreTarget): SessionSqliteMigrationTargetInput {
   return {
     agentId: target.agentId,
-    sqlitePath: resolveTargetSqlitePath(target),
-    storePath: target.storePath,
+    sqlitePath: canonicalMigrationFilePath(resolveTargetSqlitePath(target)),
+    storePath: canonicalMigrationFilePath(target.storePath),
   };
 }
 
