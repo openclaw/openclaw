@@ -16,6 +16,11 @@ import type { SlackAppMentionEvent, SlackMessageEvent } from "../../types.js";
 import { normalizeSlackChannelType } from "../channel-type.js";
 import type { SlackMonitorContext } from "../context.js";
 import { resolveSlackEventScope, type SlackEventScope } from "../event-scope.js";
+import {
+  buildSlackInboundContentVersion,
+  hasSlackInboundDeliverableMedia,
+  withSlackInboundContentVersion,
+} from "../inbound-delivery-identity.js";
 import type { SlackMessageHandler } from "../message-handler.js";
 import type { SlackMessageChangedEvent } from "../types.js";
 import { resolveSlackMessageSubtypeHandler } from "./message-subtype-handlers.js";
@@ -160,19 +165,6 @@ function resolveAssistantMessageChangedInbound(params: {
   };
 }
 
-function slackFileKeyList(value: unknown): string {
-  if (!Array.isArray(value)) {
-    return "";
-  }
-  return value
-    .map((file) => {
-      const record = asRecord(file);
-      return asString(record?.id) ?? asString(record?.name) ?? "";
-    })
-    .filter(Boolean)
-    .join(",");
-}
-
 /**
  * Slack finalizes file uploads asynchronously: a message posted with (multiple)
  * attachments can reach the app with an incomplete file set — or none at all —
@@ -181,12 +173,9 @@ function slackFileKeyList(value: unknown): string {
  * notifications silently drops the user's documents.
  *
  * Promote a user-authored `message_changed` back into the regular message
- * pipeline only when it actually delivers new content: the file set differs
- * from `previous_message`, or text appeared where there was none, or the text
- * changed alongside attached files. Plain edits keep flowing to the
- * system-event path so replies are not re-triggered (see #28834), and the
- * downstream seen-message dedupe still applies to the promoted event's
- * original `ts`.
+ * pipeline only when its nested `file_share` carries a new media version.
+ * Plain edits keep flowing to the system-event path so replies are not
+ * re-triggered (see #28834).
  */
 function resolveFileShareMessageChangedInbound(params: {
   event: SlackMessageEvent;
@@ -215,41 +204,37 @@ function resolveFileShareMessageChangedInbound(params: {
   if (!senderId || !isSlackUserId(senderId)) {
     return undefined;
   }
-  const nextText = asString(next.text)?.trim() ?? "";
-  const nextFiles = Array.isArray(next.files) ? next.files : [];
-  const nextAttachments = Array.isArray(next.attachments) ? next.attachments : [];
-  if (!nextText && nextFiles.length === 0 && nextAttachments.length === 0) {
+  if (!hasSlackInboundDeliverableMedia(next)) {
     return undefined;
   }
   const previous = asRecord(changed.previous_message) as SlackAssistantMessageRecord | undefined;
-  const prevText = asString(previous?.text)?.trim() ?? "";
-  const deliversNewContent =
-    slackFileKeyList(next.files) !== slackFileKeyList(previous?.files) ||
-    (!prevText && Boolean(nextText)) ||
-    (prevText !== nextText && nextFiles.length > 0);
-  if (!deliversNewContent) {
+  const contentVersion = buildSlackInboundContentVersion(next);
+  if (contentVersion === buildSlackInboundContentVersion(previous ?? {})) {
     return undefined;
   }
   const channelType = normalizeSlackChannelType(
     asString((changed as SlackMessageChangedEvent & { channel_type?: unknown }).channel_type),
     changed.channel,
   );
-  return {
-    type: "message",
-    ...(nextSubtype ? { subtype: nextSubtype } : {}),
-    channel: changed.channel ?? params.event.channel,
-    ...(channelType ? { channel_type: channelType } : {}),
-    user: senderId,
-    text: asString(next.text),
-    ts: asString(next.ts) ?? asString(changed.event_ts),
-    thread_ts: asString(next.thread_ts),
-    event_ts: changed.event_ts,
-    files: Array.isArray(next.files) ? (next.files as SlackMessageEvent["files"]) : undefined,
-    attachments: Array.isArray(next.attachments)
-      ? (next.attachments as SlackMessageEvent["attachments"])
-      : undefined,
-    blocks: Array.isArray(next.blocks) ? (next.blocks as SlackMessageEvent["blocks"]) : undefined,
-  };
+  return withSlackInboundContentVersion(
+    {
+      type: "message",
+      ...(nextSubtype ? { subtype: nextSubtype } : {}),
+      channel: changed.channel ?? params.event.channel,
+      ...(channelType ? { channel_type: channelType } : {}),
+      user: senderId,
+      text: asString(next.text),
+      ts: asString(next.ts) ?? asString(changed.event_ts),
+      thread_ts: asString(next.thread_ts),
+      event_ts: changed.event_ts,
+      files: Array.isArray(next.files) ? (next.files as SlackMessageEvent["files"]) : undefined,
+      attachments: Array.isArray(next.attachments)
+        ? (next.attachments as SlackMessageEvent["attachments"])
+        : undefined,
+      blocks: Array.isArray(next.blocks) ? (next.blocks as SlackMessageEvent["blocks"]) : undefined,
+    },
+    contentVersion,
+  );
 }
 
 export function registerSlackMessageEvents(params: {
@@ -305,10 +290,6 @@ export function registerSlackMessageEvents(params: {
         logVerbose("slack: drop enterprise bot-authored message");
         return;
       }
-      if (eventScope && message.subtype && message.subtype !== "file_share") {
-        logVerbose(`slack: drop enterprise message subtype=${message.subtype}`);
-        return;
-      }
       const assistantChangedInbound = resolveAssistantMessageChangedInbound({
         event: message,
         ctx,
@@ -346,6 +327,11 @@ export function registerSlackMessageEvents(params: {
           source: "message",
           ...(eventScope ? { eventScope, awaitDispatch: true } : {}),
         });
+        return;
+      }
+
+      if (eventScope && message.subtype && message.subtype !== "file_share") {
+        logVerbose(`slack: drop enterprise message subtype=${message.subtype}`);
         return;
       }
 

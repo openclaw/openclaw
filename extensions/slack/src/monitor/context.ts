@@ -155,12 +155,12 @@ export type SlackMonitorContext = {
   logger: ReturnType<typeof getChildLogger>;
   markMessageSeen: (
     channelId: string | undefined,
-    ts?: string,
+    deliveryId?: string,
     eventScope?: SlackEventScope,
   ) => boolean;
   releaseSeenMessage: (
     channelId: string | undefined,
-    ts?: string,
+    deliveryId?: string,
     eventScope?: SlackEventScope,
   ) => void;
   shouldDropMismatchedSlackEvent: (body: unknown) => boolean;
@@ -336,24 +336,24 @@ export function createSlackMonitorContext(params: {
 
   const markMessageSeen = (
     channelId: string | undefined,
-    ts?: string,
+    deliveryId?: string,
     eventScope?: SlackEventScope,
   ) => {
-    if (!channelId || !ts) {
+    if (!channelId || !deliveryId) {
       return false;
     }
-    return seenMessages.check(scopedKey(`${channelId}:${ts}`, eventScope));
+    return seenMessages.check(scopedKey(`${channelId}:${deliveryId}`, eventScope));
   };
 
   const releaseSeenMessage = (
     channelId: string | undefined,
-    ts?: string,
+    deliveryId?: string,
     eventScope?: SlackEventScope,
   ) => {
-    if (!channelId || !ts) {
+    if (!channelId || !deliveryId) {
       return;
     }
-    seenMessages.delete(scopedKey(`${channelId}:${ts}`, eventScope));
+    seenMessages.delete(scopedKey(`${channelId}:${deliveryId}`, eventScope));
   };
 
   const assistantContextKey = (channelId: string, threadTs: string, eventScope?: SlackEventScope) =>
