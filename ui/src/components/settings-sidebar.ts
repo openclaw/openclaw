@@ -48,6 +48,13 @@ type SettingsNavigationItemView = {
   blocks: readonly SettingsSearchBlock[];
 };
 
+function isRedundantRouteBlock(routeId: RouteId, block: SettingsSearchBlock): boolean {
+  const blockLabel = normalizeLowercaseStringOrEmpty(block.label);
+  return [settingsNavigationLabelForRoute(routeId), titleForRoute(routeId)].some(
+    (label) => normalizeLowercaseStringOrEmpty(label) === blockLabel,
+  );
+}
+
 function filterSettingsNavigationGroups(
   searchQuery: string,
   blockMatches: readonly SettingsSearchBlock[],
@@ -82,10 +89,13 @@ function filterSettingsNavigationGroups(
     });
   });
   const blocksByRoute = new Map<RouteId, SettingsSearchBlock[]>();
+  const seenBlocks = new Set<string>();
   for (const block of blockMatches) {
-    if (includedRoutes.has(block.routeId)) {
+    const blockKey = `${block.routeId}\u0000${block.search ?? ""}\u0000${block.hash}`;
+    if (seenBlocks.has(blockKey)) {
       continue;
     }
+    seenBlocks.add(blockKey);
     const routeBlocks = blocksByRoute.get(block.routeId) ?? [];
     routeBlocks.push(block);
     blocksByRoute.set(block.routeId, routeBlocks);
@@ -96,12 +106,17 @@ function filterSettingsNavigationGroups(
       ? [
           {
             labelKey: null,
-            items: pageRoutes.map((routeId) => ({ routeId, blocks: [] })),
+            items: pageRoutes.map((routeId) => ({
+              routeId,
+              blocks: (blocksByRoute.get(routeId) ?? []).filter(
+                (block) => !isRedundantRouteBlock(routeId, block),
+              ),
+            })),
           },
         ]
       : []),
     ...allRoutes
-      .filter((routeId) => blocksByRoute.has(routeId))
+      .filter((routeId) => !includedRoutes.has(routeId) && blocksByRoute.has(routeId))
       .map((routeId) => ({
         labelKey: null,
         items: [{ routeId, blocks: blocksByRoute.get(routeId) ?? [] }],

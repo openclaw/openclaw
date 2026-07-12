@@ -102,6 +102,52 @@ describe("settings sidebar search", () => {
     });
   });
 
+  it("keeps a precise block result when its owning page also matches", () => {
+    const onNavigate = vi.fn();
+    render(
+      renderSettingsSidebar({
+        basePath: "",
+        activeRouteId: "config",
+        connected: true,
+        version: "",
+        updateAvailable: null,
+        updateRunning: false,
+        onUpdate: vi.fn(),
+        searchQuery: "infrastructure",
+        searchBlockMatches: [
+          {
+            routeId: "infrastructure",
+            label: "Browser",
+            search: "?section=browser",
+            hash: "#config-section-browser",
+          },
+        ],
+        onExit: vi.fn(),
+        onNavigate,
+        onSearchQueryChange: vi.fn(),
+        preloadTimers: new Map(),
+      }),
+      container,
+    );
+
+    const resultLabels = [
+      ...container.querySelectorAll(
+        ".settings-sidebar__item-label, .settings-sidebar__subitem-label",
+      ),
+    ].map((item) => item.textContent?.trim());
+    expect(resultLabels).toEqual(["Infrastructure", "Browser"]);
+
+    container
+      .querySelector<HTMLAnchorElement>(
+        '.settings-sidebar__subitem[href="/settings/infrastructure?section=browser#config-section-browser"]',
+      )
+      ?.click();
+    expect(onNavigate).toHaveBeenCalledWith("infrastructure", {
+      search: "?section=browser",
+      hash: "#config-section-browser",
+    });
+  });
+
   it("filters localized routes and groups while preserving navigation", () => {
     let searchQuery = "";
     const onNavigate = vi.fn();
