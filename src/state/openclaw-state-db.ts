@@ -11,6 +11,10 @@ import {
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
+import {
+  repairCanonicalSqliteUniqueIndexes,
+  type CanonicalSqliteUniqueIndex,
+} from "../infra/sqlite-index-schema.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import {
@@ -42,6 +46,19 @@ export const OPENCLAW_STATE_SCHEMA_VERSION = 2;
 export const OPENCLAW_SQLITE_BUSY_TIMEOUT_MS = 5_000;
 const OPENCLAW_STATE_DIR_MODE = 0o700;
 const OPENCLAW_STATE_FILE_MODE = 0o600;
+const OPENCLAW_STATE_CANONICAL_UNIQUE_INDEXES = [
+  {
+    name: "idx_operator_approvals_resolution_ref",
+    definition: "ON operator_approvals(resolution_ref)",
+  },
+  {
+    name: "idx_worker_environments_provider_lease",
+    definition: `
+      ON worker_environments(provider_id, lease_id)
+      WHERE lease_id IS NOT NULL
+    `,
+  },
+] as const satisfies readonly CanonicalSqliteUniqueIndex[];
 
 /** Open shared SQLite database handle plus WAL maintenance lifecycle. */
 export type OpenClawStateDatabase = {
@@ -78,6 +95,44 @@ function assertSupportedSchemaVersion(db: DatabaseSync, pathname: string): void 
       pathname,
       userVersion,
       OPENCLAW_STATE_SCHEMA_VERSION,
+    );
+  }
+}
+
+/** Require the canonical shared-state owner and schema before offline file maintenance. */
+export function assertOpenClawStateDatabaseForMaintenance(
+  database: DatabaseSync,
+  options: { pathname: string },
+): void {
+  const userVersion = readSqliteUserVersion(database);
+  if (userVersion > OPENCLAW_STATE_SCHEMA_VERSION) {
+    throw createNewerSqliteSchemaVersionError(
+      "OpenClaw state database",
+      options.pathname,
+      userVersion,
+      OPENCLAW_STATE_SCHEMA_VERSION,
+    );
+  }
+  if (userVersion !== OPENCLAW_STATE_SCHEMA_VERSION) {
+    throw new Error(
+      `OpenClaw state database ${options.pathname} uses schema version ${userVersion}; run openclaw doctor --fix before compacting it.`,
+    );
+  }
+
+  const metadata = database
+    .prepare("SELECT role, schema_version FROM schema_meta WHERE meta_key = 'primary' LIMIT 1")
+    .get() as { role?: unknown; schema_version?: unknown } | undefined;
+  if (metadata?.role !== "global") {
+    const role = typeof metadata?.role === "string" ? metadata.role : "missing";
+    throw new Error(
+      `OpenClaw state database ${options.pathname} has schema role ${role}; expected global.`,
+    );
+  }
+  if (metadata.schema_version !== OPENCLAW_STATE_SCHEMA_VERSION) {
+    const schemaVersion =
+      typeof metadata.schema_version === "number" ? metadata.schema_version : "invalid";
+    throw new Error(
+      `OpenClaw state database ${options.pathname} metadata schema version ${schemaVersion} does not match ${OPENCLAW_STATE_SCHEMA_VERSION}; run openclaw doctor --fix before compacting it.`,
     );
   }
 }
@@ -1459,6 +1514,7 @@ function ensureSchema(db: DatabaseSync, pathname: string): void {
       ensureAdditiveStateColumns(db);
       assertCanonicalStateSchemaShape(db, pathname);
       db.exec(OPENCLAW_STATE_SCHEMA_SQL);
+      repairCanonicalSqliteUniqueIndexes(db, pathname, OPENCLAW_STATE_CANONICAL_UNIQUE_INDEXES);
       // Retired node_pairing_* tables were created by earlier schema revisions but
       // never had a shipped writer (the node surface lives on device_pairing_paired
       // records), so dropping the always-empty tables is safe, not destructive.
