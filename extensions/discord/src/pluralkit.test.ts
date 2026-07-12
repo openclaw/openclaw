@@ -138,9 +138,14 @@ describe("fetchPluralKitMessageInfo", () => {
     const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
       observedSignal = init?.signal ?? undefined;
       return await new Promise<Response>((_resolve, reject) => {
-        observedSignal?.addEventListener("abort", () => reject(observedSignal?.reason), {
-          once: true,
-        });
+        observedSignal?.addEventListener(
+          "abort",
+          () => {
+            const reason = observedSignal?.reason;
+            reject(reason instanceof Error ? reason : new Error("PluralKit request aborted"));
+          },
+          { once: true },
+        );
       });
     });
 
