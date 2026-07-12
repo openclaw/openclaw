@@ -79,6 +79,7 @@ const LARGE_PASTE_TEXT_THRESHOLD = 1000;
 const LARGE_PASTE_TEXT_MIME_TYPE = "text/plain";
 const LARGE_PASTE_TEXT_FILE_PREFIX = "pasted-text-";
 const PASTED_TEXT_PREVIEW_MAX_LENGTH = 20;
+const pastedTextPreviews = new WeakMap<ChatAttachment, string>();
 
 type ChatComposerProps = {
   paneId: string;
@@ -1122,18 +1123,26 @@ function isLargePastedTextAttachment(attachment: ChatAttachment): boolean {
   );
 }
 
-function createLargePastedTextAttachment(text: string): Promise<ChatAttachment | null> {
+function encodeTextAsDataUrl(text: string): string {
+  const bytes = new TextEncoder().encode(text);
+  const chunks: string[] = [];
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    chunks.push(String.fromCharCode(...bytes.subarray(offset, offset + chunkSize)));
+  }
+  return `data:${LARGE_PASTE_TEXT_MIME_TYPE};base64,${btoa(chunks.join(""))}`;
+}
+
+function createLargePastedTextAttachment(text: string): ChatAttachment {
   const file = new File([text], `${LARGE_PASTE_TEXT_FILE_PREFIX}${Date.now()}.txt`, {
     type: LARGE_PASTE_TEXT_MIME_TYPE,
   });
-  return new Promise((resolve) => {
-    const reader = new FileReader();
-    reader.addEventListener("load", () => {
-      resolve(chatAttachmentFromFile(file, reader.result as string));
-    });
-    reader.addEventListener("error", () => resolve(null));
-    reader.readAsDataURL(file);
-  });
+  const attachment = chatAttachmentFromFile(file, encodeTextAsDataUrl(text));
+  const preview = compactPastedTextPreview(text);
+  if (preview) {
+    pastedTextPreviews.set(attachment, preview);
+  }
+  return attachment;
 }
 
 function readTextFromDataUrl(dataUrl: string): string | null {
@@ -1174,11 +1183,7 @@ function compactPastedTextPreview(text: string): string | null {
 }
 
 function pastedTextPreview(attachment: ChatAttachment): string {
-  const dataUrl = getChatAttachmentDataUrl(attachment);
-  const text = dataUrl ? readTextFromDataUrl(dataUrl) : null;
-  return text
-    ? (compactPastedTextPreview(text) ?? attachment.fileName ?? "Attached file")
-    : (attachment.fileName ?? "Attached file");
+  return pastedTextPreviews.get(attachment) ?? attachment.fileName ?? "Attached file";
 }
 
 function appendPastedTextToDraft(draft: string, text: string): string {
@@ -1197,12 +1202,8 @@ function handleLargeTextPaste(e: ClipboardEvent, props: ChatAttachmentControlsPr
     return false;
   }
   e.preventDefault();
-  void createLargePastedTextAttachment(text).then((attachment) => {
-    if (!attachment) {
-      return;
-    }
-    props.onAttachmentsChange?.([...currentAttachments(props), attachment]);
-  });
+  const attachment = createLargePastedTextAttachment(text);
+  props.onAttachmentsChange([...currentAttachments(props), attachment]);
   return true;
 }
 
