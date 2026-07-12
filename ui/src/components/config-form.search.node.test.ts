@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { matchesNodeSearch, parseConfigSearchQuery } from "./config-form.node.ts";
+import { matchesNodeSearch, parseConfigSearchQuery } from "./config-form.search.ts";
 
 const schema = {
   type: "object",

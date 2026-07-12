@@ -1,5 +1,7 @@
 // Detects GitHub pull requests for a session's working branch so the Control
 // UI chat view can pin PR status chips above the composer.
+import fs from "node:fs/promises";
+import nodePath from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { runGit } from "../agents/worktrees/git.js";
@@ -186,6 +188,42 @@ const SHORTSTAT_DELETIONS = /(\d+) deletion/;
 // Matches sessions-diff's untracked scan bound; stats degrade to an
 // undercount past it instead of stalling the request.
 const MAX_UNTRACKED_STAT_FILES = 100;
+// Oversized untracked files count 0 lines instead of being read; the row's
+// stats are an approximation, not a patch surface.
+const MAX_UNTRACKED_STAT_BYTES = 512 * 1024;
+
+/**
+ * Line count for one untracked file, computed in-process: this runs on the
+ * chat view's 60s poll, so it must not spawn one git subprocess per path.
+ * lstat gates on regular files so FIFOs/sockets can never block the RPC and
+ * symlinks never resolve outside the checkout; only a line count is exposed,
+ * so sessions-diff's hardlink content guard is unnecessary here.
+ */
+async function untrackedFileAdditions(root: string, filePath: string): Promise<number> {
+  try {
+    const abs = nodePath.resolve(root, filePath);
+    const info = await fs.lstat(abs);
+    if (!info.isFile() || info.size === 0 || info.size > MAX_UNTRACKED_STAT_BYTES) {
+      return 0;
+    }
+    const body = await fs.readFile(abs);
+    // Binary files count 0 lines, mirroring git's shortstat behavior.
+    if (body.subarray(0, 8192).includes(0)) {
+      return 0;
+    }
+    let lines = 0;
+    for (const byte of body) {
+      if (byte === 10) {
+        lines += 1;
+      }
+    }
+    // A trailing fragment without a newline is still a line git would add.
+    return body[body.length - 1] === 10 ? lines : lines + 1;
+  } catch {
+    // Unreadable paths just do not count toward the size.
+    return 0;
+  }
+}
 
 async function untrackedAdditions(root: string): Promise<number> {
   const listing = await gitOutput(root, ["ls-files", "--others", "--exclude-standard", "-z"]);
@@ -194,27 +232,8 @@ async function untrackedAdditions(root: string): Promise<number> {
   }
   const paths = listing.split("\0").filter(Boolean);
   let additions = 0;
-  // Counts only, never patch content, so the hardlink/symlink content guards
-  // in sessions-diff are unnecessary here; binary files count as 0 lines.
   for (const filePath of paths.slice(0, MAX_UNTRACKED_STAT_FILES)) {
-    try {
-      const result = await runGit(root, [
-        "diff",
-        "--shortstat",
-        "--no-ext-diff",
-        "--no-textconv",
-        "--no-index",
-        "--",
-        "/dev/null",
-        filePath,
-      ]);
-      // Exit code 1 is git's "files differ" for --no-index, not a failure.
-      if (result.code === 0 || result.code === 1) {
-        additions += Number(SHORTSTAT_INSERTIONS.exec(result.stdout.trim())?.[1] ?? 0);
-      }
-    } catch {
-      // Unreadable paths just do not count toward the size.
-    }
+    additions += await untrackedFileAdditions(root, filePath);
   }
   return additions;
 }
@@ -500,7 +519,7 @@ async function fetchBranchPullRequests(
   context: SessionPullRequestGitContext,
   fetchImpl: typeof fetch,
   token: string | undefined,
-): Promise<ControlUiSessionPullRequest[]> {
+): Promise<{ pullRequests: ControlUiSessionPullRequest[]; rateLimited: boolean }> {
   const head = `${context.owner}:${context.branch}`;
   let items = parsePullList(
     await fetchGitHubJson(pullsByHeadUrl(context.owner, context.repo, head), fetchImpl, token),
@@ -514,11 +533,32 @@ async function fetchBranchPullRequests(
       );
     }
   }
-  return await Promise.all(
-    items
-      .slice(0, MAX_PULL_REQUESTS)
-      .map((item) => finishPullRequest(item, context.branch, fetchImpl, token)),
-  );
+  const capped = items.slice(0, MAX_PULL_REQUESTS);
+  try {
+    const pullRequests = await Promise.all(
+      capped.map((item) => finishPullRequest(item, context.branch, fetchImpl, token)),
+    );
+    return { pullRequests, rateLimited: false };
+  } catch (error) {
+    if (!(error instanceof ControlUiGitHubError && error.statusCode === 429)) {
+      throw error;
+    }
+    // Quota ran out between the list fetch and the per-PR detail fetches:
+    // keep the proven PR list as state-only chips instead of dropping it, or
+    // a cold cache would show a Create PR row despite a known open PR.
+    return {
+      pullRequests: capped.map((item) => ({
+        number: item.number,
+        owner: item.owner,
+        repo: item.repo,
+        branch: context.branch,
+        title: item.title,
+        url: item.url,
+        state: item.state,
+      })),
+      rateLimited: true,
+    };
+  }
 }
 
 async function refreshBranchPullRequests(
@@ -527,9 +567,16 @@ async function refreshBranchPullRequests(
   entry: CacheEntry,
 ): Promise<ControlUiSessionPullRequests> {
   try {
-    const pullRequests = await fetchBranchPullRequests(context, fetchImpl, githubApiToken());
-    entry.lastGood = pullRequests;
-    return { pullRequests, rateLimited: false };
+    const result = await fetchBranchPullRequests(context, fetchImpl, githubApiToken());
+    // Degraded state-only chips still become lastGood: a later refresh that
+    // rate-limits at the list fetch must serve the proven PRs, not an empty
+    // list that would resurrect the Create PR row mid-outage. The shortened
+    // expiry makes the next window retry full detail.
+    entry.lastGood = result.pullRequests;
+    if (result.rateLimited) {
+      entry.expiresAt = Date.now() + RATE_LIMIT_CACHE_MS;
+    }
+    return result;
   } catch (error) {
     const rateLimited = error instanceof ControlUiGitHubError && error.statusCode === 429;
     entry.expiresAt = Date.now() + (rateLimited ? RATE_LIMIT_CACHE_MS : FAILURE_CACHE_MS);
