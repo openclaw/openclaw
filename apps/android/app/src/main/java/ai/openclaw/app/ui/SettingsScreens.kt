@@ -2031,7 +2031,7 @@ private fun ExecApprovalCard(
         }
         ClawStatusPill(text = if (resolving) nativeString("Sending") else nativeString("Review"), status = if (resolving) ClawStatus.Warning else ClawStatus.Success)
       }
-      ExecApprovalCommandReview(approval.commandTextSource?.let(::gatewayExecApprovalTextForDisplay) ?: approval.commandText)
+      ExecApprovalCommandReview(approval.commandText.resolveNativeTextResource())
       approval.warningText?.let { warningText ->
         Text(text = warningText, style = ClawTheme.type.body, color = ClawTheme.colors.warning)
       }

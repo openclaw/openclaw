@@ -1,6 +1,9 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.i18n.nativeText
+import ai.openclaw.app.i18n.verbatimText
 import ai.openclaw.app.node.asObjectOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -16,8 +19,7 @@ import java.util.concurrent.atomic.AtomicLong
 
 data class GatewayExecApprovalSummary(
   val id: String,
-  val commandText: String,
-  val commandTextSource: String? = null,
+  val commandText: NativeText,
   val commandPreview: String?,
   val warningText: String?,
   val allowedDecisions: List<String>,
@@ -238,8 +240,7 @@ internal fun parseGatewayExecApprovalListEntry(item: JsonElement): GatewayExecAp
   // details, so rendering waits for the reviewer-safe unified approval projection.
   return GatewayExecApprovalSummary(
     id = id,
-    commandText = gatewayExecApprovalCommandRequestText(),
-    commandTextSource = "Command request",
+    commandText = nativeText("Command request"),
     commandPreview = null,
     warningText = null,
     allowedDecisions = emptyList(),
@@ -250,8 +251,6 @@ internal fun parseGatewayExecApprovalListEntry(item: JsonElement): GatewayExecAp
     expiresAtMs = expiresAtMs,
   )
 }
-
-private fun gatewayExecApprovalCommandRequestText(): String = "Command request"
 
 internal fun gatewayExecApprovalTextForDisplay(text: String): String =
   when (text) {
@@ -346,7 +345,7 @@ internal fun parseLegacyGatewayExecApprovalGetPayload(
     GatewayExecApprovalSnapshot.Pending(
       GatewayExecApprovalSummary(
         id = id,
-        commandText = commandText,
+        commandText = verbatimText(commandText),
         commandPreview = commandPreview.value?.takeIf { it != commandText },
         warningText = null,
         allowedDecisions = allowedDecisions,
@@ -451,7 +450,7 @@ private fun parseGatewayExecApprovalPresentation(
   val agentId = presentation.optionalString("agentId", requireNonEmpty = true) ?: return null
   return GatewayExecApprovalSummary(
     id = id,
-    commandText = commandText,
+    commandText = verbatimText(commandText),
     commandPreview = commandPreview.value?.takeIf { it != commandText },
     warningText = warningText.value,
     allowedDecisions = allowedDecisions,
