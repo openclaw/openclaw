@@ -526,9 +526,13 @@ describe("release Telegram QA workflow", () => {
     expect(runStep?.env?.OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS).toBe("60000");
     expect(runStep?.env?.OPENCLAW_QA_CREDENTIAL_LEASE_TTL_MS).toBe("7200000");
     expect(runStep?.env?.OPENCLAW_QA_TELEGRAM_SUT_CLEANUP_TIMEOUT_MS).toBe("60000");
+    expect(runStep?.env?.TARGET_REF).toBe("${{ inputs.target_ref }}");
     expect(runStep?.run).toContain("trap terminate_sut_uid_on_exit EXIT");
     expect(runStep?.run).toContain('"$OPENCLAW_QA_TELEGRAM_SUT_OPENCLAW_COMMAND" --terminate-uid');
     expect(runStep?.run).toContain("run_qa_attempt preflight --scenario channel-canary");
+    expect(runStep?.run).toContain('if [[ "$TARGET_REF" == extended-stable/* ]]');
+    expect(runStep?.run).toContain('qa_model="mock-openai/gpt-5.5"');
+    expect(runStep?.run).toContain('--model "$qa_model"');
     expect(runStep?.run).toContain(
       "Telegram channel canary failed; skipping the remaining scenarios.",
     );
