@@ -29,7 +29,7 @@ import {
   prepareGatewaySuspension,
   replaceLaunchAgentProgramArgument,
   repointManagedGatewayDeployment,
-  resolveConfiguredPluginLoadPaths,
+  resolveManagedPluginSourceRoots,
   resolveManagedGatewayEntrypoint,
   runBuiltGatewayCall,
   verifyGatewayReadiness,
@@ -409,15 +409,22 @@ describe("openclaw live updater", () => {
     ).toMatchObject({ entries: 5, errorCount: 5 });
   });
 
-  test("resolves configured plugin paths without requiring a service working directory", () => {
-    expect(resolveConfiguredPluginLoadPaths([], undefined)).toEqual([]);
-    expect(resolveConfiguredPluginLoadPaths(["/opt/openclaw-plugin"], undefined)).toEqual([
-      "/opt/openclaw-plugin",
+  test("uses every enabled plugin root reported by managed discovery", () => {
+    expect(
+      resolveManagedPluginSourceRoots({
+        plugins: [
+          { id: "configured", rootDir: "/opt/configured-plugin" },
+          { id: "workspace", rootDir: "/srv/workspace/.openclaw/extensions/workspace" },
+          { id: "global", rootDir: "/Users/test/.openclaw/extensions/global" },
+        ],
+      }),
+    ).toEqual([
+      "/opt/configured-plugin",
+      "/srv/workspace/.openclaw/extensions/workspace",
+      "/Users/test/.openclaw/extensions/global",
     ]);
-    expect(resolveConfiguredPluginLoadPaths(["./plugins/example"], undefined)).toBeNull();
-    expect(resolveConfiguredPluginLoadPaths(["./plugins/example"], "/srv/openclaw")).toEqual([
-      "/srv/openclaw/plugins/example",
-    ]);
+    expect(resolveManagedPluginSourceRoots({ plugins: [{ id: "unknown" }] })).toBeNull();
+    expect(resolveManagedPluginSourceRoots({})).toBeNull();
   });
 
   test("retries bounded Gateway readiness after restart", () => {

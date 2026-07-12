@@ -1665,7 +1665,7 @@ function readFallbackGatewayLogs(sinceMs) {
   return contents.join("\n");
 }
 
-function readConfiguredPluginLoadPaths(checkout, deployment) {
+function readManagedPluginSourceRoots(checkout, deployment) {
   let managedDeployment = deployment;
   try {
     managedDeployment ??= readManagedGatewayLaunchAgent(checkout);
@@ -1675,37 +1675,28 @@ function readConfiguredPluginLoadPaths(checkout, deployment) {
   try {
     const output = runBuiltGatewayCli(
       checkout,
-      ["config", "get", "plugins.load", "--json"],
+      ["plugins", "list", "--enabled", "--json"],
       managedDeployment,
       { stderr: "pipe" },
     );
-    return resolveConfiguredPluginLoadPaths(
-      JSON.parse(output)?.paths,
-      managedDeployment.workingDirectory,
-    );
-  } catch (error) {
-    const errorOutput = [error?.stdout, error?.stderr, error?.message]
-      .filter((entry) => typeof entry === "string" || Buffer.isBuffer(entry))
-      .map((entry) => String(entry))
-      .join("\n");
-    if (errorOutput.includes("Config path not found: plugins.load")) {
-      return [];
-    }
+    return resolveManagedPluginSourceRoots(JSON.parse(output));
+  } catch {
     return null;
   }
 }
 
-export function resolveConfiguredPluginLoadPaths(paths, workingDirectory) {
-  if (!Array.isArray(paths)) {
-    return [];
-  }
-  const entries = paths.filter((entry) => typeof entry === "string");
-  if (!workingDirectory && entries.some((entry) => !path.isAbsolute(entry))) {
+export function resolveManagedPluginSourceRoots(report) {
+  if (!Array.isArray(report?.plugins)) {
     return null;
   }
-  return entries.map((entry) =>
-    path.isAbsolute(entry) ? entry : path.resolve(workingDirectory, entry),
-  );
+  const roots = [];
+  for (const plugin of report.plugins) {
+    if (typeof plugin?.rootDir !== "string" || plugin.rootDir.length === 0) {
+      return null;
+    }
+    roots.push(plugin.rootDir);
+  }
+  return roots;
 }
 
 function defaultAuditGatewayLogs(checkout, sinceMs, deployment = null) {
@@ -1736,7 +1727,7 @@ function defaultAuditGatewayLogs(checkout, sinceMs, deployment = null) {
     output,
     sinceMs,
     path.join(realpathSync(checkout), "dist"),
-    readConfiguredPluginLoadPaths(checkout, deployment),
+    readManagedPluginSourceRoots(checkout, deployment),
   );
   if (audit.errorCount > 0) {
     throw new UpdateInvariantError(
