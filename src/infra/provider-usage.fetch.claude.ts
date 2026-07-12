@@ -34,6 +34,12 @@ type ClaudeWebOrganizationsResponse = Array<{
   name?: string;
 }>;
 
+function parseResetTimestamp(value: unknown): number | undefined {
+  if (!value) return undefined;
+  const ts = new Date(value as string | number).getTime();
+  return Number.isFinite(ts) ? ts : undefined;
+}
+
 function buildClaudeUsageWindows(
   data: ClaudeUsageResponse,
   options?: { skipExtraUsage?: boolean },
@@ -44,7 +50,7 @@ function buildClaudeUsageWindows(
     windows.push({
       label: "5h",
       usedPercent: clampPercent(data.five_hour.utilization),
-      resetAt: data.five_hour.resets_at ? new Date(data.five_hour.resets_at).getTime() : undefined,
+      resetAt: data.five_hour.resets_at ? parseResetTimestamp(data.five_hour.resets_at) : undefined,
     });
   }
 
@@ -52,7 +58,7 @@ function buildClaudeUsageWindows(
     windows.push({
       label: "Week",
       usedPercent: clampPercent(data.seven_day.utilization),
-      resetAt: data.seven_day.resets_at ? new Date(data.seven_day.resets_at).getTime() : undefined,
+      resetAt: data.seven_day.resets_at ? parseResetTimestamp(data.seven_day.resets_at) : undefined,
     });
   }
 
@@ -78,7 +84,7 @@ function buildClaudeUsageWindows(
     windows.push({
       label,
       usedPercent: clampPercent(limit.percent ?? 0),
-      resetAt: limit.resets_at ? new Date(limit.resets_at).getTime() : undefined,
+      resetAt: limit.resets_at ? parseResetTimestamp(limit.resets_at) : undefined,
     });
   }
 
