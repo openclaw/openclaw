@@ -527,7 +527,7 @@ export const tr: TranslationMap = {
     unavailableDescription:
       "This approval could not be found or this device is not authorized to review it.",
     connectionErrorTitle: "Connection interrupted",
-    connectionErrorDescription: "The current decision is preserved. Reconnect to continue.",
+    connectionErrorDescription: "OpenClaw cannot confirm or record a decision while disconnected. Reconnect to check the current status.",
     retry: "Retry",
     execTitle: "Command approval",
     pending: "Waiting for your decision",
