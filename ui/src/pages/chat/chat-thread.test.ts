@@ -2303,11 +2303,7 @@ function mcpAppResult(viewId: string, toolCallId: string, timestamp: number) {
   };
 }
 
-function mcpAppLiveResult(
-  viewId: string,
-  toolCallId: string,
-  timestamp: number | undefined,
-) {
+function mcpAppLiveResult(viewId: string, toolCallId: string, timestamp: number | undefined) {
   const persisted = mcpAppResult(viewId, toolCallId, timestamp ?? 0);
   return {
     role: "assistant",
