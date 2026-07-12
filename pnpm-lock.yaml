@@ -581,19 +581,6 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
-  extensions/workspaces:
-    dependencies:
-      typebox:
-        specifier: 1.3.3
-        version: 1.3.3
-    devDependencies:
-      '@openclaw/plugin-sdk':
-        specifier: workspace:*
-        version: link:../../packages/plugin-sdk
-      openclaw:
-        specifier: workspace:*
-        version: link:../..
-
   extensions/crabbox:
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -937,8 +924,8 @@ importers:
   extensions/line:
     dependencies:
       '@line/bot-sdk':
-        specifier: 11.1.0
-        version: 11.1.0
+        specifier: 11.2.0
+        version: 11.2.0
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -1799,6 +1786,19 @@ importers:
         version: link:../..
 
   extensions/workboard:
+    dependencies:
+      typebox:
+        specifier: 1.3.3
+        version: 1.3.3
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
+  extensions/workspaces:
     dependencies:
       typebox:
         specifier: 1.3.3
@@ -3099,8 +3099,8 @@ packages:
   '@lezer/yaml@1.0.4':
     resolution: {integrity: sha512-2lrrHqxalACEbxIbsjhqGpSW8kWpUKuY6RHgnSAFZa6qK62wvnPxA8hGOwOoDbwHcOFs5M4o27mjGu+P7TvBmw==}
 
-  '@line/bot-sdk@11.1.0':
-    resolution: {integrity: sha512-i8EQziuuvNitMrqSHQfzmjiyz9CBA7KjhmAJhCWhZzbI0kElfbaOOVhxEYxJGul5Aar9dv6HrHUgPeDLNIghEQ==}
+  '@line/bot-sdk@11.2.0':
+    resolution: {integrity: sha512-JKYFa3jaPYWqgI4hnc0ls+7tMmUEgnFF0Jb48kscKcGOO8qh4hddJyiq8/TFqaTWWxXQeSgYd1o5zrHjt6FrpQ==}
     engines: {node: '>=22'}
 
   '@lit-labs/signals@0.3.0':
@@ -7232,13 +7232,13 @@ packages:
     resolution: {integrity: sha512-stxByr12oeeOyY2BlviTNQlYV5xOj47GirPr4yA1hE9JCtxfQN0+tVbkxwCtYDQWhEKWFHsEK48ORg5jrouCAg==}
     engines: {node: '>=20'}
 
-  smol-toml@1.7.0:
-    resolution: {integrity: sha512-aqVvWoyO21L23mb+drl4RmMXbf6N7FdHjAhTRA9ZBL7apWBgfWC16KjrASI+1p9GAroljyMHj6fK67i0UiTNvQ==}
-    engines: {node: '>=18'}
-
   smart-buffer@4.2.0:
     resolution: {integrity: sha512-94hK0Hh8rPqQl2xXc3HsaBoOXKV20MToPkcXvwbISWLEs+64sBq5kFgn2kJDHb1Pry9yrP0dxrCI9RRci7RXKg==}
     engines: {node: '>= 6.0.0', npm: '>= 3.0.0'}
+
+  smol-toml@1.7.0:
+    resolution: {integrity: sha512-aqVvWoyO21L23mb+drl4RmMXbf6N7FdHjAhTRA9ZBL7apWBgfWC16KjrASI+1p9GAroljyMHj6fK67i0UiTNvQ==}
+    engines: {node: '>= 18'}
 
   socks-proxy-agent@8.0.5:
     resolution: {integrity: sha512-HehCEsotFqbPW9sJ8WVYB6UbmIMv7kUUORIF2Nncq4VQvBfNBLibW9YZR5dlYCSUhwcD628pRllm7n+E+YTzJw==}
@@ -9251,7 +9251,7 @@ snapshots:
       '@lezer/highlight': 1.2.3
       '@lezer/lr': 1.4.10
 
-  '@line/bot-sdk@11.1.0':
+  '@line/bot-sdk@11.2.0':
     dependencies:
       '@types/node': 24.13.2
 
@@ -9390,6 +9390,15 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
+  '@modelcontextprotocol/ext-apps@1.7.4(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(zod@4.4.3)':
+    dependencies:
+      '@modelcontextprotocol/sdk': 1.29.0(zod@4.4.3)
+      '@standard-schema/spec': 1.1.0
+      zod: 4.4.3
+    optionalDependencies:
+      react: 19.2.4
+      react-dom: 19.2.4(react@19.2.4)
+
   '@modelcontextprotocol/sdk@1.29.0(zod@4.4.3)':
     dependencies:
       '@hono/node-server': 1.19.14(hono@4.12.25)
@@ -9411,15 +9420,6 @@ snapshots:
       zod-to-json-schema: 3.25.2(zod@4.4.3)
     transitivePeerDependencies:
       - supports-color
-
-  '@modelcontextprotocol/ext-apps@1.7.4(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(zod@4.4.3)':
-    dependencies:
-      '@modelcontextprotocol/sdk': 1.29.0(zod@4.4.3)
-      '@standard-schema/spec': 1.1.0
-      zod: 4.4.3
-    optionalDependencies:
-      react: 19.2.4
-      react-dom: 19.2.4(react@19.2.4)
 
   '@mozilla/readability@0.6.0': {}
 
@@ -13763,9 +13763,9 @@ snapshots:
       is-fullwidth-code-point: 5.1.0
     optional: true
 
-  smol-toml@1.7.0: {}
-
   smart-buffer@4.2.0: {}
+
+  smol-toml@1.7.0: {}
 
   socks-proxy-agent@8.0.5:
     dependencies:
