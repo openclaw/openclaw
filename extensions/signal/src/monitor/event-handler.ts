@@ -43,10 +43,7 @@ import {
 } from "openclaw/plugin-sdk/hook-runtime";
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
-import {
-  resolveBatchedReplyThreadingPolicy,
-  resolveImplicitCurrentMessageReplyAllowance,
-} from "openclaw/plugin-sdk/reply-reference";
+import { resolveBatchedReplyThreadingPolicy } from "openclaw/plugin-sdk/reply-reference";
 import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
 import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runtime";
 import { settleReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
@@ -518,8 +515,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       author: entry.senderRecipient,
       body: entry.nativeReplyBody ?? entry.bodyText,
       allowImplicitCurrentMessage:
-        replyToMode !== "off" &&
-        resolveImplicitCurrentMessageReplyAllowance(replyToMode, replyThreading),
+        replyToMode !== "off" && replyThreading?.implicitCurrentMessage !== "deny",
       state: { hasReplied: false },
     };
     const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
