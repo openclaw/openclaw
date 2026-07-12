@@ -843,7 +843,12 @@ function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
   if (record && "received" in record) {
     const received = (record as Record<string, unknown>).received;
     if (received !== undefined && received !== null) {
-      const receivedStr = typeof received === "string" ? `"${received}"` : String(received);
+      const receivedStr =
+        typeof received === "string"
+          ? `"${received}"`
+          : typeof received === "number" || typeof received === "boolean"
+            ? String(received)
+            : JSON.stringify(received);
       if (!enrichedMessage.includes(receivedStr)) {
         enrichedMessage = `${enrichedMessage}, got: ${receivedStr}`;
       }
