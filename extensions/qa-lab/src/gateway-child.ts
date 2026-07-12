@@ -420,8 +420,8 @@ export function buildQaForcedRuntimeEnvPatch(params: {
     throw new Error("forced Codex mock QA requires the managed mock provider URL");
   }
   patch.OPENCLAW_CODEX_APP_SERVER_ARGS = `app-server -c openai_base_url=${providerBaseUrl} --listen stdio://`;
-  patch.OPENAI_API_KEY = String(QA_MOCK_OPENAI_API_KEY);
-  patch.CODEX_API_KEY = String(QA_MOCK_OPENAI_API_KEY);
+  patch.OPENAI_API_KEY = QA_MOCK_OPENAI_API_KEY;
+  patch.CODEX_API_KEY = QA_MOCK_OPENAI_API_KEY;
   return patch;
 }
 

@@ -67,7 +67,9 @@ export function buildQaImageGenerationConfigPatch(input: QaImageGenerationPatchI
           baseUrl: QA_CODEX_OPENAI_CATALOG_BASE_URL,
           request: undefined,
           models: openAiCatalog.models.map((model) =>
-            model.id === "gpt-image-1" ? { ...model, baseUrl: input.providerBaseUrl } : model,
+            model.id === "gpt-image-1"
+              ? Object.assign({}, model, { baseUrl: input.providerBaseUrl })
+              : model,
           ),
         },
       },
