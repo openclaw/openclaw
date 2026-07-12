@@ -12,16 +12,7 @@ import {
 import { logVerbose } from "../globals.js";
 import { runExec } from "../process/exec.js";
 import { toErrorObject } from "./errors.js";
-
-function parsePossiblyNoisyJsonObject(stdout: string): Record<string, unknown> {
-  const trimmed = stdout.trim();
-  const start = trimmed.indexOf("{");
-  const end = trimmed.lastIndexOf("}");
-  if (start >= 0 && end > start) {
-    return JSON.parse(trimmed.slice(start, end + 1)) as Record<string, unknown>;
-  }
-  return JSON.parse(trimmed) as Record<string, unknown>;
-}
+import { parsePossiblyNoisyJsonObject } from "./noisy-json.js";
 
 /**
  * Locate Tailscale binary using multiple strategies:
@@ -134,7 +125,7 @@ export async function getTailnetHostname(exec: typeof runExec = runExec, detecte
         timeoutMs: 5000,
         maxBuffer: 400_000,
       });
-      const parsed = stdout ? parsePossiblyNoisyJsonObject(stdout) : {};
+      const parsed = stdout ? parsePossiblyNoisyJsonObject(stdout, isTailscaleStatusPayload) : {};
       const self =
         typeof parsed.Self === "object" && parsed.Self !== null
           ? (parsed.Self as Record<string, unknown>)
@@ -160,6 +151,32 @@ export async function getTailnetHostname(exec: typeof runExec = runExec, detecte
     lastError ?? new Error("Could not determine Tailscale DNS or IP"),
     "Non-Error thrown",
   );
+}
+
+function isTailscaleStatusPayload(payload: Record<string, unknown>): boolean {
+  const self =
+    typeof payload.Self === "object" && payload.Self !== null
+      ? (payload.Self as Record<string, unknown>)
+      : undefined;
+  if (typeof self?.DNSName === "string" && self.DNSName.trim()) {
+    return true;
+  }
+  if (hasTailnetIpList(self)) {
+    return true;
+  }
+  const peer = payload.Peer;
+  if (!peer || typeof peer !== "object") {
+    return false;
+  }
+  return Object.values(peer as Record<string, unknown>).some((value) => hasTailnetIpList(value));
+}
+
+function hasTailnetIpList(value: unknown): boolean {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const ips = (value as { TailscaleIPs?: unknown }).TailscaleIPs;
+  return Array.isArray(ips) && ips.some((ip) => typeof ip === "string" && ip.trim());
 }
 
 /**
@@ -300,8 +317,23 @@ export async function hasTailscaleFunnelRouteForPort(
   } catch {
     return false;
   }
-  const parsed = stdout ? parsePossiblyNoisyJsonObject(stdout) : {};
+  const parsed = stdout ? parsePossiblyNoisyJsonObject(stdout, isTailscaleFunnelPayload) : {};
   return tailscaleFunnelStatusCoversPort(parsed, port);
+}
+
+function isTailscaleFunnelPayload(payload: Record<string, unknown>): boolean {
+  const allowFunnel = readRecord(payload.AllowFunnel);
+  const web = readRecord(payload.Web);
+  if (allowFunnel && Object.values(allowFunnel).some((value) => value === true)) {
+    return true;
+  }
+  if (!web) {
+    return false;
+  }
+  return Object.values(web).some((hostEntry) => {
+    const handlers = readRecord(readRecord(hostEntry)?.Handlers);
+    return Boolean(handlers && Object.keys(handlers).length > 0);
+  });
 }
 
 const TAILSCALE_LOOPBACK_PROXY_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
@@ -475,7 +507,9 @@ export async function readTailscaleWhoisIdentity(
       timeoutMs: opts?.timeoutMs ?? 5_000,
       maxBuffer: 200_000,
     });
-    const parsed = result.stdout ? parsePossiblyNoisyJsonObject(result.stdout) : {};
+    const parsed = result.stdout
+      ? parsePossiblyNoisyJsonObject(result.stdout, isTailscaleWhoisPayload)
+      : {};
     const identity = parseWhoisIdentity(parsed);
     writeCachedWhois(normalized, identity, cacheTtlMs);
     return identity;
@@ -483,4 +517,8 @@ export async function readTailscaleWhoisIdentity(
     writeCachedWhois(normalized, null, errorTtlMs);
     return null;
   }
+}
+
+function isTailscaleWhoisPayload(payload: Record<string, unknown>): boolean {
+  return parseWhoisIdentity(payload) !== null;
 }

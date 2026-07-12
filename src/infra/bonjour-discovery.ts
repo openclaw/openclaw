@@ -6,6 +6,7 @@ import {
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { parsePossiblyNoisyJsonObject } from "./noisy-json.js";
 import { parseStrictInteger } from "./parse-finite-number.js";
 import { isTailnetIPv4 } from "./tailnet.js";
 import { resolveWideAreaDiscoveryDomain } from "./widearea-dns.js";
@@ -163,7 +164,7 @@ function parseDigSrv(stdout: string): { host: string; port: number } | null {
 }
 
 function parseTailscaleStatusIPv4s(stdout: string): string[] {
-  const parsed = stdout ? (JSON.parse(stdout) as Record<string, unknown>) : {};
+  const parsed = stdout ? parsePossiblyNoisyJsonObject(stdout, isTailscaleStatusPayload) : {};
   const out: string[] = [];
 
   const addIps = (value: unknown) => {
@@ -195,6 +196,25 @@ function parseTailscaleStatusIPv4s(stdout: string): string[] {
   }
 
   return uniqueStrings(out);
+}
+
+function isTailscaleStatusPayload(payload: Record<string, unknown>): boolean {
+  if (hasTailnetIpList(payload.Self)) {
+    return true;
+  }
+  const peer = payload.Peer;
+  if (!peer || typeof peer !== "object") {
+    return false;
+  }
+  return Object.values(peer as Record<string, unknown>).some((value) => hasTailnetIpList(value));
+}
+
+function hasTailnetIpList(value: unknown): boolean {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const ips = (value as { TailscaleIPs?: unknown }).TailscaleIPs;
+  return Array.isArray(ips) && ips.some((ip) => typeof ip === "string" && isTailnetIPv4(ip.trim()));
 }
 
 function parsePortOrUndefined(value: string | undefined): number | undefined {

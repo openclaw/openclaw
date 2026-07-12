@@ -71,7 +71,7 @@ describe("tailscale helpers", () => {
   it("parses noisy JSON output from tailscale status", async () => {
     const exec = vi.fn().mockResolvedValue({
       stdout:
-        'warning: stale state\n{"Self":{"DNSName":"noisy.tailnet.ts.net.","TailscaleIPs":["100.9.9.9"]}}\n',
+        'warning: stale state {"Self":{},"Peer":{}}\n{"Self":{"DNSName":"noisy.tailnet.ts.net.","TailscaleIPs":["100.9.9.9"]}}\nwarning: ignored {"after":true}\n',
     });
     const host = await getTailnetHostname(exec);
     expect(host).toBe("noisy.tailnet.ts.net");
@@ -80,7 +80,7 @@ describe("tailscale helpers", () => {
   it("parses noisy JSON output from tailscale whois", async () => {
     const exec = vi.fn().mockResolvedValue({
       stdout:
-        'warning: stale state\n{"UserProfile":{"LoginName":"operator@example.com","DisplayName":"Operator"}}\n',
+        'warning: stale state {"UserProfile":{}}\n{"UserProfile":{"LoginName":"operator@example.com","DisplayName":"Operator"}}\nwarning: ignored {"after":true}\n',
     });
 
     await expect(readTailscaleWhoisIdentity("100.64.0.11", exec)).resolves.toEqual({
@@ -257,7 +257,7 @@ describe("tailscale helpers", () => {
   it("hasTailscaleFunnelRouteForPort accepts noisy JSON status output", async () => {
     const exec = vi.fn().mockResolvedValue({
       stdout:
-        'warning: stale state\n{"AllowFunnel":{"device.tailnet.ts.net:443":true},"Web":{"device.tailnet.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:18789"}}}}}\n',
+        'warning: stale state {"AllowFunnel":{},"Web":{}}\n{"AllowFunnel":{"device.tailnet.ts.net:443":true},"Web":{"device.tailnet.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:18789"}}}}}\nwarning: ignored {"after":true}\n',
     });
 
     await expect(hasTailscaleFunnelRouteForPort(18789, exec)).resolves.toBe(true);

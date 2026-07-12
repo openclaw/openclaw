@@ -257,12 +257,12 @@ describe("bonjour-discovery", () => {
 
       if (cmd === "tailscale" && argv[1] === "status" && argv[2] === "--json") {
         return {
-          stdout: JSON.stringify({
+          stdout: `warning: stale state {"Self":{},"Peer":{}}\n${JSON.stringify({
             Self: { TailscaleIPs: ["100.69.232.64"] },
             Peer: {
               "peer-1": { TailscaleIPs: ["100.123.224.76"] },
             },
-          }),
+          })}\nwarning: ignored {"after":true}\n`,
           stderr: "",
           code: 0,
           signal: null,
