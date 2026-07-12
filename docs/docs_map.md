@@ -5067,6 +5067,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: What it does
   - H2: Requirements
   - H2: Quick start (pair + connect)
+  - H2: Health summaries
   - H2: Review command approvals
   - H2: Optional direct Apple Watch node
   - H2: Relay-backed push for official builds
