@@ -273,13 +273,13 @@ struct ProIconBadge: View {
 
 struct OpenClawSidebarHeaderAction {
     let systemName: String
-    let accessibilityLabel: String
+    let accessibilityLabel: OpenClawTextValue
     let accessibilityIdentifier: String?
     let action: () -> Void
 
     init(
         systemName: String,
-        accessibilityLabel: String,
+        accessibilityLabel: OpenClawTextValue,
         accessibilityIdentifier: String? = nil,
         action: @escaping () -> Void)
     {
@@ -308,7 +308,7 @@ struct OpenClawSidebarRevealButton: View {
         }
         .buttonBorderShape(.circle)
         .openClawGlassButton(tint: OpenClawBrand.accent)
-        .accessibilityLabel(self.headerAction.accessibilityLabel)
+        .accessibilityLabel(self.headerAction.accessibilityLabel.text)
 
         if let accessibilityIdentifier = headerAction.accessibilityIdentifier {
             button.accessibilityIdentifier(accessibilityIdentifier)

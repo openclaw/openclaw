@@ -631,7 +631,10 @@ struct RootTabs: View {
         guard !self.usesSidebarTabs, let phoneChatReturn else { return nil }
         return OpenClawSidebarHeaderAction(
             systemName: "chevron.left",
-            accessibilityLabel: "Back to \(phoneChatReturn.destination.title)",
+            accessibilityLabel: .verbatim(
+                String(
+                    format: String(localized: "Back to %@"),
+                    phoneChatReturn.destination.title)),
             accessibilityIdentifier: "OpenClawChatBackToControlDetailButton",
             action: { self.openPhoneControlDetail(phoneChatReturn.destination) })
     }

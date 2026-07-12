@@ -338,7 +338,9 @@ struct SettingsProTab: View {
                     .font(OpenClawType.subhead)
             }
             .confirmationDialog(
-                    "Forget \(self.pendingForgetGateway?.name ?? "gateway")?",
+                    String(
+                        format: String(localized: "Forget %@?"),
+                        self.pendingForgetGateway?.name ?? String(localized: "gateway")),
                     isPresented: Binding(
                         get: { self.pendingForgetGateway != nil },
                         set: {
