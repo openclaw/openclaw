@@ -8,13 +8,10 @@ import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { parseSqliteSessionFileMarker } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import plugin, { testing } from "./index.js";
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
 
 // Match only lone surrogates so valid supplementary-plane characters remain allowed.
 const UNPAIRED_SURROGATE_RE =
@@ -30,6 +27,16 @@ async function expectPathMissing(targetPath: string): Promise<void> {
   throw new Error(`expected missing path ${targetPath}`);
 }
 
+async function expectSingleTranscriptArtifact(directory: string): Promise<string> {
+  const files = await fs.readdir(directory);
+  expect(files).toEqual([expect.stringMatching(/^active-memory-[a-z0-9]+-[a-f0-9]{8}\.jsonl$/)]);
+  const filename = files[0];
+  if (!filename) {
+    throw new Error(`expected active-memory transcript in ${directory}`);
+  }
+  return path.join(directory, filename);
+}
+
 const hoisted = vi.hoisted(() => {
   const sessionStore: Record<string, Record<string, unknown>> = {
     "agent:main:main": {
@@ -39,6 +46,7 @@ const hoisted = vi.hoisted(() => {
   };
   return {
     closeActiveMemorySearchManager: vi.fn(async () => {}),
+    runtimeTranscriptFiles: {} as Record<string, string>,
     sessionStore,
     updateSessionStore: vi.fn(
       async (
@@ -65,6 +73,41 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/session-transcript-runtime")
+  >("openclaw/plugin-sdk/session-transcript-runtime");
+  return {
+    ...actual,
+    readSessionTranscriptEvents: async (
+      target: Parameters<typeof actual.readSessionTranscriptEvents>[0],
+    ) => {
+      const testSessionFile = hoisted.runtimeTranscriptFiles[target.sessionId];
+      if (testSessionFile) {
+        try {
+          const content = await fs.readFile(testSessionFile, "utf8");
+          return content
+            .split("\n")
+            .map((line) => line.trim())
+            .filter(Boolean)
+            .flatMap((line) => {
+              try {
+                return [JSON.parse(line) as unknown];
+              } catch {
+                return [];
+              }
+            });
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+            throw error;
+          }
+        }
+      }
+      return await actual.readSessionTranscriptEvents(target);
+    },
+  };
+});
+
 describe("active-memory plugin", () => {
   it("keeps previous-message query context UTF-16 well-formed", () => {
     const query = testing.buildSearchQuery({
@@ -80,6 +123,54 @@ describe("active-memory plugin", () => {
   const hookOptions: Record<string, Record<string, unknown> | undefined> = {};
   const registeredCommands: Record<string, any> = {};
   const runEmbeddedAgent = vi.fn();
+  const runtimeRunEmbeddedAgent = vi.fn(async (params: Record<string, unknown>) => {
+    const sessionId =
+      typeof params.sessionId === "string" && params.sessionId.length > 0
+        ? params.sessionId
+        : "unknown";
+    const testSessionFile = path.join(stateDir, `${sessionId}.jsonl`);
+    hoisted.runtimeTranscriptFiles[sessionId] = testSessionFile;
+    const result = await runEmbeddedAgent({ ...params, sessionFile: testSessionFile });
+    if (typeof result !== "object" || result === null || Array.isArray(result)) {
+      return result;
+    }
+    const resultRecord = result as Record<string, unknown>;
+    const meta =
+      typeof resultRecord.meta === "object" &&
+      resultRecord.meta !== null &&
+      !Array.isArray(resultRecord.meta)
+        ? (resultRecord.meta as Record<string, unknown>)
+        : {};
+    const agentMeta =
+      typeof meta.agentMeta === "object" &&
+      meta.agentMeta !== null &&
+      !Array.isArray(meta.agentMeta)
+        ? (meta.agentMeta as Record<string, unknown>)
+        : {};
+    return {
+      ...resultRecord,
+      meta: {
+        ...meta,
+        agentMeta: {
+          sessionFile: testSessionFile,
+          ...agentMeta,
+        },
+      },
+    };
+  });
+  const deleteSession = vi.fn(
+    async (params: { sessionKey: string; deleteTranscript?: boolean }) => {
+      const sessionId = hoisted.sessionStore[params.sessionKey]?.sessionId;
+      if (typeof sessionId === "string") {
+        const testSessionFile = hoisted.runtimeTranscriptFiles[sessionId];
+        if (testSessionFile) {
+          await fs.rm(testSessionFile, { force: true });
+          delete hoisted.runtimeTranscriptFiles[sessionId];
+        }
+      }
+      delete hoisted.sessionStore[params.sessionKey];
+    },
+  );
   let stateDir = "";
   let configFile: Record<string, unknown> = {};
   let pluginConfig: Record<string, unknown> = {
@@ -132,7 +223,7 @@ describe("active-memory plugin", () => {
     logger: { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
     runtime: {
       agent: {
-        runEmbeddedAgent,
+        runEmbeddedAgent: runtimeRunEmbeddedAgent,
         session: {
           resolveStorePath: vi.fn(() => path.join(stateDir, "sessions.json")),
           loadSessionStore: vi.fn(() => hoisted.sessionStore),
@@ -145,6 +236,11 @@ describe("active-memory plugin", () => {
               sessionKey,
               entry,
             })),
+          ),
+          upsertSessionEntry: vi.fn(
+            async (params: { sessionKey: string; entry: Record<string, unknown> }) => {
+              hoisted.sessionStore[params.sessionKey] = { ...params.entry };
+            },
           ),
           patchSessionEntry: vi.fn(
             async (params: {
@@ -174,6 +270,9 @@ describe("active-memory plugin", () => {
             },
           ),
         },
+      },
+      subagent: {
+        deleteSession,
       },
       state: {
         resolveStateDir: () => stateDir,
@@ -333,12 +432,14 @@ describe("active-memory plugin", () => {
     const calls = runEmbeddedAgent.mock.calls;
     return requireRecord(calls[calls.length - 1]?.[0], "expected embedded run params");
   };
+  const lastRuntimeEmbeddedRunParams = () => {
+    const calls = runtimeRunEmbeddedAgent.mock.calls;
+    return requireRecord(calls[calls.length - 1]?.[0], "expected runtime embedded run params");
+  };
   const lastEmbeddedPrompt = () =>
     requireNonEmptyString(lastEmbeddedRunParams().prompt, "expected embedded prompt");
   const lastEmbeddedSessionKey = () =>
     requireNonEmptyString(lastEmbeddedRunParams().sessionKey, "expected embedded session key");
-  const lastEmbeddedSessionFile = () =>
-    requireNonEmptyString(lastEmbeddedRunParams().sessionFile, "expected embedded session file");
   const lastSessionStoreUpdater = () => {
     const calls = hoisted.updateSessionStore.mock.calls;
     const updater = calls[calls.length - 1]?.[1] as
@@ -406,6 +507,9 @@ describe("active-memory plugin", () => {
     };
     for (const key of Object.keys(hoisted.sessionStore)) {
       delete hoisted.sessionStore[key];
+    }
+    for (const key of Object.keys(hoisted.runtimeTranscriptFiles)) {
+      delete hoisted.runtimeTranscriptFiles[key];
     }
     hoisted.sessionStore["agent:main:main"] = {
       sessionId: "s-main",
@@ -496,6 +600,56 @@ describe("active-memory plugin", () => {
     );
 
     expect(lastEmbeddedRunParams().lane).toBe("active-memory");
+  });
+
+  it("creates and removes the exact SQLite recall session around the embedded run", async () => {
+    let persistedEntryAtRun: Record<string, unknown> | undefined;
+    runEmbeddedAgent.mockImplementationOnce(async (params: Record<string, unknown>) => {
+      const sessionKey = requireNonEmptyString(params.sessionKey, "expected embedded session key");
+      persistedEntryAtRun = structuredClone(hoisted.sessionStore[sessionKey]);
+      const sessionFile = requireNonEmptyString(
+        params.sessionFile,
+        "expected test transcript artifact",
+      );
+      await writeUsableMemoryTranscript(sessionFile, "lemon pepper wings");
+      return { payloads: [{ text: "- lemon pepper wings" }] };
+    });
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order?", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    const runtimeParams = lastRuntimeEmbeddedRunParams();
+    const sessionId = requireNonEmptyString(runtimeParams.sessionId, "expected runtime session id");
+    const sessionKey = requireNonEmptyString(
+      runtimeParams.sessionKey,
+      "expected runtime session key",
+    );
+    const runtimeSessionFile = requireNonEmptyString(
+      runtimeParams.sessionFile,
+      "expected runtime session file",
+    );
+    expect(parseSqliteSessionFileMarker(runtimeSessionFile)).toEqual({
+      agentId: "main",
+      sessionId,
+      storePath: path.join(stateDir, "sessions.json"),
+    });
+    expect(persistedEntryAtRun).toMatchObject({
+      sessionId,
+      sessionFile: runtimeSessionFile,
+    });
+    expect(deleteSession).toHaveBeenCalledWith({
+      sessionKey,
+      deleteTranscript: true,
+    });
+    expect(hoisted.sessionStore[sessionKey]).toBeUndefined();
+    expectPrependContextContains(result, "lemon pepper wings");
   });
 
   it("registers a session-scoped active-memory toggle command", async () => {
@@ -5744,9 +5898,7 @@ describe("active-memory plugin", () => {
     );
 
     expect(mkdtempSpy).toHaveBeenCalled();
-    const sessionFile = lastEmbeddedSessionFile();
-    expect(sessionFile).toMatch(/openclaw-active-memory-.*\/session\.jsonl$/);
-    expect(rmSpy).toHaveBeenCalledWith(path.dirname(sessionFile), {
+    expect(rmSpy).toHaveBeenCalledWith(expect.stringMatching(/openclaw-active-memory-.*/), {
       recursive: true,
       force: true,
     });
@@ -5781,11 +5933,8 @@ describe("active-memory plugin", () => {
     );
     expect(mkdirSpy).toHaveBeenCalledWith(expectedDir, { recursive: true, mode: 0o700 });
     expect(mkdtempSpy).not.toHaveBeenCalled();
-    expect(lastEmbeddedSessionFile()).toMatch(
-      new RegExp(
-        `^${escapeRegExp(expectedDir)}${escapeRegExp(path.sep)}active-memory-[a-z0-9]+-[a-f0-9]{8}\\.jsonl$`,
-      ),
-    );
+    const transcriptPath = await expectSingleTranscriptArtifact(expectedDir);
+    expect(await fs.readFile(transcriptPath, "utf8")).toContain("lemon pepper wings");
     const infoLines = vi
       .mocked(api.logger.info)
       .mock.calls.map((call: unknown[]) => String(call[0]));
@@ -5825,11 +5974,13 @@ describe("active-memory plugin", () => {
       "active-memory",
     );
     expect(mkdirSpy).toHaveBeenCalledWith(expectedDir, { recursive: true, mode: 0o700 });
-    expect(lastEmbeddedSessionFile()).toMatch(
-      new RegExp(
-        `^${escapeRegExp(expectedDir)}${escapeRegExp(path.sep)}active-memory-[a-z0-9]+-[a-f0-9]{8}\\.jsonl$`,
-      ),
+    const runtimeSessionFile = requireNonEmptyString(
+      lastRuntimeEmbeddedRunParams().sessionFile,
+      "expected runtime session file",
     );
+    expect(parseSqliteSessionFileMarker(runtimeSessionFile)).toMatchObject({
+      agentId: "main",
+    });
   });
 
   it("scopes persisted subagent transcripts by agent", async () => {
@@ -5862,11 +6013,13 @@ describe("active-memory plugin", () => {
       "active-memory-subagents",
     );
     expect(mkdirSpy).toHaveBeenCalledWith(expectedDir, { recursive: true, mode: 0o700 });
-    expect(lastEmbeddedSessionFile()).toMatch(
-      new RegExp(
-        `^${escapeRegExp(expectedDir)}${escapeRegExp(path.sep)}active-memory-[a-z0-9]+-[a-f0-9]{8}\\.jsonl$`,
-      ),
+    const runtimeSessionFile = requireNonEmptyString(
+      lastRuntimeEmbeddedRunParams().sessionFile,
+      "expected runtime session file",
     );
+    expect(parseSqliteSessionFileMarker(runtimeSessionFile)).toMatchObject({
+      agentId: "support/agent",
+    });
   });
 
   it("sanitizes control characters out of debug lines", async () => {
