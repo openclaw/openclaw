@@ -593,13 +593,14 @@ export function createProcessTool(
           if (!resolved.ok) {
             return resolved.result;
           }
-          await writeProcessStdin(resolved.stdin, params.data ?? "");
+          const data = params.data ?? "";
+          await writeProcessStdin(resolved.stdin, data);
           if (params.eof) {
             resolved.stdin.end();
           }
           return runningSessionResult(
             resolved.session,
-            `Wrote ${(params.data ?? "").length} bytes to session ${params.sessionId}${
+            `Wrote ${Buffer.byteLength(data, "utf8")} bytes to session ${params.sessionId}${
               params.eof ? " (stdin closed)" : ""
             }.`,
           );
