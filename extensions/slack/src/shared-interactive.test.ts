@@ -1,10 +1,10 @@
 // Slack tests cover shared interactive plugin behavior.
+import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import { describe, expect, it } from "vitest";
 import {
   buildSlackInteractiveBlocks,
   buildSlackPresentationBlocks,
   canRenderSlackPresentation,
-  canRenderSlackPresentationTables,
   resolveSlackBlockOffsets,
   type SlackBlock,
 } from "./blocks-render.js";
@@ -393,7 +393,7 @@ describe("buildSlackPresentationBlocks", () => {
         elements: [
           {
             type: "button",
-            action_id: "openclaw:reply_button:1:1",
+            action_id: "openclaw:callback_button:1:1",
             text: {
               type: "plain_text",
               text: "Approve",
@@ -405,6 +405,71 @@ describe("buildSlackPresentationBlocks", () => {
         ],
       },
     ]);
+  });
+
+  it("encodes typed approvals with Slack-private action data", () => {
+    const blocks = buildSlackPresentationBlocks({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Allow once",
+              action: {
+                type: "approval",
+                approvalId: "plugin:req/😀",
+                approvalKind: "plugin",
+                decision: "allow-once",
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(blocks).toEqual([
+      {
+        type: "actions",
+        block_id: "openclaw_reply_buttons_1",
+        elements: [
+          {
+            type: "button",
+            action_id: "openclaw:approval_button:1:1",
+            text: {
+              type: "plain_text",
+              text: "Allow once",
+              emoji: true,
+            },
+            value:
+              'openclaw:approval:v1:{"approvalId":"plugin:req/😀","approvalKind":"plugin","decision":"allow-once"}',
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("does not activate deprecated targets behind invalid explicit actions", () => {
+    const presentation = {
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Invalid",
+              action: null,
+              value: "legacy",
+              url: "https://legacy.example",
+            },
+          ],
+        },
+        {
+          type: "select",
+          options: [{ label: "Invalid", action: null, value: "legacy" }],
+        },
+      ],
+    } as unknown as MessagePresentation;
+
+    expect(buildSlackPresentationBlocks(presentation)).toEqual([]);
   });
 
   it("does not render generic command actions that Slack cannot execute", () => {
@@ -426,7 +491,7 @@ describe("buildSlackPresentationBlocks", () => {
     ]);
   });
 
-  it("keeps exec approval commands on Slack's approval path", () => {
+  it("keeps legacy approval commands on the owner-neutral reply route", () => {
     const blocks = buildSlackPresentationBlocks({
       blocks: [
         {
@@ -642,7 +707,6 @@ describe("buildSlackPresentationBlocks", () => {
     };
 
     expect(canRenderSlackPresentation(presentation)).toBe(false);
-    expect(canRenderSlackPresentationTables(presentation)).toBe(false);
     expect(buildSlackPresentationBlocks(presentation)).toEqual([]);
   });
 

@@ -4,6 +4,7 @@ import {
   isToolResultContentType,
   resolveToolUseId,
 } from "../../../../src/chat/tool-content.js";
+import { t } from "../../i18n/index.ts";
 import type {
   ChatItem,
   MessageGroup,
@@ -32,13 +33,19 @@ import {
   stripMessageDisplayMetadataText,
 } from "../../lib/chat/message-normalizer.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
-import { extractToolCardsCached, extractToolPreview } from "../../lib/chat/tool-cards.ts";
+import {
+  extractToolCardsCached,
+  extractToolPreview,
+  isToolCardError,
+} from "../../lib/chat/tool-cards.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import { getOrCreateSessionCacheValue } from "./session-cache.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
 export type BuildChatItemsProps = {
   sessionKey: string;
+  /** Invalidates cached display copy when the active UI language changes. */
+  locale?: string;
   messages: unknown[];
   toolMessages: unknown[];
   streamSegments: ChatStreamSegment[];
@@ -46,9 +53,14 @@ export type BuildChatItemsProps = {
   streamStartedAt: number | null;
   queue?: ChatQueueItem[];
   showToolCalls: boolean;
+  /** True while the agent is visibly working (isChatRunWorking). */
+  runWorking?: boolean;
+  /** True while chat history is loading (initial load or background reload). */
+  loading?: boolean;
   searchOpen?: boolean;
   searchQuery?: string;
   historyRenderLimit?: number;
+  allowExpandedHistoryRenderLimit?: boolean;
 };
 
 type CachedChatItems = {
@@ -546,7 +558,11 @@ function refreshOpenCallIds(
       openCallIndexes.delete(callId);
     }
   }
-  for (const callId of unresolvedToolCallIds(coalesced[callIndex])) {
+  const item = coalesced[callIndex];
+  if (!item) {
+    return;
+  }
+  for (const callId of unresolvedToolCallIds(item)) {
     openCallIndexes.set(callId, callIndex);
   }
 }
@@ -563,8 +579,9 @@ function coalesceToolActivityMessages(items: ChatItem[]): ChatItem[] {
     for (const resultItem of resultItems) {
       const callId = resolveToolResultCallId(resultItem);
       const callIndex = callId ? openCallIndexes.get(callId) : undefined;
+      const callItem = callIndex === undefined ? undefined : coalesced[callIndex];
       const merged =
-        callIndex === undefined ? null : mergeToolCallResultPair(coalesced[callIndex], resultItem);
+        callIndex === undefined || !callItem ? null : mergeToolCallResultPair(callItem, resultItem);
       if (!merged || callIndex === undefined) {
         unmatchedResultItems.push(resultItem);
         continue;
@@ -584,10 +601,8 @@ function coalesceToolActivityMessages(items: ChatItem[]): ChatItem[] {
     if (unresolvedCallIds.size === 1) {
       const callId = unresolvedCallIds.values().next().value;
       const previousIndex = callId ? openCallIndexes.get(callId) : undefined;
-      if (
-        previousIndex !== undefined &&
-        unresolvedToolCallIds(coalesced[previousIndex]).size === 1
-      ) {
+      const previous = previousIndex === undefined ? undefined : coalesced[previousIndex];
+      if (previousIndex !== undefined && previous && unresolvedToolCallIds(previous).size === 1) {
         coalesced[previousIndex] = item;
         refreshOpenCallIds(openCallIndexes, coalesced, previousIndex);
         continue;
@@ -629,7 +644,7 @@ function annotateToolTurnOutcome(
   let sawAssistantReply = false;
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index];
-    if (item.kind !== "group") {
+    if (!item || item.kind !== "group") {
       continue;
     }
     const role = item.role.toLowerCase();
@@ -852,7 +867,6 @@ function shouldRenderQueuedSendInThread(item: ChatQueueItem): boolean {
   }
   return (
     item.sendState === "waiting-model" ||
-    item.sendState === "waiting-idle" ||
     item.sendState === "sending" ||
     item.sendState === "waiting-reconnect"
   );
@@ -1058,11 +1072,12 @@ function countVisibleHistoryMessages(messages: unknown[], showToolCalls: boolean
   return count;
 }
 
-function resolveHistoryRenderLimit(limit: number | undefined): number {
+function resolveHistoryRenderLimit(limit: number | undefined, allowExpanded = false): number {
   if (typeof limit !== "number" || !Number.isFinite(limit)) {
     return CHAT_HISTORY_RENDER_LIMIT;
   }
-  return Math.max(1, Math.min(CHAT_HISTORY_RENDER_LIMIT, Math.floor(limit)));
+  const normalized = Math.max(1, Math.floor(limit));
+  return allowExpanded ? normalized : Math.min(CHAT_HISTORY_RENDER_LIMIT, normalized);
 }
 
 function resolveHistoryStartIndex(
@@ -1095,7 +1110,10 @@ function resolveHistoryStartIndex(
 
 export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGroup> {
   let items: ChatItem[] = [];
-  const historyRenderLimit = resolveHistoryRenderLimit(props.historyRenderLimit);
+  const historyRenderLimit = resolveHistoryRenderLimit(
+    props.historyRenderLimit,
+    props.allowExpandedHistoryRenderLimit,
+  );
   const history = (Array.isArray(props.messages) ? props.messages : []).filter(
     (message) => !isAssistantHeartbeatAckForDisplay(message),
   );
@@ -1142,12 +1160,11 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
           typeof marker.id === "string"
             ? `divider:compaction:${marker.id}`
             : `divider:compaction:${normalized.timestamp}:${i}`,
-        label: "Compacted history",
-        description:
-          "The compacted transcript is preserved as a checkpoint. Open session checkpoints to branch or restore from that compacted view.",
+        label: t("chat.compaction.label"),
+        description: t("chat.compaction.description"),
         action: {
           kind: "session-checkpoints",
-          label: "Open checkpoints",
+          label: t("chat.compaction.openCheckpoints"),
         },
         timestamp: normalized.timestamp ?? Date.now(),
       });
@@ -1236,6 +1253,9 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   for (let i = 0; i < maxLen; i++) {
     if (i < indexedSegments.length) {
       const segment = indexedSegments[i];
+      if (!segment) {
+        continue;
+      }
       const text = sanitizeStreamText(segment.text);
       const usesAccumulatedText = streamSegmentUsesAccumulatedText(segment);
       const visibleText = usesAccumulatedText
@@ -1300,11 +1320,30 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     }
   }
 
+  // Working spark contract: whenever the agent works with nothing visibly
+  // streaming (pre-first-token, or a queued send in flight), the thread shows
+  // the reading indicator where the reply will materialize. Streaming text
+  // and running tool rows take over as the signal once content flows.
+  // A visible running tool row already signals active work, so the spark is
+  // suppressed rather than stacked under it; hidden tool calls keep the spark.
+  const hasVisibleRunningTool =
+    props.showToolCalls &&
+    tools.some((message) => {
+      const record = asRecord(message);
+      return (
+        record?.["__openclawToolStreamLive"] === true &&
+        record["__openclawToolStreamResultReceived"] !== true
+      );
+    });
+  // The initial-load skeleton owns the empty thread; a background reload with
+  // content still visible keeps the spark (it is the only working signal).
+  const initialHistoryLoad = props.loading === true && items.length === 0;
   const hasPendingResponse =
     props.stream === null &&
-    queuedSends.some(
-      (item) => item.sendState === "sending" && shouldRenderQueuedSendInThread(item),
-    );
+    ((props.runWorking === true && !hasVisibleRunningTool && !initialHistoryLoad) ||
+      queuedSends.some(
+        (item) => item.sendState === "sending" && shouldRenderQueuedSendInThread(item),
+      ));
   if (hasPendingResponse) {
     items.push({
       kind: "reading-indicator",
@@ -1342,6 +1381,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
 function sameChatItemsInput(previous: BuildChatItemsProps, next: BuildChatItemsProps): boolean {
   return (
     previous.sessionKey === next.sessionKey &&
+    previous.locale === next.locale &&
     previous.messages === next.messages &&
     previous.toolMessages === next.toolMessages &&
     previous.streamSegments === next.streamSegments &&
@@ -1349,9 +1389,12 @@ function sameChatItemsInput(previous: BuildChatItemsProps, next: BuildChatItemsP
     previous.streamStartedAt === next.streamStartedAt &&
     previous.queue === next.queue &&
     previous.showToolCalls === next.showToolCalls &&
+    previous.runWorking === next.runWorking &&
+    previous.loading === next.loading &&
     previous.searchOpen === next.searchOpen &&
     previous.searchQuery === next.searchQuery &&
-    previous.historyRenderLimit === next.historyRenderLimit
+    previous.historyRenderLimit === next.historyRenderLimit &&
+    previous.allowExpandedHistoryRenderLimit === next.allowExpandedHistoryRenderLimit
   );
 }
 
@@ -1394,6 +1437,180 @@ export function coalesceStreamRuns(
     result.push(item);
   }
   flush();
+  return result;
+}
+
+/** Collapsed rollup of a completed turn's intermediate work (tools, commentary). */
+export type WorkGroupRenderItem = {
+  kind: "work-group";
+  key: string;
+  groups: MessageGroup[];
+  durationMs: number | null;
+  hasError: boolean;
+};
+
+type TurnRenderItem = RenderChatItem | StreamRunRenderItem;
+
+function isTurnBoundaryGroup(item: TurnRenderItem): boolean {
+  if (item.kind !== "group") {
+    return false;
+  }
+  const role = item.role.toLowerCase();
+  // sessions_send projections start a new autonomous turn, same contract as
+  // annotateToolTurnOutcome; they are inputs, not work produced by this turn.
+  return role === "user" || (role === "assistant" && assistantGroupIsForwardedBoundary(item));
+}
+
+function isCollapsibleWorkGroup(item: TurnRenderItem): item is MessageGroup {
+  if (item.kind !== "group" || item.isStreaming) {
+    return false;
+  }
+  const role = item.role.toLowerCase();
+  return role === "tool" || (role === "assistant" && !assistantGroupIsForwardedBoundary(item));
+}
+
+// Attachment/canvas/media-only replies carry no text but are still the turn's
+// visible outcome; they must never fold into the work rollup. Normalized
+// content passes unknown block types through (e.g. raw image blocks), so
+// anything that is not a tool block counts as visible reply content.
+function assistantGroupHasVisibleReplyContent(group: MessageGroup): boolean {
+  return group.messages.some(({ message }) => {
+    if (extractTextCached(message)?.trim()) {
+      return true;
+    }
+    const content = safeNormalizeMessage(message)?.content ?? [];
+    return content.some((block) => {
+      if (block.type === "text") {
+        return Boolean(block.text?.trim());
+      }
+      return !isToolCallContentType(block.type) && !isToolResultContentType(block.type);
+    });
+  });
+}
+
+// History carries no final-vs-commentary marker (commentary exists only as
+// live stream segments), so the last assistant group with visible content
+// stands in for the final reply. Turns whose last content is commentary
+// merely collapse less; the visible reply is never folded away.
+function isFinalReplyGroup(item: TurnRenderItem): boolean {
+  return (
+    isCollapsibleWorkGroup(item) &&
+    item.role.toLowerCase() === "assistant" &&
+    assistantGroupHasVisibleReplyContent(item)
+  );
+}
+
+function groupLastTimestamp(group: MessageGroup): number {
+  for (let index = group.messages.length - 1; index >= 0; index -= 1) {
+    const timestamp = rawMessageTimestamp(group.messages[index]?.message);
+    if (timestamp != null) {
+      return timestamp;
+    }
+  }
+  return group.timestamp;
+}
+
+function workGroupHasError(groups: MessageGroup[]): boolean {
+  return groups.some(
+    (group) =>
+      group.role.toLowerCase() === "tool" &&
+      group.turnSucceeded !== true &&
+      group.messages.some((entry) =>
+        extractToolCardsCached(entry.message, entry.key).some(isToolCardError),
+      ),
+  );
+}
+
+/**
+ * Once a turn is done, its intermediate work (tool groups and assistant
+ * commentary before the final reply) collapses behind one "Worked for X"
+ * disclosure so the thread reads final-output-first. Live turns stay fully
+ * expanded; the collapse itself is the done signal.
+ */
+export function collapseCompletedTurnWork(
+  items: TurnRenderItem[],
+  opts: { runWorking: boolean; searchActive?: boolean },
+): Array<TurnRenderItem | WorkGroupRenderItem> {
+  // Chat search filters the thread to matching messages; folding a match into
+  // a collapsed rollup would hide the very row the query found.
+  if (opts.searchActive) {
+    return items;
+  }
+  const turns: TurnRenderItem[][] = [];
+  let currentTurn: TurnRenderItem[] = [];
+  for (const item of items) {
+    if (isTurnBoundaryGroup(item) && currentTurn.length > 0) {
+      turns.push(currentTurn);
+      currentTurn = [];
+    }
+    currentTurn.push(item);
+  }
+  if (currentTurn.length > 0) {
+    turns.push(currentTurn);
+  }
+
+  const result: Array<TurnRenderItem | WorkGroupRenderItem> = [];
+  for (const [turnIndex, turn] of turns.entries()) {
+    // In-flight content (stream runs, streaming groups) marks the turn live.
+    // While the run works, the trailing turn also stays expanded so activity
+    // is watchable until the terminal rebuild collapses it.
+    const isLive =
+      (opts.runWorking && turnIndex === turns.length - 1) ||
+      turn.some(
+        (item) => item.kind === "stream-run" || (item.kind === "group" && item.isStreaming),
+      );
+    if (isLive) {
+      result.push(...turn);
+      continue;
+    }
+    let finalReplyIndex = -1;
+    for (let index = turn.length - 1; index >= 0; index -= 1) {
+      const candidate = turn[index];
+      if (candidate && isFinalReplyGroup(candidate)) {
+        finalReplyIndex = index;
+        break;
+      }
+    }
+    // A reply-less turn only collapses once the session is idle: mid-run it
+    // may still be the executing turn (e.g. behind a queued send).
+    if (finalReplyIndex === -1 && opts.runWorking) {
+      result.push(...turn);
+      continue;
+    }
+    const segmentEnd = finalReplyIndex === -1 ? turn.length - 1 : finalReplyIndex - 1;
+    let segmentStart = segmentEnd + 1;
+    for (let index = segmentEnd; index >= 0; index -= 1) {
+      const candidate = turn[index];
+      if (!candidate || !isCollapsibleWorkGroup(candidate)) {
+        break;
+      }
+      segmentStart = index;
+    }
+    const groups = turn.slice(segmentStart, segmentEnd + 1) as MessageGroup[];
+    const firstGroup = groups[0];
+    const lastGroup = groups[groups.length - 1];
+    if (!firstGroup || !lastGroup) {
+      result.push(...turn);
+      continue;
+    }
+    const boundary = turn[0];
+    const startTimestamp =
+      boundary && boundary.kind === "group" && isTurnBoundaryGroup(boundary)
+        ? boundary.timestamp
+        : firstGroup.timestamp;
+    const finalReply = finalReplyIndex >= 0 ? (turn[finalReplyIndex] as MessageGroup) : null;
+    const endTimestamp = finalReply ? finalReply.timestamp : groupLastTimestamp(lastGroup);
+    const durationMs = endTimestamp > startTimestamp ? endTimestamp - startTimestamp : null;
+    result.push(...turn.slice(0, segmentStart));
+    result.push({
+      kind: "work-group",
+      key: `work:${firstGroup.key}`,
+      groups,
+      durationMs,
+      hasError: workGroupHasError(groups),
+    });
+    result.push(...turn.slice(segmentEnd + 1));
+  }
   return result;
 }
 

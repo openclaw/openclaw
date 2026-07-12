@@ -67,10 +67,7 @@ function isAsciiWhitespace(value: number): boolean {
 }
 
 /** Read the browser Safe Storage secret. The OS consent prompt is intentional. */
-export async function readKeychainSecret(
-  entry: KeychainEntry,
-  signal?: AbortSignal,
-): Promise<Buffer> {
+async function readKeychainSecret(entry: KeychainEntry, signal?: AbortSignal): Promise<Buffer> {
   signal?.throwIfAborted();
   return await new Promise((resolve, reject) => {
     execFile(
@@ -97,10 +94,10 @@ export async function readKeychainSecret(
         const raw = Buffer.from(stdout);
         let start = 0;
         let end = raw.length;
-        while (start < end && isAsciiWhitespace(raw[start])) {
+        while (start < end && isAsciiWhitespace(raw.readUInt8(start))) {
           start += 1;
         }
-        while (end > start && isAsciiWhitespace(raw[end - 1])) {
+        while (end > start && isAsciiWhitespace(raw.readUInt8(end - 1))) {
           end -= 1;
         }
         const secret = Buffer.from(raw.subarray(start, end));

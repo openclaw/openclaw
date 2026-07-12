@@ -7,6 +7,11 @@ import type { DatabaseSync } from "node:sqlite";
 import { clearMemoryEmbeddingProviders as clearRegistry } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { hashText } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import {
+  formatSqliteSessionFileMarker,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
+import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -417,6 +422,51 @@ describe("memory index", () => {
     };
   }
 
+  async function seedMemoryIndexSessionTranscript(params: {
+    messages: Array<{
+      content: string;
+      role: "assistant" | "user";
+      timestamp: number | string;
+    }>;
+    sessionId: string;
+    sessionKey?: string;
+  }): Promise<void> {
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const sessionKey = params.sessionKey ?? `agent:main:memory:${params.sessionId}`;
+    // Message timestamps are behavioral inputs; entry freshness only keeps the
+    // fixture out of real session-retention maintenance as wall time advances.
+    const updatedAt = Date.now();
+    await fs.mkdir(sessionsDir, { recursive: true });
+    await upsertSessionEntry({
+      agentId: "main",
+      sessionKey,
+      storePath,
+      entry: {
+        sessionId: params.sessionId,
+        sessionFile: formatSqliteSessionFileMarker({
+          agentId: "main",
+          sessionId: params.sessionId,
+          storePath,
+        }),
+        updatedAt,
+      },
+    });
+    for (const message of params.messages) {
+      await appendSessionTranscriptMessageByIdentity({
+        agentId: "main",
+        sessionId: params.sessionId,
+        sessionKey,
+        storePath,
+        message: {
+          role: message.role,
+          timestamp: message.timestamp,
+          content: [{ type: "text", text: message.content }],
+        },
+      });
+    }
+  }
+
   function requireManager(
     result: Awaited<ReturnType<typeof getMemorySearchManager>>,
     missingMessage = "manager missing",
@@ -718,6 +768,30 @@ describe("memory index", () => {
     }
   });
 
+  it("disables batch immediately when the provider reports it unavailable", async () => {
+    providerRuntimeBatchErrors = [
+      Object.assign(new Error("provider batch unavailable"), {
+        code: "embedding_batch_unavailable",
+      }),
+    ];
+    const manager = await getFreshManager(
+      createCfg({ provider: "batch-wide-test", batchEnabled: true }),
+    );
+    try {
+      await manager.sync({ reason: "test" });
+
+      expect(providerRuntimeBatchCalls).toHaveLength(1);
+      expect(embedBatchCalls).toBe(1);
+      expect(manager.status().batch).toMatchObject({
+        enabled: false,
+        failures: 2,
+        lastError: "provider batch unavailable",
+      });
+    } finally {
+      await manager.close?.();
+    }
+  });
+
   it.each([
     ["frozen errors", Object.freeze(new Error("provider runtime retry failed"))],
     ["primitive rejections", "provider runtime retry failed"],
@@ -814,7 +888,7 @@ describe("memory index", () => {
 
       expect(providerRuntimeBatchCalls).toHaveLength(3);
       expect(providerRuntimeBatchCalls.every((call) => call.length === 1)).toBe(true);
-      expect(providerRuntimeBatchCalls.map((call) => call[0]).toSorted()).toEqual(
+      expect(providerRuntimeBatchCalls.map((call) => call[0] ?? "").toSorted()).toEqual(
         [
           "# Log\nAlpha memory line.\nZebra memory line.",
           "# Log\nBeta memory line.",
@@ -881,46 +955,26 @@ describe("memory index", () => {
 
   it("batches forced memory and session indexing across files", async () => {
     await fs.writeFile(path.join(memoryDir, "2026-01-13.md"), "# Log\nBeta memory line.");
-    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-    await fs.mkdir(sessionsDir, { recursive: true });
-    await fs.writeFile(
-      path.join(sessionsDir, "session-alpha.jsonl"),
-      [
-        JSON.stringify({
-          type: "session",
-          id: "session-alpha",
-          timestamp: "2026-04-07T15:24:04.113Z",
-        }),
-        JSON.stringify({
-          type: "message",
-          message: {
-            role: "user",
-            timestamp: "2026-04-07T15:25:04.113Z",
-            content: [{ type: "text", text: "Session alpha memory line." }],
-          },
-        }),
-      ].join("\n") + "\n",
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(sessionsDir, "session-beta.jsonl"),
-      [
-        JSON.stringify({
-          type: "session",
-          id: "session-beta",
-          timestamp: "2026-04-07T15:24:04.113Z",
-        }),
-        JSON.stringify({
-          type: "message",
-          message: {
-            role: "assistant",
-            timestamp: "2026-04-07T15:25:04.113Z",
-            content: [{ type: "text", text: "Session beta memory line." }],
-          },
-        }),
-      ].join("\n") + "\n",
-      "utf8",
-    );
+    await seedMemoryIndexSessionTranscript({
+      sessionId: "session-alpha",
+      messages: [
+        {
+          role: "user",
+          timestamp: "2026-04-07T15:25:04.113Z",
+          content: "Session alpha memory line.",
+        },
+      ],
+    });
+    await seedMemoryIndexSessionTranscript({
+      sessionId: "session-beta",
+      messages: [
+        {
+          role: "assistant",
+          timestamp: "2026-04-07T15:25:04.113Z",
+          content: "Session beta memory line.",
+        },
+      ],
+    });
     const cfg = createCfg({
       provider: "batch-wide-test",
       batchEnabled: true,
@@ -1216,27 +1270,16 @@ describe("memory index", () => {
   it("clears dirty after sessions-only identity reindex", async () => {
     try {
       setMemoryIndexStateDir(path.join(workspaceDir, ".state-sessions-only-reindex"));
-      const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-      await fs.mkdir(sessionsDir, { recursive: true });
-      await fs.writeFile(
-        path.join(sessionsDir, "session-identity.jsonl"),
-        [
-          JSON.stringify({
-            type: "session",
-            id: "session-identity",
-            timestamp: "2026-04-07T15:24:04.113Z",
-          }),
-          JSON.stringify({
-            type: "message",
-            message: {
-              role: "assistant",
-              timestamp: "2026-04-07T15:25:04.113Z",
-              content: [{ type: "text", text: "Session-only identity marker." }],
-            },
-          }),
-        ].join("\n") + "\n",
-        "utf8",
-      );
+      await seedMemoryIndexSessionTranscript({
+        sessionId: "session-identity",
+        messages: [
+          {
+            role: "assistant",
+            timestamp: "2026-04-07T15:25:04.113Z",
+            content: "Session-only identity marker.",
+          },
+        ],
+      });
 
       const oldCfg = createCfg({
         sources: ["sessions"],
@@ -1272,27 +1315,16 @@ describe("memory index", () => {
   it("marks sessions-only indexes dirty when metadata is missing but chunks exist", async () => {
     try {
       setMemoryIndexStateDir(path.join(workspaceDir, ".state-sessions-missing-meta"));
-      const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-      await fs.mkdir(sessionsDir, { recursive: true });
-      await fs.writeFile(
-        path.join(sessionsDir, "session-missing-meta.jsonl"),
-        [
-          JSON.stringify({
-            type: "session",
-            id: "session-missing-meta",
-            timestamp: "2026-04-07T15:24:04.113Z",
-          }),
-          JSON.stringify({
-            type: "message",
-            message: {
-              role: "assistant",
-              timestamp: "2026-04-07T15:25:04.113Z",
-              content: [{ type: "text", text: "Sessions missing metadata marker." }],
-            },
-          }),
-        ].join("\n") + "\n",
-        "utf8",
-      );
+      await seedMemoryIndexSessionTranscript({
+        sessionId: "session-missing-meta",
+        messages: [
+          {
+            role: "assistant",
+            timestamp: "2026-04-07T15:25:04.113Z",
+            content: "Sessions missing metadata marker.",
+          },
+        ],
+      });
 
       const cfg = createCfg({
         sources: ["sessions"],
@@ -1371,7 +1403,7 @@ describe("memory index", () => {
         expect(nextManager.status().dirty).toBe(true);
         embedBatchCalls = 0;
 
-        await nextManager.sync({ reason: "test", sessionFiles: [sessionFile] });
+        await nextManager.sync({ reason: "test", archiveFiles: [sessionFile] });
 
         expect(embedBatchCalls).toBe(0);
         expect(nextManager.status().dirty).toBe(true);
@@ -1433,12 +1465,12 @@ describe("memory index", () => {
       try {
         const fields = nextManager as unknown as {
           dirty: boolean;
-          syncSessionFiles: (params: unknown) => Promise<void>;
+          syncArchiveFiles: (params: unknown) => Promise<void>;
         };
-        const syncSessionFiles = fields.syncSessionFiles.bind(nextManager);
-        fields.syncSessionFiles = async (params) => {
+        const syncArchiveFiles = fields.syncArchiveFiles.bind(nextManager);
+        fields.syncArchiveFiles = async (params) => {
           fields.dirty = true;
-          await syncSessionFiles(params);
+          await syncArchiveFiles(params);
         };
 
         await nextManager.sync({ reason: "test", force: true });
@@ -1514,7 +1546,7 @@ describe("memory index", () => {
           runSyncWithReadonlyRecovery: (params?: {
             reason?: string;
             force?: boolean;
-            sessionFiles?: string[];
+            archiveFiles?: string[];
             progress?: (update: unknown) => void;
           }) => Promise<void>;
         }
@@ -1582,6 +1614,39 @@ describe("memory index", () => {
     const third = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
     managersForCleanup.add(third);
     expect(third).toBe(second);
+  });
+
+  it("does not reuse memory index managers across local-service hosts", async () => {
+    const cfg = createCfg({});
+    const firstAcquire = vi.fn(async () => undefined);
+    const secondAcquire = vi.fn(async () => undefined);
+    const first = requireManager(
+      await getMemorySearchManager({
+        cfg,
+        agentId: "main",
+        acquireLocalService: firstAcquire,
+      }),
+    );
+    managersForCleanup.add(first);
+
+    const second = requireManager(
+      await getMemorySearchManager({
+        cfg,
+        agentId: "main",
+        acquireLocalService: secondAcquire,
+      }),
+    );
+    managersForCleanup.add(second);
+    const secondAgain = requireManager(
+      await getMemorySearchManager({
+        cfg,
+        agentId: "main",
+        acquireLocalService: secondAcquire,
+      }),
+    );
+
+    expect(Object.is(second, first)).toBe(false);
+    expect(Object.is(secondAgain, second)).toBe(true);
   });
 
   it("retries embedding provider close before releasing the manager", async () => {
@@ -2864,37 +2929,22 @@ describe("memory index", () => {
       const staleAt = new Date("2020-01-01T00:00:00.000Z");
       await fs.utimes(memoryPath, staleAt, staleAt);
 
-      const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-      await fs.mkdir(sessionsDir, { recursive: true });
-      const transcriptPath = path.join(sessionsDir, "session-ranking.jsonl");
       const now = Date.parse("2026-04-07T15:25:04.113Z");
-      await fs.writeFile(
-        transcriptPath,
-        [
-          JSON.stringify({
-            type: "session",
-            id: "session-ranking",
-            timestamp: new Date(now - 60_000).toISOString(),
-          }),
-          JSON.stringify({
-            type: "message",
-            message: {
-              role: "user",
-              timestamp: new Date(now - 30_000).toISOString(),
-              content: [{ type: "text", text: "What is the current Project Nebula codename?" }],
-            },
-          }),
-          JSON.stringify({
-            type: "message",
-            message: {
-              role: "assistant",
-              timestamp: new Date(now).toISOString(),
-              content: [{ type: "text", text: "The current Project Nebula codename is ORBIT-10." }],
-            },
-          }),
-        ].join("\n") + "\n",
-        "utf8",
-      );
+      await seedMemoryIndexSessionTranscript({
+        sessionId: "session-ranking",
+        messages: [
+          {
+            role: "user",
+            timestamp: new Date(now - 30_000).toISOString(),
+            content: "What is the current Project Nebula codename?",
+          },
+          {
+            role: "assistant",
+            timestamp: new Date(now).toISOString(),
+            content: "The current Project Nebula codename is ORBIT-10.",
+          },
+        ],
+      });
 
       await manager.sync({ reason: "test", force: true });
       const results = await manager.search("current Project Nebula codename ORBIT-10", {
@@ -2918,28 +2968,16 @@ describe("memory index", () => {
         return;
       }
 
-      const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-      await fs.mkdir(sessionsDir, { recursive: true });
-      const transcriptPath = path.join(sessionsDir, "session-bootstrap.jsonl");
-      await fs.writeFile(
-        transcriptPath,
-        [
-          JSON.stringify({
-            type: "session",
-            id: "session-bootstrap",
-            timestamp: "2026-04-07T15:24:04.113Z",
-          }),
-          JSON.stringify({
-            type: "message",
-            message: {
-              role: "assistant",
-              timestamp: "2026-04-07T15:25:04.113Z",
-              content: [{ type: "text", text: "The current Project Nebula codename is ORBIT-10." }],
-            },
-          }),
-        ].join("\n") + "\n",
-        "utf8",
-      );
+      await seedMemoryIndexSessionTranscript({
+        sessionId: "session-bootstrap",
+        messages: [
+          {
+            role: "assistant",
+            timestamp: "2026-04-07T15:25:04.113Z",
+            content: "The current Project Nebula codename is ORBIT-10.",
+          },
+        ],
+      });
 
       const results = await manager.search("current Project Nebula codename ORBIT-10", {
         minScore: 0,
@@ -2959,10 +2997,16 @@ describe("memory index", () => {
     const stateDirName = ".state-status-dirty-test";
     setMemoryIndexStateDir(path.join(workspaceDir, stateDirName));
     try {
-      const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-      await fs.mkdir(sessionsDir, { recursive: true });
-      const transcriptPath = path.join(sessionsDir, "status-dirty-test.jsonl");
-      await fs.writeFile(transcriptPath, JSON.stringify({ type: "test", ts: 1 }) + "\n");
+      await seedMemoryIndexSessionTranscript({
+        sessionId: "status-dirty-test",
+        messages: [
+          {
+            role: "user",
+            timestamp: 1,
+            content: "Unindexed session transcript.",
+          },
+        ],
+      });
 
       const manager = await getFreshManager(cfg, "status");
       managersForCleanup.add(manager);

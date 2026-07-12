@@ -1216,8 +1216,10 @@
                 "group": "Sessions and memory",
                 "pages": [
                   "concepts/session",
+                  "concepts/session-search",
                   "concepts/channel-docking",
                   "concepts/session-pruning",
+                  "concepts/session-state",
                   "concepts/session-tool",
                   {
                     "group": "Memory",
@@ -1696,6 +1698,7 @@
                 "group": "Nodes and media",
                 "pages": [
                   "nodes/index",
+                  "nodes/presence",
                   "nodes/troubleshooting",
                   {
                     "group": "Media capabilities",

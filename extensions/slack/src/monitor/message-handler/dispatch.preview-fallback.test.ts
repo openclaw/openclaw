@@ -28,6 +28,7 @@ const stopSlackStreamMock = vi.fn(async (_params?: unknown) => ({}) as { message
 const emitSlackMessageSentHooksMock = vi.fn(() => {});
 const reactSlackMessageMock = vi.fn(async () => {});
 const removeSlackReactionMock = vi.fn(async () => {});
+const logVerboseMock = vi.fn();
 class TestSlackStreamNotDeliveredError extends Error {
   readonly pendingText: string;
   readonly slackCode: string;
@@ -47,6 +48,8 @@ let capturedReplyOptions:
   | {
       disableBlockStreaming?: boolean;
       suppressDefaultToolProgressMessages?: boolean;
+      commentaryProgressEnabled?: boolean;
+      onVerboseProgressVisibility?: (isActive: () => boolean) => void;
       allowProgressCallbacksWhenSourceDeliverySuppressed?: boolean;
       allowToolLifecycleWhenProgressHidden?: boolean;
       onAssistantMessageStart?: () => Promise<void> | void;
@@ -198,6 +201,14 @@ function requireCapturedTyping() {
     throw new Error("expected Slack typing callback");
   }
   return capturedTyping;
+}
+
+function createSlackPlatformError(error: string, details?: { needed?: string; provided?: string }) {
+  // Mirrors @slack/web-api 7.18.0 platformErrorFromResult: message plus structured result data.
+  return Object.assign(new Error(`An API error occurred: ${error}`), {
+    code: "slack_webapi_platform_error",
+    data: { ok: false, error, ...details },
+  });
 }
 
 function requireCapturedItemEventHandler() {
@@ -819,7 +830,7 @@ vi.mock("openclaw/plugin-sdk/reply-payload", () => ({
 
 vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   danger: (message: string) => message,
-  logVerbose: () => {},
+  logVerbose: logVerboseMock,
   shouldLogVerbose: () => false,
 }));
 
@@ -1258,6 +1269,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     stopSlackStreamMock.mockReset();
     reactSlackMessageMock.mockReset();
     removeSlackReactionMock.mockReset();
+    logVerboseMock.mockReset();
     for (const value of Object.values(statusReactionControllerMock)) {
       value.mockClear();
     }
@@ -1979,6 +1991,39 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(removeReactionCall[2]).toBe("hourglass_flowing_sand");
     expect(requireRecord(removeReactionCall[3], "remove Slack reaction options").token).toBe(
       "xoxb-test",
+    );
+  });
+
+  it("logs the formatted Slack error when adding the typing reaction fails", async () => {
+    reactSlackMessageMock.mockRejectedValueOnce(
+      createSlackPlatformError("missing_scope", {
+        needed: "reactions:write",
+        provided: "chat:write",
+      }),
+    );
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({ typingReaction: "hourglass_flowing_sand" }),
+    );
+    await expect(requireCapturedTyping().start()).resolves.toBeUndefined();
+
+    expect(logVerboseMock).toHaveBeenCalledWith(
+      "slack send: typing reaction failed: An API error occurred: missing_scope; code: slack_webapi_platform_error; slack error: missing_scope; needed: reactions:write; provided: chat:write",
+    );
+  });
+
+  it("logs the formatted Slack error when removing the typing reaction fails", async () => {
+    removeSlackReactionMock.mockRejectedValueOnce(createSlackPlatformError("invalid_auth"));
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({ typingReaction: "hourglass_flowing_sand" }),
+    );
+    const typing = requireCapturedTyping();
+    await typing.start();
+    await expect(typing.stop?.()).resolves.toBeUndefined();
+
+    expect(logVerboseMock).toHaveBeenCalledWith(
+      "slack send: typing reaction removal failed: An API error occurred: invalid_auth; code: slack_webapi_platform_error; slack error: invalid_auth",
     );
   });
 
@@ -3251,6 +3296,210 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
 
     expect(capturedReplyOptions?.suppressDefaultToolProgressMessages).toBe(true);
     await requireCapturedItemEventHandler()({ progressText: "hidden progress" });
+  });
+
+  it("keeps only the latest Slack commentary when tool progress is disabled", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedSlackStreamingMode = "progress";
+    mockedSlackDraftMode = "status_final";
+    mockedDispatchSequence = [];
+    mockedReplyOptionEvents = [
+      {
+        kind: "tool_start",
+        itemId: "tool-1",
+        name: "bash",
+        phase: "start",
+        args: { command: "pnpm test" },
+      },
+      {
+        kind: "item",
+        itemKind: "preamble",
+        itemId: "preamble-1",
+        progressText: "Checking the Slack event path",
+      },
+      {
+        kind: "item",
+        itemKind: "preamble",
+        itemId: "preamble-2",
+        progressText: "Preparing the smallest fix",
+      },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: {
+          streaming: {
+            mode: "progress",
+            progress: { label: false, commentary: true, toolProgress: false, maxLines: 1 },
+          },
+        },
+      }),
+    );
+
+    expect(capturedReplyOptions?.commentaryProgressEnabled).toBe(true);
+    expect(capturedReplyOptions?.suppressDefaultToolProgressMessages).toBe(true);
+    expect(draftStream.update).toHaveBeenLastCalledWith("• Preparing the smallest fix");
+    expect(draftStream.update.mock.calls.flat().join("\n")).not.toContain("pnpm test");
+
+    const updateCount = draftStream.update.mock.calls.length;
+    capturedReplyOptions?.onVerboseProgressVisibility?.(() => true);
+    await requireCapturedItemEventHandler()({
+      kind: "preamble",
+      itemId: "preamble-3",
+      progressText: "Delivered by the verbose lane",
+    });
+    expect(draftStream.update).toHaveBeenCalledTimes(updateCount);
+  });
+
+  it("uses the enterprise event client for Slack commentary drafts", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedSlackStreamingMode = "progress";
+    mockedSlackDraftMode = "status_final";
+    mockedDispatchSequence = [];
+    mockedReplyOptionEvents = [
+      {
+        kind: "item",
+        itemKind: "preamble",
+        itemId: "preamble-1",
+        progressText: "Checking the Enterprise event path",
+      },
+      {
+        kind: "item",
+        itemKind: "preamble",
+        itemId: "preamble-2",
+        progressText: "Using the scoped listener client",
+      },
+    ];
+    const eventClient = {
+      chat: { postMessage: postMessageMock, update: chatUpdateMock },
+    };
+    const eventScope = {
+      apiAppId: "A_TEST",
+      enterpriseId: "E_TEST",
+      isEnterpriseInstall: true as const,
+      teamId: "T_ENTERPRISE",
+      client: eventClient,
+    };
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: {
+          enterpriseOrgInstall: true,
+          streaming: {
+            mode: "progress",
+            progress: { label: false, commentary: true, toolProgress: false, maxLines: 1 },
+          },
+        },
+        eventScope,
+      }),
+    );
+
+    expect(createSlackDraftStreamMock).toHaveBeenCalledWith(
+      expect.objectContaining({ eventScope }),
+    );
+    expect(draftStream.update).toHaveBeenLastCalledWith("• Using the scoped listener client");
+  });
+
+  it("preserves legacy Slack preambles when commentary is omitted", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedSlackStreamingMode = "progress";
+    mockedSlackDraftMode = "status_final";
+    mockedDispatchSequence = [];
+    mockedReplyOptionEvents = [
+      {
+        kind: "item",
+        itemKind: "preamble",
+        itemId: "preamble-1",
+        progressText: "Checking the legacy Slack path",
+      },
+      {
+        kind: "item",
+        itemKind: "preamble",
+        itemId: "preamble-2",
+        progressText: "Keeping the released behavior",
+      },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: {
+          streaming: { mode: "progress", progress: { label: false, maxLines: 1 } },
+        },
+      }),
+    );
+
+    expect(capturedReplyOptions?.commentaryProgressEnabled).toBeUndefined();
+    expect(capturedReplyOptions?.onVerboseProgressVisibility).toBeUndefined();
+    expect(draftStream.update).toHaveBeenLastCalledWith("• Keeping the released behavior");
+  });
+
+  it("preserves Slack preamble previews outside progress mode", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedSlackStreamingMode = "partial";
+    mockedSlackDraftMode = "replace";
+    mockedDispatchSequence = [];
+    mockedReplyOptionEvents = [
+      {
+        kind: "item",
+        itemKind: "preamble",
+        itemId: "preamble-1",
+        progressText: "Keeping the partial preview path",
+      },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: {
+          streaming: { mode: "partial", progress: { label: false } },
+        },
+      }),
+    );
+
+    expect(capturedReplyOptions?.commentaryProgressEnabled).toBeUndefined();
+    expect(draftStream.update).toHaveBeenLastCalledWith("• Keeping the partial preview path");
+  });
+
+  it("lets Slack hide commentary without hiding tool progress", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedSlackStreamingMode = "progress";
+    mockedSlackDraftMode = "status_final";
+    mockedDispatchSequence = [];
+    mockedReplyOptionEvents = [
+      {
+        kind: "tool_start",
+        itemId: "tool-1",
+        name: "bash",
+        phase: "start",
+        args: { command: "pnpm test" },
+      },
+      {
+        kind: "item",
+        itemKind: "preamble",
+        itemId: "preamble-1",
+        progressText: "Hidden commentary",
+      },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: {
+          streaming: {
+            mode: "progress",
+            progress: { label: false, commentary: false, toolProgress: true },
+          },
+        },
+      }),
+    );
+
+    const updates = draftStream.update.mock.calls.flat().join("\n");
+    expect(capturedReplyOptions?.commentaryProgressEnabled).toBeUndefined();
+    expect(updates).toContain("pnpm test");
+    expect(updates).not.toContain("Hidden commentary");
   });
 
   it("does not create a blank Slack progress draft when label and lines are disabled", async () => {

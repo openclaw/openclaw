@@ -55,6 +55,7 @@ export function registerBrowserAgentActHookRoutes(
         res,
         ctx,
         targetId,
+        enforceCurrentUrlAllowed: true,
         run: async ({ profileCtx, cdpUrl, tab, signal }) => {
           const resolvedResult = await resolveExistingUploadPaths({ requestedPaths: paths });
           if (!resolvedResult.ok) {
@@ -101,6 +102,17 @@ export function registerBrowserAgentActHookRoutes(
               inputRef,
               element,
               paths: resolvedPaths,
+              ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+            });
+          } else if (ref) {
+            await pw.uploadViaPlaywright({
+              cdpUrl,
+              targetId: tab.targetId,
+              paths: resolvedPaths,
+              timeoutMs: timeoutMs ?? undefined,
+              ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+              ref,
+              signal,
             });
           } else {
             await pw.armFileUploadViaPlaywright({
@@ -109,14 +121,6 @@ export function registerBrowserAgentActHookRoutes(
               paths: resolvedPaths,
               timeoutMs: timeoutMs ?? undefined,
             });
-            if (ref) {
-              await pw.clickViaPlaywright({
-                cdpUrl,
-                targetId: tab.targetId,
-                ssrfPolicy: ctx.state().resolved.ssrfPolicy,
-                ref,
-              });
-            }
           }
           res.json({ ok: true });
         },
@@ -147,6 +151,7 @@ export function registerBrowserAgentActHookRoutes(
         res,
         ctx,
         targetId,
+        enforceCurrentUrlAllowed: true,
         run: async ({ profileCtx, cdpUrl, tab, signal }) => {
           if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
             if (dialogId) {

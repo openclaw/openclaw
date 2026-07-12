@@ -618,7 +618,7 @@ describe("slackOutbound sendPayload", () => {
     expect(segments[1]).toEqual({ kind: "text", text: "- Status: `/status`", mrkdwn: false });
   });
 
-  it("renders web-app buttons as native Slack links", async () => {
+  it("renders typed URL and web-app buttons as native Slack links", async () => {
     const payload: ReplyPayload = {
       presentation: {
         blocks: [
@@ -627,9 +627,9 @@ describe("slackOutbound sendPayload", () => {
             buttons: [
               {
                 label: "Launch",
-                value: "approve",
-                webApp: { url: "https://example.com/app" },
+                action: { type: "web-app", url: "https://example.com/app" },
               },
+              { label: "View", action: { type: "url", url: "https://example.com/view" } },
             ],
           },
         ],
@@ -653,6 +653,11 @@ describe("slackOutbound sendPayload", () => {
               type: "button",
               action_id: "openclaw:reply_link:1:1",
               url: "https://example.com/app",
+            }),
+            expect.objectContaining({
+              type: "button",
+              action_id: "openclaw:reply_link:1:2",
+              url: "https://example.com/view",
             }),
           ],
         }),
@@ -876,6 +881,24 @@ describe("slackOutbound sendPayload", () => {
       { type: "buttons", buttons: [{ label: "OK", value: "ok" }] },
       { type: "text", text: "after" },
     ]);
+  });
+
+  it("sends an exact mirrored portable control row once", async () => {
+    const buttons = [{ label: "Approve", action: { type: "callback" as const, value: "approve" } }];
+    const { run, sendMock } = createHarness({
+      payload: {
+        text: "Deploy?",
+        presentation: { blocks: [{ type: "buttons", buttons }] },
+        interactive: { blocks: [{ type: "buttons", buttons }] },
+      },
+    });
+
+    await run();
+
+    const actions = sendOptions(sendCall(sendMock, 0)).blocks?.filter(
+      (block) => block.type === "actions",
+    );
+    expect(actions).toHaveLength(1);
   });
 
   it("marks inline legacy text as represented when native data is compiled with it", async () => {

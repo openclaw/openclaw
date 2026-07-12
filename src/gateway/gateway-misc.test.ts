@@ -4,6 +4,7 @@ import * as fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, test, vi } from "vitest";
 import type { RequestFrame } from "../../packages/gateway-protocol/src/index.js";
 import {
@@ -470,6 +471,19 @@ describe("gateway broadcaster", () => {
     expectSentEvents(adminSocket, ["task"]);
   });
 
+  it("requires operator.read for node presence broadcasts", () => {
+    const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, broadcast } =
+      makeScopedBroadcastContext();
+
+    broadcast("node.presence", { nodeId: "mac-1", lastActiveAtMs: 100 });
+
+    expect(pairingSocket.send).not.toHaveBeenCalled();
+    expect(nodeSocket.send).not.toHaveBeenCalled();
+    expectSentEvents(readSocket, ["node.presence"]);
+    expectSentEvents(writeSocket, ["node.presence"]);
+    expectSentEvents(adminSocket, ["node.presence"]);
+  });
+
   it("allows plugin.* broadcast events for operator.write and operator.admin", () => {
     const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, broadcast } =
       makeScopedBroadcastContext();
@@ -753,7 +767,7 @@ describe("node subscription manager", () => {
 
     expect(sent).toHaveLength(2);
     expect(sent.map((s) => s.nodeId).toSorted()).toEqual(["node-a", "node-b"]);
-    expect(sent[0].event).toBe("chat");
+    expect(expectDefined(sent[0], "sent[0] test invariant").event).toBe("chat");
   });
 
   test("runtime forwards subscribed node payload json without parsing it again", () => {
@@ -887,6 +901,7 @@ describe("resolveNodeCommandAllowlist", () => {
 
     expect(DEFAULT_DANGEROUS_NODE_COMMANDS).not.toContain("screen.snapshot");
     expect(DEFAULT_DANGEROUS_NODE_COMMANDS).toContain("screen.record");
+    expect(DEFAULT_DANGEROUS_NODE_COMMANDS).toContain("health.summary");
     expect(allow.has("screen.snapshot")).toBe(true);
     expect(allow.has("screen.record")).toBe(false);
   });

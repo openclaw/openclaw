@@ -26,7 +26,9 @@ import {
   buildTurnStartParams,
   buildThreadResumeParams,
   buildThreadStartParams,
+  areCodexDynamicToolFingerprintsCompatible,
   codexDynamicToolsFingerprint,
+  codexLegacyDynamicToolsFingerprint,
   formatCodexThreadLifecycleTimingSummary,
   resolveCodexAppServerThreadModelSelection,
   resolveReasoningEffort,
@@ -509,10 +511,10 @@ describe("Codex app-server native code mode config", () => {
     });
 
     expect(instructions).toContain("## Skill Workshop");
-    expect(instructions).toContain("Route durable skill work");
-    expect(instructions).toContain("through the `skill_workshop` tool");
-    expect(instructions).toContain("Generated skills are pending proposals.");
-    expect(instructions).toContain("only when the user explicitly asks");
+    expect(instructions).toContain("Durable reusable skill/playbook/workflow work");
+    expect(instructions).toContain("`skill_workshop`");
+    expect(instructions).toContain("Generated = pending proposal");
+    expect(instructions).toContain("only explicit user ask");
   });
 
   it("keeps developer instructions compact when no dynamic tools are deferred", () => {
@@ -565,6 +567,36 @@ describe("Codex app-server native code mode config", () => {
     ]);
 
     expect(searchableFingerprint).not.toBe(directFingerprint);
+  });
+
+  it("keeps hashed dynamic tool fingerprints compatible with legacy JSON bindings", () => {
+    const tools = [
+      {
+        type: "function" as const,
+        name: "message",
+        description: "Send a visible message",
+        inputSchema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            text: { type: "string" },
+          },
+          required: ["text"],
+        },
+      },
+    ];
+    const hashed = codexDynamicToolsFingerprint(tools);
+    const legacy = codexLegacyDynamicToolsFingerprint(tools);
+
+    expect(hashed).toMatch(/^sha256:/);
+    expect(legacy).toContain('"name":"message"');
+    expect(
+      areCodexDynamicToolFingerprintsCompatible({
+        previous: legacy,
+        next: hashed,
+        nextLegacy: legacy,
+      }),
+    ).toBe(true);
   });
 
   it("keeps OpenClaw skill catalogs out of developer instructions", () => {
@@ -1236,7 +1268,7 @@ describe("Codex app-server turn params", () => {
       "This is an OpenClaw heartbeat turn. Apply these instructions only to this heartbeat wake",
     );
     expect(heartbeatCollaborationMode.settings.developer_instructions).toContain(
-      "Use heartbeats to create useful proactive progress",
+      "Heartbeat = useful proactive progress",
     );
     expect(heartbeatCollaborationMode.settings.developer_instructions).toContain(
       "If `heartbeat_respond` is not already available and `tool_search` is available",

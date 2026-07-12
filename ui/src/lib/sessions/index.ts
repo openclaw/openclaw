@@ -11,12 +11,14 @@ import type {
   SessionsPatchResult,
   SessionWorkspaceGetResult,
   SessionWorkspaceListResult,
+  SessionWorkspaceSetResult,
 } from "../../api/types.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { isSessionRunActive } from "../session-run-state.ts";
 import {
   requestSessionCreate,
   resolveSessionCreateParams,
+  type SessionCreateOutcome,
   type SessionCreateParams,
 } from "./create.ts";
 import { scopedAgentListParamsForSession } from "./navigation.ts";
@@ -172,6 +174,7 @@ export type SessionCapability = {
   reconcileChanged: (payload: unknown, options?: SessionReconcileOptions) => SessionChangedResult;
   reconcileRunTerminal: (terminal: SessionRunTerminal) => boolean;
   refresh: (options?: SessionRefreshOptions) => Promise<void>;
+  createResult: (params?: SessionCreateParams) => Promise<SessionCreateOutcome | null>;
   create: (params?: SessionCreateParams) => Promise<string | null>;
   patch: (
     key: string,
@@ -197,6 +200,12 @@ export type SessionCapability = {
     path: string,
     options?: { agentId?: string | null },
   ) => Promise<SessionWorkspaceGetResult | null>;
+  setFile: (
+    key: string,
+    path: string,
+    content: string,
+    options: { agentId?: string | null; expectedHash: string },
+  ) => Promise<SessionWorkspaceSetResult | null>;
   subscribeMessages: (
     key: string,
     options?: { agentId?: string | null },
@@ -230,7 +239,7 @@ export type SessionCapability = {
 };
 
 export { requestSessionCreate } from "./create.ts";
-export type { SessionCreateParams } from "./create.ts";
+export type { SessionCreateOutcome, SessionCreateParams } from "./create.ts";
 export { resolveSessionKey } from "./navigation.ts";
 export {
   compareSessionRowsByUpdatedAt,
@@ -407,6 +416,22 @@ function requestSessionFile(
   return client.request<SessionWorkspaceGetResult | null>("sessions.files.get", {
     sessionKey: key,
     path,
+    ...(options.agentId?.trim() ? { agentId: options.agentId.trim() } : {}),
+  });
+}
+
+function requestSessionFileSet(
+  client: SessionRequestClient,
+  key: string,
+  path: string,
+  content: string,
+  options: { agentId?: string | null; expectedHash: string },
+): Promise<SessionWorkspaceSetResult | null> {
+  return client.request<SessionWorkspaceSetResult | null>("sessions.files.set", {
+    sessionKey: key,
+    path,
+    content,
+    expectedHash: options.expectedHash,
     ...(options.agentId?.trim() ? { agentId: options.agentId.trim() } : {}),
   });
 }
@@ -767,14 +792,14 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     return request;
   };
 
-  const create = async (params: SessionCreateParams = {}) => {
+  const createResult = async (params: SessionCreateParams = {}) => {
     const scope = captureConnection();
     if (!scope || state.loading) {
       return null;
     }
     try {
       const { currentSessionKey, ...requestParams } = params;
-      const key = await requestSessionCreate(scope.client, {
+      const result = await requestSessionCreate(scope.client, {
         ...requestParams,
         ...resolveSessionCreateParams(currentSessionKey, params.agentId),
       });
@@ -788,9 +813,9 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       // Creation can originate outside the sidebar. Notify presentation owners
       // after refresh so they can reconcile the new row without guessing from list churn.
       for (const listener of createdListeners) {
-        listener(key);
+        listener(result.key);
       }
-      return key;
+      return result;
     } catch (error) {
       if (isCurrentConnection(scope)) {
         publish({ ...state, error: String(error) });
@@ -798,6 +823,9 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       return null;
     }
   };
+
+  const create = async (params: SessionCreateParams = {}) =>
+    (await createResult(params))?.key ?? null;
 
   const LEGACY_GROUPS_STORAGE_KEY = "openclaw:sessions:custom-groups";
   let groupsLoadedEpoch = -1;
@@ -1169,6 +1197,20 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     return isCurrentConnection(scope) ? result : null;
   };
 
+  const setFile = async (
+    key: string,
+    path: string,
+    content: string,
+    options: { agentId?: string | null; expectedHash: string },
+  ): Promise<SessionWorkspaceSetResult | null> => {
+    const scope = captureConnection();
+    if (!scope) {
+      return null;
+    }
+    const result = await requestSessionFileSet(scope.client, key, path, content, options);
+    return isCurrentConnection(scope) ? result : null;
+  };
+
   const subscribeMessages = async (
     key: string,
     options: { agentId?: string | null } = {},
@@ -1352,6 +1394,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     reconcileChanged,
     reconcileRunTerminal,
     refresh,
+    createResult,
     create,
     patch,
     setModelOverride,
@@ -1362,6 +1405,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     steer,
     listFiles,
     getFile,
+    setFile,
     subscribeMessages,
     unsubscribeMessages,
     listCheckpoints,

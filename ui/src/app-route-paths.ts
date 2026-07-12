@@ -4,10 +4,10 @@ import type { RouteLocation } from "@openclaw/uirouter";
 const APP_ROUTE_DEFINITIONS = {
   chat: { path: "/chat" },
   "new-session": { path: "/new" },
-  overview: { path: "/overview" },
   activity: { path: "/activity" },
   agents: { path: "/agents" },
   channels: { path: "/settings/channels", aliases: ["/channels"] },
+  connection: { path: "/settings/connection" },
   config: { path: "/settings/general", aliases: ["/config"] },
   profile: { path: "/settings/profile", aliases: ["/profile"] },
   communications: { path: "/settings/communications", aliases: ["/communications"] },
@@ -31,7 +31,6 @@ const APP_ROUTE_DEFINITIONS = {
   tasks: { path: "/tasks" },
   nodes: { path: "/nodes" },
   plugin: { path: "/plugin" },
-  dreams: { path: "/dreaming", aliases: ["/dreams"] },
 } as const;
 
 export type RouteId = keyof typeof APP_ROUTE_DEFINITIONS;

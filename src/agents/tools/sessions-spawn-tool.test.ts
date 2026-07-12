@@ -162,15 +162,15 @@ describe("sessions_spawn tool", () => {
 
     expect(tool.displaySummary).toBe("Spawn subagent or ACP session.");
     expect(tool.description).toContain('runtime="acp"');
-    expect(tool.description).toContain('unless ACP uses `streamTo="parent"`');
+    expect(tool.description).toContain('unless ACP `streamTo="parent"`');
     expect(schema.properties?.runtime?.enum).toEqual(["subagent", "acp"]);
     const resumeSessionId = requireSchemaProperty(schema.properties, "resumeSessionId");
     const streamTo = requireSchemaProperty(schema.properties, "streamTo");
-    expect(resumeSessionId.description).toContain("ACP-only resume target");
-    expect(resumeSessionId.description).toContain('ignored for runtime="subagent"');
-    expect(resumeSessionId.description).toContain("already recorded for this requester");
-    expect(streamTo.description).toContain("ACP-only stream target");
-    expect(streamTo.description).toContain('ignored for runtime="subagent"');
+    expect(resumeSessionId.description).toContain("ACP resume id");
+    expect(resumeSessionId.description).toContain("ignored by subagent");
+    expect(resumeSessionId.description).toContain("already recorded for requester");
+    expect(streamTo.description).toContain("ACP only");
+    expect(streamTo.description).toContain("Ignored by subagent");
   });
 
   it("hides ACP runtime affordances when the ACP backend is unhealthy", () => {
@@ -267,7 +267,8 @@ describe("sessions_spawn tool", () => {
 
     expect(schema.properties?.announceTarget?.enum).toEqual(["channel", "parent"]);
     expect(schema.properties?.announceTarget?.description).toContain("Native completion routing");
-    expect(schema.properties?.streamTo?.description).toContain("ACP-only stream target");
+    expect(schema.properties?.streamTo?.description).toContain("ACP only");
+    expect(schema.properties?.streamTo?.description).toContain("Ignored by subagent");
 
     await tool.execute("call-native-parent", {
       task: "investigate",
@@ -421,7 +422,10 @@ describe("sessions_spawn tool", () => {
     };
 
     expect(requireSchemaProperty(schema.properties, "taskName").description).toContain(
-      "Stable alias",
+      "Stable later-target alias",
+    );
+    expect(requireSchemaProperty(schema.properties, "taskName").description).toContain(
+      "starts lowercase letter",
     );
 
     const result = await tool.execute("call-task-name", {

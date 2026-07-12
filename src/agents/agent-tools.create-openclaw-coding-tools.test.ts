@@ -7,6 +7,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   findUnsupportedSchemaKeywords,
@@ -68,11 +70,10 @@ async function writeSessionStore(
   agentId: string,
   entries: Record<string, unknown>,
 ) {
-  await fs.writeFile(
-    storeTemplate.replaceAll("{agentId}", agentId),
-    JSON.stringify(entries, null, 2),
-    "utf-8",
-  );
+  const storePath = storeTemplate.replaceAll("{agentId}", agentId);
+  for (const [sessionKey, entry] of Object.entries(entries)) {
+    await replaceSessionEntry({ agentId, sessionKey, storePath }, entry as SessionEntry);
+  }
 }
 
 function createToolsForStoredSession(storeTemplate: string, sessionKey: string) {
@@ -157,6 +158,40 @@ function cronCreatorToolNames(
 }
 
 describe("createOpenClawCodingTools", () => {
+  it("reads node-hosted skill content through the assembled workspace-only read tool", async () => {
+    const locator = "node://node-1/skills/pond/SKILL.md";
+    const tools = createOpenClawCodingTools({
+      config: { tools: { fs: { workspaceOnly: true } } },
+      skillsSnapshot: {
+        prompt: "",
+        skills: [{ name: "pond" }],
+        resolvedSkills: [
+          {
+            name: "pond",
+            description: "Pond skill",
+            filePath: locator,
+            baseDir: "node://node-1/skills/pond",
+            readContent: "# Pond\nassembled-marker",
+            source: "openclaw-node",
+            sourceInfo: {
+              source: "openclaw-node",
+              path: locator,
+              scope: "temporary",
+              origin: "top-level",
+            },
+            disableModelInvocation: false,
+          },
+        ],
+      },
+    });
+
+    const result = await requireTool(tools, "read").execute("node-skill-read", {
+      path: locator,
+    });
+
+    expect(JSON.stringify(result)).toContain("assembled-marker");
+  });
+
   const testConfig: OpenClawConfig = {};
 
   afterEach(() => {

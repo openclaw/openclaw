@@ -8,7 +8,17 @@ import {
   PROTOCOL_VERSION,
   type WorkerAdmissionFailureReason,
   type WorkerConnectParams,
+  type WorkerLiveEventErrorDetails,
+  WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
+  type WorkerTranscriptCommitErrorReason,
+  WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import {
+  type WorkerInferenceEventFrame,
+  type WorkerInferenceStartParams,
+  type WorkerInferenceTerminalFrame,
+  WORKER_INFERENCE_PROTOCOL_FEATURE,
+} from "../../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
@@ -22,7 +32,12 @@ const CREDENTIAL = ["worker", "credential", "fixture"].join("-");
 const HANDSHAKE = {
   bundleHash: "a".repeat(64),
   openclawVersion: "2026.7.11",
-  protocolFeatures: ["worker-heartbeat-v1"],
+  protocolFeatures: [
+    "worker-heartbeat-v1",
+    WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE,
+    WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
+    WORKER_INFERENCE_PROTOCOL_FEATURE,
+  ],
 };
 const WORKER_CONNECT: WorkerConnectParams = {
   minProtocol: PROTOCOL_VERSION,
@@ -53,7 +68,58 @@ const IDENTITY: WorkerConnectionIdentity = {
   protocolFeatures: [...HANDSHAKE.protocolFeatures],
   credentialExpiresAtMs: Date.now() + 60_000,
 };
+const TRANSCRIPT_COMMIT = {
+  runEpoch: 1,
+  seq: 1,
+  baseLeafId: null,
+  messages: [
+    {
+      role: "user" as const,
+      content: [{ type: "text" as const, text: "hello" }],
+      timestamp: 1,
+    },
+  ],
+};
+const LIVE_EVENT = {
+  runEpoch: 1,
+  lastAckedSeq: 0,
+  seq: 1,
+  runId: "r",
+  event: { kind: "assistant" as const, payload: { text: "x", delta: "x" } },
+};
+const ATTACHED_IDENTITY: WorkerConnectionIdentity = {
+  ...IDENTITY,
+  sessionId: "session-1",
+};
+const INFERENCE_IDS = {
+  runEpoch: 1,
+  sessionId: "session-1",
+  runId: "run-1",
+  turnId: "turn-1",
+} as const;
+const INFERENCE_START: WorkerInferenceStartParams = {
+  ...INFERENCE_IDS,
+  modelRef: { provider: "test-provider", model: "sonnet-4.6" },
+  context: {
+    messages: [{ role: "user", content: "hello", timestamp: 1 }],
+  },
+  options: { maxTokens: 128, temperature: 0.2 },
+};
+const INFERENCE_EVENT: WorkerInferenceEventFrame = {
+  type: "event",
+  event: "worker.inference.event",
+  payload: {
+    ...INFERENCE_IDS,
+    seq: 1,
+    event: { type: "text_delta", contentIndex: 0, delta: "x" },
+  },
+};
 const cleanups: Array<() => void> = [];
+
+type InferenceSink = {
+  connectionId: string;
+  send(frame: WorkerInferenceEventFrame | WorkerInferenceTerminalFrame): void;
+};
 
 function createLogger() {
   return { warn: vi.fn() };
@@ -62,6 +128,10 @@ function createLogger() {
 function attachHarness(
   options: {
     admissionFailure?: WorkerAdmissionFailureReason;
+    commitFailure?: WorkerTranscriptCommitErrorReason;
+    identity?: WorkerConnectionIdentity;
+    liveFailure?: WorkerLiveEventErrorDetails;
+    onInferenceLaunch?: (sink: InferenceSink) => void;
     validationFailure?: ReturnType<WorkerConnectionService["validateWorkerConnection"]>;
   } = {},
 ) {
@@ -72,10 +142,40 @@ function attachHarness(
     admitWorker: vi.fn(async () =>
       options.admissionFailure
         ? { ok: false as const, reason: options.admissionFailure }
-        : { ok: true as const, identity: IDENTITY },
+        : { ok: true as const, identity: options.identity ?? IDENTITY },
     ),
+    commitTranscript: vi.fn(async () =>
+      options.commitFailure
+        ? { ok: false as const, reason: options.commitFailure }
+        : {
+            ok: true as const,
+            result: { entryIds: ["entry-1"], newLeafId: "entry-1" },
+          },
+    ),
+    pushLiveEvent: vi.fn(async () =>
+      options.liveFailure
+        ? { ok: false as const, details: options.liveFailure }
+        : { ok: true as const, result: { ackedSeq: LIVE_EVENT.seq } },
+    ),
+    startInference: vi.fn(
+      (
+        _identity: WorkerConnectionIdentity,
+        _request: WorkerInferenceStartParams,
+        sink: InferenceSink,
+      ) => {
+        return {
+          ok: true as const,
+          result: { status: "accepted" as const },
+          launch: () => options.onInferenceLaunch?.(sink),
+        };
+      },
+    ),
+    cancelInference: vi.fn(() => ({
+      ok: true as const,
+      result: { status: "cancelled" as const },
+    })),
     validateWorkerConnection: vi.fn(() => options.validationFailure ?? null),
-  } as WorkerConnectionService;
+  };
   let client: GatewayWsClient | null = null;
   const setClient = vi.fn((next: GatewayWsClient) => {
     client = next;
@@ -83,6 +183,7 @@ function attachHarness(
   });
   const logGateway = createLogger();
   const logWsControl = createLogger();
+  const setLastFrameMeta = vi.fn();
   const cleanup = attachWorkerWsMessageHandler({
     socket: socket as unknown as WebSocket,
     connId: "worker-connection",
@@ -96,7 +197,7 @@ function attachHarness(
     setHandshakeState: vi.fn(),
     advanceHandshakePhase: vi.fn(),
     setCloseCause: vi.fn(),
-    setLastFrameMeta: vi.fn(),
+    setLastFrameMeta,
     logGateway,
     logWsControl,
   });
@@ -110,8 +211,9 @@ function attachHarness(
     responses,
     service,
     setClient,
-    sendRequest: (method: string, params: unknown) =>
-      send({ type: "req", id: "request-1", method, params }),
+    setLastFrameMeta,
+    sendRequest: (method: string, params: unknown, id = "request-1") =>
+      send({ type: "req", id, method, params }),
     sendConnect: () =>
       send({ type: "req", id: "connect-1", method: "connect", params: WORKER_CONNECT }),
   };
@@ -179,6 +281,165 @@ describe("dedicated worker websocket protocol", () => {
       ok: true,
       payload: { status: "ok", ownerEpoch: 1 },
     });
+  });
+
+  it("gates inference independently", async () => {
+    const unsupported = attachHarness({
+      identity: {
+        ...ATTACHED_IDENTITY,
+        protocolFeatures: HANDSHAKE.protocolFeatures.filter(
+          (feature) => feature !== WORKER_INFERENCE_PROTOCOL_FEATURE,
+        ),
+      },
+    });
+    await admit(unsupported);
+    unsupported.sendRequest("worker.inference.start", INFERENCE_START);
+    await vi.waitFor(() =>
+      expect(unsupported.close).toHaveBeenCalledWith(1008, "method-not-allowed"),
+    );
+    expect(unsupported.service.startInference).not.toHaveBeenCalled();
+  });
+
+  it("acknowledges inference before forwarding synchronous stream frames", async () => {
+    const harness = attachHarness({
+      identity: ATTACHED_IDENTITY,
+      onInferenceLaunch: (sink) => sink.send(INFERENCE_EVENT),
+    });
+    await admit(harness);
+    harness.sendRequest("worker.inference.start", INFERENCE_START);
+
+    await vi.waitFor(() => expect(harness.responses).toHaveLength(3));
+    expect(harness.responses[1]).toMatchObject({
+      ok: true,
+      payload: { status: "accepted" },
+    });
+    expect(harness.responses[2]).toEqual(INFERENCE_EVENT);
+    expect(harness.service.startInference).toHaveBeenCalledOnce();
+
+    harness.sendRequest("worker.inference.cancel", INFERENCE_IDS, "cancel-1");
+    await vi.waitFor(() => expect(harness.responses).toHaveLength(4));
+    expect(harness.responses[3]).toMatchObject({
+      ok: true,
+      payload: { status: "cancelled" },
+    });
+    expect(harness.service.cancelInference).toHaveBeenCalledWith(ATTACHED_IDENTITY, INFERENCE_IDS);
+  });
+
+  it("dispatches semantic transcript commits on the closed worker allowlist", async () => {
+    const harness = attachHarness();
+    await admit(harness);
+    harness.sendRequest("worker.transcript.commit", TRANSCRIPT_COMMIT);
+
+    await vi.waitFor(() => expect(harness.responses).toHaveLength(2));
+    expect(harness.responses[1]).toMatchObject({
+      ok: true,
+      payload: { entryIds: ["entry-1"], newLeafId: "entry-1" },
+    });
+    expect(harness.service.commitTranscript).toHaveBeenCalledWith(IDENTITY, TRANSCRIPT_COMMIT);
+    expect(harness.setLastFrameMeta).toHaveBeenLastCalledWith({
+      type: "req",
+      method: "worker.transcript.commit",
+    });
+    expect(harness.close).not.toHaveBeenCalled();
+  });
+
+  it("gates live-event features, schema, and closed errors", async () => {
+    const unsupported = attachHarness({
+      identity: {
+        ...IDENTITY,
+        protocolFeatures: HANDSHAKE.protocolFeatures.filter(
+          (feature) => feature !== WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
+        ),
+      },
+    });
+    await admit(unsupported);
+    unsupported.sendRequest("worker.live-event", LIVE_EVENT);
+    await vi.waitFor(() => expect(unsupported.close).toHaveBeenCalled());
+    expect(unsupported.service.pushLiveEvent).not.toHaveBeenCalled();
+
+    const resync = attachHarness({
+      liveFailure: { reason: "resync-required", ackedSeq: 2, expectedSeq: 3 },
+    });
+    await admit(resync);
+    resync.sendRequest("worker.live-event", { ...LIVE_EVENT, seq: 7 });
+    await vi.waitFor(() =>
+      expect(resync.responses[1]).toMatchObject({
+        error: { details: { reason: "resync-required" } },
+      }),
+    );
+    expect(resync.service.pushLiveEvent).toHaveBeenCalledOnce();
+
+    const invalid = attachHarness();
+    await admit(invalid);
+    invalid.sendRequest("worker.live-event", {
+      ...LIVE_EVENT,
+      event: { kind: "assistant", payload: { delta: "x" } },
+    });
+    await vi.waitFor(() =>
+      expect(invalid.responses[1]).toMatchObject({
+        error: { details: { reason: "invalid-event" } },
+      }),
+    );
+    expect(invalid.service.pushLiveEvent).not.toHaveBeenCalled();
+  });
+
+  it("rejects transcript commits when the admitted worker lacks the feature", async () => {
+    const harness = attachHarness({
+      identity: { ...IDENTITY, protocolFeatures: ["worker-heartbeat-v1"] },
+    });
+    await admit(harness);
+    harness.sendRequest("worker.transcript.commit", TRANSCRIPT_COMMIT);
+
+    await vi.waitFor(() => expect(harness.close).toHaveBeenCalledWith(1008, "method-not-allowed"));
+    expect(harness.service.commitTranscript).not.toHaveBeenCalled();
+  });
+
+  it("returns closed transcript errors without closing the worker connection", async () => {
+    const harness = attachHarness({ commitFailure: "stale-base-leaf" });
+    await admit(harness);
+    harness.sendRequest("worker.transcript.commit", TRANSCRIPT_COMMIT);
+
+    await vi.waitFor(() => expect(harness.responses).toHaveLength(2));
+    expect(harness.responses[1]).toMatchObject({
+      ok: false,
+      error: { details: { reason: "stale-base-leaf" } },
+    });
+    expect(harness.close).not.toHaveBeenCalled();
+  });
+
+  it("rejects structurally invalid transcript batches before application", async () => {
+    const harness = attachHarness();
+    await admit(harness);
+    harness.sendRequest("worker.transcript.commit", {
+      ...TRANSCRIPT_COMMIT,
+      sessionId: "foreign-session",
+    });
+
+    await vi.waitFor(() => expect(harness.responses).toHaveLength(2));
+    expect(harness.responses[1]).toMatchObject({
+      ok: false,
+      error: { details: { reason: "invalid-batch" } },
+    });
+    expect(harness.service.commitTranscript).not.toHaveBeenCalled();
+    expect(harness.close).not.toHaveBeenCalled();
+  });
+
+  it("closes a replaced worker before parsing a malformed transcript batch", async () => {
+    const harness = attachHarness();
+    await admit(harness);
+    vi.mocked(harness.service.validateWorkerConnection).mockReturnValue("credential-replaced");
+    harness.sendRequest("worker.transcript.commit", {
+      ...TRANSCRIPT_COMMIT,
+      sessionId: "foreign-session",
+    });
+
+    await vi.waitFor(() => expect(harness.responses).toHaveLength(2));
+    expect(harness.responses[1]).toMatchObject({
+      ok: false,
+      error: { details: { reason: "credential-replaced" } },
+    });
+    await vi.waitFor(() => expect(harness.close).toHaveBeenCalledWith(1008, "credential-replaced"));
+    expect(harness.service.commitTranscript).not.toHaveBeenCalled();
   });
 
   it("revalidates ownership immediately before admission", async () => {

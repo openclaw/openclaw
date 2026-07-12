@@ -1,10 +1,10 @@
 import CryptoKit
 import Foundation
-@testable import OpenClaw
 import OpenClawChatUI
-import OpenClawKit
 import OpenClawProtocol
 import Testing
+@testable import OpenClaw
+@testable import OpenClawKit
 
 private actor ActivationMarkerObservation {
     private var observed = false
@@ -586,6 +586,23 @@ struct OnboardingAISetupTests {
             #expect(OnboardingProviderIcon.image(for: kind)?.isTemplate == true)
         }
         #expect(OnboardingProviderIcon.resourceURL(for: "gemini-cli") == nil)
+    }
+
+    @Test func `device code presentation decodes structured wizard metadata`() throws {
+        let presentation = try #require(parseWizardDeviceCode([
+            "code": AnyCodable("ABCD-1234"),
+            "expiresInMinutes": AnyCodable(15),
+            "message": AnyCodable("Enter this code in your browser."),
+        ]))
+
+        #expect(presentation.code == "ABCD-1234")
+        #expect(presentation.expiresInMinutes == 15)
+        #expect(presentation.message == "Enter this code in your browser.")
+        #expect(parseWizardDeviceCode(["code": AnyCodable("")]) == nil)
+        #expect(parseWizardDeviceCode([
+            "code": AnyCodable("ABCD-1234"),
+            "expiresInMinutes": AnyCodable(1e100),
+        ])?.expiresInMinutes == nil)
     }
 
     @Test func `provider auth transport outlives device code windows`() {
@@ -2504,7 +2521,7 @@ struct OnboardingAISetupTests {
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
-        try await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": tempDir.path]) {
+        try await DeviceIdentityStore.withStateDirectory(tempDir) {
             let identity = DeviceIdentityStore.loadOrCreate()
             let deviceAuthGatewayID = "local"
             let originalToken = "receipt-device-token-a"

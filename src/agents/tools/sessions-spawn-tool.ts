@@ -170,7 +170,7 @@ function createSessionsSpawnToolSchema(params: {
     taskName: Type.Optional(
       Type.String({
         description:
-          "Stable alias for later targeting; lowercase letters/digits/underscores/hyphens, starts letter.",
+          "Stable later-target alias; starts lowercase letter; then lowercase/digit/_/-.",
       }),
     ),
     label: Type.Optional(Type.String()),
@@ -185,8 +185,7 @@ function createSessionsSpawnToolSchema(params: {
       ? {
           thread: Type.Optional(
             Type.Boolean({
-              description:
-                'Bind spawn to new chat thread when supported. `thread=true` defaults mode="session".',
+              description: 'Bind new chat thread when supported; true defaults mode="session".',
             }),
           ),
         }
@@ -195,8 +194,7 @@ function createSessionsSpawnToolSchema(params: {
     cleanup: optionalStringEnum(["delete", "keep"] as const),
     sandbox: optionalStringEnum(SESSIONS_SPAWN_SANDBOX_MODES),
     context: optionalStringEnum(SUBAGENT_SPAWN_CONTEXT_MODES, {
-      description:
-        'Native context. Omit/"isolated" for clean child; "fork" only when child needs requester transcript.',
+      description: "Native: omit/isolated clean; fork only needing requester transcript.",
     }),
     announceTarget: optionalStringEnum(SUBAGENT_ANNOUNCE_TARGETS, {
       description:
@@ -204,7 +202,7 @@ function createSessionsSpawnToolSchema(params: {
     }),
     lightContext: Type.Optional(
       Type.Boolean({
-        description: 'Light bootstrap context; runtime="subagent" only.',
+        description: "Light bootstrap; subagent only.",
       }),
     ),
 
@@ -231,13 +229,11 @@ function createSessionsSpawnToolSchema(params: {
       ? {
           resumeSessionId: Type.Optional(
             Type.String({
-              description:
-                'ACP-only resume target; ignored for runtime="subagent". Use id already recorded for this requester.',
+              description: "ACP resume id already recorded for requester; ignored by subagent.",
             }),
           ),
           streamTo: optionalStringEnum(SESSIONS_SPAWN_ACP_STREAM_TARGETS, {
-            description:
-              'ACP-only stream target; ignored for runtime="subagent". Use "parent" to stream turn to requester.',
+            description: 'ACP only; "parent" streams turn to requester. Ignored by subagent.',
           }),
         }
       : {}),

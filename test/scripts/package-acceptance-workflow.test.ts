@@ -86,8 +86,10 @@ type WorkflowJob = {
   permissions?: Record<string, string>;
   "runs-on"?: string;
   strategy?: {
+    "fail-fast"?: boolean;
     matrix?: {
       include?: WorkflowMatrixEntry[];
+      tier?: string;
     };
   };
   "timeout-minutes"?: number | string;
@@ -582,6 +584,16 @@ describe("package acceptance workflow", () => {
     expect(hydratePnpm.run).toContain(
       '[ "$(readlink node_modules)" = "${PNPM_CONFIG_MODULES_DIR:-}" ]',
     );
+    expect(hydratePnpm.run).toContain("pnpm_install_artifacts_ready");
+    expect(hydratePnpm.run).toContain("run_pnpm_install || run_pnpm_install");
+    expect(hydratePnpm.run).toContain('setsid pnpm "${install_args[@]}"');
+    expect(hydratePnpm.run).toContain("grep -qE '^Done in .+ using pnpm v'");
+    expect(hydratePnpm.run).toContain("https://github.com/pnpm/pnpm/issues/12297");
+    expect(hydratePnpm.run).toContain('kill -TERM -- "-$pnpm_pid"');
+    expect(hydratePnpm.run).toContain('kill -KILL -- "-$pnpm_pid"');
+    expect(hydratePnpm.run).toContain('test -s "$PNPM_CONFIG_MODULES_DIR/.modules.yaml"');
+    expect(hydratePnpm.run).toContain('test -x "$PNPM_CONFIG_MODULES_DIR/.bin/oxfmt"');
+    expect(hydratePnpm.run).toContain('test -f "$PNPM_CONFIG_MODULES_DIR/typescript/package.json"');
     expect(workflowStep(hydrate, "Fetch main ref").run).toContain(
       "timeout --signal=TERM --kill-after=10s 30s git",
     );
@@ -766,6 +778,17 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain('[[ "$actual_sha256" == "$EXPECTED_PACKAGE_SHA256" ]]');
     expect(workflow).toContain("needs: [resolve_package, package_integrity]");
     expect(workflow).toContain("package_integrity=${PACKAGE_INTEGRITY_RESULT}");
+  });
+
+  it("keeps ref packaging independent of workflow-checkout dependencies", () => {
+    const workflow = readFileSync(PACKAGE_ACCEPTANCE_WORKFLOW, "utf8");
+    const resolveJob = workflow.slice(
+      workflow.indexOf("  resolve_package:"),
+      workflow.indexOf("  package_integrity:"),
+    );
+
+    expect(resolveJob).toContain("scripts/resolve-openclaw-package-candidate.mjs");
+    expect(resolveJob).not.toContain("pnpm install");
   });
 
   it("offers bounded product profiles and can run Telegram against the resolved artifact", () => {
@@ -2089,7 +2112,7 @@ describe("package artifact reuse", () => {
       ["run_live_discord", "Upload Discord QA artifacts", "always()"],
       ["run_live_whatsapp", "Upload WhatsApp QA artifacts", "always()"],
       ["run_live_slack", "Upload Slack QA artifacts", "always()"],
-    ];
+    ] as const;
 
     for (const [jobName, stepName, uploadCondition] of cases) {
       const uploadStep = workflowStep(workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, jobName), stepName);
@@ -2120,7 +2143,7 @@ describe("package artifact reuse", () => {
       ["qa_live_discord_release_checks", "Upload Discord QA artifacts"],
       ["qa_live_whatsapp_release_checks", "Upload WhatsApp QA artifacts"],
       ["qa_live_slack_release_checks", "Upload Slack QA artifacts"],
-    ];
+    ] as const;
 
     for (const [jobName, stepName] of cases) {
       const uploadStep = workflowStep(workflowJob(RELEASE_CHECKS_WORKFLOW, jobName), stepName);
@@ -2148,6 +2171,42 @@ describe("package artifact reuse", () => {
     );
     expect(runtimeCoverageUpload.uses).toBe(UPLOAD_ARTIFACT_V7);
     expect(runtimeCoverageUpload.with?.["if-no-files-found"]).toBe("error");
+  });
+
+  it("runs runtime parity tiers in parallel and preserves one canonical gate", () => {
+    const tierJob = workflowJob(
+      RELEASE_CHECKS_WORKFLOW,
+      "qa_lab_runtime_parity_tier_release_checks",
+    );
+    const collectorJob = workflowJob(
+      RELEASE_CHECKS_WORKFLOW,
+      "qa_lab_runtime_parity_release_checks",
+    );
+
+    expect(tierJob.strategy?.["fail-fast"]).toBe(false);
+    expect(tierJob.strategy?.matrix?.tier).toContain('["agentic","standard","soak"]');
+    expect(tierJob.strategy?.matrix?.tier).toContain('["agentic","standard"]');
+    expect(workflowStep(tierJob, "Run runtime parity tier").run).toContain('"${tier_args[@]}"');
+    expect(workflowStep(tierJob, "Upload runtime parity tier artifacts").with?.name).toContain(
+      "${{ matrix.tier }}",
+    );
+    expect(collectorJob.needs).toEqual([
+      "resolve_target",
+      "qa_lab_runtime_parity_tier_release_checks",
+    ]);
+    expect(collectorJob.name).toBe("Run QA Lab runtime parity lane");
+    expect(workflowStep(collectorJob, "Download runtime parity tier artifacts").with).toMatchObject(
+      {
+        pattern: "release-qa-runtime-parity-tier-*-${{ needs.resolve_target.outputs.revision }}",
+        "merge-multiple": true,
+      },
+    );
+    expect(workflowStep(collectorJob, "Verify runtime parity tier statuses").run).toContain(
+      "tiers=(agentic standard)",
+    );
+    expect(workflowStep(collectorJob, "Upload runtime parity artifacts").with?.name).toBe(
+      "release-qa-runtime-parity-${{ needs.resolve_target.outputs.revision }}",
+    );
   });
 
   it("requires live proof evidence artifacts when proof jobs run", () => {
@@ -2511,7 +2570,7 @@ describe("package artifact reuse", () => {
   it("uses bounded Convex lease waits instead of GitHub concurrency for CI Telegram consumers", () => {
     const telegramJobs = [
       [NPM_TELEGRAM_WORKFLOW, "run_package_telegram_e2e", "Run package Telegram E2E", "1800000"],
-      [RELEASE_TELEGRAM_QA_WORKFLOW, "run_telegram", "Run Telegram live lane", "60000"],
+      [RELEASE_TELEGRAM_QA_WORKFLOW, "run_telegram", "Run Telegram live lane", "600000"],
       [QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_telegram", "Run Telegram live lane", "1800000"],
       [
         ".github/workflows/mantis-telegram-live.yml",

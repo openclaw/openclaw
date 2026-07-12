@@ -163,7 +163,10 @@ async function runPdfPrompt(params: {
   const modelsOptions = params.workspaceDir ? { workspaceDir: params.workspaceDir } : undefined;
   await ensureOpenClawModelsJson(effectiveCfg, params.agentDir, modelsOptions);
   const authStorage = discoverAuthStorage(params.agentDir);
-  const modelRegistry = discoverModels(authStorage, params.agentDir, modelsOptions);
+  const modelRegistry = discoverModels(authStorage, params.agentDir, {
+    config: effectiveCfg,
+    ...modelsOptions,
+  });
 
   let extractionCache: PdfExtractedContent[] | null = null;
   const getExtractions = async (): Promise<PdfExtractedContent[]> => {
@@ -346,7 +349,7 @@ export function createPdfTool(options?: {
       : DEFAULT_MAX_PAGES;
 
   const description =
-    "Analyze PDFs with model. Anthropic/Google native PDF when supported; else text/image extraction. Use pdf for one, pdfs for max 10; prompt says what to inspect.";
+    "Analyze PDF(s): Anthropic/Google native when supported, else text/image extraction. pdf one; pdfs max 10; prompt says inspection.";
   const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(options?.config);
 
   return {
