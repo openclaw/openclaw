@@ -1,171 +1,93 @@
 // Feishu plugin module implements source-message recall cancellation.
+import {
+  getChannelRuntimeContext,
+  registerChannelRuntimeContext,
+} from "openclaw/plugin-sdk/channel-runtime-context";
 import type { PluginRuntime } from "../runtime-api.js";
 
-const FEISHU_CHANNEL_ID = "feishu";
-const FEISHU_SOURCE_MESSAGE_RECALL_CAPABILITY = "source-message-recall";
+const RUNTIME_CONTEXT_KEY = {
+  channelId: "feishu",
+  capability: "source-message-recall",
+} as const;
 const RECALL_TTL_MS = 30 * 60 * 1000;
 const MAX_RECALLED_MESSAGES = 2_000;
 
-type SourceMessageRunBinding = {
-  controller: AbortController;
-};
-
 type SourceMessageState = {
-  bindings: Map<symbol, SourceMessageRunBinding>;
+  controllers: Set<AbortController>;
   recalledAt?: number;
-  updatedAt: number;
+  touchedAt: number;
 };
 
-export type FeishuSourceMessageRecallRegistry = {
-  bindRun: (params: { messageId: string }) => {
-    abortSignal: AbortSignal;
-    dispose: () => void;
-  };
-  isRecalled: (messageId: string) => boolean;
-  markRecalled: (messageId: string) => { abortedRuns: number; alreadyRecalled: boolean };
+type RecallRegistry = {
+  states: Map<string, SourceMessageState>;
 };
 
-function normalizeSourceMessageId(messageId: string | undefined | null): string | undefined {
-  const trimmed = messageId?.trim();
-  return trimmed || undefined;
+function normalize(value: string | undefined | null): string | undefined {
+  return value?.trim() || undefined;
 }
 
-function normalizeAccountId(accountId: string | undefined | null): string | undefined {
-  const trimmed = accountId?.trim();
-  return trimmed || undefined;
-}
-
-function createAbortReason(messageId: string): Error {
-  return new Error(`Feishu source message ${messageId} was recalled`);
-}
-
-function pruneRegistry(states: Map<string, SourceMessageState>, now = Date.now()): void {
-  for (const [messageId, state] of states) {
-    const hasBindings = state.bindings.size > 0;
-    const recalledAt = state.recalledAt;
-    if (!hasBindings && recalledAt !== undefined && now - recalledAt > RECALL_TTL_MS) {
-      states.delete(messageId);
+function pruneRegistry(registry: RecallRegistry, now = Date.now()): void {
+  for (const [messageId, state] of registry.states) {
+    if (
+      state.controllers.size === 0 &&
+      state.recalledAt !== undefined &&
+      now - state.recalledAt > RECALL_TTL_MS
+    ) {
+      registry.states.delete(messageId);
     }
   }
-
-  if (states.size <= MAX_RECALLED_MESSAGES) {
+  if (registry.states.size <= MAX_RECALLED_MESSAGES) {
     return;
   }
-  const removable = Array.from(states.entries())
-    .filter(([, state]) => state.bindings.size === 0)
-    .toSorted(([, left], [, right]) => left.updatedAt - right.updatedAt)
-    .slice(0, states.size - MAX_RECALLED_MESSAGES);
+  const removable = [...registry.states]
+    .filter(([, state]) => state.controllers.size === 0)
+    .toSorted(([, left], [, right]) => left.touchedAt - right.touchedAt);
   for (const [messageId] of removable) {
-    states.delete(messageId);
+    if (registry.states.size <= MAX_RECALLED_MESSAGES) {
+      break;
+    }
+    registry.states.delete(messageId);
   }
 }
 
-function createFeishuSourceMessageRecallRegistry(): FeishuSourceMessageRecallRegistry {
-  const states = new Map<string, SourceMessageState>();
-
-  const getOrCreateState = (messageId: string, now = Date.now()): SourceMessageState => {
-    pruneRegistry(states, now);
-    const existing = states.get(messageId);
-    if (existing) {
-      existing.updatedAt = now;
-      return existing;
-    }
-    const state: SourceMessageState = {
-      bindings: new Map(),
-      updatedAt: now,
-    };
-    states.set(messageId, state);
-    return state;
-  };
-
-  return {
-    bindRun: ({ messageId }) => {
-      const normalizedMessageId = normalizeSourceMessageId(messageId);
-      const controller = new AbortController();
-      if (!normalizedMessageId) {
-        return {
-          abortSignal: controller.signal,
-          dispose: () => {},
-        };
-      }
-
-      const token = Symbol(normalizedMessageId);
-      const state = getOrCreateState(normalizedMessageId);
-      const recalled = state.recalledAt !== undefined;
-      const binding: SourceMessageRunBinding = {
-        controller,
-      };
-      if (!recalled) {
-        state.bindings.set(token, binding);
-      } else {
-        controller.abort(createAbortReason(normalizedMessageId));
-      }
-
-      return {
-        abortSignal: controller.signal,
-        dispose: () => {
-          state.bindings.delete(token);
-          state.updatedAt = Date.now();
-          if (state.bindings.size === 0 && state.recalledAt === undefined) {
-            states.delete(normalizedMessageId);
-          }
-        },
-      };
-    },
-    isRecalled: (messageId) => {
-      const normalizedMessageId = normalizeSourceMessageId(messageId);
-      if (!normalizedMessageId) {
-        return false;
-      }
-      pruneRegistry(states);
-      return states.get(normalizedMessageId)?.recalledAt !== undefined;
-    },
-    markRecalled: (messageId) => {
-      const normalizedMessageId = normalizeSourceMessageId(messageId);
-      if (!normalizedMessageId) {
-        return { abortedRuns: 0, alreadyRecalled: false };
-      }
-      const now = Date.now();
-      const state = getOrCreateState(normalizedMessageId, now);
-      const alreadyRecalled = state.recalledAt !== undefined;
-      state.recalledAt = state.recalledAt ?? now;
-      state.updatedAt = now;
-      let abortedRuns = 0;
-      for (const binding of state.bindings.values()) {
-        if (!binding.controller.signal.aborted) {
-          binding.controller.abort(createAbortReason(normalizedMessageId));
-          abortedRuns += 1;
-        }
-      }
-      return { abortedRuns, alreadyRecalled };
-    },
-  };
-}
-
-export function getFeishuSourceMessageRecallRegistry(params: {
+function resolveRegistry(params: {
   channelRuntime?: PluginRuntime["channel"];
   accountId?: string | null;
-}): FeishuSourceMessageRecallRegistry | undefined {
-  const accountId = normalizeAccountId(params.accountId);
-  const runtimeContexts = params.channelRuntime?.runtimeContexts;
-  if (!runtimeContexts || !accountId) {
+}): RecallRegistry | undefined {
+  const accountId = normalize(params.accountId);
+  if (!params.channelRuntime || !accountId) {
     return undefined;
   }
-  const key = {
-    channelId: FEISHU_CHANNEL_ID,
-    accountId,
-    capability: FEISHU_SOURCE_MESSAGE_RECALL_CAPABILITY,
-  };
-  const existing = runtimeContexts.get<FeishuSourceMessageRecallRegistry>(key);
+  const key = { ...RUNTIME_CONTEXT_KEY, accountId };
+  const existing = getChannelRuntimeContext({
+    channelRuntime: params.channelRuntime,
+    ...key,
+  }) as RecallRegistry | undefined;
   if (existing) {
     return existing;
   }
-  const registry = createFeishuSourceMessageRecallRegistry();
-  runtimeContexts.register({
+  const registry: RecallRegistry = { states: new Map() };
+  const lease = registerChannelRuntimeContext({
+    channelRuntime: params.channelRuntime,
     ...key,
     context: registry,
   });
-  return registry;
+  return lease ? registry : undefined;
+}
+
+function resolveState(registry: RecallRegistry, messageId: string, now = Date.now()) {
+  pruneRegistry(registry, now);
+  const existing = registry.states.get(messageId);
+  if (existing) {
+    existing.touchedAt = now;
+    return existing;
+  }
+  const state: SourceMessageState = {
+    controllers: new Set(),
+    touchedAt: now,
+  };
+  registry.states.set(messageId, state);
+  return state;
 }
 
 export function isFeishuSourceMessageRecalled(params: {
@@ -173,16 +95,13 @@ export function isFeishuSourceMessageRecalled(params: {
   accountId?: string | null;
   messageId?: string | null;
 }): boolean {
-  const messageId = normalizeSourceMessageId(params.messageId);
-  if (!messageId) {
+  const messageId = normalize(params.messageId);
+  const registry = resolveRegistry(params);
+  if (!messageId || !registry) {
     return false;
   }
-  return (
-    getFeishuSourceMessageRecallRegistry({
-      channelRuntime: params.channelRuntime,
-      accountId: params.accountId,
-    })?.isRecalled(messageId) ?? false
-  );
+  pruneRegistry(registry);
+  return registry.states.get(messageId)?.recalledAt !== undefined;
 }
 
 export function recallFeishuSourceMessage(params: {
@@ -190,63 +109,55 @@ export function recallFeishuSourceMessage(params: {
   accountId?: string | null;
   messageId?: string | null;
 }): { abortedRuns: number; alreadyRecalled: boolean; recorded: boolean } {
-  const messageId = normalizeSourceMessageId(params.messageId);
-  if (!messageId) {
+  const messageId = normalize(params.messageId);
+  const registry = resolveRegistry(params);
+  if (!messageId || !registry) {
     return { abortedRuns: 0, alreadyRecalled: false, recorded: false };
   }
-  const result = getFeishuSourceMessageRecallRegistry({
-    channelRuntime: params.channelRuntime,
-    accountId: params.accountId,
-  })?.markRecalled(messageId);
-  return result
-    ? { ...result, recorded: true }
-    : { abortedRuns: 0, alreadyRecalled: false, recorded: false };
+  const now = Date.now();
+  const state = resolveState(registry, messageId, now);
+  const alreadyRecalled = state.recalledAt !== undefined;
+  state.recalledAt ??= now;
+  let abortedRuns = 0;
+  for (const controller of state.controllers) {
+    if (!controller.signal.aborted) {
+      controller.abort(new Error(`Feishu source message ${messageId} was recalled`));
+      abortedRuns += 1;
+    }
+  }
+  return { abortedRuns, alreadyRecalled, recorded: true };
 }
 
 export function bindFeishuSourceMessageRun(params: {
   channelRuntime?: PluginRuntime["channel"];
   accountId?: string | null;
   messageId?: string | null;
-}): ReturnType<FeishuSourceMessageRecallRegistry["bindRun"]> | undefined {
-  const messageId = normalizeSourceMessageId(params.messageId);
-  if (!messageId) {
+}): { abortSignal: AbortSignal; dispose: () => void } | undefined {
+  const messageId = normalize(params.messageId);
+  const registry = resolveRegistry(params);
+  if (!messageId || !registry) {
     return undefined;
-  }
-  return getFeishuSourceMessageRecallRegistry({
-    channelRuntime: params.channelRuntime,
-    accountId: params.accountId,
-  })?.bindRun({
-    messageId,
-  });
-}
-
-export function composeFeishuSourceMessageAbortSignal(
-  ...signals: Array<AbortSignal | undefined>
-): AbortSignal | undefined {
-  const activeSignals = signals.filter(
-    (signal, index): signal is AbortSignal => Boolean(signal) && signals.indexOf(signal) === index,
-  );
-  if (activeSignals.length === 0) {
-    return undefined;
-  }
-  if (activeSignals.length === 1) {
-    return activeSignals[0];
-  }
-  if (typeof AbortSignal.any === "function") {
-    return AbortSignal.any(activeSignals);
   }
   const controller = new AbortController();
-  const abort = (signal: AbortSignal) => {
-    if (!controller.signal.aborted) {
-      controller.abort(signal.reason);
-    }
-  };
-  for (const signal of activeSignals) {
-    if (signal.aborted) {
-      abort(signal);
-      break;
-    }
-    signal.addEventListener("abort", () => abort(signal), { once: true });
+  const state = resolveState(registry, messageId);
+  if (state.recalledAt !== undefined) {
+    controller.abort(new Error(`Feishu source message ${messageId} was recalled`));
+  } else {
+    state.controllers.add(controller);
   }
-  return controller.signal;
+  let disposed = false;
+  return {
+    abortSignal: controller.signal,
+    dispose: () => {
+      if (disposed) {
+        return;
+      }
+      disposed = true;
+      state.controllers.delete(controller);
+      state.touchedAt = Date.now();
+      if (state.controllers.size === 0 && state.recalledAt === undefined) {
+        registry.states.delete(messageId);
+      }
+    },
+  };
 }

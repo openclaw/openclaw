@@ -71,7 +71,6 @@ import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu, listFeishuThreadMessages, sendMessageFeishu } from "./send.js";
 import {
   bindFeishuSourceMessageRun,
-  composeFeishuSourceMessageAbortSignal,
   isFeishuSourceMessageRecalled,
   recallFeishuSourceMessage,
 } from "./source-message-recall.js";
@@ -146,10 +145,9 @@ function bindFeishuRecallAwareDispatch(params: {
     dispose: binding.dispose,
     replyOptions: {
       ...params.replyOptions,
-      abortSignal: composeFeishuSourceMessageAbortSignal(
-        params.replyOptions?.abortSignal,
-        binding.abortSignal,
-      ),
+      abortSignal: params.replyOptions?.abortSignal
+        ? AbortSignal.any([params.replyOptions.abortSignal, binding.abortSignal])
+        : binding.abortSignal,
     },
   };
 }
@@ -1756,8 +1754,8 @@ export async function handleFeishuMessage(params: {
             );
             return;
           }
-          try {
-            const turnResult = await core.channel.inbound.run({
+          const turnResult = await core.channel.inbound
+            .run({
               channel: "feishu",
               accountId: route.accountId,
               raw: ctx,
@@ -1797,18 +1795,16 @@ export async function handleFeishuMessage(params: {
                     }),
                 }),
               },
-            });
-            if (
-              turnResult.dispatched &&
-              shouldSendNoVisibleReplyFallback({
-                ...turnResult.dispatchResult,
-                failedCounts: dispatcher.getFailedCounts?.() ?? { tool: 0, block: 0, final: 0 },
-              })
-            ) {
-              await ensureNoVisibleReplyFallback("broadcast-dispatch-complete-no-visible-reply");
-            }
-          } finally {
-            recallAwareDispatch.dispose();
+            })
+            .finally(recallAwareDispatch.dispose);
+          if (
+            turnResult.dispatched &&
+            shouldSendNoVisibleReplyFallback({
+              ...turnResult.dispatchResult,
+              failedCounts: dispatcher.getFailedCounts?.() ?? { tool: 0, block: 0, final: 0 },
+            })
+          ) {
+            await ensureNoVisibleReplyFallback("broadcast-dispatch-complete-no-visible-reply");
           }
         } else {
           // Observer agent: no-op dispatcher (session entry + inference, no Feishu reply).
@@ -1842,8 +1838,8 @@ export async function handleFeishuMessage(params: {
             );
             return;
           }
-          try {
-            await core.channel.inbound.run({
+          await core.channel.inbound
+            .run({
               channel: "feishu",
               accountId: route.accountId,
               raw: ctx,
@@ -1877,10 +1873,8 @@ export async function handleFeishuMessage(params: {
                     }),
                 }),
               },
-            });
-          } finally {
-            recallAwareDispatch.dispose();
-          }
+            })
+            .finally(recallAwareDispatch.dispose);
         }
       };
 
@@ -1980,8 +1974,8 @@ export async function handleFeishuMessage(params: {
         log(`feishu[${account.accountId}]: skipping recalled message ${ctx.messageId}`);
         return;
       }
-      try {
-        const turnResult = await core.channel.inbound.run({
+      const turnResult = await core.channel.inbound
+        .run({
           channel: "feishu",
           accountId: route.accountId,
           raw: ctx,
@@ -2039,27 +2033,25 @@ export async function handleFeishuMessage(params: {
                 }),
             }),
           },
-        });
-        if (!turnResult.dispatched) {
-          return;
-        }
-        const { dispatchResult } = turnResult;
-        const { queuedFinal, counts } = dispatchResult;
-        if (
-          shouldSendNoVisibleReplyFallback({
-            ...dispatchResult,
-            failedCounts: dispatcher.getFailedCounts?.() ?? { tool: 0, block: 0, final: 0 },
-          })
-        ) {
-          await ensureNoVisibleReplyFallback("dispatch-complete-no-visible-reply");
-        }
-
-        log(
-          `feishu[${account.accountId}]: dispatch complete (queuedFinal=${queuedFinal}, replies=${counts.final})`,
-        );
-      } finally {
-        recallAwareDispatch.dispose();
+        })
+        .finally(recallAwareDispatch.dispose);
+      if (!turnResult.dispatched) {
+        return;
       }
+      const { dispatchResult } = turnResult;
+      const { queuedFinal, counts } = dispatchResult;
+      if (
+        shouldSendNoVisibleReplyFallback({
+          ...dispatchResult,
+          failedCounts: dispatcher.getFailedCounts?.() ?? { tool: 0, block: 0, final: 0 },
+        })
+      ) {
+        await ensureNoVisibleReplyFallback("dispatch-complete-no-visible-reply");
+      }
+
+      log(
+        `feishu[${account.accountId}]: dispatch complete (queuedFinal=${queuedFinal}, replies=${counts.final})`,
+      );
     }
   } catch (err) {
     error(`feishu[${account.accountId}]: failed to dispatch message: ${String(err)}`);
