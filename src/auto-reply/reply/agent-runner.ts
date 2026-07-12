@@ -1264,8 +1264,15 @@ export async function runReplyAgent(params: {
 
   let shouldQueueAfterSteerRejection = false;
   if (effectiveShouldSteer && isActive) {
+    // Steer against the operation that owns THIS session's run slot. A native
+    // command continuation whose slot adoption was skipped (#104844) still
+    // carries a source-keyed reservation; steering by its stale sessionId
+    // would miss the live target run.
+    const registeredReplyOperation = sessionKey ? replyRunRegistry.get(sessionKey) : undefined;
     const activeReplyOperation =
-      providedReplyOperation ?? (sessionKey ? replyRunRegistry.get(sessionKey) : undefined);
+      providedReplyOperation?.key === sessionKey
+        ? providedReplyOperation
+        : (registeredReplyOperation ?? providedReplyOperation);
     const steerSessionId = activeReplyOperation?.sessionId ?? followupRun.run.sessionId;
     const steerOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
       steerSessionId,
