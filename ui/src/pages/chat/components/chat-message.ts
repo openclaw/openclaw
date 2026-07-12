@@ -583,12 +583,47 @@ type StreamGroupOptions = {
   authToken?: string | null;
 };
 
-function renderReadingIndicatorBubble() {
-  // Working claw: the brand pincer rests slightly open where the reply will
-  // materialize and pinches once per cycle (same gesture as the favicon
-  // mascot snap). aria-hidden; the composer sr-only run-status announces.
+// One salt per page load so each run's fighter rerolls between visits while
+// re-renders within a load stay stable for a given item key (same trick as
+// the lobster pet's LOAD_SALT).
+const PUNCH_SALT = Math.trunc(Math.random() * 0xffffffff);
+
+// Weighted fighting styles for the working claw; class suffixes map to the
+// stance variants in styles/chat/tool-cards.css. Orthodox is the unmarked
+// default; southpaw mirrors, flurry speeds the combo up, haymaker is the
+// rare slow heavyweight with the big pow.
+const PUNCH_STANCES: Array<[stance: string, weight: number]> = [
+  ["", 47],
+  ["chat-reading-indicator--southpaw", 35],
+  ["chat-reading-indicator--flurry", 12],
+  ["chat-reading-indicator--haymaker", 6],
+];
+
+function punchStanceClass(key: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < key.length; i++) {
+    hash ^= key.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  const total = PUNCH_STANCES.reduce((sum, [, weight]) => sum + weight, 0);
+  let roll = ((((hash ^ PUNCH_SALT) >>> 0) % 1000) / 1000) * total;
+  for (const [stance, weight] of PUNCH_STANCES) {
+    roll -= weight;
+    if (roll <= 0) {
+      return stance;
+    }
+  }
+  return "";
+}
+
+function renderReadingIndicatorBubble(key: string) {
+  // Working claw: the brand pincer shadowboxes where the reply will
+  // materialize - jab, jab, cross with a pow on impact. The stance is seeded
+  // per item key so each run fights its own style but re-renders never
+  // flicker. aria-hidden; the composer sr-only run-status announces.
+  const stance = punchStanceClass(key);
   return html`
-    <div class="chat-bubble chat-reading-indicator" aria-hidden="true">${icons.claw}</div>
+    <div class="chat-bubble chat-reading-indicator ${stance}" aria-hidden="true">${icons.claw}</div>
   `;
 }
 
@@ -602,14 +637,21 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
   // is only the reading indicator has no timestamp and therefore no footer.
   const streamStarts = parts.flatMap((part) => (part.kind === "stream" ? [part.startedAt] : []));
   const footerStartedAt = streamStarts.length > 0 ? Math.min(...streamStarts) : null;
+  // While the agent works with nothing streamed yet the run is pure claw: no
+  // avatar next to it - the punching pincer is the whole signal. The avatar
+  // arrives with the first stream part.
+  const indicatorOnly = parts.every((part) => part.kind === "reading-indicator");
+  const avatar = indicatorOnly
+    ? nothing
+    : renderChatAvatar("assistant", assistant, undefined, basePath, authToken);
 
   return html`
-    <div class="chat-group assistant">
-      ${renderChatAvatar("assistant", assistant, undefined, basePath, authToken)}
+    <div class="chat-group assistant ${indicatorOnly ? "chat-group--working" : ""}">
+      ${avatar}
       <div class="chat-group-messages">
         ${parts.map((part) =>
           part.kind === "reading-indicator"
-            ? renderReadingIndicatorBubble()
+            ? renderReadingIndicatorBubble(part.key)
             : renderGroupedMessage(
                 {
                   role: "assistant",
