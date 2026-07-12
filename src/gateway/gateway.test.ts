@@ -10,6 +10,7 @@ import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfig,
 } from "../config/config.js";
+import { resetConfigOverrides, setConfigOverride } from "../config/runtime-overrides.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetAgentRunContextForTest } from "../infra/agent-events.js";
@@ -164,6 +165,7 @@ async function setupGatewayTempHome(params: { prefix: string; minimalGateway?: b
 }
 
 function resetGatewayTestState(): void {
+  resetConfigOverrides();
   clearRuntimeConfigSnapshot();
   clearConfigCache();
   clearSessionStoreCacheForTest();
@@ -181,7 +183,7 @@ describe("gateway e2e", () => {
     ({ createConfigIO } = await import("../config/config.js"));
   });
 
-  it.each(["generated", "explicit-override"] as const)(
+  it.each(["generated", "explicit-override", "runtime-overrides"] as const)(
     "preserves %s auth across a safe direct gateway reload",
     async (authSource) => {
       const { envSnapshot, tempHome } = await setupGatewayTempHome({
@@ -191,8 +193,11 @@ describe("gateway e2e", () => {
       const fileToken = nextGatewayId("direct-file-token");
       const overrideToken = nextGatewayId("direct-override-token");
       const initialConfig: OpenClawConfig = {
-        ...(authSource === "explicit-override"
+        ...(authSource !== "generated"
           ? { gateway: { auth: { mode: "token", token: fileToken } } }
+          : {}),
+        ...(authSource === "runtime-overrides"
+          ? { channels: { whatsapp: { dmPolicy: "pairing" as const } } }
           : {}),
         logging: { level: "info" },
       };
@@ -200,6 +205,12 @@ describe("gateway e2e", () => {
       setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
       const configIO = createConfigIO({ configPath });
       await configIO.writeConfigFile(initialConfig);
+      if (authSource === "runtime-overrides") {
+        expect(setConfigOverride("gateway.auth.token", overrideToken).ok).toBe(true);
+        expect(
+          setConfigOverride("channels.whatsapp", { dmPolicy: "open", allowFrom: ["*"] }).ok,
+        ).toBe(true);
+      }
       const port = await getFreeGatewayPort();
       const server = await startGatewayServer(port, {
         bind: "loopback",
@@ -209,9 +220,7 @@ describe("gateway e2e", () => {
         controlUiEnabled: false,
       });
       const expectedToken =
-        authSource === "explicit-override"
-          ? overrideToken
-          : getRuntimeConfig().gateway?.auth?.token;
+        authSource === "generated" ? getRuntimeConfig().gateway?.auth?.token : overrideToken;
       expect(typeof expectedToken).toBe("string");
       const client = await connectGatewayClient({
         url: `ws://127.0.0.1:${port}`,
@@ -225,6 +234,10 @@ describe("gateway e2e", () => {
         }>("health", { probe: true });
         expect(health?.configReload?.hotReloadStatus).toBe("active");
 
+        if (authSource === "runtime-overrides") {
+          expect(setConfigOverride("gateway.auth.token", `${overrideToken}-later`).ok).toBe(true);
+          expect(setConfigOverride("channels.whatsapp.dmPolicy", "pairing").ok).toBe(true);
+        }
         await configIO.writeConfigFile({
           ...initialConfig,
           logging: { level: "debug" },
@@ -233,6 +246,10 @@ describe("gateway e2e", () => {
           .poll(() => getRuntimeConfig().logging?.level, { timeout: 5_000, interval: 50 })
           .toBe("debug");
         expect(getRuntimeConfig().gateway?.auth?.token).toBe(expectedToken);
+        if (authSource === "runtime-overrides") {
+          expect(getRuntimeConfig().channels?.whatsapp?.dmPolicy).toBe("open");
+          expect(getRuntimeConfig().channels?.whatsapp?.allowFrom).toEqual(["*"]);
+        }
 
         const reconnected = await connectGatewayClient({
           url: `ws://127.0.0.1:${port}`,
@@ -248,6 +265,44 @@ describe("gateway e2e", () => {
       }
     },
   );
+
+  it("preserves runtime-seeded Control UI origins across a safe direct reload", async () => {
+    const { envSnapshot, tempHome } = await setupGatewayTempHome({
+      prefix: "openclaw-gw-direct-origins-",
+    });
+    const token = nextGatewayId("direct-origins-token");
+    const configPath = await createGatewayConfigPath(tempHome);
+    setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+    const configIO = createConfigIO({ configPath });
+    const initialConfig: OpenClawConfig = {
+      gateway: { auth: { mode: "token", token } },
+      logging: { level: "info" },
+    };
+    await configIO.writeConfigFile(initialConfig);
+    const port = await getFreeGatewayPort();
+    const server = await startGatewayServer(port, {
+      bind: "lan",
+      controlUiEnabled: false,
+    });
+
+    try {
+      const seededOrigins = getRuntimeConfig().gateway?.controlUi?.allowedOrigins;
+      expect(seededOrigins?.length).toBeGreaterThan(0);
+
+      await configIO.writeConfigFile({
+        ...initialConfig,
+        logging: { level: "debug" },
+      });
+      await expect
+        .poll(() => getRuntimeConfig().logging?.level, { timeout: 5_000, interval: 50 })
+        .toBe("debug");
+      expect(getRuntimeConfig().gateway?.controlUi?.allowedOrigins).toEqual(seededOrigins);
+    } finally {
+      await server.close({ reason: "direct origin reload test complete" });
+      await removeGatewayTempHome(tempHome);
+      envSnapshot.restore();
+    }
+  });
 
   it(
     "accepts a gateway agent request over ws and returns a run id",

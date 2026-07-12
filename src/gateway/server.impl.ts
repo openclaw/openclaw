@@ -25,7 +25,7 @@ import {
   type ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "../config/io.js";
 import { isNixMode, normalizeStateDirEnv } from "../config/paths.js";
-import { applyConfigOverrides } from "../config/runtime-overrides.js";
+import { captureConfigOverrideApplier } from "../config/runtime-overrides.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getActiveCronJobCount } from "../cron/active-jobs.js";
@@ -632,7 +632,8 @@ export async function startGatewayServer(
   let startupInternalWriteHash: string | null = null;
   let startupLastGoodSnapshot = configSnapshot;
   const startupActivationSourceConfig = configSnapshot.sourceConfig;
-  const startupRuntimeConfig = applyConfigOverrides(configSnapshot.config);
+  const applyStartupConfigOverrides = captureConfigOverrideApplier();
+  const startupRuntimeConfig = applyStartupConfigOverrides(configSnapshot.config);
   startupTrace.setConfig(startupRuntimeConfig);
   const { prepareGatewayStartupConfig } = await startupConfigModulePromise;
   const authBootstrap = await startupTrace.measure(
@@ -656,23 +657,6 @@ export async function startGatewayServer(
   const reloadAuthOverride = authBootstrap.generatedToken
     ? mergeGatewayAuthConfig(opts.auth, { token: authBootstrap.generatedToken })
     : opts.auth;
-  const applyStartupGatewayOverrides = (config: OpenClawConfig): OpenClawConfig => {
-    if (!reloadAuthOverride && !opts.tailscale) {
-      return config;
-    }
-    return {
-      ...config,
-      gateway: {
-        ...config.gateway,
-        ...(reloadAuthOverride
-          ? { auth: mergeGatewayAuthConfig(config.gateway?.auth, reloadAuthOverride) }
-          : {}),
-        ...(opts.tailscale
-          ? { tailscale: mergeGatewayTailscaleConfig(config.gateway?.tailscale, opts.tailscale) }
-          : {}),
-      },
-    };
-  };
   const diagnosticsEnabled = isDiagnosticsEnabled(cfgAtStart);
   setDiagnosticsEnabledForProcess(diagnosticsEnabled);
   if (diagnosticsEnabled) {
@@ -706,6 +690,47 @@ export async function startGatewayServer(
         }),
       );
   cfgAtStart = controlUiSeed.config;
+  const seededControlUiAllowedOrigins = controlUiSeed.seededAllowedOrigins
+    ? cfgAtStart.gateway?.controlUi?.allowedOrigins
+    : undefined;
+  const applyStartupGatewayOverrides = (config: OpenClawConfig): OpenClawConfig => {
+    let runtimeConfig = applyStartupConfigOverrides(config);
+    if (reloadAuthOverride || opts.tailscale) {
+      runtimeConfig = {
+        ...runtimeConfig,
+        gateway: {
+          ...runtimeConfig.gateway,
+          ...(reloadAuthOverride
+            ? { auth: mergeGatewayAuthConfig(runtimeConfig.gateway?.auth, reloadAuthOverride) }
+            : {}),
+          ...(opts.tailscale
+            ? {
+                tailscale: mergeGatewayTailscaleConfig(
+                  runtimeConfig.gateway?.tailscale,
+                  opts.tailscale,
+                ),
+              }
+            : {}),
+        },
+      };
+    }
+    if (
+      seededControlUiAllowedOrigins &&
+      runtimeConfig.gateway?.controlUi?.allowedOrigins === undefined
+    ) {
+      runtimeConfig = {
+        ...runtimeConfig,
+        gateway: {
+          ...runtimeConfig.gateway,
+          controlUi: {
+            ...runtimeConfig.gateway?.controlUi,
+            allowedOrigins: seededControlUiAllowedOrigins,
+          },
+        },
+      };
+    }
+    return runtimeConfig;
+  };
   // Keep the old startup-write suppression path intact for compatibility with
   // callers that may still report a write, but startup itself no longer mutates config.
   if (startupConfigLoad.wroteConfig || authBootstrap.persistedGeneratedToken) {
