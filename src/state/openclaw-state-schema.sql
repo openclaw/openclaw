@@ -665,6 +665,398 @@ BEGIN
   SELECT RAISE(ABORT, 'authorization grants are immutable; revoke and recreate instead');
 END;
 
+CREATE TABLE IF NOT EXISTS teams_local_accounts (
+  account_id TEXT NOT NULL PRIMARY KEY CHECK (length(trim(account_id)) > 0),
+  principal_id TEXT NOT NULL UNIQUE,
+  login_label TEXT NOT NULL COLLATE NOCASE UNIQUE
+    CHECK (
+      length(login_label) BETWEEN 1 AND 254
+      AND login_label = lower(trim(login_label))
+    ),
+  password_salt BLOB NOT NULL CHECK (length(password_salt) = 16),
+  password_verifier BLOB NOT NULL CHECK (length(password_verifier) = 32),
+  password_scrypt_n INTEGER NOT NULL CHECK (
+    password_scrypt_n BETWEEN 16384 AND 131072
+    AND (password_scrypt_n & (password_scrypt_n - 1)) = 0
+  ),
+  password_scrypt_r INTEGER NOT NULL CHECK (password_scrypt_r BETWEEN 8 AND 32),
+  password_scrypt_p INTEGER NOT NULL CHECK (password_scrypt_p BETWEEN 1 AND 4),
+  created_at INTEGER NOT NULL,
+  FOREIGN KEY (principal_id) REFERENCES authorization_principals(principal_id)
+);
+
+CREATE TRIGGER IF NOT EXISTS teams_local_accounts_human_guard
+BEFORE INSERT ON teams_local_accounts
+FOR EACH ROW
+WHEN NOT EXISTS (
+  SELECT 1
+  FROM authorization_principals AS principal
+  WHERE principal.principal_id = NEW.principal_id
+    AND principal.kind = 'human'
+)
+BEGIN
+  SELECT RAISE(ABORT, 'Teams local account must map to a human principal');
+END;
+
+CREATE TRIGGER IF NOT EXISTS teams_local_accounts_immutable
+BEFORE UPDATE ON teams_local_accounts
+FOR EACH ROW
+BEGIN
+  SELECT RAISE(ABORT, 'Teams local accounts are immutable in v1');
+END;
+
+CREATE TRIGGER IF NOT EXISTS teams_local_accounts_delete_forbidden
+BEFORE DELETE ON teams_local_accounts
+FOR EACH ROW
+BEGIN
+  SELECT RAISE(ABORT, 'Teams local accounts cannot be deleted');
+END;
+
+CREATE TABLE IF NOT EXISTS teams_sessions (
+  session_id TEXT NOT NULL PRIMARY KEY CHECK (length(trim(session_id)) > 0),
+  token_digest TEXT NOT NULL UNIQUE CHECK (
+    length(token_digest) = 64
+    AND token_digest NOT GLOB '*[^0-9a-f]*'
+  ),
+  account_id TEXT NOT NULL,
+  principal_id TEXT NOT NULL,
+  domain_id TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('active', 'revoked')),
+  expires_at INTEGER NOT NULL,
+  revoked_at INTEGER,
+  revoked_by_principal_id TEXT,
+  created_at INTEGER NOT NULL,
+  CHECK (expires_at > created_at AND expires_at <= created_at + 2592000000),
+  CHECK (
+    (state = 'active' AND revoked_at IS NULL AND revoked_by_principal_id IS NULL)
+    OR
+    (state = 'revoked' AND revoked_at IS NOT NULL AND revoked_by_principal_id IS NOT NULL)
+  ),
+  FOREIGN KEY (account_id) REFERENCES teams_local_accounts(account_id),
+  FOREIGN KEY (principal_id) REFERENCES authorization_principals(principal_id),
+  FOREIGN KEY (revoked_by_principal_id)
+    REFERENCES authorization_principals(principal_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_teams_sessions_account
+  ON teams_sessions(account_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_teams_sessions_domain
+  ON teams_sessions(domain_id, state, expires_at);
+
+CREATE TRIGGER IF NOT EXISTS teams_sessions_insert_guard
+BEFORE INSERT ON teams_sessions
+FOR EACH ROW
+WHEN
+  NEW.state <> 'active'
+  OR NOT EXISTS (
+    SELECT 1
+    FROM teams_local_accounts AS account
+    INNER JOIN authorization_principals AS principal
+      ON principal.principal_id = account.principal_id
+    INNER JOIN authorization_domain_memberships AS membership
+      ON membership.principal_id = account.principal_id
+      AND membership.domain_id = NEW.domain_id
+    WHERE account.account_id = NEW.account_id
+      AND account.principal_id = NEW.principal_id
+      AND principal.kind = 'human'
+  )
+BEGIN
+  SELECT RAISE(ABORT, 'Teams session requires an active human account domain member');
+END;
+
+CREATE TRIGGER IF NOT EXISTS teams_sessions_payload_immutable
+BEFORE UPDATE OF
+  session_id,
+  token_digest,
+  account_id,
+  principal_id,
+  domain_id,
+  expires_at,
+  created_at
+ON teams_sessions
+FOR EACH ROW
+BEGIN
+  SELECT RAISE(ABORT, 'Teams session identity and expiry are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS teams_sessions_state_monotonic
+BEFORE UPDATE OF state, revoked_at, revoked_by_principal_id ON teams_sessions
+FOR EACH ROW
+WHEN
+  OLD.state <> 'active'
+  OR NEW.state <> 'revoked'
+  OR NEW.revoked_at IS NULL
+  OR NEW.revoked_at < OLD.created_at
+  OR NEW.revoked_by_principal_id IS NULL
+  OR NOT EXISTS (
+    SELECT 1
+    FROM authorization_domain_memberships AS membership
+    INNER JOIN authorization_principals AS principal
+      ON principal.principal_id = membership.principal_id
+    WHERE membership.domain_id = OLD.domain_id
+      AND membership.principal_id = NEW.revoked_by_principal_id
+      AND principal.kind = 'human'
+      AND (
+        membership.principal_id = OLD.principal_id
+        OR membership.role = 'owner'
+      )
+  )
+BEGIN
+  SELECT RAISE(ABORT, 'Teams session cannot be reactivated or retimestamped');
+END;
+
+CREATE TRIGGER IF NOT EXISTS teams_sessions_delete_forbidden
+BEFORE DELETE ON teams_sessions
+FOR EACH ROW
+BEGIN
+  SELECT RAISE(ABORT, 'Teams sessions cannot be deleted');
+END;
+
+CREATE TABLE IF NOT EXISTS teams_invites (
+  invite_id TEXT NOT NULL PRIMARY KEY CHECK (length(trim(invite_id)) > 0),
+  code_digest TEXT NOT NULL UNIQUE CHECK (
+    length(code_digest) = 64
+    AND code_digest NOT GLOB '*[^0-9a-f]*'
+  ),
+  domain_id TEXT NOT NULL,
+  created_by_principal_id TEXT NOT NULL,
+  recipient_label TEXT COLLATE NOCASE CHECK (
+    recipient_label IS NULL
+    OR (
+      length(recipient_label) BETWEEN 1 AND 254
+      AND recipient_label = lower(trim(recipient_label))
+    )
+  ),
+  state TEXT NOT NULL CHECK (state IN ('active', 'redeemed', 'revoked')),
+  expires_at INTEGER NOT NULL,
+  redeemed_at INTEGER,
+  redeemed_by_principal_id TEXT,
+  revoked_at INTEGER,
+  revoked_by_principal_id TEXT,
+  created_at INTEGER NOT NULL,
+  UNIQUE (invite_id, domain_id),
+  CHECK (
+    expires_at >= created_at + 60000
+    AND expires_at <= created_at + 604800000
+  ),
+  CHECK (
+    (
+      state = 'active'
+      AND redeemed_at IS NULL
+      AND redeemed_by_principal_id IS NULL
+      AND revoked_at IS NULL
+      AND revoked_by_principal_id IS NULL
+    )
+    OR (
+      state = 'redeemed'
+      AND redeemed_at IS NOT NULL
+      AND redeemed_by_principal_id IS NOT NULL
+      AND revoked_at IS NULL
+      AND revoked_by_principal_id IS NULL
+    )
+    OR (
+      state = 'revoked'
+      AND redeemed_at IS NULL
+      AND redeemed_by_principal_id IS NULL
+      AND revoked_at IS NOT NULL
+      AND revoked_by_principal_id IS NOT NULL
+    )
+  ),
+  FOREIGN KEY (domain_id) REFERENCES authorization_domains(domain_id),
+  FOREIGN KEY (created_by_principal_id)
+    REFERENCES authorization_principals(principal_id),
+  FOREIGN KEY (redeemed_by_principal_id)
+    REFERENCES authorization_principals(principal_id),
+  FOREIGN KEY (revoked_by_principal_id)
+    REFERENCES authorization_principals(principal_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_teams_invites_domain
+  ON teams_invites(domain_id, state, expires_at, created_at DESC);
+
+CREATE TRIGGER IF NOT EXISTS teams_invites_insert_guard
+BEFORE INSERT ON teams_invites
+FOR EACH ROW
+WHEN
+  NEW.state <> 'active'
+  OR NOT EXISTS (
+    SELECT 1
+    FROM authorization_domain_memberships AS membership
+    INNER JOIN authorization_principals AS principal
+      ON principal.principal_id = membership.principal_id
+    WHERE membership.domain_id = NEW.domain_id
+      AND membership.principal_id = NEW.created_by_principal_id
+      AND membership.role = 'owner'
+      AND principal.kind = 'human'
+  )
+BEGIN
+  SELECT RAISE(ABORT, 'Teams invite creator must be the current human domain owner');
+END;
+
+CREATE TRIGGER IF NOT EXISTS teams_invites_payload_immutable
+BEFORE UPDATE OF
+  invite_id,
+  code_digest,
+  domain_id,
+  created_by_principal_id,
+  recipient_label,
+  expires_at,
+  created_at
+ON teams_invites
+FOR EACH ROW
+BEGIN
+  SELECT RAISE(ABORT, 'Teams invite payload is immutable');
+END;
+
+CREATE TABLE IF NOT EXISTS teams_invite_grants (
+  invite_id TEXT NOT NULL,
+  domain_id TEXT NOT NULL,
+  namespace TEXT NOT NULL CHECK (length(trim(namespace)) > 0),
+  resource_type TEXT NOT NULL CHECK (length(trim(resource_type)) > 0),
+  resource_id TEXT NOT NULL CHECK (length(trim(resource_id)) > 0),
+  permission TEXT NOT NULL CHECK (length(trim(permission)) > 0),
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (
+    invite_id,
+    namespace,
+    resource_type,
+    resource_id,
+    permission
+  ),
+  FOREIGN KEY (invite_id, domain_id)
+    REFERENCES teams_invites(invite_id, domain_id),
+  FOREIGN KEY (domain_id, namespace, resource_type, resource_id)
+    REFERENCES authorization_resources(domain_id, namespace, resource_type, resource_id)
+);
+
+CREATE TRIGGER IF NOT EXISTS teams_invite_grants_insert_guard
+BEFORE INSERT ON teams_invite_grants
+FOR EACH ROW
+WHEN
+  NOT EXISTS (
+    SELECT 1
+    FROM teams_invites AS invite
+    WHERE invite.invite_id = NEW.invite_id
+      AND invite.domain_id = NEW.domain_id
+      AND invite.state = 'active'
+  )
+  OR NOT EXISTS (
+    SELECT 1
+    FROM authorization_resources AS resource
+    WHERE resource.domain_id = NEW.domain_id
+      AND resource.namespace = NEW.namespace
+      AND resource.resource_type = NEW.resource_type
+      AND resource.resource_id = NEW.resource_id
+      AND resource.retired_at IS NULL
+  )
+BEGIN
+  SELECT RAISE(ABORT, 'Teams invite grant requires an active invite and active resource');
+END;
+
+CREATE TRIGGER IF NOT EXISTS teams_invite_grants_immutable
+BEFORE UPDATE ON teams_invite_grants
+FOR EACH ROW
+BEGIN
+  SELECT RAISE(ABORT, 'Teams invite grants are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS teams_invite_grants_delete_forbidden
+BEFORE DELETE ON teams_invite_grants
+FOR EACH ROW
+BEGIN
+  SELECT RAISE(ABORT, 'Teams invite grants cannot be deleted');
+END;
+
+CREATE TRIGGER IF NOT EXISTS teams_invites_state_monotonic
+BEFORE UPDATE OF
+  state,
+  redeemed_at,
+  redeemed_by_principal_id,
+  revoked_at,
+  revoked_by_principal_id
+ON teams_invites
+FOR EACH ROW
+WHEN
+  OLD.state <> 'active'
+  OR (
+    NEW.state = 'redeemed'
+    AND (
+      NEW.redeemed_at IS NULL
+      OR NEW.redeemed_at < OLD.created_at
+      OR NEW.redeemed_at >= OLD.expires_at
+      OR NEW.redeemed_by_principal_id IS NULL
+      OR NOT EXISTS (
+        SELECT 1
+        FROM authorization_domain_memberships AS membership
+        INNER JOIN authorization_principals AS principal
+          ON principal.principal_id = membership.principal_id
+        WHERE membership.domain_id = OLD.domain_id
+          AND membership.principal_id = NEW.redeemed_by_principal_id
+          AND principal.kind = 'human'
+      )
+      OR NOT EXISTS (
+        SELECT 1 FROM teams_invite_grants AS manifest
+        WHERE manifest.invite_id = OLD.invite_id
+      )
+      OR EXISTS (
+        SELECT 1
+        FROM teams_invite_grants AS manifest
+        WHERE manifest.invite_id = OLD.invite_id
+          AND (
+            NOT EXISTS (
+              SELECT 1
+              FROM authorization_resources AS resource
+              WHERE resource.domain_id = OLD.domain_id
+                AND resource.namespace = manifest.namespace
+                AND resource.resource_type = manifest.resource_type
+                AND resource.resource_id = manifest.resource_id
+                AND resource.retired_at IS NULL
+            )
+            OR NOT EXISTS (
+              SELECT 1
+              FROM authorization_grants AS grant_row
+              WHERE grant_row.domain_id = OLD.domain_id
+                AND grant_row.principal_id = NEW.redeemed_by_principal_id
+                AND grant_row.namespace = manifest.namespace
+                AND grant_row.resource_type = manifest.resource_type
+                AND grant_row.resource_id = manifest.resource_id
+                AND grant_row.permission = manifest.permission
+            )
+          )
+      )
+    )
+  )
+  OR (
+    NEW.state = 'revoked'
+    AND (
+      NEW.revoked_at IS NULL
+      OR NEW.revoked_at < OLD.created_at
+      OR NEW.revoked_by_principal_id IS NULL
+      OR NOT EXISTS (
+        SELECT 1
+        FROM authorization_domain_memberships AS membership
+        INNER JOIN authorization_principals AS principal
+          ON principal.principal_id = membership.principal_id
+        WHERE membership.domain_id = OLD.domain_id
+          AND membership.principal_id = NEW.revoked_by_principal_id
+          AND membership.role = 'owner'
+          AND principal.kind = 'human'
+      )
+    )
+  )
+  OR NEW.state NOT IN ('redeemed', 'revoked')
+BEGIN
+  SELECT RAISE(ABORT, 'Teams invite terminal state is monotonic');
+END;
+
+CREATE TRIGGER IF NOT EXISTS teams_invites_delete_forbidden
+BEFORE DELETE ON teams_invites
+FOR EACH ROW
+BEGIN
+  SELECT RAISE(ABORT, 'Teams invites cannot be deleted');
+END;
+
 CREATE TABLE IF NOT EXISTS authorization_agent_sponsors (
   domain_id TEXT NOT NULL,
   agent_principal_id TEXT NOT NULL,

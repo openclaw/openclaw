@@ -1138,6 +1138,56 @@ export interface TaskRuns {
   tool_use_count: number | null;
 }
 
+export interface TeamsInviteGrants {
+  created_at: number;
+  domain_id: string;
+  invite_id: string;
+  namespace: string;
+  permission: string;
+  resource_id: string;
+  resource_type: string;
+}
+
+export interface TeamsInvites {
+  code_digest: string;
+  created_at: number;
+  created_by_principal_id: string;
+  domain_id: string;
+  expires_at: number;
+  invite_id: string;
+  recipient_label: string | null;
+  redeemed_at: number | null;
+  redeemed_by_principal_id: string | null;
+  revoked_at: number | null;
+  revoked_by_principal_id: string | null;
+  state: string;
+}
+
+export interface TeamsLocalAccounts {
+  account_id: string;
+  created_at: number;
+  login_label: string;
+  password_salt: Uint8Array;
+  password_scrypt_n: number;
+  password_scrypt_p: number;
+  password_scrypt_r: number;
+  password_verifier: Uint8Array;
+  principal_id: string;
+}
+
+export interface TeamsSessions {
+  account_id: string;
+  created_at: number;
+  domain_id: string;
+  expires_at: number;
+  principal_id: string;
+  revoked_at: number | null;
+  revoked_by_principal_id: string | null;
+  session_id: string;
+  state: string;
+  token_digest: string;
+}
+
 export interface TuiLastSessions {
   scope_key: string;
   session_key: string;
@@ -1379,6 +1429,10 @@ export interface DB {
   subagent_runs: SubagentRuns;
   task_delivery_state: TaskDeliveryState;
   task_runs: TaskRuns;
+  teams_invite_grants: TeamsInviteGrants;
+  teams_invites: TeamsInvites;
+  teams_local_accounts: TeamsLocalAccounts;
+  teams_sessions: TeamsSessions;
   tui_last_sessions: TuiLastSessions;
   update_check_state: UpdateCheckState;
   voicewake_routing_config: VoicewakeRoutingConfig;
