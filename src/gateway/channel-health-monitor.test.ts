@@ -197,6 +197,19 @@ describe("channel-health-monitor", () => {
 
     expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
     monitor.stop();
+    setIntervalSpy.mockRestore();
+  });
+
+  it("arms a one-shot first check when startup grace is shorter than the interval", () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const monitor = startDefaultMonitor(createMockChannelManager(), {
+      checkIntervalMs: 60_000,
+      startupGraceMs: 1_000,
+    });
+
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 1_000);
+    monitor.stop();
+    setTimeoutSpy.mockRestore();
   });
 
   it("does not run before the grace period", async () => {
@@ -204,6 +217,20 @@ describe("channel-health-monitor", () => {
     const monitor = startDefaultMonitor(manager, { startupGraceMs: 60_000 });
     await vi.advanceTimersByTimeAsync(5_001);
     expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
+    monitor.stop();
+  });
+
+  it("runs first health check at startup grace without waiting for the full interval", async () => {
+    const manager = createMockChannelManager();
+    const monitor = startDefaultMonitor(manager, {
+      startupGraceMs: 1_000,
+      checkIntervalMs: 60_000,
+    });
+    await vi.advanceTimersByTimeAsync(1_001);
+    expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(1);
+    // Still inside the long interval — no second evaluation yet.
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(1);
     monitor.stop();
   });
 

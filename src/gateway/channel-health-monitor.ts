@@ -96,7 +96,11 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
   let stopped = false;
   let abandonInFlightRestart = false;
   let activeCheck: Promise<void> | null = null;
-  let timer: ReturnType<typeof setInterval> | null = null;
+  // Lifecycle-owned schedule: one-shot first evaluation at startup-grace expiry
+  // plus steady cadence. setInterval alone waits a full interval before any
+  // check, leaving a post-grace recovery blind spot (#105668).
+  let startupTimer: ReturnType<typeof setTimeout> | null = null;
+  let intervalTimer: ReturnType<typeof setInterval> | null = null;
   const suppressedAccounts = new Set<string>();
 
   const rKey = (channelId: string, accountId: string) => `${channelId}:${accountId}`;
@@ -244,13 +248,21 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
     return check;
   }
 
+  function clearSchedule() {
+    if (startupTimer) {
+      clearTimeout(startupTimer);
+      startupTimer = null;
+    }
+    if (intervalTimer) {
+      clearInterval(intervalTimer);
+      intervalTimer = null;
+    }
+  }
+
   function retire(abandonRestart: boolean) {
     stopped = true;
     abandonInFlightRestart ||= abandonRestart;
-    if (timer) {
-      clearInterval(timer);
-      timer = null;
-    }
+    clearSchedule();
     if (!activeCheck) {
       abortSignal?.removeEventListener("abort", shutdown);
     }
@@ -291,9 +303,23 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
     abandonInFlightRestart = true;
   } else {
     abortSignal?.addEventListener("abort", shutdown, { once: true });
-    timer = setInterval(() => void runCheck(), checkIntervalMs);
-    if (typeof timer === "object" && "unref" in timer) {
-      timer.unref();
+    // When startup grace is shorter than the check interval (production default:
+    // 60s grace vs 5m interval), arm a one-shot so the first real evaluation is
+    // not delayed until the first interval tick. Interval ticks during grace are
+    // already no-ops via runCheckWork's startedAt gate.
+    if (timing.monitorStartupGraceMs > 0 && timing.monitorStartupGraceMs < checkIntervalMs) {
+      const startupDelayMs = resolveTimerTimeoutMs(timing.monitorStartupGraceMs, 0, 0);
+      startupTimer = setTimeout(() => {
+        startupTimer = null;
+        void runCheck();
+      }, startupDelayMs);
+      if (typeof startupTimer === "object" && "unref" in startupTimer) {
+        startupTimer.unref();
+      }
+    }
+    intervalTimer = setInterval(() => void runCheck(), checkIntervalMs);
+    if (typeof intervalTimer === "object" && "unref" in intervalTimer) {
+      intervalTimer.unref();
     }
     log.info?.(
       `started (interval: ${Math.round(checkIntervalMs / 1000)}s, startup-grace: ${Math.round(timing.monitorStartupGraceMs / 1000)}s, channel-connect-grace: ${Math.round(timing.channelConnectGraceMs / 1000)}s)`,
