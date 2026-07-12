@@ -100,7 +100,7 @@ describe("draft-stream-controls", () => {
 
   it("clearFinalizableDraftMessage preserves a replacement id while delete is in flight", async () => {
     let messageId: string | undefined = "preview-old";
-    const pendingDelete = createDeferred<void>();
+    const pendingDelete = createDeferred();
     const deleteMessage = vi.fn(() => pendingDelete.promise);
 
     const clearPromise = clearFinalizableDraftMessage({
