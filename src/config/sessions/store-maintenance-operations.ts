@@ -15,7 +15,7 @@ import {
 } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
 
-export type SessionArchiveCleanupRule = {
+type SessionArchiveCleanupRule = {
   reason: "deleted" | "reset";
   olderThanMs: number;
 };
