@@ -296,7 +296,9 @@ final class WatchDirectNode {
         try self.requireCurrentConnection(generation, configuration: configuration)
         self.statusText = String(localized: "Connecting directly…")
         guard let identity = DeviceIdentityStore.loadOrCreatePersisted(profile: .primary) else {
-            throw HTTPError(status: 0, detail: "Could not save the watch device identity")
+            throw HTTPError(
+                status: 0,
+                detail: String(localized: "Could not save the watch device identity"))
         }
         let storedToken = DeviceAuthStore.loadToken(
             deviceId: identity.deviceId,
@@ -304,7 +306,7 @@ final class WatchDirectNode {
             gatewayID: configuration.gatewayID,
             profile: .primary)?.token
         guard storedToken != nil || link.bootstrapToken != nil else {
-            throw HTTPError(status: 401, detail: "No watch device credential")
+            throw HTTPError(status: 401, detail: String(localized: "No watch device credential"))
         }
         let response: ConnectResponse
         if let bootstrapToken = link.bootstrapToken {
@@ -326,7 +328,7 @@ final class WatchDirectNode {
                 baseURL: baseURL,
                 credential: .device(storedToken))
         } else {
-            throw HTTPError(status: 401, detail: "No watch device credential")
+            throw HTTPError(status: 401, detail: String(localized: "No watch device credential"))
         }
         // A successful bootstrap response has already consumed the one-time code.
         // Finish that durable handoff across background/toggle cancellation, but
@@ -341,7 +343,9 @@ final class WatchDirectNode {
                 gatewayID: configuration.gatewayID,
                 profile: .primary)
             else {
-                throw HTTPError(status: 0, detail: "Could not save the watch device credential")
+                throw HTTPError(
+                    status: 0,
+                    detail: String(localized: "Could not save the watch device credential"))
             }
             if link.bootstrapToken != nil {
                 try self.finishCredentialHandoff(configuration: configuration)
@@ -459,7 +463,7 @@ final class WatchDirectNode {
             signedAtMs: signedAtMs,
             nonce: nonce)
         else {
-            throw HTTPError(status: 0, detail: "Could not sign watch identity")
+            throw HTTPError(status: 0, detail: String(localized: "Could not sign watch identity"))
         }
         var client: [String: AnyCodable] = [
             "id": AnyCodable("openclaw-watchos"),
@@ -551,7 +555,7 @@ final class WatchDirectNode {
         }
         let (data, response) = try await urlSession.data(for: request)
         guard let http = response as? HTTPURLResponse else {
-            throw HTTPError(status: 0, detail: "Invalid Gateway response")
+            throw HTTPError(status: 0, detail: String(localized: "Invalid Gateway response"))
         }
         guard (200..<300).contains(http.statusCode) else {
             let detail = String(data: data, encoding: .utf8) ?? ""
@@ -574,7 +578,9 @@ final class WatchDirectNode {
             gatewayID: configuration.gatewayID,
             setupSentAtMs: configuration.setupSentAtMs)
         guard Self.saveConfiguration(sanitized) else {
-            throw HTTPError(status: 0, detail: "Paired, but could not finish secure setup")
+            throw HTTPError(
+                status: 0,
+                detail: String(localized: "Paired, but could not finish secure setup"))
         }
         self.configuration = sanitized
         self.endpointText = Self.endpointText(sanitized)
