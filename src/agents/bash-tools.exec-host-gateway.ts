@@ -1237,6 +1237,7 @@ export async function processGatewayAllowlist(
         sentApproverDms,
         unavailableReason,
         allowedDecisions: approvalAllowedDecisions,
+        ask: hostAsk,
       }),
     };
   }

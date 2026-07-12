@@ -150,7 +150,8 @@ function resolveApprovalDecisions(active: ExecApprovalRequest): readonly ExecApp
   if (active.request.allowedDecisions?.length) {
     return active.request.allowedDecisions;
   }
-  if (active.kind === "exec" && active.request.ask === "always") {
+  const normalizedAsk = (active.request.ask ?? "").trim().toLowerCase();
+  if (active.kind === "exec" && normalizedAsk === "always") {
     return ["allow-once", "deny"];
   }
   return DEFAULT_EXEC_APPROVAL_DECISIONS;

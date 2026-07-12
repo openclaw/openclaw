@@ -21,6 +21,7 @@ import {
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
+  normalizeExecAsk,
   normalizeExecApprovalUnavailableDecisions,
   resolveExecApprovalRequestAllowedDecisions,
   type ExecApprovalRequest,
@@ -478,12 +479,17 @@ export function createExecApprovalHandlers(
             autoReviewResolution = true;
           }
           const allowedDecisions = resolveExecApprovalRequestAllowedDecisions(snapshot.request);
-          return allowedDecisions.includes(decision)
-            ? null
-            : {
-                message: "allow-always is unavailable for this command",
-                details: APPROVAL_ALLOW_ALWAYS_UNAVAILABLE_DETAILS,
-              };
+          if (allowedDecisions.includes(decision)) {
+            return null;
+          }
+          const normalizedAsk = normalizeExecAsk(snapshot.request.ask);
+          const isPolicyAlways = !normalizedAsk || normalizedAsk === "always";
+          return {
+            message: isPolicyAlways
+              ? "allow-always is unavailable because the effective policy requires approval every time"
+              : "allow-always is unavailable because this command cannot be persisted (e.g., shell redirection or dynamic content)",
+            details: APPROVAL_ALLOW_ALWAYS_UNAVAILABLE_DETAILS,
+          };
         },
         resolveRecord: ({ approvalId, decision: decisionLocal, resolvedBy }) =>
           autoReviewResolution

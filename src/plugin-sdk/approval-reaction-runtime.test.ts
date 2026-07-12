@@ -188,6 +188,25 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
     });
   });
 
+  it("shows non-persistable reason in reaction prompts when allow-always excluded for one-shot", () => {
+    const payload = buildApprovalReactionPromptPayloadForRequest({
+      request: {
+        ...execRequest,
+        request: {
+          ...execRequest.request,
+          ask: "on-miss",
+          unavailableDecisions: ["allow-always"],
+        },
+      },
+      nowMs: 1_000,
+    });
+
+    expect(payload.text).toContain(
+      "Allow Always is unavailable because this command cannot be persisted (e.g., shell redirection or dynamic content).",
+    );
+    expect(payload.text).not.toContain("effective policy requires approval");
+  });
+
   it("sanitizes cwd before embedding it in reaction prompts", () => {
     const payload = buildApprovalReactionPromptPayloadForRequest({
       request: {
@@ -219,8 +238,7 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
 
     expect(payload.text).toContain("React with:\n\n👍 Allow Once\n👎 Deny");
     expect(payload.text).not.toContain("♾️ Allow Always");
-    expect(payload.text).toContain("Allow Always is unavailable for this command.");
-    expect(payload.text).not.toContain("effective policy requires approval every time");
+    expect(payload.text).toContain("Allow Always is unavailable because the effective policy requires approval every time.");
     expect(
       payload.text?.trim().endsWith("Reply with: /approve exec-approval-123 allow-once|deny"),
     ).toBe(true);
