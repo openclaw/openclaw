@@ -52,11 +52,15 @@ describe("executeProviderOperationWithRetry", () => {
     "ENETUNREACH",
     "EAI_AGAIN",
     "ENOTFOUND",
-  ])("retries nested %s network failures", async (code) => {
+  ])("retries %s network failures from structured errors", async (code) => {
     const cause = Object.assign(new Error("connect failed"), { code });
+    const error =
+      code === "EPIPE"
+        ? Object.assign(new Error("socket closed"), { code })
+        : new Error("fetch failed", { cause });
     const operation = vi
       .fn<() => Promise<string>>()
-      .mockRejectedValueOnce(new Error("fetch failed", { cause }))
+      .mockRejectedValueOnce(error)
       .mockResolvedValue("ok");
 
     await expect(
