@@ -43,7 +43,7 @@ describe("workspace data binding resolver", () => {
     }
   });
 
-  it("reads JSON pointers and raw markdown from the workspace data jail", async () => {
+  it("applies pointers to JSON and raw text files in the workspace data jail", async () => {
     await withTempStateDir(async (stateDir) => {
       await fs.mkdir(path.join(stateDir, "workspaces", "data", "metrics"), { recursive: true });
       await fs.writeFile(
@@ -51,6 +51,7 @@ describe("workspace data binding resolver", () => {
         JSON.stringify({ revenue: 42, nested: { "a/b": "escaped" } }),
       );
       await fs.writeFile(path.join(stateDir, "workspaces", "data", "notes.md"), "# Notes\n");
+      await fs.writeFile(path.join(stateDir, "workspaces", "data", "table.csv"), "name,value\n");
 
       await expect(
         resolveBinding(
@@ -61,6 +62,18 @@ describe("workspace data binding resolver", () => {
       await expect(
         resolveBinding({ source: "file", path: "notes.md" }, { stateDir }),
       ).resolves.toBe("# Notes\n");
+      await expect(
+        resolveBinding({ source: "file", path: "notes.md", pointer: "" }, { stateDir }),
+      ).resolves.toBe("# Notes\n");
+      await expect(
+        resolveBinding({ source: "file", path: "notes.md", pointer: "/missing" }, { stateDir }),
+      ).rejects.toMatchObject({ code: "binding_not_found" });
+      await expect(
+        resolveBinding({ source: "file", path: "table.csv", pointer: "/missing" }, { stateDir }),
+      ).rejects.toMatchObject({ code: "binding_not_found" });
+      await expect(
+        resolveBinding({ source: "file", path: "notes.md", pointer: "missing" }, { stateDir }),
+      ).rejects.toMatchObject({ code: "binding_invalid" });
     });
   });
 

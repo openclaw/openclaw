@@ -95,6 +95,16 @@ function applyJsonPointer(value: unknown, pointer: string | undefined): unknown 
   return current;
 }
 
+function applyRawTextPointer(value: string, pointer: string | undefined): string {
+  if (pointer === undefined || pointer === "") {
+    return value;
+  }
+  if (!pointer.startsWith("/")) {
+    throw new WorkspaceBindingResolutionError("binding_invalid", "JSON pointer is invalid");
+  }
+  throw new WorkspaceBindingResolutionError("binding_not_found", "JSON pointer not found");
+}
+
 async function resolveFileBinding(
   binding: Extract<WorkspaceBinding, { source: "file" }>,
   options: ResolveBindingOptions,
@@ -137,7 +147,7 @@ async function resolveFileBinding(
   }
   const extension = path.extname(logicalPath).toLowerCase();
   if (extension === ".md" || extension === ".csv") {
-    return content;
+    return applyRawTextPointer(content, binding.pointer);
   }
   try {
     return applyJsonPointer(JSON.parse(content), binding.pointer);
