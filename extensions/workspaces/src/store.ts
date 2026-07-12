@@ -16,17 +16,21 @@
 // There is deliberately no migration from the `workspace.json` this plugin used
 // while it was in review. The plugin has never been reachable from a release tag,
 // so no installation can hold that file, and compatibility here is opt-in per
-// AGENTS.md. Seeding the default workspace on an empty database is the only
-// first-read path.
+// AGENTS.md. The landed singleton SQLite shape is different: local main users can
+// already hold durable layout state, so it is migrated once into the default
+// isolation-domain partition and its v1 documents are rewritten canonically.
 
 import { chmodSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
 import { configureSqliteConnectionPragmas } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { WidgetAssetTokens } from "./asset-tokens.js";
 import { DEFAULT_WORKSPACE } from "./default-workspace.js";
 import {
+  DEFAULT_WORKSPACE_ID,
+  migrateWorkspaceDoc,
   validateWorkspaceDoc,
   type WorkspaceActor,
   type WorkspaceWidgetRegistryEntry,
@@ -41,20 +45,79 @@ const UNDO_RING_SIZE = 20;
 const DIR_MODE = 0o700;
 const FILE_MODE = 0o600;
 const BUSY_TIMEOUT_MS = 5000;
+export const DEFAULT_ISOLATION_DOMAIN_ID = "default";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS workspace (
-  id INTEGER PRIMARY KEY CHECK (id = 1),
+  isolation_domain_id TEXT NOT NULL,
+  workspace_id TEXT NOT NULL,
   version INTEGER NOT NULL,
   doc TEXT NOT NULL,
-  updated_ms INTEGER NOT NULL
+  updated_ms INTEGER NOT NULL,
+  PRIMARY KEY (isolation_domain_id, workspace_id)
 );
 CREATE TABLE IF NOT EXISTS undo (
-  version INTEGER PRIMARY KEY,
+  isolation_domain_id TEXT NOT NULL,
+  workspace_id TEXT NOT NULL,
+  version INTEGER NOT NULL,
   doc TEXT NOT NULL,
-  created_ms INTEGER NOT NULL
+  created_ms INTEGER NOT NULL,
+  PRIMARY KEY (isolation_domain_id, workspace_id, version)
 );
 `;
+
+type SqliteTableColumn = { name: string };
+
+function tableColumns(db: DatabaseSync, table: "workspace" | "undo"): Set<string> {
+  return new Set(
+    (db.prepare(`PRAGMA table_info(${table})`).all() as unknown as SqliteTableColumn[]).map(
+      (column) => column.name,
+    ),
+  );
+}
+
+function initializeSchema(db: DatabaseSync): void {
+  const workspaceColumns = tableColumns(db, "workspace");
+  if (workspaceColumns.size === 0) {
+    db.exec(SCHEMA);
+    return;
+  }
+  if (workspaceColumns.has("isolation_domain_id")) {
+    db.exec(SCHEMA);
+    return;
+  }
+  if (!workspaceColumns.has("id")) {
+    throw new Error("unsupported workspaces database schema");
+  }
+
+  const undoColumns = tableColumns(db, "undo");
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.exec("ALTER TABLE workspace RENAME TO workspace_legacy_singleton");
+    if (undoColumns.size > 0) {
+      db.exec("ALTER TABLE undo RENAME TO undo_legacy_singleton");
+    }
+    db.exec(SCHEMA);
+    db.prepare(
+      `INSERT INTO workspace
+        (isolation_domain_id, workspace_id, version, doc, updated_ms)
+       SELECT ?, ?, version, doc, updated_ms FROM workspace_legacy_singleton WHERE id = 1`,
+    ).run(DEFAULT_ISOLATION_DOMAIN_ID, DEFAULT_WORKSPACE_ID);
+    if (undoColumns.size > 0) {
+      db.prepare(
+        `INSERT INTO undo
+          (isolation_domain_id, workspace_id, version, doc, created_ms)
+         SELECT ?, ?, version, doc, created_ms FROM undo_legacy_singleton`,
+      ).run(DEFAULT_ISOLATION_DOMAIN_ID, DEFAULT_WORKSPACE_ID);
+      db.exec("DROP TABLE undo_legacy_singleton");
+    }
+    db.exec("DROP TABLE workspace_legacy_singleton");
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
 
 function serializeWorkspaceDoc(doc: WorkspaceDoc): string {
   return JSON.stringify(doc);
@@ -89,28 +152,72 @@ function reconcileReplace(
   const widgetsRegistry: Record<string, WorkspaceWidgetRegistryEntry> = structuredClone(
     current.widgetsRegistry,
   );
+  const existingTabsById = new Map(current.tabs.map((tab) => [tab.id, tab]));
   const existingTabs = new Map(current.tabs.map((tab) => [tab.slug, tab]));
   const existingWidgets = new Map(
     current.tabs.flatMap((tab) => tab.widgets.map((widget) => [widget.id, widget] as const)),
   );
   return {
     ...incoming,
+    workspaceId: current.workspaceId,
     widgetsRegistry,
-    tabs: incoming.tabs.map((tab) => ({
-      ...tab,
-      createdBy: existingTabs.get(tab.slug)?.createdBy ?? actor,
-      widgets: tab.widgets.map((widget) => ({
-        ...widget,
-        createdBy: existingWidgets.get(widget.id)?.createdBy ?? actor,
-      })),
-    })),
+    tabs: incoming.tabs.map((tab) => {
+      const existing = existingTabsById.get(tab.id) ?? existingTabs.get(tab.slug);
+      return {
+        ...tab,
+        id: existing?.id ?? tab.id,
+        createdBy: existing?.createdBy ?? actor,
+        widgets: tab.widgets.map((widget) => ({
+          ...widget,
+          createdBy: existingWidgets.get(widget.id)?.createdBy ?? actor,
+        })),
+      };
+    }),
   };
+}
+
+function assertStableResourceIds(current: WorkspaceDoc, next: WorkspaceDoc): void {
+  if (next.workspaceId !== current.workspaceId) {
+    throw new Error("workspaceId is immutable");
+  }
+  const existingIdsBySlug = new Map(current.tabs.map((tab) => [tab.slug, tab.id]));
+  for (const tab of next.tabs) {
+    const existingId = existingIdsBySlug.get(tab.slug);
+    if (existingId !== undefined && tab.id !== existingId) {
+      throw new Error(`tab id is immutable for slug: ${tab.slug}`);
+    }
+  }
+}
+
+function tabContentEquals(
+  current: WorkspaceDoc["tabs"][number],
+  next: WorkspaceDoc["tabs"][number],
+) {
+  return isDeepStrictEqual({ ...current, revision: 1 }, { ...next, revision: 1 });
+}
+
+function stampTabRevisions(current: WorkspaceDoc, next: WorkspaceDoc): WorkspaceDoc {
+  const existingTabs = new Map(current.tabs.map((tab) => [tab.id, tab]));
+  const tabs: WorkspaceDoc["tabs"] = [];
+  for (const tab of next.tabs) {
+    const existing = existingTabs.get(tab.id);
+    const revision =
+      existing === undefined
+        ? 1
+        : tabContentEquals(existing, tab)
+          ? existing.revision
+          : existing.revision + 1;
+    tabs.push({ ...tab, revision });
+  }
+  return { ...next, tabs };
 }
 
 export class WorkspaceStore {
   readonly stateDir: string;
   readonly workspaceDir: string;
   readonly dbPath: string;
+  readonly isolationDomainId: string;
+  readonly workspaceId = DEFAULT_WORKSPACE_ID;
   private readonly db: DatabaseSync;
   readonly assetTokens = new WidgetAssetTokens();
   /**
@@ -121,8 +228,12 @@ export class WorkspaceStore {
    */
   private cached: WorkspaceDoc | null = null;
 
-  constructor(options: { stateDir?: string } = {}) {
+  constructor(options: { stateDir?: string; isolationDomainId?: string } = {}) {
     this.stateDir = options.stateDir ?? resolveStateDir();
+    this.isolationDomainId = options.isolationDomainId ?? DEFAULT_ISOLATION_DOMAIN_ID;
+    if (this.isolationDomainId.trim().length === 0) {
+      throw new Error("isolationDomainId must not be empty");
+    }
     this.workspaceDir = path.join(this.stateDir, "workspaces");
     this.dbPath = path.join(this.workspaceDir, "workspaces.sqlite");
     mkdirSync(this.workspaceDir, { recursive: true, mode: DIR_MODE });
@@ -131,7 +242,7 @@ export class WorkspaceStore {
       configureSqliteConnectionPragmas(this.db, { busyTimeoutMs: BUSY_TIMEOUT_MS });
       // WAL/SHM sidecars inherit the main DB file's permissions.
       chmodSync(this.dbPath, FILE_MODE);
-      this.db.exec(SCHEMA);
+      initializeSchema(this.db);
     } catch (error) {
       this.db.close();
       throw error;
@@ -146,15 +257,22 @@ export class WorkspaceStore {
     if (this.cached) {
       return structuredClone(this.cached);
     }
-    const row = this.db.prepare("SELECT doc FROM workspace WHERE id = 1").get() as
-      | { doc: string }
-      | undefined;
+    const row = this.db
+      .prepare("SELECT doc FROM workspace WHERE isolation_domain_id = ? AND workspace_id = ?")
+      .get(this.isolationDomainId, this.workspaceId) as { doc: string } | undefined;
     if (!row) {
       const seeded = validateWorkspaceDoc(structuredClone(DEFAULT_WORKSPACE));
       this.commit(seeded, { snapshot: null });
       return structuredClone(seeded);
     }
-    const doc = validateWorkspaceDoc(JSON.parse(row.doc));
+    const migrated = migrateWorkspaceDoc(JSON.parse(row.doc));
+    const doc = migrated.doc;
+    if (doc.workspaceId !== this.workspaceId) {
+      throw new Error(`workspace document id does not match stored workspace: ${this.workspaceId}`);
+    }
+    if (migrated.changed) {
+      this.commit(doc, { snapshot: null });
+    }
     this.cached = doc;
     return structuredClone(doc);
   }
@@ -190,10 +308,9 @@ export class WorkspaceStore {
    * are always reconciled against the stored document, so replace can neither
    * self-approve a custom widget nor forge a `createdBy` stamp.
    */
-  replace(doc: WorkspaceDoc, options: WorkspaceMutationOptions): WorkspaceMutationResult {
-    return this.transact((current) =>
-      reconcileReplace(structuredClone(doc), current, options.actor),
-    );
+  replace(doc: unknown, options: WorkspaceMutationOptions): WorkspaceMutationResult {
+    const canonical = migrateWorkspaceDoc(structuredClone(doc)).doc;
+    return this.transact((current) => reconcileReplace(canonical, current, options.actor));
   }
 
   /**
@@ -205,15 +322,26 @@ export class WorkspaceStore {
     return this.transact(
       (current) => {
         const row = this.db
-          .prepare("SELECT version, doc FROM undo ORDER BY version DESC LIMIT 1")
-          .get() as { version: number; doc: string } | undefined;
+          .prepare(
+            `SELECT version, doc FROM undo
+             WHERE isolation_domain_id = ? AND workspace_id = ?
+             ORDER BY version DESC LIMIT 1`,
+          )
+          .get(this.isolationDomainId, this.workspaceId) as
+          | { version: number; doc: string }
+          | undefined;
         if (!row) {
           throw new Error("no workspace undo snapshot available");
         }
-        this.db.prepare("DELETE FROM undo WHERE version = ?").run(row.version);
+        this.db
+          .prepare(
+            `DELETE FROM undo
+             WHERE isolation_domain_id = ? AND workspace_id = ? AND version = ?`,
+          )
+          .run(this.isolationDomainId, this.workspaceId, row.version);
         // transact() stamps the next version, so the restored document lands as a
         // forward write rather than a rewind.
-        const snapshot = validateWorkspaceDoc(JSON.parse(row.doc));
+        const snapshot = migrateWorkspaceDoc(JSON.parse(row.doc)).doc;
         // Approval state is a separate operator decision, not layout history.
         // Undo may restore tabs/widgets, but it must never revive a revoked
         // approval or discard a registry decision made after the snapshot.
@@ -240,8 +368,11 @@ export class WorkspaceStore {
       // is a read-path accelerator, not the transaction's snapshot.
       this.cached = null;
       const current = this.read();
+      const derived = derive(current);
+      assertStableResourceIds(current, derived);
+      const revised = stampTabRevisions(current, derived);
       const next = validateWorkspaceDoc({
-        ...derive(current),
+        ...revised,
         workspaceVersion: current.workspaceVersion + 1,
       });
       this.commit(next, { snapshot: options.snapshot === false ? null : current });
@@ -261,20 +392,47 @@ export class WorkspaceStore {
     const now = Date.now();
     if (params.snapshot) {
       this.db
-        .prepare("INSERT OR REPLACE INTO undo (version, doc, created_ms) VALUES (?, ?, ?)")
-        .run(doc.workspaceVersion, serializeWorkspaceDoc(params.snapshot), now);
+        .prepare(
+          `INSERT OR REPLACE INTO undo
+            (isolation_domain_id, workspace_id, version, doc, created_ms)
+           VALUES (?, ?, ?, ?, ?)`,
+        )
+        .run(
+          this.isolationDomainId,
+          this.workspaceId,
+          doc.workspaceVersion,
+          serializeWorkspaceDoc(params.snapshot),
+          now,
+        );
       this.db
         .prepare(
-          "DELETE FROM undo WHERE version NOT IN (SELECT version FROM undo ORDER BY version DESC LIMIT ?)",
+          `DELETE FROM undo
+           WHERE isolation_domain_id = ? AND workspace_id = ?
+             AND version NOT IN (
+               SELECT version FROM undo
+               WHERE isolation_domain_id = ? AND workspace_id = ?
+               ORDER BY version DESC LIMIT ?
+             )`,
         )
-        .run(UNDO_RING_SIZE);
+        .run(
+          this.isolationDomainId,
+          this.workspaceId,
+          this.isolationDomainId,
+          this.workspaceId,
+          UNDO_RING_SIZE,
+        );
     }
     this.db
       .prepare(
-        "INSERT INTO workspace (id, version, doc, updated_ms) VALUES (1, ?, ?, ?) " +
-          "ON CONFLICT(id) DO UPDATE SET version = excluded.version, doc = excluded.doc, updated_ms = excluded.updated_ms",
+        `INSERT INTO workspace
+          (isolation_domain_id, workspace_id, version, doc, updated_ms)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(isolation_domain_id, workspace_id) DO UPDATE SET
+           version = excluded.version,
+           doc = excluded.doc,
+           updated_ms = excluded.updated_ms`,
       )
-      .run(doc.workspaceVersion, serialized, now);
+      .run(this.isolationDomainId, this.workspaceId, doc.workspaceVersion, serialized, now);
     this.cached = doc;
   }
 }

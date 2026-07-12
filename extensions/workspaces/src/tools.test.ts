@@ -206,6 +206,8 @@ describe("workspace tools", () => {
       const replacement = structuredClone(store.read());
       replacement.tabs[0]!.createdBy = "agent:forged";
       replacement.tabs.push({
+        id: "agent-tab",
+        revision: 1,
         slug: "agent-tab",
         title: "Agent Tab",
         hidden: false,

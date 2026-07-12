@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
+import { DEFAULT_WORKSPACE } from "./default-workspace.js";
 import { validateWorkspaceDoc, type WorkspaceDoc } from "./schema.js";
 import { WorkspaceStore } from "./store.js";
 
@@ -31,10 +33,237 @@ describe("WorkspaceStore", () => {
     await withStore((store) => {
       const doc = store.read();
 
-      expect(doc.tabs[0]).toMatchObject({ slug: "main", title: "Overview", createdBy: "system" });
+      expect(doc).toMatchObject({
+        workspaceId: "default",
+        tabs: [{ id: "main", slug: "main", revision: 1, title: "Overview", createdBy: "system" }],
+      });
       expect(doc.workspaceVersion).toBe(1);
       // A second read hits the single-slot cache and must agree with the DB.
       expect(store.read()).toEqual(doc);
+    });
+  });
+
+  it("increments only tabs whose persisted content changed", async () => {
+    await withStore((store) => {
+      store.mutate(
+        (draft) => {
+          draft.tabs.push({
+            id: "second",
+            revision: 999,
+            slug: "second",
+            title: "Second",
+            hidden: false,
+            createdBy: "user",
+            widgets: [],
+          });
+          draft.prefs.tabOrder.push("second");
+        },
+        { actor: "user" },
+      );
+      expect(store.read().tabs.map((tab) => [tab.id, tab.revision])).toEqual([
+        ["main", 1],
+        ["second", 1],
+      ]);
+
+      const changed = store.mutate(
+        (draft) => {
+          draft.tabs[0]!.title = "Changed";
+          draft.tabs[0]!.revision = 800;
+          draft.tabs[1]!.revision = 700;
+        },
+        { actor: "user" },
+      ).doc;
+
+      expect(changed.tabs.map((tab) => [tab.id, tab.revision])).toEqual([
+        ["main", 2],
+        ["second", 1],
+      ]);
+    });
+  });
+
+  it("does not increment a tab revision for unrelated workspace state", async () => {
+    await withStore((store) => {
+      const changed = store.mutate(
+        (draft) => {
+          draft.widgetsRegistry.chart = { status: "pending", createdBy: "agent:finance" };
+        },
+        { actor: "agent:finance" },
+      ).doc;
+
+      expect(changed.tabs[0]?.revision).toBe(1);
+    });
+  });
+
+  it("ignores forged revisions on whole-document replacement", async () => {
+    await withStore((store) => {
+      const unchanged = structuredClone(store.read());
+      unchanged.tabs[0]!.revision = 900;
+      expect(store.replace(unchanged, { actor: "user" }).doc.tabs[0]?.revision).toBe(1);
+
+      const changed = structuredClone(store.read());
+      changed.tabs[0]!.revision = 800;
+      changed.tabs[0]!.title = "Replacement";
+      expect(store.replace(changed, { actor: "user" }).doc.tabs[0]?.revision).toBe(2);
+    });
+  });
+
+  it("partitions workspace documents and undo history by isolation domain", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-domains-"));
+    const first = new WorkspaceStore({ stateDir, isolationDomainId: "domain-1" });
+    const second = new WorkspaceStore({ stateDir, isolationDomainId: "domain-2" });
+    try {
+      first.mutate(
+        (draft) => {
+          draft.tabs[0]!.title = "Domain One";
+        },
+        { actor: "user" },
+      );
+      second.mutate(
+        (draft) => {
+          draft.tabs[0]!.title = "Domain Two";
+        },
+        { actor: "user" },
+      );
+
+      expect(first.read().tabs[0]?.title).toBe("Domain One");
+      expect(second.read().tabs[0]?.title).toBe("Domain Two");
+      expect(first.undo().tabs[0]?.title).toBe("Overview");
+      expect(second.read().tabs[0]?.title).toBe("Domain Two");
+    } finally {
+      first.close();
+      second.close();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("migrates the singleton v1 database into the default isolation domain", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-legacy-"));
+    const workspaceDir = path.join(stateDir, "workspaces");
+    const dbPath = path.join(workspaceDir, "workspaces.sqlite");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    const legacy = structuredClone(DEFAULT_WORKSPACE) as unknown as {
+      schemaVersion: number;
+      workspaceId?: string;
+      tabs: Array<{ id?: string; revision?: number }>;
+    };
+    legacy.schemaVersion = 1;
+    delete legacy.workspaceId;
+    for (const tab of legacy.tabs) {
+      delete tab.id;
+      delete tab.revision;
+    }
+    const db = new DatabaseSync(dbPath);
+    db.exec(`
+      CREATE TABLE workspace (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        version INTEGER NOT NULL,
+        doc TEXT NOT NULL,
+        updated_ms INTEGER NOT NULL
+      );
+      CREATE TABLE undo (
+        version INTEGER PRIMARY KEY,
+        doc TEXT NOT NULL,
+        created_ms INTEGER NOT NULL
+      );
+    `);
+    db.prepare("INSERT INTO workspace (id, version, doc, updated_ms) VALUES (1, 7, ?, 1)").run(
+      JSON.stringify({ ...legacy, workspaceVersion: 7 }),
+    );
+    db.close();
+
+    const store = new WorkspaceStore({ stateDir });
+    try {
+      const doc = store.read();
+      expect(doc).toMatchObject({
+        schemaVersion: 2,
+        workspaceId: "default",
+        workspaceVersion: 7,
+        tabs: [{ id: "main", slug: "main" }],
+      });
+    } finally {
+      store.close();
+    }
+
+    const inspected = new DatabaseSync(dbPath);
+    try {
+      expect(inspected.prepare("PRAGMA table_info(workspace)").all()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: "isolation_domain_id" }),
+          expect.objectContaining({ name: "workspace_id" }),
+        ]),
+      );
+      const row = inspected
+        .prepare(
+          "SELECT isolation_domain_id, workspace_id, doc FROM workspace WHERE isolation_domain_id = ?",
+        )
+        .get("default") as { isolation_domain_id: string; workspace_id: string; doc: string };
+      expect(row).toMatchObject({ isolation_domain_id: "default", workspace_id: "default" });
+      expect(JSON.parse(row.doc)).toMatchObject({ schemaVersion: 2, workspaceId: "default" });
+    } finally {
+      inspected.close();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects direct mutation of stable resource ids", async () => {
+    await withStore((store) => {
+      const before = store.read();
+
+      expect(() =>
+        store.mutate(
+          (draft) => {
+            draft.workspaceId = "other";
+          },
+          { actor: "user" },
+        ),
+      ).toThrow("workspaceId is immutable");
+      expect(() =>
+        store.mutate(
+          (draft) => {
+            draft.tabs[0]!.id = "other";
+          },
+          { actor: "user" },
+        ),
+      ).toThrow("tab id is immutable");
+      expect(store.read()).toEqual(before);
+    });
+  });
+
+  it("replace preserves existing stable ids when a tab keeps its slug", async () => {
+    await withStore((store) => {
+      const incoming = structuredClone(store.read());
+      incoming.workspaceId = "forged";
+      incoming.tabs[0]!.id = "forged-tab";
+
+      const { doc } = store.replace(incoming, { actor: "user" });
+
+      expect(doc.workspaceId).toBe("default");
+      expect(doc.tabs[0]?.id).toBe("main");
+    });
+  });
+
+  it("canonicalizes legacy v1 replacement input before reconciling resource ids", async () => {
+    await withStore((store) => {
+      const legacy = structuredClone(store.read()) as unknown as {
+        schemaVersion: number;
+        workspaceId?: string;
+        tabs: Array<{ id?: string; revision?: number; title: string }>;
+      };
+      legacy.schemaVersion = 1;
+      delete legacy.workspaceId;
+      for (const tab of legacy.tabs) {
+        delete tab.id;
+        delete tab.revision;
+      }
+      legacy.tabs[0]!.title = "Imported Legacy Layout";
+
+      const { doc } = store.replace(legacy, { actor: "user" });
+
+      expect(doc).toMatchObject({
+        schemaVersion: 2,
+        workspaceId: "default",
+        tabs: [{ id: "main", slug: "main", title: "Imported Legacy Layout" }],
+      });
     });
   });
 
@@ -194,6 +423,8 @@ describe("WorkspaceStore", () => {
           // Existing system tab, relabelled as agent-authored.
           { ...seeded.tabs[0]!, createdBy: "agent:evil" },
           {
+            id: "new",
+            revision: 1,
             slug: "new",
             title: "New",
             hidden: false,

@@ -5,15 +5,14 @@ import { rememberWorkspaceBroadcast } from "./broadcast.js";
 import { resolveBinding, type ResolveBindingOptions } from "./data-read.js";
 import { snapshotApprovedWidget } from "./manifest.js";
 import { scaffoldWorkspaceWidget } from "./scaffold.js";
-import {
-  validateWorkspaceDoc,
-  type WorkspaceActor,
-  type WorkspaceBinding,
-  type WorkspaceGrid,
-  type WorkspaceTab,
-  type WorkspaceWidget,
-  type JsonValue,
-  type WorkspaceDoc,
+import type {
+  WorkspaceActor,
+  WorkspaceBinding,
+  WorkspaceGrid,
+  WorkspaceTab,
+  WorkspaceWidget,
+  JsonValue,
+  WorkspaceDoc,
 } from "./schema.js";
 import { WorkspaceStore } from "./store.js";
 
@@ -429,6 +428,8 @@ export function registerWorkspaceGatewayMethods(options: WorkspaceGatewayMethodO
               throw new Error(`workspace tab already exists: ${slug}`);
             }
             draft.tabs.push({
+              id: randomUUID(),
+              revision: 1,
               slug,
               title,
               ...(icon !== undefined ? { icon } : {}),
@@ -770,9 +771,8 @@ export function registerWorkspaceGatewayMethods(options: WorkspaceGatewayMethodO
     async (opts) => {
       try {
         const params = readParams(opts.params, ["doc"]);
-        const doc = validateWorkspaceDoc(params.doc);
         await respondWrite(opts, RPC_ACTOR, undefined, async () =>
-          store.replace(doc, { actor: RPC_ACTOR }),
+          store.replace(params.doc, { actor: RPC_ACTOR }),
         );
       } catch (error) {
         respondError(opts.respond, error);

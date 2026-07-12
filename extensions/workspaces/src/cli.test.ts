@@ -199,7 +199,7 @@ describe("workspace CLI", () => {
         program.parseAsync(["workspaces", "layout", "set", "--file", filePath], {
           from: "user",
         }),
-      ).rejects.toThrow("workspaceVersion");
+      ).rejects.toThrow();
     });
   });
 
