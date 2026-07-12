@@ -9116,7 +9116,7 @@ describe("openai transport stream", () => {
       undefined,
     );
 
-    expect(params.max_completion_tokens).toBe(65_536);
+    expect(params).not.toHaveProperty("max_completion_tokens");
     expect(params).not.toHaveProperty("max_tokens");
   });
 
@@ -9279,7 +9279,7 @@ describe("openai transport stream", () => {
       undefined,
     );
 
-    expect(params.max_tokens).toBe(65_536);
+    expect(params).not.toHaveProperty("max_tokens");
     expect(params).not.toHaveProperty("max_completion_tokens");
   });
 
@@ -9519,7 +9519,7 @@ describe("openai transport stream", () => {
         messages: [],
         tools: [],
       } as never,
-      undefined,
+      { maxTokens: 200_000 },
     );
 
     expect(params.max_completion_tokens).toBe(200_000);
