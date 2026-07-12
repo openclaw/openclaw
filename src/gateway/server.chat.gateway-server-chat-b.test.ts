@@ -3440,7 +3440,7 @@ describe("gateway server chat", () => {
           },
         });
         const history = await rpcReq<{
-          messages?: unknown[];
+          messages?: Array<{ __openclaw?: { id?: string } }>;
           hasMore?: boolean;
           nextOffset?: number;
           totalMessages?: number;
@@ -3448,18 +3448,250 @@ describe("gateway server chat", () => {
         }>(ws, "chat.history", { sessionKey: "main", limit: 100 });
         expect(history.ok).toBe(true);
         const messages = history.payload?.messages ?? [];
-        expect(messages).toHaveLength(107);
-        const userMessage = messages[0] as { role?: string; content?: string };
+        expect(messages).toHaveLength(100);
+        expect(JSON.stringify(messages)).toContain("imported message 6");
+        expect(JSON.stringify(messages)).toContain("imported message 105");
+        expect(history.payload?.hasMore).toBe(true);
+        expect(history.payload?.nextOffset).toBe(100);
+        expect(history.payload?.totalMessages).toBe(107);
+        expect(history.payload?.completeSnapshot).toBeUndefined();
+
+        const older = await rpcReq<{
+          messages?: Array<{
+            role?: string;
+            content?: string;
+            provider?: string;
+            __openclaw?: { id?: string };
+          }>;
+          hasMore?: boolean;
+          nextOffset?: number;
+          totalMessages?: number;
+          completeSnapshot?: boolean;
+        }>(ws, "chat.history", {
+          sessionKey: "main",
+          limit: 100,
+          offset: history.payload?.nextOffset,
+        });
+        expect(older.ok).toBe(true);
+        const olderMessages = older.payload?.messages ?? [];
+        expect(olderMessages).toHaveLength(7);
+        const userMessage = expectDefined(olderMessages[0], "oldest imported user message");
         expect(userMessage.role).toBe("user");
         expect(userMessage.content).toBe("hi");
-        const assistantMessage = messages[1] as { role?: string; provider?: string };
+        const assistantMessage = expectDefined(
+          olderMessages[1],
+          "oldest imported assistant message",
+        );
         expect(assistantMessage.role).toBe("assistant");
         expect(assistantMessage.provider).toBe("claude-cli");
-        expect(JSON.stringify(messages)).toContain("imported message 105");
-        expect(history.payload?.hasMore).toBe(false);
-        expect(history.payload?.nextOffset).toBeUndefined();
-        expect(history.payload?.totalMessages).toBe(107);
-        expect(history.payload?.completeSnapshot).toBe(true);
+        expect(older.payload?.hasMore).toBe(false);
+        expect(older.payload?.nextOffset).toBeUndefined();
+        expect(older.payload?.totalMessages).toBe(107);
+        expect(older.payload?.completeSnapshot).toBeUndefined();
+        expect(
+          new Set([...messages, ...olderMessages].map((message) => message["__openclaw"]?.id)).size,
+        ).toBe(107);
+
+        const complete = await rpcReq<{
+          messages?: unknown[];
+          hasMore?: boolean;
+          completeSnapshot?: boolean;
+        }>(ws, "chat.history", { sessionKey: "main", limit: 200 });
+        expect(complete.payload?.messages).toHaveLength(107);
+        expect(complete.payload?.hasMore).toBe(false);
+        expect(complete.payload?.completeSnapshot).toBe(true);
+      } finally {
+        homeEnvSnapshot.restore();
+      }
+    });
+  });
+
+  test("chat.history pages byte-truncated claude-cli imports to the oldest record", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await connectOk(ws);
+      const sessionDir = await createSessionDir();
+      const sessionId = "sess-claude-cli-byte-pages";
+      const cliSessionId = "5b8b202c-f6bb-4046-9475-d2f15fd07531";
+      const homeEnvSnapshot = captureEnv(["HOME"]);
+      const homeDir = path.join(sessionDir, "home");
+      const claudeProjectsDir = path.join(homeDir, ".claude", "projects", "workspace");
+      await fs.mkdir(claudeProjectsDir, { recursive: true });
+      await fs.writeFile(
+        path.join(claudeProjectsDir, `${cliSessionId}.jsonl`),
+        Array.from({ length: 14 }, (_, index) =>
+          JSON.stringify({
+            type: index % 2 === 0 ? "user" : "assistant",
+            uuid: `byte-page-${index + 1}`,
+            timestamp: new Date(Date.parse("2026-03-26T16:30:00.000Z") + index).toISOString(),
+            message: {
+              role: index % 2 === 0 ? "user" : "assistant",
+              content: [{ type: "text", text: `message ${index + 1} ${"x".repeat(600)}` }],
+            },
+          }),
+        ).join("\n"),
+        "utf-8",
+      );
+      setTestEnvValue("HOME", homeDir);
+      setMaxChatHistoryMessagesBytesForTest(1_200);
+      try {
+        await writeSessionStore({
+          entries: {
+            main: {
+              sessionId,
+              sessionFile: testSessionFilePath(sessionDir, sessionId),
+              updatedAt: futureFixtureUpdatedAt(),
+              modelProvider: "claude-cli",
+              model: "claude-sonnet-4-6",
+              cliSessionBindings: { "claude-cli": { sessionId: cliSessionId } },
+            },
+          },
+        });
+
+        const deliveredIds: string[] = [];
+        let offset: number | undefined;
+        let firstPageLength: number | undefined;
+        for (;;) {
+          const history = await rpcReq<{
+            messages?: Array<{ __openclaw?: { id?: string } }>;
+            hasMore?: boolean;
+            nextOffset?: number;
+            totalMessages?: number;
+            completeSnapshot?: boolean;
+          }>(ws, "chat.history", {
+            sessionKey: "main",
+            limit: 20,
+            ...(offset !== undefined ? { offset } : {}),
+          });
+          expect(history.ok).toBe(true);
+          expect(history.payload?.totalMessages).toBe(14);
+          expect(history.payload?.completeSnapshot).toBeUndefined();
+          const page = history.payload?.messages ?? [];
+          firstPageLength ??= page.length;
+          deliveredIds.push(
+            ...page.map((message) =>
+              expectDefined(message["__openclaw"]?.id, "imported history identity"),
+            ),
+          );
+          if (!history.payload?.hasMore) {
+            expect(history.payload?.nextOffset).toBeUndefined();
+            break;
+          }
+          const nextOffset = expectDefined(history.payload.nextOffset, "next history offset");
+          expect(nextOffset).toBeGreaterThan(offset ?? 0);
+          offset = nextOffset;
+        }
+        expect(firstPageLength).toBeLessThan(14);
+        expect(new Set(deliveredIds)).toEqual(
+          new Set(Array.from({ length: 14 }, (_, index) => `byte-page-${index + 1}`)),
+        );
+
+        setMaxChatHistoryMessagesBytesForTest();
+        const complete = await rpcReq<{
+          messages?: unknown[];
+          hasMore?: boolean;
+          completeSnapshot?: boolean;
+        }>(ws, "chat.history", { sessionKey: "main", limit: 20 });
+        expect(complete.payload?.messages).toHaveLength(14);
+        expect(complete.payload?.hasMore).toBe(false);
+        expect(complete.payload?.completeSnapshot).toBe(true);
+      } finally {
+        homeEnvSnapshot.restore();
+      }
+    });
+  });
+
+  test("chat.history makes the full local prefix reachable in a claude-cli merge", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await connectOk(ws);
+      const sessionDir = await createSessionDir();
+      const sessionId = "sess-claude-cli-local-prefix";
+      const cliSessionId = "5b8b202c-f6bb-4046-9475-d2f15fd07532";
+      const homeEnvSnapshot = captureEnv(["HOME"]);
+      const homeDir = path.join(sessionDir, "home");
+      const claudeProjectsDir = path.join(homeDir, ".claude", "projects", "workspace");
+      await fs.mkdir(claudeProjectsDir, { recursive: true });
+      await fs.writeFile(
+        path.join(claudeProjectsDir, `${cliSessionId}.jsonl`),
+        [
+          JSON.stringify({
+            type: "user",
+            uuid: "import-prefix-user",
+            timestamp: "2026-03-26T16:29:54.800Z",
+            message: { role: "user", content: "import prefix user" },
+          }),
+          JSON.stringify({
+            type: "assistant",
+            uuid: "import-prefix-assistant",
+            timestamp: "2026-03-26T16:29:55.500Z",
+            message: { role: "assistant", content: "import prefix assistant" },
+          }),
+        ].join("\n"),
+        "utf-8",
+      );
+      setTestEnvValue("HOME", homeDir);
+      try {
+        await writeSessionStore({
+          entries: {
+            main: {
+              sessionId,
+              sessionFile: testSessionFilePath(sessionDir, sessionId),
+              updatedAt: futureFixtureUpdatedAt(),
+              modelProvider: "claude-cli",
+              model: "claude-sonnet-4-6",
+              cliSessionBindings: { "claude-cli": { sessionId: cliSessionId } },
+            },
+          },
+        });
+        await writeMainSessionTranscript(
+          sessionDir,
+          Array.from({ length: 70 }, (_, index) =>
+            JSON.stringify({
+              message: {
+                role: index % 2 === 0 ? "user" : "assistant",
+                content: [{ type: "text", text: `local-only message ${index + 1}` }],
+                timestamp: Date.parse("2026-03-27T00:00:00.000Z") + index,
+              },
+            }),
+          ),
+          sessionId,
+        );
+
+        const deliveredIdentities = new Set<string>();
+        let offset: number | undefined;
+        for (;;) {
+          const history = await rpcReq<{
+            messages?: Array<{ __openclaw?: { id?: string; seq?: number } }>;
+            hasMore?: boolean;
+            nextOffset?: number;
+            totalMessages?: number;
+          }>(ws, "chat.history", {
+            sessionKey: "main",
+            limit: 2,
+            ...(offset !== undefined ? { offset } : {}),
+          });
+          expect(history.ok).toBe(true);
+          expect(history.payload?.totalMessages).toBe(72);
+          for (const message of history.payload?.messages ?? []) {
+            const metadata = expectDefined(message["__openclaw"], "history metadata");
+            deliveredIdentities.add(
+              metadata.seq !== undefined
+                ? `seq:${metadata.seq}`
+                : `id:${expectDefined(metadata.id, "history id")}`,
+            );
+          }
+          if (!history.payload?.hasMore) {
+            break;
+          }
+          const nextOffset = expectDefined(history.payload.nextOffset, "next history offset");
+          expect(nextOffset).toBeGreaterThan(offset ?? 0);
+          offset = nextOffset;
+        }
+        expect(deliveredIdentities.size).toBe(72);
+        expect(deliveredIdentities).toContain("id:import-prefix-user");
+        expect(deliveredIdentities).toContain("id:import-prefix-assistant");
+        for (let index = 1; index <= 70; index += 1) {
+          expect(deliveredIdentities).toContain(`seq:${index}`);
+        }
       } finally {
         homeEnvSnapshot.restore();
       }

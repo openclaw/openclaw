@@ -294,10 +294,15 @@ type PreRegisteredAgentRun = {
 };
 
 type ChatHistoryMethod = "chat.history" | "chat.startup";
+type ChatHistoryMergedRecordCursor = {
+  identity: string;
+  nextOffset: number;
+};
 type ChatHistoryPage = {
   messages: unknown[];
   responseOffset?: number;
   completeCliImport?: true;
+  mergedRecordCursors?: ChatHistoryMergedRecordCursor[];
   pagination: {
     offset: number;
     totalMessages: number;
@@ -2960,6 +2965,16 @@ function readChatHistoryMessageSeq(message: unknown): number | undefined {
   return typeof seq === "number" && Number.isSafeInteger(seq) && seq > 0 ? seq : undefined;
 }
 
+function readChatHistoryMessageIdentity(message: unknown): string | undefined {
+  const metadata = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]);
+  const seq = metadata?.seq;
+  if (typeof seq === "number" && Number.isSafeInteger(seq) && seq > 0) {
+    return `seq:${seq}`;
+  }
+  const id = metadata?.id;
+  return typeof id === "string" && id.length > 0 ? `id:${id}` : undefined;
+}
+
 function resolveChatHistoryNextOffset(params: {
   messages: unknown[];
   totalMessages: number;
@@ -2996,6 +3011,38 @@ function shouldReplayOldestChatHistoryRecord(params: {
     (message) => readChatHistoryMessageSeq(message) === oldestSeq,
   ).length;
   return boundedCount < projectedCount;
+}
+
+function resolveMergedChatHistoryNextOffset(params: {
+  projected: unknown[];
+  bounded: unknown[];
+  cursors: ChatHistoryMergedRecordCursor[];
+  offset: number;
+  rawPageMessages: number;
+}): number {
+  const cursorByIdentity = new Map(
+    params.cursors.map((cursor) => [cursor.identity, cursor.nextOffset] as const),
+  );
+  const oldestIdentity = params.bounded
+    .map((message) => readChatHistoryMessageIdentity(message))
+    .find(
+      (identity): identity is string => identity !== undefined && cursorByIdentity.has(identity),
+    );
+  if (oldestIdentity === undefined) {
+    if (params.projected.length > 0 && params.bounded.length > 0) {
+      // A metadata-free unavailable sentinel represents only the newest raw record.
+      return params.offset + 1;
+    }
+    return params.offset + params.rawPageMessages;
+  }
+  const projectedCount = params.projected.filter(
+    (message) => readChatHistoryMessageIdentity(message) === oldestIdentity,
+  ).length;
+  const boundedCount = params.bounded.filter(
+    (message) => readChatHistoryMessageIdentity(message) === oldestIdentity,
+  ).length;
+  const nextOffset = expectDefined(cursorByIdentity.get(oldestIdentity), "merged history cursor");
+  return Math.max(params.offset, nextOffset - (boundedCount < projectedCount ? 1 : 0));
 }
 
 function capOffsetChatHistoryProjectedMessages(messages: unknown[], max: number): unknown[] {
@@ -3105,8 +3152,8 @@ async function readChatHistoryPage(params: {
   const cliSessionId = params.ignoreCliSessionImports
     ? undefined
     : resolveClaudeCliBindingSessionId(entry);
-  // Bound Claude history is imported as one complete snapshot. Keep every request
-  // on that path; local-only offset pages would silently drop the imported transcript.
+  // Keep bound Claude history on the merged path; local-only offset pages would
+  // silently drop imported records.
   if (offset !== undefined && !cliSessionId) {
     const rawHistoryWindow = resolveSessionHistoryTailReadOptions(max);
     const readPage =
@@ -3211,6 +3258,54 @@ async function readChatHistoryPage(params: {
   if (offset !== undefined && !cliHistory.imported) {
     return readChatHistoryPage({ ...params, ignoreCliSessionImports: true });
   }
+  if (cliHistory.imported) {
+    // The import reader already scans the complete external JSONL. Only after it
+    // succeeds do the matching full local read needed to build a pageable merge.
+    const completeLocalMessages = dropPreSessionStartAnnouncePairs(
+      await readSessionMessagesAsync(readScope, {
+        mode: "full",
+        reason: "chat.history CLI import merge",
+        allowResetArchiveFallback: true,
+      }),
+      typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
+    );
+    const completeCliHistory = resolveChatHistoryWithCliSessionImports({
+      entry,
+      provider,
+      localMessages: completeLocalMessages,
+    });
+    if (!completeCliHistory.imported) {
+      return readChatHistoryPage({ ...params, ignoreCliSessionImports: true });
+    }
+    const mergedMessages = dropPreSessionStartAnnouncePairs(
+      completeCliHistory.messages,
+      typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
+    );
+    const mergedOffset = Math.min(offset ?? 0, mergedMessages.length);
+    const pageEnd = mergedMessages.length - mergedOffset;
+    const pageStart = Math.max(0, pageEnd - max);
+    const rawPage = mergedMessages.slice(pageStart, pageEnd);
+    const displayMessages = projectChatDisplayMessages(rawPage, {
+      maxChars: effectiveMaxChars,
+    });
+    const mergedRecordCursors = rawPage.flatMap((message, index) => {
+      const identity = readChatHistoryMessageIdentity(message);
+      return identity === undefined
+        ? []
+        : [{ identity, nextOffset: mergedMessages.length - (pageStart + index) }];
+    });
+    return {
+      messages: augmentChatHistoryWithCanvasBlocks(displayMessages),
+      ...(offset !== undefined ? { responseOffset: offset } : {}),
+      ...(mergedOffset === 0 && pageStart === 0 ? { completeCliImport: true as const } : {}),
+      mergedRecordCursors,
+      pagination: {
+        offset: mergedOffset,
+        totalMessages: mergedMessages.length,
+        rawPageMessages: rawPage.length,
+      },
+    };
+  }
   const rawMessages = cliHistory.messages;
   // Drop subagent_announce pairs (user inter-session announce + adjacent
   // assistant) whose record timestamp predates the current session's
@@ -3220,34 +3315,22 @@ async function readChatHistoryPage(params: {
     rawMessages,
     typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
   );
-  const displayMessages = cliHistory.imported
-    ? projectChatDisplayMessages(recencyFilteredMessages, { maxChars: effectiveMaxChars })
-    : projectRecentChatDisplayMessages(recencyFilteredMessages, {
-        maxChars: effectiveMaxChars,
-        maxMessages: max,
-      });
+  const displayMessages = projectRecentChatDisplayMessages(recencyFilteredMessages, {
+    maxChars: effectiveMaxChars,
+    maxMessages: max,
+  });
   return {
-    // Imported CLI transcripts are complete snapshots and intentionally ignore
-    // the requested local-tail count; offset paging cannot reconstruct imports.
     messages: augmentChatHistoryWithCanvasBlocks(displayMessages),
-    ...(cliHistory.imported ? { completeCliImport: true as const } : {}),
-    pagination: cliHistory.imported
-      ? {
-          offset: 0,
-          totalMessages: recencyFilteredMessages.length,
-          rawPageMessages: recencyFilteredMessages.length,
-          exhausted: true,
-        }
-      : {
-          offset: 0,
-          totalMessages: readPage.totalMessages,
-          // The extra record supplies pair-filter context; it was not returned and
-          // must remain reachable by the next strictly-older page.
-          rawPageMessages: Math.min(
-            rawHistoryWindow.maxMessages,
-            Math.max(readPage.messages.length, readPage.totalMessages > 0 ? 1 : 0),
-          ),
-        },
+    pagination: {
+      offset: 0,
+      totalMessages: readPage.totalMessages,
+      // The extra record supplies pair-filter context; it was not returned and
+      // must remain reachable by the next strictly-older page.
+      rawPageMessages: Math.min(
+        rawHistoryWindow.maxMessages,
+        Math.max(readPage.messages.length, readPage.totalMessages > 0 ? 1 : 0),
+      ),
+    },
   };
 }
 
@@ -3363,17 +3446,30 @@ async function handleChatHistoryRequest({
   });
   const capped = capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
   const bounded = enforceChatHistoryFinalBudget({ messages: capped, maxBytes: maxHistoryBytes });
+  const historyBudgetPreserved =
+    replaced.replacedCount === 0 &&
+    capped.length === normalized.length &&
+    bounded.messages.length === capped.length &&
+    bounded.messages.every((message, index) => message === capped[index]);
   const pagination = historyPage.pagination;
-  const candidateNextOffset = resolveChatHistoryNextOffset({
-    messages: bounded.messages,
-    totalMessages: pagination.totalMessages,
-    offset: pagination.offset,
-    rawPageMessages: pagination.rawPageMessages,
-    replayOldestRecord: shouldReplayOldestChatHistoryRecord({
-      projected: normalized,
-      bounded: bounded.messages,
-    }),
-  });
+  const candidateNextOffset = historyPage.mergedRecordCursors
+    ? resolveMergedChatHistoryNextOffset({
+        projected: normalized,
+        bounded: bounded.messages,
+        cursors: historyPage.mergedRecordCursors,
+        offset: pagination.offset,
+        rawPageMessages: pagination.rawPageMessages,
+      })
+    : resolveChatHistoryNextOffset({
+        messages: bounded.messages,
+        totalMessages: pagination.totalMessages,
+        offset: pagination.offset,
+        rawPageMessages: pagination.rawPageMessages,
+        replayOldestRecord: shouldReplayOldestChatHistoryRecord({
+          projected: normalized,
+          bounded: bounded.messages,
+        }),
+      });
   const hasMore = pagination.exhausted !== true && candidateNextOffset < pagination.totalMessages;
   const nextOffset = hasMore ? candidateNextOffset : undefined;
   reportOmittedChatHistory({
@@ -3463,7 +3559,7 @@ async function handleChatHistoryRequest({
     ...(hasMore ? { nextOffset } : {}),
     hasMore,
     totalMessages: pagination.totalMessages,
-    ...(historyPage.completeCliImport && bounded.messages.length === normalized.length
+    ...(historyPage.completeCliImport && !hasMore && historyBudgetPreserved
       ? { completeSnapshot: true }
       : {}),
     defaults,

@@ -184,6 +184,7 @@ describe("cli session history", () => {
       });
       expect(String(messages[0]?.content)).toContain("[Thu 2026-03-26 16:29 GMT] hi");
       expectFields(messages[0]?.["__openclaw"], {
+        id: "user-1",
         importedFrom: "claude-cli",
         externalId: "user-1",
         cliSessionId: sessionId,
@@ -200,6 +201,7 @@ describe("cli session history", () => {
         cacheRead: 22,
       });
       expectFields(messages[1]?.["__openclaw"], {
+        id: "assistant-1",
         importedFrom: "claude-cli",
         externalId: "assistant-1",
         cliSessionId: sessionId,
@@ -223,6 +225,25 @@ describe("cli session history", () => {
           tool_use_id: "toolu_123",
         },
       ]);
+    });
+  });
+
+  it("assigns stable source-line ids when Claude entries have no uuid", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      await fs.writeFile(
+        filePath,
+        JSON.stringify({
+          type: "user",
+          timestamp: "2026-03-26T16:29:54.800Z",
+          message: { role: "user", content: "stable fallback" },
+        }),
+        "utf-8",
+      );
+
+      const first = readClaudeCliSessionMessages({ cliSessionId: sessionId, homeDir });
+      const second = readClaudeCliSessionMessages({ cliSessionId: sessionId, homeDir });
+      expect(first[0]?.["__openclaw"]?.id).toBe(`claude-cli:${sessionId}:line:1`);
+      expect(second[0]?.["__openclaw"]?.id).toBe(first[0]?.["__openclaw"]?.id);
     });
   });
 
