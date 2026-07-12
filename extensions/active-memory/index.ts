@@ -30,6 +30,7 @@ import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/p
 import { parseAgentSessionKey, parseThreadSessionSuffix } from "openclaw/plugin-sdk/routing";
 import { isPathInside } from "openclaw/plugin-sdk/security-runtime";
 import {
+  cleanupSessionLifecycleArtifacts,
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
 } from "openclaw/plugin-sdk/session-store-runtime";
@@ -3391,19 +3392,23 @@ async function runRecallSubagent(params: {
     throw error;
   } finally {
     if (runtimeSessionCreated) {
-      await params.api.runtime.subagent
-        .deleteSession({
-          sessionKey: subagentSessionKey,
-          deleteTranscript: false,
-        })
-        .catch((error: unknown) => {
-          const message = toSingleLineLogValue(
-            error instanceof Error ? error.message : String(error),
-          );
-          params.api.logger.debug?.(
-            `active-memory: failed to clean up recall session ${subagentSessionKey}: ${message}`,
-          );
-        });
+      const sessionKeySegmentPrefix =
+        parseAgentSessionKey(subagentSessionKey)?.rest ?? subagentSessionKey;
+      await cleanupSessionLifecycleArtifacts({
+        agentId: params.agentId,
+        archiveRemovedEntryTranscripts: false,
+        orphanTranscriptMinAgeMs: 0,
+        sessionKeySegmentPrefix,
+        storePath,
+        transcriptContentMarker: `"runId":"${subagentSessionId}"`,
+      }).catch((error: unknown) => {
+        const message = toSingleLineLogValue(
+          error instanceof Error ? error.message : String(error),
+        );
+        params.api.logger.debug?.(
+          `active-memory: failed to clean up recall session ${subagentSessionKey}: ${message}`,
+        );
+      });
     }
     await transientWorkspace?.cleanup();
   }

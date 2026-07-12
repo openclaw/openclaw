@@ -8,6 +8,7 @@ import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { parseSqliteSessionFileMarker } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
@@ -46,6 +47,7 @@ const hoisted = vi.hoisted(() => {
   };
   return {
     closeActiveMemorySearchManager: vi.fn(async () => {}),
+    cleanupSessionLifecycleArtifacts: vi.fn(),
     runtimeTranscriptFiles: {} as Record<string, string>,
     sessionStore,
     updateSessionStore: vi.fn(
@@ -69,6 +71,7 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
   );
   return {
     ...actual,
+    cleanupSessionLifecycleArtifacts: hoisted.cleanupSessionLifecycleArtifacts,
     updateSessionStore: hoisted.updateSessionStore,
   };
 });
@@ -158,19 +161,6 @@ describe("active-memory plugin", () => {
       },
     };
   });
-  const deleteSession = vi.fn(
-    async (params: { sessionKey: string; deleteTranscript?: boolean }) => {
-      const sessionId = hoisted.sessionStore[params.sessionKey]?.sessionId;
-      if (typeof sessionId === "string") {
-        const testSessionFile = hoisted.runtimeTranscriptFiles[sessionId];
-        if (testSessionFile) {
-          await fs.rm(testSessionFile, { force: true });
-          delete hoisted.runtimeTranscriptFiles[sessionId];
-        }
-      }
-      delete hoisted.sessionStore[params.sessionKey];
-    },
-  );
   let stateDir = "";
   let configFile: Record<string, unknown> = {};
   let pluginConfig: Record<string, unknown> = {
@@ -270,9 +260,6 @@ describe("active-memory plugin", () => {
             },
           ),
         },
-      },
-      subagent: {
-        deleteSession,
       },
       state: {
         resolveStateDir: () => stateDir,
@@ -530,6 +517,28 @@ describe("active-memory plugin", () => {
         payloads: [{ text: "- lemon pepper wings\n- blue cheese" }],
       };
     });
+    hoisted.cleanupSessionLifecycleArtifacts.mockImplementation(
+      async (params: { sessionKeySegmentPrefix: string }) => {
+        const entry = Object.entries(hoisted.sessionStore).find(([sessionKey]) => {
+          const parsed = sessionKey.split(":").slice(2).join(":");
+          return parsed.startsWith(params.sessionKeySegmentPrefix);
+        });
+        if (!entry) {
+          return { archivedTranscriptArtifacts: 0, removedEntries: 0 };
+        }
+        const [sessionKey, sessionEntry] = entry;
+        const sessionId = sessionEntry.sessionId;
+        if (typeof sessionId === "string") {
+          const testSessionFile = hoisted.runtimeTranscriptFiles[sessionId];
+          if (testSessionFile) {
+            await fs.rm(testSessionFile, { force: true });
+            delete hoisted.runtimeTranscriptFiles[sessionId];
+          }
+        }
+        delete hoisted.sessionStore[sessionKey];
+        return { archivedTranscriptArtifacts: 0, removedEntries: 1 };
+      },
+    );
     testing.resetActiveRecallCacheForTests();
     testing.setTimeoutPartialDataGraceMsForTests(5);
     plugin.register(api as unknown as OpenClawPluginApi);
@@ -645,9 +654,13 @@ describe("active-memory plugin", () => {
       sessionId,
       sessionFile: runtimeSessionFile,
     });
-    expect(deleteSession).toHaveBeenCalledWith({
-      sessionKey,
-      deleteTranscript: false,
+    expect(hoisted.cleanupSessionLifecycleArtifacts).toHaveBeenCalledWith({
+      agentId: "main",
+      archiveRemovedEntryTranscripts: false,
+      orphanTranscriptMinAgeMs: 0,
+      sessionKeySegmentPrefix: parseAgentSessionKey(sessionKey)?.rest,
+      storePath: path.join(stateDir, "sessions.json"),
+      transcriptContentMarker: `"runId":"${sessionId}"`,
     });
     expect(hoisted.sessionStore[sessionKey]).toBeUndefined();
     expectPrependContextContains(result, "lemon pepper wings");
