@@ -39,6 +39,11 @@ type BrowserTarget = { nodeId: string; label: string };
 
 const WORKTREE_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
+/** Last path segment for the folder trigger label; handles both separators. */
+function folderDisplayName(path: string): string {
+  return path.split(/[\\/]/).findLast((segment) => segment.length > 0) ?? "";
+}
+
 class NewSessionPage extends OpenClawLightDomElement {
   @property({ attribute: false }) data: NewSessionRouteData | undefined;
 
@@ -80,10 +85,46 @@ class NewSessionPage extends OpenClawLightDomElement {
       (sessions, notify) => sessions.subscribe(notify),
     );
 
+  override connectedCallback() {
+    super.connectedCallback();
+    document.addEventListener("pointerdown", this.handleDocumentPointerDown, true);
+    document.addEventListener("keydown", this.handleDocumentKeydown, true);
+  }
+
   override disconnectedCallback() {
+    document.removeEventListener("pointerdown", this.handleDocumentPointerDown, true);
+    document.removeEventListener("keydown", this.handleDocumentKeydown, true);
     this.subscriptions.clear();
     super.disconnectedCallback();
   }
+
+  private openMenus(): HTMLDetailsElement[] {
+    return [...this.querySelectorAll<HTMLDetailsElement>(".new-session-page__select[open]")];
+  }
+
+  // Same central dismissal contract as the chat composer's <details> menus:
+  // pointerdown outside an open menu closes it, Escape closes and restores
+  // trigger focus.
+  private readonly handleDocumentPointerDown = (event: PointerEvent) => {
+    const path = event.composedPath();
+    for (const details of this.openMenus()) {
+      if (!path.includes(details)) {
+        details.open = false;
+      }
+    }
+  };
+
+  private readonly handleDocumentKeydown = (event: KeyboardEvent) => {
+    if (event.key !== "Escape") {
+      return;
+    }
+    const open = this.openMenus().at(-1);
+    if (open) {
+      event.stopPropagation();
+      open.open = false;
+      open.querySelector<HTMLElement>("summary")?.focus();
+    }
+  };
 
   override updated() {
     const agentsReady = this.agents().length > 0;
@@ -354,20 +395,19 @@ class NewSessionPage extends OpenClawLightDomElement {
 
   private closeBrowser() {
     this.browserRequestToken += 1;
+    // Reset state before collapsing the <details> so its toggle handler sees
+    // browserOpen === false and does not re-enter this method.
     this.browserOpen = false;
     this.browserLoading = false;
     this.browserError = null;
     this.browserListing = null;
     this.browserTarget = null;
-  }
-
-  private toggleBrowser() {
-    if (this.browserOpen) {
-      this.closeBrowser();
-      return;
+    const details = this.querySelector<HTMLDetailsElement>(
+      ".new-session-page__select--folder[open]",
+    );
+    if (details) {
+      details.open = false;
     }
-    this.browserOpen = true;
-    this.showBrowserRoot();
   }
 
   private showBrowserRoot() {
@@ -456,13 +496,28 @@ class NewSessionPage extends OpenClawLightDomElement {
           >
             ${icons.arrowLeft}
           </button>
-          <span class="new-session-page__browser-path"
-            >${target
-              ? `${target.label}${listing?.path ? ` · ${listing.path}` : ""}`
-              : t("newSession.where")}${this.browserLoading
-              ? ` · ${t("common.loading")}`
-              : ""}</span
-          >
+          ${target
+            ? html`
+                <input
+                  class="new-session-page__browser-path"
+                  type="text"
+                  aria-label=${t("newSession.folder")}
+                  placeholder=${target.label}
+                  .value=${listing?.path ?? ""}
+                  @keydown=${(event: KeyboardEvent) => {
+                    // Manual path entry browses there; "Use this folder" applies it.
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      const path = (event.target as HTMLInputElement).value.trim();
+                      this.loadBrowser(path || undefined);
+                    }
+                  }}
+                />
+              `
+            : html`<span class="new-session-page__browser-path">${t("newSession.where")}</span>`}
+          ${this.browserLoading
+            ? html`<span class="new-session-page__browser-loading">${t("common.loading")}</span>`
+            : nothing}
           <button
             type="button"
             class="new-session-page__browser-nav"
@@ -554,157 +609,230 @@ class NewSessionPage extends OpenClawLightDomElement {
     `;
   }
 
-  private renderTargetBar() {
-    const agents = this.agents();
+  /** Closes the menu containing the clicked item and hands focus back. */
+  private closeMenuFrom(event: Event) {
+    const details = (event.currentTarget as HTMLElement).closest("details");
+    if (details?.open) {
+      details.open = false;
+      details.querySelector<HTMLElement>("summary")?.focus();
+    }
+  }
+
+  private renderMenuItem(params: {
+    label: string;
+    checked: boolean;
+    disabled?: boolean;
+    title?: string;
+    onSelect: (event: Event) => void;
+  }) {
+    return html`
+      <button
+        type="button"
+        class="session-menu__item"
+        role="menuitemradio"
+        aria-checked=${String(params.checked)}
+        title=${params.title ?? nothing}
+        ?disabled=${params.disabled ?? false}
+        @click=${params.onSelect}
+      >
+        <span class="session-menu__check" aria-hidden="true"
+          >${params.checked ? icons.check : nothing}</span
+        >
+        <span class="session-menu__text">${params.label}</span>
+      </button>
+    `;
+  }
+
+  private renderAgentSelect(agents: ReturnType<NewSessionPage["agents"]>) {
+    const selected = this.selectedAgent();
+    const label = selected?.identity?.name ?? selected?.name ?? selected?.id ?? this.agentId;
+    return html`
+      <details class="new-session-page__select">
+        <summary class="new-session-page__trigger" title=${t("newSession.agent")}>
+          <span class="new-session-page__target-icon" aria-hidden="true">${icons.bot}</span>
+          <span class="new-session-page__trigger-label">${label}</span>
+          <span class="new-session-page__trigger-chevron" aria-hidden="true"
+            >${icons.chevronDown}</span
+          >
+        </summary>
+        <div class="new-session-page__menu" role="menu" aria-label=${t("newSession.agent")}>
+          ${agents.map((option) =>
+            this.renderMenuItem({
+              label: option.identity?.name ?? option.name ?? option.id,
+              checked: normalizeAgentId(option.id) === this.agentId,
+              onSelect: (event) => {
+                this.selectAgentId(option.id);
+                this.closeMenuFrom(event);
+              },
+            }),
+          )}
+        </div>
+      </details>
+    `;
+  }
+
+  /** Where + worktree consolidated into one "run on" menu (Cursor-style). */
+  private renderWhereSelect() {
     const execNodes = this.execNodes();
-    const isAdmin = this.isAdmin();
+    const showNodes = this.isAdmin() && execNodes.length > 0;
+    const activeNode = execNodes.find((node) => node.nodeId === this.execNode);
+    const whereLabel = this.execNode
+      ? (activeNode?.displayName ?? this.execNode)
+      : t("newSession.gateway");
     const customFolder = this.usesCustomFolder();
     const worktreeAvailable = this.worktreeAvailable();
     const branches = this.branches;
     return html`
-      <div class="new-session-page__targets">
-        ${agents.length > 1
-          ? html`
-              <label class="new-session-page__target" title=${t("newSession.agent")}>
-                <span class="new-session-page__target-icon" aria-hidden="true">${icons.bot}</span>
-                <select
-                  aria-label=${t("newSession.agent")}
-                  .value=${this.agentId}
-                  @change=${(event: Event) =>
-                    this.selectAgentId((event.target as HTMLSelectElement).value)}
-                >
-                  ${agents.map(
-                    (option) => html`
-                      <option
-                        value=${option.id}
-                        ?selected=${normalizeAgentId(option.id) === this.agentId}
-                      >
-                        ${option.identity?.name ?? option.name ?? option.id}
-                      </option>
-                    `,
-                  )}
-                </select>
-              </label>
-            `
-          : nothing}
-        ${isAdmin && execNodes.length > 0
-          ? html`
-              <label class="new-session-page__target" title=${t("newSession.where")}>
-                <span class="new-session-page__target-icon" aria-hidden="true"
-                  >${icons.monitor}</span
-                >
-                <select
-                  aria-label=${t("newSession.where")}
-                  .value=${this.execNode}
-                  @change=${(event: Event) => {
-                    this.selectExecNode((event.target as HTMLSelectElement).value);
-                  }}
-                >
-                  <option value="" ?selected=${!this.execNode}>${t("newSession.gateway")}</option>
-                  ${execNodes.map(
-                    (node) => html`
-                      <option value=${node.nodeId} ?selected=${this.execNode === node.nodeId}>
-                        ${node.displayName}
-                      </option>
-                    `,
-                  )}
-                </select>
-              </label>
-            `
-          : nothing}
-        <label
-          class="new-session-page__target new-session-page__target--folder"
-          title=${t("newSession.folder")}
+      <details class="new-session-page__select">
+        <summary
+          class="new-session-page__trigger"
+          title=${t("newSession.where")}
+          data-worktree=${String(this.worktree)}
         >
-          <span class="new-session-page__target-icon" aria-hidden="true">${icons.folder}</span>
-          <input
-            type="text"
-            aria-label=${t("newSession.folder")}
-            placeholder=${this.execNode
-              ? t("newSession.folderPlaceholder")
-              : this.workspacePath() || t("newSession.folderPlaceholder")}
-            .value=${this.folder}
-            ?disabled=${!isAdmin}
-            @input=${(event: Event) => {
-              // Track keystrokes so a re-render (e.g. agent hydration) cannot
-              // overwrite an in-progress edit; side effects wait for change.
-              this.folder = (event.target as HTMLInputElement).value;
-            }}
-            @change=${(event: Event) => this.applyFolder((event.target as HTMLInputElement).value)}
-          />
-          ${this.browseAvailable()
+          <span class="new-session-page__target-icon" aria-hidden="true">${icons.monitor}</span>
+          <span class="new-session-page__trigger-label">${whereLabel}</span>
+          ${this.worktree
+            ? html`<span class="new-session-page__target-icon" aria-hidden="true"
+                >${icons.gitBranch}</span
+              >`
+            : nothing}
+          <span class="new-session-page__trigger-chevron" aria-hidden="true"
+            >${icons.chevronDown}</span
+          >
+        </summary>
+        <div class="new-session-page__menu" role="menu" aria-label=${t("newSession.where")}>
+          ${showNodes
             ? html`
-                <button
-                  type="button"
-                  class="new-session-page__browse"
-                  title=${t("newSession.browse")}
-                  aria-label=${t("newSession.browse")}
-                  aria-expanded=${String(this.browserOpen)}
-                  @click=${() => this.toggleBrowser()}
-                >
-                  ${icons.folderOpen}
-                </button>
+                <div class="new-session-page__menu-title">${t("newSession.where")}</div>
+                ${this.renderMenuItem({
+                  label: t("newSession.gateway"),
+                  checked: !this.execNode,
+                  onSelect: (event) => {
+                    this.selectExecNode("");
+                    this.closeMenuFrom(event);
+                  },
+                })}
+                ${execNodes.map((node) =>
+                  this.renderMenuItem({
+                    label: node.displayName,
+                    checked: this.execNode === node.nodeId,
+                    onSelect: (event) => {
+                      this.selectExecNode(node.nodeId);
+                      this.closeMenuFrom(event);
+                    },
+                  }),
+                )}
               `
             : nothing}
-        </label>
-        <div class="new-session-page__target-group">
-          <label
-            class="new-session-page__target new-session-page__target--toggle"
-            title=${worktreeAvailable
-              ? t("chat.runControls.newSessionWorktree")
-              : t("newSession.worktreeUnavailable")}
-          >
-            <input
-              type="checkbox"
-              .checked=${this.worktree}
-              ?disabled=${!worktreeAvailable || customFolder}
-              @change=${(event: Event) => {
-                this.worktree = (event.target as HTMLInputElement).checked;
-                if (this.worktree) {
-                  this.maybeLoadBranches();
-                }
-              }}
-            />
-            <span class="new-session-page__target-icon" aria-hidden="true">${icons.gitBranch}</span>
-            <span>${t("newSession.worktree")}</span>
-          </label>
-          ${this.worktree
+          ${!this.execNode
             ? html`
-                <label class="new-session-page__target" title=${t("newSession.baseBranch")}>
-                  <input
-                    type="text"
-                    list="new-session-branches"
-                    class="new-session-page__branch"
-                    aria-label=${t("newSession.baseBranch")}
-                    placeholder=${this.branchesLoading
-                      ? t("common.loading")
-                      : (branches?.defaultBranch ?? t("newSession.baseBranch"))}
-                    .value=${this.baseRef}
-                    @input=${(event: Event) => {
-                      this.baseRef = (event.target as HTMLInputElement).value.trim();
-                    }}
-                  />
-                  <datalist id="new-session-branches">
-                    ${(branches?.branches ?? []).map(
-                      (branch) => html`<option value=${branch.name}></option>`,
-                    )}
-                  </datalist>
-                </label>
-                <label class="new-session-page__target" title=${t("newSession.worktreeName")}>
-                  <input
-                    type="text"
-                    class="new-session-page__branch"
-                    aria-label=${t("newSession.worktreeName")}
-                    placeholder=${t("newSession.worktreeNamePlaceholder")}
-                    .value=${this.worktreeName}
-                    @input=${(event: Event) => {
-                      this.worktreeName = (event.target as HTMLInputElement).value.trim();
-                    }}
-                  />
-                </label>
+                ${showNodes
+                  ? html`<div class="session-menu__separator" role="separator"></div>`
+                  : nothing}
+                ${this.renderMenuItem({
+                  label: t("newSession.worktree"),
+                  checked: this.worktree,
+                  disabled: !worktreeAvailable || customFolder,
+                  title: worktreeAvailable
+                    ? t("chat.runControls.newSessionWorktree")
+                    : t("newSession.worktreeUnavailable"),
+                  onSelect: () => {
+                    // Stays open: enabling reveals the branch/name fields below.
+                    this.worktree = !this.worktree;
+                    if (this.worktree) {
+                      this.maybeLoadBranches();
+                    }
+                  },
+                })}
+                ${this.worktree
+                  ? html`
+                      <label class="new-session-page__menu-field">
+                        <span>${t("newSession.baseBranch")}</span>
+                        <input
+                          type="text"
+                          list="new-session-branches"
+                          placeholder=${this.branchesLoading
+                            ? t("common.loading")
+                            : (branches?.defaultBranch ?? t("newSession.baseBranch"))}
+                          .value=${this.baseRef}
+                          @input=${(event: Event) => {
+                            this.baseRef = (event.target as HTMLInputElement).value.trim();
+                          }}
+                        />
+                        <datalist id="new-session-branches">
+                          ${(branches?.branches ?? []).map(
+                            (branch) => html`<option value=${branch.name}></option>`,
+                          )}
+                        </datalist>
+                      </label>
+                      <label class="new-session-page__menu-field">
+                        <span>${t("newSession.worktreeName")}</span>
+                        <input
+                          type="text"
+                          placeholder=${t("newSession.worktreeNamePlaceholder")}
+                          .value=${this.worktreeName}
+                          @input=${(event: Event) => {
+                            this.worktreeName = (event.target as HTMLInputElement).value.trim();
+                          }}
+                        />
+                      </label>
+                    `
+                  : nothing}
               `
             : nothing}
         </div>
+      </details>
+    `;
+  }
+
+  private renderFolderSelect() {
+    const browseAvailable = this.browseAvailable();
+    const folderName = folderDisplayName(this.folder.trim() || this.workspacePath());
+    const label = folderName || t("newSession.folderPlaceholder");
+    return html`
+      <details
+        class="new-session-page__select new-session-page__select--folder"
+        @toggle=${(event: Event) => {
+          const details = event.currentTarget as HTMLDetailsElement;
+          if (details.open) {
+            this.browserOpen = true;
+            this.showBrowserRoot();
+          } else if (this.browserOpen) {
+            this.closeBrowser();
+          }
+        }}
+      >
+        <summary
+          class="new-session-page__trigger ${browseAvailable
+            ? ""
+            : "new-session-page__trigger--disabled"}"
+          title=${browseAvailable ? t("newSession.browse") : t("newSession.folder")}
+          aria-disabled=${String(!browseAvailable)}
+          @click=${(event: Event) => {
+            if (!browseAvailable) {
+              event.preventDefault();
+            }
+          }}
+        >
+          <span class="new-session-page__target-icon" aria-hidden="true">${icons.folder}</span>
+          <span class="new-session-page__trigger-label">${label}</span>
+          <span class="new-session-page__trigger-chevron" aria-hidden="true"
+            >${icons.chevronDown}</span
+          >
+        </summary>
+        <div class="new-session-page__menu new-session-page__menu--browser">
+          ${this.renderBrowser()}
+        </div>
+      </details>
+    `;
+  }
+
+  private renderTargetBar() {
+    const agents = this.agents();
+    return html`
+      <div class="new-session-page__triggers">
+        ${agents.length > 1 ? this.renderAgentSelect(agents) : nothing} ${this.renderFolderSelect()}
+        ${this.renderWhereSelect()}
       </div>
     `;
   }
@@ -717,7 +845,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       !WORKTREE_NAME_PATTERN.test(this.worktreeName.trim());
     return html`
       <div class="new-session-page__draft">
-        ${this.renderTargetBar()} ${this.renderBrowser()}
+        ${this.renderTargetBar()}
         ${worktreeNameInvalid
           ? html`<div class="new-session-page__error">${t("newSession.worktreeNameInvalid")}</div>`
           : nothing}

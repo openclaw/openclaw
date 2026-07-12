@@ -105,41 +105,54 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await page.getByRole("heading", { name: "Main" }).waitFor();
       await page.locator(".new-session-page__message").waitFor();
 
-      // Unified layout: the draft block (target row above the composer) sits
+      // Unified layout: the trigger row (menus above the composer) sits
       // inside the start-screen welcome, below the hero.
       const heroBox = await page.locator(".agent-chat__welcome h2").boundingBox();
-      const targetsBox = await page.locator(".new-session-page__targets").boundingBox();
+      const triggersBox = await page.locator(".new-session-page__triggers").boundingBox();
       const composerBox = await page.locator(".new-session-page__composer").boundingBox();
       expect(heroBox).not.toBeNull();
-      expect(targetsBox).not.toBeNull();
+      expect(triggersBox).not.toBeNull();
       expect(composerBox).not.toBeNull();
       expect((heroBox?.y ?? 0) + (heroBox?.height ?? 0)).toBeLessThanOrEqual(
-        (targetsBox?.y ?? 0) + 1,
+        (triggersBox?.y ?? 0) + 1,
       );
-      expect((targetsBox?.y ?? 0) + (targetsBox?.height ?? 0)).toBeLessThanOrEqual(
+      expect((triggersBox?.y ?? 0) + (triggersBox?.height ?? 0)).toBeLessThanOrEqual(
         (composerBox?.y ?? 0) + 1,
       );
 
-      const folderInput = page.getByRole("textbox", { name: "Folder", exact: true });
-      await expect.poll(() => folderInput.inputValue()).toBe(WORKSPACE);
+      // The folder trigger labels the workspace and opens the browser menu.
+      const folderSelect = page.locator(".new-session-page__select--folder");
+      await expect
+        .poll(() => folderSelect.locator(".new-session-page__trigger-label").textContent())
+        .toBe("openclaw");
 
       // Browse from the workspace, descend one level, then adopt the folder.
-      await page.getByRole("button", { name: "Browse folders" }).click();
+      await folderSelect.locator("summary").click();
       await page
         .locator(".new-session-page__browser-list")
         .getByRole("button", { name: "Gateway" })
         .click();
       await page.locator(".new-session-page__browser-entry", { hasText: "packages" }).click();
       await expect
-        .poll(() => page.locator(".new-session-page__browser-path").textContent())
-        .toBe(`Gateway · local · ${PICKED}`);
+        .poll(() => page.locator("input.new-session-page__browser-path").inputValue())
+        .toBe(PICKED);
       await page.getByRole("button", { name: "Use this folder" }).click();
 
-      await expect.poll(() => folderInput.inputValue()).toBe(PICKED);
-      // Custom host folders force a managed worktree.
-      const worktreeToggle = page.locator(".new-session-page__target--toggle input");
-      await expect.poll(() => worktreeToggle.isChecked()).toBe(true);
-      expect(await worktreeToggle.isDisabled()).toBe(true);
+      // The adopted folder closes the menu and updates the trigger label.
+      await expect.poll(() => folderSelect.getAttribute("open")).toBeNull();
+      await expect
+        .poll(() => folderSelect.locator(".new-session-page__trigger-label").textContent())
+        .toBe("packages");
+
+      // Custom host folders force a managed worktree (badge on the where
+      // trigger; the menu item is checked and locked).
+      const whereTrigger = page.locator('.new-session-page__trigger[data-worktree="true"]');
+      await whereTrigger.waitFor();
+      await whereTrigger.click();
+      const worktreeItem = page.getByRole("menuitemradio", { name: "Worktree" });
+      await expect.poll(() => worktreeItem.getAttribute("aria-checked")).toBe("true");
+      expect(await worktreeItem.isDisabled()).toBe(true);
+      await page.keyboard.press("Escape");
 
       await page.locator(".new-session-page__message").fill("fix the flaky test");
       await page.getByRole("button", { name: "Start session" }).click();
@@ -244,32 +257,40 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     try {
       await page.goto(`${server.baseUrl}new`);
       await page.locator(".new-session-page__message").waitFor();
-      const where = page.getByRole("combobox", { name: "Where" });
-      const folder = page.getByRole("textbox", { name: "Folder", exact: true });
-      await where.selectOption("macbook");
-      await expect.poll(() => folder.inputValue()).toBe("");
+      const folderSelect = page.locator(".new-session-page__select--folder");
+      const whereSelect = page.locator(
+        ".new-session-page__select:not(.new-session-page__select--folder)",
+      );
+      const whereTrigger = whereSelect.locator("summary");
+      const whereLabel = whereSelect.locator(".new-session-page__trigger-label");
 
-      // Reopening a Windows node browser preserves UNC paths; these cannot be
-      // rediscovered by starting at the node home directory.
-      await folder.fill(NODE_UNC);
-      await folder.press("Tab");
-      await page.getByRole("button", { name: "Browse folders" }).click();
-      await page
-        .locator(".new-session-page__browser-list")
-        .getByRole("button", { name: "MacBook" })
-        .click();
-      await expect
-        .poll(() => page.locator(".new-session-page__browser-path").textContent())
-        .toBe(`MacBook · ${NODE_UNC}`);
-      await page.getByRole("button", { name: "Browse folders" }).click();
-      await folder.fill("");
-      await folder.press("Tab");
+      // Pick the node from the where menu.
+      await whereTrigger.click();
+      await page.getByRole("menuitemradio", { name: "MacBook" }).click();
+      await expect.poll(() => whereLabel.textContent()).toBe("MacBook");
+      // Node sessions cannot use managed worktrees, so the menu drops the item.
+      await whereTrigger.click();
+      expect(await page.getByRole("menuitemradio", { name: "Worktree" }).count()).toBe(0);
+      await page.keyboard.press("Escape");
 
-      await where.selectOption("");
-      await expect.poll(() => folder.inputValue()).toBe(WORKSPACE);
-      await page.getByRole("button", { name: "Browse folders" }).click();
-
+      // Manual path entry in the browser head preserves UNC paths; these
+      // cannot be rediscovered by starting at the node home directory.
+      await folderSelect.locator("summary").click();
       const roots = page.locator(".new-session-page__browser-list");
+      await roots.getByRole("button", { name: "MacBook" }).click();
+      const pathInput = page.locator("input.new-session-page__browser-path");
+      await expect.poll(() => pathInput.inputValue()).toBe(NODE_HOME);
+      await pathInput.fill(NODE_UNC);
+      await pathInput.press("Enter");
+      await expect.poll(() => pathInput.inputValue()).toBe(NODE_UNC);
+      // Close without applying; the draft keeps the node home default.
+      await page.keyboard.press("Escape");
+
+      // Back on the Gateway, the browser super-root lists every node.
+      await whereTrigger.click();
+      await page.getByRole("menuitemradio", { name: "Gateway · local" }).click();
+      await expect.poll(() => whereLabel.textContent()).toBe("Gateway · local");
+      await folderSelect.locator("summary").click();
       await expect
         .poll(() =>
           roots
@@ -287,11 +308,11 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await roots.getByRole("button", { name: "Projects" }).click();
       await page.getByRole("button", { name: "Use this folder" }).click();
 
-      await expect.poll(() => where.inputValue()).toBe("macbook");
-      await expect.poll(() => folder.inputValue()).toBe(NODE_PICKED);
-      const worktreeToggle = page.locator(".new-session-page__target--toggle input");
-      expect(await worktreeToggle.isChecked()).toBe(false);
-      expect(await worktreeToggle.isDisabled()).toBe(true);
+      // Using a node folder retargets the draft to that node.
+      await expect.poll(() => whereLabel.textContent()).toBe("MacBook");
+      await expect
+        .poll(() => folderSelect.locator(".new-session-page__trigger-label").textContent())
+        .toBe("Projects");
 
       await page.locator(".new-session-page__message").fill("inspect the remote checkout");
       await page.getByRole("button", { name: "Start session" }).click();
