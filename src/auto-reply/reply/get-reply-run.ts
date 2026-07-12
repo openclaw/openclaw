@@ -29,7 +29,10 @@ import {
 } from "../../config/sessions/paths.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { consumeSessionSkillSuggestion } from "../../config/sessions/skill-suggestions.js";
-import { resolveSessionStoreEntry } from "../../config/sessions/store.js";
+import {
+  formatSqliteSessionFileMarker,
+  sqliteSessionFileMarkerMatchesSession,
+} from "../../config/sessions/sqlite-marker.js";
 import type { PendingSkillSuggestion, SessionEntry } from "../../config/sessions/types.js";
 import { resolveSilentReplySettings } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -998,10 +1001,11 @@ export async function runPreparedReply(
             isFirstTurnInSession,
             workspaceDir,
             cfg,
+            execOverrides,
             skillFilter: opts?.skillFilter,
           });
         });
-  sessionEntry = skillResult.sessionEntry ?? sessionEntry;
+  sessionEntry = skillResult.sessionEntry;
   if (sessionEntry) {
     sessionEntryHandle?.replaceCurrent(sessionEntry);
   }
@@ -1096,12 +1100,19 @@ export async function runPreparedReply(
     sessionId: string;
     sessionFile: string;
   } => {
+    // Working-set exact key first; disk alias resolve only when storePath known.
+    // No whole-map scan — that encodes the store layout the accessor hides.
     const latestSessionEntry =
       sessionStore && sessionKey
-        ? (resolveSessionStoreEntry({
-            store: sessionStore,
-            sessionKey,
-          }).existing ?? sessionEntry)
+        ? (sessionStore[sessionKey] ??
+          (storePath
+            ? loadSessionEntry({
+                storePath,
+                sessionKey,
+                readConsistency: "latest",
+              })
+            : undefined) ??
+          sessionEntry)
         : sessionEntry;
     const latestSessionId = latestSessionEntry?.sessionId ?? sessionIdFinal;
     opts?.onSessionPrepared?.({
@@ -1109,14 +1120,22 @@ export async function runPreparedReply(
       sessionId: latestSessionId,
       storePath,
     });
+    const existingSessionFile = latestSessionEntry?.sessionFile;
+    const sessionFile =
+      existingSessionFile &&
+      sqliteSessionFileMarkerMatchesSession(existingSessionFile, latestSessionId)
+        ? existingSessionFile
+        : storePath
+          ? formatSqliteSessionFileMarker({
+              agentId,
+              sessionId: latestSessionId,
+              storePath,
+            })
+          : resolveSessionFilePath(latestSessionId, latestSessionEntry, sessionFilePathOptions);
     return {
       sessionEntry: latestSessionEntry,
       sessionId: latestSessionId,
-      sessionFile: resolveSessionFilePath(
-        latestSessionId,
-        latestSessionEntry,
-        sessionFilePathOptions,
-      ),
+      sessionFile,
     };
   };
   let preparedSessionState = resolvePreparedSessionState();

@@ -170,16 +170,6 @@ export const pt_BR: TranslationMap = {
       node: "Nó",
     },
   },
-  instances: {
-    title: "Instâncias conectadas",
-    subtitle: "Sinalizadores de presença do gateway e dos clientes.",
-    showHosts: "Mostrar hosts e IPs",
-    hideHosts: "Ocultar hosts e IPs",
-    toggleHostVisibility: "Alternar visibilidade do host",
-    noInstances: "Nenhuma instância reportada ainda.",
-    lastInput: "Última entrada {time}",
-    reason: "Motivo {reason}",
-  },
   worktrees: {
     newWorktree: "Novo worktree",
     owner: "Proprietário",
@@ -389,6 +379,7 @@ export const pt_BR: TranslationMap = {
       skills: "Skills",
       channels: "Channels",
       cronJobs: "Cron Jobs",
+      memory: "Memória",
     },
     context: {
       title: "Agent Context",
@@ -484,6 +475,7 @@ export const pt_BR: TranslationMap = {
     noEvents: "No events yet.",
   },
   quickSettings: {
+    language: "Idioma",
     appearance: {
       lobsterVisits: "Visitas da lagosta",
       lobsterVisitsOn: "Aparece ocasionalmente",
@@ -521,6 +513,47 @@ export const pt_BR: TranslationMap = {
       severity: "Severity",
       plugin: "Plugin",
     },
+  },
+  approvalPage: {
+    brandName: "OpenClaw",
+    eyebrow: "Operator approval",
+    loadingTitle: "Loading approval",
+    loadingDescription: "Checking the current approval state with the Gateway.",
+    unavailableTitle: "Approval unavailable",
+    unavailableDescription:
+      "This approval could not be found or this device is not authorized to review it.",
+    connectionErrorTitle: "Connection interrupted",
+    connectionErrorDescription:
+      "OpenClaw cannot confirm or record a decision while disconnected. Reconnect to check the current status.",
+    retry: "Retry",
+    execTitle: "Command approval",
+    pending: "Waiting for your decision",
+    pendingDescription: "Review the request carefully. The first answer from any surface wins.",
+    approvedHere: "Approved here",
+    deniedHere: "Denied here",
+    resolvedElsewhere: "Resolved elsewhere",
+    resolvedElsewhereDescription:
+      "Another surface or an earlier attempt recorded the decision first.",
+    approved: "Approved",
+    denied: "Denied",
+    expired: "Expirado",
+    cancelled: "Cancelled",
+    allowedOnceDescription: "The operation was approved for this request only.",
+    allowedAlwaysDescription: "The operation was approved with the always-allow decision.",
+    deniedDescription: "The operation was denied and will not continue.",
+    expiredDescription: "No decision arrived before the deadline, so the operation was denied.",
+    cancelledDescription: "The requesting run ended before a decision could be used.",
+    summaryLabel: "Summary",
+    commandLabel: "Comando",
+    requestLabel: "Request details",
+    nodeLabel: "Nó",
+    toolLabel: "Tool",
+    expiresLabel: "Expires",
+    resolvedLabel: "Resolved",
+    actionsLabel: "Approval decisions",
+    resolvingDecision: "Recording {decision}…",
+    safeToClose: "The decision is recorded. You can close this page.",
+    openControlUi: "Open Control UI",
   },
   agentTools: {
     connectedSource: "Conectado: {id}",
@@ -616,11 +649,10 @@ export const pt_BR: TranslationMap = {
   tabs: {
     agents: "Agentes",
     activity: "Atividade",
-    overview: "Visão Geral",
     workboard: "Quadro de trabalho",
     worktrees: "Worktrees",
     channels: "Canais",
-    instances: "Instâncias",
+    connection: "Conexão",
     sessions: "Sessões",
     usage: "Uso",
     cron: "Tarefas Cron",
@@ -642,17 +674,15 @@ export const pt_BR: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "Depuração",
     logs: "Logs",
-    dreams: "Sonhos",
     plugin: "Plugin",
   },
   subtitles: {
     agents: "Espaços, ferramentas, identidades.",
     activity: "Resumos de atividade de ferramentas locais do navegador.",
-    overview: "Status, entrada, saúde.",
     workboard: "Fila de trabalho do agente e transferência de sessão.",
     worktrees: "Checkouts isolados de tarefas de agentes e snapshots de recuperação.",
     channels: "Canais e configurações.",
-    instances: "Clientes e nós conectados.",
+    connection: "Endpoint do Gateway, credenciais e status do handshake.",
     sessions: "Sessões ativas e padrões.",
     usage: "Uso e custos da API.",
     cron: "Despertares e execuções.",
@@ -674,8 +704,10 @@ export const pt_BR: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "Snapshots, eventos, RPC.",
     logs: "Logs ao vivo do gateway.",
-    dreams: "Consolidação de memória durante o sono.",
     plugin: "Painel fornecido pelo plugin.",
+  },
+  mcpPage: {
+    manageServersLink: "Gerencie servidores na página de Plugins.",
   },
   pluginsPage: {
     searchLabel: "Pesquisar plugins",
@@ -942,94 +974,6 @@ export const pt_BR: TranslationMap = {
     unavailableTitle: "Plugin panel unavailable",
     unavailableSubtitle:
       "The plugin that owns this tab is not active on the connected gateway, or it did not provide a panel.",
-  },
-  codexSessions: {
-    eyebrow: "Frota do Codex",
-    title: "Sessões em todos os seus computadores",
-    interactiveSubtitle:
-      "Inicie uma ramificação de Chat cuja seleção de modelo permanece sob controle do Codex App Server, arquive sessões locais elegíveis com confirmação e veja sessões de computadores pareados.",
-    summaryLabel: "Resumo das sessões do Codex",
-    summary: {
-      sessions: "sessões",
-      onlineHosts: "online",
-      hosts: "hosts",
-    },
-    searchLabel: "Pesquisar sessões do Codex",
-    searchPlaceholder: "Pesquisar títulos de sessões",
-    refresh: "Atualizar",
-    disconnected: "Reconecte-se ao Gateway para atualizar as sessões do Codex.",
-    partial: "Hosts indisponíveis: {count}. Os demais hosts continuam disponíveis.",
-    loading: "Carregando sessões do Codex…",
-    loadMore: "Carregar mais",
-    loadingMore: "Carregando…",
-    untitled: "Sessão do Codex sem título",
-    threadId: "Thread",
-    actions: {
-      continue: "Continuar",
-      continueAsBranch: "Continuar como ramificação",
-      openChat: "Abrir Chat",
-      continuing: "Continuando…",
-      archive: "Arquivar",
-      readTranscript: "Lido",
-      readTranscriptLabel: "Ler transcrição de {title}",
-      continueLabel: "Continuar {title}",
-      continueAsBranchLabel: "Continuar {title} como ramificação",
-      openChatLabel: "Abrir Chat para {title}",
-      continueAsBranchHint:
-        "Crie um Chat a partir do histórico visível persistido. Na sua primeira mensagem, o Codex App Server seleciona o modelo e o provedor para a nova thread do harness. A seleção posterior permanece controlada pelo Codex; o OpenClaw nunca substitui por outro runtime, modelo ou fallback. A origem permanece intocada, e trabalhos em andamento podem estar ausentes.",
-      archiveLabel: "Arquivar {title}",
-      archiveConfirmation:
-        "Arquivar {title} e todos os descendentes gerados? Confirme que nenhum outro cliente Codex ou runner do OpenClaw está usando-os. Arquivar enquanto outro runner está ativo pode interromper o trabalho dele.",
-      active: "Sessões ativas não podem iniciar uma ramificação nem ser arquivadas.",
-      archiveActivityUnknownHint:
-        "A atividade é desconhecida porque o status é local ao processo. Arquive somente depois de confirmar que nenhum outro cliente Codex ou runner está usando esta sessão.",
-      statusUnavailable: "Esta sessão do Codex não pode ser gerenciada no estado atual.",
-      hostOffline: "Reconecte este computador antes de gerenciar suas sessões do Codex.",
-      gatewayOffline: "Reconecte-se ao gateway antes de gerenciar sessões do Codex.",
-      remoteReadOnly:
-        "Sessões de computadores pareados são somente para visualização por enquanto.",
-    },
-    status: {
-      active: "Ativa",
-      idle: "Ociosa",
-      archived: "Arquivada",
-      storedActivityUnknown: "Armazenada / atividade desconhecida",
-      systemError: "Erro de sistema",
-      unknown: "Desconhecido",
-    },
-    host: {
-      gateway: "Gateway",
-      node: "Nó",
-      connected: "Conectado",
-      offline: "Offline",
-      unavailable: "Catálogo de sessões indisponível",
-      sessionCount: "{count} exibido(s)",
-    },
-    empty: {
-      title: "Nenhum host do Codex encontrado",
-      supervisionSubtitle:
-        "Ative a supervisão do Codex no gateway ou em um computador pareado e, em seguida, atualize esta visualização.",
-      search: "Nenhuma sessão neste host corresponde à sua busca.",
-      nonArchived: "Nenhuma sessão não arquivada neste host.",
-    },
-    sidebar: {
-      title: "Sessões do Codex",
-      unavailable: "Sessões do Codex indisponíveis",
-      viewAll: "Ver todas as sessões do Codex",
-      truncated: "Mais sessões estão disponíveis no catálogo completo.",
-    },
-    transcript: {
-      eyebrow: "Transcrição do Codex",
-      back: "Todas as sessões do Codex",
-      you: "Você",
-      reasoning: "Raciocínio",
-      command: "Comando",
-      fileChange: "Alteração de arquivo",
-      item: "Item do Codex",
-      details: "Detalhes completos",
-      loading: "Carregando transcrição…",
-      loadMore: "Carregar itens mais antigos da transcrição",
-    },
   },
   logbook: {
     duration: {
@@ -1386,18 +1330,22 @@ export const pt_BR: TranslationMap = {
     eventUnarchived: "Desarquivado",
     eventStale: "Sessão obsoleta",
   },
-  overview: {
+  connection: {
+    lostTitle: "Conexão com o Gateway perdida",
+    reconnecting: "Reconectando…",
+    offlineHint:
+      "Atualizações ao vivo e ações estão pausadas até que a conexão seja restabelecida.",
+    retryNow: "Tentar novamente agora",
     access: {
       title: "Acesso ao Gateway",
-      subtitle: "Onde o dashboard se conecta e como ele se autentica.",
-      wsUrl: "URL WebSocket",
+      subtitle: "Onde o dashboard se conecta e como é autenticado.",
+      wsUrl: "URL do WebSocket",
       token: "Token do Gateway",
       password: "Senha (não armazenada)",
       passwordPlaceholder: "senha do sistema ou compartilhada",
-      sessionKey: "Chave de Sessão Padrão",
-      language: "Idioma",
+      sessionKey: "Chave de sessão padrão",
       connectHint: "Clique em Conectar para aplicar as alterações de conexão.",
-      trustedProxy: "Autenticado por proxy confiável.",
+      trustedProxy: "Autenticado por meio de proxy confiável.",
       showToken: "Mostrar token",
       hideToken: "Ocultar token",
       toggleTokenVisibility: "Alternar visibilidade do token",
@@ -1406,142 +1354,58 @@ export const pt_BR: TranslationMap = {
       togglePasswordVisibility: "Alternar visibilidade da senha",
     },
     snapshot: {
-      title: "Resumo",
-      subtitle: "Informações mais recentes do handshake do gateway.",
+      title: "Instantâneo",
+      subtitle: "Informações do handshake mais recente do Gateway.",
       status: "Status",
-      uptime: "Tempo de Atividade",
-      tickInterval: "Intervalo de Tick",
-      lastChannelsRefresh: "Última Atualização de Canais",
-      channelsHint: "Use Canais para vincular WhatsApp, Telegram, Discord, Signal ou iMessage.",
+      uptime: "Tempo de atividade",
+      tickInterval: "Intervalo de atualização",
+      lastChannelsRefresh: "Última atualização dos canais",
     },
-    stats: {
-      instances: "Instâncias",
-      instancesHint: "Beacons de presença nos últimos 5 minutos.",
-      sessions: "Sessões",
-      sessionsHint: "Chaves de sessão recentes rastreadas pelo gateway.",
-      cron: "Cron",
-      cronNext: "Próximo despertar {time}",
-    },
-    notes: {
-      title: "Notas",
-      subtitle: "Lembretes rápidos para configurações de controle remoto.",
-      tailscaleTitle: "Tailscale serve",
-      tailscaleText:
-        "Prefira o modo serve para manter o gateway em loopback com autenticação tailnet.",
-      sessionTitle: "Higiene de sessão",
-      sessionText: "Use /new ou sessions.patch para redefinir o contexto.",
-      cronTitle: "Lembretes de Cron",
-      cronText: "Use sessões isoladas para execuções recorrentes.",
-    },
-    auth: {
-      required:
-        "Este gateway requer autenticação. Adicione um token ou senha e clique em Conectar.",
-      failed:
-        "Falha na autenticação. Recopie uma URL com token usando {command}, ou atualize o token e clique em Conectar.",
-    },
-    pairing: {
-      hint: "Este dispositivo precisa de aprovação de pareamento do host do gateway.",
-      scopeUpgradeTitle: "Ampliação de escopo aguardando aprovação.",
-      scopeUpgradeSummary:
-        "Este dispositivo já está pareado, mas a ampliação de escopo solicitada está aguardando aprovação.",
-      roleUpgradeTitle: "Alteração de função aguardando aprovação.",
-      roleUpgradeSummary:
-        "Este dispositivo já está pareado, mas a alteração de função solicitada está aguardando aprovação.",
-      metadataUpgradeTitle: "Alteração de metadados do dispositivo aguardando aprovação.",
-      metadataUpgradeSummary:
-        "Este dispositivo já está pareado, mas a alteração de metadados está aguardando aprovação.",
-      mobileHint:
-        "No celular? Copie a URL completa (incluindo #token=...) executando openclaw dashboard --no-open no desktop.",
-      docsTitle: "Documentação de pareamento de dispositivo (abre em nova aba)",
-      docsLink: "Docs: Pareamento de dispositivo",
-    },
-    insecure: {
-      hint: "Esta página é HTTP, então o navegador bloqueia a identidade do dispositivo. Use HTTPS (Tailscale Serve) ou abra {url} no host do gateway.",
-      stayHttp: "Se você precisar permanecer em HTTP, defina {config} (apenas token).",
-    },
-    connection: {
-      title: "Como conectar",
-      step1: "Inicie o gateway na sua máquina host:",
-      step2: "Obtenha uma URL do painel com token:",
-      step3: "Cole a URL do WebSocket e o token acima, ou abra a URL com token diretamente.",
-      step4: "Ou gere um token reutilizável:",
-      docsHint: "Para acesso remoto, recomendamos o Tailscale Serve. ",
+    help: {
+      title: "Como se conectar",
+      step1: "Inicie o Gateway na sua máquina host:",
+      step2: "Obtenha uma URL tokenizada do painel:",
+      step3: "Cole a URL do WebSocket e o token acima ou abra diretamente a URL tokenizada.",
       docsLink: "Leia a documentação →",
-      authDocsTitle: "Documentação de autenticação da Control UI (abre em nova aba)",
-      authDocsLink: "Docs: Autenticação da Control UI",
-      tailscaleDocsTitle: "Documentação do Tailscale Serve (abre em nova aba)",
-      tailscaleDocsLink: "Docs: Tailscale Serve",
-      insecureHttpDocsTitle: "Documentação de HTTP inseguro (abre em nova aba)",
-      insecureHttpDocsLink: "Docs: HTTP inseguro",
       copyCommand: "Copiar comando",
       copyCommandAria: "Copiar comando: {command}",
     },
-    cards: {
-      cost: "Custo",
+  },
+  attention: {
+    cronFailed: "{count} tarefa(s) cron falhou(aram)",
+    cronOverdue: "{count} tarefa(s) cron está(ão) atrasada(s)",
+    modelAuthExpired: "Autenticação do modelo expirada: {providers}",
+    modelAuthExpiring: "Autenticação do modelo prestes a expirar: {providers}",
+  },
+  palette: {
+    placeholder: "Pesquisar conversas e comandos…",
+    noResults: "Nenhum resultado",
+    categories: {
+      search: "Pesquisa",
+      navigation: "Navegação",
       skills: "Skills",
-      recentSessions: "Sessões Recentes",
-      modelAuth: "Autenticação de modelo",
-      modelAuthOk: "{count} ok",
-      modelAuthExpired: "{count} expirados",
-      modelAuthExpiring: "{count} expirando",
-      modelAuthProviders: "{count} provedores",
-      modelAuthUsageLeft: "{pct}% restantes",
-      modelAuthExpiresIn: "expira {when}",
-      modelAuthAttentionExpiredTitle: "Autenticação de modelo expirada",
-      modelAuthAttentionExpiringTitle: "Autenticação de modelo expirando em breve",
-      modelAuthAttentionExpiredDesc: "{providers} — autentique novamente com openclaw models auth",
-      modelAuthAttentionExpiringEntry: "{provider} ({when})",
     },
-    attention: {
-      title: "Atenção",
+    items: {
+      sessions: "Sessões",
+      scheduled: "Agendados",
+      skills: "Skills",
+      plugins: "Plugins",
+      settings: "Configurações",
+      agents: "Agentes",
+      shellCommand: "Comando do shell",
+      debugMode: "Modo de depuração",
     },
-    eventLog: {
-      title: "Log de Eventos",
+    descriptions: {
+      shellCommand: "Executar shell",
+      debugMode: "Alternar depuração",
     },
-    logTail: {
-      title: "Logs do Gateway",
-    },
-    quickActions: {
-      newSession: "Nova Sessão",
-      automation: "Automação",
-      refreshAll: "Atualizar Tudo",
-      terminal: "Terminal",
-    },
-    palette: {
-      placeholder: "Digite um comando…",
-      noResults: "Sem resultados",
-      categories: {
-        search: "Pesquisar",
-        navigation: "Navegação",
-        skills: "Skills",
-      },
-      items: {
-        overview: "Visão geral",
-        sessions: "Sessões",
-        scheduled: "Agendado",
-        skills: "Skills",
-        plugins: "Plugins",
-        settings: "Configurações",
-        agents: "Agentes",
-        shellCommand: "Comando de shell",
-        debugMode: "Modo de depuração",
-      },
-      descriptions: {
-        shellCommand: "Executar shell",
-        debugMode: "Alternar depuração",
-      },
-      footer: {
-        navigate: "navegar",
-        select: "selecionar",
-        close: "fechar",
-      },
+    footer: {
+      navigate: "navegar",
+      select: "selecionar",
+      close: "fechar",
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "Agente",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "Cena",
       diary: "Diário",
@@ -2049,16 +1913,14 @@ export const pt_BR: TranslationMap = {
       },
     },
   },
-  connection: {
-    lostTitle: "Conexão com o Gateway perdida",
-    reconnecting: "Reconectando…",
-    offlineHint:
-      "Atualizações ao vivo e ações estão pausadas até que a conexão seja restabelecida.",
-    retryNow: "Tentar novamente agora",
-  },
   chat: {
     disconnected: "Desconectado do gateway.",
     archivedSessionDisabled: "Restaure esta sessão para enviar mensagens.",
+    loadOlder: "Carregar anteriores",
+    catalog: {
+      remoteViewOnly: "Esta sessão está em um nó pareado e é somente para visualização.",
+      unsupportedViewOnly: "Esta fonte de sessão externa é somente para visualização.",
+    },
     taskSuggestions: {
       eyebrow: "Acompanhamento sugerido",
       start: "Iniciar em uma worktree",
@@ -2137,9 +1999,9 @@ export const pt_BR: TranslationMap = {
       workSessions: "Trabalho",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "Chats recentes",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",
@@ -2308,6 +2170,8 @@ export const pt_BR: TranslationMap = {
       finished: "Concluídas ({count})",
       stopTask: "Parar {title}",
       viewTranscript: "Ver transcrição",
+      toolUseOne: "1 uso de ferramenta",
+      toolUseMany: "{count} usos de ferramentas",
     },
     sessionDiff: {
       title: "Alterações",
@@ -2450,6 +2314,50 @@ export const pt_BR: TranslationMap = {
       howHeading: "Como ela deve funcionar?",
       howHint: "Escolha como os resultados serão entregues.",
       title: "Nova automação",
+      createAndRun: "Criar e executar agora",
+    },
+    suggestions: {
+      title: "Ideias de automação",
+      hint: "Automações iniciais — escolha uma e ajuste antes de criar.",
+      use: "Usar ideia →",
+      ideas: {
+        repoPulse: {
+          name: "Pulso do repositório",
+          tagline: "Issues, PRs e falhas de CI da noite, ordenados por urgência.",
+          prompt:
+            "Revise a atividade noturna nos meus repositórios: novas issues, pull requests e falhas de CI. Resuma as três coisas que mais precisam da minha atenção hoje, cada uma com um link e um motivo em uma linha.",
+        },
+        standupGhostwriter: {
+          name: "Ghostwriter do standup",
+          tagline: "Sua atualização de standup, redigida a partir do trabalho de ontem.",
+          prompt:
+            "Redija minha atualização de standup com base nos commits de ontem, pull requests mesclados e threads de revisão em aberto. Máximo de três tópicos: feito, fazendo, bloqueado.",
+        },
+        hackerNewsScout: {
+          name: "Explorador do Hacker News",
+          tagline: "Três links que valem seu café, com opiniões quentes.",
+          prompt:
+            "Escaneie a página inicial do Hacker News de hoje em busca de posts sobre agentes de IA, ferramentas para desenvolvedores e TypeScript. Envie-me os três links mais interessantes, cada um com uma opinião direta em uma linha.",
+        },
+        dependencyRadar: {
+          name: "Radar de dependências",
+          tagline: "Dependências desatualizadas ou vulneráveis, com notas de atualização.",
+          prompt:
+            "Verifique meu projeto principal em busca de dependências desatualizadas ou vulneráveis. Liste as atualizações relevantes com uma nota de risco em uma linha cada, e esboce o comando de atualização.",
+        },
+        watchdog: {
+          name: "Vigia noturno",
+          tagline: "Verificação de saúde a cada hora com um veredicto em uma linha.",
+          prompt:
+            "Verifique se meus serviços e gateway estão saudáveis: analise logs recentes em busca de novos erros, reinicializações ou carga incomum. Responda com uma linha curta confirmando que tudo está bem quando estiver; se algo parecer quebrado, informe o que falhou e por onde começar a investigar.",
+        },
+        polyglotMinute: {
+          name: "Minuto poliglota",
+          tagline: "Uma frase estrangeira útil com seu café da manhã.",
+          prompt:
+            "Me ensine uma frase útil em japonês: a frase, como pronunciá-la, seu significado literal e quando usá-la. Mantenha em até cinco linhas.",
+        },
+      },
     },
     summary: {
       enabled: "Ativado",

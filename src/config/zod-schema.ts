@@ -36,22 +36,19 @@ import {
   SessionSendPolicySchema,
 } from "./zod-schema.session.js";
 
+// zod@4 ships "sideEffects": false, so bundlers tree-shake the classic entry's
+// implicit config(en()) locale registration (zod/v4/classic/external.js) and a
+// built dist renders every issue as the bare "Invalid input" fallback. Register
+// the locale explicitly where the config schemas live; zod stores it on
+// globalThis, so one call covers every zod parse in the process.
+export function installZodDefaultLocale(): void {
+  z.config(z.locales.en());
+}
+installZodDefaultLocale();
+
 const BrowserSnapshotDefaultsSchema = z
   .object({
     mode: z.literal("efficient").optional(),
-  })
-  .strict()
-  .optional();
-
-const NodeHostSchema = z
-  .object({
-    browserProxy: z
-      .object({
-        enabled: z.boolean().optional(),
-        allowProfiles: z.array(z.string()).optional(),
-      })
-      .strict()
-      .optional(),
   })
   .strict()
   .optional();
@@ -385,7 +382,7 @@ const TalkSchema = z
     }
   });
 
-const McpServerSchema = z
+export const McpServerSchema = z
   .object({
     enabled: z.boolean().optional(),
     command: z.string().optional(),
@@ -474,6 +471,38 @@ const McpConfigSchema = z
   .object({
     servers: z.record(z.string(), McpServerSchema).optional(),
     sessionIdleTtlMs: z.number().finite().min(0).optional(),
+  })
+  .strict()
+  .optional();
+
+const NodeHostMcpServerNameSchema = z
+  .string()
+  .refine(
+    (value) => value.length > 0 && value === value.trim(),
+    "MCP server name must be non-empty and must not have surrounding whitespace",
+  );
+
+const NodeHostSchema = z
+  .object({
+    browserProxy: z
+      .object({
+        enabled: z.boolean().optional(),
+        allowProfiles: z.array(z.string()).optional(),
+      })
+      .strict()
+      .optional(),
+    mcp: z
+      .object({
+        servers: z.record(NodeHostMcpServerNameSchema, McpServerSchema).optional(),
+      })
+      .strict()
+      .optional(),
+    skills: z
+      .object({
+        enabled: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();
@@ -728,6 +757,7 @@ export const OpenClawSchema = z
     audit: z
       .object({
         enabled: z.boolean().optional(),
+        messages: z.union([z.literal("off"), z.literal("direct"), z.literal("all")]).optional(),
       })
       .strict()
       .optional(),
@@ -1415,6 +1445,18 @@ export const OpenClawSchema = z
               })
               .strict()
               .optional(),
+            pluginTools: z
+              .object({
+                enabled: z.boolean().optional(),
+              })
+              .strict()
+              .optional(),
+            skills: z
+              .object({
+                enabled: z.boolean().optional(),
+              })
+              .strict()
+              .optional(),
             allowCommands: z.array(z.string()).optional(),
             denyCommands: z.array(z.string()).optional(),
           })
@@ -1570,8 +1612,7 @@ export const OpenClawSchema = z
       if (!Array.isArray(ids)) {
         continue;
       }
-      for (let idx = 0; idx < ids.length; idx += 1) {
-        const agentId = ids[idx];
+      for (const [idx, agentId] of ids.entries()) {
         if (!agentIds.has(agentId)) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,

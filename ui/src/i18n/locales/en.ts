@@ -168,16 +168,6 @@ export const en: TranslationMap = {
       node: "Node",
     },
   },
-  instances: {
-    title: "Connected Instances",
-    subtitle: "Presence beacons from the gateway and clients.",
-    showHosts: "Show hosts and IPs",
-    hideHosts: "Hide hosts and IPs",
-    toggleHostVisibility: "Toggle host visibility",
-    noInstances: "No instances reported yet.",
-    lastInput: "Last input {time}",
-    reason: "Reason {reason}",
-  },
   worktrees: {
     newWorktree: "New worktree",
     owner: "Owner",
@@ -387,6 +377,7 @@ export const en: TranslationMap = {
       skills: "Skills",
       channels: "Channels",
       cronJobs: "Cron Jobs",
+      memory: "Memory",
     },
     context: {
       title: "Agent Context",
@@ -482,6 +473,7 @@ export const en: TranslationMap = {
     noEvents: "No events yet.",
   },
   quickSettings: {
+    language: "Language",
     appearance: {
       lobsterVisits: "Lobster visits",
       lobsterVisitsOn: "Drops by occasionally",
@@ -519,6 +511,47 @@ export const en: TranslationMap = {
       severity: "Severity",
       plugin: "Plugin",
     },
+  },
+  approvalPage: {
+    brandName: "OpenClaw",
+    eyebrow: "Operator approval",
+    loadingTitle: "Loading approval",
+    loadingDescription: "Checking the current approval state with the Gateway.",
+    unavailableTitle: "Approval unavailable",
+    unavailableDescription:
+      "This approval could not be found or this device is not authorized to review it.",
+    connectionErrorTitle: "Connection interrupted",
+    connectionErrorDescription:
+      "OpenClaw cannot confirm or record a decision while disconnected. Reconnect to check the current status.",
+    retry: "Retry",
+    execTitle: "Command approval",
+    pending: "Waiting for your decision",
+    pendingDescription: "Review the request carefully. The first answer from any surface wins.",
+    approvedHere: "Approved here",
+    deniedHere: "Denied here",
+    resolvedElsewhere: "Resolved elsewhere",
+    resolvedElsewhereDescription:
+      "Another surface or an earlier attempt recorded the decision first.",
+    approved: "Approved",
+    denied: "Denied",
+    expired: "Expired",
+    cancelled: "Cancelled",
+    allowedOnceDescription: "The operation was approved for this request only.",
+    allowedAlwaysDescription: "The operation was approved with the always-allow decision.",
+    deniedDescription: "The operation was denied and will not continue.",
+    expiredDescription: "No decision arrived before the deadline, so the operation was denied.",
+    cancelledDescription: "The requesting run ended before a decision could be used.",
+    summaryLabel: "Summary",
+    commandLabel: "Command",
+    requestLabel: "Request details",
+    nodeLabel: "Node",
+    toolLabel: "Tool",
+    expiresLabel: "Expires",
+    resolvedLabel: "Resolved",
+    actionsLabel: "Approval decisions",
+    resolvingDecision: "Recording {decision}…",
+    safeToClose: "The decision is recorded. You can close this page.",
+    openControlUi: "Open Control UI",
   },
   agentTools: {
     connectedSource: "Connected: {id}",
@@ -617,11 +650,10 @@ export const en: TranslationMap = {
   tabs: {
     agents: "Agents",
     activity: "Activity",
-    overview: "Overview",
     workboard: "Workboard",
     worktrees: "Worktrees",
     channels: "Channels",
-    instances: "Instances",
+    connection: "Connection",
     sessions: "Sessions",
     usage: "Usage",
     cron: "Cron Jobs",
@@ -629,7 +661,7 @@ export const en: TranslationMap = {
     skills: "Skills",
     plugins: "Plugins",
     skillWorkshop: "Skill Workshop",
-    nodes: "Nodes",
+    nodes: "Devices",
     chat: "Chat",
     config: "Config",
     profile: "Profile",
@@ -643,17 +675,15 @@ export const en: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "Debug",
     logs: "Logs",
-    dreams: "Dreaming",
     plugin: "Plugin",
   },
   subtitles: {
     agents: "Workspaces, tools, identities.",
     activity: "Browser-local tool activity summaries.",
-    overview: "Status, entry points, health.",
     workboard: "Agent work queue and session handoff.",
     worktrees: "Isolated agent task checkouts and recovery snapshots.",
     channels: "Channels and settings.",
-    instances: "Connected clients and nodes.",
+    connection: "Gateway endpoint, credentials, and handshake status.",
     sessions: "Active sessions and defaults.",
     usage: "API usage and costs.",
     cron: "Wakeups and recurring runs.",
@@ -661,7 +691,7 @@ export const en: TranslationMap = {
     skills: "Skills and API keys.",
     plugins: "Install and manage optional capabilities.",
     skillWorkshop: "Review, refine, and apply proposals before they become live skills.",
-    nodes: "Paired devices and commands.",
+    nodes: "Paired devices, live connections, and commands.",
     chat: "Gateway chat for quick interventions.",
     config: "Edit openclaw.json.",
     profile: "Your agent's stats, streaks, and life in the reef.",
@@ -675,8 +705,10 @@ export const en: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "Snapshots, events, RPC.",
     logs: "Live gateway logs.",
-    dreams: "Memory dreaming, consolidation, and reflection.",
     plugin: "Plugin-provided panel.",
+  },
+  mcpPage: {
+    manageServersLink: "Manage servers on the Plugins page.",
   },
   pluginsPage: {
     searchLabel: "Search plugins",
@@ -938,93 +970,6 @@ export const en: TranslationMap = {
     unavailableTitle: "Plugin panel unavailable",
     unavailableSubtitle:
       "The plugin that owns this tab is not active on the connected gateway, or it did not provide a panel.",
-  },
-  codexSessions: {
-    eyebrow: "Codex fleet",
-    title: "Sessions across your computers",
-    interactiveSubtitle:
-      "Read paginated Codex transcripts from every connected computer, start a Codex-controlled Chat branch, or archive eligible local sessions.",
-    summaryLabel: "Codex session summary",
-    summary: {
-      sessions: "sessions",
-      onlineHosts: "online",
-      hosts: "hosts",
-    },
-    searchLabel: "Search Codex sessions",
-    searchPlaceholder: "Search session titles",
-    refresh: "Refresh",
-    disconnected: "Reconnect to the gateway to refresh Codex sessions.",
-    partial: "Unavailable hosts: {count}. Other hosts remain available.",
-    loading: "Loading Codex sessions…",
-    loadMore: "Load more",
-    loadingMore: "Loading…",
-    untitled: "Untitled Codex session",
-    threadId: "Thread",
-    actions: {
-      continue: "Continue",
-      continueAsBranch: "Continue as branch",
-      openChat: "Open Chat",
-      continuing: "Continuing…",
-      archive: "Archive",
-      readTranscript: "Read",
-      readTranscriptLabel: "Read transcript for {title}",
-      continueLabel: "Continue {title}",
-      continueAsBranchLabel: "Continue {title} as a branch",
-      openChatLabel: "Open Chat for {title}",
-      continueAsBranchHint:
-        "Create a Chat from persisted visible history. On your first message, Codex App Server selects the model and provider for the new harness thread. Later selection remains Codex-controlled; OpenClaw never substitutes another runtime, model, or fallback. The source remains untouched, and in-flight work may be absent.",
-      archiveLabel: "Archive {title}",
-      archiveConfirmation:
-        "Archive {title} and any spawned descendants? Confirm that no other Codex client or OpenClaw runner is using them. Archiving while another runner is active may interrupt its work.",
-      active: "Active sessions cannot start a branch or be archived.",
-      archiveActivityUnknownHint:
-        "Activity is unknown because status is process-local. Archive only after confirming that no other Codex client or runner is using this session.",
-      statusUnavailable: "This Codex session cannot be managed in its current state.",
-      hostOffline: "Reconnect this computer before managing its Codex sessions.",
-      gatewayOffline: "Reconnect to the gateway before managing Codex sessions.",
-      remoteReadOnly: "Transcript available; continue and archive stay on the owning computer.",
-    },
-    status: {
-      active: "Active",
-      idle: "Idle",
-      archived: "Archived",
-      storedActivityUnknown: "Stored / activity unknown",
-      systemError: "System error",
-      unknown: "Unknown",
-    },
-    host: {
-      gateway: "Gateway",
-      node: "Node",
-      connected: "Connected",
-      offline: "Offline",
-      unavailable: "Session catalog unavailable",
-      sessionCount: "{count} shown",
-    },
-    empty: {
-      title: "No Codex hosts found",
-      supervisionSubtitle:
-        "Enable Codex supervision on the gateway or a paired computer, then refresh this view.",
-      search: "No sessions on this host match your search.",
-      nonArchived: "No non-archived sessions on this host.",
-    },
-    sidebar: {
-      title: "Codex sessions",
-      unavailable: "Codex sessions unavailable",
-      viewAll: "View all Codex sessions",
-      truncated: "More sessions are available in the full catalog.",
-    },
-    transcript: {
-      eyebrow: "Codex transcript",
-      back: "All Codex sessions",
-      you: "You",
-      reasoning: "Reasoning",
-      command: "Command",
-      fileChange: "File change",
-      item: "Codex item",
-      details: "Full details",
-      loading: "Loading transcript…",
-      loadMore: "Load older transcript items",
-    },
   },
   logbook: {
     duration: {
@@ -1379,7 +1324,11 @@ export const en: TranslationMap = {
     eventUnarchived: "Unarchived",
     eventStale: "Stale session",
   },
-  overview: {
+  connection: {
+    lostTitle: "Gateway connection lost",
+    reconnecting: "Reconnecting…",
+    offlineHint: "Live updates and actions are paused until the connection returns.",
+    retryNow: "Retry now",
     access: {
       title: "Gateway Access",
       subtitle: "Where the dashboard connects and how it authenticates.",
@@ -1388,7 +1337,6 @@ export const en: TranslationMap = {
       password: "Password (not stored)",
       passwordPlaceholder: "system or shared password",
       sessionKey: "Default Session Key",
-      language: "Language",
       connectHint: "Click Connect to apply connection changes.",
       trustedProxy: "Authenticated via trusted proxy.",
       showToken: "Show token",
@@ -1405,134 +1353,52 @@ export const en: TranslationMap = {
       uptime: "Uptime",
       tickInterval: "Tick Interval",
       lastChannelsRefresh: "Last Channels Refresh",
-      channelsHint: "Use Channels to link WhatsApp, Telegram, Discord, Signal, or iMessage.",
     },
-    stats: {
-      instances: "Instances",
-      instancesHint: "Presence beacons in the last 5 minutes.",
-      sessions: "Sessions",
-      sessionsHint: "Recent session keys tracked by the gateway.",
-      cron: "Cron",
-      cronNext: "Next wake {time}",
-    },
-    notes: {
-      title: "Notes",
-      subtitle: "Quick reminders for remote control setups.",
-      tailscaleTitle: "Tailscale serve",
-      tailscaleText: "Prefer serve mode to keep the gateway on loopback with tailnet auth.",
-      sessionTitle: "Session hygiene",
-      sessionText: "Use /new or sessions.patch to reset context.",
-      cronTitle: "Cron reminders",
-      cronText: "Use isolated sessions for recurring runs.",
-    },
-    auth: {
-      required: "This gateway requires auth. Add a token or password, then click Connect.",
-      failed:
-        "Auth failed. Re-copy a tokenized URL with {command}, or update the token, then click Connect.",
-    },
-    pairing: {
-      hint: "This device needs pairing approval from the gateway host.",
-      scopeUpgradeTitle: "Scope upgrade pending approval.",
-      scopeUpgradeSummary:
-        "This device is already paired, but the requested wider scope is waiting for approval.",
-      roleUpgradeTitle: "Role upgrade pending approval.",
-      roleUpgradeSummary:
-        "This device is already paired, but the requested role change is waiting for approval.",
-      metadataUpgradeTitle: "Device metadata change pending approval.",
-      metadataUpgradeSummary:
-        "This device is already paired, but the metadata change is waiting for approval.",
-      mobileHint:
-        "On mobile? Copy the full URL (including #token=...) from openclaw dashboard --no-open on your desktop.",
-      docsTitle: "Device pairing docs (opens in new tab)",
-      docsLink: "Docs: Device pairing",
-    },
-    insecure: {
-      hint: "This page is HTTP, so the browser blocks device identity. Use HTTPS (Tailscale Serve) or open {url} on the gateway host.",
-      stayHttp: "If you must stay on HTTP, set {config} (token-only).",
-    },
-    connection: {
+    help: {
       title: "How to connect",
       step1: "Start the gateway on your host machine:",
       step2: "Get a tokenized dashboard URL:",
       step3: "Paste the WebSocket URL and token above, or open the tokenized URL directly.",
-      step4: "Or generate a reusable token:",
-      docsHint: "For remote access, Tailscale Serve is recommended. ",
       docsLink: "Read the docs →",
-      authDocsTitle: "Control UI auth docs (opens in new tab)",
-      authDocsLink: "Docs: Control UI auth",
-      tailscaleDocsTitle: "Tailscale Serve docs (opens in new tab)",
-      tailscaleDocsLink: "Docs: Tailscale Serve",
-      insecureHttpDocsTitle: "Insecure HTTP docs (opens in new tab)",
-      insecureHttpDocsLink: "Docs: Insecure HTTP",
       copyCommand: "Copy command",
       copyCommandAria: "Copy command: {command}",
     },
-    cards: {
-      cost: "Cost",
+  },
+  attention: {
+    cronFailed: "{count} cron job(s) failed",
+    cronOverdue: "{count} cron job(s) overdue",
+    modelAuthExpired: "Model auth expired: {providers}",
+    modelAuthExpiring: "Model auth expiring: {providers}",
+  },
+  palette: {
+    placeholder: "Search chats and commands…",
+    noResults: "No results",
+    categories: {
+      search: "Search",
+      navigation: "Navigation",
       skills: "Skills",
-      recentSessions: "Recent Sessions",
-      modelAuth: "Model Auth",
-      modelAuthOk: "{count} ok",
-      modelAuthExpired: "{count} expired",
-      modelAuthExpiring: "{count} expiring",
-      modelAuthProviders: "{count} providers",
-      modelAuthUsageLeft: "{pct}% left",
-      modelAuthExpiresIn: "expires {when}",
-      modelAuthAttentionExpiredTitle: "Model auth expired",
-      modelAuthAttentionExpiringTitle: "Model auth expiring soon",
-      modelAuthAttentionExpiredDesc: "{providers} — re-authenticate with openclaw models auth",
-      modelAuthAttentionExpiringEntry: "{provider} ({when})",
     },
-    attention: {
-      title: "Attention",
+    items: {
+      sessions: "Sessions",
+      scheduled: "Scheduled",
+      skills: "Skills",
+      plugins: "Plugins",
+      settings: "Settings",
+      agents: "Agents",
+      shellCommand: "Shell Command",
+      debugMode: "Debug Mode",
     },
-    eventLog: {
-      title: "Event Log",
+    descriptions: {
+      shellCommand: "Run shell",
+      debugMode: "Toggle debug",
     },
-    logTail: {
-      title: "Gateway Logs",
-    },
-    quickActions: {
-      newSession: "New Session",
-      automation: "Automation",
-      refreshAll: "Refresh All",
-      terminal: "Terminal",
-    },
-    palette: {
-      placeholder: "Search chats and commands…",
-      noResults: "No results",
-      categories: {
-        search: "Search",
-        navigation: "Navigation",
-        skills: "Skills",
-      },
-      items: {
-        overview: "Overview",
-        sessions: "Sessions",
-        scheduled: "Scheduled",
-        skills: "Skills",
-        plugins: "Plugins",
-        settings: "Settings",
-        agents: "Agents",
-        shellCommand: "Shell Command",
-        debugMode: "Debug Mode",
-      },
-      descriptions: {
-        shellCommand: "Run shell",
-        debugMode: "Toggle debug",
-      },
-      footer: {
-        navigate: "navigate",
-        select: "select",
-        close: "close",
-      },
+    footer: {
+      navigate: "navigate",
+      select: "select",
+      close: "close",
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "Agent",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "Scene",
       diary: "Diary",
@@ -2033,15 +1899,14 @@ export const en: TranslationMap = {
       },
     },
   },
-  connection: {
-    lostTitle: "Gateway connection lost",
-    reconnecting: "Reconnecting…",
-    offlineHint: "Live updates and actions are paused until the connection returns.",
-    retryNow: "Retry now",
-  },
   chat: {
     disconnected: "Disconnected from gateway.",
     archivedSessionDisabled: "Restore this session to send messages.",
+    loadOlder: "Load older",
+    catalog: {
+      remoteViewOnly: "This session is on a paired node and is view-only.",
+      unsupportedViewOnly: "This external session source is view-only.",
+    },
     taskSuggestions: {
       eyebrow: "Suggested follow-up",
       start: "Start in worktree",
@@ -2120,9 +1985,9 @@ export const en: TranslationMap = {
       workSessions: "Work",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "Recent chats",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",
@@ -2288,6 +2153,8 @@ export const en: TranslationMap = {
       finished: "Finished ({count})",
       stopTask: "Stop {title}",
       viewTranscript: "View transcript",
+      toolUseOne: "1 tool use",
+      toolUseMany: "{count} tool uses",
     },
     sessionDiff: {
       title: "Changes",
@@ -2427,6 +2294,50 @@ export const en: TranslationMap = {
       howHeading: "How should it work?",
       howHint: "Choose how results are delivered.",
       title: "New Cron Job",
+      createAndRun: "Create & run now",
+    },
+    suggestions: {
+      title: "Automation ideas",
+      hint: "Starter automations — pick one and tweak it before creating.",
+      use: "Use idea →",
+      ideas: {
+        repoPulse: {
+          name: "Repo pulse",
+          tagline: "Overnight issues, PRs, and CI failures, ranked by urgency.",
+          prompt:
+            "Review overnight activity in my repositories: new issues, pull requests, and CI failures. Summarize the three things that most need my attention today, each with a link and a one-line reason.",
+        },
+        standupGhostwriter: {
+          name: "Standup ghostwriter",
+          tagline: "Your standup update, drafted from yesterday's work.",
+          prompt:
+            "Draft my standup update from yesterday's commits, merged pull requests, and open review threads. Three bullets max: done, doing, blocked.",
+        },
+        hackerNewsScout: {
+          name: "Hacker News scout",
+          tagline: "Three links worth your coffee, with hot takes.",
+          prompt:
+            "Scan today's Hacker News front page for posts about AI agents, developer tooling, and TypeScript. Send me the three most interesting links, each with a one-line hot take.",
+        },
+        dependencyRadar: {
+          name: "Dependency radar",
+          tagline: "Outdated or vulnerable dependencies, with upgrade notes.",
+          prompt:
+            "Check my main project for outdated or vulnerable dependencies. List the notable updates with a one-line risk note each, and draft the upgrade command.",
+        },
+        watchdog: {
+          name: "Night watch",
+          tagline: "Hourly health check with a one-line verdict.",
+          prompt:
+            "Check that my services and gateway are healthy: scan recent logs for new errors, restarts, or unusual load. Reply with a single short all-clear line when everything is fine; if something looks broken, report what failed and where to start looking.",
+        },
+        polyglotMinute: {
+          name: "Polyglot minute",
+          tagline: "One useful foreign phrase with your morning coffee.",
+          prompt:
+            "Teach me one useful phrase in Japanese: the phrase, how to pronounce it, its literal meaning, and when to use it. Keep it under five lines.",
+        },
+      },
     },
     summary: {
       enabled: "Enabled",

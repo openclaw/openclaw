@@ -172,16 +172,6 @@ export const tr: TranslationMap = {
       node: "Düğüm",
     },
   },
-  instances: {
-    title: "Bağlı Örnekler",
-    subtitle: "Gateway ve istemcilerden gelen varlık işaretçileri.",
-    showHosts: "Ana bilgisayarları ve IP'leri göster",
-    hideHosts: "Ana bilgisayarları ve IP'leri gizle",
-    toggleHostVisibility: "Ana bilgisayar görünürlüğünü değiştir",
-    noInstances: "Henüz bildirilmiş örnek yok.",
-    lastInput: "Son giriş {time}",
-    reason: "Neden {reason}",
-  },
   worktrees: {
     newWorktree: "Yeni worktree",
     owner: "Sahip",
@@ -393,6 +383,7 @@ export const tr: TranslationMap = {
       skills: "Skills",
       channels: "Kanallar",
       cronJobs: "Cron İşleri",
+      memory: "Bellek",
     },
     context: {
       title: "Agent Context",
@@ -488,6 +479,7 @@ export const tr: TranslationMap = {
     noEvents: "No events yet.",
   },
   quickSettings: {
+    language: "Dil",
     appearance: {
       lobsterVisits: "Istakoz ziyaretleri",
       lobsterVisitsOn: "Ara sıra uğrar",
@@ -525,6 +517,47 @@ export const tr: TranslationMap = {
       severity: "Severity",
       plugin: "Plugin",
     },
+  },
+  approvalPage: {
+    brandName: "OpenClaw",
+    eyebrow: "Operator approval",
+    loadingTitle: "Loading approval",
+    loadingDescription: "Checking the current approval state with the Gateway.",
+    unavailableTitle: "Approval unavailable",
+    unavailableDescription:
+      "This approval could not be found or this device is not authorized to review it.",
+    connectionErrorTitle: "Connection interrupted",
+    connectionErrorDescription:
+      "OpenClaw cannot confirm or record a decision while disconnected. Reconnect to check the current status.",
+    retry: "Retry",
+    execTitle: "Command approval",
+    pending: "Waiting for your decision",
+    pendingDescription: "Review the request carefully. The first answer from any surface wins.",
+    approvedHere: "Approved here",
+    deniedHere: "Denied here",
+    resolvedElsewhere: "Resolved elsewhere",
+    resolvedElsewhereDescription:
+      "Another surface or an earlier attempt recorded the decision first.",
+    approved: "Approved",
+    denied: "Denied",
+    expired: "Süresi doldu",
+    cancelled: "Cancelled",
+    allowedOnceDescription: "The operation was approved for this request only.",
+    allowedAlwaysDescription: "The operation was approved with the always-allow decision.",
+    deniedDescription: "The operation was denied and will not continue.",
+    expiredDescription: "No decision arrived before the deadline, so the operation was denied.",
+    cancelledDescription: "The requesting run ended before a decision could be used.",
+    summaryLabel: "Summary",
+    commandLabel: "Komut",
+    requestLabel: "Request details",
+    nodeLabel: "Düğüm",
+    toolLabel: "Tool",
+    expiresLabel: "Expires",
+    resolvedLabel: "Resolved",
+    actionsLabel: "Approval decisions",
+    resolvingDecision: "Recording {decision}…",
+    safeToClose: "The decision is recorded. You can close this page.",
+    openControlUi: "Open Control UI",
   },
   agentTools: {
     connectedSource: "Bağlı: {id}",
@@ -621,11 +654,10 @@ export const tr: TranslationMap = {
   tabs: {
     agents: "Aracılar",
     activity: "Etkinlik",
-    overview: "Genel Bakış",
     workboard: "Çalışma panosu",
     worktrees: "Worktree'ler",
     channels: "Kanallar",
-    instances: "Örnekler",
+    connection: "Bağlantı",
     sessions: "Oturumlar",
     usage: "Kullanım",
     cron: "Cron İşleri",
@@ -647,17 +679,15 @@ export const tr: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "Hata Ayıklama",
     logs: "Günlükler",
-    dreams: "Düşler",
     plugin: "Eklenti",
   },
   subtitles: {
     agents: "Çalışma alanları, araçlar, kimlikler.",
     activity: "Tarayıcıya yerel araç etkinliği özetleri.",
-    overview: "Durum, giriş noktaları, sağlık.",
     workboard: "Ajan iş kuyruğu ve oturum devri.",
     worktrees: "Yalıtılmış aracı görev checkout'ları ve kurtarma anlık görüntüleri.",
     channels: "Kanallar ve ayarlar.",
-    instances: "Bağlı istemciler ve düğümler.",
+    connection: "Gateway uç noktası, kimlik bilgileri ve el sıkışma durumu.",
     sessions: "Etkin oturumlar ve varsayılanlar.",
     usage: "API kullanımı ve maliyetler.",
     cron: "Uyandırmalar ve yinelenen çalıştırmalar.",
@@ -680,8 +710,10 @@ export const tr: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "Anlık görüntüler, olaylar, RPC.",
     logs: "Canlı Gateway günlükleri.",
-    dreams: "Uyku sırasında bellek birleştirme.",
     plugin: "Eklenti tarafından sağlanan panel.",
+  },
+  mcpPage: {
+    manageServersLink: "Eklentiler sayfasında sunucuları yönetin.",
   },
   pluginsPage: {
     searchLabel: "Eklentileri ara",
@@ -952,94 +984,6 @@ export const tr: TranslationMap = {
     unavailableTitle: "Plugin panel unavailable",
     unavailableSubtitle:
       "The plugin that owns this tab is not active on the connected gateway, or it did not provide a panel.",
-  },
-  codexSessions: {
-    eyebrow: "Codex filosu",
-    title: "Bilgisayarlarınızdaki oturumlar",
-    interactiveSubtitle:
-      "Model seçimi Codex App Server denetiminde kalan bir Chat dalı başlatın, uygun yerel oturumları onayla arşivleyin ve eşlenmiş bilgisayar oturumlarını görüntüleyin.",
-    summaryLabel: "Codex oturum özeti",
-    summary: {
-      sessions: "oturum",
-      onlineHosts: "çevrimiçi",
-      hosts: "ana makine",
-    },
-    searchLabel: "Codex oturumlarında ara",
-    searchPlaceholder: "Oturum başlıklarında ara",
-    refresh: "Yenile",
-    disconnected: "Codex oturumlarını yenilemek için Gateway'e yeniden bağlanın.",
-    partial:
-      "Kullanılamayan ana makine sayısı: {count}. Diğer ana makineler kullanılabilir durumda.",
-    loading: "Codex oturumları yükleniyor…",
-    loadMore: "Daha fazla yükle",
-    loadingMore: "Yükleniyor…",
-    untitled: "Başlıksız Codex oturumu",
-    threadId: "Konuşma",
-    actions: {
-      continue: "Devam et",
-      continueAsBranch: "Dal olarak devam et",
-      openChat: "Chat'i aç",
-      continuing: "Devam ediliyor…",
-      archive: "Arşivle",
-      readTranscript: "Okundu",
-      readTranscriptLabel: "{title} için dökümü oku",
-      continueLabel: "{title} ile devam et",
-      continueAsBranchLabel: "{title} ile dal olarak devam et",
-      openChatLabel: "{title} için Chat'i aç",
-      continueAsBranchHint:
-        "Kalıcı hale getirilmiş görünür geçmişten bir Chat oluşturun. İlk mesajınızda, Codex App Server yeni harness iş parçacığı için modeli ve sağlayıcıyı seçer. Sonraki seçimler Codex denetiminde kalır; OpenClaw hiçbir zaman başka bir çalışma zamanı, model veya yedek seçenekle değiştirme yapmaz. Kaynak dokunulmadan kalır ve devam eden çalışma eksik olabilir.",
-      archiveLabel: "{title} oturumunu arşivle",
-      archiveConfirmation:
-        "{title} ve ondan türetilen alt öğeler arşivlensin mi? Başka hiçbir Codex istemcisinin veya OpenClaw çalıştırıcısının bunları kullanmadığını onaylayın. Başka bir çalıştırıcı etkinken arşivleme yapmak çalışmasını kesintiye uğratabilir.",
-      active: "Etkin oturumlar dal başlatamaz veya arşivlenemez.",
-      archiveActivityUnknownHint:
-        "Durum sürece yerel olduğundan etkinlik bilinmiyor. Yalnızca başka hiçbir Codex istemcisinin veya çalıştırıcısının bu oturumu kullanmadığını onayladıktan sonra arşivleyin.",
-      statusUnavailable: "Bu Codex oturumu mevcut durumunda yönetilemez.",
-      hostOffline: "Codex oturumlarını yönetmeden önce bu bilgisayarı yeniden bağlayın.",
-      gatewayOffline: "Codex oturumlarını yönetmeden önce gateway'e yeniden bağlanın.",
-      remoteReadOnly: "Eşleştirilmiş bilgisayar oturumları şimdilik yalnızca görüntülenebilir.",
-    },
-    status: {
-      active: "Etkin",
-      idle: "Boşta",
-      archived: "Arşivlenmiş",
-      storedActivityUnknown: "Saklandı / etkinlik bilinmiyor",
-      systemError: "Sistem hatası",
-      unknown: "Bilinmiyor",
-    },
-    host: {
-      gateway: "Gateway",
-      node: "Düğüm",
-      connected: "Bağlı",
-      offline: "Çevrimdışı",
-      unavailable: "Oturum kataloğu kullanılamıyor",
-      sessionCount: "{count} gösteriliyor",
-    },
-    empty: {
-      title: "Codex ana makinesi bulunamadı",
-      supervisionSubtitle:
-        "Gateway’de veya eşleştirilmiş bir bilgisayarda Codex denetimini etkinleştirin, ardından bu görünümü yenileyin.",
-      search: "Bu ana makinedeki hiçbir oturum aramanızla eşleşmiyor.",
-      nonArchived: "Bu ana makinede arşivlenmemiş oturum yok.",
-    },
-    sidebar: {
-      title: "Codex oturumları",
-      unavailable: "Codex oturumları kullanılamıyor",
-      viewAll: "Tüm Codex oturumlarını görüntüle",
-      truncated: "Tam katalogda daha fazla oturum mevcut.",
-    },
-    transcript: {
-      eyebrow: "Codex dökümü",
-      back: "Tüm Codex oturumları",
-      you: "Siz",
-      reasoning: "Gerekçelendirme",
-      command: "Komut",
-      fileChange: "Dosya değişikliği",
-      item: "Codex öğesi",
-      details: "Tüm ayrıntılar",
-      loading: "Döküm yükleniyor…",
-      loadMore: "Daha eski döküm öğelerini yükle",
-    },
   },
   logbook: {
     duration: {
@@ -1394,165 +1338,82 @@ export const tr: TranslationMap = {
     eventUnarchived: "Arşivden çıkarıldı",
     eventStale: "Eski oturum",
   },
-  overview: {
+  connection: {
+    lostTitle: "Gateway bağlantısı kesildi",
+    reconnecting: "Yeniden bağlanıyor…",
+    offlineHint: "Bağlantı geri gelene kadar canlı güncellemeler ve işlemler duraklatıldı.",
+    retryNow: "Şimdi yeniden dene",
     access: {
       title: "Gateway Erişimi",
-      subtitle: "Kontrol panelinin nereye bağlandığı ve nasıl kimlik doğruladığı.",
+      subtitle: "Kontrol panelinin nereye bağlandığı ve kimliğini nasıl doğruladığı.",
       wsUrl: "WebSocket URL'si",
-      token: "Gateway Token",
+      token: "Gateway Belirteci",
       password: "Parola (saklanmaz)",
       passwordPlaceholder: "sistem veya paylaşılan parola",
       sessionKey: "Varsayılan Oturum Anahtarı",
-      language: "Dil",
       connectHint: "Bağlantı değişikliklerini uygulamak için Bağlan'a tıklayın.",
-      trustedProxy: "Güvenilir proxy üzerinden kimlik doğrulandı.",
-      showToken: "Tokenı göster",
-      hideToken: "Token'ı gizle",
-      toggleTokenVisibility: "Token görünürlüğünü değiştir",
+      trustedProxy: "Güvenilir proxy aracılığıyla kimlik doğrulandı.",
+      showToken: "Belirteci göster",
+      hideToken: "Belirteci gizle",
+      toggleTokenVisibility: "Belirteç görünürlüğünü değiştir",
       showPassword: "Parolayı göster",
       hidePassword: "Parolayı gizle",
       togglePasswordVisibility: "Parola görünürlüğünü değiştir",
     },
     snapshot: {
       title: "Anlık Görüntü",
-      subtitle: "En son gateway el sıkışma bilgileri.",
+      subtitle: "En son Gateway el sıkışma bilgileri.",
       status: "Durum",
       uptime: "Çalışma Süresi",
-      tickInterval: "Tick Aralığı",
-      lastChannelsRefresh: "Son Kanal Yenilemesi",
-      channelsHint:
-        "WhatsApp, Telegram, Discord, Signal veya iMessage bağlamak için Kanallar'ı kullanın.",
+      tickInterval: "Tik Aralığı",
+      lastChannelsRefresh: "Son Kanal Yenileme",
     },
-    stats: {
-      instances: "Örnekler",
-      instancesHint: "Son 5 dakikadaki varlık işaretçileri.",
-      sessions: "Oturumlar",
-      sessionsHint: "Gateway tarafından izlenen son oturum anahtarları.",
-      cron: "Cron",
-      cronNext: "Sonraki uyandırma {time}",
-    },
-    notes: {
-      title: "Notlar",
-      subtitle: "Uzaktan kontrol kurulumları için hızlı hatırlatmalar.",
-      tailscaleTitle: "Tailscale serve",
-      tailscaleText:
-        "Gateway’i tailnet kimlik doğrulamasıyla loopback üzerinde tutmak için serve modunu tercih edin.",
-      sessionTitle: "Oturum hijyeni",
-      sessionText: "Bağlamı sıfırlamak için /new veya sessions.patch kullanın.",
-      cronTitle: "Cron hatırlatmaları",
-      cronText: "Yinelenen çalıştırmalar için yalıtılmış oturumlar kullanın.",
-    },
-    auth: {
-      required:
-        "Bu Gateway kimlik doğrulama gerektiriyor. Bir token veya parola ekleyin, ardından Bağlan'a tıklayın.",
-      failed:
-        "Kimlik doğrulama başarısız oldu. {command} ile token içeren URL'yi yeniden kopyalayın veya token'ı güncelleyin, ardından Bağlan'a tıklayın.",
-    },
-    pairing: {
-      hint: "Bu cihazın Gateway ana bilgisayarından eşleştirme onayı alması gerekiyor.",
-      scopeUpgradeTitle: "Kapsam yükseltmesi onay bekliyor.",
-      scopeUpgradeSummary:
-        "Bu cihaz zaten eşleştirilmiş, ancak istenen daha geniş kapsam onay bekliyor.",
-      roleUpgradeTitle: "Rol yükseltmesi onay bekliyor.",
-      roleUpgradeSummary:
-        "Bu cihaz zaten eşleştirilmiş, ancak istenen rol değişikliği onay bekliyor.",
-      metadataUpgradeTitle: "Cihaz meta veri değişikliği onay bekliyor.",
-      metadataUpgradeSummary:
-        "Bu cihaz zaten eşleştirilmiş, ancak meta veri değişikliği onay bekliyor.",
-      mobileHint:
-        "Mobilde misiniz? Masaüstünüzde openclaw dashboard --no-open komutundan tam URL'yi (#token=... dahil) kopyalayın.",
-      docsTitle: "Cihaz eşleştirme belgeleri (yeni sekmede açılır)",
-      docsLink: "Belgeler: Cihaz eşleştirme",
-    },
-    insecure: {
-      hint: "Bu sayfa HTTP olduğu için tarayıcı cihaz kimliğini engelliyor. HTTPS (Tailscale Serve) kullanın veya Gateway ana bilgisayarında {url} adresini açın.",
-      stayHttp: "HTTP kullanmaya devam etmeniz gerekiyorsa, {config} ayarlayın (yalnızca token).",
-    },
-    connection: {
+    help: {
       title: "Nasıl bağlanılır",
-      step1: "Ana bilgisayarınızda Gateway’i başlatın:",
-      step2: "Token içeren bir kontrol paneli URL'si alın:",
+      step1: "Ana makinenizde Gateway'i başlatın:",
+      step2: "Token içeren bir pano URL'si alın:",
       step3:
-        "Yukarıya WebSocket URL'sini ve token'ı yapıştırın veya token içeren URL'yi doğrudan açın.",
-      step4: "Ya da yeniden kullanılabilir bir token oluşturun:",
-      docsHint: "Uzaktan erişim için Tailscale Serve önerilir. ",
-      docsLink: "Dokümanları oku →",
-      authDocsTitle: "Control UI kimlik doğrulama belgeleri (yeni sekmede açılır)",
-      authDocsLink: "Belgeler: Control UI kimlik doğrulama",
-      tailscaleDocsTitle: "Tailscale Serve belgeleri (yeni sekmede açılır)",
-      tailscaleDocsLink: "Belgeler: Tailscale Serve",
-      insecureHttpDocsTitle: "Güvenli olmayan HTTP belgeleri (yeni sekmede açılır)",
-      insecureHttpDocsLink: "Belgeler: Güvenli olmayan HTTP",
+        "WebSocket URL'sini ve token'ı yukarıya yapıştırın veya token içeren URL'yi doğrudan açın.",
+      docsLink: "Belgeleri okuyun →",
       copyCommand: "Komutu kopyala",
       copyCommandAria: "Komutu kopyala: {command}",
     },
-    cards: {
-      cost: "Maliyet",
+  },
+  attention: {
+    cronFailed: "{count} cron görevi başarısız oldu",
+    cronOverdue: "{count} cron görevinin süresi geçti",
+    modelAuthExpired: "Model kimlik doğrulamasının süresi doldu: {providers}",
+    modelAuthExpiring: "Model kimlik doğrulamasının süresi dolmak üzere: {providers}",
+  },
+  palette: {
+    placeholder: "Sohbetlerde ve komutlarda ara…",
+    noResults: "Sonuç yok",
+    categories: {
+      search: "Ara",
+      navigation: "Gezinme",
       skills: "Skills",
-      recentSessions: "Son Oturumlar",
-      modelAuth: "Model Kimlik Doğrulaması",
-      modelAuthOk: "{count} tamam",
-      modelAuthExpired: "{count} süresi dolmuş",
-      modelAuthExpiring: "{count} süresi yakında dolacak",
-      modelAuthProviders: "{count} sağlayıcı",
-      modelAuthUsageLeft: "%{pct} kaldı",
-      modelAuthExpiresIn: "{when} süresi doluyor",
-      modelAuthAttentionExpiredTitle: "Model kimlik doğrulamasının süresi doldu",
-      modelAuthAttentionExpiringTitle: "Model kimlik doğrulamasının süresi yakında dolacak",
-      modelAuthAttentionExpiredDesc:
-        "{providers} — openclaw models auth ile yeniden kimlik doğrulayın",
-      modelAuthAttentionExpiringEntry: "{provider} ({when})",
     },
-    attention: {
-      title: "Dikkat",
+    items: {
+      sessions: "Oturumlar",
+      scheduled: "Zamanlanmış",
+      skills: "Skills",
+      plugins: "Eklentiler",
+      settings: "Ayarlar",
+      agents: "Ajanlar",
+      shellCommand: "Kabuk Komutu",
+      debugMode: "Hata Ayıklama Modu",
     },
-    eventLog: {
-      title: "Olay Günlüğü",
+    descriptions: {
+      shellCommand: "Kabuğu çalıştır",
+      debugMode: "Hata ayıklamayı aç/kapat",
     },
-    logTail: {
-      title: "Gateway Günlükleri",
-    },
-    quickActions: {
-      newSession: "Yeni Oturum",
-      automation: "Otomasyon",
-      refreshAll: "Tümünü Yenile",
-      terminal: "Terminal",
-    },
-    palette: {
-      placeholder: "Bir komut yazın…",
-      noResults: "Sonuç yok",
-      categories: {
-        search: "Ara",
-        navigation: "Navigation",
-        skills: "Skills",
-      },
-      items: {
-        overview: "Genel Bakış",
-        sessions: "Oturumlar",
-        scheduled: "Zamanlanmış",
-        skills: "Skills",
-        plugins: "Eklentiler",
-        settings: "Ayarlar",
-        agents: "Aracılar",
-        shellCommand: "Shell Komutu",
-        debugMode: "Hata Ayıklama Modu",
-      },
-      descriptions: {
-        shellCommand: "Shell çalıştır",
-        debugMode: "Hata ayıklamayı değiştir",
-      },
-      footer: {
-        navigate: "gezin",
-        select: "seç",
-        close: "kapat",
-      },
+    footer: {
+      navigate: "gezin",
+      select: "seç",
+      close: "kapat",
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "Aracı",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "Sahne",
       diary: "Günlük",
@@ -2060,15 +1921,14 @@ export const tr: TranslationMap = {
       },
     },
   },
-  connection: {
-    lostTitle: "Gateway bağlantısı kesildi",
-    reconnecting: "Yeniden bağlanıyor…",
-    offlineHint: "Bağlantı geri gelene kadar canlı güncellemeler ve işlemler duraklatıldı.",
-    retryNow: "Şimdi yeniden dene",
-  },
   chat: {
     disconnected: "Gateway bağlantısı kesildi.",
     archivedSessionDisabled: "Mesaj göndermek için bu oturumu geri yükleyin.",
+    loadOlder: "Daha eskileri yükle",
+    catalog: {
+      remoteViewOnly: "Bu oturum eşleştirilmiş bir düğümdedir ve yalnızca görüntülenebilir.",
+      unsupportedViewOnly: "Bu harici oturum kaynağı yalnızca görüntülenebilir.",
+    },
     taskSuggestions: {
       eyebrow: "Önerilen takip görevi",
       start: "Çalışma ağacında başlat",
@@ -2147,9 +2007,9 @@ export const tr: TranslationMap = {
       workSessions: "Çalışma",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "Son sohbetler",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",
@@ -2316,6 +2176,8 @@ export const tr: TranslationMap = {
       finished: "Tamamlandı ({count})",
       stopTask: "{title} öğesini durdur",
       viewTranscript: "Transkripti görüntüle",
+      toolUseOne: "1 araç kullanımı",
+      toolUseMany: "{count} araç kullanımı",
     },
     sessionDiff: {
       title: "Değişiklikler",
@@ -2456,6 +2318,50 @@ export const tr: TranslationMap = {
       howHeading: "Nasıl çalışmalı?",
       howHint: "Sonuçların nasıl iletileceğini seçin.",
       title: "Yeni Otomasyon",
+      createAndRun: "Oluştur ve şimdi çalıştır",
+    },
+    suggestions: {
+      title: "Otomasyon fikirleri",
+      hint: "Başlangıç otomasyonları — birini seçin ve oluşturmadan önce düzenleyin.",
+      use: "Fikri kullan →",
+      ideas: {
+        repoPulse: {
+          name: "Repo nabzı",
+          tagline: "Gece açılan sorunlar, PR'lar ve CI hataları, aciliyete göre sıralanmış.",
+          prompt:
+            "Depolarımdaki gece aktivitesini incele: yeni sorunlar, pull request'ler ve CI hataları. Bugün en çok dikkat etmem gereken üç şeyi özetle; her biri için bir bağlantı ve tek satırlık bir neden ekle.",
+        },
+        standupGhostwriter: {
+          name: "Standup yazarı",
+          tagline: "Dünkü çalışmalarınızdan hazırlanmış standup güncellemesi.",
+          prompt:
+            "Dünkü commit'lerimden, birleştirilen pull request'lerden ve açık inceleme başlıklarından standup güncellememi taslak olarak hazırla. En fazla üç madde: yapıldı, yapılıyor, engellendi.",
+        },
+        hackerNewsScout: {
+          name: "Hacker News kaşifi",
+          tagline: "Kahvenize değer üç bağlantı, sıcak yorumlarıyla.",
+          prompt:
+            "Bugünkü Hacker News ana sayfasını AI ajanları, geliştirici araçları ve TypeScript hakkındaki gönderiler için tara. En ilginç üç bağlantıyı, her biri için tek satırlık sıcak bir yorumla bana gönder.",
+        },
+        dependencyRadar: {
+          name: "Bağımlılık radarı",
+          tagline: "Güncel olmayan veya güvenlik açığı olan bağımlılıklar, güncelleme notlarıyla.",
+          prompt:
+            "Ana projemi güncel olmayan veya güvenlik açığı bulunan bağımlılıklar açısından kontrol et. Önemli güncellemeleri tek satırlık risk notu ile listele ve güncelleme komutunu taslak olarak hazırla.",
+        },
+        watchdog: {
+          name: "Gece nöbeti",
+          tagline: "Tek satırlık kararla saatlik sağlık kontrolü.",
+          prompt:
+            "Hizmetlerimin ve Gateway'imin sağlıklı olduğunu kontrol et: son günlükleri yeni hatalar, yeniden başlatmalar veya olağandışı yük için tara. Her şey yolundaysa tek bir kısa 'sorun yok' satırıyla yanıt ver; bir şey bozuk görünüyorsa neyin başarısız olduğunu ve nereden bakmaya başlanacağını bildir.",
+        },
+        polyglotMinute: {
+          name: "Poliglot dakikası",
+          tagline: "Sabah kahvenizle birlikte işe yarar bir yabancı dil ifadesi.",
+          prompt:
+            "Bana Japonca'da işe yarar bir ifade öğret: ifadeyi, nasıl telaffuz edileceğini, gerçek anlamını ve ne zaman kullanılacağını. Beş satırı geçmesin.",
+        },
+      },
     },
     summary: {
       enabled: "Etkin",

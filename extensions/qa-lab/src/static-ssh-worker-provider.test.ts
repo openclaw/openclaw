@@ -11,9 +11,11 @@ const KEY_REF = {
   provider: "default",
   id: "/cloud-workers/development/private-key",
 };
+const HOST_KEY = ["ssh-ed25519", "AAAA"].join(" ");
 const PROFILE = {
   host: "worker.example.test",
   user: "openclaw",
+  hostKey: HOST_KEY,
   keyRef: KEY_REF,
 };
 
@@ -23,6 +25,7 @@ describe("QA Lab static-SSH worker provider", () => {
     const profile = {
       host: " worker.example.test ",
       user: " openclaw ",
+      hostKey: ` ${HOST_KEY} `,
       keyRef: KEY_REF,
     };
 
@@ -36,6 +39,7 @@ describe("QA Lab static-SSH worker provider", () => {
         host: "worker.example.test",
         port: 22,
         user: "openclaw",
+        hostKey: HOST_KEY,
         keyRef: KEY_REF,
       },
     });
@@ -46,64 +50,94 @@ describe("QA Lab static-SSH worker provider", () => {
     const provider = createStaticSshWorkerProvider();
 
     await expect(
-      provider.provision(
-        { host: "worker.example.test", port: 2222, user: "openclaw", keyRef: KEY_REF },
-        "operation-456",
-      ),
+      provider.provision({ ...PROFILE, port: 2222 }, "operation-456"),
     ).resolves.toMatchObject({ ssh: { port: 2222 } });
   });
 
   it.each<{ label: string; profile: WorkerProfile }>([
-    { label: "host", profile: { host: " ", user: "openclaw", keyRef: KEY_REF } },
-    { label: "user", profile: { host: "worker.example.test", user: "", keyRef: KEY_REF } },
+    { label: "host", profile: { ...PROFILE, host: " " } },
+    { label: "user", profile: { ...PROFILE, user: "" } },
     {
       label: "port",
-      profile: { host: "worker.example.test", port: 0, user: "openclaw", keyRef: KEY_REF },
+      profile: { ...PROFILE, port: 0 },
     },
     {
       label: "port",
-      profile: { host: "worker.example.test", port: 1.5, user: "openclaw", keyRef: KEY_REF },
+      profile: { ...PROFILE, port: 1.5 },
     },
     {
       label: "port",
-      profile: { host: "worker.example.test", port: 65_536, user: "openclaw", keyRef: KEY_REF },
+      profile: { ...PROFILE, port: 65_536 },
     },
     {
       label: "keyRef",
-      profile: { host: "worker.example.test", user: "openclaw", keyRef: "plaintext-key" },
+      profile: { ...PROFILE, keyRef: "plaintext-key" },
     },
-    { label: "keyRef", profile: { host: "worker.example.test", user: "openclaw" } },
+    {
+      label: "keyRef",
+      profile: { host: PROFILE.host, user: PROFILE.user, hostKey: HOST_KEY },
+    },
     {
       label: "keyRef",
       profile: {
-        host: "worker.example.test",
-        user: "openclaw",
+        ...PROFILE,
         keyRef: { source: "file", provider: "", id: "/private-key" },
       },
     },
     {
       label: "keyRef",
       profile: {
-        host: "worker.example.test",
-        user: "openclaw",
+        ...PROFILE,
         keyRef: { source: "file", provider: "default", id: "private-key" },
       },
     },
     {
       label: "keyRef",
       profile: {
-        host: "worker.example.test",
-        user: "openclaw",
+        ...PROFILE,
         keyRef: { source: "env", provider: "default", id: "lowercase" },
       },
     },
     {
       label: "keyRef",
       profile: {
-        host: "worker.example.test",
-        user: "openclaw",
+        ...PROFILE,
         keyRef: { source: "exec", provider: "vault", id: "../private-key" },
       },
+    },
+    {
+      label: "hostKey",
+      profile: { host: PROFILE.host, user: PROFILE.user, keyRef: KEY_REF },
+    },
+    { label: "hostKey", profile: { ...PROFILE, hostKey: " " } },
+    { label: "hostKey", profile: { ...PROFILE, hostKey: 42 } },
+    {
+      label: "hostKey",
+      profile: { ...PROFILE, hostKey: [HOST_KEY, HOST_KEY].join("\n") },
+    },
+    {
+      label: "hostKey",
+      profile: { ...PROFILE, hostKey: ["restrict", HOST_KEY].join(" ") },
+    },
+    {
+      label: "hostKey",
+      profile: { ...PROFILE, hostKey: [HOST_KEY, "comment"].join(" ") },
+    },
+    {
+      label: "hostKey",
+      profile: { ...PROFILE, hostKey: ["not-a-key-type", "AAAA"].join(" ") },
+    },
+    {
+      label: "hostKey",
+      profile: { ...PROFILE, hostKey: ["ssh-ed25519", "not-base64!"].join(" ") },
+    },
+    {
+      label: "hostKey",
+      profile: { ...PROFILE, hostKey: ["ssh-ed25519", "A"].join(" ") },
+    },
+    {
+      label: "hostKey",
+      profile: { ...PROFILE, hostKey: [HOST_KEY, "x".repeat(16_384)].join(" ") },
     },
   ])("rejects an invalid $label", async ({ label, profile }) => {
     const provider = createStaticSshWorkerProvider();

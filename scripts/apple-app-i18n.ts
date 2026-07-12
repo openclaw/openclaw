@@ -46,6 +46,7 @@ const CATALOGS: readonly AppleCatalogSpec[] = [
         "Message is empty.",
         "OpenClaw is not connected to a gateway yet.",
         "Send failed: %@",
+        "The shared image could not be prepared.",
       ],
       "apps/ios/Sources/Design/SettingsChannelsDestination.swift": ["Logout"],
       "apps/ios/Sources/Design/ChatProTab.swift": [
@@ -77,7 +78,7 @@ const CATALOGS: readonly AppleCatalogSpec[] = [
       "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift": ["Go to Chat"],
       "apps/ios/Sources/RootTabs.swift": ["Agent", "Chat", "Control", "Settings", "Talk"],
       "apps/ios/WatchApp/Sources/WatchInboxView.swift": [
-        "Approve",
+        "Allow Once",
         "Chat",
         "Continue on iPhone",
         "Deny",

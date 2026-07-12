@@ -667,6 +667,7 @@ describe("OpenClaw SDK", () => {
         ageMs: 1000,
         idleMs: 250,
         attachedSessionIds: [],
+        tunnelStatus: "stopped",
       },
     };
     const transport = new FakeTransport({

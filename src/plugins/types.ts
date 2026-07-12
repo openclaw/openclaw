@@ -144,6 +144,7 @@ import type {
   ProviderThinkingPolicyContext,
 } from "./provider-thinking.types.js";
 import type { PluginRuntime } from "./runtime/types.js";
+import type { SessionCatalogProvider } from "./session-catalog.js";
 import type {
   OpenClawPluginHookOptions,
   OpenClawPluginToolFactory,
@@ -339,6 +340,8 @@ export type ProviderAuthContext = {
   workspaceDir?: string;
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
+  /** Cancels browser callbacks, device polling, and other app-owned auth work. */
+  signal?: AbortSignal;
   /**
    * Optional onboarding CLI options that triggered this auth flow.
    *
@@ -1272,7 +1275,21 @@ export type WorkerSshEndpoint = {
   host: string;
   port: number;
   user: string;
+  /** OpenSSH public host-key line obtained from trusted provisioning output. */
+  hostKey: string;
   /** Secret reference only; providers must never return plaintext key material. */
+  keyRef: SecretRef;
+};
+
+/** Resolved SSH client identity. Providers may return a local path or ephemeral material. */
+export type WorkerSshIdentity =
+  | { kind: "path"; path: string }
+  | { kind: "material"; contents: string };
+
+/** Durable context supplied when a worker provider resolves the identity it minted. */
+export type WorkerSshIdentityRequest = {
+  leaseId: string;
+  profile: WorkerProfile;
   keyRef: SecretRef;
 };
 
@@ -1308,6 +1325,11 @@ export type WorkerProvider = {
   provision: (profile: WorkerProfile, operationId: string) => Promise<WorkerLease>;
   /** Throws on transient/indeterminate failures; `unknown` means authoritative absence. */
   inspect: (lease: { leaseId: string; profile: WorkerProfile }) => Promise<WorkerLeaseStatus>;
+  /**
+   * Resolves provider-owned dynamic identities. When absent, the gateway uses its generic
+   * SecretRef resolver; when present, failures are authoritative and never fall back.
+   */
+  resolveSshIdentity?: (request: WorkerSshIdentityRequest) => Promise<WorkerSshIdentity>;
   renew?: (leaseId: string) => Promise<void>;
   /** Idempotent; resolves only after the provider can prove teardown. */
   destroy: (lease: { leaseId: string; profile: WorkerProfile }) => Promise<void>;
@@ -2017,7 +2039,15 @@ export type PluginCommandDiagnosticsSession = {
   sessionKey?: string;
   /** Ephemeral OpenClaw session id when available. */
   sessionId?: string;
-  /** Transcript file for this OpenClaw session when available. */
+  /**
+   * Deprecated transcript locator for this OpenClaw session when available.
+   *
+   * SQLite-backed sessions use a `sqlite:<agentId>:<sessionId>:<storePath>`
+   * marker, not a filesystem path. Use session id/key plus transcript-runtime
+   * helpers for active transcript reads.
+   *
+   * @deprecated Use session identity fields with `plugin-sdk/session-transcript-runtime`.
+   */
   sessionFile?: string;
   /** Embedded agent harness selected for this session. */
   agentHarnessId?: string;
@@ -2055,7 +2085,15 @@ export type PluginCommandContext = {
   sessionKey?: string;
   /** Ephemeral host session id for the active conversation when available. */
   sessionId?: string;
-  /** Transcript file for the active OpenClaw session when available. */
+  /**
+   * Deprecated transcript locator for the active OpenClaw session when available.
+   *
+   * SQLite-backed sessions use a `sqlite:<agentId>:<sessionId>:<storePath>`
+   * marker, not a filesystem path. Use session id/key plus transcript-runtime
+   * helpers for active transcript reads.
+   *
+   * @deprecated Use session identity fields with `plugin-sdk/session-transcript-runtime`.
+   */
   sessionFile?: string;
   /** Raw command arguments after the command name */
   args?: string;
@@ -2286,6 +2324,20 @@ export type OpenClawPluginNodeHostCommand = {
   dangerous?: boolean;
   /** Return false to omit this command and capability from the node declaration. */
   isAvailable?: (context: OpenClawPluginNodeHostCommandAvailabilityContext) => boolean;
+  agentTool?: {
+    name: string;
+    description: string;
+    parameters?: Record<string, unknown>;
+    /**
+     * Platforms where this node-hosted agent tool should be allowlisted by
+     * default. Omit to require explicit `gateway.nodes.allowCommands`.
+     */
+    defaultPlatforms?: Array<"ios" | "android" | "macos" | "windows" | "linux" | "unknown">;
+    mcp?: {
+      server: string;
+      tool: string;
+    };
+  };
   handle: (paramsJSON?: string | null) => Promise<string>;
 };
 
@@ -2748,6 +2800,8 @@ export type OpenClawPluginApi = {
     handler: GatewayRequestHandler,
     opts?: { scope?: OperatorScope },
   ) => void;
+  /** Register a read-only external-session catalog with optional native adoption actions. */
+  registerSessionCatalog: (provider: SessionCatalogProvider) => void;
   registerCli: (
     registrar: OpenClawPluginCliRegistrar,
     opts?: {

@@ -80,6 +80,7 @@ type ClaudeLiveSession = {
   managedRun: ManagedRun;
   providerId: string;
   modelId: string;
+  sessionId?: string;
   noOutputTimeoutMs: number;
   stderr: string;
   stdoutBuffer: string;
@@ -371,7 +372,7 @@ function buildClaudeLiveFingerprint(params: {
     stableArgv.push(entry);
   }
   return JSON.stringify({
-    command: params.context.preparedBackend.backend.command,
+    command: params.argv[0],
     workspaceDirHash: sha256(params.context.workspaceDir),
     cwdHash: params.context.cwdHash ?? sha256(params.context.cwd ?? params.context.workspaceDir),
     provider: params.context.params.provider,
@@ -921,6 +922,10 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
   if (!parsed) {
     return;
   }
+  const parsedSessionId = parseSessionId(parsed);
+  if (parsedSessionId) {
+    session.sessionId = parsedSessionId;
+  }
   if (!turn) {
     return;
   }
@@ -939,7 +944,7 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
   turn.rawLines.push(trimmed);
   const toolEventCountBefore = turn.toolEventCount;
   turn.streamingParser.push(`${trimmed}\n`);
-  turn.sessionId = parseSessionId(parsed) ?? turn.sessionId;
+  turn.sessionId = parsedSessionId ?? turn.sessionId;
   noteClaudeLiveProgress(turn, parsed, turn.toolEventCount !== toolEventCountBefore);
   handleClaudeLiveControlRequest(session, turn, parsed);
   if (parsed.type !== "result") {
@@ -1183,6 +1188,7 @@ function createTurn(params: {
     delta: CliToolResultDelta,
   ) => ClaudeLiveToolTerminalOutcome | undefined;
   onCommentaryText?: (text: string) => void;
+  onSessionId?: (sessionId: string) => void;
   session: ClaudeLiveSession;
   execPermission: ClaudeLiveExecPermission;
   resolve: (output: CliOutput) => void;
@@ -1223,6 +1229,7 @@ function createTurn(params: {
         params.onToolResult?.(delta);
       },
       onCommentaryText: params.onCommentaryText,
+      onSessionId: params.onSessionId,
     }),
     execPermission: params.execPermission,
     resolve: params.resolve,
@@ -1290,6 +1297,8 @@ function createRequiredLiveSessionError(params: {
 export async function runClaudeLiveSessionTurn(params: {
   context: PreparedCliRunContext;
   args: string[];
+  executableCommand?: string;
+  executableLeadingArgv?: readonly string[];
   env: Record<string, string>;
   prompt: string;
   useResume: boolean;
@@ -1307,13 +1316,15 @@ export async function runClaudeLiveSessionTurn(params: {
   ) => ClaudeLiveToolTerminalOutcome | undefined;
   onCommentaryText?: (text: string) => void;
   onMcpCaptureReady?: (captureKey: string) => void;
+  onSessionId?: (sessionId: string) => void;
   cleanup: () => Promise<void>;
 }): Promise<ClaudeLiveRunResult> {
   const key = buildClaudeLiveKey(params.context);
   const resumeCapable = Boolean(params.context.preparedBackend.backend.resumeArgs?.length);
   const execPermission = resolveClaudeLiveExecPermission(params.context);
   const argv = [
-    params.context.preparedBackend.backend.command,
+    params.executableCommand ?? params.context.preparedBackend.backend.command,
+    ...(params.executableLeadingArgv ?? []),
     ...buildClaudeLiveArgs({
       args: params.args,
       backend: params.context.preparedBackend.backend,
@@ -1508,6 +1519,9 @@ export async function runClaudeLiveSessionTurn(params: {
     throw new Error("Claude CLI live session is already handling a turn");
   }
   const liveSession = session;
+  if (liveSession.sessionId) {
+    params.onSessionId?.(liveSession.sessionId);
+  }
   notifyMcpCaptureReady(liveSession.mcpCaptureKey);
   liveSession.noOutputTimeoutMs = params.noOutputTimeoutMs;
   liveSession.stderr = "";
@@ -1523,6 +1537,7 @@ export async function runClaudeLiveSessionTurn(params: {
       onToolResult: params.onToolResult,
       resolveToolResultTerminalOutcome: params.resolveToolResultTerminalOutcome,
       onCommentaryText: params.onCommentaryText,
+      onSessionId: params.onSessionId,
       session: liveSession,
       execPermission,
       resolve,

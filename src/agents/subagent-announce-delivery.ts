@@ -64,7 +64,7 @@ import {
   isEmbeddedRunAbandoned,
   getRuntimeConfig,
   formatEmbeddedAgentQueueFailureSummary,
-  loadSessionStore,
+  loadSessionEntry,
   queueEmbeddedAgentMessageWithOutcomeAsync,
   resolveActiveEmbeddedRunSessionId,
   resolveAgentIdFromSessionKey,
@@ -721,8 +721,11 @@ export function loadRequesterSessionEntry(requesterSessionKey: string) {
   const canonicalKey = resolveRequesterStoreKey(cfg, requesterSessionKey);
   const agentId = resolveAgentIdFromSessionKey(canonicalKey);
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
-  const store = loadSessionStore(storePath);
-  const entry = store[canonicalKey];
+  const entry = loadSessionEntry({
+    storePath,
+    sessionKey: canonicalKey,
+    clone: false,
+  });
   return { cfg, entry, canonicalKey };
 }
 
@@ -730,8 +733,11 @@ export function loadSessionEntryByKey(sessionKey: string) {
   const cfg = subagentAnnounceDeliveryDeps.getRuntimeConfig();
   const agentId = resolveAgentIdFromSessionKey(sessionKey);
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
-  const store = loadSessionStore(storePath);
-  return store[sessionKey];
+  return loadSessionEntry({
+    storePath,
+    sessionKey,
+    clone: false,
+  });
 }
 
 async function maybeSteerSubagentAnnounce(params: {
@@ -1142,6 +1148,7 @@ async function deliverTextCompletionDirect(params: {
       threadId: params.deliveryTarget.threadId,
       requesterSessionKey: params.requesterSessionKey,
       agentId,
+      conversationType: "direct",
       content,
       idempotencyKey,
       mirror: {

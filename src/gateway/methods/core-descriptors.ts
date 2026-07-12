@@ -68,7 +68,10 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "plugins.sessionAction", scope: "dynamic" },
   { name: "crestodian.chat", scope: "operator.admin" },
   { name: "crestodian.setup.detect", scope: "operator.admin" },
+  // Failed activation candidates are non-mutating probes. Keep this admin-only
+  // without the shared three-write budget so the automatic ladder can finish.
   { name: "crestodian.setup.activate", scope: "operator.admin" },
+  { name: "crestodian.setup.auth.start", scope: "operator.admin" },
   { name: "wizard.start", scope: "operator.admin" },
   { name: "wizard.next", scope: "operator.admin" },
   { name: "wizard.cancel", scope: "operator.admin" },
@@ -98,6 +101,7 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "tools.effective", scope: "operator.read", startup: true },
   { name: "tools.invoke", scope: "operator.write" },
   { name: "audit.list", scope: "operator.read" },
+  { name: "audit.activity.list", scope: "operator.read" },
   { name: "tasks.list", scope: "operator.read" },
   { name: "tasks.get", scope: "operator.read" },
   { name: "tasks.cancel", scope: "operator.write" },
@@ -127,6 +131,8 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "agents.files.set", scope: "operator.admin" },
   { name: "sessions.files.list", scope: "operator.read" },
   { name: "sessions.files.get", scope: "operator.read" },
+  // Workspace file writes require the same admin scope as agents.files.set.
+  { name: "sessions.files.set", scope: "operator.admin" },
   { name: "artifacts.list", scope: "operator.read" },
   { name: "artifacts.get", scope: "operator.read" },
   { name: "artifacts.download", scope: "operator.read" },
@@ -212,6 +218,8 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "node.list", scope: "operator.read" },
   { name: "node.describe", scope: "operator.read" },
   { name: "node.pluginSurface.refresh", scope: "node" },
+  { name: "node.pluginTools.update", scope: "node" },
+  { name: "node.skills.update", scope: "node" },
   { name: "node.pending.drain", scope: "node" },
   { name: "node.pending.enqueue", scope: "operator.write" },
   { name: "node.invoke", scope: "operator.write" },
@@ -306,6 +314,8 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   // Session checkout diff reads the session's own git worktree, matching the
   // sessions.files.* trusted-operator read domain.
   { name: "sessions.diff", scope: "operator.read" },
+  // Additive protocol methods append here to preserve existing advertised indices.
+  { name: "crestodian.setup.verify", scope: "operator.admin" },
   // Cloud-worker mutations depend on the loaded provider registry and owned
   // reconciler, so advertise them early but gate dispatch until sidecars are ready.
   {
@@ -320,6 +330,12 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
     startup: true,
     controlPlaneWrite: true,
   },
+  { name: "sessions.catalog.list", scope: "operator.read" },
+  { name: "sessions.catalog.read", scope: "operator.read" },
+  { name: "sessions.catalog.continue", scope: "operator.write" },
+  { name: "sessions.catalog.archive", scope: "operator.write" },
+  { name: "approval.get", scope: "operator.approvals" },
+  { name: "approval.resolve", scope: "operator.approvals" },
 ] as const;
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(

@@ -16,8 +16,11 @@ import { resolveStorePath } from "../../../config/sessions/paths.js";
 import {
   listSessionEntries,
   loadSessionEntry,
+  loadTranscriptEvents,
+  resolveSessionTranscriptRuntimeReadTarget,
   updateSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
+import { parseSqliteSessionFileMarker } from "../../../config/sessions/sqlite-marker.js";
 import { resolveQuotaSuspensionEntryMaintenance } from "../../../config/sessions/store-maintenance.js";
 import {
   bindOwnedSessionTranscriptWrites,
@@ -26,6 +29,7 @@ import {
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
 import type { SessionEntry as ConfigSessionEntry } from "../../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   assertContextEngineHostSupport,
   OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
@@ -126,6 +130,7 @@ import {
   resolveProcessToolScopeKey,
   resolveToolLoopDetectionConfig,
 } from "../../agent-tools.js";
+import { getActiveAgentRingZeroTools } from "../../agent-tools.ring-zero-context.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import {
@@ -689,8 +694,14 @@ function sessionMessagesContainIdempotencyKey(
   );
 }
 
-function flushSessionManagerFile(sessionManager: ReturnType<typeof guardSessionManager>): void {
-  (sessionManager as unknown as { rewriteFile?: () => void }).rewriteFile?.();
+function flushSessionManagerTranscript(
+  sessionManager: ReturnType<typeof guardSessionManager>,
+): void {
+  (
+    sessionManager as unknown as {
+      replacePersistedTranscript?: () => void;
+    }
+  ).replacePersistedTranscript?.();
 }
 
 type OrphanRepairSessionManager = Pick<
@@ -993,6 +1004,91 @@ async function loadAttemptSessionEntryAfterQuotaMaintenance(params: {
   return updated ?? entry;
 }
 
+async function resolveAttemptTrajectorySessionFile(params: {
+  agentId: string;
+  config?: OpenClawConfig;
+  sessionFile: string;
+  sessionId: string;
+  sessionKey?: string;
+  sessionTarget?: EmbeddedRunAttemptParams["sessionTarget"];
+}): Promise<string> {
+  const storePath =
+    params.sessionTarget?.storePath ??
+    resolveStorePath(params.config?.session?.store, { agentId: params.agentId });
+  if (!storePath || !params.sessionKey) {
+    return params.sessionFile;
+  }
+  return (
+    await resolveSessionTranscriptRuntimeReadTarget({
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      storePath,
+    })
+  ).sessionFile;
+}
+
+type ExistingAttemptTranscriptState = {
+  hasBootstrapTranscriptState: boolean;
+  hasFileTranscriptState: boolean;
+};
+
+function isTranscriptMessageEvent(event: unknown): boolean {
+  return (
+    typeof event === "object" &&
+    event !== null &&
+    "type" in event &&
+    (event as { type?: unknown }).type === "message"
+  );
+}
+
+async function resolveExistingAttemptTranscriptState(params: {
+  agentId: string;
+  config?: OpenClawConfig;
+  sessionFile: string;
+  sessionId: string;
+  sessionKey?: string;
+  sessionTarget?: EmbeddedRunAttemptParams["sessionTarget"];
+}): Promise<ExistingAttemptTranscriptState> {
+  const storePath =
+    params.sessionTarget?.storePath ??
+    resolveStorePath(params.config?.session?.store, { agentId: params.agentId });
+  const sqliteMarker = parseSqliteSessionFileMarker(params.sessionFile);
+  let hasBootstrapTranscriptState = false;
+  if (storePath && params.sessionKey) {
+    try {
+      const sqliteEvents = await loadTranscriptEvents({
+        agentId: params.agentId,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        storePath,
+      });
+      hasBootstrapTranscriptState = sqliteEvents.some(isTranscriptMessageEvent);
+      if (sqliteMarker) {
+        return {
+          hasBootstrapTranscriptState,
+          hasFileTranscriptState: false,
+        };
+      }
+    } catch {
+      if (sqliteMarker) {
+        return {
+          hasBootstrapTranscriptState: false,
+          hasFileTranscriptState: false,
+        };
+      }
+    }
+  }
+  const hasFileTranscriptState = await fs
+    .stat(params.sessionFile)
+    .then(() => true)
+    .catch(() => false);
+  return {
+    hasBootstrapTranscriptState: hasBootstrapTranscriptState || hasFileTranscriptState,
+    hasFileTranscriptState,
+  };
+}
+
 export async function runEmbeddedAttempt(
   params: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
@@ -1056,6 +1152,7 @@ export async function runEmbeddedAttempt(
     params.sandboxSessionKey?.trim() || params.sessionKey?.trim() || params.sessionId;
   const sandbox = await resolveSandboxContext({
     config: params.config,
+    execOverrides: params.execOverrides,
     sessionKey: sandboxSessionKey,
     workspaceDir: resolvedWorkspace,
   });
@@ -1371,6 +1468,7 @@ export async function runEmbeddedAttempt(
       },
     );
     const toolsEnabled = supportsModelTools(params.model);
+    const ringZeroToolRun = getActiveAgentRingZeroTools().length > 0;
     const toolConstructionPlan = resolveEmbeddedAttemptToolConstructionPlan({
       disableTools: params.disableTools,
       isRawModelRun,
@@ -1388,12 +1486,14 @@ export async function runEmbeddedAttempt(
     const toolSearchConfig = resolveToolSearchConfig(toolSearchRuntimeConfig);
     const codeModeControlsEnabledForRun =
       toolsEnabled &&
+      !ringZeroToolRun &&
       params.disableTools !== true &&
       !isRawModelRun &&
       params.toolsAllow?.length !== 0 &&
       codeModeConfig.enabled;
     const toolSearchControlsEnabledForRun =
       toolsEnabled &&
+      !ringZeroToolRun &&
       params.disableTools !== true &&
       !isRawModelRun &&
       params.toolsAllow?.length !== 0 &&
@@ -1489,7 +1589,6 @@ export async function runEmbeddedAttempt(
       : (() => {
           const allTools = createOpenClawCodingTools({
             agentId: sessionAgentId,
-            ...(params.crestodianTool ? { crestodianTool: params.crestodianTool } : {}),
             ...buildEmbeddedAttemptToolRunContext({ ...params, trace: runTrace }),
             messageChannel: params.messageChannel,
             clientCaps: params.clientCaps,
@@ -2423,10 +2522,14 @@ export async function runEmbeddedAttempt(
       ) {
         invalidateSessionFileRepairCache(params.sessionFile);
       }
-      const hadSessionFile = await fs
-        .stat(params.sessionFile)
-        .then(() => true)
-        .catch(() => false);
+      const transcriptState = await resolveExistingAttemptTranscriptState({
+        agentId: sessionAgentId,
+        config: params.config,
+        sessionFile: params.sessionFile,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        sessionTarget: params.sessionTarget,
+      });
 
       const transcriptPolicy = resolveAttemptTranscriptPolicy({
         runtimePlan: params.runtimePlan,
@@ -2481,10 +2584,11 @@ export async function runEmbeddedAttempt(
 
       await withOwnedSessionWriteLock(async () => {
         await runAttemptContextEngineBootstrap({
-          hadSessionFile,
+          hadSessionFile: transcriptState.hasBootstrapTranscriptState,
           contextEngine: activeContextEngine,
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
+          sessionTarget: params.sessionTarget,
           sessionFile: params.sessionFile,
           sessionManager,
           runtimeContext: buildAfterTurnRuntimeContext({
@@ -2507,6 +2611,7 @@ export async function runEmbeddedAttempt(
               contextEngine: contextParams.contextEngine as never,
               sessionId: contextParams.sessionId,
               sessionKey: contextParams.sessionKey,
+              sessionTarget: contextParams.sessionTarget,
               sessionFile: contextParams.sessionFile,
               reason: contextParams.reason,
               sessionManager: contextParams.sessionManager as never,
@@ -2521,7 +2626,7 @@ export async function runEmbeddedAttempt(
         await prepareSessionManagerForRun({
           sessionManager,
           sessionFile: params.sessionFile,
-          hadSessionFile,
+          hadSessionFile: transcriptState.hasFileTranscriptState,
           sessionId: params.sessionId,
           cwd: effectiveCwd,
         });
@@ -2973,6 +3078,7 @@ export async function runEmbeddedAttempt(
           contextEngine: activeContextEngine,
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
+          sessionTarget: params.sessionTarget,
           sessionFile: params.sessionFile,
           tokenBudget: params.contextTokenBudget,
           modelId: params.modelId,
@@ -3067,13 +3173,21 @@ export async function runEmbeddedAttempt(
         modelApi: params.model.api,
         workspaceDir: params.workspaceDir,
       });
+      const trajectorySessionFile = await resolveAttemptTrajectorySessionFile({
+        agentId: sessionAgentId,
+        config: params.config,
+        sessionFile: params.sessionFile,
+        sessionId: activeSession.sessionId,
+        sessionKey: params.sessionKey,
+        sessionTarget: params.sessionTarget,
+      });
       trajectoryRecorder = createTrajectoryRuntimeRecorder({
         cfg: params.config,
         env: process.env,
         runId: params.runId,
         sessionId: activeSession.sessionId,
         sessionKey: params.sessionKey,
-        sessionFile: params.sessionFile,
+        sessionFile: trajectorySessionFile,
         provider: params.provider,
         modelId: params.modelId,
         modelApi: params.model.api,
@@ -4766,7 +4880,7 @@ export async function runEmbeddedAttempt(
                 activeSessionManager.appendMessage(
                   redactedUserMessage as Parameters<typeof activeSessionManager.appendMessage>[0],
                 );
-                flushSessionManagerFile(activeSessionManager);
+                flushSessionManagerTranscript(activeSessionManager);
               });
               activeSession.agent.state.messages =
                 activeSessionManager.buildSessionContext().messages;
@@ -5642,9 +5756,9 @@ export async function runEmbeddedAttempt(
           }
 
           if (activeContextEngine && !beforeAgentFinalizeRevisionReason) {
-            // Context-engine afterTurn hooks may reconcile against the jsonl, so
-            // materialize the active turn before finalization reads from disk.
-            flushSessionManagerFile(activeSessionManager);
+            // Context-engine afterTurn hooks may reconcile against persisted
+            // transcript state, so materialize the active turn first.
+            flushSessionManagerTranscript(activeSessionManager);
           }
         });
 
@@ -5669,6 +5783,7 @@ export async function runEmbeddedAttempt(
             yieldAborted,
             sessionIdUsed,
             sessionKey: params.sessionKey,
+            sessionTarget: params.sessionTarget,
             sessionFile: params.sessionFile,
             messagesSnapshot,
             prePromptMessageCount: contextEngineAfterTurnCheckpoint ?? prePromptMessageCount,
@@ -5685,6 +5800,7 @@ export async function runEmbeddedAttempt(
                 contextEngine: contextParams.contextEngine as never,
                 sessionId: contextParams.sessionId,
                 sessionKey: contextParams.sessionKey,
+                sessionTarget: contextParams.sessionTarget,
                 sessionFile: contextParams.sessionFile,
                 reason: contextParams.reason,
                 sessionManager: contextParams.sessionManager as never,

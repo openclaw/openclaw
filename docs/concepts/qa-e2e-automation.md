@@ -617,6 +617,18 @@ Imperative Slack scenarios (`extensions/qa-lab/src/live-transports/slack/slack-l
 - `slack-reaction-glyph-native` - opt-in live message-tool reaction scenario.
   Instructs the agent to pass the exact `✅` glyph and confirms Slack stored
   `white_check_mark` for the SUT bot on the target message.
+- `slack-chart-presentation-native` - opt-in portable chart scenario that
+  verifies the native `data_visualization` block and exact accessible text.
+- `slack-table-presentation-native` - opt-in portable table scenario that
+  verifies the native `data_table` block, exact rows, and accessible text.
+- `slack-table-invalid-blocks-fallback` - opt-in direct-transport scenario
+  that sends a structurally readable over-limit raw table with 101 data rows
+  plus its header through the
+  production Slack send path, proves Slack itself returns `invalid_blocks`,
+  and verifies the stored formatting-disabled fallback is complete and has no
+  native data block. The report keeps only safe error-code, count, and boolean
+  evidence; raw synthetic table text follows
+  `OPENCLAW_QA_SLACK_CAPTURE_CONTENT`.
 - `slack-approval-exec-native` - opt-in native Slack exec approval scenario.
   Requests an exec approval through the gateway, verifies the Slack message
   has native approval buttons, resolves it, and verifies the resolved Slack

@@ -27,6 +27,9 @@ actor MacNodeRuntime {
     private let codexThreadCatalogEnabled: @Sendable () -> Bool
     private let codexThreadListRequest: @Sendable (String?) async throws -> String
     private let codexThreadTurnsRequest: @Sendable (String?) async throws -> String
+    private let claudeSessionCatalogEnabled: @Sendable () -> Bool
+    private let claudeSessionListRequest: @Sendable (String?) async throws -> String
+    private let claudeSessionReadRequest: @Sendable (String?) async throws -> String
     private let execApprovalStoreMutations: ExecApprovalStoreMutations
     private let shellRunner: @Sendable (
         _ command: [String],
@@ -69,6 +72,15 @@ actor MacNodeRuntime {
         codexThreadTurnsRequest: @escaping @Sendable (String?) async throws -> String = { paramsJSON in
             try await MacNodeCodexThreadCatalog.turns(paramsJSON: paramsJSON)
         },
+        claudeSessionCatalogEnabled: @escaping @Sendable () -> Bool = {
+            MacNodeClaudeSessionCatalog.shouldAdvertise()
+        },
+        claudeSessionListRequest: @escaping @Sendable (String?) async throws -> String = { paramsJSON in
+            try MacNodeClaudeSessionCatalog.list(paramsJSON: paramsJSON)
+        },
+        claudeSessionReadRequest: @escaping @Sendable (String?) async throws -> String = { paramsJSON in
+            try MacNodeClaudeSessionCatalog.read(paramsJSON: paramsJSON)
+        },
         execApprovalStoreMutations: ExecApprovalStoreMutations = .live,
         shellRunner: @escaping @Sendable (
             _ command: [String],
@@ -87,6 +99,9 @@ actor MacNodeRuntime {
         self.codexThreadCatalogEnabled = codexThreadCatalogEnabled
         self.codexThreadListRequest = codexThreadListRequest
         self.codexThreadTurnsRequest = codexThreadTurnsRequest
+        self.claudeSessionCatalogEnabled = claudeSessionCatalogEnabled
+        self.claudeSessionListRequest = claudeSessionListRequest
+        self.claudeSessionReadRequest = claudeSessionReadRequest
         self.execApprovalStoreMutations = execApprovalStoreMutations
         self.shellRunner = shellRunner
     }
@@ -150,10 +165,18 @@ actor MacNodeRuntime {
             case MacNodeCodexThreadCatalogContract.listCommand,
                  MacNodeCodexThreadCatalogContract.turnsCommand:
                 return try await self.handleCodexThreadInvoke(req)
+            case MacNodeClaudeSessionCatalogContract.listCommand,
+                 MacNodeClaudeSessionCatalogContract.readCommand:
+                return try await self.handleClaudeSessionInvoke(req)
             default:
                 return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: unknown command")
             }
         } catch let error as MacNodeCodexThreadCatalog.CatalogError {
+            return Self.errorResponse(
+                req,
+                code: error.isInvalidRequest ? .invalidRequest : .unavailable,
+                message: error.localizedDescription)
+        } catch let error as MacNodeClaudeSessionCatalog.CatalogError {
             return Self.errorResponse(
                 req,
                 code: error.isInvalidRequest ? .invalidRequest : .unavailable,
@@ -177,6 +200,20 @@ actor MacNodeRuntime {
         let request = req.command == MacNodeCodexThreadCatalogContract.listCommand
             ? self.codexThreadListRequest
             : self.codexThreadTurnsRequest
+        let payload = try await request(req.paramsJSON)
+        return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+    }
+
+    private func handleClaudeSessionInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        guard self.claudeSessionCatalogEnabled() else {
+            return Self.errorResponse(
+                req,
+                code: .unavailable,
+                message: "UNAVAILABLE: Claude session catalog is disabled")
+        }
+        let request = req.command == MacNodeClaudeSessionCatalogContract.listCommand
+            ? self.claudeSessionListRequest
+            : self.claudeSessionReadRequest
         let payload = try await request(req.paramsJSON)
         return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
     }

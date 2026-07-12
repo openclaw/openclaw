@@ -1618,6 +1618,7 @@
                       "gateway/health",
                       "gateway/heartbeat",
                       "gateway/doctor",
+                      "gateway/audit",
                       "logging",
                       "gateway/opentelemetry",
                       "gateway/prometheus",
@@ -1632,7 +1633,8 @@
                       "gateway/gateway-lock",
                       "gateway/background-process",
                       "gateway/restart-recovery",
-                      "gateway/multiple-gateways"
+                      "gateway/multiple-gateways",
+                      "gateway/multi-tenant-hosting"
                     ]
                   },
                   {
@@ -1744,6 +1746,7 @@
                       "cli/crestodian",
                       "cli/daemon",
                       "cli/doctor",
+                      "cli/fleet",
                       "cli/gateway",
                       "cli/health",
                       "cli/logs",

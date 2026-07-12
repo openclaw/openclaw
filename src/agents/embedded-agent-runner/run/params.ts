@@ -31,6 +31,7 @@ import type {
   ToolResultFormat,
 } from "../../embedded-agent-subscribe.shared-types.js";
 import type { FastModeAutoProgressState } from "../../fast-mode.js";
+import type { ExpectedAgentHarnessRuntimeArtifact } from "../../harness/runtime-artifact.types.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.js";
 import type { AgentMessage } from "../../runtime/index.js";
@@ -177,6 +178,8 @@ export type RunEmbeddedAgentParams = {
   modelSelectionLocked?: boolean;
   /** Explicit runtime override selected for this turn. Unlike agentHarnessId, this may force OpenClaw. */
   agentHarnessRuntimeOverride?: string;
+  /** Verified setup continuation: pin both the harness and its local implementation. */
+  expectedAgentHarnessRuntimeArtifact?: ExpectedAgentHarnessRuntimeArtifact;
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
   thinkLevel?: ThinkLevel;
@@ -201,8 +204,6 @@ export type RunEmbeddedAgentParams = {
   bootstrapContextRunKind?: BootstrapContextRunKind;
   /** Optional tool allow-list; when set, only these tools are sent to the model. */
   toolsAllow?: string[];
-  /** Ring-zero Crestodian tool; set only by the Crestodian agent runner. */
-  crestodianTool?: import("../../tools/crestodian-tool.js").CrestodianToolOptions;
   /** Seen bootstrap truncation warning signatures for this session (once mode dedupe). */
   bootstrapPromptWarningSignaturesSeen?: string[];
   /** Last shown bootstrap truncation warning signature for this session. */

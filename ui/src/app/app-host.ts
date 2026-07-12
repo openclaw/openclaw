@@ -33,6 +33,7 @@ import { isWorkboardEnabledInConfigSnapshot } from "../lib/plugin-activation.ts"
 import { searchForSession } from "../lib/sessions/index.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
+import "../pages/approval/approval-page.ts";
 import { renderDevicePairSetup } from "../pages/nodes/view-pairing.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
@@ -108,6 +109,25 @@ function renderConnectingSplash(basePath: string) {
         alt=""
       />
     </main>
+  `;
+}
+
+function renderApprovalDocument(runtime: ApplicationRuntime) {
+  const documentMode = runtime.documentMode;
+  if (documentMode?.kind !== "approval") {
+    return nothing;
+  }
+  return html`
+    <openclaw-approval-page .approvalId=${documentMode.approvalId ?? ""}>
+      <main class="approval-page approval-page--booting" role="status" aria-live="polite">
+        <img
+          class="connect-splash__logo"
+          src=${controlUiPublicAssetPath("favicon.svg", runtime.context.basePath)}
+          alt=""
+        />
+        <span>${t("common.loading")}</span>
+      </main>
+    </openclaw-approval-page>
   `;
 }
 
@@ -384,6 +404,13 @@ class OpenClawApp extends OpenClawLightDomElement {
         </openclaw-tooltip-provider>
       `;
     }
+    if (runtime.documentMode?.kind === "approval") {
+      return html`
+        <openclaw-tooltip-provider>
+          ${gatewayUrlConfirmation} ${renderApprovalDocument(runtime)}
+        </openclaw-tooltip-provider>
+      `;
+    }
     return html`
       <openclaw-tooltip-provider>
         <openclaw-github-link-hovercard-provider .client=${gatewaySnapshot.client}>
@@ -594,25 +621,35 @@ class OpenClawShell extends OpenClawLightDomElement {
     });
     if (nextNavCollapsed) {
       void this.updateComplete.then(() => {
-        this.querySelector<HTMLElement>(".shell-nav-expand")?.focus();
+        this.restoreFocusTo(this.querySelector<HTMLElement>(".shell-nav-expand"));
       });
     }
+  }
+
+  /** Focus a restoration target, falling back to the content anchor. The
+   * in-page sidebar toggles are display:none when the Mac app hosts the
+   * toggle in its titlebar (openclaw-native-nav, DashboardWindowController),
+   * so focus must not strand on the body or inside an offscreen drawer. */
+  private restoreFocusTo(target: HTMLElement | null | undefined) {
+    const resolved =
+      target?.isConnected && target.checkVisibility()
+        ? target
+        : this.querySelector<HTMLElement>(".content");
+    resolved?.focus();
   }
 
   private closeNavDrawer(options: { restoreFocus?: boolean } = {}) {
     if (this.navDrawerOpen) {
       this.dismissSidebarTransientMenus();
     }
-    const focusTarget = options.restoreFocus ? this.navDrawerTrigger : null;
+    const trigger = options.restoreFocus ? this.navDrawerTrigger : null;
     this.navDrawerOpen = false;
     this.navDrawerTrigger = null;
-    if (!(focusTarget instanceof HTMLElement) || !focusTarget.isConnected) {
+    if (!options.restoreFocus) {
       return;
     }
     requestAnimationFrame(() => {
-      if (focusTarget.isConnected) {
-        focusTarget.focus();
-      }
+      this.restoreFocusTo(trigger instanceof HTMLElement ? trigger : null);
     });
   }
 
@@ -641,7 +678,7 @@ class OpenClawShell extends OpenClawLightDomElement {
     this.requestUpdate();
     if (dismissedHiddenMenus) {
       void this.updateComplete.then(() => {
-        this.querySelector<HTMLElement>(".topbar-nav-toggle")?.focus();
+        this.restoreFocusTo(this.querySelector<HTMLElement>(".topbar-nav-toggle"));
       });
     }
   };
@@ -955,8 +992,6 @@ class OpenClawShell extends OpenClawLightDomElement {
                 .basePath=${context.basePath}
                 .activeRouteId=${activeRoute}
                 .activePluginTabId=${activePluginTabId}
-                .activePluginHostId=${activePluginRef?.hostId ?? ""}
-                .activePluginThreadId=${activePluginRef?.threadId ?? ""}
                 .enabledRouteIds=${this.enabledRouteIds()}
                 .sessionKey=${this.activeSessionKey}
                 .connected=${gatewaySnapshot.connected}
@@ -1015,6 +1050,7 @@ class OpenClawShell extends OpenClawLightDomElement {
           "workboard"
             ? "content--workboard"
             : ""}"
+          tabindex="-1"
         >
           ${gatewaySnapshot.connected
             ? nothing

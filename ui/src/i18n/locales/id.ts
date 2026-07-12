@@ -170,16 +170,6 @@ export const id: TranslationMap = {
       node: "Node",
     },
   },
-  instances: {
-    title: "Instance Terhubung",
-    subtitle: "Beacon kehadiran dari gateway dan klien.",
-    showHosts: "Tampilkan host dan IP",
-    hideHosts: "Sembunyikan host dan IP",
-    toggleHostVisibility: "Alihkan visibilitas host",
-    noInstances: "Belum ada instance yang dilaporkan.",
-    lastInput: "Input terakhir {time}",
-    reason: "Alasan {reason}",
-  },
   worktrees: {
     newWorktree: "Worktree baru",
     owner: "Pemilik",
@@ -390,6 +380,7 @@ export const id: TranslationMap = {
       skills: "Skills",
       channels: "Saluran",
       cronJobs: "Tugas Cron",
+      memory: "Memori",
     },
     context: {
       title: "Agent Context",
@@ -485,6 +476,7 @@ export const id: TranslationMap = {
     noEvents: "No events yet.",
   },
   quickSettings: {
+    language: "Bahasa",
     appearance: {
       lobsterVisits: "Kunjungan lobster",
       lobsterVisitsOn: "Mampir sesekali",
@@ -522,6 +514,47 @@ export const id: TranslationMap = {
       severity: "Severity",
       plugin: "Plugin",
     },
+  },
+  approvalPage: {
+    brandName: "OpenClaw",
+    eyebrow: "Operator approval",
+    loadingTitle: "Loading approval",
+    loadingDescription: "Checking the current approval state with the Gateway.",
+    unavailableTitle: "Approval unavailable",
+    unavailableDescription:
+      "This approval could not be found or this device is not authorized to review it.",
+    connectionErrorTitle: "Connection interrupted",
+    connectionErrorDescription:
+      "OpenClaw cannot confirm or record a decision while disconnected. Reconnect to check the current status.",
+    retry: "Retry",
+    execTitle: "Command approval",
+    pending: "Waiting for your decision",
+    pendingDescription: "Review the request carefully. The first answer from any surface wins.",
+    approvedHere: "Approved here",
+    deniedHere: "Denied here",
+    resolvedElsewhere: "Resolved elsewhere",
+    resolvedElsewhereDescription:
+      "Another surface or an earlier attempt recorded the decision first.",
+    approved: "Approved",
+    denied: "Denied",
+    expired: "Kedaluwarsa",
+    cancelled: "Cancelled",
+    allowedOnceDescription: "The operation was approved for this request only.",
+    allowedAlwaysDescription: "The operation was approved with the always-allow decision.",
+    deniedDescription: "The operation was denied and will not continue.",
+    expiredDescription: "No decision arrived before the deadline, so the operation was denied.",
+    cancelledDescription: "The requesting run ended before a decision could be used.",
+    summaryLabel: "Summary",
+    commandLabel: "Perintah",
+    requestLabel: "Request details",
+    nodeLabel: "Node",
+    toolLabel: "Tool",
+    expiresLabel: "Expires",
+    resolvedLabel: "Resolved",
+    actionsLabel: "Approval decisions",
+    resolvingDecision: "Recording {decision}…",
+    safeToClose: "The decision is recorded. You can close this page.",
+    openControlUi: "Open Control UI",
   },
   agentTools: {
     connectedSource: "Terhubung: {id}",
@@ -619,11 +652,10 @@ export const id: TranslationMap = {
   tabs: {
     agents: "Agen",
     activity: "Aktivitas",
-    overview: "Ikhtisar",
     workboard: "Workboard",
     worktrees: "Worktree",
     channels: "Saluran",
-    instances: "Instans",
+    connection: "Koneksi",
     sessions: "Sesi",
     usage: "Penggunaan",
     cron: "Tugas Cron",
@@ -645,17 +677,15 @@ export const id: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "Debug",
     logs: "Log",
-    dreams: "Mimpi",
     plugin: "Plugin",
   },
   subtitles: {
     agents: "Ruang kerja, alat, identitas.",
     activity: "Ringkasan aktivitas alat lokal browser.",
-    overview: "Status, titik masuk, kesehatan.",
     workboard: "Antrean kerja agen dan serah terima sesi.",
     worktrees: "Checkout tugas agen terisolasi dan snapshot pemulihan.",
     channels: "Saluran dan pengaturan.",
-    instances: "Klien dan node yang terhubung.",
+    connection: "Endpoint Gateway, kredensial, dan status handshake.",
     sessions: "Sesi aktif dan default.",
     usage: "Penggunaan API dan biaya.",
     cron: "Bangun dan proses berulang.",
@@ -677,8 +707,10 @@ export const id: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "Snapshot, peristiwa, RPC.",
     logs: "Log Gateway langsung.",
-    dreams: "Konsolidasi memori saat tidur.",
     plugin: "Panel yang disediakan plugin.",
+  },
+  mcpPage: {
+    manageServersLink: "Kelola server di halaman Plugins.",
   },
   pluginsPage: {
     searchLabel: "Cari plugin",
@@ -944,93 +976,6 @@ export const id: TranslationMap = {
     unavailableTitle: "Plugin panel unavailable",
     unavailableSubtitle:
       "The plugin that owns this tab is not active on the connected gateway, or it did not provide a panel.",
-  },
-  codexSessions: {
-    eyebrow: "Armada Codex",
-    title: "Sesi di semua komputer Anda",
-    interactiveSubtitle:
-      "Mulai cabang Chat yang pemilihan modelnya tetap di bawah kendali Codex App Server, arsipkan sesi lokal yang memenuhi syarat dengan konfirmasi, dan lihat sesi komputer yang dipasangkan.",
-    summaryLabel: "Ringkasan sesi Codex",
-    summary: {
-      sessions: "sesi",
-      onlineHosts: "online",
-      hosts: "host",
-    },
-    searchLabel: "Cari sesi Codex",
-    searchPlaceholder: "Cari judul sesi",
-    refresh: "Muat ulang",
-    disconnected: "Hubungkan kembali ke Gateway untuk memuat ulang sesi Codex.",
-    partial: "{count} host tidak tersedia. Host lainnya tetap tersedia.",
-    loading: "Memuat sesi Codex…",
-    loadMore: "Muat lebih banyak",
-    loadingMore: "Memuat…",
-    untitled: "Sesi Codex tanpa judul",
-    threadId: "Thread",
-    actions: {
-      continue: "Lanjutkan",
-      continueAsBranch: "Lanjutkan sebagai cabang",
-      openChat: "Buka Chat",
-      continuing: "Melanjutkan…",
-      archive: "Arsipkan",
-      readTranscript: "Dibaca",
-      readTranscriptLabel: "Baca transkrip untuk {title}",
-      continueLabel: "Lanjutkan {title}",
-      continueAsBranchLabel: "Lanjutkan {title} sebagai cabang",
-      openChatLabel: "Buka Chat untuk {title}",
-      continueAsBranchHint:
-        "Buat Chat dari riwayat terlihat yang tersimpan. Pada pesan pertama Anda, Codex App Server memilih model dan penyedia untuk thread harness baru. Pemilihan berikutnya tetap dikendalikan Codex; OpenClaw tidak pernah mengganti dengan runtime, model, atau fallback lain. Sumber tetap tidak berubah, dan pekerjaan yang sedang berjalan mungkin tidak ada.",
-      archiveLabel: "Arsipkan {title}",
-      archiveConfirmation:
-        "Arsipkan {title} dan semua turunan yang dihasilkan? Konfirmasikan bahwa tidak ada klien Codex atau runner OpenClaw lain yang menggunakannya. Mengarsipkan saat runner lain aktif dapat mengganggu pekerjaannya.",
-      active: "Sesi aktif tidak dapat memulai cabang atau diarsipkan.",
-      archiveActivityUnknownHint:
-        "Aktivitas tidak diketahui karena status bersifat lokal pada proses. Arsipkan hanya setelah mengonfirmasi bahwa tidak ada klien Codex atau runner lain yang menggunakan sesi ini.",
-      statusUnavailable: "Sesi Codex ini tidak dapat dikelola dalam statusnya saat ini.",
-      hostOffline: "Hubungkan kembali komputer ini sebelum mengelola sesi Codex-nya.",
-      gatewayOffline: "Hubungkan kembali ke gateway sebelum mengelola sesi Codex.",
-      remoteReadOnly: "Sesi komputer yang dipasangkan saat ini hanya dapat dilihat.",
-    },
-    status: {
-      active: "Aktif",
-      idle: "Siaga",
-      archived: "Diarsipkan",
-      storedActivityUnknown: "Tersimpan / aktivitas tidak diketahui",
-      systemError: "Kesalahan sistem",
-      unknown: "Tidak diketahui",
-    },
-    host: {
-      gateway: "Gateway",
-      node: "Node",
-      connected: "Terhubung",
-      offline: "Offline",
-      unavailable: "Katalog sesi tidak tersedia",
-      sessionCount: "{count} ditampilkan",
-    },
-    empty: {
-      title: "Tidak ditemukan host Codex",
-      supervisionSubtitle:
-        "Aktifkan supervisi Codex di gateway atau komputer yang dipasangkan, lalu segarkan tampilan ini.",
-      search: "Tidak ada sesi di host ini yang cocok dengan pencarian Anda.",
-      nonArchived: "Tidak ada sesi non-arsip di host ini.",
-    },
-    sidebar: {
-      title: "Sesi Codex",
-      unavailable: "Sesi Codex tidak tersedia",
-      viewAll: "Lihat semua sesi Codex",
-      truncated: "Sesi lainnya tersedia di katalog lengkap.",
-    },
-    transcript: {
-      eyebrow: "Transkrip Codex",
-      back: "Semua sesi Codex",
-      you: "Anda",
-      reasoning: "Penalaran",
-      command: "Perintah",
-      fileChange: "Perubahan file",
-      item: "Item Codex",
-      details: "Detail lengkap",
-      loading: "Memuat transkrip…",
-      loadMore: "Muat item transkrip yang lebih lama",
-    },
   },
   logbook: {
     duration: {
@@ -1386,18 +1331,21 @@ export const id: TranslationMap = {
     eventUnarchived: "Dibatalkan pengarsipannya",
     eventStale: "Sesi kedaluwarsa",
   },
-  overview: {
+  connection: {
+    lostTitle: "Koneksi Gateway terputus",
+    reconnecting: "Menghubungkan kembali…",
+    offlineHint: "Pembaruan langsung dan tindakan dijeda hingga koneksi kembali.",
+    retryNow: "Coba lagi sekarang",
     access: {
       title: "Akses Gateway",
-      subtitle: "Tempat dasbor terhubung dan cara autentikasinya.",
+      subtitle: "Lokasi dashboard terhubung dan cara autentikasinya.",
       wsUrl: "URL WebSocket",
       token: "Token Gateway",
-      password: "Kata sandi (tidak disimpan)",
+      password: "Kata Sandi (tidak disimpan)",
       passwordPlaceholder: "kata sandi sistem atau bersama",
       sessionKey: "Kunci Sesi Default",
-      language: "Bahasa",
-      connectHint: "Klik Connect untuk menerapkan perubahan koneksi.",
-      trustedProxy: "Diautentikasi melalui proxy tepercaya.",
+      connectHint: "Klik Hubungkan untuk menerapkan perubahan koneksi.",
+      trustedProxy: "Diautentikasi melalui proksi tepercaya.",
       showToken: "Tampilkan token",
       hideToken: "Sembunyikan token",
       toggleTokenVisibility: "Alihkan visibilitas token",
@@ -1410,138 +1358,54 @@ export const id: TranslationMap = {
       subtitle: "Informasi handshake Gateway terbaru.",
       status: "Status",
       uptime: "Waktu aktif",
-      tickInterval: "Interval Tick",
-      lastChannelsRefresh: "Refresh Saluran Terakhir",
-      channelsHint:
-        "Gunakan Channels untuk menautkan WhatsApp, Telegram, Discord, Signal, atau iMessage.",
+      tickInterval: "Interval tick",
+      lastChannelsRefresh: "Penyegaran saluran terakhir",
     },
-    stats: {
-      instances: "Instans",
-      instancesHint: "Beacon presence dalam 5 menit terakhir.",
-      sessions: "Sesi",
-      sessionsHint: "Kunci sesi terbaru yang dilacak oleh Gateway.",
-      cron: "Cron",
-      cronNext: "Bangun berikutnya {time}",
-    },
-    notes: {
-      title: "Catatan",
-      subtitle: "Pengingat cepat untuk pengaturan kendali jarak jauh.",
-      tailscaleTitle: "Tailscale serve",
-      tailscaleText:
-        "Utamakan mode serve untuk menjaga gateway tetap di loopback dengan auth tailnet.",
-      sessionTitle: "Kebersihan sesi",
-      sessionText: "Gunakan /new atau sessions.patch untuk mereset konteks.",
-      cronTitle: "Pengingat cron",
-      cronText: "Gunakan sesi terisolasi untuk proses berulang.",
-    },
-    auth: {
-      required: "Gateway ini memerlukan auth. Tambahkan token atau kata sandi, lalu klik Connect.",
-      failed:
-        "Auth gagal. Salin ulang URL bertoken dengan {command}, atau perbarui token, lalu klik Connect.",
-    },
-    pairing: {
-      hint: "Perangkat ini memerlukan persetujuan pairing dari host gateway.",
-      scopeUpgradeTitle: "Peningkatan cakupan menunggu persetujuan.",
-      scopeUpgradeSummary:
-        "Perangkat ini sudah dipasangkan, tetapi perluasan cakupan yang diminta sedang menunggu persetujuan.",
-      roleUpgradeTitle: "Peningkatan peran menunggu persetujuan.",
-      roleUpgradeSummary:
-        "Perangkat ini sudah dipasangkan, tetapi perubahan peran yang diminta sedang menunggu persetujuan.",
-      metadataUpgradeTitle: "Perubahan metadata perangkat menunggu persetujuan.",
-      metadataUpgradeSummary:
-        "Perangkat ini sudah dipasangkan, tetapi perubahan metadata sedang menunggu persetujuan.",
-      mobileHint:
-        "Di seluler? Salin URL lengkap (termasuk #token=...) dari openclaw dashboard --no-open di desktop Anda.",
-      docsTitle: "Dokumentasi pemasangan perangkat (dibuka di tab baru)",
-      docsLink: "Dokumentasi: Pemasangan perangkat",
-    },
-    insecure: {
-      hint: "Halaman ini menggunakan HTTP, jadi browser memblokir identitas perangkat. Gunakan HTTPS (Tailscale Serve) atau buka {url} di host gateway.",
-      stayHttp: "Jika Anda harus tetap menggunakan HTTP, setel {config} (khusus token).",
-    },
-    connection: {
-      title: "Cara terhubung",
-      step1: "Mulai gateway di mesin host Anda:",
-      step2: "Dapatkan URL dasbor bertoken:",
-      step3: "Tempel URL WebSocket dan token di atas, atau buka URL bertoken langsung.",
-      step4: "Atau buat token yang dapat digunakan kembali:",
-      docsHint: "Untuk akses jarak jauh, Tailscale Serve direkomendasikan. ",
+    help: {
+      title: "Cara menghubungkan",
+      step1: "Mulai Gateway di mesin host Anda:",
+      step2: "Dapatkan URL dasbor dengan token:",
+      step3: "Tempel URL WebSocket dan token di atas, atau buka URL dengan token secara langsung.",
       docsLink: "Baca dokumentasi →",
-      authDocsTitle: "Dokumentasi autentikasi Control UI (dibuka di tab baru)",
-      authDocsLink: "Dokumentasi: autentikasi Control UI",
-      tailscaleDocsTitle: "Dokumentasi Tailscale Serve (dibuka di tab baru)",
-      tailscaleDocsLink: "Dokumentasi: Tailscale Serve",
-      insecureHttpDocsTitle: "Dokumentasi HTTP tidak aman (dibuka di tab baru)",
-      insecureHttpDocsLink: "Dokumentasi: HTTP tidak aman",
       copyCommand: "Salin perintah",
       copyCommandAria: "Salin perintah: {command}",
     },
-    cards: {
-      cost: "Biaya",
+  },
+  attention: {
+    cronFailed: "{count} tugas cron gagal",
+    cronOverdue: "{count} tugas cron terlambat",
+    modelAuthExpired: "Autentikasi model telah kedaluwarsa: {providers}",
+    modelAuthExpiring: "Autentikasi model akan kedaluwarsa: {providers}",
+  },
+  palette: {
+    placeholder: "Cari obrolan dan perintah…",
+    noResults: "Tidak ada hasil",
+    categories: {
+      search: "Pencarian",
+      navigation: "Navigasi",
       skills: "Skills",
-      recentSessions: "Sesi Terbaru",
-      modelAuth: "Autentikasi Model",
-      modelAuthOk: "{count} ok",
-      modelAuthExpired: "{count} kedaluwarsa",
-      modelAuthExpiring: "{count} akan kedaluwarsa",
-      modelAuthProviders: "{count} penyedia",
-      modelAuthUsageLeft: "{pct}% tersisa",
-      modelAuthExpiresIn: "kedaluwarsa {when}",
-      modelAuthAttentionExpiredTitle: "Autentikasi model kedaluwarsa",
-      modelAuthAttentionExpiringTitle: "Autentikasi model akan segera kedaluwarsa",
-      modelAuthAttentionExpiredDesc: "{providers} — autentikasi ulang dengan openclaw models auth",
-      modelAuthAttentionExpiringEntry: "{provider} ({when})",
     },
-    attention: {
-      title: "Perhatian",
+    items: {
+      sessions: "Sesi",
+      scheduled: "Terjadwal",
+      skills: "Skills",
+      plugins: "Plugin",
+      settings: "Pengaturan",
+      agents: "Agen",
+      shellCommand: "Perintah Shell",
+      debugMode: "Mode Debug",
     },
-    eventLog: {
-      title: "Log Peristiwa",
+    descriptions: {
+      shellCommand: "Jalankan shell",
+      debugMode: "Aktifkan/nonaktifkan debug",
     },
-    logTail: {
-      title: "Log Gateway",
-    },
-    quickActions: {
-      newSession: "Sesi Baru",
-      automation: "Otomatisasi",
-      refreshAll: "Refresh Semua",
-      terminal: "Terminal",
-    },
-    palette: {
-      placeholder: "Ketik perintah…",
-      noResults: "Tidak ada hasil",
-      categories: {
-        search: "Cari",
-        navigation: "Navigasi",
-        skills: "Skills",
-      },
-      items: {
-        overview: "Ikhtisar",
-        sessions: "Sesi",
-        scheduled: "Terjadwal",
-        skills: "Skills",
-        plugins: "Plugin",
-        settings: "Pengaturan",
-        agents: "Agen",
-        shellCommand: "Perintah shell",
-        debugMode: "Mode debug",
-      },
-      descriptions: {
-        shellCommand: "Jalankan shell",
-        debugMode: "Alihkan debug",
-      },
-      footer: {
-        navigate: "navigasi",
-        select: "pilih",
-        close: "tutup",
-      },
+    footer: {
+      navigate: "navigasi",
+      select: "pilih",
+      close: "tutup",
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "Agen",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "Scene",
       diary: "Diary",
@@ -2049,15 +1913,14 @@ export const id: TranslationMap = {
       },
     },
   },
-  connection: {
-    lostTitle: "Koneksi Gateway terputus",
-    reconnecting: "Menghubungkan kembali…",
-    offlineHint: "Pembaruan langsung dan tindakan dijeda hingga koneksi kembali.",
-    retryNow: "Coba lagi sekarang",
-  },
   chat: {
     disconnected: "Terputus dari gateway.",
     archivedSessionDisabled: "Pulihkan sesi ini untuk mengirim pesan.",
+    loadOlder: "Muat yang lebih lama",
+    catalog: {
+      remoteViewOnly: "Sesi ini berada di node yang dipasangkan dan hanya dapat dilihat.",
+      unsupportedViewOnly: "Sumber sesi eksternal ini hanya dapat dilihat.",
+    },
     taskSuggestions: {
       eyebrow: "Tindak lanjut yang disarankan",
       start: "Mulai di worktree",
@@ -2136,9 +1999,9 @@ export const id: TranslationMap = {
       workSessions: "Pekerjaan",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "Chat terbaru",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",
@@ -2304,6 +2167,8 @@ export const id: TranslationMap = {
       finished: "Selesai ({count})",
       stopTask: "Hentikan {title}",
       viewTranscript: "Lihat transkrip",
+      toolUseOne: "1 penggunaan alat",
+      toolUseMany: "{count} penggunaan alat",
     },
     sessionDiff: {
       title: "Perubahan",
@@ -2444,6 +2309,50 @@ export const id: TranslationMap = {
       howHeading: "Bagaimana cara kerjanya?",
       howHint: "Pilih bagaimana hasil dikirim.",
       title: "Otomatisasi Baru",
+      createAndRun: "Buat & jalankan sekarang",
+    },
+    suggestions: {
+      title: "Ide otomasi",
+      hint: "Otomasi awal — pilih satu dan sesuaikan sebelum membuat.",
+      use: "Gunakan ide →",
+      ideas: {
+        repoPulse: {
+          name: "Repo pulse",
+          tagline: "Isu semalam, PR, dan kegagalan CI, diurutkan berdasarkan urgensi.",
+          prompt:
+            "Tinjau aktivitas semalam di repositori saya: isu baru, pull request, dan kegagalan CI. Rangkum tiga hal yang paling membutuhkan perhatian saya hari ini, masing-masing dengan tautan dan alasan satu baris.",
+        },
+        standupGhostwriter: {
+          name: "Ghostwriter standup",
+          tagline: "Update standup Anda, disusun dari pekerjaan kemarin.",
+          prompt:
+            "Buat update standup saya dari commit kemarin, pull request yang telah digabung, dan thread ulasan yang masih terbuka. Maksimal tiga poin: selesai, sedang dikerjakan, terblokir.",
+        },
+        hackerNewsScout: {
+          name: "Penjelajah Hacker News",
+          tagline: "Tiga tautan layak dibaca sambil ngopi, lengkap dengan opini singkat.",
+          prompt:
+            "Pindai halaman depan Hacker News hari ini untuk postingan tentang AI agents, developer tooling, dan TypeScript. Kirimkan tiga tautan paling menarik, masing-masing dengan opini singkat satu baris.",
+        },
+        dependencyRadar: {
+          name: "Radar dependensi",
+          tagline: "Dependensi usang atau rentan, dengan catatan peningkatan.",
+          prompt:
+            "Periksa proyek utama saya untuk dependensi yang usang atau rentan. Daftarkan pembaruan penting dengan catatan risiko satu baris masing-masing, dan buat perintah peningkatannya.",
+        },
+        watchdog: {
+          name: "Penjaga malam",
+          tagline: "Pemeriksaan kesehatan per jam dengan satu baris kesimpulan.",
+          prompt:
+            "Periksa apakah layanan dan gateway saya dalam kondisi baik: pindai log terkini untuk error baru, restart, atau beban tidak biasa. Balas dengan satu baris singkat yang menyatakan semua aman jika semuanya baik-baik saja; jika ada yang tampak bermasalah, laporkan apa yang gagal dan dari mana harus mulai memeriksa.",
+        },
+        polyglotMinute: {
+          name: "Menit poliglot",
+          tagline: "Satu frasa asing yang berguna menemani kopi pagi Anda.",
+          prompt:
+            "Ajarkan saya satu frasa berguna dalam bahasa Jepang: frasanya, cara pengucapannya, arti harfiahnya, dan kapan menggunakannya. Jaga agar tidak lebih dari lima baris.",
+        },
+      },
     },
     summary: {
       enabled: "Diaktifkan",

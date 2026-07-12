@@ -110,7 +110,7 @@ import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../skills/runtime/remote.js";
 import {
   isBrowserOperatorUiClient,
-  isGatewayCliClient,
+  isEphemeralGatewayClient,
   isOperatorUiClient,
   isWebchatClient,
 } from "../../../utils/message-channel.js";
@@ -443,14 +443,20 @@ function resolvePinnedClientMetadata(params: {
     }
   }
 
-  function normalizeMobileAppPlatformPin(clientId: string | undefined, value: string): string {
+  function resolveNativeAppPlatformFamily(
+    clientId: string | undefined,
+    value: string,
+  ): string | undefined {
     if (clientId === GATEWAY_CLIENT_IDS.IOS_APP && /^(?:ios|ipados)(?:\s|$)/.test(value)) {
       return "ios-family";
     }
     if (clientId === GATEWAY_CLIENT_IDS.ANDROID_APP && /^android(?:\s|$)/.test(value)) {
       return "android";
     }
-    return value;
+    if (clientId === GATEWAY_CLIENT_IDS.MACOS_APP && /^macos \d+(?:\.\d+){0,2}$/.test(value)) {
+      return "macos";
+    }
+    return undefined;
   }
 
   const claimedPlatform = normalizeDeviceMetadataForAuth(params.claimedPlatform);
@@ -466,24 +472,32 @@ function resolvePinnedClientMetadata(params: {
     claimedPlatform !== "" &&
     normalizeLegacyNodeHostPlatformPin(claimedPlatform) ===
       normalizeLegacyNodeHostPlatformPin(pairedPlatform);
-  const isMobileAppPlatformVersionRefresh =
+  const claimedNativeAppPlatformFamily = resolveNativeAppPlatformFamily(
+    params.clientId,
+    claimedPlatform,
+  );
+  const pairedNativeAppPlatformFamily = resolveNativeAppPlatformFamily(
+    params.clientId,
+    pairedPlatform,
+  );
+  const isNativeAppPlatformVersionRefresh =
     hasPinnedPlatform &&
     claimedPlatform !== "" &&
     claimedPlatform !== pairedPlatform &&
-    normalizeMobileAppPlatformPin(params.clientId, claimedPlatform) ===
-      normalizeMobileAppPlatformPin(params.clientId, pairedPlatform);
+    claimedNativeAppPlatformFamily !== undefined &&
+    claimedNativeAppPlatformFamily === pairedNativeAppPlatformFamily;
   const platformMismatch =
     hasPinnedPlatform &&
     claimedPlatform !== pairedPlatform &&
     !isLegacyNodeHostPlatformPin &&
-    !isMobileAppPlatformVersionRefresh;
+    !isNativeAppPlatformVersionRefresh;
   const deviceFamilyMismatch = hasPinnedDeviceFamily && claimedDeviceFamily !== pairedDeviceFamily;
   const pinnedPlatform =
     claimedPlatform === pairedPlatform
       ? params.pairedPlatform
       : isLegacyNodeHostPlatformPin
         ? normalizeLegacyNodeHostPlatformPin(pairedPlatform)
-        : isMobileAppPlatformVersionRefresh
+        : isNativeAppPlatformVersionRefresh
           ? params.claimedPlatform
           : undefined;
   return {
@@ -491,7 +505,7 @@ function resolvePinnedClientMetadata(params: {
     deviceFamilyMismatch,
     pinnedPlatform: hasPinnedPlatform ? pinnedPlatform : undefined,
     pinnedDeviceFamily: hasPinnedDeviceFamily ? params.pairedDeviceFamily : undefined,
-    ...(isMobileAppPlatformVersionRefresh ? { refreshPairedPlatform: params.claimedPlatform } : {}),
+    ...(isNativeAppPlatformVersionRefresh ? { refreshPairedPlatform: params.claimedPlatform } : {}),
   };
 }
 
@@ -541,6 +555,21 @@ export type GatewayWsMessageHandlerParams = {
   logHealth: SubsystemLogger;
   logWsControl: SubsystemLogger;
 };
+
+function claimsWorkerConnectionIdentity(value: unknown): boolean {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const connect = value as { role?: unknown; client?: unknown };
+  if (connect.role === "worker") {
+    return true;
+  }
+  if (!connect.client || typeof connect.client !== "object") {
+    return false;
+  }
+  const client = connect.client as { id?: unknown; mode?: unknown };
+  return client.id === GATEWAY_CLIENT_IDS.WORKER || client.mode === GATEWAY_CLIENT_MODES.WORKER;
+}
 
 export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerParams) {
   const {
@@ -742,6 +771,20 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     };
     try {
       const parsed = JSON.parse(text);
+      const client = getClient();
+      if (
+        !client &&
+        parsed !== null &&
+        typeof parsed === "object" &&
+        "params" in parsed &&
+        claimsWorkerConnectionIdentity(parsed.params)
+      ) {
+        setHandshakeState("failed");
+        setCloseCause("invalid-handshake", { handshakeError: "invalid worker handshake" });
+        logWsControl.warn("worker admission rejected reason=invalid-handshake");
+        close(1008, "invalid-handshake");
+        return;
+      }
       const frameType =
         parsed && typeof parsed === "object" && "type" in parsed
           ? typeof (parsed as { type?: unknown }).type === "string"
@@ -764,7 +807,6 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         setLastFrameMeta({ type: frameType, method: frameMethod, id: frameId });
       }
 
-      const client = getClient();
       if (!client) {
         // Handshake must be a normal request:
         // { type:"req", method:"connect", params: ConnectParams }.
@@ -2138,7 +2180,9 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           connectParams.permissions = reconciliation.effectivePermissions;
         }
 
-        const shouldTrackPresence = !isGatewayCliClient(connectParams.client);
+        // Presence lists user-visible clients/nodes. Ephemeral control-plane connections
+        // (CLI, backend RPC probes, tests) churn for the full TTL and stay excluded.
+        const shouldTrackPresence = !isEphemeralGatewayClient(connectParams.client);
         const clientId = connectParams.client.id;
         const instanceId = connectParams.client.instanceId;
         const presenceKey = shouldTrackPresence ? (device?.id ?? instanceId ?? connId) : undefined;
@@ -2237,6 +2281,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           socket,
           connect: connectParams,
           connId,
+          connectionKind: "gateway",
           isDeviceTokenAuth: authMethod === "device-token",
           usesSharedGatewayAuth: sessionUsesSharedGatewayAuth,
           sharedGatewaySessionGeneration: sessionSharedGatewaySessionGeneration,

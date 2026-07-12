@@ -191,8 +191,9 @@ without exceptions outside doctor/import/export/debug boundaries.
 - No active session files.
 - No fake JSONL test fixtures except doctor legacy migration tests.
 - No raw SQLite access where Kysely is expected.
-- No new legacy DB migrations. This layout has not shipped; keep schema version
-  at `1` unless there is a strong reason.
+- No new file-era DB migrations. The global schema remains at version `1`.
+  The shipped per-agent version `1` schema has one bounded runtime migration to
+  version `2` for stable memory-source identities.
 
 ## Code-Read Assumptions
 
@@ -206,9 +207,9 @@ proceed with these assumptions:
 - Runtime compatibility files are not required. Legacy JSON and JSONL files are
   migration inputs only. The branch-local SQLite sidecars never shipped and are
   deleted instead of imported.
-- `openclaw doctor --fix` owns the legacy file-to-database migration step.
-  Runtime startup and `openclaw migrate` should not carry legacy OpenClaw
-  database-upgrade paths.
+- `openclaw doctor --fix` owns legacy file-to-database migration. Runtime
+  startup owns only bounded upgrades between shipped SQLite schema versions;
+  it must not import file-era state.
 - Credential compatibility follows the same rule: runtime credentials live in
   SQLite. Old `auth-profiles.json`, per-agent `auth.json`, and shared
   `credentials/oauth.json` files are doctor migration inputs, then removed
@@ -263,7 +264,8 @@ file world:
   status payload field. Runtime and bridge tests no longer contain the
   `storePath` contract name; doctor/migration code owns that legacy vocabulary.
 - Session writes no longer pass through the old in-process `store-writer.ts`
-  queue. SQLite patch writes use conflict detection and bounded retry instead.
+  queue. SQLite patch writes prepare outside the transaction, then use a short
+  synchronous validate/apply transaction with explicit conflict detection.
 - Legacy path discovery still has valid migration uses, but runtime code should
   stop treating `sessions.json` and transcript JSONL files as possible write
   targets.
@@ -295,10 +297,10 @@ The branch already has a real shared SQLite base:
 - Runtime stores derive selected and inserted row types from those generated
   Kysely `DB` interfaces instead of shadowing SQLite row shapes by hand. Raw SQL
   remains limited to schema application, pragmas, and migration-only DDL.
-- The SQLite schemas are collapsed to `user_version = 1` because this database
-  layout has not shipped yet. Runtime openers create the current schema only;
-  file-to-database import remains in doctor code, and branch-local
-  database upgrade helpers have been deleted.
+- The global SQLite schema remains at `user_version = 1`. The per-agent schema
+  is at version `2`; its opener atomically migrates the shipped version `1`
+  memory-source key to a stable integer identity. File-to-database import
+  remains in doctor code.
 - Relational ownership is enforced where the ownership boundary is canonical:
   source migration rows cascade from `migration_runs`, task delivery state
   cascades from `task_runs`, and transcript identity rows cascade from
@@ -333,8 +335,9 @@ The branch already has a real shared SQLite base:
   `agent_databases` registry instead of reimplementing that query at each call
   site.
 - Global and per-agent databases record a `schema_meta` row with database role,
-  schema version, timestamps, and agent id for agent databases. The layout still
-  stays at `user_version = 1` because this SQLite schema has not shipped yet.
+  schema version, timestamps, and agent id for agent databases. The global DB
+  remains at `user_version = 1`; per-agent DBs use version `2` after the bounded
+  memory-source identity migration.
 - Per-agent session identity now has a canonical `sessions` root table keyed by
   `session_id`, with `session_key`, `session_scope`, `account_id`,
   `primary_conversation_id`, timestamps, display fields, model metadata,
@@ -580,10 +583,10 @@ Completed consolidation/deletion highlights:
 - Channel session runtime types now expose `{agentId, sessionKey}` for
   updated-at reads, inbound metadata, and last-route updates. The old
   `saveSessionStore(storePath, store)` compatibility type is gone.
-- Plugin runtime, extension API, and `config/sessions` barrel surfaces now steer
-  plugin code to SQLite-backed session row helpers. Root library compatibility
-  exports (`loadSessionStore`, `saveSessionStore`, `resolveStorePath`) remain as
-  deprecated shims for existing consumers. The old
+- Plugin runtime, extension API, and plugin SDK session surfaces now expose
+  SQLite-backed session row helpers instead of active-session whole-store/file
+  compatibility helpers. Root library compatibility exports remain available
+  only outside the plugin SDK for legacy internal and migration callers. The old
   `resolveLegacySessionStorePath` helper is gone; legacy `sessions.json` path
   construction is now local to migration and test fixtures.
 - `src/config/sessions/session-entries.sqlite.ts` now stores canonical session
@@ -1343,8 +1346,8 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   Runtime tests no longer create invalid or empty `runs.json` fixtures to prove
   registry behavior; they seed/read SQLite rows directly.
 - Backup stages the state directory before archiving, copies non-database files,
-  snapshots `*.sqlite` databases with `VACUUM INTO`, omits live WAL/SHM
-  sidecars, records snapshot metadata in the archive manifest, and records
+  snapshots databases with `VACUUM INTO`, omits live WAL/SHM sidecars, records
+  snapshot metadata in the archive manifest, and records
   completed backup runs in SQLite with the archive manifest. `openclaw backup
 create` validates the written archive by default; `--no-verify` is the
   explicit fast path.
@@ -1498,12 +1501,14 @@ tool_artifacts(run_id, artifact_id, kind, metadata_json, blob, created_at)
 run_artifacts(run_id, path, kind, metadata_json, blob, created_at)
 trajectory_runtime_events(session_id, run_id, seq, event_json, created_at)
 memory_index_meta(key, value)
-memory_index_sources(path, source, hash, mtime, size)
+memory_index_sources(id, path, source, hash, mtime, size)
 memory_index_chunks(id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
 memory_embedding_cache(provider, model, provider_key, hash, embedding, dims, updated_at)
 memory_index_state(id, revision)
 cache_entries(scope, key, value_json, blob, expires_at, updated_at)
 ```
+
+`memory_index_sources.id` is the stable integer primary key; `(path, source)` remains unique.
 
 Future search can add FTS tables without changing the canonical event tables:
 
@@ -1824,9 +1829,9 @@ Backups remain one archive file:
   `openclaw backup create` does this archive verification by default;
   `--no-verify` skips only the post-write archive pass, not the snapshot
   creation integrity check.
-- Restore copies snapshots back to their target paths. This branch resets the
-  unshipped SQLite layout to `user_version = 1`; future shipped schema changes
-  can add explicit migrations when they are needed.
+- Restore copies snapshots back to their target paths. Restored global DBs use
+  version `1`; restored per-agent DBs use version `2`, with version `1` snapshots
+  upgraded atomically when opened.
 
 ### Phase 6: Worker Runtime
 
@@ -1859,12 +1864,14 @@ SQLite-native:
 
 1. Stop long-running write activity or enter a short backup barrier.
 2. For every global and agent database, run a checkpoint.
-3. Snapshot each database using SQLite backup semantics or `VACUUM INTO` into a
-   temporary backup directory.
-4. Archive the compacted database snapshots, config file, credentials directory,
-   selected workspaces, and a manifest.
-5. Verify the archive by opening every included SQLite snapshot and running
-   `PRAGMA integrity_check`.
+3. Snapshot databases with `VACUUM INTO` into a temporary backup directory.
+   Plugin schemas that require owner-defined SQLite capabilities fail closed
+   until the owner provides a safe snapshot contract.
+4. Archive the database snapshots, config file, credentials directory, selected
+   workspaces, and a manifest.
+5. Verify every SQLite snapshot's file shape, then open canonical OpenClaw
+   databases and run `PRAGMA integrity_check` plus role validation. Dedicated
+   plugin schemas remain opaque unless their owner supplies a verifier.
    `openclaw backup create` does this by default; `--no-verify` is only for
    intentionally skipping the post-write archive pass.
 
@@ -1874,17 +1881,18 @@ agent id, schema version, source path, snapshot path, byte size, and integrity
 status.
 
 Restore should rebuild the global database and agent database files from the
-archive snapshots. Because the SQLite layout has not shipped yet, this refactor
-keeps only the version-1 schema plus doctor file-to-database import. The restore
-command validates the archive first, then replaces each manifest asset from the
-verified extracted payload.
+archive snapshots. The global schema remains version `1`; per-agent version `1`
+snapshots receive the bounded runtime upgrade to version `2`. Doctor remains
+the only owner of file-to-database import. The restore command validates the
+archive first, then replaces each manifest asset from the verified extracted
+payload.
 
 ## Runtime Refactor Plan
 
 1. Add database registry APIs.
    - Resolve global DB and per-agent DB paths.
-   - Keep the unshipped schemas at `user_version = 1`; do not add schema
-     migration runner code until a shipped schema needs it.
+   - Keep the global schema at `user_version = 1`. Per-agent DBs use version `2`
+     with one atomic migration from the shipped version `1` memory-source shape.
    - Add close/checkpoint/integrity helpers used by tests, backup, and doctor.
 
 2. Collapse sidecar SQLite stores.
@@ -1979,10 +1987,12 @@ verified extracted payload.
      lifetime and cancellation behavior are boring.
 
 8. Backup integration.
-   - Teach backup to snapshot global and agent databases via SQLite backup or
-     `VACUUM INTO`. Done for discovered `*.sqlite` files under the state asset.
-   - Add backup verification for SQLite integrity and schema version. Done for
-     backup creation and default archive verification integrity checks.
+   - Teach backup to snapshot global, agent, and plugin databases with
+     `VACUUM INTO`. Done for discovered `*.sqlite` files under the state asset;
+     plugin schemas requiring unavailable owner capabilities fail closed.
+   - Add backup verification for canonical SQLite integrity and schema identity,
+     plus generic file-shape validation for dedicated plugin snapshots. Done for
+     backup creation and default archive verification.
    - Record backup run metadata in SQLite. Done via the shared `backup_runs`
      table with archive path, status, and manifest JSON.
    - Add restore from verified archive snapshots. Done: `openclaw backup
@@ -2109,8 +2119,9 @@ restore` validates before extraction, uses the verifier's normalized
 
 - One connection per thread/process is fine; do not share handles across
   workers.
-- Use WAL, `foreign_keys=ON`, a 30s busy timeout, and short `BEGIN IMMEDIATE`
-  write transactions.
+- Use WAL, `foreign_keys=ON`, a 5s busy timeout, and short `BEGIN IMMEDIATE`
+  write transactions. Do not layer synchronous lock retries above SQLite's
+  single busy wait.
 - Keep write transaction helpers synchronous unless/until an async transaction
   API adds explicit mutex/backpressure semantics.
 - Keep parent delivery writes small and transactional.
