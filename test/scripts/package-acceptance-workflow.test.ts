@@ -86,8 +86,10 @@ type WorkflowJob = {
   permissions?: Record<string, string>;
   "runs-on"?: string;
   strategy?: {
+    "fail-fast"?: boolean;
     matrix?: {
       include?: WorkflowMatrixEntry[];
+      tier?: string;
     };
   };
   "timeout-minutes"?: number | string;
@@ -2169,6 +2171,42 @@ describe("package artifact reuse", () => {
     );
     expect(runtimeCoverageUpload.uses).toBe(UPLOAD_ARTIFACT_V7);
     expect(runtimeCoverageUpload.with?.["if-no-files-found"]).toBe("error");
+  });
+
+  it("runs runtime parity tiers in parallel and preserves one canonical gate", () => {
+    const tierJob = workflowJob(
+      RELEASE_CHECKS_WORKFLOW,
+      "qa_lab_runtime_parity_tier_release_checks",
+    );
+    const collectorJob = workflowJob(
+      RELEASE_CHECKS_WORKFLOW,
+      "qa_lab_runtime_parity_release_checks",
+    );
+
+    expect(tierJob.strategy?.["fail-fast"]).toBe(false);
+    expect(tierJob.strategy?.matrix?.tier).toContain('["agentic","standard","soak"]');
+    expect(tierJob.strategy?.matrix?.tier).toContain('["agentic","standard"]');
+    expect(workflowStep(tierJob, "Run runtime parity tier").run).toContain('"${tier_args[@]}"');
+    expect(workflowStep(tierJob, "Upload runtime parity tier artifacts").with?.name).toContain(
+      "${{ matrix.tier }}",
+    );
+    expect(collectorJob.needs).toEqual([
+      "resolve_target",
+      "qa_lab_runtime_parity_tier_release_checks",
+    ]);
+    expect(collectorJob.name).toBe("Run QA Lab runtime parity lane");
+    expect(workflowStep(collectorJob, "Download runtime parity tier artifacts").with).toMatchObject(
+      {
+        pattern: "release-qa-runtime-parity-tier-*-${{ needs.resolve_target.outputs.revision }}",
+        "merge-multiple": true,
+      },
+    );
+    expect(workflowStep(collectorJob, "Verify runtime parity tier statuses").run).toContain(
+      "tiers=(agentic standard)",
+    );
+    expect(workflowStep(collectorJob, "Upload runtime parity artifacts").with?.name).toBe(
+      "release-qa-runtime-parity-${{ needs.resolve_target.outputs.revision }}",
+    );
   });
 
   it("requires live proof evidence artifacts when proof jobs run", () => {
