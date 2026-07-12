@@ -18,10 +18,16 @@ export function normalizeElevenLabsBaseUrl(baseUrl?: string): string {
   try {
     parsed = new URL(trimmed);
   } catch {
-    throw new Error(`Invalid ElevenLabs baseUrl: ${trimmed}`);
+    // Do not interpolate the raw value: an explicit baseUrl may embed userinfo
+    // (https://user:token@host) or credential-bearing query params that would
+    // otherwise leak into logs/diagnostics via this error.
+    throw new Error("Invalid ElevenLabs baseUrl: value is not a valid URL");
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new Error(`Invalid ElevenLabs baseUrl (expected http/https): ${trimmed}`);
+    // Only the scheme is safe to surface; the rest of the URL may carry secrets.
+    throw new Error(
+      `Invalid ElevenLabs baseUrl: unsupported scheme "${parsed.protocol}" (expected http or https)`,
+    );
   }
   return trimmed;
 }
