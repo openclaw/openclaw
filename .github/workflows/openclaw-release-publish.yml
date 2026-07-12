@@ -607,7 +607,9 @@ jobs:
               "${plan_args[@]}" > "${plan_path}"
           cat "${plan_path}"
 
-          bootstrap_should_dispatch="$(jq -er '.bootstrap.shouldDispatch' "${plan_path}")"
+          bootstrap_should_dispatch="$(
+            jq -er '.bootstrap.shouldDispatch | select(type == "boolean") | tostring' "${plan_path}"
+          )"
           echo "bootstrap_should_dispatch=${bootstrap_should_dispatch}" >> "${GITHUB_OUTPUT}"
           if [[ "${bootstrap_should_dispatch}" != "true" ]]; then
             exit 0

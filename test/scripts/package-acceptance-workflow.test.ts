@@ -3481,6 +3481,9 @@ describe("package artifact reuse", () => {
     expect(trustedClawHubPlan.run).toContain(
       'gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main"',
     );
+    expect(trustedClawHubPlan.run).toContain(
+      "jq -er '.bootstrap.shouldDispatch | select(type == \"boolean\") | tostring'",
+    );
     expect(trustedClawHubPlan.run).not.toContain("cd .release-harness");
     expect(releaseWorkflow).toContain("Attest ClawHub bootstrap approval");
     expect(releaseWorkflow).toContain("Upload ClawHub bootstrap approval");
