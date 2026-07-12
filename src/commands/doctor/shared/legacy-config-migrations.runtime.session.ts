@@ -34,22 +34,20 @@ function parseZeroDuration(val: unknown): boolean {
   }
 }
 
-/** Returns `true` when `resetArchiveRetention` or `pruneAfter` evaluates to ≤ 0. */
-function isZeroDurationResetArchiveRetention(raw: unknown): boolean {
+function isZeroDurationPruneAfter(raw: unknown): boolean {
   const maintenance = getRecord(raw);
-  if (!maintenance) {
+  if (!maintenance || !Object.hasOwn(maintenance, "pruneAfter")) {
     return false;
   }
-  if (
-    Object.hasOwn(maintenance, "resetArchiveRetention") &&
-    parseZeroDuration(maintenance.resetArchiveRetention)
-  ) {
-    return true;
+  return parseZeroDuration(maintenance.pruneAfter);
+}
+
+function isZeroDurationResetArchiveRetention(raw: unknown): boolean {
+  const maintenance = getRecord(raw);
+  if (!maintenance || !Object.hasOwn(maintenance, "resetArchiveRetention")) {
+    return false;
   }
-  if (Object.hasOwn(maintenance, "pruneAfter") && parseZeroDuration(maintenance.pruneAfter)) {
-    return true;
-  }
-  return false;
+  return parseZeroDuration(maintenance.resetArchiveRetention);
 }
 
 const LEGACY_SESSION_MAINTENANCE_ROTATE_BYTES_RULE: LegacyConfigRule = {
@@ -66,10 +64,17 @@ const LEGACY_SESSION_PARENT_FORK_MAX_TOKENS_RULE: LegacyConfigRule = {
   match: hasLegacyParentForkMaxTokens,
 };
 
+const SESSION_MAINTENANCE_PRUNE_AFTER_ZERO_RULE: LegacyConfigRule = {
+  path: ["session", "maintenance"],
+  message:
+    'session.maintenance.pruneAfter is a zero duration — this causes immediate deletion of all sessions. Run "openclaw doctor --fix" to remove it so the documented 30d default applies.',
+  match: isZeroDurationPruneAfter,
+};
+
 const SESSION_MAINTENANCE_RESET_ARCHIVE_RETENTION_ZERO_RULE: LegacyConfigRule = {
   path: ["session", "maintenance"],
   message:
-    'session.maintenance.resetArchiveRetention is a zero duration — this causes immediate deletion of all reset transcript archives. Run "openclaw doctor --fix" to remove it so the documented pruneAfter default applies.',
+    'session.maintenance.resetArchiveRetention is a zero duration — this causes immediate deletion of all reset transcript archives. Run "openclaw doctor --fix" to remove it so archives are kept indefinitely (disk-budget eviction only).',
   match: isZeroDurationResetArchiveRetention,
 };
 
@@ -103,9 +108,11 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SESSION: LegacyConfigMigrationSpec
   }),
   defineLegacyConfigMigration({
     id: "session.maintenance.resetArchiveRetention-zero",
-    describe:
-      "Remove zero-duration session.maintenance.resetArchiveRetention so the documented pruneAfter default applies",
-    legacyRules: [SESSION_MAINTENANCE_RESET_ARCHIVE_RETENTION_ZERO_RULE],
+    describe: "Remove zero-duration session maintenance values so documented defaults apply",
+    legacyRules: [
+      SESSION_MAINTENANCE_PRUNE_AFTER_ZERO_RULE,
+      SESSION_MAINTENANCE_RESET_ARCHIVE_RETENTION_ZERO_RULE,
+    ],
     apply: (raw, changes) => {
       const maintenance = getRecord(getRecord(raw.session)?.maintenance);
       if (!maintenance) {
@@ -131,13 +138,15 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SESSION: LegacyConfigMigrationSpec
         }
         delete maintenance[key];
         const label = typeof val === "number" ? String(val) : val;
+        const restoreMsg =
+          key === "pruneAfter"
+            ? "30d session-pruning default applies"
+            : "archives kept indefinitely (disk-budget eviction only)";
         const fieldPath =
           key === "resetArchiveRetention"
             ? "session.maintenance.resetArchiveRetention"
             : "session.maintenance.pruneAfter";
-        changes.push(
-          `Removed ${fieldPath} "${label}" (zero duration); documented pruneAfter default applies.`,
-        );
+        changes.push(`Removed ${fieldPath} "${label}" (zero duration); ${restoreMsg}.`);
       }
     },
   }),
