@@ -261,14 +261,26 @@ private fun SkillWorkshopActionConfirmDialog(
   onDismiss: () -> Unit,
   onConfirm: () -> Unit,
 ) {
+  val dialogTitle =
+    when (action.action) {
+      SkillWorkshopProposalAction.Apply -> nativeString("Apply proposal?")
+      SkillWorkshopProposalAction.Reject -> nativeString("Reject proposal?")
+      SkillWorkshopProposalAction.Quarantine -> nativeString("Quarantine proposal?")
+    }
+  val dialogBody =
+    when (action.action) {
+      SkillWorkshopProposalAction.Apply ->
+        nativeString("This will apply \"\$proposalTitle\" and refresh Skill Workshop state from the gateway.", action.title)
+      SkillWorkshopProposalAction.Reject ->
+        nativeString("This will reject \"\$proposalTitle\" and refresh Skill Workshop state from the gateway.", action.title)
+      SkillWorkshopProposalAction.Quarantine ->
+        nativeString("This will quarantine \"\$proposalTitle\" and refresh Skill Workshop state from the gateway.", action.title)
+    }
   AlertDialog(
     onDismissRequest = onDismiss,
-    title = { Text(nativeString("\${action.action.label} proposal?", action.action.label)) },
+    title = { Text(dialogTitle) },
     text = {
-      Text(
-        text =
-          nativeString("This will \${action.action.label.lowercase()} \"\${action.title}\" and refresh Skill Workshop state from the gateway.", action.action.label.lowercase(), action.title),
-      )
+      Text(text = dialogBody)
     },
     confirmButton = {
       TextButton(onClick = onConfirm) {

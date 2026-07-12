@@ -835,8 +835,8 @@ private fun NotificationSettingsScreen(
     SettingsTogglePanel(
       rows =
         listOf(
-          SettingsToggleRow("Forward Notifications", if (enabled) nativeString("OpenClaw can receive selected alerts.") else nativeString("Alerts stay on this phone."), Icons.Default.Notifications, enabled, ::setForwarding),
-          SettingsToggleRow("Quiet Hours", "$quietStart to $quietEnd", Icons.Default.Bolt, quietEnabled) { checked ->
+          SettingsToggleRow(nativeString("Forward Notifications"), if (enabled) nativeString("OpenClaw can receive selected alerts.") else nativeString("Alerts stay on this phone."), Icons.Default.Notifications, enabled, ::setForwarding),
+          SettingsToggleRow(nativeString("Quiet Hours"), nativeString("\$quietStart to \$quietEnd", quietStart, quietEnd), Icons.Default.Bolt, quietEnabled) { checked ->
             viewModel.setNotificationForwardingQuietHours(enabled = checked, start = quietStart, end = quietEnd)
           },
         ),
@@ -1202,11 +1202,11 @@ private fun PhoneCapabilitiesScreen(
     SettingsTogglePanel(
       rows =
         listOfNotNull(
-          SettingsToggleRow("Camera", "Allow camera tools when requested.", Icons.Default.CameraAlt, cameraEnabled, ::setCameraAccess),
-          SettingsToggleRow("Precise Location", "Share precise location while location is enabled.", Icons.Default.LocationOn, locationPreciseEnabled, ::setPreciseLocation),
+          SettingsToggleRow(nativeString("Camera"), nativeString("Allow camera tools when requested."), Icons.Default.CameraAlt, cameraEnabled, ::setCameraAccess),
+          SettingsToggleRow(nativeString("Precise Location"), nativeString("Share precise location while location is enabled."), Icons.Default.LocationOn, locationPreciseEnabled, ::setPreciseLocation),
           if (photosAvailable) {
             SettingsToggleRow(
-              "Photos",
+              nativeString("Photos"),
               if (photosGranted) nativeString("Selected or full photo access granted.") else nativeString("Allow photo library access."),
               Icons.Default.Image,
               photosGranted,
@@ -1216,14 +1216,14 @@ private fun PhoneCapabilitiesScreen(
             null
           },
           SettingsToggleRow(
-            "Installed Apps",
+            nativeString("Installed Apps"),
             if (installedAppsSharingEnabled) nativeString("OpenClaw can list launcher-visible apps.") else nativeString("App list stays on this phone."),
             Icons.Default.Storage,
             installedAppsSharingEnabled,
             ::setInstalledAppsSharing,
           ),
-          SettingsToggleRow("Keep Awake", "Keep the node available during active work.", Icons.Default.Bolt, preventSleep, viewModel::setPreventSleep),
-          SettingsToggleRow("Canvas Status", "Show screen-sharing debug state.", Icons.AutoMirrored.Filled.ScreenShare, canvasDebugStatusEnabled, viewModel::setCanvasDebugStatusEnabled),
+          SettingsToggleRow(nativeString("Keep Awake"), nativeString("Keep the node available during active work."), Icons.Default.Bolt, preventSleep, viewModel::setPreventSleep),
+          SettingsToggleRow(nativeString("Canvas Status"), nativeString("Show screen-sharing debug state."), Icons.AutoMirrored.Filled.ScreenShare, canvasDebugStatusEnabled, viewModel::setCanvasDebugStatusEnabled),
         ),
     )
     ClawPanel {
