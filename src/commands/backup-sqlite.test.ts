@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { createLocalSqliteSnapshotProvider } from "../snapshot/local-repository.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.generated.js";
@@ -229,6 +230,36 @@ describe("SQLite backup commands", () => {
     await expect(backupSqliteRestoreCommand(runtime, "/tmp/snapshot", {})).rejects.toThrow(
       "Missing required --target value",
     );
+  });
+
+  it("rejects generic provider artifacts before verify or restore", async () => {
+    const tempDir = tempDirs.make("openclaw-backup-sqlite-");
+    const databasePath = path.join(tempDir, "generic.sqlite");
+    const repositoryPath = path.join(tempDir, "snapshots");
+    const restorePath = path.join(tempDir, "restore", "generic.sqlite");
+    const sqlite = requireNodeSqlite();
+    const database = new sqlite.DatabaseSync(databasePath);
+    try {
+      database.exec("CREATE TABLE entries (id INTEGER PRIMARY KEY);");
+    } finally {
+      database.close();
+    }
+    const snapshot = await createLocalSqliteSnapshotProvider({ repositoryPath }).create({
+      path: databasePath,
+      identity: { role: "generic", id: "generic-test" },
+    });
+    const runtime = createRuntimeCapture();
+
+    await expect(backupSqliteListCommand(runtime, { repository: repositoryPath })).rejects.toThrow(
+      /database role generic is not allowed/u,
+    );
+    await expect(backupSqliteVerifyCommand(runtime, snapshot.ref.path, {})).rejects.toThrow(
+      /database role generic is not allowed/u,
+    );
+    await expect(
+      backupSqliteRestoreCommand(runtime, snapshot.ref.path, { target: restorePath }),
+    ).rejects.toThrow(/database role generic is not allowed/u);
+    await expect(fs.access(restorePath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 });
 

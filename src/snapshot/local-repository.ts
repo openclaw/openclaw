@@ -61,6 +61,7 @@ const SNAPSHOT_ARTIFACT_ENTRIES = new Set([
 const RESTORE_STAGING_ENTRIES = new Set([SNAPSHOT_SQLITE_FILENAME]);
 
 export type LocalSqliteSnapshotProviderOptions = {
+  readonly allowedDatabaseRoles?: readonly SnapshotDatabaseIdentity["role"][];
   readonly repositoryPath: string;
   readonly now?: () => Date;
 };
@@ -72,10 +73,12 @@ export function createLocalSqliteSnapshotProvider(
 }
 
 class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
+  readonly #allowedDatabaseRoles: readonly SnapshotDatabaseIdentity["role"][] | undefined;
   readonly #repositoryPath: string;
   readonly #now: () => Date;
 
   constructor(options: LocalSqliteSnapshotProviderOptions) {
+    this.#allowedDatabaseRoles = options.allowedDatabaseRoles;
     this.#repositoryPath = path.resolve(options.repositoryPath);
     this.#now = options.now ?? (() => new Date());
   }
@@ -243,6 +246,7 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
   async verify(snapshot: SnapshotRef): Promise<SnapshotVerificationResult> {
     const snapshotDir = await this.#resolveSnapshotDirectory(snapshot);
     const manifest = await readVerifiedSnapshotManifest(snapshotDir);
+    assertAllowedDatabaseRole(manifest, this.#allowedDatabaseRoles);
     const artifact = await hashSnapshotArtifact(snapshotDir);
     const artifactPath = path.join(snapshotDir, SNAPSHOT_SQLITE_FILENAME);
     assertArtifactMatchesManifest(artifactPath, artifact, manifest);
@@ -257,6 +261,7 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
   ): Promise<SnapshotVerificationResult> {
     const snapshotDir = await this.#resolveSnapshotDirectory(snapshot);
     const manifest = await readVerifiedSnapshotManifest(snapshotDir);
+    assertAllowedDatabaseRole(manifest, this.#allowedDatabaseRoles);
     const resolvedTargetPath = path.resolve(targetPath);
     const canonicalRepositoryPath = await fs.realpath(this.#repositoryPath);
     const canonicalTargetPath = await canonicalPathFromExistingAncestor(resolvedTargetPath);
@@ -348,9 +353,11 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
         continue;
       }
       await assertExactSnapshotContents(snapshotPath);
+      const manifest = await readSnapshotManifest(snapshotPath);
+      assertAllowedDatabaseRole(manifest, this.#allowedDatabaseRoles);
       snapshots.push({
         ref: { path: snapshotPath },
-        manifest: await readSnapshotManifest(snapshotPath),
+        manifest,
       });
     }
     return snapshots.toSorted(
@@ -395,6 +402,18 @@ function assertArtifactMatchesManifest(
       `Snapshot artifact hash mismatch for ${artifactPath}: expected ${manifest.artifact.sha256}, got ${artifact.sha256}`,
     );
   }
+}
+
+function assertAllowedDatabaseRole(
+  manifest: SnapshotManifest,
+  allowedRoles: readonly SnapshotDatabaseIdentity["role"][] | undefined,
+): void {
+  if (!allowedRoles || allowedRoles.includes(manifest.database.role)) {
+    return;
+  }
+  throw new Error(
+    `SQLite snapshot database role ${manifest.database.role} is not allowed for this operation.`,
+  );
 }
 
 async function verifySnapshotDatabaseFile(
