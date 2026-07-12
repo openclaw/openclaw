@@ -135,11 +135,10 @@ actor HealthSummaryService: HealthSummaryServicing {
 
     private func requireAuthorizationCoverage(for range: DateInterval) async throws {
         if #available(iOS 26.0, *) {
-            let dates = try await self.healthStore.earliestAuthorizedSampleDate(
-                for: HealthAuthorization.readTypes)
+            let dates = try await self.earliestAuthorizedDates()
             guard Self.authorizationCovers(
                 startDate: range.start,
-                earliestAuthorizedDates: dates.values)
+                earliestAuthorizedDates: dates)
             else {
                 throw NSError(domain: "Health", code: 3, userInfo: [
                     NSLocalizedDescriptionKey: """
@@ -147,6 +146,21 @@ actor HealthSummaryService: HealthSummaryServicing {
                     request a shorter period
                     """,
                 ])
+            }
+        }
+    }
+
+    @available(iOS 26.0, *)
+    private func earliestAuthorizedDates() async throws -> [Date] {
+        try await withCheckedThrowingContinuation { continuation in
+            self.healthStore.getEarliestAuthorizedSampleDate(
+                for: HealthAuthorization.readTypes)
+            { dates, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume(returning: dates.map { Array($0.values) } ?? [])
+                }
             }
         }
     }
