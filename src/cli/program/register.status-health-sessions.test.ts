@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   sessionsTailCommand: vi.fn(),
   sessionsCompactCommand: vi.fn(),
   exportTrajectoryCommand: vi.fn(),
+  capabilityProjectionCommand: vi.fn(),
   commitmentsListCommand: vi.fn(),
   commitmentsDismissCommand: vi.fn(),
   tasksListCommand: vi.fn(),
@@ -37,6 +38,7 @@ const sessionsCleanupCommand = mocks.sessionsCleanupCommand;
 const sessionsTailCommand = mocks.sessionsTailCommand;
 const sessionsCompactCommand = mocks.sessionsCompactCommand;
 const exportTrajectoryCommand = mocks.exportTrajectoryCommand;
+const capabilityProjectionCommand = mocks.capabilityProjectionCommand;
 const commitmentsListCommand = mocks.commitmentsListCommand;
 const commitmentsDismissCommand = mocks.commitmentsDismissCommand;
 const tasksListCommand = mocks.tasksListCommand;
@@ -105,6 +107,10 @@ vi.mock("../../commands/export-trajectory.js", () => ({
   exportTrajectoryCommand: mocks.exportTrajectoryCommand,
 }));
 
+vi.mock("../../commands/capability-projection.js", () => ({
+  capabilityProjectionCommand: mocks.capabilityProjectionCommand,
+}));
+
 vi.mock("../../commands/commitments.js", () => ({
   commitmentsListCommand: mocks.commitmentsListCommand,
   commitmentsDismissCommand: mocks.commitmentsDismissCommand,
@@ -150,6 +156,7 @@ describe("registerStatusHealthSessionsCommands", () => {
     sessionsTailCommand.mockResolvedValue(undefined);
     sessionsCompactCommand.mockResolvedValue(undefined);
     exportTrajectoryCommand.mockResolvedValue(undefined);
+    capabilityProjectionCommand.mockResolvedValue(undefined);
     commitmentsListCommand.mockResolvedValue(undefined);
     commitmentsDismissCommand.mockResolvedValue(undefined);
     tasksListCommand.mockResolvedValue(undefined);
@@ -473,6 +480,37 @@ describe("registerStatusHealthSessionsCommands", () => {
     expectCommandOptions(exportTrajectoryCommand, {
       requestJsonBase64: "eyJzZXNzaW9uS2V5IjoiYWdlbnQ6bWFpbjp0ZWxlZ3JhbTpkaXJlY3Q6b3duZXIifQ",
       json: true,
+    });
+  });
+
+  it("runs sessions capability-projection with explicit read-only inputs", async () => {
+    await runCli([
+      "sessions",
+      "--agent",
+      "main",
+      "capability-projection",
+      "--session-key",
+      "agent:main:discord:channel:synthetic",
+      "--run-id",
+      "run-synthetic",
+      "--window-start",
+      "2026-07-12T15:59:00Z",
+      "--window-end",
+      "2026-07-12T16:01:00Z",
+      "--evidence-file",
+      "/tmp/evidence.json",
+      "--output-root",
+      "/tmp/output",
+    ]);
+
+    expectCommandOptions(capabilityProjectionCommand, {
+      sessionKey: "agent:main:discord:channel:synthetic",
+      agent: "main",
+      runId: "run-synthetic",
+      windowStart: "2026-07-12T15:59:00Z",
+      windowEnd: "2026-07-12T16:01:00Z",
+      evidenceFile: "/tmp/evidence.json",
+      outputRoot: "/tmp/output",
     });
   });
 

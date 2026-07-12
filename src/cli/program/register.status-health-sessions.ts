@@ -357,6 +357,47 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     });
 
   sessionsCmd
+    .command("capability-projection")
+    .description("Generate a deterministic capability projection report from sanitized evidence")
+    .requiredOption("--session-key <key>", "Session key to inspect")
+    .option("--agent <id>", "Agent id for resolving the session store")
+    .option("--store <path>", "Path to session store (default: resolved from the agent)")
+    .option("--run-id <id>", "Select the exact context.compiled run id")
+    .option("--event-sequence <number>", "Select the exact context.compiled event sequence")
+    .requiredOption("--window-start <rfc3339>", "Start of the evidence/selection window")
+    .requiredOption("--window-end <rfc3339>", "End of the evidence/selection window")
+    .requiredOption("--evidence-file <path>", "Closed sanitized-evidence JSON array")
+    .requiredOption("--output-root <path>", "Approved root containing generated reports")
+    .option(
+      "--output-dir <path>",
+      "Output directory (default: <output-root>/reports/capability-projection)",
+    )
+    .option("--workspace <path>", "Workspace identity recorded in the report")
+    .action(async (opts, command) => {
+      const parentOpts = command.parent?.opts() as { store?: string; agent?: string } | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { capabilityProjectionCommand } =
+          await import("../../commands/capability-projection.js");
+        await capabilityProjectionCommand(
+          {
+            sessionKey: opts.sessionKey as string,
+            agent: (opts.agent as string | undefined) ?? parentOpts?.agent,
+            store: (opts.store as string | undefined) ?? parentOpts?.store,
+            runId: opts.runId as string | undefined,
+            eventSequence: opts.eventSequence as string | undefined,
+            windowStart: opts.windowStart as string | undefined,
+            windowEnd: opts.windowEnd as string | undefined,
+            evidenceFile: opts.evidenceFile as string,
+            outputRoot: opts.outputRoot as string,
+            outputDir: opts.outputDir as string | undefined,
+            workspace: opts.workspace as string | undefined,
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  sessionsCmd
     .command("compact <key>")
     .description("Compact a stored session transcript via the running gateway")
     .option("--agent <id>", "Agent id that owns the session (required for global keys)")

@@ -39,6 +39,12 @@ export type TrajectoryCollection = {
     | "EVIDENCE_COLLECTION_FAILED";
 };
 
+type ExpectedTrajectoryContext = {
+  sessionId: string;
+  sessionKey: string;
+  evidenceWindow: { start: string; end: string };
+};
+
 const MAX_TRAJECTORY_BYTES = 50 * 1024 * 1024;
 
 const BASE_TOOL_CATALOG: Array<{
@@ -329,7 +335,7 @@ function matchesSelection(event: SafeCompiledContext, selection: ExactTurnSelect
 function successfulResult(
   event: TrajectoryEvent,
   runId: string,
-  expected: { sessionId: string; sessionKey: string },
+  expected: ExpectedTrajectoryContext,
 ): SafeExistingToolResult | null {
   if (
     event.runId !== runId ||
@@ -337,6 +343,14 @@ function successfulResult(
     event.sessionKey !== expected.sessionKey ||
     event.type !== "tool.result" ||
     !isRecord(event.data)
+  ) {
+    return null;
+  }
+  const eventTimestamp = Date.parse(event.ts);
+  if (
+    !Number.isFinite(eventTimestamp) ||
+    eventTimestamp < Date.parse(expected.evidenceWindow.start) ||
+    eventTimestamp > Date.parse(expected.evidenceWindow.end)
   ) {
     return null;
   }
@@ -358,13 +372,30 @@ function successfulResult(
 export async function collectExactTurnFromTrajectory(
   trajectoryPath: string,
   selection: ExactTurnSelection,
-  expected: { sessionId: string; sessionKey: string },
+  expected: ExpectedTrajectoryContext,
 ): Promise<TrajectoryCollection> {
   try {
+    const evidenceWindowStart = Date.parse(expected.evidenceWindow.start);
+    const evidenceWindowEnd = Date.parse(expected.evidenceWindow.end);
+    if (
+      !Number.isFinite(evidenceWindowStart) ||
+      !Number.isFinite(evidenceWindowEnd) ||
+      evidenceWindowStart > evidenceWindowEnd
+    ) {
+      return {
+        compiled: null,
+        successfulToolResults: [],
+        errorCode: "EVIDENCE_COLLECTION_FAILED",
+      };
+    }
     if (selection.mode === "latest_in_window") {
-      const start = Date.parse(selection.start);
-      const end = Date.parse(selection.end);
-      if (!Number.isFinite(start) || !Number.isFinite(end) || start > end) {
+      const selectionStart = Date.parse(selection.start);
+      const selectionEnd = Date.parse(selection.end);
+      if (
+        !Number.isFinite(selectionStart) ||
+        !Number.isFinite(selectionEnd) ||
+        selectionStart > selectionEnd
+      ) {
         return {
           compiled: null,
           successfulToolResults: [],
@@ -386,6 +417,8 @@ export async function collectExactTurnFromTrajectory(
       return compiled &&
         compiled.sessionId === expected.sessionId &&
         compiled.sessionKey === expected.sessionKey &&
+        Date.parse(compiled.ts) >= evidenceWindowStart &&
+        Date.parse(compiled.ts) <= evidenceWindowEnd &&
         matchesSelection(compiled, selection)
         ? [{ compiled, index }]
         : [];

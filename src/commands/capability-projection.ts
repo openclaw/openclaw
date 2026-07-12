@@ -1,8 +1,13 @@
+import fs from "node:fs/promises";
 import os from "node:os";
+import path from "node:path";
+import { resolveStateDir } from "../config/paths.js";
 import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions/paths.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { resolveTrajectoryFilePath } from "../trajectory/paths.js";
+import { VERSION } from "../version.js";
 import {
   collectExactTurnFromTrajectory,
   collectToolFactsFromSanitizedEvidence,
@@ -17,6 +22,7 @@ import {
   type CollectionError,
   type EvidenceRecord,
 } from "./capability-projection-model.js";
+import { publishCapabilityProjectionPair } from "./capability-projection-render.js";
 import {
   CapabilityProjectionEvidenceSchema,
   CapabilityProjectionReportSchema,
@@ -34,6 +40,20 @@ export type CapabilityProjectionInput = {
   evidence: EvidenceRecord[];
   observations?: CapabilityProjectionReport["observations"];
   collectionErrors?: CollectionError[];
+};
+
+export type CapabilityProjectionCommandOptions = {
+  sessionKey?: string;
+  agent?: string;
+  store?: string;
+  runId?: string;
+  eventSequence?: string;
+  windowStart?: string;
+  windowEnd?: string;
+  evidenceFile?: string;
+  outputRoot?: string;
+  outputDir?: string;
+  workspace?: string;
 };
 
 export function resolveCapabilityProjectionTrajectoryPath(params: {
@@ -73,6 +93,7 @@ export function resolveCapabilityProjectionTrajectoryPath(params: {
 export async function collectCapabilityProjectionTrajectory(params: {
   sessionKey: string;
   selection: ExactTurnSelection;
+  evidenceWindow: { start: string; end: string };
   agentId?: string;
   storePath?: string;
   env?: NodeJS.ProcessEnv;
@@ -84,6 +105,7 @@ export async function collectCapabilityProjectionTrajectory(params: {
   return await collectExactTurnFromTrajectory(target.trajectoryPath, params.selection, {
     sessionId: target.sessionId,
     sessionKey: params.sessionKey,
+    evidenceWindow: params.evidenceWindow,
   });
 }
 
@@ -157,6 +179,9 @@ function validateEvidenceStrings(value: unknown, key = "evidence"): void {
 }
 
 function sanitizeEvidenceRecord(input: EvidenceRecord): EvidenceRecord {
+  if (input.redactionApplied !== true) {
+    throw new Error("Evidence record is not marked as redacted");
+  }
   const parsed = CapabilityProjectionEvidenceSchema.parse({ ...input, redactionApplied: true });
   validateEvidenceStrings(parsed);
   return parsed as EvidenceRecord;
@@ -345,4 +370,120 @@ export function defaultCapabilityProjectionHost(params: {
     instanceDir: params.instanceDir,
     workspaceDir: params.workspaceDir,
   };
+}
+
+function resolveCommandSelection(
+  opts: CapabilityProjectionCommandOptions,
+): ExactTurnSelection | null {
+  const windowStart = opts.windowStart?.trim();
+  const windowEnd = opts.windowEnd?.trim();
+  const startMs = windowStart ? Date.parse(windowStart) : Number.NaN;
+  const endMs = windowEnd ? Date.parse(windowEnd) : Number.NaN;
+  if (
+    !windowStart ||
+    !windowEnd ||
+    !Number.isFinite(startMs) ||
+    !Number.isFinite(endMs) ||
+    startMs > endMs
+  ) {
+    return null;
+  }
+  const selectors = [Boolean(opts.runId?.trim()), Boolean(opts.eventSequence?.trim())].filter(
+    Boolean,
+  ).length;
+  if (selectors > 1) {
+    return null;
+  }
+  if (opts.runId?.trim()) {
+    return { mode: "exact_run_id", runId: opts.runId.trim() };
+  }
+  if (opts.eventSequence?.trim()) {
+    const sequence = Number(opts.eventSequence);
+    return Number.isSafeInteger(sequence) && sequence >= 0
+      ? { mode: "exact_event_sequence", sequence }
+      : null;
+  }
+  return { mode: "latest_in_window", start: windowStart, end: windowEnd };
+}
+
+/** Generates a report from local trajectory metadata plus a closed sanitized-evidence file. */
+export async function capabilityProjectionCommand(
+  opts: CapabilityProjectionCommandOptions,
+  runtime: RuntimeEnv,
+): Promise<void> {
+  const sessionKey = opts.sessionKey?.trim();
+  const selection = resolveCommandSelection(opts);
+  const evidenceFile = opts.evidenceFile?.trim();
+  const outputRoot = opts.outputRoot?.trim();
+  if (!sessionKey || !selection || !evidenceFile || !outputRoot) {
+    runtime.error(
+      "Capability projection requires --session-key, --evidence-file, --output-root, both --window-start/--window-end, and at most one exact selector: --run-id or --event-sequence.",
+    );
+    runtime.exit(1);
+    return;
+  }
+  let evidence: EvidenceRecord[];
+  try {
+    const parsed = JSON.parse(await fs.readFile(path.resolve(evidenceFile), "utf8")) as unknown;
+    evidence = CapabilityProjectionEvidenceSchema.array().parse(parsed) as EvidenceRecord[];
+    if (evidence.some((record) => record.redactionApplied !== true)) {
+      throw new Error("unredacted evidence");
+    }
+  } catch {
+    runtime.error("Capability projection evidence file is invalid or unreadable.");
+    runtime.exit(1);
+    return;
+  }
+  const targetAgentId = resolveAgentIdFromSessionKey(sessionKey);
+  if (opts.agent?.trim() && opts.agent.trim() !== targetAgentId) {
+    runtime.error("Capability projection --agent conflicts with the canonical session owner.");
+    runtime.exit(1);
+    return;
+  }
+  const evidenceWindow = { start: opts.windowStart as string, end: opts.windowEnd as string };
+  const trajectory = await collectCapabilityProjectionTrajectory({
+    sessionKey,
+    selection,
+    evidenceWindow,
+    agentId: targetAgentId,
+    storePath: opts.store,
+  });
+  const workspaceDir = path.resolve(opts.workspace ?? process.cwd());
+  const resolvedOutputRoot = path.resolve(outputRoot);
+  const resolvedOutputDir = path.resolve(
+    opts.outputDir ?? path.join(resolvedOutputRoot, "reports", "capability-projection"),
+  );
+  const generatedAt = new Date().toISOString();
+  const report = buildCapabilityProjectionReport({
+    generatedAt,
+    host: defaultCapabilityProjectionHost({
+      instanceDir: resolveStateDir(process.env),
+      workspaceDir,
+    }),
+    openclawVersion: VERSION,
+    agentId: targetAgentId,
+    sessionKey,
+    evidenceWindow,
+    selection,
+    trajectory,
+    evidence,
+  });
+  try {
+    const published = await publishCapabilityProjectionPair({
+      report,
+      outputRoot: resolvedOutputRoot,
+      outputDir: resolvedOutputDir,
+    });
+    runtime.log(
+      JSON.stringify({
+        reportId: report.reportId,
+        confidence: report.overallConfidence.level,
+        jsonPath: published.jsonPath,
+        markdownPath: published.markdownPath,
+      }),
+    );
+  } catch {
+    runtime.error("Capability projection publication failed.");
+    runtime.exit(1);
+  }
 }

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { RuntimeEnv } from "../runtime.js";
 import { collectExactTurnFromTrajectory } from "./capability-projection-collectors.js";
 import type { CapabilityName, EvidenceState, ToolFact } from "./capability-projection-model.js";
 import {
@@ -13,6 +14,7 @@ import {
 import { capabilityProjectionReportJsonSchema } from "./capability-projection-schema.js";
 import {
   buildCapabilityProjectionReport,
+  capabilityProjectionCommand,
   type CapabilityProjectionInput,
 } from "./capability-projection.js";
 
@@ -649,6 +651,19 @@ describe("capability projection acceptance fixtures", () => {
         traceId: "t",
         source: "runtime",
         type: "tool.result",
+        ts: "2026-07-12T16:00:00.500Z",
+        seq: 2,
+        sessionId: "s",
+        sessionKey,
+        runId,
+        data: { name: "exec", success: true },
+      },
+      {
+        traceSchema: "openclaw-trajectory",
+        schemaVersion: 1,
+        traceId: "t",
+        source: "runtime",
+        type: "tool.result",
         ts: now,
         seq: 2,
         sessionId: "s",
@@ -703,7 +718,11 @@ describe("capability projection acceptance fixtures", () => {
         mode: "exact_event_sequence",
         sequence: 1,
       },
-      { sessionId: "s", sessionKey },
+      {
+        sessionId: "s",
+        sessionKey,
+        evidenceWindow: { start: "2026-07-12T15:59:00Z", end: now },
+      },
     );
     expect(collected.compiled?.toolNames).toEqual(["exec"]);
     expect(collected.successfulToolResults).toEqual([]);
@@ -711,7 +730,11 @@ describe("capability projection acceptance fixtures", () => {
     const wrongSession = await collectExactTurnFromTrajectory(
       trajectory,
       { mode: "exact_event_sequence", sequence: 1 },
-      { sessionId: "other-session", sessionKey },
+      {
+        sessionId: "other-session",
+        sessionKey,
+        evidenceWindow: { start: "2026-07-12T15:59:00Z", end: "2026-07-12T16:01:00Z" },
+      },
     );
     expect(wrongSession.errorCode).toBe("MISSING_SESSION_PROJECTION");
   });
@@ -757,6 +780,63 @@ describe("capability projection acceptance fixtures", () => {
 });
 
 describe("collector and publication safety", () => {
+  it("rejects unredacted CLI evidence and conflicting session ownership", async () => {
+    const dir = await makeTempDir();
+    const evidenceFile = path.join(dir, "evidence.json");
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    } as unknown as RuntimeEnv;
+    await fs.writeFile(
+      evidenceFile,
+      JSON.stringify([
+        {
+          id: "unsafe",
+          rank: 8,
+          kind: "agent_self_report",
+          source: "sanitized fixture",
+          observedAt: now,
+          periodRelation: "same_period",
+          status: "collected",
+          fields: { claimCode: "CALLABLE", toolNames: ["memory_get"] },
+          redactionApplied: false,
+        },
+      ]),
+    );
+    await capabilityProjectionCommand(
+      {
+        sessionKey,
+        runId,
+        windowStart: "2026-07-12T15:59:00Z",
+        windowEnd: "2026-07-12T16:01:00Z",
+        evidenceFile,
+        outputRoot: dir,
+      },
+      runtime,
+    );
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Capability projection evidence file is invalid or unreadable.",
+    );
+    vi.clearAllMocks();
+    await fs.writeFile(evidenceFile, "[]");
+    await capabilityProjectionCommand(
+      {
+        sessionKey,
+        agent: "other",
+        runId,
+        windowStart: "2026-07-12T15:59:00Z",
+        windowEnd: "2026-07-12T16:01:00Z",
+        evidenceFile,
+        outputRoot: dir,
+      },
+      runtime,
+    );
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Capability projection --agent conflicts with the canonical session owner.",
+    );
+  });
+
   it("has a closed evidence schema with no arbitrary evidence fields", () => {
     const schemaText = JSON.stringify(capabilityProjectionReportJsonSchema);
     expect(schemaText).toContain("context_compiled");
@@ -775,7 +855,11 @@ describe("collector and publication safety", () => {
         start: "2026-07-12T00:00:00Z",
         end: "2026-07-12T01:00:00Z",
       },
-      { sessionId: "fixture", sessionKey },
+      {
+        sessionId: "fixture",
+        sessionKey,
+        evidenceWindow: { start: "2026-07-12T00:00:00Z", end: "2026-07-12T01:00:00Z" },
+      },
     );
     expect(result.errorCode).toBe("MISSING_SESSION_PROJECTION");
     const invalid = await collectExactTurnFromTrajectory(
@@ -785,7 +869,11 @@ describe("collector and publication safety", () => {
         start: "not-a-date",
         end: "2026-07-12T01:00:00Z",
       },
-      { sessionId: "fixture", sessionKey },
+      {
+        sessionId: "fixture",
+        sessionKey,
+        evidenceWindow: { start: "2026-07-12T00:00:00Z", end: "2026-07-12T01:00:00Z" },
+      },
     );
     expect(invalid.errorCode).toBe("EVIDENCE_COLLECTION_FAILED");
     const reversed = await collectExactTurnFromTrajectory(
@@ -795,7 +883,11 @@ describe("collector and publication safety", () => {
         start: "2026-07-12T02:00:00Z",
         end: "2026-07-12T01:00:00Z",
       },
-      { sessionId: "fixture", sessionKey },
+      {
+        sessionId: "fixture",
+        sessionKey,
+        evidenceWindow: { start: "2026-07-12T00:00:00Z", end: "2026-07-12T03:00:00Z" },
+      },
     );
     expect(reversed.errorCode).toBe("EVIDENCE_COLLECTION_FAILED");
   });
