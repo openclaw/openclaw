@@ -3,6 +3,7 @@ import {
   fetchWithSsrFGuard,
   shouldUseEnvHttpProxyForUrl,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
+  type PinnedDispatcherPolicy,
 } from "./openclaw-runtime-network.js";
 import type { SsrFPolicy } from "./ssrf-policy.js";
 
@@ -21,6 +22,7 @@ export async function withRemoteHttpResponse<T>(params: {
   init?: RequestInit;
   signal?: AbortSignal;
   ssrfPolicy?: SsrFPolicy;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
   fetchImpl?: typeof fetch;
   fetchWithSsrFGuardImpl?: typeof fetchWithSsrFGuard;
   shouldUseEnvHttpProxyForUrlImpl?: typeof shouldUseEnvHttpProxyForUrl;
@@ -35,6 +37,7 @@ export async function withRemoteHttpResponse<T>(params: {
     init: params.init,
     signal: params.signal,
     policy: params.ssrfPolicy,
+    dispatcherPolicy: params.dispatcherPolicy,
     auditContext: params.auditContext ?? "memory-remote",
     ...(shouldUseEnvProxy(params.url) ? { mode: MEMORY_REMOTE_TRUSTED_ENV_PROXY_MODE } : {}),
   });

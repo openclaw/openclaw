@@ -694,6 +694,15 @@ export function buildProviderRequestDispatcherPolicy(
   };
 }
 
+/** Resolves PinnedDispatcherPolicy from sanitized provider request overrides. */
+export function resolveDispatcherPolicyFromOverrides(
+  overrides: ProviderRequestTransportOverrides | undefined,
+): PinnedDispatcherPolicy | undefined {
+  const proxy = resolveProxyOverride(overrides);
+  const tls = resolveTlsOverride(overrides?.tls);
+  return buildProviderRequestDispatcherPolicy({ proxy, tls });
+}
+
 /** Resolves the full provider request policy, headers, auth, proxy, and TLS config. */
 export function resolveProviderRequestPolicyConfig(
   params: ResolveProviderRequestPolicyConfigParams,
