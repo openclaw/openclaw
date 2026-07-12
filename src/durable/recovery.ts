@@ -94,7 +94,7 @@ function firstBoolean(...values: unknown[]): boolean | undefined {
 }
 
 function correlationIdForRun(run: DurableRuntimeRun): string | undefined {
-  return run.metadata?.sessionKey ? String(run.metadata.sessionKey) : run.sourceRef;
+  return firstString(run.metadata?.sessionKey, run.sourceRef);
 }
 
 function runtimeSubject(run: DurableRuntimeRun): string {
@@ -209,7 +209,7 @@ function mergeRecoveryDiagnosticMetadata(
   diagnostic: Record<string, unknown>,
 ): Record<string, unknown> {
   return {
-    ...(metadata ?? {}),
+    ...metadata,
     [RECOVERY_DIAGNOSTIC_METADATA_KEY]: diagnostic,
   };
 }

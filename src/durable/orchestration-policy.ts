@@ -51,4 +51,5 @@ export function buildDurableSubagentOrchestrationGuidance(params: {
     case "auto":
       return `- Sub-agent orchestration -> start directly when the current context is enough; use \`sessions_spawn(...)\` when parallelism, specialist isolation, fault isolation, or long background work makes the run more reliable.${yieldGuidance}${statusGuidance}`;
   }
+  return "";
 }

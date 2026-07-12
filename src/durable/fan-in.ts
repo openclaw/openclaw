@@ -87,6 +87,7 @@ export function durableChildTerminalOutcomeFromLink(
     case "running":
       return undefined;
   }
+  return undefined;
 }
 
 function summarizeTerminalOutcomes(
@@ -176,6 +177,7 @@ function computeFanInResult(params: {
         ready: succeeded === total,
       };
   }
+  return { status: "waiting", total, succeeded, failed, terminal, ready: false };
 }
 
 export function reconcileDurableFanIn(params: {
