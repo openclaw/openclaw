@@ -90,4 +90,18 @@ describe("file-transfer plugin entry", () => {
     });
     expect(invokeNode).not.toHaveBeenCalled();
   });
+
+  it.each(["file.fetch", "dir.list", "dir.fetch", "file.write"])(
+    "rejects malformed %s params before importing runtime handlers",
+    async (command) => {
+      const entry = pluginEntry.nodeHostCommands?.find((item) => item.command === command);
+      if (!entry) {
+        throw new Error(`missing ${command} node-host command`);
+      }
+
+      await expect(entry.handle("{not-json")).rejects.toThrow(
+        "INVALID_REQUEST: paramsJSON malformed JSON",
+      );
+    },
+  );
 });
