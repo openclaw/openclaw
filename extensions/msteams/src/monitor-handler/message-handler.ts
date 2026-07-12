@@ -217,6 +217,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     quoteInfo?: ReturnType<typeof extractMSTeamsQuoteInfo>;
     quoteContext?: MSTeamsTurnContext;
     quoteReplyToId?: string;
+    debounceScopeKey: string;
     wasMentioned: boolean;
     implicitMentionKinds: Array<"reply_to_bot">;
   };
@@ -1038,9 +1039,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
   const inboundDebouncer = core.channel.debounce.createInboundDebouncer<MSTeamsDebounceEntry>({
     debounceMs: inboundDebounceMs,
     buildKey: (entry) => {
-      const conversationId = normalizeMSTeamsConversationId(
-        entry.context.activity.conversation?.id ?? "",
-      );
+      const conversationId = entry.debounceScopeKey;
       const senderId =
         entry.context.activity.from?.aadObjectId ?? entry.context.activity.from?.id ?? "";
       if (!senderId || !conversationId) {
@@ -1079,7 +1078,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         .join("\n");
       const wasMentioned = entries.some((entry) => entry.wasMentioned);
       const implicitMentionKinds = entries.flatMap((entry) => entry.implicitMentionKinds);
-      const quoteEntry = entries.findLast((entry) => entry.quoteInfo);
+      const quoteEntry = entries.findLast(
+        (entry) => entry.quoteInfo && entry.debounceScopeKey === last.debounceScopeKey,
+      );
       await handleTeamsMessageNow({
         context: last.context,
         rawText: combinedRawText,
@@ -1088,6 +1089,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         quoteInfo: quoteEntry?.quoteInfo,
         quoteContext: quoteEntry?.quoteContext,
         quoteReplyToId: quoteEntry?.quoteReplyToId,
+        debounceScopeKey: last.debounceScopeKey,
         wasMentioned,
         implicitMentionKinds,
       });
@@ -1114,6 +1116,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       botName: activity.recipient?.name,
     });
     const quoteInfo = extractMSTeamsQuoteInfo(attachments, activity.entities);
+    const debounceScopeKey = resolveMSTeamsDebounceScopeKey(activity);
     const wasMentioned = wasMSTeamsBotMentioned(activity);
     const conversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "");
     const replyToId = activity.replyToId ?? undefined;
@@ -1132,8 +1135,23 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       quoteInfo,
       quoteContext: quoteInfo ? context : undefined,
       quoteReplyToId: replyToId,
+      debounceScopeKey,
       wasMentioned,
       implicitMentionKinds,
     });
   };
+}
+
+function resolveMSTeamsDebounceScopeKey(activity: MSTeamsTurnContext["activity"]): string {
+  const rawConversationId = activity.conversation?.id ?? "";
+  const conversationId = normalizeMSTeamsConversationId(rawConversationId);
+  if (activity.conversation?.conversationType !== "channel") {
+    return conversationId;
+  }
+  const threadId =
+    extractMSTeamsConversationMessageId(rawConversationId) ??
+    activity.replyToId ??
+    activity.id ??
+    "";
+  return `${conversationId}:${threadId}`;
 }
