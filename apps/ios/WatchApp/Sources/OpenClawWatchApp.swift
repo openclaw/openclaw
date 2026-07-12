@@ -289,6 +289,7 @@ extension WatchInboxStore {
                         text: "Gateway is online and ready.",
                         timestampMs: sentAtMs - 30000),
                 ],
+                chatStatus: nil,
                 sentAtMs: sentAtMs,
                 snapshotId: "watch-screenshot-now-face"))
     }
