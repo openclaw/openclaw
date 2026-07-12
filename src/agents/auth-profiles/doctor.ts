@@ -5,11 +5,28 @@
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isSupportedGithubCopilotDomain } from "../../plugin-sdk/github-copilot-domain.js";
 import { buildProviderAuthDoctorHintWithPlugin } from "../../plugins/provider-runtime.runtime.js";
 import type { AuthProfileStore } from "./types.js";
 
 const QWEN_PORTAL_OAUTH_MIGRATION_HINT =
   "Legacy Qwen Portal OAuth profiles are not refreshable. Re-authenticate with a current portal token: openclaw onboard --auth-choice qwen-oauth.";
+
+const GITHUB_COPILOT_UNSUPPORTED_ENTERPRISE_DOMAIN_HINT =
+  "This GitHub Copilot OAuth profile has an unsupported enterprise domain and can no longer refresh. Re-authenticate with a supported host (github.com or a *.ghe.com tenant): openclaw onboard --auth-choice github-copilot.";
+
+function hasUnsupportedGithubCopilotEnterpriseDomain(
+  store: AuthProfileStore,
+  profileId?: string,
+): boolean {
+  const profiles = profileId ? [store.profiles[profileId]] : Object.values(store.profiles);
+  return profiles.some(
+    (profile) =>
+      profile?.type === "oauth" &&
+      normalizeProviderId(profile.provider) === "github-copilot" &&
+      !isSupportedGithubCopilotDomain(profile.enterpriseUrl),
+  );
+}
 
 // Qwen Portal OAuth changed credential behavior; old profiles need an explicit
 // local hint before falling back to provider plugin doctor hints.
@@ -40,6 +57,12 @@ async function formatAuthDoctorHintWithPluginBuilder(
     hasLegacyQwenPortalOAuthProfile(params.store, params.profileId)
   ) {
     return QWEN_PORTAL_OAUTH_MIGRATION_HINT;
+  }
+  if (
+    normalizedProvider === "github-copilot" &&
+    hasUnsupportedGithubCopilotEnterpriseDomain(params.store, params.profileId)
+  ) {
+    return GITHUB_COPILOT_UNSUPPORTED_ENTERPRISE_DOMAIN_HINT;
   }
 
   const pluginHint = await buildPluginHint({

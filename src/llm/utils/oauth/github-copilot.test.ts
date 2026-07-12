@@ -1,7 +1,15 @@
 // GitHub Copilot OAuth tests cover device flow polling and timeout behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { refreshGitHubCopilotToken, testing } from "./github-copilot.js";
+import type { Model } from "../../types.js";
+import {
+  githubCopilotOAuthProvider,
+  refreshGitHubCopilotToken,
+  testing,
+} from "./github-copilot.js";
+import type { OAuthCredentials } from "./types.js";
+
+const { getGitHubCopilotBaseUrl } = testing;
 
 function stubHangingFetch(timeoutMs: number): void {
   vi.spyOn(AbortSignal, "timeout").mockImplementation((actualTimeoutMs) => {
@@ -180,6 +188,136 @@ describe("GitHub Copilot OAuth model policy", () => {
     ).resolves.toBe(true);
 
     expect(cancel).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("GitHub Copilot OAuth enterprise domain allowlist", () => {
+  function stubTokenFetch(): ReturnType<typeof vi.fn> {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            token: "copilot-token",
+            expires_at: Math.floor(Date.now() / 1000) + 3600,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  it("rejects an unlisted enterprise domain without sending any request", async () => {
+    const fetchMock = stubTokenFetch();
+
+    await expect(refreshGitHubCopilotToken("refresh-token", "attacker.example")).rejects.toThrow(
+      'unsupported enterprise domain "attacker.example"',
+    );
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps a data-residency ghe.com tenant for the refresh endpoint", async () => {
+    const fetchMock = stubTokenFetch();
+
+    await refreshGitHubCopilotToken("refresh-token", "acme.ghe.com");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.acme.ghe.com/copilot_internal/v2/token",
+      expect.anything(),
+    );
+  });
+
+  it("defaults to public github.com when no enterprise domain is set", async () => {
+    const fetchMock = stubTokenFetch();
+
+    await refreshGitHubCopilotToken("refresh-token");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.github.com/copilot_internal/v2/token",
+      expect.anything(),
+    );
+  });
+
+  it("refuses to build a base url for an unsupported enterprise domain", () => {
+    expect(() => getGitHubCopilotBaseUrl(undefined, "attacker.example")).toThrow(
+      'unsupported enterprise domain "attacker.example"',
+    );
+  });
+
+  it("keeps a data-residency ghe.com tenant for the enterprise base url", () => {
+    expect(getGitHubCopilotBaseUrl(undefined, "acme.ghe.com")).toBe(
+      "https://copilot-api.acme.ghe.com",
+    );
+  });
+
+  it("keeps the individual account base url when no domain is provided", () => {
+    expect(getGitHubCopilotBaseUrl(undefined, undefined)).toBe(
+      "https://api.individual.githubcopilot.com",
+    );
+  });
+});
+
+describe("GitHub Copilot OAuth model routing", () => {
+  const models: Model[] = [
+    { id: "gpt-5", provider: "github-copilot" } as Model,
+    { id: "claude-sonnet-5", provider: "anthropic" } as Model,
+  ];
+
+  function credential(overrides: Partial<OAuthCredentials & { enterpriseUrl: string }>) {
+    return {
+      access: "access-token",
+      refresh: "refresh-token",
+      expires: Date.now() + 3_600_000,
+      ...overrides,
+    } as OAuthCredentials;
+  }
+
+  it("drops github-copilot models for an unsupported persisted enterprise domain", () => {
+    const result = githubCopilotOAuthProvider.modifyModels?.(
+      models,
+      credential({ enterpriseUrl: "attacker.example" }),
+    );
+
+    expect(result?.map((m) => m.provider)).toEqual(["anthropic"]);
+  });
+
+  it("does not trust a proxy-ep base url minted for an unsupported persisted domain", () => {
+    const result = githubCopilotOAuthProvider.modifyModels?.(
+      models,
+      credential({
+        access: "tid=x;proxy-ep=proxy.attacker.example;exp=1",
+        enterpriseUrl: "attacker.example",
+      }),
+    );
+
+    expect(result?.some((m) => m.provider === "github-copilot")).toBe(false);
+    expect(JSON.stringify(result)).not.toContain("attacker.example");
+  });
+
+  it("routes a data-residency ghe.com tenant to its copilot proxy", () => {
+    const result = githubCopilotOAuthProvider.modifyModels?.(
+      models,
+      credential({ enterpriseUrl: "acme.ghe.com" }),
+    );
+
+    expect(result?.find((m) => m.provider === "github-copilot")?.baseUrl).toBe(
+      "https://copilot-api.acme.ghe.com",
+    );
+  });
+
+  it("restores github-copilot routing after reauthenticating on a supported host", () => {
+    const quarantined = githubCopilotOAuthProvider.modifyModels?.(
+      models,
+      credential({ enterpriseUrl: "attacker.example" }),
+    );
+    expect(quarantined?.some((m) => m.provider === "github-copilot")).toBe(false);
+
+    const recovered = githubCopilotOAuthProvider.modifyModels?.(models, credential({}));
+
+    expect(recovered?.find((m) => m.provider === "github-copilot")?.baseUrl).toBe(
+      "https://api.individual.githubcopilot.com",
+    );
   });
 });
 
