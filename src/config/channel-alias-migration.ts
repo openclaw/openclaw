@@ -44,6 +44,14 @@ export type ChannelAliasMigrationSpec = {
   /** Channel id under `channels.<id>`; also the doctor message path prefix. */
   channelId: string;
   streaming: StreamingAliasSpec;
+  /**
+   * Set when the channel's runtime account merge replaces the root `streaming`
+   * object wholesale (Discord). Migration then seeds account objects it
+   * materializes with the inherited root settings. Leave unset for channels
+   * that deep-merge streaming at runtime (Slack, iMessage) — seeding there
+   * would freeze inheritance into the account config.
+   */
+  accountStreamingReplacesRoot?: boolean;
   dm?: {
     root?: boolean;
     accounts?: boolean;
@@ -149,6 +157,7 @@ export function defineChannelAliasMigration(spec: ChannelAliasMigrationSpec): {
       normalizeDm: spec.dm?.root,
       rootDmPromoteAllowFrom: spec.dm?.rootPromoteAllowFrom,
       normalizeAccountDm: spec.dm?.accounts,
+      seedAccountStreamingFromRoot: spec.accountStreamingReplacesRoot,
       resolveStreamingOptions,
       normalizeAccountExtra: spec.normalizeAccountExtra,
     });

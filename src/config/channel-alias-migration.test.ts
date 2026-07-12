@@ -105,6 +105,7 @@ describe("defineChannelAliasMigration normalizeChannelConfig", () => {
     const migration = defineChannelAliasMigration({
       channelId: "discord",
       streaming: { defaultMode: "off", absentObjectDefault: "progress", includePreviewChunk: true },
+      accountStreamingReplacesRoot: true,
       dm: { root: true, accounts: true },
     });
 

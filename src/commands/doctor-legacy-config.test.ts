@@ -174,13 +174,18 @@ describe("normalizeCompatibilityConfigValues preview streaming aliases", () => {
 });
 
 describe("normalizeLegacyChannelAliases account inheritance seeding", () => {
-  // Discord-shaped options: object-without-mode default "off", absent default "progress".
-  function normalizeChannel(entry: Record<string, unknown>) {
+  // Discord-shaped options: object-without-mode default "off", absent default
+  // "progress", account merge replaces the root streaming object wholesale.
+  function normalizeChannel(
+    entry: Record<string, unknown>,
+    options?: { seedAccountStreamingFromRoot?: boolean },
+  ) {
     const changes: string[] = [];
     const result = normalizeLegacyChannelAliases({
       entry,
       pathPrefix: "channels.discord",
       changes,
+      seedAccountStreamingFromRoot: options?.seedAccountStreamingFromRoot ?? true,
       resolveStreamingOptions: (value) => ({
         resolvedMode: resolveLegacyAliasStreamingMode(value, "off"),
         aliasOnlyMode: "progress",
@@ -274,6 +279,23 @@ describe("normalizeLegacyChannelAliases account inheritance seeding", () => {
     });
     expect(res.changes).toEqual([
       "Moved channels.discord.accounts.work.streaming (boolean) → channels.discord.accounts.work.streaming.mode (off).",
+    ]);
+  });
+
+  it("does not seed for deep-merge channels so runtime inheritance keeps composing", () => {
+    // Slack/iMessage deep-merge root+account streaming at runtime; copying root
+    // values into the account config would freeze inheritance at fix time.
+    const res = normalizeChannel(
+      {
+        streaming: { mode: "block", block: { coalesce: { idleMs: 5 } } },
+        accounts: { work: { chunkMode: "newline" } },
+      },
+      { seedAccountStreamingFromRoot: false },
+    );
+
+    expect(workStreaming(res.entry)).toEqual({ chunkMode: "newline" });
+    expect(res.changes).toEqual([
+      "Moved channels.discord.accounts.work.chunkMode → channels.discord.accounts.work.streaming.chunkMode.",
     ]);
   });
 });

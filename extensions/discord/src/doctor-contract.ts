@@ -26,6 +26,10 @@ const streamingAliasMigration = defineChannelAliasMigration({
     absentObjectDefault: "progress",
     includePreviewChunk: true,
   },
+  // Discord's account merge replaces the root streaming object wholesale
+  // (`streaming` not in mergeDiscordAccountConfig nestedObjectKeys), so doctor
+  // must seed materialized account objects with the inherited root settings.
+  accountStreamingReplacesRoot: true,
   dm: { root: true, accounts: true },
   normalizeAccountExtra: ({ account, pathPrefix, changes }) => {
     const accountVoice = asObjectRecord(account.voice);

@@ -298,6 +298,14 @@ export function normalizeLegacyChannelAliases(params: {
   normalizeDm?: boolean;
   rootDmPromoteAllowFrom?: boolean;
   normalizeAccountDm?: boolean;
+  /**
+   * Set for channels whose runtime account merge replaces the root `streaming`
+   * object wholesale (`streaming` not deep-merged). Doctor then seeds account
+   * objects it materializes with the inherited root settings. Channels that
+   * deep-merge streaming (slack, imessage) must NOT seed: their runtime keeps
+   * composing root+account, and seeded copies would freeze inheritance.
+   */
+  seedAccountStreamingFromRoot?: boolean;
   resolveStreamingOptions: (entry: Record<string, unknown>) => LegacyStreamingAliasOptions;
   normalizeAccountExtra?: (params: NormalizeLegacyChannelAccountParams) => CompatMutationResult;
 }): CompatMutationResult {
@@ -329,11 +337,10 @@ export function normalizeLegacyChannelAliases(params: {
     return { entry: updated, changed };
   }
 
-  // Runtime account merge replaces the root `streaming` object wholesale
-  // (mergeAccountConfig shallow spread, `streaming` not nested-merged), so an
-  // account object materialized by migration must be seeded with the settings
-  // the account previously inherited, or `doctor --fix` silently changes
-  // effective delivery/preview behavior for that account.
+  // For replace-semantics channels (seedAccountStreamingFromRoot), an account
+  // object materialized by migration must be seeded with the settings the
+  // account previously inherited from the root object, or `doctor --fix`
+  // silently changes effective delivery/preview behavior for that account.
   const rootStreaming = asObjectRecord(updated.streaming);
 
   let accountsChanged = false;
@@ -374,7 +381,12 @@ export function normalizeLegacyChannelAliases(params: {
     accountEntry = accountStreaming.entry;
     accountChanged = accountChanged || accountStreaming.changed;
 
-    if (accountStreaming.changed && beforeAccountStreaming === undefined && rootStreaming) {
+    if (
+      params.seedAccountStreamingFromRoot === true &&
+      accountStreaming.changed &&
+      beforeAccountStreaming === undefined &&
+      rootStreaming
+    ) {
       const created = asObjectRecord(accountEntry.streaming);
       const seeded = created ? fillMissingRecordFields(created, rootStreaming) : null;
       if (seeded?.filled) {
