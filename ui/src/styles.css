@@ -2,6 +2,7 @@
 @import "./styles/layout.css";
 @import "./styles/layout.mobile.css";
 @import "./styles/components.css";
+@import "./styles/approval.css";
 @import "./styles/activity.css";
 @import "./styles/about.css";
 @import "./styles/chat.css";
@@ -15,7 +16,6 @@
 @import "./styles/model-providers.css";
 @import "./styles/profile.css";
 @import "./styles/logbook.css";
-@import "./styles/codex-sessions.css";
 @import "./styles/dreams.css";
 @import "./styles/lobster-pet.css";
 @import "./styles/workspace.css";

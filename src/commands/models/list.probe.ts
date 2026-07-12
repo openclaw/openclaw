@@ -1,6 +1,7 @@
 /** Auth probe planning and execution helpers for model diagnostics. */
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   resolveAgentDir,
@@ -15,8 +16,8 @@ import {
   listProfilesForProvider,
   resolveAuthProfileDisplayLabel,
   resolveAuthProfileEligibility,
-  resolveAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
+import { resolveAuthProfileOrderWithMetadata } from "../../agents/auth-profiles/order.js";
 import { describeFailoverError } from "../../agents/failover-error.js";
 import { hasUsableCustomProviderApiKey, resolveEnvApiKey } from "../../agents/model-auth.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
@@ -194,7 +195,7 @@ function selectProbeModel(params: {
   const { provider, candidates, catalog } = params;
   const direct = candidates.get(provider);
   if (direct && direct.length > 0) {
-    return { provider, model: direct[0] };
+    return { provider, model: expectDefined(direct[0], "direct entry at 0") };
   }
   const fromCatalog = catalog
     .map((entry, index) => ({ entry, index }))
@@ -341,10 +342,15 @@ export async function buildProbeTargets(params: {
         findNormalizedProviderValue(cfg?.auth?.order, providerKey)
       );
     })();
-    const allowedProfiles =
-      explicitOrder && explicitOrder.length > 0
-        ? new Set(resolveAuthProfileOrder({ cfg, store, provider: providerKey }))
-        : null;
+    const orderResolution = resolveAuthProfileOrderWithMetadata({
+      cfg,
+      store,
+      provider: providerKey,
+      forModel: model?.model,
+    });
+    const allowedProfiles = orderResolution.hasExplicitOrder
+      ? new Set(orderResolution.profileIds)
+      : null;
     // Explicit auth.order both selects and documents profile eligibility; report
     // excluded profiles instead of silently skipping them.
     const filteredProfiles = profileFilter.size
@@ -439,12 +445,17 @@ export async function buildProbeTargets(params: {
     if (profileFilter.size > 0) {
       continue;
     }
-
-    const envKey = resolveEnvApiKey(providerKey, process.env, {
-      config: cfg,
-      workspaceDir,
-    });
     const hasUsableModelsJsonKey = hasUsableCustomProviderApiKey(cfg, providerKey);
+    if (orderResolution.hasExplicitOrder && !hasUsableModelsJsonKey) {
+      continue;
+    }
+
+    const envKey = orderResolution.hasExplicitOrder
+      ? null
+      : resolveEnvApiKey(providerKey, process.env, {
+          config: cfg,
+          workspaceDir,
+        });
     if (!envKey && !hasUsableModelsJsonKey) {
       continue;
     }
@@ -591,7 +602,7 @@ async function runTargetsWithConcurrency(params: {
       if (index >= targets.length) {
         return;
       }
-      const target = targets[index];
+      const target = expectDefined(targets[index], "targets entry at index");
       onProgress?.({
         completed,
         total: targets.length,
