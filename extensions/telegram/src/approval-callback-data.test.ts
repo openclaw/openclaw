@@ -30,6 +30,11 @@ describe("approval callback data", () => {
     );
   });
 
+  it.each(["\n", "\r\n"])("does not corrupt callbacks ending in a line terminator", (ending) => {
+    const value = `/approve plugin:abc allow-always${ending}`;
+    expect(rewriteTelegramApprovalDecisionAlias(value)).toBe(value);
+  });
+
   it("keeps rewritten allow-always callbacks when canonical form would overflow", () => {
     const approvalId = `plugin:${"a".repeat(36)}`;
     expect(sanitizeTelegramCallbackData(`/approve ${approvalId} allow-always`)).toBe(
