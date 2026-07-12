@@ -425,6 +425,7 @@ describe("session branch diff stats", () => {
     await fs.writeFile(path.join(root, "b.txt"), "committed\n");
     await git("add", "a.txt", "b.txt");
     await git("commit", "-m", "feature work");
+    await git("update-ref", "refs/remotes/origin/feature", "HEAD");
     // Uncommitted work counts too: the row sizes the PR the push would open.
     await fs.appendFile(path.join(root, "b.txt"), "pending\n");
 
@@ -457,6 +458,7 @@ describe("session branch diff stats", () => {
     await git("commit", "-m", "base");
     await git("update-ref", "refs/remotes/origin/main", "HEAD");
     await git("checkout", "-b", "feature");
+    await git("update-ref", "refs/remotes/origin/feature", "HEAD");
 
     const fetchImpl = routedFetch([
       { match: "/pulls?head=", response: () => githubJson([]) },
@@ -471,5 +473,32 @@ describe("session branch diff stats", () => {
     );
 
     expect(result.branch).toMatchObject({ additions: 0, deletions: 0 });
+  });
+
+  it("omits the branch payload until the branch exists on origin", async () => {
+    await git("init", "--initial-branch=main", ".");
+    await fs.writeFile(path.join(root, "a.txt"), "one\n");
+    await git("add", "a.txt");
+    await git("commit", "-m", "base");
+    await git("update-ref", "refs/remotes/origin/main", "HEAD");
+    await git("checkout", "-b", "feature");
+    await fs.appendFile(path.join(root, "a.txt"), "two\n");
+    await git("add", "a.txt");
+    await git("commit", "-m", "local only");
+
+    const fetchImpl = routedFetch([
+      { match: "/pulls?head=", response: () => githubJson([]) },
+      { match: "/repos/openclaw/openclaw", response: () => githubJson({ fork: false }) },
+    ]);
+    const result = await loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main" },
+      {
+        fetchImpl,
+        resolveGitContext: async () => ({ ...context, root, defaultBranch: "main" }),
+      },
+    );
+
+    // GitHub's pull/new page 404s for unpushed branches, so no Create PR row.
+    expect(result.branch).toBeUndefined();
   });
 });

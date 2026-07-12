@@ -218,7 +218,21 @@ async function loadBranchDiffStats(
 
 async function resolveSessionBranch(
   context: SessionPullRequestGitContext,
-): Promise<ControlUiSessionBranch> {
+): Promise<ControlUiSessionBranch | undefined> {
+  if (context.root) {
+    // GitHub's pull/new page 404s for branches it has never seen, so the
+    // Create PR row only exists once the branch's remote-tracking ref does
+    // (push from this checkout updates it). Stubbed test contexts skip this.
+    const pushed = await gitOutput(context.root, [
+      "rev-parse",
+      "--verify",
+      "--quiet",
+      `refs/remotes/origin/${context.branch}`,
+    ]);
+    if (!pushed) {
+      return undefined;
+    }
+  }
   const stats =
     context.root && context.defaultBranch
       ? await loadBranchDiffStats(context.root, context.defaultBranch)
@@ -487,7 +501,7 @@ export async function loadControlUiSessionPullRequests(
     resolveSessionBranch(context),
     cachedBranchPullRequests(context, deps),
   ]);
-  return { ...snapshot, branch };
+  return branch ? { ...snapshot, branch } : snapshot;
 }
 
 function cachedBranchPullRequests(

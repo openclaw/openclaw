@@ -80,7 +80,7 @@ export type ControlUiSessionBranch = {
 /** Pull requests detected for a session's git branch, chip row payload. */
 export type ControlUiSessionPullRequests = {
   pullRequests: ControlUiSessionPullRequest[];
-  /** Present whenever the session works on a non-default GitHub branch. */
+  /** Present when the session's non-default GitHub branch exists on origin. */
   branch?: ControlUiSessionBranch;
   /** GitHub quota exhausted; entries may be stale until the limit resets. */
   rateLimited: boolean;
