@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   assignNativeI18nIds,
@@ -21,6 +22,14 @@ type NativeTranslationArtifact = {
   locale: string;
   version: 1;
 };
+
+function artifactEntry(
+  artifact: NativeTranslationArtifact,
+  index: number,
+  context: string,
+): NativeTranslationArtifact["entries"][number] {
+  return expectDefined(artifact.entries[index], context);
+}
 
 describe("native app i18n inventory", () => {
   it("keeps IDs stable across extractor classification changes", () => {
@@ -250,6 +259,19 @@ describe("native app i18n inventory", () => {
     ).toBe(false);
   });
 
+  it("ignores generated Android resource entries", () => {
+    const entries = extractNativeI18nCandidates(
+      "android",
+      "apps/android/app/src/main/res/values/strings.xml",
+      `<resources>
+        <string name="manual_status">Gateway ready</string>
+        <string name="native_0123456789abcdef">Generated feedback</string>
+      </resources>`,
+    );
+
+    expect(entries.map((entry) => entry.source)).toEqual(["Gateway ready"]);
+  });
+
   it("collects stable Android and Apple UI entries", async () => {
     const entries = await collectNativeI18nEntries();
     const surfaces = new Set(entries.map((entry) => entry.surface));
@@ -268,6 +290,7 @@ describe("native app i18n inventory", () => {
         (entry) => !/(?:Tests?|UITests?|Previews?|Testing)\.(?:swift|kt|kts)$/u.test(entry.path),
       ),
     ).toBe(true);
+    expect(entries.every((entry) => !entry.path.endsWith("/NativeStringResources.kt"))).toBe(true);
     expect(
       entries
         .filter((entry) => entry.surface === "apple")
@@ -314,12 +337,6 @@ describe("native app i18n inventory", () => {
     expect(entries.some((entry) => entry.source === "Creating...")).toBe(true);
     expect(entries.some((entry) => entry.source === "Permission required")).toBe(true);
     expect(entries.some((entry) => entry.source === "Needs setup")).toBe(true);
-    expect(
-      entries.some(
-        (entry) =>
-          entry.source === "Choose a supported ${issue.target.title} provider on the Gateway",
-      ),
-    ).toBe(true);
     expect(
       entries.some(
         (entry) => entry.source === "Talk failed: Realtime provider closed unexpectedly.",
@@ -720,6 +737,8 @@ describe("native app i18n inventory", () => {
         surface: "apple",
       },
     ];
+    const greeting = expectDefined(inventory[0], "native greeting inventory entry");
+    const other = expectDefined(inventory[1], "native other inventory entry");
     const emptyGlossaryHash = createHash("sha256").update(JSON.stringify([])).digest("hex");
     const createArtifact = (): NativeTranslationArtifact => ({
       version: 1,
@@ -727,13 +746,13 @@ describe("native app i18n inventory", () => {
       glossaryHash: emptyGlossaryHash,
       entries: [
         {
-          id: inventory[0].id,
-          source: inventory[0].source,
+          id: greeting.id,
+          source: greeting.source,
           translated: "Hej ${name}\nNästa",
         },
         {
-          id: inventory[1].id,
-          source: inventory[1].source,
+          id: other.id,
+          source: other.source,
           translated: "Annat",
         },
       ],
@@ -766,21 +785,36 @@ describe("native app i18n inventory", () => {
         expected: "entries[0].source does not match inventory",
         mutate: (artifact) => ({
           ...artifact,
-          entries: [{ ...artifact.entries[0], source: "Changed" }, artifact.entries[1]],
+          entries: [
+            { ...artifactEntry(artifact, 0, "first native translation entry"), source: "Changed" },
+            artifactEntry(artifact, 1, "second native translation entry"),
+          ],
         }),
       },
       {
         expected: 'duplicate id "native.android.greeting"',
         mutate: (artifact) => ({
           ...artifact,
-          entries: [artifact.entries[0], { ...artifact.entries[1], id: artifact.entries[0].id }],
+          entries: [
+            artifactEntry(artifact, 0, "first duplicate native translation entry"),
+            {
+              ...artifactEntry(artifact, 1, "second duplicate native translation entry"),
+              id: artifactEntry(artifact, 0, "duplicate native translation source entry").id,
+            },
+          ],
         }),
       },
       {
         expected: "entries[1].translated must be nonempty",
         mutate: (artifact) => ({
           ...artifact,
-          entries: [artifact.entries[0], { ...artifact.entries[1], translated: "  " }],
+          entries: [
+            artifactEntry(artifact, 0, "first nonempty native translation entry"),
+            {
+              ...artifactEntry(artifact, 1, "second nonempty native translation entry"),
+              translated: "  ",
+            },
+          ],
         }),
       },
       {
@@ -795,8 +829,11 @@ describe("native app i18n inventory", () => {
         mutate: (artifact) => ({
           ...artifact,
           entries: [
-            { ...artifact.entries[0], translated: "Hej ${name} Nästa" },
-            artifact.entries[1],
+            {
+              ...artifactEntry(artifact, 0, "first structural native translation entry"),
+              translated: "Hej ${name} Nästa",
+            },
+            artifactEntry(artifact, 1, "second structural native translation entry"),
           ],
         }),
       },
@@ -845,29 +882,33 @@ describe("native app i18n inventory", () => {
         surface: "android",
       },
     ];
+    const languagePicker = expectDefined(inventory[0], "native language picker inventory entry");
+    const androidInspect = expectDefined(inventory[1], "native Android inspect inventory entry");
+    const appleInspect = expectDefined(inventory[2], "native Apple inspect inventory entry");
+    const voiceNote = expectDefined(inventory[3], "native voice note inventory entry");
     const artifact: NativeTranslationArtifact = {
       version: 1,
       locale: "id",
       glossaryHash: createHash("sha256").update(JSON.stringify([])).digest("hex"),
       entries: [
         {
-          id: inventory[0].id,
-          source: inventory[0].source,
-          translated: inventory[0].source,
+          id: languagePicker.id,
+          source: languagePicker.source,
+          translated: languagePicker.source,
         },
         {
-          id: inventory[1].id,
-          source: inventory[1].source,
-          translated: inventory[1].source,
+          id: androidInspect.id,
+          source: androidInspect.source,
+          translated: androidInspect.source,
         },
         {
-          id: inventory[2].id,
-          source: inventory[2].source,
+          id: appleInspect.id,
+          source: appleInspect.source,
           translated: "Periksa",
         },
         {
-          id: inventory[3].id,
-          source: inventory[3].source,
+          id: voiceNote.id,
+          source: voiceNote.source,
           translated: "Ghi ghi chú thoại",
         },
       ],

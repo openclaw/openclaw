@@ -302,6 +302,10 @@ import {
   ApprovalResolveResultSchema,
   type ApprovalSnapshot,
   ApprovalSnapshotSchema,
+  type SessionApprovalEvent,
+  SessionApprovalEventSchema,
+  type SessionApprovalReplay,
+  SessionApprovalReplaySchema,
   type ApprovalTerminalReason,
   ApprovalTerminalReasonSchema,
   type CancelledApprovalSnapshot,
@@ -419,6 +423,20 @@ import {
   type WorkerHeartbeatResponseFrame,
   WorkerHeartbeatResponseFrameSchema,
   type WorkerHelloOk,
+  type WorkerLiveEvent,
+  WorkerLiveEventSchema,
+  type WorkerLiveEventErrorDetails,
+  WorkerLiveEventErrorDetailsSchema,
+  type WorkerLiveEventErrorShape,
+  WorkerLiveEventErrorShapeSchema,
+  type WorkerLiveEventParams,
+  WorkerLiveEventParamsSchema,
+  type WorkerLiveEventRequestFrame,
+  WorkerLiveEventRequestFrameSchema,
+  type WorkerLiveEventResponseFrame,
+  WorkerLiveEventResponseFrameSchema,
+  type WorkerLiveEventResult,
+  WorkerLiveEventResultSchema,
   type WorkerProtocolCloseReason,
   WorkerProtocolCloseReasonSchema,
   type WorkerTranscriptCommitErrorReason,
@@ -436,6 +454,7 @@ import {
   type WorkerTranscriptMessage,
   WorkerTranscriptMessageSchema,
   WORKER_HEARTBEAT_INTERVAL_MS,
+  WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
   WORKER_PROTOCOL_FEATURES,
   WORKER_PROTOCOL_MAX_FEATURE_LENGTH,
   WORKER_PROTOCOL_MAX_FEATURES,
@@ -517,6 +536,8 @@ import {
   NodePresenceAlivePayloadSchema,
   type NodePresenceAliveReason,
   NodePresenceAliveReasonSchema,
+  type NodePresenceActivityPayload,
+  NodePresenceActivityPayloadSchema,
   type NodeInvokeParams,
   NodeInvokeParamsSchema,
   type NodeInvokeResultParams,
@@ -946,7 +967,7 @@ export const validateWorkerHeartbeatParams = lazyCompile<WorkerHeartbeatParams>(
   WorkerHeartbeatParamsSchema,
 );
 
-function checkWorkerTranscriptCommitJson(data: unknown): ValidationError | undefined {
+function checkWorkerProtocolJson(data: unknown): ValidationError | undefined {
   const stack: Array<{ depth: number; value: unknown }> = [{ depth: 0, value: data }];
   const seen = new WeakSet<object>();
   while (stack.length > 0) {
@@ -993,7 +1014,11 @@ function checkWorkerTranscriptCommitJson(data: unknown): ValidationError | undef
 
 export const validateWorkerTranscriptCommitParams = lazyCompile<WorkerTranscriptCommitParams>(
   WorkerTranscriptCommitParamsSchema,
-  checkWorkerTranscriptCommitJson,
+  checkWorkerProtocolJson,
+);
+export const validateWorkerLiveEventParams = lazyCompile<WorkerLiveEventParams>(
+  WorkerLiveEventParamsSchema,
+  checkWorkerProtocolJson,
 );
 export const validateGatewaySuspendPrepareParams = lazyCompile<GatewaySuspendPrepareParams>(
   GatewaySuspendPrepareParamsSchema,
@@ -1115,6 +1140,9 @@ export const validateNodeEventParams = lazyCompile<NodeEventParams>(NodeEventPar
 export const validateNodeEventResult = lazyCompile<NodeEventResult>(NodeEventResultSchema);
 export const validateNodePresenceAlivePayload = lazyCompile<NodePresenceAlivePayload>(
   NodePresenceAlivePayloadSchema,
+);
+export const validateNodePresenceActivityPayload = lazyCompile<NodePresenceActivityPayload>(
+  NodePresenceActivityPayloadSchema,
 );
 export const validateNodePendingDrainParams = lazyCompile<NodePendingDrainParams>(
   NodePendingDrainParamsSchema,
@@ -1611,6 +1639,13 @@ export {
   WorkerHeartbeatParamsSchema,
   WorkerHeartbeatRequestFrameSchema,
   WorkerHeartbeatResponseFrameSchema,
+  WorkerLiveEventSchema,
+  WorkerLiveEventErrorDetailsSchema,
+  WorkerLiveEventErrorShapeSchema,
+  WorkerLiveEventParamsSchema,
+  WorkerLiveEventRequestFrameSchema,
+  WorkerLiveEventResponseFrameSchema,
+  WorkerLiveEventResultSchema,
   WorkerProtocolCloseReasonSchema,
   WorkerTranscriptCommitErrorReasonSchema,
   WorkerTranscriptCommitErrorShapeSchema,
@@ -1620,6 +1655,7 @@ export {
   WorkerTranscriptCommitResultSchema,
   WorkerTranscriptMessageSchema,
   WORKER_HEARTBEAT_INTERVAL_MS,
+  WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
   WORKER_PROTOCOL_FEATURES,
   WORKER_PROTOCOL_MAX_FEATURE_LENGTH,
   WORKER_PROTOCOL_MAX_FEATURES,
@@ -1678,6 +1714,7 @@ export {
   NodeEventResultSchema,
   NodePresenceAlivePayloadSchema,
   NodePresenceAliveReasonSchema,
+  NodePresenceActivityPayloadSchema,
   NodePendingDrainParamsSchema,
   NodePendingDrainResultSchema,
   NodePendingEnqueueParamsSchema,
@@ -1959,6 +1996,8 @@ export {
   ApprovalGetResultSchema,
   ApprovalResolveParamsSchema,
   ApprovalResolveResultSchema,
+  SessionApprovalEventSchema,
+  SessionApprovalReplaySchema,
   ExecApprovalsGetParamsSchema,
   ExecApprovalsSetParamsSchema,
   ExecApprovalGetParamsSchema,
@@ -2011,6 +2050,13 @@ export type {
   WorkerHeartbeatResult,
   WorkerHeartbeatResponseFrame,
   WorkerHelloOk,
+  WorkerLiveEvent,
+  WorkerLiveEventErrorDetails,
+  WorkerLiveEventErrorShape,
+  WorkerLiveEventParams,
+  WorkerLiveEventRequestFrame,
+  WorkerLiveEventResponseFrame,
+  WorkerLiveEventResult,
   WorkerProtocolCloseReason,
   WorkerTranscriptCommitErrorReason,
   WorkerTranscriptCommitErrorShape,
@@ -2239,6 +2285,7 @@ export type {
   NodeEventResult,
   NodePresenceAlivePayload,
   NodePresenceAliveReason,
+  NodePresenceActivityPayload,
   NodePendingDrainParams,
   NodePendingDrainResult,
   NodePendingEnqueueParams,
@@ -2319,6 +2366,8 @@ export type {
   ApprovalGetResult,
   ApprovalResolveParams,
   ApprovalResolveResult,
+  SessionApprovalEvent,
+  SessionApprovalReplay,
   ExecApprovalsGetParams,
   ExecApprovalsNodeSnapshot,
   ExecApprovalsSetParams,

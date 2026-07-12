@@ -4872,6 +4872,18 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Notes
   - H2: Related
 
+## nodes/presence.md
+
+- Route: /nodes/presence
+- Headings:
+  - H2: Requirements
+  - H2: Check the active computer
+  - H2: How activity becomes presence
+  - H2: Privacy and model context
+  - H2: How connection alerts are routed
+  - H2: Troubleshooting
+  - H2: Related
+
 ## nodes/talk.md
 
 - Route: /nodes/talk
@@ -8316,7 +8328,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H1: Multi-surface operator approvals
   - H2: Goals
   - H2: Non-goals
-  - H2: Existing system and evidence map
+  - H2: Pre-rollout baseline and evidence map
   - H2: Prior art
   - H2: Architecture and ownership
   - H2: Persistent record
@@ -8334,7 +8346,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: PR 2: typed actions and channel callbacks
   - H3: PR 3: Control UI deep link
   - H3: PR 4: native clients
-  - H3: PR 5: propagation and fail-closed behavior
+  - H3: PR 5: ancestor lifecycle propagation
+  - H3: PR 6: fail-closed behavior
+  - H3: Follow-up: durable remote-message cleanup
   - H2: Tests
   - H2: Observability
   - H2: Open decisions

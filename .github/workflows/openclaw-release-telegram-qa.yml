@@ -283,12 +283,6 @@ jobs:
               "repos/${GITHUB_REPOSITORY}/compare/${candidate_sha}...main" \
               --jq '.status'
           )"
-          git -C .candidate fetch --force --no-tags origin \
-            '+refs/heads/release/*:refs/remotes/origin/release/*'
-          git -C .candidate fetch --force --no-tags origin \
-            '+refs/heads/extended-stable/*:refs/remotes/origin/extended-stable/*'
-          git -C .candidate fetch --force origin '+refs/tags/v*:refs/tags/v*'
-
           trusted_reason=""
           trusted_release_branch=""
           if [[ "$compare_status" == "ahead" || "$compare_status" == "identical" ]]; then
@@ -296,31 +290,43 @@ jobs:
           else
             normalized_ref="${TARGET_REF#refs/heads/}"
             if [[ "$normalized_ref" =~ ^(release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*|extended-stable/[0-9]{4}\.[1-9][0-9]*\.33)$ ]]; then
-              [[ "$(git -C .candidate rev-parse "refs/remotes/origin/${normalized_ref}")" == "$candidate_sha" ]]
+              branch_sha="$(
+                git -C .candidate ls-remote --exit-code --refs origin \
+                  "refs/heads/${normalized_ref}" |
+                  awk 'NR == 1 { print $1 } END { if (NR != 1) exit 1 }'
+              )"
+              [[ "$branch_sha" == "$candidate_sha" ]]
               trusted_reason="release-branch-head"
               trusted_release_branch="$normalized_ref"
             elif [[ "$TARGET_REF" =~ ^refs/tags/v ]] || [[ "$TARGET_REF" =~ ^v ]]; then
               normalized_tag="${TARGET_REF#refs/tags/}"
-              [[ "$(git -C .candidate rev-parse "refs/tags/${normalized_tag}^{commit}")" == "$candidate_sha" ]]
+              tag_refs="$(
+                git -C .candidate ls-remote --exit-code origin \
+                  "refs/tags/${normalized_tag}" "refs/tags/${normalized_tag}^{}"
+              )"
+              awk -v sha="$candidate_sha" '$1 == sha { found = 1 } END { exit(found ? 0 : 1) }' \
+                <<<"$tag_refs"
               trusted_reason="release-tag"
             elif [[ "$TARGET_REF" =~ ^[a-f0-9]{40}$ && "$TARGET_REF" == "$candidate_sha" ]]; then
               matching_release_branches="$(
-                git -C .candidate for-each-ref \
-                  --format='%(objectname) %(refname:strip=3)' \
-                  refs/remotes/origin/release \
-                  refs/remotes/origin/extended-stable |
-                  awk -v sha="$candidate_sha" '$1 == sha { print $2 }'
+                gh api --paginate \
+                  "repos/${GITHUB_REPOSITORY}/commits/${candidate_sha}/branches-where-head" \
+                  --jq '.[].name' |
+                  awk '$0 ~ /^release\/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$/ ||
+                       $0 ~ /^extended-stable\/[0-9]{4}\.[1-9][0-9]*\.33$/ { print }'
               )"
               if [[ "$(wc -l <<<"$matching_release_branches" | tr -d ' ')" == "1" && -n "$matching_release_branches" ]]; then
                 trusted_reason="release-branch-head"
                 trusted_release_branch="$matching_release_branches"
               else
-                while IFS= read -r tag_ref; do
-                  if [[ "$(git -C .candidate rev-parse "${tag_ref}^{commit}")" == "$candidate_sha" ]]; then
-                    trusted_reason="release-tag"
-                    break
-                  fi
-                done < <(git -C .candidate for-each-ref --format='%(refname)' 'refs/tags/v*')
+                matching_release_tags="$(
+                  git -C .candidate ls-remote origin 'refs/tags/v*' |
+                    awk -v sha="$candidate_sha" '$1 == sha { sub(/\^\{\}$/, "", $2); print $2 }' |
+                    sort -u
+                )"
+                if [[ -n "$matching_release_tags" ]]; then
+                  trusted_reason="release-tag"
+                fi
               fi
             fi
           fi
@@ -974,12 +980,6 @@ jobs:
               "repos/${GITHUB_REPOSITORY}/compare/${candidate_sha}...main" \
               --jq '.status'
           )"
-          git fetch --force --no-tags origin \
-            '+refs/heads/release/*:refs/remotes/origin/release/*'
-          git fetch --force --no-tags origin \
-            '+refs/heads/extended-stable/*:refs/remotes/origin/extended-stable/*'
-          git fetch --force origin '+refs/tags/v*:refs/tags/v*'
-
           trusted_reason=""
           trusted_release_branch=""
           if [[ "$compare_status" == "ahead" || "$compare_status" == "identical" ]]; then
@@ -987,31 +987,42 @@ jobs:
           else
             normalized_ref="${TARGET_REF#refs/heads/}"
             if [[ "$normalized_ref" =~ ^(release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*|extended-stable/[0-9]{4}\.[1-9][0-9]*\.33)$ ]]; then
-              [[ "$(git rev-parse "refs/remotes/origin/${normalized_ref}")" == "$candidate_sha" ]]
+              branch_sha="$(
+                git ls-remote --exit-code --refs origin "refs/heads/${normalized_ref}" |
+                  awk 'NR == 1 { print $1 } END { if (NR != 1) exit 1 }'
+              )"
+              [[ "$branch_sha" == "$candidate_sha" ]]
               trusted_reason="release-branch-head"
               trusted_release_branch="$normalized_ref"
             elif [[ "$TARGET_REF" =~ ^refs/tags/v ]] || [[ "$TARGET_REF" =~ ^v ]]; then
               normalized_tag="${TARGET_REF#refs/tags/}"
-              [[ "$(git rev-parse "refs/tags/${normalized_tag}^{commit}")" == "$candidate_sha" ]]
+              tag_refs="$(
+                git ls-remote --exit-code origin \
+                  "refs/tags/${normalized_tag}" "refs/tags/${normalized_tag}^{}"
+              )"
+              awk -v sha="$candidate_sha" '$1 == sha { found = 1 } END { exit(found ? 0 : 1) }' \
+                <<<"$tag_refs"
               trusted_reason="release-tag"
             elif [[ "$TARGET_REF" =~ ^[a-f0-9]{40}$ && "$TARGET_REF" == "$candidate_sha" ]]; then
               matching_release_branches="$(
-                git for-each-ref \
-                  --format='%(objectname) %(refname:strip=3)' \
-                  refs/remotes/origin/release \
-                  refs/remotes/origin/extended-stable |
-                  awk -v sha="$candidate_sha" '$1 == sha { print $2 }'
+                gh api --paginate \
+                  "repos/${GITHUB_REPOSITORY}/commits/${candidate_sha}/branches-where-head" \
+                  --jq '.[].name' |
+                  awk '$0 ~ /^release\/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$/ ||
+                       $0 ~ /^extended-stable\/[0-9]{4}\.[1-9][0-9]*\.33$/ { print }'
               )"
               if [[ "$(wc -l <<<"$matching_release_branches" | tr -d ' ')" == "1" && -n "$matching_release_branches" ]]; then
                 trusted_reason="release-branch-head"
                 trusted_release_branch="$matching_release_branches"
               else
-                while IFS= read -r tag_ref; do
-                  if [[ "$(git rev-parse "${tag_ref}^{commit}")" == "$candidate_sha" ]]; then
-                    trusted_reason="release-tag"
-                    break
-                  fi
-                done < <(git for-each-ref --format='%(refname)' 'refs/tags/v*')
+                matching_release_tags="$(
+                  git ls-remote origin 'refs/tags/v*' |
+                    awk -v sha="$candidate_sha" '$1 == sha { sub(/\^\{\}$/, "", $2); print $2 }' |
+                    sort -u
+                )"
+                if [[ -n "$matching_release_tags" ]]; then
+                  trusted_reason="release-tag"
+                fi
               fi
             fi
           fi
@@ -2024,6 +2035,7 @@ jobs:
           OPENCLAW_QA_TELEGRAM_SUT_UID: ${{ steps.create_sut.outputs.uid }}
           SUT_RUNTIME_ROOT: ${{ steps.create_sut.outputs.runtime_root }}
           SUT_UID: ${{ steps.create_sut.outputs.uid }}
+          TARGET_REF: ${{ inputs.target_ref }}
           TARGET_SHA: ${{ inputs.target_sha }}
         shell: bash
         run: |
@@ -2043,6 +2055,15 @@ jobs:
           trap terminate_sut_uid_on_exit EXIT
           trap 'exit 130' INT
           trap 'exit 143' TERM
+          qa_model="mock-openai/gpt-5.6-luna"
+          qa_alt_model="mock-openai/gpt-5.6-luna-alt"
+          candidate_telegram_qa="$CANDIDATE_ROOT/extensions/qa-lab/src/live-transports/telegram/telegram-live.runtime.ts"
+          if [[ -f "$candidate_telegram_qa" ]] &&
+            grep -Fq '"openai/gpt-5.5": {' "$candidate_telegram_qa" &&
+            ! grep -Fq '"openai/gpt-5.6-luna": {' "$candidate_telegram_qa"; then
+            qa_model="mock-openai/gpt-5.5"
+            qa_alt_model="mock-openai/gpt-5.5-alt"
+          fi
           {
             printf 'trusted_harness_sha=%s\n' "${{ needs.trusted_identity.outputs.workflow_sha }}"
             printf 'candidate_runtime_plugin_sha=%s\n' "$TARGET_SHA"
@@ -2064,8 +2085,8 @@ jobs:
                 --repo-root "$CANDIDATE_ROOT" \
                 --output-dir "${EVIDENCE_RELATIVE}/${output_name}" \
                 --provider-mode mock-openai \
-                --model mock-openai/gpt-5.6-luna \
-                --alt-model mock-openai/gpt-5.6-luna-alt \
+                --model "$qa_model" \
+                --alt-model "$qa_alt_model" \
                 --fast \
                 --credential-source convex \
                 --credential-role ci \
@@ -2149,6 +2170,7 @@ jobs:
         env:
           BOUNDARY_EVIDENCE_DIR: ${{ steps.create_sut.outputs.boundary_evidence_dir }}
           OUTPUT_DIR: ${{ steps.run_lane.outputs.output_dir }}
+          RUN_LANE_OUTCOME: ${{ steps.run_lane.outcome }}
         shell: bash
         run: |
           set -euo pipefail
@@ -2192,6 +2214,7 @@ jobs:
               (.candidateArtifact.version | length > 0)
             ' "$context_path" >/dev/null
           jq -e \
+            --arg runLaneOutcome "$RUN_LANE_OUTCOME" \
             '
               .version == 1 and
               .kind == "qa-gateway-process-boundary" and
@@ -2222,7 +2245,10 @@ jobs:
                   )
                 )
               ) and
-              ([.launches[] | select(.terminalState == "ready-exited")] | length >= 2)
+              (
+                [.launches[] | select(.terminalState == "ready-exited")] | length >=
+                  (if $runLaneOutcome == "success" then 2 else 1 end)
+              )
             ' "$runtime_path" >/dev/null
 
           while IFS=$'\t' read -r relative_path expected_sha256; do
