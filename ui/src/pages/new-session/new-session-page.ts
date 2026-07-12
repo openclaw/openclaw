@@ -647,62 +647,64 @@ class NewSessionPage extends OpenClawLightDomElement {
               `
             : nothing}
         </label>
-        <label
-          class="new-session-page__target new-session-page__target--toggle"
-          title=${worktreeAvailable
-            ? t("chat.runControls.newSessionWorktree")
-            : t("newSession.worktreeUnavailable")}
-        >
-          <input
-            type="checkbox"
-            .checked=${this.worktree}
-            ?disabled=${!worktreeAvailable || customFolder}
-            @change=${(event: Event) => {
-              this.worktree = (event.target as HTMLInputElement).checked;
-              if (this.worktree) {
-                this.maybeLoadBranches();
-              }
-            }}
-          />
-          <span class="new-session-page__target-icon" aria-hidden="true">${icons.gitBranch}</span>
-          <span>${t("newSession.worktree")}</span>
-        </label>
-        ${this.worktree
-          ? html`
-              <label class="new-session-page__target" title=${t("newSession.baseBranch")}>
-                <input
-                  type="text"
-                  list="new-session-branches"
-                  class="new-session-page__branch"
-                  aria-label=${t("newSession.baseBranch")}
-                  placeholder=${this.branchesLoading
-                    ? t("common.loading")
-                    : (branches?.defaultBranch ?? t("newSession.baseBranch"))}
-                  .value=${this.baseRef}
-                  @input=${(event: Event) => {
-                    this.baseRef = (event.target as HTMLInputElement).value.trim();
-                  }}
-                />
-                <datalist id="new-session-branches">
-                  ${(branches?.branches ?? []).map(
-                    (branch) => html`<option value=${branch.name}></option>`,
-                  )}
-                </datalist>
-              </label>
-              <label class="new-session-page__target" title=${t("newSession.worktreeName")}>
-                <input
-                  type="text"
-                  class="new-session-page__branch"
-                  aria-label=${t("newSession.worktreeName")}
-                  placeholder=${t("newSession.worktreeNamePlaceholder")}
-                  .value=${this.worktreeName}
-                  @input=${(event: Event) => {
-                    this.worktreeName = (event.target as HTMLInputElement).value.trim();
-                  }}
-                />
-              </label>
-            `
-          : nothing}
+        <div class="new-session-page__target-group">
+          <label
+            class="new-session-page__target new-session-page__target--toggle"
+            title=${worktreeAvailable
+              ? t("chat.runControls.newSessionWorktree")
+              : t("newSession.worktreeUnavailable")}
+          >
+            <input
+              type="checkbox"
+              .checked=${this.worktree}
+              ?disabled=${!worktreeAvailable || customFolder}
+              @change=${(event: Event) => {
+                this.worktree = (event.target as HTMLInputElement).checked;
+                if (this.worktree) {
+                  this.maybeLoadBranches();
+                }
+              }}
+            />
+            <span class="new-session-page__target-icon" aria-hidden="true">${icons.gitBranch}</span>
+            <span>${t("newSession.worktree")}</span>
+          </label>
+          ${this.worktree
+            ? html`
+                <label class="new-session-page__target" title=${t("newSession.baseBranch")}>
+                  <input
+                    type="text"
+                    list="new-session-branches"
+                    class="new-session-page__branch"
+                    aria-label=${t("newSession.baseBranch")}
+                    placeholder=${this.branchesLoading
+                      ? t("common.loading")
+                      : (branches?.defaultBranch ?? t("newSession.baseBranch"))}
+                    .value=${this.baseRef}
+                    @input=${(event: Event) => {
+                      this.baseRef = (event.target as HTMLInputElement).value.trim();
+                    }}
+                  />
+                  <datalist id="new-session-branches">
+                    ${(branches?.branches ?? []).map(
+                      (branch) => html`<option value=${branch.name}></option>`,
+                    )}
+                  </datalist>
+                </label>
+                <label class="new-session-page__target" title=${t("newSession.worktreeName")}>
+                  <input
+                    type="text"
+                    class="new-session-page__branch"
+                    aria-label=${t("newSession.worktreeName")}
+                    placeholder=${t("newSession.worktreeNamePlaceholder")}
+                    .value=${this.worktreeName}
+                    @input=${(event: Event) => {
+                      this.worktreeName = (event.target as HTMLInputElement).value.trim();
+                    }}
+                  />
+                </label>
+              `
+            : nothing}
+        </div>
       </div>
     `;
   }

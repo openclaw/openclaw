@@ -98,6 +98,7 @@ own docs.
 | Debug app discovery and connectivity     | [Gateway on macOS](/platforms/mac/bundled-gateway#debug-app-connectivity)                   |
 | Understand launchd behavior              | [Gateway lifecycle](/platforms/mac/child-process)                                           |
 | Fix permissions or signing/TCC issues    | [macOS permissions](/platforms/mac/permissions)                                             |
+| Detect the Mac you most recently used    | [Active computer presence](/nodes/presence)                                                 |
 | Connect to a remote Gateway              | [Remote control](/platforms/mac/remote)                                                     |
 | Read menu bar status and health checks   | [Menu bar](/platforms/mac/menu-bar), [Health checks](/platforms/mac/health)                 |
 | Use the embedded chat UI                 | [WebChat](/platforms/mac/webchat)                                                           |

@@ -750,6 +750,7 @@ export function buildAgentSystemPrompt(params: {
     capabilities?: string[];
     repoRoot?: string;
     activeProcessSessions?: ActiveProcessSessionReference[];
+    activeNode?: string;
   };
   messageToolHints?: string[];
   toolSchemaDirectoryPrompt?: string;
@@ -1395,6 +1396,7 @@ export function buildRuntimeLine(
     shell?: string;
     repoRoot?: string;
     activeProcessSessions?: ActiveProcessSessionReference[];
+    activeNode?: string;
   },
   runtimeChannel?: string,
   runtimeCapabilities: string[] = [],
@@ -1419,6 +1421,9 @@ export function buildRuntimeLine(
         ? `arch=${runtimeInfo.arch}`
         : "",
     runtimeInfo?.node ? `node=${runtimeInfo.node}` : "",
+    runtimeInfo?.activeNode
+      ? `active_node=${sanitizeForPromptLiteral(runtimeInfo.activeNode)}`
+      : "",
     runtimeInfo?.model ? `model=${runtimeInfo.model}` : "",
     runtimeInfo?.defaultModel ? `default_model=${runtimeInfo.defaultModel}` : "",
     runtimeInfo?.shell ? `shell=${runtimeInfo.shell}` : "",
