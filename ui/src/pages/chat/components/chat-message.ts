@@ -580,10 +580,11 @@ type StreamGroupOptions = {
 };
 
 function renderReadingIndicatorBubble() {
-  // Working spark: pulsing brand mark where the reply will materialize.
-  // aria-hidden; the composer's sr-only run-status region announces phases.
+  // Working claw: the brand pincer rests slightly open where the reply will
+  // materialize and pinches once per cycle (same gesture as the favicon
+  // mascot snap). aria-hidden; the composer sr-only run-status announces.
   return html`
-    <div class="chat-bubble chat-reading-indicator" aria-hidden="true">${icons.spark}</div>
+    <div class="chat-bubble chat-reading-indicator" aria-hidden="true">${icons.claw}</div>
   `;
 }
 
