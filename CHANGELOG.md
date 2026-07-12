@@ -29,7 +29,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Control UI workspace file editor:** retain unsaved edits across file, panel, and session navigation; isolate drafts by Gateway, split pane, and canonical file identity; open Markdown in the editor; require explicit edit capability advertisement; serialize concurrent same-file saves across path aliases and nested workspace roots; and reject malformed hashes or non-round-trippable UTF-16 input.
 - **Gateway chat typecheck:** import chat event types from their owning protocol schema after the retired aggregate type module was removed, restoring full project typechecks.
 - **Packaged Crabbox commands:** include the lease-freshness helper imported by the published wrapper so `crabbox:*` commands do not fail with `ERR_MODULE_NOT_FOUND` in npm installs.
 - **Plugin session catalogs:** reject unknown catalog filters, report catalogs as plugin capabilities, and preserve them in SDK registration captures instead of silently returning empty results or classifying catalog-only plugins as capability-free.
