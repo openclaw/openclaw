@@ -20371,7 +20371,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 173,
+      "line": 169,
       "path": "apps/ios/Sources/LiveActivity/LiveActivityManager.swift",
       "source": "Connecting...",
       "surface": "apple",
@@ -20379,7 +20379,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 176,
+      "line": 172,
       "path": "apps/ios/Sources/LiveActivity/LiveActivityManager.swift",
       "source": "Reconnecting...",
       "surface": "apple",
@@ -20387,7 +20387,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 183,
+      "line": 179,
       "path": "apps/ios/Sources/LiveActivity/LiveActivityManager.swift",
       "source": "Approval needed",
       "surface": "apple",
@@ -20395,7 +20395,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 186,
+      "line": 182,
       "path": "apps/ios/Sources/LiveActivity/LiveActivityManager.swift",
       "source": "Action required",
       "surface": "apple",
