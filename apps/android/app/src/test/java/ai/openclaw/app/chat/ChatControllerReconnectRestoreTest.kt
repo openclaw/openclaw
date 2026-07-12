@@ -227,12 +227,24 @@ class ChatControllerReconnectRestoreTest {
       controller.refresh()
       runCurrent()
 
-      assertEquals(0, gateway.callCount("chat.history"))
+      val createIndexBeforeFirstDescribeCompletes =
+        gateway.calls.indexOfLast { it.method == "sessions.create" }
+      val historyCallsBeforeFirstDescribeCompletes =
+        gateway.calls.withIndex().filter { it.value.method == "chat.history" }
+      assertTrue(createIndexBeforeFirstDescribeCompletes >= 0)
+      assertTrue(historyCallsBeforeFirstDescribeCompletes.isNotEmpty())
+      assertTrue(historyCallsBeforeFirstDescribeCompletes.all { it.index > createIndexBeforeFirstDescribeCompletes })
+      assertTrue(
+        historyCallsBeforeFirstDescribeCompletes.all {
+          gateway.sessionKeyOf(it.value.paramsJson) == "agent:second:node-device"
+        },
+      )
       firstDescribe.complete("""{"session":null}""")
       runCurrent()
 
       val createIndex = gateway.calls.indexOfLast { it.method == "sessions.create" }
       val historyCalls = gateway.calls.withIndex().filter { it.value.method == "chat.history" }
+      assertEquals(1, gateway.callCount("sessions.create"))
       assertTrue(createIndex >= 0)
       assertTrue(historyCalls.isNotEmpty())
       assertTrue(historyCalls.all { it.index > createIndex })
