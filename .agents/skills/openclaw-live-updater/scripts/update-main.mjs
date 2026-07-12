@@ -1699,6 +1699,12 @@ export function resolveManagedPluginSourceRoots(report) {
   return roots;
 }
 
+export function resolveManagedGatewaySourceRoot(checkout, deployment) {
+  return typeof deployment?.entrypoint === "string" && deployment.entrypoint.length > 0
+    ? path.dirname(path.resolve(deployment.entrypoint))
+    : path.join(realpathSync(checkout), "dist");
+}
+
 function defaultAuditGatewayLogs(checkout, sinceMs, deployment = null) {
   let output;
   try {
@@ -1726,7 +1732,7 @@ function defaultAuditGatewayLogs(checkout, sinceMs, deployment = null) {
   const audit = parseGatewayLogAudit(
     output,
     sinceMs,
-    path.join(realpathSync(checkout), "dist"),
+    resolveManagedGatewaySourceRoot(checkout, deployment),
     readManagedPluginSourceRoots(checkout, deployment),
   );
   if (audit.errorCount > 0) {

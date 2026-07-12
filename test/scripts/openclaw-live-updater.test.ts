@@ -29,6 +29,7 @@ import {
   prepareGatewaySuspension,
   replaceLaunchAgentProgramArgument,
   repointManagedGatewayDeployment,
+  resolveManagedGatewaySourceRoot,
   resolveManagedPluginSourceRoots,
   resolveManagedGatewayEntrypoint,
   runBuiltGatewayCall,
@@ -425,6 +426,14 @@ describe("openclaw live updater", () => {
     ]);
     expect(resolveManagedPluginSourceRoots({ plugins: [{ id: "unknown" }] })).toBeNull();
     expect(resolveManagedPluginSourceRoots({})).toBeNull();
+  });
+
+  test("scopes restart logs to the effective managed runtime", () => {
+    expect(
+      resolveManagedGatewaySourceRoot("/srv/openclaw", {
+        entrypoint: "/srv/runtime/gateway-abc/dist/index.js",
+      }),
+    ).toBe("/srv/runtime/gateway-abc/dist");
   });
 
   test("retries bounded Gateway readiness after restart", () => {

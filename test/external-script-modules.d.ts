@@ -198,6 +198,10 @@ declare module "*openclaw-live-updater/scripts/update-main.mjs" {
     managedSourceRoots?: string[] | null,
   ): Record<string, unknown>;
   export function resolveManagedPluginSourceRoots(report: unknown): string[] | null;
+  export function resolveManagedGatewaySourceRoot(
+    checkout: string,
+    deployment?: GatewayDeployment | null,
+  ): string;
   export function prepareGatewaySuspension(
     checkout: string,
     callGateway?: (
