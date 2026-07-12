@@ -2238,6 +2238,7 @@ jobs:
         env:
           OUTPUT_DIR: ${{ steps.run_lane.outputs.output_dir }}
           RUNTIME_ROOT: ${{ steps.create_sut.outputs.runtime_root }}
+          RUN_LANE_OUTCOME: ${{ steps.run_lane.outcome }}
         shell: bash
         run: |
           set -euo pipefail
@@ -2391,7 +2392,10 @@ jobs:
           mapfile -t gateway_logs < <(
             sudo find "$RUNTIME_ROOT/tmp" -xdev -type f -name 'openclaw-*.log' -print | sort
           )
-          ((${#gateway_logs[@]} > 0 && ${#gateway_logs[@]} <= 8))
+          ((${#gateway_logs[@]} <= 8))
+          if [[ "$RUN_LANE_OUTCOME" != "success" ]]; then
+            ((${#gateway_logs[@]} > 0))
+          fi
           for index in "${!gateway_logs[@]}"; do
             log_path="$(sudo realpath -e "${gateway_logs[$index]}")"
             case "$log_path" in
@@ -2407,7 +2411,10 @@ jobs:
             find "$diagnostics_dir" -maxdepth 1 -type f -name 'gateway-model-config-*.json' -print |
               sort
           )
-          ((${#model_config_proofs[@]} > 0 && ${#model_config_proofs[@]} <= 8))
+          ((${#model_config_proofs[@]} <= 8))
+          if [[ "$RUN_LANE_OUTCOME" != "success" ]]; then
+            ((${#model_config_proofs[@]} > 0))
+          fi
           for proof_path in "${model_config_proofs[@]}"; do
             [[ "$(stat -c '%F:%a' "$proof_path")" == "regular file:600" ]]
             proof_bytes="$(stat -c '%s' "$proof_path")"
