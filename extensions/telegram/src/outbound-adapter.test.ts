@@ -7,11 +7,13 @@ const sendMessageTelegramMock = vi.fn();
 const pinMessageTelegramMock = vi.fn();
 const reactMessageTelegramMock = vi.fn();
 const sendPollTelegramMock = vi.fn();
+const sendLocationTelegramMock = vi.fn();
 
 vi.mock("./send.js", () => ({
   pinMessageTelegram: (...args: unknown[]) => pinMessageTelegramMock(...args),
   reactMessageTelegram: (...args: unknown[]) => reactMessageTelegramMock(...args),
   sendPollTelegram: (...args: unknown[]) => sendPollTelegramMock(...args),
+  sendLocationTelegram: (...args: unknown[]) => sendLocationTelegramMock(...args),
   sendMessageTelegram: (...args: unknown[]) => sendMessageTelegramMock(...args),
 }));
 
@@ -66,6 +68,7 @@ describe("telegramOutbound", () => {
     reactMessageTelegramMock.mockReset();
     sendPollTelegramMock.mockReset();
     sendMessageTelegramMock.mockReset();
+    sendLocationTelegramMock.mockReset();
   });
 
   it("forwards mediaLocalRoots in direct media sends", async () => {
@@ -768,6 +771,96 @@ describe("telegramOutbound", () => {
     expect(options.mediaUrl).toBe("file:///tmp/note.ogg");
     expect(options.asVoice).toBe(true);
     expect(result).toEqual({ channel: "telegram", messageId: "tg-voice", chatId: "12345" });
+  });
+
+  it("forwards videoAsNote payload media to Telegram video-note sends", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-video-note", chatId: "12345" });
+
+    const result = await telegramOutbound.sendPayload!({
+      cfg: {} as never,
+      to: "12345",
+      text: "",
+      payload: {
+        mediaUrl: "file:///tmp/note.mp4",
+        videoAsNote: true,
+      },
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", "");
+    expect(options.mediaUrl).toBe("file:///tmp/note.mp4");
+    expect(options.asVideoNote).toBe(true);
+    expect(result).toEqual({
+      channel: "telegram",
+      messageId: "tg-video-note",
+      chatId: "12345",
+    });
+  });
+
+  it.each([
+    { name: "no attachment", mediaUrls: [] },
+    {
+      name: "multiple attachments",
+      mediaUrls: ["file:///tmp/one.mp4", "file:///tmp/two.mp4"],
+    },
+  ])("rejects video-note payloads with $name", async ({ mediaUrls }) => {
+    await expect(
+      telegramOutbound.sendPayload!({
+        cfg: {} as never,
+        to: "12345",
+        text: "",
+        payload: { mediaUrls, videoAsNote: true },
+        deps: { sendTelegram: sendMessageTelegramMock },
+      }),
+    ).rejects.toThrow("Telegram video notes require exactly one media attachment.");
+    expect(sendMessageTelegramMock).not.toHaveBeenCalled();
+  });
+
+  it("maps portable locations to Telegram native sends", async () => {
+    sendLocationTelegramMock.mockResolvedValueOnce({
+      messageId: "tg-location",
+      chatId: "12345",
+    });
+    const location = {
+      latitude: 48.858844,
+      longitude: 2.294351,
+      name: "Eiffel Tower",
+      address: "Champ de Mars",
+    };
+
+    const result = await telegramOutbound.sendPayload!({
+      cfg: {} as never,
+      to: "12345",
+      text: "",
+      payload: { location },
+      accountId: "ops",
+    });
+
+    expect(sendLocationTelegramMock).toHaveBeenCalledWith(
+      "12345",
+      location,
+      expect.objectContaining({ cfg: {}, accountId: "ops", buttons: undefined }),
+    );
+    expect(sendMessageTelegramMock).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      channel: "telegram",
+      messageId: "tg-location",
+      chatId: "12345",
+    });
+  });
+
+  it("rejects mixed Telegram location and text payloads", async () => {
+    await expect(
+      telegramOutbound.sendPayload!({
+        cfg: {} as never,
+        to: "12345",
+        text: "caption",
+        payload: {
+          text: "caption",
+          location: { latitude: 1, longitude: 2 },
+        },
+      }),
+    ).rejects.toThrow(/cannot be combined/i);
   });
 
   it("backs declared durable final capabilities with delivery proofs", async () => {

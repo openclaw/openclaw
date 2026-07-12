@@ -276,6 +276,17 @@ export type AgentRuntimeReplyPayloadDelivery = {
   pin?: boolean | AgentRuntimeReplyPayloadDeliveryPin;
 };
 
+type AgentRuntimeReplyPayloadLocation = {
+  latitude: number;
+  longitude: number;
+  accuracy?: number;
+  name?: string;
+  address?: string;
+  isLive?: boolean;
+  source?: "pin" | "place" | "live";
+  caption?: string;
+};
+
 /** Portable reply payload emitted by agent runtimes before channel rendering. */
 export type AgentRuntimeReplyPayload = {
   text?: string;
@@ -296,6 +307,8 @@ export type AgentRuntimeReplyPayload = {
   replyToTag?: boolean;
   replyToCurrent?: boolean;
   audioAsVoice?: boolean;
+  videoAsNote?: boolean;
+  location?: AgentRuntimeReplyPayloadLocation;
   spokenText?: string;
   ttsSupplement?: {
     spokenText: string;

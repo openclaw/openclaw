@@ -59,6 +59,7 @@ const {
   pinMessageTelegram,
   reactMessageTelegram,
   renameForumTopicTelegram,
+  sendLocationTelegram,
   sendMessageTelegram: sendMessageTelegramImported,
   sendTypingTelegram,
   sendPollTelegram,
@@ -2430,6 +2431,86 @@ describe("sendMessageTelegram", () => {
       expect(Object.keys(params).toSorted()).toEqual(["caption", "parse_mode"]);
       expect(res.messageId).toBe("201");
     }
+  });
+
+  it.each([
+    {
+      name: "non-video media",
+      contentType: "image/png",
+      fileName: "photo.png",
+      forceDocument: false,
+    },
+    {
+      name: "forced documents",
+      contentType: "video/mp4",
+      fileName: "video.mp4",
+      forceDocument: true,
+    },
+  ])("rejects video notes backed by $name", async (testCase) => {
+    mockLoadedMedia({
+      buffer: Buffer.from("fake-media"),
+      contentType: testCase.contentType,
+      fileName: testCase.fileName,
+    });
+
+    await expect(
+      sendMessageTelegram("123", "", {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        api: {},
+        mediaUrl: `https://example.com/${testCase.fileName}`,
+        asVideoNote: true,
+        forceDocument: testCase.forceDocument,
+      }),
+    ).rejects.toThrow("Telegram video notes require video media.");
+  });
+
+  it("sends native locations and venues with bounded accuracy", async () => {
+    const chatId = "123";
+    const sendLocation = vi.fn().mockResolvedValue({ message_id: 301, chat: { id: chatId } });
+    const sendVenue = vi.fn().mockResolvedValue({ message_id: 302, chat: { id: chatId } });
+    const api = { sendLocation, sendVenue } as unknown as TelegramApiOverride;
+
+    await sendLocationTelegram(
+      chatId,
+      { latitude: 48.858844, longitude: 2.294351, accuracy: 12 },
+      { cfg: TELEGRAM_TEST_CFG, token: "tok", api },
+    );
+    await sendLocationTelegram(
+      chatId,
+      {
+        latitude: 48.858844,
+        longitude: 2.294351,
+        name: "Eiffel Tower",
+        address: "Champ de Mars",
+      },
+      { cfg: TELEGRAM_TEST_CFG, token: "tok", api },
+    );
+
+    expect(sendLocation).toHaveBeenCalledWith(
+      chatId,
+      48.858844,
+      2.294351,
+      expect.objectContaining({ horizontal_accuracy: 12 }),
+    );
+    expect(sendVenue).toHaveBeenCalledWith(
+      chatId,
+      48.858844,
+      2.294351,
+      "Eiffel Tower",
+      "Champ de Mars",
+      expect.any(Object),
+    );
+  });
+
+  it("rejects incomplete Telegram venues", async () => {
+    await expect(
+      sendLocationTelegram(
+        "123",
+        { latitude: 1, longitude: 2, name: "Unnamed address" },
+        { cfg: TELEGRAM_TEST_CFG, token: "tok", api: {} },
+      ),
+    ).rejects.toThrow(/require both/i);
   });
 
   it("passes probed dimensions to regular video sends", async () => {

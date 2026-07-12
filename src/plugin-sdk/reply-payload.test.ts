@@ -336,6 +336,28 @@ describe("normalizeOutboundReplyPayload", () => {
     });
   });
 
+  it("normalizes portable location and video-note hints", () => {
+    expect(
+      normalizeOutboundReplyPayload({
+        location: {
+          latitude: 48.858844,
+          longitude: 2.294351,
+          name: "  Eiffel Tower ",
+          address: " Champ de Mars ",
+        },
+        videoAsNote: true,
+      }),
+    ).toMatchObject({
+      location: {
+        latitude: 48.858844,
+        longitude: 2.294351,
+        name: "Eiffel Tower",
+        address: "Champ de Mars",
+      },
+      videoAsNote: true,
+    });
+  });
+
   it("keeps the normalized deliverer from forwarding trustedLocalMedia", async () => {
     const handler = vi.fn(async () => {});
     const deliver = createNormalizedOutboundDeliverer(handler);

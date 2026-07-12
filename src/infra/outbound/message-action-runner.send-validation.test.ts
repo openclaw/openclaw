@@ -89,6 +89,20 @@ describe("runMessageAction send validation", () => {
     expect(result.kind).toBe("send");
   });
 
+  it("allows send when only a portable location is provided", async () => {
+    const result = await runDrySend({
+      cfg: workspaceConfig,
+      actionParams: {
+        channel: "workspace",
+        target: "#C12345678",
+        location: { latitude: 48.858844, longitude: 2.294351 },
+      },
+      toolContext: { currentChannelId: "C12345678" },
+    });
+
+    expect(result.kind).toBe("send");
+  });
+
   it("uses the current internal UI source as the message-tool-only send sink", async () => {
     const result = await runMessageAction({
       cfg: emptyConfig,

@@ -3,6 +3,7 @@ import * as grammy from "grammy";
 import { type ApiClientOptions, Bot, HttpError } from "grammy";
 import type { ReactionType, ReactionTypeEmoji } from "grammy/types";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
+import { formatLocationText, type NormalizedLocation } from "openclaw/plugin-sdk/channel-location";
 import {
   createMessageReceiptFromOutboundResults,
   type MessageReceipt,
@@ -39,6 +40,7 @@ import {
   isTelegramRateLimitError,
   isTelegramServerError,
 } from "./network-errors.js";
+import { normalizeTelegramOutboundLocation } from "./normalize.js";
 import {
   recordOutboundMessageForPromptContext,
   type TelegramOutboundPromptContextMessage as TelegramMessageLike,
@@ -100,6 +102,8 @@ type TelegramApi = Bot["api"];
 export type TelegramApiOverride = Partial<TelegramApi>;
 type TelegramSendMessageParams = Parameters<TelegramApi["sendMessage"]>[2];
 type TelegramSendPollParams = Parameters<TelegramApi["sendPoll"]>[3];
+type TelegramSendLocationParams = Parameters<TelegramApi["sendLocation"]>[3];
+type TelegramSendVenueParams = Parameters<TelegramApi["sendVenue"]>[5];
 type TelegramEditMessageTextParams = Parameters<TelegramApi["editMessageText"]>[3];
 type TelegramEditMessageCaptionParams = Parameters<TelegramApi["editMessageCaption"]>[2];
 type TelegramCreateForumTopicParams = NonNullable<Parameters<TelegramApi["createForumTopic"]>[2]>;
@@ -160,6 +164,22 @@ type TelegramSendResult = {
   chatId: string;
   receipt?: MessageReceipt;
 };
+
+type TelegramLocationSendOpts = Pick<
+  TelegramSendOpts,
+  | "cfg"
+  | "token"
+  | "accountId"
+  | "verbose"
+  | "api"
+  | "retry"
+  | "gatewayClientScopes"
+  | "replyToMessageId"
+  | "messageThreadId"
+  | "buttons"
+  | "silent"
+  | "onDeliveryResult"
+>;
 
 type TelegramOutboundSuccessLogParams = {
   accountId: string;
@@ -1331,6 +1351,9 @@ async function sendMessageTelegramWithContext(
     let sendImageAsPhoto = true;
     const deliveryKind =
       opts.forceDocument === true && (kind === "image" || kind === "video") ? "document" : kind;
+    if (opts.asVideoNote === true && deliveryKind !== "video") {
+      throw new Error("Telegram video notes require video media.");
+    }
     if (deliveryKind === "image" && !isGif) {
       sendImageAsPhoto = await shouldSendTelegramImageAsPhoto(media.buffer);
     }
@@ -1562,6 +1585,131 @@ async function sendMessageTelegramWithContext(
     direction: "outbound",
   });
   return textResult;
+}
+
+/** Send a standalone location pin or named venue through Telegram's native payload. */
+export async function sendLocationTelegram(
+  to: string,
+  input: NormalizedLocation,
+  opts: TelegramLocationSendOpts,
+): Promise<TelegramSendResult> {
+  const context = resolveTelegramApiContext(opts);
+  return withTelegramApiContextLease(
+    context,
+    sendLocationTelegramWithContext(to, input, opts, context),
+  );
+}
+
+async function sendLocationTelegramWithContext(
+  to: string,
+  input: NormalizedLocation,
+  opts: TelegramLocationSendOpts,
+  context: TelegramApiContext,
+): Promise<TelegramSendResult> {
+  const location = normalizeTelegramOutboundLocation(input);
+  if (!location) {
+    throw new Error("Telegram location is required.");
+  }
+  const hasName = Boolean(location.name);
+  const hasAddress = Boolean(location.address);
+  if (hasName !== hasAddress) {
+    throw new Error("Telegram venues require both location.name and location.address.");
+  }
+
+  const { cfg, account, api } = context;
+  const botUserId = resolveTelegramBotUserIdFromToken(opts.token || account.token);
+  const target = parseTelegramTarget(to);
+  const chatId = await resolveAndPersistChatId({
+    cfg,
+    api,
+    lookupTarget: target.chatId,
+    persistTarget: to,
+    verbose: opts.verbose,
+    gatewayClientScopes: opts.gatewayClientScopes,
+  });
+  const threadParams = buildTelegramThreadReplyParams({
+    thread: resolveTelegramSendThreadSpec({
+      targetMessageThreadId: target.messageThreadId,
+      messageThreadId: opts.messageThreadId,
+      chatType: target.chatType,
+    }),
+    replyToMessageId: opts.replyToMessageId,
+  });
+  const replyMarkup = buildInlineKeyboard(opts.buttons);
+  const commonParams = {
+    ...threadParams,
+    ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+    ...(opts.silent === true ? { disable_notification: true } : {}),
+  };
+  const requestWithChatNotFound = createRequestWithChatNotFound({
+    requestWithDiag: createTelegramNonIdempotentRequestWithDiag({
+      cfg,
+      account,
+      retry: opts.retry,
+      verbose: opts.verbose,
+    }),
+    chatId,
+    input: to,
+  });
+  const label = hasName ? "venue" : "location";
+  const delivery = await withTelegramNativeQuoteFallback({
+    label,
+    requestParams: commonParams,
+    request: (effectiveParams, retryLabel) =>
+      requestWithChatNotFound(
+        () =>
+          hasName
+            ? api.sendVenue(
+                chatId,
+                location.latitude,
+                location.longitude,
+                location.name ?? "",
+                location.address ?? "",
+                effectiveParams as TelegramSendVenueParams,
+              )
+            : api.sendLocation(chatId, location.latitude, location.longitude, {
+                ...effectiveParams,
+                ...(location.accuracy !== undefined
+                  ? { horizontal_accuracy: location.accuracy }
+                  : {}),
+              } as TelegramSendLocationParams),
+        retryLabel,
+      ),
+  });
+  const result = delivery.result;
+  const acceptedParams = toAcceptedThreadScopedParams(delivery.acceptedParams);
+  const messageId = resolveTelegramMessageIdOrThrow(result, `${label} send`);
+  const resolvedChatId = String(result?.chat?.id ?? chatId);
+  recordSentMessage(chatId, messageId, cfg);
+  await opts.onDeliveryResult?.({ messageId: String(messageId), chatId: resolvedChatId });
+  await recordOutboundMessageForPromptContext({
+    cfg,
+    account,
+    ...(botUserId !== undefined ? { botUserId } : {}),
+    chatId,
+    message: result,
+    messageId,
+    text: formatLocationText(location),
+    ...(acceptedParams?.message_thread_id !== undefined
+      ? { messageThreadId: acceptedParams.message_thread_id }
+      : {}),
+  });
+  logTelegramOutboundSendOk({
+    accountId: account.accountId,
+    chatId: resolvedChatId,
+    messageId: String(messageId),
+    operation: hasName ? "sendVenue" : "sendLocation",
+    deliveryKind: label,
+    messageThreadId: acceptedParams?.message_thread_id,
+    replyToMessageId: opts.replyToMessageId,
+    silent: opts.silent,
+  });
+  recordChannelActivity({
+    channel: "telegram",
+    accountId: account.accountId,
+    direction: "outbound",
+  });
+  return { messageId: String(messageId), chatId: resolvedChatId };
 }
 
 export async function sendTypingTelegram(

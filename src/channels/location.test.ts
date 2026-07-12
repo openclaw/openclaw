@@ -1,8 +1,34 @@
 // Location tests cover channel location payload normalization and display helpers.
 import { describe, expect, it } from "vitest";
-import { formatLocationText, toLocationContext } from "./location.js";
+import { formatLocationText, normalizeLocation, toLocationContext } from "./location.js";
 
 describe("provider location helpers", () => {
+  it("normalizes bounded outbound coordinates and labels", () => {
+    expect(
+      normalizeLocation({
+        latitude: 48.858844,
+        longitude: 2.294351,
+        accuracy: 12,
+        name: "  Eiffel Tower ",
+        address: " Champ de Mars ",
+      }),
+    ).toEqual({
+      latitude: 48.858844,
+      longitude: 2.294351,
+      accuracy: 12,
+      name: "Eiffel Tower",
+      address: "Champ de Mars",
+    });
+  });
+
+  it.each([
+    [{ latitude: 91, longitude: 0 }, "latitude"],
+    [{ latitude: 0, longitude: -181 }, "longitude"],
+    [{ latitude: 0, longitude: 0, accuracy: 1501 }, "accuracy"],
+  ])("rejects invalid outbound location fields", (value, field) => {
+    expect(() => normalizeLocation(value)).toThrow(field);
+  });
+
   it("formats pin locations with accuracy", () => {
     const text = formatLocationText({
       latitude: 48.858844,
