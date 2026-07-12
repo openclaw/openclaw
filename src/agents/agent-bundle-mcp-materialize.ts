@@ -19,7 +19,10 @@ import type {
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
 import { mcpContentBlockToAgentContent } from "./mcp-content.js";
-import { buildMcpAppCanvasPayload, fetchMcpAppView } from "./mcp-ui-resource.js";
+import {
+  buildMcpAppCanvasPayload,
+  fetchMcpAppView,
+} from "./mcp-ui-resource.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -414,7 +417,7 @@ export async function materializeBundleMcpToolsForRun(params: {
   const tools = buildBundleMcpToolsFromCatalog({
     catalog,
     reservedToolNames,
-    createExecute: (tool) => async (_toolCallId: string, input: unknown) => {
+    createExecute: (tool) => async (toolCallId: string, input: unknown) => {
       params.runtime.markUsed();
       const result = await params.runtime.callTool(tool.serverName, tool.toolName, input);
       const agentResult = toAgentToolResult({
@@ -431,6 +434,7 @@ export async function materializeBundleMcpToolsForRun(params: {
           serverName: tool.serverName,
           toolName: tool.toolName,
           uiResourceUri: tool.uiResourceUri,
+          toolCallId,
           toolInput: input,
           toolResult: result,
           ...(allowedAppToolNames ? { allowedAppToolNames } : {}),

@@ -224,7 +224,9 @@ export class McpAppView extends LitElement {
       }
       const iframe = document.createElement("iframe");
       iframe.title = this.title || t("mcpApp.title");
-      iframe.referrerPolicy = "no-referrer";
+      // The isolated proxy binds its parent before accepting messages. Only the
+      // Control UI origin is disclosed; path/query data remains suppressed.
+      iframe.referrerPolicy = "origin";
       iframe.style.height = `${this.height}px`;
       // The proxy listener is a dedicated origin that never serves host data,
       // so Apps retain their required origin capabilities without reaching Control UI.

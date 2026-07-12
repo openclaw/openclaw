@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   completeDeferredSessionMcpRuntimeRetirement: vi.fn(),
   getMcpAppViewLease: vi.fn(),
   peekSessionMcpRuntime: vi.fn(),
+  restoreMcpAppView: vi.fn(),
 }));
 
 vi.mock("../../agents/mcp-ui-resource.js", () => ({
@@ -17,6 +18,9 @@ vi.mock("../../agents/mcp-app-sandbox.js", () => ({
 vi.mock("../../agents/agent-bundle-mcp-runtime.js", () => ({
   completeDeferredSessionMcpRuntimeRetirement: mocks.completeDeferredSessionMcpRuntimeRetirement,
   peekSessionMcpRuntime: mocks.peekSessionMcpRuntime,
+}));
+vi.mock("../mcp-app-reconstruction.js", () => ({
+  restoreMcpAppView: mocks.restoreMcpAppView,
 }));
 
 import { mcpAppHandlers } from "./mcp-app.js";
@@ -100,6 +104,7 @@ describe("MCP App gateway bridge", () => {
     mocks.getMcpAppViewLease.mockReset().mockReturnValue(view);
     mocks.completeDeferredSessionMcpRuntimeRetirement.mockReset().mockResolvedValue(false);
     mocks.peekSessionMcpRuntime.mockReset().mockReturnValue(runtime());
+    mocks.restoreMcpAppView.mockReset().mockResolvedValue(undefined);
   });
 
   it("returns the ephemeral view payload only for the bound session", async () => {
@@ -145,7 +150,6 @@ describe("MCP App gateway bridge", () => {
     const listed = await invoke("mcp.app.listTools", params);
     expect(listed.mock.calls[0]?.[1].tools.map((tool: { name: string }) => tool.name)).toEqual([
       "shared",
-      "app-only",
     ]);
 
     const denied = await invoke("mcp.app.callTool", { ...params, toolName: "model-only" });
@@ -172,5 +176,29 @@ describe("MCP App gateway bridge", () => {
       viewId: "expired",
     });
     expect(respond.mock.calls[0]?.[0]).toBe(false);
+    expect(mocks.restoreMcpAppView).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        viewId: "expired",
+      }),
+    );
+  });
+
+  it("restores a transcript-backed view after a Gateway restart", async () => {
+    const restoredRuntime = runtime();
+    const restoredView = { ...view, runtime: restoredRuntime, allowedAppToolNames: new Set() };
+    mocks.peekSessionMcpRuntime.mockReturnValue(undefined);
+    mocks.restoreMcpAppView.mockResolvedValue({
+      runtime: restoredRuntime,
+      view: restoredView,
+    });
+
+    const respond = await invoke("mcp.app.view", {
+      sessionKey: "agent:main:main",
+      viewId: "cv_app",
+    });
+
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+    expect(respond.mock.calls[0]?.[1]).toMatchObject({ html: "<html>demo</html>" });
   });
 });
