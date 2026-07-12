@@ -28,6 +28,36 @@ openclaw-chat-page {
   box-shadow: none !important;
 }
 
+.chat::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 90;
+  pointer-events: none;
+  background: var(--accent);
+  opacity: 0;
+  transition: opacity 140ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.chat[data-attachment-drop-active]::after {
+  opacity: 0.1;
+}
+
+.chat > * {
+  transition: opacity 140ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.chat[data-attachment-drop-active] > * {
+  opacity: 0.5;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat::after,
+  .chat > * {
+    transition-duration: 0ms;
+  }
+}
+
 .chat-workbench__main {
   /* Positioning context for the floating rail openers so they pin to the
      thread column instead of overlapping an open right-docked rail. */

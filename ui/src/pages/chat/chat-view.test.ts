@@ -554,6 +554,12 @@ function requireElement(container: Element, selector: string, label: string): El
   return element;
 }
 
+function createDragEvent(type: string, types = ["Files"]): Event {
+  const event = new Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "dataTransfer", { value: { types } });
+  return event;
+}
+
 function itemAt<T>(items: ArrayLike<T>, index: number, label: string): T {
   return expectDefined(items[index], `${label} ${index}`);
 }
@@ -3527,6 +3533,38 @@ describe("chat slash menu accessibility", () => {
 });
 
 describe("chat attachment picker", () => {
+  it("highlights only the chat pane receiving a file drag", () => {
+    const first = renderChatView();
+    const second = renderChatView();
+    const firstChat = requireElement(first, "section.card.chat", "first chat drop target");
+    const secondChat = requireElement(second, "section.card.chat", "second chat drop target");
+
+    secondChat.dispatchEvent(createDragEvent("dragenter"));
+
+    expect(firstChat.hasAttribute("data-attachment-drop-active")).toBe(false);
+    expect(secondChat.hasAttribute("data-attachment-drop-active")).toBe(true);
+
+    secondChat.dispatchEvent(createDragEvent("dragleave"));
+
+    expect(secondChat.hasAttribute("data-attachment-drop-active")).toBe(false);
+  });
+
+  it("keeps the file drop overlay stable across nested drag targets", () => {
+    const container = renderChatView();
+    const chat = requireElement(container, "section.card.chat", "chat drop target");
+
+    chat.dispatchEvent(createDragEvent("dragenter"));
+    chat.dispatchEvent(createDragEvent("dragenter"));
+    chat.dispatchEvent(createDragEvent("dragleave"));
+    expect(chat.hasAttribute("data-attachment-drop-active")).toBe(true);
+
+    chat.dispatchEvent(createDragEvent("dragleave"));
+    expect(chat.hasAttribute("data-attachment-drop-active")).toBe(false);
+
+    chat.dispatchEvent(createDragEvent("dragenter", ["application/x-openclaw-session"]));
+    expect(chat.hasAttribute("data-attachment-drop-active")).toBe(false);
+  });
+
   it("turns large pasted plain text into a compact attachment", async () => {
     const onAttachmentsChange = vi.fn();
     const container = renderChatView({

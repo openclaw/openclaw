@@ -1050,6 +1050,8 @@ describe("pw-tools-core browser SSRF guards", () => {
     const ariaSnapshot = vi.fn(async () => 'button "Save"');
     pageState.page = createSnapshotPage({
       ariaSnapshot,
+      on: vi.fn(),
+      off: vi.fn(),
       url: vi.fn(() => "https://example.com"),
     });
 
@@ -1075,6 +1077,9 @@ describe("pw-tools-core browser SSRF guards", () => {
     const ariaSnapshot = vi.fn(async () => "");
     pageState.page = createSnapshotPage({
       locator: vi.fn(() => ({ ariaSnapshot })),
+      mainFrame: vi.fn(() => ({})),
+      on: vi.fn(),
+      off: vi.fn(),
       url: vi.fn(() => "https://example.com"),
     });
 
