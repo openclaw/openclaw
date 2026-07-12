@@ -8,6 +8,7 @@ function makeStream() {
   return {
     emit: vi.fn(),
     update: vi.fn(),
+    clearText: vi.fn(),
     close: vi.fn<() => Promise<StreamCloseResult>>(async () => ({ id: "stream-final" })),
     canceled: false,
   };
@@ -76,6 +77,7 @@ describe("createTeamsReplyStreamController", () => {
     expect(stream.emit).toHaveBeenCalledWith("abcde");
     expect(ctrl.preparePayload({ text: "abXYZ" })).toEqual({ text: "abXYZ" });
     await ctrl.finalize();
+    expect(stream.clearText).toHaveBeenCalledTimes(1);
     expect(stream.close).toHaveBeenCalled();
   });
 

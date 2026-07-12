@@ -188,8 +188,10 @@ export function createTeamsReplyStreamController(params: {
         return;
       }
       // Non-whitespace rewrites are not safe to append into Teams. Let block
-      // delivery carry the final payload, but still close the stale stream.
+      // delivery carry the final payload, but clear the SDK's accumulated text
+      // before closing so stale prefixes are not finalized as another message.
       if (previousRemainder.trim()) {
+        stream.clearText();
         streamFailed = true;
         streamFinalizationPending = true;
         return;
