@@ -187,14 +187,13 @@ struct IPadWorkboardScreen: View {
     }
 
     private var compactQueueControls: some View {
-        ProCard(radius: OpenClawProMetric.cardRadius) {
+        let count = self.filteredCards.count
+        let countText = String(
+            AttributedString(localized: "^[\(count) card](inflect: true)").characters)
+        return ProCard(radius: OpenClawProMetric.cardRadius) {
             VStack(alignment: .leading, spacing: 9) {
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
-                    Text(verbatim: self.filteredCards.count == 1
-                        ? String(localized: "1 card")
-                        : String(
-                            format: String(localized: "%@ cards"),
-                            self.filteredCards.count.formatted()))
+                    Text(verbatim: countText)
                         .font(OpenClawType.headline)
                     Spacer(minLength: 8)
                     self.compactRefreshButton

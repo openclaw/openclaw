@@ -153,15 +153,14 @@ struct IPadSkillWorkshopScreen: View {
     }
 
     private var compactFiltersCard: some View {
-        ProCard(radius: OpenClawProMetric.cardRadius) {
+        let count = self.filteredProposals.count
+        let countText = String(
+            AttributedString(localized: "^[\(count) proposal](inflect: true)").characters)
+        return ProCard(radius: OpenClawProMetric.cardRadius) {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(verbatim: self.filteredProposals.count == 1
-                            ? String(localized: "1 proposal")
-                            : String(
-                                format: String(localized: "%@ proposals"),
-                                self.filteredProposals.count.formatted()))
+                        Text(verbatim: countText)
                             .font(OpenClawType.headline)
                         Text(self.statusFilterLabel)
                             .font(OpenClawType.caption)

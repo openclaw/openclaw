@@ -644,10 +644,8 @@ extension AgentProTab {
 
     private var agentTotalText: String {
         let count = self.sortedAgents.count
-        if count == 1 {
-            return String(localized: "1 agent total")
-        }
-        return String(format: String(localized: "%@ agents total"), count.formatted())
+        return String(
+            AttributedString(localized: "^[\(count) agent](inflect: true) total").characters)
     }
 
     var instancesColor: Color {

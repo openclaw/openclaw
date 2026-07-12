@@ -305,17 +305,16 @@ struct AgentProDreamingDestination: View {
     }
 
     private func dreamDiaryDayView(_ day: DreamDiaryDay) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let count = day.entryCount
+        let entryCountText = String(
+            AttributedString(localized: "^[\(count) entry](inflect: true)").characters)
+        return VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
                 Text(day.title)
                     .font(OpenClawType.subheadSemiBold)
                     .lineLimit(1)
                 Spacer(minLength: 8)
-                Text(verbatim: day.entryCount == 1
-                    ? String(localized: "1 entry")
-                    : String(
-                        format: String(localized: "%@ entries"),
-                        day.entryCount.formatted()))
+                Text(verbatim: entryCountText)
                     .font(OpenClawType.caption2SemiBold)
                     .foregroundStyle(OpenClawBrand.accent)
             }

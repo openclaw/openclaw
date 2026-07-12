@@ -138,8 +138,8 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
   ],
   "apps/ios/Sources/Gateway/ExecApprovalPromptDialog.swift": [
     "private struct ExecApprovalPromptMetadataRow: View {\n    let label: LocalizedStringKey",
-    'format: String(localized: "about %@ minutes")',
-    'format: String(localized: "about %@ hours")',
+    'localized: "about ^[\\(minutes) minute](inflect: true)"',
+    'localized: "about ^[\\(hours) hour](inflect: true)"',
   ],
   "apps/ios/Sources/Voice/TalkGatewayPermissionState.swift": [
     'String(format: String(localized: "Missing %@"), scope)',
@@ -156,7 +156,7 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
   ],
   "apps/ios/Sources/Design/AgentProTab+Overview.swift": [
     "subtitle: .verbatim(self.agentTotalText)",
-    'format: String(localized: "%@ agents total")',
+    'AttributedString(localized: "^[\\(count) agent](inflect: true) total")',
     "func agentMenuRow(\n        icon: String,\n        title: OpenClawTextValue,\n        detail: OpenClawTextValue",
     "func metricTile(\n        icon: String,\n        title: OpenClawTextValue,\n        value: String,\n        detail: OpenClawTextValue",
   ],

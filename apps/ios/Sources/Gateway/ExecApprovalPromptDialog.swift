@@ -282,18 +282,16 @@ private struct ExecApprovalPromptCard: View {
         }
         if remainingSeconds < 3600 {
             let minutes = Int(ceil(Double(remainingSeconds) / 60.0))
-            return minutes == 1
-                ? String(localized: "about 1 minute")
-                : String(
-                    format: String(localized: "about %@ minutes"),
-                    minutes.formatted())
+            return String(
+                AttributedString(
+                    localized: "about ^[\(minutes) minute](inflect: true)")
+                    .characters)
         }
         let hours = Int(ceil(Double(remainingSeconds) / 3600.0))
-        return hours == 1
-            ? String(localized: "about 1 hour")
-            : String(
-                format: String(localized: "about %@ hours"),
-                hours.formatted())
+        return String(
+            AttributedString(
+                localized: "about ^[\(hours) hour](inflect: true)")
+                .characters)
     }
 }
 

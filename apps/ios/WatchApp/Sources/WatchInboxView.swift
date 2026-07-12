@@ -470,12 +470,9 @@ private struct WatchControlSurfaceView: View {
     }
 
     private var approvalHeadline: String {
-        if self.approvalCount == 1 {
-            return String(localized: "1 approval waiting")
-        }
+        let count = self.approvalCount
         return String(
-            format: String(localized: "%@ approvals waiting"),
-            self.approvalCount.formatted())
+            AttributedString(localized: "^[\(count) approval](inflect: true) waiting").characters)
     }
 
     private var approvalSubtitle: String {
@@ -555,12 +552,9 @@ private struct WatchControlSurfaceView: View {
             return status
         }
         if self.chatCount > 0 {
-            if self.chatCount == 1 {
-                return String(localized: "1 recent message")
-            }
+            let count = self.chatCount
             return String(
-                format: String(localized: "%@ recent messages"),
-                self.chatCount.formatted())
+                AttributedString(localized: "^[\(count) recent message](inflect: true)").characters)
         }
         return self.store.hasAppSnapshot
             ? String(localized: "No messages synced")
@@ -1665,9 +1659,9 @@ private struct WatchExecApprovalDetailView: View {
         if deltaSeconds < 60 {
             return String(localized: "less than 1 minute")
         }
+        let minutes = deltaSeconds / 60
         return String(
-            format: String(localized: "%@ minutes"),
-            (deltaSeconds / 60).formatted())
+            AttributedString(localized: "^[\(minutes) minute](inflect: true)").characters)
     }
 }
 

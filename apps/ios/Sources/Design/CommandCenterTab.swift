@@ -879,10 +879,8 @@ struct CommandSessionsScreen: View {
         if count == 0 {
             return self.emptyTitle
         }
-        if count == 1 {
-            return String(localized: "1 session")
-        }
-        return String(format: String(localized: "%@ sessions"), count.formatted())
+        return String(
+            AttributedString(localized: "^[\(count) session](inflect: true)").characters)
     }
 
     private var visibleSessions: [OpenClawChatSessionEntry] {

@@ -25,8 +25,8 @@ describe("Apple app i18n catalogs", () => {
     };
 
     for (const key of [
-      "%@ agents total",
-      "%@ approvals waiting",
+      "^[%lld agent](inflect: true) total",
+      "^[%lld approval](inflect: true) waiting",
       "Approval needed",
       "Agent: %@",
       "Connect a nearby Gateway",

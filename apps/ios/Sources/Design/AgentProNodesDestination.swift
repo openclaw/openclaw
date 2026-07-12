@@ -334,21 +334,17 @@ struct AgentProNodesDestination: View {
         let tags = (entry.tags ?? []).prefix(2).joined(separator: ", ")
         let scopesCount = entry.scopes?.count ?? 0
         let rolesCount = entry.roles?.count ?? 0
+        let scopesText = String(
+            AttributedString(localized: "^[\(scopesCount) scope](inflect: true)").characters)
+        let rolesText = String(
+            AttributedString(localized: "^[\(rolesCount) role](inflect: true)").characters)
         let labels = [
             Self.normalized(entry.instanceid).map {
                 String(format: String(localized: "instance %@"), $0)
             },
             tags.isEmpty ? nil : tags,
-            scopesCount > 0
-                ? String(
-                    format: String(localized: "%@ scopes"),
-                    scopesCount.formatted())
-                : nil,
-            rolesCount > 0
-                ? String(
-                    format: String(localized: "%@ roles"),
-                    rolesCount.formatted())
-                : nil,
+            scopesCount > 0 ? scopesText : nil,
+            rolesCount > 0 ? rolesText : nil,
         ].compactMap(\.self)
         return labels.isEmpty ? nil : labels.joined(separator: " • ")
     }

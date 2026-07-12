@@ -82,11 +82,6 @@ extension AgentProTab {
     }
 
     private static func tokenCountText(_ count: Int) -> String {
-        if count == 1 {
-            return String(localized: "1 token")
-        }
-        return String(
-            format: String(localized: "%@ tokens"),
-            Self.compactNumber(count))
+        String(AttributedString(localized: "^[\(count) token](inflect: true)").characters)
     }
 }
