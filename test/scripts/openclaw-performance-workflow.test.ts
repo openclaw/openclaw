@@ -41,9 +41,29 @@ describe("OpenClaw performance workflow", () => {
   it("pins the Kova evaluator that reads truncated agent payloads", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
     const kovaRef = "0a6d104f44753edef94462375c8b614e03fa378f";
+    const installRun = findStep("Install OCM and Kova").run ?? "";
 
     expect(workflow).toContain(`default: ${kovaRef}`);
     expect(workflow).toContain(`inputs.kova_ref || '${kovaRef}'`);
+    expect(installRun).toContain(
+      'npm --prefix "$KOVA_SRC" ci --ignore-scripts --no-audit --no-fund',
+    );
+    expect(installRun).toContain('require.resolve("mock-ai-provider/package.json", {');
+    expect(installRun).toContain('require.resolve("zod", { paths: [root] })');
+  });
+
+  it("pins and verifies the OCM release archive", () => {
+    const workflow = readFileSync(WORKFLOW, "utf8");
+    const installRun = findStep("Install OCM and Kova").run ?? "";
+
+    expect(workflow).toContain("OCM_VERSION: v0.2.25");
+    expect(workflow).toContain(
+      "OCM_LINUX_X64_SHA256: 57530199d21eb5bfa29695749928b40fd2869484c7edff69b7c65bfc84f2f1aa",
+    );
+    expect(installRun).toContain(
+      '"https://github.com/shakkernerd/ocm/releases/download/${OCM_VERSION}/ocm-x86_64-unknown-linux-gnu.tar.gz"',
+    );
+    expect(installRun).toContain('echo "${OCM_LINUX_X64_SHA256}  ${ocm_archive}" | sha256sum -c -');
   });
 
   it("keeps manual rehearsal reports artifact-only by default", () => {
