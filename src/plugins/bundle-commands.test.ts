@@ -133,6 +133,45 @@ describe("loadEnabledClaudeBundleCommands", () => {
               contents: ["---", "disable-model-invocation: true", "---", "Do not load me."],
             },
             {
+              relativePath: "commands/disabled-on.md",
+              contents: ["---", "disable-model-invocation: on", "---", "Do not load me either."],
+            },
+            {
+              relativePath: "commands/disabled-one.md",
+              contents: ["---", "disable-model-invocation: 1", "---", "Do not load me either."],
+            },
+            {
+              relativePath: "commands/disabled-yes.md",
+              contents: ["---", "disable-model-invocation: yes", "---", "Do not load me either."],
+            },
+            {
+              relativePath: "commands/enabled-no.md",
+              contents: [
+                "---",
+                "disable-model-invocation: no",
+                "---",
+                "Keep this command available.",
+              ],
+            },
+            {
+              relativePath: "commands/enabled-off.md",
+              contents: [
+                "---",
+                "disable-model-invocation: off",
+                "---",
+                "Keep this command available.",
+              ],
+            },
+            {
+              relativePath: "commands/enabled-zero.md",
+              contents: [
+                "---",
+                "disable-model-invocation: 0",
+                "---",
+                "Keep this command available.",
+              ],
+            },
+            {
               relativePath: "commands/not-frontmatter.md",
               contents: ["---not", "name: nope", "---not", "Treat this as Markdown."],
             },
@@ -149,6 +188,39 @@ describe("loadEnabledClaudeBundleCommands", () => {
         });
 
         expectEnabledClaudeBundleCommands(commands, [
+          {
+            pluginId: "compound-bundle",
+            rawName: "enabled-no",
+            description: "Keep this command available.",
+            promptTemplate: "Keep this command available.",
+            sourceFilePath: path.join(
+              resolveBundlePluginRoot(homeDir, "compound-bundle"),
+              "commands",
+              "enabled-no.md",
+            ),
+          },
+          {
+            pluginId: "compound-bundle",
+            rawName: "enabled-off",
+            description: "Keep this command available.",
+            promptTemplate: "Keep this command available.",
+            sourceFilePath: path.join(
+              resolveBundlePluginRoot(homeDir, "compound-bundle"),
+              "commands",
+              "enabled-off.md",
+            ),
+          },
+          {
+            pluginId: "compound-bundle",
+            rawName: "enabled-zero",
+            description: "Keep this command available.",
+            promptTemplate: "Keep this command available.",
+            sourceFilePath: path.join(
+              resolveBundlePluginRoot(homeDir, "compound-bundle"),
+              "commands",
+              "enabled-zero.md",
+            ),
+          },
           {
             pluginId: "compound-bundle",
             rawName: "not-frontmatter",
@@ -186,6 +258,9 @@ describe("loadEnabledClaudeBundleCommands", () => {
         ]);
         const rawNames = commands.map((entry) => entry.rawName);
         expect(rawNames).not.toContain("disabled");
+        expect(rawNames).not.toContain("disabled-on");
+        expect(rawNames).not.toContain("disabled-one");
+        expect(rawNames).not.toContain("disabled-yes");
       },
     );
   });
