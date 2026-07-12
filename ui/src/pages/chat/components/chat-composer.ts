@@ -1141,9 +1141,12 @@ function readTextFromDataUrl(dataUrl: string): string | null {
   if (!match) {
     return null;
   }
-  const metadata = match[1].toLowerCase();
+  const metadata = match[1];
   const payload = match[2];
-  if (metadata.includes(";base64")) {
+  if (metadata === undefined || payload === undefined) {
+    return null;
+  }
+  if (metadata.toLowerCase().includes(";base64")) {
     try {
       const binary = atob(payload);
       const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
@@ -1159,10 +1162,10 @@ function readTextFromDataUrl(dataUrl: string): string | null {
   }
 }
 
-function compactPastedTextPreview(text: string): string {
+function compactPastedTextPreview(text: string): string | null {
   const normalized = text.replace(/\s+/gu, " ").trim();
   if (!normalized) {
-    return t("chat.composer.pastedText");
+    return null;
   }
   if (normalized.length <= PASTED_TEXT_PREVIEW_MAX_LENGTH) {
     return normalized;
@@ -1173,7 +1176,9 @@ function compactPastedTextPreview(text: string): string {
 function pastedTextPreview(attachment: ChatAttachment): string {
   const dataUrl = getChatAttachmentDataUrl(attachment);
   const text = dataUrl ? readTextFromDataUrl(dataUrl) : null;
-  return text ? compactPastedTextPreview(text) : t("chat.composer.pastedText");
+  return text
+    ? (compactPastedTextPreview(text) ?? attachment.fileName ?? "Attached file")
+    : (attachment.fileName ?? "Attached file");
 }
 
 function appendPastedTextToDraft(draft: string, text: string): string {
@@ -1383,10 +1388,10 @@ function renderAttachmentPreview(props: ChatAttachmentControlsProps) {
                         <button
                           class="chat-attachment-text-action"
                           type="button"
-                          aria-label=${t("chat.composer.showPastedText")}
+                          aria-label=${t("workspace.restore")}
                           @click=${() => showPastedTextInComposer(att, props)}
                         >
-                          ${t("chat.composer.showPastedText")}
+                          ${t("workspace.restore")}
                           <span aria-hidden="true">${icons.chevronRight}</span>
                         </button>
                       </span>

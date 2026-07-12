@@ -3723,7 +3723,7 @@ describe("chat attachment picker", () => {
       "First words from a l...",
     );
     expect(container.querySelector(".chat-attachment-text-action")?.textContent).toContain(
-      "Show in text field",
+      "Restore",
     );
   });
 
@@ -3782,7 +3782,7 @@ describe("chat attachment picker", () => {
     });
     const showButton = requireElement(
       preview,
-      '[aria-label="Show pasted text in text field"]',
+      '[aria-label="Restore"]',
       "show pasted text button",
     ) as HTMLButtonElement;
 
