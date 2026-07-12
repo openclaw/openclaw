@@ -75,6 +75,19 @@ export const SessionFileRelevanceSchema = Type.Union([
   Type.Literal("mixed"),
 ]);
 
+/** Encoding used when a session file preview includes inline content. */
+export const WorkspaceFileContentEncodingSchema = Type.Union([
+  Type.Literal("utf8"),
+  Type.Literal("base64"),
+]);
+
+/** Preview renderer class for a session workspace file. */
+export const SessionFilePreviewKindSchema = Type.Union([
+  Type.Literal("text"),
+  Type.Literal("image"),
+  Type.Literal("unsupported"),
+]);
+
 const SessionFileHashSchema = Type.String({
   minLength: 64,
   maxLength: 64,
@@ -91,6 +104,9 @@ export const SessionFileEntrySchema = Type.Object(
     missing: Type.Boolean(),
     size: Type.Optional(Type.Integer({ minimum: 0 })),
     updatedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    mimeType: Type.Optional(NonEmptyString),
+    contentEncoding: Type.Optional(WorkspaceFileContentEncodingSchema),
+    previewKind: Type.Optional(SessionFilePreviewKindSchema),
     content: Type.Optional(Type.String()),
     hash: Type.Optional(SessionFileHashSchema),
   },
@@ -821,7 +837,9 @@ export type SessionsGroupsDeleteParams = Static<typeof SessionsGroupsDeleteParam
 export type SessionsGroupsMutationResult = Static<typeof SessionsGroupsMutationResultSchema>;
 export type SessionsCompactParams = Static<typeof SessionsCompactParamsSchema>;
 export type SessionsUsageParams = Static<typeof SessionsUsageParamsSchema>;
+export type WorkspaceFileContentEncoding = Static<typeof WorkspaceFileContentEncodingSchema>;
 export type SessionFileKind = Static<typeof SessionFileKindSchema>;
+export type SessionFilePreviewKind = Static<typeof SessionFilePreviewKindSchema>;
 export type SessionFileRelevance = Static<typeof SessionFileRelevanceSchema>;
 export type SessionFileEntry = Static<typeof SessionFileEntrySchema>;
 export type SessionFileBrowserEntry = Static<typeof SessionFileBrowserEntrySchema>;

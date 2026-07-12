@@ -441,10 +441,13 @@ describe("sessions.files RPC handlers", () => {
 
     expect(preview.file).toMatchObject({
       content: "export default {};\n",
+      contentEncoding: "utf8",
       hash: hashContent("export default {};\n"),
       kind: "read",
+      mimeType: "text/plain",
       missing: false,
       path: "ui/vite.config.ts",
+      previewKind: "text",
     });
   });
 
@@ -928,9 +931,12 @@ describe("sessions.files RPC handlers", () => {
     );
   });
 
-  it("previews binary files without issuing a CAS hash", async () => {
-    const binary = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01, 0x02]);
-    fs.writeFileSync(path.join(workspaceRoot, "logo.png"), binary);
+  it("previews supported images as sniffed base64 without issuing a CAS hash", async () => {
+    const image = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+      "base64",
+    );
+    fs.writeFileSync(path.join(workspaceRoot, "logo.png"), image);
 
     const payload = expectOkPayload(
       await invokeSessionFilesHandler("sessions.files.get", {
@@ -939,8 +945,54 @@ describe("sessions.files RPC handlers", () => {
       }),
     );
 
-    expect(typeof payload.file.content).toBe("string");
+    expect(payload.file).toMatchObject({
+      content: image.toString("base64"),
+      contentEncoding: "base64",
+      mimeType: "image/png",
+      path: "logo.png",
+      previewKind: "image",
+    });
     expect(payload.file.hash).toBeUndefined();
+  });
+
+  it("returns unsupported binary metadata without lossy inline content", async () => {
+    const binary = Buffer.concat([Buffer.from("SQLite format 3\0"), Buffer.alloc(64, 7)]);
+    fs.writeFileSync(path.join(workspaceRoot, "cache.db"), binary);
+
+    const payload = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.get", {
+        sessionKey: "agent:main:main",
+        path: "cache.db",
+      }),
+    );
+
+    expect(payload.file).toMatchObject({
+      missing: false,
+      path: "cache.db",
+      previewKind: "unsupported",
+      size: binary.length,
+    });
+    expect(payload.file.content).toBeUndefined();
+    expect(payload.file.contentEncoding).toBeUndefined();
+    expect(payload.file.hash).toBeUndefined();
+  });
+
+  it("does not trust an image extension without supported image bytes", async () => {
+    const binary = Buffer.concat([Buffer.from("SQLite format 3\0"), Buffer.alloc(64, 7)]);
+    fs.writeFileSync(path.join(workspaceRoot, "disguised.png"), binary);
+
+    const payload = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.get", {
+        sessionKey: "agent:main:main",
+        path: "disguised.png",
+      }),
+    );
+
+    expect(payload.file).toMatchObject({
+      path: "disguised.png",
+      previewKind: "unsupported",
+    });
+    expect(payload.file.content).toBeUndefined();
   });
 
   it("rejects writes to binary files even with a matching byte hash", async () => {

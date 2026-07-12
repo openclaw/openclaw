@@ -67,9 +67,20 @@ public enum NodePresenceAliveReason: String, Codable, Sendable {
     case connect = "connect"
 }
 
+public enum WorkspaceFileContentEncoding: String, Codable, Sendable {
+    case utf8 = "utf8"
+    case base64 = "base64"
+}
+
 public enum SessionFileKind: String, Codable, Sendable {
     case modified = "modified"
     case read = "read"
+}
+
+public enum SessionFilePreviewKind: String, Codable, Sendable {
+    case text = "text"
+    case image = "image"
+    case unsupported = "unsupported"
 }
 
 public enum SessionFileRelevance: String, Codable, Sendable {
@@ -3565,6 +3576,9 @@ public struct SessionFileEntry: Codable, Sendable {
     public let missing: Bool
     public let size: Int?
     public let updatedatms: Int?
+    public let mimetype: String?
+    public let contentencoding: WorkspaceFileContentEncoding?
+    public let previewkind: SessionFilePreviewKind?
     public let content: String?
     public let hash: String?
 
@@ -3576,6 +3590,9 @@ public struct SessionFileEntry: Codable, Sendable {
         missing: Bool,
         size: Int? = nil,
         updatedatms: Int? = nil,
+        mimetype: String? = nil,
+        contentencoding: WorkspaceFileContentEncoding? = nil,
+        previewkind: SessionFilePreviewKind? = nil,
         content: String? = nil,
         hash: String? = nil)
     {
@@ -3586,6 +3603,9 @@ public struct SessionFileEntry: Codable, Sendable {
         self.missing = missing
         self.size = size
         self.updatedatms = updatedatms
+        self.mimetype = mimetype
+        self.contentencoding = contentencoding
+        self.previewkind = previewkind
         self.content = content
         self.hash = hash
     }
@@ -3598,6 +3618,9 @@ public struct SessionFileEntry: Codable, Sendable {
         case missing
         case size
         case updatedatms = "updatedAtMs"
+        case mimetype = "mimeType"
+        case contentencoding = "contentEncoding"
+        case previewkind = "previewKind"
         case content
         case hash
     }
@@ -7585,7 +7608,7 @@ public struct AgentsWorkspaceFile: Codable, Sendable {
     public let size: Int
     public let updatedatms: Int
     public let mimetype: String
-    public let encoding: AnyCodable
+    public let encoding: WorkspaceFileContentEncoding
     public let content: String
 
     public init(
@@ -7594,7 +7617,7 @@ public struct AgentsWorkspaceFile: Codable, Sendable {
         size: Int,
         updatedatms: Int,
         mimetype: String,
-        encoding: AnyCodable,
+        encoding: WorkspaceFileContentEncoding,
         content: String)
     {
         self.path = path

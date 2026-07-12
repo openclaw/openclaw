@@ -379,6 +379,9 @@ type SessionWorkspaceFileEntry = {
   missing: boolean;
   size?: number;
   updatedAtMs?: number;
+  mimeType?: string;
+  contentEncoding?: "utf8" | "base64";
+  previewKind?: "text" | "image" | "unsupported";
   content?: string;
   /** sha256 hex of the file bytes; the CAS token for sessions.files.set. */
   hash?: string;

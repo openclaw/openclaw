@@ -17,6 +17,7 @@ import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 import {
   decodeUtf8Strict,
+  isSupportedWorkspaceImageMimeType,
   listWorkspacePath,
   normalizeRelativePath,
   readWorkspaceFile,
@@ -45,17 +46,6 @@ const IMAGE_EXTENSIONS = new Set([
   ".png",
   ".webp",
 ]);
-const SUPPORTED_IMAGE_MIME_TYPES = new Set([
-  "image/avif",
-  "image/bmp",
-  "image/gif",
-  "image/heic",
-  "image/heif",
-  "image/jpeg",
-  "image/png",
-  "image/webp",
-]);
-
 function workspaceError(type: string, message: string, details?: Record<string, unknown>) {
   return errorShape(ErrorCodes.INVALID_REQUEST, message, {
     details: {
@@ -232,7 +222,7 @@ export const agentsWorkspaceHandlers: GatewayRequestHandlers = {
     // from riding the image path past the UTF-8 text gate.
     if (expectsImage) {
       const sniffedMime = await detectMime({ buffer: read.buffer });
-      if (!sniffedMime || !SUPPORTED_IMAGE_MIME_TYPES.has(sniffedMime)) {
+      if (!isSupportedWorkspaceImageMimeType(sniffedMime)) {
         respondUnsupported();
         return;
       }
