@@ -118,7 +118,6 @@ type RetainedFileDraft = {
 };
 
 const retainedFileDrafts = new Map<string, RetainedFileDraft>();
-const retainedFileDraftLimit = 20;
 
 function retainedFileDraftKey(content: FileSidebarContent): string {
   return content.draftKey ?? `${content.root ?? ""}\u0000${content.path}`;
@@ -131,10 +130,6 @@ function setRetainedFileDraft(content: FileSidebarContent, draft: RetainedFileDr
     return;
   }
   retainedFileDrafts.set(key, draft);
-  const oldest = retainedFileDrafts.keys().next().value;
-  if (retainedFileDrafts.size > retainedFileDraftLimit && typeof oldest === "string") {
-    retainedFileDrafts.delete(oldest);
-  }
 }
 
 export type SidebarContent =

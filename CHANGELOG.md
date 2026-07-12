@@ -29,7 +29,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Control UI workspace file drafts:** retain recent unsaved file edits across file, panel, and session navigation in the current browser tab until they are saved or explicitly discarded.
+- **Control UI workspace file drafts:** retain unsaved file edits across file, panel, and session navigation in the current browser tab until they are saved or explicitly discarded.
 - **Gateway service audit:** treat POSIX shell `-c` wrappers as opaque for the gateway-subcommand check, avoiding false missing-command warnings for shell-wrapped macOS LaunchAgents without parsing inner commands or ports. Fixes #81751. (#81778) Thanks @liaoandi.
 - **Memory filename search:** index paths separately from chunk bodies so exact full-path, basename, and stem queries rank the intended memory file first without changing body BM25 scores, snippets, or embeddings. (#96052, #94102) Thanks @Pick-cat.
 - **Outbound channel bootstrap:** suppress repeated failed plugin activation for the same channel, config, and registry generation while retrying after config or registry reloads. (#100377) Thanks @xialonglee.
