@@ -403,7 +403,7 @@ describe("Slack live QA runtime helpers", () => {
   it("rejects commentary when false and mismatched tool progress", () => {
     const verify = (
       scenarioId: string,
-      mutate: (markers: string[]) => string[],
+      mutate: (markers: [string, string, string]) => string[],
       finalText: "echo" | "exact" = "exact",
     ) => {
       const scenario = testing.findScenario([scenarioId])[0];
@@ -418,7 +418,9 @@ describe("Slack live QA runtime helpers", () => {
       if (markers.some((marker) => !marker) || !verifyObserved) {
         throw new Error(`missing Slack progress verifier: ${scenarioId}`);
       }
-      const completeMarkers = markers as string[];
+      // The some() guard above proves all three markers matched; tuple-narrow so
+      // destructuring in mutate callbacks yields string under indexed-access checks.
+      const completeMarkers = markers as [string, string, string];
       return () =>
         verifyObserved({
           finalMessage: {
