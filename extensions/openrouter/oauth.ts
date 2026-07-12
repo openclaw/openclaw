@@ -238,12 +238,25 @@ export async function waitForOpenRouterOAuthCallback(params: {
           return;
         }
 
-        const error = readString(requestUrl.searchParams.get("error"));
-        if (error) {
+        const state = readString(requestUrl.searchParams.get("state"));
+        try {
+          requireOpenRouterOAuthState(state, params.expectedState);
+        } catch (err) {
           res.statusCode = 400;
           res.setHeader("Content-Type", "text/plain");
-          res.end(`OpenRouter authentication failed: ${error}`);
-          finish(new Error(`OpenRouter OAuth error: ${error}`));
+          res.end("Invalid OAuth state");
+          finish(err instanceof Error ? err : new Error("OpenRouter OAuth state mismatch"));
+          return;
+        }
+
+        const error = readString(requestUrl.searchParams.get("error"));
+        if (error) {
+          const description = readString(requestUrl.searchParams.get("error_description"));
+          const detail = description ? `${error}: ${description}` : error;
+          res.statusCode = 400;
+          res.setHeader("Content-Type", "text/plain");
+          res.end(`OpenRouter authentication failed: ${detail}`);
+          finish(new Error(`OpenRouter OAuth error: ${detail}`));
           return;
         }
 
@@ -253,16 +266,6 @@ export async function waitForOpenRouterOAuthCallback(params: {
           res.setHeader("Content-Type", "text/plain");
           res.end("Missing OAuth code");
           finish(new Error("Missing OpenRouter OAuth code"));
-          return;
-        }
-        const state = readString(requestUrl.searchParams.get("state"));
-        try {
-          requireOpenRouterOAuthState(state, params.expectedState);
-        } catch (err) {
-          res.statusCode = 400;
-          res.setHeader("Content-Type", "text/plain");
-          res.end("Invalid OAuth state");
-          finish(err instanceof Error ? err : new Error("OpenRouter OAuth state mismatch"));
           return;
         }
 
