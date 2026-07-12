@@ -1,11 +1,11 @@
+import { parseBrowserHttpUrl } from "openclaw/plugin-sdk/browser-config";
 /**
  * Browser profile allocation helpers.
  *
  * Validates profile names and allocates CDP ports/colors for newly persisted
  * browser profiles.
  */
-import { expectDefined } from "@openclaw/normalization-core";
-import { parseBrowserHttpUrl } from "openclaw/plugin-sdk/browser-config";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 
 /**
  * CDP port allocation for browser profiles.

@@ -10,7 +10,7 @@
  * @module @openclaw/oc-path/oc-path
  */
 
-import { expectDefined } from "@openclaw/normalization-core";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { OcEmitSentinelError, REDACTED_SENTINEL } from "./sentinel.js";
 

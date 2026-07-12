@@ -1,5 +1,3 @@
-// Telegram rich message helpers isolate Bot API 10.1 calls until grammY types catch up.
-import { expectDefined } from "@openclaw/normalization-core";
 import type { Bot } from "grammy";
 import type {
   ForceReply,
@@ -10,6 +8,8 @@ import type {
   ReplyParameters,
 } from "grammy/types";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
+// Telegram rich message helpers isolate Bot API 10.1 calls until grammY types catch up.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import {
   escapeTelegramHtml,

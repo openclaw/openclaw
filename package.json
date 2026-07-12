@@ -458,6 +458,10 @@
       "types": "./dist/plugin-sdk/heartbeat-runtime.d.ts",
       "default": "./dist/plugin-sdk/heartbeat-runtime.js"
     },
+    "./plugin-sdk/expect-runtime": {
+      "types": "./dist/plugin-sdk/expect-runtime.d.ts",
+      "default": "./dist/plugin-sdk/expect-runtime.js"
+    },
     "./plugin-sdk/number-runtime": {
       "types": "./dist/plugin-sdk/number-runtime.d.ts",
       "default": "./dist/plugin-sdk/number-runtime.js"

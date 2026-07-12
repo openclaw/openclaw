@@ -1,6 +1,6 @@
-// Telegram helper module supports format behavior.
-import { expectDefined } from "@openclaw/normalization-core";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
+// Telegram helper module supports format behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   FILE_REF_EXTENSIONS_WITH_TLD,

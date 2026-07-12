@@ -1,5 +1,5 @@
 // Line plugin module implements reply payload transform behavior.
-import { expectDefined } from "@openclaw/normalization-core";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import {

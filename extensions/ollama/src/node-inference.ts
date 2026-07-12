@@ -1,6 +1,6 @@
-// Ollama node inference exposes local models to agents through paired node hosts.
-import { expectDefined } from "@openclaw/normalization-core";
 import { jsonResult } from "openclaw/plugin-sdk/channel-actions";
+// Ollama node inference exposes local models to agents through paired node hosts.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   readFiniteNumberParam,
   readPositiveIntegerParam,

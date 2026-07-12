@@ -1,6 +1,6 @@
 // Line plugin module implements markdown to line behavior.
 import type { messagingApi } from "@line/bot-sdk";
-import { expectDefined } from "@openclaw/normalization-core";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { stripMarkdown } from "openclaw/plugin-sdk/text-chunking";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { uriAction } from "./actions.js";

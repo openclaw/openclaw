@@ -1,8 +1,8 @@
-import { expectDefined } from "@openclaw/normalization-core";
 /**
  * Codex provider plugin and live app-server model catalog discovery.
  */
 import { createSubsystemLogger } from "openclaw/plugin-sdk/core";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {

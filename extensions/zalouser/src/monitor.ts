@@ -1,5 +1,3 @@
-// Zalouser plugin module implements monitor behavior.
-import { expectDefined } from "@openclaw/normalization-core";
 import { mergeAllowlist, summarizeMapping } from "openclaw/plugin-sdk/allow-from";
 import {
   implicitMentionKindWhen,
@@ -10,6 +8,8 @@ import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pair
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/core";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
+// Zalouser plugin module implements monitor behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   DEFAULT_GROUP_HISTORY_LIMIT,

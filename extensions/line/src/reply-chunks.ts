@@ -1,7 +1,7 @@
 // Line plugin module implements reply chunks behavior.
 import type { messagingApi } from "@line/bot-sdk";
-import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 
 type LineReplyMessage = messagingApi.TextMessage;
 

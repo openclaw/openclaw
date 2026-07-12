@@ -1,7 +1,7 @@
 // Memory Core plugin module implements manager embedding ops behavior.
 import fs from "node:fs/promises";
-import { expectDefined } from "@openclaw/normalization-core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   enforceEmbeddingMaxInputTokens,
   hasNonTextEmbeddingParts,

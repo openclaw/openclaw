@@ -1,7 +1,7 @@
 // Codex plugin module implements command handlers behavior.
 import crypto from "node:crypto";
-import { expectDefined } from "@openclaw/normalization-core";
 import { resolveAgentDir, resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   isModelSelectionLocked,
   MODEL_SELECTION_LOCKED_MESSAGE,

@@ -1,5 +1,5 @@
 // Qqbot plugin module implements message queue behavior.
-import { expectDefined } from "@openclaw/normalization-core";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { formatErrorMessage } from "../utils/format.js";
 

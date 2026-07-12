@@ -7,7 +7,7 @@
  * Zero external dependencies — uses only the constants from `./constants.ts`.
  */
 
-import { expectDefined } from "@openclaw/normalization-core";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { EngineLogger } from "../types.js";
 import {
   RECONNECT_DELAYS,

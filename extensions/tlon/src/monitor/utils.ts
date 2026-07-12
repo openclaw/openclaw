@@ -1,10 +1,10 @@
-// Tlon helper module supports utils behavior.
-import { expectDefined } from "@openclaw/normalization-core";
 import {
   resolveStableChannelMessageIngress,
   type StableChannelIngressIdentityParams,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { formatErrorMessage as sharedFormatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+// Tlon helper module supports utils behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { normalizeShip } from "../targets.js";
 
 export interface ParsedCite {

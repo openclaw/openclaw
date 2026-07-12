@@ -1,5 +1,3 @@
-// Imessage plugin module implements accounts behavior.
-import { expectDefined } from "@openclaw/normalization-core";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import {
   createAccountListHelpers,
@@ -7,6 +5,8 @@ import {
   resolveMergedAccountConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
+// Imessage plugin module implements accounts behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { IMessageAccountConfig } from "./account-types.js";

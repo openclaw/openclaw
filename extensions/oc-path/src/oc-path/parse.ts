@@ -11,8 +11,8 @@
  * @module @openclaw/oc-path/parse
  */
 
-import { expectDefined } from "@openclaw/normalization-core";
 import MarkdownIt from "markdown-it";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { AstBlock, AstItem, Diagnostic, FrontmatterEntry, ParseResult } from "./ast.js";
 import { slugify } from "./slug.js";
 

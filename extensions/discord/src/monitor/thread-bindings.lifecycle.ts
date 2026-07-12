@@ -1,7 +1,7 @@
-// Discord plugin module implements thread bindings.lifecycle behavior.
-import { expectDefined } from "@openclaw/normalization-core";
 import { readAcpSessionEntry, type AcpSessionStoreEntry } from "openclaw/plugin-sdk/acp-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+// Discord plugin module implements thread bindings.lifecycle behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,

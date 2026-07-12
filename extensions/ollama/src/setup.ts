@@ -1,6 +1,6 @@
-// Ollama setup module handles plugin onboarding behavior.
-import { expectDefined } from "@openclaw/normalization-core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+// Ollama setup module handles plugin onboarding behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type {
   OpenClawConfig,
   SecretInput,

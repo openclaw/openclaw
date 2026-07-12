@@ -1,9 +1,9 @@
-// Discord plugin module implements send.shared behavior.
-import { expectDefined } from "@openclaw/normalization-core";
 import { PollLayoutType } from "discord-api-types/payloads/v10";
 import type { RESTAPIPoll } from "discord-api-types/rest/v10";
 import type { APIChannel } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+// Discord plugin module implements send.shared behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { buildOutboundMediaLoadOptions } from "openclaw/plugin-sdk/media-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-runtime";
 import {

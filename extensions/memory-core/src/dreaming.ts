@@ -1,6 +1,6 @@
-// Memory Core plugin module implements dreaming behavior.
-import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+// Memory Core plugin module implements dreaming behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   DEFAULT_MEMORY_DREAMING_FREQUENCY as DEFAULT_MEMORY_DREAMING_CRON_EXPR,
   DEFAULT_MEMORY_DEEP_DREAMING_LIMIT as DEFAULT_MEMORY_DREAMING_LIMIT,

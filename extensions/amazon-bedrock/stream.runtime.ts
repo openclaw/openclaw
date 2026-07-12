@@ -24,9 +24,9 @@ import {
   type ToolConfiguration,
   ToolResultStatus,
 } from "@aws-sdk/client-bedrock-runtime";
-import { expectDefined } from "@openclaw/normalization-core";
 import { NodeHttpHandler } from "@smithy/node-http-handler";
 import type { DocumentType } from "@smithy/types";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   adjustMaxTokensForThinking,
   AssistantMessageEventStream,

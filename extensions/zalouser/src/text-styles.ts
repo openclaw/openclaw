@@ -1,5 +1,5 @@
 // Zalouser plugin module implements text styles behavior.
-import { expectDefined } from "@openclaw/normalization-core";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { TextStyle, type Style } from "./zca-constants.js";
 
 const ESCAPE_SENTINEL_START = "\u0001";

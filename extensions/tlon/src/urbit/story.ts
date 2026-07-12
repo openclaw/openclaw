@@ -4,7 +4,7 @@
  * Converts markdown-like text to Tlon's story format.
  */
 
-import { expectDefined } from "@openclaw/normalization-core";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 
 // Inline content types
 type StoryInline =

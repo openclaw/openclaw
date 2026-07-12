@@ -1,7 +1,7 @@
-// Telegram plugin module implements group migration behavior.
-import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { TelegramGroupConfig } from "openclaw/plugin-sdk/config-contracts";
+// Telegram plugin module implements group migration behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 

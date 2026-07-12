@@ -1,6 +1,6 @@
-// Line plugin module implements card command behavior.
-import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+// Line plugin module implements card command behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";

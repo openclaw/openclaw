@@ -1,5 +1,5 @@
 // Imessage plugin module implements the same-sender inbound debounce merge.
-import { expectDefined } from "@openclaw/normalization-core";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { IMessagePayload } from "./types.js";
 

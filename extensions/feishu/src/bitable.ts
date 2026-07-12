@@ -82,15 +82,19 @@ function parseBitableUrl(url: string): { token: string; tableId?: string; isWiki
     // Wiki format: /wiki/XXXXX?table=YYY
     const wikiMatch = u.pathname.match(/\/wiki\/([A-Za-z0-9]+)/);
     if (wikiMatch) {
-      const token = wikiMatch[1];
-      return token === undefined ? null : { token, tableId, isWiki: true };
+      const wikiPathSegment = wikiMatch[1];
+      return wikiPathSegment === undefined
+        ? null
+        : { token: wikiPathSegment, tableId, isWiki: true };
     }
 
     // Base format: /base/XXXXX?table=YYY
     const baseMatch = u.pathname.match(/\/base\/([A-Za-z0-9]+)/);
     if (baseMatch) {
-      const token = baseMatch[1];
-      return token === undefined ? null : { token, tableId, isWiki: false };
+      const basePathSegment = baseMatch[1];
+      return basePathSegment === undefined
+        ? null
+        : { token: basePathSegment, tableId, isWiki: false };
     }
 
     return null;

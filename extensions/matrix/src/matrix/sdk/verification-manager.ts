@@ -1,11 +1,11 @@
-// Matrix plugin module implements verification manager behavior.
-import { expectDefined } from "@openclaw/normalization-core";
 import {
   VerificationPhase,
   VerificationRequestEvent,
   VerifierEvent,
 } from "matrix-js-sdk/lib/crypto-api/verification.js";
 import { VerificationMethod } from "matrix-js-sdk/lib/types.js";
+// Matrix plugin module implements verification manager behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   resolveDateTimestampMs,
   resolveTimestampMsToIsoString,

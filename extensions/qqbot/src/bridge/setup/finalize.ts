@@ -1,6 +1,6 @@
-// Qqbot plugin module implements finalize behavior.
-import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+// Qqbot plugin module implements finalize behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";

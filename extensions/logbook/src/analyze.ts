@@ -1,6 +1,6 @@
 // Logbook analysis pipeline: frames -> observations -> revised timeline cards.
 // Pure parsing/validation lives here so tests can cover it without the SDK.
-import { expectDefined } from "@openclaw/normalization-core";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { CARD_CATEGORIES } from "./prompts.js";
 import { dayKeyFor } from "./store.js";
 import type { LogbookCard, LogbookCardDraft, LogbookDistraction } from "./types.js";

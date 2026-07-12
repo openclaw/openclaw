@@ -1,5 +1,3 @@
-// Discord plugin module implements message handlerraft preview behavior.
-import { expectDefined } from "@openclaw/normalization-core";
 import { EmbeddedBlockChunker } from "openclaw/plugin-sdk/agent-runtime";
 import {
   type ChannelProgressDraftLine,
@@ -11,6 +9,8 @@ import {
   resolveChannelStreamingSuppressDefaultToolProgressMessages,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+// Discord plugin module implements message handlerraft preview behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   convertMarkdownTables,
   stripInlineDirectiveTagsForDelivery,
