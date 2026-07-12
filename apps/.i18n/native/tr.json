@@ -12949,6 +12949,11 @@
       "translated": "Çevrimdışı"
     },
     {
+      "id": "native.apple.4a98b3a346be2662",
+      "source": "No chat messages yet",
+      "translated": "Henüz sohbet mesajı yok"
+    },
+    {
       "id": "native.apple.0b1eff808df04e2b",
       "source": "Approval",
       "translated": "Onay"
@@ -20302,6 +20307,16 @@
       "id": "native.apple.a902d7f653b46010",
       "source": "Context usage",
       "translated": "Bağlam kullanımı"
+    },
+    {
+      "id": "native.apple.3cba3f4fe2ca796b",
+      "source": "%@ percent of the context window used",
+      "translated": "Bağlam penceresinin yüzde %@ kadarı kullanıldı"
+    },
+    {
+      "id": "native.apple.9243b96b3d4d590f",
+      "source": "%@ tokens used",
+      "translated": "%@ token kullanıldı"
     },
     {
       "id": "native.apple.769b7dcea4708c40",

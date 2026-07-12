@@ -2721,6 +2721,142 @@
         }
       }
     },
+    "%@ percent of the context window used": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ percent of the context window used"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "new",
+            "value": "已使用上下文窗口的 %@%"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "new",
+            "value": "已使用情境視窗的百分之 %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ por cento da janela de contexto usada"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ Prozent des Kontextfensters verwendet"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ por ciento de la ventana de contexto utilizada"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "new",
+            "value": "コンテキストウィンドウの%@パーセントを使用"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "컨텍스트 창의 %@퍼센트 사용됨"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ pour cent de la fenêtre de contexte utilisée"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "संदर्भ विंडो का %@ प्रतिशत उपयोग किया गया"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "تم استخدام %@ بالمئة من نافذة السياق"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ percento della finestra di contesto utilizzato"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Bağlam penceresinin yüzde %@ kadarı kullanıldı"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Використано %@ відсотків контекстного вікна"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ persen dari jendela konteks telah digunakan"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Wykorzystano %@ procent okna kontekstu"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "ใช้หน้าต่างบริบทไป %@ เปอร์เซ็นต์"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Đã sử dụng %@ phần trăm cửa sổ ngữ cảnh"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ procent van het contextvenster gebruikt"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ درصد از پنجرهٔ زمینه استفاده شده است"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Использовано %@ процентов контекстного окна"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ procent av kontextfönstret används"
+          }
+        }
+      }
+    },
     "%@ permission denied": {
       "localizations": {
         "en": {
@@ -4213,6 +4349,142 @@
           "stringUnit": {
             "state": "new",
             "value": "%@ token under %@d"
+          }
+        }
+      }
+    },
+    "%@ tokens used": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ tokens used"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "new",
+            "value": "已使用 %@ 个 token"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "new",
+            "value": "已使用 %@ 個權杖"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ tokens usados"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ Token verwendet"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ tokens utilizados"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@トークンを使用"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@개 토큰 사용됨"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ jetons utilisés"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ टोकन उपयोग किए गए"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "تم استخدام %@ من الرموز"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ token utilizzati"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ token kullanıldı"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Використано токенів: %@"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ token telah digunakan"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Wykorzystano %@ tokenów"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "ใช้โทเค็นไป %@ รายการ"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Đã sử dụng %@ token"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ tokens gebruikt"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ توکن استفاده شده است"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Использовано токенов: %@"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ token används"
           }
         }
       }
@@ -88140,127 +88412,127 @@
         "zh-CN": {
           "stringUnit": {
             "state": "new",
-            "value": "No chat messages yet"
+            "value": "暂无聊天消息"
           }
         },
         "zh-TW": {
           "stringUnit": {
             "state": "new",
-            "value": "No chat messages yet"
+            "value": "尚無聊天訊息"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "new",
-            "value": "No chat messages yet"
+            "value": "Ainda não há mensagens no chat"
           }
         },
         "de": {
           "stringUnit": {
             "state": "new",
-            "value": "No chat messages yet"
+            "value": "Noch keine Chatnachrichten"
           }
         },
         "es": {
           "stringUnit": {
             "state": "new",
-            "value": "No chat messages yet"
+            "value": "Aún no hay mensajes de chat"
           }
         },
         "ja-JP": {
           "stringUnit": {
             "state": "new",
-            "value": "No chat messages yet"
+            "value": "チャットメッセージはまだありません"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "new",
-            "value": "No chat messages yet"
+            "value": "아직 채팅 메시지가 없습니다"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "new",
-            "value": "No chat messages yet"
+            "value": "Aucun message de chat pour le moment"
           }
         },
         "hi": {
           "stringUnit": {
             "state": "new",
-            "value": "No chat messages yet"
+            "value": "अभी तक कोई चैट संदेश नहीं"
           }
         },
         "ar": {
           "stringUnit": {
             "state": "new",
-            "value": "No chat messages yet"
+            "value": "لا توجد رسائل دردشة بعد"
           }
         },
         "it": {
           "stringUnit": {
             "state": "new",
-            "value": "No chat messages yet"
+            "value": "Nessun messaggio di chat"
           }
         },
         "tr": {
           "stringUnit": {
             "state": "new",
-            "value": "No chat messages yet"
+            "value": "Henüz sohbet mesajı yok"
           }
         },
         "uk": {
           "stringUnit": {
             "state": "new",
-            "value": "No chat messages yet"
+            "value": "Повідомлень у чаті ще немає"
           }
         },
         "id": {
           "stringUnit": {
             "state": "new",
-            "value": "No chat messages yet"
+            "value": "Belum ada pesan chat"
           }
         },
         "pl": {
           "stringUnit": {
             "state": "new",
-            "value": "No chat messages yet"
+            "value": "Brak wiadomości na czacie"
           }
         },
         "th": {
           "stringUnit": {
             "state": "new",
-            "value": "No chat messages yet"
+            "value": "ยังไม่มีข้อความแชท"
           }
         },
         "vi": {
           "stringUnit": {
             "state": "new",
-            "value": "No chat messages yet"
+            "value": "Chưa có tin nhắn trò chuyện nào"
           }
         },
         "nl": {
           "stringUnit": {
             "state": "new",
-            "value": "No chat messages yet"
+            "value": "Nog geen chatberichten"
           }
         },
         "fa": {
           "stringUnit": {
             "state": "new",
-            "value": "No chat messages yet"
+            "value": "هنوز هیچ پیام گفت‌وگویی وجود ندارد"
           }
         },
         "ru": {
           "stringUnit": {
             "state": "new",
-            "value": "No chat messages yet"
+            "value": "Сообщений в чате пока нет"
           }
         },
         "sv": {
           "stringUnit": {
             "state": "new",
-            "value": "No chat messages yet"
+            "value": "Inga chattmeddelanden än"
           }
         }
       }

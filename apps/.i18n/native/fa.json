@@ -12949,6 +12949,11 @@
       "translated": "آفلاین"
     },
     {
+      "id": "native.apple.4a98b3a346be2662",
+      "source": "No chat messages yet",
+      "translated": "هنوز هیچ پیام گفت‌وگویی وجود ندارد"
+    },
+    {
       "id": "native.apple.0b1eff808df04e2b",
       "source": "Approval",
       "translated": "تأیید"
@@ -20302,6 +20307,16 @@
       "id": "native.apple.a902d7f653b46010",
       "source": "Context usage",
       "translated": "مصرف کانتکست"
+    },
+    {
+      "id": "native.apple.3cba3f4fe2ca796b",
+      "source": "%@ percent of the context window used",
+      "translated": "%@ درصد از پنجرهٔ زمینه استفاده شده است"
+    },
+    {
+      "id": "native.apple.9243b96b3d4d590f",
+      "source": "%@ tokens used",
+      "translated": "%@ توکن استفاده شده است"
     },
     {
       "id": "native.apple.769b7dcea4708c40",

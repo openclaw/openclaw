@@ -3902,6 +3902,174 @@
       ]
     },
     {
+      "locale": "ar",
+      "source": "No chat messages yet",
+      "translations": [
+        "No chat messages yet",
+        "لا توجد رسائل دردشة بعد"
+      ]
+    },
+    {
+      "locale": "de",
+      "source": "No chat messages yet",
+      "translations": [
+        "No chat messages yet",
+        "Noch keine Chatnachrichten"
+      ]
+    },
+    {
+      "locale": "es",
+      "source": "No chat messages yet",
+      "translations": [
+        "Aún no hay mensajes de chat",
+        "No chat messages yet"
+      ]
+    },
+    {
+      "locale": "fa",
+      "source": "No chat messages yet",
+      "translations": [
+        "No chat messages yet",
+        "هنوز هیچ پیام گفت‌وگویی وجود ندارد"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "No chat messages yet",
+      "translations": [
+        "Aucun message de chat pour le moment",
+        "No chat messages yet"
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "No chat messages yet",
+      "translations": [
+        "No chat messages yet",
+        "अभी तक कोई चैट संदेश नहीं"
+      ]
+    },
+    {
+      "locale": "id",
+      "source": "No chat messages yet",
+      "translations": [
+        "Belum ada pesan chat",
+        "No chat messages yet"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "No chat messages yet",
+      "translations": [
+        "Nessun messaggio di chat",
+        "No chat messages yet"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "No chat messages yet",
+      "translations": [
+        "No chat messages yet",
+        "チャットメッセージはまだありません"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "No chat messages yet",
+      "translations": [
+        "No chat messages yet",
+        "아직 채팅 메시지가 없습니다"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "No chat messages yet",
+      "translations": [
+        "No chat messages yet",
+        "Nog geen chatberichten"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "No chat messages yet",
+      "translations": [
+        "Brak wiadomości na czacie",
+        "No chat messages yet"
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "No chat messages yet",
+      "translations": [
+        "Ainda não há mensagens no chat",
+        "No chat messages yet"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "No chat messages yet",
+      "translations": [
+        "No chat messages yet",
+        "Сообщений в чате пока нет"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "No chat messages yet",
+      "translations": [
+        "Inga chattmeddelanden än",
+        "No chat messages yet"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "No chat messages yet",
+      "translations": [
+        "No chat messages yet",
+        "ยังไม่มีข้อความแชท"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "No chat messages yet",
+      "translations": [
+        "Henüz sohbet mesajı yok",
+        "No chat messages yet"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "No chat messages yet",
+      "translations": [
+        "No chat messages yet",
+        "Повідомлень у чаті ще немає"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "No chat messages yet",
+      "translations": [
+        "Chưa có tin nhắn trò chuyện nào",
+        "No chat messages yet"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "No chat messages yet",
+      "translations": [
+        "No chat messages yet",
+        "暂无聊天消息"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "No chat messages yet",
+      "translations": [
+        "No chat messages yet",
+        "尚無聊天訊息"
+      ]
+    },
+    {
       "locale": "de",
       "source": "No recent sessions",
       "translations": [

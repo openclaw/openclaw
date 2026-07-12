@@ -12949,6 +12949,11 @@
       "translated": "Offline"
     },
     {
+      "id": "native.apple.4a98b3a346be2662",
+      "source": "No chat messages yet",
+      "translated": "Belum ada pesan chat"
+    },
+    {
       "id": "native.apple.0b1eff808df04e2b",
       "source": "Approval",
       "translated": "Persetujuan"
@@ -20302,6 +20307,16 @@
       "id": "native.apple.a902d7f653b46010",
       "source": "Context usage",
       "translated": "Penggunaan konteks"
+    },
+    {
+      "id": "native.apple.3cba3f4fe2ca796b",
+      "source": "%@ percent of the context window used",
+      "translated": "%@ persen dari jendela konteks telah digunakan"
+    },
+    {
+      "id": "native.apple.9243b96b3d4d590f",
+      "source": "%@ tokens used",
+      "translated": "%@ token telah digunakan"
     },
     {
       "id": "native.apple.769b7dcea4708c40",
