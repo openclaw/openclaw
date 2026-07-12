@@ -15,7 +15,6 @@ import { getPwAiModule } from "../pw-ai-module.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import type { ProfileContext } from "../server-context.js";
 import { isProfileRestartRequiredError } from "../server-context.lifecycle.js";
-import { readHttpOrigin } from "./origin.js";
 import { readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserRouteRegistrar } from "./types.js";
 import {
@@ -23,6 +22,7 @@ import {
   getProfileContext,
   jsonBrowserError,
   jsonError,
+  readHttpOrigin,
   runProfileRouteOperation,
   toStringOrEmpty,
 } from "./utils.js";

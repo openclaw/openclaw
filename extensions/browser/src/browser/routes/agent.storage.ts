@@ -16,10 +16,15 @@ import {
   resolveTargetIdFromQuery,
   withPlaywrightRouteContext,
 } from "./agent.shared.js";
-import { readHttpOrigin } from "./origin.js";
 import { readOptionalRouteFiniteNumber, readRouteFiniteNumber } from "./route-numeric.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
-import { asyncBrowserRoute, jsonError, toBoolean, toStringOrEmpty } from "./utils.js";
+import {
+  asyncBrowserRoute,
+  jsonError,
+  readHttpOrigin,
+  toBoolean,
+  toStringOrEmpty,
+} from "./utils.js";
 
 type StorageKind = "local" | "session";
 
