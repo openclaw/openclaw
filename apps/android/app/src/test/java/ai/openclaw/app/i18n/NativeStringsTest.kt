@@ -82,11 +82,11 @@ class NativeStringsTest {
   }
 
   @Test
-  fun resolvingStateFlowEmitsWhenThePersistedAppLocaleChanges() =
+  fun resolvingStateFlowEmitsWhenTheAppLocaleChanges() =
     runBlocking {
       val app = RuntimeEnvironment.getApplication()
-      NativeStringResources.install(app)
       persistAppLocales(app, "en")
+      NativeStringResources.install(app)
       val resolved = MutableStateFlow(nativeText("Mic off")).resolveNativeText()
       val firstEmission = CompletableDeferred<Unit>()
       val emissions = mutableListOf<String>()
@@ -100,13 +100,14 @@ class NativeStringsTest {
 
       try {
         firstEmission.await()
-        persistAppLocales(app, "fr")
+        NativeStringResources.setApplicationLocales(LocaleListCompat.forLanguageTags("fr"))
         notifyNativeLocaleChanged()
         collection.join()
 
         assertEquals(listOf("Mic off", "Micro désactivé"), emissions)
       } finally {
         collection.cancel()
+        NativeStringResources.setApplicationLocales(LocaleListCompat.getEmptyLocaleList())
         app.deleteFile(APP_LOCALES_FILE)
       }
     }
