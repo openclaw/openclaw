@@ -147,12 +147,12 @@ function createProps(overrides: Partial<AgentsProps> = {}): AgentsProps {
 }
 
 describe("renderAgents", () => {
-  it("renders Memory after Cron and scopes the panel to the selected agent", () => {
+  it("renders Memory after Automations and scopes the panel to the selected agent", () => {
     const container = document.createElement("div");
     render(renderAgents(createProps({ activePanel: "memory" })), container);
 
     const tabs = [...container.querySelectorAll(".agent-tab")].map((tab) => directText(tab));
-    expect(tabs.slice(-2)).toEqual(["Cron Jobs", "Memory"]);
+    expect(tabs.slice(-2)).toEqual(["Automations", "Memory"]);
     const panel = container.querySelector<HTMLElement & { agentId: string }>(
       "openclaw-agent-memory-panel",
     );
