@@ -448,6 +448,7 @@ describe("memory tools", () => {
         agentSessionKey: "agent:marketing-agent:main",
         sandboxed: true,
         corpus,
+        signal: expect.any(AbortSignal),
       });
     },
   );

@@ -209,6 +209,54 @@ describe("searchMemoryWiki", () => {
     expect(getActiveMemorySearchManagerMock).not.toHaveBeenCalled();
   });
 
+  it("skips full-vault fallback when exhaustiveFallback is false (#104719)", async () => {
+    const { rootDir, config } = await createQueryVault({
+      initialize: true,
+    });
+    await fs.writeFile(
+      path.join(rootDir, "sources", "alpha.md"),
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", id: "source.alpha", title: "Alpha Source" },
+        body: "# Alpha Source\n\nalpha body text\n",
+      }),
+      "utf8",
+    );
+
+    // Without a digest, normal search scans the vault; supplement path must not.
+    const supplementResults = await searchMemoryWiki({
+      config,
+      query: "alpha",
+      exhaustiveFallback: false,
+    });
+    const directResults = await searchMemoryWiki({ config, query: "alpha" });
+
+    expect(supplementResults).toEqual([]);
+    expect(directResults).toHaveLength(1);
+    expect(directResults[0]?.path).toBe("sources/alpha.md");
+  });
+
+  it("returns early when the deadline signal is already aborted (#104719)", async () => {
+    const { rootDir, config } = await createQueryVault({
+      initialize: true,
+    });
+    await fs.writeFile(
+      path.join(rootDir, "sources", "alpha.md"),
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", id: "source.alpha", title: "Alpha Source" },
+        body: "# Alpha Source\n\nalpha body text\n",
+      }),
+      "utf8",
+    );
+
+    const results = await searchMemoryWiki({
+      config,
+      query: "alpha",
+      signal: AbortSignal.abort(),
+    });
+
+    expect(results).toEqual([]);
+  });
+
   it("skips malformed pages while searching the rest of the vault (#96125)", async () => {
     const { rootDir, config } = await createQueryVault({ initialize: true });
     await fs.writeFile(

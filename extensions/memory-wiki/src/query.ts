@@ -262,24 +262,37 @@ async function listWikiMarkdownFiles(rootDir: string): Promise<string[]> {
   return files.toSorted((left, right) => left.localeCompare(right));
 }
 
-export async function readQueryableWikiPages(rootDir: string): Promise<QueryableWikiPage[]> {
+export async function readQueryableWikiPages(
+  rootDir: string,
+  signal?: AbortSignal,
+): Promise<QueryableWikiPage[]> {
+  if (signal?.aborted) {
+    return [];
+  }
   const files = await listWikiMarkdownFiles(rootDir);
-  return readQueryableWikiPagesByPaths(rootDir, files);
+  return readQueryableWikiPagesByPaths(rootDir, files, signal);
 }
 
 async function readQueryableWikiPagesByPaths(
   rootDir: string,
   files: string[],
+  signal?: AbortSignal,
 ): Promise<QueryableWikiPage[]> {
-  const pages = await Promise.all(
-    files.map(async (relativePath) => {
-      const absolutePath = path.join(rootDir, relativePath);
-      const raw = await fs.readFile(absolutePath, "utf8");
-      const summary = toWikiPageSummary({ absolutePath, relativePath, raw });
-      return summary ? { ...summary, raw } : null;
-    }),
-  );
-  return pages.flatMap((page) => (page ? [page] : []));
+  // Sequential reads so an abort can stop further I/O mid-batch (Promise.all
+  // would keep launching reads after the deadline fires).
+  const pages: QueryableWikiPage[] = [];
+  for (const relativePath of files) {
+    if (signal?.aborted) {
+      break;
+    }
+    const absolutePath = path.join(rootDir, relativePath);
+    const raw = await fs.readFile(absolutePath, "utf8");
+    const summary = toWikiPageSummary({ absolutePath, relativePath, raw });
+    if (summary) {
+      pages.push({ ...summary, raw });
+    }
+  }
+  return pages;
 }
 
 function parseClaimsDigest(raw: string): QueryDigestClaim[] {
@@ -1406,8 +1419,17 @@ async function searchWikiCorpus(params: {
   query: string;
   maxResults: number;
   mode: WikiSearchMode;
+  signal?: AbortSignal;
+  /** When false, skip full-vault fallback after digest underfill (supplement path). */
+  exhaustiveFallback?: boolean;
 }): Promise<WikiSearchResult[]> {
+  if (params.signal?.aborted) {
+    return [];
+  }
   const digest = await readQueryDigestBundle(params.rootDir);
+  if (params.signal?.aborted) {
+    return [];
+  }
   const candidatePaths = digest
     ? buildDigestCandidatePaths({
         digest,
@@ -1416,11 +1438,18 @@ async function searchWikiCorpus(params: {
         mode: params.mode,
       })
     : [];
+
+  // Supplement searches stay on digest-routed candidates; direct wiki_search
+  // keeps full-vault fallback when digest is missing or underfills.
+  if (candidatePaths.length === 0 && params.exhaustiveFallback === false) {
+    return [];
+  }
+
   const seenPaths = new Set<string>();
   const candidatePages =
     candidatePaths.length > 0
-      ? await readQueryableWikiPagesByPaths(params.rootDir, candidatePaths)
-      : await readQueryableWikiPages(params.rootDir);
+      ? await readQueryableWikiPagesByPaths(params.rootDir, candidatePaths, params.signal)
+      : await readQueryableWikiPages(params.rootDir, params.signal);
   for (const page of candidatePages) {
     seenPaths.add(page.relativePath);
   }
@@ -1428,14 +1457,26 @@ async function searchWikiCorpus(params: {
   const results = candidatePages
     .map((page) => toWikiSearchResult(page, params.query, params.mode))
     .filter((page) => page.score > 0);
-  if (candidatePaths.length === 0 || results.length >= params.maxResults) {
+  if (
+    candidatePaths.length === 0 ||
+    results.length >= params.maxResults ||
+    params.exhaustiveFallback === false ||
+    params.signal?.aborted
+  ) {
     return results;
   }
 
   const remainingPaths = (await listWikiMarkdownFiles(params.rootDir)).filter(
     (relativePath) => !seenPaths.has(relativePath),
   );
-  const remainingPages = await readQueryableWikiPagesByPaths(params.rootDir, remainingPaths);
+  if (params.signal?.aborted) {
+    return results;
+  }
+  const remainingPages = await readQueryableWikiPagesByPaths(
+    params.rootDir,
+    remainingPaths,
+    params.signal,
+  );
   return [
     ...results,
     ...remainingPages
@@ -1478,6 +1519,8 @@ export async function searchMemoryWiki(params: {
   searchBackend?: WikiSearchBackend;
   searchCorpus?: WikiSearchCorpus;
   mode?: WikiSearchMode;
+  signal?: AbortSignal;
+  exhaustiveFallback?: boolean;
 }): Promise<WikiSearchResult[]> {
   const effectiveConfig = applySearchOverrides(params.config, params);
   assertSessionVisibilityAppConfig({
@@ -1498,6 +1541,8 @@ export async function searchMemoryWiki(params: {
         query: params.query,
         maxResults,
         mode,
+        signal: params.signal,
+        exhaustiveFallback: params.exhaustiveFallback,
       })
     : [];
 
