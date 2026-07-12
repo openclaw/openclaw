@@ -222,7 +222,7 @@ final class TalkModeManager: NSObject {
     private var loggedPartialThisCycle: Bool = false
     private var lastSpokenText: String?
     private var lastInterruptedAtSeconds: Double?
-    private var speechErrorStatusPendingRestart = false
+    private var speechErrorStatusPendingRestart: String?
 
     private var defaultVoiceId: String?
     private var currentVoiceId: String?
@@ -1475,19 +1475,25 @@ final class TalkModeManager: NSObject {
         }
 
         GatewayDiagnostics.log("talk speech: error=\(msg)")
-        self.speechErrorStatusPendingRestart = false
+        self.speechErrorStatusPendingRestart = nil
         if !self.isSpeaking {
             if msg.localizedCaseInsensitiveContains("no speech detected") {
                 // Treat as transient silence. Don't scare users with an error banner.
-                self.statusText = self.isEnabled
-                    ? String(localized: "Listening")
-                    : String(format: String(localized: "Speech error: %@"), msg)
-                self.speechErrorStatusPendingRestart = !self.isEnabled
+                if self.isEnabled {
+                    self.statusText = String(localized: "Listening")
+                } else {
+                    let errorStatus = String(
+                        format: String(localized: "Speech error: %@"),
+                        msg)
+                    self.statusText = errorStatus
+                    self.speechErrorStatusPendingRestart = errorStatus
+                }
             } else {
-                self.statusText = String(
+                let errorStatus = String(
                     format: String(localized: "Speech error: %@"),
                     msg)
-                self.speechErrorStatusPendingRestart = true
+                self.statusText = errorStatus
+                self.speechErrorStatusPendingRestart = errorStatus
             }
         }
         self.logger.debug("speech recognition error: \(msg, privacy: .public)")
@@ -1513,10 +1519,12 @@ final class TalkModeManager: NSObject {
             try self.configureOwnedAudioSession()
             try self.startRecognition()
             self.isListening = true
-            if self.speechErrorStatusPendingRestart {
+            if let pendingStatus = self.speechErrorStatusPendingRestart,
+               self.statusText == pendingStatus
+            {
                 self.statusText = String(localized: "Listening")
-                self.speechErrorStatusPendingRestart = false
             }
+            self.speechErrorStatusPendingRestart = nil
             GatewayDiagnostics.log("talk speech: recognition restarted")
         } catch {
             self.stopNativeCaptureAndDiscardTranscript()
