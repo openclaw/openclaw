@@ -6448,3 +6448,271 @@ describe("initSessionState internal channel routing preservation", () => {
     expect(result.sessionEntry.deliveryContext?.accountId).toBe("work");
   });
 });
+
+describe("initSessionState caller-verified session", () => {
+  it("reuses a stale-by-daily-reset session when CallerSessionId matches the store entry", async () => {
+    const root = await makeCaseDir("openclaw-caller-verified-daily-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:webchat:daily-reuse";
+    const existingSessionId = "caller-verified-session";
+
+    // Stale under the default daily reset (atHour 4): started 48h ago
+    const staleStartedAt = Date.now() - 48 * 60 * 60 * 1000;
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: staleStartedAt,
+        sessionStartedAt: staleStartedAt,
+        lastInteractionAt: staleStartedAt,
+        systemSent: true,
+      },
+    });
+
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello again",
+        SessionKey: sessionKey,
+        CallerSessionId: existingSessionId,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    // The session must be reused — not rolled over to a new sessionId.
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe(existingSessionId);
+  });
+
+  it("reuses a stale-by-idle session when CallerSessionId matches", async () => {
+    const root = await makeCaseDir("openclaw-caller-verified-idle-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:webchat:idle-reuse";
+    const existingSessionId = "caller-verified-idle-session";
+
+    // Stale under 5-minute idle timeout
+    const staleUpdatedAt = Date.now() - 10 * 60 * 1000;
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: staleUpdatedAt,
+        sessionStartedAt: staleUpdatedAt,
+        lastInteractionAt: staleUpdatedAt,
+        systemSent: true,
+      },
+    });
+
+    const cfg = {
+      session: { store: storePath, reset: { mode: "idle", idleMinutes: 5 } },
+    } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello again",
+        SessionKey: sessionKey,
+        CallerSessionId: existingSessionId,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    // The session must be reused — not rolled over.
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe(existingSessionId);
+  });
+
+  it("does NOT prevent /new from creating a new session even with CallerSessionId", async () => {
+    const root = await makeCaseDir("openclaw-caller-verified-new-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:webchat:new-reset";
+    const existingSessionId = "caller-verified-new-session";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: Date.now(),
+        sessionStartedAt: Date.now(),
+        lastInteractionAt: Date.now(),
+        systemSent: true,
+      },
+    });
+
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: {
+        RawBody: "/new",
+        Body: "/new",
+        SessionKey: sessionKey,
+        CallerSessionId: existingSessionId,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    // /new must still create a new session regardless of CallerSessionId.
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(true);
+    expect(result.sessionId).not.toBe(existingSessionId);
+  });
+
+  it("falls through to normal freshness evaluation when CallerSessionId does not match", async () => {
+    const root = await makeCaseDir("openclaw-caller-verified-mismatch-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:webchat:mismatch";
+    const realSessionId = "real-session";
+
+    // Stale session
+    const staleStartedAt = Date.now() - 48 * 60 * 60 * 1000;
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: realSessionId,
+        updatedAt: staleStartedAt,
+        sessionStartedAt: staleStartedAt,
+        lastInteractionAt: staleStartedAt,
+        systemSent: true,
+      },
+    });
+
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello",
+        SessionKey: sessionKey,
+        // Claim a sessionId that does NOT match the store entry
+        CallerSessionId: "wrong-session-id",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    // Mismatch → fall through to normal freshness → stale → new session.
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionId).not.toBe(realSessionId);
+  });
+
+  it("creates a new session when CallerSessionId is set but no entry exists", async () => {
+    const root = await makeCaseDir("openclaw-caller-verified-no-entry-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:webchat:no-entry";
+
+    // Empty store — no entry for the session key
+    await writeSessionStoreFast(storePath, {});
+
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello",
+        SessionKey: sessionKey,
+        CallerSessionId: "some-session-id",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    // No entry → canReuseExistingEntry is false → new session.
+    expect(result.isNewSession).toBe(true);
+  });
+
+  it("does not activate for an empty CallerSessionId string", async () => {
+    const root = await makeCaseDir("openclaw-caller-verified-empty-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:webchat:empty";
+    const existingSessionId = "empty-caller-session";
+
+    const staleStartedAt = Date.now() - 48 * 60 * 60 * 1000;
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: staleStartedAt,
+        sessionStartedAt: staleStartedAt,
+        lastInteractionAt: staleStartedAt,
+        systemSent: true,
+      },
+    });
+
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello",
+        SessionKey: sessionKey,
+        CallerSessionId: "",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    // Empty string → length > 0 guard blocks activation → stale → new session.
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionId).not.toBe(existingSessionId);
+  });
+
+  it("does not affect heartbeat system events (CallerSessionId not set)", async () => {
+    const root = await makeCaseDir("openclaw-caller-verified-heartbeat-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:webchat:heartbeat";
+    const existingSessionId = "heartbeat-caller-session";
+
+    // Stale under daily reset
+    const staleStartedAt = Date.now() - 48 * 60 * 60 * 1000;
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: staleStartedAt,
+        sessionStartedAt: staleStartedAt,
+        lastInteractionAt: staleStartedAt,
+        systemSent: true,
+      },
+    });
+
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: {
+        Body: "heartbeat check",
+        SessionKey: sessionKey,
+        Provider: "heartbeat",
+        // Heartbeat does NOT set CallerSessionId
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    // Heartbeat uses isSystemEvent guard — it reuses the session independently.
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe(existingSessionId);
+  });
+
+  it("does NOT bypass freshness for a fresh session with matching CallerSessionId (one-shot proof)", async () => {
+    const root = await makeCaseDir("openclaw-caller-verified-fresh-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:webchat:fresh-no-bypass";
+    const existingSessionId = "fresh-caller-session";
+
+    // Fresh session — updated just now, well within all reset windows
+    const now = Date.now();
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: now,
+        sessionStartedAt: now,
+        lastInteractionAt: now,
+        systemSent: true,
+      },
+    });
+
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello again",
+        SessionKey: sessionKey,
+        CallerSessionId: existingSessionId,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    // Fresh session is reused via normal freshness — not via the caller bypass.
+    // The callerVerifiedSession guard must NOT activate when entryFreshness?.fresh
+    // is true, keeping the path one-shot (only activates for stale sessions).
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe(existingSessionId);
+  });
+});

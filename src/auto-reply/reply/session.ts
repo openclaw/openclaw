@@ -687,7 +687,23 @@ async function initSessionStateAttemptLocked(
     !resetTriggered &&
     (entryFreshness?.fresh ?? false) &&
     isRecoverableTerminalSessionStatus(entry?.status);
+  // Caller-verified session: when a caller (e.g. chat.send) has already loaded
+  // the session entry and passes its sessionId via ctx.CallerSessionId, trust
+  // that verification and skip freshness evaluation. This is naturally one-shot
+  // because it only activates when the entry is stale (entryFreshness?.fresh
+  // === false); after the first successful send updates the session timestamp,
+  // subsequent sends go through normal freshness.
+  // The sessionId MUST match the store entry to prevent spoofing.
+  // Explicit /new and /reset (isNewSession) always take precedence.
+  const callerVerifiedSession =
+    !isNewSession &&
+    typeof ctx.CallerSessionId === "string" &&
+    ctx.CallerSessionId.length > 0 &&
+    canReuseExistingEntry &&
+    entry?.sessionId === ctx.CallerSessionId &&
+    entryFreshness?.fresh === false;
   const freshEntry =
+    callerVerifiedSession ||
     (lockedModelSelection && canReuseExistingEntry) ||
     (isSystemEvent && canReuseExistingEntry) ||
     (((reconnectResumeRequested && canReuseExistingEntry) ||

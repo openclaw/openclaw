@@ -353,6 +353,16 @@ export type MsgContext = {
    * Used for hook confirmation messages like "Session context saved to memory".
    */
   HookMessages?: string[];
+  /**
+   * Caller-verified session id. When set by a caller that has already validated
+   * the session entry (e.g. chat.send via its own loadSessionEntry call),
+   * initSessionState will honor this and skip freshness evaluation when the id
+   * matches the current store entry AND the entry is stale. This is naturally
+   * one-shot: after the first successful send updates the session timestamp,
+   * subsequent sends go through normal freshness evaluation. Does NOT apply to
+   * explicit /new or /reset commands.
+   */
+  CallerSessionId?: string;
 };
 
 export type FinalizedMsgContext = Omit<MsgContext, "CommandAuthorized"> & {
