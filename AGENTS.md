@@ -178,6 +178,11 @@ Skills own workflows; root owns hard policy and routing.
 - PR head changed: rerun `scripts/pr review-init`; checkout alone leaves stale guard SHA.
 - `rg`: options before `--`; use `--` before patterns starting with `-`.
 - `gh --jq` is not standalone `jq`; pipe JSON to `jq` for variables or `--arg`.
+- `gh api --paginate '<endpoint>' | jq -s ...`; gh `--slurp` may emit nothing and forbids `--jq`/`--template`.
+- Main-bound workflow dispatch: resolve server `main` SHA immediately before dispatch; retry if identity fails after `main` advances.
+- `gh run view --json` uses `attempt`, not `attemptNumber`.
+- Crabbox stop: no `--timing-json`; use `node scripts/crabbox-wrapper.mjs stop --provider <provider> --id <id>`.
+- macOS `find` has no `-printf`; use `-print0` plus `stat`.
 - Actions checkout refs: use full 40-char SHAs; short SHAs resolve as branches/tags.
 - zsh Git object paths: use `${sha}:path`; `$sha:path` invokes parameter modifiers.
 - Bare issue/PR URL/number: inspect live and take the efficient maintainer path; switch branches/refs when useful.
