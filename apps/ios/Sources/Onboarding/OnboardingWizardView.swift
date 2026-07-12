@@ -1091,8 +1091,8 @@ extension OnboardingWizardView {
         }
 
         if let problem {
-            self.connectMessage = problem.message
-            self.statusLine = problem.message
+            self.connectMessage = problem.localizedMessage
+            self.statusLine = problem.localizedMessage
             return
         }
 

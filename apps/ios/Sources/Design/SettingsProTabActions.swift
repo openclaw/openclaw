@@ -1007,7 +1007,7 @@ extension SettingsProTab {
 
     var setupStatusLine: String? {
         if let problem = self.appModel.lastGatewayProblem {
-            return problem.message
+            return problem.localizedMessage
         }
         let trimmedSetup = self.setupStatusText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let gatewayStatus = self.appModel.gatewayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
