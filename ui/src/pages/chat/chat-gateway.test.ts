@@ -710,6 +710,36 @@ describe("handleChatEvent", () => {
     expect(state.chatStream).toHaveLength(201);
   });
 
+  it("accepts a final that shares its sequence with the flushed delta", () => {
+    const state = createState({ sessionKey: "main" });
+
+    expect(
+      handleChatEvent(state, {
+        runId: "run-terminal-flush",
+        seq: 7,
+        sessionKey: "main",
+        state: "delta",
+        deltaText: "Complete reply",
+      }),
+    ).toBe("delta");
+    expect(
+      handleChatEvent(state, {
+        runId: "run-terminal-flush",
+        seq: 7,
+        sessionKey: "main",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Complete reply" }],
+        },
+      }),
+    ).toBe("final");
+
+    expect(state.chatRunId).toBe(null);
+    expect(state.chatStream).toBe(null);
+    expect(state.chatMessages).toHaveLength(1);
+  });
+
   it("does not let ignored off-session frames suppress the selected session replay", () => {
     const state = createState({ sessionKey: "main" });
     const payload: ChatEventPayload = {

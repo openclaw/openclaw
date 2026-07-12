@@ -25,7 +25,7 @@ import {
 export type { ChatEventPayload, ChatState } from "./chat-history.ts";
 
 const CHAT_EVENT_DEDUPE_RUN_LIMIT = 200;
-const acceptedChatEventSeqByRun = new WeakMap<object, Map<string, number>>();
+const acceptedChatEventSeqByRunState = new WeakMap<object, Map<string, Map<string, number>>>();
 
 type AssistantMessageNormalizationOptions = {
   roleRequirement: "required" | "optional";
@@ -195,17 +195,19 @@ function acceptChatEventFrame(state: ChatState, payload: ChatEventPayload): bool
     return true;
   }
   const stateKey = state as object;
-  let accepted = acceptedChatEventSeqByRun.get(stateKey);
+  let accepted = acceptedChatEventSeqByRunState.get(stateKey);
   if (!accepted) {
     accepted = new Map();
-    acceptedChatEventSeqByRun.set(stateKey, accepted);
+    acceptedChatEventSeqByRunState.set(stateKey, accepted);
   }
-  const lastAcceptedSeq = accepted.get(runKey);
+  const acceptedSeqByState = accepted.get(runKey) ?? new Map<string, number>();
+  const lastAcceptedSeq = acceptedSeqByState.get(payload.state);
   if (lastAcceptedSeq !== undefined && payload.seq <= lastAcceptedSeq) {
     return false;
   }
+  acceptedSeqByState.set(payload.state, payload.seq);
   accepted.delete(runKey);
-  accepted.set(runKey, payload.seq);
+  accepted.set(runKey, acceptedSeqByState);
   if (accepted.size > CHAT_EVENT_DEDUPE_RUN_LIMIT) {
     for (const staleKey of accepted.keys()) {
       accepted.delete(staleKey);
