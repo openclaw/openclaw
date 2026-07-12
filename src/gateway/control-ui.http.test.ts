@@ -973,6 +973,14 @@ describe("handleControlUiHttpRequest", () => {
           new RegExp(`${CONTROL_UI_MCP_APP_SANDBOX_TICKET_ATTRIBUTE}="([^"]+)"`),
         )?.[1];
         expect(ticket).toBeTruthy();
+        const ticketPayload = JSON.parse(
+          Buffer.from(ticket?.split(".")[0] ?? "", "base64url").toString("utf8"),
+        ) as Record<string, unknown>;
+        expect(ticketPayload).toMatchObject({
+          scope: "mcp-app-sandbox",
+          nonce: expect.stringMatching(/^[A-Za-z0-9_-]{22}$/),
+        });
+        expect(ticketPayload).not.toHaveProperty("exp");
 
         const csp = encodeURIComponent(
           JSON.stringify({

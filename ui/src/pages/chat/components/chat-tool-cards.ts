@@ -735,8 +735,8 @@ export function renderToolCard(
   const isError = outcome === "failed";
   const isRunning = outcome === "running";
   const icon = TOOL_ROW_ICONS[view.kind] ?? display.icon;
-  const collapsedMcpAppPreview =
-    !opts.expanded && card.preview?.kind === "mcp-app"
+  const persistentMcpAppPreview =
+    card.preview?.kind === "mcp-app"
       ? renderToolPreview(card.preview, "chat_tool", {
           onOpenSidebar: opts.onOpenSidebar,
           rawText: card.outputText,
@@ -776,7 +776,7 @@ export function renderToolCard(
             ></span>`
           : nothing}
       </button>
-      ${collapsedMcpAppPreview}
+      ${persistentMcpAppPreview}
       ${opts.expanded
         ? html`
             <div class="chat-tool-msg-body">
@@ -835,15 +835,16 @@ export function renderExpandedToolCardContent(
       fullMessageRequest,
       rawText: card.outputText ?? null,
     });
-  const visiblePreview = card.preview
-    ? renderToolPreview(card.preview, "chat_tool", {
-        onOpenSidebar,
-        rawText: card.outputText,
-        canvasPluginSurfaceUrl,
-        embedSandboxMode,
-        allowExternalEmbedUrls,
-      })
-    : nothing;
+  const visiblePreview =
+    card.preview && card.preview.kind !== "mcp-app"
+      ? renderToolPreview(card.preview, "chat_tool", {
+          onOpenSidebar,
+          rawText: card.outputText,
+          canvasPluginSurfaceUrl,
+          embedSandboxMode,
+          allowExternalEmbedUrls,
+        })
+      : nothing;
   const sidebarAction = canOpenSidebar
     ? html`
         <div class="chat-tool-card__actions">

@@ -685,34 +685,49 @@ describe("tool-cards", () => {
     expect(sidebar.entryUrl).toBe("/__openclaw__/canvas/documents/cv_sidebar/index.html");
   });
 
-  it("keeps an expanded MCP App preview visible alongside text output", () => {
+  it("keeps the MCP App iframe mounted while tool details expand", async () => {
     const container = document.createElement("div");
     const root = document.documentElement;
     const previousTicket = root.getAttribute("data-openclaw-mcp-app-sandbox-ticket");
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(() => new Promise(() => {}));
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        serverName: "diagrams",
+        resource: {
+          uri: "ui://diagrams/app.html",
+          html: "<!doctype html><html><body>diagram</body></html>",
+        },
+        result: {
+          content: [{ type: "text", text: "rendered" }],
+        },
+      }),
+    } as Response);
     root.setAttribute("data-openclaw-mcp-app-sandbox-ticket", "test-ticket");
 
     try {
-      render(
-        renderToolCard(
-          {
-            id: "msg:mcp-app:1",
-            name: "diagrams_create_view",
-            outputText: "rendered",
-            preview: {
-              kind: "mcp-app",
-              serverName: "diagrams",
-              title: "Diagram",
-              viewId: "mcpview_0123456789ABCDEFGHJKMNPQRSTVWXYZ",
-            },
-          },
-          { expanded: true, onToggleExpanded: vi.fn() },
-        ),
-        container,
-      );
+      const card = {
+        id: "msg:mcp-app:1",
+        name: "diagrams_create_view",
+        outputText: "rendered",
+        preview: {
+          kind: "mcp-app" as const,
+          serverName: "diagrams",
+          title: "Diagram",
+          viewId: "mcpview_0123456789ABCDEFGHJKMNPQRSTVWXYZ",
+        },
+      };
+      render(renderToolCard(card, { expanded: false, onToggleExpanded: vi.fn() }), container);
 
-      expect(container.querySelector('[data-kind="mcp-app"]')).not.toBeNull();
+      await vi.waitFor(() => {
+        expect(container.querySelector(".chat-tool-card__preview-frame--mcp-app")).not.toBeNull();
+      });
+      const iframe = container.querySelector(".chat-tool-card__preview-frame--mcp-app");
+
+      render(renderToolCard(card, { expanded: true, onToggleExpanded: vi.fn() }), container);
+
+      expect(container.querySelector(".chat-tool-card__preview-frame--mcp-app")).toBe(iframe);
       expect(container.querySelector(".chat-tool-card__raw-toggle")).not.toBeNull();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
     } finally {
       fetchMock.mockRestore();
       if (previousTicket === null) {
