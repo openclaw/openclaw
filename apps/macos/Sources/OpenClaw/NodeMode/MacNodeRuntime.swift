@@ -26,6 +26,10 @@ actor MacNodeRuntime {
     private let refreshCanvasSurfaceUrl: @Sendable () async -> String?
     private let codexThreadCatalogEnabled: @Sendable () -> Bool
     private let codexThreadListRequest: @Sendable (String?) async throws -> String
+    private let codexThreadTurnsRequest: @Sendable (String?) async throws -> String
+    private let claudeSessionCatalogEnabled: @Sendable () -> Bool
+    private let claudeSessionListRequest: @Sendable (String?) async throws -> String
+    private let claudeSessionReadRequest: @Sendable (String?) async throws -> String
     private let execApprovalStoreMutations: ExecApprovalStoreMutations
     private let shellRunner: @Sendable (
         _ command: [String],
@@ -60,11 +64,22 @@ actor MacNodeRuntime {
         },
         refreshCanvasSurfaceUrl: @escaping @Sendable () async -> String? = { nil },
         codexThreadCatalogEnabled: @escaping @Sendable () -> Bool = {
-            OpenClawConfigFile.explicitlyEnabledPlugin(
-                MacNodeCodexThreadCatalogContract.pluginId)
+            MacNodeCodexThreadCatalog.shouldAdvertise()
         },
         codexThreadListRequest: @escaping @Sendable (String?) async throws -> String = { paramsJSON in
             try await MacNodeCodexThreadCatalog.list(paramsJSON: paramsJSON)
+        },
+        codexThreadTurnsRequest: @escaping @Sendable (String?) async throws -> String = { paramsJSON in
+            try await MacNodeCodexThreadCatalog.turns(paramsJSON: paramsJSON)
+        },
+        claudeSessionCatalogEnabled: @escaping @Sendable () -> Bool = {
+            MacNodeClaudeSessionCatalog.shouldAdvertise()
+        },
+        claudeSessionListRequest: @escaping @Sendable (String?) async throws -> String = { paramsJSON in
+            try MacNodeClaudeSessionCatalog.list(paramsJSON: paramsJSON)
+        },
+        claudeSessionReadRequest: @escaping @Sendable (String?) async throws -> String = { paramsJSON in
+            try MacNodeClaudeSessionCatalog.read(paramsJSON: paramsJSON)
         },
         execApprovalStoreMutations: ExecApprovalStoreMutations = .live,
         shellRunner: @escaping @Sendable (
@@ -83,6 +98,10 @@ actor MacNodeRuntime {
         self.refreshCanvasSurfaceUrl = refreshCanvasSurfaceUrl
         self.codexThreadCatalogEnabled = codexThreadCatalogEnabled
         self.codexThreadListRequest = codexThreadListRequest
+        self.codexThreadTurnsRequest = codexThreadTurnsRequest
+        self.claudeSessionCatalogEnabled = claudeSessionCatalogEnabled
+        self.claudeSessionListRequest = claudeSessionListRequest
+        self.claudeSessionReadRequest = claudeSessionReadRequest
         self.execApprovalStoreMutations = execApprovalStoreMutations
         self.shellRunner = shellRunner
     }
@@ -143,19 +162,21 @@ actor MacNodeRuntime {
                 return try await self.handleSystemExecApprovalsGet(req)
             case OpenClawSystemCommand.execApprovalsSet.rawValue:
                 return try await self.handleSystemExecApprovalsSet(req)
-            case MacNodeCodexThreadCatalogContract.listCommand:
-                guard self.codexThreadCatalogEnabled() else {
-                    return Self.errorResponse(
-                        req,
-                        code: .unavailable,
-                        message: "UNAVAILABLE: Codex session catalog is disabled")
-                }
-                let payload = try await codexThreadListRequest(req.paramsJSON)
-                return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+            case MacNodeCodexThreadCatalogContract.listCommand,
+                 MacNodeCodexThreadCatalogContract.turnsCommand:
+                return try await self.handleCodexThreadInvoke(req)
+            case MacNodeClaudeSessionCatalogContract.listCommand,
+                 MacNodeClaudeSessionCatalogContract.readCommand:
+                return try await self.handleClaudeSessionInvoke(req)
             default:
                 return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: unknown command")
             }
         } catch let error as MacNodeCodexThreadCatalog.CatalogError {
+            return Self.errorResponse(
+                req,
+                code: error.isInvalidRequest ? .invalidRequest : .unavailable,
+                message: error.localizedDescription)
+        } catch let error as MacNodeClaudeSessionCatalog.CatalogError {
             return Self.errorResponse(
                 req,
                 code: error.isInvalidRequest ? .invalidRequest : .unavailable,
@@ -167,6 +188,34 @@ actor MacNodeRuntime {
 
     private func isCanvasCommand(_ command: String) -> Bool {
         command.hasPrefix("canvas.") || command.hasPrefix("canvas.a2ui.")
+    }
+
+    private func handleCodexThreadInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        guard self.codexThreadCatalogEnabled() else {
+            return Self.errorResponse(
+                req,
+                code: .unavailable,
+                message: "UNAVAILABLE: Codex session catalog is disabled")
+        }
+        let request = req.command == MacNodeCodexThreadCatalogContract.listCommand
+            ? self.codexThreadListRequest
+            : self.codexThreadTurnsRequest
+        let payload = try await request(req.paramsJSON)
+        return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+    }
+
+    private func handleClaudeSessionInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        guard self.claudeSessionCatalogEnabled() else {
+            return Self.errorResponse(
+                req,
+                code: .unavailable,
+                message: "UNAVAILABLE: Claude session catalog is disabled")
+        }
+        let request = req.command == MacNodeClaudeSessionCatalogContract.listCommand
+            ? self.claudeSessionListRequest
+            : self.claudeSessionReadRequest
+        let payload = try await request(req.paramsJSON)
+        return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
     }
 }
 
@@ -1120,21 +1169,19 @@ extension MacNodeRuntime {
         }
 
         if requiresAsk, !approvedByAsk {
-            let promptDecision = await MainActor.run {
-                ExecApprovalsPromptPresenter.prompt(
-                    ExecApprovalPromptRequest(
-                        command: context.displayCommand,
-                        cwd: params.cwd,
-                        host: "node",
-                        security: context.security.rawValue,
-                        ask: context.ask.rawValue,
-                        agentId: context.agentId,
-                        resolvedPath: context.resolution?.resolvedPath,
-                        sessionKey: context.sessionKey,
-                        allowedDecisions: ExecApprovalPromptRequest.allowedDecisions(
-                            forAsk: context.ask.rawValue,
-                            allowAlwaysEligible: context.allowAlwaysEligible)))
-            }
+            let promptDecision = await ExecApprovalsPromptPresenter.prompt(
+                ExecApprovalPromptRequest(
+                    command: context.displayCommand,
+                    cwd: params.cwd,
+                    host: "node",
+                    security: context.security.rawValue,
+                    ask: context.ask.rawValue,
+                    agentId: context.agentId,
+                    resolvedPath: context.resolution?.resolvedPath,
+                    sessionKey: context.sessionKey,
+                    allowedDecisions: ExecApprovalPromptRequest.allowedDecisions(
+                        forAsk: context.ask.rawValue,
+                        allowAlwaysEligible: context.allowAlwaysEligible)))
             guard let decision = promptDecision else {
                 await self.emitExecEvent(
                     "exec.denied",

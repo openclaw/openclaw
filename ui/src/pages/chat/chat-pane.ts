@@ -2,6 +2,12 @@ import { consume } from "@lit/context";
 import { html, nothing } from "lit";
 import { property, state as litState } from "lit/decorators.js";
 import type {
+  SessionCatalogHost,
+  SessionCatalogSession,
+  SessionCatalogTranscriptItem,
+  SessionsCatalogContinueResult,
+  SessionsCatalogListResult,
+  SessionsCatalogReadResult,
   TaskSuggestion,
   TaskSuggestionEvent,
   TaskSuggestionsAcceptResult,
@@ -31,8 +37,14 @@ import {
 import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
+import { retirePendingChatSideQuestion } from "../../lib/chat/side-result.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
+import {
+  buildCatalogSessionKey,
+  parseCatalogSessionKey,
+  type CatalogSessionKey,
+} from "../../lib/sessions/catalog-key.ts";
 import { resolveSessionKey, scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -96,6 +108,7 @@ import {
 import {
   createSessionWorkspaceProps,
   openSessionWorkspaceFile,
+  renderSessionDiffToggle,
   renderSessionWorkspaceToggle,
   revealSessionWorkspaceFile,
   toggleSessionWorkspace,
@@ -130,6 +143,9 @@ type ChatPaneConnectionScope = {
   generation: number;
   sessions: ChatPageContext["sessions"];
 };
+
+const CATALOG_SESSION_LOOKUP_PAGE_LIMIT = 100;
+const CATALOG_SESSION_LOOKUP_MAX_PAGES = 100;
 
 const CHAT_OPEN_DETAILS_SELECTOR =
   ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__talk-select[open], .agent-chat__attach-menu[open], .chat-pr__checks[open]";
@@ -187,6 +203,7 @@ class ChatPane extends OpenClawLightDomElement {
   @property({ attribute: false }) showPaneHeader = false;
   @property({ attribute: false }) paneTitle = "";
   @property({ attribute: false }) narrow = false;
+  @property({ attribute: false }) onOpenSplitView?: () => void;
   @property({ attribute: false }) onSplitDown?: (paneId: string) => void;
   @property({ attribute: false }) onSplitRight?: (paneId: string) => void;
   @property({ attribute: false }) onClosePane?: (paneId: string) => void;
@@ -210,6 +227,14 @@ class ChatPane extends OpenClawLightDomElement {
   private sessionPullRequestsRequestVersion = 0;
   private sessionPullRequestsExpanded = false;
   private dismissedSessionPullRequestIds: ReadonlySet<string> = new Set();
+  @litState() private catalogMessages: unknown[] = [];
+  @litState() private catalogLoading = false;
+  @litState() private catalogLoadingOlder = false;
+  private catalogCursor: string | undefined;
+  private catalogSession: SessionCatalogSession | null = null;
+  private catalogHost: SessionCatalogHost | null = null;
+  private catalogLoadGeneration = 0;
+  private catalogRequestedSessionKey: string | null = null;
 
   private captureConnectionScope(): ChatPaneConnectionScope | null {
     const context = this.context;
@@ -277,6 +302,11 @@ class ChatPane extends OpenClawLightDomElement {
       return;
     }
     const sessionKey = scope.state.sessionKey;
+    if (parseCatalogSessionKey(sessionKey)) {
+      this.taskSuggestions = [];
+      this.requestUpdate();
+      return;
+    }
     const agentId = resolveChatAgentId(scope.state);
     try {
       const result = await scope.client.request<TaskSuggestionsListResult>("taskSuggestions.list", {
@@ -313,7 +343,10 @@ class ChatPane extends OpenClawLightDomElement {
       return;
     }
     const sessionKey = scope.state.sessionKey;
-    if (!sessionKey.trim()) {
+    if (!sessionKey.trim() || parseCatalogSessionKey(sessionKey)) {
+      this.sessionPullRequests = [];
+      this.sessionPullRequestsRateLimited = false;
+      this.requestUpdate();
       return;
     }
     try {
@@ -483,7 +516,9 @@ class ChatPane extends OpenClawLightDomElement {
     if (!state) {
       return null;
     }
-    const nextSessionKey = resolveSessionKey(sessionKey, this.context.gateway.snapshot.hello);
+    const nextSessionKey = parseCatalogSessionKey(sessionKey)
+      ? sessionKey
+      : resolveSessionKey(sessionKey, this.context.gateway.snapshot.hello);
     if (!nextSessionKey) {
       return null;
     }
@@ -496,7 +531,12 @@ class ChatPane extends OpenClawLightDomElement {
   // active pane, so inactive split panes must never run these bindings.
   private applyActiveSessionBindings() {
     const state = this.state;
-    if (!state || !this.active || !this.sessionKey.trim()) {
+    if (
+      !state ||
+      !this.active ||
+      !this.sessionKey.trim() ||
+      parseCatalogSessionKey(state.sessionKey)
+    ) {
       return;
     }
     const nextSessionKey = state.sessionKey;
@@ -514,6 +554,7 @@ class ChatPane extends OpenClawLightDomElement {
       return;
     }
     const previousSessionKey = state.sessionKey;
+    const catalogKey = parseCatalogSessionKey(nextSessionKey);
     const previousSessionsResult = state.sessionsResult;
     const nextSessionRow = state.sessionsResult?.sessions.find((row) => row.key === nextSessionKey);
     const nextSessionLabel = resolveSessionDisplayName(nextSessionKey, nextSessionRow);
@@ -554,10 +595,16 @@ class ChatPane extends OpenClawLightDomElement {
     // fallbacks stay pane-local until a later edit persists successfully.
     this.chatState.adoptComposerRoute();
     this.taskSuggestionsRequestVersion += 1;
+    this.catalogLoadGeneration += 1;
     this.taskSuggestions = [];
     this.taskSuggestionBusyIds.clear();
     this.taskSuggestionOperations.clear();
     this.resetSessionPullRequests();
+    if (catalogKey) {
+      this.openCatalogSession(catalogKey, state);
+      return;
+    }
+    this.catalogRequestedSessionKey = null;
     this.markSessionRead(nextSessionRow);
     if (previousSessionKey !== nextSessionKey) {
       state.announceSessionSwitch?.(nextSessionKey, nextSessionLabel);
@@ -601,6 +648,144 @@ class ChatPane extends OpenClawLightDomElement {
     void subscriptionSync;
     void historyLoad;
     void sessionsRefresh;
+  }
+
+  private openCatalogSession(key: CatalogSessionKey, state: ChatPageHost) {
+    this.catalogRequestedSessionKey = buildCatalogSessionKey(key);
+    this.catalogMessages = [];
+    this.catalogCursor = undefined;
+    this.catalogSession = null;
+    this.catalogHost = null;
+    state.chatAttachments = [];
+    state.chatLoading = true;
+    state.requestUpdate();
+    void this.loadCatalogSession(key, false);
+  }
+
+  private catalogItemMessage(item: SessionCatalogTranscriptItem, index: number): unknown {
+    const timestamp = item.timestamp ? Date.parse(item.timestamp) : Date.now() + index;
+    const text = item.text || "[Unsupported external session item]";
+    if (item.type === "userMessage") {
+      return { role: "user", content: text, timestamp, messageId: item.id };
+    }
+    const prefix =
+      item.type === "reasoning"
+        ? "Thinking\n\n"
+        : item.type === "toolCall"
+          ? "Tool call\n\n"
+          : item.type === "toolResult"
+            ? "Tool result\n\n"
+            : "";
+    return {
+      role: "assistant",
+      content: [{ type: "text", text: `${prefix}${text}` }],
+      timestamp,
+      messageId: item.id,
+    };
+  }
+
+  private async loadCatalogSession(key: CatalogSessionKey, older: boolean) {
+    const state = this.state;
+    const client = state?.client;
+    if (!state || !client || !state.connected) {
+      return;
+    }
+    const generation = older ? this.catalogLoadGeneration : ++this.catalogLoadGeneration;
+    const requestedSessionKey = buildCatalogSessionKey(key);
+    const isCurrent = () =>
+      generation === this.catalogLoadGeneration && this.sessionKey === requestedSessionKey;
+    if (older) {
+      this.catalogLoadingOlder = true;
+    } else {
+      this.catalogLoading = true;
+    }
+    try {
+      if (!older) {
+        let cursor: string | undefined;
+        const seenCursors = new Set<string>();
+        // A sidebar row can come from any loaded page. Follow that host's cursor
+        // so continuation metadata is not lost when the selected row is past page one.
+        for (let pageIndex = 0; pageIndex < CATALOG_SESSION_LOOKUP_MAX_PAGES; pageIndex += 1) {
+          const listed = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
+            catalogId: key.catalogId,
+            hostIds: [key.hostId],
+            limitPerHost: CATALOG_SESSION_LOOKUP_PAGE_LIMIT,
+            ...(cursor ? { cursors: { [key.hostId]: cursor } } : {}),
+          });
+          if (!isCurrent()) {
+            return;
+          }
+          const catalog = listed.catalogs.find((candidate) => candidate.id === key.catalogId);
+          this.catalogHost = catalog?.hosts.find((host) => host.hostId === key.hostId) ?? null;
+          this.catalogSession =
+            this.catalogHost?.sessions.find((session) => session.threadId === key.threadId) ?? null;
+          if (this.catalogSession) {
+            break;
+          }
+          const nextCursor = this.catalogHost?.nextCursor;
+          if (!nextCursor || seenCursors.has(nextCursor)) {
+            break;
+          }
+          seenCursors.add(nextCursor);
+          cursor = nextCursor;
+        }
+      }
+      const page = await client.request<SessionsCatalogReadResult>("sessions.catalog.read", {
+        catalogId: key.catalogId,
+        hostId: key.hostId,
+        threadId: key.threadId,
+        limit: 50,
+        ...(older && this.catalogCursor ? { cursor: this.catalogCursor } : {}),
+      });
+      if (!isCurrent()) {
+        return;
+      }
+      const messages = page.items
+        .toReversed()
+        .map((item, index) => this.catalogItemMessage(item, index));
+      this.catalogMessages = older ? [...messages, ...this.catalogMessages] : messages;
+      this.catalogCursor = page.nextCursor;
+      const currentState = this.state ?? state;
+      currentState.lastError = null;
+      scheduleChatScroll(currentState, !older);
+    } catch (error) {
+      if (isCurrent()) {
+        (this.state ?? state).lastError = error instanceof Error ? error.message : String(error);
+      }
+    } finally {
+      if (isCurrent()) {
+        const currentState = this.state ?? state;
+        this.catalogLoading = false;
+        this.catalogLoadingOlder = false;
+        currentState.chatLoading = false;
+        currentState.requestUpdate();
+      }
+    }
+  }
+
+  private async continueCatalogSession(key: CatalogSessionKey) {
+    const state = this.state;
+    const client = state?.client;
+    const draft = state?.chatMessage.trim();
+    if (!state || !client || !draft || !this.catalogSession?.canContinue) {
+      return;
+    }
+    state.chatSending = true;
+    state.requestUpdate();
+    try {
+      const result = await client.request<SessionsCatalogContinueResult>(
+        "sessions.catalog.continue",
+        key,
+      );
+      this.onPaneSessionChange?.(this.paneId, result.sessionKey);
+      this.switchPaneSession(result.sessionKey);
+      state.handleChatDraftChange(draft);
+      await state.handleSendChat();
+    } catch (error) {
+      state.lastError = error instanceof Error ? error.message : String(error);
+      state.chatSending = false;
+      state.requestUpdate();
+    }
   }
 
   private readonly handleCommandPaletteSlashCommand = (command: string) => {
@@ -933,7 +1118,7 @@ class ChatPane extends OpenClawLightDomElement {
     chatState.addCleanup(
       this.context.gateway.subscribeEvents((event) => {
         const state = this.state;
-        if (state) {
+        if (state && !parseCatalogSessionKey(state.sessionKey)) {
           if (event.event === "task.suggestion" && event.payload) {
             this.handleTaskSuggestionEvent(event.payload as TaskSuggestionEvent);
           }
@@ -958,12 +1143,15 @@ class ChatPane extends OpenClawLightDomElement {
 
   override willUpdate(changedProperties: Map<PropertyKey, unknown>) {
     if (changedProperties.has("sessionKey") && this.state) {
-      const nextSessionKey = resolveSessionKey(
-        this.sessionKey,
-        this.context.gateway.snapshot.hello,
-      );
+      const catalogKey = parseCatalogSessionKey(this.sessionKey);
+      const nextSessionKey = catalogKey
+        ? this.sessionKey
+        : resolveSessionKey(this.sessionKey, this.context.gateway.snapshot.hello);
       if (nextSessionKey && nextSessionKey !== this.state.sessionKey) {
         this.switchPaneSession(nextSessionKey);
+      } else if (catalogKey && this.catalogRequestedSessionKey !== this.sessionKey) {
+        this.catalogLoadGeneration += 1;
+        this.openCatalogSession(catalogKey, this.state);
       }
       this.chatState.restoreCreatedSessionComposer(nextSessionKey);
     }
@@ -1116,9 +1304,11 @@ class ChatPane extends OpenClawLightDomElement {
       isGatewayMethodAdvertised(snapshot, "browser.request") === true;
     state.assistantAgentId = snapshot.assistantAgentId;
     const routeSessionKey = this.sessionKey.trim();
-    const canonicalRouteSessionKey = routeSessionKey
-      ? resolveSessionKey(routeSessionKey, snapshot.hello)
-      : null;
+    const catalogRouteKey = parseCatalogSessionKey(routeSessionKey);
+    const canonicalRouteSessionKey =
+      routeSessionKey && !catalogRouteKey
+        ? resolveSessionKey(routeSessionKey, snapshot.hello)
+        : null;
     if (
       routeSessionKey &&
       canonicalRouteSessionKey &&
@@ -1178,6 +1368,11 @@ class ChatPane extends OpenClawLightDomElement {
         }
       };
       this.connectedClient = startupClient;
+      if (catalogRouteKey) {
+        void this.loadCatalogSession(catalogRouteKey, false);
+        state.requestUpdate?.();
+        return;
+      }
       void syncSelectedSessionMessageSubscription(state, { force: true });
       void retryReconnectableQueuedChatSends(state);
       void refreshPageChat(state, { startup: true, awaitHistory: true }).finally(() => {
@@ -1205,13 +1400,14 @@ class ChatPane extends OpenClawLightDomElement {
              drag-and-drop. -->
         <span class="chat-pane__session-title" title=${this.paneTitle}>${this.paneTitle}</span>
         <div class="chat-pane__actions">
-          ${renderBackgroundTasksToggle(backgroundTasks, "pane-header")}
-          ${renderSessionWorkspaceToggle(sessionWorkspace, "pane-header")}
+          ${renderSessionDiffToggle(sessionWorkspace)}
+          ${renderBackgroundTasksToggle(backgroundTasks)}
+          ${renderSessionWorkspaceToggle(sessionWorkspace)}
           ${!this.narrow
             ? html`
                 <openclaw-tooltip .content=${t("chat.splitView.splitDown")}>
                   <button
-                    class="btn btn--ghost btn--icon"
+                    class="btn btn--ghost btn--icon chat-icon-btn"
                     type="button"
                     aria-label=${t("chat.splitView.splitDown")}
                     @click=${() => this.onSplitDown?.(this.paneId)}
@@ -1221,7 +1417,7 @@ class ChatPane extends OpenClawLightDomElement {
                 </openclaw-tooltip>
                 <openclaw-tooltip .content=${t("chat.splitView.splitRight")}>
                   <button
-                    class="btn btn--ghost btn--icon"
+                    class="btn btn--ghost btn--icon chat-icon-btn"
                     type="button"
                     aria-label=${t("chat.splitView.splitRight")}
                     @click=${() => this.onSplitRight?.(this.paneId)}
@@ -1233,7 +1429,7 @@ class ChatPane extends OpenClawLightDomElement {
             : nothing}
           <openclaw-tooltip .content=${t("chat.splitView.closePane")}>
             <button
-              class="btn btn--ghost btn--icon"
+              class="btn btn--ghost btn--icon chat-icon-btn"
               type="button"
               aria-label=${t("chat.splitView.closePane")}
               @click=${() => this.onClosePane?.(this.paneId)}
@@ -1252,42 +1448,60 @@ class ChatPane extends OpenClawLightDomElement {
       return html`<main class="app-shell app-shell--booting" aria-busy="true"></main>`;
     }
     const currentAgentId = resolveChatAgentId(state);
+    const catalogKey = parseCatalogSessionKey(state.sessionKey);
     // Tool rows consult the global title store while rendering; point its
     // fetcher at this pane's connection. Requests capture session + agent at
     // schedule time, so later renders of other panes cannot re-route them.
     configureToolTitleFetcher({
       client: state.connected ? state.client : null,
-      sessionKey: state.sessionKey || null,
+      sessionKey: catalogKey ? null : state.sessionKey || null,
       agentId: currentAgentId || null,
       onTitlesChanged: () => state.requestUpdate?.(),
     });
     const agentDefaultModel = this.context.agents.state.agentsList?.agents.find(
       (agent) => agent.id === currentAgentId,
     )?.model?.primary;
+    const selectedSession = state.sessionsResult?.sessions.find((row) =>
+      areUiSessionKeysEquivalent(row.key, state.sessionKey),
+    );
     const selectedSessionArchived =
       state.selectedChatSessionArchived ||
       state.sessionsResult?.sessions.some(
         (row) => row.archived === true && areUiSessionKeysEquivalent(row.key, state.sessionKey),
       ) === true;
     const disabledReason = selectedSessionArchived ? t("chat.archivedSessionDisabled") : null;
+    const catalogDisabledReason = catalogKey
+      ? this.catalogSession?.canContinue
+        ? null
+        : this.catalogHost?.kind === "node"
+          ? t("chat.catalog.remoteViewOnly")
+          : t("chat.catalog.unsupportedViewOnly")
+      : null;
     const canOpenRealtimeTalkSettings = hasOperatorAdminAccess(
       this.context.gateway.snapshot.hello?.auth ?? null,
     );
     const sessionWorkspace = createSessionWorkspaceProps(state, {
+      draftScope: this.paneId,
       narrowLayout: this.paneWidth < WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH,
-    });
-    const backgroundTasks = createBackgroundTasksProps(state, {
-      onOpenSession: (sessionKey) => {
-        this.onPaneSessionChange?.(this.paneId, sessionKey);
-      },
     });
     const railSideDocked =
       !sessionWorkspace.collapsed &&
       !sessionWorkspace.narrowLayout &&
       sessionWorkspace.dock !== "bottom";
-    // Every open side rail (workspace and/or background tasks) narrows the
-    // room left for the chat + detail split.
-    const sideRailCount = (railSideDocked ? 1 : 0) + (backgroundTasks.collapsed ? 0 : 1);
+    // The workspace rail claims the side slot first; the tasks rail needs
+    // room for both columns before it may side-dock next to it.
+    const backgroundTasks = createBackgroundTasksProps(state, {
+      narrowLayout:
+        this.paneWidth <
+        WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH + (railSideDocked ? WORKSPACE_RAIL_MAX_WIDTH : 0),
+      onOpenSession: (sessionKey) => {
+        this.onPaneSessionChange?.(this.paneId, sessionKey);
+      },
+    });
+    const tasksSideDocked = !backgroundTasks.collapsed && !backgroundTasks.narrowLayout;
+    // Every side-docked rail narrows the room left for the chat + detail
+    // split; bottom strips do not.
+    const sideRailCount = (railSideDocked ? 1 : 0) + (tasksSideDocked ? 1 : 0);
     const detailSplitWidth = this.paneWidth - sideRailCount * WORKSPACE_RAIL_MAX_WIDTH;
     const props: ChatProps = {
       paneId: this.paneId,
@@ -1299,18 +1513,27 @@ class ChatPane extends OpenClawLightDomElement {
       autoExpandToolCalls: state.chatVerboseLevel === "full",
       showThinking: state.settings.chatShowThinking,
       showToolCalls: state.settings.chatShowToolCalls,
-      loading: state.chatLoading,
+      loading: catalogKey ? this.catalogLoading : state.chatLoading,
       sending: state.chatSending,
       canAbort: hasAbortableSessionRun(state),
       runStatus: state.chatRunStatus,
       compactionStatus: state.compactionStatus,
       fallbackStatus: state.fallbackStatus,
-      messages: state.chatMessages,
-      sideResult: state.chatSideResult,
-      toolMessages: state.chatToolMessages,
-      streamSegments: state.chatStreamSegments,
-      stream: state.chatStream,
-      streamStartedAt: state.chatStreamStartedAt,
+      messages: catalogKey ? this.catalogMessages : state.chatMessages,
+      historyPagination:
+        catalogKey && this.catalogCursor
+          ? {
+              loading: this.catalogLoadingOlder,
+              onLoadOlder: () => void this.loadCatalogSession(catalogKey, true),
+            }
+          : undefined,
+      sideChatTurns: catalogKey ? [] : state.chatSideChatTurns,
+      sideChatPending: catalogKey ? null : state.chatSideResultPending,
+      sideChatHidden: catalogKey ? true : state.chatSideChatHidden,
+      toolMessages: catalogKey ? [] : state.chatToolMessages,
+      streamSegments: catalogKey ? [] : state.chatStreamSegments,
+      stream: catalogKey ? null : state.chatStream,
+      streamStartedAt: catalogKey ? null : state.chatStreamStartedAt,
       assistantAvatarUrl: resolveChatAvatarUrl(state),
       sendShortcut: state.settings.chatSendShortcut,
       draft: state.chatMessage,
@@ -1321,81 +1544,92 @@ class ChatPane extends OpenClawLightDomElement {
       realtimeTalkInputLevel: state.realtimeTalkInputLevel,
       realtimeTalkConversation: state.realtimeTalkConversation,
       connected: state.connected,
-      canSend: !selectedSessionArchived,
-      disabledReason,
+      canSend: catalogKey ? this.catalogSession?.canContinue === true : !selectedSessionArchived,
+      disabledReason: catalogDisabledReason ?? disabledReason,
       error: state.lastError,
       sessions: state.sessionsResult,
+      sessionHost: {
+        assistantAgentId: state.assistantAgentId,
+        agentsList: state.agentsList,
+        hello: state.hello,
+      },
       providerUsage: {
         basePath: state.basePath,
         modelAuthStatusResult: state.modelAuthStatusResult,
       },
-      composerControls: renderChatControls({
-        paneId: this.paneId,
-        agentsList: state.agentsList,
-        connected: state.connected,
-        hideCronSessions: state.sessionsHideCron,
-        loading: state.chatLoading,
-        manualRefreshInFlight: state.chatManualRefreshInFlight,
-        model: {
-          activeRunId: state.chatRunId,
-          agentDefaultModel,
-          connected: state.connected,
-          gatewayAvailable: Boolean(state.client),
-          loading: state.chatLoading,
-          modelCatalog: state.chatModelCatalog,
-          modelOverrides: state.sessions.state.modelOverrides,
-          modelSwitching: Boolean(state.chatModelSwitchPromises[state.sessionKey]),
-          modelsLoading: state.chatModelsLoading,
-          sending: state.chatSending,
-          sessionKey: state.sessionKey,
-          sessionsResult: state.sessionsResult,
-          stream: state.chatStream,
-          onRequestUpdate: () => state.requestUpdate?.(),
-          onFastModeSelect: (next, targetSessionKey) =>
-            switchChatFastMode(state, next, targetSessionKey),
-          onModelSelect: (next, targetSessionKey) => switchChatModel(state, next, targetSessionKey),
-          onThinkingSelect: (next, targetSessionKey) =>
-            switchChatThinkingLevel(state, next, targetSessionKey),
-        },
-        onboarding: state.onboarding,
-        runId: state.chatRunId,
-        sending: state.chatSending,
-        settings: state.settings,
-        settingsOpen: state.chatMobileControlsOpen,
-        sessionKey: state.sessionKey,
-        sessionsResult: state.sessionsResult,
-        stream: state.chatStream,
-        realtimeTalkOptions: state.realtimeTalkOptions,
-        realtimeTalkInputDevices: state.realtimeTalkInputDevices,
-        realtimeTalkInputDeviceId: state.realtimeTalkInputDeviceId,
-        realtimeTalkInputLoading: state.realtimeTalkInputLoading,
-        realtimeTalkInputError: state.realtimeTalkInputError,
-        canOpenRealtimeTalkSettings,
-        onRefresh: () => handleChatManualRefresh(state),
-        onRealtimeTalkInputRefresh: () => void state.refreshRealtimeTalkInputs(true),
-        onRealtimeTalkInputSelect: state.selectRealtimeTalkInput,
-        onRealtimeTalkOptionsChange: state.updateRealtimeTalkOptions,
-        onOpenRealtimeTalkSettings: () => {
-          if (!canOpenRealtimeTalkSettings) {
-            return;
-          }
-          this.context.navigate("communications", { search: "?section=talk" });
-        },
-        onSettingsChange: state.applySettings,
-        onSettingsOpenChange: (open, options) => {
-          state.setChatMobileControlsOpen(open, options);
-          if (open) {
-            void state.refreshRealtimeTalkInputs(false);
-          }
-        },
-        onToggleCronSessions: () => {
-          state.sessionsHideCron = !state.sessionsHideCron;
-          state.requestUpdate?.();
-        },
-      }),
-      sessionWorkspace,
-      backgroundTasks,
+      composerControls: catalogKey
+        ? nothing
+        : renderChatControls({
+            paneId: this.paneId,
+            agentsList: state.agentsList,
+            connected: state.connected,
+            hideCronSessions: state.sessionsHideCron,
+            loading: state.chatLoading,
+            manualRefreshInFlight: state.chatManualRefreshInFlight,
+            model: {
+              activeRunId: state.chatRunId,
+              agentDefaultModel,
+              connected: state.connected,
+              gatewayAvailable: Boolean(state.client),
+              loading: state.chatLoading,
+              modelCatalog: state.chatModelCatalog,
+              modelOverrides: state.sessions.state.modelOverrides,
+              modelSelectionLocked: selectedSession?.modelSelectionLocked === true,
+              modelSelectionRuntimeId: selectedSession?.agentRuntime?.id,
+              modelSwitching: Boolean(state.chatModelSwitchPromises[state.sessionKey]),
+              modelsLoading: state.chatModelsLoading,
+              sending: state.chatSending,
+              sessionKey: state.sessionKey,
+              sessionsResult: state.sessionsResult,
+              stream: state.chatStream,
+              onRequestUpdate: () => state.requestUpdate?.(),
+              onFastModeSelect: (next, targetSessionKey) =>
+                switchChatFastMode(state, next, targetSessionKey),
+              onModelSelect: (next, targetSessionKey) =>
+                switchChatModel(state, next, targetSessionKey),
+              onThinkingSelect: (next, targetSessionKey) =>
+                switchChatThinkingLevel(state, next, targetSessionKey),
+            },
+            onboarding: state.onboarding,
+            runId: state.chatRunId,
+            sending: state.chatSending,
+            settings: state.settings,
+            settingsOpen: state.chatMobileControlsOpen,
+            sessionKey: state.sessionKey,
+            sessionsResult: state.sessionsResult,
+            stream: state.chatStream,
+            realtimeTalkOptions: state.realtimeTalkOptions,
+            realtimeTalkInputDevices: state.realtimeTalkInputDevices,
+            realtimeTalkInputDeviceId: state.realtimeTalkInputDeviceId,
+            realtimeTalkInputLoading: state.realtimeTalkInputLoading,
+            realtimeTalkInputError: state.realtimeTalkInputError,
+            canOpenRealtimeTalkSettings,
+            onRefresh: () => handleChatManualRefresh(state),
+            onRealtimeTalkInputRefresh: () => void state.refreshRealtimeTalkInputs(true),
+            onRealtimeTalkInputSelect: state.selectRealtimeTalkInput,
+            onRealtimeTalkOptionsChange: state.updateRealtimeTalkOptions,
+            onOpenRealtimeTalkSettings: () => {
+              if (!canOpenRealtimeTalkSettings) {
+                return;
+              }
+              this.context.navigate("communications", { search: "?section=talk" });
+            },
+            onSettingsChange: state.applySettings,
+            onSettingsOpenChange: (open, options) => {
+              state.setChatMobileControlsOpen(open, options);
+              if (open) {
+                void state.refreshRealtimeTalkInputs(false);
+              }
+            },
+            onToggleCronSessions: () => {
+              state.sessionsHideCron = !state.sessionsHideCron;
+              state.requestUpdate?.();
+            },
+          }),
+      sessionWorkspace: catalogKey ? undefined : sessionWorkspace,
+      backgroundTasks: catalogKey ? undefined : backgroundTasks,
       paneHeaderActive: this.showPaneHeader,
+      onOpenSplitView: this.onOpenSplitView,
       taskSuggestions: this.taskSuggestions,
       pullRequests: this.sessionPullRequests.filter(
         (pullRequest) => !this.dismissedSessionPullRequestIds.has(chatPullRequestId(pullRequest)),
@@ -1419,7 +1653,13 @@ class ChatPane extends OpenClawLightDomElement {
       onOpenWorkspaceFile: (target) => openSessionWorkspaceFile(state, target),
       onRevealWorkspaceFile: (path) => revealSessionWorkspaceFile(state, path),
       onRefresh: () => {
-        state.chatSideResult = null;
+        if (catalogKey) {
+          void this.loadCatalogSession(catalogKey, false);
+          return;
+        }
+        state.chatSideChatTurns = [];
+        state.chatSideChatHidden = false;
+        retirePendingChatSideQuestion(state);
         state.resetToolStream();
         void refreshPageChat(state, { awaitHistory: true, scheduleScroll: false });
       },
@@ -1436,7 +1676,8 @@ class ChatPane extends OpenClawLightDomElement {
         state.chatAttachments = next;
         state.requestUpdate?.();
       },
-      onSend: () => void state.handleSendChat(),
+      onSend: () =>
+        catalogKey ? void this.continueCatalogSession(catalogKey) : void state.handleSendChat(),
       onCompact: () => void state.handleSendChat("/compact"),
       onOpenSessionCheckpoints: () => {
         const search = new URLSearchParams({ session: state.sessionKey });
@@ -1459,8 +1700,36 @@ class ChatPane extends OpenClawLightDomElement {
       onQueueRetry: (id) => void state.retryQueuedChatMessage(id),
       onQueueSteer: (id) => void state.steerQueuedChatMessage(id),
       onGoalCommand: (command) => void state.handleSendChat(command),
-      onDismissSideResult: () => {
-        state.chatSideResult = null;
+      onSideQuestion: (command, displayQuestion, onSendRejected) =>
+        void state.handleSendChat(command, {
+          ...(displayQuestion ? { sideQuestionDisplayText: displayQuestion } : {}),
+          ...(onSendRejected ? { onSideQuestionSendRejected: onSendRejected } : {}),
+        }),
+      onSideChatClose: () => {
+        // Hide only: a pending run keeps going and its arriving answer (or a
+        // new question) reopens the panel with the conversation intact.
+        state.chatSideChatHidden = true;
+        state.requestUpdate?.();
+      },
+      onSideChatClear: () => {
+        const pendingRunId = state.chatSideResultPending?.runId;
+        state.chatSideChatTurns = [];
+        state.chatSideChatHidden = false;
+        // Retire (not just clear) so a discarded question's still-running
+        // detached run cannot leak its late reply into the transcript.
+        retirePendingChatSideQuestion(state);
+        // Best-effort targeted abort: trash means "stop the pending side
+        // question", not just hide it. The retire above already suppresses
+        // the run's late events, so a failed abort needs no fallback.
+        if (pendingRunId && state.client && state.connected) {
+          state.client
+            .request("chat.abort", {
+              sessionKey: state.sessionKey,
+              ...scopedAgentParamsForSession(state, state.sessionKey),
+              runId: pendingRunId,
+            })
+            .catch(() => {});
+        }
         state.requestUpdate?.();
       },
       replyTarget: state.chatReplyTarget ?? null,
@@ -1484,19 +1753,19 @@ class ChatPane extends OpenClawLightDomElement {
       onSessionSelect: (next) => {
         this.onPaneSessionChange?.(this.paneId, next);
       },
-      onLoadSidebarFullMessage: async (
-        request: SidebarFullMessageRequest,
-      ): Promise<DetailFullMessageResult | null> => {
-        if (!state.client || !state.connected) {
-          return null;
-        }
-        return state.client.request<DetailFullMessageResult>("chat.message.get", {
-          sessionKey: request.sessionKey,
-          ...(request.agentId ? { agentId: request.agentId } : {}),
-          messageId: request.messageId,
-          maxChars: CHAT_DETAIL_FULL_MESSAGE_MAX_CHARS,
-        });
-      },
+      onLoadSidebarFullMessage: catalogKey
+        ? undefined
+        : async (request: SidebarFullMessageRequest): Promise<DetailFullMessageResult | null> => {
+            if (!state.client || !state.connected) {
+              return null;
+            }
+            return state.client.request<DetailFullMessageResult>("chat.message.get", {
+              sessionKey: request.sessionKey,
+              ...(request.agentId ? { agentId: request.agentId } : {}),
+              messageId: request.messageId,
+              maxChars: CHAT_DETAIL_FULL_MESSAGE_MAX_CHARS,
+            });
+          },
       sidebarOpen: state.sidebarOpen,
       sidebarContent: state.sidebarContent,
       sidebarStacked: detailSplitWidth < DETAIL_SIDEBAR_SIDE_MIN_WIDTH,

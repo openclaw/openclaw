@@ -172,16 +172,6 @@ export const ru: TranslationMap = {
       node: "Узел",
     },
   },
-  instances: {
-    title: "Подключенные экземпляры",
-    subtitle: "Сигналы присутствия от шлюза и клиентов.",
-    showHosts: "Показать хосты и IP-адреса",
-    hideHosts: "Скрыть хосты и IP-адреса",
-    toggleHostVisibility: "Переключить видимость хостов",
-    noInstances: "Экземпляры пока не передавались.",
-    lastInput: "Последний ввод {time}",
-    reason: "Причина {reason}",
-  },
   worktrees: {
     newWorktree: "Новое рабочее дерево",
     owner: "Владелец",
@@ -212,6 +202,11 @@ export const ru: TranslationMap = {
     gateway: "Gateway · локально",
     folder: "Папка",
     folderPlaceholder: "Рабочая область агента",
+    browse: "Обзор папок",
+    browserUp: "Родительская папка",
+    browserUse: "Использовать эту папку",
+    browserEmpty: "Нет подпапок",
+    browserLoadFailed: "Не удалось получить список этой папки.",
     worktree: "Рабочее дерево",
     worktreeUnavailable: "Рабочая область агента не является git checkout",
     baseBranch: "Базовая ветка",
@@ -323,12 +318,19 @@ export const ru: TranslationMap = {
     unpinSession: "Открепить сеанс",
     markUnread: "Mark as unread",
     markRead: "Mark as read",
+    markUnreadCount: "Отметить {count} как непрочитанные",
+    markReadCount: "Отметить {count} как прочитанные",
     forkSession: "Fork",
     openChat: "Открыть чат",
+    openPullRequest: "Открыть PR",
+    openInEditorMenu: "Открыть в",
     archiveSession: "Архивировать сеанс",
+    archiveSessionCount: "Архивировать {count}",
     restoreSession: "Восстановить сеанс",
     deleteSessionMenu: "Delete…",
+    deleteSessionCount: "Удалить {count}…",
     deleteSessionConfirm: 'Delete "{session}" and its transcript?',
+    deleteSessionsConfirm: "Удалить {count} сеансов и их расшифровки?",
     groupBy: "Группировать по",
     groupByNone: "Нет",
     groupByCategory: "Пользовательские группы",
@@ -342,6 +344,7 @@ export const ru: TranslationMap = {
     newGroupPrompt: "Название новой группы",
     moveToGroup: "Переместить сеанс в группу",
     moveToGroupMenu: "Move to group",
+    moveToGroupMenuCount: "Переместить {count} в группу",
     removeFromGroup: "Remove from group",
     groupMenu: "Параметры группы {group}",
     renameGroupMenu: "Переименовать группу…",
@@ -380,6 +383,7 @@ export const ru: TranslationMap = {
       skills: "Навыки",
       channels: "Каналы",
       cronJobs: "Cron Jobs",
+      memory: "Память",
     },
     context: {
       title: "Контекст агента",
@@ -476,6 +480,7 @@ export const ru: TranslationMap = {
     noEvents: "Событий пока нет.",
   },
   quickSettings: {
+    language: "Язык",
     appearance: {
       lobsterVisits: "Визиты омара",
       lobsterVisitsOn: "Заглядывает время от времени",
@@ -500,8 +505,7 @@ export const ru: TranslationMap = {
     pending: "Ожидает: {count}",
     allowOnce: "Разрешить один раз",
     alwaysAllow: "Всегда разрешать",
-    allowAlwaysUnavailable:
-      "Действующая политика подтверждений требует подтверждения каждый раз, поэтому «Всегда разрешать» недоступно.",
+    allowAlwaysUnavailable: "«Всегда разрешать» недоступно для этой команды.",
     deny: "Запретить",
     labels: {
       host: "Хост",
@@ -514,6 +518,47 @@ export const ru: TranslationMap = {
       severity: "Серьезность",
       plugin: "Плагин",
     },
+  },
+  approvalPage: {
+    brandName: "OpenClaw",
+    eyebrow: "Operator approval",
+    loadingTitle: "Loading approval",
+    loadingDescription: "Checking the current approval state with the Gateway.",
+    unavailableTitle: "Approval unavailable",
+    unavailableDescription:
+      "This approval could not be found or this device is not authorized to review it.",
+    connectionErrorTitle: "Connection interrupted",
+    connectionErrorDescription:
+      "OpenClaw cannot confirm or record a decision while disconnected. Reconnect to check the current status.",
+    retry: "Повторить",
+    execTitle: "Command approval",
+    pending: "Waiting for your decision",
+    pendingDescription: "Review the request carefully. The first answer from any surface wins.",
+    approvedHere: "Approved here",
+    deniedHere: "Denied here",
+    resolvedElsewhere: "Resolved elsewhere",
+    resolvedElsewhereDescription:
+      "Another surface or an earlier attempt recorded the decision first.",
+    approved: "Approved",
+    denied: "Denied",
+    expired: "Истек",
+    cancelled: "Cancelled",
+    allowedOnceDescription: "The operation was approved for this request only.",
+    allowedAlwaysDescription: "The operation was approved with the always-allow decision.",
+    deniedDescription: "The operation was denied and will not continue.",
+    expiredDescription: "No decision arrived before the deadline, so the operation was denied.",
+    cancelledDescription: "The requesting run ended before a decision could be used.",
+    summaryLabel: "Summary",
+    commandLabel: "Команда",
+    requestLabel: "Request details",
+    nodeLabel: "Узел",
+    toolLabel: "Инструмент",
+    expiresLabel: "Expires",
+    resolvedLabel: "Разрешено",
+    actionsLabel: "Approval decisions",
+    resolvingDecision: "Recording {decision}…",
+    safeToClose: "The decision is recorded. You can close this page.",
+    openControlUi: "Open Control UI",
   },
   agentTools: {
     connectedSource: "Подключено: {id}",
@@ -610,11 +655,10 @@ export const ru: TranslationMap = {
   tabs: {
     agents: "Агенты",
     activity: "Активность",
-    overview: "Обзор",
     workboard: "Рабочая доска",
     worktrees: "Рабочие деревья",
     channels: "Каналы",
-    instances: "Экземпляры",
+    connection: "Подключение",
     sessions: "Сеансы",
     usage: "Использование",
     cron: "Задания Cron",
@@ -636,17 +680,15 @@ export const ru: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "Отладка",
     logs: "Журналы",
-    dreams: "Сновидения",
     plugin: "Плагин",
   },
   subtitles: {
     agents: "Рабочие пространства, инструменты, идентификаторы.",
     activity: "Сводки активности инструментов в локальном браузере.",
-    overview: "Состояние, точки входа, работоспособность.",
     workboard: "Очередь задач агента и передача сеанса.",
     worktrees: "Изолированные копии для задач агентов и снимки восстановления.",
     channels: "Каналы и настройки.",
-    instances: "Подключенные клиенты и узлы.",
+    connection: "Адрес Gateway, учётные данные и статус рукопожатия.",
     sessions: "Активные сеансы и значения по умолчанию.",
     usage: "Использование API и расходы.",
     cron: "Пробуждения и повторяющиеся запуски.",
@@ -669,8 +711,10 @@ export const ru: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "Снимки, события, RPC.",
     logs: "Живые журналы шлюза.",
-    dreams: "Сновидения памяти, консолидация и рефлексия.",
     plugin: "Панель, предоставленная плагином.",
+  },
+  mcpPage: {
+    manageServersLink: "Управляйте серверами на странице плагинов.",
   },
   pluginsPage: {
     searchLabel: "Поиск плагинов",
@@ -793,6 +837,7 @@ export const ru: TranslationMap = {
     artifactDetails: "Сведения о сборке Control UI",
     version: "Версия",
     commit: "Коммит",
+    branch: "Ветка",
     built: "Сборка",
     unavailable: "Недоступно",
     copyCommit: "Скопировать полный хеш коммита",
@@ -936,57 +981,6 @@ export const ru: TranslationMap = {
     unavailableSubtitle:
       "The plugin that owns this tab is not active on the connected gateway, or it did not provide a panel.",
   },
-  codexSessions: {
-    eyebrow: "Парк Codex",
-    title: "Сеансы на всех ваших компьютерах",
-    subtitle:
-      "Сеансы Codex на этом Gateway и всех подключённых компьютерах с общим доступом. Только для чтения.",
-    summaryLabel: "Сводка сеансов Codex",
-    summary: {
-      sessions: "сеансы",
-      onlineHosts: "в сети",
-      hosts: "хосты",
-    },
-    searchLabel: "Поиск сеансов Codex",
-    searchPlaceholder: "Поиск по названиям сеансов",
-    scopeLabel: "Фильтр архива сеансов",
-    scope: {
-      active: "Активно",
-      archived: "В архиве",
-    },
-    refresh: "Обновить",
-    disconnected: "Повторно подключитесь к Gateway, чтобы обновить сеансы Codex.",
-    partial: "Недоступные хосты: {count}. Остальные хосты по-прежнему доступны.",
-    loading: "Загрузка сеансов Codex…",
-    loadMore: "Загрузить ещё",
-    loadingMore: "Загрузка…",
-    untitled: "Сеанс Codex без названия",
-    threadId: "Ветка",
-    status: {
-      active: "Активно",
-      idle: "Бездействует",
-      archived: "В архиве",
-      notLoaded: "Сохранён",
-      systemError: "Системная ошибка",
-      unknown: "Неизвестно",
-    },
-    host: {
-      gateway: "Gateway",
-      node: "Узел",
-      connected: "Подключено",
-      offline: "Не в сети",
-      unavailable: "Каталог сеансов недоступен",
-      sessionCount: "{count} показано",
-    },
-    empty: {
-      title: "Хосты Codex не найдены",
-      subtitle:
-        "Включите общий доступ к сеансам Codex на Gateway или сопряжённом компьютере, затем обновите эту страницу.",
-      search: "Ни один сеанс на этом хосте не соответствует поиску.",
-      active: "На этом хосте нет активных сеансов.",
-      archived: "На этом хосте нет архивных сеансов.",
-    },
-  },
   logbook: {
     duration: {
       minutes: "{minutes}m",
@@ -1009,7 +1003,7 @@ export const ru: TranslationMap = {
       batchError: "Analysis error",
       modelMissing: "No vision model",
       modelMissingHelp:
-        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.5) or configure tools.media models.",
+        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.6-sol) or configure tools.media models.",
     },
     actions: {
       pause: "Pause",
@@ -1040,6 +1034,100 @@ export const ru: TranslationMap = {
       title: "Ask your day",
       placeholder: "When did I review the gateway PR?",
       submit: "Запрос",
+    },
+  },
+  workspaces: {
+    tabs: {
+      label: "Workspaces",
+      hidden: "Hidden ({count})",
+    },
+    error: {
+      title: "Couldn't load your workspaces",
+      subtitle: "Something went wrong loading your workspaces. Try reloading.",
+      detailSummary: "Show details",
+    },
+    header: {
+      subtitle: "Arrange widgets and tabs for this workspace.",
+    },
+    onboarding: {
+      title: "Build your first workspace tab",
+      primary: "Ask your agent to build a tab.",
+      secondary: "Or create one from the command line:",
+    },
+    empty: {
+      onboardingTitle: "No workspaces yet",
+      onboardingSubtitle:
+        "Ask your agent to build a workspace, or create one from the command line.",
+      onboardingCommand: "openclaw workspaces tabs create --title Main",
+      tabTitle: "This workspace is empty",
+      tabSubtitle: "Ask your agent to add a widget, or add one yourself.",
+      noVisibleTabs: "Every workspace tab is hidden. Restore one from the hidden menu.",
+    },
+    widget: {
+      collapse: "Collapse widget",
+      expand: "Expand widget",
+      moveHandle: "Move widget",
+      resizeHandle: "Resize widget",
+      menuLabel: "Widget options",
+      provenanceChip: "AI",
+      provenanceTooltip: "Built by {agent}",
+      errorTitle: "This widget couldn't load",
+      errorHumane: "This widget ran into a problem while rendering.",
+      errorDetailSummary: "Show details",
+      customPlaceholder: "Custom widget — coming soon.",
+      customLoading: "Loading custom widget…",
+      approval: {
+        title: "Custom widget awaiting approval",
+        byAgent: "Built by {agent}",
+        byUnknown: "Built by an unknown agent",
+        approve: "Approve",
+        reject: "Reject",
+        unavailable:
+          "This custom widget isn't available. Ask your agent to rebuild it, or remove it.",
+      },
+      markdownEmpty: "No content yet.",
+      unknownKind: "Unknown widget type: {kind}",
+      editTitleTitle: "Edit widget title",
+      editTitleLabel: "Widget title",
+      moveToTabTitle: "Move to tab",
+      moveToTabEmpty: "There are no other tabs to move this widget to.",
+      menu: {
+        editTitle: "Edit title",
+        moveToTab: "Move to tab…",
+        hide: "Hide",
+        remove: "Удалить",
+      },
+      stat: {
+        empty: "—",
+      },
+      table: {
+        empty: "No rows to show.",
+        more: "+{count} ещё",
+      },
+      sessions: {
+        empty: "No sessions yet.",
+      },
+      usage: {
+        cost: "Стоимость",
+        tokens: "Токены",
+      },
+      cron: {
+        empty: "No scheduled jobs.",
+        next: "Next {time}",
+        noNext: "Not scheduled",
+      },
+      instances: {
+        empty: "No connected instances.",
+        idle: "Idle for {duration}",
+      },
+      activity: {
+        empty: "No recent activity.",
+      },
+      embed: {
+        missing: "This embed has no URL yet.",
+        blockedExternal: "External embeds are disabled by your gateway policy.",
+        blockedScheme: "This embed URL uses an unsupported scheme.",
+      },
     },
   },
   workboard: {
@@ -1247,7 +1335,12 @@ export const ru: TranslationMap = {
     eventUnarchived: "Разархивировано",
     eventStale: "Устаревший сеанс",
   },
-  overview: {
+  connection: {
+    lostTitle: "Соединение с Gateway потеряно",
+    reconnecting: "Повторное подключение…",
+    offlineHint:
+      "Обновления в реальном времени и действия приостановлены до восстановления соединения.",
+    retryNow: "Повторить сейчас",
     access: {
       title: "Доступ к шлюзу",
       subtitle: "Где подключается панель мониторинга и как она проходит аутентификацию.",
@@ -1256,7 +1349,6 @@ export const ru: TranslationMap = {
       password: "Пароль (не сохраняется)",
       passwordPlaceholder: "системный или общий пароль",
       sessionKey: "Ключ сеанса по умолчанию",
-      language: "Язык",
       connectHint: "Нажмите «Подключиться», чтобы применить изменения подключения.",
       trustedProxy: "Аутентификация выполнена через доверенный прокси.",
       showToken: "Показать токен",
@@ -1273,138 +1365,52 @@ export const ru: TranslationMap = {
       uptime: "Время работы",
       tickInterval: "Интервал тика",
       lastChannelsRefresh: "Последнее обновление каналов",
-      channelsHint:
-        "Используйте «Каналы», чтобы подключить WhatsApp, Telegram, Discord, Signal или iMessage.",
     },
-    stats: {
-      instances: "Экземпляры",
-      instancesHint: "Сигналы присутствия за последние 5 минут.",
-      sessions: "Сеансы",
-      sessionsHint: "Недавние ключи сеансов, отслеживаемые шлюзом.",
-      cron: "Cron",
-      cronNext: "Следующее пробуждение {time}",
-    },
-    notes: {
-      title: "Заметки",
-      subtitle: "Краткие напоминания для настроек удаленного управления.",
-      tailscaleTitle: "Tailscale serve",
-      tailscaleText:
-        "Предпочитайте режим serve, чтобы держать шлюз на loopback с аутентификацией tailnet.",
-      sessionTitle: "Гигиена сеансов",
-      sessionText: "Используйте /new или sessions.patch, чтобы сбросить контекст.",
-      cronTitle: "Напоминания Cron",
-      cronText: "Используйте изолированные сеансы для повторяющихся запусков.",
-    },
-    auth: {
-      required:
-        "Этот шлюз требует аутентификации. Добавьте токен или пароль, затем нажмите Connect.",
-      failed:
-        "Ошибка аутентификации. Снова скопируйте URL с токеном с помощью {command} или обновите токен, затем нажмите Connect.",
-    },
-    pairing: {
-      hint: "Этому устройству требуется подтверждение сопряжения от хоста шлюза.",
-      scopeUpgradeTitle: "Расширение области доступа ожидает подтверждения.",
-      scopeUpgradeSummary:
-        "Это устройство уже сопряжено, но запрошенная более широкая область доступа ожидает подтверждения.",
-      roleUpgradeTitle: "Повышение роли ожидает подтверждения.",
-      roleUpgradeSummary:
-        "Это устройство уже сопряжено, но запрошенное изменение роли ожидает подтверждения.",
-      metadataUpgradeTitle: "Изменение метаданных устройства ожидает подтверждения.",
-      metadataUpgradeSummary:
-        "Это устройство уже сопряжено, но изменение метаданных ожидает подтверждения.",
-      mobileHint:
-        "На мобильном устройстве? Скопируйте полный URL (включая #token=...) из openclaw dashboard --no-open на настольном компьютере.",
-      docsTitle: "Документация по сопряжению устройств (откроется в новой вкладке)",
-      docsLink: "Документация: сопряжение устройств",
-    },
-    insecure: {
-      hint: "Эта страница использует HTTP, поэтому браузер блокирует идентификацию устройства. Используйте HTTPS (Tailscale Serve) или откройте {url} на хосте шлюза.",
-      stayHttp: "Если необходимо остаться на HTTP, задайте {config} (только токен).",
-    },
-    connection: {
+    help: {
       title: "Как подключиться",
       step1: "Запустите gateway на хост-машине:",
       step2: "Получите URL панели мониторинга с токеном:",
       step3: "Вставьте WebSocket URL и токен выше или откройте URL с токеном напрямую.",
-      step4: "Или создайте многоразовый токен:",
-      docsHint: "Для удаленного доступа рекомендуется Tailscale Serve. ",
       docsLink: "Читать документацию →",
-      authDocsTitle: "Документация по аутентификации Control UI (откроется в новой вкладке)",
-      authDocsLink: "Документация: аутентификация Control UI",
-      tailscaleDocsTitle: "Документация Tailscale Serve (откроется в новой вкладке)",
-      tailscaleDocsLink: "Документация: Tailscale Serve",
-      insecureHttpDocsTitle: "Документация по небезопасному HTTP (откроется в новой вкладке)",
-      insecureHttpDocsLink: "Документация: небезопасный HTTP",
       copyCommand: "Копировать команду",
       copyCommandAria: "Копировать команду: {command}",
     },
-    cards: {
-      cost: "Стоимость",
+  },
+  attention: {
+    cronFailed: "Сбой заданий cron: {count}",
+    cronOverdue: "Просрочено заданий cron: {count}",
+    modelAuthExpired: "Срок авторизации модели истёк: {providers}",
+    modelAuthExpiring: "Срок авторизации модели скоро истечёт: {providers}",
+  },
+  palette: {
+    placeholder: "Поиск чатов и команд…",
+    noResults: "Нет результатов",
+    categories: {
+      search: "Поиск",
+      navigation: "Навигация",
       skills: "Навыки",
-      recentSessions: "Недавние сеансы",
-      modelAuth: "Аутентификация модели",
-      modelAuthOk: "{count} в порядке",
-      modelAuthExpired: "{count} истекло",
-      modelAuthExpiring: "{count} истекает",
-      modelAuthProviders: "{count} провайдеров",
-      modelAuthUsageLeft: "осталось {pct}%",
-      modelAuthExpiresIn: "истекает {when}",
-      modelAuthAttentionExpiredTitle: "Срок действия авторизации модели истек",
-      modelAuthAttentionExpiringTitle: "Срок действия авторизации модели скоро истечет",
-      modelAuthAttentionExpiredDesc:
-        "{providers} — повторно авторизуйтесь с помощью openclaw models auth",
-      modelAuthAttentionExpiringEntry: "{provider} ({when})",
     },
-    attention: {
-      title: "Внимание",
+    items: {
+      sessions: "Сеансы",
+      scheduled: "Запланировано",
+      skills: "Навыки",
+      plugins: "Плагины",
+      settings: "Настройки",
+      agents: "Агенты",
+      shellCommand: "Shell Command",
+      debugMode: "Режим отладки",
     },
-    eventLog: {
-      title: "Журнал событий",
+    descriptions: {
+      shellCommand: "Запустить shell",
+      debugMode: "Переключить отладку",
     },
-    logTail: {
-      title: "Журналы шлюза",
-    },
-    quickActions: {
-      newSession: "Новый сеанс",
-      automation: "Автоматизация",
-      refreshAll: "Обновить все",
-      terminal: "Терминал",
-    },
-    palette: {
-      placeholder: "Введите команду…",
-      noResults: "Нет результатов",
-      categories: {
-        search: "Поиск",
-        navigation: "Навигация",
-        skills: "Навыки",
-      },
-      items: {
-        overview: "Обзор",
-        sessions: "Сеансы",
-        scheduled: "Запланировано",
-        skills: "Навыки",
-        plugins: "Плагины",
-        settings: "Настройки",
-        agents: "Агенты",
-        shellCommand: "Shell Command",
-        debugMode: "Режим отладки",
-      },
-      descriptions: {
-        shellCommand: "Запустить shell",
-        debugMode: "Переключить отладку",
-      },
-      footer: {
-        navigate: "навигация",
-        select: "выбрать",
-        close: "закрыть",
-      },
+    footer: {
+      navigate: "навигация",
+      select: "выбрать",
+      close: "закрыть",
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "Агент",
-      ariaLabel: "Агент Dreaming",
-    },
     tabs: {
       scene: "Сцена",
       diary: "Дневник",
@@ -1917,16 +1923,14 @@ export const ru: TranslationMap = {
       },
     },
   },
-  connection: {
-    lostTitle: "Соединение с Gateway потеряно",
-    reconnecting: "Повторное подключение…",
-    offlineHint:
-      "Обновления в реальном времени и действия приостановлены до восстановления соединения.",
-    retryNow: "Повторить сейчас",
-  },
   chat: {
     disconnected: "Отключено от gateway.",
     archivedSessionDisabled: "Восстановите этот сеанс, чтобы отправлять сообщения.",
+    loadOlder: "Загрузить более ранние",
+    catalog: {
+      remoteViewOnly: "Этот сеанс находится на сопряжённом узле и доступен только для просмотра.",
+      unsupportedViewOnly: "Этот внешний источник сеансов доступен только для просмотра.",
+    },
     taskSuggestions: {
       eyebrow: "Предлагаемая следующая задача",
       start: "Начать в рабочем дереве",
@@ -1981,10 +1985,7 @@ export const ru: TranslationMap = {
     commandPaletteTitle: "Поиск или переход к… (⌘K)",
     openCommandPalette: "Открыть палитру команд",
     docsOpensInNewTab: "{label} (откроется в новой вкладке)",
-    updateAvailable: "Доступно обновление:",
-    runningVersion: "запущена v{version}",
     updating: "Обновление…",
-    updateNow: "Обновить сейчас",
     dismissUpdateBanner: "Скрыть баннер обновления",
     switchedSession: "Переключено на {session}",
     splitView: {
@@ -1996,6 +1997,7 @@ export const ru: TranslationMap = {
       dropOpenHere: "Открыть здесь",
     },
     sidebar: {
+      updateAvailable: "Доступно обновление",
       allSessions: "Все сеансы",
       chats: "Чаты",
       openSessionMenu: "Open session menu",
@@ -2004,12 +2006,13 @@ export const ru: TranslationMap = {
       sortSessions: "Сортировать сеансы",
       sortUpdated: "Последнее обновление",
       sessionMenu: "Actions for {session}",
+      sessionMenuMany: "Действия для {count} сеансов",
       workSessions: "Работа",
     },
     welcome: {
-      ready: "Готово к чату",
       hintBeforeShortcut: "Введите сообщение ниже ·",
       hintAfterShortcut: "для команд",
+      recentSessions: "Недавние чаты",
       suggestions: {
         whatCanYouDo: "Что вы умеете?",
         summarizeRecentSessions: "Суммируйте мои недавние сеансы",
@@ -2107,6 +2110,11 @@ export const ru: TranslationMap = {
       clearSessionSearch: "Очистить поиск сеансов",
       loadMoreSessions: "Загрузить еще сеансы",
       model: "Модель чата",
+      modelSection: "Модель",
+      modelLocked: "Заблокировано",
+      modelLockedLabel: "Выбор модели управляется для этого сеанса",
+      lockedSessionModel: "Модель сеанса",
+      nativeCodexModel: "Модель, управляемая Codex",
       thinkingLevel: "Уровень мышления чата",
     },
     toolCards: {
@@ -2171,6 +2179,28 @@ export const ru: TranslationMap = {
       finished: "Завершены ({count})",
       stopTask: "Остановить {title}",
       viewTranscript: "Просмотреть расшифровку",
+      toolUseOne: "1 вызов инструмента",
+      toolUseMany: "{count} вызовов инструмента",
+    },
+    sessionDiff: {
+      title: "Изменения",
+      show: "Показать изменения сеанса",
+      refresh: "Обновить изменения",
+      loading: "Загрузка изменений…",
+      empty: "В рабочей копии этого сеанса нет изменений.",
+      notGit: "Рабочая область этого сеанса не является рабочей копией git.",
+      unknownSession: "С этим сеансом не связана рабочая область.",
+      disconnected: "Gateway отключен.",
+      unmodifiedLines: "{count} неизмененных строк",
+      binaryFile: "Бинарный файл",
+      untracked: "неотслеживаемый",
+      tooLarge: "Diff слишком большой для отображения.",
+      truncatedFile: "Diff усечен.",
+      truncatedResult: "Некоторые изменения были опущены, так как diff очень большой.",
+      statusAdded: "Добавлено",
+      statusDeleted: "Удалено",
+      statusRenamed: "Переименовано",
+      statusModified: "Изменено",
     },
     workspaceFiles: {
       label: "Рабочая область сеанса",
@@ -2290,6 +2320,50 @@ export const ru: TranslationMap = {
       howHeading: "Как это должно работать?",
       howHint: "Выберите способ доставки результатов.",
       title: "Новая задача Cron",
+      createAndRun: "Создать и запустить сейчас",
+    },
+    suggestions: {
+      title: "Идеи для автоматизации",
+      hint: "Готовые автоматизации — выберите одну и настройте перед созданием.",
+      use: "Использовать идею →",
+      ideas: {
+        repoPulse: {
+          name: "Пульс репозитория",
+          tagline: "Ночные задачи, PR и сбои CI, отсортированные по срочности.",
+          prompt:
+            "Проверь ночную активность в моих репозиториях: новые задачи, pull request'ы и сбои CI. Кратко изложи три вещи, которые сегодня требуют моего внимания больше всего, каждую со ссылкой и однострочным обоснованием.",
+        },
+        standupGhostwriter: {
+          name: "Призрак стендапа",
+          tagline: "Обновление для стендапа, составленное из вчерашней работы.",
+          prompt:
+            "Составь мой стендап-отчёт на основе вчерашних коммитов, смёрженных pull request'ов и открытых веток с ревью. Не более трёх пунктов: сделано, делаю, заблокировано.",
+        },
+        hackerNewsScout: {
+          name: "Разведчик Hacker News",
+          tagline: "Три ссылки к утреннему кофе с горячими комментариями.",
+          prompt:
+            "Просмотри главную страницу Hacker News сегодня в поисках постов об AI-агентах, инструментах разработчика и TypeScript. Пришли мне три самые интересные ссылки, каждую с однострочным горячим комментарием.",
+        },
+        dependencyRadar: {
+          name: "Радар зависимостей",
+          tagline: "Устаревшие или уязвимые зависимости с заметками об обновлении.",
+          prompt:
+            "Проверь мой основной проект на наличие устаревших или уязвимых зависимостей. Перечисли важные обновления с однострочной заметкой о риске для каждого и составь команду для обновления.",
+        },
+        watchdog: {
+          name: "Ночной дозор",
+          tagline: "Ежечасная проверка состояния с кратким итогом.",
+          prompt:
+            "Проверь работоспособность моих сервисов и Gateway: просмотри последние логи на наличие новых ошибок, перезапусков или необычной нагрузки. Если всё в порядке, ответь одной короткой строкой; если что-то сломано — сообщи, что именно и с чего начать разбираться.",
+        },
+        polyglotMinute: {
+          name: "Минута полиглота",
+          tagline: "Одна полезная иностранная фраза под утренний кофе.",
+          prompt:
+            "Научи меня одной полезной фразе на японском: сама фраза, произношение, буквальный перевод и когда её использовать. Уложись в пять строк.",
+        },
+      },
     },
     summary: {
       enabled: "Включено",

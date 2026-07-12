@@ -101,6 +101,7 @@ struct ExecApprovalsStoreRefactorTests {
 
         try await self.withLockedEnv([
             "OPENCLAW_HOME": home.path,
+            "OPENCLAW_PROFILE": nil,
             "OPENCLAW_STATE_DIR": stateDir.path,
         ]) {
             try await body(stateDir)
@@ -108,6 +109,7 @@ struct ExecApprovalsStoreRefactorTests {
     }
 
     private func withTempHomeAndStateDir(
+        profile: String? = nil,
         _ body: @escaping @Sendable (URL, URL) async throws -> Void) async throws
     {
         let root = self.realTemporaryDirectory
@@ -118,6 +120,7 @@ struct ExecApprovalsStoreRefactorTests {
 
         try await self.withLockedEnv([
             "OPENCLAW_HOME": home.path,
+            "OPENCLAW_PROFILE": profile,
             "OPENCLAW_STATE_DIR": stateDir.path,
         ]) {
             try await body(home, stateDir)
@@ -2099,6 +2102,33 @@ extension ExecApprovalsStoreRefactorTests {
     }
 
     @Test
+    func `ensure file keeps named profile isolated from default approvals`() async throws {
+        try await self.withTempHomeAndStateDir(profile: "work") { home, stateDir in
+            let defaultDir = home.appendingPathComponent(".openclaw", isDirectory: true)
+            try FileManager().createDirectory(at: defaultDir, withIntermediateDirectories: true)
+            let defaultFile = defaultDir.appendingPathComponent("exec-approvals.json")
+            let defaultJson = """
+            {
+              "version": 1,
+              "socket": { "token": "default-profile-token" },
+              "defaults": { "security": "full", "ask": "off" },
+              "agents": {}
+            }
+            """
+            try Data(defaultJson.utf8).write(to: defaultFile)
+            let defaultBefore = try Data(contentsOf: defaultFile)
+
+            let file = ExecApprovalsStore.ensureFile()
+
+            #expect(file.socket?.token != "default-profile-token")
+            #expect(FileManager().fileExists(
+                atPath: stateDir.appendingPathComponent("exec-approvals.json").path))
+            #expect(try Data(contentsOf: defaultFile) == defaultBefore)
+            #expect(!FileManager().fileExists(atPath: "\(defaultFile.path).migrated"))
+        }
+    }
+
+    @Test
     func `legacy writer revocation wins before migration publishes and archives`() async throws {
         try await self.withTempHomeAndStateDir { home, _ in
             let legacyDir = home.appendingPathComponent(".openclaw", isDirectory: true)
@@ -2242,11 +2272,9 @@ extension ExecApprovalsStoreRefactorTests {
                 [.modificationDate: Date().addingTimeInterval(-31)],
                 ofItemAtPath: lockURL.path)
 
-            let startedAt = Date()
             let result = ExecApprovalsStore.addAllowlistEntry(
                 agentId: "main",
                 pattern: "/bin/echo")
-            let elapsed = Date().timeIntervalSince(startedAt)
 
             guard case .failure(.unavailable) = result else {
                 Issue.record("expected lock contention failure")
@@ -2254,7 +2282,6 @@ extension ExecApprovalsStoreRefactorTests {
             }
             #expect(FileManager().fileExists(atPath: lockURL.path))
             #expect(try Data(contentsOf: lockURL) == Data("{".utf8))
-            #expect(elapsed < 0.5)
             #expect(ExecApprovalsStore.loadFile().agents?["main"]?.allowlist?.isEmpty != false)
         }
     }

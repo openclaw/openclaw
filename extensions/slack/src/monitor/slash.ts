@@ -1,5 +1,6 @@
 // Slack plugin module implements slash behavior.
 import type { SlackActionMiddlewareArgs, SlackCommandMiddlewareArgs } from "@slack/bolt";
+import type { Block, KnownBlock } from "@slack/web-api";
 import { loadModelCatalog, resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
 import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 import {
@@ -50,9 +51,11 @@ import {
 } from "./external-arg-menu-store.js";
 import { escapeSlackMrkdwn } from "./mrkdwn.js";
 import { isSlackChannelAllowedByPolicy } from "./policy.js";
+import {
+  createSlackResponseUrlBudget,
+  isSlackResponseAlreadyReportedError,
+} from "./response-url-budget.js";
 import { resolveSlackRoomContextHints } from "./room-context.js";
-
-type SlackBlock = { type: string; [key: string]: unknown };
 
 const SLACK_COMMAND_ARG_ACTION_ID = "openclaw_cmdarg";
 const SLACK_COMMAND_ARG_ACTION_LISTENER = /^openclaw_cmdarg/;
@@ -364,11 +367,16 @@ function buildSlackCommandArgMenuBlocks(params: {
   ];
 }
 
+type SlackCommandRegistration =
+  | { mode: "single"; name: string }
+  | { mode: "native" }
+  | { mode: "disabled" };
+
 export async function registerSlackMonitorSlashCommands(params: {
   ctx: SlackMonitorContext;
   account: ResolvedSlackAccount;
   trackEvent?: () => void;
-}): Promise<void> {
+}): Promise<SlackCommandRegistration> {
   const { ctx, account, trackEvent } = params;
   const startupCfg = ctx.cfg;
   const runtime = ctx.runtime;
@@ -385,12 +393,29 @@ export async function registerSlackMonitorSlashCommands(params: {
     command: SlackCommandMiddlewareArgs["command"];
     ack: SlackCommandMiddlewareArgs["ack"];
     respond: SlackCommandMiddlewareArgs["respond"];
+    responseTransport?: "response-url" | "web-api";
     body?: unknown;
     prompt: string;
     commandArgs?: CommandArgs;
     commandDefinition?: ChatCommandDefinition;
   }) => {
-    const { command, ack, respond, body, prompt, commandArgs, commandDefinition } = p;
+    const {
+      command,
+      ack,
+      respond: respondWithoutBudget,
+      body,
+      prompt,
+      commandArgs,
+      commandDefinition,
+    } = p;
+    const responseBudget =
+      p.responseTransport === "web-api"
+        ? {
+            respond: respondWithoutBudget,
+            remaining: () => undefined,
+          }
+        : createSlackResponseUrlBudget(respondWithoutBudget);
+    const respond = responseBudget.respond;
     const cfg = getRuntimeConfigSnapshot() ?? ctx.cfg;
     try {
       if (ctx.shouldDropMismatchedSlackEvent?.(body)) {
@@ -756,15 +781,21 @@ export async function registerSlackMonitorSlashCommands(params: {
             channel: "slack",
             accountId: route.accountId,
           }),
+          responseBudget,
         });
       };
+      const pendingSlashReplies: ReplyPayload[] = [];
 
       const { counts } = await dispatchReplyWithDispatcher({
         ctx: ctxPayload,
         cfg,
         dispatcherOptions: {
           ...replyPipeline,
-          deliver: async (payload) => deliverSlashPayloads([payload]),
+          // response_url has one shared five-call budget. Plan the whole turn
+          // before its first post so a later payload cannot strand a partial reply.
+          deliver: async (payload) => {
+            pendingSlashReplies.push(payload);
+          },
           onError: (err, info) => {
             runtime.error?.(
               danger(`slack slash ${info.kind} reply failed: ${formatSlackError(err)}`),
@@ -776,15 +807,19 @@ export async function registerSlackMonitorSlashCommands(params: {
           onModelSelected,
         },
       });
-      if (counts.final + counts.tool + counts.block === 0) {
+      if (pendingSlashReplies.length > 0) {
+        await deliverSlashPayloads(pendingSlashReplies);
+      } else if (counts.final + counts.tool + counts.block === 0) {
         await deliverSlashPayloads([]);
       }
     } catch (err) {
       runtime.error?.(danger(`slack slash handler failed: ${formatErrorMessage(err)}`));
-      await respond({
-        text: "Sorry, something went wrong handling that command.",
-        response_type: "ephemeral",
-      });
+      if (!isSlackResponseAlreadyReportedError(err) && responseBudget.remaining() !== 0) {
+        await respond({
+          text: "Sorry, something went wrong handling that command.",
+          response_type: "ephemeral",
+        });
+      }
     }
   };
 
@@ -824,7 +859,20 @@ export async function registerSlackMonitorSlashCommands(params: {
     }
   }
 
-  if (nativeCommands.length > 0) {
+  if (slashCommand.enabled) {
+    ctx.app.command(
+      buildSlackSlashCommandMatcher(slashCommand.name),
+      async ({ command, ack, respond, body }: SlackCommandMiddlewareArgs) => {
+        await handleSlashCommand({
+          command,
+          ack,
+          respond,
+          body,
+          prompt: command.text?.trim() ?? "",
+        });
+      },
+    );
+  } else if (nativeCommands.length > 0) {
     if (!slashCommandsRuntime) {
       throw new Error("Missing commands runtime for native Slack commands.");
     }
@@ -859,25 +907,19 @@ export async function registerSlackMonitorSlashCommands(params: {
         },
       );
     }
-  } else if (slashCommand.enabled) {
-    ctx.app.command(
-      buildSlackSlashCommandMatcher(slashCommand.name),
-      async ({ command, ack, respond, body }: SlackCommandMiddlewareArgs) => {
-        await handleSlashCommand({
-          command,
-          ack,
-          respond,
-          body,
-          prompt: command.text?.trim() ?? "",
-        });
-      },
-    );
   } else {
     logVerbose("slack: slash commands disabled");
   }
 
+  const registration: SlackCommandRegistration =
+    nativeCommands.length > 0
+      ? { mode: "native" }
+      : slashCommand.enabled
+        ? { mode: "single", name: slashCommand.name }
+        : { mode: "disabled" };
+
   if (nativeCommands.length === 0 || !supportsInteractiveArgMenus) {
-    return;
+    return registration;
   }
 
   const registerArgOptions = () => {
@@ -962,25 +1004,39 @@ export async function registerSlackMonitorSlashCommands(params: {
         action: NonNullable<(typeof ctx.app & { action?: unknown })["action"]>;
       }
     ).action(actionId, async (args: SlackActionMiddlewareArgs) => {
-      const { ack, body, respond } = args;
+      const { ack, body } = args;
+      const respond = (
+        args as unknown as {
+          respond?: SlackCommandMiddlewareArgs["respond"];
+        }
+      ).respond;
       const action = args.action as { value?: string; selected_option?: { value?: string } };
       await ack();
       if (ctx.shouldDropMismatchedSlackEvent?.(body)) {
         runtime.log?.("slack: drop slash arg action payload (mismatched app/team)");
         return;
       }
-      const respondFn =
+      const respondFn: SlackCommandMiddlewareArgs["respond"] =
         respond ??
-        (async (payload: { text: string; blocks?: SlackBlock[]; response_type?: string }) => {
+        (async (message) => {
           if (!body.channel?.id || !body.user?.id) {
             return;
           }
+          const payload =
+            typeof message === "string"
+              ? { text: message }
+              : (message as {
+                  text?: string;
+                  blocks?: (Block | KnownBlock)[];
+                  mrkdwn?: boolean;
+                });
           await ctx.app.client.chat.postEphemeral({
             token: ctx.botToken,
             channel: body.channel.id,
             user: body.user.id,
-            text: payload.text,
-            blocks: payload.blocks,
+            text: payload.text ?? "",
+            ...(payload.blocks ? { blocks: payload.blocks } : {}),
+            ...(typeof payload.mrkdwn === "boolean" ? { mrkdwn: payload.mrkdwn } : {}),
           });
         });
       const actionValue = action?.value ?? action?.selected_option?.value;
@@ -1027,6 +1083,9 @@ export async function registerSlackMonitorSlashCommands(params: {
         command: commandPayload,
         ack: async () => {},
         respond: respondFn,
+        // Bolt's action responder uses response_url; only the postEphemeral fallback
+        // goes through the uncapped Web API path.
+        responseTransport: respond ? "response-url" : "web-api",
         body,
         prompt,
         commandArgs,
@@ -1035,4 +1094,5 @@ export async function registerSlackMonitorSlashCommands(params: {
     });
   };
   registerArgAction(SLACK_COMMAND_ARG_ACTION_LISTENER);
+  return registration;
 }

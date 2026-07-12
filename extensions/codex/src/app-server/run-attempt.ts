@@ -17,6 +17,7 @@ import {
   formatErrorMessage,
   getAgentHarnessHookRunner,
   getBeforeToolCallPolicyDiagnosticState,
+  isHostScopedAgentToolActive,
   isActiveHarnessContextEngine,
   loadCodexBundleMcpThreadConfig,
   resolveAgentHarnessBeforePromptBuildResult,
@@ -34,6 +35,7 @@ import {
   setActiveEmbeddedRun,
   supportsModelTools,
   runAgentCleanupStep,
+  type AgentHarnessRuntimeArtifactBinding,
   type FastModeAutoProgressState,
   type EmbeddedRunAttemptParams,
   type EmbeddedRunAttemptResult,
@@ -49,7 +51,6 @@ import {
   resolveDiagnosticModelContentCapturePolicy,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
-import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   resolveCodexAppServerForModelProvider,
@@ -100,7 +101,10 @@ import {
   isInvalidCodexImagePayloadError,
   resolveCodexAppServerReplayBlockedReason,
 } from "./attempt-results.js";
-import { startCodexAttemptThread } from "./attempt-startup.js";
+import {
+  isCodexContextRestartSelectionChangedError,
+  startCodexAttemptThread,
+} from "./attempt-startup.js";
 import { createCodexSteeringQueue, type CodexSteeringQueueOptions } from "./attempt-steering.js";
 import {
   resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs,
@@ -114,13 +118,17 @@ import {
   createCodexAttemptTurnWatchController,
   type CodexAttemptTurnWatchTimeoutKind,
 } from "./attempt-turn-watches.js";
+import { prepareCodexAppServerAuthBinding } from "./auth-binding.js";
 import {
   resolveCodexAppServerAuthAccountCacheKey,
   resolveCodexAppServerFallbackApiKeyCacheKey,
   resolveCodexAppServerHomeDir,
   resolveCodexAppServerAuthProfileId,
   resolveCodexAppServerAuthProfileIdForAgent,
+  resolveCodexAppServerPreparedAuthHandoff,
+  resolveCodexAppServerPreparedApiKeyCacheKey,
 } from "./auth-bridge.js";
+import { resolveCodexBindingAppServerConnection } from "./binding-connection.js";
 import {
   CodexAppServerRpcError,
   isCodexAppServerApprovalRequest,
@@ -131,7 +139,6 @@ import {
   isCodexSandboxExecServerEnabled,
   readCodexPluginConfig,
   resolveCodexComputerUseConfig,
-  resolveCodexAppServerRuntimeOptions,
   resolveCodexModelBackedReviewerPolicyContext,
   resolveOpenClawExecPolicyForCodexAppServer,
   shouldAutoApproveCodexAppServerApprovals,
@@ -179,6 +186,7 @@ import {
 } from "./dynamic-tool-execution.js";
 import {
   filterCodexDynamicTools,
+  isCrestodianOnlyCodexDynamicToolAllowlist,
   resolveCodexDynamicToolsLoadingForModel,
   resolveCodexDynamicToolsLoadingForRuntime,
 } from "./dynamic-tool-profile.js";
@@ -225,7 +233,7 @@ import { resolveCodexProviderWebSearchSupport } from "./provider-capabilities.js
 import { readCodexRateLimitsRevision, readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import { releaseCodexSandboxExecServerEnvironment } from "./sandbox-exec-server.js";
 import {
-  isCodexAppServerNativeAuthProfile,
+  reclaimCurrentCodexSessionGeneration,
   sessionBindingIdentity,
   type CodexAppServerBindingIdentity,
   type CodexAppServerBindingStore,
@@ -243,6 +251,7 @@ import {
   buildTurnCollaborationMode,
   buildTurnStartParams,
   codexDynamicToolsFingerprint,
+  codexLegacyDynamicToolsFingerprint,
   resolveCodexAppServerThreadModelSelection,
   type CodexAppServerThreadLifecycleBinding,
   type CodexContextEngineThreadBootstrapProjection,
@@ -255,6 +264,7 @@ import {
 } from "./tool-progress-normalization.js";
 import {
   createCodexTrajectoryRecorder,
+  type CodexHostTrajectoryRecorder,
   normalizeCodexTrajectoryError,
   recordCodexTrajectoryCompletion,
   recordCodexTrajectoryContext,
@@ -499,6 +509,12 @@ export async function runCodexAppServerAttempt(
     enabled: profilerEnabled,
   });
   const attemptClientFactory = options.clientFactory ?? getLeasedSharedCodexAppServerClient;
+  const runtimeArtifactRequest =
+    params.captureRuntimeArtifact || params.expectedRuntimeArtifact
+      ? params.expectedRuntimeArtifact
+        ? { expected: params.expectedRuntimeArtifact }
+        : {}
+      : undefined;
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);
   const computerUseConfig = resolveCodexComputerUseConfig({ pluginConfig });
   const { sessionAgentId } = resolveSessionAgentIds({
@@ -535,53 +551,117 @@ export async function runCodexAppServerAttempt(
   });
   const bindingStore = options.bindingStore;
   preDynamicStartupStages.mark("session-agent");
-  const activeContextEngine = isActiveHarnessContextEngine(params.contextEngine)
+  let activeContextEngine = isActiveHarnessContextEngine(params.contextEngine)
     ? params.contextEngine
     : undefined;
   const isInactiveThreadBootstrapBinding = (binding: CodexAppServerThreadBinding | undefined) =>
     !activeContextEngine && binding?.contextEngine?.projection?.mode === "thread_bootstrap";
   let startupBinding = await bindingStore.read(bindingIdentity);
+  if (!startupBinding && bindingIdentity.kind === "session" && bindingIdentity.sessionKey) {
+    const reclaimed = await reclaimCurrentCodexSessionGeneration({
+      bindingStore,
+      identity: bindingIdentity,
+      config: params.config,
+    });
+    if (!reclaimed) {
+      throw new Error(
+        `Codex session generation is no longer current: ${bindingIdentity.sessionId}`,
+      );
+    }
+    startupBinding = await bindingStore.read(bindingIdentity);
+  }
   preDynamicStartupStages.mark("read-binding");
-  const startupBindingAuthProfileId = startupBinding?.authProfileId;
+  // Only the private binding store may authorize the native user-home runtime.
+  // Public session metadata and preserveNativeModel are intentionally insufficient.
+  const usesSupervisionConnection = startupBinding?.connectionScope === "supervision";
+  if (usesSupervisionConnection) {
+    activeContextEngine = undefined;
+  }
+  if (usesSupervisionConnection && pluginConfig.supervision?.enabled !== true) {
+    throw new Error(
+      "Codex supervision is disabled; refusing to open a native user-home supervised session",
+    );
+  }
+  const resolveRuntimeOptionsForBinding = (paramsLocal: {
+    modelProvider?: string;
+    model?: string;
+  }) =>
+    resolveCodexBindingAppServerConnection({
+      binding: startupBinding,
+      pluginConfig,
+      execPolicy,
+      modelProvider: paramsLocal.modelProvider,
+      model: paramsLocal.model,
+      config: params.config,
+      agentDir,
+      openClawSandboxActive: sandbox?.enabled === true,
+    }).appServer;
   const initialStartupBindingHadInactiveThreadBootstrap =
     isInactiveThreadBootstrapBinding(startupBinding);
-  const startupAuthProfileCandidate =
-    params.runtimePlan?.auth.forwardedAuthProfileId ??
-    params.authProfileId ??
-    startupBinding?.authProfileId ??
-    startupBindingAuthProfileId;
-  const startupAuthProfileId = params.authProfileStore
-    ? resolveCodexAppServerAuthProfileId({
-        authProfileId: startupAuthProfileCandidate,
-        store: params.authProfileStore,
-        config: params.config,
-      })
-    : resolveCodexAppServerAuthProfileIdForAgent({
-        authProfileId: startupAuthProfileCandidate,
+  const preparedAuthRoute = usesSupervisionConnection
+    ? undefined
+    : params.runtimePlan?.auth.modelRoute;
+  const startupAuthProfileCandidate = usesSupervisionConnection
+    ? undefined
+    : preparedAuthRoute
+      ? params.runtimePlan?.auth.forwardedAuthProfileId
+      : (params.runtimePlan?.auth.forwardedAuthProfileId ??
+        params.authProfileId ??
+        startupBinding?.authProfileId);
+  const resolvedStartupAuthProfileId = usesSupervisionConnection
+    ? undefined
+    : preparedAuthRoute
+      ? startupAuthProfileCandidate
+      : params.authProfileStore
+        ? resolveCodexAppServerAuthProfileId({
+            authProfileId: startupAuthProfileCandidate,
+            store: params.authProfileStore,
+            config: params.config,
+          })
+        : resolveCodexAppServerAuthProfileIdForAgent({
+            authProfileId: startupAuthProfileCandidate,
+            agentDir,
+            config: params.config,
+          });
+  const authHandoff = usesSupervisionConnection
+    ? { authProfileId: undefined, nativeAuthProfile: true, preparedAuth: undefined }
+    : await resolveCodexAppServerPreparedAuthHandoff({
+        authRequirement: preparedAuthRoute?.authRequirement,
+        resolvedApiKey: params.resolvedApiKey,
+        authProfileId: resolvedStartupAuthProfileId,
+        authProfileStore: params.authProfileStore,
         agentDir,
         config: params.config,
+        subscriptionProfileRequiredError:
+          "Prepared Codex subscription route requires a forwarded OpenAI OAuth or token profile.",
+        subscriptionProfileUnusableError: "Prepared Codex subscription auth profile is unusable.",
       });
-  let reviewerPolicyContext = resolveCodexModelBackedReviewerPolicyContext({
-    provider: params.provider,
-    model: params.modelId,
-    bindingModelProvider: startupBinding?.modelProvider,
-    bindingModel: startupBinding?.model,
-    nativeAuthProfile: isCodexAppServerNativeAuthProfile({
-      authProfileId: startupAuthProfileId,
-      authProfileStore: params.authProfileStore,
-      agentDir,
-      config: params.config,
-    }),
-  });
+  const {
+    authProfileId: startupAuthProfileId,
+    nativeAuthProfile,
+    preparedAuth: startupPreparedAuth,
+  } = authHandoff;
+  const startupClientAuthProfileId =
+    usesSupervisionConnection || startupPreparedAuth?.kind === "api-key"
+      ? null
+      : startupAuthProfileId;
+  const resolveReviewerPolicyContext = (binding: CodexAppServerThreadBinding | undefined) => {
+    const nativeModelOwned = binding?.preserveNativeModel === true;
+    // A supervised Codex branch owns its model. The outer OpenClaw default may
+    // be Anthropic (or anything else) and must not select this thread's reviewer.
+    return resolveCodexModelBackedReviewerPolicyContext({
+      provider: nativeModelOwned ? "codex" : params.provider,
+      model: nativeModelOwned ? binding.model : params.modelId,
+      bindingModelProvider: binding?.modelProvider,
+      bindingModel: binding?.model,
+      nativeAuthProfile,
+    });
+  };
+  let reviewerPolicyContext = resolveReviewerPolicyContext(startupBinding);
   preDynamicStartupStages.mark("auth-profile");
-  let configuredAppServer = resolveCodexAppServerRuntimeOptions({
-    pluginConfig,
-    execPolicy,
+  let configuredAppServer = resolveRuntimeOptionsForBinding({
     modelProvider: reviewerPolicyContext.modelProvider,
     model: reviewerPolicyContext.model,
-    config: params.config,
-    agentDir,
-    openClawSandboxActive: sandbox?.enabled === true,
   });
   const effectiveWorkspace = sandbox?.enabled
     ? sandbox.workspaceAccess === "rw"
@@ -682,26 +762,10 @@ export async function runCodexAppServerAttempt(
   const initialInactiveThreadBootstrapBindingForcedFreshStart =
     initialStartupBindingHadInactiveThreadBootstrap && !startupBinding?.threadId;
   preDynamicStartupStages.mark("rotate-binding");
-  reviewerPolicyContext = resolveCodexModelBackedReviewerPolicyContext({
-    provider: params.provider,
-    model: params.modelId,
-    bindingModelProvider: startupBinding?.modelProvider,
-    bindingModel: startupBinding?.model,
-    nativeAuthProfile: isCodexAppServerNativeAuthProfile({
-      authProfileId: startupAuthProfileId,
-      authProfileStore: params.authProfileStore,
-      agentDir,
-      config: params.config,
-    }),
-  });
-  configuredAppServer = resolveCodexAppServerRuntimeOptions({
-    pluginConfig,
-    execPolicy,
+  reviewerPolicyContext = resolveReviewerPolicyContext(startupBinding);
+  configuredAppServer = resolveRuntimeOptionsForBinding({
     modelProvider: reviewerPolicyContext.modelProvider,
     model: reviewerPolicyContext.model,
-    config: params.config,
-    agentDir,
-    openClawSandboxActive: sandbox?.enabled === true,
   });
   policyAppServer = resolveCodexAppServerForOpenClawToolPolicy({
     appServer: configuredAppServer,
@@ -728,11 +792,71 @@ export async function runCodexAppServerAttempt(
     configuredEvents: options.nativeHookRelay?.events,
     appServer,
   });
-  const runtimeParams = {
-    ...params,
-    sessionKey: contextSessionKey,
-    ...(startupAuthProfileId ? { authProfileId: startupAuthProfileId } : {}),
-  };
+  const preparedAuthBinding =
+    !usesSupervisionConnection && appServer.start.homeScope !== "user" && startupAuthProfileId
+      ? await prepareCodexAppServerAuthBinding({
+          authProfileId: startupAuthProfileId,
+          authProfileStore: params.authProfileStore,
+          agentDir,
+          config: params.config,
+        })
+      : undefined;
+  const attemptAuthProfileStore = preparedAuthBinding?.authProfileStore ?? params.authProfileStore;
+  const effectiveContextWindowInfo = usesSupervisionConnection
+    ? undefined
+    : params.contextWindowInfo;
+  const effectiveContextTokenBudget = usesSupervisionConnection
+    ? undefined
+    : params.contextTokenBudget;
+  const effectiveRuntimeProviderId = usesSupervisionConnection
+    ? (startupBinding?.modelProvider ?? "codex")
+    : params.provider;
+  // Pending branches learn the authoritative model only inside App Server.
+  // This placeholder prevents outer-model metadata from shaping pre-start context policy.
+  const effectiveRuntimeModelId = usesSupervisionConnection
+    ? (startupBinding?.model ?? "codex-native")
+    : params.modelId;
+  const {
+    authProfileId: _outerAuthProfileId,
+    contextWindowInfo: _outerContextWindowInfo,
+    contextTokenBudget: _outerContextTokenBudget,
+    model: _outerModel,
+    modelId: _outerModelId,
+    provider: _outerProvider,
+    runtimePlan: _outerRuntimePlan,
+    requestedModelId: _outerRequestedModelId,
+    fallbackReason: _outerFallbackReason,
+    degradedReason: _outerDegradedReason,
+    thinkLevel: _outerThinkLevel,
+    fastMode: _outerFastMode,
+    ...paramsWithoutOuterNativeOwnership
+  } = params;
+  const supervisedRuntimeModel = {
+    id: effectiveRuntimeModelId,
+    name: effectiveRuntimeModelId,
+    provider: effectiveRuntimeProviderId,
+    api: "openai-chatgpt-responses",
+    reasoning: true,
+    input: ["text", "image"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: undefined,
+    maxTokens: undefined,
+  } as unknown as EmbeddedRunAttemptParams["model"];
+  const runtimeParams: EmbeddedRunAttemptParams = usesSupervisionConnection
+    ? {
+        ...paramsWithoutOuterNativeOwnership,
+        provider: "codex",
+        modelId: effectiveRuntimeModelId,
+        model: supervisedRuntimeModel,
+        thinkLevel: _outerThinkLevel,
+        sessionKey: contextSessionKey,
+      }
+    : {
+        ...params,
+        authProfileStore: attemptAuthProfileStore,
+        sessionKey: contextSessionKey,
+        ...(startupAuthProfileId ? { authProfileId: startupAuthProfileId } : {}),
+      };
   const activeSessionId = params.sessionId;
   const activeSessionFile = params.sessionFile;
   const buildActiveRunAttemptParams = (): EmbeddedRunAttemptParams => ({
@@ -740,32 +864,44 @@ export async function runCodexAppServerAttempt(
     sessionId: activeSessionId,
     sessionFile: activeSessionFile,
   });
-  const startupAuthAccountCacheKey = await resolveCodexAppServerAuthAccountCacheKey({
-    authProfileId: startupAuthProfileId,
-    authProfileStore: params.authProfileStore,
-    agentDir,
-    config: params.config,
-  });
-  const startupEnvApiKeyCacheKey = startupAuthProfileId
+  const startupAuthAccountCacheKey = usesSupervisionConnection
     ? undefined
-    : resolveCodexAppServerFallbackApiKeyCacheKey({
-        startOptions: appServer.start,
-      });
+    : startupPreparedAuth?.kind === "api-key"
+      ? resolveCodexAppServerPreparedApiKeyCacheKey(startupPreparedAuth.apiKey)
+      : startupPreparedAuth?.kind === "profile"
+        ? startupPreparedAuth.snapshot?.secretFreeCacheKey
+        : await resolveCodexAppServerAuthAccountCacheKey({
+            authProfileId: startupAuthProfileId,
+            authProfileStore: attemptAuthProfileStore,
+            agentDir,
+            config: params.config,
+          });
+  const startupEnvApiKeyCacheKey = usesSupervisionConnection
+    ? undefined
+    : startupPreparedAuth || startupAuthProfileId
+      ? undefined
+      : resolveCodexAppServerFallbackApiKeyCacheKey({
+          startOptions: appServer.start,
+        });
   preDynamicStartupStages.mark("auth-cache");
   const bundleMcpThreadConfig = await loadCodexBundleMcpThreadConfig({
     workspaceDir: effectiveWorkspace,
     cfg: params.config,
-    toolsEnabled: supportsModelTools(params.model),
+    toolsEnabled: usesSupervisionConnection || supportsModelTools(params.model),
     disableTools: params.disableTools,
     toolsAllow: params.toolsAllow,
   });
   preDynamicStartupStages.mark("bundle-mcp");
   const sandboxExecServerEnabled = isCodexSandboxExecServerEnabled(pluginConfig);
-  const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(params, sandbox, {
-    agentId: sessionAgentId,
-    runtimeSessionKey: sandboxSessionKey,
-    sandboxExecServerEnabled,
-  });
+  const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(
+    runtimeParams,
+    sandbox,
+    {
+      agentId: sessionAgentId,
+      runtimeSessionKey: sandboxSessionKey,
+      sandboxExecServerEnabled,
+    },
+  );
   preDynamicStartupStages.mark("native-tool-surface");
   const nativeProviderWebSearchSupport =
     resolveCodexWebSearchPlan({
@@ -776,18 +912,21 @@ export async function runCodexAppServerAttempt(
       ? await resolveCodexProviderWebSearchSupport({
           clientFactory: attemptClientFactory,
           appServer,
-          authProfileId: startupAuthProfileId,
+          authProfileId: startupClientAuthProfileId,
+          preparedAuth: startupPreparedAuth,
           agentDir,
           config: params.config,
-          modelProviderOverride: resolveCodexAppServerThreadModelSelection({
-            provider: params.provider,
-            model: params.modelId,
-            binding: startupBinding,
-            authProfileId: startupAuthProfileId,
-            authProfileStore: params.authProfileStore,
-            agentDir,
-            config: params.config,
-          }).modelProvider,
+          modelProviderOverride: usesSupervisionConnection
+            ? startupBinding?.modelProvider
+            : resolveCodexAppServerThreadModelSelection({
+                provider: params.provider,
+                model: params.modelId,
+                binding: startupBinding,
+                authProfileId: startupAuthProfileId,
+                authProfileStore: attemptAuthProfileStore,
+                agentDir,
+                config: params.config,
+              }).modelProvider,
           signal: runAbortController.signal,
         })
       : "unsupported";
@@ -851,13 +990,13 @@ export async function runCodexAppServerAttempt(
   const dynamicToolParams =
     allocateCodexToolOutcomeOrdinal || onCodexToolOutcome
       ? {
-          ...params,
+          ...runtimeParams,
           ...(allocateCodexToolOutcomeOrdinal
             ? { allocateToolOutcomeOrdinal: allocateCodexToolOutcomeOrdinal }
             : {}),
           ...(onCodexToolOutcome ? { onToolOutcome: onCodexToolOutcome } : {}),
         }
-      : params;
+      : runtimeParams;
   let persistentWebSearchAllowed: boolean | undefined;
   let webSearchAllowed = false;
   // Codex can compact a thread while keeping the same dynamic-tool bridge.
@@ -923,10 +1062,13 @@ export async function runCodexAppServerAttempt(
     registeredTools,
     signal: runAbortController.signal,
     computerContextEpoch,
-    loading: resolveCodexDynamicToolsLoadingForRuntime(pluginConfig, params.modelId, {
+    loading: resolveCodexDynamicToolsLoadingForRuntime(pluginConfig, effectiveRuntimeModelId, {
       connectionClass: appServer.connectionClass,
     }),
-    directToolNames: resolveCodexDynamicToolDirectNames(params),
+    directToolNames: resolveCodexDynamicToolDirectNames(
+      params,
+      isHostScopedAgentToolActive("crestodian"),
+    ),
     hookContext: {
       agentId: sessionAgentId,
       config: params.config,
@@ -947,7 +1089,6 @@ export async function runCodexAppServerAttempt(
       allocateToolOutcomeOrdinal: allocateCodexToolOutcomeOrdinal,
     },
   });
-  const hadSessionFile = await pathExists(activeSessionFile);
   const activeTranscriptTarget = {
     agentId: sessionAgentId,
     sessionFile: activeSessionFile,
@@ -958,17 +1099,18 @@ export async function runCodexAppServerAttempt(
     !activeContextEngine && initialStartupBindingHadInactiveThreadBootstrap
       ? []
       : ((await readMirroredSessionHistoryMessages(activeTranscriptTarget)) ?? []);
+  const hadSessionTranscriptState = historyMessages.length > 0;
   const hookContextWindowFields = {
-    ...(params.contextWindowInfo?.tokens
-      ? { contextTokenBudget: params.contextWindowInfo.tokens }
-      : params.contextTokenBudget
-        ? { contextTokenBudget: params.contextTokenBudget }
+    ...(effectiveContextWindowInfo?.tokens
+      ? { contextTokenBudget: effectiveContextWindowInfo.tokens }
+      : effectiveContextTokenBudget
+        ? { contextTokenBudget: effectiveContextTokenBudget }
         : {}),
-    ...(params.contextWindowInfo?.source
-      ? { contextWindowSource: params.contextWindowInfo.source }
+    ...(effectiveContextWindowInfo?.source
+      ? { contextWindowSource: effectiveContextWindowInfo.source }
       : {}),
-    ...(params.contextWindowInfo?.referenceTokens
-      ? { contextWindowReferenceTokens: params.contextWindowInfo.referenceTokens }
+    ...(effectiveContextWindowInfo?.referenceTokens
+      ? { contextWindowReferenceTokens: effectiveContextWindowInfo.referenceTokens }
       : {}),
   };
   const hookContext = {
@@ -994,22 +1136,23 @@ export async function runCodexAppServerAttempt(
       agentDir,
       activeAgentId: sessionAgentId,
       contextEnginePluginId: activeContextEnginePluginId,
-      tokenBudget: params.contextTokenBudget,
+      tokenBudget: effectiveContextTokenBudget,
     });
   if (activeContextEngine) {
     await bootstrapHarnessContextEngine({
-      hadSessionFile,
+      hadSessionFile: hadSessionTranscriptState,
       contextEngine: activeContextEngine,
       sessionId: activeSessionId,
       sessionKey: contextSessionKey,
       sessionFile: activeSessionFile,
+      sessionTarget: params.sessionTarget,
       runtimeContext: buildActiveContextEngineRuntimeContext(),
       contextEngineHostSupport: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
-      providerId: params.provider,
-      requestedModelId: params.requestedModelId,
-      modelId: params.modelId,
-      fallbackReason: params.fallbackReason,
-      degradedReason: params.degradedReason,
+      providerId: effectiveRuntimeProviderId,
+      requestedModelId: usesSupervisionConnection ? undefined : params.requestedModelId,
+      modelId: effectiveRuntimeModelId,
+      fallbackReason: usesSupervisionConnection ? undefined : params.fallbackReason,
+      degradedReason: usesSupervisionConnection ? undefined : params.degradedReason,
       runMaintenance: runHarnessContextEngineMaintenance,
       config: params.config,
       warn: (message) => embeddedAgentLog.warn(message),
@@ -1019,7 +1162,7 @@ export async function runCodexAppServerAttempt(
   }
   const memoryToolNames = getCodexWorkspaceMemoryToolNames(toolBridge.availableSpecs);
   const workspaceBootstrapContext = await buildCodexWorkspaceBootstrapContext({
-    params,
+    params: runtimeParams,
     resolvedWorkspace,
     effectiveWorkspace,
     sessionKey: contextSessionKey,
@@ -1027,17 +1170,17 @@ export async function runCodexAppServerAttempt(
     memoryToolNames,
   });
   const baseDeveloperInstructions = joinPresentSections(
-    buildDeveloperInstructions(params, {
+    buildDeveloperInstructions(runtimeParams, {
       dynamicTools: toolBridge.availableSpecs,
     }),
     workspaceBootstrapContext.developerInstructions,
   );
   const openClawPromptContext = buildCodexOpenClawPromptContext({
-    params,
+    params: runtimeParams,
     workspacePromptContext: workspaceBootstrapContext.promptContext,
   });
   const skillsCollaborationInstructions = renderCodexSkillsCollaborationInstructions({
-    attempt: params,
+    attempt: runtimeParams,
     skillsPrompt: params.skillsSnapshot?.prompt,
   });
   let promptText = params.prompt;
@@ -1045,7 +1188,7 @@ export async function runCodexAppServerAttempt(
   let developerInstructions = baseDeveloperInstructions;
   let prePromptMessageCount = historyMessages.length;
   const codexContextProjectionMaxChars = resolveCodexContextEngineProjectionMaxChars({
-    contextTokenBudget: params.contextTokenBudget,
+    contextTokenBudget: effectiveContextTokenBudget,
     reserveTokens: resolveCodexContextEngineProjectionReserveTokens({
       config: params.config,
     }),
@@ -1077,19 +1220,19 @@ export async function runCodexAppServerAttempt(
       sessionId: activeSessionId,
       sessionKey: contextSessionKey,
       messages: historyMessages,
-      tokenBudget: params.contextTokenBudget,
+      tokenBudget: effectiveContextTokenBudget,
       availableTools: new Set(
         flattenCodexDynamicToolFunctions(toolBridge.availableSpecs)
           .map((tool) => tool.name)
           .filter(isNonEmptyString),
       ),
       citationsMode: params.config?.memory?.citations,
-      modelId: params.modelId,
+      modelId: effectiveRuntimeModelId,
       contextEngineHostSupport: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
-      providerId: params.provider,
-      requestedModelId: params.requestedModelId,
-      fallbackReason: params.fallbackReason,
-      degradedReason: params.degradedReason,
+      providerId: effectiveRuntimeProviderId,
+      requestedModelId: usesSupervisionConnection ? undefined : params.requestedModelId,
+      fallbackReason: usesSupervisionConnection ? undefined : params.fallbackReason,
+      degradedReason: usesSupervisionConnection ? undefined : params.degradedReason,
       prompt: params.prompt,
     });
     if (!assembled) {
@@ -1115,6 +1258,7 @@ export async function runCodexAppServerAttempt(
           ),
           projection: contextEngineProjection,
           dynamicToolsFingerprint: codexDynamicToolsFingerprint(toolBridge.specs),
+          legacyDynamicToolsFingerprint: codexLegacyDynamicToolsFingerprint(toolBridge.specs),
         })
       : { project: true, reason: "per-turn-projection" };
     embeddedAgentLog.info("codex app-server context-engine projection decision", {
@@ -1362,7 +1506,7 @@ export async function runCodexAppServerAttempt(
   ) => {
     precomputedStaleBindingContinuityProjectionApplied = false;
     staleBindingContinuityForcedFreshStart = false;
-    if (activeContextEngine || !binding?.threadId) {
+    if (activeContextEngine || !binding?.threadId || binding.pendingSupervisionBranch) {
       return false;
     }
     if (isInactiveThreadBootstrapBinding(binding)) {
@@ -1374,7 +1518,7 @@ export async function runCodexAppServerAttempt(
     return projected;
   };
   const applyNoContextEngineContinuityProjection = (
-    action: "started" | "resumed",
+    action: "started" | "resumed" | "forked",
     binding?: CodexAppServerThreadBinding,
   ) => {
     if (activeContextEngine || !historyMessages.some((message) => message.role === "user")) {
@@ -1466,15 +1610,24 @@ export async function runCodexAppServerAttempt(
     skillsPrompt: skillsCollaborationInstructions ? (params.skillsSnapshot?.prompt ?? "") : "",
     tools: toolBridge.availableSpecs,
   });
+  const hostTrajectoryRecorder = (
+    params as EmbeddedRunAttemptParams & {
+      trajectoryRecorder?: CodexHostTrajectoryRecorder | null;
+    }
+  ).trajectoryRecorder;
   const trajectoryRecorder = createCodexTrajectoryRecorder({
     attempt: params,
     cwd: effectiveCwd,
     developerInstructions: buildRenderedCodexDeveloperInstructions(),
     prompt: codexTurnPromptText,
+    trajectoryRecorder: hostTrajectoryRecorder,
+    trajectorySessionFile: params.trajectorySessionFile,
     tools: toolBridge.availableSpecs,
+    warn: (message, fields) => embeddedAgentLog.warn(message, fields),
   });
   let client: CodexAppServerClient;
   let thread: CodexAppServerThreadLifecycleBinding;
+  let runtimeArtifact: AgentHarnessRuntimeArtifactBinding | undefined;
   let turnRouter: CodexAppServerTurnRouter;
   let turnRoute: CodexThreadRouteReservation | undefined;
   let routeActivated = false;
@@ -1633,7 +1786,7 @@ export async function runCodexAppServerAttempt(
       stream: "codex_app_server.lifecycle",
       data: { phase: "startup" },
     });
-    const attemptAppServer = withCodexAppServerFastModeServiceTier(appServer, params);
+    const attemptAppServer = withCodexAppServerFastModeServiceTier(appServer, runtimeParams);
     pluginAppServer = attemptAppServer;
     const startupResult = await startCodexAttemptThread({
       attemptClientFactory,
@@ -1641,7 +1794,10 @@ export async function runCodexAppServerAttempt(
       appServer: attemptAppServer,
       pluginConfig,
       computerUseConfig,
-      startupAuthProfileId,
+      startupAuthProfileId: startupClientAuthProfileId,
+      startupAuthBindingFingerprint: preparedAuthBinding?.fingerprint,
+      ...(runtimeArtifactRequest ? { runtimeArtifactRequest } : {}),
+      startupPreparedAuth,
       startupAuthAccountCacheKey,
       startupEnvApiKeyCacheKey,
       agentDir,
@@ -1670,30 +1826,22 @@ export async function runCodexAppServerAttempt(
     });
     client = startupResult.client;
     thread = startupResult.thread;
+    runtimeArtifact = startupResult.runtimeArtifact;
     turnRouter = startupResult.turnRouter;
     turnRoute = startupResult.turnRoute;
     pluginAppServer = startupResult.pluginAppServer;
-    if (thread.lifecycle.action === "started") {
-      const activeThreadReviewerPolicyContext = resolveCodexModelBackedReviewerPolicyContext({
-        provider: params.provider,
-        model: params.modelId,
-        bindingModelProvider: thread.modelProvider,
-        bindingModel: thread.model,
-        nativeAuthProfile: isCodexAppServerNativeAuthProfile({
-          authProfileId: startupAuthProfileId,
-          authProfileStore: params.authProfileStore,
-          agentDir,
-          config: params.config,
-        }),
-      });
-      const activeThreadConfiguredAppServer = resolveCodexAppServerRuntimeOptions({
-        pluginConfig,
-        execPolicy,
+    if (
+      usesSupervisionConnection &&
+      (thread.connectionScope !== "supervision" ||
+        thread.supervisionSourceThreadId !== startupBinding?.supervisionSourceThreadId)
+    ) {
+      throw new Error("Codex supervised thread lost its private connection ownership");
+    }
+    if (thread.lifecycle.action === "started" || thread.lifecycle.action === "forked") {
+      const activeThreadReviewerPolicyContext = resolveReviewerPolicyContext(thread);
+      const activeThreadConfiguredAppServer = resolveRuntimeOptionsForBinding({
         modelProvider: activeThreadReviewerPolicyContext.modelProvider,
         model: activeThreadReviewerPolicyContext.model,
-        config: params.config,
-        agentDir,
-        openClawSandboxActive: sandbox?.enabled === true,
       });
       const activeThreadAppServer = resolveCodexAppServerForModelProvider({
         appServer: activeThreadConfiguredAppServer,
@@ -2731,8 +2879,10 @@ export async function runCodexAppServerAttempt(
   const buildLlmInputEvent = () => ({
     runId: params.runId,
     sessionId: params.sessionId,
-    provider: params.provider,
-    model: params.modelId,
+    provider: usesSupervisionConnection
+      ? (thread.modelProvider ?? effectiveRuntimeProviderId)
+      : params.provider,
+    model: usesSupervisionConnection ? (thread.model ?? effectiveRuntimeModelId) : params.modelId,
     systemPrompt: buildRenderedCodexDeveloperInstructions(),
     prompt: codexTurnPromptText,
     historyMessages: codexModelInputHistoryMessages,
@@ -2741,16 +2891,18 @@ export async function runCodexAppServerAttempt(
   });
   const buildCodexModelInputMessages = () => [
     ...codexModelInputHistoryMessages,
-    buildCodexUserPromptMessage({ ...params, prompt: codexTurnPromptText }),
+    buildCodexUserPromptMessage({ ...runtimeParams, prompt: codexTurnPromptText }),
   ];
   const codexModelCallBaseFields = {
     runId: params.runId,
     callId: codexModelCallId,
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     sessionId: params.sessionId,
-    provider: params.provider,
-    model: params.modelId,
-    api: params.model.api,
+    provider: usesSupervisionConnection
+      ? (thread.modelProvider ?? effectiveRuntimeProviderId)
+      : params.provider,
+    model: usesSupervisionConnection ? (thread.model ?? effectiveRuntimeModelId) : params.modelId,
+    api: usesSupervisionConnection ? runtimeParams.model.api : params.model.api,
     transport: appServer.start.transport,
     ...hookContextWindowFields,
     trace: codexModelCallTrace,
@@ -2787,22 +2939,24 @@ export async function runCodexAppServerAttempt(
   };
   const startCodexTurn = async (): Promise<CodexTurnStartResponse> => {
     const activeTurnRoute = await ensureCurrentThreadRoute();
-    const turnAppServer = withCodexAppServerFastModeServiceTier(pluginAppServer, params);
+    const turnAppServer = withCodexAppServerFastModeServiceTier(pluginAppServer, runtimeParams);
     pluginAppServer = turnAppServer;
-    const turnStartParams = buildTurnStartParams(params, {
+    const turnStartParams = buildTurnStartParams(runtimeParams, {
       threadId: thread.threadId,
       cwd: codexExecutionCwd,
       appServer: turnAppServer,
       promptText: codexTurnPromptText,
       sandboxPolicy: codexSandboxPolicy,
       environmentSelection: codexEnvironmentSelection,
-      model: thread.model,
-      modelProvider: thread.modelProvider,
+      ...(usesSupervisionConnection
+        ? {}
+        : { model: thread.model, modelProvider: thread.modelProvider }),
       turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
       skillsCollaborationInstructions,
       memoryCollaborationInstructions: workspaceBootstrapContext.memoryCollaborationInstructions,
       heartbeatCollaborationInstructions:
         workspaceBootstrapContext.heartbeatCollaborationInstructions,
+      preserveNativeTurnSettings: usesSupervisionConnection,
     });
     codexModelCallDiagnostics.setRequestPayloadBytes(utf8JsonByteLength(turnStartParams));
     // Keep turn/start diagnostics scoped to this attempt: resumed native work
@@ -2910,6 +3064,7 @@ export async function runCodexAppServerAttempt(
     }
     if (
       turn === undefined &&
+      thread.connectionScope !== "supervision" &&
       shouldUseFreshCodexThreadAfterContextEngineOverflow({
         error: turnStartError,
         contextEngineActive: Boolean(activeContextEngine),
@@ -3018,12 +3173,18 @@ export async function runCodexAppServerAttempt(
         event: {
           runId: params.runId,
           sessionId: params.sessionId,
-          provider: params.provider,
-          model: params.modelId,
+          provider: usesSupervisionConnection
+            ? (thread.modelProvider ?? effectiveRuntimeProviderId)
+            : params.provider,
+          model: usesSupervisionConnection
+            ? (thread.model ?? effectiveRuntimeModelId)
+            : params.modelId,
           ...hookContextWindowFields,
-          resolvedRef:
-            params.runtimePlan?.observability.resolvedRef ?? `${params.provider}/${params.modelId}`,
-          ...(params.runtimePlan?.observability.harnessId
+          resolvedRef: usesSupervisionConnection
+            ? `${thread.modelProvider ?? effectiveRuntimeProviderId}/${thread.model ?? effectiveRuntimeModelId}`
+            : (params.runtimePlan?.observability.resolvedRef ??
+              `${params.provider}/${params.modelId}`),
+          ...(!usesSupervisionConnection && params.runtimePlan?.observability.harnessId
             ? { harnessId: params.runtimePlan.observability.harnessId }
             : {}),
           assistantTexts: [],
@@ -3046,7 +3207,7 @@ export async function runCodexAppServerAttempt(
       );
       const turnStartFailureMessages = [
         ...historyMessages,
-        buildCodexUserPromptMessage({ ...params, prompt: codexTurnPromptText }),
+        buildCodexUserPromptMessage({ ...runtimeParams, prompt: codexTurnPromptText }),
       ];
       await runCodexAgentEndHook(params, {
         event: {
@@ -3092,6 +3253,22 @@ export async function runCodexAppServerAttempt(
             messagesSnapshot: turnStartFailureMessages,
             systemPromptReport,
           }),
+        };
+      }
+      if (isCodexContextRestartSelectionChangedError(turnStartError)) {
+        return {
+          ...buildCodexTurnStartFailureResult({
+            params,
+            message: turnStartErrorMessage,
+            messagesSnapshot: turnStartFailureMessages,
+            systemPromptReport,
+          }),
+          codexAppServerFailure: {
+            kind: "client_closed_before_turn_completed",
+            transport: appServer.start.transport,
+            threadId: thread.threadId,
+            replaySafe: true,
+          },
         };
       }
       throw turnStartError;
@@ -3239,8 +3416,14 @@ export async function runCodexAppServerAttempt(
     const shouldRetireClient = timedOut;
     if (shouldRetireClient) {
       void (async () => {
-        // Timed-out native turns cannot be safely resumed on the same thread.
-        await bindingStore.mutate(bindingIdentity, { kind: "clear", threadId: thread.threadId });
+        // Supervised sessions stay native even after a suspect turn. Clearing
+        // their private scope would make the next attempt silently agent-home.
+        if (thread.connectionScope !== "supervision") {
+          await bindingStore.mutate(bindingIdentity, {
+            kind: "clear",
+            threadId: thread.threadId,
+          });
+        }
         await retireCodexAppServerClientAfterTimedOutTurn(client, {
           threadId: thread.threadId,
           turnId: activeTurnId,
@@ -3342,6 +3525,7 @@ export async function runCodexAppServerAttempt(
       });
     }
     if (
+      thread.connectionScope !== "supervision" &&
       shouldUseFreshCodexThreadAfterContextEngineOverflow({
         error: finalPromptError,
         contextEngineActive: Boolean(activeContextEngine),
@@ -3486,9 +3670,10 @@ export async function runCodexAppServerAttempt(
         sessionIdUsed: activeSessionId,
         sessionKey: contextSessionKey,
         sessionFile: activeSessionFile,
+        sessionTarget: params.sessionTarget,
         messagesSnapshot: finalMessages,
         prePromptMessageCount,
-        tokenBudget: params.contextTokenBudget,
+        tokenBudget: effectiveContextTokenBudget,
         runtimeContext: buildHarnessContextEngineRuntimeContextFromUsage({
           attempt: buildActiveRunAttemptParams(),
           workspaceDir: effectiveWorkspace,
@@ -3496,16 +3681,20 @@ export async function runCodexAppServerAttempt(
           agentDir,
           activeAgentId: sessionAgentId,
           contextEnginePluginId: activeContextEnginePluginIdLocal,
-          tokenBudget: params.contextTokenBudget,
+          tokenBudget: effectiveContextTokenBudget,
           lastCallUsage: result.attemptUsage,
           promptCache: result.promptCache,
         }),
         contextEngineHostSupport: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
-        providerId: params.provider,
-        requestedModelId: params.requestedModelId,
-        modelId: params.modelId,
-        fallbackReason: params.fallbackReason,
-        degradedReason: params.degradedReason,
+        providerId: usesSupervisionConnection
+          ? (thread.modelProvider ?? effectiveRuntimeProviderId)
+          : params.provider,
+        requestedModelId: usesSupervisionConnection ? undefined : params.requestedModelId,
+        modelId: usesSupervisionConnection
+          ? (thread.model ?? effectiveRuntimeModelId)
+          : params.modelId,
+        fallbackReason: usesSupervisionConnection ? undefined : params.fallbackReason,
+        degradedReason: usesSupervisionConnection ? undefined : params.degradedReason,
         runMaintenance: runHarnessContextEngineMaintenance,
         config: params.config,
         warn: (message) => embeddedAgentLog.warn(message),
@@ -3516,12 +3705,18 @@ export async function runCodexAppServerAttempt(
       event: {
         runId: params.runId,
         sessionId: params.sessionId,
-        provider: params.provider,
-        model: params.modelId,
+        provider: usesSupervisionConnection
+          ? (thread.modelProvider ?? effectiveRuntimeProviderId)
+          : params.provider,
+        model: usesSupervisionConnection
+          ? (thread.model ?? effectiveRuntimeModelId)
+          : params.modelId,
         ...hookContextWindowFields,
-        resolvedRef:
-          params.runtimePlan?.observability.resolvedRef ?? `${params.provider}/${params.modelId}`,
-        ...(params.runtimePlan?.observability.harnessId
+        resolvedRef: usesSupervisionConnection
+          ? `${thread.modelProvider ?? effectiveRuntimeProviderId}/${thread.model ?? effectiveRuntimeModelId}`
+          : (params.runtimePlan?.observability.resolvedRef ??
+            `${params.provider}/${params.modelId}`),
+        ...(!usesSupervisionConnection && params.runtimePlan?.observability.harnessId
           ? { harnessId: params.runtimePlan.observability.harnessId }
           : {}),
         assistantTexts: result.assistantTexts,
@@ -3555,6 +3750,9 @@ export async function runCodexAppServerAttempt(
           threadId: thread.threadId,
         });
       } catch (error) {
+        if (thread.connectionScope === "supervision") {
+          throw error;
+        }
         const clearedStaleBinding = await bindingStore.mutate(bindingIdentity, {
           kind: "clear",
           threadId: thread.threadId,
@@ -3626,6 +3824,10 @@ export async function runCodexAppServerAttempt(
       ...(codexAppServerFailure ? { codexAppServerFailure } : {}),
       ...(promptTimeoutOutcome ? { promptTimeoutOutcome } : {}),
       ...(assistantTranscriptOwned ? { assistantTranscriptOwned: true } : {}),
+      ...(runtimeArtifact ? { runtimeArtifact } : {}),
+      ...(!finalAborted && !effectiveTimedOut && !finalPromptError && preparedAuthBinding
+        ? { authBindingFingerprint: preparedAuthBinding.fingerprint }
+        : {}),
       systemPromptReport,
     };
   } finally {
@@ -3734,6 +3936,13 @@ async function clearCodexBindingAfterInvalidImagePayload(
     embeddedAgentLog.warn(
       "codex app-server image payload error detected for unbound thread; preserving thread binding",
       { ...fields, boundThreadId: currentBinding.threadId },
+    );
+    return;
+  }
+  if (currentBinding?.connectionScope === "supervision") {
+    embeddedAgentLog.warn(
+      "codex app-server image payload error detected for supervised thread; preserving native binding",
+      fields,
     );
     return;
   }
@@ -3930,15 +4139,16 @@ function handleApprovalRequest(params: {
   });
 }
 
-function resolveCodexDynamicToolDirectNames(params: EmbeddedRunAttemptParams): string[] {
+function resolveCodexDynamicToolDirectNames(
+  params: EmbeddedRunAttemptParams,
+  hostCrestodianActive = false,
+): string[] {
   // Tools with catalogMode=direct-only use the model-only namespace. This list
   // remains for control tools that intentionally live at the dynamic-tool root.
   const names: string[] = [];
-  // The ring-zero crestodian tool is the run's entire tool surface; register it
-  // directly instead of deferring it behind Codex tool_search discovery. This is
-  // structural: per-run configs cannot flip codexDynamicToolsLoading because the
-  // harness resolves plugin config from the live global config, not params.config.
-  if (params.crestodianTool) {
+  // Crestodian is the run's only tool and must stay callable when Codex tool
+  // search is unavailable. Exact toolsAllow is the public harness contract.
+  if (hostCrestodianActive && isCrestodianOnlyCodexDynamicToolAllowlist(params.toolsAllow)) {
     names.push("crestodian");
   }
   if (params.sourceReplyDeliveryMode === "message_tool_only") {

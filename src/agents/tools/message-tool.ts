@@ -4,6 +4,7 @@
  * Sends, edits, reacts to, polls, and routes messages through channel plugins and Gateway-backed actions.
  */
 import {
+  normalizeOptionalLowercaseString,
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
 } from "@openclaw/normalization-core/string-coerce";
@@ -327,6 +328,38 @@ function sanitizePresentationTextFieldsResult(
           suppressionReason ??= sanitized.suppressionReason;
         }
       }
+      if (normalizeOptionalLowercaseString(sanitizedBlock.type) === "table") {
+        if (typeof sanitizedBlock.caption === "string") {
+          const sanitized = sanitizeUserVisibleToolTextResult(sanitizedBlock.caption, bootPrompt);
+          sanitizedBlock.caption = sanitized.text.trim();
+          suppressionReason ??= sanitized.suppressionReason;
+        }
+        if (Array.isArray(sanitizedBlock.headers)) {
+          sanitizedBlock.headers = sanitizedBlock.headers.map((header) => {
+            if (typeof header !== "string") {
+              return header;
+            }
+            const sanitized = sanitizeUserVisibleToolTextResult(header, bootPrompt);
+            suppressionReason ??= sanitized.suppressionReason;
+            return sanitized.text.trim();
+          });
+        }
+        if (Array.isArray(sanitizedBlock.rows)) {
+          sanitizedBlock.rows = sanitizedBlock.rows.map((row) => {
+            if (!Array.isArray(row)) {
+              return row;
+            }
+            return row.map((cell) => {
+              if (typeof cell !== "string") {
+                return cell;
+              }
+              const sanitized = sanitizeUserVisibleToolTextResult(cell, bootPrompt);
+              suppressionReason ??= sanitized.suppressionReason;
+              return sanitized.text.trim();
+            });
+          });
+        }
+      }
       if (Array.isArray(sanitizedBlock.buttons)) {
         sanitizedBlock.buttons = sanitizedBlock.buttons.map((button) => {
           if (!button || typeof button !== "object" || Array.isArray(button)) {
@@ -364,6 +397,29 @@ function sanitizePresentationTextFieldsResult(
               delete sanitizedButton[webAppField];
             }
             suppressionReason ??= sanitized.suppressionReason;
+          }
+          const action = sanitizedButton.action;
+          if (action && typeof action === "object" && !Array.isArray(action)) {
+            const sanitizedAction = { ...(action as Record<string, unknown>) };
+            if (
+              (sanitizedAction.type === "url" || sanitizedAction.type === "web-app") &&
+              typeof sanitizedAction.url === "string"
+            ) {
+              const sanitized = sanitizeUserVisibleToolTextResult(sanitizedAction.url, bootPrompt);
+              if (sanitized.text) {
+                sanitizedAction.url = sanitized.text;
+                sanitizedButton.action = sanitizedAction;
+              } else {
+                // Explicit typed actions own the control. If sanitization removes
+                // the target, legacy shadow fields must not become active fallbacks.
+                delete sanitizedButton.action;
+                delete sanitizedButton.value;
+                delete sanitizedButton.url;
+                delete sanitizedButton.webApp;
+                delete sanitizedButton.web_app;
+              }
+              suppressionReason ??= sanitized.suppressionReason;
+            }
           }
           return sanitizedButton;
         });
@@ -487,26 +543,45 @@ function buildRoutingSchema() {
   };
 }
 
-const presentationActionSchema = Type.Union([
+const presentationCommandActionSchema = Type.Object({
+  type: Type.Literal("command"),
+  command: Type.String(),
+});
+
+const presentationCallbackActionSchema = Type.Object({
+  type: Type.Literal("callback"),
+  value: Type.String(),
+});
+
+const presentationCommandOrCallbackActionSchema = Type.Union([
+  presentationCommandActionSchema,
+  presentationCallbackActionSchema,
+]);
+
+// Approval actions carry server-issued IDs and are runtime-authored only. The
+// message tool exposes the remaining button actions that models may safely author.
+const presentationButtonActionSchema = Type.Union([
+  presentationCommandActionSchema,
+  presentationCallbackActionSchema,
   Type.Object({
-    type: Type.Literal("command"),
-    command: Type.String(),
+    type: Type.Literal("url"),
+    url: Type.String(),
   }),
   Type.Object({
-    type: Type.Literal("callback"),
-    value: Type.String(),
+    type: Type.Literal("web-app"),
+    url: Type.String(),
   }),
 ]);
 
 const presentationOptionSchema = Type.Object({
   label: Type.String(),
-  action: Type.Optional(presentationActionSchema),
+  action: Type.Optional(presentationCommandOrCallbackActionSchema),
   value: Type.Optional(Type.String()),
 });
 
 const presentationButtonSchema = Type.Object({
   label: Type.String(),
-  action: Type.Optional(presentationActionSchema),
+  action: Type.Optional(presentationButtonActionSchema),
   value: Type.Optional(Type.String()),
   url: Type.Optional(Type.String()),
   webApp: Type.Optional(Type.Object({ url: Type.String() })),
@@ -529,7 +604,7 @@ const presentationChartSeriesSchema = Type.Object({
 // Keep this flat: some provider tool-schema validators reject an anyOf nested
 // under presentation.blocks.items. Runtime normalization enforces block shapes.
 const presentationBlockSchema = Type.Object({
-  type: stringEnum(["text", "context", "divider", "buttons", "select", "chart"]),
+  type: stringEnum(["text", "context", "divider", "buttons", "select", "chart", "table"]),
   text: Type.Optional(Type.String()),
   buttons: Type.Optional(Type.Array(presentationButtonSchema)),
   placeholder: Type.Optional(Type.String()),
@@ -541,6 +616,15 @@ const presentationBlockSchema = Type.Object({
   series: Type.Optional(Type.Array(presentationChartSeriesSchema, { minItems: 1 })),
   xLabel: Type.Optional(Type.String()),
   yLabel: Type.Optional(Type.String()),
+  caption: Type.Optional(Type.String()),
+  headers: Type.Optional(Type.Array(Type.String(), { minItems: 1 })),
+  rows: Type.Optional(
+    Type.Array(
+      Type.Array(Type.Unsafe<string | number>({ type: ["string", "number"] }), { minItems: 1 }),
+      { minItems: 1 },
+    ),
+  ),
+  rowHeaderColumnIndex: Type.Optional(Type.Integer({ minimum: 0 })),
 });
 
 const presentationMessageSchema = Type.Object(
@@ -551,7 +635,7 @@ const presentationMessageSchema = Type.Object(
   },
   {
     description:
-      "Rich message payload: text, charts, buttons, selects, and context. Unsupported blocks degrade to text.",
+      "Rich message payload: text, charts, tables, buttons, selects, and context. Unsupported blocks degrade to text.",
   },
 );
 
@@ -725,6 +809,9 @@ function buildPollSchema() {
   };
   for (const name of SHARED_POLL_CREATION_PARAM_NAMES) {
     const def = POLL_CREATION_PARAM_DEFS[name];
+    if (!def) {
+      continue;
+    }
     switch (def.kind) {
       case "string":
         props[name] = Type.Optional(Type.String());

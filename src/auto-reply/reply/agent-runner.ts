@@ -1,6 +1,5 @@
 // Orchestrates reply agent execution, payload building, and delivery callbacks.
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   hasSessionAutoModelFallbackProvenance,
@@ -24,7 +23,7 @@ import {
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
-import { deriveContextPromptTokens, hasNonzeroUsage, normalizeUsage } from "../../agents/usage.js";
+import { deriveContextPromptTokens, hasNonzeroUsage } from "../../agents/usage.js";
 import { enqueueCommitmentExtraction } from "../../commitments/runtime.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -33,9 +32,13 @@ import {
   type SessionEntry,
 } from "../../config/sessions.js";
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  formatSqliteSessionFileMarker,
+  sqliteSessionFileMarkerMatchesSession,
+} from "../../config/sessions/sqlite-marker.js";
 import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import type { TypingMode } from "../../config/types.js";
-import { resolveSessionTranscriptCandidates } from "../../gateway/session-utils.fs.js";
+import { readLatestSessionUsageFromTranscriptAsync } from "../../gateway/session-transcript-readers.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
@@ -105,7 +108,10 @@ import { createFollowupRunner } from "./followup-runner.js";
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "./get-reply-run-queue.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
-import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
+import {
+  buildPendingFinalDeliveryText,
+  sanitizePendingFinalDeliveryText,
+} from "./pending-final-delivery.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import {
@@ -169,6 +175,18 @@ function markBeforeAgentRunBlockedPayloads(payloads: ReplyPayload[]): ReplyPaylo
   return payloads.map((payload) =>
     setReplyPayloadMetadata(payload, { beforeAgentRunBlocked: true }),
   );
+}
+
+function resolvePendingFinalDeliveryRetryText(params: {
+  isHeartbeat: boolean;
+  payload: ReplyPayload;
+}): string {
+  const pendingText = buildPendingFinalDeliveryText([params.payload]);
+  if (!params.isHeartbeat) {
+    return pendingText;
+  }
+  const stripped = stripHeartbeatToken(pendingText, { mode: "message" });
+  return stripped.shouldSkip ? "" : stripped.text || pendingText;
 }
 
 function buildSilentFallbackFailurePayload(params: {
@@ -744,63 +762,20 @@ async function accumulateSessionUsageFromTranscript(params: {
     return undefined;
   }
   try {
-    const candidates = resolveSessionTranscriptCandidates(
+    const usage = await readLatestSessionUsageFromTranscriptAsync({
       sessionId,
-      params.storePath,
-      params.sessionFile,
-    );
-    let transcriptText: string | undefined;
-    for (const candidate of candidates) {
-      try {
-        transcriptText = await fs.readFile(candidate, "utf-8");
-        break;
-      } catch {
-        continue;
-      }
-    }
-    if (!transcriptText) {
+      storePath: params.storePath,
+      sessionFile: params.sessionFile,
+    });
+    if (!usage) {
       return undefined;
     }
-
-    let input = 0;
-    let output = 0;
-    let cacheRead = 0;
-    let cacheWrite = 0;
-    let sawUsage = false;
-    for (const line of transcriptText.split(/\r?\n/)) {
-      if (!line.trim()) {
-        continue;
-      }
-      let parsed: { message?: { usage?: unknown } } | undefined;
-      try {
-        parsed = JSON.parse(line) as { message?: { usage?: unknown } };
-      } catch {
-        continue;
-      }
-      const message = parsed?.message;
-      if (!message) {
-        continue;
-      }
-      const usage = normalizeUsage(message?.usage as Parameters<typeof normalizeUsage>[0]);
-      if (!hasNonzeroUsage(usage)) {
-        continue;
-      }
-      sawUsage = true;
-      input += usage.input ?? 0;
-      output += usage.output ?? 0;
-      cacheRead += usage.cacheRead ?? 0;
-      cacheWrite += usage.cacheWrite ?? 0;
-    }
-    if (!sawUsage) {
-      return undefined;
-    }
-    const total = input + output + cacheRead + cacheWrite;
     return {
-      input: input || undefined,
-      output: output || undefined,
-      cacheRead: cacheRead || undefined,
-      cacheWrite: cacheWrite || undefined,
-      total: total || undefined,
+      input: usage.inputTokens,
+      output: usage.outputTokens,
+      cacheRead: usage.cacheRead,
+      cacheWrite: usage.cacheWrite,
+      total: usage.totalTokens,
     };
   } catch {
     return undefined;
@@ -1040,15 +1015,6 @@ function joinCommitmentAssistantText(payloads: ReplyPayload[]): string {
     .trim();
 }
 
-function buildPendingFinalDeliveryText(payloads: ReplyPayload[]): string {
-  const text = payloads
-    .filter((payload) => payload.isReasoning !== true)
-    .map((payload) => payload.text)
-    .filter((textLocal): textLocal is string => Boolean(textLocal))
-    .join("\n\n");
-  return sanitizePendingFinalDeliveryText(text);
-}
-
 function normalizeAssistantFinalDeliveryText(text: string): string {
   const parsed = normalizeReplyPayloadDirectives({
     payload: { text },
@@ -1139,6 +1105,28 @@ function refreshSessionEntryFromStore(params: {
   } catch {
     return fallbackEntry;
   }
+}
+
+function resolveAdmittedRunSessionFile(params: {
+  agentId: string;
+  sessionId: string;
+  sessionFile?: string;
+  storePath?: string;
+}): string | undefined {
+  if (
+    params.sessionFile &&
+    sqliteSessionFileMarkerMatchesSession(params.sessionFile, params.sessionId)
+  ) {
+    return params.sessionFile;
+  }
+  if (params.storePath) {
+    return formatSqliteSessionFileMarker({
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+      storePath: params.storePath,
+    });
+  }
+  return params.sessionFile;
 }
 
 export async function runReplyAgent(params: {
@@ -1508,8 +1496,14 @@ export async function runReplyAgent(params: {
       });
       if (admittedSessionEntry?.sessionId === replyOperation.sessionId) {
         activeSessionEntry = admittedSessionEntry;
-        if (admittedSessionEntry.sessionFile) {
-          followupRun.run.sessionFile = admittedSessionEntry.sessionFile;
+        const admittedSessionFile = resolveAdmittedRunSessionFile({
+          agentId: followupRun.run.agentId,
+          sessionId: replyOperation.sessionId,
+          sessionFile: admittedSessionEntry.sessionFile,
+          storePath,
+        });
+        if (admittedSessionFile) {
+          followupRun.run.sessionFile = admittedSessionFile;
         }
       }
     }
@@ -2720,6 +2714,16 @@ export async function runReplyAgent(params: {
           })()
         : pendingText;
       if (resolvedPendingText) {
+        const pendingFinalDeliveryIntentId = crypto.randomUUID();
+        for (const payload of finalPayloads) {
+          setReplyPayloadMetadata(payload, {
+            pendingFinalDeliveryIntentId,
+            pendingFinalDeliveryRetryText: resolvePendingFinalDeliveryRetryText({
+              isHeartbeat,
+              payload,
+            }),
+          });
+        }
         const pendingFinalDeliveryContext = resolveReplyRunDeliveryContext({
           cfg,
           sessionCtx,
@@ -2733,6 +2737,7 @@ export async function runReplyAgent(params: {
           () => ({
             pendingFinalDelivery: true,
             pendingFinalDeliveryText: resolvedPendingText,
+            pendingFinalDeliveryIntentId,
             pendingFinalDeliveryContext,
             pendingFinalDeliveryCreatedAt: Date.now(),
             updatedAt: Date.now(),

@@ -78,6 +78,7 @@ import {
   runWithDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
 import {
+  approveNodePairing,
   beginNodePairingConnect,
   finalizeNodePairingCleanupClaim,
   releaseNodePairingCleanupClaim,
@@ -109,7 +110,7 @@ import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../skills/runtime/remote.js";
 import {
   isBrowserOperatorUiClient,
-  isGatewayCliClient,
+  isEphemeralGatewayClient,
   isOperatorUiClient,
   isWebchatClient,
 } from "../../../utils/message-channel.js";
@@ -121,7 +122,7 @@ import { hasForwardedRequestHeaders, isLocalDirectRequest } from "../../auth.js"
 import { listControlUiPluginTabs } from "../../control-ui-plugin-tabs.js";
 import { normalizeDeviceMetadataForAuth } from "../../device-auth.js";
 import { pruneSupersededSilentPairingsAfterApproval } from "../../device-pairing-prune.js";
-import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../../method-scopes.js";
+import { ADMIN_SCOPE, APPROVALS_SCOPE, PAIRING_SCOPE, WRITE_SCOPE } from "../../method-scopes.js";
 import type { GatewayMethodRegistry } from "../../methods/registry.js";
 import {
   isLocalishHost,
@@ -135,6 +136,10 @@ import {
   resolveNodePairingClientIpSource,
   shouldAutoApproveNodePairingFromTrustedCidrs,
 } from "../../node-pairing-auto-approve.js";
+import {
+  planNodePairingSshVerify,
+  startNodePairingSshVerify,
+} from "../../node-pairing-ssh-verify.js";
 import type { NodeReapprovalCoordinator } from "../../node-reapproval-coordinator.js";
 import { isOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
 import { checkBrowserOrigin } from "../../origin-check.js";
@@ -438,14 +443,20 @@ function resolvePinnedClientMetadata(params: {
     }
   }
 
-  function normalizeMobileAppPlatformPin(clientId: string | undefined, value: string): string {
+  function resolveNativeAppPlatformFamily(
+    clientId: string | undefined,
+    value: string,
+  ): string | undefined {
     if (clientId === GATEWAY_CLIENT_IDS.IOS_APP && /^(?:ios|ipados)(?:\s|$)/.test(value)) {
       return "ios-family";
     }
     if (clientId === GATEWAY_CLIENT_IDS.ANDROID_APP && /^android(?:\s|$)/.test(value)) {
       return "android";
     }
-    return value;
+    if (clientId === GATEWAY_CLIENT_IDS.MACOS_APP && /^macos \d+(?:\.\d+){0,2}$/.test(value)) {
+      return "macos";
+    }
+    return undefined;
   }
 
   const claimedPlatform = normalizeDeviceMetadataForAuth(params.claimedPlatform);
@@ -461,24 +472,32 @@ function resolvePinnedClientMetadata(params: {
     claimedPlatform !== "" &&
     normalizeLegacyNodeHostPlatformPin(claimedPlatform) ===
       normalizeLegacyNodeHostPlatformPin(pairedPlatform);
-  const isMobileAppPlatformVersionRefresh =
+  const claimedNativeAppPlatformFamily = resolveNativeAppPlatformFamily(
+    params.clientId,
+    claimedPlatform,
+  );
+  const pairedNativeAppPlatformFamily = resolveNativeAppPlatformFamily(
+    params.clientId,
+    pairedPlatform,
+  );
+  const isNativeAppPlatformVersionRefresh =
     hasPinnedPlatform &&
     claimedPlatform !== "" &&
     claimedPlatform !== pairedPlatform &&
-    normalizeMobileAppPlatformPin(params.clientId, claimedPlatform) ===
-      normalizeMobileAppPlatformPin(params.clientId, pairedPlatform);
+    claimedNativeAppPlatformFamily !== undefined &&
+    claimedNativeAppPlatformFamily === pairedNativeAppPlatformFamily;
   const platformMismatch =
     hasPinnedPlatform &&
     claimedPlatform !== pairedPlatform &&
     !isLegacyNodeHostPlatformPin &&
-    !isMobileAppPlatformVersionRefresh;
+    !isNativeAppPlatformVersionRefresh;
   const deviceFamilyMismatch = hasPinnedDeviceFamily && claimedDeviceFamily !== pairedDeviceFamily;
   const pinnedPlatform =
     claimedPlatform === pairedPlatform
       ? params.pairedPlatform
       : isLegacyNodeHostPlatformPin
         ? normalizeLegacyNodeHostPlatformPin(pairedPlatform)
-        : isMobileAppPlatformVersionRefresh
+        : isNativeAppPlatformVersionRefresh
           ? params.claimedPlatform
           : undefined;
   return {
@@ -486,7 +505,7 @@ function resolvePinnedClientMetadata(params: {
     deviceFamilyMismatch,
     pinnedPlatform: hasPinnedPlatform ? pinnedPlatform : undefined,
     pinnedDeviceFamily: hasPinnedDeviceFamily ? params.pairedDeviceFamily : undefined,
-    ...(isMobileAppPlatformVersionRefresh ? { refreshPairedPlatform: params.claimedPlatform } : {}),
+    ...(isNativeAppPlatformVersionRefresh ? { refreshPairedPlatform: params.claimedPlatform } : {}),
   };
 }
 
@@ -536,6 +555,21 @@ export type GatewayWsMessageHandlerParams = {
   logHealth: SubsystemLogger;
   logWsControl: SubsystemLogger;
 };
+
+function claimsWorkerConnectionIdentity(value: unknown): boolean {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const connect = value as { role?: unknown; client?: unknown };
+  if (connect.role === "worker") {
+    return true;
+  }
+  if (!connect.client || typeof connect.client !== "object") {
+    return false;
+  }
+  const client = connect.client as { id?: unknown; mode?: unknown };
+  return client.id === GATEWAY_CLIENT_IDS.WORKER || client.mode === GATEWAY_CLIENT_MODES.WORKER;
+}
 
 export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerParams) {
   const {
@@ -737,6 +771,20 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     };
     try {
       const parsed = JSON.parse(text);
+      const client = getClient();
+      if (
+        !client &&
+        parsed !== null &&
+        typeof parsed === "object" &&
+        "params" in parsed &&
+        claimsWorkerConnectionIdentity(parsed.params)
+      ) {
+        setHandshakeState("failed");
+        setCloseCause("invalid-handshake", { handshakeError: "invalid worker handshake" });
+        logWsControl.warn("worker admission rejected reason=invalid-handshake");
+        close(1008, "invalid-handshake");
+        return;
+      }
       const frameType =
         parsed && typeof parsed === "object" && "type" in parsed
           ? typeof (parsed as { type?: unknown }).type === "string"
@@ -759,7 +807,6 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         setLastFrameMeta({ type: frameType, method: frameMethod, id: frameId });
       }
 
-      const client = getClient();
       if (!client) {
         // Handshake must be a normal request:
         // { type:"req", method:"connect", params: ConnectParams }.
@@ -1629,6 +1676,97 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             } else if (pairing.created) {
               context.broadcast("device.pair.requested", pairing.request, { dropIfSlow: true });
             }
+            // SSH-verified auto-approval: for eligible fresh node pairings the
+            // gateway reads the device identity back over SSH from the
+            // connecting host and approves on a key match. Runs detached: this
+            // connection still closes with pairing-required, and the node's
+            // retry loop picks up the approval.
+            let sshVerifyStarted = false;
+            // Gate on the request actually being approved, not just this
+            // connect's params: requestDevicePairing can refresh an older
+            // pending request in place (incomingApprovalCoveredByExisting), so a
+            // device could seed a scoped pending request, then reconnect
+            // scopeless from an SSH-verifiable host. SSH auto-approval must stay
+            // limited to a fresh node request that carries no roles/scopes
+            // beyond node.
+            const pendingReq = pairing.request;
+            const pendingIsFreshScopelessNode =
+              (pendingReq.scopes ?? []).length === 0 &&
+              (pendingReq.role === undefined || pendingReq.role === "node") &&
+              (pendingReq.roles ?? []).every((pendingRole) => pendingRole === "node");
+            if (pairing.request.silent !== true && pendingIsFreshScopelessNode) {
+              const sshVerifyPlan = planNodePairingSshVerify({
+                config: configSnapshot.gateway?.nodes?.pairing?.sshVerify,
+                eligibility: {
+                  existingPairedDevice: Boolean(existingPairedDevice),
+                  role,
+                  reason,
+                  scopes,
+                  hasBrowserOriginHeader,
+                  isControlUi,
+                  isWebchat,
+                  reportedClientIpSource,
+                  reportedClientIp,
+                },
+              });
+              const sshVerify = sshVerifyPlan
+                ? startNodePairingSshVerify({
+                    plan: sshVerifyPlan,
+                    expectedDeviceId: device.id,
+                    expectedPublicKey: devicePublicKey,
+                  })
+                : null;
+              // A reconnect during an in-flight probe keeps the retry hint
+              // below but must not attach a second approval tail.
+              if (sshVerifyPlan && sshVerify) {
+                sshVerifyStarted = true;
+              }
+              if (sshVerifyPlan && sshVerify && !sshVerify.alreadyInFlight) {
+                const pendingRequestId = pairing.request.requestId;
+                runDetachedConnectWork(
+                  async () => {
+                    const outcome = await sshVerify.done;
+                    if (!outcome.ok) {
+                      logGateway.info(
+                        `node pairing ssh-verify did not approve device=${device.id} host=${sshVerifyPlan.host} reason=${outcome.reason}`,
+                      );
+                      return;
+                    }
+                    // Approving the pending requestId keeps this race-safe: a
+                    // superseded or owner-resolved request simply returns null.
+                    const approvedBySsh = await approveDevicePairing(pendingRequestId, {
+                      callerScopes: scopes,
+                      accessMetadata: clientAccessMetadata,
+                      approvedVia: "ssh-verified",
+                    });
+                    if (approvedBySsh?.status !== "approved") {
+                      logGateway.info(
+                        `node pairing ssh-verify approval skipped device=${device.id} (request superseded or already resolved)`,
+                      );
+                      return;
+                    }
+                    logGateway.info(
+                      `security audit: device pairing ssh-verified auto-approve device=${device.id} ip=${reportedClientIp ?? "unknown-ip"} sshUser=${outcome.user} client=${connectParams.client.id} conn=${connId}`,
+                    );
+                    buildRequestContext().broadcast(
+                      "device.pair.resolved",
+                      {
+                        requestId: pendingRequestId,
+                        deviceId: device.id,
+                        decision: "approved",
+                        ts: Date.now(),
+                      },
+                      { dropIfSlow: true },
+                    );
+                  },
+                  (error) => {
+                    logGateway.warn(
+                      `node pairing ssh-verify failed device=${device.id}: ${String(error)}`,
+                    );
+                  },
+                );
+              }
+            }
             // Re-resolve: another connection may have superseded/approved the request since we created it
             recoveryRequestId = await resolveLivePendingRequestId();
             if (
@@ -1650,10 +1788,15 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                 role === "node" &&
                 scopes.length === 0 &&
                 !existingPairedDevice;
+              // Keep the node retrying while a detached approval can still land
+              // (bootstrap redemption or a running ssh-verify probe); default
+              // pairing-required behavior pauses the client reconnect loop.
+              const retryWhileDetachedApprovalPending =
+                retryAfterBootstrapPairingApproval || sshVerifyStarted;
               const pairingErrorDetails = buildPairingConnectErrorDetails({
                 reason,
                 requestId: recoveryRequestId,
-                ...(retryAfterBootstrapPairingApproval
+                ...(retryWhileDetachedApprovalPending
                   ? {
                       recommendedNextStep: "wait_then_retry",
                       retryable: true,
@@ -1909,6 +2052,24 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           const nodePairingSnapshot = await beginNodePairingConnect(nodeId);
           const pairedNode = nodePairingSnapshot.pairedNode;
           pendingNodePairingCleanup = nodePairingSnapshot.cleanupClaim;
+          // Re-read the device record: how device pairing was approved decides
+          // whether the first capability surface may be marked silent.
+          const pairedDeviceForSurface =
+            device && devicePublicKey ? await getPairedDevice(device.id) : null;
+          const deviceApprovedVia =
+            pairedDeviceForSurface?.publicKey === devicePublicKey
+              ? pairedDeviceForSurface?.approvedVia
+              : undefined;
+          // Only device approvals that carry a proof stronger than network
+          // origin may hint silent capability approval: "silent" (same-host
+          // local), "ssh-verified" (device-key match over SSH), "bootstrap"
+          // (owner setup code). "trusted-cidr" proves only that the device came
+          // from an allowed network, which must not silently approve its
+          // command/capability surface.
+          const deviceApprovedNonInteractively =
+            deviceApprovedVia === "silent" ||
+            deviceApprovedVia === "ssh-verified" ||
+            deviceApprovedVia === "bootstrap";
           let reconciliation: Awaited<ReturnType<typeof reconcileNodePairingOnConnect>>;
           try {
             reconciliation = await reconcileNodePairingOnConnect({
@@ -1916,6 +2077,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               connectParams,
               pairedNode,
               reportedClientIp,
+              initialSurfaceSilent: deviceApprovedNonInteractively,
               requestPairing: async (input) => {
                 return await requestNodePairingFromConnect({
                   input,
@@ -1939,6 +2101,43 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               return;
             }
             throw error;
+          }
+          // The ssh-verify key match already proved this node runs under the
+          // operator's account on a machine they own, which is the same claim
+          // a manual capability approval asserts; approve the first declared
+          // surface directly. Surface upgrades still prompt.
+          if (
+            deviceApprovedVia === "ssh-verified" &&
+            !pairedNode &&
+            reconciliation.pendingPairing
+          ) {
+            const surfaceRequestId = reconciliation.pendingPairing.request.requestId;
+            const approvedSurface = await approveNodePairing(surfaceRequestId, {
+              callerScopes: [ADMIN_SCOPE, PAIRING_SCOPE, WRITE_SCOPE],
+            });
+            if (approvedSurface && "node" in approvedSurface) {
+              logGateway.info(
+                `security audit: node capability surface ssh-verified auto-approve node=${reconciliation.nodeId} commands=${reconciliation.declaredCommands.join(",") || "<none>"}`,
+              );
+              buildRequestContext().broadcast(
+                "node.pair.resolved",
+                {
+                  requestId: surfaceRequestId,
+                  nodeId: reconciliation.nodeId,
+                  decision: "approved",
+                  ts: Date.now(),
+                },
+                { dropIfSlow: true },
+              );
+              reconciliation = {
+                ...reconciliation,
+                effectiveCaps: reconciliation.declaredCaps,
+                effectiveCommands: reconciliation.declaredCommands,
+                effectivePermissions: reconciliation.declaredPermissions,
+                pendingPairing: undefined,
+                shouldClearPendingPairings: true,
+              };
+            }
           }
           if (!reconciliation.shouldClearPendingPairings) {
             await releasePendingNodePairingCleanup();
@@ -1981,7 +2180,9 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           connectParams.permissions = reconciliation.effectivePermissions;
         }
 
-        const shouldTrackPresence = !isGatewayCliClient(connectParams.client);
+        // Presence lists user-visible clients/nodes. Ephemeral control-plane connections
+        // (CLI, backend RPC probes, tests) churn for the full TTL and stay excluded.
+        const shouldTrackPresence = !isEphemeralGatewayClient(connectParams.client);
         const clientId = connectParams.client.id;
         const instanceId = connectParams.client.instanceId;
         const presenceKey = shouldTrackPresence ? (device?.id ?? instanceId ?? connId) : undefined;
@@ -2080,6 +2281,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           socket,
           connect: connectParams,
           connId,
+          connectionKind: "gateway",
           isDeviceTokenAuth: authMethod === "device-token",
           usesSharedGatewayAuth: sessionUsesSharedGatewayAuth,
           sharedGatewaySessionGeneration: sessionSharedGatewaySessionGeneration,

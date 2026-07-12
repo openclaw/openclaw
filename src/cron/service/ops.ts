@@ -5,6 +5,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
+import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -24,7 +25,7 @@ import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { createCronExecutionId } from "../run-id.js";
 import { normalizeCronRunLogJobId } from "../run-log.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
-import type { CronJob, CronJobCreate, CronJobPatch, CronPayload, CronStoreFile } from "../types.js";
+import type { CronJob, CronJobCreate, CronJobPatch, CronPayload } from "../types.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
 import {
@@ -59,7 +60,14 @@ import type {
   CronWakeMode,
 } from "./state.js";
 import { emit } from "./state.js";
-import { ensureLoaded, persist, warnIfDisabled } from "./store.js";
+import {
+  ensureLoaded,
+  persist,
+  persistOrRestore,
+  snapshotStoreForRollback,
+  type CronRollbackSnapshot,
+  warnIfDisabled,
+} from "./store.js";
 import { CRON_TASK_RUNNING_PROGRESS_SUMMARY } from "./task-ledger.js";
 import {
   applyJobResult,
@@ -513,49 +521,6 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
   });
 }
 
-type CronRollbackSnapshot = {
-  store: CronStoreFile | null;
-  pendingCatchupDeferralJobIds: Set<string>;
-};
-
-// Rolls the live scheduler state back to its pre-mutation snapshot when the
-// durable write fails. recomputeNextRunsForMaintenance mutates schedule state
-// across all jobs and drops catch-up deferral markers for removed/disabled
-// jobs, so restoring only the touched job would leave siblings and deferrals
-// ahead of disk; without the rollback a failed add/update/remove keeps
-// running, reverting, or resurrecting jobs the caller was told did not apply.
-async function persistOrRestore(
-  state: CronServiceState,
-  snapshot: CronRollbackSnapshot,
-  opts: {
-    postPersistAutoDisableNotifications?: Array<() => void>;
-    suppressScheduledJobId?: string;
-  } = {},
-) {
-  try {
-    await persist(
-      state,
-      opts.suppressScheduledJobId === undefined
-        ? undefined
-        : { suppressScheduledJobId: opts.suppressScheduledJobId },
-    );
-  } catch (err) {
-    state.store = snapshot.store;
-    state.pendingCatchupDeferralJobIds = snapshot.pendingCatchupDeferralJobIds;
-    throw err;
-  }
-  for (const notify of opts.postPersistAutoDisableNotifications ?? []) {
-    notify();
-  }
-}
-
-function snapshotStoreForRollback(state: CronServiceState): CronRollbackSnapshot {
-  return {
-    store: state.store ? structuredClone(state.store) : null,
-    pendingCatchupDeferralJobIds: new Set(state.pendingCatchupDeferralJobIds),
-  };
-}
-
 function finalizeUpdatedJob(params: {
   job: CronJob;
   nextJob: CronJob;
@@ -897,7 +862,7 @@ async function skipInvalidPersistedManualRun(params: {
     severity: "warn",
     nowMs: params.state.deps.nowMs,
   });
-  const shouldDelete = applyJobResult(
+  applyJobResult(
     params.state,
     params.job,
     {
@@ -928,11 +893,6 @@ async function skipInvalidPersistedManualRun(params: {
     },
     params.terminalTracker,
   );
-
-  if (shouldDelete && params.state.store) {
-    params.state.store.jobs = params.state.store.jobs.filter((entry) => entry.id !== params.job.id);
-    emit(params.state, { jobId: params.job.id, action: "removed" });
-  }
 
   recomputeNextRunsForMaintenance(params.state, { recomputeExpired: true });
   await persist(params.state);
@@ -1300,11 +1260,6 @@ async function finishPreparedManualRun(
         );
       }
 
-      if (shouldDelete && state.store) {
-        state.store.jobs = state.store.jobs.filter((entry) => entry.id !== job.id);
-        emit(state, { jobId: job.id, action: "removed", job });
-      }
-
       // Manual runs should not advance other due jobs without executing them.
       // Use maintenance-only recompute to repair missing values while
       // preserving existing past-due nextRunAtMs entries for future timer ticks.
@@ -1316,6 +1271,7 @@ async function finishPreparedManualRun(
             state: structuredClone(job.state),
           };
       const postRunRemoved = shouldDelete;
+      const removedJob = shouldDelete ? structuredClone(job) : undefined;
       // Isolated Telegram send can persist target writeback directly to disk.
       // Reload before final persist so manual `cron run` keeps those changes.
       await ensureLoaded(state, { forceReload: true, skipRecompute: true });
@@ -1323,6 +1279,7 @@ async function finishPreparedManualRun(
         notifySetupTimeout = false;
         return;
       }
+      const rollbackSnapshot = snapshotStoreForRollback(state);
       mergeManualRunSnapshotAfterReload({
         state,
         jobId,
@@ -1330,7 +1287,10 @@ async function finishPreparedManualRun(
         removed: postRunRemoved,
       });
       recomputeNextRunsForMaintenance(state, { recomputeExpired: true });
-      await persist(state);
+      await persistOrRestore(state, rollbackSnapshot);
+      if (removedJob) {
+        emit(state, { jobId: removedJob.id, action: "removed", job: removedJob });
+      }
       finalized = true;
     });
     if (notifySetupTimeout && isCronActiveJobMarkerCurrent(prepared.activeJobMarker)) {
@@ -1373,46 +1333,48 @@ export async function enqueueRun(state: CronServiceState, id: string, mode?: "du
 
   const runId = `manual:${id}:${state.deps.nowMs()}:${nextManualRunId++}`;
   const terminalTracker: ManualRunTerminalTracker = { emitted: false };
-  void enqueueCommandInLane(
-    CommandLane.Cron,
-    async () => {
-      const result = await run(state, id, mode, { runId, terminalTracker });
-      if (result.ok && "ran" in result && !result.ran) {
-        if (result.reason !== "invalid-spec") {
-          const finishedAt = state.deps.nowMs();
-          const job = state.store?.jobs.find((entry) => entry.id === id);
-          emitManualRunFinished(
-            state,
-            {
-              jobId: id,
-              action: "finished",
-              job,
-              status: "skipped",
-              error: `queued manual run skipped before execution: ${result.reason}`,
-              runId,
-              runAtMs: finishedAt,
-              durationMs: 0,
-              nextRunAtMs: job?.state.nextRunAtMs,
-            },
-            terminalTracker,
+  void runWithGatewayIndependentRootWorkContinuation(() =>
+    enqueueCommandInLane(
+      CommandLane.Cron,
+      async () => {
+        const result = await run(state, id, mode, { runId, terminalTracker });
+        if (result.ok && "ran" in result && !result.ran) {
+          if (result.reason !== "invalid-spec") {
+            const finishedAt = state.deps.nowMs();
+            const job = state.store?.jobs.find((entry) => entry.id === id);
+            emitManualRunFinished(
+              state,
+              {
+                jobId: id,
+                action: "finished",
+                job,
+                status: "skipped",
+                error: `queued manual run skipped before execution: ${result.reason}`,
+                runId,
+                runAtMs: finishedAt,
+                durationMs: 0,
+                nextRunAtMs: job?.state.nextRunAtMs,
+              },
+              terminalTracker,
+            );
+          }
+          state.deps.log.info(
+            { jobId: id, runId, reason: result.reason },
+            "cron: queued manual run skipped before execution",
           );
         }
-        state.deps.log.info(
-          { jobId: id, runId, reason: result.reason },
-          "cron: queued manual run skipped before execution",
-        );
-      }
-      return result;
-    },
-    {
-      warnAfterMs: 5_000,
-      onWait: (waitMs, queuedAhead) => {
-        state.deps.log.warn(
-          { jobId: id, runId, waitMs, queuedAhead },
-          "cron: queued manual run waiting for an execution slot",
-        );
+        return result;
       },
-    },
+      {
+        warnAfterMs: 5_000,
+        onWait: (waitMs, queuedAhead) => {
+          state.deps.log.warn(
+            { jobId: id, runId, waitMs, queuedAhead },
+            "cron: queued manual run waiting for an execution slot",
+          );
+        },
+      },
+    ),
   ).catch((err: unknown) => {
     if (terminalTracker.emitted) {
       state.deps.log.error(

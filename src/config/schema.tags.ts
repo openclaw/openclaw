@@ -42,6 +42,7 @@ const TAG_PRIORITY: Record<ConfigTag, number> = {
 };
 
 const TAG_OVERRIDES: Record<string, ConfigTag[]> = {
+  cloudWorkers: ["network", "automation"],
   "gateway.auth.token": ["security", "auth", "access", "network"],
   "gateway.auth.password": ["security", "auth", "access", "network"],
   "gateway.push.apns.relay.baseUrl": ["network", "advanced"],
@@ -58,12 +59,18 @@ const TAG_OVERRIDES: Record<string, ConfigTag[]> = {
   "gateway.controlUi.dangerouslyDisableDeviceAuth": ["security", "access", "network", "advanced"],
   "gateway.controlUi.allowInsecureAuth": ["security", "access", "network", "advanced"],
   "gateway.nodes.pairing.autoApproveCidrs": ["security", "access", "network", "advanced"],
+  "gateway.nodes.pairing.sshVerify": ["security", "access", "network", "advanced"],
+  "gateway.nodes.pluginTools.enabled": ["tools", "security", "access", "network", "advanced"],
+  "gateway.nodes.skills.enabled": ["tools", "security", "access", "network", "advanced"],
+  "nodeHost.mcp.servers": ["tools", "network", "advanced"],
+  "nodeHost.skills.enabled": ["tools", "network", "advanced"],
   "proxy.tls.caFile": ["security", "network", "storage", "advanced"],
   "tools.exec.applyPatch.workspaceOnly": ["tools", "security", "access", "advanced"],
   "tools.exec.mode": ["tools", "security", "access"],
 };
 
 const PREFIX_RULES: Array<{ prefix: string; tags: ConfigTag[] }> = [
+  { prefix: "cloudworkers.", tags: ["network", "automation"] },
   { prefix: "channels.", tags: ["channels", "network"] },
   { prefix: "tools.", tags: ["tools"] },
   { prefix: "gateway.", tags: ["network"] },

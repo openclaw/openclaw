@@ -32,6 +32,7 @@ import type { PluginManifestContracts } from "./manifest.js";
 import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-providers.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 import type { PluginRuntime } from "./runtime/types.js";
+import type { SessionCatalogProvider } from "./session-catalog.js";
 import type { PluginDependencyStatus } from "./status-dependencies-core.js";
 type ChannelPlugin = import("../channels/plugins/types.plugin.js").ChannelPlugin;
 type CliBackendPlugin = import("./types.js").CliBackendPlugin;
@@ -72,6 +73,7 @@ type SpeechProviderPlugin = import("./types.js").SpeechProviderPlugin;
 type VideoGenerationProviderPlugin = import("./types.js").VideoGenerationProviderPlugin;
 type WebFetchProviderPlugin = import("./types.js").WebFetchProviderPlugin;
 type WebSearchProviderPlugin = import("./types.js").WebSearchProviderPlugin;
+type WorkerProvider = import("./types.js").WorkerProvider;
 type UnifiedModelCatalogProviderPlugin = import("./types.js").UnifiedModelCatalogProviderPlugin;
 
 /** Agent tool factory registered by one plugin runtime. */
@@ -161,6 +163,14 @@ export type PluginModelCatalogProviderRegistration = {
   rootDir?: string;
 };
 
+export type PluginSessionCatalogRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  provider: SessionCatalogProvider;
+  source: string;
+  rootDir?: string;
+};
+
 export type PluginCliBackendRegistration = {
   pluginId: string;
   pluginName?: string;
@@ -207,6 +217,7 @@ export type PluginWebFetchProviderRegistration =
   PluginOwnedProviderRegistration<WebFetchProviderPlugin>;
 export type PluginWebSearchProviderRegistration =
   PluginOwnedProviderRegistration<WebSearchProviderPlugin>;
+export type PluginWorkerProviderRegistration = PluginOwnedProviderRegistration<WorkerProvider>;
 export type PluginMigrationProviderRegistration =
   PluginOwnedProviderRegistration<MigrationProviderPlugin>;
 export type PluginMemoryEmbeddingProviderRegistration =
@@ -454,6 +465,7 @@ export type PluginRegistry = {
   channelSetups: PluginChannelSetupRegistration[];
   providers: PluginProviderRegistration[];
   modelCatalogProviders: PluginModelCatalogProviderRegistration[];
+  sessionCatalogs: PluginSessionCatalogRegistration[];
   cliBackends: PluginCliBackendRegistration[];
   textTransforms: PluginTextTransformsRegistration[];
   embeddingProviders: PluginEmbeddingProviderRegistration[];
@@ -467,6 +479,7 @@ export type PluginRegistry = {
   musicGenerationProviders: PluginMusicGenerationProviderRegistration[];
   webFetchProviders: PluginWebFetchProviderRegistration[];
   webSearchProviders: PluginWebSearchProviderRegistration[];
+  workerProviders: Map<string, PluginWorkerProviderRegistration>;
   migrationProviders: PluginMigrationProviderRegistration[];
   codexAppServerExtensionFactories: PluginCodexAppServerExtensionFactoryRegistration[];
   agentToolResultMiddlewares: PluginAgentToolResultMiddlewareRegistration[];

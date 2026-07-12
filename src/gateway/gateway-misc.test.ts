@@ -383,6 +383,24 @@ function broadcastChatClassEvents(
 }
 
 describe("gateway broadcaster", () => {
+  it("keeps workers outside all generic and targeted gateway broadcasts", () => {
+    const workerSocket = makeRecordingSocket();
+    const worker = makeGatewayWsClient("c-worker", workerSocket, {
+      role: "worker",
+      scopes: [],
+    } as unknown as GatewayWsClient["connect"]);
+    worker.connectionKind = "worker";
+    const clients = new Set<GatewayWsClient>([worker]);
+    const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({ clients });
+
+    for (const event of ["heartbeat", "presence", "health", "tick", "shutdown", "chat"]) {
+      broadcast(event, { value: event });
+    }
+    broadcastToConnIds("tick", { ts: 1 }, new Set([worker.connId]));
+
+    expect(workerSocket.send).not.toHaveBeenCalled();
+  });
+
   it("filters approval and pairing events by scope", () => {
     const approvalsSocket: TestSocket = {
       bufferedAmount: 0,
@@ -482,7 +500,13 @@ describe("gateway broadcaster", () => {
     broadcast("health", { ok: true });
     broadcast("tick", { ts: 2 });
     broadcast("shutdown", { reason: "restart" });
-    broadcast("update.available", { updateAvailable: { version: "2026.4.20" } });
+    broadcast("update.available", {
+      updateAvailable: {
+        currentVersion: "2026.4.19",
+        latestVersion: "2026.4.20",
+        channel: "stable",
+      },
+    });
     broadcast("unknown.future.event", { hidden: true });
 
     expectSentEvents(pairingSocket, [

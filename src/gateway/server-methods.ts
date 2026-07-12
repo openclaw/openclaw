@@ -147,6 +147,10 @@ const loadExecApprovalsHandlers = lazyHandlerModule(
   () => import("./server-methods/exec-approvals.js"),
   (module) => module.execApprovalsHandlers,
 );
+const loadFsHandlers = lazyHandlerModule(
+  () => import("./server-methods/fs.js"),
+  (module) => module.fsHandlers,
+);
 const loadHealthHandlers = lazyHandlerModule(
   () => import("./server-methods/health.js"),
   (module) => module.healthHandlers,
@@ -207,9 +211,17 @@ const loadSessionsFilesHandlers = lazyHandlerModule(
   () => import("./server-methods/sessions-files.js"),
   (module) => module.sessionsFilesHandlers,
 );
+const loadSessionsDiffHandlers = lazyHandlerModule(
+  () => import("./server-methods/sessions-diff.js"),
+  (module) => module.sessionsDiffHandlers,
+);
 const loadSessionsHandlers = lazyHandlerModule(
   () => import("./server-methods/sessions.js"),
   (module) => module.sessionsHandlers,
+);
+const loadSessionCatalogHandlers = lazyHandlerModule(
+  () => import("./server-methods/session-catalog.js"),
+  (module) => module.sessionCatalogHandlers,
 );
 const loadSkillsHandlers = lazyHandlerModule(
   () => import("./server-methods/skills.js"),
@@ -435,7 +447,12 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadDoctorHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["environments.list", "environments.status"],
+    methods: [
+      "environments.list",
+      "environments.status",
+      "environments.create",
+      "environments.destroy",
+    ],
     loadHandlers: loadEnvironmentsHandlers,
   }),
   ...createLazyCoreHandlers({
@@ -457,6 +474,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "exec.approvals.node.set",
     ],
     loadHandlers: loadExecApprovalsHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["fs.listDir"],
+    loadHandlers: loadFsHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: ["web.login.start", "web.login.wait"],
@@ -505,7 +526,13 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadWizardHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["crestodian.chat", "crestodian.setup.detect", "crestodian.setup.activate"],
+    methods: [
+      "crestodian.chat",
+      "crestodian.setup.detect",
+      "crestodian.setup.verify",
+      "crestodian.setup.activate",
+      "crestodian.setup.auth.start",
+    ],
     loadHandlers: loadCrestodianHandlers,
   }),
   ...createLazyCoreHandlers({
@@ -531,7 +558,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadTalkHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["audit.list"],
+    methods: ["audit.list", "audit.activity.list"],
     loadHandlers: loadAuditHandlers,
   }),
   ...createLazyCoreHandlers({
@@ -604,6 +631,15 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   }),
   ...createLazyCoreHandlers({
     methods: [
+      "sessions.catalog.list",
+      "sessions.catalog.read",
+      "sessions.catalog.continue",
+      "sessions.catalog.archive",
+    ],
+    loadHandlers: loadSessionCatalogHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: [
       "sessions.list",
       "sessions.cleanup",
       "sessions.subscribe",
@@ -659,6 +695,8 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "node.list",
       "node.describe",
       "node.pluginSurface.refresh",
+      "node.pluginTools.update",
+      "node.skills.update",
       "node.pending.pull",
       "node.pending.ack",
       "node.invoke",
@@ -728,8 +766,12 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadArtifactsHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["sessions.files.list", "sessions.files.get"],
+    methods: ["sessions.files.list", "sessions.files.get", "sessions.files.set"],
     loadHandlers: loadSessionsFilesHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["sessions.diff"],
+    loadHandlers: loadSessionsDiffHandlers,
   }),
 };
 

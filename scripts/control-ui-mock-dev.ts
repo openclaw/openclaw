@@ -1,4 +1,5 @@
 // Control Ui Mock Dev script supports OpenClaw repository automation.
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import qrcode from "qrcode";
@@ -34,6 +35,10 @@ const TOTAL_TELEGRAM_SESSIONS = 180;
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const uiRoot = path.join(repoRoot, "ui");
+
+function mockFileHash(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
 
 function parseArgs(args: string[]): CliOptions {
   const options: CliOptions = { allowedHosts: [], host: "127.0.0.1", port: 5187 };
@@ -80,7 +85,7 @@ function sessionRow(
     key,
     kind: "direct",
     label,
-    model: options.model ?? "gpt-5.5",
+    model: options.model ?? "gpt-5.6-luna",
     modelProvider: options.modelProvider ?? "openai",
     status: "done",
     totalTokens: 0,
@@ -93,7 +98,7 @@ function sessionsListResponse(sessions: unknown[], options: SessionListOptions) 
     count: sessions.length,
     defaults: {
       contextTokens: 200_000,
-      model: "gpt-5.5",
+      model: "gpt-5.6-luna",
       modelProvider: "openai",
     },
     hasMore: options.hasMore,
@@ -182,6 +187,69 @@ function usageCostTotals(totalTokens: number, totalCost = 0) {
 
 // Model Providers settings fixtures: auth state plus live plan/quota/billing
 // snapshots so the /settings/model-providers page renders fully in the mock.
+function buildSessionDiffMock() {
+  const appPatch = [
+    "diff --git a/src/app.ts b/src/app.ts",
+    "index 1111111..2222222 100644",
+    "--- a/src/app.ts",
+    "+++ b/src/app.ts",
+    "@@ -12,4 +12,5 @@ export function bootstrap() {",
+    "   const config = readSettings();",
+    "-  const client = createClient(config);",
+    "+  const client = createClient(config, { retries: 3 });",
+    '+  client.on("error", reportError);',
+    "   return client;",
+    "@@ -181,3 +182,3 @@ export function shutdown() {",
+    "   flushQueues();",
+    '-  logger.info("bye");',
+    '+  logger.info("shutdown complete");',
+    "",
+  ].join("\n");
+  const readmePatch = [
+    "diff --git a/README.md b/README.md",
+    "new file mode 100644",
+    "--- /dev/null",
+    "+++ b/README.md",
+    "@@ -0,0 +1,3 @@",
+    "+# Demo",
+    "+",
+    "+Mock harness session diff fixture.",
+    "",
+  ].join("\n");
+  return {
+    sessionKey: "main",
+    root: "/tmp/openclaw-mock-checkout",
+    branch: "feature/session-diff-panel",
+    baseRef: "main",
+    files: [
+      {
+        path: "src/app.ts",
+        status: "modified",
+        additions: 3,
+        deletions: 2,
+        patch: appPatch,
+      },
+      {
+        path: "README.md",
+        status: "added",
+        additions: 3,
+        deletions: 0,
+        untracked: true,
+        patch: readmePatch,
+      },
+      {
+        path: "assets/logo.png",
+        status: "modified",
+        additions: 0,
+        deletions: 0,
+        binary: true,
+      },
+    ],
+    additions: 6,
+    deletions: 2,
+  };
+}
+
 function buildModelProviderMocks(baseTime: number) {
   const hour = 60 * 60 * 1000;
   const expiry = (remainingMs: number, label: string) => ({
@@ -351,8 +419,8 @@ function buildModelProviderMocks(baseTime: number) {
         provider: "anthropic",
         available: true,
       },
-      { id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true },
-      { id: "gpt-5.5-codex", name: "GPT-5.5 Codex", provider: "openai", available: true },
+      { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai", available: true },
+      { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai", available: true },
       { id: "gemini-3-pro", name: "Gemini 3 Pro", provider: "google", available: false },
       { id: "openrouter/auto", name: "OpenRouter Auto", provider: "openrouter", available: true },
     ],
@@ -430,7 +498,7 @@ function buildProfileUsageMocks(baseTime: number) {
           },
           {
             provider: "openai",
-            model: "gpt-5.5",
+            model: "gpt-5.6-luna",
             count: 4_000,
             totals: usageCostTotals(Math.round(lifetimeTokens * 0.3)),
           },
@@ -690,6 +758,22 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       file: {
         ...file,
         content: sessionFileContentByPath.get(file.path) ?? "",
+        // Fake CAS token so the file panel offers edit mode against the mock.
+        hash: mockFileHash(sessionFileContentByPath.get(file.path) ?? ""),
+      },
+      root: sessionWorkspaceRoot,
+      sessionKey: "agent:alpha",
+    },
+  }));
+  const sessionFileSetCases = sessionFiles.map((file) => ({
+    match: { sessionKey: "agent:alpha", path: file.path },
+    response: {
+      file: {
+        ...file,
+        kind: "modified",
+        workspacePath: file.path,
+        hash: mockFileHash(`${file.path}:saved`),
+        updatedAtMs: baseTime,
       },
       root: sessionWorkspaceRoot,
       sessionKey: "agent:alpha",
@@ -747,8 +831,10 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
     assistantAgentId: "openclaw-mock",
     assistantName: "OpenClaw mock",
     defaultAgentId: "openclaw-mock",
+    featureMethods: ["chat.metadata", "chat.startup", "sessions.diff", "sessions.files.set"],
     historyMessages: buildScrollableChatHistory(baseTime),
     methodResponses: {
+      "sessions.diff": buildSessionDiffMock(),
       "usage.cost": profileUsage.cost,
       "sessions.usage": profileUsage.sessions,
       "models.authStatus": modelProviders.authStatus,
@@ -894,6 +980,49 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
           },
         ],
       },
+      "system-presence": [
+        {
+          host: "gateway-mock.local",
+          ip: "192.168.1.10",
+          version: "2026.6.11",
+          platform: "macos 26.5.2",
+          deviceFamily: "Mac",
+          modelIdentifier: "Mac14,12",
+          lastInputSeconds: 42,
+          mode: "gateway",
+          reason: "self",
+          instanceId: "mock-gateway-instance",
+          text: "Gateway: gateway-mock.local (192.168.1.10) · app 2026.6.11 · mode gateway · reason self",
+          ts: baseTime,
+        },
+        {
+          host: "Mac Studio",
+          ip: "192.168.1.11",
+          version: "2026.6.11",
+          platform: "macos 26.5.2",
+          deviceFamily: "Mac",
+          modelIdentifier: "Mac15,14",
+          lastInputSeconds: 177,
+          mode: "node",
+          reason: "periodic",
+          deviceId: "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
+          instanceId: "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
+          roles: ["node"],
+          text: "Node: Mac Studio (192.168.1.11) · app 2026.6.11 · last input 177s ago · mode node · reason periodic",
+          ts: baseTime - 30_000,
+        },
+        {
+          host: "openclaw-control-ui",
+          version: "2026.6.11",
+          platform: "macos 26.5.2",
+          mode: "webchat",
+          reason: "connect",
+          roles: ["operator"],
+          instanceId: "mock-unpaired-webchat",
+          text: "Node: openclaw-control-ui · mode webchat",
+          ts: baseTime - 10_000,
+        },
+      ],
       "agents.files.get": {
         cases: workspaceFileCases,
       },
@@ -902,6 +1031,9 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       },
       "sessions.files.get": {
         cases: sessionFileGetCases,
+      },
+      "sessions.files.set": {
+        cases: sessionFileSetCases,
       },
       "sessions.files.list": {
         cases: [

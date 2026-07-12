@@ -37,24 +37,45 @@ private final class DashboardWindowDragMessageHandler: NSObject, WKScriptMessage
 }
 
 @MainActor
+private final class DashboardUpdateMessageHandler: NSObject, WKScriptMessageHandler {
+    weak var owner: DashboardWindowController?
+
+    func userContentController(_: WKUserContentController, didReceive message: WKScriptMessage) {
+        self.owner?.receiveUpdateMessage(message)
+    }
+}
+
+@MainActor
 final class DashboardWindowController: NSWindowController, WKNavigationDelegate, WKUIDelegate, NSWindowDelegate {
     private static let linkMessageHandlerName = "openclawLink"
     private static let windowDragMessageHandlerName = "openclawWindowDrag"
+    private static let updateMessageHandlerName = "openclawUpdate"
 
     private let webView: WKWebView
     private let linkBrowser: DashboardLinkBrowserView
     private let linkBrowserItem: NSSplitViewItem
     private let splitViewController: NSSplitViewController
+    private let updateMessageHandler: DashboardUpdateMessageHandler
     private(set) var currentURL: URL
     private var auth: DashboardWindowAuth
+    private let updater: UpdaterProviding?
+    private var updateBridgeEnabled: Bool
     private var backButton: NSButton?
     private var forwardButton: NSButton?
     private var canGoBackObservation: NSKeyValueObservation?
     private var canGoForwardObservation: NSKeyValueObservation?
 
-    init(url: URL, auth: DashboardWindowAuth) {
+    init(
+        url: URL,
+        auth: DashboardWindowAuth,
+        updater: UpdaterProviding? = nil,
+        updateBridgeEnabled: Bool = true)
+    {
+        let shouldEnableUpdateBridge = updater?.isAvailable == true && updateBridgeEnabled
         self.currentURL = url
         self.auth = auth
+        self.updater = updater
+        self.updateBridgeEnabled = shouldEnableUpdateBridge
 
         let dataStore = WKWebsiteDataStore.default()
         let config = WKWebViewConfiguration()
@@ -67,6 +88,13 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         config.userContentController.add(linkMessageHandler, name: Self.linkMessageHandlerName)
         let windowDragMessageHandler = DashboardWindowDragMessageHandler()
         config.userContentController.add(windowDragMessageHandler, name: Self.windowDragMessageHandlerName)
+        let updateMessageHandler = DashboardUpdateMessageHandler()
+        self.updateMessageHandler = updateMessageHandler
+        if shouldEnableUpdateBridge {
+            // Handler presence is the Control UI feature probe; unsigned builds
+            // and remote dashboards must not advertise a local app update.
+            config.userContentController.add(updateMessageHandler, name: Self.updateMessageHandlerName)
+        }
         Self.installNativeChromeScript(into: config.userContentController)
         Self.installNativeAuthScript(into: config.userContentController, url: url, auth: auth)
 
@@ -86,7 +114,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         splitViewController.splitView.autosaveName = DashboardWindowLayout.linkBrowserSplitAutosaveName
 
         let dashboardViewController = NSViewController()
-        dashboardViewController.view = self.webView
+        dashboardViewController.view = BrowserProfileImportBannerView.makeDashboardPane(webView: self.webView)
         let dashboardItem = NSSplitViewItem(viewController: dashboardViewController)
         dashboardItem.minimumThickness = DashboardWindowLayout.mainBrowserMinWidth
 
@@ -117,6 +145,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.linkBrowserItem.isCollapsed = true
         linkMessageHandler.owner = self
         windowDragMessageHandler.owner = self
+        updateMessageHandler.owner = self
         self.webView.navigationDelegate = self
         self.webView.uiDelegate = self
         self.linkBrowser.webViewNavigationDelegate = self
@@ -125,6 +154,17 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.linkBrowser.onOpenExternal = { [weak self] url in self?.openExternal(url) }
         self.window?.delegate = self
         self.installNavigationControls()
+    }
+
+    func setUpdateBridgeEnabled(_ enabled: Bool) {
+        let nextEnabled = self.updater?.isAvailable == true && enabled
+        guard nextEnabled != self.updateBridgeEnabled else { return }
+        self.updateBridgeEnabled = nextEnabled
+        let controller = self.webView.configuration.userContentController
+        controller.removeScriptMessageHandler(forName: Self.updateMessageHandlerName)
+        if nextEnabled {
+            controller.add(self.updateMessageHandler, name: Self.updateMessageHandlerName)
+        }
     }
 
     // MARK: - WKUIDelegate
@@ -192,8 +232,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         fatalError("init(coder:) is not supported")
     }
 
-    func show(url: URL, auth: DashboardWindowAuth) {
-        self.update(url: url, auth: auth)
+    func show(url: URL, auth: DashboardWindowAuth, updateBridgeEnabled: Bool? = nil) {
+        self.update(url: url, auth: auth, updateBridgeEnabled: updateBridgeEnabled)
         self.show()
     }
 
@@ -202,10 +242,13 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     /// the remote tunnel is recreated on a new local port while the window stays
     /// open; ordering the window front here would steal focus on background
     /// tunnel recreation.
-    func update(url: URL, auth: DashboardWindowAuth) {
+    func update(url: URL, auth: DashboardWindowAuth, updateBridgeEnabled: Bool? = nil) {
         self.currentURL = url
         self.auth = auth
         self.refreshNativeAuthScript(url: url, auth: auth)
+        if let updateBridgeEnabled {
+            self.setUpdateBridgeEnabled(updateBridgeEnabled)
+        }
         self.load(url)
     }
 
@@ -239,6 +282,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     func showFailure(title: String, message: String, detail: String? = nil) {
         self.currentURL = URL(string: "about:blank")!
         self.auth = DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil)
+        self.setUpdateBridgeEnabled(false)
         self.refreshNativeAuthScript(url: self.currentURL, auth: self.auth)
         self.webView.stopLoading()
         self.webView.loadHTMLString(
@@ -321,6 +365,34 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         return payload["type"] as? String == "window-drag"
     }
 
+    fileprivate func receiveUpdateMessage(_ message: WKScriptMessage) {
+        guard message.name == Self.updateMessageHandlerName,
+              message.webView === self.webView,
+              message.frameInfo.isMainFrame,
+              Self.isTrustedLinkSource(message.frameInfo.request.url, dashboardURL: self.currentURL),
+              Self.isStartUpdateRequest(message.body),
+              let updater = self.updater
+        else {
+            return
+        }
+        // Eligibility is cached at window setup, but update.channel or launchd
+        // ownership can change while the dashboard stays open. Revalidate here.
+        guard DashboardManager.updateBridgeEnabled(mode: AppStateStore.shared.connectionMode) else {
+            self.setUpdateBridgeEnabled(false)
+            // JS treated its posted message as handled; return this click to
+            // the gateway updater after withdrawing the native bridge.
+            self.webView.evaluateJavaScript(
+                "window.dispatchEvent(new CustomEvent('openclaw:native-update-declined'))")
+            return
+        }
+        updater.checkForUpdates(nil)
+    }
+
+    static func isStartUpdateRequest(_ body: Any) -> Bool {
+        guard let payload = body as? [String: Any] else { return false }
+        return payload["type"] as? String == "start-update"
+    }
+
     static func linkRequest(from body: Any) -> DashboardLinkRequest? {
         guard let payload = body as? [String: Any],
               payload["type"] as? String == "open-link",
@@ -395,11 +467,20 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         Self.installNativeAuthScript(into: controller, url: url, auth: auth)
     }
 
-    /// Back/forward buttons next to the traffic lights. The window has no
-    /// native toolbar (full-size content view with the web UI's own chrome), so
-    /// a leading titlebar accessory is the only native slot for them.
+    /// Sidebar toggle plus back/forward buttons next to the traffic lights
+    /// (Safari's ordering). The window has no native toolbar (full-size content
+    /// view with the web UI's own chrome), so a leading titlebar accessory is
+    /// the only native slot for them.
     private func installNavigationControls() {
         guard let window = self.window else { return }
+        let sidebar = Self.makeNavigationButton(
+            symbolName: "sidebar.leading",
+            label: "Toggle Sidebar",
+            action: #selector(self.toggleNavigationSidebar(_:)),
+            target: self)
+        // Unlike back/forward there is no readiness state to observe; the web
+        // UI ignores the toggle event on surfaces without a collapsible nav.
+        sidebar.isEnabled = true
         let back = Self.makeNavigationButton(
             symbolName: "chevron.left",
             label: "Back",
@@ -413,11 +494,13 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.backButton = back
         self.forwardButton = forward
 
-        let stack = NSStackView(views: [back, forward])
+        let stack = NSStackView(views: [sidebar, back, forward])
         stack.orientation = .horizontal
-        stack.spacing = 4
-        stack.edgeInsets = NSEdgeInsets(top: 0, left: 8, bottom: 0, right: 0)
-        stack.setFrameSize(NSSize(width: 68, height: 28))
+        stack.spacing = 12
+        stack.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 0)
+        // Fixed accessory frame: 12 leading inset + three ~27pt buttons + two
+        // 12pt gaps. Keep in sync with `spacing`/`edgeInsets` above.
+        stack.setFrameSize(NSSize(width: 116, height: 28))
 
         let accessory = NSTitlebarAccessoryViewController()
         accessory.view = stack
@@ -465,12 +548,38 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         return button
     }
 
+    func navigateBack() {
+        self.activeNavigationWebView.goBack()
+    }
+
+    func navigateForward() {
+        self.activeNavigationWebView.goForward()
+    }
+
     @objc private func navigateBack(_: Any?) {
         self.webView.goBack()
     }
 
     @objc private func navigateForward(_: Any?) {
         self.webView.goForward()
+    }
+
+    /// Named to avoid AppKit's standard `toggleSidebar(_:)` responder action,
+    /// which would otherwise reach the split view controller and collapse the
+    /// native link-browser pane instead of the web UI's navigation sidebar.
+    @objc private func toggleNavigationSidebar(_: Any?) {
+        self.webView.evaluateJavaScript(
+            "window.dispatchEvent(new CustomEvent('openclaw:native-toggle-sidebar'))")
+    }
+
+    private var activeNavigationWebView: WKWebView {
+        guard let linkWebView = self.linkBrowser.activeWebView,
+              let firstResponder = self.window?.firstResponder as? NSView,
+              firstResponder === linkWebView || firstResponder.isDescendant(of: linkWebView)
+        else {
+            return self.webView
+        }
+        return linkWebView
     }
 
     private static func makeWindow(contentView: NSView) -> NSWindow {
@@ -558,7 +667,10 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             const style = document.createElement("style");
             style.id = "openclaw-native-macos-chrome";
             style.textContent = \(Self.jsStringLiteral(css));
-            document.documentElement.classList.add("openclaw-native-macos");
+            // openclaw-native-nav advertises the titlebar sidebar toggle so a
+            // matching Control UI hides its in-page expand/collapse buttons;
+            // older web bundles ignore the class and keep their own controls.
+            document.documentElement.classList.add("openclaw-native-macos", "openclaw-native-nav");
             document.head.appendChild(style);
           } catch {}
         })();
@@ -861,6 +973,10 @@ extension DashboardWindowController {
         self.webView.configuration.userContentController.userScripts
     }
 
+    var _testUpdateBridgeAvailable: Bool {
+        self.updateBridgeEnabled
+    }
+
     var _testLinkBrowserIsCollapsed: Bool {
         self.linkBrowserItem.isCollapsed
     }
@@ -959,6 +1075,19 @@ extension DashboardWindowController {
 
     var _testAllowsBackForwardGestures: Bool {
         self.webView.allowsBackForwardNavigationGestures
+    }
+
+    var _testNavigationWebViewIdentity: ObjectIdentifier {
+        ObjectIdentifier(self.activeNavigationWebView)
+    }
+
+    var _testDashboardWebViewIdentity: ObjectIdentifier {
+        ObjectIdentifier(self.webView)
+    }
+
+    func _testFocusLinkBrowser() -> Bool {
+        guard let webView = self.linkBrowser.activeWebView else { return false }
+        return self.window?.makeFirstResponder(webView) == true
     }
 }
 #endif
