@@ -2120,6 +2120,13 @@
       "kind": "html-attribute",
       "name": "aria-label",
       "path": "ui/src/pages/chat/components/chat-composer.ts",
+      "text": "Run status: Interrupted"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/pages/chat/components/chat-composer.ts",
       "text": "Slash commands"
     },
     {
@@ -2177,6 +2184,13 @@
       "name": "text",
       "path": "ui/src/pages/chat/components/chat-composer.ts",
       "text": "instant"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/chat/components/chat-composer.ts",
+      "text": "Interrupted"
     },
     {
       "count": 2,
