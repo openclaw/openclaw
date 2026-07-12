@@ -13850,4 +13850,172 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
 
     expect(resolved.requiresReasoningContentOnAssistantMessages).toBe(false);
   });
+
+  it("extracts and normalizes tool calls that are leaked as raw text in completions streams", async () => {
+    const model = {
+      id: "spark/default",
+      name: "Spark Default",
+      api: "openai-completions",
+      provider: "spark",
+      baseUrl: "https://llm.jlapenna.net",
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 92480,
+      maxTokens: 32768,
+    } satisfies Model<"openai-completions">;
+
+    const output = {
+      role: "assistant" as const,
+      content: [],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+
+    const stream: { push(event: unknown): void } = { push() {} };
+
+    const mockChunks = [
+      {
+        id: "chatcmpl-raw-toolcall",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              content:
+                'I will poll now. <|tool_call>call:process{action:<|"|>poll<|"|>,sessionId:<|"|>amber-ocean<|"|>}<tool_call|> Done!',
+            },
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-raw-toolcall",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {},
+            logprobs: null,
+            finish_reason: "stop",
+          },
+        ],
+      },
+    ] as const;
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk as never;
+      }
+    }
+
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+
+    expect(output.stopReason).toBe("toolUse");
+    expect(output.content).toMatchObject([
+      { type: "text", text: "I will poll now." },
+      {
+        type: "toolCall",
+        name: "process",
+        arguments: { action: "poll", sessionId: "amber-ocean" },
+      },
+      { type: "text", text: "Done!" },
+    ]);
+  });
+
+  it("extracts leaked gemma4 tool calls with nested object and array arguments", async () => {
+    const model = {
+      id: "spark/default",
+      name: "Spark Default",
+      api: "openai-completions",
+      provider: "spark",
+      baseUrl: "https://llm.jlapenna.net",
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 92480,
+      maxTokens: 32768,
+    } satisfies Model<"openai-completions">;
+
+    const output = {
+      role: "assistant" as const,
+      content: [],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+
+    const stream: { push(event: unknown): void } = { push() {} };
+
+    const mockChunks = [
+      {
+        id: "chatcmpl-raw-toolcall-nested",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              content:
+                'Checking now. <|tool_call>call:search{query:<|"|>disk space<|"|>,filter:{status:<|"|>open<|"|>,tags:[<|"|>a<|"|>,<|"|>b<|"|>]},limit:5}<tool_call|> One sec.',
+            },
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-raw-toolcall-nested",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {},
+            logprobs: null,
+            finish_reason: "stop",
+          },
+        ],
+      },
+    ] as const;
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk as never;
+      }
+    }
+
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+
+    expect(output.stopReason).toBe("toolUse");
+    expect(output.content).toMatchObject([
+      { type: "text", text: "Checking now." },
+      {
+        type: "toolCall",
+        name: "search",
+        arguments: {
+          query: "disk space",
+          filter: { status: "open", tags: ["a", "b"] },
+          limit: 5,
+        },
+      },
+      { type: "text", text: "One sec." },
+    ]);
+  });
 });
