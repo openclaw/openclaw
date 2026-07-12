@@ -133,8 +133,6 @@ export async function createPreUpdateConfigSnapshot(params: {
   if (preUpdateConfigSnapshotsWritten.has(snapshotKey)) {
     return;
   }
-  // Mark before I/O so a failed best-effort write cannot loop on every later write.
-  preUpdateConfigSnapshotsWritten.add(snapshotKey);
   const snapshotPath = `${params.configPath}.pre-update`;
   try {
     const content = await params.fs.readFile(params.configPath, "utf-8");
@@ -143,6 +141,10 @@ export async function createPreUpdateConfigSnapshot(params: {
       mode: 0o600,
       flag: "w",
     });
+    // Only mark after I/O succeeds so a transient read/write failure
+    // does not permanently block future snapshots for this config.
+    // See: https://github.com/openclaw/openclaw/issues/105193
+    preUpdateConfigSnapshotsWritten.add(snapshotKey);
   } catch {
     // best-effort, do not block update
   }
