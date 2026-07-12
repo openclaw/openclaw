@@ -431,8 +431,20 @@ const ALLOWED_UI_LITERALS = new Map<string, ReadonlySet<string>>([
     new Set(["all", "applied", "held", "pending", "rejected"]),
   ],
   [
+    "apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayDiagnostics.kt",
+    new Set(["$versionName-dev"]),
+  ],
+  [
+    "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceScreen.kt",
+    new Set(["${normalized.take(87)}..."]),
+  ],
+  [
     "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatCommandControls.kt",
     new Set(["/$name", "help"]),
+  ],
+  [
+    "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageActions.kt",
+    new Set([">", "> $line"]),
   ],
 ]);
 
