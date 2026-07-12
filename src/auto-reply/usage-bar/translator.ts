@@ -122,7 +122,7 @@ function applyVerb(name: string, args: string[], value: unknown, vocab: Vocab): 
     case "num":
       return num(value);
     case "fixed": {
-      const digits = args[0] ? Number.parseInt(args[0], 10) || 0 : 2;
+      const digits = args[0] && /^\d+$/.test(args[0]) ? Number.parseInt(args[0], 10) : 2;
       return fixed(value, digits);
     }
     case "dur":
@@ -143,7 +143,7 @@ function applyVerb(name: string, args: string[], value: unknown, vocab: Vocab): 
       return Object.hasOwn(table, lower) ? table[lower] : value;
     }
     case "meter": {
-      const width = args[0] ? Number.parseInt(args[0], 10) || 5 : 5;
+      const width = args[0] && /^\d+$/.test(args[0]) ? Number.parseInt(args[0], 10) : 5;
       const scale = args.length > 1 ? vocab[expectDefined(args[1], "args entry at 1")] : undefined;
       return meter(value, width, scale);
     }
