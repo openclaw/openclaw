@@ -2675,6 +2675,15 @@ describe("ci workflow guards", () => {
     expect(smokeProfileJob["runs-on"]).toContain("blacksmith-16vcpu-ubuntu-2404");
     expect(smokeRunStep.run).toContain("createQaSmokeCiPart");
     expect(smokeRunStep.run).toContain("createQaSmokeCiMatrix");
+    expect(smokeRunStep.run).toContain("readQaScenarioPack");
+    expect(smokeRunStep.run).toContain("scenarioIdsByKind");
+    const compatibilityScenarioBlock = smokeRunStep.run.match(
+      /const compatibilityScenarioIds = new Set\(\[([\s\S]*?)\]\);/u,
+    )?.[1];
+    expect(compatibilityScenarioBlock?.match(/^\s+"[^"]+",$/gmu)).toHaveLength(12);
+    expect(compatibilityScenarioBlock).toContain('"control-ui-chat-flow-playwright"');
+    expect(compatibilityScenarioBlock).toContain('"gateway-smoke"');
+    expect(compatibilityScenarioBlock).toContain('"matrix-restart-resume"');
     expect(smokeRunStep.run).toContain("No QA smoke runs assigned");
     expect(smokeRunStep.run).toContain("node openclaw.mjs qa run");
     expect(smokeRunStep.run).not.toContain("pnpm openclaw qa run");
