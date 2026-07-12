@@ -99,9 +99,12 @@ type ChatThreadProps = {
   showToolCalls: boolean;
   /** True while the session has an abortable live run (marks running tool rows). */
   runActive?: boolean;
+  /** True while the agent is visibly working (isChatRunWorking); shows the working spark. */
+  runWorking?: boolean;
   sessions: SessionsListResult | null;
   /** Host context resolving global-alias session keys (scope=global fleets). */
-  sessionHost?: Pick<UiSessionDefaultsHost, "agentsList" | "hello"> | null;
+  /** Includes assistantAgentId so bare-global welcome recents scope to the selected agent. */
+  sessionHost?: UiSessionDefaultsHost | null;
   assistantName: string;
   assistantAvatar: string | null;
   assistantAvatarUrl?: string | null;
@@ -131,6 +134,7 @@ type ChatThreadProps = {
   onFocusComposer?: () => void;
   /** Sends a detached /btw side question built from the selection popup. */
   onSideQuestion?: (command: string) => void;
+  onOpenSession?: (sessionKey: string) => void;
 };
 
 type ChatPinnedMessagesProps = Pick<
@@ -754,6 +758,8 @@ export function renderChatThread(props: ChatThreadProps) {
     streamStartedAt: props.streamStartedAt,
     queue: props.queue,
     showToolCalls: props.showToolCalls,
+    runWorking: Boolean(props.runWorking),
+    loading: props.loading,
     searchOpen: state.searchOpen,
     searchQuery: state.searchQuery,
     historyRenderLimit,
@@ -903,6 +909,7 @@ export function renderChatThread(props: ChatThreadProps) {
                   }
                   return renderMessageGroup(item, {
                     onOpenSidebar: props.onOpenSidebar,
+                    onOpenWorkspaceFile: props.onOpenWorkspaceFile,
                     sessionKey: props.sessionKey,
                     agentId: props.fullMessageAgentId,
                     showReasoning,

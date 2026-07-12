@@ -129,6 +129,7 @@ vi.mock("./provider-model-normalization.runtime.js", () => ({
 vi.mock("../plugins/provider-public-artifacts.js", () => ({
   resolveBundledProviderPolicySurface:
     providerPolicySurfaceMock.resolveBundledProviderPolicySurface,
+  resolveProviderPolicySurface: providerPolicySurfaceMock.resolveBundledProviderPolicySurface,
 }));
 
 vi.mock("./model-selection-cli.js", () => ({
@@ -1183,6 +1184,7 @@ describe("model-selection", () => {
         { provider: "ollama", id: "existing", name: "Existing" },
         {
           api: "ollama",
+          baseUrl: "http://127.0.0.1:11434",
           compat: undefined,
           contextTokens: undefined,
           provider: "ollama",
@@ -1465,7 +1467,11 @@ describe("model-selection", () => {
           id: "moonshotai/kimi-k2.5",
           name: "Kimi K2.5 (Configured)",
           alias: "Kimi K2.5 (NVIDIA)",
+          api: undefined,
+          baseUrl: "https://nvidia.example.com",
           contextWindow: 32_000,
+          contextTokens: undefined,
+          input: undefined,
           reasoning: true,
           compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
         },
