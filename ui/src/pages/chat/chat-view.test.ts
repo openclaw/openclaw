@@ -3706,13 +3706,38 @@ describe("chat attachment picker", () => {
     }
   });
 
-  it("keeps the default composer placeholder for pasted text attachments", () => {
-    const pastedTextAttachment: ChatAttachment = {
-      id: "pasted-text",
-      fileName: "pasted-text-1.txt",
-      mimeType: "text/plain",
-      sizeBytes: 2048,
-    };
+  it("keeps the default placeholder only for internally generated pasted text", () => {
+    let pastedTextAttachments: ChatAttachment[] = [];
+    const pasteTarget = renderChatView({
+      getAttachments: () => pastedTextAttachments,
+      onAttachmentsChange: (next) => {
+        pastedTextAttachments = next;
+      },
+    });
+    const textarea = requireElement(
+      pasteTarget,
+      ".agent-chat__composer-combobox > textarea",
+      "composer textarea",
+    );
+    const event = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "clipboardData", {
+      value: {
+        items: { 0: { type: "text/plain" }, length: 1 },
+        getData: (type: string) => (type === "text/plain" ? `large paste ${"x".repeat(1100)}` : ""),
+      },
+    });
+    textarea.dispatchEvent(event);
+
+    const namedLikePaste = registerChatAttachmentPayload({
+      attachment: {
+        id: "ordinary-text-file",
+        fileName: "pasted-text-1.txt",
+        mimeType: "text/plain",
+        sizeBytes: 4,
+      },
+      dataUrl: `data:text/plain;base64,${btoa("file")}`,
+      file: new File(["file"], "pasted-text-1.txt", { type: "text/plain" }),
+    });
     const imageAttachment: ChatAttachment = {
       id: "image",
       fileName: "screen.png",
@@ -3720,10 +3745,16 @@ describe("chat attachment picker", () => {
       sizeBytes: 2048,
     };
 
-    const textOnly = renderChatView({ attachments: [pastedTextAttachment] });
+    const textOnly = renderChatView({ attachments: pastedTextAttachments });
     expect(textOnly.querySelector("textarea")?.getAttribute("placeholder")).toBe(
       t("chat.composer.placeholder", { name: "Val" }),
     );
+
+    const ordinaryTextFile = renderChatView({ attachments: [namedLikePaste] });
+    expect(ordinaryTextFile.querySelector("textarea")?.getAttribute("placeholder")).toBe(
+      t("chat.composer.placeholderWithAttachments"),
+    );
+    expect(ordinaryTextFile.querySelector(".chat-attachment-text-action")).toBeNull();
 
     const withImage = renderChatView({ attachments: [imageAttachment] });
     expect(withImage.querySelector("textarea")?.getAttribute("placeholder")).toBe(

@@ -79,6 +79,7 @@ const LARGE_PASTE_TEXT_THRESHOLD = 1000;
 const LARGE_PASTE_TEXT_MIME_TYPE = "text/plain";
 const LARGE_PASTE_TEXT_FILE_PREFIX = "pasted-text-";
 const PASTED_TEXT_PREVIEW_MAX_LENGTH = 20;
+const largePastedTextAttachments = new WeakSet<ChatAttachment>();
 const pastedTextPreviews = new WeakMap<ChatAttachment, string>();
 
 type ChatComposerProps = {
@@ -1117,10 +1118,7 @@ function chatAttachmentFromFile(file: File, dataUrl: string): ChatAttachment {
 }
 
 function isLargePastedTextAttachment(attachment: ChatAttachment): boolean {
-  return (
-    attachment.mimeType === LARGE_PASTE_TEXT_MIME_TYPE &&
-    attachment.fileName?.startsWith(LARGE_PASTE_TEXT_FILE_PREFIX) === true
-  );
+  return largePastedTextAttachments.has(attachment);
 }
 
 function encodeTextAsDataUrl(text: string): string {
@@ -1138,6 +1136,7 @@ function createLargePastedTextAttachment(text: string): ChatAttachment {
     type: LARGE_PASTE_TEXT_MIME_TYPE,
   });
   const attachment = chatAttachmentFromFile(file, encodeTextAsDataUrl(text));
+  largePastedTextAttachments.add(attachment);
   const preview = compactPastedTextPreview(text);
   if (preview) {
     pastedTextPreviews.set(attachment, preview);
