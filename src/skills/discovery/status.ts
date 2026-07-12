@@ -252,6 +252,8 @@ type BuildSkillStatusContext = {
   agentSkillFilter?: string[];
   workspaceDir: string;
   clawhubLockRead: ClawHubSkillsLockfileStatusRead;
+  managedSkillsDir: string;
+  managedLockRead: ClawHubSkillsLockfileStatusRead;
 };
 
 function buildSkillStatus(
@@ -294,13 +296,20 @@ function buildSkillStatus(
   const availableToAgent = eligible && !blockedByAgentFilter;
   const userInvocable = indexed.userInvocable;
 
+  // Globally managed skills live under managedSkillsDir and are tracked in the
+  // managed lockfile, not the workspace lockfile. Route them to the managed
+  // parent dir so resolveClawHubSkillStatusLinkSync resolves the correct
+  // install path and lockfile entry.
+  const resolvedManagedSkillsDir = path.resolve(context.managedSkillsDir);
+  const isGlobalSkill =
+    !bundled && path.resolve(entry.skill.baseDir).startsWith(resolvedManagedSkillsDir + path.sep);
   const clawhub =
     workspaceDir && !bundled
       ? resolveClawHubSkillStatusLinkSync({
-          workspaceDir,
+          workspaceDir: isGlobalSkill ? path.dirname(resolvedManagedSkillsDir) : workspaceDir,
           skillDir: entry.skill.baseDir,
           skillKey,
-          lockRead: context.clawhubLockRead,
+          lockRead: isGlobalSkill ? context.managedLockRead : context.clawhubLockRead,
         })
       : undefined;
   const skillCard = resolveLocalSkillCardStatusSync(entry.skill.baseDir);
@@ -367,6 +376,11 @@ export function buildWorkspaceSkillStatus(
   const prefs = resolveSkillsInstallPreferences(opts?.config);
   const allowBundled = resolveBundledAllowlist(opts?.config);
   const clawhubLockRead = readClawHubSkillsLockfileStatusSync(workspaceDir);
+  const managedParentDir = path.dirname(path.resolve(managedSkillsDir));
+  const managedLockRead =
+    managedParentDir !== path.resolve(workspaceDir)
+      ? readClawHubSkillsLockfileStatusSync(managedParentDir)
+      : clawhubLockRead;
   const skillIndexEntries = buildSkillIndexEntries(skillEntries, {
     bundledNames: bundledContext.names,
     agentSkillFilter,
@@ -385,6 +399,8 @@ export function buildWorkspaceSkillStatus(
         agentSkillFilter,
         workspaceDir,
         clawhubLockRead,
+        managedSkillsDir,
+        managedLockRead,
       }),
     ),
   };

@@ -238,6 +238,37 @@ describe("buildWorkspaceSkillStatus", () => {
     }
   });
 
+  it("links globally installed ClawHub skills via the managed lockfile, not the workspace lockfile", async () => {
+    const managedParentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-managed-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-status-"));
+    try {
+      const managedSkillsDir = path.join(managedParentDir, "skills");
+      const skillDir = path.join(managedSkillsDir, "agentreceipt");
+      // Write origin metadata inside the globally installed skill dir.
+      await writeClawHubStatusFixture({
+        workspaceDir: managedParentDir,
+        skillDir,
+        slug: "agentreceipt",
+      });
+
+      const report = buildWorkspaceSkillStatus(workspaceDir, {
+        managedSkillsDir,
+        entries: [createEntry("agentreceipt", { baseDir: skillDir })],
+      });
+
+      // Global skill must be linked via the managed lockfile, not flagged as
+      // "not tracked by the workspace ClawHub lockfile".
+      expect(report.skills[0]?.clawhub).toMatchObject({
+        status: "linked",
+        valid: true,
+        slug: "agentreceipt",
+      });
+    } finally {
+      await fs.rm(managedParentDir, { recursive: true, force: true });
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not surface install options for OS-scoped skills on unsupported platforms", () => {
     if (process.platform === "win32") {
       // Keep this simple; win32 platform naming is already explicitly handled elsewhere.
