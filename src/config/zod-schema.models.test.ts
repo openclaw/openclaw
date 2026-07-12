@@ -6,6 +6,7 @@ describe("ModelsConfigSchema", () => {
   it.each([
     "claude-cli",
     "azure-openai-responses",
+    "clawrouter",
     "gmi",
     "gmi-cloud",
     "gmicloud",
@@ -19,6 +20,7 @@ describe("ModelsConfigSchema", () => {
     "qwen-oauth",
     "qwen-portal",
     "qwen-token-plan",
+    "x-ai",
     "z.ai",
     "z-ai",
   ])("accepts bundled provider overlay for %s without baseUrl or models", (providerId) => {
@@ -91,6 +93,26 @@ describe("ModelsConfigSchema", () => {
                 thinkingFormat: "deepseek",
                 requiresReasoningContentOnAssistantMessages: true,
               },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts catalog-declared temperature compatibility", () => {
+    const result = ModelsConfigSchema.safeParse({
+      providers: {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          api: "openai-responses",
+          models: [
+            {
+              id: "gpt-5.6-luna",
+              name: "GPT-5.6 Luna",
+              compat: { supportsTemperature: false },
             },
           ],
         },

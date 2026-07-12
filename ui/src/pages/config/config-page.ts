@@ -4,7 +4,7 @@ import { property, state } from "lit/decorators.js";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { FastMode } from "../../api/types.ts";
-import type { RouteId } from "../../app-route-paths.ts";
+import { pathForRoute, type RouteId } from "../../app-route-paths.ts";
 import {
   applicationContext,
   type ApplicationContext,
@@ -21,7 +21,7 @@ import {
 import { startThemeTransition } from "../../app/theme-transition.ts";
 import { resolveTheme, type ThemeMode, type ThemeName } from "../../app/theme.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
-import { t } from "../../i18n/index.ts";
+import { i18n, isSupportedLocale, t, type Locale } from "../../i18n/index.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
@@ -97,12 +97,12 @@ const SCOPED_CONFIG_SECTION_KEYS = new Set<string>([
   ...AI_AGENTS_SECTION_KEYS,
 ]);
 const KNOWN_CHANNELS = [
-  { id: "telegram", label: "Telegram" },
-  { id: "discord", label: "Discord" },
-  { id: "slack", label: "Slack" },
-  { id: "whatsapp", label: "WhatsApp" },
-  { id: "signal", label: "Signal" },
-  { id: "imessage", label: "iMessage" },
+  { id: "telegram", labelKey: "configPage.channels.telegram" },
+  { id: "discord", labelKey: "configPage.channels.discord" },
+  { id: "slack", labelKey: "configPage.channels.slack" },
+  { id: "whatsapp", labelKey: "configPage.channels.whatsapp" },
+  { id: "signal", labelKey: "configPage.channels.signal" },
+  { id: "imessage", labelKey: "configPage.channels.imessage" },
 ] as const;
 
 const SYSTEM_INFO_POLL_INTERVAL_MS = 10_000;
@@ -205,7 +205,9 @@ function quickChannels(config: unknown): QuickSettingsChannel[] {
     configuredIds.length > 0
       ? configuredIds.toSorted((left, right) => left.localeCompare(right))
       : KNOWN_CHANNELS.map(({ id }) => id);
-  const labels = new Map<string, string>(KNOWN_CHANNELS.map(({ id, label }) => [id, label]));
+  const labels = new Map<string, string>(
+    KNOWN_CHANNELS.map(({ id, labelKey }) => [id, t(labelKey)]),
+  );
   return channelIds.map((id) => {
     const value = configured[id];
     const connected = Boolean(value && typeof value === "object" && Object.keys(value).length);
@@ -215,7 +217,7 @@ function quickChannels(config: unknown): QuickSettingsChannel[] {
         labels.get(id) ??
         id.replace(/[-_]+/g, " ").replace(/\b\w/g, (character) => character.toUpperCase()),
       connected,
-      detail: connected ? "Configured" : undefined,
+      detail: connected ? t("common.configured") : undefined,
     };
   });
 }
@@ -576,11 +578,17 @@ export class ConfigPage extends OpenClawLightDomElement {
       customTheme: next.customTheme,
       textScale: next.textScale,
       lobsterPetVisits: next.lobsterPetVisits,
+      lobsterPetSounds: next.lobsterPetSounds,
     });
     applyTextScale(this.settings.textScale);
     // theme.refresh() also republishes non-theme appearance prefs (text
-    // scale, lobster pet visits) to app-host subscribers.
+    // scale, lobster pet visits/sounds) to app-host subscribers.
     this.context.theme.refresh();
+  }
+
+  private setLocale(locale: Locale) {
+    this.settings = patchSettings({ locale });
+    void i18n.setLocale(locale);
   }
 
   private setTheme(
@@ -642,7 +650,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.customThemeImportSelectOnSuccess = false;
       this.customThemeImportMessage = {
         kind: "success",
-        text: `Imported ${customTheme.label}.`,
+        text: t("configPage.themeImported", { name: customTheme.label }),
       };
     } catch (error) {
       this.customThemeImportMessage = {
@@ -664,7 +672,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     });
     this.customThemeImportMessage = {
       kind: "success",
-      text: "Custom theme removed.",
+      text: t("configPage.themeRemoved"),
     };
   }
 
@@ -791,9 +799,9 @@ export class ConfigPage extends OpenClawLightDomElement {
       configSaving: configState.configSaving,
       configApplying: configState.configApplying,
       connected: configState.connected,
+      pluginsHref: pathForRoute("plugins", this.context.basePath),
       onSaveConfig: () => void runtimeConfig.save(),
       onApplyConfig: () => void runtimeConfig.apply(),
-      onServerEnabledChange: (name, enabled) => runtimeConfig.setMcpServerEnabled(name, enabled),
       editor: renderConfig({
         ...props,
         activeSection: "mcp",
@@ -810,10 +818,12 @@ export class ConfigPage extends OpenClawLightDomElement {
     const agentsDefaults = asConfigRecord(asConfigRecord(configObject.agents)?.defaults);
     const model = typeof agentsDefaults?.model === "string" ? agentsDefaults.model : "default";
     const thinkingLevel =
-      typeof agentsDefaults?.thinkingLevel === "string" ? agentsDefaults.thinkingLevel : "off";
+      typeof agentsDefaults?.thinkingDefault === "string" ? agentsDefaults.thinkingDefault : "off";
     const fastMode = agentsDefaults?.fastMode;
     const appConfig = this.context.config.current;
     return renderQuickSettings({
+      locale: isSupportedLocale(this.settings.locale) ? this.settings.locale : i18n.getLocale(),
+      onLocaleChange: (locale) => this.setLocale(locale),
       currentModel: model,
       thinkingLevel,
       fastMode: fastMode === "auto" || typeof fastMode === "boolean" ? fastMode : false,
@@ -845,6 +855,9 @@ export class ConfigPage extends OpenClawLightDomElement {
       lobsterPetVisits: this.settings.lobsterPetVisits !== false,
       setLobsterPetVisits: (enabled) =>
         this.applySettings({ ...this.settings, lobsterPetVisits: enabled }),
+      lobsterPetSounds: this.settings.lobsterPetSounds === true,
+      setLobsterPetSounds: (enabled) =>
+        this.applySettings({ ...this.settings, lobsterPetSounds: enabled }),
       onOpenCustomThemeImport: () => {
         this.pageId = "appearance";
         this.setFormMode("form");
@@ -868,7 +881,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       onSaveConfig: () => void runtimeConfig.save(),
       onApplyConfig: () => void runtimeConfig.apply(),
       onThinkingChange: (level) =>
-        runtimeConfig.patchForm(["agents", "defaults", "thinkingLevel"], level),
+        runtimeConfig.patchForm(["agents", "defaults", "thinkingDefault"], level),
       onFastModeChange: (mode: FastMode) =>
         runtimeConfig.patchForm(["agents", "defaults", "fastMode"], mode),
       onChannelConfigure: () => this.navigate("communications"),
@@ -903,11 +916,15 @@ export class ConfigPage extends OpenClawLightDomElement {
       return nothing;
     }
     const modes = [
-      ["quick", "Simple"],
-      ["advanced", "Advanced"],
+      ["quick", t("configPage.simple")],
+      ["advanced", t("configPage.advanced")],
     ] as const;
     return html`
-      <div class="config-view-toggle qs-segmented" role="tablist" aria-label="Settings view">
+      <div
+        class="config-view-toggle qs-segmented"
+        role="tablist"
+        aria-label=${t("configPage.settingsView")}
+      >
         ${modes.map(
           ([mode, label]) => html`
             <button

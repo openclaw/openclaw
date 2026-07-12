@@ -24,7 +24,7 @@ import type {
 /** Event payload emitted for cron lifecycle changes and completed runs. */
 export type CronEvent = {
   jobId: string;
-  action: "added" | "updated" | "removed" | "started" | "finished";
+  action: "added" | "updated" | "removed" | "started" | "finished" | "scheduled";
   /** Snapshot of the job at the time of the event. Present for all actions where the job is accessible. */
   job?: CronJob;
   runAtMs?: number;
@@ -154,6 +154,7 @@ export type CronServiceDeps = {
        * https://github.com/openclaw/openclaw/issues/15692
        */
       delivered?: boolean;
+      deliveryError?: string;
       /**
        * `true` when announce/direct delivery was attempted for this run, even
        * if the final per-message ack status is uncertain.
@@ -167,6 +168,7 @@ export type CronServiceDeps = {
     {
       delivered?: boolean;
       deliveryAttempted?: boolean;
+      deliveryError?: string;
       delivery?: CronDeliveryTrace;
     } & CronRunOutcome
   >;
@@ -200,9 +202,14 @@ export type CronServiceDepsInternal = Omit<CronServiceDeps, "nowMs"> & {
 export type CronServiceState = {
   deps: CronServiceDepsInternal;
   store: CronStoreFile | null;
+  /** Last known durable wake for each persisted job. Map presence distinguishes
+   * a durably unscheduled job from one that is not part of durable topology. */
+  durableNextRunAtMsByJobId: Map<string, number | undefined>;
   timer: NodeJS.Timeout | null;
   running: boolean;
   stopped: boolean;
+  schedulingPaused: boolean;
+  schedulerStarted: boolean;
   restartRecoveryPending: boolean;
   /** Prevents maintenance reads from advancing deferred startup catch-up slots.
    * Entries are removed when the deferred job runs or becomes irrelevant. */
@@ -227,9 +234,12 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
   return {
     deps: { ...deps, nowMs: deps.nowMs ?? (() => Date.now()) },
     store: null,
+    durableNextRunAtMsByJobId: new Map<string, number | undefined>(),
     timer: null,
     running: false,
     stopped: false,
+    schedulingPaused: false,
+    schedulerStarted: false,
     restartRecoveryPending: false,
     pendingCatchupDeferralJobIds: new Set<string>(),
     activeManualRunJobIds: new Set<string>(),
@@ -241,6 +251,15 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     lastQuarantineFailureWarnKey: null,
     storeLoadedAtMs: null,
   };
+}
+
+/** Dispatches a cron event without letting subscriber errors escape scheduler work. */
+export function emit(state: CronServiceState, evt: CronEvent) {
+  try {
+    state.deps.onEvent?.(evt);
+  } catch {
+    /* ignore */
+  }
 }
 
 /** Direct-run mode: respect due time or force execution. */

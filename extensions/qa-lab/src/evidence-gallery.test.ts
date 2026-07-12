@@ -8,7 +8,6 @@ import {
   resolveQaEvidenceArtifactFileByIndex,
   resolveQaEvidenceArtifactFile,
   resolveQaEvidenceProducerFile,
-  resolveQaEvidenceFile,
 } from "./evidence-gallery.js";
 import {
   QA_EVIDENCE_FILENAME,
@@ -62,7 +61,7 @@ function vitestArtifactEvidence(params: {
           provider: {
             id: "mock-openai",
             live: false,
-            model: { name: "mock-openai/gpt-5.5", ref: "mock-openai/gpt-5.5" },
+            model: { name: "mock-openai/gpt-5.6-luna", ref: "mock-openai/gpt-5.6-luna" },
           },
           packageSource: { kind: "source-checkout" },
           artifacts: [{ ...params.artifact, source: "vitest" }],
@@ -90,7 +89,7 @@ describe("evidence gallery", () => {
         OPENCLAW_QA_REF: "gallery-test",
       } as NodeJS.ProcessEnv,
       generatedAt: "2026-06-17T12:00:00.000Z",
-      primaryModel: "mock-openai/gpt-5.5",
+      primaryModel: "mock-openai/gpt-5.6-luna",
       providerMode: "mock-openai",
       targets: [
         {
@@ -616,9 +615,11 @@ describe("evidence gallery", () => {
       }),
     );
 
-    await expect(resolveQaEvidenceFile({ inputPath: outputDir, repoRoot })).resolves.toBe(
-      await fs.realpath(evidencePath),
-    );
+    await expect(
+      buildQaEvidenceGalleryModel({ evidencePath: outputDir, repoRoot }),
+    ).resolves.toMatchObject({
+      counts: { blocked: 0, fail: 0, pass: 1, skipped: 0 },
+    });
     await expect(
       resolveQaEvidenceArtifactFile({
         artifactPath: "artifact.log",
@@ -694,7 +695,10 @@ describe("evidence gallery", () => {
       }),
     ).rejects.toThrow("Evidence artifact not found.");
     await expect(
-      resolveQaEvidenceFile({ inputPath: "/tmp/not-openclaw-evidence.json", repoRoot }),
+      buildQaEvidenceGalleryModel({
+        evidencePath: "/tmp/not-openclaw-evidence.json",
+        repoRoot,
+      }),
     ).rejects.toThrow("Evidence path not found.");
   });
 });

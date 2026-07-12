@@ -682,6 +682,35 @@ describe("runWithModelFallback", () => {
     expect(diagnostics.events).toMatchObject(expectedEvents);
   });
 
+  it("does not replay a thrown attempt after the caller reports a committed side effect", async () => {
+    const failure = new FailoverError("primary failed after tool start", {
+      provider: "openai",
+      model: "gpt-5.4",
+      reason: "overloaded",
+    });
+    const run = vi.fn().mockRejectedValue(failure);
+    const canFallbackAfterError = vi.fn().mockReturnValue(false);
+
+    await expect(
+      runWithModelFallback({
+        cfg: makeDiagnosticFallbackConfig(["anthropic/claude-opus-4-7"]),
+        provider: "openai",
+        model: "gpt-5.4",
+        run,
+        canFallbackAfterError,
+      }),
+    ).rejects.toBe(failure);
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(canFallbackAfterError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        model: "gpt-5.4",
+        error: failure,
+      }),
+    );
+  });
+
   it("uses the opt-in auth skip cache on the second turn for the same session", async () => {
     const previous = process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS;
     process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS = "60000";
@@ -1272,6 +1301,91 @@ describe("runWithModelFallback", () => {
       { isFinalFallbackAttempt: false },
     ]);
     expect(result.attempts).toStrictEqual([]);
+  });
+
+  it("lets a pinned Codex harness bypass unrelated provider auth cooldowns", async () => {
+    const cfg = makeCfg();
+    registerAgentHarness(
+      {
+        id: "codex",
+        label: "Codex",
+        supports: () => ({ supported: true }),
+        runAttempt: vi.fn<AgentHarness["runAttempt"]>(async () => {
+          throw new Error("fallback test should not invoke the harness runtime");
+        }),
+      },
+      { ownerPluginId: "codex-test" },
+    );
+    const tempDir = await makeAuthTempDir();
+    setAuthRuntimeStore(tempDir, {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        "anthropic:default": { type: "api_key", provider: "anthropic", key: "test-key" },
+      },
+      usageStats: {
+        "anthropic:default": {
+          disabledUntil: Date.now() + 60_000,
+          disabledReason: "billing",
+          failureCounts: { billing: 1 },
+        },
+      },
+    });
+    const run = vi.fn().mockResolvedValueOnce("native codex ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      agentDir: tempDir,
+      resolveAgentHarnessRuntimeOverride: () => "codex",
+      run,
+    });
+
+    expect(result.result).toBe("native codex ok");
+    expect(run).toHaveBeenCalledOnce();
+    expect(result.attempts).toStrictEqual([]);
+  });
+
+  it("prefers a prepared harness over a colliding CLI runtime id", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          cliBackends: { codex: { command: "codex" } },
+          model: { primary: "anthropic/claude-sonnet-4-6" },
+        },
+      },
+    });
+    const prepareAgentHarnessRuntime = vi.fn(() => {
+      registerAgentHarness(
+        {
+          id: "codex",
+          label: "Codex",
+          supports: () => ({ supported: true }),
+          runAttempt: vi.fn<AgentHarness["runAttempt"]>(async () => {
+            throw new Error("fallback test should not invoke the harness runtime");
+          }),
+        },
+        { ownerPluginId: "codex-test" },
+      );
+    });
+    const run = vi.fn().mockResolvedValueOnce("native codex ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "codex",
+      model: "gpt-5.5",
+      resolveAgentHarnessRuntimeOverride: () => "codex",
+      prepareAgentHarnessRuntime,
+      run,
+    });
+
+    expect(prepareAgentHarnessRuntime).toHaveBeenCalledWith({
+      provider: "codex",
+      model: "gpt-5.5",
+      agentHarnessRuntimeOverride: "codex",
+    });
+    expect(result.result).toBe("native codex ok");
+    expect(run).toHaveBeenCalledOnce();
   });
 
   it("lets configured CLI runtimes bypass stale provider auth cooldowns", async () => {
@@ -2140,6 +2254,58 @@ describe("runWithModelFallback", () => {
       ["openai", "gpt-4.1-mini", { isFinalFallbackAttempt: false }],
       ["anthropic", "claude-sonnet-4-6", { isFinalFallbackAttempt: false }],
     ]);
+  });
+
+  it("returns runtime-changing live switches to the retry owner before redirecting", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-haiku-3-5",
+            fallbacks: ["openai/gpt-5.6-luna"],
+          },
+        },
+      },
+    });
+    const switchError = new LiveSessionModelSwitchError({
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      agentRuntimeOverride: "codex",
+    });
+    const run = vi.fn().mockRejectedValue(switchError);
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "anthropic",
+        model: "claude-haiku-3-5",
+        resolveAgentHarnessRuntimeOverride: (provider) =>
+          provider === "openai" ? "openclaw" : undefined,
+        run,
+      }),
+    ).rejects.toBe(switchError);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns same-model runtime switches to the retry owner", async () => {
+    const switchError = new LiveSessionModelSwitchError({
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      agentRuntimeOverride: "codex",
+    });
+    const run = vi.fn().mockRejectedValue(switchError);
+
+    await expect(
+      runWithModelFallback({
+        cfg: makeCfg(),
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        fallbacksOverride: [],
+        resolveAgentHarnessRuntimeOverride: () => "openclaw",
+        run,
+      }),
+    ).rejects.toBe(switchError);
+    expect(run).toHaveBeenCalledTimes(1);
   });
 
   it("does not redirect stale live-session switch errors back to the current candidate (#58496 family)", async () => {

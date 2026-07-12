@@ -37,13 +37,23 @@ import {
   type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
 import { buildWorkspaceSkillSnapshot } from "../../skills/loading/workspace.js";
+import {
+  getGeneratedMediaTaskIdsForSessionKey,
+  hasNewGeneratedMediaTaskForSessionKey,
+} from "../../tasks/task-status-access.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import { ensureAuthProfileStore } from "../auth-profiles/store.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
+import {
+  cliBackendAcceptsAuthProfileForwarding,
+  resolveCliExecutionAuthProfileId,
+} from "../cli-execution-auth.js";
 import { runCliAgent } from "../cli-runner.js";
+import { hasClaudeLiveSessionForOwner } from "../cli-runner/claude-live-session.js";
+import { resolveCliRuntimeToolsAllow } from "../cli-runner/tool-policy.js";
 import { getCliSessionBinding } from "../cli-session.js";
 import { runEmbeddedAgent, type EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { FailoverError } from "../failover-error.js";
@@ -52,6 +62,7 @@ import { resolveAvailableAgentHarnessPolicy } from "../harness/selection.js";
 import { resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
 import { isCliProvider } from "../model-selection.js";
 import { resolveOpenAIRuntimeProvider } from "../openai-routing.js";
+import type { AgentRunSessionTarget } from "../run-session-target.js";
 import { resolveAgentRunAbortLifecycleFields } from "../run-termination.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import type { AgentMessage } from "../runtime/index.js";
@@ -62,7 +73,12 @@ import {
   resolveFallbackRetryPrompt,
 } from "./attempt-execution.helpers.js";
 import { resolveAgentRunContext } from "./run-context.js";
-import { clearCliSessionInStore } from "./session-store.js";
+import {
+  clearCliSessionInStore,
+  consumeCliSessionForkInStore,
+  persistCliSessionForkSuccessorInStore,
+  restoreCliSessionForkInStore,
+} from "./session-store.js";
 import type { AgentCommandOpts } from "./types.js";
 
 export {
@@ -104,9 +120,6 @@ const ACP_TRANSCRIPT_USAGE = {
     total: 0,
   },
 } as const;
-const GOOGLE_GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
-const GOOGLE_PROVIDER_ID = "google";
-
 function shouldSuppressEmbeddedLiveStreamOutput(params: { opts: AgentCommandOpts }): boolean {
   return params.opts.sessionEffects === "internal" && params.opts.deliver !== true;
 }
@@ -126,6 +139,7 @@ type PersistTextTurnTranscriptParams = {
   finalText: string;
   sessionId: string;
   sessionKey: string;
+  sessionFile?: string;
   sessionEntry: SessionEntry | undefined;
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
@@ -235,64 +249,6 @@ function resolveHarnessAuthProfileSelection(params: {
     : { authProfileProvider: params.authProfileProvider };
 }
 
-function cliBackendAcceptsAuthProfileForwarding(params: {
-  provider: string;
-  config: OpenClawConfig;
-  agentId?: string;
-}): boolean {
-  const backend = resolveCliBackendConfig(params.provider, params.config, {
-    agentId: params.agentId,
-  });
-  return backend?.id === "google-gemini-cli";
-}
-
-function resolveCliExecutionAuthProfileId(params: {
-  cliExecutionProvider: string;
-  authProfileProvider: string;
-  config: OpenClawConfig;
-  agentDir: string;
-  selected: HarnessAuthProfileSelection;
-}): string | undefined {
-  if (params.selected.authProfileId) {
-    if (
-      params.selected.authProfileProvider === params.cliExecutionProvider ||
-      (params.cliExecutionProvider === GOOGLE_GEMINI_CLI_PROVIDER_ID &&
-        params.selected.authProfileIdSource !== "auto")
-    ) {
-      return params.selected.authProfileId;
-    }
-  }
-
-  const store = ensureAuthProfileStore(params.agentDir, {
-    allowKeychainPrompt: false,
-    externalCliProviderIds: [params.cliExecutionProvider],
-  });
-  const cliProfileId = resolveAuthProfileOrder({
-    cfg: params.config,
-    store,
-    provider: params.cliExecutionProvider,
-  })[0];
-  if (cliProfileId) {
-    return cliProfileId;
-  }
-
-  if (
-    params.cliExecutionProvider !== GOOGLE_GEMINI_CLI_PROVIDER_ID ||
-    params.authProfileProvider !== GOOGLE_PROVIDER_ID
-  ) {
-    return undefined;
-  }
-
-  return resolveAuthProfileOrder({
-    cfg: params.config,
-    store,
-    provider: GOOGLE_PROVIDER_ID,
-  }).find((profileId) => {
-    const credential = store.profiles[profileId];
-    return credential?.provider === GOOGLE_PROVIDER_ID && credential.type === "api_key";
-  });
-}
-
 function resolveTranscriptUsage(usage: PersistTextTurnTranscriptParams["assistant"]["usage"]) {
   if (!usage) {
     return ACP_TRANSCRIPT_USAGE;
@@ -354,7 +310,9 @@ async function persistTextTurnTranscript(
         if (!params.embeddedAssistantGapFill) {
           return true;
         }
-        const latest = await readTailAssistantTextFromSessionTranscript(sessionFile);
+        const latest = await readTailAssistantTextFromSessionTranscript(sessionFile, {
+          excludeTranscriptOnlyOpenClawAssistant: true,
+        });
         const normalizedReply = normalizeTranscriptMirrorText(replyText);
         const normalizedLatest = latest?.text ? normalizeTranscriptMirrorText(latest.text) : "";
         return !normalizedLatest || normalizedLatest !== normalizedReply;
@@ -366,6 +324,7 @@ async function persistTextTurnTranscript(
     {
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
+      sessionFile: params.sessionFile,
       sessionEntry: params.sessionEntry,
       sessionStore: params.sessionStore,
       storePath: params.storePath,
@@ -412,6 +371,7 @@ export async function persistAcpTurnTranscript(params: {
   finalText: string;
   sessionId: string;
   sessionKey: string;
+  sessionFile?: string;
   sessionEntry: SessionEntry | undefined;
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
@@ -438,6 +398,7 @@ export async function persistCliTurnTranscript(params: {
   result: EmbeddedAgentRunResult;
   sessionId: string;
   sessionKey: string;
+  sessionFile?: string;
   sessionEntry: SessionEntry | undefined;
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
@@ -461,6 +422,7 @@ export async function persistCliTurnTranscript(params: {
     finalText: replyText,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
+    sessionFile: params.sessionFile,
     sessionEntry: params.sessionEntry,
     sessionStore: params.sessionStore,
     storePath: params.storePath,
@@ -481,11 +443,14 @@ export async function persistCliTurnTranscript(params: {
 export function runAgentAttempt(params: {
   providerOverride: string;
   modelOverride: string;
+  configuredAuthProfileId?: string;
   originalProvider: string;
   cfg: OpenClawConfig;
   sessionEntry: SessionEntry | undefined;
+  agentHarnessRuntimeOverride?: string;
   sessionId: string;
   sessionKey: string | undefined;
+  sessionTarget?: AgentRunSessionTarget;
   sessionAgentId: string;
   sessionFile: string;
   workspaceDir: string;
@@ -531,6 +496,18 @@ export function runAgentAttempt(params: {
   onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
   onLifecycleGenerationChanged?: (lifecycleGeneration: string) => void;
 }) {
+  const sessionAuthProfileId = params.sessionEntry?.authProfileOverride?.trim();
+  const sessionAuthProfileSource = params.sessionEntry?.authProfileOverrideSource;
+  // An explicit session choice owns the conversation. Otherwise the profile
+  // bound to the configured model replaces a stale automatic session choice.
+  const selectedAuthProfile =
+    sessionAuthProfileId && sessionAuthProfileSource !== "auto"
+      ? { id: sessionAuthProfileId, source: sessionAuthProfileSource }
+      : params.configuredAuthProfileId?.trim()
+        ? { id: params.configuredAuthProfileId.trim(), source: "user" as const }
+        : sessionAuthProfileId
+          ? { id: sessionAuthProfileId, source: sessionAuthProfileSource }
+          : undefined;
   const isRawModelRun = params.opts.modelRun === true || params.opts.promptMode === "none";
   const claudeCliFallbackPrelude =
     !isRawModelRun &&
@@ -556,16 +533,31 @@ export function runAgentAttempt(params: {
   const bootstrapPromptWarningSignature =
     bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
   const requestedAgentHarnessId = isRawModelRun ? "openclaw" : undefined;
+  const sessionRuntimeOverride = isRawModelRun ? undefined : params.agentHarnessRuntimeOverride;
+  const locksSessionRuntimeOverride =
+    sessionRuntimeOverride !== undefined && params.sessionEntry?.modelSelectionLocked === true;
+  const sessionCliRuntime =
+    sessionRuntimeOverride &&
+    !locksSessionRuntimeOverride &&
+    isCliProvider(sessionRuntimeOverride, params.cfg)
+      ? sessionRuntimeOverride
+      : undefined;
+  const configuredCliRuntime =
+    !isRawModelRun && !sessionRuntimeOverride
+      ? resolveCliRuntimeExecutionProvider({
+          provider: params.providerOverride,
+          cfg: params.cfg,
+          agentId: params.sessionAgentId,
+          modelId: params.modelOverride,
+          authProfileId: selectedAuthProfile?.id,
+        })
+      : undefined;
   const cliExecutionProvider = isRawModelRun
     ? params.providerOverride
-    : (resolveCliRuntimeExecutionProvider({
-        provider: params.providerOverride,
-        cfg: params.cfg,
-        agentId: params.sessionAgentId,
-        modelId: params.modelOverride,
-        authProfileId: params.sessionEntry?.authProfileOverride,
-      }) ?? params.providerOverride);
-  const isCliExecutionProvider = isCliProvider(cliExecutionProvider, params.cfg);
+    : (sessionCliRuntime ?? configuredCliRuntime ?? params.providerOverride);
+  const isCliExecutionProvider = sessionRuntimeOverride
+    ? sessionCliRuntime !== undefined
+    : isCliProvider(cliExecutionProvider, params.cfg);
   if (params.fallbackRuntimeState && params.fallbackRuntimeState.originRuntime === undefined) {
     params.fallbackRuntimeState.originRuntime =
       !isRawModelRun && isCliExecutionProvider ? "cli" : "embedded";
@@ -581,21 +573,23 @@ export function runAgentAttempt(params: {
     });
   const agentHarnessPolicy = isRawModelRun
     ? ({ runtime: "openclaw", runtimeSource: "model" } as const)
-    : resolveAvailableAgentHarnessPolicy({
-        provider: params.providerOverride,
-        modelId: params.modelOverride,
-        config: params.cfg,
-        agentId: params.sessionAgentId,
-        sessionKey: params.sessionKey ?? params.sessionId,
-      });
+    : sessionRuntimeOverride
+      ? ({ runtime: sessionRuntimeOverride, runtimeSource: "model" } as const)
+      : resolveAvailableAgentHarnessPolicy({
+          provider: params.providerOverride,
+          modelId: params.modelOverride,
+          config: params.cfg,
+          agentId: params.sessionAgentId,
+          sessionKey: params.sessionKey ?? params.sessionId,
+        });
   const harnessAuthSelection = resolveHarnessAuthProfileSelection({
     config: params.cfg,
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
     provider: params.providerOverride,
     authProfileProvider: params.authProfileProvider,
-    sessionAuthProfileId: params.sessionEntry?.authProfileOverride,
-    sessionAuthProfileSource: params.sessionEntry?.authProfileOverrideSource,
+    sessionAuthProfileId: selectedAuthProfile?.id,
+    sessionAuthProfileSource: selectedAuthProfile?.source,
     harnessId: requestedAgentHarnessId,
     harnessRuntime: agentHarnessPolicy.runtime,
     ...(params.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
@@ -624,7 +618,9 @@ export function runAgentAttempt(params: {
         selected: harnessAuthSelection,
       })
     : undefined;
-  const authProfileId = cliAuthProfileId ?? runtimeAuthPlan.forwardedAuthProfileId;
+  const authProfileId = allowCliAuthProfileForwarding
+    ? cliAuthProfileId
+    : runtimeAuthPlan.forwardedAuthProfileId;
   const embeddedAgentProvider = resolveOpenAIRuntimeProvider({
     provider: params.providerOverride,
     harnessRuntime: agentHarnessPolicy.runtime,
@@ -636,6 +632,7 @@ export function runAgentAttempt(params: {
   });
   const embeddedAgentHarnessOverride =
     requestedAgentHarnessId ??
+    sessionRuntimeOverride ??
     (agentHarnessPolicy.runtime === "openclaw" && agentHarnessPolicy.runtimeSource !== "implicit"
       ? "openclaw"
       : undefined);
@@ -655,9 +652,22 @@ export function runAgentAttempt(params: {
           }
         : undefined;
     const resolveReusableCliSessionBinding = async () => {
+      const hasManagedClaudeLiveSession = Boolean(
+        isClaudeCliProvider(cliExecutionProvider) &&
+        cliSessionBinding?.sessionId &&
+        hasClaudeLiveSessionForOwner({
+          backendId: cliExecutionProvider,
+          agentAccountId: params.runContext.accountId,
+          agentId: params.sessionAgentId,
+          authProfileId: cliSessionBinding.authProfileId,
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+        }),
+      );
       if (
         !isClaudeCliProvider(cliExecutionProvider) ||
         !cliSessionBinding?.sessionId ||
+        hasManagedClaudeLiveSession ||
         (await claudeCliSessionTranscriptHasContent({
           sessionId: cliSessionBinding.sessionId,
           workspaceDir: cliProcessCwd,
@@ -678,24 +688,49 @@ export function runAgentAttempt(params: {
           })) ?? params.sessionEntry;
       }
 
-      return undefined;
+      // The store is already cleared above, so no stale --resume can leak to a
+      // later turn. Still return the bound id as the reuse candidate: prepare
+      // re-detects the missing transcript, keeps useResume=false, and arms
+      // raw-transcript reseed from prior OpenClaw history. Returning undefined
+      // strips the candidate and starves reseed, losing warm-stdin continuity.
+      return cliSessionBinding;
     };
-    const runCliWithSession = (
+    const mediaTaskIdsBefore = getGeneratedMediaTaskIdsForSessionKey(params.sessionKey);
+    const runCliWithSession = async (
       nextCliSessionId: string | undefined,
       activeCliSessionBinding = cliSessionBinding,
-    ) =>
-      runCliAgent({
+    ) => {
+      const forkCliSessionOnResume = activeCliSessionBinding?.forkNextResume === true;
+      if (
+        forkCliSessionOnResume &&
+        !resolveCliBackendConfig(cliExecutionProvider, params.cfg, {
+          agentId: params.sessionAgentId,
+        })?.config.forkArg
+      ) {
+        throw new Error(`CLI backend "${cliExecutionProvider}" does not support session forks`);
+      }
+      const forkStoreParams =
+        forkCliSessionOnResume && nextCliSessionId && mutableCliSessionStore
+          ? {
+              provider: cliExecutionProvider,
+              expectedCliSessionId: nextCliSessionId,
+              ...mutableCliSessionStore,
+            }
+          : undefined;
+      return runCliAgent({
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
         sessionEntry: params.sessionEntry,
         agentId: params.sessionAgentId,
         trigger: "user",
         sessionFile: params.sessionFile,
+        storePath: params.storePath,
         workspaceDir: params.workspaceDir,
         cwd: params.cwd,
         config: params.cfg,
         prompt: cliPrompt,
         transcriptPrompt: params.transcriptBody,
+        modelProvider: params.providerOverride,
         provider: cliExecutionProvider,
         model: params.modelOverride,
         thinkLevel: params.resolvedThinkLevel,
@@ -707,12 +742,42 @@ export function runAgentAttempt(params: {
         extraSystemPrompt: params.opts.extraSystemPrompt,
         inputProvenance: params.opts.inputProvenance,
         sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,
-        requireExplicitMessageTarget: isSubagentSessionKey(params.sessionKey),
+        requireExplicitMessageTarget:
+          params.opts.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
+        cliSessionBindingFacts: params.opts.cliSessionBindingFacts,
         cliSessionId: nextCliSessionId,
         cliSessionBinding:
           nextCliSessionId === activeCliSessionBinding?.sessionId
             ? activeCliSessionBinding
             : undefined,
+        forkCliSessionOnResume,
+        ...(forkStoreParams
+          ? {
+              claimCliSessionFork: async () => {
+                const claimed = await consumeCliSessionForkInStore(forkStoreParams);
+                if (claimed) {
+                  params.sessionEntry = claimed;
+                }
+                return Boolean(claimed);
+              },
+              restoreCliSessionFork: async () => {
+                const restored = await restoreCliSessionForkInStore(forkStoreParams);
+                if (restored) {
+                  params.sessionEntry = restored;
+                }
+              },
+              persistCliSessionForkSuccessor: async (successorCliSessionId: string) => {
+                const persisted = await persistCliSessionForkSuccessorInStore({
+                  ...forkStoreParams,
+                  successorCliSessionId,
+                });
+                if (!persisted) {
+                  throw new Error("CLI session fork successor could not be persisted");
+                }
+                params.sessionEntry = persisted;
+              },
+            }
+          : {}),
         authProfileId,
         bootstrapPromptWarningSignaturesSeen,
         bootstrapPromptWarningSignature,
@@ -735,16 +800,27 @@ export function runAgentAttempt(params: {
         agentAccountId: params.runContext.accountId,
         senderId: params.runContext.senderId,
         senderIsOwner: params.opts.senderIsOwner,
-        toolsAllow: params.opts.toolsAllow,
+        bashElevated: params.opts.bashElevated,
+        groupId: params.runContext.groupId,
+        groupChannel: params.runContext.groupChannel,
+        groupSpace: params.runContext.groupSpace,
+        spawnedBy: params.spawnedBy,
+        toolsAllow: resolveCliRuntimeToolsAllow(
+          params.opts.toolsAllow,
+          params.opts.toolsAllowIsDefault,
+        ),
         cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
         cleanupCliLiveSessionOnRunEnd: params.opts.cleanupCliLiveSessionOnRunEnd,
         oneShotCliRun: params.opts.oneShotCliRun,
         userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
         suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
-        ...(mutableCliSessionStore
+        ...(mutableCliSessionStore && !forkCliSessionOnResume
           ? {
               onBeforeFreshCliSessionRetry: async (retry) => {
-                if (retry.sessionId !== activeCliSessionBinding?.sessionId) {
+                if (
+                  hasNewGeneratedMediaTaskForSessionKey(params.sessionKey, mediaTaskIdsBefore) ||
+                  retry.sessionId !== activeCliSessionBinding?.sessionId
+                ) {
                   return false;
                 }
 
@@ -762,13 +838,16 @@ export function runAgentAttempt(params: {
             }
           : {}),
       });
+    };
     return resolveReusableCliSessionBinding().then(async (activeCliSessionBinding) => {
       try {
         return await runCliWithSession(activeCliSessionBinding?.sessionId, activeCliSessionBinding);
       } catch (err) {
         if (
           isClaudeCliProvider(cliExecutionProvider) &&
+          !activeCliSessionBinding?.forkNextResume &&
           shouldClearReusedCliSessionAfterError(err) &&
+          !hasNewGeneratedMediaTaskForSessionKey(params.sessionKey, mediaTaskIdsBefore) &&
           activeCliSessionBinding?.sessionId &&
           mutableCliSessionStore
         ) {
@@ -790,6 +869,8 @@ export function runAgentAttempt(params: {
   return runEmbeddedAgent({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
+    sessionTarget: params.sessionTarget,
+    sandboxSessionKey: params.sessionKey,
     agentId: params.sessionAgentId,
     trigger: "user",
     messageChannel: params.messageChannel,
@@ -815,6 +896,7 @@ export function runAgentAttempt(params: {
     cwd: params.cwd,
     config: params.cfg,
     agentHarnessId: embeddedAgentHarnessOverride,
+    modelSelectionLocked: !isRawModelRun && params.sessionEntry?.modelSelectionLocked === true,
     agentHarnessRuntimeOverride: embeddedAgentHarnessOverride,
     skillsSnapshot: params.skillsSnapshot,
     prompt: effectivePrompt,
@@ -853,6 +935,7 @@ export function runAgentAttempt(params: {
     inputProvenance: params.opts.inputProvenance,
     sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,
     disableMessageTool: params.opts.disableMessageTool,
+    forceRestartSafeTools: params.opts.forceRestartSafeTools,
     streamParams: params.opts.streamParams,
     agentDir: params.agentDir,
     allowGatewaySubagentBinding: params.opts.allowGatewaySubagentBinding,

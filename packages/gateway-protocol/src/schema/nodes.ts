@@ -1,6 +1,18 @@
 // Gateway Protocol schema module defines protocol validation shapes.
-import { Type } from "typebox";
+import { type Static, Type } from "typebox";
 import { NonEmptyString } from "./primitives.js";
+
+const NodePluginToolNameSchema = Type.String({
+  minLength: 1,
+  maxLength: 64,
+  pattern: "^[A-Za-z][A-Za-z0-9_-]{0,63}$",
+});
+
+const NodeSkillNameSchema = Type.String({
+  minLength: 1,
+  maxLength: 64,
+  pattern: "^(?!.*--)[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$",
+});
 
 /** Pending node work classes that the gateway may queue for paired devices. */
 const NodePendingWorkTypeSchema = Type.String({
@@ -35,6 +47,15 @@ export const NodePresenceAlivePayloadSchema = Type.Object(
     deviceFamily: Type.Optional(NonEmptyString),
     modelIdentifier: Type.Optional(NonEmptyString),
     pushTransport: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
+/** Recent operator input activity reported by an interactive node. */
+export const NodePresenceActivityPayloadSchema = Type.Object(
+  {
+    idleSeconds: Type.Integer({ minimum: 0, maximum: 2_592_000 }),
+    saturated: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );
@@ -80,6 +101,61 @@ export const NodeRenameParamsSchema = Type.Object(
 /** Lists paired nodes known to the gateway. */
 export const NodeListParamsSchema = Type.Object({}, { additionalProperties: false });
 
+/** Agent-visible tool descriptor advertised by a connected node. */
+export const NodePluginToolDescriptorSchema = Type.Object(
+  {
+    pluginId: NonEmptyString,
+    name: NodePluginToolNameSchema,
+    description: NonEmptyString,
+    parameters: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+    command: Type.Optional(NonEmptyString),
+    mcp: Type.Optional(
+      Type.Object(
+        {
+          server: NonEmptyString,
+          tool: NonEmptyString,
+        },
+        { additionalProperties: false },
+      ),
+    ),
+  },
+  { additionalProperties: false },
+);
+
+/** Replaces the connected node's dynamic agent-visible plugin/MCP tool catalog. */
+export const NodePluginToolsUpdateParamsSchema = Type.Object(
+  {
+    tools: Type.Array(NodePluginToolDescriptorSchema),
+  },
+  { additionalProperties: false },
+);
+
+// Plugin-SDK-reachable types export directly from this owner module; routing them
+// through the ProtocolSchemas registry retains the whole registry in public dts.
+export type NodePluginToolDescriptor = Static<typeof NodePluginToolDescriptorSchema>;
+export type NodePluginToolsUpdateParams = Static<typeof NodePluginToolsUpdateParamsSchema>;
+
+/** Agent-visible skill descriptor advertised by a connected node. */
+export const NodeSkillDescriptorSchema = Type.Object(
+  {
+    name: NodeSkillNameSchema,
+    description: Type.String({ minLength: 1, maxLength: 1024 }),
+    content: Type.String({ minLength: 1, maxLength: 64 * 1024 }),
+  },
+  { additionalProperties: false },
+);
+
+/** Replaces the connected node's agent-visible skill catalog. */
+export const NodeSkillsUpdateParamsSchema = Type.Object(
+  {
+    skills: Type.Array(NodeSkillDescriptorSchema, { maxItems: 64 }),
+  },
+  { additionalProperties: false },
+);
+
+export type NodeSkillDescriptor = Static<typeof NodeSkillDescriptorSchema>;
+export type NodeSkillsUpdateParams = Static<typeof NodeSkillsUpdateParamsSchema>;
+
 /** Acknowledges queued node work that the node has consumed. */
 export const NodePendingAckParamsSchema = Type.Object(
   {
@@ -102,6 +178,11 @@ export const NodeInvokeParamsSchema = Type.Object(
     params: Type.Optional(Type.Unknown()),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
     idempotencyKey: NonEmptyString,
+    // Gateway-only approval routing metadata. Node forwarding strips these fields.
+    turnSourceChannel: Type.Optional(Type.String()),
+    turnSourceTo: Type.Optional(Type.String()),
+    turnSourceAccountId: Type.Optional(Type.String()),
+    turnSourceThreadId: Type.Optional(Type.Union([Type.String(), Type.Number()])),
   },
   { additionalProperties: false },
 );
@@ -204,3 +285,25 @@ export const NodeInvokeRequestEventSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+// Wire types derive directly from local schema consts so public d.ts graphs never
+// pull in the ProtocolSchemas registry.
+export type NodePairListParams = Static<typeof NodePairListParamsSchema>;
+export type NodePairApproveParams = Static<typeof NodePairApproveParamsSchema>;
+export type NodePairRejectParams = Static<typeof NodePairRejectParamsSchema>;
+export type NodePairRemoveParams = Static<typeof NodePairRemoveParamsSchema>;
+export type NodeRenameParams = Static<typeof NodeRenameParamsSchema>;
+export type NodeListParams = Static<typeof NodeListParamsSchema>;
+export type NodePendingAckParams = Static<typeof NodePendingAckParamsSchema>;
+export type NodeDescribeParams = Static<typeof NodeDescribeParamsSchema>;
+export type NodeInvokeParams = Static<typeof NodeInvokeParamsSchema>;
+export type NodeInvokeResultParams = Static<typeof NodeInvokeResultParamsSchema>;
+export type NodeEventParams = Static<typeof NodeEventParamsSchema>;
+export type NodeEventResult = Static<typeof NodeEventResultSchema>;
+export type NodePresenceAlivePayload = Static<typeof NodePresenceAlivePayloadSchema>;
+export type NodePresenceAliveReason = Static<typeof NodePresenceAliveReasonSchema>;
+export type NodePresenceActivityPayload = Static<typeof NodePresenceActivityPayloadSchema>;
+export type NodePendingDrainParams = Static<typeof NodePendingDrainParamsSchema>;
+export type NodePendingDrainResult = Static<typeof NodePendingDrainResultSchema>;
+export type NodePendingEnqueueParams = Static<typeof NodePendingEnqueueParamsSchema>;
+export type NodePendingEnqueueResult = Static<typeof NodePendingEnqueueResultSchema>;

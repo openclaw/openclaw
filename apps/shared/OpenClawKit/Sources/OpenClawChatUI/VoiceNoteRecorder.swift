@@ -29,7 +29,9 @@ public protocol VoiceNoteAudioCapture: AnyObject {
 
 extension VoiceNoteAudioCapture {
     /// Metering is a UI nicety; test captures may skip it.
-    public func currentLevel() -> Double? { nil }
+    public func currentLevel() -> Double? {
+        nil
+    }
 }
 
 /// A completed voice-note recording ready to stage as a chat attachment.
@@ -151,7 +153,7 @@ public final class OpenClawVoiceNoteRecorder {
     public func start() async -> Bool {
         guard self.state == .idle || self.errorMessage != nil else { return false }
         guard self.captureAdmissionHandler() else {
-            self.fail(message: String(localized: "Push-to-talk is using the microphone."))
+            self.fail(message: String(localized: "Another feature is using the microphone."))
             return false
         }
 

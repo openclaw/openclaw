@@ -1,4 +1,5 @@
 // Gateway Protocol schema module defines protocol validation shapes.
+import type { Static } from "typebox";
 import { Type, type TSchema } from "typebox";
 import { NonEmptyString } from "./primitives.js";
 
@@ -68,6 +69,7 @@ function cronRunStatusSchema(options: Record<string, unknown> = {}) {
 }
 
 const CronRunStatusSchema = cronRunStatusSchema();
+const CronConfigRevisionSchema = Type.String({ minLength: 1, maxLength: 128 });
 const DeprecatedCronRunStatusSchema = cronRunStatusSchema({
   deprecated: true,
   description: "Deprecated alias for lastRunStatus.",
@@ -220,8 +222,8 @@ export const CronScheduleSchema = Type.Union([
   Type.Object(
     {
       kind: Type.Literal("every"),
-      everyMs: Type.Integer({ minimum: 1 }),
-      anchorMs: Type.Optional(Type.Integer({ minimum: 0 })),
+      everyMs: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+      anchorMs: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
     },
     { additionalProperties: false },
   ),
@@ -230,7 +232,7 @@ export const CronScheduleSchema = Type.Union([
       kind: Type.Literal("cron"),
       expr: NonEmptyString,
       tz: Type.Optional(Type.String()),
-      staggerMs: Type.Optional(Type.Integer({ minimum: 0 })),
+      staggerMs: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
     },
     { additionalProperties: false },
   ),
@@ -490,6 +492,8 @@ export const CronJobSchema = Type.Object(
     deleteAfterRun: Type.Optional(Type.Boolean()),
     createdAtMs: Type.Integer({ minimum: 0 }),
     updatedAtMs: Type.Integer({ minimum: 0 }),
+    /** Opaque Gateway-computed token for the job definition, excluding scheduler state. */
+    configRevision: Type.Optional(CronConfigRevisionSchema),
     schedule: CronScheduleSchema,
     trigger: Type.Optional(CronTriggerSchema),
     sessionTarget: CronSessionTargetSchema,
@@ -589,6 +593,8 @@ export const CronJobPatchSchema = Type.Object(
 /** Updates a cron job by id or legacy jobId alias. */
 export const CronUpdateParamsSchema = cronIdOrJobIdParams({
   patch: CronJobPatchSchema,
+  /** Rejects the patch when the current definition does not match the caller's token. */
+  expectedConfigRevision: Type.Optional(CronConfigRevisionSchema),
 });
 
 /** Removes a cron job by id or legacy jobId alias. */
@@ -660,3 +666,18 @@ export const CronRunLogEntrySchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+// Wire types derive directly from local schema consts so public d.ts graphs never
+// pull in the ProtocolSchemas registry.
+export type CronJob = Static<typeof CronJobSchema>;
+export type CronListParams = Static<typeof CronListParamsSchema>;
+export type CronStatusParams = Static<typeof CronStatusParamsSchema>;
+export type CronGetParams = Static<typeof CronGetParamsSchema>;
+export type CronAddParams = Static<typeof CronAddParamsSchema>;
+export type CronAddResult = Static<typeof CronAddResultSchema>;
+export type CronDeclarativeAddResult = Static<typeof CronDeclarativeAddResultSchema>;
+export type CronUpdateParams = Static<typeof CronUpdateParamsSchema>;
+export type CronRemoveParams = Static<typeof CronRemoveParamsSchema>;
+export type CronRunParams = Static<typeof CronRunParamsSchema>;
+export type CronRunsParams = Static<typeof CronRunsParamsSchema>;
+export type CronRunLogEntry = Static<typeof CronRunLogEntrySchema>;

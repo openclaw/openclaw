@@ -118,7 +118,11 @@ function resultDetails(result: { details?: unknown }): Record<string, unknown> {
 }
 
 function createCodeModeHarness(
-  params: { agentId?: string; catalogRef?: ToolSearchCatalogRef } = {},
+  params: {
+    agentId?: string;
+    catalogRef?: ToolSearchCatalogRef;
+    forceRestartSafeTools?: boolean;
+  } = {},
 ) {
   const catalogRef = params.catalogRef ?? createToolSearchCatalogRef();
   const config = { tools: { codeMode: true } } as never;
@@ -130,6 +134,7 @@ function createCodeModeHarness(
     sessionKey: params.agentId ? `agent:${params.agentId}:main` : "agent:main:main",
     runId: "run-code-mode",
     catalogRef,
+    forceRestartSafeTools: params.forceRestartSafeTools,
   };
   const tools = createCodeModeTools(ctx);
   return { catalogRef, config, ctx, tools };
@@ -140,6 +145,7 @@ async function runUntilCompleted(params: {
   waitTool: AnyAgentTool;
   code: string;
   language?: "javascript" | "typescript";
+  restartSafe?: boolean;
 }) {
   // Code Mode may return a waiting state before completion; tests poll through
   // the public wait tool instead of reaching into activeRuns.
@@ -147,6 +153,7 @@ async function runUntilCompleted(params: {
     await params.execTool.execute("code-call-1", {
       code: params.code,
       language: params.language,
+      restartSafe: params.restartSafe,
     }),
   );
   for (let index = 0; index < 8 && details.status === "waiting"; index += 1) {
@@ -267,6 +274,31 @@ describe("Code Mode", () => {
       CODE_MODE_WAIT_TOOL_NAME,
     ]);
     expect(compacted.catalogToolCount).toBe(2);
+  });
+
+  it("keeps direct-only tools model-visible and out of the guest catalog", () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const computer = {
+      ...fakeTool("computer", "Control a desktop"),
+      catalogMode: "direct-only" as const,
+    };
+    const ticket = pluginTool("fake_create_ticket", "Create a fake ticket");
+
+    const compacted = applyCodeModeCatalog({
+      tools: [...codeModeTools, computer, ticket],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    expect(compacted.tools.map((tool) => tool.name)).toEqual([
+      CODE_MODE_EXEC_TOOL_NAME,
+      CODE_MODE_WAIT_TOOL_NAME,
+      "computer",
+    ]);
+    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["fake_create_ticket"]);
   });
 
   it("marks only the internal wait control as hidden from channel progress", () => {
@@ -861,7 +893,7 @@ describe("Code Mode", () => {
         type: "object",
         properties: {
           owner: { type: "string" },
-          repo: { type: "string", description: "Repository name" },
+          repo: { type: "string", description: "Repository 名称" },
           title: { type: "string", description: "Issue title\nShown in tracker" },
           body: { type: "string", default: "" },
         },
@@ -914,6 +946,9 @@ describe("Code Mode", () => {
         return {
           apiHeader: api.header,
           apiFilePaths: apiFiles.files.map((file) => file.path),
+          listedServerFileBytes: apiFiles.files.find((file) => file.path === "mcp/github.d.ts").bytes,
+          serverFileBytes: serverFile.bytes,
+          serverFileContent: serverFile.content,
           rootFileHasReference: rootFile.content.includes('./github.d.ts'),
           serverFileHasCreateIssue: serverFile.content.includes('function createIssue('),
           serverFileHasTitleDoc: serverFile.content.includes('@param title Issue title Shown in tracker'),
@@ -962,12 +997,23 @@ describe("Code Mode", () => {
       apiSchemaTitle: "object",
       apiHeader: expect.stringContaining("function createIssue("),
       apiFilePaths: ["mcp/index.d.ts", "mcp/github.d.ts"],
+      listedServerFileBytes: expect.any(Number),
+      serverFileBytes: expect.any(Number),
+      serverFileContent: expect.stringContaining("Repository 名称"),
       rootFileHasReference: true,
       serverFileHasCreateIssue: true,
       serverFileHasTitleDoc: true,
       rootServers: [{ identifier: "github", serverName: "github", toolCount: 1 }],
     });
-    const value = details.value as { apiHeader: string };
+    const value = details.value as {
+      apiHeader: string;
+      listedServerFileBytes: number;
+      serverFileBytes: number;
+      serverFileContent: string;
+    };
+    expect(value.listedServerFileBytes).toBe(value.serverFileBytes);
+    expect(value.serverFileBytes).toBe(Buffer.byteLength(value.serverFileContent, "utf8"));
+    expect(value.serverFileBytes).toBeGreaterThan(value.serverFileContent.length);
     expect(value.apiHeader).toContain("@param title Issue title Shown in tracker");
     expect(value.apiHeader).not.toContain("@param title Issue title\n");
     expect(value.apiHeader).toContain("title: string;");
@@ -1362,6 +1408,7 @@ describe("Code Mode", () => {
 
     const first = resultDetails(
       await codeModeTools[0].execute("code-call-yield", {
+        restartSafe: true,
         code: `
           text("before");
           await yield_control("pause");
@@ -1373,6 +1420,7 @@ describe("Code Mode", () => {
 
     expect(first.status).toBe("waiting");
     expect(first.reason).toBe("yield");
+    expect(first.replaySafe).toBe(true);
     expect(first.output).toEqual([{ type: "text", text: "before" }]);
 
     const runId = first.runId;
@@ -1385,6 +1433,186 @@ describe("Code Mode", () => {
       { type: "text", text: "before" },
       { type: "text", text: "after" },
     ]);
+  });
+
+  it("keeps restart-safe mode across audited core reads", async () => {
+    const targetTool = fakeTool("read", "Read");
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, targetTool],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const first = resultDetails(
+      await codeModeTools[0].execute("code-call-replay-safety", {
+        restartSafe: true,
+        code: `
+          const matches = await tools.search(${JSON.stringify(targetTool.name)});
+          return await tools.call(matches[0].id, {});
+        `,
+      }),
+    );
+    expect(first.status).toBe("waiting");
+    expect(first.replaySafe).toBe(true);
+
+    const second = resultDetails(
+      await codeModeTools[1].execute("code-wait-replay-safety", { runId: first.runId }),
+    );
+    expect(second.status).toBe("waiting");
+    expect(second.replaySafe).toBe(true);
+
+    const completed = resultDetails(
+      await codeModeTools[1].execute("code-wait-replay-safety-complete", {
+        runId: second.runId,
+      }),
+    );
+    expect(completed.status).toBe("completed");
+  });
+
+  it("allows explicitly replay-safe plugin tools by exact catalog id", async () => {
+    const targetTool = pluginTool("fake_plugin_read", "Plugin read");
+    setPluginToolMeta(targetTool, {
+      pluginId: "fake-code-mode",
+      optional: true,
+      replaySafe: true,
+    });
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, targetTool],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const completed = await runUntilCompleted({
+      execTool: codeModeTools[0],
+      waitTool: codeModeTools[1],
+      restartSafe: true,
+      code: `
+        const matches = await tools.search("fake_plugin_read");
+        return await tools.call(matches[0].id, {});
+      `,
+    });
+
+    expect(completed.status).toBe("completed");
+    expect(completed.replaySafe).toBe(true);
+    expect(targetTool.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects MCP tools even when their metadata claims replay safety", async () => {
+    const targetTool = mcpTool({
+      name: "mcp_github_read_file",
+      serverName: "github",
+      toolName: "read_file",
+    });
+    setPluginToolMeta(targetTool, {
+      pluginId: "bundle-mcp",
+      optional: false,
+      replaySafe: true,
+      mcp: {
+        serverName: "github",
+        safeServerName: "github",
+        toolName: "read_file",
+        operation: "tool",
+      },
+    });
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, targetTool],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const completed = await runUntilCompleted({
+      execTool: codeModeTools[0],
+      waitTool: codeModeTools[1],
+      restartSafe: true,
+      code: 'return await MCP.github.readFile({ path: "README.md" });',
+    });
+
+    expect(completed.status).toBe("failed");
+    expect(completed.replaySafe).toBe(true);
+    expect(completed.error).toContain("cannot call plugin namespaces");
+    expect(targetTool.execute).not.toHaveBeenCalled();
+  });
+
+  it("rejects side-effecting calls before executing them in restart-safe mode", async () => {
+    const targetTool = pluginTool("fake_write", "Write");
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, targetTool],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const first = resultDetails(
+      await codeModeTools[0].execute("code-call-unsafe-restart", {
+        restartSafe: true,
+        code: `
+          const matches = await tools.search("fake_write");
+          return await tools.call(matches[0].id, {});
+        `,
+      }),
+    );
+    expect(first.status).toBe("waiting");
+    expect(first.replaySafe).toBe(true);
+
+    const failed = resultDetails(
+      await codeModeTools[1].execute("code-wait-unsafe-restart", { runId: first.runId }),
+    );
+    expect(failed.status).toBe("failed");
+    expect(failed.error).toContain("cannot call side-effecting tools");
+    expect(targetTool.execute).not.toHaveBeenCalled();
+  });
+
+  it("keeps host-forced restart safety when the model clears the exec flag", async () => {
+    const targetTool = pluginTool("fake_forced_write", "Write");
+    const {
+      config,
+      catalogRef,
+      tools: codeModeTools,
+    } = createCodeModeHarness({
+      forceRestartSafeTools: true,
+    });
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, targetTool],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const first = resultDetails(
+      await codeModeTools[0].execute("code-call-forced-restart", {
+        restartSafe: false,
+        code: `
+          const matches = await tools.search("fake_forced_write");
+          return await tools.call(matches[0].id, {});
+        `,
+      }),
+    );
+    expect(first.status).toBe("waiting");
+    expect(first.replaySafe).toBe(true);
+
+    const failed = resultDetails(
+      await codeModeTools[1].execute("code-wait-forced-restart", { runId: first.runId }),
+    );
+    expect(failed.status).toBe("failed");
+    expect(failed.error).toContain("cannot call side-effecting tools");
+    expect(targetTool.execute).not.toHaveBeenCalled();
   });
 
   it("fails yield suspension when snapshot expiry would exceed the Date range", async () => {
