@@ -1422,7 +1422,7 @@ describe("config strict validation", () => {
 
       expect(snap.valid).toBe(false);
       expect(issuePaths(snap.issues)).toContain("agents.defaults.sandbox");
-      expect(issuePaths(snap.issues)).toContain("agents.list.0.sandbox");
+      expect(issuePaths(snap.issues)).toContain("agents.list[0].sandbox");
       expect(issuePaths(snap.legacyIssues)).toContain("agents.defaults.sandbox");
       expect(issuePaths(snap.legacyIssues)).toContain("agents.list");
       expect(snap.sourceConfig.agents?.defaults?.sandbox).toEqual({ perSession: true });

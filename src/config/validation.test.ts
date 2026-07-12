@@ -56,13 +56,22 @@ describe("mapZodIssueToConfigIssue", () => {
       expect(result.path).toBe("");
     });
 
-    it("includes numeric array-index segments in path", () => {
+    it("includes numeric array-index segments in path with bracket notation", () => {
       const result = testing.mapZodIssueToConfigIssue({
         code: "custom",
         path: ["agents", "list", 0, "name"],
         message: "missing name",
       });
-      expect(result.path).toBe("agents.list.0.name");
+      expect(result.path).toBe("agents.list[0].name");
+    });
+
+    it("formats consecutive numeric indices with bracket notation", () => {
+      const result = testing.mapZodIssueToConfigIssue({
+        code: "custom",
+        path: ["agents", "list", 3, "tools", "profile"],
+        message: "Invalid input",
+      });
+      expect(result.path).toBe("agents.list[3].tools.profile");
     });
   });
 
@@ -340,7 +349,7 @@ describe("mapZodIssueToConfigIssue", () => {
         ],
       });
       expect(result).toEqual({
-        path: "bindings.0.url",
+        path: "bindings[0].url",
         message: "Expected string",
       });
     });
@@ -358,7 +367,7 @@ describe("mapZodIssueToConfigIssue", () => {
         ],
       });
       expect(result).toEqual({
-        path: "bindings.0.channel",
+        path: "bindings[0].channel",
         message: "Expected string",
       });
     });
@@ -374,7 +383,7 @@ describe("mapZodIssueToConfigIssue", () => {
         ],
       });
       // Ambiguous — falls back to the original union message
-      expect(result.path).toBe("bindings.0");
+      expect(result.path).toBe("bindings[0]");
       expect(result.message).toBe("Invalid input");
     });
 
@@ -395,8 +404,67 @@ describe("mapZodIssueToConfigIssue", () => {
         path: ["bindings", 0],
         message: "Invalid input",
       });
-      expect(result.path).toBe("bindings.0");
+      expect(result.path).toBe("bindings[0]");
       expect(result.message).toBe("Invalid input");
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Received/bad value hint
+  // ---------------------------------------------------------------------------
+
+  describe("received/bad value hint", () => {
+    it("appends got: value when Zod provides a received field (string)", () => {
+      const result = testing.mapZodIssueToConfigIssue({
+        code: "invalid_enum_value",
+        path: ["agents", "list", 3, "tools", "profile"],
+        message: "Invalid input",
+        received: "none",
+        options: ["minimal", "coding", "messaging", "full"],
+      });
+      expect(result.message).toContain('got: "none"');
+    });
+
+    it("appends got: value when received is a number", () => {
+      const result = testing.mapZodIssueToConfigIssue({
+        code: "invalid_type",
+        path: ["port"],
+        message: "Expected number, received string",
+        received: "abc",
+      });
+      expect(result.message).toContain('got: "abc"');
+    });
+
+    it("does not duplicate received value if already in message", () => {
+      const result = testing.mapZodIssueToConfigIssue({
+        code: "invalid_enum_value",
+        path: ["mode"],
+        message: 'Invalid input, got: "none"',
+        received: "none",
+      });
+      // Should not append again
+      const matches = result.message.match(/got: "none"/g);
+      expect(matches).toHaveLength(1);
+    });
+
+    it("does not append received when it is undefined", () => {
+      const result = testing.mapZodIssueToConfigIssue({
+        code: "custom",
+        path: ["x"],
+        message: "something wrong",
+        received: undefined,
+      });
+      expect(result.message).not.toContain("got:");
+    });
+
+    it("does not append received when it is null", () => {
+      const result = testing.mapZodIssueToConfigIssue({
+        code: "custom",
+        path: ["x"],
+        message: "something wrong",
+        received: null,
+      });
+      expect(result.message).not.toContain("got:");
     });
   });
 

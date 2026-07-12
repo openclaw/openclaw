@@ -26,7 +26,7 @@ describe("config hooks module paths", () => {
           ],
         },
       },
-      "hooks.mappings.0.transform.module",
+      "hooks.mappings[0].transform.module",
     );
   });
 
@@ -44,7 +44,7 @@ describe("config hooks module paths", () => {
           ],
         },
       },
-      "hooks.mappings.0.transform.module",
+      "hooks.mappings[0].transform.module",
     );
   });
 
@@ -59,7 +59,7 @@ describe("config hooks module paths", () => {
           },
         },
       },
-      "hooks.internal.handlers.0.module",
+      "hooks.internal.handlers[0].module",
     );
   });
 
@@ -74,7 +74,7 @@ describe("config hooks module paths", () => {
           },
         },
       },
-      "hooks.internal.handlers.0.module",
+      "hooks.internal.handlers[0].module",
     );
   });
 
@@ -109,7 +109,7 @@ describe("config hooks module paths", () => {
           ],
         },
       },
-      "hooks.mappings.0.channel",
+      "hooks.mappings[0].channel",
     );
   });
 });

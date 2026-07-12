@@ -106,7 +106,7 @@ describe("config validation allowed-values metadata", () => {
     if (!result.ok) {
       expect(result.issues).toEqual([
         {
-          path: "bindings.0.acp",
+          path: "bindings[0].acp",
           message: 'Unrecognized key: "agent"',
         },
       ]);
@@ -130,7 +130,7 @@ describe("config validation allowed-values metadata", () => {
     if (!result.ok) {
       expect(result.issues).toEqual([
         {
-          path: "bindings.0",
+          path: "bindings[0]",
           message: 'Unrecognized key: "extraTopLevel"',
         },
       ]);
@@ -148,7 +148,7 @@ describe("config validation allowed-values metadata", () => {
     if (!result.ok) {
       expect(result.issues).toEqual([
         {
-          path: "agents.list.0.model",
+          path: "agents.list[0].model",
           message: "Invalid input",
         },
       ]);
@@ -174,7 +174,7 @@ describe("config validation legacy openai-codex api", () => {
       const providerIssue = requireIssue(result.issues, "models.providers.openai-codex.api");
       expect(providerIssue.message).toContain('"openai-codex-responses" is a removed api id');
       expect(providerIssue.message).toContain('use "openai-chatgpt-responses"');
-      const modelIssue = requireIssue(result.issues, "models.providers.openai-codex.models.0.api");
+      const modelIssue = requireIssue(result.issues, "models.providers.openai-codex.models[0].api");
       expect(modelIssue.message).toContain('use "openai-chatgpt-responses"');
     }
   });

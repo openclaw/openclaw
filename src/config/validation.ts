@@ -204,7 +204,15 @@ function toConfigPathSegments(pathLocal3: unknown): ConfigPathSegment[] {
 }
 
 function formatConfigPath(segments: readonly ConfigPathSegment[]): string {
-  return segments.join(".");
+  return segments
+    .map((segment, index) => {
+      if (typeof segment === "number") {
+        return `[${segment}]`;
+      }
+      // String segments need a dot prefix unless they are the very first segment.
+      return index > 0 ? `.${segment}` : segment;
+    })
+    .join("");
 }
 
 function formatMissingOfficialExternalPluginWarning(
@@ -828,7 +836,19 @@ function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
   // Numeric ceiling/floor hints (too_big / too_small with numeric origin).
   // Append a parenthesized bound alongside Zod's native message,
   // matching the clarity that enum/union rejections get via (allowed: …).
-  const enrichedMessage = record ? appendNumericBoundHint(message, record) : message;
+  let enrichedMessage = record ? appendNumericBoundHint(message, record) : message;
+
+  // Append the received/bad value when Zod provides it (e.g. invalid_enum_value,
+  // invalid_literal, invalid_type). This makes the error grep-able and actionable.
+  if (record && "received" in record) {
+    const received = (record as Record<string, unknown>).received;
+    if (received !== undefined && received !== null) {
+      const receivedStr = typeof received === "string" ? `"${received}"` : String(received);
+      if (!enrichedMessage.includes(receivedStr)) {
+        enrichedMessage = `${enrichedMessage}, got: ${receivedStr}`;
+      }
+    }
+  }
 
   const allowedValuesSummary = summarizeAllowedValues(collectAllowedValuesFromUnknownIssue(issue));
 
@@ -967,7 +987,7 @@ function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[]
     }
     if (avatar.startsWith("~")) {
       issues.push({
-        path: `agents.list.${index}.identity.avatar`,
+        path: `agents.list[${index}].identity.avatar`,
         message: "identity.avatar must be a workspace-relative path, http(s) URL, or data URI.",
       });
       continue;
@@ -975,7 +995,7 @@ function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[]
     const hasScheme = hasAvatarUriScheme(avatar);
     if (hasScheme && !isWindowsAbsolutePath(avatar)) {
       issues.push({
-        path: `agents.list.${index}.identity.avatar`,
+        path: `agents.list[${index}].identity.avatar`,
         message: "identity.avatar must be a workspace-relative path, http(s) URL, or data URI.",
       });
       continue;
@@ -986,7 +1006,7 @@ function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[]
     );
     if (!isWorkspaceAvatarPath(avatar, workspaceDir)) {
       issues.push({
-        path: `agents.list.${index}.identity.avatar`,
+        path: `agents.list[${index}].identity.avatar`,
         message: "identity.avatar must stay within the agent workspace.",
       });
     }
@@ -1792,7 +1812,7 @@ function validateConfigObjectWithPluginsBase(
   );
   if (Array.isArray(config.agents?.list)) {
     for (const [index, entry] of config.agents.list.entries()) {
-      validateHeartbeatTarget(entry?.heartbeat?.target, `agents.list.${index}.heartbeat.target`);
+      validateHeartbeatTarget(entry?.heartbeat?.target, `agents.list[${index}].heartbeat.target`);
     }
   }
 

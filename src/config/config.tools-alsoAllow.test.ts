@@ -36,7 +36,7 @@ describe("config: tools.alsoAllow", () => {
 
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.issues.map((issue) => issue.path)).toContain("agents.list.0.tools");
+      expect(res.issues.map((issue) => issue.path)).toContain("agents.list[0].tools");
     }
   });
 
