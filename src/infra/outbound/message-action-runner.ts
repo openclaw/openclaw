@@ -221,6 +221,7 @@ function resolveGatewayActionOptions(gateway?: MessageActionRunnerGateway) {
 
 const MESSAGE_ACTION_RECONCILIATION_TIMEOUT_MS = 60_000;
 const MESSAGE_ACTION_RECONCILIATION_MAX_MS = 9 * 60_000;
+const MESSAGE_ACTION_INITIAL_SEND_TIMEOUT_MAX_MS = 30_000;
 
 async function callGatewayMessageAction<T>(params: {
   gateway?: MessageActionRunnerGateway;
@@ -231,12 +232,18 @@ async function callGatewayMessageAction<T>(params: {
     await loadMessageActionGatewayRuntime();
   const gateway = resolveGatewayActionOptions(params.gateway);
   const agentRuntimeIdentityToken = await params.gateway?.resolveAgentRuntimeIdentityToken?.();
+  // A timed-out send is reattached with the same idempotency key. Cap only the
+  // initial wait so the 9-minute join remains inside Codex's 10-minute tool envelope.
+  const timeoutMs =
+    params.actionParams.action === "send"
+      ? Math.min(gateway.timeoutMs, MESSAGE_ACTION_INITIAL_SEND_TIMEOUT_MAX_MS)
+      : gateway.timeoutMs;
   const call = {
     url: gateway.url,
     token: gateway.token,
     method: "message.action",
     params: params.actionParams,
-    timeoutMs: gateway.timeoutMs,
+    timeoutMs,
     signal: params.abortSignal,
     clientName: gateway.clientName,
     clientDisplayName: gateway.clientDisplayName,

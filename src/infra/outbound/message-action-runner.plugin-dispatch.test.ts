@@ -1245,7 +1245,7 @@ describe("runMessageAction plugin dispatch", () => {
         gateway: {
           clientName: "cli",
           mode: "cli",
-          timeoutMs: 30_000,
+          timeoutMs: 120_000,
         },
         dryRun: false,
       } satisfies Parameters<typeof runMessageAction>[0];
@@ -1261,6 +1261,7 @@ describe("runMessageAction plugin dispatch", () => {
         "second gateway least privilege call",
         1,
       );
+      expect(firstCall.timeoutMs).toBe(30_000);
       expect(secondCall).toMatchObject({
         ...firstCall,
         timeoutMs: null,
