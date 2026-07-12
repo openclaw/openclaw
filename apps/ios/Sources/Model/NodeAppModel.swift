@@ -3735,7 +3735,9 @@ extension NodeAppModel {
         }
         if problem.needsPairingApproval || problem.pauseReconnect {
             LiveActivityManager.shared.showAttention(
-                statusText: problem.needsPairingApproval ? "Approval needed" : "Action required",
+                statusText: problem.needsPairingApproval
+                    ? String(localized: "Approval needed")
+                    : String(localized: "Action required"),
                 agentName: self.activeAgentName,
                 sessionKey: self.mainSessionKey)
         }
@@ -3752,7 +3754,9 @@ extension NodeAppModel {
         }
         if problem.needsPairingApproval || problem.pauseReconnect {
             LiveActivityManager.shared.showAttention(
-                statusText: problem.needsPairingApproval ? "Approval needed" : "Action required",
+                statusText: problem.needsPairingApproval
+                    ? String(localized: "Approval needed")
+                    : String(localized: "Action required"),
                 agentName: self.activeAgentName,
                 sessionKey: self.mainSessionKey)
         }
@@ -4417,7 +4421,9 @@ extension NodeAppModel {
         self.gatewayServerName = nil
         self.gatewayRemoteAddress = nil
         LiveActivityManager.shared.showConnecting(
-            statusText: (attempt == 0) ? "Connecting..." : "Reconnecting...",
+            statusText: (attempt == 0)
+                ? String(localized: "Connecting...")
+                : String(localized: "Reconnecting..."),
             agentName: self.activeAgentName,
             sessionKey: self.mainSessionKey)
     }
@@ -5847,7 +5853,7 @@ extension NodeAppModel {
                 guard self.isOperatorGatewayConnected else {
                     return WatchChatPreview(
                         items: [],
-                        statusText: "Connect iPhone chat to read messages")
+                        statusText: String(localized: "Connect iPhone chat to read messages"))
                 }
                 payload = try await IOSGatewayChatTransport(gateway: self.operatorSession)
                     .requestHistory(sessionKey: self.chatSessionKey)
@@ -5859,7 +5865,9 @@ extension NodeAppModel {
                 statusText: items.isEmpty ? "No chat messages yet" : nil)
         } catch {
             GatewayDiagnostics.log("watch app snapshot: chat preview failed error=\(error.localizedDescription)")
-            return WatchChatPreview(items: [], statusText: "Chat unavailable")
+            return WatchChatPreview(
+                items: [],
+                statusText: String(localized: "Chat unavailable"))
         }
     }
 

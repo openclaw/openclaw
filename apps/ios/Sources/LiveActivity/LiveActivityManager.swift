@@ -17,7 +17,11 @@ final class LiveActivityManager {
         self.hydrateCurrentAndPruneDuplicates()
     }
 
-    func showConnecting(statusText: String = "Connecting...", agentName: String, sessionKey: String) {
+    func showConnecting(
+        statusText: String = String(localized: "Connecting..."),
+        agentName: String,
+        sessionKey: String)
+    {
         self.hydrateCurrentAndPruneDuplicates()
 
         if self.currentActivity != nil {
@@ -77,7 +81,7 @@ final class LiveActivityManager {
         self.updateCurrent(state: self.attentionState(statusText: statusText), staleDate: nil)
     }
 
-    func handleConnecting(statusText: String = "Connecting...") {
+    func handleConnecting(statusText: String = String(localized: "Connecting...")) {
         self.updateCurrent(
             state: self.connectingState(statusText: statusText),
             staleDate: Date().addingTimeInterval(self.connectingStaleSeconds))
@@ -172,7 +176,7 @@ final class LiveActivityManager {
 
     private func disconnectedState() -> OpenClawActivityAttributes.ContentState {
         OpenClawActivityAttributes.ContentState(
-            statusText: "Disconnected",
+            statusText: String(localized: "Disconnected"),
             isIdle: false,
             isDisconnected: true,
             isConnecting: false,

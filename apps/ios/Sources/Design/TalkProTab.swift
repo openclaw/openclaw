@@ -155,22 +155,24 @@ struct TalkProTab: View {
 
     private var conversationSection: some View {
         Section("Conversation") {
-            SettingsDetailRow("Agent", value: self.appModel.chatAgentName)
-            SettingsDetailRow("Session", value: self.appModel.chatSessionKey)
-            SettingsDetailRow("Runtime", value: self.appModel.talkMode.statusText)
+            SettingsDetailRow("Agent", value: .verbatim(self.appModel.chatAgentName))
+            SettingsDetailRow("Session", value: .verbatim(self.appModel.chatSessionKey))
+            SettingsDetailRow("Runtime", value: .localized(self.appModel.talkMode.statusText))
         }
     }
 
     private var voiceModeSection: some View {
         Section("Voice Mode") {
-            SettingsDetailRow("Configured", value: self.appModel.talkMode.gatewayTalkVoiceModeTitle)
-            SettingsDetailRow("Active", value: self.activeModeText)
-            SettingsDetailRow("Transport", value: self.transportText)
+            SettingsDetailRow(
+                "Configured",
+                value: .localized(self.appModel.talkMode.gatewayTalkVoiceModeTitle))
+            SettingsDetailRow("Active", value: .verbatim(self.activeModeText))
+            SettingsDetailRow("Transport", value: .localized(self.transportText))
             if let issueText = self.talkIssueText {
-                SettingsDetailRow("Last issue", value: issueText)
+                SettingsDetailRow("Last issue", value: .verbatim(issueText))
             }
-            SettingsDetailRow("Permission", value: self.permissionText)
-            SettingsDetailRow("Speech language", value: self.speechLocaleText)
+            SettingsDetailRow("Permission", value: .localized(self.permissionText))
+            SettingsDetailRow("Speech language", value: .verbatim(self.speechLocaleText))
         }
     }
 

@@ -275,22 +275,30 @@ private struct ExecApprovalPromptCard: View {
         guard let expiresAtMs else { return nil }
         let remainingSeconds = Int((Double(expiresAtMs) / 1000.0) - Date().timeIntervalSince1970)
         if remainingSeconds <= 0 {
-            return "expired"
+            return String(localized: "expired")
         }
         if remainingSeconds < 60 {
-            return "under a minute"
+            return String(localized: "under a minute")
         }
         if remainingSeconds < 3600 {
             let minutes = Int(ceil(Double(remainingSeconds) / 60.0))
-            return minutes == 1 ? "about 1 minute" : "about \(minutes) minutes"
+            return minutes == 1
+                ? String(localized: "about 1 minute")
+                : String(
+                    format: String(localized: "about %@ minutes"),
+                    minutes.formatted())
         }
         let hours = Int(ceil(Double(remainingSeconds) / 3600.0))
-        return hours == 1 ? "about 1 hour" : "about \(hours) hours"
+        return hours == 1
+            ? String(localized: "about 1 hour")
+            : String(
+                format: String(localized: "about %@ hours"),
+                hours.formatted())
     }
 }
 
 private struct ExecApprovalPromptMetadataRow: View {
-    let label: String
+    let label: LocalizedStringKey
     let value: String
 
     var body: some View {
@@ -298,7 +306,7 @@ private struct ExecApprovalPromptMetadataRow: View {
             Text(self.label)
                 .font(OpenClawType.caption)
                 .foregroundStyle(.secondary)
-            Text(self.value)
+            Text(verbatim: self.value)
                 .font(OpenClawType.footnote)
                 .textSelection(.enabled)
         }

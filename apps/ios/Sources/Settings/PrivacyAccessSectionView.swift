@@ -77,18 +77,18 @@ struct PrivacyAccessSectionView: View {
     {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Label(title, systemImage: icon)
+                Label(LocalizedStringKey(title), systemImage: icon)
                     .font(OpenClawType.subheadSemiBold)
                 Spacer()
-                OpenClawStatusBadge(label: status, tone: self.statusTone(for: status))
+                OpenClawStatusBadge(label: .localized(status), tone: self.statusTone(for: status))
                     .accessibilityIdentifier("privacy-access-\(title)-status")
             }
-            Text(detail)
+            Text(LocalizedStringKey(detail))
                 .font(OpenClawType.footnote)
                 .foregroundStyle(.secondary)
             if let actionTitle, let action {
                 Button(action: action) {
-                    Text(actionTitle)
+                    Text(LocalizedStringKey(actionTitle))
                         .font(OpenClawType.footnoteSemiBold)
                 }
                 .buttonStyle(.bordered)

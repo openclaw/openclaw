@@ -139,7 +139,7 @@ struct OnboardingConnectPhaseView: View {
             OpenClawNoticeBanner(
                 icon: "exclamationmark.triangle.fill",
                 title: "Connection Failed",
-                message: message,
+                message: .verbatim(message),
                 ownerLabel: "Needs attention",
                 tint: OpenClawBrand.danger,
                 primaryActionTitle: allowsRetry ? "Retry" : nil,

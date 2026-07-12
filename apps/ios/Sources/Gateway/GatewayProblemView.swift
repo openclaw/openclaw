@@ -11,12 +11,12 @@ struct GatewayProblemBanner: View {
     var body: some View {
         OpenClawNoticeBanner(
             icon: self.iconName,
-            title: self.problem.title,
-            message: self.problem.message,
-            ownerLabel: self.ownerLabel,
+            title: .localized(self.problem.title),
+            message: .localized(self.problem.message),
+            ownerLabel: .localized(self.ownerLabel),
             tint: self.tint,
             detail: self.problem.requestId.map(OpenClawNoticeDetail.requestID),
-            primaryActionTitle: self.primaryActionTitle,
+            primaryActionTitle: self.primaryActionTitle.map(OpenClawTextValue.localized),
             onPrimaryAction: self.onPrimaryAction,
             secondaryActionTitle: "Details",
             onSecondaryAction: self.onShowDetails)
@@ -88,12 +88,12 @@ struct GatewayProblemDetailsSheet: View {
             List {
                 Section {
                     VStack(alignment: .leading, spacing: 10) {
-                        Text(self.problem.title)
+                        Text(LocalizedStringKey(self.problem.title))
                             .font(OpenClawType.title3)
-                        Text(self.problem.message)
+                        Text(LocalizedStringKey(self.problem.message))
                             .font(OpenClawType.body)
                             .foregroundStyle(.secondary)
-                        Text(self.ownerSummary)
+                        Text(LocalizedStringKey(self.ownerSummary))
                             .font(OpenClawType.footnoteSemiBold)
                             .foregroundStyle(.secondary)
                     }
@@ -170,7 +170,7 @@ struct GatewayProblemDetailsSheet: View {
 
                 if let copyFeedback {
                     Section {
-                        Text(copyFeedback)
+                        Text(verbatim: copyFeedback)
                             .font(OpenClawType.footnote)
                             .foregroundStyle(.secondary)
                     }
@@ -189,7 +189,7 @@ struct GatewayProblemDetailsSheet: View {
                             self.dismiss()
                             onPrimaryAction()
                         } label: {
-                            Text(primaryActionTitle)
+                            Text(LocalizedStringKey(primaryActionTitle))
                                 .font(OpenClawType.subheadSemiBold)
                         }
                         .font(OpenClawType.subheadSemiBold)

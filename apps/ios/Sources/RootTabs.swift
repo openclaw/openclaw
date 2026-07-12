@@ -340,7 +340,10 @@ struct RootTabs: View {
             self.sidebarHorizontalSeparator
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("OpenClaw \(self.sidebarGatewayStatusTitle)")
+        .accessibilityLabel(
+            String(
+                format: String(localized: "OpenClaw %@"),
+                self.sidebarGatewayStatusTitle))
     }
 
     private var sidebarGatewayStatusTitle: String {
