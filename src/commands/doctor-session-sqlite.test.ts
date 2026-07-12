@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   loadExactSqliteSessionEntry,
@@ -282,7 +283,10 @@ describe("runDoctorSessionSqlite", () => {
       expect(fs.existsSync(archivedTranscriptPath)).toBe(true);
     }
     expect(firstImport.targets[0]?.archivedUnreferencedJsonlFiles).toHaveLength(1);
-    const archivedUnreferencedPath = firstImport.targets[0]?.archivedUnreferencedJsonlFiles[0];
+    const archivedUnreferencedPath = expectDefined(
+      firstImport.targets[0]?.archivedUnreferencedJsonlFiles[0],
+      "firstImport.targets[0]?.archivedUnreferencedJsonlFiles[0] test invariant",
+    );
     expect(archivedUnreferencedPath).toBeTruthy();
     expect(archivedUnreferencedPath).not.toContain(`${path.sep}sessions${path.sep}`);
     expect(archivedUnreferencedPath).toContain("archive-tier.orphan.jsonl.imported-");
@@ -438,7 +442,7 @@ describe("runDoctorSessionSqlite", () => {
       store: store.storePath,
     });
     const manifest = readMigrationManifest(report.migrationRun?.manifestPath);
-    const target = manifest.targets[0];
+    const target = expectDefined(manifest.targets[0], "manifest.targets[0] test invariant");
 
     expect(report.migrationRun?.runId).toBe(manifest.runId);
     expect(target).toMatchObject({
@@ -578,7 +582,7 @@ describe("runDoctorSessionSqlite", () => {
     });
     const manifestPath = requireMigrationManifestPath(importReport.migrationRun?.manifestPath);
     const manifest = readMigrationManifest(manifestPath);
-    manifest.targets[0].completedMoves = [];
+    expectDefined(manifest.targets[0], "manifest.targets[0] test invariant").completedMoves = [];
     fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
 
     const restore = await runDoctorSessionSqlite({
@@ -680,7 +684,7 @@ describe("runDoctorSessionSqlite", () => {
     const manifestPath = requireMigrationManifestPath(importReport.migrationRun?.manifestPath);
     const manifest = readMigrationManifest(manifestPath);
     manifest.failedAt = "2030-01-01T00:00:00.000Z";
-    manifest.targets[0].issues = [
+    expectDefined(manifest.targets[0], "manifest.targets[0] test invariant").issues = [
       {
         code: "startup_failure",
         message: `token=supersecret startup migration failed for agent:main:main at ${store.storePath} and ${process.env.HOME ?? "/Users/example"}/private/openclaw.json`,
@@ -725,7 +729,7 @@ describe("runDoctorSessionSqlite", () => {
     const manifestPath = requireMigrationManifestPath(importReport.migrationRun?.manifestPath);
     const manifest = readMigrationManifest(manifestPath);
     manifest.failedAt = "2030-01-01T00:00:00.000Z";
-    manifest.targets[0].issues = [
+    expectDefined(manifest.targets[0], "manifest.targets[0] test invariant").issues = [
       { code: "startup_failure", message: "selected store failed after archive" },
     ];
     manifest.targets.push({
@@ -1206,7 +1210,14 @@ describe("runDoctorSessionSqlite", () => {
     expect(report.targets[0]?.sqlitePath).toBe(
       path.join(store.sessionDir, "openclaw-agent.sqlite"),
     );
-    expect(fs.existsSync(report.targets[0]?.sqlitePath)).toBe(true);
+    expect(
+      fs.existsSync(
+        expectDefined(
+          report.targets[0]?.sqlitePath,
+          "report.targets[0]?.sqlitePath test invariant",
+        ),
+      ),
+    ).toBe(true);
     expect(
       loadSqliteTranscriptEventsSync({
         agentId: "main",

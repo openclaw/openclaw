@@ -3,6 +3,7 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
@@ -357,11 +358,13 @@ const makeContext = (): GatewayRequestContext =>
     getRuntimeConfig: () => mocks.loadConfigReturn,
   }) as unknown as GatewayRequestContext;
 
-type AgentHandlerArgs = Parameters<typeof agentHandlers.agent>[0];
+type AgentHandler = NonNullable<typeof agentHandlers.agent>;
+type AgentHandlerArgs = Parameters<AgentHandler>[0];
 type AgentParams = AgentHandlerArgs["params"];
 type AgentCommandCall = Record<string, unknown>;
 
-type AgentIdentityGetHandlerArgs = Parameters<(typeof agentHandlers)["agent.identity.get"]>[0];
+type AgentIdentityGetHandler = NonNullable<(typeof agentHandlers)["agent.identity.get"]>;
+type AgentIdentityGetHandlerArgs = Parameters<AgentIdentityGetHandler>[0];
 type AgentIdentityGetParams = AgentIdentityGetHandlerArgs["params"];
 
 const realSetTimeout = globalThis.setTimeout.bind(globalThis);
@@ -774,7 +777,10 @@ function setupCronContinuationReleaseFixture() {
 
 async function invokeGatewaySuspendPrepare(context: GatewayRequestContext, requestId: string) {
   const respond = vi.fn();
-  await suspendHandlers["gateway.suspend.prepare"]({
+  await expectDefined(
+    suspendHandlers["gateway.suspend.prepare"],
+    'suspendHandlers["gateway.suspend.prepare"] test invariant',
+  )({
     params: { requestId },
     respond: respond as never,
     context: {
@@ -878,14 +884,17 @@ async function invokeAgent(
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   }
   try {
-    await agentHandlers.agent({
-      params,
-      respond: respond as never,
-      context: options?.context ?? makeContext(),
-      req: { type: "req", id: options?.reqId ?? "agent-test-req", method: "agent" },
-      client: options?.client ?? null,
-      isWebchatConnect: options?.isWebchatConnect ?? (() => false),
-    });
+    await expectDefined(agentHandlers.agent, "agentHandlers.agent test invariant").call(
+      agentHandlers,
+      {
+        params,
+        respond: respond as never,
+        context: options?.context ?? makeContext(),
+        req: { type: "req", id: options?.reqId ?? "agent-test-req", method: "agent" },
+        client: options?.client ?? null,
+        isWebchatConnect: options?.isWebchatConnect ?? (() => false),
+      },
+    );
     if (options?.flushDispatch !== false) {
       await waitForAcceptedRunDispatch(respond);
     }
@@ -906,7 +915,10 @@ async function invokeAgentIdentityGet(
   },
 ) {
   const respond = options?.respond ?? vi.fn();
-  await agentHandlers["agent.identity.get"]({
+  await expectDefined(
+    agentHandlers["agent.identity.get"],
+    'agentHandlers["agent.identity.get"] test invariant',
+  )({
     params,
     respond: respond as never,
     context: options?.context ?? makeContext(),
@@ -1192,7 +1204,10 @@ describe("gateway agent handler", () => {
     expect(context.dedupe.get(`agent:${runId}`)?.payload).not.toHaveProperty("sessionKey");
 
     const abortRespond = vi.fn();
-    await chatHandlers["chat.abort"]({
+    await expectDefined(
+      chatHandlers["chat.abort"],
+      'chatHandlers["chat.abort"] test invariant',
+    )({
       params: { sessionKey: "agent:ops:main", runId },
       respond: abortRespond as never,
       context,
@@ -1615,7 +1630,10 @@ describe("gateway agent handler", () => {
     expect(mocks.updateSessionStore).not.toHaveBeenCalled();
 
     const abortRespond = vi.fn();
-    await chatHandlers["chat.abort"]({
+    await expectDefined(
+      chatHandlers["chat.abort"],
+      'chatHandlers["chat.abort"] test invariant',
+    )({
       params: { sessionKey, runId },
       respond: abortRespond as never,
       context,
@@ -3934,7 +3952,9 @@ describe("gateway agent handler", () => {
       },
     );
     await waitForAgentCommandCall();
-    expect(store[sessionKey].cronRunContinuation).toMatchObject({
+    expect(
+      expectDefined(store[sessionKey], "store[sessionKey] test invariant").cronRunContinuation,
+    ).toMatchObject({
       phase: "continuing",
       ownerRunId: "cron-media-first",
     });
@@ -3958,14 +3978,18 @@ describe("gateway agent handler", () => {
       message: "cron run continuation changed before admission",
     });
     expect(mocks.agentCommand).toHaveBeenCalledTimes(1);
-    expect(store[sessionKey].cronRunContinuation).toMatchObject({
+    expect(
+      expectDefined(store[sessionKey], "store[sessionKey] test invariant").cronRunContinuation,
+    ).toMatchObject({
       phase: "continuing",
       ownerRunId: "cron-media-first",
     });
 
     finishFirstTurn({ payloads: [{ text: "continued" }] });
     await waitForAssertion(() => {
-      expect(store[sessionKey].cronRunContinuation).toEqual({
+      expect(
+        expectDefined(store[sessionKey], "store[sessionKey] test invariant").cronRunContinuation,
+      ).toEqual({
         lifecycleRevision: "revision-1",
         phase: "ready",
         basePersisted: true,
@@ -4051,7 +4075,7 @@ describe("gateway agent handler", () => {
     };
     mocks.updateSessionStore.mockImplementation(async (_path, updater) => await updater(store));
     mocks.agentCommand.mockImplementation(async (call: AgentCommandCall) => {
-      store[sessionKey].sessionId = "run-2";
+      expectDefined(store[sessionKey], "store[sessionKey] test invariant").sessionId = "run-2";
       const onActiveModelSelected = call.onActiveModelSelected;
       if (typeof onActiveModelSelected !== "function") {
         throw new Error("expected active model callback");
@@ -4128,8 +4152,9 @@ describe("gateway agent handler", () => {
         throw new Error("expected continuation model callback");
       }
       await onActiveModelSelected({ provider: "gemini-cli", model: "gemini-3" });
-      store[sessionKey].contextTokens = 1_000_000;
-      store[sessionKey].contextBudgetStatus = {
+      expectDefined(store[sessionKey], "store[sessionKey] test invariant").contextTokens =
+        1_000_000;
+      expectDefined(store[sessionKey], "store[sessionKey] test invariant").contextBudgetStatus = {
         schemaVersion: 1,
         source: "pre-prompt-estimate",
         updatedAt: 2,
@@ -4148,7 +4173,8 @@ describe("gateway agent handler", () => {
         messageCount: 1,
         unwindowedMessageCount: 1,
       };
-      store[sessionKey].agentHarnessId = "gemini";
+      expectDefined(store[sessionKey], "store[sessionKey] test invariant").agentHarnessId =
+        "gemini";
       return { payloads: [], meta: { error: "candidate failed", stopReason: "error" } };
     });
 
@@ -4170,8 +4196,12 @@ describe("gateway agent handler", () => {
         agentHarnessId: "openclaw",
         cliSessionBindings: { "openai-cli": { sessionId: "native-a" } },
       });
-      expect(persisted.cliSessionBindings?.["gemini-cli"]).toBeUndefined();
-      expect(persisted.contextBudgetStatus).toBeUndefined();
+      expect(
+        expectDefined(persisted, "persisted test invariant").cliSessionBindings?.["gemini-cli"],
+      ).toBeUndefined();
+      expect(
+        expectDefined(persisted, "persisted test invariant").contextBudgetStatus,
+      ).toBeUndefined();
     }
   });
 
@@ -4184,7 +4214,10 @@ describe("gateway agent handler", () => {
       const context = makeContext();
       let releaseAttempts = 0;
       mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
-        if (store[sessionKey].cronRunContinuation?.phase === "continuing") {
+        if (
+          expectDefined(store[sessionKey], "store[sessionKey] test invariant").cronRunContinuation
+            ?.phase === "continuing"
+        ) {
           releaseAttempts += 1;
           if (releaseAttempts <= 3) {
             throw new Error("disk unavailable");
@@ -4209,7 +4242,9 @@ describe("gateway agent handler", () => {
       await vi.advanceTimersByTimeAsync(10);
 
       expect(releaseAttempts).toBe(3);
-      expect(store[sessionKey].cronRunContinuation).toMatchObject({
+      expect(
+        expectDefined(store[sessionKey], "store[sessionKey] test invariant").cronRunContinuation,
+      ).toMatchObject({
         phase: "continuing",
         ownerRunId: "cron-media-release-fails",
       });
@@ -4235,7 +4270,9 @@ describe("gateway agent handler", () => {
       await vi.advanceTimersByTimeAsync(250);
 
       expect(releaseAttempts).toBe(4);
-      expect(store[sessionKey].cronRunContinuation).toEqual({
+      expect(
+        expectDefined(store[sessionKey], "store[sessionKey] test invariant").cronRunContinuation,
+      ).toEqual({
         lifecycleRevision: "revision-1",
         phase: "ready",
         basePersisted: true,
@@ -4279,7 +4316,10 @@ describe("gateway agent handler", () => {
       const context = makeContext();
       let releaseAttempts = 0;
       mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
-        if (store[sessionKey].cronRunContinuation?.phase === "continuing") {
+        if (
+          expectDefined(store[sessionKey], "store[sessionKey] test invariant").cronRunContinuation
+            ?.phase === "continuing"
+        ) {
           releaseAttempts += 1;
           throw new Error("disk unavailable");
         }
@@ -4351,7 +4391,10 @@ describe("gateway agent handler", () => {
       const context = makeContext();
       let releaseAttempts = 0;
       mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
-        if (store[sessionKey].cronRunContinuation?.phase === "continuing") {
+        if (
+          expectDefined(store[sessionKey], "store[sessionKey] test invariant").cronRunContinuation
+            ?.phase === "continuing"
+        ) {
           releaseAttempts += 1;
           throw new Error("disk unavailable");
         }
@@ -4388,7 +4431,9 @@ describe("gateway agent handler", () => {
       await vi.advanceTimersByTimeAsync(250);
 
       expect(releaseAttempts).toBe(3);
-      expect(store[sessionKey].cronRunContinuation).toMatchObject({
+      expect(
+        expectDefined(store[sessionKey], "store[sessionKey] test invariant").cronRunContinuation,
+      ).toMatchObject({
         phase: "continuing",
         ownerRunId: "cron-media-release-rotates",
       });
@@ -9001,7 +9046,10 @@ describe("gateway agent handler chat.abort integration", () => {
     expect(context.chatAbortControllers.has(runId)).toBe(true);
 
     const abortRespond = vi.fn();
-    await chatHandlers["chat.abort"]({
+    await expectDefined(
+      chatHandlers["chat.abort"],
+      'chatHandlers["chat.abort"] test invariant',
+    )({
       params: { sessionKey: "agent:main:main", runId },
       respond: abortRespond as never,
       context,
@@ -9065,7 +9113,10 @@ describe("gateway agent handler chat.abort integration", () => {
     expect(context.chatAbortControllers.has(runId)).toBe(true);
 
     const stopRespond = vi.fn();
-    await chatHandlers["chat.send"]({
+    await expectDefined(
+      chatHandlers["chat.send"],
+      'chatHandlers["chat.send"] test invariant',
+    )({
       params: {
         sessionKey: "agent:main:main",
         message: "/stop",
@@ -9143,7 +9194,10 @@ describe("gateway agent handler chat.abort integration", () => {
     });
 
     const abortRespond = vi.fn();
-    await chatHandlers["chat.abort"]({
+    await expectDefined(
+      chatHandlers["chat.abort"],
+      'chatHandlers["chat.abort"] test invariant',
+    )({
       params: { sessionKey: requestedSessionKey, runId },
       respond: abortRespond as never,
       context,
@@ -9237,7 +9291,10 @@ describe("gateway agent handler chat.abort integration", () => {
     });
 
     const abortRespond = vi.fn();
-    await chatHandlers["chat.abort"]({
+    await expectDefined(
+      chatHandlers["chat.abort"],
+      'chatHandlers["chat.abort"] test invariant',
+    )({
       params: { sessionKey: "global", agentId: "work", runId },
       respond: abortRespond as never,
       context,
@@ -9315,7 +9372,10 @@ describe("gateway agent handler chat.abort integration", () => {
     });
 
     const stopRespond = vi.fn();
-    await chatHandlers["chat.send"]({
+    await expectDefined(
+      chatHandlers["chat.send"],
+      'chatHandlers["chat.send"] test invariant',
+    )({
       params: {
         sessionKey: requestedSessionKey,
         message: "/stop",
@@ -9390,7 +9450,10 @@ describe("gateway agent handler chat.abort integration", () => {
     expect(context.chatAbortControllers.has(runId)).toBe(false);
 
     const abortRespond = vi.fn();
-    await chatHandlers["chat.abort"]({
+    await expectDefined(
+      chatHandlers["chat.abort"],
+      'chatHandlers["chat.abort"] test invariant',
+    )({
       params: { sessionKey: "agent:main:main" },
       respond: abortRespond as never,
       context,
@@ -9486,7 +9549,10 @@ describe("gateway agent handler chat.abort integration", () => {
     expect(context.chatAbortControllers.has(runId)).toBe(false);
 
     const abortRespond = vi.fn();
-    await chatHandlers["chat.abort"]({
+    await expectDefined(
+      chatHandlers["chat.abort"],
+      'chatHandlers["chat.abort"] test invariant',
+    )({
       params: { sessionKey: "agent:main:main", runId },
       respond: abortRespond as never,
       context,
@@ -9735,7 +9801,10 @@ describe("gateway agent handler chat.abort integration", () => {
     expect(context.chatAbortControllers.has(runId)).toBe(false);
 
     const abortRespond = vi.fn();
-    await chatHandlers["chat.abort"]({
+    await expectDefined(
+      chatHandlers["chat.abort"],
+      'chatHandlers["chat.abort"] test invariant',
+    )({
       params: { sessionKey: "global", agentId: "work", runId },
       respond: abortRespond as never,
       context,
@@ -9823,7 +9892,10 @@ describe("gateway agent handler chat.abort integration", () => {
     expect(context.chatAbortControllers.has(runId)).toBe(false);
 
     const abortRespond = vi.fn();
-    await chatHandlers["chat.abort"]({
+    await expectDefined(
+      chatHandlers["chat.abort"],
+      'chatHandlers["chat.abort"] test invariant',
+    )({
       params: { sessionKey: "agent:main:main", runId },
       respond: abortRespond as never,
       context,
@@ -10222,7 +10294,10 @@ describe("gateway agent handler chat.abort integration", () => {
     expect(context.chatAbortControllers.has(runId)).toBe(false);
 
     const abortRespond = vi.fn();
-    await chatHandlers["chat.abort"]({
+    await expectDefined(
+      chatHandlers["chat.abort"],
+      'chatHandlers["chat.abort"] test invariant',
+    )({
       params: { sessionKey: "agent:main:main", runId },
       respond: abortRespond as never,
       context,
@@ -10319,7 +10394,10 @@ describe("gateway agent handler chat.abort integration", () => {
     });
 
     const abortRespond = vi.fn();
-    await chatHandlers["chat.abort"]({
+    await expectDefined(
+      chatHandlers["chat.abort"],
+      'chatHandlers["chat.abort"] test invariant',
+    )({
       params: { sessionKey: "agent:main:telegram:direct:123", runId },
       respond: abortRespond as never,
       context,
@@ -10450,7 +10528,10 @@ describe("gateway agent handler chat.abort integration", () => {
     expect(capturedSignal?.aborted).toBe(false);
 
     const abortRespond = vi.fn();
-    await chatHandlers["chat.abort"]({
+    await expectDefined(
+      chatHandlers["chat.abort"],
+      'chatHandlers["chat.abort"] test invariant',
+    )({
       params: { sessionKey: "agent:main:main", runId },
       respond: abortRespond as never,
       context,
@@ -10500,7 +10581,10 @@ describe("gateway agent handler chat.abort integration", () => {
     });
 
     const abortRespond = vi.fn();
-    await chatHandlers["chat.abort"]({
+    await expectDefined(
+      chatHandlers["chat.abort"],
+      'chatHandlers["chat.abort"] test invariant',
+    )({
       params: { sessionKey: "agent:main:main", runId },
       respond: abortRespond as never,
       context,
@@ -10544,7 +10628,10 @@ describe("gateway agent handler chat.abort integration", () => {
     );
 
     const abortRespond = vi.fn();
-    await chatHandlers["chat.abort"]({
+    await expectDefined(
+      chatHandlers["chat.abort"],
+      'chatHandlers["chat.abort"] test invariant',
+    )({
       params: { sessionKey: "agent:main:main", runId },
       respond: abortRespond as never,
       context,
@@ -10602,7 +10689,10 @@ describe("gateway agent handler chat.abort integration", () => {
     );
 
     const abortRespond = vi.fn();
-    await chatHandlers["chat.abort"]({
+    await expectDefined(
+      chatHandlers["chat.abort"],
+      'chatHandlers["chat.abort"] test invariant',
+    )({
       params: { sessionKey: "agent:main:main" },
       respond: abortRespond as never,
       context,
