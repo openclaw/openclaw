@@ -188,6 +188,7 @@ describe("fal image-generation provider", () => {
               baseUrl: "https://fal.run",
               models: [],
               request: {
+                allowPrivateNetwork: true,
                 headers: {
                   "X-Fal-Trace": "trace-1",
                 },
@@ -205,6 +206,7 @@ describe("fal image-generation provider", () => {
     const headers = new Headers(request.init?.headers);
     expect(headers.get("content-type")).toBe("application/json");
     expect(headers.get("x-fal-trace")).toBe("trace-1");
+    expect(request.policy?.allowPrivateNetwork).toBe(true);
   });
 
   it("shares an explicit operation deadline across generated image downloads", async () => {
