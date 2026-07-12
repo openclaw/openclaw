@@ -1573,13 +1573,29 @@ export async function syncNativeLocale(
     candidates.push(entry);
     previousBySource.set(entry.source, candidates);
   }
+  const currentIds = new Set(entries.map((entry) => entry.id));
+  const currentSourceCounts = new Map<string, number>();
+  for (const entry of entries) {
+    currentSourceCounts.set(entry.source, (currentSourceCounts.get(entry.source) ?? 0) + 1);
+  }
+  const reusableBySource = new Map(
+    [...previousBySource].map(([source, candidates]) => {
+      const isCompleteIdChurn =
+        candidates.length === currentSourceCounts.get(source) &&
+        candidates.every((candidate) => !currentIds.has(candidate.id));
+      return [
+        source,
+        isCompleteIdChurn ? choosePreviousTranslation(source, candidates) : undefined,
+      ] as const;
+    }),
+  );
   const reusableById = new Map(
     entries.map((entry) => {
       const exact = previousById.get(entry.id);
       const translated =
         exact?.source === entry.source && exact.translated.trim()
           ? exact.translated
-          : choosePreviousTranslation(entry.source, previousBySource.get(entry.source) ?? []);
+          : reusableBySource.get(entry.source);
       return [entry.id, translated] as const;
     }),
   );

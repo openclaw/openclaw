@@ -779,6 +779,57 @@ describe("native app i18n inventory", () => {
         entries: Array<{ translated: string }>;
       };
       expect(ambiguousArtifact.entries[0]?.translated).toBe("Öppna i aktuell kontext");
+
+      const duplicateEntries = [
+        {
+          id: "native.apple.open.action",
+          kind: "ui-call",
+          line: 1,
+          path: "apps/ios/action.swift",
+          source: "Open",
+          surface: "apple",
+        },
+        {
+          id: "native.apple.open.state",
+          kind: "ui-call",
+          line: 2,
+          path: "apps/ios/state.swift",
+          source: "Open",
+          surface: "apple",
+        },
+      ] satisfies NativeI18nEntry[];
+      await writeFile(
+        artifactPath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            locale: "sv",
+            glossaryHash: refreshedArtifact.glossaryHash,
+            entries: [
+              {
+                id: "native.apple.open.action",
+                source: "Open",
+                translated: "Öppna",
+              },
+            ],
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      const duplicate = await syncNativeLocale("sv", duplicateEntries, {
+        glossary: [{ source: "Request", target: "Begäran" }],
+        translationsDir,
+        translate: async (pending) => new Map(pending.map((entry) => [entry.id, "Öppen"])),
+      });
+      expect(duplicate).toEqual({ changed: true, translated: 1 });
+      const duplicateArtifact = JSON.parse(await readFile(artifactPath, "utf8")) as {
+        entries: Array<{ id: string; translated: string }>;
+      };
+      expect(duplicateArtifact.entries).toEqual([
+        { id: "native.apple.open.action", source: "Open", translated: "Öppna" },
+        { id: "native.apple.open.state", source: "Open", translated: "Öppen" },
+      ]);
     } finally {
       cleanupTempDirs(tempDirs);
     }

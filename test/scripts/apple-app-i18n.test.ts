@@ -300,19 +300,34 @@ describe("Apple app i18n catalogs", () => {
       selectInfoPlistTranslation(
         "Use the camera to scan setup codes.",
         ["Utilisez l’appareil photo pour scanner les codes de configuration."],
-        "Ancienne description de la caméra.",
+        {
+          source: "Old camera purpose.",
+          value: "Ancienne description de la caméra.",
+        },
       ),
     ).toBe("Utilisez l’appareil photo pour scanner les codes de configuration.");
-    expect(selectInfoPlistTranslation("OpenClaw Share", [], "OpenClaw Partager")).toBe(
-      "OpenClaw Partager",
-    );
+    expect(
+      selectInfoPlistTranslation("OpenClaw Share", [], {
+        source: "OpenClaw Share",
+        value: "OpenClaw Partager",
+      }),
+    ).toBe("OpenClaw Partager");
     expect(
       selectInfoPlistTranslation(
         "Use the camera to scan setup codes.",
         ["Use the camera to scan setup codes."],
-        "Utilisez l’appareil photo pour scanner les codes de configuration.",
+        {
+          source: "Use the camera to scan setup codes.",
+          value: "Utilisez l’appareil photo pour scanner les codes de configuration.",
+        },
       ),
     ).toBe("Utilisez l’appareil photo pour scanner les codes de configuration.");
+    expect(
+      selectInfoPlistTranslation("Use the camera for video calls.", [], {
+        source: "Use the camera to scan setup codes.",
+        value: "Utilisez l’appareil photo pour scanner les codes de configuration.",
+      }),
+    ).toBe("Use the camera for video calls.");
   });
 
   it("compiles macOS catalogs into app-bundle localization directories", async () => {

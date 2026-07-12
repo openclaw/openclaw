@@ -422,10 +422,20 @@ function parseInfoPlistStrings(source: string): Array<{ key: string; source: str
     );
 }
 
-function parseStringsFile(source: string): Map<string, string> {
-  const values = new Map<string, string>();
-  for (const match of source.matchAll(/^\s*("(?:\\.|[^"\\])*")\s*=\s*("(?:\\.|[^"\\])*");/gmu)) {
-    values.set(JSON.parse(match[1] ?? '""') as string, JSON.parse(match[2] ?? '""') as string);
+type InfoPlistTranslation = {
+  source?: string;
+  value: string;
+};
+
+function parseStringsFile(source: string): Map<string, InfoPlistTranslation> {
+  const values = new Map<string, InfoPlistTranslation>();
+  for (const match of source.matchAll(
+    /(?:^\/\* OpenClaw source: ("(?:\\.|[^"\\])*") \*\/\n)?^\s*("(?:\\.|[^"\\])*")\s*=\s*("(?:\\.|[^"\\])*");/gmu,
+  )) {
+    values.set(JSON.parse(match[2] ?? '""') as string, {
+      source: match[1] ? (JSON.parse(match[1]) as string) : undefined,
+      value: JSON.parse(match[3] ?? '""') as string,
+    });
   }
   return values;
 }
@@ -433,7 +443,7 @@ function parseStringsFile(source: string): Map<string, string> {
 export function selectInfoPlistTranslation(
   source: string,
   candidates: readonly string[],
-  existingValue?: string,
+  existing?: InfoPlistTranslation,
 ): string {
   const translatedCandidates = candidates.filter(
     (candidate) => candidate.trim() && candidate.trim() !== source.trim(),
@@ -441,7 +451,7 @@ export function selectInfoPlistTranslation(
   if (translatedCandidates.length > 0) {
     return chooseTranslation(source, translatedCandidates);
   }
-  return existingValue?.trim() ? existingValue : source;
+  return existing?.source === source && existing.value.trim() ? existing.value : source;
 }
 
 async function readOptionalFile(filePath: string): Promise<string | null> {
@@ -734,7 +744,10 @@ async function syncIosInfoPlist(write: boolean): Promise<number> {
             .filter((entry) => entry.source === source)
             .map((entry) => entry.translated) ?? [];
         const value = selectInfoPlistTranslation(source, candidates, existing.get(key));
-        return `${stringsLiteral(key)} = ${stringsLiteral(value)};`;
+        return [
+          `/* OpenClaw source: ${stringsLiteral(source)} */`,
+          `${stringsLiteral(key)} = ${stringsLiteral(value)};`,
+        ].join("\n");
       });
       const expected = `${lines.join("\n")}\n`;
       if (existingSource !== expected) {
