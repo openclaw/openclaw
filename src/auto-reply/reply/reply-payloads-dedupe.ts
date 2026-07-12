@@ -114,7 +114,7 @@ export function filterMessagingToolMediaDuplicates(params: {
 
 export function hasEnabledDeliveryOperation(payload: ReplyPayload): boolean {
   const pin = payload.delivery?.pin;
-  return pin === true || (typeof pin === "object" && pin.enabled === true);
+  return pin === true || (typeof pin === "object" && pin.enabled);
 }
 
 function normalizeMediaForDedupe(value: string): string {
