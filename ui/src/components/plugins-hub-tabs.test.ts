@@ -92,6 +92,20 @@ describe("renderPluginsHubTabs", () => {
     );
   });
 
+  it("does not queue focus recovery for same-tab keyboard activation", async () => {
+    const container = mount({ active: "installed", onSelect: () => undefined });
+    container.querySelector<HTMLButtonElement>("#plugins-tab-installed")?.click();
+
+    // A later re-render of the strip must not reclaim focus from whatever
+    // control the user moved on to.
+    container.remove();
+    const rerendered = mount({ active: "installed", onSelect: () => undefined });
+    await Promise.resolve();
+    expect(document.activeElement).not.toBe(
+      rerendered.querySelector<HTMLButtonElement>("#plugins-tab-installed"),
+    );
+  });
+
   it("does not steal focus after mouse activation", async () => {
     const source = mount({ active: "installed", onSelect: () => undefined });
     source

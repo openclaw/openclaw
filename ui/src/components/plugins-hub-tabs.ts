@@ -75,8 +75,10 @@ function handleHubTabKeydown(event: KeyboardEvent, tab: PluginsHubTab) {
 
 function selectHubTab(event: MouseEvent, tab: PluginsHubTab, props: PluginsHubTabsProps) {
   // detail === 0 means the click came from the keyboard (Enter/Space); only
-  // then should the destination strip pull focus after the route swap.
-  if (event.detail === 0) {
+  // then should the destination strip pull focus after the route swap. Skip
+  // same-tab activation: it does not navigate, and a lingering entry would
+  // let a later re-render steal focus from whatever the user moved on to.
+  if (event.detail === 0 && tab !== props.active) {
     pendingFocus = { tab, at: Date.now() };
   }
   props.onSelect(tab);
