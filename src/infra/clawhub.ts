@@ -1159,6 +1159,15 @@ export async function fetchClawHubPackageSecurity(params: {
   return parseClawHubPackageSecurityResponse(response);
 }
 
+const CLAWHUB_SEARCH_MAX_LIMIT = 100;
+
+function clampClawHubSearchLimit(limit: number | undefined): string | undefined {
+  if (!Number.isFinite(limit) || !limit || limit <= 0) {
+    return undefined;
+  }
+  return String(Math.min(Math.trunc(limit), CLAWHUB_SEARCH_MAX_LIMIT));
+}
+
 export async function searchClawHubPackages(params: {
   query: string;
   family?: ClawHubPackageFamily;
@@ -1177,7 +1186,7 @@ export async function searchClawHubPackages(params: {
     search: {
       q: params.query.trim(),
       family: params.family,
-      limit: params.limit ? String(params.limit) : undefined,
+      limit: clampClawHubSearchLimit(params.limit),
     },
   });
   return result.results ?? [];
@@ -1199,7 +1208,7 @@ export async function searchClawHubSkills(params: {
     fetchImpl: params.fetchImpl,
     search: {
       q: params.query.trim(),
-      limit: params.limit ? String(params.limit) : undefined,
+      limit: clampClawHubSearchLimit(params.limit),
     },
   });
   return result.results ?? [];
