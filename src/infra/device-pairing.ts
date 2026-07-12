@@ -1,5 +1,6 @@
 // Manages device pairing requests, approvals, and token issuance.
 import { randomUUID } from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeUniqueSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
 import {
@@ -677,9 +678,15 @@ function reconcilePendingPairingRequests<
 }): PendingPairingRequestResult<TPending> {
   if (
     params.existing.length === 1 &&
-    params.canRefreshSingle(params.existing[0], params.incoming)
+    params.canRefreshSingle(
+      expectDefined(params.existing[0], "existing entry at 0"),
+      params.incoming,
+    )
   ) {
-    const refreshed = params.refreshSingle(params.existing[0], params.incoming);
+    const refreshed = params.refreshSingle(
+      expectDefined(params.existing[0], "existing entry at 0"),
+      params.incoming,
+    );
     params.pendingById[refreshed.requestId] = refreshed;
     params.persist();
     return { status: "pending", request: refreshed, created: false };
@@ -777,7 +784,10 @@ export async function approveDevicePairing(
   options: {
     callerScopes?: readonly string[];
     accessMetadata?: DevicePairingAccessMetadata;
-    approvedVia?: Extract<PairedDeviceApprovalKind, "owner" | "silent" | "trusted-cidr">;
+    approvedVia?: Extract<
+      PairedDeviceApprovalKind,
+      "owner" | "silent" | "trusted-cidr" | "ssh-verified"
+    >;
   },
   baseDir?: string,
 ): Promise<ApproveDevicePairingResult>;
@@ -787,7 +797,10 @@ export async function approveDevicePairing(
     | {
         callerScopes?: readonly string[];
         accessMetadata?: DevicePairingAccessMetadata;
-        approvedVia?: Extract<PairedDeviceApprovalKind, "owner" | "silent" | "trusted-cidr">;
+        approvedVia?: Extract<
+          PairedDeviceApprovalKind,
+          "owner" | "silent" | "trusted-cidr" | "ssh-verified"
+        >;
       }
     | string,
   maybeBaseDir?: string,

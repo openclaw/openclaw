@@ -11,11 +11,13 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const LIVE_E2E_WORKFLOW = ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml";
 const EXACT_TARGET_REF = "1".repeat(40);
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function runHelper(script: string, ...args: Array<string | Record<string, string>>) {
   const maybeEnv = args.at(-1);
@@ -56,7 +58,9 @@ function expectDeclaredDispatchInputs(command: string): void {
     on?: { workflow_dispatch?: { inputs?: Record<string, unknown> } };
   };
   const declared = new Set(Object.keys(workflow.on?.workflow_dispatch?.inputs ?? {}));
-  const emitted = [...command.matchAll(/(?:^|\s)-f\s+([a-z0-9_]+)=/gu)].map((match) => match[1]);
+  const emitted = [...command.matchAll(/(?:^|\s)-f\s+([a-z0-9_]+)=/gu)].flatMap((match) =>
+    match[1] === undefined ? [] : [match[1]],
+  );
   expect(emitted.length).toBeGreaterThan(0);
   for (const input of emitted) {
     expect(declared.has(input), `undeclared workflow_dispatch input: ${input}`).toBe(true);
@@ -159,7 +163,7 @@ describe("Docker E2E helper CLIs", () => {
   it("rejects missing timings limits without a Node stack trace", () => {
     for (const limit of [undefined, "-h"]) {
       const args = ["scripts/docker-e2e-timings.mjs", "summary.json", "--limit"];
-      const result = runHelper(...(limit === undefined ? args : [...args, limit]));
+      const result = runHelper(args[0]!, ...args.slice(1), ...(limit === undefined ? [] : [limit]));
 
       expect(result.status).toBe(1);
       expect(result.stdout).toBe("");
@@ -439,7 +443,7 @@ describe("Docker E2E helper CLIs", () => {
             lanes: [
               {
                 ghWorkflowCommand:
-                  "gh workflow run 'openclaw-live-and-e2e-checks-reusable.yml' --ref 'full-release-validation-temp-deleted' -f package_artifact_run_id='12345' -f package_artifact_name='docker-e2e-package' -f docker_e2e_bare_image='ghcr.io/openclaw/openclaw-bare:test' -f published_upgrade_survivor_baselines='openclaw@2026.5.3' -f published_upgrade_survivor_scenarios='plugin-dependency-cleanup' -f unsafe_input='do-not-copy'",
+                  "gh workflow run 'openclaw-live-and-e2e-checks-reusable.yml' --ref 'full-release-validation-temp-deleted' -f package_artifact_run_id='12345' -f package_artifact_name='docker-e2e-package' -f docker_e2e_bare_image='ghcr.io/openclaw/openclaw-bare:test' -f published_upgrade_survivor_baselines='openclaw@2026.5.3' -f published_upgrade_survivor_scenarios='plugin-dependency-cleanup' -f allow_unreleased_changelog=true -f unsafe_input='do-not-copy'",
                 name: "published-upgrade-survivor-openclaw-2026-5-3",
                 status: 1,
               },
@@ -469,6 +473,7 @@ describe("Docker E2E helper CLIs", () => {
       expect(combinedCommand).toContain(
         "published_upgrade_survivor_scenarios='plugin-dependency-cleanup'",
       );
+      expect(combinedCommand).toContain("allow_unreleased_changelog=true");
       expect(combinedCommand).not.toContain("unsafe_input");
       expect(result.stdout).not.toContain("package_artifact_run_id=");
       expect(result.stdout).not.toContain("package_artifact_name=");
@@ -492,6 +497,26 @@ describe("Docker E2E helper CLIs", () => {
     }
   });
 
+  it("rejects non-boolean unreleased changelog intent from summary artifacts", () => {
+    const root = tempDirs.make("openclaw-docker-e2e-rerun-inputs-");
+    const file = path.join(root, "summary.json");
+    writeFileSync(
+      file,
+      `${JSON.stringify({
+        allowUnreleasedChangelog: "true",
+        failures: [{ name: "install-e2e", status: 1 }],
+        github: { selectedSha: EXACT_TARGET_REF },
+        status: "failed",
+      })}\n`,
+      "utf8",
+    );
+
+    const result = runHelper("scripts/docker-e2e-rerun.mjs", file);
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).not.toContain("allow_unreleased_changelog");
+  });
+
   it("groups combined reruns by recovered workflow inputs", () => {
     const root = mkdtempSync(`${tmpdir()}/openclaw-docker-e2e-rerun-groups-`);
     try {
@@ -503,7 +528,7 @@ describe("Docker E2E helper CLIs", () => {
             lanes: [
               {
                 ghWorkflowCommand:
-                  "gh workflow run 'openclaw-live-and-e2e-checks-reusable.yml' --ref 'release/2026.6' -f published_upgrade_survivor_baselines='openclaw@2026.5.3'",
+                  "gh workflow run 'openclaw-live-and-e2e-checks-reusable.yml' --ref 'release/2026.6' -f published_upgrade_survivor_baselines='openclaw@2026.5.3' -f allow_unreleased_changelog=1",
                 name: "published-upgrade-survivor-openclaw-2026-5-3",
                 status: 1,
               },
@@ -542,6 +567,7 @@ describe("Docker E2E helper CLIs", () => {
       expect(result.stdout).not.toContain(
         "docker_lanes='published-upgrade-survivor-openclaw-2026-5-3 published-upgrade-survivor-openclaw-2026-5-2'",
       );
+      expect(result.stdout).not.toContain("allow_unreleased_changelog");
     } finally {
       rmSync(root, { force: true, recursive: true });
     }

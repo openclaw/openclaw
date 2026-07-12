@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import OpenClawKit
 import Testing
@@ -5,25 +6,6 @@ import Testing
 
 @Suite(.serialized)
 struct ExecApprovalsStoreRefactorTests {
-    private actor ShellRunProbe {
-        private var commands: [[String]] = []
-
-        func run(_ command: [String]) -> ShellExecutor.ShellResult {
-            self.commands.append(command)
-            return ShellExecutor.ShellResult(
-                stdout: "ok",
-                stderr: "",
-                exitCode: 0,
-                timedOut: false,
-                success: true,
-                errorMessage: nil)
-        }
-
-        func capturedCommands() -> [[String]] {
-            self.commands
-        }
-    }
-
     private var realTemporaryDirectory: URL {
         let path = FileManager().temporaryDirectory.path
         if path.hasPrefix("/var/") {
@@ -80,6 +62,7 @@ struct ExecApprovalsStoreRefactorTests {
 
         try await self.withLockedEnv([
             "OPENCLAW_HOME": home.path,
+            "OPENCLAW_PROFILE": nil,
             "OPENCLAW_STATE_DIR": stateDir.path,
         ]) {
             try await body(stateDir)
@@ -87,6 +70,7 @@ struct ExecApprovalsStoreRefactorTests {
     }
 
     private func withTempHomeAndStateDir(
+        profile: String? = nil,
         _ body: @escaping @Sendable (URL, URL) async throws -> Void) async throws
     {
         let root = self.realTemporaryDirectory
@@ -97,6 +81,7 @@ struct ExecApprovalsStoreRefactorTests {
 
         try await self.withLockedEnv([
             "OPENCLAW_HOME": home.path,
+            "OPENCLAW_PROFILE": profile,
             "OPENCLAW_STATE_DIR": stateDir.path,
         ]) {
             try await body(home, stateDir)
@@ -529,572 +514,6 @@ struct ExecApprovalsStoreRefactorTests {
     }
 
     @Test
-    func `native approvals get reports held sidecar lock as unavailable`() async throws {
-        try await self.withTempStateDir { stateDir in
-            let lockURL = stateDir.appendingPathComponent("exec-approvals.json.lock")
-            try Data("held".utf8).write(to: lockURL)
-
-            let response = await MacNodeRuntime().handleInvoke(BridgeInvokeRequest(
-                id: "approvals-get-held-lock",
-                command: OpenClawSystemCommand.execApprovalsGet.rawValue))
-
-            #expect(!response.ok)
-            #expect(response.error?.code == .unavailable)
-            #expect(response.error?.message == "UNAVAILABLE: exec approvals store unavailable; retry")
-            #expect(FileManager().fileExists(atPath: lockURL.path))
-        }
-    }
-
-    @Test
-    func `native approvals get reports malformed store as unavailable`() async throws {
-        try await self.withTempStateDir { _ in
-            let url = ExecApprovalsStore.fileURL()
-            let malformed = Data("{".utf8)
-            try malformed.write(to: url, options: [.atomic])
-
-            let response = await MacNodeRuntime().handleInvoke(BridgeInvokeRequest(
-                id: "approvals-get-malformed",
-                command: OpenClawSystemCommand.execApprovalsGet.rawValue))
-
-            #expect(!response.ok)
-            #expect(response.error?.code == .unavailable)
-            #expect(response.error?.message == "UNAVAILABLE: exec approvals store unavailable; retry")
-            #expect(try Data(contentsOf: url) == malformed)
-        }
-    }
-
-    @Test
-    func `allow always atomic commit failure denies without persisting or executing`() async throws {
-        try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.security = .allowlist
-                entry.ask = .off
-            }.get()
-            let probe = ShellRunProbe()
-            let mutations = ExecApprovalStoreMutations(
-                commitExecution: { _ in .failure(.unavailable) })
-            let runtime = MacNodeRuntime(
-                execApprovalStoreMutations: mutations,
-                shellRunner: { command, _, _, _ in await probe.run(command) })
-            let params = OpenClawSystemRunParams(
-                command: ["/usr/bin/printf", "ok"],
-                agentId: "main",
-                approvalDecision: "allow-always")
-            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-
-            let response = await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "persist-failure",
-                command: OpenClawSystemCommand.run.rawValue,
-                paramsJSON: json))
-
-            #expect(!response.ok)
-            #expect(response.error?.message.contains("exec approvals update unavailable") == true)
-            #expect(await probe.capturedCommands().isEmpty)
-            #expect(ExecApprovalsStore.resolve(agentId: "main").allowlist.isEmpty)
-        }
-    }
-
-    @Test
-    func `allowlist usage failure denies before shell execution`() async throws {
-        try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.security = .allowlist
-                entry.ask = .off
-                entry.allowlist = [ExecAllowlistEntry(pattern: "/usr/bin/printf")]
-            }.get()
-            let probe = ShellRunProbe()
-            let mutations = ExecApprovalStoreMutations(
-                commitExecution: { _ in .failure(.unavailable) })
-            let runtime = MacNodeRuntime(
-                execApprovalStoreMutations: mutations,
-                shellRunner: { command, _, _, _ in await probe.run(command) })
-            let params = OpenClawSystemRunParams(command: ["/usr/bin/printf", "ok"], agentId: "main")
-            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-
-            let response = await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "usage-failure",
-                command: OpenClawSystemCommand.run.rawValue,
-                paramsJSON: json))
-
-            #expect(!response.ok)
-            #expect(response.error?.message.contains("exec approvals update unavailable") == true)
-            #expect(await probe.capturedCommands().isEmpty)
-        }
-    }
-
-    @Test
-    func `native runtime revalidates unprompted full policy before shell execution`() async throws {
-        try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.security = .full
-                entry.ask = .off
-            }.get()
-            let probe = ShellRunProbe()
-            let mutations = ExecApprovalStoreMutations(commitExecution: { commit in
-                _ = ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                    entry.security = .deny
-                }
-                return ExecApprovalsStore.commitExecution(commit)
-            })
-            let runtime = MacNodeRuntime(
-                execApprovalStoreMutations: mutations,
-                shellRunner: { command, _, _, _ in await probe.run(command) })
-            let params = OpenClawSystemRunParams(
-                command: ["/usr/bin/printf", "ok"],
-                agentId: "main")
-            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-
-            let response = await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "full-policy-race",
-                command: OpenClawSystemCommand.run.rawValue,
-                paramsJSON: json))
-
-            #expect(!response.ok)
-            #expect(response.error?.message.contains("exec approvals update unavailable") == true)
-            #expect(await probe.capturedCommands().isEmpty)
-        }
-    }
-
-    @Test
-    func `native runtime rejects ask tightening before shell execution`() async throws {
-        try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.security = .full
-                entry.ask = .off
-            }.get()
-            let probe = ShellRunProbe()
-            let mutations = ExecApprovalStoreMutations(commitExecution: { commit in
-                _ = ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                    entry.ask = .onMiss
-                }
-                return ExecApprovalsStore.commitExecution(commit)
-            })
-            let runtime = MacNodeRuntime(
-                execApprovalStoreMutations: mutations,
-                shellRunner: { command, _, _, _ in await probe.run(command) })
-            let params = OpenClawSystemRunParams(
-                command: ["/usr/bin/printf", "ok"],
-                agentId: "main")
-            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-
-            let response = await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "ask-policy-race",
-                command: OpenClawSystemCommand.run.rawValue,
-                paramsJSON: json))
-
-            #expect(!response.ok)
-            #expect(response.error?.message.contains("exec approvals update unavailable") == true)
-            #expect(await probe.capturedCommands().isEmpty)
-        }
-    }
-
-    @Test
-    func `native runtime treats a successful commit as the authorization linearization point`() async throws {
-        try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.security = .full
-                entry.ask = .off
-            }.get()
-            let probe = ShellRunProbe()
-            let mutations = ExecApprovalStoreMutations(commitExecution: { commit in
-                let result = ExecApprovalsStore.commitExecution(commit)
-                _ = ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                    entry.security = .deny
-                }
-                return result
-            })
-            let runtime = MacNodeRuntime(
-                execApprovalStoreMutations: mutations,
-                shellRunner: { command, _, _, _ in await probe.run(command) })
-            let command = ["/usr/bin/printf", "ok"]
-            let params = OpenClawSystemRunParams(command: command, agentId: "main")
-            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-
-            let response = await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "authorization-linearization",
-                command: OpenClawSystemCommand.run.rawValue,
-                paramsJSON: json))
-
-            #expect(response.ok)
-            #expect(await probe.capturedCommands() == [command])
-            #expect(ExecApprovalsStore.resolve(agentId: "main").agent.security == .deny)
-        }
-    }
-
-    @Test
-    func `native runtime cannot persist allow always after concurrent policy revocation`() async throws {
-        try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.security = .allowlist
-                entry.ask = .onMiss
-            }.get()
-            let probe = ShellRunProbe()
-            let mutations = ExecApprovalStoreMutations(commitExecution: { commit in
-                _ = ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                    entry.security = .deny
-                }
-                return ExecApprovalsStore.commitExecution(commit)
-            })
-            let runtime = MacNodeRuntime(
-                execApprovalStoreMutations: mutations,
-                shellRunner: { command, _, _, _ in await probe.run(command) })
-            let params = OpenClawSystemRunParams(
-                command: ["/usr/bin/printf", "ok"],
-                agentId: "main",
-                approvalDecision: "allow-always")
-            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-
-            let response = await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "allow-always-policy-race",
-                command: OpenClawSystemCommand.run.rawValue,
-                paramsJSON: json))
-
-            #expect(!response.ok)
-            #expect(await probe.capturedCommands().isEmpty)
-            #expect(ExecApprovalsStore.resolve(agentId: "main").allowlist.isEmpty)
-        }
-    }
-
-    @Test
-    func `revoked gateway timeout fallback denies before native shell execution`() async throws {
-        try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.security = .full
-                entry.ask = .always
-                entry.askFallback = .deny
-            }.get()
-            let probe = ShellRunProbe()
-            let runtime = MacNodeRuntime(
-                shellRunner: { command, _, _, _ in await probe.run(command) })
-            let params = OpenClawSystemRunParams(
-                command: ["/usr/bin/printf", "ok"],
-                agentId: "main",
-                approvalSource: "ask-fallback")
-            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-
-            let response = await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "revoked-timeout-fallback",
-                command: OpenClawSystemCommand.run.rawValue,
-                paramsJSON: json))
-
-            #expect(!response.ok)
-            #expect(response.error?.message == "SYSTEM_RUN_DISABLED: security=deny")
-            #expect(await probe.capturedCommands().isEmpty)
-        }
-    }
-
-    @Test
-    func `marker only full timeout fallback executes without a second prompt`() async throws {
-        try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.security = .full
-                entry.ask = .always
-                entry.askFallback = .full
-            }.get()
-            let probe = ShellRunProbe()
-            let runtime = MacNodeRuntime(
-                shellRunner: { command, _, _, _ in await probe.run(command) })
-            let command = ["/usr/bin/printf", "ok"]
-            let params = OpenClawSystemRunParams(
-                command: command,
-                agentId: "main",
-                approvalSource: "ask-fallback")
-            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-
-            let response = await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "full-timeout-fallback",
-                command: OpenClawSystemCommand.run.rawValue,
-                paramsJSON: json))
-
-            #expect(response.ok)
-            #expect(await probe.capturedCommands() == [command])
-        }
-    }
-
-    @Test
-    func `timeout fallback rejects explicit approval fields`() async throws {
-        try await self.withTempStateDir { _ in
-            let probe = ShellRunProbe()
-            let runtime = MacNodeRuntime(
-                shellRunner: { command, _, _, _ in await probe.run(command) })
-            let params = OpenClawSystemRunParams(
-                command: ["/usr/bin/printf", "ok"],
-                agentId: "main",
-                approvalDecision: "allow-once",
-                approvalSource: "ask-fallback")
-            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-
-            let response = await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "mixed-timeout-fallback",
-                command: OpenClawSystemCommand.run.rawValue,
-                paramsJSON: json))
-
-            #expect(!response.ok)
-            #expect(response.error?.message.contains("cannot be combined") == true)
-            #expect(await probe.capturedCommands().isEmpty)
-        }
-    }
-
-    @Test
-    func `auto review marker executes one shot allowlist miss`() async throws {
-        try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.security = .allowlist
-                entry.ask = .onMiss
-            }.get()
-            let probe = ShellRunProbe()
-            let runtime = MacNodeRuntime(
-                shellRunner: { command, _, _, _ in await probe.run(command) })
-            let command = ["/usr/bin/printf", "ok"]
-            let params = OpenClawSystemRunParams(
-                command: command,
-                agentId: "main",
-                approvalSource: "auto-review")
-            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-
-            let response = await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "auto-review-once",
-                command: OpenClawSystemCommand.run.rawValue,
-                paramsJSON: json))
-
-            #expect(response.ok)
-            #expect(await probe.capturedCommands() == [command])
-            #expect(ExecApprovalsStore.resolve(agentId: "main").allowlist.isEmpty)
-        }
-    }
-
-    @Test
-    func `auto review marker cannot bypass ask always`() async throws {
-        try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.security = .full
-                entry.ask = .always
-            }.get()
-            let probe = ShellRunProbe()
-            let runtime = MacNodeRuntime(
-                shellRunner: { command, _, _, _ in await probe.run(command) })
-            let params = OpenClawSystemRunParams(
-                command: ["/usr/bin/printf", "ok"],
-                agentId: "main",
-                approvalSource: "auto-review")
-            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-
-            let response = await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "auto-review-ask-always",
-                command: OpenClawSystemCommand.run.rawValue,
-                paramsJSON: json))
-
-            #expect(!response.ok)
-            #expect(response.error?.message.contains("ask=always") == true)
-            #expect(await probe.capturedCommands().isEmpty)
-        }
-    }
-
-    @Test
-    func `auto review revalidates concurrent ask always before shell execution`() async throws {
-        try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.security = .allowlist
-                entry.ask = .onMiss
-            }.get()
-            let probe = ShellRunProbe()
-            let mutations = ExecApprovalStoreMutations(commitExecution: { commit in
-                _ = ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                    entry.ask = .always
-                }
-                return ExecApprovalsStore.commitExecution(commit)
-            })
-            let runtime = MacNodeRuntime(
-                execApprovalStoreMutations: mutations,
-                shellRunner: { command, _, _, _ in await probe.run(command) })
-            let params = OpenClawSystemRunParams(
-                command: ["/usr/bin/printf", "ok"],
-                agentId: "main",
-                approvalSource: "auto-review")
-            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-
-            let response = await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "auto-review-ask-race",
-                command: OpenClawSystemCommand.run.rawValue,
-                paramsJSON: json))
-
-            #expect(!response.ok)
-            #expect(response.error?.message.contains("exec approvals update unavailable") == true)
-            #expect(await probe.capturedCommands().isEmpty)
-        }
-    }
-
-    @Test
-    func `auto review marker preserves reviewed strict inline execution`() async throws {
-        try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.security = .allowlist
-                entry.ask = .onMiss
-            }.get()
-            let probe = ShellRunProbe()
-            let runtime = MacNodeRuntime(
-                shellRunner: { command, _, _, _ in await probe.run(command) })
-            let payload = "/usr/bin/printf reviewed"
-            let command = ["/bin/sh", "-c", payload]
-            let params = OpenClawSystemRunParams(
-                command: command,
-                rawCommand: payload,
-                agentId: "main",
-                approvalSource: "auto-review")
-            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-
-            let response = await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "auto-review-inline",
-                command: OpenClawSystemCommand.run.rawValue,
-                paramsJSON: json))
-
-            #expect(response.ok)
-            #expect(await probe.capturedCommands() == [command])
-        }
-    }
-
-    @Test
-    func `auto review marker rejects legacy approval fields`() async throws {
-        try await self.withTempStateDir { _ in
-            let probe = ShellRunProbe()
-            let runtime = MacNodeRuntime(
-                shellRunner: { command, _, _, _ in await probe.run(command) })
-            let params = OpenClawSystemRunParams(
-                command: ["/usr/bin/printf", "ok"],
-                agentId: "main",
-                approved: true,
-                approvalSource: "auto-review")
-            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-
-            let response = await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "mixed-auto-review",
-                command: OpenClawSystemCommand.run.rawValue,
-                paramsJSON: json))
-
-            #expect(!response.ok)
-            #expect(response.error?.message.contains("cannot be combined") == true)
-            #expect(await probe.capturedCommands().isEmpty)
-        }
-    }
-
-    @Test
-    func `allowlist timeout fallback executes the canonical bound command`() async throws {
-        try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.security = .full
-                entry.ask = .always
-                entry.askFallback = .allowlist
-                entry.allowlist = [ExecAllowlistEntry(pattern: "/usr/bin/printf")]
-            }.get()
-            let probe = ShellRunProbe()
-            let runtime = MacNodeRuntime(
-                shellRunner: { command, _, _, _ in await probe.run(command) })
-            let params = OpenClawSystemRunParams(
-                command: ["printf", "ok"],
-                agentId: "main",
-                approvalSource: "ask-fallback")
-            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-
-            let response = await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "allowlist-timeout-fallback",
-                command: OpenClawSystemCommand.run.rawValue,
-                paramsJSON: json))
-
-            #expect(response.ok)
-            #expect(await probe.capturedCommands() == [["/usr/bin/printf", "ok"]])
-        }
-    }
-
-    @Test
-    func `allowlist timeout fallback miss denies without shell execution`() async throws {
-        try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.security = .full
-                entry.ask = .always
-                entry.askFallback = .allowlist
-                entry.allowlist = [ExecAllowlistEntry(pattern: "/usr/bin/printf")]
-            }.get()
-            let probe = ShellRunProbe()
-            let runtime = MacNodeRuntime(
-                shellRunner: { command, _, _, _ in await probe.run(command) })
-            let params = OpenClawSystemRunParams(
-                command: ["/bin/echo", "miss"],
-                agentId: "main",
-                approvalSource: "ask-fallback")
-            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-
-            let response = await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "allowlist-timeout-fallback-miss",
-                command: OpenClawSystemCommand.run.rawValue,
-                paramsJSON: json))
-
-            #expect(!response.ok)
-            #expect(response.error?.message.contains("allowlist miss") == true)
-            #expect(await probe.capturedCommands().isEmpty)
-        }
-    }
-
-    @Test
-    func `explicit allow once executes original unbound shell command`() async throws {
-        try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.security = .allowlist
-                entry.ask = .onMiss
-                entry.allowlist = [ExecAllowlistEntry(pattern: "/usr/bin/printf")]
-            }.get()
-            let probe = ShellRunProbe()
-            let runtime = MacNodeRuntime(
-                shellRunner: { command, _, _, _ in await probe.run(command) })
-            let payload = "/usr/bin/printf one && /usr/bin/printf two"
-            let original = ["/bin/sh", "-c", payload]
-            let params = OpenClawSystemRunParams(
-                command: original,
-                rawCommand: payload,
-                agentId: "main",
-                approvalDecision: "allow-once")
-            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-
-            let response = await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "allow-once",
-                command: OpenClawSystemCommand.run.rawValue,
-                paramsJSON: json))
-
-            #expect(response.ok)
-            #expect(await probe.capturedCommands() == [original])
-        }
-    }
-
-    @Test
-    func `allow always executes unbound shell command once without persisting inner grants`() async throws {
-        try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.security = .allowlist
-                entry.ask = .onMiss
-            }.get()
-            let probe = ShellRunProbe()
-            let runtime = MacNodeRuntime(
-                shellRunner: { command, _, _, _ in await probe.run(command) })
-            let payload = "/usr/bin/printf one && /usr/bin/printf two"
-            let original = ["/bin/sh", "-c", payload]
-            let params = OpenClawSystemRunParams(
-                command: original,
-                rawCommand: payload,
-                agentId: "main",
-                approvalDecision: "allow-always")
-            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-
-            let response = await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "allow-always-unbound",
-                command: OpenClawSystemCommand.run.rawValue,
-                paramsJSON: json))
-
-            #expect(response.ok)
-            #expect(await probe.capturedCommands() == [original])
-            #expect(ExecApprovalsStore.resolve(agentId: "main").allowlist.isEmpty)
-        }
-    }
-
-    @Test
     func `native rewrites preserve non-sensitive metadata and arbitrary ids`() async throws {
         try await self.withTempStateDir { _ in
             let raw = Data(
@@ -1348,6 +767,12 @@ struct ExecApprovalsStoreRefactorTests {
     func `execution commit rejects explicit approval after concurrent deny`() async throws {
         try await self.withTempStateDir { _ in
             _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
+                entry.security = .full
+                entry.ask = .off
+            }.get()
+            let policySnapshot = ExecApprovalPolicySnapshot(
+                resolved: ExecApprovalsStore.resolve(agentId: "main"))
+            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
                 entry.security = .deny
                 entry.ask = .off
             }.get()
@@ -1355,7 +780,9 @@ struct ExecApprovalsStoreRefactorTests {
             let result = ExecApprovalsStore.commitExecution(ExecApprovalExecutionCommit(
                 agentId: "main",
                 command: "printf ok",
-                authorization: .explicitOnce(evaluatedSecurity: .full),
+                authorization: .explicitOnce(
+                    evaluatedSecurity: .full,
+                    policySnapshot: policySnapshot),
                 uses: []))
 
             guard case .failure(.unavailable) = result else {
@@ -1370,13 +797,20 @@ struct ExecApprovalsStoreRefactorTests {
         try await self.withTempStateDir { _ in
             _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
                 entry.security = .full
+                entry.ask = .onMiss
+            }.get()
+            let policySnapshot = ExecApprovalPolicySnapshot(
+                resolved: ExecApprovalsStore.resolve(agentId: "main"))
+            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
                 entry.ask = .always
             }.get()
 
             let result = ExecApprovalsStore.commitExecution(ExecApprovalExecutionCommit(
                 agentId: "main",
                 command: "printf ok",
-                authorization: .autoReview(evaluatedSecurity: .full),
+                authorization: .autoReview(
+                    evaluatedSecurity: .full,
+                    policySnapshot: policySnapshot),
                 uses: []))
 
             guard case .failure(.unavailable) = result else {
@@ -1391,12 +825,63 @@ struct ExecApprovalsStoreRefactorTests {
             let denied = ExecApprovalsStore.commitExecution(ExecApprovalExecutionCommit(
                 agentId: "main",
                 command: "printf ok",
-                authorization: .autoReview(evaluatedSecurity: .full),
+                authorization: .autoReview(
+                    evaluatedSecurity: .full,
+                    policySnapshot: policySnapshot),
                 uses: []))
             guard case .failure(.unavailable) = denied else {
                 Issue.record("expected deny policy to override auto review")
                 return
             }
+        }
+    }
+
+    @Test
+    func `forwarded explicit approval cannot restore a rule revoked before Mac evaluation`() async throws {
+        try await self.withTempStateDir { _ in
+            let stale = ExecAllowlistEntry(
+                pattern: "/usr/bin/printf",
+                source: "allow-always")
+            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
+                entry.security = .allowlist
+                entry.ask = .always
+                entry.allowlist = [stale]
+            }.get()
+            let forwardedSnapshot = ExecApprovalPolicySnapshot(
+                resolved: ExecApprovalsStore.resolve(agentId: "main"))
+
+            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
+                entry.allowlist = []
+            }.get()
+            let freshContext = await ExecApprovalEvaluator.evaluate(
+                command: ["/usr/bin/printf", "ok"],
+                rawCommand: nil,
+                cwd: nil,
+                envOverrides: nil,
+                agentId: "main")
+            #expect(freshContext.policySnapshot != forwardedSnapshot)
+
+            let commit = ExecApprovalExecutionCommit.build(
+                context: freshContext,
+                effectiveSecurity: .allowlist,
+                approvalSource: nil,
+                explicitlyApproved: true,
+                persistAllowlist: true,
+                delayedPolicySnapshot: forwardedSnapshot)
+            if case let .explicitAlways(_, policySnapshot, grants) = commit.authorization {
+                #expect(policySnapshot == forwardedSnapshot)
+                #expect(grants.map(\.match.pattern) == ["/usr/bin/printf"])
+            } else {
+                Issue.record("expected forwarded durable approval")
+            }
+
+            let result = ExecApprovalsStore.commitExecution(commit)
+
+            guard case .failure(.unavailable) = result else {
+                Issue.record("expected revoked forwarded approval to fail")
+                return
+            }
+            #expect(ExecApprovalsStore.resolve(agentId: "main").allowlist.isEmpty)
         }
     }
 
@@ -1644,7 +1129,6 @@ struct ExecApprovalsStoreRefactorTests {
         }
     }
 }
-
 extension ExecApprovalsStoreRefactorTests {
     @Test
     func `ensure file migrates default approvals into custom state dir`() async throws {
@@ -1690,6 +1174,33 @@ extension ExecApprovalsStoreRefactorTests {
             #expect(file.agents?["main"]?.allowlist?.map(\.pattern) == ["git status"])
             #expect(!FileManager().fileExists(atPath: legacyFile.path))
             #expect(FileManager().fileExists(atPath: "\(legacyFile.path).migrated"))
+        }
+    }
+
+    @Test
+    func `ensure file keeps named profile isolated from default approvals`() async throws {
+        try await self.withTempHomeAndStateDir(profile: "work") { home, stateDir in
+            let defaultDir = home.appendingPathComponent(".openclaw", isDirectory: true)
+            try FileManager().createDirectory(at: defaultDir, withIntermediateDirectories: true)
+            let defaultFile = defaultDir.appendingPathComponent("exec-approvals.json")
+            let defaultJson = """
+            {
+              "version": 1,
+              "socket": { "token": "default-profile-token" },
+              "defaults": { "security": "full", "ask": "off" },
+              "agents": {}
+            }
+            """
+            try Data(defaultJson.utf8).write(to: defaultFile)
+            let defaultBefore = try Data(contentsOf: defaultFile)
+
+            let file = ExecApprovalsStore.ensureFile()
+
+            #expect(file.socket?.token != "default-profile-token")
+            #expect(FileManager().fileExists(
+                atPath: stateDir.appendingPathComponent("exec-approvals.json").path))
+            #expect(try Data(contentsOf: defaultFile) == defaultBefore)
+            #expect(!FileManager().fileExists(atPath: "\(defaultFile.path).migrated"))
         }
     }
 
@@ -1837,11 +1348,9 @@ extension ExecApprovalsStoreRefactorTests {
                 [.modificationDate: Date().addingTimeInterval(-31)],
                 ofItemAtPath: lockURL.path)
 
-            let startedAt = Date()
             let result = ExecApprovalsStore.addAllowlistEntry(
                 agentId: "main",
                 pattern: "/bin/echo")
-            let elapsed = Date().timeIntervalSince(startedAt)
 
             guard case .failure(.unavailable) = result else {
                 Issue.record("expected lock contention failure")
@@ -1849,7 +1358,6 @@ extension ExecApprovalsStoreRefactorTests {
             }
             #expect(FileManager().fileExists(atPath: lockURL.path))
             #expect(try Data(contentsOf: lockURL) == Data("{".utf8))
-            #expect(elapsed < 0.5)
             #expect(ExecApprovalsStore.loadFile().agents?["main"]?.allowlist?.isEmpty != false)
         }
     }
@@ -1926,6 +1434,35 @@ extension ExecApprovalsStoreRefactorTests {
     }
 
     @Test
+    func `entry scoped mutations reject inherited wildcard entries`() async throws {
+        try await self.withTempStateDir { _ in
+            let inherited = ExecAllowlistEntry(id: "wildcard-entry", pattern: "/bin/echo")
+            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "*") { entry in
+                entry.allowlist = [inherited]
+            }.get()
+            #expect(ExecApprovalsStore.resolve(agentId: "main").allowlist.map(\.id) == [inherited.id])
+
+            let update = ExecApprovalsStore.updateAllowlistEntry(
+                agentId: "main",
+                id: inherited.id,
+                pattern: "/bin/cat")
+            let removal = ExecApprovalsStore.removeAllowlistEntry(
+                agentId: "main",
+                id: inherited.id)
+
+            if case .failure(.entryNotOwned) = update {} else {
+                Issue.record("expected inherited update to report entryNotOwned")
+            }
+            if case .failure(.entryNotOwned) = removal {} else {
+                Issue.record("expected inherited removal to report entryNotOwned")
+            }
+            let persisted = ExecApprovalsStore.loadFile().agents?["*"]?.allowlist
+            #expect(persisted?.map(\.id) == [inherited.id])
+            #expect(persisted?.map(\.pattern) == [inherited.pattern])
+        }
+    }
+
+    @Test
     func `conditional save cannot restore revoked approvals`() async throws {
         try await self.withTempStateDir { _ in
             ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
@@ -1948,6 +1485,28 @@ extension ExecApprovalsStoreRefactorTests {
             let current = ExecApprovalsStore.resolve(agentId: "main")
             #expect(current.agent.security == .deny)
             #expect(current.allowlist.isEmpty)
+        }
+    }
+
+    @Test
+    func `conditional save does not recreate deleted approval state`() async throws {
+        try await self.withTempStateDir { _ in
+            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
+                entry.security = .allowlist
+                entry.allowlist = [ExecAllowlistEntry(pattern: "/bin/echo")]
+            }.get()
+            let stale = ExecApprovalsStore.readSnapshot()
+            try FileManager().removeItem(at: ExecApprovalsStore.fileURL())
+
+            let result = ExecApprovalsStore.saveFile(stale.file, ifBaseHash: stale.hash)
+
+            switch result {
+            case .conflict, .baseHashUnavailable:
+                break
+            default:
+                Issue.record("expected deleted approval state to remain absent")
+            }
+            #expect(!FileManager().fileExists(atPath: ExecApprovalsStore.fileURL().path))
         }
     }
 

@@ -614,7 +614,7 @@ export async function runGatewayClosePrelude(params: {
   disposeAuthRateLimiter?: () => void;
   disposeBrowserAuthRateLimiter: () => void;
   stopModelPricingRefresh?: () => void;
-  stopChannelHealthMonitor?: () => void;
+  stopChannelHealthMonitor?: () => Promise<void>;
   stopReadinessEventLoopHealth?: () => void;
   clearSecretsRuntimeSnapshot?: () => void;
   closeMcpServer?: () => Promise<void>;
@@ -625,7 +625,7 @@ export async function runGatewayClosePrelude(params: {
   params.disposeAuthRateLimiter?.();
   params.disposeBrowserAuthRateLimiter();
   params.stopModelPricingRefresh?.();
-  params.stopChannelHealthMonitor?.();
+  await params.stopChannelHealthMonitor?.();
   params.stopReadinessEventLoopHealth?.();
   params.clearSecretsRuntimeSnapshot?.();
   await params.closeMcpServer?.().catch(() => {});
@@ -695,7 +695,10 @@ export function createGatewayCloseHandler(
     lifecycleUnsub: (() => void) | null;
     taskUnsub: (() => void) | null;
     getPendingReplyCount?: () => number;
-    clients: Set<{ socket: { close: (code: number, reason: string) => void } }>;
+    clients: Set<{
+      connectionKind?: "gateway" | "worker";
+      socket: { close: (code: number, reason: string) => void };
+    }>;
     configReloader: { stop: () => Promise<void> };
     wss: WebSocketServer;
     httpServer: HttpServer;
@@ -722,7 +725,9 @@ export function createGatewayCloseHandler(
     const measureCloseStep = <T>(name: string, run: () => Promise<T> | T) =>
       measureGatewayRestartTrace(`restart.close.${name}`, run, [["reason", reason]]);
     try {
-      shutdownLog.info(`shutdown started: ${reason}`);
+      // Debug-level: the signal handler already announced the stop/restart at
+      // info, and the completion line below reports duration and outcome.
+      shutdownLog.debug(`shutdown started: ${reason}`);
 
       await measureCloseStep("gateway-shutdown-hook", () =>
         shutdownStep(
@@ -919,7 +924,10 @@ export function createGatewayCloseHandler(
       let clientCloseFailures = 0;
       for (const c of params.clients) {
         try {
-          c.socket.close(1012, "service restart");
+          c.socket.close(
+            1012,
+            c.connectionKind === "worker" ? "gateway-shutdown" : "service restart",
+          );
         } catch {
           clientCloseFailures++;
         }

@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -30,14 +31,11 @@ import {
   loadPluginRegistrySnapshotWithMetadata,
   normalizePluginsConfigWithRegistry,
   refreshPluginRegistry,
-  resolveChannelOwners,
-  resolveCliBackendOwners,
   resolveManifestContractOwnerPluginId,
   resolveManifestContractPluginIds,
   resolveManifestContractPluginIdsByCompatibilityRuntimePath,
   resolvePluginContributionOwners,
   resolveProviderOwners,
-  resolveSetupProviderOwners,
 } from "./plugin-registry.js";
 import { resolvePluginPath } from "./registry.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -261,8 +259,20 @@ describe("plugin registry facade", () => {
         matches: "demo-alias",
       }),
     ).toEqual(["demo"]);
-    expect(resolveChannelOwners({ index, channelId: "demo-chat" })).toEqual(["demo"]);
-    expect(resolveCliBackendOwners({ index, cliBackendId: "demo-cli" })).toEqual(["demo"]);
+    expect(
+      resolvePluginContributionOwners({
+        index,
+        contribution: "channels",
+        matches: "demo-chat",
+      }),
+    ).toEqual(["demo"]);
+    expect(
+      resolvePluginContributionOwners({
+        index,
+        contribution: "cliBackends",
+        matches: "demo-cli",
+      }),
+    ).toEqual(["demo"]);
     expect(
       resolvePluginContributionOwners({
         index,
@@ -270,7 +280,13 @@ describe("plugin registry facade", () => {
         matches: (contributionId) => contributionId === "demo-cli",
       }),
     ).toEqual(["demo"]);
-    expect(resolveSetupProviderOwners({ index, setupProviderId: "demo-setup" })).toEqual(["demo"]);
+    expect(
+      resolvePluginContributionOwners({
+        index,
+        contribution: "setupProviders",
+        matches: "demo-setup",
+      }),
+    ).toEqual(["demo"]);
     expect(resolveManifestContractPluginIds({ index, contract: "webSearchProviders" })).toEqual([
       "demo",
     ]);
@@ -346,14 +362,27 @@ describe("plugin registry facade", () => {
 
     expect(listPluginContributionIds({ lookUpTable, contribution: "providers" })).toEqual(["demo"]);
     expect(resolveProviderOwners({ lookUpTable, providerId: "DEMO" })).toEqual(["demo"]);
-    expect(resolveChannelOwners({ lookUpTable, channelId: "demo-chat" })).toEqual(["demo"]);
-    expect(resolveCliBackendOwners({ lookUpTable, cliBackendId: "demo-cli" })).toEqual(["demo"]);
-    expect(resolveCliBackendOwners({ lookUpTable, cliBackendId: "demo-setup-cli" })).toEqual([
-      "demo",
-    ]);
-    expect(resolveSetupProviderOwners({ lookUpTable, setupProviderId: "demo-setup" })).toEqual([
-      "demo",
-    ]);
+    expect(
+      resolvePluginContributionOwners({
+        lookUpTable,
+        contribution: "channels",
+        matches: "demo-chat",
+      }),
+    ).toEqual(["demo"]);
+    expect(
+      resolvePluginContributionOwners({
+        lookUpTable,
+        contribution: "cliBackends",
+        matches: "demo-cli",
+      }),
+    ).toEqual(["demo"]);
+    expect(
+      resolvePluginContributionOwners({
+        lookUpTable,
+        contribution: "setupProviders",
+        matches: "demo-setup",
+      }),
+    ).toEqual(["demo"]);
     expect(
       resolvePluginContributionOwners({
         lookUpTable,
@@ -394,7 +423,10 @@ describe("plugin registry facade", () => {
     const index = createIndex("openai", {
       plugins: [
         {
-          ...createIndex("openai").plugins[0],
+          ...expectDefined(
+            createIndex("openai").plugins[0],
+            'createIndex("openai").plugins[0] test invariant',
+          ),
           manifestPath: path.join(rootDir, "openclaw.plugin.json"),
           source: path.join(rootDir, "index.ts"),
           rootDir,
@@ -470,7 +502,10 @@ describe("plugin registry facade", () => {
         policyHash: resolveInstalledPluginIndexPolicyHash(config),
         plugins: [
           {
-            ...createIndex("persisted").plugins[0],
+            ...expectDefined(
+              createIndex("persisted").plugins[0],
+              'createIndex("persisted").plugins[0] test invariant',
+            ),
             manifestPath: path.join(persistedRootDir, "openclaw.plugin.json"),
             manifestHash: hashFile(path.join(persistedRootDir, "openclaw.plugin.json")),
             source: path.join(persistedRootDir, "index.ts"),
@@ -642,7 +677,10 @@ describe("plugin registry facade", () => {
       createIndex("persisted", {
         plugins: [
           {
-            ...createIndex("persisted").plugins[0],
+            ...expectDefined(
+              createIndex("persisted").plugins[0],
+              'createIndex("persisted").plugins[0] test invariant',
+            ),
             manifestPath: path.join(staleBundledRootDir, "openclaw.plugin.json"),
             source: path.join(staleBundledRootDir, "index.ts"),
             rootDir: staleBundledRootDir,
@@ -662,6 +700,83 @@ describe("plugin registry facade", () => {
     expect(result.source).toBe("derived");
     expectDiagnosticCodes(result.diagnostics, ["persisted-registry-stale-source"]);
     expectSnapshotPluginIds(result.snapshot, ["demo"]);
+  });
+
+  it("refreshes stale built records and accepts source records for dist-opt-out plugins", async () => {
+    const tempRoot = makeTempDir();
+    const stateDir = path.join(tempRoot, "state");
+    const packageRoot = path.join(tempRoot, "openclaw");
+    const sourceRoot = path.join(packageRoot, "extensions", "demo");
+    const builtRoot = path.join(packageRoot, "dist", "extensions", "demo");
+    fs.mkdirSync(path.join(packageRoot, ".git"), { recursive: true });
+    fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
+    fs.mkdirSync(sourceRoot, { recursive: true });
+    fs.mkdirSync(builtRoot, { recursive: true });
+    fs.writeFileSync(path.join(packageRoot, "pnpm-workspace.yaml"), "packages: []\n");
+    const sourceCandidate = {
+      ...createCandidate(sourceRoot),
+      origin: "bundled" as const,
+      packageDir: sourceRoot,
+      packageManifest: { extensions: ["./index.ts"], build: { bundledDist: false } },
+    } satisfies PluginCandidate;
+    const packageJson = JSON.stringify({
+      openclaw: sourceCandidate.packageManifest,
+    });
+    fs.writeFileSync(path.join(sourceRoot, "package.json"), packageJson);
+    fs.copyFileSync(
+      path.join(sourceRoot, "openclaw.plugin.json"),
+      path.join(builtRoot, "openclaw.plugin.json"),
+    );
+    fs.copyFileSync(path.join(sourceRoot, "index.ts"), path.join(builtRoot, "index.ts"));
+    fs.writeFileSync(path.join(builtRoot, "package.json"), packageJson);
+    const env = hermeticEnv({
+      OPENCLAW_BUNDLED_PLUGINS_DIR: path.dirname(builtRoot),
+      OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+    });
+    const freshIndex = loadPluginRegistrySnapshot({
+      candidates: [sourceCandidate],
+      env,
+      preferPersisted: false,
+    });
+    await writePersistedInstalledPluginIndex(freshIndex, { stateDir });
+
+    const persisted = loadPluginRegistrySnapshotWithMetadata({
+      stateDir,
+      candidates: [sourceCandidate],
+      env,
+    });
+    expect(persisted.source).toBe("persisted");
+    expect(persisted.diagnostics).toStrictEqual([]);
+
+    const legacySourceIndex = structuredClone(freshIndex);
+    for (const plugin of legacySourceIndex.plugins) {
+      delete plugin.packageBuild;
+    }
+    await writePersistedInstalledPluginIndex(legacySourceIndex, { stateDir });
+    const migrated = loadPluginRegistrySnapshotWithMetadata({
+      stateDir,
+      candidates: [sourceCandidate],
+      env,
+    });
+    expect(migrated.source).toBe("derived");
+    expectDiagnosticCodes(migrated.diagnostics, ["persisted-registry-stale-source"]);
+
+    const staleBuiltIndex = structuredClone(freshIndex);
+    for (const plugin of staleBuiltIndex.plugins) {
+      plugin.rootDir = builtRoot;
+      plugin.source = path.join(builtRoot, "index.ts");
+      plugin.manifestPath = path.join(builtRoot, "openclaw.plugin.json");
+      delete plugin.packageBuild;
+    }
+    await writePersistedInstalledPluginIndex(staleBuiltIndex, { stateDir });
+    const refreshed = loadPluginRegistrySnapshotWithMetadata({
+      stateDir,
+      candidates: [sourceCandidate],
+      env,
+    });
+    expect(refreshed.source).toBe("derived");
+    expectDiagnosticCodes(refreshed.diagnostics, ["persisted-registry-stale-source"]);
+    expect(refreshed.snapshot.plugins[0]?.rootDir).toBe(sourceRoot);
   });
 
   it("falls back to the derived registry when persisted policy is stale", async () => {

@@ -766,7 +766,9 @@ export async function runGatewayLoop(params: {
   };
 
   const onSigterm = () => {
-    gatewayLog.info("signal SIGTERM received");
+    // Debug-level: every accepted signal is announced by request()'s
+    // "received <signal>; ..." line, so an info pre-log would double up.
+    gatewayLog.debug("signal SIGTERM received");
     void (async () => {
       const { consumeGatewayRestartIntentPayloadSync } = await loadGatewayLifecycleRuntimeModule();
       const restartIntent = consumeGatewayRestartIntentPayloadSync();
@@ -782,11 +784,11 @@ export async function runGatewayLoop(params: {
     });
   };
   const onSigint = () => {
-    gatewayLog.info("signal SIGINT received");
+    gatewayLog.debug("signal SIGINT received");
     request("stop", "SIGINT");
   };
   const onSigusr1 = () => {
-    gatewayLog.info("signal SIGUSR1 received");
+    gatewayLog.debug("signal SIGUSR1 received");
     void (async () => {
       const {
         abortPendingChannelReloads,
@@ -883,7 +885,7 @@ export async function runGatewayLoop(params: {
       const {
         abortActiveCronTaskRuns,
         advanceCronActiveJobGeneration,
-        reloadTaskRegistryFromStore,
+        reloadTaskRuntimeStateFromStore,
         retireActiveCronTaskRunTracking,
         resetCronActiveJobs,
         resetAllLanes,
@@ -908,7 +910,7 @@ export async function runGatewayLoop(params: {
       resetAllLanes();
       clearRuntimeConfigSnapshot();
       resetGatewayRestartStateForInProcessRestart();
-      reloadTaskRegistryFromStore();
+      reloadTaskRuntimeStateFromStore();
       markGatewayRestartTrace("restart.next-start");
     });
 
@@ -916,11 +918,13 @@ export async function runGatewayLoop(params: {
     // SIGTERM/SIGINT still exit after a graceful shutdown.
     let isFirstStart = true;
     for (;;) {
-      await onIteration();
+      // The restart hook reopens admission before reloading durable state. Clear
+      // its local mirror first so a failed reload cannot skip the next drain.
       restartDrainingMarked = false;
-      startupStartedAt = Date.now();
       let startupFailedBeforeServerHandle = false;
       try {
+        await onIteration();
+        startupStartedAt = Date.now();
         await params.beginBoot?.(startupStartedAt);
         server = await params.start({ startupStartedAt });
         startupFailedWithoutServerHandle = false;

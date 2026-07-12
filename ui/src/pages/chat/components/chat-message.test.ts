@@ -6,6 +6,7 @@ import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { setUiTimeFormatPreference } from "../../../lib/format.ts";
 import {
+  formatChatRelativeTimestampLabel,
   formatChatTimestampForDisplay,
   renderMessageGroup,
   renderStreamGroup,
@@ -905,7 +906,10 @@ describe("grouped chat rendering", () => {
     const time = container.querySelector<HTMLTimeElement>(".chat-group-timestamp");
     expect(time).not.toBeNull();
     expect(time?.closest("details.msg-meta")).toBeNull();
-    expect(time?.title).not.toBe("");
+    // Absolute time lives in the styled tooltip around the relative label.
+    expect(time?.closest("openclaw-tooltip")?.getAttribute("content")).toBe(
+      formatChatTimestampForDisplay(1000).label,
+    );
   });
 
   it("uses the largest single assistant call for grouped context usage", () => {
@@ -934,36 +938,71 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".msg-meta__tokens")?.textContent).toBe("↑214.5k");
   });
 
-  it("renders full dates with message and streaming timestamps", () => {
-    const container = document.createElement("div");
+  it("renders relative labels with absolute datetimes for message and streaming timestamps", () => {
+    vi.useFakeTimers();
+    try {
+      const timestamp = Date.UTC(2026, 3, 24, 18, 30);
+      vi.setSystemTime(timestamp + 5 * 60 * 1000);
+      const container = document.createElement("div");
+
+      renderAssistantMessage(container, {
+        role: "assistant",
+        content: "Done",
+        timestamp,
+      });
+
+      const time = container.querySelector<HTMLTimeElement>(".chat-group-timestamp");
+      const display = formatChatTimestampForDisplay(timestamp);
+      expect(time?.dateTime).toBe(display.dateTime);
+      expect(time?.textContent?.trim()).toBe("5m ago");
+
+      render(
+        renderStreamGroup([
+          {
+            kind: "stream",
+            key: `stream:${timestamp}`,
+            text: "Working",
+            startedAt: timestamp,
+            isStreaming: true,
+          },
+        ]),
+        container,
+      );
+
+      const streamingTime = container.querySelector<HTMLTimeElement>(".chat-group-timestamp");
+      expect(streamingTime?.textContent?.trim()).toBe("5m ago");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("falls back to compact dates for footer labels older than a week", () => {
     const timestamp = Date.UTC(2026, 3, 24, 18, 30);
-
-    renderAssistantMessage(container, {
-      role: "assistant",
-      content: "Done",
-      timestamp,
-    });
-
-    const time = container.querySelector<HTMLTimeElement>(".chat-group-timestamp");
-    const display = formatChatTimestampForDisplay(timestamp);
-    expect(time?.dateTime).toBe(display.dateTime);
-    expect(time?.textContent?.trim()).toBe(display.label);
-
-    render(
-      renderStreamGroup([
-        {
-          kind: "stream",
-          key: `stream:${timestamp}`,
-          text: "Working",
-          startedAt: timestamp,
-          isStreaming: true,
-        },
-      ]),
-      container,
+    const sameYearNow = Date.UTC(2026, 5, 24, 18, 30);
+    const nextYearNow = Date.UTC(2027, 0, 2, 18, 30);
+    expect(formatChatRelativeTimestampLabel(timestamp, sameYearNow)).toBe(
+      new Date(timestamp).toLocaleDateString([], { month: "short", day: "numeric" }),
     );
+    expect(formatChatRelativeTimestampLabel(timestamp, nextYearNow)).toBe(
+      new Date(timestamp).toLocaleDateString([], {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      }),
+    );
+  });
 
-    const streamingTime = container.querySelector<HTMLTimeElement>(".chat-group-timestamp");
-    expect(streamingTime?.textContent?.trim()).toBe(display.label);
+  it("clamps skewed-future footer labels but dates far-future ones", () => {
+    const nowMs = Date.UTC(2026, 3, 24, 18, 30);
+    expect(formatChatRelativeTimestampLabel(nowMs + 30 * 1000, nowMs)).toBe("just now");
+    const nextYear = Date.UTC(2027, 3, 24, 18, 30);
+    expect(formatChatRelativeTimestampLabel(nextYear, nowMs)).toBe(
+      new Date(nextYear).toLocaleDateString([], {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      }),
+    );
   });
 
   it("omits streaming bubble class for completed stream segments", () => {
@@ -1039,21 +1078,64 @@ describe("grouped chat rendering", () => {
     // One bubble per segment, all under the single group.
     expect(container.querySelectorAll(".chat-bubble")).toHaveLength(3);
     // Footer time anchors to the earliest segment start, not render order.
-    const display = formatChatTimestampForDisplay(10);
-    expect(container.querySelector(".chat-group-timestamp")?.textContent?.trim()).toBe(
-      display.label,
+    expect(container.querySelector<HTMLTimeElement>(".chat-group-timestamp")?.dateTime).toBe(
+      formatChatTimestampForDisplay(10).dateTime,
     );
   });
 
-  it("renders a reading-indicator-only run as one group with no footer", () => {
+  it("renders a reading-indicator-only run without avatar or footer", () => {
     const container = document.createElement("div");
 
     render(renderStreamGroup([{ kind: "reading-indicator", key: "reading" }]), container);
 
-    expect(container.querySelectorAll(".chat-group.assistant")).toHaveLength(1);
-    expect(container.querySelectorAll(".chat-avatar.assistant")).toHaveLength(1);
+    const group = container.querySelector(".chat-group.assistant");
+    expect(group).not.toBeNull();
+    expect(group?.classList.contains("chat-group--working")).toBe(true);
+    // Working runs are pure claw: the avatar only arrives with stream text.
+    expect(container.querySelectorAll(".chat-avatar.assistant")).toHaveLength(0);
     expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
     expect(container.querySelector(".chat-group-footer")).toBeNull();
+  });
+
+  it("keeps the avatar once a stream part joins the reading indicator", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderStreamGroup([
+        { kind: "stream", key: "stream:s:live", text: "reply", startedAt: 10, isStreaming: true },
+        { kind: "reading-indicator", key: "reading" },
+      ]),
+      container,
+    );
+
+    const group = container.querySelector(".chat-group.assistant");
+    expect(group?.classList.contains("chat-group--working")).toBe(false);
+    expect(container.querySelectorAll(".chat-avatar.assistant")).toHaveLength(1);
+    expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
+  });
+
+  it("seeds a stable punch stance per reading-indicator key", () => {
+    const stanceFor = (key: string) => {
+      const container = document.createElement("div");
+      render(renderStreamGroup([{ kind: "reading-indicator", key }]), container);
+      const bubble = container.querySelector(".chat-reading-indicator");
+      return [...(bubble?.classList ?? [])].filter((cls) =>
+        cls.startsWith("chat-reading-indicator--"),
+      );
+    };
+
+    const first = stanceFor("stream:agent:main:pending");
+    // Stable across re-renders: same key always fights the same style.
+    expect(stanceFor("stream:agent:main:pending")).toEqual(first);
+    // At most one stance modifier; orthodox is the unmarked default.
+    expect(first.length).toBeLessThanOrEqual(1);
+    for (const cls of first) {
+      expect([
+        "chat-reading-indicator--southpaw",
+        "chat-reading-indicator--flurry",
+        "chat-reading-indicator--haymaker",
+      ]).toContain(cls);
+    }
   });
 
   it("renders configured local user names", () => {

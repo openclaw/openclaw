@@ -355,8 +355,6 @@ export type GatewayClientOptions = {
   url?: string; // ws://127.0.0.1:18789
   origin?: string;
   connectChallengeTimeoutMs?: number;
-  /** @deprecated Use connectChallengeTimeoutMs. */
-  connectDelayMs?: number;
   /**
    * Server-side pre-auth handshake budget. Config-derived local clients use
    * this to keep the connect-challenge watchdog aligned with the gateway.
@@ -418,16 +416,13 @@ export function describeGatewayCloseCode(code: number): string | undefined {
 }
 
 function readConnectChallengeTimeoutOverride(
-  opts: Pick<GatewayClientOptions, "connectChallengeTimeoutMs" | "connectDelayMs">,
+  opts: Pick<GatewayClientOptions, "connectChallengeTimeoutMs">,
 ): number | undefined {
   if (
     typeof opts.connectChallengeTimeoutMs === "number" &&
     Number.isFinite(opts.connectChallengeTimeoutMs)
   ) {
     return opts.connectChallengeTimeoutMs;
-  }
-  if (typeof opts.connectDelayMs === "number" && Number.isFinite(opts.connectDelayMs)) {
-    return opts.connectDelayMs;
   }
   return undefined;
 }
@@ -450,7 +445,7 @@ function formatGatewayClientErrorForLog(err: unknown): string {
 export function resolveGatewayClientConnectChallengeTimeoutMs(
   opts: Pick<
     GatewayClientOptions,
-    "connectChallengeTimeoutMs" | "connectDelayMs" | "env" | "preauthHandshakeTimeoutMs"
+    "connectChallengeTimeoutMs" | "env" | "preauthHandshakeTimeoutMs"
   >,
 ): number {
   return resolveConnectChallengeTimeoutMs(readConnectChallengeTimeoutOverride(opts), {
@@ -804,10 +799,14 @@ export class GatewayClient {
     if (this.pendingStop?.ws === ws) {
       return this.pendingStop;
     }
-    let resolve!: () => void;
+    const resolvers: Array<() => void> = [];
     const promise = new Promise<void>((res) => {
-      resolve = res;
+      resolvers.push(res);
     });
+    const resolve = resolvers.at(0);
+    if (!resolve) {
+      throw new Error("pending stop promise did not initialize its resolver");
+    }
     this.pendingStop = { ws, promise, resolve };
     return this.pendingStop;
   }
@@ -1537,7 +1536,12 @@ export class GatewayClient {
       if (!this.lastTick) {
         return;
       }
-      if (this.pending.size > 0) {
+      const allPendingRequestsHaveTimeouts =
+        this.pending.size > 0 &&
+        [...this.pending.values()].every((pending) => pending.timeout !== null);
+      // Finite requests own their deadline. One unbounded request keeps the
+      // transport watchdog active so a dead socket cannot strand it forever.
+      if (allPendingRequestsHaveTimeouts) {
         return;
       }
       const gap = Date.now() - this.lastTick;

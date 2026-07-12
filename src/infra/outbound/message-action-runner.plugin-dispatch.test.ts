@@ -101,6 +101,7 @@ const mocks = vi.hoisted(() => ({
   callGatewayLeastPrivilege: vi.fn(),
   randomIdempotencyKey: vi.fn(() => "idem-gateway-action"),
   maybeApplyTtsToPayload: vi.fn(async (params: { payload: unknown }) => params.payload),
+  prepareOutboundMirrorRoute: vi.fn(),
 }));
 
 vi.mock("./channel-resolution.js", () => ({
@@ -148,7 +149,12 @@ vi.mock("../../channels/plugins/bootstrap-registry.js", () => ({
 vi.mock("./message-action-threading.js", async () => {
   const { createOutboundThreadingMock } =
     await import("./message-action-threading.test-helpers.js");
-  return createOutboundThreadingMock();
+  const threading = createOutboundThreadingMock();
+  mocks.prepareOutboundMirrorRoute.mockImplementation(threading.prepareOutboundMirrorRoute);
+  return {
+    ...threading,
+    prepareOutboundMirrorRoute: mocks.prepareOutboundMirrorRoute,
+  };
 });
 
 function createAlwaysConfiguredPluginConfig(account: Record<string, unknown> = { enabled: true }) {
@@ -312,6 +318,7 @@ describe("runMessageAction plugin dispatch", () => {
     mocks.maybeApplyTtsToPayload.mockImplementation(
       async (params: { payload: unknown }) => params.payload,
     );
+    mocks.prepareOutboundMirrorRoute.mockClear();
   });
 
   describe("alias-based plugin action dispatch", () => {
@@ -334,14 +341,21 @@ describe("runMessageAction plugin dispatch", () => {
       capabilities: { chatTypes: ["direct", "channel"] },
       config: createAlwaysConfiguredPluginConfig(),
       messaging: {
+        targetPrefixes: ["actionhub", "actionhub-alias"],
+        normalizeTarget: (raw) => raw.replace(/^actionhub-alias:/i, "actionhub:"),
         targetResolver: {
           looksLikeId: () => true,
         },
       },
       actions: {
-        describeMessageTool: () => ({ actions: ["pin", "list-pins", "member-info"] }),
+        describeMessageTool: () => ({
+          actions: ["pin", "list-pins", "member-info", "channel-info"],
+        }),
         supportsAction: ({ action }) =>
-          action === "pin" || action === "list-pins" || action === "member-info",
+          action === "pin" ||
+          action === "list-pins" ||
+          action === "member-info" ||
+          action === "channel-info",
         handleAction,
       },
     };
@@ -366,6 +380,7 @@ describe("runMessageAction plugin dispatch", () => {
     });
 
     it("dispatches messageId/chatId-based plugin actions through the shared runner", async () => {
+      const resolveAgentRuntimeIdentityToken = vi.fn(async () => "unused-agent-runtime-token");
       await runMessageAction({
         cfg: {
           channels: {
@@ -379,6 +394,12 @@ describe("runMessageAction plugin dispatch", () => {
           channel: "actionhub",
           messageId: "om_123",
         },
+        gateway: {
+          resolveAgentRuntimeIdentityToken,
+          clientName: "gateway-client",
+          mode: "backend",
+        },
+        conversationReadOrigin: "direct-operator",
         dryRun: false,
       });
 
@@ -395,11 +416,16 @@ describe("runMessageAction plugin dispatch", () => {
           channel: "actionhub",
           chatId: "oc_123",
         },
+        conversationReadOrigin: "direct-operator",
         dryRun: false,
       });
 
       const pinCall = readPluginCall(handleAction, 0);
-      expectRecordFields(pinCall, { action: "pin" }, "pin call");
+      expectRecordFields(
+        pinCall,
+        { action: "pin", conversationReadOrigin: "direct-operator" },
+        "pin call",
+      );
       expectRecordFields(
         readRecordField(pinCall, "params", "pin call params"),
         { messageId: "om_123" },
@@ -412,6 +438,7 @@ describe("runMessageAction plugin dispatch", () => {
         { chatId: "oc_123" },
         "list pins call params",
       );
+      expect(resolveAgentRuntimeIdentityToken).not.toHaveBeenCalled();
     });
 
     it("routes execution context ids into plugin handleAction", async () => {
@@ -435,6 +462,7 @@ describe("runMessageAction plugin dispatch", () => {
           defaultAccountId: "ops",
           requesterAccountId: "ops",
           requesterSenderId: "trusted-user",
+          conversationReadOrigin: "direct-operator",
           sessionKey: "agent:alpha:main",
           sessionId: "session-123",
           agentId: "alpha",
@@ -456,6 +484,7 @@ describe("runMessageAction plugin dispatch", () => {
             accountId: "ops",
             requesterAccountId: "ops",
             requesterSenderId: "trusted-user",
+            conversationReadOrigin: "direct-operator",
             sessionKey: "agent:alpha:main",
             sessionId: "session-123",
             inboundEventKind: "room_event",
@@ -476,6 +505,153 @@ describe("runMessageAction plugin dispatch", () => {
           "plugin tool context",
         );
       });
+    });
+
+    it("uses capability authorization instead of ambient routing for local plugin actions", async () => {
+      const cfg = {
+        channels: {
+          actionhub: {
+            enabled: true,
+          },
+        },
+      } as OpenClawConfig;
+
+      await expect(
+        runMessageAction({
+          cfg,
+          action: "pin",
+          params: {
+            channel: "actionhub",
+            messageId: "om_123",
+            target: "forged-current",
+          },
+          requesterAccountId: "forged-account",
+          requesterSenderId: "forged-sender",
+          toolContext: {
+            currentChannelId: "forged-current",
+            currentChannelProvider: "actionhub",
+          },
+          messageActionAuthorization: {},
+          dryRun: false,
+        }),
+      ).rejects.toThrow("requires the exact current conversation and account");
+      expect(handleAction).not.toHaveBeenCalled();
+
+      await runMessageAction({
+        cfg,
+        action: "pin",
+        params: {
+          channel: "actionhub",
+          messageId: "om_123",
+          target: "trusted-current",
+        },
+        defaultAccountId: "trusted-account",
+        requesterAccountId: "forged-account",
+        requesterSenderId: "forged-sender",
+        toolContext: {
+          currentChannelId: "forged-current",
+          currentChannelProvider: "actionhub",
+        },
+        messageActionAuthorization: {
+          requesterAccountId: "trusted-account",
+          requesterSenderId: "trusted-sender",
+          toolContext: {
+            currentChannelId: "trusted-current",
+            currentChannelProvider: "actionhub",
+          },
+        },
+        dryRun: false,
+      });
+
+      const trustedCall = readPluginCall(handleAction, 0);
+      expectRecordFields(
+        trustedCall,
+        {
+          requesterAccountId: "trusted-account",
+          requesterSenderId: "trusted-sender",
+        },
+        "trusted plugin action call",
+      );
+      expectRecordFields(
+        readRecordField(trustedCall, "toolContext", "trusted plugin tool context"),
+        {
+          currentChannelId: "trusted-current",
+          currentChannelProvider: "actionhub",
+        },
+        "trusted plugin tool context",
+      );
+    });
+
+    it("canonicalizes channelId-backed execution targets after host authorization", async () => {
+      await runMessageAction({
+        cfg: {
+          channels: {
+            actionhub: {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        action: "channel-info",
+        params: {
+          channel: "actionhub",
+          target: "actionhub-alias:current",
+        },
+        defaultAccountId: "default",
+        requesterAccountId: "default",
+        conversationReadOrigin: "delegated",
+        toolContext: {
+          currentChannelId: "actionhub:current",
+          currentChannelProvider: "actionhub",
+          currentChatType: "channel",
+        },
+        dryRun: false,
+      });
+
+      const call = readFirstPluginCall(handleAction);
+      expectRecordFields(
+        readRecordField(call, "params", "normalized plugin params"),
+        {
+          target: "actionhub:current",
+          channelId: "actionhub:current",
+        },
+        "normalized plugin params",
+      );
+    });
+
+    it("canonicalizes the execution target only after host authorization", async () => {
+      await runMessageAction({
+        cfg: {
+          channels: {
+            actionhub: {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        action: "pin",
+        params: {
+          channel: "actionhub",
+          target: "actionhub-alias:current",
+          messageId: "om_123",
+        },
+        defaultAccountId: "default",
+        requesterAccountId: "default",
+        conversationReadOrigin: "delegated",
+        toolContext: {
+          currentChannelId: "actionhub:current",
+          currentChannelProvider: "actionhub",
+        },
+        dryRun: false,
+      });
+
+      const call = readFirstPluginCall(handleAction);
+      expectRecordFields(
+        readRecordField(call, "params", "normalized plugin params"),
+        {
+          target: "actionhub:current",
+          to: "actionhub:current",
+        },
+        "normalized plugin params",
+      );
     });
 
     it("preserves no-context owner Discord admin actions through the shared runner", async () => {
@@ -522,7 +698,14 @@ describe("runMessageAction plugin dispatch", () => {
       } as OpenClawConfig;
 
       setActivePluginRegistry(
-        createTestRegistry([{ pluginId: "discord", source: "test", plugin: discordPlugin }]),
+        createTestRegistry([
+          {
+            pluginId: "discord",
+            source: "test",
+            origin: "bundled",
+            plugin: discordPlugin,
+          },
+        ]),
       );
 
       await runMessageAction({
@@ -613,11 +796,12 @@ describe("runMessageAction plugin dispatch", () => {
           },
         ]),
       );
-      mocks.callGateway.mockResolvedValue({
+      mocks.callGatewayLeastPrivilege.mockResolvedValue({
         ok: true,
         added: "✅",
       });
 
+      const resolveAgentRuntimeIdentityToken = vi.fn(async () => "agent-runtime-token");
       const result = await runMessageAction({
         cfg: {
           channels: {
@@ -644,25 +828,27 @@ describe("runMessageAction plugin dispatch", () => {
           currentMessageId: "wamid.1",
         },
         gateway: {
-          clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-          mode: GATEWAY_CLIENT_MODES.BACKEND,
+          resolveAgentRuntimeIdentityToken,
+          clientName: "cli",
+          mode: "cli",
         },
         dryRun: false,
       });
 
-      const gatewayCall = readMockCallArg(mocks.callGateway, "trusted gateway call");
-      expectRecordFields(
-        gatewayCall,
-        { method: "message.action", scopes: ["operator.admin"] },
-        "gateway call",
+      const gatewayCall = readMockCallArg(
+        mocks.callGatewayLeastPrivilege,
+        "gateway least privilege call",
       );
+      expectRecordFields(gatewayCall, { method: "message.action" }, "gateway call");
+      expect(gatewayCall.agentRuntimeIdentityToken).toBe("agent-runtime-token");
+      expect(resolveAgentRuntimeIdentityToken).toHaveBeenCalledTimes(1);
       const gatewayParams = readRecordField(gatewayCall, "params", "gateway call params");
+      expect(gatewayParams).not.toHaveProperty("conversationReadOrigin");
       expectRecordFields(
         gatewayParams,
         {
           channel: "gatewaychat",
           action: "react",
-          requesterSenderId: "trusted-user",
           sessionKey: "agent:alpha:main",
           sessionId: "session-123",
           agentId: "alpha",
@@ -671,15 +857,9 @@ describe("runMessageAction plugin dispatch", () => {
         },
         "gateway call params",
       );
-      expectRecordFields(
-        readRecordField(gatewayParams, "toolContext", "gateway tool context"),
-        {
-          currentChannelProvider: "gatewaychat",
-          currentMessageId: "wamid.1",
-        },
-        "gateway tool context",
-      );
-      expect(mocks.callGatewayLeastPrivilege).not.toHaveBeenCalled();
+      expect(gatewayParams).not.toHaveProperty("requesterAccountId");
+      expect(gatewayParams).not.toHaveProperty("requesterSenderId");
+      expect(gatewayParams).not.toHaveProperty("toolContext");
       expect(handleActionEntry).not.toHaveBeenCalled();
       expectRecordFields(
         result,
@@ -950,6 +1130,7 @@ describe("runMessageAction plugin dispatch", () => {
           },
         } as OpenClawConfig,
         action: "send",
+        conversationReadOrigin: "direct-operator",
         params: {
           channel: "gatewaychat",
           target: "user-123",
@@ -973,6 +1154,7 @@ describe("runMessageAction plugin dispatch", () => {
         {
           channel: "gatewaychat",
           action: "send",
+          conversationReadOrigin: "direct-operator",
           idempotencyKey: "idem-gateway-action",
         },
         "gateway call params",
@@ -2031,6 +2213,17 @@ describe("runMessageAction plugin dispatch", () => {
         handledBy: "core",
         payload: { ok: true },
       });
+      mocks.prepareOutboundMirrorRoute.mockResolvedValueOnce({
+        resolvedThreadId: undefined,
+        outboundRoute: {
+          sessionKey: "agent:main:cardchat:channel:test-card",
+          baseSessionKey: "agent:main:cardchat:channel:test-card",
+          peer: { kind: "channel", id: "test-card" },
+          chatType: "channel",
+          from: "cardchat:channel:test-card",
+          to: "channel:test-card",
+        },
+      });
       setActivePluginRegistry(
         createTestRegistry([
           {
@@ -2070,6 +2263,7 @@ describe("runMessageAction plugin dispatch", () => {
           clientName: "cli",
           mode: "cli",
         },
+        agentId: "main",
         dryRun: false,
       });
 
@@ -2079,6 +2273,11 @@ describe("runMessageAction plugin dispatch", () => {
       expect(mocks.callGatewayLeastPrivilege).not.toHaveBeenCalled();
       const executeCall = readMockCallArg(mocks.executeSendAction, "execute send call");
       expectRecordFields(executeCall, { message: "Deployment trend" }, "execute send call");
+      expectRecordFields(
+        readRecordField(executeCall, "ctx", "execute send context"),
+        { conversationType: "channel" },
+        "execute send context",
+      );
       expectRecordFields(
         readRecordField(executeCall, "payload", "execute send payload"),
         { text: "Deployment trend", presentation },

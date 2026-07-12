@@ -3,7 +3,7 @@
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "./session-menu.ts";
-import type { SessionMenuAction, SessionMenuData } from "./session-menu.ts";
+import type { SessionMenuAction, SessionMenuData, SessionMenuWork } from "./session-menu.ts";
 
 type SessionMenuElement = HTMLElement & { updateComplete: Promise<boolean> };
 
@@ -19,8 +19,10 @@ async function mountMenu(
   options: {
     session?: Partial<SessionMenuData>;
     canOpenChat?: boolean;
+    work?: SessionMenuWork | null;
     workboard?: { captured: boolean; busy: boolean } | null;
     archiveAllowed?: boolean;
+    selectionCount?: number;
     groups?: readonly string[];
     trigger?: HTMLElement | null;
     onAction?: (action: SessionMenuAction) => void;
@@ -42,6 +44,7 @@ async function mountMenu(
   render(
     html`<openclaw-session-menu
       .session=${session}
+      .selectionCount=${options.selectionCount ?? 1}
       .x=${100}
       .y=${100}
       .trigger=${options.trigger ?? null}
@@ -50,6 +53,7 @@ async function mountMenu(
       .archiveAllowed=${options.archiveAllowed ?? true}
       .groups=${options.groups ?? []}
       .canOpenChat=${options.canOpenChat ?? true}
+      .work=${options.work ?? null}
       .workboard=${options.workboard === undefined
         ? { captured: false, busy: false }
         : options.workboard}
@@ -99,6 +103,26 @@ describe("session menu", () => {
       "Archive session",
       "Delete…",
     ]);
+  });
+
+  it("renders only batch actions with counts for a multi-selection", async () => {
+    const menu = await mountMenu({
+      selectionCount: 3,
+      work: { loading: false, pullRequestUrl: "https://example.test/pr", worktreePath: "/tmp/x" },
+    });
+
+    expect(menuItemLabels(menu)).toEqual([
+      "Mark 3 as unread",
+      "Move 3 to group",
+      "Archive 3",
+      "Delete 3…",
+    ]);
+  });
+
+  it("offers Mark N as read when every selected session is unread", async () => {
+    const menu = await mountMenu({ selectionCount: 2, session: { unread: true } });
+
+    expect(menuItemLabels(menu)).toContain("Mark 2 as read");
   });
 
   it("omits Open chat and Workboard when unavailable", async () => {
@@ -170,6 +194,129 @@ describe("session menu", () => {
     await menu.updateComplete;
 
     expect(menuItemLabels(menu)).not.toContain("Remove from group");
+  });
+
+  it("omits the submenu separator when New group is the only entry", async () => {
+    const menu = await mountMenu({ groups: [] });
+
+    menuItem(menu, "Move to group").click();
+    await menu.updateComplete;
+
+    const submenu = menu.querySelector<HTMLElement>(".session-menu__submenu");
+    if (!submenu) {
+      throw new Error("Expected group submenu");
+    }
+    expect(menuItemLabels(submenu)).toEqual(["New group…"]);
+    expect(submenu.querySelector('[role="separator"]')).toBeNull();
+  });
+
+  it("keeps the submenu separator when groups exist", async () => {
+    const menu = await mountMenu({ groups: ["Research"] });
+
+    menuItem(menu, "Move to group").click();
+    await menu.updateComplete;
+
+    const submenu = menu.querySelector<HTMLElement>(".session-menu__submenu");
+    if (!submenu) {
+      throw new Error("Expected group submenu");
+    }
+    expect(submenu.querySelector('[role="separator"]')).not.toBeNull();
+  });
+
+  it("numbers group submenu entries and dispatches them from digit keys", async () => {
+    const onAction = vi.fn<(action: SessionMenuAction) => void>();
+    const menu = await mountMenu({
+      session: { category: "Research" },
+      groups: ["Research", "Projects"],
+      onAction,
+    });
+
+    const closedDigit = new KeyboardEvent("keydown", { key: "1", bubbles: true, cancelable: true });
+    document.dispatchEvent(closedDigit);
+    expect(onAction).not.toHaveBeenCalled();
+
+    menuItem(menu, "Move to group").click();
+    await menu.updateComplete;
+
+    const submenu = menu.querySelector<HTMLElement>(".session-menu__submenu");
+    if (!submenu) {
+      throw new Error("Expected group submenu");
+    }
+    expect(menuItemLabels(submenu)).toEqual([
+      "Research",
+      "Projects",
+      "Remove from group",
+      "New group…",
+    ]);
+    const shortcuts = Array.from(submenu.querySelectorAll<HTMLElement>('[role="menuitem"]')).map(
+      (item) => item.dataset.shortcut,
+    );
+    expect(shortcuts).toEqual(["1", "2", "3", "4"]);
+    expect(
+      menuItem(submenu, "Projects").querySelector(".session-menu__shortcut")?.textContent,
+    ).toBe("2");
+
+    const keydown = new KeyboardEvent("keydown", { key: "2", bubbles: true, cancelable: true });
+    document.dispatchEvent(keydown);
+    expect(onAction).toHaveBeenCalledWith({ kind: "move-to-group", category: "Projects" });
+    expect(keydown.defaultPrevented).toBe(true);
+  });
+
+  it("omits Open PR and Open in for sessions without a worktree", async () => {
+    const menu = await mountMenu();
+
+    expect(menuItemLabels(menu)).not.toContain("Open PR");
+    expect(menuItemLabels(menu)).not.toContain("Open in");
+  });
+
+  it("keeps Open PR and Open in disabled while the work context loads", async () => {
+    const menu = await mountMenu({
+      work: { loading: true, pullRequestUrl: null, worktreePath: null },
+    });
+
+    expect(menuItem(menu, "Open PR").disabled).toBe(true);
+    expect(menuItem(menu, "Open in").disabled).toBe(true);
+  });
+
+  it("dispatches open-pr with the resolved URL from click or the G shortcut", async () => {
+    const url = "https://github.com/openclaw/openclaw/pull/12345";
+    const calls: SessionMenuAction[] = [];
+    const menu = await mountMenu({
+      work: { loading: false, pullRequestUrl: url, worktreePath: null },
+      onAction: (action) => calls.push(action),
+    });
+
+    const openPr = menuItem(menu, "Open PR");
+    expect(openPr.disabled).toBe(false);
+    expect(openPr.querySelector(".session-menu__shortcut")?.textContent).toBe("G");
+    expect(menuItem(menu, "Open in").disabled).toBe(true);
+
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "g", bubbles: true, cancelable: true }),
+    );
+    expect(calls).toEqual([{ kind: "open-pr", url }]);
+  });
+
+  it("opens the editor submenu and dispatches open-in with the worktree path", async () => {
+    const onAction = vi.fn<(action: SessionMenuAction) => void>();
+    const menu = await mountMenu({
+      work: { loading: false, pullRequestUrl: null, worktreePath: "/work/trees/demo" },
+      onAction,
+    });
+
+    expect(menuItem(menu, "Open PR").disabled).toBe(true);
+    menuItem(menu, "Open in").click();
+    await menu.updateComplete;
+
+    expect(menuItemLabels(menu)).toEqual(
+      expect.arrayContaining(["Cursor", "VS Code", "Windsurf", "Zed"]),
+    );
+    menuItem(menu, "VS Code").click();
+    expect(onAction).toHaveBeenCalledWith({
+      kind: "open-in",
+      editor: "vscode",
+      path: "/work/trees/demo",
+    });
   });
 
   it("renders shortcut hints and dispatches actions from bare letter keys", async () => {

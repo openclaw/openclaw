@@ -1,5 +1,6 @@
 // Fetch timeout helpers wrap fetch calls with timeout and abort behavior.
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveSafeTimeoutDelayMs } from "./timer-delay.js";
 
@@ -27,6 +28,11 @@ export function bindAbortRelay(controller: AbortController): () => void {
   return relayAbort.bind(controller);
 }
 
+/** Relays a parent abort while preserving its reason. */
+function relayAbortReason(this: AbortController, signal: AbortSignal) {
+  this.abort(signal.reason);
+}
+
 function sanitizeTimeoutLogUrl(rawUrl: string | undefined): string | undefined {
   const trimmed = rawUrl?.trim();
   if (!trimmed) {
@@ -41,7 +47,9 @@ function sanitizeTimeoutLogUrl(rawUrl: string | undefined): string | undefined {
     parsed.search = "";
     parsed.hash = "";
     const value = redactSensitiveUrlLikeString(parsed.toString());
-    return value.length > LOG_URL_MAX_CHARS ? `${value.slice(0, LOG_URL_MAX_CHARS)}...` : value;
+    return value.length > LOG_URL_MAX_CHARS
+      ? `${truncateUtf16Safe(value, LOG_URL_MAX_CHARS)}...`
+      : value;
   } catch {
     const withoutQueryOrHash = trimmed.split(URL_SECRET_SUFFIX_PATTERN, 1)[0] ?? "";
     const cleaned = redactSensitiveUrlLikeString(
@@ -55,7 +63,7 @@ function sanitizeTimeoutLogUrl(rawUrl: string | undefined): string | undefined {
       return undefined;
     }
     return cleaned.length > LOG_URL_MAX_CHARS
-      ? `${cleaned.slice(0, LOG_URL_MAX_CHARS)}...`
+      ? `${truncateUtf16Safe(cleaned, LOG_URL_MAX_CHARS)}...`
       : cleaned;
   }
 }
@@ -134,10 +142,10 @@ export function buildTimeoutAbortSignal(params: TimeoutAbortSignalParams): {
     );
   };
   scheduleTimeout();
-  const onAbort = bindAbortRelay(controller);
-  if (signal) {
+  const onAbort = signal ? relayAbortReason.bind(controller, signal) : undefined;
+  if (signal && onAbort) {
     if (signal.aborted) {
-      controller.abort();
+      controller.abort(signal.reason);
     } else {
       signal.addEventListener("abort", onAbort, { once: true });
     }
@@ -159,7 +167,7 @@ export function buildTimeoutAbortSignal(params: TimeoutAbortSignalParams): {
       if (timeoutId) {
         clearTimeout(timeoutId);
       }
-      if (signal) {
+      if (signal && onAbort) {
         signal.removeEventListener("abort", onAbort);
       }
     },

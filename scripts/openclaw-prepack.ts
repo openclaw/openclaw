@@ -15,6 +15,7 @@ const requiredPreparedPathGroups = [
 ];
 const requiredControlUiAssetPrefix = "dist/control-ui/assets/";
 const DEFAULT_PREPACK_COMMAND_TIMEOUT_MS = 30 * 60 * 1000;
+const ALLOW_UNRELEASED_CHANGELOG_ENV = "OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG";
 
 type PreparedFileReader = {
   existsSync: typeof existsSync;
@@ -118,6 +119,19 @@ export function resolvePrepackCommandTimeoutMs(env: NodeJS.ProcessEnv = process.
   );
 }
 
+export function resolvePrepackAllowUnreleasedChangelog(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const raw = env[ALLOW_UNRELEASED_CHANGELOG_ENV]?.trim();
+  if (raw === undefined || raw === "" || raw === "0" || raw === "false") {
+    return false;
+  }
+  if (raw === "1" || raw === "true") {
+    return true;
+  }
+  throw new Error(`invalid ${ALLOW_UNRELEASED_CHANGELOG_ENV}: ${raw}`);
+}
+
 export function resolvePrepackCommandStdio(
   options: SpawnSyncOptions,
   env: NodeJS.ProcessEnv = process.env,
@@ -202,14 +216,20 @@ async function writeDistInventory(): Promise<void> {
   await writePackageDistInventory(process.cwd());
 }
 
+export async function preparePrepackArtifacts(env: NodeJS.ProcessEnv = process.env): Promise<void> {
+  ensurePreparedArtifacts();
+  await writeDistInventory();
+  runBuildSmoke();
+  await preparePackageChangelog(process.cwd(), {
+    allowUnreleased: resolvePrepackAllowUnreleasedChangelog(env),
+  });
+}
+
 async function main(): Promise<void> {
   const buildEnv = resolvePrepackBuildEnvironment();
   runPnpm(["build"], buildEnv);
   runPnpm(["ui:build"], buildEnv);
-  ensurePreparedArtifacts();
-  await writeDistInventory();
-  runBuildSmoke();
-  await preparePackageChangelog();
+  await preparePrepackArtifacts(buildEnv);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
