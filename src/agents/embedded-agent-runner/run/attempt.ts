@@ -4675,11 +4675,20 @@ export async function runEmbeddedAttempt(
         }
 
         await sessionLockController.waitForSessionEvents(activeSession);
+        log.debug(
+          `run cleanup: stage=post-prompt-session-events runId=${params.runId} sessionId=${params.sessionId}`,
+        );
         await waitForPendingEvents();
+        log.debug(
+          `run cleanup: stage=post-prompt-pending-events runId=${params.runId} sessionId=${params.sessionId}`,
+        );
         if (repairedRejectedThinkingReplay) {
           activeSession.agent.state.messages = activeSessionManager.buildSessionContext().messages;
         }
         await sessionLockController.releaseForPrompt();
+        log.debug(
+          `run cleanup: stage=prompt-lock-released runId=${params.runId} sessionId=${params.sessionId}`,
+        );
 
         if (
           shouldWaitForCompletionRequiredAsyncTasks({
@@ -4737,6 +4746,9 @@ export async function runEmbeddedAttempt(
             await sessionLockController.waitForSessionEvents(activeSession);
           }
         }
+        log.debug(
+          `run cleanup: stage=completion-required-async-tasks runId=${params.runId} sessionId=${params.sessionId}`,
+        );
 
         // Capture snapshot before compaction wait so we have complete messages if timeout occurs
         // Check compaction state before and after to avoid race condition where compaction starts during capture
@@ -4757,6 +4769,9 @@ export async function runEmbeddedAttempt(
           if (onBlockReplyFlush) {
             await onBlockReplyFlush();
           }
+          log.debug(
+            `run cleanup: stage=block-reply-flush runId=${params.runId} sessionId=${params.sessionId}`,
+          );
 
           // Skip compaction wait when yield aborted the run — the signal is
           // already tripped and abortable() would immediately reject.
@@ -4792,8 +4807,14 @@ export async function runEmbeddedAttempt(
             throw err;
           }
         }
+        log.debug(
+          `run cleanup: stage=compaction-wait runId=${params.runId} sessionId=${params.sessionId}`,
+        );
 
         await sessionLockController.waitForSessionEvents(activeSession);
+        log.debug(
+          `run cleanup: stage=post-compaction-session-events runId=${params.runId} sessionId=${params.sessionId}`,
+        );
         await sessionLockController.withSessionWriteLock(async () => {
           // Check if ANY compaction occurred during the entire attempt (prompt + retry).
           // Using a cumulative count (> 0) instead of a delta check avoids missing
