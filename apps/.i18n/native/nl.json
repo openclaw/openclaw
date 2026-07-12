@@ -4859,6 +4859,11 @@
       "translated": "Laatste duur"
     },
     {
+      "id": "native.android.3eab9690ca253a77",
+      "source": "${durationMs}ms",
+      "translated": "${durationMs} ms"
+    },
+    {
       "id": "native.android.f46a99f8986a2828",
       "source": "Consecutive Errors",
       "translated": "Opeenvolgende fouten"
