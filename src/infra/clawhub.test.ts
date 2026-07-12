@@ -475,6 +475,85 @@ describe("clawhub helpers", () => {
     expect(new URL(requestedUrl).searchParams.has("limit")).toBe(false);
   });
 
+  it("omits fractional searchClawHubSkills limits after truncation", async () => {
+    let requestedUrl = "";
+    await searchClawHubSkills({
+      query: "calendar",
+      limit: 0.5,
+      fetchImpl: async (input) => {
+        requestedUrl = input instanceof Request ? input.url : String(input);
+        return new Response(JSON.stringify({ results: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    });
+    expect(new URL(requestedUrl).searchParams.has("limit")).toBe(false);
+  });
+
+  it("clamps searchClawHubPackages limit to the configured maximum", async () => {
+    let requestedUrl = "";
+    await searchClawHubPackages({
+      query: "security",
+      limit: 999_999,
+      fetchImpl: async (input) => {
+        requestedUrl = input instanceof Request ? input.url : String(input);
+        return new Response(JSON.stringify({ results: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    });
+    expect(new URL(requestedUrl).searchParams.get("limit")).toBe("100");
+  });
+
+  it("passes through a valid searchClawHubPackages limit unchanged", async () => {
+    let requestedUrl = "";
+    await searchClawHubPackages({
+      query: "security",
+      limit: 5,
+      fetchImpl: async (input) => {
+        requestedUrl = input instanceof Request ? input.url : String(input);
+        return new Response(JSON.stringify({ results: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    });
+    expect(new URL(requestedUrl).searchParams.get("limit")).toBe("5");
+  });
+
+  it("omits the searchClawHubPackages limit when none is provided", async () => {
+    let requestedUrl = "";
+    await searchClawHubPackages({
+      query: "security",
+      fetchImpl: async (input) => {
+        requestedUrl = input instanceof Request ? input.url : String(input);
+        return new Response(JSON.stringify({ results: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    });
+    expect(new URL(requestedUrl).searchParams.has("limit")).toBe(false);
+  });
+
+  it("omits fractional searchClawHubPackages limits after truncation", async () => {
+    let requestedUrl = "";
+    await searchClawHubPackages({
+      query: "security",
+      limit: 0.5,
+      fetchImpl: async (input) => {
+        requestedUrl = input instanceof Request ? input.url : String(input);
+        return new Response(JSON.stringify({ results: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    });
+    expect(new URL(requestedUrl).searchParams.has("limit")).toBe(false);
+  });
+
   it("sends owner-qualified skill detail lookups as slug plus ownerHandle", async () => {
     let requestedUrl = "";
 

@@ -1162,10 +1162,14 @@ export async function fetchClawHubPackageSecurity(params: {
 const CLAWHUB_SEARCH_MAX_LIMIT = 100;
 
 function clampClawHubSearchLimit(limit: number | undefined): string | undefined {
-  if (!Number.isFinite(limit) || !limit || limit <= 0) {
+  if (!Number.isFinite(limit)) {
     return undefined;
   }
-  return String(Math.min(Math.trunc(limit), CLAWHUB_SEARCH_MAX_LIMIT));
+  const normalized = Math.trunc(limit);
+  if (normalized < 1) {
+    return undefined;
+  }
+  return String(Math.min(normalized, CLAWHUB_SEARCH_MAX_LIMIT));
 }
 
 export async function searchClawHubPackages(params: {
