@@ -202,6 +202,11 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
                 manual: false,
               });
             }
+            // stop() can run while stopChannel awaits during shutdown or reload.
+            // A retired monitor must not restart a channel after ownership moves on.
+            if (stopped) {
+              return;
+            }
             channelManager.resetRestartAttempts(channelId as ChannelId, accountId);
             await channelManager.startChannel(channelId as ChannelId, accountId);
           } catch (err) {

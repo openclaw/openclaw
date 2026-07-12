@@ -618,6 +618,46 @@ describe("channel-health-monitor", () => {
     monitor.stop();
   });
 
+  it.each(["manual stop", "abort signal"] as const)(
+    "does not resume an in-flight restart after %s",
+    async (stopMode) => {
+      let releaseStop: (() => void) | undefined;
+      const stopGate = new Promise<void>((resolve) => {
+        releaseStop = resolve;
+      });
+      const abort = new AbortController();
+      const manager = createSlackSnapshotManager(
+        disconnectedAccount(Date.now() - 300_000),
+        {
+          stopChannel: vi.fn(async () => {
+            await stopGate;
+          }),
+        },
+      );
+      const monitor = startDefaultMonitor(manager, {
+        abortSignal: abort.signal,
+        checkIntervalMs: 100,
+        cooldownCycles: 0,
+      });
+
+      await vi.advanceTimersByTimeAsync(101);
+      expect(manager.stopChannel).toHaveBeenCalledTimes(1);
+
+      if (stopMode === "manual stop") {
+        monitor.stop();
+      } else {
+        abort.abort();
+      }
+      releaseStop?.();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(manager.resetRestartAttempts).not.toHaveBeenCalled();
+      expect(manager.startChannel).not.toHaveBeenCalled();
+      monitor.stop();
+    },
+  );
+
   it("stops cleanly", async () => {
     const manager = createMockChannelManager();
     const monitor = startDefaultMonitor(manager);
