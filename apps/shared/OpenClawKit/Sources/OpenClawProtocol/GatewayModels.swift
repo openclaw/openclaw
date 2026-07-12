@@ -3955,6 +3955,7 @@ public struct SessionsCreateResult: Codable, Sendable {
     public let sessionid: String?
     public let entry: [String: AnyCodable]?
     public let runstarted: Bool?
+    public let runerror: ErrorShape?
     public let worktree: SessionWorktreeInfo?
 
     public init(
@@ -3963,6 +3964,7 @@ public struct SessionsCreateResult: Codable, Sendable {
         sessionid: String? = nil,
         entry: [String: AnyCodable]? = nil,
         runstarted: Bool? = nil,
+        runerror: ErrorShape? = nil,
         worktree: SessionWorktreeInfo? = nil)
     {
         self.ok = ok
@@ -3970,6 +3972,7 @@ public struct SessionsCreateResult: Codable, Sendable {
         self.sessionid = sessionid
         self.entry = entry
         self.runstarted = runstarted
+        self.runerror = runerror
         self.worktree = worktree
     }
 
@@ -3979,6 +3982,7 @@ public struct SessionsCreateResult: Codable, Sendable {
         case sessionid = "sessionId"
         case entry
         case runstarted = "runStarted"
+        case runerror = "runError"
         case worktree
     }
 }
