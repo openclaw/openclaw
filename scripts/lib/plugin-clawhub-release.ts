@@ -226,7 +226,7 @@ async function buildClawHubQueryError(
       .replace(/\s+/gu, " ")
       .trim();
   } catch {
-    body = "";
+    // Keep the original empty diagnostic body when response text cannot be read.
   }
   if (body.length > CLAWHUB_ERROR_BODY_MAX_CHARS) {
     body = `${body.slice(0, CLAWHUB_ERROR_BODY_MAX_CHARS)}...`;

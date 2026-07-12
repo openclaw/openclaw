@@ -122,11 +122,11 @@ describe("promotions feed state", () => {
     await maybeRefreshPromotionsFeed({ nowMs: NOW, fetchImpl });
 
     const expired = await maybeRefreshPromotionsFeed({ nowMs: NOW + 60_000, fetchImpl });
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
     expect(listLivePromotionEntries(expired, NOW + 60_000)).toHaveLength(0);
 
     const cached = await maybeRefreshPromotionsFeed({ nowMs: NOW + 61_000, fetchImpl });
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
     expect(listLivePromotionEntries(cached, NOW + 61_000)).toHaveLength(0);
   });
 
