@@ -650,6 +650,22 @@ describe("channel ingress queue", () => {
       });
     });
 
+    it("uses the queue JSON contract when listing deeply nested payloads", async () => {
+      await withTempState(async (stateDir) => {
+        const queue = createChannelIngressQueue<unknown>({
+          channelId: "test",
+          accountId: "account",
+          stateDir,
+        });
+        const nestedJson = `${"[".repeat(1001)}0${"]".repeat(1001)}`;
+        const payload = JSON.parse(nestedJson);
+
+        await queue.enqueue("deep", payload);
+
+        await expect(queue.listPending({ limit: 1 })).resolves.toMatchObject([{ id: "deep" }]);
+      });
+    });
+
     it("skips corrupt metadata_json in listPending", async () => {
       await withTempState(async (stateDir) => {
         const queue = createChannelIngressQueue<{ text: string }, { source: string }>({
@@ -792,6 +808,38 @@ describe("channel ingress queue", () => {
           id: "good-second",
           payload: { text: "claimable" },
         });
+      });
+    });
+
+    it("bounds corrupt reconciliation work per claimNext call", async () => {
+      await withTempState(async (stateDir) => {
+        const queueName = '["test","account"]';
+        const queue = createChannelIngressQueue<{ text: string }>({
+          channelId: "test",
+          accountId: "account",
+          stateDir,
+        });
+        for (let index = 0; index < 101; index += 1) {
+          insertCorruptRow(stateDir, queueName, `bad-${index.toString().padStart(3, "0")}`, {
+            payload_json: "{corrupt",
+          });
+        }
+
+        await expect(queue.claimNext({ scanLimit: 200 })).resolves.toBeNull();
+
+        const database = openOpenClawStateDatabase({ env: createStateDirEnv(stateDir) });
+        const counts = executeSqliteQuerySync(
+          database.db,
+          getNodeSqliteKysely<ChannelIngressTestDatabase>(database.db)
+            .selectFrom("channel_ingress_events")
+            .select(["status"])
+            .where("queue_name", "=", queueName),
+        ).rows;
+        expect(counts.filter((row) => row.status === "failed")).toHaveLength(100);
+        expect(counts.filter((row) => row.status === "pending")).toHaveLength(1);
+
+        await expect(queue.claimNext({ scanLimit: 200 })).resolves.toBeNull();
+        expect(await queue.listPending({ limit: "all" })).toEqual([]);
       });
     });
 

@@ -5,7 +5,7 @@
  */
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { sql, type Selectable } from "kysely";
+import type { Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -421,6 +421,13 @@ function normalizeScanLimit(limit: number | undefined): number {
   return Math.max(1, Math.floor(limit ?? 100));
 }
 
+// Materialize pending rows in bounded chunks because SQLite's json_valid()
+// rejects some payloads accepted by the queue's JSON.stringify/JSON.parse contract.
+const LIST_PENDING_BATCH_SIZE = 100;
+// Keep repair work bounded under one SQLite write lock; later calls continue
+// from the durable failed tombstones left by this call.
+const MAX_CORRUPT_RECONCILIATIONS_PER_CLAIM = 100;
+
 function normalizeMaxEntries(value: number | undefined): number | null {
   return value === undefined ? null : Math.max(0, Math.floor(value));
 }
@@ -551,22 +558,38 @@ export function createChannelIngressQueue<
   >["listPending"] = async (listOptions) => {
     const { db } = openStateDatabase(options.stateDir);
     const kysely = getChannelIngressKysely(db);
-    const baseQuery = kysely
-      .selectFrom("channel_ingress_events")
-      .selectAll()
-      .where("queue_name", "=", queueName)
-      .where("status", "=", "pending")
-      // Apply the caller's limit to usable work, not a corrupt prefix that materialization skips.
-      .where(sql<boolean>`json_valid(${sql.ref("payload_json")})`)
-      .limit(normalizeLimit(listOptions?.limit));
-    const query =
-      listOptions?.orderBy === "id"
-        ? baseQuery.orderBy("event_id", "asc")
-        : baseQuery.orderBy("received_at", "asc").orderBy("event_id", "asc");
-    const rows = executeSqliteQuerySync(db, query).rows;
-    return rows
-      .map((row) => baseRecord<TPayload, TMetadata>(row))
-      .filter((rec): rec is ChannelIngressQueueRecord<TPayload, TMetadata> => rec !== null);
+    const limit = normalizeLimit(listOptions?.limit);
+    const records: Array<ChannelIngressQueueRecord<TPayload, TMetadata>> = [];
+    let offset = 0;
+    while (records.length < limit) {
+      const baseQuery = kysely
+        .selectFrom("channel_ingress_events")
+        .selectAll()
+        .where("queue_name", "=", queueName)
+        .where("status", "=", "pending");
+      const orderedQuery =
+        listOptions?.orderBy === "id"
+          ? baseQuery.orderBy("event_id", "asc")
+          : baseQuery.orderBy("received_at", "asc").orderBy("event_id", "asc");
+      const rows = executeSqliteQuerySync(
+        db,
+        orderedQuery.limit(LIST_PENDING_BATCH_SIZE).offset(offset),
+      ).rows;
+      for (const row of rows) {
+        const record = baseRecord<TPayload, TMetadata>(row);
+        if (record) {
+          records.push(record);
+          if (records.length === limit) {
+            break;
+          }
+        }
+      }
+      if (rows.length < LIST_PENDING_BATCH_SIZE) {
+        break;
+      }
+      offset += rows.length;
+    }
+    return records;
   };
 
   const listClaims: ChannelIngressQueue<
@@ -660,6 +683,7 @@ export function createChannelIngressQueue<
             : select.orderBy("received_at", "asc").orderBy("event_id", "asc");
         orderedSelect = orderedSelect.limit(normalizeScanLimit(claimOptions?.scanLimit));
         const transitionAt = now();
+        let corruptReconciliations = 0;
         let selected:
           | { row: ChannelIngressRow; record: ChannelIngressQueueRecord<TPayload, TMetadata> }
           | undefined;
@@ -669,13 +693,19 @@ export function createChannelIngressQueue<
           for (const row of rows) {
             const rec = baseRecord<TPayload, TMetadata>(row);
             if (rec === null) {
-              tombstonedCorruptRow =
-                tombstoneCorruptPayloadRow({
-                  db: tx.db,
-                  row,
-                  expectedStatus: "pending",
-                  failedAt: transitionAt,
-                }) || tombstonedCorruptRow;
+              if (corruptReconciliations >= MAX_CORRUPT_RECONCILIATIONS_PER_CLAIM) {
+                continue;
+              }
+              const didTombstone = tombstoneCorruptPayloadRow({
+                db: tx.db,
+                row,
+                expectedStatus: "pending",
+                failedAt: transitionAt,
+              });
+              tombstonedCorruptRow = didTombstone || tombstonedCorruptRow;
+              if (didTombstone) {
+                corruptReconciliations += 1;
+              }
               continue;
             }
             const laneKey =
@@ -686,7 +716,11 @@ export function createChannelIngressQueue<
               break;
             }
           }
-          if (selected || !tombstonedCorruptRow) {
+          if (
+            selected ||
+            !tombstonedCorruptRow ||
+            corruptReconciliations >= MAX_CORRUPT_RECONCILIATIONS_PER_CLAIM
+          ) {
             break;
           }
         }
