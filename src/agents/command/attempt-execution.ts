@@ -46,6 +46,7 @@ import { resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import { ensureAuthProfileStore } from "../auth-profiles/store.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
+import { resolveCliBackendConfig } from "../cli-backends.js";
 import {
   cliBackendAcceptsAuthProfileForwarding,
   resolveCliExecutionAuthProfileId,
@@ -72,7 +73,12 @@ import {
   resolveFallbackRetryPrompt,
 } from "./attempt-execution.helpers.js";
 import { resolveAgentRunContext } from "./run-context.js";
-import { clearCliSessionInStore } from "./session-store.js";
+import {
+  clearCliSessionInStore,
+  consumeCliSessionForkInStore,
+  persistCliSessionForkSuccessorInStore,
+  restoreCliSessionForkInStore,
+} from "./session-store.js";
 import type { AgentCommandOpts } from "./types.js";
 
 export {
@@ -690,10 +696,27 @@ export function runAgentAttempt(params: {
       return cliSessionBinding;
     };
     const mediaTaskIdsBefore = getGeneratedMediaTaskIdsForSessionKey(params.sessionKey);
-    const runCliWithSession = (
+    const runCliWithSession = async (
       nextCliSessionId: string | undefined,
       activeCliSessionBinding = cliSessionBinding,
     ) => {
+      const forkCliSessionOnResume = activeCliSessionBinding?.forkNextResume === true;
+      if (
+        forkCliSessionOnResume &&
+        !resolveCliBackendConfig(cliExecutionProvider, params.cfg, {
+          agentId: params.sessionAgentId,
+        })?.config.forkArg
+      ) {
+        throw new Error(`CLI backend "${cliExecutionProvider}" does not support session forks`);
+      }
+      const forkStoreParams =
+        forkCliSessionOnResume && nextCliSessionId && mutableCliSessionStore
+          ? {
+              provider: cliExecutionProvider,
+              expectedCliSessionId: nextCliSessionId,
+              ...mutableCliSessionStore,
+            }
+          : undefined;
       return runCliAgent({
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
@@ -727,6 +750,34 @@ export function runAgentAttempt(params: {
           nextCliSessionId === activeCliSessionBinding?.sessionId
             ? activeCliSessionBinding
             : undefined,
+        forkCliSessionOnResume,
+        ...(forkStoreParams
+          ? {
+              claimCliSessionFork: async () => {
+                const claimed = await consumeCliSessionForkInStore(forkStoreParams);
+                if (claimed) {
+                  params.sessionEntry = claimed;
+                }
+                return Boolean(claimed);
+              },
+              restoreCliSessionFork: async () => {
+                const restored = await restoreCliSessionForkInStore(forkStoreParams);
+                if (restored) {
+                  params.sessionEntry = restored;
+                }
+              },
+              persistCliSessionForkSuccessor: async (successorCliSessionId: string) => {
+                const persisted = await persistCliSessionForkSuccessorInStore({
+                  ...forkStoreParams,
+                  successorCliSessionId,
+                });
+                if (!persisted) {
+                  throw new Error("CLI session fork successor could not be persisted");
+                }
+                params.sessionEntry = persisted;
+              },
+            }
+          : {}),
         authProfileId,
         bootstrapPromptWarningSignaturesSeen,
         bootstrapPromptWarningSignature,
@@ -763,7 +814,7 @@ export function runAgentAttempt(params: {
         oneShotCliRun: params.opts.oneShotCliRun,
         userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
         suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
-        ...(mutableCliSessionStore
+        ...(mutableCliSessionStore && !forkCliSessionOnResume
           ? {
               onBeforeFreshCliSessionRetry: async (retry) => {
                 if (
@@ -794,6 +845,7 @@ export function runAgentAttempt(params: {
       } catch (err) {
         if (
           isClaudeCliProvider(cliExecutionProvider) &&
+          !activeCliSessionBinding?.forkNextResume &&
           shouldClearReusedCliSessionAfterError(err) &&
           !hasNewGeneratedMediaTaskForSessionKey(params.sessionKey, mediaTaskIdsBefore) &&
           activeCliSessionBinding?.sessionId &&

@@ -127,7 +127,10 @@ async function loadSettledCostUsageSummary(
     if (remainingBeforeCallMs <= 0) {
       throw createUsageCostSettleTimeoutError(lastSummary);
     }
-    const callOpts = { ...rpcOpts, timeout: String(remainingBeforeCallMs) };
+    const callOpts = {
+      ...rpcOpts,
+      timeout: String(Math.min(DEFAULT_GATEWAY_RPC_TIMEOUT_MS, remainingBeforeCallMs)),
+    };
     const summary = (await callGatewayCli("usage.cost", callOpts, params)) as CostUsageSummary;
     lastSummary = summary;
     const status = summary.cacheStatus?.status;
@@ -139,8 +142,8 @@ async function loadSettledCostUsageSummary(
     if (remainingMs <= 0) {
       throw createUsageCostSettleTimeoutError(summary);
     }
-    // The existing RPC timeout is the whole command budget. Giving each retry a
-    // fresh timeout would let a short bounded audit keep running for minutes.
+    // The usage-cost timeout is the whole command budget. Each transport call
+    // remains capped separately so one unresponsive RPC cannot consume it all.
     await sleep(Math.min(pollMs, remainingMs));
     pollMs = Math.min(pollMs * 2, USAGE_COST_SETTLE_MAX_POLL_MS);
   }

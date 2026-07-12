@@ -176,8 +176,12 @@ verifies a hash-at-rest, short-lived credential bound to the environment, bundle
 hash, owner epoch, RPC-set version, expiry, and one nullable session; it
 separately checks the current version and feature set. Success returns minimal
 `worker-hello-ok`; feature negotiation is independent of the general protocol
-version. Frames stay under 64 KiB. Initially only `worker.heartbeat` is allowed,
-with ownership and expiry rechecked on each RPC.
+version. Frames stay under 64 KiB. The closed allowlist contains
+`worker.heartbeat` and `worker.transcript.commit` for ordered semantic message batches. Transcript
+commits use owner-epoch fencing, a gateway-owned session binding, base-leaf
+compare-and-swap, and durable sequence replay; the gateway generates transcript
+entry and parent IDs through the normal session writer. Ownership and expiry are
+rechecked on each RPC.
 
 ### Client capabilities
 

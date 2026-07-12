@@ -1152,6 +1152,30 @@ html.openclaw-native-nav .topbar .topbar-nav-toggle {
   text-align: center;
 }
 
+.sidebar-session-catalog-load-more {
+  display: block;
+  width: calc(100% - 20px);
+  margin: 3px 10px 5px;
+  padding: 4px 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: left;
+}
+
+.sidebar-session-catalog-load-more:hover:not(:disabled),
+.sidebar-session-catalog-load-more:focus-visible {
+  background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
+  color: var(--text);
+}
+
+.sidebar-session-catalog-load-more:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
 .sidebar-session-group-drag-handle {
   width: 8px;
   height: 18px;

@@ -905,6 +905,7 @@ export function renderChatThread(props: ChatThreadProps) {
                   }
                   return renderMessageGroup(item, {
                     onOpenSidebar: props.onOpenSidebar,
+                    onOpenWorkspaceFile: props.onOpenWorkspaceFile,
                     sessionKey: props.sessionKey,
                     agentId: props.fullMessageAgentId,
                     showReasoning,
