@@ -1,10 +1,6 @@
 /**
  * Proof for #103578: extractProviderErrorDetail bounds and redacts error
- * response bodies from a real loopback HTTP server.  Combined with the
- * Vitest tests (which exercise the full postTokenForm → readResponseWithLimit
- * → refreshAccessToken → extractProviderErrorDetail chain via mocked SSRF),
- * this demonstrates both the shared-helper bounding and the caller-level
- * redaction.
+ * response bodies from a real loopback HTTP server.
  *
  * Usage: node --import tsx scripts/proof/openai-oauth-refresh-live.mts
  */
@@ -15,8 +11,11 @@ function listenLoopback(server: Server): Promise<number> {
   return new Promise((resolve, reject) => {
     server.listen(0, "127.0.0.1", () => {
       const addr = server.address();
-      if (addr && typeof addr === "object") resolve(addr.port);
-      else reject(new Error("Failed to get server port"));
+      if (addr && typeof addr === "object") {
+        resolve(addr.port);
+      } else {
+        reject(new Error("Failed to get server port"));
+      }
     });
     server.on("error", reject);
   });
@@ -41,51 +40,55 @@ async function runCase(
   const port = await listenLoopback(server);
   let ok = false;
   try {
-    const response = await fetch(`http://127.0.0.1:${port}`);
+    const response = await fetch("http://127.0.0.1:" + port);
     const detail = await extractProviderErrorDetail(response);
     ok = checks(detail);
   } finally {
     await closeServer(server);
   }
-  console.log(`${label}: ${ok ? "PASS" : "FAIL"}`);
+  console.log(label + ": " + (ok ? "PASS" : "FAIL"));
   return ok;
 }
 
 let allPassed = true;
 console.log("=== #103578 bounded OAuth error proof ===\n");
 
-// Case 1 — secret values in OAuth token response fields are redacted.
-// Real OAuth endpoints can echo tokens back in error responses, e.g.:
-// {"error":"invalid_grant","refresh_token":"sk-abc123","access_token":"sk-xyz"}
+// Case 1 - secret values in OAuth token response fields are redacted.
 const secret = "oauth-refresh-secret-abc123";
 const ok1 = await runCase(
-  "Case 1 — secret redacted from error body",
+  "Case 1 - secret redacted from error body",
   JSON.stringify({
     error: "invalid_grant",
     error_description: "Token refresh failed",
     refresh_token: secret,
-    access_token: `sk-${secret}`,
+    access_token: "sk-" + secret,
   }),
   (detail) =>
     typeof detail === "string" && detail.includes("invalid_grant") && !detail.includes(secret),
 );
-if (!ok1) allPassed = false;
+if (!ok1) {
+  allPassed = false;
+}
 
-// Case 2 — oversized body is bounded.
+// Case 2 - oversized body is bounded.
 const ok2 = await runCase(
-  "Case 2 — oversized body bounded",
+  "Case 2 - oversized body bounded",
   JSON.stringify({ error: "server_error" }) + "x".repeat(64 * 1024),
   (detail) => typeof detail === "string" && detail.length < 16 * 1024,
 );
-if (!ok2) allPassed = false;
+if (!ok2) {
+  allPassed = false;
+}
 
-// Case 3 — normal error body passes through.
+// Case 3 - normal error body passes through.
 const ok3 = await runCase(
-  "Case 3 — normal body preserved",
+  "Case 3 - normal body preserved",
   JSON.stringify({ error: "invalid_client", error_description: "Invalid client credentials" }),
   (detail) => typeof detail === "string" && detail.includes("invalid_client"),
 );
-if (!ok3) allPassed = false;
+if (!ok3) {
+  allPassed = false;
+}
 
-console.log(`\nOVERALL: ${allPassed ? "ALL PASSED" : "FAILURES"}`);
+console.log("\nOVERALL: " + (allPassed ? "ALL PASSED" : "FAILURES"));
 process.exit(allPassed ? 0 : 1);
