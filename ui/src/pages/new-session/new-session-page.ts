@@ -511,7 +511,6 @@ class NewSessionPage extends OpenClawLightDomElement {
     const matchesCurrentTarget = target.nodeId === this.execNode;
     const path = matchesCurrentTarget && isAbsolutePath(folder) ? folder : undefined;
     this.browserTarget = target;
-    this.browserPathDraft = path ?? "";
     this.loadBrowser(path);
   }
 
@@ -527,6 +526,10 @@ class NewSessionPage extends OpenClawLightDomElement {
     // Clear the previous directory immediately: keeping it clickable while the
     // request is in flight would let "Use this folder" apply the stale path.
     this.browserListing = null;
+    // Navigation owns the shown path at once, so a mid-flight "Use this
+    // folder" applies where the user is heading, never the directory they
+    // just left ("" = the host default while heading home).
+    this.browserPathDraft = path ?? "";
     const draftAtRequest = this.browserPathDraft;
     void client
       .request<FsListDirResult>("fs.listDir", {
