@@ -7,6 +7,7 @@ import ai.openclaw.app.GatewayNodesDevicesSummary
 import ai.openclaw.app.GatewayPairedDeviceSummary
 import ai.openclaw.app.GatewayPendingDeviceSummary
 import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.currentAppLanguage
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawDetailRow
 import ai.openclaw.app.ui.design.ClawPanel
@@ -168,7 +169,11 @@ private fun NodesSection(
   content: @Composable () -> Unit,
 ) {
   Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-    Text(text = title.uppercase(), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+    Text(
+      text = localizedUppercase(title, currentAppLanguage().languageTag),
+      style = ClawTheme.type.caption,
+      color = ClawTheme.colors.textMuted,
+    )
     ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
       Column {
         content()
@@ -279,15 +284,15 @@ internal fun devicePairingAdminUnavailableText(): String =
   )
 
 private fun pendingDeviceSubtitle(device: GatewayPendingDeviceSummary): String {
-  val roles = formatDeviceList(device.roles, "role")
-  val scopes = formatDeviceList(device.scopes, "scope")
+  val roles = formatDeviceList(device.roles, DeviceListKind.Role)
+  val scopes = formatDeviceList(device.scopes, DeviceListKind.Scope)
   val requested = device.requestedAtMs?.let { nativeString("requested \${relativeDeviceTime(it)}", relativeDeviceTime(it)) }
   return listOfNotNull(roles, scopes, requested, device.remoteIp).joinToString(" · ")
 }
 
 private fun pairedDeviceSubtitle(device: GatewayPairedDeviceSummary): String {
-  val roles = formatDeviceList(device.roles, "role")
-  val scopes = formatDeviceList(device.scopes, "scope")
+  val roles = formatDeviceList(device.roles, DeviceListKind.Role)
+  val scopes = formatDeviceList(device.scopes, DeviceListKind.Scope)
   val tokens =
     nativeString(
       "\${device.tokens.count { !it.revoked }}/\${device.tokens.size} active tokens",
@@ -311,14 +316,23 @@ private fun pairedDeviceStatus(tokens: List<GatewayDeviceTokenSummary>): ClawSta
     else -> ClawStatus.Warning
   }
 
-private fun formatDeviceList(
+internal enum class DeviceListKind {
+  Role,
+  Scope,
+}
+
+internal fun formatDeviceList(
   values: List<String>,
-  fallback: String,
+  kind: DeviceListKind,
 ): String? =
   when (values.size) {
     0 -> null
     1 -> values.first()
-    else -> "${values.size} ${fallback}s"
+    else ->
+      when (kind) {
+        DeviceListKind.Role -> nativeString("\${values.size} roles", values.size)
+        DeviceListKind.Scope -> nativeString("\${values.size} scopes", values.size)
+      }
   }
 
 private fun nodeBadge(value: String): String =
@@ -330,11 +344,15 @@ private fun nodeBadge(value: String): String =
     .joinToString("")
     .ifBlank { "N" }
 
-private fun relativeDeviceTime(timeMs: Long): String {
-  val minutes = ((System.currentTimeMillis() - timeMs).coerceAtLeast(0L)) / 60_000L
-  if (minutes < 1) return "now"
-  if (minutes < 60) return "${minutes}m ago"
+internal fun relativeDeviceTime(
+  timeMs: Long,
+  nowMs: Long = System.currentTimeMillis(),
+): String {
+  val minutes = ((nowMs - timeMs).coerceAtLeast(0L)) / 60_000L
+  if (minutes < 1) return nativeString("now")
+  if (minutes < 60) return nativeString("\${minutes}m ago", minutes)
   val hours = minutes / 60L
-  if (hours < 24) return "${hours}h ago"
-  return "${hours / 24L}d ago"
+  if (hours < 24) return nativeString("\${hours}h ago", hours)
+  val days = hours / 24L
+  return nativeString("\${days}d ago", days)
 }
