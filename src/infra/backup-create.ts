@@ -538,11 +538,35 @@ const SQLITE_BACKUP_EXCLUDED_SUFFIXES = [".reindex-lock.sqlite"] as const;
 const SQLITE_BACKUP_REINDEX_TRANSIENT_PATTERN =
   /\.sqlite\.(?:backup|memory-reindex|tmp)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
+function isCanonicalAgentSqlitePathOrAncestor(sourcePath: string, stateDir: string): boolean {
+  const relativePath = path.relative(path.resolve(stateDir), path.resolve(sourcePath));
+  const segments = relativePath.split(path.sep);
+  if (segments[0] !== "agents" || !segments[1]) {
+    return false;
+  }
+  if (segments.length === 2) {
+    return true;
+  }
+  if (segments[2] !== "agent") {
+    return false;
+  }
+  if (segments.length === 3) {
+    return true;
+  }
+  if (segments.length !== 4) {
+    return false;
+  }
+  return SQLITE_BACKUP_SOURCE_SUFFIXES.some(
+    (suffix) => segments[3] === `openclaw-agent.sqlite${suffix}`,
+  );
+}
+
 function isStatePackageContentPath(sourcePath: string, stateDir: string): boolean {
   const resolvedStateDir = path.resolve(stateDir);
   const resolvedSourcePath = path.resolve(sourcePath);
   return (
     isPathWithin(resolvedSourcePath, resolvedStateDir) &&
+    !isCanonicalAgentSqlitePathOrAncestor(resolvedSourcePath, resolvedStateDir) &&
     path.relative(resolvedStateDir, resolvedSourcePath).split(path.sep).includes("node_modules")
   );
 }
@@ -634,7 +658,11 @@ async function listStateSqlitePaths(params: {
         if (extensionsFilter(entryPath) && !isStatePackageContentPath(entryPath, params.stateDir)) {
           await visit(entryPath);
         }
-      } else if (entry.isFile() && extensionsFilter(entryPath)) {
+      } else if (
+        entry.isFile() &&
+        extensionsFilter(entryPath) &&
+        !isStatePackageContentPath(entryPath, params.stateDir)
+      ) {
         const resolvedEntryPath = path.resolve(entryPath);
         if (resolveSqliteBackupDatabasePath(resolvedEntryPath)) {
           discoveredSourcePaths.add(resolvedEntryPath);
@@ -726,11 +754,18 @@ async function createStateSqliteBackupPlan(params: {
     const sourcePath = path.join(params.tempDir, `openclaw-state-db-${snapshots.length}.sqlite`);
     try {
       source.exec("PRAGMA busy_timeout = 30000;");
-      // VACUUM INTO removes deleted-page remnants before the snapshot enters
-      // the archive. Load sqlite-vec best-effort so memory indexes using vec0
-      // can still be compacted without weakening that privacy property.
-      await loadSqliteVecExtension({ db: source });
-      source.prepare("VACUUM INTO ?").run(sourcePath);
+      try {
+        // VACUUM INTO removes deleted-page remnants before the snapshot enters
+        // the archive. Load known bundled extensions, but fail closed when an
+        // owner schema needs capabilities core cannot safely reproduce.
+        await loadSqliteVecExtension({ db: source });
+        source.prepare("VACUUM INTO ?").run(sourcePath);
+      } catch (err) {
+        throw new Error(
+          `SQLite database cannot be compacted safely for backup: ${archiveSourcePath}. Required SQLite capabilities are unavailable; raw page backup was refused because it can retain deleted data.`,
+          { cause: err },
+        );
+      }
     } finally {
       source.close();
     }
