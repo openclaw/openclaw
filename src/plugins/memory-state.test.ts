@@ -413,6 +413,57 @@ describe("memory plugin state", () => {
     expect(reloaded.listMemoryCorpusSupplements()[0]?.pluginId).toBe("memory-wiki");
   });
 
+  it("shares clear and restore across duplicate module instances", async () => {
+    const runtime = createMemoryRuntime();
+    registerMemoryCapability("memory-core", {
+      promptBuilder: () => ["primary"],
+      flushPlanResolver: () => ({
+        softThresholdTokens: 1,
+        forceFlushTranscriptBytes: 2,
+        reserveTokensFloor: 3,
+        prompt: "prompt",
+        systemPrompt: "system",
+        relativePath: "memory/shared.md",
+      }),
+      runtime,
+    });
+    registerMemoryPromptSupplement("memory-wiki", () => ["wiki supplement"]);
+    registerMemoryCorpusSupplement("memory-wiki", {
+      search: async () => [{ corpus: "wiki", path: "sources/alpha.md", score: 1, snippet: "x" }],
+      get: async () => null,
+    });
+    const snapshot = createMemoryStateSnapshot();
+
+    vi.resetModules();
+    const reloaded = await import("./memory-state.js");
+
+    expect(reloaded.getMemoryCapabilityRegistration()?.pluginId).toBe("memory-core");
+    expect(reloaded.listMemoryCorpusSupplements()).toHaveLength(1);
+    expect(reloaded.listMemoryPromptSupplements()).toHaveLength(1);
+    expect(reloaded.buildMemoryPromptSection({ availableTools: new Set() })).toEqual([
+      "primary",
+      "wiki supplement",
+    ]);
+
+    reloaded.clearMemoryPluginState();
+    expect(reloaded.getMemoryCapabilityRegistration()).toBeUndefined();
+    expect(reloaded.listMemoryCorpusSupplements()).toEqual([]);
+    expect(reloaded.listMemoryPromptSupplements()).toEqual([]);
+    // Original module instance observes the same cleared shared object.
+    expect(getMemoryCapabilityRegistration()).toBeUndefined();
+    expect(listMemoryCorpusSupplements()).toEqual([]);
+    expect(listMemoryPromptSupplements()).toEqual([]);
+
+    reloaded.restoreMemoryPluginState(snapshot);
+    expect(reloaded.getMemoryCapabilityRegistration()?.pluginId).toBe("memory-core");
+    expect(reloaded.listMemoryCorpusSupplements()).toHaveLength(1);
+    expect(reloaded.listMemoryPromptSupplements()).toHaveLength(1);
+    expect(reloaded.resolveMemoryFlushPlan({})?.relativePath).toBe("memory/shared.md");
+    expect(reloaded.getMemoryRuntime()).toBe(runtime);
+    expect(listMemoryCorpusSupplements()).toHaveLength(1);
+    expect(getMemoryRuntime()).toBe(runtime);
+  });
+
   it("uses the registered flush plan resolver", () => {
     registerMemoryFlushPlanResolver(() => ({
       softThresholdTokens: 1,

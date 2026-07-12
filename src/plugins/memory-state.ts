@@ -3,6 +3,7 @@ import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { MemorySearchManager } from "../memory-host-sdk/host/types.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 const log = createSubsystemLogger("plugins/memory-state");
 
@@ -174,23 +175,15 @@ type MemoryPluginState = {
 
 const MEMORY_PLUGIN_STATE_KEY = Symbol.for("openclaw.memoryPluginState");
 
-function resolveMemoryPluginState(): MemoryPluginState {
-  const host = globalThis as typeof globalThis & {
-    [MEMORY_PLUGIN_STATE_KEY]?: MemoryPluginState;
-  };
-  const existing = host[MEMORY_PLUGIN_STATE_KEY];
-  if (existing) {
-    return existing;
-  }
-  const created: MemoryPluginState = {
+// Keep memory plugin registrations process-global so duplicated dist chunks
+// still share one registry object at runtime (capability + corpus + prompt).
+const memoryPluginState = resolveGlobalSingleton<MemoryPluginState>(
+  MEMORY_PLUGIN_STATE_KEY,
+  () => ({
     corpusSupplements: [],
     promptSupplements: [],
-  };
-  host[MEMORY_PLUGIN_STATE_KEY] = created;
-  return created;
-}
-
-const memoryPluginState = resolveMemoryPluginState();
+  }),
+);
 
 export function registerMemoryCorpusSupplement(
   pluginId: string,
