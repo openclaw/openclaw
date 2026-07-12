@@ -550,6 +550,18 @@ reveal_text_above() {
   wait_for_text "$needle" 60
 }
 
+reveal_text_below() {
+  local needle="$1"
+  for _ in $(seq 1 10); do
+    if wait_for_text "$needle" 2; then
+      return 0
+    fi
+    adb shell input swipe 540 2050 540 750 500 || true
+    sleep 1
+  done
+  wait_for_text "$needle" 60
+}
+
 copy_ui_xml() {
   local local_path="$1"
   timeout 20 adb shell uiautomator dump /sdcard/openclaw-ui.xml >/dev/null 2>&1 || true
@@ -916,7 +928,7 @@ wait_for_text "$REVIEW_SKILL_TITLE" 60
 tap_review_for_skill "$REVIEW_SKILL_TITLE"
 wait_for_text "$REVIEW_TITLE" 120
 tap_exact_text "Verify and install"
-reveal_text_above "Acknowledge Gateway warning and install"
+reveal_text_below "Acknowledge Gateway warning and install"
 capture_png /sdcard/openclaw-10-review-required.png proof-output/10-review-required-dialog.png
 copy_ui_xml proof-output/10-review-required-dialog-ui.xml
 assert_fixture_download_count "proof-review-skill" 0 "review-before-ack"
@@ -943,7 +955,7 @@ wait_for_text "$MALICIOUS_SKILL_TITLE" 60
 tap_review_for_skill "$MALICIOUS_SKILL_TITLE"
 wait_for_text "$REVIEW_TITLE" 120
 tap_exact_text "Verify and install"
-reveal_text_above "install was not started"
+reveal_text_below "install was not started"
 capture_png /sdcard/openclaw-13-malicious-blocked.png proof-output/13-malicious-blocked.png
 copy_ui_xml proof-output/13-malicious-blocked-ui.xml
 record_screen /sdcard/openclaw-malicious-blocked.mp4 proof-output/malicious-blocked.mp4 8
