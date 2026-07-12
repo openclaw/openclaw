@@ -54,12 +54,18 @@ describe("imessage normalizeCompatibilityConfig streaming aliases", () => {
       (imessage.accounts as Record<string, Record<string, unknown>>).personal,
       "personal iMessage account",
     );
-    expect(personal.streaming).toEqual({ block: { coalesce: { idleMs: 250 } } });
+    // The account previously inherited the root streaming object; migration
+    // seeds the materialized account object so effective delivery keeps parity.
+    expect(personal.streaming).toEqual({
+      chunkMode: "newline",
+      block: { enabled: true, coalesce: { idleMs: 250 } },
+    });
     expect(personal.blockStreamingCoalesce).toBeUndefined();
     for (const change of [
       "Moved channels.imessage.chunkMode → channels.imessage.streaming.chunkMode.",
       "Moved channels.imessage.blockStreaming → channels.imessage.streaming.block.enabled.",
       "Moved channels.imessage.accounts.personal.blockStreamingCoalesce → channels.imessage.accounts.personal.streaming.block.coalesce.",
+      "Copied channels.imessage.streaming into channels.imessage.accounts.personal.streaming to keep inherited settings while migrating flat streaming keys.",
     ]) {
       expect(result.changes).toContain(change);
     }
