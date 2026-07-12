@@ -1,5 +1,8 @@
 // Keeps manifest providerAuthChoices literals aligned with registered provider.auth methods.
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterAll, describe, expect, it } from "vitest";
 import { createNonExitingRuntime } from "../runtime.js";
 import { createCapturedPluginRegistration } from "../test-utils/plugin-registration.js";
 import { listBundledPluginMetadata } from "./bundled-plugin-metadata.js";
@@ -100,17 +103,30 @@ function findRegisteredProvider(
 async function probeRuntimeAuthLiterals(params: {
   method: ProviderAuthMethod;
   optionKey: string;
+  agentDir: string;
 }): Promise<ProviderResolveNonInteractiveApiKeyParams | undefined> {
   if (!params.method.runNonInteractive) {
     return undefined;
   }
+  // The sentinel maps only to the expected optionKey so flagValue === sentinel
+  // proves the method read the right key. Other keys get distinct placeholders
+  // to satisfy provider-specific preflight opts (e.g. account/gateway ids)
+  // without weakening that proof.
+  const opts = new Proxy<Record<string, unknown>>(
+    { [params.optionKey]: SENTINEL_API_KEY },
+    {
+      get: (target, key) =>
+        typeof key === "string" ? (target[key] ?? `parity-extra-${key}`) : undefined,
+    },
+  );
   let captured: ProviderResolveNonInteractiveApiKeyParams | undefined;
   try {
     await params.method.runNonInteractive({
       authChoice: "parity",
+      agentDir: params.agentDir,
       config: {},
       baseConfig: {},
-      opts: { [params.optionKey]: SENTINEL_API_KEY },
+      opts,
       runtime: createNonExitingRuntime(),
       resolveApiKey: async (resolveParams) => {
         if (!captured) {
@@ -136,6 +152,12 @@ const parityCases = listParityCases().toSorted((left, right) => {
     return providerOrder;
   }
   return left.methodId.localeCompare(right.methodId);
+});
+
+const probeAgentDir = mkdtempSync(path.join(tmpdir(), "openclaw-auth-parity-"));
+
+afterAll(() => {
+  rmSync(probeAgentDir, { recursive: true, force: true });
 });
 
 describe("bundled provider manifest↔runtime auth literal parity", () => {
@@ -183,7 +205,15 @@ describe("bundled provider manifest↔runtime auth literal parity", () => {
       const probed = await probeRuntimeAuthLiterals({
         method,
         optionKey: parityCase.optionKey,
+        agentDir: probeAgentDir,
       });
+      // Fail closed: an api-key-style choice whose method cannot be probed
+      // would otherwise leave its flag/env literals unchecked while CI stays
+      // green — the same silent-drift hole this test exists to close.
+      expect(
+        probed,
+        `${parityCase.pluginId} auth method ${parityCase.methodId} did not resolve an API key non-interactively; flag/env literals unverifiable`,
+      ).toBeDefined();
       if (!probed) {
         return;
       }
