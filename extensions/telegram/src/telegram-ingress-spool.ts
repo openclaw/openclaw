@@ -245,8 +245,8 @@ export function isTelegramSpooledCorruptClaimOwnedByOtherLiveProcess(
   if (processId === TELEGRAM_SPOOLED_UPDATE_PROCESS_ID) {
     return isFreshClaimOwner(owner, options);
   }
-  return Boolean(
-    processPid !== process.pid && isFreshClaimOwner(owner, options) && processExists(processPid),
+  return (
+    processPid !== process.pid && isFreshClaimOwner(owner, options) && processExists(processPid)
   );
 }
 
