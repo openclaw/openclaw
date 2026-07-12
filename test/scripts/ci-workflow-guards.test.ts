@@ -1582,6 +1582,15 @@ describe("ci workflow guards", () => {
         "${{ needs.preflight.outputs.compatibility_target }}",
       );
     }
+    expect(iosInstallStep.run).toContain(
+      'swiftformat_link="$(brew --prefix)/bin/swiftformat"',
+    );
+    expect(iosInstallStep.run).toContain(
+      'ln -sfn "$swift_tools_dir/swiftformat" "$swiftformat_link"',
+    );
+    expect(iosInstallStep.run).toContain(
+      '[[ "$("$swiftformat_link" --version)" == "$swiftformat_version" ]]',
+    );
     for (const lintStep of [macosLintStep, iosLintStep]) {
       expect(lintStep.run).toContain(
         "if [[ -x ./scripts/lint-swift.sh && -x ./scripts/format-swift.sh ]]; then",

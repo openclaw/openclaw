@@ -2392,6 +2392,11 @@ jobs:
             chmod +x "$swift_tools_dir/swiftformat"
             echo "$swift_tools_dir" >> "$GITHUB_PATH"
             [[ "$("$swift_tools_dir/swiftformat" --version)" == "$swiftformat_version" ]]
+            # Legacy generated Xcode phases prepend Homebrew ahead of GITHUB_PATH.
+            # Point that lookup at the verified binary or the build can bypass the pin.
+            swiftformat_link="$(brew --prefix)/bin/swiftformat"
+            ln -sfn "$swift_tools_dir/swiftformat" "$swiftformat_link"
+            [[ "$("$swiftformat_link" --version)" == "$swiftformat_version" ]]
           else
             echo "Current CI targets must provide scripts/install-swift-tools.sh." >&2
             exit 1
