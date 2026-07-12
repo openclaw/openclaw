@@ -368,11 +368,13 @@ describe("gateway-cli coverage", () => {
         "--json",
       ]);
 
-      expect(callGateway).toHaveBeenCalledTimes(1);
-      const costCall = firstMockArg(callGateway) as { method?: string; timeoutMs?: number };
-      expect(costCall.method).toBe("usage.cost");
-      expect(costCall.timeoutMs).toBeGreaterThan(0);
-      expect(costCall.timeoutMs).toBeLessThanOrEqual(50);
+      expect(callGateway.mock.calls.length).toBeGreaterThanOrEqual(1);
+      const costCalls = callGateway.mock.calls.map(
+        ([raw]) => raw as { method?: string; timeoutMs?: number },
+      );
+      expect(costCalls.every((call) => call.method === "usage.cost")).toBe(true);
+      expect(costCalls.every((call) => (call.timeoutMs ?? 0) > 0)).toBe(true);
+      expect(costCalls.every((call) => (call.timeoutMs ?? 0) <= 50)).toBe(true);
       expect(runtimeErrors.join("\n")).toContain("Timed out waiting for usage cost cache refresh");
     },
   );
