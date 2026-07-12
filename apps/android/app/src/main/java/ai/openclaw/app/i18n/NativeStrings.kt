@@ -2,9 +2,12 @@ package ai.openclaw.app.i18n
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.res.Configuration
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.res.stringResource
-import androidx.core.content.ContextCompat
+import androidx.core.app.LocaleManagerCompat
+import androidx.core.os.ConfigurationCompat
+import androidx.core.os.LocaleListCompat
 import kotlinx.coroutines.ExperimentalForInheritanceCoroutinesApi
 import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -106,8 +109,16 @@ internal object NativeStringResources {
   @Volatile
   private var applicationContext: Context? = null
 
+  @Volatile
+  private var applicationLocales: LocaleListCompat? = null
+
   fun install(context: Context) {
     applicationContext = context.applicationContext
+    applicationLocales = null
+  }
+
+  fun setApplicationLocales(locales: LocaleListCompat) {
+    applicationLocales = locales
   }
 
   fun resolve(
@@ -115,7 +126,15 @@ internal object NativeStringResources {
     vararg formatArgs: Any,
   ): String {
     val context = applicationContext ?: return formatNativeSource(source, formatArgs)
-    val localized = ContextCompat.getContextForLanguage(context)
+    val locales = applicationLocales ?: LocaleManagerCompat.getApplicationLocales(context)
+    val localized =
+      if (locales.isEmpty) {
+        context
+      } else {
+        val configuration = Configuration(context.resources.configuration)
+        ConfigurationCompat.setLocales(configuration, locales)
+        context.createConfigurationContext(configuration)
+      }
     return localized.nativeString(source, *formatArgs)
   }
 }
