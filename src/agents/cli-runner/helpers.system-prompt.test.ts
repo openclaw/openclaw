@@ -58,9 +58,7 @@ describe("buildCliAgentSystemPrompt", () => {
       modelDisplay: "test/model",
     });
 
-    expect(prompt).toContain(
-      "- exec: Run shell on connected node; sync; host=node",
-    );
+    expect(prompt).toContain("- exec: Run shell on connected node; sync; host=node");
     expect(prompt).not.toContain("pty available");
   });
 
@@ -93,9 +91,7 @@ describe("buildCliAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## Bootstrap Pending");
-    expect(prompt).toContain(
-      "BOOTSTRAP.md below; follow before normal reply.",
-    );
+    expect(prompt).toContain("BOOTSTRAP.md below; follow before normal reply.");
     expect(prompt).toContain("Can finish BOOTSTRAP.md here: do it.");
     expect(prompt).toContain("First visible reply must follow BOOTSTRAP.md; no generic greeting.");
   });

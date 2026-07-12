@@ -1267,8 +1267,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       name: "full guidance for a backend with native file tools",
       nativeToolMode: "always-on" as const,
       transportsSystemPrompt: true,
-      expectedText:
-        "BOOTSTRAP.md below; follow before normal reply.",
+      expectedText: "BOOTSTRAP.md below; follow before normal reply.",
     },
     {
       name: "limited guidance for a backend without native file tools",
@@ -2388,7 +2387,9 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
             "Current source visible reply MUST use `message(action=send)`",
           );
         } else {
-          expect(first.systemPrompt).toContain("Current-session final text normally routes to source");
+          expect(first.systemPrompt).toContain(
+            "Current-session final text normally routes to source",
+          );
           expect(first.systemPrompt).toContain(
             "If turn says final private, visible output uses `message(action=send)`",
           );
