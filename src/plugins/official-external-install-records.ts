@@ -12,6 +12,11 @@ function resolveNpmSpecPackageName(spec: string | undefined): string | undefined
   return spec ? parseRegistryNpmSpec(spec)?.name : undefined;
 }
 
+/** Official catalog npm specs without an exact version follow the OpenClaw release line. */
+export function isOfficialNpmSpecVersionLockstep(spec: string | undefined): boolean {
+  return Boolean(spec && parseRegistryNpmSpec(spec)?.selectorKind !== "exact-version");
+}
+
 function resolveClawHubSpecPackageName(spec: string | undefined): string | undefined {
   return spec ? parseClawHubPluginSpec(spec)?.name : undefined;
 }

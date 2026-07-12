@@ -60,6 +60,7 @@ import {
 import { installPluginFromMarketplace } from "./marketplace.js";
 import { checkMinHostVersion } from "./min-host-version.js";
 import {
+  isOfficialNpmSpecVersionLockstep,
   resolveTrustedSourceLinkedOfficialClawHubSpec,
   resolveTrustedSourceLinkedOfficialNpmSpec,
 } from "./official-external-install-records.js";
@@ -437,7 +438,7 @@ function resolveOfficialCoreVersionDriftMessage(params: {
   currentVersion: string | undefined;
   coreVersion: string | undefined;
   record: PluginInstallRecord;
-  officialPackageName: string | undefined;
+  trustedOfficialNpmSpec: string | undefined;
   specOverride: string | undefined;
   syncOfficialPluginInstalls: boolean | undefined;
 }): string | undefined {
@@ -445,20 +446,28 @@ function resolveOfficialCoreVersionDriftMessage(params: {
     params.record.source !== "npm" ||
     params.specOverride ||
     params.syncOfficialPluginInstalls ||
-    !params.officialPackageName
+    !isOfficialNpmSpecVersionLockstep(params.trustedOfficialNpmSpec)
   ) {
     return undefined;
   }
+  const officialPackageName = resolveNpmSpecPackageName(params.trustedOfficialNpmSpec);
   const pinnedVersion = resolveExactNpmSpecVersion(params.record.spec);
   const currentVersion = normalizeExactNpmVersion(params.currentVersion);
   const coreVersion = normalizeExactNpmVersion(params.coreVersion);
-  if (!pinnedVersion || !currentVersion || !coreVersion || currentVersion === coreVersion) {
+  if (
+    !officialPackageName ||
+    !pinnedVersion ||
+    !currentVersion ||
+    !coreVersion ||
+    pinnedVersion !== currentVersion ||
+    compareNpmSemverForUpdate(pinnedVersion, coreVersion) >= 0
+  ) {
     return undefined;
   }
-  if (resolveNpmSpecPackageName(params.record.spec) !== params.officialPackageName) {
+  if (resolveNpmSpecPackageName(params.record.spec) !== officialPackageName) {
     return undefined;
   }
-  const exactTarget = `${params.officialPackageName}@${coreVersion}`;
+  const exactTarget = `${officialPackageName}@${coreVersion}`;
   if (parseRegistryNpmSpec(exactTarget)?.selectorKind !== "exact-version") {
     return undefined;
   }
@@ -1702,7 +1711,7 @@ export async function updateNpmInstalledPlugins(params: {
       currentVersion,
       coreVersion: params.coreVersion,
       record,
-      officialPackageName: officialNpmPackageName,
+      trustedOfficialNpmSpec,
       specOverride: params.specOverrides?.[pluginId],
       syncOfficialPluginInstalls: params.syncOfficialPluginInstalls,
     });
