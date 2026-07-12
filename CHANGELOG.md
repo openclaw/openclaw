@@ -30,7 +30,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Discord command reconciliation:** fall back to Discord's complete command-set replacement when an application at the 100-command cap cannot create a replacement before deleting stale commands, preventing startup deployment failures without an unsafe delete gap.
 - **Swabble status config:** honor the global `--config` path when reading service status instead of silently using the default configuration.
 - **Gradium TTS credential egress:** reject non-HTTPS, foreign-host, and hostname-lookalike base URLs before dispatching API keys, and pin guarded transport to Gradium's documented API hostname. (#101280) Thanks @zhangguiping-xydt.
 - **Gateway command SecretRefs:** preserve authoritative active-snapshot values when another command secret remains unresolved, falling back locally only for missing paths instead of emitting a per-turn `secrets.resolve` failure. (#96661) Thanks @SunnyShu0925.
