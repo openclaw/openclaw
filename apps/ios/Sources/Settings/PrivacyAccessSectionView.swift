@@ -7,6 +7,7 @@ import UIKit
 private enum PrivacyPermissionStatus {
     case addOnly
     case allowed
+    case enabled
     case limited
     case notAllowed
     case notSet
@@ -16,6 +17,7 @@ private enum PrivacyPermissionStatus {
         switch self {
         case .addOnly: LocalizedStringResource("Add-Only")
         case .allowed: LocalizedStringResource("Allowed")
+        case .enabled: LocalizedStringResource("Enabled")
         case .limited: LocalizedStringResource("Limited")
         case .notAllowed: LocalizedStringResource("Not Allowed")
         case .notSet: LocalizedStringResource("Not Set")
@@ -25,7 +27,7 @@ private enum PrivacyPermissionStatus {
 
     var tone: OpenClawStatusTone {
         switch self {
-        case .allowed, .limited:
+        case .allowed, .enabled, .limited:
             .ok
         case .addOnly, .notSet:
             .warn
@@ -41,6 +43,8 @@ struct PrivacyAccessSectionView: View {
     @State private var calendarStatus: EKAuthorizationStatus = EKEventStore.authorizationStatus(for: .event)
     @State private var remindersStatus: EKAuthorizationStatus = EKEventStore.authorizationStatus(for: .reminder)
     @State private var photosStatus = PhotoLibraryAccess.authorizationStatus()
+    @State private var healthEnabled = HealthAuthorization.isEnabled
+    @State private var healthError: String?
 
     @Environment(\.scenePhase) private var scenePhase
 
@@ -90,6 +94,21 @@ struct PrivacyAccessSectionView: View {
                 detail: "List, add, and complete reminders.",
                 actionTitle: self.remindersActionTitle,
                 action: self.handleRemindersAction)
+
+            self.permissionRow(
+                identifier: "health",
+                title: "Health Summaries",
+                icon: "heart.text.clipboard",
+                status: self.healthPermissionStatus,
+                detail: self.healthDetail,
+                actionTitle: self.healthActionTitle,
+                action: self.handleHealthAction)
+
+            if let healthError {
+                Text(healthError)
+                    .font(OpenClawType.footnote)
+                    .foregroundStyle(OpenClawBrand.danger)
+            }
         } label: {
             Text("Privacy & Access")
                 .font(OpenClawType.subheadSemiBold)
@@ -374,11 +393,64 @@ struct PrivacyAccessSectionView: View {
         }
     }
 
+    private var healthPermissionStatus: PrivacyPermissionStatus {
+        guard HealthAuthorization.isAvailable else { return .notAllowed }
+        // HealthKit hides read authorization; this is only OpenClaw's sharing switch.
+        return self.healthEnabled ? .enabled : .notSet
+    }
+
+    private var healthDetail: LocalizedStringResource {
+        if !HealthAuthorization.isAvailable {
+            return LocalizedStringResource("Health data is unavailable on this device.")
+        }
+        if self.healthEnabled {
+            return LocalizedStringResource(
+                """
+                Shares only requested step, sleep, resting heart rate, and workout aggregates through your Gateway \
+                with your configured AI provider. Results may remain in chat history.
+                """)
+        }
+        return LocalizedStringResource(
+            """
+            Off by default. Enabling lets requested aggregates leave this iPhone through your Gateway and configured \
+            AI provider.
+            """)
+    }
+
+    private var healthActionTitle: LocalizedStringResource? {
+        guard HealthAuthorization.isAvailable else { return nil }
+        return self.healthEnabled
+            ? LocalizedStringResource("Disable")
+            : LocalizedStringResource("Enable & Share Summaries")
+    }
+
+    private func handleHealthAction() {
+        if self.healthEnabled {
+            HealthAuthorization.disable()
+            self.healthEnabled = false
+            self.healthError = nil
+            self.gatewayController.refreshActiveGatewayRegistrationFromSettings()
+            return
+        }
+
+        Task { @MainActor in
+            do {
+                try await HealthAuthorization.enable()
+                self.healthEnabled = true
+                self.healthError = nil
+                self.gatewayController.refreshActiveGatewayRegistrationFromSettings()
+            } catch {
+                self.healthError = error.localizedDescription
+            }
+        }
+    }
+
     private func refreshAll() {
         self.contactsStatus = CNContactStore.authorizationStatus(for: .contacts)
         self.calendarStatus = EKEventStore.authorizationStatus(for: .event)
         self.remindersStatus = EKEventStore.authorizationStatus(for: .reminder)
         self.updatePhotosStatus(PhotoLibraryAccess.authorizationStatus())
+        self.healthEnabled = HealthAuthorization.isEnabled
     }
 
     private func updatePhotosStatus(_ status: PHAuthorizationStatus) {

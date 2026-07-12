@@ -12724,6 +12724,11 @@
       "translated": "O OpenClaw pode usar dados de movimento para oferecer suporte a interações e automações sensíveis ao dispositivo."
     },
     {
+      "id": "native.apple.c86f7ba5b3762eb7",
+      "source": "After you enable Health Summaries, OpenClaw reads steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
+      "translated": "Depois que você ativa os Resumos de Saúde, o OpenClaw lê passos, sono, frequência cardíaca em repouso e exercícios para compartilhar os dados agregados solicitados com o provedor de IA configurado."
+    },
+    {
       "id": "native.apple.40ed4259ec869f1b",
       "source": "OpenClaw lets your assistant read photos you allow and lets you choose photos to share.",
       "translated": "O OpenClaw permite que seu assistente leia as fotos que você autorizar e permite que você escolha fotos para compartilhar."
@@ -13714,6 +13719,11 @@
       "translated": "Permitido"
     },
     {
+      "id": "native.apple.7b551f40d1a6148c",
+      "source": "Enabled",
+      "translated": "Ativado"
+    },
+    {
       "id": "native.apple.94208c3068dae5b9",
       "source": "Limited",
       "translated": "Limitado"
@@ -13779,6 +13789,11 @@
       "translated": "Liste, adicione e conclua lembretes."
     },
     {
+      "id": "native.apple.33df187e4402065a",
+      "source": "Health Summaries",
+      "translated": "Resumos de Saúde"
+    },
+    {
       "id": "native.apple.bb572eab08269809",
       "source": "Privacy & Access",
       "translated": "Privacidade e acesso"
@@ -13817,6 +13832,31 @@
       "id": "native.apple.3cb9ed2ae352f95c",
       "source": "Open Settings",
       "translated": "Abrir Ajustes"
+    },
+    {
+      "id": "native.apple.3f902cdb4d4e9176",
+      "source": "Health data is unavailable on this device.",
+      "translated": "Os dados de saúde não estão disponíveis neste dispositivo."
+    },
+    {
+      "id": "native.apple.33316ec020810816",
+      "source": "Shares only requested step, sleep, resting heart rate, and workout aggregates through your Gateway with your configured AI provider. Results may remain in chat history.",
+      "translated": "Compartilha somente os dados agregados solicitados de passos, sono, frequência cardíaca em repouso e exercícios por meio do seu Gateway com o provedor de IA configurado. Os resultados podem permanecer no histórico do chat."
+    },
+    {
+      "id": "native.apple.53fb25cb6e6aae6e",
+      "source": "Off by default. Enabling lets requested aggregates leave this iPhone through your Gateway and configured AI provider.",
+      "translated": "Desativado por padrão. A ativação permite que os dados agregados solicitados saiam deste iPhone por meio do seu Gateway e do provedor de IA configurado."
+    },
+    {
+      "id": "native.apple.6c2be9b001fb95b0",
+      "source": "Disable",
+      "translated": "Desativar"
+    },
+    {
+      "id": "native.apple.9eab20fbad55a0a9",
+      "source": "Enable & Share Summaries",
+      "translated": "Ativar e compartilhar resumos"
     },
     {
       "id": "native.apple.d9f9a74e25431256",

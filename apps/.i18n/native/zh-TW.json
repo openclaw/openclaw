@@ -12724,6 +12724,11 @@
       "translated": "OpenClaw 可能會使用動作資料，以支援裝置感知的互動與自動化。"
     },
     {
+      "id": "native.apple.c86f7ba5b3762eb7",
+      "source": "After you enable Health Summaries, OpenClaw reads steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
+      "translated": "啟用健康摘要後，OpenClaw 會讀取步數、睡眠、靜止心率和體能訓練，以便與您設定的 AI 供應商分享要求的彙整資料。"
+    },
+    {
       "id": "native.apple.40ed4259ec869f1b",
       "source": "OpenClaw lets your assistant read photos you allow and lets you choose photos to share.",
       "translated": "OpenClaw 可讓您的助理讀取您允許的照片，並讓您選擇要分享的照片。"
@@ -13714,6 +13719,11 @@
       "translated": "已允許"
     },
     {
+      "id": "native.apple.7b551f40d1a6148c",
+      "source": "Enabled",
+      "translated": "已啟用"
+    },
+    {
       "id": "native.apple.94208c3068dae5b9",
       "source": "Limited",
       "translated": "有限"
@@ -13779,6 +13789,11 @@
       "translated": "列出、新增並完成提醒事項。"
     },
     {
+      "id": "native.apple.33df187e4402065a",
+      "source": "Health Summaries",
+      "translated": "健康摘要"
+    },
+    {
       "id": "native.apple.bb572eab08269809",
       "source": "Privacy & Access",
       "translated": "隱私權與存取權"
@@ -13817,6 +13832,31 @@
       "id": "native.apple.3cb9ed2ae352f95c",
       "source": "Open Settings",
       "translated": "開啟設定"
+    },
+    {
+      "id": "native.apple.3f902cdb4d4e9176",
+      "source": "Health data is unavailable on this device.",
+      "translated": "此裝置無法使用健康資料。"
+    },
+    {
+      "id": "native.apple.33316ec020810816",
+      "source": "Shares only requested step, sleep, resting heart rate, and workout aggregates through your Gateway with your configured AI provider. Results may remain in chat history.",
+      "translated": "僅透過您的 Gateway 與已設定的 AI 供應商分享要求的步數、睡眠、靜止心率和體能訓練彙整資料。結果可能會保留在聊天記錄中。"
+    },
+    {
+      "id": "native.apple.53fb25cb6e6aae6e",
+      "source": "Off by default. Enabling lets requested aggregates leave this iPhone through your Gateway and configured AI provider.",
+      "translated": "預設關閉。啟用後，要求的彙整資料可透過您的 Gateway 和已設定的 AI 供應商離開此 iPhone。"
+    },
+    {
+      "id": "native.apple.6c2be9b001fb95b0",
+      "source": "Disable",
+      "translated": "停用"
+    },
+    {
+      "id": "native.apple.9eab20fbad55a0a9",
+      "source": "Enable & Share Summaries",
+      "translated": "啟用並分享摘要"
     },
     {
       "id": "native.apple.d9f9a74e25431256",

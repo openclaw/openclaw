@@ -12724,6 +12724,11 @@
       "translated": "OpenClawは、デバイス対応のインタラクションと自動化をサポートするためにモーションデータを使用する場合があります。"
     },
     {
+      "id": "native.apple.c86f7ba5b3762eb7",
+      "source": "After you enable Health Summaries, OpenClaw reads steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
+      "translated": "ヘルスケア概要を有効にすると、OpenClaw は歩数、睡眠、安静時心拍数、ワークアウトを読み取り、要求された集計データを設定済みの AI プロバイダーと共有します。"
+    },
+    {
       "id": "native.apple.40ed4259ec869f1b",
       "source": "OpenClaw lets your assistant read photos you allow and lets you choose photos to share.",
       "translated": "OpenClaw は、許可した写真をアシスタントが読み取れるようにし、共有する写真を選択できるようにします。"
@@ -13714,6 +13719,11 @@
       "translated": "許可済み"
     },
     {
+      "id": "native.apple.7b551f40d1a6148c",
+      "source": "Enabled",
+      "translated": "有効"
+    },
+    {
       "id": "native.apple.94208c3068dae5b9",
       "source": "Limited",
       "translated": "制限付き"
@@ -13779,6 +13789,11 @@
       "translated": "リマインダーを一覧表示、追加、完了します。"
     },
     {
+      "id": "native.apple.33df187e4402065a",
+      "source": "Health Summaries",
+      "translated": "ヘルスケア概要"
+    },
+    {
       "id": "native.apple.bb572eab08269809",
       "source": "Privacy & Access",
       "translated": "プライバシーとアクセス"
@@ -13817,6 +13832,31 @@
       "id": "native.apple.3cb9ed2ae352f95c",
       "source": "Open Settings",
       "translated": "設定を開く"
+    },
+    {
+      "id": "native.apple.3f902cdb4d4e9176",
+      "source": "Health data is unavailable on this device.",
+      "translated": "このデバイスではヘルスケアデータを利用できません。"
+    },
+    {
+      "id": "native.apple.33316ec020810816",
+      "source": "Shares only requested step, sleep, resting heart rate, and workout aggregates through your Gateway with your configured AI provider. Results may remain in chat history.",
+      "translated": "要求された歩数、睡眠、安静時心拍数、ワークアウトの集計データのみを、Gateway 経由で設定済みの AI プロバイダーと共有します。結果はチャット履歴に残る場合があります。"
+    },
+    {
+      "id": "native.apple.53fb25cb6e6aae6e",
+      "source": "Off by default. Enabling lets requested aggregates leave this iPhone through your Gateway and configured AI provider.",
+      "translated": "デフォルトではオフです。有効にすると、要求された集計データが Gateway と設定済みの AI プロバイダーを経由してこの iPhone から送信されます。"
+    },
+    {
+      "id": "native.apple.6c2be9b001fb95b0",
+      "source": "Disable",
+      "translated": "無効にする"
+    },
+    {
+      "id": "native.apple.9eab20fbad55a0a9",
+      "source": "Enable & Share Summaries",
+      "translated": "概要を有効にして共有"
     },
     {
       "id": "native.apple.d9f9a74e25431256",
