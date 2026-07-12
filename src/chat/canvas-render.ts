@@ -1,5 +1,5 @@
 // Renders chat canvas payloads into text and metadata for transcript output.
-import { safeParseJson } from "@openclaw/normalization-core";
+import { expectDefined, safeParseJson } from "@openclaw/normalization-core";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { parseFenceSpans } from "../../packages/markdown-core/src/fences.js";
@@ -7,6 +7,7 @@ import { parseFenceSpans } from "../../packages/markdown-core/src/fences.js";
 // Extracts assistant-message canvas previews from tool JSON or markdown embed
 // shortcodes. The returned text strips consumed shortcodes for channel delivery.
 type CanvasSurface = "assistant_message";
+type CanvasSandbox = "strict" | "scripts";
 
 type CanvasPreview = {
   kind: "canvas";
@@ -18,6 +19,8 @@ type CanvasPreview = {
   viewId?: string;
   className?: string;
   style?: string;
+  sandbox?: CanvasSandbox;
+  mcpApp?: { viewId: string };
 };
 
 function getRecordStringField(
@@ -48,6 +51,10 @@ function normalizeSurface(value: string | undefined): CanvasSurface | undefined 
   return value === "assistant_message" ? value : undefined;
 }
 
+function normalizeSandbox(value: string | undefined): CanvasSandbox | undefined {
+  return value === "strict" || value === "scripts" ? value : undefined;
+}
+
 function normalizePreferredHeight(value: number | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 160
     ? Math.min(Math.trunc(value), 1200)
@@ -67,6 +74,8 @@ function coerceCanvasPreview(
   const presentation = getNestedRecord(record, "presentation");
   const view = getNestedRecord(record, "view");
   const source = getNestedRecord(record, "source");
+  const mcpAppRecord = getNestedRecord(record, "mcpApp");
+  const mcpAppViewId = getRecordStringField(mcpAppRecord, "viewId");
   const requestedSurface =
     getRecordStringField(presentation, "target") ?? getRecordStringField(record, "target");
   const surface = requestedSurface ? normalizeSurface(requestedSurface) : "assistant_message";
@@ -84,8 +93,21 @@ function coerceCanvasPreview(
     getRecordStringField(presentation, "class_name") ??
     getRecordStringField(presentation, "className");
   const style = getRecordStringField(presentation, "style");
+  const sandbox = normalizeSandbox(getRecordStringField(presentation, "sandbox"));
   const viewUrl = getRecordStringField(view, "url") ?? getRecordStringField(view, "entryUrl");
   const viewId = getRecordStringField(view, "id") ?? getRecordStringField(view, "docId");
+  if (mcpAppViewId && viewId === mcpAppViewId) {
+    return {
+      kind: "canvas",
+      surface,
+      render: "url",
+      viewId,
+      ...(title ? { title } : {}),
+      ...(preferredHeight ? { preferredHeight } : {}),
+      ...(sandbox ? { sandbox } : {}),
+      mcpApp: { viewId: mcpAppViewId },
+    };
+  }
   if (viewUrl) {
     return {
       kind: "canvas",
@@ -97,6 +119,8 @@ function coerceCanvasPreview(
       ...(preferredHeight ? { preferredHeight } : {}),
       ...(className ? { className } : {}),
       ...(style ? { style } : {}),
+      ...(sandbox ? { sandbox } : {}),
+      ...(mcpAppViewId ? { mcpApp: { viewId: mcpAppViewId } } : {}),
     };
   }
   const sourceType = getRecordStringField(source, "type")?.trim().toLowerCase();
@@ -114,9 +138,17 @@ function coerceCanvasPreview(
       ...(preferredHeight ? { preferredHeight } : {}),
       ...(className ? { className } : {}),
       ...(style ? { style } : {}),
+      ...(sandbox ? { sandbox } : {}),
+      ...(mcpAppViewId ? { mcpApp: { viewId: mcpAppViewId } } : {}),
     };
   }
   return undefined;
+}
+
+/** Extracts an MCP App Canvas preview from sanitized tool-result details. */
+export function extractCanvasFromDetails(value: unknown): CanvasPreview | undefined {
+  const details = asOptionalRecord(value);
+  return coerceCanvasPreview(asOptionalRecord(details?.mcpAppPreview));
 }
 
 function parseCanvasAttributes(raw: string): Record<string, string> {
@@ -157,7 +189,7 @@ function previewFromShortcode(attrs: Record<string, string>): CanvasPreview | un
       kind: "canvas",
       surface,
       render: "url",
-      url: url ?? defaultCanvasEntryUrl(ref),
+      url: url ?? defaultCanvasEntryUrl(expectDefined(ref, "canvas reference")),
       ...(ref ? { viewId: ref } : {}),
       ...(title ? { title } : {}),
       ...(preferredHeight ? { preferredHeight } : {}),

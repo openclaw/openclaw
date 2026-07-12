@@ -62,7 +62,7 @@ extension SettingsProTab {
                 title: "Notifications",
                 detail: "Approval and event alert channel",
                 value: self.notificationStatusText,
-                color: self.notificationStatus.color)
+                color: self.notificationStatusColor)
             self.diagnosticCheckRow(
                 icon: "rectangle.on.rectangle",
                 title: "Screen Capture",
@@ -117,11 +117,11 @@ extension SettingsProTab {
     }
 
     func switchGateway(to entry: GatewaySettingsStore.GatewayRegistryEntry) async {
-        guard self.connectingGatewayID == nil else { return }
-        self.connectingGatewayID = entry.stableID
+        guard self.connectingGateway == nil else { return }
+        self.connectingGateway = .gateway(entry.id)
         self.setupStatusText = "Switching to \(entry.name)…"
         defer {
-            self.connectingGatewayID = nil
+            self.connectingGateway = nil
             self.refreshGatewayRegistry()
         }
         if let failure = await self.gatewayController.switchToGateway(stableID: entry.stableID) {
@@ -139,7 +139,7 @@ extension SettingsProTab {
             self.refreshGatewayRegistry()
             return
         }
-        if self.gatewayCredentialFieldStableID == entry.stableID {
+        if GatewayStableIdentifier.matches(self.gatewayCredentialFieldStableID, entry.stableID) {
             self.clearManualCredentialFields()
         }
         self.setupStatusText = "Forgot \(entry.name)."
@@ -183,7 +183,7 @@ extension SettingsProTab {
             gatewayConnected: self.gatewayDiagnosticConnected,
             discoveredGatewayCount: self.gatewayController.gateways.count,
             talkConfigLoaded: self.gatewayDiagnosticTalkConfigLoaded,
-            notificationsAllowed: self.notificationStatus == .allowed)
+            notificationsAllowed: self.notificationServingActive)
         self.diagnosticsIssueCount = issueCount
         self.diagnosticsLastRunText = SettingsDiagnostics.timestamp(Date())
     }
@@ -261,9 +261,9 @@ extension SettingsProTab {
                 self.gatewayController.resumeAutoConnect(after: supersededSetupLease)
             }
         }
-        self.connectingGatewayID = gateway.id
+        self.connectingGateway = .gateway(gateway.id)
         defer {
-            self.connectingGatewayID = nil
+            self.connectingGateway = nil
             self.refreshGatewayRegistry()
         }
         self.manualGatewayEnabled = false
@@ -370,7 +370,7 @@ extension SettingsProTab {
         self.stagedGatewaySetupLink = nil
         self.pendingTargetSuppression.replace(owner: .qrScanner, lease: lease)
         self.scannerScanID = self.scannerResultHandoff.beginScan()
-        self.connectingGatewayID = nil
+        self.connectingGateway = nil
         self.setupStatusText = "Opening QR scanner..."
         self.showQRScanner = true
     }
@@ -466,23 +466,29 @@ extension SettingsProTab {
             self.setupStatusText = "Failed: invalid port"
             return
         }
-        self.connectingGatewayID = "manual"
+        self.connectingGateway = .manual
         self.manualGatewayEnabled = true
         defer {
-            self.connectingGatewayID = nil
+            self.connectingGateway = nil
             self.refreshGatewayRegistry()
         }
         let stableID = GatewayConnectionController.ManualAuthOverride.manualStableID(
             host: host,
             port: port)
         self.selectGatewayCredentialTarget(stableID, allowManualOverride: true)
-        if self.appModel.activeGatewayConnectConfig?.effectiveStableID == stableID,
-           self.appModel.activeGatewayConnectConfig?.nodeOptions.allowStoredDeviceAuth == true
+        if GatewayStableIdentifier.matches(
+            self.appModel.activeGatewayConnectConfig?.effectiveStableID,
+            stableID),
+            self.appModel.activeGatewayConnectConfig?.nodeOptions.allowStoredDeviceAuth == true
         {
             self.pendingManualAuthOverride = nil
         }
-        let fieldsMatchTarget = self.gatewayCredentialFieldStableID == stableID
-        let pendingOverride = self.pendingManualAuthOverride?.targetStableID == stableID
+        let fieldsMatchTarget = GatewayStableIdentifier.matches(
+            self.gatewayCredentialFieldStableID,
+            stableID)
+        let pendingOverride = GatewayStableIdentifier.matches(
+            self.pendingManualAuthOverride?.targetStableID,
+            stableID)
             ? self.pendingManualAuthOverride
             : nil
         let authOverride = GatewayConnectionController.ManualAuthOverride.currentManualInput(
@@ -541,10 +547,10 @@ extension SettingsProTab {
     }
 
     func beginGatewaySetupAttempt() -> UUID? {
-        guard self.connectingGatewayID == nil else { return nil }
+        guard self.connectingGateway == nil else { return nil }
         let attemptID = UUID()
         self.setupAttemptID = attemptID
-        self.connectingGatewayID = "setup-code"
+        self.connectingGateway = .setupCode
         return attemptID
     }
 
@@ -555,7 +561,7 @@ extension SettingsProTab {
 
     func invalidateGatewaySetupAttempt() {
         self.setupAttemptID = nil
-        self.connectingGatewayID = nil
+        self.connectingGateway = nil
     }
 
     func handleLocationModeChange(_ newValue: String) {
@@ -581,6 +587,8 @@ extension SettingsProTab {
 
         if mode == .off {
             _ = await self.appModel.requestLocationPermissions(mode: mode)
+            self.pendingLocationMode = nil
+            self.locationModeRaw = rawValue
             self.previousLocationModeRaw = rawValue
             self.refreshLocationPermissionSummary(desiredMode: mode)
             self.gatewayController.refreshActiveGatewayRegistrationFromSettings()
@@ -590,15 +598,97 @@ extension SettingsProTab {
         let granted = await self.appModel.requestLocationPermissions(mode: mode)
         self.refreshLocationPermissionSummary(desiredMode: mode)
         if granted {
+            self.pendingLocationMode = nil
+            self.locationModeRaw = rawValue
             self.previousLocationModeRaw = rawValue
             self.gatewayController.refreshActiveGatewayRegistrationFromSettings()
         } else {
             self.locationModeRaw = previous
             self.previousLocationModeRaw = previous
-            self.locationStatusText = "Location permission was not granted."
             self.refreshLocationPermissionSummary(
                 desiredMode: OpenClawLocationMode(rawValue: previous) ?? .off)
+            let presentation = self.locationSettingsPresentation(selectedMode: mode)
+            self.locationStatusText = presentation.statusText
         }
+    }
+
+    var selectedLocationMode: OpenClawLocationMode {
+        OpenClawLocationMode(rawValue: self.locationModeRaw) ?? .off
+    }
+
+    var displayedLocationMode: OpenClawLocationMode {
+        self.pendingLocationMode ?? self.selectedLocationMode
+    }
+
+    var locationSettingsPresentation: LocationSettingsPresentation {
+        self.locationSettingsPresentation(selectedMode: self.displayedLocationMode)
+    }
+
+    func locationSettingsPresentation(selectedMode: OpenClawLocationMode) -> LocationSettingsPresentation {
+        var summary = self.locationPermissionSummary
+        summary.desiredMode = selectedMode
+        return LocationSettingsPresentation(selectedMode: selectedMode, summary: summary)
+    }
+
+    func handleLocationSharingTap() {
+        guard !self.isChangingLocationMode else { return }
+        self.performLocationSettingsAction(self.locationSettingsPresentation.toggleAction())
+    }
+
+    func selectLocationAccessLevel(_ mode: OpenClawLocationMode) {
+        guard mode != .off else { return }
+        guard !self.isChangingLocationMode else { return }
+        let presentation = self.locationSettingsPresentation(selectedMode: mode)
+        self.performLocationSettingsAction(presentation.accessLevelAction(mode: mode))
+    }
+
+    func performLocationSettingsAction(_ action: LocationSettingsAction) {
+        switch action {
+        case let .setMode(mode):
+            self.setLocationMode(mode)
+        case let .openAppSettings(mode):
+            self.pendingLocationMode = mode
+            self.locationStatusText = self.locationSettingsPresentation(selectedMode: mode).statusText
+            self.openLocationSettings()
+        }
+    }
+
+    func setLocationMode(_ mode: OpenClawLocationMode) {
+        let rawValue = mode.rawValue
+        let previous = self.previousLocationModeRaw
+        if self.locationModeRaw != rawValue {
+            self.locationModeRaw = rawValue
+            return
+        }
+        Task {
+            await self.applyLocationMode(mode, rawValue: rawValue, previous: previous)
+        }
+    }
+
+    func applyPendingLocationModeIfAvailable() {
+        guard let mode = self.pendingLocationMode else { return }
+        Task {
+            let locationServicesEnabled = await Self.locationServicesEnabled()
+            let manager = CLLocationManager()
+            let summary = LocationPermissionSummary(
+                desiredMode: mode,
+                locationServicesEnabled: locationServicesEnabled,
+                authorizationStatus: manager.authorizationStatus,
+                accuracyAuthorization: manager.accuracyAuthorization)
+            self.locationPermissionSummary = summary
+            let unavailableStatus = self.locationSettingsPresentation(selectedMode: mode).statusText
+            self.pendingLocationMode = nil
+            guard summary.effectiveMode != .off else {
+                self.locationStatusText = unavailableStatus
+                return
+            }
+            self.setLocationMode(mode)
+        }
+    }
+
+    func openLocationSettings() {
+        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+        UIApplication.shared.open(url)
     }
 
     func refreshNotificationSettings() {
@@ -611,18 +701,58 @@ extension SettingsProTab {
         }
     }
 
-    func handleNotificationAction() {
-        if self.notificationStatus.shouldOpenNotificationSettings {
-            self.openNotificationSettings()
+    func handleNotificationServingToggleChange(_ isOn: Bool) {
+        guard isOn else {
+            self.notificationServingEnabled = false
+            // UIKit stops APNs delivery here; re-enabling registers again and the
+            // app delegate republishes the current token to the active gateway.
+            UIApplication.shared.unregisterForRemoteNotifications()
             return
         }
-        guard self.notificationStatus == .notSet else { return }
 
-        if PushBuildConfig.current.usesOpenClawHostedRelay {
-            self.showNotificationRelayDisclosure = true
-            return
+        switch self.notificationStatus {
+        case .allowed:
+            self.enableNotificationServing()
+        case .notSet:
+            guard self.prepareNotificationEnrollment() else { return }
+            self.requestNotificationAuthorizationFromSettings()
+        case .notAllowed, .unknown:
+            self.notificationServingEnabled = true
+            self.openNotificationSettings()
+        case .checking:
+            break
         }
-        self.requestNotificationAuthorizationFromSettings()
+    }
+
+    private func prepareNotificationEnrollment() -> Bool {
+        if PushBuildConfig.current.usesOpenClawHostedRelay,
+           !PushEnrollmentConsent.disclosureAccepted
+        {
+            self.showNotificationRelayDisclosure = true
+            return false
+        }
+        return true
+    }
+
+    private func enableNotificationServing() {
+        guard self.prepareNotificationEnrollment() else { return }
+        self.notificationServingEnabled = true
+        self.registerForRemoteNotificationsIfEnrollmentReady()
+    }
+
+    func acceptNotificationRelayDisclosure() {
+        PushEnrollmentConsent.markDisclosureAccepted()
+        switch self.notificationStatus {
+        case .allowed:
+            self.enableNotificationServing()
+        case .notSet:
+            self.requestNotificationAuthorizationFromSettings()
+        case .notAllowed, .unknown:
+            self.notificationServingEnabled = true
+            self.openNotificationSettings()
+        case .checking:
+            self.notificationServingEnabled = false
+        }
     }
 
     func requestNotificationAuthorizationFromSettings() {
@@ -639,7 +769,8 @@ extension SettingsProTab {
             await MainActor.run {
                 self.isRequestingNotificationAuthorization = false
                 self.notificationStatus = SettingsNotificationStatus(settings.authorizationStatus)
-                guard granted else { return }
+                self.notificationServingEnabled = granted && self.notificationStatus.allowsNotifications
+                guard self.notificationServingEnabled else { return }
                 self.registerForRemoteNotificationsIfEnrollmentReady()
             }
         }
@@ -647,7 +778,10 @@ extension SettingsProTab {
 
     @MainActor
     func registerForRemoteNotificationsIfEnrollmentReady() {
-        guard PushEnrollmentConsent.disclosureAccepted else { return }
+        guard self.notificationServingEnabled else { return }
+        guard !PushBuildConfig.current.usesOpenClawHostedRelay
+            || PushEnrollmentConsent.disclosureAccepted
+        else { return }
         guard self.notificationStatus.allowsNotifications else { return }
         UIApplication.shared.registerForRemoteNotifications()
     }
@@ -673,11 +807,11 @@ extension SettingsProTab {
 
     var gatewayCustomHeadersTargetStableID: String? {
         guard let stableID = self.gatewayCredentialTargetStableID else { return nil }
-        if self.currentManualGatewayStableID == stableID {
+        if GatewayStableIdentifier.matches(self.currentManualGatewayStableID, stableID) {
             return self.manualGatewayTLS ? stableID : nil
         }
         if let active = self.appModel.activeGatewayConnectConfig,
-           active.effectiveStableID == stableID
+           GatewayStableIdentifier.matches(active.effectiveStableID, stableID)
         {
             return active.url.scheme?.lowercased() == "wss" ? stableID : nil
         }
@@ -712,7 +846,9 @@ extension SettingsProTab {
             set: { value in
                 let previousStableID = self.currentManualGatewayStableID
                 self.manualGatewayHost = value
-                if previousStableID != self.currentManualGatewayStableID {
+                if GatewayStableIdentifier.key(previousStableID) !=
+                    GatewayStableIdentifier.key(self.currentManualGatewayStableID)
+                {
                     self.clearManualCredentialFields()
                 }
             })
@@ -762,6 +898,7 @@ extension SettingsProTab {
     func title(for route: SettingsRoute) -> String {
         switch route {
         case .gateway: "Gateway"
+        case .appleWatch: "Apple Watch"
         case .approvals: "Approvals"
         case .permissions: "Permissions"
         case .channels: "Channels"
@@ -774,6 +911,21 @@ extension SettingsProTab {
         }
     }
 
+    func sendDirectWatchSetup() async {
+        guard !self.isSendingWatchDirectSetup else { return }
+        self.isSendingWatchDirectSetup = true
+        self.watchDirectSetupStatusText = "Preparing one-time setup…"
+        defer { self.isSendingWatchDirectSetup = false }
+        do {
+            let result = try await self.appModel.sendDirectWatchSetup()
+            self.watchDirectSetupStatusText = result.deliveredImmediately
+                ? "Setup sent. Open OpenClaw on the watch to connect."
+                : "Setup queued for the watch. Open OpenClaw before the code expires."
+        } catch {
+            self.watchDirectSetupStatusText = error.localizedDescription
+        }
+    }
+
     var manualPortBinding: Binding<String> {
         Binding(
             get: { self.manualGatewayPortText },
@@ -782,7 +934,9 @@ extension SettingsProTab {
                 let filtered = newValue.filter(\.isNumber)
                 self.manualGatewayPortText = filtered
                 self.manualGatewayPort = Int(filtered) ?? 0
-                if previousStableID != self.currentManualGatewayStableID {
+                if GatewayStableIdentifier.key(previousStableID) !=
+                    GatewayStableIdentifier.key(self.currentManualGatewayStableID)
+                {
                     self.clearManualCredentialFields()
                 }
             })
@@ -797,7 +951,7 @@ extension SettingsProTab {
 
     private func selectGatewayCredentialTarget(_ stableID: String, allowManualOverride: Bool) {
         let instanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
-        if self.gatewayCredentialFieldStableID != stableID {
+        if !GatewayStableIdentifier.matches(self.gatewayCredentialFieldStableID, stableID) {
             let credentials = GatewaySettingsStore.loadGatewayCredentials(
                 instanceId: instanceId,
                 gatewayStableID: stableID)
@@ -1018,13 +1172,16 @@ extension SettingsProTab {
         self.appModel.pendingExecApprovalPrompt
     }
 
+    var pendingApprovalCount: Int {
+        self.appModel.pendingExecApprovalCount
+    }
+
+    var approvalWaitingText: String {
+        self.pendingApprovalCount == 1 ? "1 waiting" : "\(self.pendingApprovalCount) waiting"
+    }
+
     var notificationsNeedAttention: Bool {
-        switch self.notificationStatus {
-        case .allowed, .checking:
-            false
-        case .notAllowed, .notSet, .unknown:
-            true
-        }
+        self.notificationPresentation.needsAttention
     }
 
     var approvalItems: [SettingsApprovalItem] {
@@ -1071,60 +1228,65 @@ extension SettingsProTab {
         return diagnosticsIssueCount == 0 ? OpenClawBrand.ok : OpenClawBrand.warn
     }
 
-    var privacyDetail: String {
-        let location = OpenClawLocationMode(rawValue: self.locationModeRaw) ?? .off
-        return switch (location, self.locationPermissionSummary.effectiveMode) {
-        case (.off, _):
-            "Location off"
-        case (.whileUsing, .whileUsing):
-            "Location While Using"
-        case (.whileUsing, .off):
-            "Location While Using, effective Off"
-        case (.whileUsing, .always):
-            "Location While Using, effective Always"
-        case (.always, .always):
-            "Location Always"
-        case (.always, .whileUsing):
-            "Location Always, effective While Using"
-        case (.always, .off):
-            "Location Always, effective Off"
-        }
-    }
-
-    var locationPermissionDetailText: String {
+    var locationPermissionDetailText: String? {
         if self.isChangingLocationMode {
             return "Requesting iOS location permission…"
         }
-        return self.locationPermissionSummary.detailText
+        return self.locationSettingsPresentation.statusText
     }
 
     var locationPermissionWarningText: String? {
         guard let locationStatusText else { return nil }
-        guard locationStatusText != self.locationPermissionSummary.detailText else { return nil }
+        guard locationStatusText != self.locationPermissionDetailText else { return nil }
         return locationStatusText
     }
 
     var notificationStatusText: String {
-        self.notificationStatus.text
+        self.notificationPresentation.text
     }
 
-    var notificationActionText: String {
-        self.notificationStatus.actionTitle
+    var notificationStatusColor: Color {
+        self.notificationPresentation.color
+    }
+
+    var notificationServingActive: Bool {
+        self.notificationPresentation.isActive
+    }
+
+    var notificationDisclosureAccepted: Bool {
+        !PushBuildConfig.current.usesOpenClawHostedRelay
+            || PushEnrollmentConsent.disclosureAccepted
+    }
+
+    var notificationToggleBinding: Binding<Bool> {
+        Binding(
+            get: { self.notificationServingActive },
+            set: { self.handleNotificationServingToggleChange($0) })
+    }
+
+    var notificationPresentation: SettingsNotificationPresentation {
+        switch self.notificationStatus {
+        case .checking:
+            return .checking
+        case .allowed:
+            if !self.notificationServingEnabled {
+                return .off
+            }
+            if !self.notificationDisclosureAccepted {
+                return .setup
+            }
+            return .enabled
+        case .notAllowed:
+            return .denied
+        case .notSet:
+            return .notSet
+        case .unknown:
+            return .unknown
+        }
     }
 
     var notificationStatusDetail: String {
-        switch self.notificationStatus {
-        case .checking:
-            "Checking iOS notification permission."
-        case .allowed:
-            "OpenClaw can show approval prompts and event alerts when the app is not active."
-        case .notAllowed:
-            "Notifications have been denied. Enable them in iOS Settings."
-        case .notSet:
-            "Enable notifications to receive approval prompts and event alerts outside the app."
-        case .unknown:
-            "OpenClaw cannot determine the current notification permission state."
-        }
+        self.notificationPresentation.detail
     }
 
     var notificationRelayDetail: String {

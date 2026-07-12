@@ -12,28 +12,38 @@ type NavigationItem = {
 // The sidebar shows a small user-customizable pinned set; every other nav route
 // lives in the collapsed "More" section. Chat is reachable through the session
 // list and Settings/Docs live in the sidebar footer, so neither is listed here.
+// Skills and Skill Workshop are tabs inside the Plugins hub, not sidebar items.
 export const SIDEBAR_NAV_ROUTES = [
-  "overview",
-  "activity",
   "workboard",
-  "instances",
   "sessions",
   "usage",
   "cron",
   "tasks",
   "agents",
+  "plugins",
+  "nodes",
+] as const satisfies readonly NavigationRouteId[];
+
+// Routes presented as tabs of the Plugins hub. The sidebar highlights the
+// Plugins entry for all of them, mirroring how config covers settings routes.
+const PLUGINS_HUB_ROUTES: ReadonlySet<NavigationRouteId> = new Set([
+  "plugins",
   "skills",
   "skill-workshop",
-  "nodes",
-  "dreams",
-] as const satisfies readonly NavigationRouteId[];
+]);
+
+export function isPluginsHubRoute(routeId: NavigationRouteId): boolean {
+  return PLUGINS_HUB_ROUTES.has(routeId);
+}
 
 export type SidebarNavRoute = (typeof SIDEBAR_NAV_ROUTES)[number];
 
-// Sessions are the sidebar's core content; Overview is the only page pinned by
-// default. Users pin more via the customize menu.
+// Keep the highest-value operational destinations visible on first use. Users
+// can still replace this set through the customize menu.
 export const DEFAULT_SIDEBAR_PINNED_ROUTES = [
-  "overview",
+  "usage",
+  "cron",
+  "plugins",
 ] as const satisfies readonly SidebarNavRoute[];
 
 /**
@@ -62,7 +72,7 @@ export function sidebarMoreRoutes(pinned: readonly SidebarNavRoute[]): SidebarNa
   return SIDEBAR_NAV_ROUTES.filter((routeId) => !pinned.includes(routeId));
 }
 
-export type SettingsNavigationGroup = {
+type SettingsNavigationGroup = {
   /** i18n key for the group heading; null renders the group without a label. */
   labelKey: string | null;
   routes: readonly NavigationRouteId[];
@@ -70,12 +80,18 @@ export type SettingsNavigationGroup = {
 
 // Grouping feeds the full-page settings sidebar (settings-sidebar.ts).
 export const SETTINGS_NAVIGATION_GROUPS = [
-  { labelKey: null, routes: ["config", "appearance"] },
-  { labelKey: "nav.settingsGroupConnections", routes: ["channels", "communications"] },
-  { labelKey: "nav.settingsGroupAgents", routes: ["ai-agents", "automation", "mcp"] },
+  { labelKey: null, routes: ["profile", "config", "appearance"] },
+  {
+    labelKey: "nav.settingsGroupConnections",
+    routes: ["connection", "channels", "communications"],
+  },
+  {
+    labelKey: "nav.settingsGroupAgents",
+    routes: ["ai-agents", "model-providers", "automation", "mcp"],
+  },
   {
     labelKey: "nav.settingsGroupSystem",
-    routes: ["infrastructure", "worktrees", "debug", "logs"],
+    routes: ["infrastructure", "worktrees", "debug", "logs", "activity", "about"],
   },
 ] as const satisfies readonly SettingsNavigationGroup[];
 
@@ -85,30 +101,33 @@ export const SETTINGS_NAVIGATION_ROUTES: readonly NavigationRouteId[] =
 const NAVIGATION_ICONS: NavigationItem = {
   agents: "bot",
   activity: "activity",
-  overview: "barChart",
   workboard: "kanban",
   worktrees: "folder",
   channels: "link",
-  instances: "radio",
+  connection: "radio",
   sessions: "fileText",
-  usage: "barChart",
-  cron: "loader",
-  tasks: "loader",
+  usage: "coins",
+  cron: "calendarClock",
+  tasks: "listChecks",
   skills: "zap",
+  plugins: "puzzle",
   "skill-workshop": "wrench",
   nodes: "monitor",
   chat: "messageSquare",
   config: "settings",
+  profile: "lobster",
   communications: "send",
   appearance: "spark",
   automation: "terminal",
   mcp: "wrench",
   infrastructure: "globe",
+  about: "fileText",
   "ai-agents": "brain",
+  "model-providers": "plug",
   debug: "bug",
   logs: "scrollText",
-  dreams: "moon",
   plugin: "puzzle",
+  "new-session": "plus",
 };
 
 export function isSettingsNavigationRoute(routeId: NavigationRouteId): boolean {
@@ -170,16 +189,16 @@ export function cancelRoutePreload(
 const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey: string }> = {
   agents: { titleKey: "tabs.agents", subtitleKey: "subtitles.agents" },
   activity: { titleKey: "tabs.activity", subtitleKey: "subtitles.activity" },
-  overview: { titleKey: "tabs.overview", subtitleKey: "subtitles.overview" },
   workboard: { titleKey: "tabs.workboard", subtitleKey: "subtitles.workboard" },
   worktrees: { titleKey: "tabs.worktrees", subtitleKey: "subtitles.worktrees" },
   channels: { titleKey: "tabs.channels", subtitleKey: "subtitles.channels" },
-  instances: { titleKey: "tabs.instances", subtitleKey: "subtitles.instances" },
+  connection: { titleKey: "tabs.connection", subtitleKey: "subtitles.connection" },
   sessions: { titleKey: "tabs.sessions", subtitleKey: "subtitles.sessions" },
   usage: { titleKey: "tabs.usage", subtitleKey: "subtitles.usage" },
   cron: { titleKey: "tabs.cron", subtitleKey: "subtitles.cron" },
   tasks: { titleKey: "tabs.tasks", subtitleKey: "subtitles.tasks" },
   skills: { titleKey: "tabs.skills", subtitleKey: "subtitles.skills" },
+  plugins: { titleKey: "tabs.plugins", subtitleKey: "subtitles.plugins" },
   "skill-workshop": {
     titleKey: "tabs.skillWorkshop",
     subtitleKey: "subtitles.skillWorkshop",
@@ -187,6 +206,7 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
   nodes: { titleKey: "tabs.nodes", subtitleKey: "subtitles.nodes" },
   chat: { titleKey: "tabs.chat", subtitleKey: "subtitles.chat" },
   config: { titleKey: "nav.settings", subtitleKey: "subtitles.config" },
+  profile: { titleKey: "tabs.profile", subtitleKey: "subtitles.profile" },
   communications: {
     titleKey: "tabs.communications",
     subtitleKey: "subtitles.communications",
@@ -195,11 +215,16 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
   automation: { titleKey: "tabs.automation", subtitleKey: "subtitles.automation" },
   mcp: { titleKey: "tabs.mcp", subtitleKey: "subtitles.mcp" },
   infrastructure: { titleKey: "tabs.infrastructure", subtitleKey: "subtitles.infrastructure" },
+  about: { titleKey: "tabs.about", subtitleKey: "subtitles.about" },
   "ai-agents": { titleKey: "tabs.aiAgents", subtitleKey: "subtitles.aiAgents" },
+  "model-providers": {
+    titleKey: "tabs.modelProviders",
+    subtitleKey: "subtitles.modelProviders",
+  },
   debug: { titleKey: "tabs.debug", subtitleKey: "subtitles.debug" },
   logs: { titleKey: "tabs.logs", subtitleKey: "subtitles.logs" },
-  dreams: { titleKey: "tabs.dreams", subtitleKey: "subtitles.dreams" },
   plugin: { titleKey: "tabs.plugin", subtitleKey: "subtitles.plugin" },
+  "new-session": { titleKey: "newSession.title", subtitleKey: "newSession.hint" },
 };
 
 export function titleForRoute(routeId: NavigationRouteId): string {

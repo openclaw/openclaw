@@ -21,6 +21,7 @@ import {
 } from "../../logging/diagnostic-session-state.js";
 import { diagnosticLogger } from "../../logging/diagnostic.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../../shared/number-coercion.js";
 import {
   testing,
@@ -491,6 +492,39 @@ describe("embedded-agent runner run registry", () => {
     expect(queueMessage).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      label: "capable prompt into an incapable run",
+      handleMode: undefined,
+      requestMode: "gateway" as const,
+    },
+    {
+      label: "incapable prompt into a capable run",
+      handleMode: "gateway" as const,
+      requestMode: undefined,
+    },
+  ])("rejects $label", ({ handleMode, requestMode }) => {
+    const queueMessage = vi.fn(async () => {});
+    setActiveEmbeddedRun("session-task-suggestions", {
+      ...createRunHandle(),
+      taskSuggestionDeliveryMode: handleMode,
+      queueMessage,
+    });
+
+    const outcome = queueEmbeddedAgentMessageWithOutcome("session-task-suggestions", "continue", {
+      steeringMode: "all",
+      taskSuggestionDeliveryMode: requestMode,
+    });
+
+    expect(outcome).toEqual({
+      queued: false,
+      sessionId: "session-task-suggestions",
+      reason: "task_suggestion_delivery_mode_mismatch",
+      gatewayHealth: "live",
+    });
+    expect(queueMessage).not.toHaveBeenCalled();
+  });
+
   it("defaults active embedded steering to all pending messages", () => {
     const queueMessage = vi.fn(async () => {});
     setActiveEmbeddedRun("session-default-steer", {
@@ -744,9 +778,7 @@ describe("embedded-agent runner run registry", () => {
     expect(queueMessage).not.toHaveBeenCalled();
   });
 
-  it("keeps reply-run fallback reachable for transcript-commit wait requests", async () => {
-    // Some callers queue through the broader reply-run operation when the
-    // embedded handle cannot prove transcript commit support directly.
+  it("rejects transcript-commit waits before reply-run fallback without an active handle", async () => {
     const queueMessage = vi.fn(async () => {});
     const operation = createReplyOperation({
       sessionKey: "agent:main:main",
@@ -762,7 +794,7 @@ describe("embedded-agent runner run registry", () => {
     operation.setPhase("running");
     const recorder = createUserTurnTranscriptRecorder({
       input: { text: "visible group prompt", sender: { id: "user-42" } },
-      target: { transcriptPath: "/tmp/unused-session.jsonl" },
+      target: createTestUserTurnTranscriptTarget(),
     });
 
     const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
@@ -771,22 +803,13 @@ describe("embedded-agent runner run registry", () => {
       { waitForTranscriptCommit: true, userTurnTranscriptRecorder: recorder },
     );
 
-    expect(outcome.queued).toBe(true);
-    if (!outcome.queued) {
-      throw new Error("expected reply-run fallback to queue");
-    }
-    expect(outcome).toMatchObject({
-      queued: true,
+    expect(outcome).toEqual({
+      queued: false,
       sessionId: "session-reply-run",
-      target: "reply_run",
+      reason: "transcript_commit_wait_unsupported",
       gatewayHealth: "live",
     });
-    expect(outcome.enqueuedAtMs).toEqual(expect.any(Number));
-    expect(outcome.deliveredAtMs).toBeUndefined();
-    expect(queueMessage).toHaveBeenCalledWith("completion from child", {
-      waitForTranscriptCommit: true,
-      userTurnTranscriptRecorder: recorder,
-    });
+    expect(queueMessage).not.toHaveBeenCalled();
   });
 
   it("force-clears an aborted run that does not drain", async () => {

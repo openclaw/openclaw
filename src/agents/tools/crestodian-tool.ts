@@ -1,9 +1,10 @@
 /**
  * crestodian built-in tool: ring-zero setup/repair actions for the Crestodian
- * agent. Never exposed to normal agents — construction is gated on an explicit
- * runner option, and every action funnels through Crestodian's typed operation
+ * agent. Never exposed to normal agents — construction is bound to a host-owned
+ * per-run scope, and every action funnels through Crestodian's typed operation
  * union with approval assertions and the audit log.
  */
+import { createHash } from "node:crypto";
 import { Type } from "typebox";
 import {
   executeCrestodianOperation,
@@ -12,6 +13,7 @@ import {
 } from "../../crestodian/operations.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { stringEnum } from "../schema/typebox.js";
+import { stableStringify } from "../stable-stringify.js";
 import { textResult, ToolInputError, readStringParam, type AnyAgentTool } from "./common.js";
 
 export type CrestodianToolOptions = {
@@ -32,27 +34,36 @@ export type CrestodianToolOptions = {
   proposalRef?: { current?: string };
   /**
    * Host handoff channel for actions the tool cannot perform itself
-   * (interactive channel-setup wizard, opening the agent TUI). The engine
-   * reads it after the turn; CLI MCP hosts mirror it from tool events.
+   * (interactive channel setup, external onboarding guidance, opening the
+   * agent TUI). The engine reads it after the turn; CLI MCP hosts mirror it
+   * from tool events.
    */
   directiveRef?: { current?: CrestodianToolDirective };
 };
 
-/** Interactive handoffs the hosting chat engine executes after the turn. */
+/** Host directives the hosting chat engine handles after the turn. */
 export type CrestodianToolDirective =
   | { kind: "channel-setup"; channel: string }
   | { kind: "model-setup"; workspace?: string }
-  | { kind: "open-tui"; agentId?: string; workspace?: string };
+  | { kind: "open-tui"; agentId?: string; workspace?: string }
+  | Extract<CrestodianOperation, { kind: "open-setup" }>
+  | { kind: "approved-operation"; operation: CrestodianOperation };
+
+type CrestodianHostNavigationDirective = Exclude<
+  CrestodianToolDirective,
+  { kind: "approved-operation" }
+>;
 
 /** Canonical operation fingerprint used to bind "yes" to one exact mutation. */
 export function hashCrestodianOperation(operation: CrestodianOperation): string {
-  return JSON.stringify(operation, Object.keys(operation).toSorted());
+  return createHash("sha256").update(stableStringify(operation)).digest("hex");
 }
 
 /** Result markers shared with out-of-process hosts (CLI MCP runs). */
 const CRESTODIAN_NEEDS_APPROVAL_PREFIX = "needs-approval:";
 const CRESTODIAN_APPROVAL_MISMATCH_PREFIX = "approval-mismatch:";
 const CRESTODIAN_DIRECTIVE_PREFIX = "directive:";
+const CRESTODIAN_APPROVED_OPERATION_PREFIX = `${CRESTODIAN_DIRECTIVE_PREFIX}approved-operation:`;
 
 /**
  * Reconstruct a host directive from an out-of-process tool result. Directive
@@ -67,13 +78,22 @@ export function resolveCrestodianDirectiveTransition(params: {
     return null;
   }
   try {
-    return directiveForOperation(operationForAction(params.args));
+    const operation = operationForAction(params.args);
+    if (
+      params.resultText.startsWith(CRESTODIAN_APPROVED_OPERATION_PREFIX) &&
+      isPersistentCrestodianOperation(operation)
+    ) {
+      return { kind: "approved-operation", operation };
+    }
+    return directiveForOperation(operation);
   } catch {
     return null;
   }
 }
 
-function directiveForOperation(operation: CrestodianOperation): CrestodianToolDirective | null {
+function directiveForOperation(
+  operation: CrestodianOperation,
+): CrestodianHostNavigationDirective | null {
   if (operation.kind === "channel-setup") {
     return { kind: "channel-setup", channel: operation.channel };
   }
@@ -89,6 +109,9 @@ function directiveForOperation(operation: CrestodianOperation): CrestodianToolDi
       ...(operation.agentId ? { agentId: operation.agentId } : {}),
       ...(operation.workspace ? { workspace: operation.workspace } : {}),
     };
+  }
+  if (operation.kind === "open-setup") {
+    return operation;
   }
   return null;
 }
@@ -116,7 +139,13 @@ export function resolveCrestodianProposalTransition(params: {
     return { proposal: undefined };
   }
   if (params.resultText.startsWith(CRESTODIAN_NEEDS_APPROVAL_PREFIX)) {
-    return { proposal: hashCrestodianOperation(operation) };
+    const markerLine = params.resultText.split("\n", 1)[0] ?? "";
+    const carriedHash = markerLine.slice(CRESTODIAN_NEEDS_APPROVAL_PREFIX.length).trim();
+    return {
+      proposal: /^[a-f0-9]{64}$/.test(carriedHash)
+        ? carriedHash
+        : hashCrestodianOperation(operation),
+    };
   }
   // Executed or errored mutation: an armed approval is single-use either way.
   return { proposal: undefined };
@@ -127,6 +156,7 @@ const CRESTODIAN_TOOL_ACTIONS = [
   "models",
   "agents",
   "channels",
+  "channel_info",
   "audit",
   "validate_config",
   "doctor",
@@ -134,10 +164,11 @@ const CRESTODIAN_TOOL_ACTIONS = [
   "config_schema",
   "gateway_status",
   "plugin_search",
-  // Interactive handoffs executed by the hosting chat after this turn.
+  // Host directives handled by the hosting chat after this turn.
   "connect_channel",
   "configure_model_provider",
   "open_agent",
+  "open_setup",
   // Mutating actions below require approved=true.
   "setup",
   "set_default_model",
@@ -149,7 +180,6 @@ const CRESTODIAN_TOOL_ACTIONS = [
   "gateway_restart",
   "plugin_install",
   "plugin_uninstall",
-  "doctor_fix",
 ] as const;
 
 const CrestodianToolSchema = Type.Object({
@@ -161,7 +191,15 @@ const CrestodianToolSchema = Type.Object({
   workspace: Type.Optional(Type.String({ description: "Workspace directory" })),
   agentId: Type.Optional(Type.String({ description: "Agent id for create_agent/open_agent" })),
   channel: Type.Optional(
-    Type.String({ description: "Channel id for connect_channel (e.g. telegram)" }),
+    Type.String({
+      description: "Channel id for connect_channel, channel_info, or open_setup channels",
+    }),
+  ),
+  target: Type.Optional(
+    stringEnum(["guided", "classic", "channels"], {
+      description:
+        "Setup target for open_setup. channels runs in this chat; guided/classic require exiting Crestodian and running openclaw onboard.",
+    }),
   ),
   query: Type.Optional(Type.String({ description: "Search query for plugin_search" })),
   spec: Type.Optional(Type.String({ description: "npm/clawhub spec for plugin_install" })),
@@ -194,6 +232,14 @@ function requireParam(params: Record<string, unknown>, name: string): string {
   return value.trim();
 }
 
+function readSetupTarget(params: Record<string, unknown>): "guided" | "classic" | "channels" {
+  const target = readStringParam(params, "target")?.trim() ?? "guided";
+  if (target === "guided" || target === "classic" || target === "channels") {
+    return target;
+  }
+  throw new ToolInputError(`crestodian: unknown setup target "${target}"`);
+}
+
 function operationForAction(params: Record<string, unknown>): CrestodianOperation {
   const action = readStringParam(params, "action", { required: true });
   switch (action) {
@@ -205,14 +251,14 @@ function operationForAction(params: Record<string, unknown>): CrestodianOperatio
       return { kind: "agents" };
     case "channels":
       return { kind: "channel-list" };
+    case "channel_info":
+      return { kind: "channel-info", channel: requireParam(params, "channel").toLowerCase() };
     case "audit":
       return { kind: "audit" };
     case "validate_config":
       return { kind: "config-validate" };
     case "doctor":
       return { kind: "doctor" };
-    case "doctor_fix":
-      return { kind: "doctor-fix" };
     case "config_get":
       return { kind: "config-get", path: requireParam(params, "path") };
     case "config_schema": {
@@ -234,6 +280,15 @@ function operationForAction(params: Record<string, unknown>): CrestodianOperatio
         kind: "open-tui",
         ...(agentId ? { agentId } : {}),
         ...(workspace ? { workspace } : {}),
+      };
+    }
+    case "open_setup": {
+      const target = readSetupTarget(params);
+      const channel = readStringParam(params, "channel")?.trim().toLowerCase();
+      return {
+        kind: "open-setup",
+        target,
+        ...(channel ? { channel } : {}),
       };
     }
     case "gateway_start":
@@ -287,37 +342,21 @@ function operationForAction(params: Record<string, unknown>): CrestodianOperatio
   }
 }
 
-/** Validate openclaw.json after a write so the agent can fix mistakes in-loop. */
-async function verifyConfigAfterToolWrite(): Promise<string | null> {
-  try {
-    const { readConfigFileSnapshot } = await import("../../config/config.js");
-    const snapshot = await readConfigFileSnapshot();
-    if (!snapshot.exists || snapshot.valid) {
-      return null;
-    }
-    const issues = (snapshot.issues ?? []).map(
-      (issue: { path?: string; message: string }) =>
-        `${issue.path ? `${issue.path}: ` : ""}${issue.message}`,
-    );
-    return [
-      "CONFIG INVALID after this write — fix it before doing anything else:",
-      ...(issues.length > 0 ? issues : ["unknown validation failure"]),
-    ].join("\n");
-  } catch {
-    return null;
-  }
-}
-
 export function createCrestodianTool(options: CrestodianToolOptions): AnyAgentTool {
   return {
     name: "crestodian",
     label: "Crestodian",
+    // Setup authority is never discoverable through tool catalogs: the host
+    // scopes it to this run and the model must receive it directly.
+    catalogMode: "direct-only",
     description: [
-      "Ring-zero OpenClaw setup and repair. Read actions (status/models/agents/channels/config_get/config_schema/gateway_status/plugin_search/validate_config/doctor/audit) run immediately.",
-      "connect_channel(channel) starts guided channel setup; configure_model_provider starts masked provider/default-model setup; open_agent hands the user to their normal agent. These interactive handoffs run immediately.",
-      "Mutating actions (setup/set_default_model/config_set/config_set_ref/create_agent/gateway_*/plugin_install/plugin_uninstall/doctor_fix) REQUIRE approved=true, which you may only set after the user clearly agreed to that exact change in this conversation.",
-      "Before writing an unfamiliar config path, call config_schema for it — the schema is the source of truth. Secrets go through config_set_ref (env var), never plaintext echoes.",
-      "Every applied write is validated; if the result reports CONFIG INVALID, fix it immediately. All writes are audited.",
+      "Ring-zero setup/repair. Reads (status/models/agents/channels/channel_info/config_get/config_schema/gateway_status/plugin_search/validate_config/doctor/audit) run now.",
+      "connect_channel/open_setup(target=channels) starts guided chat setup; open_agent hands off normal agent.",
+      "Cannot change active inference route here. configure_model_provider/open_setup guided|classic, provider/credential/default-model change: exit and `openclaw onboard`; never ask credentials here.",
+      "Writes (setup/set_default_model/config_set/config_set_ref/create_agent/gateway_*/plugin_install) need approved=true only after user clearly agrees to exact change in this conversation. Host applies after turn and rechecks live inference owner.",
+      "Unknown config path: config_schema first; schema is truth. Secret: config_set_ref env, never plaintext. Raw auth/models/env/secrets/plugins/tools/agent-route/$include writes refused; typed workflow only.",
+      "Plugin uninstall refused: exit, CLI. Doctor repair refused: exit, `openclaw doctor --fix`.",
+      "Every write validated/audited. CONFIG INVALID => fix immediately.",
     ].join(" "),
     parameters: CrestodianToolSchema,
     execute: async (_toolCallId, args) => {
@@ -327,15 +366,19 @@ export function createCrestodianTool(options: CrestodianToolOptions): AnyAgentTo
       if (directive) {
         // Not a write: the host chat performs the interactive handoff after
         // this turn (the wizard itself collects explicit user answers).
-        if (options.directiveRef) {
+        if (options.directiveRef && options.directiveRef.current?.kind !== "approved-operation") {
           options.directiveRef.current = directive;
         }
         return textResult(
           directive.kind === "channel-setup"
             ? `${CRESTODIAN_DIRECTIVE_PREFIX} the host chat now starts the guided ${directive.channel} setup with the user. Tell the user the setup questions come next; do not describe steps yourself.`
             : directive.kind === "model-setup"
-              ? `${CRESTODIAN_DIRECTIVE_PREFIX} the host now starts masked model-provider setup. Tell the user the provider questions come next; do not ask for credentials yourself.`
-              : `${CRESTODIAN_DIRECTIVE_PREFIX} the host now hands the user over to their normal agent. Say goodbye briefly.`,
+              ? `${CRESTODIAN_DIRECTIVE_PREFIX} the active inference route cannot be changed inside Crestodian. Tell the user to exit Crestodian and run \`openclaw onboard\`; do not ask for provider credentials here.`
+              : directive.kind === "open-tui"
+                ? `${CRESTODIAN_DIRECTIVE_PREFIX} the host now hands the user over to their normal agent. Say goodbye briefly.`
+                : directive.target === "channels"
+                  ? `${CRESTODIAN_DIRECTIVE_PREFIX} the host now opens channel setup${directive.channel ? ` for ${directive.channel}` : ""}. Tell the user the channel setup questions come next.`
+                  : `${CRESTODIAN_DIRECTIVE_PREFIX} ${directive.target} setup cannot run inside Crestodian because it may change the active inference route. Tell the user to exit Crestodian and run \`openclaw onboard\`.`,
           {},
         );
       }
@@ -366,7 +409,7 @@ export function createCrestodianTool(options: CrestodianToolOptions): AnyAgentTo
             options.proposalRef.current = operationHash;
           }
           return textResult(
-            `${CRESTODIAN_NEEDS_APPROVAL_PREFIX} this action changes state. The proposal is registered; describe this exact change and ask the user to reply yes (their approval unlocks THIS action only — then retry the identical call with approved=true).`,
+            `${CRESTODIAN_NEEDS_APPROVAL_PREFIX}${operationHash}\nThis action changes state. The proposal is registered; describe this exact change and ask the user to reply yes (their approval unlocks THIS action only — then retry the exact registered operation with approved=true).`,
             { needsApproval: true },
           );
         }
@@ -374,27 +417,34 @@ export function createCrestodianTool(options: CrestodianToolOptions): AnyAgentTo
           // One approval, one mutation: re-proposals need a fresh yes.
           options.proposalRef.current = undefined;
         }
+        const approvedDirective: CrestodianToolDirective = {
+          kind: "approved-operation",
+          operation,
+        };
+        if (options.directiveRef) {
+          options.directiveRef.current = approvedDirective;
+        }
+        // Ring-zero writes belong to the host process, not the model loop or
+        // its out-of-process MCP server. The host rechecks the verified
+        // inference binding immediately before applying this exact operation.
+        return textResult(
+          `${CRESTODIAN_APPROVED_OPERATION_PREFIX} the host accepted this exact approved action and will apply it after this turn. Do not call it again.`,
+          {},
+        );
       }
       const capture = createCaptureRuntime();
-      let applied: boolean;
       try {
-        const result = await executeCrestodianOperation(operation, capture, {
-          approved: persistent,
+        await executeCrestodianOperation(operation, capture, {
+          approved: false,
           deps: { setupSurface: options.surface },
-          auditDetails: { via: "crestodian-agent-tool" },
         });
-        applied = result.applied;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         return textResult([capture.read(), `error: ${message}`].filter(Boolean).join("\n"), {
           error: true,
         });
       }
-      const verify = applied ? await verifyConfigAfterToolWrite() : null;
-      return textResult(
-        [capture.read() || "done", verify].filter(Boolean).join("\n\n"),
-        verify ? { configInvalid: true } : {},
-      );
+      return textResult(capture.read() || "done", {});
     },
   };
 }
