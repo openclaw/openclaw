@@ -21,6 +21,17 @@ export const ModelChoiceSchema = Type.Object(
     available: Type.Optional(Type.Boolean()),
     contextWindow: Type.Optional(Type.Integer({ minimum: 1 })),
     reasoning: Type.Optional(Type.Boolean()),
+    input: Type.Optional(
+      Type.Array(
+        Type.Union([
+          Type.Literal("text"),
+          Type.Literal("image"),
+          Type.Literal("audio"),
+          Type.Literal("video"),
+          Type.Literal("document"),
+        ]),
+      ),
+    ),
   },
   { additionalProperties: false },
 );
@@ -241,7 +252,12 @@ export const AgentsFilesSetResultSchema = Type.Object(
 export const ModelsListParamsSchema = Type.Object(
   {
     view: Type.Optional(
-      Type.Union([Type.Literal("default"), Type.Literal("configured"), Type.Literal("all")]),
+      Type.Union([
+        Type.Literal("default"),
+        Type.Literal("configured"),
+        Type.Literal("provider-config"),
+        Type.Literal("all"),
+      ]),
     ),
   },
   { additionalProperties: false },

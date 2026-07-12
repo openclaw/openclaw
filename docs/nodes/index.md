@@ -270,11 +270,12 @@ A desktop or server node can expose chat-capable models from an Ollama server ru
 
 ### Codex sessions and transcripts
 
-The official `codex` plugin can expose non-archived Codex sessions
-on a headless node host or native macOS node.
-Enable `plugins.entries.codex.config.supervision.enabled` independently in the
-node's local config and on the Gateway. The node setting is local consent;
-enabling only the Gateway cannot read another computer's Codex state.
+The official `codex` plugin can expose non-archived Codex sessions on a
+headless node host or native macOS node. Catalog registration no longer depends
+on `supervision.enabled`; that option gates the agent-facing supervision tools.
+The plugin must still be active on both computers, and the node setting remains
+local consent: enabling only the Gateway cannot read another computer's Codex
+state.
 
 The node advertises the versioned read-only
 `codex.appServer.threads.list.v1` and
@@ -282,8 +283,9 @@ The node advertises the versioned read-only
 upgrade when those commands first appear. The Gateway invokes them through the
 normal plugin node policy and isolates failures by host.
 
-Paired-node rows appear in the main sidebar and **Codex Sessions**. Selecting a
-row reads its persisted transcript through bounded, cursor-paginated
+Paired-node rows appear as a **Codex** group in the normal sessions sidebar.
+Selecting a row opens the normal Chat pane and reads its persisted transcript
+through bounded, cursor-paginated
 `thread/turns/list` calls with full item projection. The node invoke transport is request/response only and cannot
 carry the streaming turns, live events, or approvals required to continue a
 native thread through the Codex harness. **Continue** and **Archive** are
@@ -314,9 +316,12 @@ session or loading an older page does not read the whole JSONL history into one
 Gateway response.
 
 Both node commands are read-only. They expose catalog metadata and transcript
-content only to an authenticated operator connection with `operator.write`,
-which is required by the shared `node.invoke` transport. OpenClaw does not
-modify Claude's files or start a Claude runner on the paired computer.
+content only through the generic `sessions.catalog.list` and
+`sessions.catalog.read` methods to an authenticated operator connection with
+`operator.write`. Paired-node rows stay view-only. A Gateway-local Claude CLI
+row can be adopted from the normal Chat composer: OpenClaw imports bounded
+visible history, resumes with `--fork-session` on the first turn, and leaves the
+source transcript untouched. Claude Desktop rows remain view-only.
 
 See [Anthropic: Claude sessions across computers](/providers/anthropic#claude-sessions-across-computers)
 for the Control UI behavior and storage sources.

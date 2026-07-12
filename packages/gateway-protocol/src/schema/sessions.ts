@@ -85,6 +85,7 @@ export const SessionFileEntrySchema = Type.Object(
     size: Type.Optional(Type.Integer({ minimum: 0 })),
     updatedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
     content: Type.Optional(Type.String()),
+    hash: Type.Optional(NonEmptyString),
   },
   { additionalProperties: false },
 );
@@ -148,6 +149,28 @@ export const SessionsFilesGetParamsSchema = Type.Object(
 
 /** Result for reading one session-referenced file. */
 export const SessionsFilesGetResultSchema = Type.Object(
+  {
+    sessionKey: NonEmptyString,
+    root: Type.Optional(NonEmptyString),
+    file: SessionFileEntrySchema,
+  },
+  { additionalProperties: false },
+);
+
+/** Overwrites one existing session workspace file with hash-based CAS. */
+export const SessionsFilesSetParamsSchema = Type.Object(
+  {
+    sessionKey: NonEmptyString,
+    path: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
+    content: Type.String(),
+    expectedHash: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+/** Result for overwriting one session workspace file. */
+export const SessionsFilesSetResultSchema = Type.Object(
   {
     sessionKey: NonEmptyString,
     root: Type.Optional(NonEmptyString),

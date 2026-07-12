@@ -1,11 +1,11 @@
 {
   "fallbackKeys": [],
-  "generatedAt": "2026-07-11T22:59:19.020Z",
+  "generatedAt": "2026-07-11T23:57:29.501Z",
   "locale": "ko",
   "model": "claude-sonnet-4-6",
   "provider": "anthropic",
-  "sourceHash": "5fbda60604eb9b844654f33fabe19441623164d820307db15487c73e86e54cc4",
-  "totalKeys": 2241,
-  "translatedKeys": 2241,
+  "sourceHash": "40a631b1c7cbce949831756fcafc18ab92cf543f70880dff86d0d27cf8c3babc",
+  "totalKeys": 2137,
+  "translatedKeys": 2137,
   "workflow": 1
 }

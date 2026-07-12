@@ -1152,6 +1152,30 @@ html.openclaw-native-nav .topbar .topbar-nav-toggle {
   text-align: center;
 }
 
+.sidebar-session-catalog-load-more {
+  display: block;
+  width: calc(100% - 20px);
+  margin: 3px 10px 5px;
+  padding: 4px 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: left;
+}
+
+.sidebar-session-catalog-load-more:hover:not(:disabled),
+.sidebar-session-catalog-load-more:focus-visible {
+  background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
+  color: var(--text);
+}
+
+.sidebar-session-catalog-load-more:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
 .sidebar-session-group-drag-handle {
   width: 8px;
   height: 18px;
@@ -1272,6 +1296,26 @@ html.openclaw-native-nav .topbar .topbar-nav-toggle {
   flex-direction: column;
   gap: 2px;
   min-height: 12px;
+}
+
+.sidebar-session-pagination {
+  display: flex;
+  gap: 14px;
+  padding: 0 10px 10px;
+}
+
+.sidebar-session-pagination__button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.sidebar-session-pagination__button:hover,
+.sidebar-session-pagination__button:focus-visible {
+  color: var(--text);
 }
 
 .sidebar-recent-session--dragging {

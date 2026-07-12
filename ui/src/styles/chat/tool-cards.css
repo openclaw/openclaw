@@ -624,6 +624,23 @@
   color: var(--muted);
 }
 
+.chat-tool-card__detail-link {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.chat-tool-card__detail-link:hover,
+.chat-tool-card__detail-link:focus-visible {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .chat-tool-card__block {
   margin-top: 8px;
   min-width: 0;
