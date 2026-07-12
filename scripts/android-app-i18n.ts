@@ -272,6 +272,9 @@ const UI_BRANCH_LITERAL_RE = /(?:->|return|\?:)\s*"((?:\\.|[^"\\])+)"/gu;
 const UI_IF_BRANCH_LITERAL_RE = /(?:\bif\s*\([^)]*\)|\belse)\s*\{\s*"((?:\\.|[^"\\])+)"/gu;
 const UI_MODEL_STRING_NAME_RE =
   /^(?:contentDescription|errorText|helperText|onClickLabel|statusText)$/u;
+const UI_MODEL_CLASS_FIELDS = new Map<string, ReadonlySet<string>>([
+  ["SettingsToggleRow", new Set(["subtitle", "title"])],
+]);
 const KOTLIN_STRING_LITERAL_RE = /"((?:\\.|[^"\\])+)"/gu;
 
 // These literals are either technical data or immutable source tokens localized at a typed render edge.
@@ -592,11 +595,14 @@ function collectTypedModelLiteralFindings(
       trackTypeArguments: true,
     });
     const userFacingParameters = new Map<string, number>();
+    const classFields = UI_MODEL_CLASS_FIELDS.get(className);
     parameters.forEach((parameter, index) => {
       const field = parameter.value.match(
         /\bval\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*String\??(?=\s*(?:=|$))/u,
       )?.[1];
-      if (field && UI_MODEL_STRING_NAME_RE.test(field)) userFacingParameters.set(field, index);
+      if (field && (UI_MODEL_STRING_NAME_RE.test(field) || classFields?.has(field))) {
+        userFacingParameters.set(field, index);
+      }
     });
     if (userFacingParameters.size === 0) continue;
     const callPattern = new RegExp(`\\b${className}\\s*\\(`, "gu");
@@ -729,7 +735,11 @@ function renderStringsXml(
   manual: readonly ResourceString[],
   generated: ReadonlyMap<string, { source: string; value: string }>,
 ): string {
-  const lines = ["<resources>"];
+  const lines = [
+    generated.size > 0
+      ? '<resources xmlns:tools="http://schemas.android.com/tools">'
+      : "<resources>",
+  ];
   for (const entry of manual) {
     lines.push(`    <string name="${entry.key}"${entry.attrs}>${entry.rawValue}</string>`);
   }
@@ -740,8 +750,10 @@ function renderStringsXml(
     )) {
       const formatted = INTERPOLATION_RE.test(entry.source) ? "" : ' formatted="false"';
       INTERPOLATION_RE.lastIndex = 0;
+      // Translation-memory text intentionally preserves technical tokens and source punctuation,
+      // so Android's English dictionary and typography suggestions do not apply to managed keys.
       lines.push(
-        `    <string name="${key}"${formatted}>"${renderAndroidResourceValue(entry.source, entry.value)}"</string>`,
+        `    <string name="${key}"${formatted} tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"${renderAndroidResourceValue(entry.source, entry.value)}"</string>`,
       );
     }
   }

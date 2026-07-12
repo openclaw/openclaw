@@ -10,6 +10,11 @@ import {
 describe("Android app i18n resources", () => {
   it("keeps generated resources, runtime coverage, and every locale aligned", async () => {
     await expect(checkAndroidAppI18n()).resolves.toBeUndefined();
+    const base = await readFile("apps/android/app/src/main/res/values/strings.xml", "utf8");
+    expect(base).toContain('xmlns:tools="http://schemas.android.com/tools"');
+    expect(base).toMatch(
+      /<string name="native_[a-f0-9]+"[^>]*tools:ignore="Typos,TypographyDashes,TypographyEllipsis">/u,
+    );
   });
 
   it("preserves the existing Swedish app name", async () => {
@@ -43,6 +48,10 @@ describe("Android app i18n resources", () => {
         val connected: Boolean,
         val statusText: String,
       )
+      data class SettingsToggleRow(
+        val title: String,
+        val subtitle: String,
+      )
 
       Text("Settings")
       Text(text = nativeStringResource("Connected"))
@@ -51,6 +60,8 @@ describe("Android app i18n resources", () => {
       SettingsMetric("Gateway", gatewayName)
       ConnectionState(connected = false, statusText = "Connecting to $host")
       ConnectionState(connected = true, statusText = nativeString("Connected"))
+      SettingsToggleRow("Phone capability", "Share device data")
+      SettingsToggleRow(nativeString("Localized capability"), nativeString("Localized detail"))
       Text(text = fileName ?: "Attachment")
       Modifier.clickable(onClickLabel = "Open detail", onClick = {})
       Text(nativeString("First sentence. ") + "Second sentence.")
@@ -73,6 +84,8 @@ describe("Android app i18n resources", () => {
       expect.objectContaining({ source: "Working" }),
       expect.objectContaining({ source: "Gateway" }),
       expect.objectContaining({ source: "Connecting to $host" }),
+      expect.objectContaining({ source: "Phone capability" }),
+      expect.objectContaining({ source: "Share device data" }),
       expect.objectContaining({ source: "Attachment" }),
       expect.objectContaining({ source: "Open detail" }),
       expect.objectContaining({ source: "Second sentence." }),
