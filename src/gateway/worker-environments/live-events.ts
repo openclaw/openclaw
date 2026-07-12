@@ -42,6 +42,7 @@ type OwnedLiveRun = {
   claimId: string;
   controlUiVisible: boolean;
   lifecycleGeneration: string;
+  pendingProjections: Set<Promise<void>>;
 };
 
 type LiveEventTarget = {
@@ -202,6 +203,8 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       .filter(isValidLiveSessionBinding)
       .map(({ environmentId, runEpoch }) => [environmentId, runEpoch]),
   );
+  // Only an owner corroborated by the same persisted binding may seed a
+  // post-restart ACK. Unmatched owner rows must restart from zero.
   const startupOwners = new Map(
     [...options.startupOwners].filter(
       ([environmentId, ownerEpoch]) =>
@@ -265,13 +268,20 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     return false;
   };
 
-  const releaseRun = (window: LiveEventWindow, runId: string): void => {
+  const releaseRun = (window: LiveEventWindow, runId: string, afterProjections = false): void => {
     const owned = window.activeRuns.get(runId);
     if (!owned) {
       return;
     }
     window.activeRuns.delete(runId);
-    releaseAgentRunContext(runId, owned.claimId);
+    const release = () => releaseAgentRunContext(runId, owned.claimId);
+    if (afterProjections && owned.pendingProjections.size > 0) {
+      // Capacity reset may follow a synchronous emit while Gateway projection is
+      // still deferred. Keep its claim valid until every emitted event settles.
+      void Promise.allSettled(owned.pendingProjections).then(release);
+      return;
+    }
+    release();
   };
 
   const fenceReleasedRun = (window: LiveEventWindow, runId: string): void => {
@@ -281,10 +291,10 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     releaseRun(window, runId);
   };
 
-  const clearWindow = (window: LiveEventWindow): void => {
+  const clearWindow = (window: LiveEventWindow, afterProjections = false): void => {
     windows.delete(window.sessionId);
     for (const runId of window.activeRuns.keys()) {
-      releaseRun(window, runId);
+      releaseRun(window, runId, afterProjections);
     }
     window.pending.clear();
     window.pendingBytes = 0;
@@ -313,6 +323,8 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
         existing?.environmentId === binding.environmentId &&
         existing.runEpoch === binding.runEpoch
       ) {
+        // Retain the last target for key-based identity matching, but gate delivery
+        // as stale until target resolution succeeds again.
         staleSessions.add(binding.sessionId);
       }
       return false;
@@ -397,16 +409,23 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     details: { reason: "resync-required", ackedSeq, expectedSeq: ackedSeq + 1 },
   });
 
-  const resolveWindow = (params: {
-    identity: WorkerConnectionIdentity;
-    request: WorkerLiveEventParams;
-  }): WorkerLiveEventApplicationResult | LiveEventWindow => {
-    const sessionId = params.identity.sessionId;
-    if (!sessionId) {
-      return { ok: false, details: { reason: "session-not-attached" } };
-    }
+  const resyncWindow = (window: LiveEventWindow): WorkerLiveEventFailure => {
+    // Resync replays the unacked suffix from expectedSeq. Drop speculative state
+    // so stable or renumbered replay sequences cannot collide with stale pending.
+    window.pending.clear();
+    window.pendingBytes = 0;
+    return resyncRequired(window.ackedSeq);
+  };
+
+  const resolveOrCreateWindow = (
+    sessionId: string,
+    params: {
+      identity: WorkerConnectionIdentity;
+      request: WorkerLiveEventParams;
+    },
+  ): WorkerLiveEventApplicationResult | LiveEventWindow => {
     const binding = boundSessions.get(sessionId);
-    if (!binding || staleSessions.has(sessionId)) {
+    if (!binding) {
       return { ok: false, details: { reason: "session-not-attached" } };
     }
     if (
@@ -415,43 +434,49 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     ) {
       return { ok: false, details: { reason: "epoch-mismatch" } };
     }
-    const current = windows.get(sessionId);
-    if (current) {
+    if (staleSessions.has(sessionId)) {
+      return { ok: false, details: { reason: "session-not-attached" } };
+    }
+    let window = windows.get(sessionId);
+    if (window) {
       if (
-        params.request.runEpoch !== current.runEpoch ||
-        params.identity.credentialHash !== current.credentialHash ||
-        params.identity.environmentId !== current.environmentId
+        params.request.runEpoch !== window.runEpoch ||
+        params.identity.credentialHash !== window.credentialHash ||
+        params.identity.environmentId !== window.environmentId
       ) {
         return { ok: false, details: { reason: "epoch-mismatch" } };
       }
-      if (params.request.lastAckedSeq > current.ackedSeq) {
-        return resyncRequired(current.ackedSeq);
+    } else {
+      const startupOwnerEpoch = startupOwners.get(params.identity.environmentId);
+      if (startupOwnerEpoch !== params.request.runEpoch && params.request.lastAckedSeq !== 0) {
+        return resyncRequired(0);
       }
-      return current;
+      if (windows.size >= maxSessions) {
+        return capacityExceeded();
+      }
+      window = {
+        activeRuns: new Map(),
+        ackedSeq: params.request.lastAckedSeq,
+        credentialHash: params.identity.credentialHash,
+        environmentId: params.identity.environmentId,
+        pending: new Map(),
+        pendingBytes: 0,
+        runEpoch: params.request.runEpoch,
+        sessionId,
+        target: binding.target,
+        terminalRuns: new Map(),
+      };
+      windows.set(sessionId, window);
+      // Seed one process-lost window; later windows for this owner start at zero.
+      startupOwners.delete(params.identity.environmentId);
     }
-    const startupOwnerEpoch = startupOwners.get(params.identity.environmentId);
-    if (startupOwnerEpoch !== params.request.runEpoch && params.request.lastAckedSeq !== 0) {
-      return resyncRequired(0);
+    if (params.request.seq <= window.ackedSeq) {
+      return { ok: true, result: { ackedSeq: window.ackedSeq } };
     }
-    if (windows.size >= maxSessions) {
-      return capacityExceeded();
+    if (params.request.lastAckedSeq > window.ackedSeq) {
+      return resyncWindow(window);
     }
-    const created: LiveEventWindow = {
-      activeRuns: new Map(),
-      ackedSeq: params.request.lastAckedSeq,
-      credentialHash: params.identity.credentialHash,
-      environmentId: params.identity.environmentId,
-      pending: new Map(),
-      pendingBytes: 0,
-      runEpoch: params.request.runEpoch,
-      sessionId,
-      target: binding.target,
-      terminalRuns: new Map(),
-    };
-    windows.set(sessionId, created);
-    // Seed one process-lost window; later windows for this owner start at zero.
-    startupOwners.delete(params.identity.environmentId);
-    return created;
+    return window;
   };
 
   const pruneReleasedRuns = (window: LiveEventWindow): WorkerLiveEventFailure | undefined => {
@@ -518,7 +543,8 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     }
     if (activeRunCount >= maxActiveRuns) {
       // Reset the cumulative cursor rather than wedging the unskippable tail.
-      clearWindow(window);
+      // Already-emitted events keep their claims until deferred projection settles.
+      clearWindow(window, true);
       return capacityExceeded();
     }
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
@@ -556,6 +582,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       claimId,
       controlUiVisible,
       lifecycleGeneration,
+      pendingProjections: new Set<Promise<void>>(),
     };
     window.activeRuns.set(runId, claimed);
     return claimed;
@@ -571,9 +598,11 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     }
     const definitiveTerminal = isDefinitiveTerminal(request.event);
     if (definitiveTerminal) {
+      // Emission runs synchronous listeners that can clear this claim reentrantly.
+      // Fence first so terminal delivery cannot reopen the run ID.
       window.terminalRuns.set(request.runId, request.seq);
     }
-    emitAgentEventForOwner(
+    const projection = emitAgentEventForOwner(
       {
         runId: request.runId,
         stream: request.event.kind,
@@ -581,6 +610,10 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       },
       owned.claimId,
     );
+    if (projection) {
+      owned.pendingProjections.add(projection);
+      void projection.then(() => owned.pendingProjections.delete(projection));
+    }
     // Projection owns release so detach can revoke deferred terminal delivery.
     return undefined;
   };
@@ -594,16 +627,15 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     while (request) {
       const failed = publish(window, request);
       if (failed) {
-        if (failed.details.reason === "capacity-exceeded") {
-          return failed;
-        }
         return publishedPrefix ? { ok: true, result: { ackedSeq: window.ackedSeq } } : failed;
       }
       window.ackedSeq = request.seq;
       publishedPrefix = true;
       const oldestRetainedSeq = window.ackedSeq - windowSize;
       for (const [runId, terminalSeq] of window.terminalRuns) {
-        if (terminalSeq <= oldestRetainedSeq) {
+        // Active terminal claims stay fenced until projection cleanup. Released run IDs
+        // age out after windowSize later events and may then start a fresh claim.
+        if (!window.activeRuns.has(runId) && terminalSeq <= oldestRetainedSeq) {
           window.terminalRuns.delete(runId);
         }
       }
@@ -634,60 +666,24 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       return invalidEvent();
     }
     const sessionId = params.identity.sessionId;
-    const binding = boundSessions.get(sessionId);
-    if (!binding) {
-      return { ok: false, details: { reason: "session-not-attached" } };
-    }
-    if (
-      binding.environmentId !== params.identity.environmentId ||
-      binding.runEpoch !== params.request.runEpoch
-    ) {
-      return { ok: false, details: { reason: "epoch-mismatch" } };
-    }
-    if (staleSessions.has(sessionId)) {
-      return { ok: false, details: { reason: "session-not-attached" } };
-    }
-    const current = windows.get(sessionId);
-    if (
-      current &&
-      (params.request.runEpoch < current.runEpoch ||
-        (params.request.runEpoch === current.runEpoch &&
-          (params.identity.credentialHash !== current.credentialHash ||
-            params.identity.environmentId !== current.environmentId)))
-    ) {
-      return { ok: false, details: { reason: "epoch-mismatch" } };
-    }
-    if (
-      current &&
-      current.credentialHash === params.identity.credentialHash &&
-      current.environmentId === params.identity.environmentId &&
-      current.runEpoch === params.request.runEpoch
-    ) {
-      if (params.request.seq <= current.ackedSeq) {
-        return { ok: true, result: { ackedSeq: current.ackedSeq } };
-      }
-      if (params.request.lastAckedSeq > current.ackedSeq) {
-        return resyncRequired(current.ackedSeq);
-      }
-    }
-    const window = resolveWindow(params);
+    const window = resolveOrCreateWindow(sessionId, params);
     if ("ok" in window) {
       return window;
     }
     const { seq } = params.request;
-    if (seq <= window.ackedSeq || window.pending.has(seq)) {
+    if (window.pending.has(seq)) {
       return { ok: true, result: { ackedSeq: window.ackedSeq } };
     }
     const expectedSeq = window.ackedSeq + 1;
     if (seq > window.ackedSeq + windowSize) {
-      return resyncRequired(window.ackedSeq);
+      return resyncWindow(window);
     }
     if (seq === expectedSeq) {
       return drain(window, params.request);
     }
     const sizeBytes = Buffer.byteLength(JSON.stringify(params.request.event), "utf8");
     if (window.pendingBytes + sizeBytes > maxPendingBytes) {
-      return resyncRequired(window.ackedSeq);
+      return resyncWindow(window);
     }
     window.pending.set(seq, { request: params.request, sizeBytes });
     window.pendingBytes += sizeBytes;
@@ -712,6 +708,9 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       }
     }
     if (fencedEpoch >= 0) {
+      // Oldest tombstones may expire because service/store ownership stays authoritative.
+      // Refresh recency first so a re-fenced environment keeps its newest stale-owner epoch.
+      fencedEnvironmentEpochs.delete(environmentId);
       fencedEnvironmentEpochs.set(environmentId, fencedEpoch);
       if (fencedEnvironmentEpochs.size > MAX_FENCED_ENVIRONMENTS) {
         const oldestEnvironmentId = fencedEnvironmentEpochs.keys().next().value;

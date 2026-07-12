@@ -153,6 +153,7 @@ export type AgentRunContext = {
 type AgentEventState = {
   seqByRun: Map<string, number>;
   listeners: Set<(evt: AgentEventPayload) => void>;
+  projectionListeners?: Set<(evt: AgentEventPayload) => Promise<void>>;
   auditListeners: Set<(evt: AgentEventPayload) => void>;
   runContextById: Map<string, AgentRunContext>;
   runContextOwnersById?: Map<
@@ -191,6 +192,11 @@ function getAgentEventExecutionContext() {
     AGENT_EVENT_EXECUTION_CONTEXT_KEY,
     () => new AsyncLocalStorage<AgentEventExecutionContext>(),
   );
+}
+
+function getAgentEventProjectionListeners(state = getAgentEventState()) {
+  state.projectionListeners ??= new Set<(evt: AgentEventPayload) => Promise<void>>();
+  return state.projectionListeners;
 }
 
 /** Runs one execution with immutable ownership inherited by every emitted stream event. */
@@ -621,10 +627,26 @@ function enrichAgentEvent(
   return enriched;
 }
 
+function projectAgentEvent(event: AgentEventPayload): Promise<void> | undefined {
+  const pending: Promise<void>[] = [];
+  for (const listener of getAgentEventProjectionListeners()) {
+    try {
+      pending.push(listener(event));
+    } catch {
+      // Projection listeners own their logging; preserve event-bus isolation.
+    }
+  }
+  if (pending.length === 0) {
+    return undefined;
+  }
+  return Promise.allSettled(pending).then(() => undefined);
+}
+
 /** Emits an agent event after assigning per-run sequence, timestamp, and context metadata. */
 export function emitAgentEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {
   const enriched = enrichAgentEvent(event);
   if (enriched) {
+    void projectAgentEvent(enriched);
     notifyListeners(getAgentEventState().listeners, enriched);
   }
 }
@@ -635,8 +657,11 @@ export function emitAgentEventForOwner(
 ) {
   const enriched = enrichAgentEvent(event, claimId);
   if (enriched) {
+    const projection = projectAgentEvent(enriched);
     notifyListeners(getAgentEventState().listeners, enriched);
+    return projection;
   }
+  return undefined;
 }
 
 /** Emits run metadata only to the Gateway-owned durable audit projection. */
@@ -716,6 +741,13 @@ export function onAgentEvent(listener: (evt: AgentEventPayload) => void) {
   return registerListener(state.listeners, listener);
 }
 
+/** Subscribes the Gateway-owned async projection used by owner-release barriers. */
+export function onAgentEventProjection(listener: (evt: AgentEventPayload) => Promise<void>) {
+  const listeners = getAgentEventProjectionListeners();
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
 /** Subscribes to private audit-only agent events; returns an unsubscribe callback. */
 export function onAgentAuditEvent(listener: (evt: AgentEventPayload) => void) {
   return registerListener(getAgentEventState().auditListeners, listener);
@@ -726,6 +758,7 @@ export function resetAgentEventsForTest() {
   const state = getAgentEventState();
   state.seqByRun.clear();
   state.listeners.clear();
+  getAgentEventProjectionListeners(state).clear();
   state.auditListeners.clear();
   state.runContextById.clear();
   getAgentRunContextOwners(state).clear();

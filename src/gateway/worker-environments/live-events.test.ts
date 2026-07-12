@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   WorkerLiveEventErrorDetails as ErrorDetails,
   WorkerLiveEventParams as Params,
@@ -14,6 +14,7 @@ import {
   emitAgentEvent,
   getAgentRunContext,
   onAgentEvent,
+  onAgentEventProjection,
   sweepStaleRunContexts,
   type AgentEventPayload as Event,
 } from "../../infra/agent-events.js";
@@ -247,6 +248,45 @@ describe("worker live events", () => {
     expect(deltas()).toEqual(["first", "second"]);
   });
 
+  it("keeps a published prefix claim until buffered capacity projection settles", async () => {
+    start({ maxActiveRuns: 1 });
+    const first = msg(1, "first", 0, "run-prefix");
+    const second = msg(2, "second", 0, "run-buffered");
+    let settleProjection = () => {};
+    const projection = new Promise<void>((resolve) => {
+      settleProjection = resolve;
+    });
+    const stopProjection = onAgentEventProjection((event) =>
+      event.runId === first.runId ? projection : Promise.resolve(),
+    );
+    try {
+      ack(second, 0);
+      ack(first);
+      expect(getAgentRunContext(first.runId)).toBeDefined();
+
+      fail({ ...second, lastAckedSeq: 1 }, "resync-required");
+      settleProjection();
+      await vi.waitFor(() => expect(getAgentRunContext(first.runId)).toBeUndefined());
+      ack({ ...second, lastAckedSeq: 0, seq: 1 });
+    } finally {
+      settleProjection();
+      stopProjection();
+    }
+
+    expect(deltas()).toEqual(["first", "second"]);
+  });
+
+  it("clears speculative pending events on in-window resync", () => {
+    start({ windowSize: 2 });
+    ack(msg(2, "stale"), 0);
+    fail(msg(3, "gap"), "resync-required");
+
+    ack(msg(1, "first"));
+    ack(msg(2, "fresh", 1));
+
+    expect(deltas()).toEqual(["first", "fresh"]);
+  });
+
   it("resets after capacity failure", () => {
     start({ maxActiveRuns: 1 });
     ack(msg(1, "active", 0, "run-active"));
@@ -326,6 +366,16 @@ describe("worker live events", () => {
     ack(live(1, { kind: "lifecycle", payload: { phase: "end", endedAt: 200 } }));
     ack(msg(2, "other", 1, "run-other"));
     fail(msg(3, "late", 2), "invalid-event");
+  });
+
+  it("retains a terminal fence while its run remains claimed", () => {
+    start({ windowSize: 2 });
+    ack(live(1, { kind: "lifecycle", payload: { phase: "end", endedAt: 200 } }));
+    ack(msg(2, "other-first", 1, "run-other"));
+    ack(msg(3, "other-second", 2, "run-other"));
+
+    fail(msg(4, "late", 3), "invalid-event");
+    expect(events.filter((event) => event.runId === RUN)).toHaveLength(1);
   });
 
   it("clears on detach", () => {

@@ -4,7 +4,11 @@ import { isAuditLedgerEnabled, resolveAuditMessageMode } from "../audit/audit-co
 import { createAuditEventRecorder } from "../audit/audit-recorder.js";
 import { onTrustedMessageAuditEvent } from "../audit/message-audit-events.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { clearAgentRunContext, onAgentAuditEvent, onAgentEvent } from "../infra/agent-events.js";
+import {
+  clearAgentRunContext,
+  onAgentAuditEvent,
+  onAgentEventProjection,
+} from "../infra/agent-events.js";
 import { onTrustedToolExecutionEvent } from "../infra/diagnostic-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
@@ -32,10 +36,11 @@ function dispatchEventHandler<TEvent>(params: {
   log: SubsystemLogger;
   failureMessage: string;
   context: Record<string, unknown>;
-}) {
-  void params
+}): Promise<void> {
+  return params
     .loadHandler()
     .then((handler) => handler(params.event))
+    .then(() => undefined)
     .catch((error: unknown) => {
       params.log.warn(params.failureMessage, { ...params.context, error });
     });
@@ -242,7 +247,7 @@ export function startGatewayEventSubscriptions(params: {
     return lifecycleEventHandlerPromise;
   };
 
-  const unsubscribeAgentEvents = onAgentEvent((evt) => {
+  const unsubscribeAgentEvents = onAgentEventProjection((evt) => {
     if (auditEnabled) {
       auditRecorder.record(evt);
     }
@@ -292,7 +297,7 @@ export function startGatewayEventSubscriptions(params: {
         }
       }
     }
-    dispatchEventHandler({
+    return dispatchEventHandler({
       loadHandler: getAgentEventHandler,
       event: evt,
       log: params.log,
@@ -313,7 +318,7 @@ export function startGatewayEventSubscriptions(params: {
   });
 
   const transcriptUnsub = onInternalSessionTranscriptUpdate((evt) => {
-    dispatchEventHandler({
+    void dispatchEventHandler({
       loadHandler: getTranscriptUpdateHandler,
       event: evt,
       log: params.log,
@@ -323,7 +328,7 @@ export function startGatewayEventSubscriptions(params: {
   });
 
   const lifecycleUnsub = onSessionLifecycleEvent((evt) => {
-    dispatchEventHandler({
+    void dispatchEventHandler({
       loadHandler: getLifecycleEventHandler,
       event: evt,
       log: params.log,
