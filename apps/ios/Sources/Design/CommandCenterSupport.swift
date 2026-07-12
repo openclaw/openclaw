@@ -160,16 +160,16 @@ struct CommandSessionActionsModifier: ViewModifier {
                 } else {
                     self.actionButton(
                         self.session.pinned == true
-                            ? LocalizedStringKey("Unpin")
-                            : LocalizedStringKey("Pin"),
+                            ? OpenClawTextValue.localized("Unpin")
+                            : OpenClawTextValue.localized("Pin"),
                         systemImage: self.session.pinned == true ? "pin.slash" : "pin")
                     {
                         self.actions.togglePinned()
                     }
                     self.actionButton(
                         self.session.unread == true
-                            ? LocalizedStringKey("Mark as Read")
-                            : LocalizedStringKey("Mark as Unread"),
+                            ? OpenClawTextValue.localized("Mark as Read")
+                            : OpenClawTextValue.localized("Mark as Unread"),
                         systemImage: self.session.unread == true ? "envelope.open" : "envelope.badge")
                     {
                         self.actions.toggleUnread()
@@ -229,7 +229,7 @@ struct CommandSessionActionsModifier: ViewModifier {
     private var groupMenu: some View {
         Menu {
             ForEach(self.categories, id: \.self) { category in
-                self.actionButton(category, systemImage: "folder") {
+                self.actionButton(.verbatim(category), systemImage: "folder") {
                     self.actions.moveToGroup(category)
                 }
             }
@@ -276,13 +276,17 @@ struct CommandSessionActionsModifier: ViewModifier {
     }
 
     private func actionButton(
-        _ title: LocalizedStringKey,
+        _ title: OpenClawTextValue,
         systemImage: String,
         action: @escaping () -> Void) -> some View
     {
         Button(action: action) {
-            Label(title, systemImage: systemImage)
-                .font(OpenClawType.subhead)
+            Label {
+                title.text
+                    .font(OpenClawType.subhead)
+            } icon: {
+                Image(systemName: systemImage)
+            }
         }
     }
 

@@ -223,7 +223,8 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
     "Text(verbatim: self.item.trailing)",
     "Text(verbatim: self.item.detail)",
     "struct CommandEmptyStateRow: View {\n    let icon: String\n    let title: OpenClawTextValue\n    let detail: OpenClawTextValue",
-    "private func actionButton(\n        _ title: LocalizedStringKey",
+    "private func actionButton(\n        _ title: OpenClawTextValue",
+    "self.actionButton(.verbatim(category)",
   ],
   "apps/ios/Sources/Design/IPadSkillWorkshopScreen.swift": [
     'format: String(localized: "No proposals in %@")',
