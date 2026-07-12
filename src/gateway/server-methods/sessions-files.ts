@@ -26,7 +26,6 @@ import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 import {
   decodeUtf8Strict,
-  isSupportedWorkspaceImageMimeType,
   listWorkspacePath,
   normalizeRelativePath,
   readWorkspaceFile,
@@ -41,6 +40,16 @@ import {
   type WorkspaceDirEntry,
   type WorkspaceFileUpdateResult,
 } from "./workspace-fs.js";
+
+// Keep browser previews to formats supported by the Control UI's inline image
+// renderer. Native workspace clients own a broader, separate format policy.
+const BROWSER_PREVIEW_IMAGE_MIME_TYPES = new Set([
+  "image/avif",
+  "image/gif",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+]);
 
 type FileKind = "modified" | "read";
 
@@ -338,7 +347,7 @@ async function toSessionFileEntry(
         // Content sniffing, not the filename, decides whether binary bytes can
         // leave the Gateway as an inline image preview.
         const mimeType = await detectMime({ buffer: read.buffer });
-        if (isSupportedWorkspaceImageMimeType(mimeType)) {
+        if (mimeType && BROWSER_PREVIEW_IMAGE_MIME_TYPES.has(mimeType)) {
           entry.mimeType = mimeType;
           entry.contentEncoding = "base64";
           entry.previewKind = "image";

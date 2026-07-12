@@ -13,23 +13,6 @@ export type WorkspaceFileReadResult = ReadResult & { canonicalPath: string };
 /** Shared preview cap: keeps file payloads comfortably under client WS limits. */
 export const WORKSPACE_PREVIEW_MAX_BYTES = 256 * 1024;
 
-const SUPPORTED_WORKSPACE_IMAGE_MIME_TYPES = new Set([
-  "image/avif",
-  "image/bmp",
-  "image/gif",
-  "image/heic",
-  "image/heif",
-  "image/jpeg",
-  "image/png",
-  "image/webp",
-]);
-
-export function isSupportedWorkspaceImageMimeType(
-  mimeType: string | undefined,
-): mimeType is string {
-  return mimeType !== undefined && SUPPORTED_WORKSPACE_IMAGE_MIME_TYPES.has(mimeType);
-}
-
 let workspaceFileUpdateQueue: Promise<void> = Promise.resolve();
 
 async function openWorkspaceRoot(rootDir: string): Promise<WorkspaceRoot | undefined> {

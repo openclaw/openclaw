@@ -977,6 +977,41 @@ describe("sessions.files RPC handlers", () => {
     expect(payload.file.hash).toBeUndefined();
   });
 
+  it.each([
+    {
+      name: "BMP",
+      bytes: Buffer.concat([Buffer.from("BM", "ascii"), Buffer.alloc(16)]),
+      mimeType: "image/bmp",
+    },
+    {
+      name: "HEIC",
+      bytes: Buffer.from([
+        0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63, 0x00, 0x00, 0x00,
+        0x00, 0x6d, 0x69, 0x66, 0x31,
+      ]),
+      mimeType: "image/heic",
+    },
+  ])("returns browser-incompatible $name images as unsupported metadata", async (fixture) => {
+    const fileName = `preview.${fixture.name.toLowerCase()}`;
+    fs.writeFileSync(path.join(workspaceRoot, fileName), fixture.bytes);
+
+    const payload = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.get", {
+        sessionKey: "agent:main:main",
+        path: fileName,
+      }),
+    );
+
+    expect(payload.file).toMatchObject({
+      mimeType: fixture.mimeType,
+      path: fileName,
+      previewKind: "unsupported",
+      size: fixture.bytes.length,
+    });
+    expect(payload.file.content).toBeUndefined();
+    expect(payload.file.contentEncoding).toBeUndefined();
+  });
+
   it("does not trust an image extension without supported image bytes", async () => {
     const binary = Buffer.concat([Buffer.from("SQLite format 3\0"), Buffer.alloc(64, 7)]);
     fs.writeFileSync(path.join(workspaceRoot, "disguised.png"), binary);
