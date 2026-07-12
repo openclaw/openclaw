@@ -12,6 +12,7 @@ import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../config/io.js";
 import {
   type AgentEventPayload,
+  type AgentEventRuntimePayload,
   getAgentEventLifecycleGeneration,
   getAgentRunContext,
   getAgentRunContextOwnerStatus,
@@ -379,8 +380,8 @@ export function createAgentEventHandler({
   resolveActiveLifecycleGenerationForRun = () => undefined,
   updateRunToolErrorSummary,
   resolveSessionActiveRunState,
-}: AgentEventHandlerOptions) {
-  const shouldProcessOwnedEvent = (evt: AgentEventPayload): boolean => {
+}: AgentEventHandlerOptions): (event: AgentEventPayload) => void {
+  const shouldProcessOwnedEvent = (evt: AgentEventRuntimePayload): boolean => {
     const claimId = evt.contextClaimId;
     if (!claimId) {
       return true;
@@ -392,7 +393,7 @@ export function createAgentEventHandler({
     // A missing claim means detach or supersession revoked this terminal event.
     return getAgentRunContextOwnerStatus(evt.runId, claimId, lifecycleGeneration) === "active";
   };
-  const clearRunContextForEvent = (evt: AgentEventPayload): void => {
+  const clearRunContextForEvent = (evt: AgentEventRuntimePayload): void => {
     if (evt.contextClaimId) {
       clearAgentRunContext(evt.runId, evt.lifecycleGeneration, evt.contextClaimId);
       return;
@@ -407,7 +408,7 @@ export function createAgentEventHandler({
   };
   type PendingTerminalLifecycleError = {
     timer: NodeJS.Timeout;
-    event: AgentEventPayload;
+    event: AgentEventRuntimePayload;
     opts?: TerminalLifecycleOptions;
   };
 
@@ -645,7 +646,10 @@ export function createAgentEventHandler({
     );
   };
 
-  const finalizeLifecycleEvent = (evt: AgentEventPayload, opts?: TerminalLifecycleOptions) => {
+  const finalizeLifecycleEvent = (
+    evt: AgentEventRuntimePayload,
+    opts?: TerminalLifecycleOptions,
+  ) => {
     if (!shouldProcessOwnedEvent(evt)) {
       return;
     }
@@ -847,7 +851,7 @@ export function createAgentEventHandler({
   };
 
   const scheduleTerminalLifecycleError = (
-    evt: AgentEventPayload,
+    evt: AgentEventRuntimePayload,
     opts?: TerminalLifecycleOptions,
   ) => {
     clearPendingTerminalLifecycleError(evt.runId);
@@ -1262,7 +1266,8 @@ export function createAgentEventHandler({
     }
   };
 
-  return (evt: AgentEventPayload) => {
+  return (event: AgentEventPayload) => {
+    const evt = event as AgentEventRuntimePayload;
     if (!shouldProcessOwnedEvent(evt)) {
       return;
     }

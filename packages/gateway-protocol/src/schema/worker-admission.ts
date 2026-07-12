@@ -730,7 +730,13 @@ export const WorkerLiveEventSchema = Type.Union([
   workerLiveObject({ kind: Type.Literal("lifecycle"), payload: WorkerLiveLifecyclePayloadSchema }),
 ]);
 
-export const WorkerLiveEventParamsSchema = workerLiveObject({
+export const WorkerLiveEventParamsSchema: Type.TObject<{
+  readonly runEpoch: typeof LiveIntegerSchema;
+  readonly lastAckedSeq: typeof LiveIntegerSchema;
+  readonly seq: typeof LiveSequenceSchema;
+  readonly runId: typeof WorkerIdentifierSchema;
+  readonly event: typeof WorkerLiveEventSchema;
+}> = workerLiveObject({
   runEpoch: LiveIntegerSchema,
   lastAckedSeq: LiveIntegerSchema,
   seq: LiveSequenceSchema,
@@ -764,7 +770,12 @@ export const WorkerLiveEventErrorShapeSchema = workerLiveObject({
   details: WorkerLiveEventErrorDetailsSchema,
 });
 
-export const WorkerLiveEventRequestFrameSchema = workerLiveObject({
+export const WorkerLiveEventRequestFrameSchema: Type.TObject<{
+  readonly type: Type.TLiteral<"req">;
+  readonly id: typeof WorkerFrameIdSchema;
+  readonly method: Type.TLiteral<(typeof WORKER_PROTOCOL_METHODS)[2]>;
+  readonly params: typeof WorkerLiveEventParamsSchema;
+}> = workerLiveObject({
   type: Type.Literal("req"),
   id: WorkerFrameIdSchema,
   method: Type.Literal(WORKER_PROTOCOL_METHODS[2]),

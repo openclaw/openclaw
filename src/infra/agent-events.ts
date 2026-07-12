@@ -117,9 +117,6 @@ export type AgentEventPayload = {
   data: Record<string, unknown>;
   /** Internal, non-enumerable gateway lifecycle generation that owns this run. */
   lifecycleGeneration?: string;
-  controlUiVisible?: boolean;
-  contextClaimId?: string;
-  deliverySessionKey?: string;
   sessionKey?: string;
   /**
    * sessionId the run was bound to when it started. Lifecycle persistence uses
@@ -128,6 +125,13 @@ export type AgentEventPayload = {
    */
   sessionId?: string;
   agentId?: string;
+};
+
+/** Gateway-only routing metadata stamped onto events after public input validation. */
+export type AgentEventRuntimePayload = AgentEventPayload & {
+  readonly controlUiVisible?: boolean;
+  readonly contextClaimId?: string;
+  readonly deliverySessionKey?: string;
 };
 
 /** Per-run metadata used to stamp events and gate Control UI visibility. */
@@ -152,7 +156,7 @@ export type AgentRunContext = {
 
 type AgentEventState = {
   seqByRun: Map<string, number>;
-  listeners: Set<(evt: AgentEventPayload) => void>;
+  listeners: Set<(evt: AgentEventRuntimePayload) => void>;
   auditListeners: Set<(evt: AgentEventPayload) => void>;
   runContextById: Map<string, AgentRunContext>;
   runContextOwnersById?: Map<
@@ -179,7 +183,7 @@ type AgentEventExecutionContext = {
 function getAgentEventState(): AgentEventState {
   return resolveGlobalSingleton<AgentEventState>(AGENT_EVENT_STATE_KEY, () => ({
     seqByRun: new Map<string, number>(),
-    listeners: new Set<(evt: AgentEventPayload) => void>(),
+    listeners: new Set<(evt: AgentEventRuntimePayload) => void>(),
     auditListeners: new Set<(evt: AgentEventPayload) => void>(),
     runContextById: new Map<string, AgentRunContext>(),
     lifecycleGeneration: randomUUID(),
@@ -529,7 +533,7 @@ export function resetAgentRunContextForTest() {
 function enrichAgentEvent(
   event: Omit<AgentEventPayload, "seq" | "ts">,
   claimId?: string,
-): AgentEventPayload | undefined {
+): AgentEventRuntimePayload | undefined {
   const state = getAgentEventState();
   const owners = getAgentRunContextOwners(state).get(event.runId);
   if (claimId !== undefined) {
@@ -584,7 +588,7 @@ function enrichAgentEvent(
       ? (ownedLifecycleGeneration ?? state.lifecycleGeneration)
       : ownedLifecycleGeneration;
   const agentId = event.agentId ?? context?.agentId;
-  const enriched: AgentEventPayload = {
+  const enriched: AgentEventRuntimePayload = {
     ...event,
     sessionKey,
     ...(sessionId ? { sessionId } : {}),
@@ -714,6 +718,11 @@ export function emitAgentPatchSummaryEvent(params: {
 export function onAgentEvent(listener: (evt: AgentEventPayload) => void) {
   const state = getAgentEventState();
   return registerListener(state.listeners, listener);
+}
+
+/** Subscribes Gateway internals that consume non-public ownership and routing metadata. */
+export function onAgentRuntimeEvent(listener: (evt: AgentEventRuntimePayload) => void) {
+  return registerListener(getAgentEventState().listeners, listener);
 }
 
 /** Subscribes to private audit-only agent events; returns an unsubscribe callback. */

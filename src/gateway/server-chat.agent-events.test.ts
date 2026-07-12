@@ -9,7 +9,7 @@ import { formatChannelProgressDraftLine } from "../channels/streaming.js";
 import {
   claimAgentRunContext,
   emitAgentEventForOwner,
-  onAgentEvent,
+  onAgentRuntimeEvent,
   registerAgentRunContext,
   releaseAgentRunContext,
   resetAgentRunContextForTest,
@@ -4121,7 +4121,7 @@ describe("agent event handler", () => {
       { isControlUiVisible: false, sessionKey: "session-hidden" },
       { exclusive: true, trackOwner: true },
     )!;
-    const stop = onAgentEvent(handler);
+    const stop = onAgentRuntimeEvent(handler);
     emitAgentEventForOwner(
       { runId: "revoked", stream: "lifecycle", data: { phase: "error", error: "retry" } },
       claimId,

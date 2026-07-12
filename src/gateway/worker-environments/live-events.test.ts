@@ -13,9 +13,9 @@ import {
   clearAgentRunContext,
   emitAgentEvent,
   getAgentRunContext,
-  onAgentEvent,
+  onAgentRuntimeEvent,
   sweepStaleRunContexts,
-  type AgentEventPayload as Event,
+  type AgentEventRuntimePayload as Event,
 } from "../../infra/agent-events.js";
 import type { WorkerConnectionIdentity as Identity } from "./connection-identity.js";
 import {
@@ -118,7 +118,7 @@ describe("worker live events", () => {
     await create(10);
     start();
     events = [];
-    unsubscribe = onAgentEvent((event) => events.push(event));
+    unsubscribe = onAgentRuntimeEvent((event) => events.push(event));
   });
 
   afterEach(async () => {
