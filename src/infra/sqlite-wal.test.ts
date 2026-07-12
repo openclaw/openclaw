@@ -11,6 +11,7 @@ import { requireNodeSqlite } from "./node-sqlite.js";
 import {
   DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES,
   configureSqliteConnectionPragmas,
+  configureSqlitePreSchemaPragmas,
   configureSqliteWalMaintenance,
 } from "./sqlite-wal.js";
 
@@ -615,6 +616,53 @@ describe("sqlite WAL maintenance", () => {
     );
     expect(db["exec"]).toHaveBeenNthCalledWith(4, "PRAGMA synchronous = NORMAL;");
     expect(db["exec"]).toHaveBeenNthCalledWith(5, "PRAGMA foreign_keys = ON;");
+  });
+
+  it("retries the WAL transition when SQLite bypasses the busy handler", () => {
+    const db = createMockDb();
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    let journalModeAttempts = 0;
+    vi.mocked(db["exec"]).mockImplementation((sql) => {
+      if (sql === "PRAGMA journal_mode = WAL;" && journalModeAttempts++ === 0) {
+        throw Object.assign(new Error("database is locked"), {
+          code: "ERR_SQLITE_ERROR",
+          errcode: 5,
+        });
+      }
+    });
+
+    configureSqliteConnectionPragmas(db, {
+      busyTimeoutMs: 50,
+      checkpointIntervalMs: 0,
+    });
+
+    expect(journalModeAttempts).toBe(2);
+    expect(
+      vi.mocked(db["exec"]).mock.calls.filter(([sql]) => sql.startsWith("PRAGMA busy_timeout")),
+    ).toEqual([
+      ["PRAGMA busy_timeout = 50;"],
+      ["PRAGMA busy_timeout = 0;"],
+      ["PRAGMA busy_timeout = 50;"],
+    ]);
+  });
+
+  it("configures lock retry before inspecting a fresh database header", () => {
+    const db = createMockDb();
+    vi.mocked(db["prepare"]).mockImplementation(
+      (sql: string) =>
+        ({
+          get: vi.fn(() => (sql === "PRAGMA page_count" ? { page_count: 0 } : undefined)),
+        }) as unknown as ReturnType<DatabaseSync["prepare"]>,
+    );
+
+    configureSqlitePreSchemaPragmas(db, { busyTimeoutMs: 5000 });
+
+    expect(db["exec"]).toHaveBeenNthCalledWith(1, "PRAGMA busy_timeout = 5000;");
+    expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA page_count");
+    expect(db["exec"]).toHaveBeenNthCalledWith(2, "PRAGMA auto_vacuum = INCREMENTAL;");
+    expect(vi.mocked(db["exec"]).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(db["prepare"]).mock.invocationCallOrder[0],
+    );
   });
 
   it("sets busy timeout before rollback journaling on NFS-backed volumes", () => {

@@ -18,7 +18,7 @@ import {
 } from "../infra/sqlite-user-version.js";
 import {
   configureSqliteConnectionPragmas,
-  enableIncrementalAutoVacuumForFreshDatabase,
+  configureSqlitePreSchemaPragmas,
   type SqliteWalMaintenance,
 } from "../infra/sqlite-wal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -1524,7 +1524,9 @@ export function openOpenClawStateDatabase(
   const walMaintenance = (() => {
     let maintenance: SqliteWalMaintenance | undefined;
     try {
-      enableIncrementalAutoVacuumForFreshDatabase(db);
+      configureSqlitePreSchemaPragmas(db, {
+        busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+      });
       maintenance = configureSqliteConnectionPragmas(db, {
         busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
         databaseLabel: "openclaw-state",

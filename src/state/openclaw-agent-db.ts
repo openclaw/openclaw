@@ -20,7 +20,7 @@ import {
 } from "../infra/sqlite-user-version.js";
 import {
   configureSqliteConnectionPragmas,
-  enableIncrementalAutoVacuumForFreshDatabase,
+  configureSqlitePreSchemaPragmas,
   registerSqliteCacheExitClose,
   type SqliteWalMaintenance,
 } from "../infra/sqlite-wal.js";
@@ -591,7 +591,9 @@ export function ensureOpenClawAgentDatabaseSchema(
   const databaseOptions = { ...options, agentId };
   const pathname = resolveOpenClawAgentSqlitePath(databaseOptions);
   ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
-  enableIncrementalAutoVacuumForFreshDatabase(db);
+  configureSqlitePreSchemaPragmas(db, {
+    busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+  });
   ensureAgentSchema(db, agentId, pathname);
   ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
   if (options.register === true) {
@@ -814,7 +816,9 @@ export function openOpenClawAgentDatabase(
   const walMaintenance = (() => {
     let maintenance: SqliteWalMaintenance | undefined;
     try {
-      enableIncrementalAutoVacuumForFreshDatabase(db);
+      configureSqlitePreSchemaPragmas(db, {
+        busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+      });
       maintenance = configureSqliteConnectionPragmas(db, {
         busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
         databaseLabel: `openclaw-agent:${agentId}`,

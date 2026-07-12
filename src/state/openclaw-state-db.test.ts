@@ -226,9 +226,54 @@ function expectNoncanonicalAuditSchemaRejected(stateDir: string, databasePath: s
   });
 }
 
-function runConcurrentSchemaUpgradeProbe(params: { moduleUrl: string; rootDir: string }): string[] {
+function runConcurrentSchemaProbe(params: {
+  mode: "fresh" | "upgrade";
+  moduleUrl: string;
+  rootDir: string;
+}): string[] {
   const workerSource = `
     import fs from "node:fs";
+    import { DatabaseSync } from "node:sqlite";
+
+    const pageBarrierDir = process.env.OPENCLAW_SCHEMA_TEST_PAGE_BARRIER_DIR;
+    if (pageBarrierDir) {
+      const pageReadyPath = process.env.OPENCLAW_SCHEMA_TEST_PAGE_READY_PATH;
+      const workerCount = Number(process.env.OPENCLAW_SCHEMA_TEST_WORKER_COUNT);
+      const originalPrepare = DatabaseSync.prototype.prepare;
+      const sleepBuffer = new Int32Array(new SharedArrayBuffer(4));
+      DatabaseSync.prototype.prepare = function (sql) {
+        const statement = originalPrepare.call(this, sql);
+        if (sql !== "PRAGMA page_count") {
+          return statement;
+        }
+        return new Proxy(statement, {
+          get(target, property) {
+            if (property === "get") {
+              return (...args) => {
+                const row = target.get(...args);
+                if (row?.page_count !== 0) {
+                  throw new Error("fresh database acquired pages before the initialization barrier");
+                }
+                fs.writeFileSync(pageReadyPath, "ready");
+                const deadline = Date.now() + 15_000;
+                while (
+                  fs.readdirSync(pageBarrierDir).filter((name) => name.startsWith("page-ready-"))
+                    .length < workerCount
+                ) {
+                  if (Date.now() >= deadline) {
+                    throw new Error("timed out waiting for fresh database page-count barrier");
+                  }
+                  Atomics.wait(sleepBuffer, 0, 0, 2);
+                }
+                return row;
+              };
+            }
+            const value = Reflect.get(target, property, target);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+      };
+    }
 
     const {
       closeOpenClawStateDatabaseForTest,
@@ -263,6 +308,7 @@ function runConcurrentSchemaUpgradeProbe(params: { moduleUrl: string; rootDir: s
 
     const moduleUrl = ${JSON.stringify(params.moduleUrl)};
     const rootDir = ${JSON.stringify(params.rootDir)};
+    const mode = ${JSON.stringify(params.mode)};
     const workerSource = ${JSON.stringify(workerSource)};
     const workerCount = 8;
     const roundCount = 3;
@@ -285,67 +331,70 @@ function runConcurrentSchemaUpgradeProbe(params: { moduleUrl: string; rootDir: s
     }
 
     for (let round = 0; round < roundCount; round += 1) {
-      const databasePath = path.join(rootDir, \`concurrent-upgrade-\${round}.sqlite\`);
+      const databasePath = path.join(rootDir, \`concurrent-\${mode}-\${round}.sqlite\`);
       const barrierDir = path.join(rootDir, \`barrier-\${round}\`);
       fs.mkdirSync(barrierDir, { recursive: true });
 
-      const {
-        closeOpenClawStateDatabaseForTest,
-        openOpenClawStateDatabase,
-      } = await import(moduleUrl);
-      openOpenClawStateDatabase({ path: databasePath });
-      closeOpenClawStateDatabaseForTest();
+      if (mode === "upgrade") {
+        const {
+          closeOpenClawStateDatabaseForTest,
+          openOpenClawStateDatabase,
+        } = await import(moduleUrl);
+        openOpenClawStateDatabase({ path: databasePath });
+        closeOpenClawStateDatabaseForTest();
 
-      const legacy = new DatabaseSync(databasePath);
-      legacy
-        .prepare(
-          \`INSERT INTO task_runs (
-             task_id, runtime, requester_session_key, owner_key, scope_kind,
-             child_session_key, agent_id, task, status, delivery_status,
-             notify_policy, created_at, last_event_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)\`,
-        )
-        .run(
-          \`legacy-concurrent-\${round}\`,
-          "subagent",
-          "agent:main:main",
-          "agent:main:main",
-          "session",
-          \`agent:worker:subagent:concurrent-\${round}\`,
-          "main",
-          "Verify concurrent schema upgrade",
-          "running",
-          "pending",
-          "done_only",
-          100,
-          100,
-        );
-      legacy.exec(\`
-        DROP TABLE worker_environment_credentials;
-        ALTER TABLE gateway_boot_lifecycle DROP COLUMN startup_reason;
-        ALTER TABLE task_runs DROP COLUMN requester_agent_id;
-        ALTER TABLE official_external_plugin_catalog_snapshots DROP COLUMN trust_mode;
-        ALTER TABLE official_external_plugin_catalog_snapshots DROP COLUMN trust_key_id;
-        ALTER TABLE official_external_plugin_catalog_snapshots DROP COLUMN trust_signature_count;
-        ALTER TABLE official_external_plugin_catalog_snapshots DROP COLUMN trust_threshold;
-        ALTER TABLE official_external_plugin_catalog_snapshots DROP COLUMN trust_verified_at;
-        ALTER TABLE worker_environments DROP COLUMN bootstrap_bundle_hash;
-        ALTER TABLE worker_environments DROP COLUMN bootstrap_openclaw_version;
-        ALTER TABLE worker_environments DROP COLUMN bootstrap_protocol_features_json;
-        ALTER TABLE worker_environments DROP COLUMN owner_epoch;
-        ALTER TABLE worker_environments DROP COLUMN teardown_terminal_state;
-        ALTER TABLE worker_environments DROP COLUMN ssh_host_key;
-        PRAGMA user_version = 1;
-        UPDATE schema_meta
-           SET schema_version = 1,
-               updated_at = 1
-         WHERE meta_key = 'primary';
-      \`);
-      legacy.close();
+        const legacy = new DatabaseSync(databasePath);
+        legacy
+          .prepare(
+            \`INSERT INTO task_runs (
+               task_id, runtime, requester_session_key, owner_key, scope_kind,
+               child_session_key, agent_id, task, status, delivery_status,
+               notify_policy, created_at, last_event_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)\`,
+          )
+          .run(
+            \`legacy-concurrent-\${round}\`,
+            "subagent",
+            "agent:main:main",
+            "agent:main:main",
+            "session",
+            \`agent:worker:subagent:concurrent-\${round}\`,
+            "main",
+            "Verify concurrent schema upgrade",
+            "running",
+            "pending",
+            "done_only",
+            100,
+            100,
+          );
+        legacy.exec(\`
+          DROP TABLE worker_environment_credentials;
+          ALTER TABLE gateway_boot_lifecycle DROP COLUMN startup_reason;
+          ALTER TABLE task_runs DROP COLUMN requester_agent_id;
+          ALTER TABLE official_external_plugin_catalog_snapshots DROP COLUMN trust_mode;
+          ALTER TABLE official_external_plugin_catalog_snapshots DROP COLUMN trust_key_id;
+          ALTER TABLE official_external_plugin_catalog_snapshots DROP COLUMN trust_signature_count;
+          ALTER TABLE official_external_plugin_catalog_snapshots DROP COLUMN trust_threshold;
+          ALTER TABLE official_external_plugin_catalog_snapshots DROP COLUMN trust_verified_at;
+          ALTER TABLE worker_environments DROP COLUMN bootstrap_bundle_hash;
+          ALTER TABLE worker_environments DROP COLUMN bootstrap_openclaw_version;
+          ALTER TABLE worker_environments DROP COLUMN bootstrap_protocol_features_json;
+          ALTER TABLE worker_environments DROP COLUMN owner_epoch;
+          ALTER TABLE worker_environments DROP COLUMN teardown_terminal_state;
+          ALTER TABLE worker_environments DROP COLUMN ssh_host_key;
+          PRAGMA user_version = 1;
+          UPDATE schema_meta
+             SET schema_version = 1,
+                 updated_at = 1
+           WHERE meta_key = 'primary';
+        \`);
+        legacy.close();
+      }
 
       const startPath = path.join(barrierDir, "start");
       const workers = Array.from({ length: workerCount }, (_, index) => {
         const readyPath = path.join(barrierDir, \`ready-\${index}\`);
+        const pageReadyPath = path.join(barrierDir, \`page-ready-\${index}\`);
         return spawn(
           process.execPath,
           ["--import", "tsx", "--input-type=module", "-e", workerSource],
@@ -356,6 +405,13 @@ function runConcurrentSchemaUpgradeProbe(params: { moduleUrl: string; rootDir: s
               OPENCLAW_SCHEMA_TEST_MODULE_URL: moduleUrl,
               OPENCLAW_SCHEMA_TEST_READY_PATH: readyPath,
               OPENCLAW_SCHEMA_TEST_START_PATH: startPath,
+              ...(mode === "fresh"
+                ? {
+                    OPENCLAW_SCHEMA_TEST_PAGE_BARRIER_DIR: barrierDir,
+                    OPENCLAW_SCHEMA_TEST_PAGE_READY_PATH: pageReadyPath,
+                    OPENCLAW_SCHEMA_TEST_WORKER_COUNT: String(workerCount),
+                  }
+                : {}),
             },
             stdio: ["ignore", "pipe", "pipe"],
           },
@@ -403,7 +459,7 @@ function runConcurrentSchemaUpgradeProbe(params: { moduleUrl: string; rootDir: s
   );
   const resultLine = output.trim().split("\n").at(-1);
   if (!resultLine) {
-    throw new Error("concurrent schema upgrade probe produced no result");
+    throw new Error(`concurrent schema ${params.mode} probe produced no result`);
   }
   return JSON.parse(resultLine) as string[];
 }
@@ -1126,7 +1182,7 @@ describe("openclaw state database", () => {
   it("serializes concurrent additive schema upgrades across processes", () => {
     const rootDir = createTempStateDir();
     const moduleUrl = new URL("./openclaw-state-db.ts", import.meta.url).href;
-    const databasePaths = runConcurrentSchemaUpgradeProbe({ moduleUrl, rootDir });
+    const databasePaths = runConcurrentSchemaProbe({ mode: "upgrade", moduleUrl, rootDir });
     const expectedShape = createSqliteSchemaShapeFromSql(
       new URL("./openclaw-state-schema.sql", import.meta.url),
     );
@@ -1150,6 +1206,33 @@ describe("openclaw state database", () => {
           agent_id: "worker",
           requester_agent_id: "main",
         });
+        expect(collectSqliteSchemaShape(db)).toEqual(expectedShape);
+      } finally {
+        db.close();
+      }
+    }
+  }, 60_000);
+
+  it("serializes concurrent fresh database initialization across processes", () => {
+    const rootDir = createTempStateDir();
+    const moduleUrl = new URL("./openclaw-state-db.ts", import.meta.url).href;
+    const databasePaths = runConcurrentSchemaProbe({ mode: "fresh", moduleUrl, rootDir });
+    const expectedShape = createSqliteSchemaShapeFromSql(
+      new URL("./openclaw-state-schema.sql", import.meta.url),
+    );
+    const { DatabaseSync } = requireNodeSqlite();
+
+    expect(databasePaths).toHaveLength(3);
+    for (const databasePath of databasePaths) {
+      const db = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+        expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+        expect(readSqliteNumberPragma(db, "auto_vacuum")).toBe(2);
+        expect(readSqliteNumberPragma(db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+        expect(
+          db.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get(),
+        ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
         expect(collectSqliteSchemaShape(db)).toEqual(expectedShape);
       } finally {
         db.close();
