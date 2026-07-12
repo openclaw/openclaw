@@ -17,12 +17,24 @@ afterEach(() => {
   process.env = { ...originalEnv };
 });
 
-async function importThemeWithEnv(env: Record<string, string | undefined>) {
-  for (const [key, value] of Object.entries(env)) {
-    if (value === undefined) {
-      delete process.env[key];
+type ThemeEnvOverrides = {
+  OPENCLAW_THEME?: string | undefined;
+  COLORFGBG?: string | undefined;
+};
+
+async function importThemeWithEnv(env: ThemeEnvOverrides) {
+  if (Object.hasOwn(env, "OPENCLAW_THEME")) {
+    if (env.OPENCLAW_THEME === undefined) {
+      delete process.env.OPENCLAW_THEME;
     } else {
-      process.env[key] = value;
+      process.env.OPENCLAW_THEME = env.OPENCLAW_THEME;
+    }
+  }
+  if (Object.hasOwn(env, "COLORFGBG")) {
+    if (env.COLORFGBG === undefined) {
+      delete process.env.COLORFGBG;
+    } else {
+      process.env.COLORFGBG = env.COLORFGBG;
     }
   }
   return importFreshModule<typeof import("./theme.js")>(
