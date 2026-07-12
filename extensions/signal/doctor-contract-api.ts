@@ -1,19 +1,18 @@
-// Whatsapp plugin module implements doctor contract behavior.
+// Signal API module exposes the plugin doctor contract.
 import type {
   ChannelDoctorConfigMutation,
   ChannelDoctorLegacyConfigRule,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { defineChannelAliasMigration } from "openclaw/plugin-sdk/runtime-doctor";
-import { normalizeCompatibilityConfig as normalizeAckReactionConfig } from "./doctor.js";
 
-// WhatsApp's nested streaming schema is delivery-only ({chunkMode, block});
-// it has no preview mode, so only the delivery flat aliases are legal legacy
+// Signal's nested streaming schema is delivery-only ({chunkMode, block}); it
+// has no preview mode, so only the delivery flat aliases are legal legacy
 // input. Account merge replaces the root streaming object wholesale
-// (mergeAccountConfig spreads in account-config.ts), so migration seeds
-// materialized account objects with the inherited root settings.
+// (resolveMergedAccountConfig without a streaming deep-merge), so migration
+// seeds materialized account objects with the inherited root settings.
 const streamingAliasMigration = defineChannelAliasMigration({
-  channelId: "whatsapp",
+  channelId: "signal",
   streaming: { defaultMode: "partial", deliveryOnly: true },
   accountStreamingReplacesRoot: true,
 });
@@ -26,9 +25,5 @@ export function normalizeCompatibilityConfig({
 }: {
   cfg: OpenClawConfig;
 }): ChannelDoctorConfigMutation {
-  const ackReaction = normalizeAckReactionConfig({ cfg });
-  return streamingAliasMigration.normalizeChannelConfig({
-    cfg: ackReaction.config,
-    changes: ackReaction.changes,
-  });
+  return streamingAliasMigration.normalizeChannelConfig({ cfg });
 }
