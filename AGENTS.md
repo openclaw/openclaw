@@ -175,6 +175,7 @@ Skills own workflows; root owns hard policy and routing.
 - `scripts/pr` artifacts: preserve template enum values; validate before prepare.
 - `scripts/pr` subcommands require a PR number; no subcommand `--help` placeholder.
 - `scripts/pr` review: checkout main baseline, then PR, before artifact validation.
+- PR head changed: rerun `scripts/pr review-init`; checkout alone leaves stale guard SHA.
 - `rg`: options before `--`; use `--` before patterns starting with `-`.
 - `gh --jq` is not standalone `jq`; pipe JSON to `jq` for variables or `--arg`.
 - Actions checkout refs: use full 40-char SHAs; short SHAs resolve as branches/tags.
