@@ -1,6 +1,6 @@
 import type { WorkerEnvironmentService } from "./service.js";
 
-export type WorkerInferenceControl = Pick<
+type WorkerInferenceControl = Pick<
   WorkerEnvironmentService,
   "cancelInferenceForSession" | "hasInferenceForSession" | "resolveInferenceSessionForRunId"
 >;
