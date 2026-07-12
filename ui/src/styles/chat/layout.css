@@ -2739,17 +2739,13 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   .agent-chat__composer-controls {
     order: 0;
     display: grid;
-    grid-template-columns: 40px minmax(0, max-content);
+    /* Three columns: settings, the transient interrupted toast (absent in
+       the normal state, so its column collapses), and the model picker. */
+    grid-template-columns: 40px minmax(0, max-content) minmax(0, max-content);
     flex: 1 1 0;
     width: auto;
     margin-left: 0;
     gap: 0;
-  }
-
-  /* The interrupted toast stays desktop-only; the composer grid has no slot
-     for it and the sr-only run-status region still announces on mobile. */
-  .agent-chat__composer-run-status {
-    display: none;
   }
 
   .agent-chat__composer-meta {

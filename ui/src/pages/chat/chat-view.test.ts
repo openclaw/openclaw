@@ -64,6 +64,7 @@ const buildChatItemsMock = vi.hoisted(() =>
       stream: string | null;
       streamStartedAt: number | null;
       runWorking?: boolean;
+      loading?: boolean;
     }) => {
       if (
         props.messages.some(
@@ -104,7 +105,8 @@ const buildChatItemsMock = vi.hoisted(() =>
       }
       // Mirrors buildChatItems: streamed text renders as a stream item; an
       // empty stream or a working run with no stream shows the reading
-      // indicator (working spark).
+      // indicator (working spark), except on the initial empty load where
+      // the skeleton owns the thread.
       if (props.stream !== null) {
         items.push(
           props.stream
@@ -117,7 +119,10 @@ const buildChatItemsMock = vi.hoisted(() =>
               }
             : { kind: "reading-indicator", key: "reading:test" },
         );
-      } else if (props.runWorking === true) {
+      } else if (
+        props.runWorking === true &&
+        !(props.loading === true && props.messages.length === 0)
+      ) {
         items.push({ kind: "reading-indicator", key: "reading:test" });
       }
       return items;

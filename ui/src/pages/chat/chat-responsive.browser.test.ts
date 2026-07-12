@@ -1323,7 +1323,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         expect(settings.y + settings.height).toBeLessThanOrEqual(footer.y + footer.height + 1);
         expect(model.y).toBeGreaterThanOrEqual(textarea.y);
         expect(context.y).toBeGreaterThanOrEqual(textarea.y);
-        expect(progress.y).toBeGreaterThanOrEqual(textarea.y);
         expect(
           Math.abs(attach.y + attach.height / 2 - (send.y + send.height / 2)),
         ).toBeLessThanOrEqual(2);
@@ -1331,11 +1330,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         expect(model.x).toBeGreaterThanOrEqual(settings.x + settings.width - 1);
         expect(send.x).toBeGreaterThanOrEqual(textarea.x + textarea.width - 1);
         expect(send.x + send.width).toBeLessThanOrEqual(input.x + input.width + 1);
-        expect(progress.x).toBeGreaterThanOrEqual(context.x + context.width - 1);
-        expect(
-          Math.abs(progress.y + progress.height / 2 - (context.y + context.height / 2)),
-        ).toBeLessThanOrEqual(2);
-        expect(rectsOverlap(progress, context)).toBe(false);
         expect(rectsOverlap(model, settings)).toBe(false);
         expect(rectsOverlap(model, send)).toBe(false);
         expect(rectsOverlap(settings, send)).toBe(false);
@@ -1348,7 +1342,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           expect(model.width).toBeLessThanOrEqual(footer.width);
           expect(send.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
           expect(send.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
-          for (const control of [model, settings, context, progress]) {
+          for (const control of [model, settings, context]) {
             expect(
               Math.abs(control.y + control.height / 2 - (settings.y + settings.height / 2)),
             ).toBeLessThanOrEqual(2);

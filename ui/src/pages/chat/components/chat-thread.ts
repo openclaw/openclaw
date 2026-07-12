@@ -758,9 +758,8 @@ export function renderChatThread(props: ChatThreadProps) {
     streamStartedAt: props.streamStartedAt,
     queue: props.queue,
     showToolCalls: props.showToolCalls,
-    // Initial history load keeps the skeleton as the empty-thread signal; the
-    // working spark takes over once content (or a send/stream) exists.
-    runWorking: Boolean(props.runWorking) && !props.loading,
+    runWorking: Boolean(props.runWorking),
+    loading: Boolean(props.loading),
     searchOpen: state.searchOpen,
     searchQuery: state.searchQuery,
     historyRenderLimit,

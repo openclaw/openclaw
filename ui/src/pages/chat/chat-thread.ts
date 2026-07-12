@@ -48,6 +48,8 @@ export type BuildChatItemsProps = {
   showToolCalls: boolean;
   /** True while the agent is visibly working (isChatRunWorking). */
   runWorking?: boolean;
+  /** True while chat history is loading (initial load or background reload). */
+  loading?: boolean;
   searchOpen?: boolean;
   searchQuery?: string;
   historyRenderLimit?: number;
@@ -1306,9 +1308,23 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   // streaming (pre-first-token, or a queued send in flight), the thread shows
   // the reading indicator where the reply will materialize. Streaming text
   // and running tool rows take over as the signal once content flows.
+  // A visible running tool row already signals active work, so the spark is
+  // suppressed rather than stacked under it; hidden tool calls keep the spark.
+  const hasVisibleRunningTool =
+    props.showToolCalls &&
+    tools.some((message) => {
+      const record = asRecord(message);
+      return (
+        record?.__openclawToolStreamLive === true &&
+        record.__openclawToolStreamResultReceived !== true
+      );
+    });
+  // The initial-load skeleton owns the empty thread; a background reload with
+  // content still visible keeps the spark (it is the only working signal).
+  const initialHistoryLoad = props.loading === true && items.length === 0;
   const hasPendingResponse =
     props.stream === null &&
-    (props.runWorking === true ||
+    ((props.runWorking === true && !hasVisibleRunningTool && !initialHistoryLoad) ||
       queuedSends.some(
         (item) => item.sendState === "sending" && shouldRenderQueuedSendInThread(item),
       ));
@@ -1357,6 +1373,7 @@ function sameChatItemsInput(previous: BuildChatItemsProps, next: BuildChatItemsP
     previous.queue === next.queue &&
     previous.showToolCalls === next.showToolCalls &&
     previous.runWorking === next.runWorking &&
+    previous.loading === next.loading &&
     previous.searchOpen === next.searchOpen &&
     previous.searchQuery === next.searchQuery &&
     previous.historyRenderLimit === next.historyRenderLimit
