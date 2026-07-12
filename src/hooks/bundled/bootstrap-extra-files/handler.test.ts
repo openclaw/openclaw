@@ -74,6 +74,60 @@ describe("bootstrap-extra-files hook", () => {
     );
   });
 
+  it("loads custom-named files when allowCustomNames is true", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-bootstrap-extra-custom-");
+    await fs.writeFile(path.join(tempDir, "MEMBERS.md"), "team members", "utf-8");
+    await fs.writeFile(path.join(tempDir, "REPORT.md"), "report template", "utf-8");
+
+    const cfg: OpenClawConfig = {
+      hooks: {
+        internal: {
+          entries: {
+            "bootstrap-extra-files": {
+              enabled: true,
+              paths: ["MEMBERS.md", "REPORT.md"],
+              allowCustomNames: true,
+            },
+          },
+        },
+      },
+    };
+    const context = await createBootstrapContext({
+      workspaceDir: tempDir,
+      cfg,
+      sessionKey: "agent:main:main",
+      rootFiles: [{ name: "AGENTS.md", content: "root agents" }],
+    });
+
+    const event = createHookEvent("agent", "bootstrap", "agent:main:main", context);
+    await handler(event);
+
+    const names = context.bootstrapFiles.map((f) => f.name).toSorted();
+    expect(names).toEqual(["AGENTS.md", "MEMBERS.md", "REPORT.md"]);
+    expect(context.bootstrapFiles.find((f) => f.name === "MEMBERS.md")?.content).toBe(
+      "team members",
+    );
+  });
+
+  it("rejects custom-named files when allowCustomNames is false (default)", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-bootstrap-extra-reject-");
+    await fs.writeFile(path.join(tempDir, "CUSTOM.md"), "custom", "utf-8");
+
+    const cfg = createBootstrapExtraConfig(["CUSTOM.md"]);
+    const context = await createBootstrapContext({
+      workspaceDir: tempDir,
+      cfg,
+      sessionKey: "agent:main:main",
+      rootFiles: [{ name: "AGENTS.md", content: "root agents" }],
+    });
+
+    const event = createHookEvent("agent", "bootstrap", "agent:main:main", context);
+    await handler(event);
+
+    // CUSTOM.md should NOT be added (no allowCustomNames)
+    expect(context.bootstrapFiles.map((f) => f.name)).toEqual(["AGENTS.md"]);
+  });
+
   it("re-applies subagent bootstrap allowlist after extras are added", async () => {
     const tempDir = await makeTempWorkspace("openclaw-bootstrap-extra-subagent-");
     const extraDir = path.join(tempDir, "packages", "persona");

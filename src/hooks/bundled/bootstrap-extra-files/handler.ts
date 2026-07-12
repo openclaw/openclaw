@@ -41,10 +41,13 @@ const bootstrapExtraFilesHook: HookHandler = async (event) => {
     return;
   }
 
+  const allowCustomNames = (hookConfig as Record<string, unknown>).allowCustomNames === true;
+
   try {
     const { files: extras, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(
       context.workspaceDir,
       patterns,
+      { allowCustomNames },
     );
     if (diagnostics.length > 0) {
       log.debug("skipped extra bootstrap candidates", {

@@ -186,7 +186,8 @@ export type WorkspaceBootstrapFileName =
   | typeof DEFAULT_MEMORY_FILENAME;
 
 export type WorkspaceBootstrapFile = {
-  name: WorkspaceBootstrapFileName;
+  /** Bootstrap filename. Standard names or custom names (when allowCustomNames is enabled). */
+  name: string;
   path: string;
   content?: string;
   missing: boolean;
@@ -1261,6 +1262,7 @@ async function resolveExtraBootstrapPatternPaths(
 export async function loadExtraBootstrapFilesWithDiagnostics(
   dir: string,
   extraPatterns: string[],
+  options?: { allowCustomNames?: boolean },
 ): Promise<{
   files: WorkspaceBootstrapFile[];
   diagnostics: ExtraBootstrapLoadDiagnostic[];
@@ -1287,9 +1289,9 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
   const diagnostics: ExtraBootstrapLoadDiagnostic[] = [];
   for (const relPath of resolvedPaths) {
     const filePath = path.resolve(resolvedDir, relPath);
-    // Only load files whose basename is a recognized bootstrap filename
+    // Only load files whose basename is a recognized bootstrap filename (unless allowCustomNames)
     const baseName = path.basename(relPath);
-    if (!VALID_BOOTSTRAP_NAMES.has(baseName)) {
+    if (!options?.allowCustomNames && !VALID_BOOTSTRAP_NAMES.has(baseName)) {
       diagnostics.push({
         path: filePath,
         reason: "invalid-bootstrap-filename",
@@ -1303,7 +1305,7 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
     });
     if (loaded.ok) {
       files.push({
-        name: baseName as WorkspaceBootstrapFileName,
+        name: baseName,
         path: filePath,
         content: loaded.content,
         missing: false,
