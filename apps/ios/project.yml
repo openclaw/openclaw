@@ -423,6 +423,8 @@ targets:
         group: WatchApp/Sources
       - path: WatchApp/Sources/WatchInboxMessages.swift
         group: WatchApp/Sources
+      - path: Sources/Services/ExactOpaqueIdentifier.swift
+        group: Sources/Services
     dependencies:
       - package: OpenClawKit
     settings:
