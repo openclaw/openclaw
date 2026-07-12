@@ -54,8 +54,9 @@ vi.mock("../infra/executable-path.js", () => ({
 }));
 
 const { runGmailService } = await import("./gmail-ops.js");
+const { GMAIL_WATCH_REAUTH_REASON } = await import("./gmail-watcher-errors.js");
 
-function createGmailConfig(account = "me@example.com") {
+function createGmailConfig(account = "me@example.com", gmail: Record<string, unknown> = {}) {
   return {
     hooks: {
       enabled: true,
@@ -65,6 +66,7 @@ function createGmailConfig(account = "me@example.com") {
         topic: "projects/demo/topics/gmail",
         pushToken: "push-token",
         tailscale: { mode: "off" as const },
+        ...gmail,
       },
     },
   };
@@ -111,6 +113,50 @@ describe("runGmailService", () => {
       expect(mocks.defaultRuntime.error).toHaveBeenCalledWith(
         "gmail watch renew failed: Error: renewal failed",
       );
+    } finally {
+      shutdown?.();
+    }
+  });
+
+  it("stops the foreground serve process when watch renewal needs Gmail re-auth", async () => {
+    vi.useFakeTimers();
+    mocks.getRuntimeConfig.mockReturnValue(
+      createGmailConfig("me@example.com", { renewEveryMinutes: 1 }),
+    );
+    mocks.runCommandWithTimeout
+      .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
+      .mockResolvedValueOnce({
+        code: 1,
+        stdout: "",
+        stderr: "invalid_grant: Token has been expired or revoked",
+      });
+
+    const child = new EventEmitter();
+    const kill = vi.fn(() => {
+      child.emit("exit", null, "SIGTERM");
+      return true;
+    });
+    mocks.spawn.mockReturnValue(Object.assign(child, { kill, killed: false }));
+
+    const existingSigintListeners = new Set(process.rawListeners("SIGINT"));
+    let shutdown: (() => void) | undefined;
+    try {
+      await runGmailService({});
+      shutdown = process
+        .rawListeners("SIGINT")
+        .find((listener) => !existingSigintListeners.has(listener)) as (() => void) | undefined;
+
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(kill).toHaveBeenCalledWith("SIGTERM");
+      expect(mocks.defaultRuntime.error).toHaveBeenCalledWith(
+        `${GMAIL_WATCH_REAUTH_REASON}; stopping gmail watcher`,
+      );
+      expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(2);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(2);
     } finally {
       shutdown?.();
     }
