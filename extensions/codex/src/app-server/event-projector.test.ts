@@ -3676,127 +3676,43 @@ describe("CodexAppServerEventProjector", () => {
     expect(item.content).toContain("showing 10000");
   });
 
-  it("keeps streamed progress output UTF-16 safe at the 8,000-char progress message cap", async () => {
-    const onToolResult = vi.fn();
-    const projector = await createProjector({
-      ...(await createParams()),
-      verboseLevel: "full",
-      onToolResult,
-    });
+  it.each([
+    { prefixLength: 7_999, delta: "😀tail", expectedChunk: "" },
+    { prefixLength: 7_998, delta: "x😀tail", expectedChunk: "x\n" },
+  ])(
+    "keeps streamed progress UTF-16 safe with $prefixLength chars already emitted",
+    async ({ prefixLength, delta, expectedChunk }) => {
+      const onToolResult = vi.fn();
+      const projector = await createProjector({
+        ...(await createParams()),
+        verboseLevel: "full",
+        onToolResult,
+      });
 
-    // Case 1: remainingChars=1, delta starts with a non-BMP emoji.
-    // Old .slice(0, 1) would cut after the HIGH surrogate → lone surrogate.
-    // Fixed truncateUtf16Safe backs off → chunk is empty, no corrupt text emitted.
-    await projector.handleNotification(
-      forCurrentTurn("item/started", {
-        item: {
-          type: "commandExecution",
-          id: "cmd-progress-utf16-1",
-          command: "echo emoji",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
-          status: "inProgress",
-          commandActions: [],
-          aggregatedOutput: null,
-          exitCode: null,
-          durationMs: null,
-        },
-      }),
-    );
-    await projector.handleNotification(
-      forCurrentTurn("item/commandExecution/outputDelta", {
-        itemId: "cmd-progress-utf16-1",
-        delta: "a".repeat(7_999),
-      }),
-    );
-    // remainingChars = 1, delta starts with 😀 (surrogate pair U+D83D U+DE00)
-    await projector.handleNotification(
-      forCurrentTurn("item/commandExecution/outputDelta", {
-        itemId: "cmd-progress-utf16-1",
-        delta: "😀hello",
-      }),
-    );
+      await projector.handleNotification(
+        forCurrentTurn("item/commandExecution/outputDelta", {
+          itemId: "cmd-progress-utf16",
+          delta: "a".repeat(prefixLength),
+        }),
+      );
+      onToolResult.mockClear();
+      await projector.handleNotification(
+        forCurrentTurn("item/commandExecution/outputDelta", {
+          itemId: "cmd-progress-utf16",
+          delta,
+        }),
+      );
 
-    // Case 2: remainingChars=2, delta="x😀y" — cut lands on the HIGH surrogate.
-    // Old .slice(0, 2) → "x\uD83D" (lone HIGH surrogate).
-    // Fixed truncateUtf16Safe → "x" (backs off before the emoji).
-    await projector.handleNotification(
-      forCurrentTurn("item/started", {
-        item: {
-          type: "commandExecution",
-          id: "cmd-progress-utf16-2",
-          command: "echo emoji2",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
-          status: "inProgress",
-          commandActions: [],
-          aggregatedOutput: null,
-          exitCode: null,
-          durationMs: null,
-        },
-      }),
-    );
-    await projector.handleNotification(
-      forCurrentTurn("item/commandExecution/outputDelta", {
-        itemId: "cmd-progress-utf16-2",
-        delta: "a".repeat(7_998),
-      }),
-    );
-    // remainingChars = 2, emoji at positions 1-2 of "x😀y"
-    await projector.handleNotification(
-      forCurrentTurn("item/commandExecution/outputDelta", {
-        itemId: "cmd-progress-utf16-2",
-        delta: "x😀y",
-      }),
-    );
-
-    // Case 3: ASCII-only delta at the boundary — must not regress.
-    await projector.handleNotification(
-      forCurrentTurn("item/started", {
-        item: {
-          type: "commandExecution",
-          id: "cmd-progress-ascii",
-          command: "echo ascii",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
-          status: "inProgress",
-          commandActions: [],
-          aggregatedOutput: null,
-          exitCode: null,
-          durationMs: null,
-        },
-      }),
-    );
-    await projector.handleNotification(
-      forCurrentTurn("item/commandExecution/outputDelta", {
-        itemId: "cmd-progress-ascii",
-        delta: "0".repeat(7_990),
-      }),
-    );
-    await projector.handleNotification(
-      forCurrentTurn("item/commandExecution/outputDelta", {
-        itemId: "cmd-progress-ascii",
-        delta: "0123456789",
-      }),
-    );
-
-    // Collect all emitted progress texts and verify no lone surrogates.
-    const LONE_SURROGATE =
-      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
-    const allTexts = onToolResult.mock.calls
-      .flat()
-      .filter((c): c is { text?: string } => typeof c === "object" && c !== null)
-      .map((c) => c.text)
-      .filter((t): t is string => typeof t === "string");
-
-    expect(allTexts.length).toBeGreaterThan(0);
-    for (const text of allTexts) {
-      expect(text).not.toMatch(LONE_SURROGATE);
-    }
-  });
+      expect(onToolResult).toHaveBeenCalledTimes(1);
+      expect(onToolResult).toHaveBeenCalledWith({
+        text: `🛠️ \`bash\`\n\`\`\`txt\n${expectedChunk}...(truncated)...\n\`\`\``,
+      });
+      const text = (mockCallArg(onToolResult, 0, 0, "onToolResult") as { text?: string }).text;
+      expect(text).not.toMatch(
+        /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+      );
+    },
+  );
 
   it("freezes streamed raw prefix after UTF-16-safe truncation so full-output echoes stay suppressed", async () => {
     const projector = await createProjector();
