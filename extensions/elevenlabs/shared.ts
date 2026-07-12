@@ -7,16 +7,21 @@ export function isValidElevenLabsVoiceId(voiceId: string): boolean {
 
 export function normalizeElevenLabsBaseUrl(baseUrl?: string): string {
   const trimmed = baseUrl?.trim().replace(/\/+$/, "");
+  // Only an absent/blank value falls back to the default endpoint. An explicit
+  // custom endpoint is the operator's intent, so reject it actionably here (at
+  // the shared config boundary) rather than silently retargeting to the default
+  // or letting a downstream `new URL(...)` throw an opaque TypeError.
   if (!trimmed) {
     return DEFAULT_ELEVENLABS_BASE_URL;
   }
-  // Callers pass the result straight into `new URL(...)`; a malformed value
-  // (e.g. "not a url") would otherwise throw an uncaught TypeError downstream.
-  // Fall back to the default endpoint instead of propagating an unparseable URL.
+  let parsed: URL;
   try {
-    void new URL(trimmed);
+    parsed = new URL(trimmed);
   } catch {
-    return DEFAULT_ELEVENLABS_BASE_URL;
+    throw new Error(`Invalid ElevenLabs baseUrl: ${trimmed}`);
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(`Invalid ElevenLabs baseUrl (expected http/https): ${trimmed}`);
   }
   return trimmed;
 }
