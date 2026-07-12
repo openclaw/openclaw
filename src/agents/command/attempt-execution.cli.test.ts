@@ -2472,6 +2472,21 @@ describe("CLI attempt execution", () => {
     expect(embeddedArg.suppressLiveStreamOutput).toBe(false);
   });
 
+  it("carries a server-owned Teams subject into the embedded run unchanged", async () => {
+    const authorizationSubject = {
+      principal: { issuer: "core", subject: "agent:main", kind: "service" as const },
+      domain: { id: "domain-1" },
+      delegation: { id: "delegation-1", assignmentId: "assignment-1" },
+    };
+
+    const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
+      opts: { authorizationSubject },
+      runId: "teams-authorization-subject",
+    });
+
+    expect(embeddedArg.authorizationSubject).toBe(authorizationSubject);
+  });
+
   it("forwards Gateway plugin runtime binding to embedded runs", async () => {
     const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
       opts: { allowGatewaySubagentBinding: true },

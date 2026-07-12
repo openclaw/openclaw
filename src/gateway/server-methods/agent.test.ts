@@ -105,6 +105,7 @@ const mocks = vi.hoisted(() => ({
       lastInteractionAt: entry?.lastInteractionAt,
     }),
   ),
+  resolveAuthorizedGatewayAgentAuthorizationSubject: vi.fn(),
   lifecycleGeneration: "test-generation",
 }));
 
@@ -165,6 +166,11 @@ vi.mock("../../config/sessions/session-accessor.js", async () => {
 vi.mock("../../commands/agent.js", () => ({
   agentCommand: mocks.agentCommand,
   agentCommandFromIngress: mocks.agentCommand,
+}));
+
+vi.mock("../authorization/agent-session-bindings.js", () => ({
+  resolveAuthorizedGatewayAgentAuthorizationSubject:
+    mocks.resolveAuthorizedGatewayAgentAuthorizationSubject,
 }));
 
 vi.mock("../../acp/runtime/session-meta.js", async () => {
@@ -836,6 +842,21 @@ function operatorWriteCliClient(): AgentHandlerArgs["client"] {
   } as AgentHandlerArgs["client"];
 }
 
+function authenticatedHumanGatewayClient(): AgentHandlerArgs["client"] {
+  const client = operatorWriteGatewayClient();
+  if (!client) {
+    throw new Error("expected authenticated gateway client");
+  }
+  return {
+    ...client,
+    principal: {
+      issuer: "trusted-proxy",
+      subject: "owner@example.com",
+      kind: "human",
+    },
+  };
+}
+
 async function waitForAgentCommandCall<
   T extends AgentCommandCall = AgentCommandCall,
 >(): Promise<T> {
@@ -963,10 +984,216 @@ describe("gateway agent handler", () => {
           lastInteractionAt: entry?.lastInteractionAt,
         }),
       );
+    mocks.resolveAuthorizedGatewayAgentAuthorizationSubject.mockReset();
     mocks.lifecycleGeneration = "test-generation";
     dateOnlyFakeClockActive = false;
     vi.useRealTimers();
     resetExecApprovalFollowupRuntimeHandoffsForTests();
+  });
+
+  it("issues the bound service-agent authorization subject only to a direct authenticated run", async () => {
+    const authorizationSubject = Object.freeze({
+      principal: Object.freeze({ issuer: "core", subject: "agent:main", kind: "service" as const }),
+      domain: Object.freeze({ id: "domain-1" }),
+      delegation: Object.freeze({ id: "delegation-1", assignmentId: "assignment-1" }),
+    });
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+    mocks.resolveAuthorizedGatewayAgentAuthorizationSubject.mockResolvedValue(authorizationSubject);
+
+    await invokeAgent(
+      {
+        message: "authorized direct run",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "teams-auth-direct",
+      },
+      { client: authenticatedHumanGatewayClient(), reqId: "teams-auth-direct" },
+    );
+
+    await waitForAgentCommandCall();
+    expect(mocks.resolveAuthorizedGatewayAgentAuthorizationSubject).toHaveBeenCalledOnce();
+    expect(mocks.resolveAuthorizedGatewayAgentAuthorizationSubject).toHaveBeenCalledWith({
+      invokingPrincipal: {
+        issuer: "trusted-proxy",
+        subject: "owner@example.com",
+        kind: "human",
+      },
+      runtimeAgentId: "main",
+      sessionKey: "agent:main:main",
+    });
+    const commandInvocation = mocks.agentCommand.mock.calls.at(-1);
+    expect(commandInvocation?.[0]).not.toHaveProperty("authorizationSubject");
+    expect(commandInvocation?.[3]).toEqual({ authorizationSubject });
+  });
+
+  it("continues without authority when the final agent session has no binding", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+    mocks.resolveAuthorizedGatewayAgentAuthorizationSubject.mockResolvedValue(undefined);
+
+    await invokeAgent(
+      {
+        message: "unbound direct run",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "teams-auth-unbound",
+      },
+      { client: authenticatedHumanGatewayClient(), reqId: "teams-auth-unbound" },
+    );
+
+    await waitForAgentCommandCall();
+    expect(mocks.resolveAuthorizedGatewayAgentAuthorizationSubject).toHaveBeenCalledOnce();
+    expect(mocks.agentCommand.mock.calls.at(-1)?.[3]).toBeUndefined();
+  });
+
+  it("continues without authority when caller authorization resolution fails", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+    mocks.resolveAuthorizedGatewayAgentAuthorizationSubject.mockRejectedValue(
+      new Error("authorization state unavailable"),
+    );
+    const context = makeContext();
+
+    await invokeAgent(
+      {
+        message: "authorization lookup failure",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "teams-auth-lookup-failure",
+      },
+      {
+        client: authenticatedHumanGatewayClient(),
+        context,
+        reqId: "teams-auth-lookup-failure",
+      },
+    );
+
+    await waitForAgentCommandCall();
+    expect(mocks.agentCommand.mock.calls.at(-1)?.[3]).toBeUndefined();
+    expect(context.logGateway.warn).toHaveBeenCalledWith(
+      expect.stringContaining("continuing without Teams authority"),
+    );
+  });
+
+  it.each([
+    {
+      name: "a null client",
+      client: null,
+      params: {},
+    },
+    {
+      name: "a principal-less operator client",
+      client: operatorWriteGatewayClient(),
+      params: {},
+    },
+    {
+      name: "an internal backend handoff",
+      client: backendGatewayClient(),
+      params: { sessionEffects: "internal" as const, suppressPromptPersistence: true },
+    },
+    {
+      name: "inter-session provenance",
+      client: authenticatedHumanGatewayClient(),
+      params: {
+        inputProvenance: {
+          kind: "inter_session" as const,
+          sourceSessionKey: "agent:main:subagent:child",
+          sourceTool: "sessions_send",
+        },
+      },
+    },
+    {
+      name: "internal-system provenance",
+      client: authenticatedHumanGatewayClient(),
+      params: {
+        inputProvenance: {
+          kind: "internal_system" as const,
+          sourceTool: "runtime_resume",
+        },
+      },
+    },
+    {
+      name: "a one-shot model probe",
+      client: authenticatedHumanGatewayClient(),
+      params: { modelRun: true },
+    },
+    {
+      name: "a cron bootstrap run",
+      client: authenticatedHumanGatewayClient(),
+      params: { bootstrapContextRunKind: "cron" as const },
+    },
+  ])(
+    "does not issue a service-agent authorization subject for $name",
+    async ({ client, params }) => {
+      primeMainAgentRun();
+      mocks.agentCommand.mockClear();
+      mocks.resolveAuthorizedGatewayAgentAuthorizationSubject.mockClear();
+      mocks.resolveAuthorizedGatewayAgentAuthorizationSubject.mockResolvedValue({
+        principal: { issuer: "core", subject: "agent:main", kind: "service" },
+        domain: { id: "domain-1" },
+        delegation: { id: "delegation-1", assignmentId: "assignment-1" },
+      });
+
+      await invokeAgent(
+        {
+          message: "ineligible run",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          idempotencyKey: `teams-auth-denied-${params.inputProvenance?.kind ?? params.bootstrapContextRunKind ?? (params.modelRun ? "probe" : client ? "backend" : "null")}`,
+          ...params,
+        },
+        { client, reqId: "teams-auth-denied" },
+      );
+
+      await waitForAgentCommandCall();
+      expect(mocks.resolveAuthorizedGatewayAgentAuthorizationSubject).not.toHaveBeenCalled();
+      expect(mocks.agentCommand.mock.calls.at(-1)?.[3]).toBeUndefined();
+    },
+  );
+
+  it("does not issue a service-agent authorization subject to a subagent session", async () => {
+    const sessionKey = "agent:main:subagent:child";
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: {
+        sessionId: "subagent-session-id",
+        updatedAt: Date.now(),
+        spawnedBy: "agent:main:main",
+      },
+      canonicalKey: sessionKey,
+    });
+    mocks.updateSessionStore.mockImplementation(
+      async (_path, updater) =>
+        await updater({
+          [sessionKey]: {
+            sessionId: "subagent-session-id",
+            updatedAt: Date.now(),
+            spawnedBy: "agent:main:main",
+          },
+        }),
+    );
+    mocks.agentCommand.mockResolvedValue({ payloads: [{ text: "ok" }], meta: { durationMs: 100 } });
+    mocks.resolveAuthorizedGatewayAgentAuthorizationSubject.mockResolvedValue({
+      principal: { issuer: "core", subject: "agent:main", kind: "service" },
+      domain: { id: "domain-1" },
+      delegation: { id: "delegation-1", assignmentId: "assignment-1" },
+    });
+
+    await invokeAgent(
+      {
+        message: "subagent work",
+        agentId: "main",
+        sessionKey,
+        idempotencyKey: "teams-auth-denied-subagent",
+      },
+      { client: authenticatedHumanGatewayClient(), reqId: "teams-auth-denied-subagent" },
+    );
+
+    await waitForAgentCommandCall();
+    expect(mocks.resolveAuthorizedGatewayAgentAuthorizationSubject).not.toHaveBeenCalled();
+    expect(mocks.agentCommand.mock.calls.at(-1)?.[3]).toBeUndefined();
   });
 
   it("passes resolved maintenance config to the gateway admission store write", async () => {

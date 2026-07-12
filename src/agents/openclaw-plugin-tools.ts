@@ -10,6 +10,7 @@ import {
   getRuntimeConfigSourceSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { bindPluginToolAuthorizationSubject } from "../plugins/tool-authorization-context.js";
 import { resolvePluginTools } from "../plugins/tools.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { resolveApiKeyForProfile, resolveAuthProfileOrder } from "./auth-profiles.js";
@@ -119,13 +120,15 @@ export function resolveOpenClawPluginToolsForOptions(params: {
     getRuntimeConfig: resolveCurrentRuntimeConfig,
   });
   const existingToolNames = new Set(params.existingToolNames ?? []);
+  const context = {
+    ...pluginToolInputs.context,
+    ...(hasAuthForProvider ? { hasAuthForProvider } : {}),
+    ...(resolveApiKeyForProvider ? { resolveApiKeyForProvider } : {}),
+  };
+  bindPluginToolAuthorizationSubject(context, params.options?.authorizationSubject);
   const pluginTools = resolvePluginTools({
     ...pluginToolInputs,
-    context: {
-      ...pluginToolInputs.context,
-      ...(hasAuthForProvider ? { hasAuthForProvider } : {}),
-      ...(resolveApiKeyForProvider ? { resolveApiKeyForProvider } : {}),
-    },
+    context,
     existingToolNames,
     toolAllowlist: params.options?.pluginToolAllowlist,
     toolDenylist: params.options?.pluginToolDenylist,

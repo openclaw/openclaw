@@ -11,6 +11,22 @@ export type GatewayDelegationRef = Readonly<{
 export type GatewayValidatedDelegation = GatewayDelegationRef &
   Readonly<{ sponsorPrincipalId: string }>;
 
+export const GATEWAY_AGENT_SESSION_INVOKE_PERMISSION = "agents.session.invoke";
+
+/** Server-only proof binding one agent run to its authenticated human invoker. */
+export type GatewayAgentSessionAuthorizationRef = Readonly<{
+  id: string;
+  invokingPrincipal: GatewayPrincipal;
+}>;
+
+/** Immutable server-issued subject carried into one agent run; never derived from tool arguments. */
+export type GatewayAuthorizationSubject = Readonly<{
+  principal: GatewayPrincipal;
+  domain: IsolationDomainRef;
+  delegation?: GatewayDelegationRef;
+  agentSession?: GatewayAgentSessionAuthorizationRef;
+}>;
+
 export type GatewayAuthorizationContext = Readonly<{
   principalId: string;
   principalKind: GatewayPrincipal["kind"];
@@ -49,6 +65,7 @@ export type GatewayAuthorizationRequest = Readonly<{
   principal: GatewayPrincipal;
   domain: IsolationDomainRef;
   delegation?: GatewayDelegationRef;
+  agentSession?: GatewayAgentSessionAuthorizationRef;
   method: string;
   permission: string;
   resources: readonly GatewayResourceRef[];
