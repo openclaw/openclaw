@@ -142,6 +142,13 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
   const scopes = Array.isArray(connectParams.scopes) ? connectParams.scopes : [];
   connectParams.role = role;
   connectParams.scopes = scopes;
+  if (role === "member" && scopes.length > 0) {
+    const message = "member sessions cannot request operator scopes";
+    markHandshakeFailure("member-scopes-forbidden", { scopeCount: scopes.length });
+    sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, message);
+    close(1008, message);
+    return undefined;
+  }
 
   const isControlUi = isOperatorUiClient(connectParams.client);
   const isBrowserOperatorUi = isBrowserOperatorUiClient(connectParams.client);

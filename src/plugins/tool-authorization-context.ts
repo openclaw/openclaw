@@ -109,6 +109,11 @@ export function bindPluginToolAuthorizationSubject(
   contextSubjects.set(context, existing ?? canonical);
 }
 
+/** True only when core bound a delegated Teams subject to this exact factory context. */
+export function hasPluginToolAuthorizationSubject(context: OpenClawPluginToolContext): boolean {
+  return contextSubjects.has(context);
+}
+
 function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
   return (
     (typeof value === "object" || typeof value === "function") &&
@@ -128,6 +133,9 @@ export function withPluginToolAuthorizationInvocation<T>(
   },
   run: () => T,
 ): T {
+  if (input.signal?.aborted) {
+    throw new Error("plugin tool authorization invocation was aborted before execution");
+  }
   const subject = contextSubjects.get(input.context);
   const invocation: PluginToolAuthorizationInvocation = Object.freeze({
     pluginId: requiredIdentifier(input.pluginId, "plugin id"),
@@ -141,9 +149,6 @@ export function withPluginToolAuthorizationInvocation<T>(
     lifetime.active = false;
   };
   input.signal?.addEventListener("abort", deactivate, { once: true });
-  if (input.signal?.aborted) {
-    deactivate();
-  }
   invocationLifetimes.set(invocation, lifetime);
   return pluginToolAuthorizationInvocation.run(invocation, () => {
     try {

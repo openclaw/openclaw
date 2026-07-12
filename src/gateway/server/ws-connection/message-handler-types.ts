@@ -11,6 +11,7 @@ import type { createSubsystemLogger } from "../../../logging/subsystem.js";
 import type { DeviceBootstrapProfile } from "../../../shared/device-bootstrap-profile.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
+import type { TeamsSession } from "../../authorization/teams-identity.js";
 import type { GatewayMethodRegistry } from "../../methods/registry.js";
 import type { NodePairingAutoApproveClientIpSource } from "../../node-pairing-auto-approve.js";
 import type { NodeReapprovalCoordinator } from "../../node-reapproval-coordinator.js";
@@ -140,6 +141,7 @@ export type AuthenticatedGatewayConnect = {
   sessionSharedGatewaySessionGeneration?: string;
   issuedBootstrapProfile: DeviceBootstrapProfile | null;
   handoffBootstrapProfile: DeviceBootstrapProfile | null;
+  teamsSession?: TeamsSession;
   trustedProxyAuthOk: boolean;
   skipControlUiPairingForDevice: boolean;
   skipLocalBackendSelfPairing: boolean;

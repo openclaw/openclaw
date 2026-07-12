@@ -3,6 +3,12 @@ import type { GatewayDelegationRef, IsolationDomainRef } from "./contracts.js";
 
 const clientDomains = new WeakMap<GatewayClient, IsolationDomainRef>();
 const clientDelegations = new WeakMap<GatewayClient, GatewayDelegationRef>();
+export type GatewayClientTeamsSessionRef = Readonly<{
+  id: string;
+  principalId: string;
+  domainId: string;
+}>;
+const clientTeamsSessions = new WeakMap<GatewayClient, GatewayClientTeamsSessionRef>();
 
 function requiredIdentifier(value: string, label: string): string {
   const normalized = value.trim();
@@ -103,4 +109,63 @@ export function inheritGatewayClientAuthorizationDelegation(
     throw new Error("gateway client authorization delegation cannot cross client identity");
   }
   clientDelegations.set(target, delegation);
+}
+
+/** Binds the exact server-resolved Teams session without exposing it on the client object. */
+export function bindGatewayClientTeamsSession(
+  client: GatewayClient,
+  session: GatewayClientTeamsSessionRef,
+): void {
+  const principal = client.principal;
+  const domainId = requiredIdentifier(session.domainId, "gateway client Teams session domain id");
+  if (principal?.kind !== "human" || clientDomains.get(client)?.id !== domainId) {
+    throw new Error("gateway client Teams session requires the matching human domain client");
+  }
+  const canonical = Object.freeze({
+    id: requiredIdentifier(session.id, "gateway client Teams session id"),
+    principalId: requiredIdentifier(
+      session.principalId,
+      "gateway client Teams session principal id",
+    ),
+    domainId,
+  });
+  const existing = clientTeamsSessions.get(client);
+  if (
+    existing &&
+    (existing.id !== canonical.id ||
+      existing.principalId !== canonical.principalId ||
+      existing.domainId !== canonical.domainId)
+  ) {
+    throw new Error("gateway client Teams session is already bound differently");
+  }
+  clientTeamsSessions.set(client, canonical);
+}
+
+export function getGatewayClientTeamsSession(
+  client: GatewayClient | null | undefined,
+): GatewayClientTeamsSessionRef | undefined {
+  return client ? clientTeamsSessions.get(client) : undefined;
+}
+
+export function inheritGatewayClientTeamsSession(
+  source: GatewayClient,
+  target: GatewayClient,
+): void {
+  const session = clientTeamsSessions.get(source);
+  if (!session) {
+    return;
+  }
+  const sourcePrincipal = source.principal;
+  const targetPrincipal = target.principal;
+  if (
+    sourcePrincipal?.kind !== "human" ||
+    targetPrincipal?.kind !== "human" ||
+    sourcePrincipal.issuer !== targetPrincipal.issuer ||
+    sourcePrincipal.subject !== targetPrincipal.subject ||
+    getGatewayClientAuthorizationDomain(source)?.id !==
+      getGatewayClientAuthorizationDomain(target)?.id
+  ) {
+    throw new Error("gateway client Teams session cannot cross client identity");
+  }
+  clientTeamsSessions.set(target, session);
 }

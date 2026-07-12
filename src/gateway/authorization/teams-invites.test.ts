@@ -246,6 +246,36 @@ describe("Teams one-time invites", () => {
       }),
     ).rejects.toThrow("invite is invalid or unavailable");
 
+    const unsupported = createTeamsInvite({
+      id: "invite-unsupported",
+      domainId: "domain-1",
+      createdByPrincipalId: owner.id,
+      ttlMs: 60_000,
+      grants: [{ resource: tab, permission: "workspaces.tab.read" }],
+      database,
+    });
+    await expect(
+      registerTeamsLocalAccountFromInvite({
+        code: unsupported.code,
+        accountId: "account-unsupported",
+        principalId: "principal-unsupported",
+        loginLabel: "unsupported@example.com",
+        password: "correct horse battery staple",
+        sessionTtlMs: 60_000,
+        validateInvite: () => {
+          throw new Error("unsupported invite landing");
+        },
+        database,
+      }),
+    ).rejects.toThrow("unsupported invite landing");
+    expect(
+      listTeamsInvites({
+        domainId: "domain-1",
+        requestedByPrincipalId: owner.id,
+        database,
+      }).find((invite) => invite.id === unsupported.invite.id)?.state,
+    ).toBe("active");
+
     const created = createTeamsInvite({
       id: "invite-race",
       domainId: "domain-1",
@@ -298,6 +328,11 @@ describe("Teams one-time invites", () => {
       db
         .prepare("SELECT 1 AS found FROM teams_local_accounts WHERE account_id = ?")
         .get("account-invalid"),
+    ).toBeUndefined();
+    expect(
+      db
+        .prepare("SELECT 1 AS found FROM teams_local_accounts WHERE account_id = ?")
+        .get("account-unsupported"),
     ).toBeUndefined();
   });
 

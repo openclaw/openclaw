@@ -331,6 +331,53 @@ export function resolveTeamsSession(
   return row ? mapSession(row) : undefined;
 }
 
+/** Resolves one active session by its server-private id for established WS revalidation. */
+export function resolveTeamsSessionById(
+  input: DatabaseInput & { id: string; now?: number },
+): TeamsSession | undefined {
+  const id = requiredIdentifier(input.id, "Teams session id");
+  const now = input.now ?? Date.now();
+  const { db } = openOpenClawStateDatabase(input.database);
+  const row = executeSqliteQueryTakeFirstSync(
+    db,
+    getTeamsIdentityKysely(db)
+      .selectFrom("teams_sessions as session")
+      .innerJoin("teams_local_accounts as account", (join) =>
+        join
+          .onRef("account.account_id", "=", "session.account_id")
+          .onRef("account.principal_id", "=", "session.principal_id"),
+      )
+      .innerJoin("authorization_domain_memberships as membership", (join) =>
+        join
+          .onRef("membership.domain_id", "=", "session.domain_id")
+          .onRef("membership.principal_id", "=", "session.principal_id"),
+      )
+      .innerJoin(
+        "authorization_principals as principal",
+        "principal.principal_id",
+        "session.principal_id",
+      )
+      .select([
+        "session.session_id",
+        "session.account_id",
+        "session.principal_id",
+        "principal.issuer",
+        "principal.subject",
+        "principal.kind",
+        "session.domain_id",
+        "session.state",
+        "session.created_at",
+        "session.expires_at",
+        "session.revoked_at",
+        "session.revoked_by_principal_id",
+      ])
+      .where("session.session_id", "=", id)
+      .where("session.state", "=", "active")
+      .where("session.expires_at", ">", now),
+  );
+  return row ? mapSession(row) : undefined;
+}
+
 export function listTeamsSessions(
   input: DatabaseInput & { accountId: string },
 ): readonly TeamsSession[] {

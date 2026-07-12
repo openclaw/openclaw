@@ -26,6 +26,8 @@ export type OpenClawPluginTeamsResourceRef = Readonly<{
 
 export type OpenClawPluginTeamsApi = {
   context: {
+    /** Distinguishes a core-bound delegated run from an ordinary legacy/local tool run. */
+    isBound: (toolContext: OpenClawPluginToolContext) => boolean;
     /** Resolve only the current host-authorized request; no identity fields are accepted. */
     require: {
       (): OpenClawPluginTeamsRequestContext;
@@ -34,7 +36,7 @@ export type OpenClawPluginTeamsApi = {
   };
   authorization: {
     decide: (input: {
-      context: OpenClawPluginTeamsToolCallContext;
+      context: OpenClawPluginTeamsToolCallContext | OpenClawPluginTeamsRequestContext;
       permission: string;
       resources: readonly OpenClawPluginTeamsResourceRef[];
     }) => Promise<
@@ -42,6 +44,12 @@ export type OpenClawPluginTeamsApi = {
     >;
   };
   resources: {
+    listChildren: (input: {
+      context: OpenClawPluginTeamsRequestContext;
+      parent: OpenClawPluginTeamsResourceRef;
+      requiredAction: string;
+      type?: string;
+    }) => Promise<readonly OpenClawPluginTeamsResourceRef[]>;
     prepareRegister: (input: {
       context: OpenClawPluginTeamsRequestContext;
       resource: OpenClawPluginTeamsResourceRef;
@@ -52,6 +60,7 @@ export type OpenClawPluginTeamsApi = {
     prepareRetire: (input: {
       context: OpenClawPluginTeamsRequestContext;
       resource: OpenClawPluginTeamsResourceRef;
+      parent?: OpenClawPluginTeamsResourceRef;
       requiredAction: string;
       idempotencyKey: string;
     }) => Promise<string>;

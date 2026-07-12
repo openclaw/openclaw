@@ -11,6 +11,7 @@ import {
 import { verifyDeviceToken } from "../../../infra/device-pairing.js";
 import type { DeviceBootstrapProfile } from "../../../shared/device-bootstrap-profile.js";
 import type { GatewayAuthResult } from "../../auth.js";
+import { resolveTeamsSessionFromRequest } from "../../teams-http.js";
 import { formatForLog } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import { resolveSharedGatewaySessionGeneration } from "../ws-shared-generation.js";
@@ -95,6 +96,7 @@ export async function authenticateGatewayConnect(
     isWebchat,
     isNativeAppUi,
   } = admission;
+  const teamsSession = role === "member" ? resolveTeamsSessionFromRequest(upgradeReq) : undefined;
 
   const deviceRaw = connectParams.device;
   const hasTokenAuth = Boolean(connectParams.auth?.token);
@@ -102,7 +104,13 @@ export async function authenticateGatewayConnect(
   const hasSharedAuth = hasTokenAuth || hasPasswordAuth;
   const controlUiAuthPolicy = resolveControlUiAuthPolicy({
     isControlUi,
-    controlUiConfig: configSnapshot.gateway?.controlUi,
+    controlUiConfig:
+      role === "member"
+        ? {
+            ...configSnapshot.gateway?.controlUi,
+            dangerouslyDisableDeviceAuth: false,
+          }
+        : configSnapshot.gateway?.controlUi,
     deviceRaw,
   });
   const device = controlUiAuthPolicy.device;
@@ -113,7 +121,7 @@ export async function authenticateGatewayConnect(
   if (hasRawHandshakeCredentials) {
     advanceHandshakePhase("auth_credentials_received");
   }
-  const connectAuthState = await resolveConnectAuthState({
+  const sharedConnectAuthState = await resolveConnectAuthState({
     resolvedAuth,
     connectAuth: connectParams.auth,
     hasDeviceIdentity: Boolean(device),
@@ -123,6 +131,33 @@ export async function authenticateGatewayConnect(
     rateLimiter: authRateLimiter,
     clientIp: browserRateLimitClientIp,
   });
+  const connectAuthState =
+    role !== "member"
+      ? sharedConnectAuthState
+      : teamsSession
+        ? {
+            ...sharedConnectAuthState,
+            authResult: {
+              ok: true,
+              method: "teams-session" as const,
+              principal: teamsSession.principal,
+            },
+            authOk: true,
+            authMethod: "teams-session" as const,
+            sharedAuthOk: false,
+            sharedAuthProvided: false,
+          }
+        : {
+            ...sharedConnectAuthState,
+            authResult: { ok: false, reason: "teams_session_required" },
+            authOk: false,
+            authMethod: "teams-session" as const,
+            sharedAuthOk: false,
+            sharedAuthProvided: false,
+            bootstrapTokenCandidate: undefined,
+            deviceTokenCandidate: undefined,
+            deviceTokenCandidateSource: undefined,
+          };
   const {
     sharedAuthOk,
     bootstrapTokenCandidate,
@@ -204,6 +239,10 @@ export async function authenticateGatewayConnect(
     });
     close(1008, truncateCloseReason(authMessage));
   };
+  if (role === "member" && !teamsSession) {
+    rejectUnauthorized(connectAuthState.authResult);
+    return undefined;
+  }
   const clearUnboundScopes = () => {
     if (scopes.length > 0) {
       scopes = [];
@@ -470,6 +509,7 @@ export async function authenticateGatewayConnect(
     sessionSharedGatewaySessionGeneration,
     issuedBootstrapProfile,
     handoffBootstrapProfile,
+    teamsSession,
     trustedProxyAuthOk,
     skipControlUiPairingForDevice,
     skipLocalBackendSelfPairing,

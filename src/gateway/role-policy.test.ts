@@ -3,6 +3,7 @@
  */
 import { describe, expect, test } from "vitest";
 import {
+  filterAdvertisedGatewayMethodsForRole,
   isRoleAuthorizedForMethod,
   parseGatewayRole,
   roleCanSkipDeviceIdentity,
@@ -12,6 +13,7 @@ describe("gateway role policy", () => {
   test("parses supported roles", () => {
     expect(parseGatewayRole("operator")).toBe("operator");
     expect(parseGatewayRole("node")).toBe("node");
+    expect(parseGatewayRole("member")).toBe("member");
     expect(parseGatewayRole("admin")).toBeNull();
     expect(parseGatewayRole(undefined)).toBeNull();
   });
@@ -20,6 +22,7 @@ describe("gateway role policy", () => {
     expect(roleCanSkipDeviceIdentity("operator", true)).toBe(true);
     expect(roleCanSkipDeviceIdentity("operator", false)).toBe(false);
     expect(roleCanSkipDeviceIdentity("node", true)).toBe(false);
+    expect(roleCanSkipDeviceIdentity("member", true)).toBe(false);
   });
 
   test("authorizes roles against node vs operator methods", () => {
@@ -35,5 +38,39 @@ describe("gateway role policy", () => {
     expect(isRoleAuthorizedForMethod("operator", "node.skills.update")).toBe(false);
     expect(isRoleAuthorizedForMethod("operator", "node.pending.drain")).toBe(false);
     expect(isRoleAuthorizedForMethod("operator", "node.event")).toBe(false);
+    expect(
+      isRoleAuthorizedForMethod("member", "workspace.tab.get", {
+        kind: "resource",
+        member: true,
+      }),
+    ).toBe(true);
+    expect(isRoleAuthorizedForMethod("member", "workspace.tab.get", { kind: "resource" })).toBe(
+      false,
+    );
+    expect(isRoleAuthorizedForMethod("member", "workspace.tab.get")).toBe(false);
+    expect(isRoleAuthorizedForMethod("member", "config.get", { kind: "resource" })).toBe(false);
+  });
+
+  test("filters the post-auth Hello method list to plugin resources for members", () => {
+    const policies = new Map([
+      ["workspace.tab.get", { kind: "resource" as const, member: true }],
+      ["workspace.get", undefined],
+      ["config.get", { kind: "resource" as const }],
+    ]);
+
+    expect(
+      filterAdvertisedGatewayMethodsForRole(
+        "member",
+        ["workspace.tab.get", "workspace.get", "config.get"],
+        (method) => policies.get(method),
+      ),
+    ).toEqual(["workspace.tab.get"]);
+    expect(
+      filterAdvertisedGatewayMethodsForRole(
+        "operator",
+        ["workspace.tab.get", "workspace.get", "config.get"],
+        (method) => policies.get(method),
+      ),
+    ).toEqual(["workspace.tab.get", "workspace.get", "config.get"]);
   });
 });

@@ -84,6 +84,7 @@ describe("command-registry", () => {
     expect(names).toContain("mcp");
     expect(names).toContain("agent");
     expect(names).toContain("agents");
+    expect(names).toContain("teams");
   });
 
   it("returns only commands that support subcommands", () => {
@@ -95,6 +96,7 @@ describe("command-registry", () => {
     expect(names).toContain("sessions");
     expect(names).toContain("commitments");
     expect(names).toContain("tasks");
+    expect(names).toContain("teams");
     expect(names).not.toContain("agent");
     expect(names).not.toContain("crestodian");
     expect(names).not.toContain("status");
@@ -112,6 +114,13 @@ describe("command-registry", () => {
       true,
     );
     expect(agentProgram.commands.map((command) => command.name())).toEqual(["agent"]);
+  });
+
+  it("lazy-registers the Teams command by its root descriptor", async () => {
+    const program = createProgram();
+
+    await expect(registerCoreCliByName(program, testProgramContext, "teams")).resolves.toBe(true);
+    expect(namesOf(program)).toEqual(["teams"]);
   });
 
   it("registerCoreCliByName returns false for unknown commands", async () => {
