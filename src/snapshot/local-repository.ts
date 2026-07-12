@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
+import { z } from "zod";
 import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
 import { sameFileIdentity } from "../infra/fs-safe-advanced.js";
 import {
@@ -14,11 +15,12 @@ import {
   isPathInside,
 } from "../infra/fs-safe.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { inspectWindowsAcl, type WindowsAclEntry } from "../infra/permissions.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
 import { resolveSystemBin } from "../infra/resolve-system-bin.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import {
+  createPrivateSqliteDirectory,
+  createPrivateSqliteTempDirectory,
   createVerifiedSqliteSnapshot,
   publishVerifiedSqliteFile,
   syncDirectoryBestEffort,
@@ -53,7 +55,6 @@ import {
 
 const SNAPSHOT_DIRECTORY_MODE = 0o700;
 const SNAPSHOT_FILE_MODE = 0o600;
-const SNAPSHOT_ID_BASENAME_MAX_LENGTH = 80;
 const SNAPSHOT_PENDING_FILENAME = ".pending";
 const SQLITE_SIDECAR_SUFFIXES = ["-wal", "-shm", "-journal"] as const;
 const SNAPSHOT_ARTIFACT_ENTRIES = new Set([
@@ -100,6 +101,7 @@ const WINDOWS_STAGING_ACCESS_RIGHTS = new Set([
   "DC",
   "RA",
   "WA",
+  "UNKNOWN",
 ]);
 const WINDOWS_STAGING_REPLACEMENT_RIGHTS = new Set([
   "F",
@@ -111,15 +113,101 @@ const WINDOWS_STAGING_REPLACEMENT_RIGHTS = new Set([
   "MA",
   "GA",
   "DC",
+  "UNKNOWN",
 ]);
 const WINDOWS_TRUSTED_OWNER_SIDS = new Set([
   "S-1-5-18", // LocalSystem
   "S-1-5-32-544", // Builtin Administrators
   "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464", // TrustedInstaller
 ]);
+const WINDOWS_TRUSTED_ACCESS_SIDS = new Set([
+  ...WINDOWS_TRUSTED_OWNER_SIDS,
+  "S-1-3-0", // Creator Owner resolves to the trusted creator on inherited ACEs.
+]);
+// Windows descriptors can approach 64 KiB each; batched JSON and base64 need
+// bounded aggregate headroom across every ancestor.
+const WINDOWS_ACL_METADATA_MAX_BUFFER = 16 * 1024 * 1024;
 const WINDOWS_SID_PATTERN = /^S-\d+-\d+(?:-\d+)+$/iu;
+const WINDOWS_SID_SCHEMA = z
+  .string()
+  .regex(WINDOWS_SID_PATTERN)
+  .transform((value) => value.toUpperCase());
+const WINDOWS_PRINCIPAL_SCHEMA = z
+  .string()
+  .min(1)
+  .transform((value) => value.toUpperCase());
+const WINDOWS_ACCESS_ENTRY_SCHEMA = z
+  .object({
+    principal: WINDOWS_PRINCIPAL_SCHEMA,
+    accessType: z.enum(["Allow", "Deny"]),
+    rightsMask: z.number().int().nonnegative().max(0xffffffff),
+    inheritanceFlags: z.string(),
+    propagationFlags: z.string(),
+  })
+  .strict();
+const WINDOWS_PATH_SECURITY_SCHEMA = z
+  .object({
+    currentUserSid: WINDOWS_SID_SCHEMA,
+    paths: z
+      .array(
+        z
+          .object({
+            path: z.string().min(1),
+            ownerSid: WINDOWS_SID_SCHEMA,
+            entries: z.array(WINDOWS_ACCESS_ENTRY_SCHEMA).min(1),
+          })
+          .strict(),
+      )
+      .min(1),
+  })
+  .strict();
+const WINDOWS_FILE_RIGHTS = [
+  [0x000001, "RD"],
+  [0x000002, "WD"],
+  [0x000004, "AD"],
+  [0x000008, "REA"],
+  [0x000010, "WEA"],
+  [0x000020, "X"],
+  [0x000040, "DC"],
+  [0x000080, "RA"],
+  [0x000100, "WA"],
+  [0x010000, "D"],
+  [0x020000, "RC"],
+  [0x040000, "WDAC"],
+  [0x080000, "WO"],
+  [0x100000, "S"],
+  [0x02000000, "MA"],
+  [0x10000000, "GA"],
+  [0x20000000, "GE"],
+  [0x40000000, "GW"],
+  [0x80000000, "GR"],
+] as const;
+const WINDOWS_KNOWN_FILE_RIGHTS_MASK = WINDOWS_FILE_RIGHTS.reduce(
+  (mask, [right]) => mask | right,
+  0,
+);
+const WINDOWS_READ_RIGHTS_MASK =
+  0x000001 | 0x000008 | 0x000020 | 0x000080 | 0x020000 | 0x10000000 | 0x20000000 | 0x80000000;
+const WINDOWS_WRITE_RIGHTS_MASK =
+  0x000002 |
+  0x000004 |
+  0x000010 |
+  0x000040 |
+  0x000100 |
+  0x010000 |
+  0x040000 |
+  0x080000 |
+  0x10000000 |
+  0x40000000;
 let macosTrustedAclPrincipalsPromise: Promise<ReadonlySet<string>> | undefined;
-let windowsCurrentUserSidPromise: Promise<string> | undefined;
+
+type WindowsAclEntry = {
+  readonly principal: string;
+  readonly rights: string[];
+  readonly rawRights: string;
+  readonly canRead: boolean;
+  readonly canWrite: boolean;
+};
 
 export type LocalSqliteSnapshotProviderOptions = {
   readonly allowedDatabaseRoles?: readonly SnapshotDatabaseIdentity["role"][];
@@ -162,13 +250,13 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
     if (!Number.isFinite(now.getTime())) {
       throw new Error("SQLite snapshot timestamp is invalid.");
     }
-    const snapshotId = buildSnapshotId(now, sourcePath);
+    const snapshotId = buildSnapshotId(now);
     const snapshotRefPath = path.join(this.#repositoryPath, snapshotId);
     const snapshotDir = path.join(trustedRepositoryPath, snapshotId);
-    const stagingDir = path.join(trustedRepositoryPath, `.tmp-${snapshotId}-${randomUUID()}`);
+    const stagingDir = path.join(trustedRepositoryPath, `.tmp-${randomUUID()}`);
     const artifactPath = path.join(stagingDir, SNAPSHOT_SQLITE_FILENAME);
     await assertDirectoryIdentity(trustedRepositoryPath, repositoryIdentity);
-    await fs.mkdir(stagingDir, { mode: SNAPSHOT_DIRECTORY_MODE });
+    await createPrivateSqliteDirectory(stagingDir);
 
     let stagingIdentity: Stats | undefined;
     let publishedDirectory: FileHandle | undefined;
@@ -207,7 +295,7 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
 
       await assertDirectoryIdentity(trustedRepositoryPath, repositoryIdentity);
       try {
-        await fs.mkdir(snapshotDir, { mode: SNAPSHOT_DIRECTORY_MODE });
+        await createPrivateSqliteDirectory(snapshotDir);
         snapshotDirectoryCreated = true;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "EEXIST") {
@@ -653,17 +741,29 @@ function sanitizeGlobalStateSnapshot(database: DatabaseSync): void {
   database.prepare("DELETE FROM delivery_queue_entries").run();
 }
 
-function buildSnapshotId(now: Date, sourcePath: string): string {
+function buildSnapshotId(now: Date): string {
   const timestamp = now.toISOString().replaceAll(/[:.]/g, "-");
-  const basename =
-    path
-      .basename(sourcePath)
-      .replaceAll(/[^a-zA-Z0-9._-]/g, "-")
-      .slice(0, SNAPSHOT_ID_BASENAME_MAX_LENGTH) || "database.sqlite";
-  return `${timestamp}-${basename}-${randomUUID()}`;
+  return `${timestamp}-${randomUUID()}`;
 }
 
 async function ensurePrivateDirectory(directoryPath: string, scopeLabel: string): Promise<void> {
+  if (process.platform === "win32") {
+    const parentResult = await ensureAbsoluteDirectory(path.dirname(directoryPath), {
+      mode: SNAPSHOT_DIRECTORY_MODE,
+      scopeLabel,
+    });
+    if (!parentResult.ok) {
+      throw parentResult.error;
+    }
+    try {
+      await createPrivateSqliteDirectory(directoryPath);
+      return;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+        throw error;
+      }
+    }
+  }
   const result = await ensureAbsoluteDirectory(directoryPath, {
     mode: SNAPSHOT_DIRECTORY_MODE,
     scopeLabel,
@@ -966,7 +1066,7 @@ async function withPrivateSqliteStagingDirectory<T>(options: {
     options.rootPath,
   );
   await assertDirectoryIdentity(trustedRootPath, options.expectedRootIdentity);
-  const directoryPath = await fs.mkdtemp(path.join(trustedRootPath, options.prefix));
+  const directoryPath = await createPrivateSqliteTempDirectory(trustedRootPath, options.prefix);
   const directoryIdentity = await fs.lstat(directoryPath);
 
   let outcome: { ok: true; value: T } | { ok: false; error: unknown };
@@ -1053,7 +1153,8 @@ async function assertPrivateStagingDirectory(
     throw new Error(`Private SQLite staging directory changed during operation: ${directoryPath}`);
   }
   if (process.platform === "win32") {
-    await assertTrustedWindowsAcl(directoryPath, true);
+    // The parent root was already checked for private and inherit-only ACEs.
+    // An untrusted principal cannot alter or replace children beneath that root.
     return;
   }
   const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
@@ -1199,36 +1300,83 @@ async function assertTrustedMacosAcl(pathname: string, requirePrivate: boolean):
 }
 
 async function assertTrustedWindowsStagingPath(rootPath: string): Promise<void> {
-  await assertTrustedWindowsAcl(rootPath, true);
+  const paths = [rootPath];
   let currentPath = path.dirname(rootPath);
   while (currentPath !== rootPath) {
-    await assertTrustedWindowsAcl(currentPath, false);
+    paths.push(currentPath);
     const parentPath = path.dirname(currentPath);
     if (parentPath === currentPath) {
-      return;
+      break;
     }
     currentPath = parentPath;
   }
+  let security: z.infer<typeof WINDOWS_PATH_SECURITY_SCHEMA>;
+  try {
+    security = await inspectWindowsPathSecurity(paths);
+  } catch {
+    throw new Error(`Unable to verify private Windows ACL for SQLite staging: ${rootPath}`);
+  }
+  if (security.paths.length !== paths.length) {
+    throw new Error(`Unable to verify private Windows ACL for SQLite staging: ${rootPath}`);
+  }
+  for (const [index, pathname] of paths.entries()) {
+    const pathSecurity = security.paths[index];
+    if (!pathSecurity || path.resolve(pathSecurity.path) !== path.resolve(pathname)) {
+      throw new Error(`Unable to verify private Windows ACL for SQLite staging: ${pathname}`);
+    }
+    assertTrustedWindowsAcl(pathname, index === 0, security.currentUserSid, pathSecurity);
+  }
 }
 
-async function assertTrustedWindowsAcl(pathname: string, requirePrivate: boolean): Promise<void> {
-  const currentUserSid = await resolveWindowsCurrentUserSid();
-  const [acl, ownerSid] = await Promise.all([
-    inspectTrustedWindowsAcl(pathname, currentUserSid),
-    resolveWindowsPathOwnerSid(pathname),
-  ]);
-  if (!acl.ok || acl.entries.length === 0) {
-    throw new Error(`Unable to verify private Windows ACL for SQLite staging: ${pathname}`);
-  }
-  if (ownerSid !== currentUserSid && !WINDOWS_TRUSTED_OWNER_SIDS.has(ownerSid)) {
+function assertTrustedWindowsAcl(
+  pathname: string,
+  requirePrivate: boolean,
+  currentUserSid: string,
+  security: z.infer<typeof WINDOWS_PATH_SECURITY_SCHEMA>["paths"][number],
+): void {
+  if (security.ownerSid !== currentUserSid && !WINDOWS_TRUSTED_OWNER_SIDS.has(security.ownerSid)) {
     throw new Error(`Windows staging path is owned by an untrusted principal: ${pathname}`);
   }
-  const unsafeEntries = [...acl.untrustedWorld, ...acl.untrustedGroup].filter((entry) =>
-    windowsAclEntryPermitsUnsafeStagingAccess(entry, requirePrivate),
-  );
+  const allowedEntries = security.entries.filter((entry) => entry.accessType === "Allow");
+  if (allowedEntries.length === 0) {
+    throw new Error(`Unable to verify private Windows ACL for SQLite staging: ${pathname}`);
+  }
+  const unsafeEntries = allowedEntries
+    .filter(
+      (entry) =>
+        entry.principal !== currentUserSid && !WINDOWS_TRUSTED_ACCESS_SIDS.has(entry.principal),
+    )
+    .map(windowsSecurityEntryToAclEntry)
+    .filter((entry) => windowsAclEntryPermitsUnsafeStagingAccess(entry, requirePrivate));
   if (unsafeEntries.length > 0) {
     throw new Error(`Windows ACL permits untrusted SQLite staging access: ${pathname}`);
   }
+}
+
+function windowsSecurityEntryToAclEntry(
+  entry: z.infer<typeof WINDOWS_ACCESS_ENTRY_SCHEMA>,
+): WindowsAclEntry {
+  const rights: string[] = WINDOWS_FILE_RIGHTS.filter(
+    ([right]) => (entry.rightsMask & right) !== 0,
+  ).map(([, name]) => name);
+  if ((entry.rightsMask & ~WINDOWS_KNOWN_FILE_RIGHTS_MASK) !== 0) {
+    rights.push("UNKNOWN");
+  }
+  const inheritanceFlags = entry.inheritanceFlags.split(",").map((flag) => flag.trim());
+  const propagationFlags = entry.propagationFlags.split(",").map((flag) => flag.trim());
+  const rawFlags = [
+    inheritanceFlags.includes("ObjectInherit") ? "(OI)" : "",
+    inheritanceFlags.includes("ContainerInherit") ? "(CI)" : "",
+    propagationFlags.includes("NoPropagateInherit") ? "(NP)" : "",
+    propagationFlags.includes("InheritOnly") ? "(IO)" : "",
+  ].join("");
+  return {
+    principal: entry.principal,
+    rights,
+    rawRights: `${rawFlags}(${rights.join(",")})`,
+    canRead: (entry.rightsMask & WINDOWS_READ_RIGHTS_MASK) !== 0,
+    canWrite: (entry.rightsMask & WINDOWS_WRITE_RIGHTS_MASK) !== 0,
+  };
 }
 
 function windowsAclEntryPermitsUnsafeStagingAccess(
@@ -1250,74 +1398,47 @@ function windowsAclEntryPermitsUnsafeStagingAccess(
   );
 }
 
-async function inspectTrustedWindowsAcl(
-  pathname: string,
-  currentUserSid: string,
-): Promise<Awaited<ReturnType<typeof inspectWindowsAcl>>> {
-  const icacls = resolveSystemBin("icacls");
-  if (!icacls) {
-    throw new Error("Unable to resolve icacls for Windows staging ACL verification.");
-  }
-  return await inspectWindowsAcl(pathname, {
-    env: { USERSID: currentUserSid },
-    exec: async (command, args) => {
-      if (path.win32.basename(command).toLowerCase() !== "icacls.exe") {
-        throw new Error(`Unexpected Windows ACL helper command: ${command}`);
-      }
-      return await runExec(icacls, args, {
-        timeoutMs: 5_000,
-        maxBuffer: 1024 * 1024,
-      });
-    },
-  });
-}
-
-async function resolveWindowsCurrentUserSid(): Promise<string> {
-  windowsCurrentUserSidPromise ??= (async () => {
-    const whoami = resolveSystemBin("whoami");
-    if (!whoami) {
-      throw new Error("Unable to resolve whoami for Windows staging ownership verification.");
-    }
-    const { stdout, stderr } = await runExec(whoami, ["/user", "/fo", "csv", "/nh"], {
-      timeoutMs: 5_000,
-      maxBuffer: 64 * 1024,
-    });
-    return parseWindowsSid(`${stdout}\n${stderr}`, "current Windows user");
-  })();
-  return await windowsCurrentUserSidPromise;
-}
-
-async function resolveWindowsPathOwnerSid(pathname: string): Promise<string> {
-  const powershell = resolveSystemBin("powershell");
-  if (!powershell) {
-    throw new Error("Unable to resolve PowerShell for Windows staging ownership verification.");
-  }
-  const encodedPath = Buffer.from(pathname, "utf8").toString("base64");
+async function inspectWindowsPathSecurity(
+  pathnames: readonly string[],
+): Promise<z.infer<typeof WINDOWS_PATH_SECURITY_SCHEMA>> {
+  const encodedPaths = Buffer.from(JSON.stringify(pathnames), "utf8").toString("base64");
   const command = [
     "$ErrorActionPreference = 'Stop'",
-    `$path = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encodedPath}'))`,
-    "$acl = Get-Acl -LiteralPath $path",
-    "$owner = $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value",
-    "[Console]::Out.Write($owner)",
+    `$paths = ConvertFrom-Json ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encodedPaths}')))`,
+    "$pathSecurity = @($paths | ForEach-Object { $path = [string]$_; $acl = Get-Acl -LiteralPath $path; $entries = @($acl.Access | ForEach-Object { $identity = $_.IdentityReference; try { $principal = $identity.Translate([System.Security.Principal.SecurityIdentifier]).Value } catch { $principal = [string]$identity.Value }; $rightsMask = ([int64][int32]$_.FileSystemRights) -band 0xffffffffL; [pscustomobject]@{ principal = $principal; accessType = [string]$_.AccessControlType; rightsMask = $rightsMask; inheritanceFlags = [string]$_.InheritanceFlags; propagationFlags = [string]$_.PropagationFlags } }); [pscustomobject]@{ path = $path; ownerSid = $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value; entries = $entries } })",
+    "$payload = [pscustomobject]@{ currentUserSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value; paths = $pathSecurity }",
+    "$json = ConvertTo-Json -InputObject $payload -Compress -Depth 4",
+    "[Console]::Out.Write([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json)))",
   ].join("; ");
+  const stdout = await runEncodedWindowsPowerShell(command, WINDOWS_ACL_METADATA_MAX_BUFFER);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.from(stdout.trim(), "base64").toString("utf8"));
+  } catch (error) {
+    throw new Error("Unable to parse Windows ACL metadata.", { cause: error });
+  }
+  const result = WINDOWS_PATH_SECURITY_SCHEMA.safeParse(parsed);
+  if (!result.success) {
+    throw new Error("Invalid Windows ACL metadata.", { cause: result.error });
+  }
+  return result.data;
+}
+
+async function runEncodedWindowsPowerShell(command: string, maxBuffer: number): Promise<string> {
+  const powershell = resolveSystemBin("powershell");
+  if (!powershell) {
+    throw new Error("Unable to resolve PowerShell for Windows SQLite path security.");
+  }
   const encodedCommand = Buffer.from(command, "utf16le").toString("base64");
-  const { stdout, stderr } = await runExec(
+  const { stdout } = await runExec(
     powershell,
     ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedCommand],
     {
-      timeoutMs: 5_000,
-      maxBuffer: 64 * 1024,
+      timeoutMs: 10_000,
+      maxBuffer,
     },
   );
-  return parseWindowsSid(`${stdout}\n${stderr}`, `owner of ${pathname}`);
-}
-
-function parseWindowsSid(output: string, scope: string): string {
-  const sid = output.match(/S-\d+-\d+(?:-\d+)+/iu)?.[0].toUpperCase();
-  if (!sid || !WINDOWS_SID_PATTERN.test(sid)) {
-    throw new Error(`Unable to resolve ${scope} SID for SQLite staging.`);
-  }
-  return sid;
+  return stdout;
 }
 
 async function removePublishedSnapshotDirectoryIfOwned(
