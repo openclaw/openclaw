@@ -47,9 +47,13 @@ function decodeExportTrajectoryRequest(encoded: string): Partial<ExportTrajector
   if (!ENCODED_EXPORT_REQUEST_RE.test(trimmed)) {
     throw new Error("Encoded trajectory export request is invalid");
   }
+  const bytes = Buffer.from(trimmed, "base64url");
+  if (bytes.toString("base64url") !== trimmed) {
+    throw new Error("Encoded trajectory export request is invalid");
+  }
   let decoded: unknown;
   try {
-    decoded = JSON.parse(Buffer.from(trimmed, "base64url").toString("utf8")) as unknown;
+    decoded = JSON.parse(bytes.toString("utf8")) as unknown;
   } catch {
     throw new Error("Encoded trajectory export request is invalid JSON");
   }
