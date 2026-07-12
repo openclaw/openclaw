@@ -1,10 +1,6 @@
 // Keeps manifest providerAuthChoices literals aligned with registered provider.auth methods.
 import { describe, expect, it } from "vitest";
 import { createNonExitingRuntime } from "../runtime.js";
-import {
-  loadBundledPluginPublicSurface,
-  resolveBundledPluginPublicModulePath,
-} from "../test-utils/bundled-plugin-public-surface.js";
 import { createCapturedPluginRegistration } from "../test-utils/plugin-registration.js";
 import { listBundledPluginMetadata } from "./bundled-plugin-metadata.js";
 import type { PluginManifestProviderAuthChoice } from "./manifest.js";
@@ -71,6 +67,11 @@ function listParityCases(): ParityCase[] {
 async function loadPluginRegister(
   pluginId: string,
 ): Promise<(api: ReturnType<typeof createCapturedPluginRegistration>["api"]) => void> {
+  // Dynamic import keeps this file out of the unit-fast lane: loading built
+  // plugin dists pulls large module graphs into the shared worker cache and
+  // breaks co-resident vi.mock-based unit tests (observed with memory-host-sdk).
+  const { loadBundledPluginPublicSurface, resolveBundledPluginPublicModulePath } =
+    await import("../test-utils/bundled-plugin-public-surface.js");
   // Resolve first so unknown plugin ids fail with a clear path error before import.
   resolveBundledPluginPublicModulePath({
     pluginId,
