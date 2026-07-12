@@ -498,13 +498,18 @@ describe("registerSlackMessageEvents", () => {
     subtype?: "file_share" | null;
     botId?: string;
     username?: string;
+    channel?: string;
+    channelType?: "im" | "mpim" | "channel" | "group" | null;
+    parentUserId?: string;
   }) {
     const user = overrides?.user ?? "U1";
     return {
       type: "message",
       subtype: "message_changed",
-      channel: "C123",
-      channel_type: "channel",
+      channel: overrides?.channel ?? "C123",
+      ...(overrides?.channelType === null
+        ? {}
+        : { channel_type: overrides?.channelType ?? "channel" }),
       message: {
         type: "message",
         ...(overrides?.subtype === null ? {} : { subtype: overrides?.subtype ?? "file_share" }),
@@ -512,6 +517,7 @@ describe("registerSlackMessageEvents", () => {
         user,
         ...(overrides?.botId ? { bot_id: overrides.botId } : {}),
         ...(overrides?.username ? { username: overrides.username } : {}),
+        ...(overrides?.parentUserId ? { parent_user_id: overrides.parentUserId } : {}),
         text: overrides?.text ?? "please review these",
         files: overrides?.files ?? [
           { id: "F1", name: "packing-slip-1.pdf" },
@@ -654,6 +660,43 @@ describe("registerSlackMessageEvents", () => {
       bot_id: "B_OTHER",
       username: "file integration",
     });
+  });
+
+  it("preserves cached conversation type and parent routing on promotion", async () => {
+    const harness = createSlackSystemEventTestHarness({ dmPolicy: "open" });
+    harness.ctx.rememberSlackChannelType("C0MPDM42", "mpim");
+    const handleSlackMessage = vi.fn(async () => {});
+    registerSlackMessageEvents({ ctx: harness.ctx, handleSlackMessage });
+
+    await requireMessageHandler(harness.getHandler("message") as MessageHandler | null)({
+      event: makeFileShareChangedEvent({
+        channel: "C0MPDM42",
+        channelType: null,
+        parentUserId: "U_PARENT",
+      }),
+      body: {},
+    });
+
+    expect(handleSlackMessage).toHaveBeenCalledOnce();
+    const [promoted] = handleSlackMessage.mock.calls[0] as unknown as [
+      { channel_type?: string; parent_user_id?: string },
+    ];
+    expect(promoted).toMatchObject({
+      channel_type: "mpim",
+      parent_user_id: "U_PARENT",
+    });
+  });
+
+  it("leaves an omitted uncached conversation type unresolved", async () => {
+    const { handler, handleSlackMessage } = createHandlers("message", { dmPolicy: "open" });
+    await requireMessageHandler(handler)({
+      event: makeFileShareChangedEvent({ channel: "C0SHARED", channelType: null }),
+      body: {},
+    });
+
+    expect(handleSlackMessage).toHaveBeenCalledOnce();
+    const [promoted] = handleSlackMessage.mock.calls[0] as unknown as [{ channel_type?: string }];
+    expect(promoted.channel_type).toBeUndefined();
   });
 
   it("promotes a Slack Connect file-access placeholder for files.info hydration", async () => {

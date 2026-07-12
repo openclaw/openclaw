@@ -49,6 +49,7 @@ type SlackAssistantMessageRecord = {
   text?: unknown;
   ts?: unknown;
   thread_ts?: unknown;
+  parent_user_id?: unknown;
   files?: unknown;
   attachments?: unknown;
   assistant_thread?: unknown;
@@ -181,6 +182,7 @@ function resolveAssistantMessageChangedInbound(params: {
 function resolveFileShareMessageChangedInbound(params: {
   event: SlackMessageEvent;
   ctx: SlackMonitorContext;
+  eventScope?: SlackEventScope;
 }): SlackMessageEvent | undefined {
   if (params.event.subtype !== "message_changed") {
     return undefined;
@@ -210,10 +212,7 @@ function resolveFileShareMessageChangedInbound(params: {
     return undefined;
   }
   const contentVersion = buildSlackInboundContentVersion(next);
-  const channelType = normalizeSlackChannelType(
-    asString((changed as SlackMessageChangedEvent & { channel_type?: unknown }).channel_type),
-    changed.channel,
-  );
+  const channelType = params.ctx.recallSlackChannelType(changed.channel, params.eventScope);
   return withSlackInboundContentVersion(
     {
       type: "message",
@@ -226,6 +225,7 @@ function resolveFileShareMessageChangedInbound(params: {
       text: asString(next.text),
       ts: asString(next.ts) ?? asString(changed.event_ts),
       thread_ts: asString(next.thread_ts),
+      parent_user_id: asString(next.parent_user_id),
       event_ts: changed.event_ts,
       files: Array.isArray(next.files) ? (next.files as SlackMessageEvent["files"]) : undefined,
       attachments: Array.isArray(next.attachments)
@@ -321,6 +321,7 @@ export function registerSlackMessageEvents(params: {
       const fileShareChangedInbound = resolveFileShareMessageChangedInbound({
         event: message,
         ctx,
+        eventScope: eventScope ?? undefined,
       });
       if (fileShareChangedInbound) {
         await handleSlackMessage(fileShareChangedInbound, {
