@@ -235,7 +235,7 @@ struct WatchAppCommandStatus: Codable, Equatable {
         case .failed:
             String(format: localize(.failedFormat), label, self.detail ?? localize(.unavailable))
         case .blocked:
-            localize(.refreshingFromIPhone)
+            self.detail ?? localize(.refreshingFromIPhone)
         }
     }
 
@@ -584,23 +584,27 @@ struct WatchAppSnapshotMessage: Codable, Equatable {
         self.chatItems = try container.decodeIfPresent([WatchChatItem].self, forKey: .chatItems)
         self.sentAtMs = try container.decodeIfPresent(Int64.self, forKey: .sentAtMs)
         self.snapshotId = try container.decodeIfPresent(String.self, forKey: .snapshotId)
+        let gatewayStatusText = try container.decodeIfPresent(String.self, forKey: .gatewayStatusText)
+        let talkStatusText = try container.decodeIfPresent(String.self, forKey: .talkStatusText)
+        let chatStatusCode = try container.decodeIfPresent(String.self, forKey: .chatStatusCode)
+        let chatStatusText = try container.decodeIfPresent(String.self, forKey: .chatStatusText)
         self.gatewayStatus = (try? container.decode(
             OpenClawWatchAppStatus.self,
             forKey: .gatewayStatus)) ?? Self.decodeLegacyGatewayStatus(
-            text: container.decodeIfPresent(String.self, forKey: .gatewayStatusText),
+            text: gatewayStatusText,
             connected: self.gatewayConnected)
         self.talkStatus = (try? container.decode(
             OpenClawWatchAppStatus.self,
             forKey: .talkStatus)) ?? Self.decodeLegacyTalkStatus(
-            text: container.decodeIfPresent(String.self, forKey: .talkStatusText),
+            text: talkStatusText,
             enabled: self.talkEnabled,
             listening: self.talkListening,
             speaking: self.talkSpeaking)
         self.chatStatus = (try? container.decode(
             OpenClawWatchAppStatus.self,
             forKey: .chatStatus)) ?? Self.decodeLegacyChatStatus(
-            code: container.decodeIfPresent(String.self, forKey: .chatStatusCode),
-            text: container.decodeIfPresent(String.self, forKey: .chatStatusText))
+            code: chatStatusCode,
+            text: chatStatusText)
     }
 
     func encode(to encoder: Encoder) throws {

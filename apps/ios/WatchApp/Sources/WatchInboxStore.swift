@@ -709,8 +709,11 @@ import WatchKit
         self.persistState()
     }
 
-    func markAppCommandBlocked(_ command: WatchAppCommand, reason _: String) {
-        self.appCommandStatus = WatchAppCommandStatus(command: command, code: .blocked)
+    func markAppCommandBlocked(_ command: WatchAppCommand, reason: String) {
+        self.appCommandStatus = WatchAppCommandStatus(
+            command: command,
+            code: .blocked,
+            detail: reason)
         self.persistState()
     }
 
@@ -736,8 +739,11 @@ import WatchKit
 extension WatchInboxStore {
     func consume(execApprovalResolved message: WatchExecApprovalResolvedMessage) {
         guard self.routeGatewayPayload(.execApprovalResolved(message: message)) else { return }
-        let outcome = if let outcomeText = message.outcomeText, !outcomeText.isEmpty {
-            WatchExecApprovalOutcome(code: .verbatim, verbatim: outcomeText)
+        let normalizedOutcomeText = message.outcomeText?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .prefix(160)
+        let outcome = if let normalizedOutcomeText, !normalizedOutcomeText.isEmpty {
+            WatchExecApprovalOutcome(code: .verbatim, verbatim: String(normalizedOutcomeText))
         } else if message.source == "another-reviewer" {
             WatchExecApprovalOutcome(code: .resolvedElsewhere)
         } else {

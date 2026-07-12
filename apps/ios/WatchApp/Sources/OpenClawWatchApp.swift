@@ -147,7 +147,9 @@ struct OpenClawWatchApp: App {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         guard self.inboxStore.hasGatewayTaggedAppSnapshot else {
-            self.inboxStore.markAppCommandBlocked(.sendChat, reason: "refreshing iPhone state")
+            self.inboxStore.markAppCommandBlocked(
+                .sendChat,
+                reason: String(localized: "Refreshing iPhone state"))
             self.refreshAppSnapshot()
             return nil
         }
