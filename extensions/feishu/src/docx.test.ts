@@ -408,7 +408,7 @@ describe("feishu_doc image fetch hardening", () => {
     expect(readRemoteMediaBufferMock).toHaveBeenCalled();
     expect(readRemoteMediaBufferMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        timeoutMs: FEISHU_HTTP_TIMEOUT_MS,
+        responseHeaderTimeoutMs: FEISHU_HTTP_TIMEOUT_MS,
         readIdleTimeoutMs: FEISHU_HTTP_TIMEOUT_MS,
       }),
     );
@@ -436,7 +436,7 @@ describe("feishu_doc image fetch hardening", () => {
     expect(readRemoteMediaBufferMock).toHaveBeenCalledWith(
       expect.objectContaining({
         url: "https://x.test/stalled.png",
-        timeoutMs: FEISHU_HTTP_TIMEOUT_MS,
+        responseHeaderTimeoutMs: FEISHU_HTTP_TIMEOUT_MS,
         readIdleTimeoutMs: FEISHU_HTTP_TIMEOUT_MS,
       }),
     );
@@ -467,7 +467,7 @@ describe("feishu_doc image fetch hardening", () => {
     expect(readRemoteMediaBufferMock).toHaveBeenCalledWith(
       expect.objectContaining({
         url: "https://x.test/non-default-timeout.png",
-        timeoutMs: 1_234,
+        responseHeaderTimeoutMs: 1_234,
         readIdleTimeoutMs: 1_234,
       }),
     );
@@ -679,7 +679,7 @@ describe("feishu_doc image fetch hardening", () => {
     expect(readRemoteMediaBufferMock).toHaveBeenCalledWith(
       expect.objectContaining({
         url: "https://x.test/remote.png",
-        timeoutMs: FEISHU_HTTP_TIMEOUT_MS,
+        responseHeaderTimeoutMs: FEISHU_HTTP_TIMEOUT_MS,
         readIdleTimeoutMs: FEISHU_HTTP_TIMEOUT_MS,
       }),
     );

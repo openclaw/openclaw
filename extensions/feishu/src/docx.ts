@@ -521,7 +521,7 @@ async function readRemoteDocxImage(url: string, maxBytes: number, imageReadTimeo
   return await getFeishuRuntime().channel.media.readRemoteMediaBuffer({
     url,
     maxBytes,
-    timeoutMs: imageReadTimeoutMs,
+    responseHeaderTimeoutMs: imageReadTimeoutMs,
     readIdleTimeoutMs: imageReadTimeoutMs,
   });
 }
