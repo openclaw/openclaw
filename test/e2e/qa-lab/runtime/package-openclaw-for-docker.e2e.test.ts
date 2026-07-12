@@ -98,6 +98,7 @@ describe("package-openclaw-for-docker", () => {
       outputDir: ".artifacts/docker",
       outputName: "openclaw-current.tgz",
       packJson: ".artifacts/docker/pack.json",
+      pnpmPack: false,
       skipBuild: true,
       sourceDir: "/repo",
     });
@@ -130,6 +131,19 @@ describe("package-openclaw-for-docker", () => {
     for (const [flag, args] of duplicateCases) {
       expect(() => parseArgs(args), flag).toThrow(`${flag} was provided more than once`);
     }
+  });
+
+  it("rejects pnpm pack with npm metadata output", async () => {
+    expect(parseArgs(["--pnpm-pack"]).pnpmPack).toBe(true);
+    expect(() => parseArgs(["--pnpm-pack", "--pack-json", "pack.json"])).toThrow(
+      "--pack-json cannot be combined with --pnpm-pack",
+    );
+    await expect(
+      packOpenClawPackageForDocker("/repo", "/out", {
+        packJsonPath: "pack.json",
+        pnpmPack: true,
+      }),
+    ).rejects.toThrow("packJsonPath cannot be combined with pnpmPack");
   });
 
   it("rejects package artifact output names that escape the output directory", () => {
