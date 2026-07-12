@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { UiSettings } from "../../app/settings.ts";
 import { createSessionCapability } from "../../lib/sessions/index.ts";
@@ -31,18 +31,9 @@ type TestChatHost = Omit<ChatHost, "settings"> & {
   settings?: Partial<UiSettings>;
 };
 
-const { executeSlashCommandMock, setLastActiveSessionKeyMock } = vi.hoisted(() => ({
-  executeSlashCommandMock: vi.fn(),
-  setLastActiveSessionKeyMock: vi.fn(),
-}));
+const executeSlashCommandMock = vi.hoisted(() => vi.fn());
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
-
-vi.mock("../../app/settings.ts", () => ({
-  normalizeChatAutoScrollMode: (value: unknown) =>
-    value === "always" || value === "off" ? value : "near-bottom",
-  setLastActiveSessionKey: (...args: unknown[]) => setLastActiveSessionKeyMock(...args),
-}));
 
 vi.mock("./chat-command-executor.ts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./chat-command-executor.ts")>();
@@ -158,6 +149,7 @@ function fetchUrl(source: MockCallSource, callIndex: number) {
 }
 
 function makeHost(overrides?: Partial<TestChatHost>): TestChatHost {
+  const settings = { lastActiveSessionKey: "", ...overrides?.settings };
   const host = {
     client: null,
     chatMessages: [],
@@ -200,7 +192,9 @@ function makeHost(overrides?: Partial<TestChatHost>): TestChatHost {
     toolStreamOrder: [],
     toolStreamSyncTimer: null,
     updateComplete: Promise.resolve(),
+    applySettings: vi.fn((next: UiSettings) => Object.assign(settings, next)),
     ...overrides,
+    settings,
   };
   const sessions = createSessionCapability({
     snapshot: {
@@ -1099,7 +1093,6 @@ describe("handleSendChat", () => {
 
   beforeEach(() => {
     executeSlashCommandMock.mockReset();
-    setLastActiveSessionKeyMock.mockReset();
   });
 
   afterEach(() => {
@@ -2952,7 +2945,9 @@ describe("handleSendChat", () => {
     expect(host.chatRunId).toBe("run-1");
     expect(host.chatStream).toBe("Working...");
     expect(host.chatQueue).toStrictEqual([]);
-    expect(setLastActiveSessionKeyMock).toHaveBeenCalledWith(expect.anything(), "agent:main:main");
+    expect(host.applySettings).toHaveBeenCalledWith(
+      expect.objectContaining({ lastActiveSessionKey: "agent:main:main" }),
+    );
   });
 
   it("restores queued steer items when chat.send returns terminal error", async () => {
@@ -2977,7 +2972,7 @@ describe("handleSendChat", () => {
     expect(host.chatStream).toBe("Working...");
     expect(host.chatQueue).toStrictEqual([original]);
     expect(host.lastError).toBe("Steer failed before it reached the run; try again.");
-    expect(setLastActiveSessionKeyMock).not.toHaveBeenCalled();
+    expect(host.applySettings).not.toHaveBeenCalled();
   });
 
   it("removes pending steer indicators when the run finishes", () => {
@@ -3242,9 +3237,4 @@ describe("handleAbortChat", () => {
     expect(host.pendingAbort).toBeUndefined();
     expect(host.chatMessage).toBe("draft");
   });
-});
-
-afterAll(() => {
-  vi.doUnmock("../../app/settings.ts");
-  vi.resetModules();
 });
