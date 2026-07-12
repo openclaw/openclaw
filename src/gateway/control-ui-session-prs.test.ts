@@ -519,4 +519,29 @@ describe("session branch diff stats", () => {
     // GitHub's pull/new page 404s for unpushed branches, so no Create PR row.
     expect(result.branch).toBeUndefined();
   });
+
+  it("omits the branch payload when the default branch is unknown", async () => {
+    await git("init", "--initial-branch=main", ".");
+    await fs.writeFile(path.join(root, "a.txt"), "one\n");
+    await git("add", "a.txt");
+    await git("commit", "-m", "base");
+    await git("checkout", "-b", "feature");
+    await git("update-ref", "refs/remotes/origin/feature", "HEAD");
+
+    const fetchImpl = routedFetch([
+      { match: "/pulls?head=", response: () => githubJson([]) },
+      { match: "/repos/openclaw/openclaw", response: () => githubJson({ fork: false }) },
+    ]);
+    const result = await loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main" },
+      {
+        fetchImpl,
+        // No defaultBranch: origin/HEAD unresolvable in this checkout.
+        resolveGitContext: async () => ({ ...context, branch: "feature", root }),
+      },
+    );
+
+    // Fail closed: without a default branch there is nothing to compare against.
+    expect(result.branch).toBeUndefined();
+  });
 });

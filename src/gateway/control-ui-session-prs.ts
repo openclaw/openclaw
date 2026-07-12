@@ -237,7 +237,15 @@ async function loadBranchDiffStats(
     return null;
   }
   try {
-    const result = await runGit(root, ["diff", "--shortstat", mergeBase]);
+    // --no-ext-diff/--no-textconv: checkout-configurable diff drivers must
+    // never execute in the Gateway process (same guard as sessions-diff).
+    const result = await runGit(root, [
+      "diff",
+      "--shortstat",
+      "--no-ext-diff",
+      "--no-textconv",
+      mergeBase,
+    ]);
     if (result.code !== 0) {
       return null;
     }
@@ -264,13 +272,15 @@ async function branchHasCreatablePullRequest(
   root: string,
   context: SessionPullRequestGitContext,
 ): Promise<boolean> {
+  // Fail closed without a resolvable default branch: a session sitting on the
+  // actual default in a clone lacking origin/HEAD must not get a Create PR row.
+  if (!context.defaultBranch) {
+    return false;
+  }
   const remoteRef = `refs/remotes/origin/${context.branch}`;
   const pushed = await gitOutput(root, ["rev-parse", "--verify", "--quiet", remoteRef]);
   if (!pushed) {
     return false;
-  }
-  if (!context.defaultBranch) {
-    return true;
   }
   const ahead = await gitOutput(root, [
     "rev-list",
