@@ -36,6 +36,7 @@ const rawSqliteAllowPathGroups = {
   ],
   "SQLite database lifecycle, schema, transactions, and pragmas": [
     "src/infra/node-sqlite.ts",
+    "src/infra/sqlite-index-schema.ts",
     "src/infra/sqlite-integrity.ts",
     "src/infra/sqlite-pragma.test-support.ts",
     "src/infra/sqlite-transaction.ts",
@@ -56,6 +57,7 @@ const rawSqliteAllowPathGroups = {
     "src/commands/doctor-sqlite-compact.ts",
     "src/commands/doctor-session-sqlite.ts",
     "src/commands/doctor-session-sqlite-readers.ts",
+    "src/commands/doctor-session-sqlite-recover-report.ts",
     "src/commands/doctor-state-sqlite-compact.ts",
     "src/infra/state-migrations.ts",
     "src/infra/state-migrations.debug-proxy.ts",
