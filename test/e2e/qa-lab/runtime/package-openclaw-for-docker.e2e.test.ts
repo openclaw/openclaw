@@ -5,7 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import { DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV } from "../../../../scripts/lib/bundled-plugin-build-entries.mjs";
 import {
   buildPackageArtifacts,
@@ -16,6 +17,7 @@ import {
 } from "../../../../scripts/package-openclaw-for-docker.mjs";
 
 const skipBundledAiRuntime = async (): Promise<() => Promise<void>> => async () => {};
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function isProcessAlive(pid: number): boolean {
   if (!Number.isSafeInteger(pid) || pid <= 0) {
@@ -135,7 +137,7 @@ describe("package-openclaw-for-docker", () => {
   });
 
   it("loads from a trusted harness checkout without installed dependencies", async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-harness-"));
+    const tempRoot = tempDirs.make("openclaw-package-harness-");
     const copiedFiles = [
       "scripts/package-openclaw-for-docker.mjs",
       "scripts/package-changelog.mjs",
