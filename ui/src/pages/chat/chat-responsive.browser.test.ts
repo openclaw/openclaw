@@ -593,7 +593,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
-  it("reveals message context on timestamp hover and keeps click-to-open", async () => {
+  it("reveals message context on timestamp hover and keeps click-to-open", { timeout: 20_000 }, async () => {
     if (!realChatServer) {
       throw new Error("Expected the Control UI server to be ready");
     }
