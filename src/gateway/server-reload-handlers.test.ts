@@ -1664,6 +1664,7 @@ describe("gateway Gmail hot reload handlers", () => {
       webTools: {},
     }));
     const heartbeatRunner = { stop: vi.fn(), updateConfig: vi.fn() };
+    const commitTerminalConfig = vi.fn();
     const reloader = startManagedGatewayConfigReloader({
       minimalTestGateway: false,
       initialConfig,
@@ -1726,7 +1727,7 @@ describe("gateway Gmail hot reload handlers", () => {
       sharedGatewaySessionGenerationState: { current: undefined, required: null },
       clients: [],
       reconcileTerminalSessions: vi.fn(),
-      commitTerminalConfig: vi.fn(),
+      commitTerminalConfig,
     });
     const registeredWriteListener = writeListenerRef.current;
     if (!registeredWriteListener) {
@@ -1751,6 +1752,7 @@ describe("gateway Gmail hot reload handlers", () => {
       activate: true,
     });
     expect(heartbeatRunner.updateConfig).not.toHaveBeenCalled();
+    expect(commitTerminalConfig).toHaveBeenCalledWith(nextConfig);
     await reloader.stop();
   });
 
