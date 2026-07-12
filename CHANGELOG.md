@@ -30,6 +30,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Canvas Gateway and macOS reliability:** resolve hosted Canvas routes through freshly scoped node capabilities, keep bridge actions available before page scripts and when live reload is disabled, restore file watching beneath hidden state directories, prefer path capabilities over stale queries, preserve false and empty eval results, and restrict macOS hosted actions to the exact trusted A2UI document. Fixes #91083. Thanks @Medicalmusings, @LaPhilosophie, @Lucenx9, and @hanZeng-08.
 - **Gradium TTS credential egress:** reject non-HTTPS, foreign-host, and hostname-lookalike base URLs before dispatching API keys, and pin guarded transport to Gradium's documented API hostname. (#101280) Thanks @zhangguiping-xydt.
 - **Gateway command SecretRefs:** preserve authoritative active-snapshot values when another command secret remains unresolved, falling back locally only for missing paths instead of emitting a per-turn `secrets.resolve` failure. (#96661) Thanks @SunnyShu0925.
 - **Cron delivery status:** keep successful isolated agent turns at `status=ok` when downstream delivery fails, while preserving the send failure separately in delivery state and run logs. (#95419) Thanks @Alix-007.
