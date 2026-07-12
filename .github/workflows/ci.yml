@@ -1424,9 +1424,11 @@ jobs:
 
       - name: Setup Go for docs i18n
         if: matrix.requires_go == true
+        # The current workflow validates frozen targets whose go.mod may predate this patch pin.
+        # Keep the runner toolchain owned by the workflow while using the target only for cache keys.
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
         with:
-          go-version-file: scripts/docs-i18n/go.mod
+          go-version: "1.25.12"
           cache-dependency-path: scripts/docs-i18n/go.sum
 
       - name: Verify docs i18n Go toolchain

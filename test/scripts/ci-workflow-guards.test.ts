@@ -2084,7 +2084,7 @@ describe("ci workflow guards", () => {
     );
   });
 
-  it("keeps docs i18n CI on the patched preferred Go toolchain", () => {
+  it("keeps docs i18n CI on the workflow-owned patched Go toolchain", () => {
     const workflow = readCiWorkflow();
     const nodeTestJob = workflow.jobs["checks-node-core-test-nondist-shard"];
     const setupGoStep = nodeTestJob.steps.find(
@@ -2097,11 +2097,11 @@ describe("ci workflow guards", () => {
       if: "matrix.requires_go == true",
       uses: SETUP_GO_V6,
       with: {
-        "go-version-file": "scripts/docs-i18n/go.mod",
+        "go-version": "1.25.12",
         "cache-dependency-path": "scripts/docs-i18n/go.sum",
       },
     });
-    expect(setupGoStep.with).not.toHaveProperty("go-version");
+    expect(setupGoStep.with).not.toHaveProperty("go-version-file");
     expect(verifyGoStep).toMatchObject({
       if: "matrix.requires_go == true",
       run: 'test "$(go env GOVERSION)" = "go1.25.12"',
