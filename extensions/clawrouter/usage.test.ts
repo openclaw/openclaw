@@ -151,7 +151,7 @@ describe("ClawRouter usage", () => {
         {
           label: "Monthly budget",
           usedPercent: 25,
-          resetAt: Date.UTC(2026, 7, 1),
+          resetAt: Date.UTC(2026, 6, 1),
         },
       ],
       billing: [
@@ -161,7 +161,7 @@ describe("ClawRouter usage", () => {
           limit: 100,
           unit: "USD",
           period: "month",
-          resetAt: Date.UTC(2026, 7, 1),
+          resetAt: Date.UTC(2026, 6, 1),
         },
       ],
       summary: "12 requests · 34,567 tokens · $25.00 used",

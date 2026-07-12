@@ -55,7 +55,8 @@ function resolveMonthlyResetAt(windowKey: unknown): number | undefined {
   const year = Number(match[1]);
   const month = Number(match[2]);
   return Number.isSafeInteger(year) && month >= 1 && month <= 12
-    ? Date.UTC(year, month, 1)
+    ? // windowKey uses 1-based months; Date.UTC expects a zero-based month index.
+      Date.UTC(year, month - 1, 1)
     : undefined;
 }
 
