@@ -1464,15 +1464,34 @@ function isCollapsibleWorkGroup(item: TurnRenderItem): item is MessageGroup {
   return role === "tool" || (role === "assistant" && !assistantGroupIsForwardedBoundary(item));
 }
 
+// Attachment/canvas/media-only replies carry no text but are still the turn's
+// visible outcome; they must never fold into the work rollup. Normalized
+// content passes unknown block types through (e.g. raw image blocks), so
+// anything that is not a tool block counts as visible reply content.
+function assistantGroupHasVisibleReplyContent(group: MessageGroup): boolean {
+  return group.messages.some(({ message }) => {
+    if (extractTextCached(message)?.trim()) {
+      return true;
+    }
+    const content = safeNormalizeMessage(message)?.content ?? [];
+    return content.some((block) => {
+      if (block.type === "text") {
+        return Boolean(block.text?.trim());
+      }
+      return !isToolCallContentType(block.type) && !isToolResultContentType(block.type);
+    });
+  });
+}
+
 // History carries no final-vs-commentary marker (commentary exists only as
-// live stream segments), so the last assistant text group stands in for the
-// final reply. Turns whose last text is commentary merely collapse less;
-// the visible reply is never folded away.
+// live stream segments), so the last assistant group with visible content
+// stands in for the final reply. Turns whose last content is commentary
+// merely collapse less; the visible reply is never folded away.
 function isFinalReplyGroup(item: TurnRenderItem): boolean {
   return (
     isCollapsibleWorkGroup(item) &&
     item.role.toLowerCase() === "assistant" &&
-    assistantGroupHasReplyText(item)
+    assistantGroupHasVisibleReplyContent(item)
   );
 }
 

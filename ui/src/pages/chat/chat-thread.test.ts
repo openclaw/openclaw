@@ -192,6 +192,29 @@ describe("collapseCompletedTurnWork", () => {
     expect(items.some((item) => item.kind === "divider")).toBe(true);
   });
 
+  it("keeps attachment-only final replies outside the work rollup", () => {
+    const items = collapsedItems({
+      messages: [
+        { role: "user", content: "render it", timestamp: 1_000 },
+        toolResult("call-1", 2_000),
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "image",
+              url: "/media/screenshot.png",
+              source: { type: "url", url: "/media/screenshot.png" },
+            },
+          ],
+          timestamp: 3_000,
+        },
+      ],
+    });
+
+    expect(items.map((item) => item.kind)).toEqual(["group", "work-group", "group"]);
+    expect(requireGroup(items[2]).role).toBe("assistant");
+  });
+
   it("keeps search matches visible instead of folding them into a rollup", () => {
     const items = collapseCompletedTurnWork(
       coalesceStreamRuns(
