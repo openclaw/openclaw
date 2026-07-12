@@ -1,0 +1,14 @@
+"CFBundleDisplayName" = "OpenClaw";
+"NSCalendarsFullAccessUsageDescription" = "يستخدم OpenClaw تقويماتك لعرض الأحداث وسياق الجدولة عند تفعيل الوصول إلى التقويم.";
+"NSCalendarsUsageDescription" = "يستخدم OpenClaw تقويماتك لعرض الأحداث وسياق الجدولة عند تفعيل الوصول إلى التقويم.";
+"NSCalendarsWriteOnlyAccessUsageDescription" = "يستخدم OpenClaw تقويماتك لإضافة أحداث عند تفعيل الوصول إلى التقويم.";
+"NSCameraUsageDescription" = "يستخدم OpenClaw الكاميرا عند مسح رمز QR لإعداد Gateway أو عندما تطلب من Gateway المقترن أو المساعد التقاط صورة أو فيديو قصير من هذا iPhone، مثلًا للاتصال بـ Gateway أو لعرض مستند أو شاشة جهاز أو مساحة عمل على مساعدك.";
+"NSContactsUsageDescription" = "يستخدم OpenClaw جهات اتصالك حتى تتمكن من البحث عن الأشخاص والإشارة إليهم أثناء استخدام المساعد.";
+"NSLocalNetworkUsageDescription" = "يكتشف OpenClaw ويتصل ببوابة OpenClaw الخاصة بك على الشبكة المحلية.";
+"NSLocationAlwaysAndWhenInUseUsageDescription" = "يمكن لـ OpenClaw مشاركة موقعك في الخلفية عند تفعيل دائمًا.";
+"NSLocationWhenInUseUsageDescription" = "يستخدم OpenClaw موقعك عندما تسمح بمشاركة الموقع.";
+"NSMicrophoneUsageDescription" = "يستخدم OpenClaw الميكروفون للدردشة الفورية، والتنبيه الصوتي، والضغط للتحدث، والملاحظات الصوتية.";
+"NSMotionUsageDescription" = "قد يستخدم OpenClaw بيانات الحركة لدعم التفاعلات والأتمتة الواعية بالجهاز.";
+"NSPhotoLibraryUsageDescription" = "يتيح OpenClaw لمساعدك قراءة الصور التي تسمح بها، ويتيح لك اختيار الصور لمشاركتها.";
+"NSRemindersFullAccessUsageDescription" = "يستخدم OpenClaw تذكيراتك لعرض المهام وإضافتها وإكمالها عند تفعيل الوصول إلى التذكيرات.";
+"NSSpeechRecognitionUsageDescription" = "يستخدم OpenClaw التعرف على الكلام على الجهاز لوضع التحدث والتنبيه الصوتي.";

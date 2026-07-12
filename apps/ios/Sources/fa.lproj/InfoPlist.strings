@@ -1,0 +1,14 @@
+"CFBundleDisplayName" = "OpenClaw";
+"NSCalendarsFullAccessUsageDescription" = "OpenClaw از تقویم‌های شما استفاده می‌کند تا وقتی دسترسی به تقویم را فعال می‌کنید، رویدادها و زمینهٔ زمان‌بندی را نشان دهد.";
+"NSCalendarsUsageDescription" = "OpenClaw از تقویم‌های شما استفاده می‌کند تا وقتی دسترسی به تقویم را فعال می‌کنید، رویدادها و زمینهٔ زمان‌بندی را نشان دهد.";
+"NSCalendarsWriteOnlyAccessUsageDescription" = "OpenClaw از تقویم‌های شما استفاده می‌کند تا وقتی دسترسی به تقویم را فعال می‌کنید، رویدادها را اضافه کند.";
+"NSCameraUsageDescription" = "OpenClaw زمانی از دوربین استفاده می‌کند که کد QR راه‌اندازی Gateway را اسکن می‌کنید یا از Gateway جفت‌شده یا دستیار خود می‌خواهید از این iPhone عکس یا ویدیوی کوتاهی بگیرد؛ برای مثال برای اتصال به Gateway یا نشان دادن یک سند، صفحهٔ دستگاه یا فضای کاری به دستیار خود.";
+"NSContactsUsageDescription" = "OpenClaw از مخاطبان شما استفاده می‌کند تا هنگام استفاده از دستیار بتوانید افراد را جست‌وجو کرده و به آن‌ها ارجاع دهید.";
+"NSLocalNetworkUsageDescription" = "OpenClaw، gateway ‏OpenClaw شما را در شبکهٔ محلی پیدا می‌کند و به آن متصل می‌شود.";
+"NSLocationAlwaysAndWhenInUseUsageDescription" = "OpenClaw می‌تواند وقتی گزینهٔ Always را فعال می‌کنید، موقعیت مکانی شما را در پس‌زمینه به اشتراک بگذارد.";
+"NSLocationWhenInUseUsageDescription" = "OpenClaw وقتی اشتراک‌گذاری موقعیت مکانی را مجاز می‌کنید، از موقعیت مکانی شما استفاده می‌کند.";
+"NSMicrophoneUsageDescription" = "OpenClaw از میکروفون برای گفت‌وگوی بی‌درنگ، فعال‌سازی صوتی، فشار برای صحبت و یادداشت‌های صوتی استفاده می‌کند.";
+"NSMotionUsageDescription" = "OpenClaw ممکن است از داده‌های حرکت برای پشتیبانی از تعاملات و خودکارسازی‌های آگاه از دستگاه استفاده کند.";
+"NSPhotoLibraryUsageDescription" = "OpenClaw به دستیار شما اجازه می‌دهد عکس‌هایی را که مجاز می‌کنید بخواند و به شما امکان می‌دهد عکس‌هایی را برای اشتراک‌گذاری انتخاب کنید.";
+"NSRemindersFullAccessUsageDescription" = "وقتی دسترسی به یادآورها را فعال می‌کنید، OpenClaw از یادآورهای شما برای فهرست کردن، افزودن و تکمیل کارها استفاده می‌کند.";
+"NSSpeechRecognitionUsageDescription" = "OpenClaw برای حالت گفت‌وگو و بیدارباش صوتی از تشخیص گفتار روی دستگاه استفاده می‌کند.";

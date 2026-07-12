@@ -1,0 +1,14 @@
+"CFBundleDisplayName" = "OpenClaw";
+"NSCalendarsFullAccessUsageDescription" = "OpenClaw usa i tuoi calendari per mostrare eventi e contesto di pianificazione quando abiliti l'accesso al calendario.";
+"NSCalendarsUsageDescription" = "OpenClaw usa i tuoi calendari per mostrare eventi e contesto di pianificazione quando abiliti l'accesso al calendario.";
+"NSCalendarsWriteOnlyAccessUsageDescription" = "OpenClaw usa i tuoi calendari per aggiungere eventi quando abiliti l'accesso al calendario.";
+"NSCameraUsageDescription" = "OpenClaw usa la fotocamera quando scansioni un codice QR di configurazione del Gateway o chiedi al Gateway associato o all'assistente di acquisire una foto o un breve video da questo iPhone, ad esempio per connetterti al Gateway o mostrare all'assistente un documento, lo schermo di un dispositivo o uno spazio di lavoro.";
+"NSContactsUsageDescription" = "OpenClaw usa i tuoi contatti per permetterti di cercare e fare riferimento alle persone mentre usi l'assistente.";
+"NSLocalNetworkUsageDescription" = "OpenClaw rileva e si connette al tuo gateway OpenClaw sulla rete locale.";
+"NSLocationAlwaysAndWhenInUseUsageDescription" = "OpenClaw può condividere la tua posizione in background quando abiliti Sempre.";
+"NSLocationWhenInUseUsageDescription" = "OpenClaw usa la tua posizione quando consenti la condivisione della posizione.";
+"NSMicrophoneUsageDescription" = "OpenClaw usa il microfono per chat in tempo reale, attivazione vocale, push-to-talk e note vocali.";
+"NSMotionUsageDescription" = "OpenClaw può usare i dati di movimento per supportare interazioni e automazioni consapevoli del dispositivo.";
+"NSPhotoLibraryUsageDescription" = "OpenClaw consente al tuo assistente di leggere le foto che autorizzi e ti permette di scegliere le foto da condividere.";
+"NSRemindersFullAccessUsageDescription" = "OpenClaw usa i tuoi promemoria per elencare, aggiungere e completare attività quando abiliti l’accesso ai promemoria.";
+"NSSpeechRecognitionUsageDescription" = "OpenClaw usa il riconoscimento vocale sul dispositivo per la modalità conversazione e l’attivazione vocale.";

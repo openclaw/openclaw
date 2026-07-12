@@ -1,0 +1,14 @@
+"CFBundleDisplayName" = "OpenClaw";
+"NSCalendarsFullAccessUsageDescription" = "OpenClaw використовує ваші календарі, щоб показувати події та контекст планування, коли ви надаєте доступ до календаря.";
+"NSCalendarsUsageDescription" = "OpenClaw використовує ваші календарі, щоб показувати події та контекст планування, коли ви надаєте доступ до календаря.";
+"NSCalendarsWriteOnlyAccessUsageDescription" = "OpenClaw використовує ваші календарі, щоб додавати події, коли ви надаєте доступ до календаря.";
+"NSCameraUsageDescription" = "OpenClaw використовує камеру, коли ви скануєте QR-код налаштування Gateway або просите спарений Gateway чи помічника зробити фото або коротке відео з цього iPhone, наприклад щоб підключитися до вашого Gateway або показати помічнику документ, екран пристрою чи робочий простір.";
+"NSContactsUsageDescription" = "OpenClaw використовує ваші контакти, щоб ви могли шукати людей і посилатися на них під час використання помічника.";
+"NSLocalNetworkUsageDescription" = "OpenClaw виявляє та підключається до вашого OpenClaw gateway у локальній мережі.";
+"NSLocationAlwaysAndWhenInUseUsageDescription" = "OpenClaw може ділитися вашим місцезнаходженням у фоновому режимі, коли ви вмикаєте «Завжди».";
+"NSLocationWhenInUseUsageDescription" = "OpenClaw використовує ваше місцезнаходження, коли ви дозволяєте ділитися місцезнаходженням.";
+"NSMicrophoneUsageDescription" = "OpenClaw використовує мікрофон для чату в реальному часі, голосового пробудження, режиму push-to-talk та голосових нотаток.";
+"NSMotionUsageDescription" = "OpenClaw може використовувати дані про рух для підтримки взаємодій і автоматизацій з урахуванням пристрою.";
+"NSPhotoLibraryUsageDescription" = "OpenClaw дає змогу вашому асистенту читати дозволені вами фото й дає вам змогу вибирати фото для надсилання.";
+"NSRemindersFullAccessUsageDescription" = "OpenClaw використовує ваші нагадування, щоб переглядати, додавати та завершувати завдання, коли ви вмикаєте доступ до нагадувань.";
+"NSSpeechRecognitionUsageDescription" = "OpenClaw використовує розпізнавання мовлення на пристрої для режиму розмови та голосової активації.";

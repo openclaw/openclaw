@@ -1,0 +1,14 @@
+"CFBundleDisplayName" = "OpenClaw";
+"NSCalendarsFullAccessUsageDescription" = "OpenClawは、カレンダーへのアクセスを有効にしたときに、イベントとスケジュールのコンテキストを表示するためにカレンダーを使用します。";
+"NSCalendarsUsageDescription" = "OpenClawは、カレンダーへのアクセスを有効にしたときに、イベントとスケジュールのコンテキストを表示するためにカレンダーを使用します。";
+"NSCalendarsWriteOnlyAccessUsageDescription" = "OpenClawは、カレンダーへのアクセスを有効にしたときに、イベントを追加するためにカレンダーを使用します。";
+"NSCameraUsageDescription" = "OpenClawは、Gateway設定用QRコードをスキャンするとき、またはペアリング済みのGatewayやアシスタントにこのiPhoneから写真や短い動画の撮影を依頼するときにカメラを使用します。たとえば、Gatewayに接続したり、アシスタントにドキュメント、デバイス画面、ワークスペースを見せたりする場合です。";
+"NSContactsUsageDescription" = "OpenClawは、アシスタントの使用中に人物を検索して参照できるように、連絡先を使用します。";
+"NSLocalNetworkUsageDescription" = "OpenClawは、ローカルネットワーク上のOpenClaw Gatewayを検出して接続します。";
+"NSLocationAlwaysAndWhenInUseUsageDescription" = "OpenClawは、「常に」を有効にした場合、バックグラウンドで位置情報を共有できます。";
+"NSLocationWhenInUseUsageDescription" = "OpenClawは、位置情報の共有を許可したときに位置情報を使用します。";
+"NSMicrophoneUsageDescription" = "OpenClaw はリアルタイムチャット、音声ウェイク、プッシュトゥトーク、ボイスメモにマイクを使用します。";
+"NSMotionUsageDescription" = "OpenClawは、デバイス対応のインタラクションと自動化をサポートするためにモーションデータを使用する場合があります。";
+"NSPhotoLibraryUsageDescription" = "OpenClaw は、許可した写真をアシスタントが読み取れるようにし、共有する写真を選択できるようにします。";
+"NSRemindersFullAccessUsageDescription" = "リマインダーへのアクセスを有効にすると、OpenClaw はリマインダーを使用してタスクの一覧表示、追加、完了を行います。";
+"NSSpeechRecognitionUsageDescription" = "OpenClaw はトークモードと音声ウェイクにオンデバイス音声認識を使用します。";

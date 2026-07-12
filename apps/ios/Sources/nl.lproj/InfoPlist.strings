@@ -1,0 +1,14 @@
+"CFBundleDisplayName" = "OpenClaw";
+"NSCalendarsFullAccessUsageDescription" = "OpenClaw gebruikt je agenda’s om gebeurtenissen en planningscontext te tonen wanneer je agendatoegang inschakelt.";
+"NSCalendarsUsageDescription" = "OpenClaw gebruikt je agenda’s om gebeurtenissen en planningscontext te tonen wanneer je agendatoegang inschakelt.";
+"NSCalendarsWriteOnlyAccessUsageDescription" = "OpenClaw gebruikt je agenda’s om gebeurtenissen toe te voegen wanneer je agendatoegang inschakelt.";
+"NSCameraUsageDescription" = "OpenClaw gebruikt de camera wanneer je een QR-code voor Gateway-configuratie scant of je gekoppelde Gateway of assistent vraagt om een foto of korte video vanaf deze iPhone vast te leggen, bijvoorbeeld om verbinding te maken met je Gateway of om je assistent een document, apparaatscherm of werkruimte te tonen.";
+"NSContactsUsageDescription" = "OpenClaw gebruikt je contacten zodat je personen kunt zoeken en vermelden terwijl je de assistent gebruikt.";
+"NSLocalNetworkUsageDescription" = "OpenClaw vindt en maakt verbinding met je OpenClaw-gateway op het lokale netwerk.";
+"NSLocationAlwaysAndWhenInUseUsageDescription" = "OpenClaw kan je locatie op de achtergrond delen wanneer je Altijd inschakelt.";
+"NSLocationWhenInUseUsageDescription" = "OpenClaw gebruikt je locatie wanneer je locatie delen toestaat.";
+"NSMicrophoneUsageDescription" = "OpenClaw gebruikt de microfoon voor realtime chat, spraakwake, push-to-talk en spraaknotities.";
+"NSMotionUsageDescription" = "OpenClaw kan bewegingsgegevens gebruiken ter ondersteuning van apparaatafhankelijke interacties en automatiseringen.";
+"NSPhotoLibraryUsageDescription" = "OpenClaw laat je assistent foto’s lezen die je toestaat en laat je foto’s kiezen om te delen.";
+"NSRemindersFullAccessUsageDescription" = "OpenClaw gebruikt je herinneringen om taken weer te geven, toe te voegen en te voltooien wanneer je toegang tot herinneringen inschakelt.";
+"NSSpeechRecognitionUsageDescription" = "OpenClaw gebruikt spraakherkenning op het apparaat voor de praatmodus en spraakactivering.";

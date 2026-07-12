@@ -1,0 +1,14 @@
+"CFBundleDisplayName" = "OpenClaw";
+"NSCalendarsFullAccessUsageDescription" = "OpenClaw używa Twoich kalendarzy do wyświetlania wydarzeń i kontekstu planowania, gdy włączysz dostęp do kalendarza.";
+"NSCalendarsUsageDescription" = "OpenClaw używa Twoich kalendarzy do wyświetlania wydarzeń i kontekstu planowania, gdy włączysz dostęp do kalendarza.";
+"NSCalendarsWriteOnlyAccessUsageDescription" = "OpenClaw używa Twoich kalendarzy do dodawania wydarzeń, gdy włączysz dostęp do kalendarza.";
+"NSCameraUsageDescription" = "OpenClaw używa aparatu, gdy skanujesz kod QR konfiguracji Gateway lub poprosisz sparowane Gateway albo asystenta o zrobienie zdjęcia lub nagranie krótkiego wideo z tego iPhone’a, na przykład aby połączyć się z Gateway lub pokazać asystentowi dokument, ekran urządzenia albo miejsce pracy.";
+"NSContactsUsageDescription" = "OpenClaw używa Twoich kontaktów, aby umożliwić wyszukiwanie osób i odwoływanie się do nich podczas korzystania z asystenta.";
+"NSLocalNetworkUsageDescription" = "OpenClaw wykrywa i łączy się z Twoim gateway OpenClaw w sieci lokalnej.";
+"NSLocationAlwaysAndWhenInUseUsageDescription" = "OpenClaw może udostępniać Twoją lokalizację w tle, gdy włączysz Zawsze.";
+"NSLocationWhenInUseUsageDescription" = "OpenClaw używa Twojej lokalizacji, gdy zezwolisz na udostępnianie lokalizacji.";
+"NSMicrophoneUsageDescription" = "OpenClaw używa mikrofonu do czatu w czasie rzeczywistym, aktywacji głosowej, funkcji naciśnij i mów oraz notatek głosowych.";
+"NSMotionUsageDescription" = "OpenClaw może używać danych o ruchu do obsługi interakcji i automatyzacji zależnych od urządzenia.";
+"NSPhotoLibraryUsageDescription" = "OpenClaw pozwala Twojemu asystentowi odczytywać zdjęcia, na które zezwolisz, oraz pozwala wybrać zdjęcia do udostępnienia.";
+"NSRemindersFullAccessUsageDescription" = "OpenClaw używa Twoich przypomnień do wyświetlania, dodawania i oznaczania zadań jako ukończone, gdy włączysz dostęp do przypomnień.";
+"NSSpeechRecognitionUsageDescription" = "OpenClaw używa rozpoznawania mowy na urządzeniu w trybie rozmowy i do wybudzania głosem.";

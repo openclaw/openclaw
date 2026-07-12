@@ -1,0 +1,14 @@
+"CFBundleDisplayName" = "OpenClaw";
+"NSCalendarsFullAccessUsageDescription" = "OpenClaw ใช้ปฏิทินของคุณเพื่อแสดงกิจกรรมและบริบทการจัดกำหนดการเมื่อคุณเปิดใช้งานการเข้าถึงปฏิทิน";
+"NSCalendarsUsageDescription" = "OpenClaw ใช้ปฏิทินของคุณเพื่อแสดงกิจกรรมและบริบทการจัดกำหนดการเมื่อคุณเปิดใช้งานการเข้าถึงปฏิทิน";
+"NSCalendarsWriteOnlyAccessUsageDescription" = "OpenClaw ใช้ปฏิทินของคุณเพื่อเพิ่มกิจกรรมเมื่อคุณเปิดใช้งานการเข้าถึงปฏิทิน";
+"NSCameraUsageDescription" = "OpenClaw ใช้กล้องเมื่อคุณสแกนคิวอาร์โค้ดตั้งค่า Gateway หรือขอให้ Gateway หรือผู้ช่วยที่จับคู่ไว้ถ่ายภาพหรือวิดีโอสั้นจาก iPhone เครื่องนี้ เช่น เพื่อเชื่อมต่อกับ Gateway ของคุณ หรือแสดงเอกสาร หน้าจออุปกรณ์ หรือพื้นที่ทำงานให้ผู้ช่วยของคุณดู";
+"NSContactsUsageDescription" = "OpenClaw ใช้รายชื่อผู้ติดต่อของคุณเพื่อให้คุณค้นหาและอ้างอิงถึงบุคคลขณะใช้ผู้ช่วยได้";
+"NSLocalNetworkUsageDescription" = "OpenClaw ค้นพบและเชื่อมต่อกับ gateway OpenClaw ของคุณบนเครือข่ายภายใน";
+"NSLocationAlwaysAndWhenInUseUsageDescription" = "OpenClaw สามารถแชร์ตำแหน่งที่ตั้งของคุณในเบื้องหลังเมื่อคุณเปิดใช้งาน \"เสมอ\"";
+"NSLocationWhenInUseUsageDescription" = "OpenClaw ใช้ตำแหน่งที่ตั้งของคุณเมื่อคุณอนุญาตให้แชร์ตำแหน่งที่ตั้ง";
+"NSMicrophoneUsageDescription" = "OpenClaw ใช้ไมโครโฟนสำหรับแชทแบบเรียลไทม์ การปลุกด้วยเสียง push-to-talk และบันทึกเสียง";
+"NSMotionUsageDescription" = "OpenClaw อาจใช้ข้อมูลการเคลื่อนไหวเพื่อรองรับการโต้ตอบและระบบอัตโนมัติที่รับรู้ถึงอุปกรณ์";
+"NSPhotoLibraryUsageDescription" = "OpenClaw ช่วยให้ผู้ช่วยของคุณอ่านรูปภาพที่คุณอนุญาต และให้คุณเลือกรูปภาพที่จะแชร์ได้";
+"NSRemindersFullAccessUsageDescription" = "OpenClaw ใช้รายการเตือนความจำของคุณเพื่อแสดงรายการ เพิ่ม และทำงานให้เสร็จเมื่อคุณเปิดใช้งานสิทธิ์เข้าถึงรายการเตือนความจำ";
+"NSSpeechRecognitionUsageDescription" = "OpenClaw ใช้การรู้จำเสียงพูดบนอุปกรณ์สำหรับโหมดพูดคุยและการปลุกด้วยเสียง";

@@ -1,0 +1,14 @@
+"CFBundleDisplayName" = "OpenClaw";
+"NSCalendarsFullAccessUsageDescription" = "OpenClaw verwendet Ihre Kalender, um Ereignisse und Planungskontext anzuzeigen, wenn Sie den Kalenderzugriff aktivieren.";
+"NSCalendarsUsageDescription" = "OpenClaw verwendet Ihre Kalender, um Ereignisse und Planungskontext anzuzeigen, wenn Sie den Kalenderzugriff aktivieren.";
+"NSCalendarsWriteOnlyAccessUsageDescription" = "OpenClaw verwendet Ihre Kalender, um Ereignisse hinzuzufügen, wenn Sie den Kalenderzugriff aktivieren.";
+"NSCameraUsageDescription" = "OpenClaw verwendet die Kamera, wenn Sie einen QR-Code zur Gateway-Einrichtung scannen oder Ihre gekoppelte Gateway oder Ihren Assistenten bitten, ein Foto oder kurzes Video von diesem iPhone aufzunehmen, beispielsweise um eine Verbindung zu Ihrer Gateway herzustellen oder Ihrem Assistenten ein Dokument, einen Gerätebildschirm oder einen Arbeitsbereich zu zeigen.";
+"NSContactsUsageDescription" = "OpenClaw verwendet Ihre Kontakte, damit Sie Personen suchen und referenzieren können, während Sie den Assistenten verwenden.";
+"NSLocalNetworkUsageDescription" = "OpenClaw erkennt Ihre OpenClaw-Gateway im lokalen Netzwerk und stellt eine Verbindung zu ihr her.";
+"NSLocationAlwaysAndWhenInUseUsageDescription" = "OpenClaw kann Ihren Standort im Hintergrund teilen, wenn Sie „Immer“ aktivieren.";
+"NSLocationWhenInUseUsageDescription" = "OpenClaw verwendet Ihren Standort, wenn Sie die Standortfreigabe erlauben.";
+"NSMicrophoneUsageDescription" = "OpenClaw verwendet das Mikrofon für Echtzeit-Chat, Sprachaktivierung, Push-to-Talk und Sprachnotizen.";
+"NSMotionUsageDescription" = "OpenClaw kann Bewegungsdaten verwenden, um gerätebewusste Interaktionen und Automatisierungen zu unterstützen.";
+"NSPhotoLibraryUsageDescription" = "OpenClaw ermöglicht deinem Assistenten, von dir erlaubte Fotos zu lesen, und lässt dich Fotos zum Teilen auswählen.";
+"NSRemindersFullAccessUsageDescription" = "OpenClaw verwendet deine Erinnerungen, um Aufgaben aufzulisten, hinzuzufügen und abzuschließen, wenn du den Zugriff auf Erinnerungen aktivierst.";
+"NSSpeechRecognitionUsageDescription" = "OpenClaw verwendet die Spracherkennung auf dem Gerät für den Sprechmodus und die Sprachaktivierung.";

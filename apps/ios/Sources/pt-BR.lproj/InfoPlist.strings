@@ -1,0 +1,14 @@
+"CFBundleDisplayName" = "OpenClaw";
+"NSCalendarsFullAccessUsageDescription" = "O OpenClaw usa seus calendários para mostrar eventos e contexto de agendamento quando você ativa o acesso ao calendário.";
+"NSCalendarsUsageDescription" = "O OpenClaw usa seus calendários para mostrar eventos e contexto de agendamento quando você ativa o acesso ao calendário.";
+"NSCalendarsWriteOnlyAccessUsageDescription" = "O OpenClaw usa seus calendários para adicionar eventos quando você ativa o acesso ao calendário.";
+"NSCameraUsageDescription" = "O OpenClaw usa a câmera quando você escaneia um código QR de configuração do Gateway ou pede ao Gateway pareado ou ao assistente para capturar uma foto ou um vídeo curto deste iPhone, por exemplo, para se conectar ao Gateway ou mostrar ao assistente um documento, a tela de um dispositivo ou seu espaço de trabalho.";
+"NSContactsUsageDescription" = "O OpenClaw usa seus contatos para que você possa pesquisar e mencionar pessoas ao usar o assistente.";
+"NSLocalNetworkUsageDescription" = "O OpenClaw descobre e se conecta ao Gateway do OpenClaw na rede local.";
+"NSLocationAlwaysAndWhenInUseUsageDescription" = "O OpenClaw pode compartilhar sua localização em segundo plano quando você ativa Sempre.";
+"NSLocationWhenInUseUsageDescription" = "O OpenClaw usa sua localização quando você permite o compartilhamento de localização.";
+"NSMicrophoneUsageDescription" = "O OpenClaw usa o microfone para chat em tempo real, ativação por voz, pressionar para falar e notas de voz.";
+"NSMotionUsageDescription" = "O OpenClaw pode usar dados de movimento para oferecer suporte a interações e automações sensíveis ao dispositivo.";
+"NSPhotoLibraryUsageDescription" = "O OpenClaw permite que seu assistente leia as fotos que você autorizar e permite que você escolha fotos para compartilhar.";
+"NSRemindersFullAccessUsageDescription" = "O OpenClaw usa seus lembretes para listar, adicionar e concluir tarefas quando você ativa o acesso aos lembretes.";
+"NSSpeechRecognitionUsageDescription" = "O OpenClaw usa reconhecimento de fala no dispositivo para o modo de conversa e ativação por voz.";

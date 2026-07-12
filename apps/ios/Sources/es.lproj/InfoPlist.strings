@@ -1,0 +1,14 @@
+"CFBundleDisplayName" = "OpenClaw";
+"NSCalendarsFullAccessUsageDescription" = "OpenClaw usa tus calendarios para mostrar eventos y contexto de programación cuando activas el acceso al calendario.";
+"NSCalendarsUsageDescription" = "OpenClaw usa tus calendarios para mostrar eventos y contexto de programación cuando activas el acceso al calendario.";
+"NSCalendarsWriteOnlyAccessUsageDescription" = "OpenClaw usa tus calendarios para agregar eventos cuando activas el acceso al calendario.";
+"NSCameraUsageDescription" = "OpenClaw usa la cámara cuando escaneas un código QR de configuración de Gateway o pides a tu Gateway emparejado o asistente que capture una foto o un video corto desde este iPhone, por ejemplo, para conectarte a tu Gateway o mostrarle a tu asistente un documento, la pantalla de un dispositivo o un espacio de trabajo.";
+"NSContactsUsageDescription" = "OpenClaw usa tus contactos para que puedas buscar y hacer referencia a personas mientras usas el asistente.";
+"NSLocalNetworkUsageDescription" = "OpenClaw descubre y se conecta a tu gateway de OpenClaw en la red local.";
+"NSLocationAlwaysAndWhenInUseUsageDescription" = "OpenClaw puede compartir tu ubicación en segundo plano cuando activas Siempre.";
+"NSLocationWhenInUseUsageDescription" = "OpenClaw usa tu ubicación cuando permites compartir la ubicación.";
+"NSMicrophoneUsageDescription" = "OpenClaw usa el micrófono para chat en tiempo real, activación por voz, pulsar para hablar y notas de voz.";
+"NSMotionUsageDescription" = "OpenClaw puede usar datos de movimiento para admitir interacciones y automatizaciones conscientes del dispositivo.";
+"NSPhotoLibraryUsageDescription" = "OpenClaw permite que tu asistente lea las fotos que autorices y te permite elegir fotos para compartir.";
+"NSRemindersFullAccessUsageDescription" = "OpenClaw usa tus recordatorios para listar, agregar y completar tareas cuando habilitas el acceso a recordatorios.";
+"NSSpeechRecognitionUsageDescription" = "OpenClaw usa el reconocimiento de voz en el dispositivo para el modo de conversación y la activación por voz.";

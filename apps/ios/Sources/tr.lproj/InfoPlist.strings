@@ -1,0 +1,14 @@
+"CFBundleDisplayName" = "OpenClaw";
+"NSCalendarsFullAccessUsageDescription" = "OpenClaw, takvim erişimini etkinleştirdiğinizde etkinlikleri ve planlama bağlamını göstermek için takvimlerinizi kullanır.";
+"NSCalendarsUsageDescription" = "OpenClaw, takvim erişimini etkinleştirdiğinizde etkinlikleri ve planlama bağlamını göstermek için takvimlerinizi kullanır.";
+"NSCalendarsWriteOnlyAccessUsageDescription" = "OpenClaw, takvim erişimini etkinleştirdiğinizde etkinlik eklemek için takvimlerinizi kullanır.";
+"NSCameraUsageDescription" = "OpenClaw, bir Gateway kurulum QR kodunu taradığınızda veya eşleştirilmiş Gateway'inizden ya da asistanınızdan bu iPhone'dan fotoğraf veya kısa video çekmesini istediğinizde kamerayı kullanır; örneğin Gateway'inize bağlanmak veya asistanınıza bir belge, cihaz ekranı ya da çalışma alanı göstermek için.";
+"NSContactsUsageDescription" = "OpenClaw, asistanı kullanırken kişileri arayabilmeniz ve onlara referans verebilmeniz için kişilerinizi kullanır.";
+"NSLocalNetworkUsageDescription" = "OpenClaw, yerel ağdaki OpenClaw gateway'inizi keşfeder ve ona bağlanır.";
+"NSLocationAlwaysAndWhenInUseUsageDescription" = "OpenClaw, Her Zaman seçeneğini etkinleştirdiğinizde konumunuzu arka planda paylaşabilir.";
+"NSLocationWhenInUseUsageDescription" = "OpenClaw, konum paylaşımına izin verdiğinizde konumunuzu kullanır.";
+"NSMicrophoneUsageDescription" = "OpenClaw mikrofonu gerçek zamanlı sohbet, sesle uyandırma, bas-konuş ve sesli notlar için kullanır.";
+"NSMotionUsageDescription" = "OpenClaw, cihaza duyarlı etkileşimleri ve otomasyonları desteklemek için hareket verilerini kullanabilir.";
+"NSPhotoLibraryUsageDescription" = "OpenClaw, asistanınızın izin verdiğiniz fotoğrafları okumasını sağlar ve paylaşılacak fotoğrafları seçmenize olanak tanır.";
+"NSRemindersFullAccessUsageDescription" = "OpenClaw, anımsatıcılara erişimi etkinleştirdiğinizde görevleri listelemek, eklemek ve tamamlamak için anımsatıcılarınızı kullanır.";
+"NSSpeechRecognitionUsageDescription" = "OpenClaw, konuşma modu ve sesle uyandırma için aygıt üzerinde konuşma tanımayı kullanır.";

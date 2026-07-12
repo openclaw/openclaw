@@ -1,0 +1,14 @@
+"CFBundleDisplayName" = "OpenClaw";
+"NSCalendarsFullAccessUsageDescription" = "OpenClaw menggunakan kalender Anda untuk menampilkan acara dan konteks penjadwalan saat Anda mengaktifkan akses kalender.";
+"NSCalendarsUsageDescription" = "OpenClaw menggunakan kalender Anda untuk menampilkan acara dan konteks penjadwalan saat Anda mengaktifkan akses kalender.";
+"NSCalendarsWriteOnlyAccessUsageDescription" = "OpenClaw menggunakan kalender Anda untuk menambahkan acara saat Anda mengaktifkan akses kalender.";
+"NSCameraUsageDescription" = "OpenClaw menggunakan kamera saat Anda memindai kode QR penyiapan Gateway atau meminta Gateway yang dipasangkan atau asisten Anda untuk mengambil foto atau video pendek dari iPhone ini, misalnya untuk terhubung ke Gateway Anda atau menunjukkan dokumen, layar perangkat, atau ruang kerja kepada asisten Anda.";
+"NSContactsUsageDescription" = "OpenClaw menggunakan kontak Anda agar Anda dapat mencari dan merujuk orang saat menggunakan asisten.";
+"NSLocalNetworkUsageDescription" = "OpenClaw menemukan dan terhubung ke gateway OpenClaw Anda di jaringan lokal.";
+"NSLocationAlwaysAndWhenInUseUsageDescription" = "OpenClaw dapat membagikan lokasi Anda di latar belakang saat Anda mengaktifkan Selalu.";
+"NSLocationWhenInUseUsageDescription" = "OpenClaw menggunakan lokasi Anda saat Anda mengizinkan berbagi lokasi.";
+"NSMicrophoneUsageDescription" = "OpenClaw menggunakan mikrofon untuk obrolan realtime, voice wake, push-to-talk, dan pesan suara.";
+"NSMotionUsageDescription" = "OpenClaw dapat menggunakan data gerak untuk mendukung interaksi dan automasi yang sadar perangkat.";
+"NSPhotoLibraryUsageDescription" = "OpenClaw memungkinkan asisten Anda membaca foto yang Anda izinkan dan memungkinkan Anda memilih foto untuk dibagikan.";
+"NSRemindersFullAccessUsageDescription" = "OpenClaw menggunakan pengingat Anda untuk mencantumkan, menambahkan, dan menyelesaikan tugas saat Anda mengaktifkan akses pengingat.";
+"NSSpeechRecognitionUsageDescription" = "OpenClaw menggunakan pengenalan ucapan di perangkat untuk mode bicara dan bangun dengan suara.";

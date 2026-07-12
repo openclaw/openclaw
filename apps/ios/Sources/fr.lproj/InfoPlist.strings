@@ -1,0 +1,14 @@
+"CFBundleDisplayName" = "OpenClaw";
+"NSCalendarsFullAccessUsageDescription" = "OpenClaw utilise vos calendriers pour afficher les événements et le contexte de planification lorsque vous activez l’accès au calendrier.";
+"NSCalendarsUsageDescription" = "OpenClaw utilise vos calendriers pour afficher les événements et le contexte de planification lorsque vous activez l’accès au calendrier.";
+"NSCalendarsWriteOnlyAccessUsageDescription" = "OpenClaw utilise vos calendriers pour ajouter des événements lorsque vous activez l’accès au calendrier.";
+"NSCameraUsageDescription" = "OpenClaw utilise l’appareil photo lorsque vous scannez un code QR de configuration de la Gateway ou demandez à votre Gateway appairée ou à votre assistant de prendre une photo ou une courte vidéo depuis cet iPhone, par exemple pour vous connecter à votre Gateway ou montrer à votre assistant un document, l’écran d’un appareil ou un espace de travail.";
+"NSContactsUsageDescription" = "OpenClaw utilise vos contacts afin que vous puissiez rechercher et mentionner des personnes lorsque vous utilisez l’assistant.";
+"NSLocalNetworkUsageDescription" = "OpenClaw détecte votre gateway OpenClaw sur le réseau local et s’y connecte.";
+"NSLocationAlwaysAndWhenInUseUsageDescription" = "OpenClaw peut partager votre position en arrière-plan lorsque vous activez Toujours.";
+"NSLocationWhenInUseUsageDescription" = "OpenClaw utilise votre position lorsque vous autorisez le partage de position.";
+"NSMicrophoneUsageDescription" = "OpenClaw utilise le microphone pour le chat en temps réel, l'activation vocale, le push-to-talk et les notes vocales.";
+"NSMotionUsageDescription" = "OpenClaw peut utiliser les données de mouvement pour prendre en charge des interactions et automatisations adaptées à l’appareil.";
+"NSPhotoLibraryUsageDescription" = "OpenClaw permet à votre assistant de lire les photos que vous autorisez et vous permet de choisir les photos à partager.";
+"NSRemindersFullAccessUsageDescription" = "OpenClaw utilise vos rappels pour lister, ajouter et terminer des tâches lorsque vous activez l’accès aux rappels.";
+"NSSpeechRecognitionUsageDescription" = "OpenClaw utilise la reconnaissance vocale sur l’appareil pour le mode conversation et l’activation vocale.";

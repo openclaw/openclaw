@@ -1,0 +1,14 @@
+"CFBundleDisplayName" = "OpenClaw";
+"NSCalendarsFullAccessUsageDescription" = "当你启用日历访问权限时，OpenClaw 会使用你的日历来显示事件和日程安排上下文。";
+"NSCalendarsUsageDescription" = "当你启用日历访问权限时，OpenClaw 会使用你的日历来显示事件和日程安排上下文。";
+"NSCalendarsWriteOnlyAccessUsageDescription" = "当你启用日历访问权限时，OpenClaw 会使用你的日历来添加事件。";
+"NSCameraUsageDescription" = "当你扫描 Gateway 设置二维码，或请求已配对的 Gateway 或助手从此 iPhone 拍摄照片或短视频时，OpenClaw 会使用相机，例如用于连接到你的 Gateway，或向助手展示文档、设备屏幕或工作区。";
+"NSContactsUsageDescription" = "OpenClaw 会使用你的联系人，以便你在使用助手时搜索和引用人员。";
+"NSLocalNetworkUsageDescription" = "OpenClaw 会在本地网络上发现并连接到你的 OpenClaw Gateway。";
+"NSLocationAlwaysAndWhenInUseUsageDescription" = "当你启用“始终”时，OpenClaw 可以在后台共享你的位置。";
+"NSLocationWhenInUseUsageDescription" = "当你允许位置共享时，OpenClaw 会使用你的位置。";
+"NSMicrophoneUsageDescription" = "OpenClaw 使用麦克风进行实时聊天、语音唤醒、按键说话和语音备忘。";
+"NSMotionUsageDescription" = "OpenClaw 可能会使用运动数据来支持设备感知的交互和自动化。";
+"NSPhotoLibraryUsageDescription" = "OpenClaw 允许你的助手读取你允许的照片，并允许你选择要分享的照片。";
+"NSRemindersFullAccessUsageDescription" = "当你启用提醒事项访问权限时，OpenClaw 会使用你的提醒事项来列出、添加和完成任务。";
+"NSSpeechRecognitionUsageDescription" = "OpenClaw 使用设备端语音识别来支持对话模式和语音唤醒。";
