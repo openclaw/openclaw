@@ -21,7 +21,10 @@ describe("MCP App transcript reconstruction", () => {
       {
         role: "toolResult",
         toolCallId: "call-1",
-        content: [{ type: "text", text: "ok" }],
+        content: [
+          { type: "text", text: "ok" },
+          { type: "audio", data: "YXVkaW8=", mimeType: "audio/mpeg" },
+        ],
         details: {
           mcpServer: "demo",
           mcpTool: "show",
@@ -51,7 +54,10 @@ describe("MCP App transcript reconstruction", () => {
       },
       toolInput: { city: "Paris" },
       toolResult: {
-        content: [{ type: "text", text: "ok" }],
+        content: [
+          { type: "text", text: "ok" },
+          { type: "audio", data: "YXVkaW8=", mimeType: "audio/mpeg" },
+        ],
         structuredContent: { city: "Paris" },
       },
     });
@@ -64,6 +70,34 @@ describe("MCP App transcript reconstruction", () => {
           {
             role: "toolResult",
             toolCallId: "call-other",
+            details: {
+              mcpServer: "demo",
+              mcpTool: "show",
+              mcpAppPreview: {
+                mcpApp: {
+                  viewId: "mcp-app-1",
+                  serverName: "demo",
+                  toolName: "show",
+                  uiResourceUri: "ui://demo/app",
+                  toolCallId: "call-1",
+                },
+              },
+            },
+          },
+        ],
+        "mcp-app-1",
+      ),
+    ).toBeUndefined();
+  });
+
+  it("rejects a descriptor without its matching tool-call input", () => {
+    expect(
+      findMcpAppReconstructionData(
+        [
+          {
+            role: "toolResult",
+            toolCallId: "call-1",
+            content: [],
             details: {
               mcpServer: "demo",
               mcpTool: "show",

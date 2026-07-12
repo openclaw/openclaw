@@ -36,10 +36,6 @@ export async function waitForMcpAppHandlerRegistration(
   scheduleFrame: ScheduleFrame = window.requestAnimationFrame.bind(window),
   scheduleFallback: ScheduleFallback = window.setTimeout.bind(window),
 ): Promise<void> {
-  // Apps can complete the protocol handshake before framework effects install
-  // their tool notification handlers. Cross a paint boundary before delivering
-  // the initial input/result pair, with a fallback for background tabs where
-  // requestAnimationFrame may be throttled indefinitely.
   await Promise.race([
     new Promise<void>((resolve) => {
       scheduleFrame(() => {
@@ -47,7 +43,7 @@ export async function waitForMcpAppHandlerRegistration(
       });
     }),
     new Promise<void>((resolve) => {
-      scheduleFallback(resolve, 50);
+      scheduleFallback(resolve, 1_000);
     }),
   ]);
 }

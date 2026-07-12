@@ -34,7 +34,8 @@ describe("mcp-app-view localization", () => {
       .poll(() => view.shadowRoot?.querySelector(".error")?.textContent)
       .toBe("Aplicativo MCP indisponível: MCP App gateway unavailable");
   });
-  it("waits through a paint boundary before delivering initial tool notifications", async () => {
+
+  it("crosses two paint boundaries before delivering initial tool notifications", async () => {
     const frames: FrameRequestCallback[] = [];
     const pending = waitForMcpAppHandlerRegistration((callback) => {
       frames.push(callback);
@@ -45,14 +46,32 @@ describe("mcp-app-view localization", () => {
       resolved = true;
     });
 
-    expect(frames).toHaveLength(1);
     frames.shift()?.(0);
     await Promise.resolve();
     expect(resolved).toBe(false);
-    expect(frames).toHaveLength(1);
 
     frames.shift()?.(16);
     await pending;
     expect(resolved).toBe(true);
+  });
+
+  it("uses a delayed fallback when animation frames are suspended", async () => {
+    const frames: FrameRequestCallback[] = [];
+    let fallback: (() => void) | undefined;
+    const pending = waitForMcpAppHandlerRegistration(
+      (callback) => {
+        frames.push(callback);
+        return frames.length;
+      },
+      (callback, delayMs) => {
+        expect(delayMs).toBe(1_000);
+        fallback = callback;
+        return 1;
+      },
+    );
+
+    expect(frames).toHaveLength(1);
+    fallback?.();
+    await pending;
   });
 });

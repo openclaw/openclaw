@@ -1,4 +1,4 @@
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { type CallToolResult, ContentBlockSchema } from "@modelcontextprotocol/sdk/types.js";
 import { getOrCreateSessionMcpRuntime } from "../agents/agent-bundle-mcp-runtime.js";
 import type { SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
@@ -91,9 +91,9 @@ function readToolInputFromMessage(
 
 function readCallToolResult(message: Record<string, unknown>, details: Record<string, unknown>) {
   const content = Array.isArray(message.content)
-    ? message.content.filter((value) => {
-        const block = asRecord(value);
-        return block?.type === "text" || block?.type === "image";
+    ? message.content.flatMap((value) => {
+        const parsed = ContentBlockSchema.safeParse(value);
+        return parsed.success ? [parsed.data] : [];
       })
     : [];
   return {
@@ -145,9 +145,12 @@ export function findMcpAppReconstructionData(
     const input = messages
       .map((message) => readToolInputFromMessage(message, result.descriptor.toolCallId))
       .find((entry) => entry?.found);
+    if (!input) {
+      continue;
+    }
     return {
       ...result,
-      toolInput: input?.input ?? {},
+      toolInput: input.input,
     };
   }
   return undefined;
@@ -160,13 +163,13 @@ export async function findMcpAppReconstructionDataByVisit(
 ): Promise<ReconstructionData | undefined> {
   let result: Omit<ReconstructionData, "toolInput"> | undefined;
   await visitTranscript((message) => {
-    result ??= readTranscriptResult(message, viewId);
+    result = readTranscriptResult(message, viewId) ?? result;
   });
   if (!result) {
     return undefined;
   }
   const resolvedResult = result;
-  let toolInput: unknown = {};
+  let toolInput: unknown;
   let foundInput = false;
   await visitTranscript((message) => {
     if (foundInput) {
@@ -178,7 +181,7 @@ export async function findMcpAppReconstructionDataByVisit(
       toolInput = input.input;
     }
   });
-  return { ...resolvedResult, toolInput };
+  return foundInput ? { ...resolvedResult, toolInput } : undefined;
 }
 
 function getRestoreInFlight(): Map<string, Promise<ReconstructionResult | undefined>> {
