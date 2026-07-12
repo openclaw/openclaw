@@ -1001,6 +1001,13 @@ async function buildSendPayloadParts(params: {
   }
   actionParams.mediaUrls = mergedMediaUrls.length > 0 ? [...mergedMediaUrls] : undefined;
 
+  if (
+    location &&
+    (message.trim() || mergedMediaUrls.length > 0 || hasPresentation || hasInteractive)
+  ) {
+    throw new Error("Location sends cannot be combined with message text or media.");
+  }
+
   if (params.channel && params.target) {
     message = await maybeApplyCrossContextMarker({
       cfg: params.cfg,
