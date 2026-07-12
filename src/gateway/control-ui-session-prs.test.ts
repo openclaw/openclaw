@@ -439,17 +439,22 @@ describe("session branch diff stats", () => {
       { sessionKey: "agent:main:main" },
       {
         fetchImpl,
-        resolveGitContext: async () => ({ ...context, root, defaultBranch: "main" }),
+        resolveGitContext: async () => ({
+          ...context,
+          branch: "feature",
+          root,
+          defaultBranch: "main",
+        }),
       },
     );
 
     expect(result.branch).toEqual({
       owner: "openclaw",
       repo: "openclaw",
-      branch: context.branch,
+      branch: "feature",
       additions: 4,
       deletions: 1,
-      createUrl: "https://github.com/openclaw/openclaw/pull/new/claude/browser-tabs-tighter-header",
+      createUrl: "https://github.com/openclaw/openclaw/pull/new/feature",
     });
   });
 
@@ -470,7 +475,12 @@ describe("session branch diff stats", () => {
       { sessionKey: "agent:main:main" },
       {
         fetchImpl,
-        resolveGitContext: async () => ({ ...context, root, defaultBranch: "main" }),
+        resolveGitContext: async () => ({
+          ...context,
+          branch: "feature",
+          root,
+          defaultBranch: "main",
+        }),
       },
     );
 
@@ -497,7 +507,12 @@ describe("session branch diff stats", () => {
       { sessionKey: "agent:main:main" },
       {
         fetchImpl,
-        resolveGitContext: async () => ({ ...context, root, defaultBranch: "main" }),
+        resolveGitContext: async () => ({
+          ...context,
+          branch: "feature",
+          root,
+          defaultBranch: "main",
+        }),
       },
     );
 

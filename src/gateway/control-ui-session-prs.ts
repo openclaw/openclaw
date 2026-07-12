@@ -297,7 +297,7 @@ async function resolveSessionBranch(
     repo: context.repo,
     branch: context.branch,
     createUrl: branchCreateUrl(context),
-    ...(stats ?? {}),
+    ...stats,
   };
 }
 
