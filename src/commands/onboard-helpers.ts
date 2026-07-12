@@ -11,12 +11,12 @@ import {
   ConnectErrorDetailCodes,
   readConnectErrorDetailCode,
 } from "../../packages/gateway-protocol/src/connect-error-details.js";
-import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import {
   decorativeEmoji,
   supportsDecorativeEmoji,
 } from "../../packages/terminal-core/src/decorative-emoji.js";
 import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { resolveAgentEffectiveModelPrimary, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   DEFAULT_AGENT_WORKSPACE_DIR,
@@ -169,23 +169,46 @@ export function validateGatewayPasswordInput(value: unknown): string | undefined
   return undefined;
 }
 
-/** Prints the onboarding banner. */
+// Wizard banner art, pregenerated from pixel bitmaps (two pixel rows per
+// terminal row via ▀▄█). The mascot rows and wordmark rows are separate so the
+// mascot can take the accent color; the wordmark starts on mascot row 2, which
+// keeps the claws poking above the text line. Keep row alignment when editing.
+const WIZARD_MASCOT_ART = [
+  "▄███▄     ▄███▄",
+  "▀█▄█▀     ▀█▄█▀",
+  "     ▀▄ ▄▀",
+  "    ██ █ ██",
+  "    ▀█████▀",
+  "   ▄█▀ █ ▀█▄",
+] as const;
+const WIZARD_MASCOT_WIDTH = 15;
+const WIZARD_WORDMARK_ROW_OFFSET = 2;
+
+const WIZARD_WORDMARK_ART = [
+  "█▀▀▀█ █▀▀▀█ █▀▀▀▀ █▄  █ █▀▀▀▀ █     █▀▀▀█ █   █",
+  "█   █ █▀▀▀▀ █▀▀▀  █ ▀▄█ █     █     █▀▀▀█ █▄▀▄█",
+  "▀▀▀▀▀ ▀     ▀▀▀▀▀ ▀   ▀ ▀▀▀▀▀ ▀▀▀▀▀ ▀   ▀ ▀   ▀",
+] as const;
+const WIZARD_HEADER_WIDTH = WIZARD_MASCOT_WIDTH + 3 + 47;
+
+/** Prints the onboarding banner: pixel mascot beside the OPENCLAW wordmark. */
 export function printWizardHeader(runtime: RuntimeEnv) {
-  const bannerWidth = 54;
-  const icon = decorativeEmoji("🦞");
-  const title = supportsDecorativeEmoji() && icon ? `${icon} OPENCLAW ${icon}` : "OPENCLAW";
-  const pad = Math.max(0, bannerWidth - visibleWidth(title));
-  const titleLine = `${" ".repeat(Math.floor(pad / 2))}${title}${" ".repeat(Math.ceil(pad / 2))}`;
-  const header = [
-    "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
-    "██░▄▄▄░██░▄▄░██░▄▄▄██░▀██░██░▄▄▀██░████░▄▄▀██░███░██",
-    "██░███░██░▀▀░██░▄▄▄██░█░█░██░█████░████░▀▀░██░█░█░██",
-    "██░▀▀▀░██░█████░▀▀▀██░██▄░██░▀▀▄██░▀▀░█░██░██▄▀▄▀▄██",
-    "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
-    titleLine,
-    " ",
-  ].join("\n");
-  runtime.log(header);
+  // Narrow terminals (mobile SSH) would wrap the art mid-glyph; fall back to
+  // the plain title line the way the compact CLI banner handles tight widths.
+  const columns = process.stdout.columns ?? 80;
+  if (columns < WIZARD_HEADER_WIDTH) {
+    const icon = decorativeEmoji("🦞");
+    runtime.log(supportsDecorativeEmoji() && icon ? `${icon} OPENCLAW ${icon}\n` : "OPENCLAW\n");
+    return;
+  }
+  const lines = WIZARD_MASCOT_ART.map((mascotRow, index) => {
+    const wordmarkRow = WIZARD_WORDMARK_ART[index - WIZARD_WORDMARK_ROW_OFFSET];
+    if (!wordmarkRow) {
+      return theme.accent(mascotRow);
+    }
+    return `${theme.accent(mascotRow.padEnd(WIZARD_MASCOT_WIDTH))}   ${wordmarkRow}`;
+  });
+  runtime.log(`${lines.join("\n")}\n`);
 }
 
 /** Records wizard provenance metadata on config writes. */
