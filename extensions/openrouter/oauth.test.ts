@@ -167,6 +167,30 @@ describe("OpenRouter OAuth", () => {
       code: "AUTHCODE",
       state: "state-1",
     });
+    expect(() =>
+      parseOpenRouterOAuthCallbackInput(
+        `${OPENROUTER_OAUTH_REDIRECT_URI}?state=state-1&error=access_denied&error_description=Denied`,
+        "state-1",
+      ),
+    ).toThrow("OpenRouter OAuth error: access_denied: Denied");
+    expect(() =>
+      parseOpenRouterOAuthCallbackInput(
+        "state=state-1&error=access_denied&error_description=Denied",
+        "state-1",
+      ),
+    ).toThrow("OpenRouter OAuth error: access_denied: Denied");
+    expect(() =>
+      parseOpenRouterOAuthCallbackInput(
+        `${OPENROUTER_OAUTH_REDIRECT_URI}?error=access_denied&error_description=Denied`,
+        "state-1",
+      ),
+    ).toThrow("Missing OpenRouter OAuth state");
+    expect(() =>
+      parseOpenRouterOAuthCallbackInput(
+        `${OPENROUTER_OAUTH_REDIRECT_URI}?state=wrong&error=access_denied&error_description=Denied`,
+        "state-1",
+      ),
+    ).toThrow("OpenRouter OAuth state mismatch");
     expect(buildOpenRouterOAuthRedirectUri({ state: "state-1" })).toBe(
       `${OPENROUTER_OAUTH_REDIRECT_URI}?state=state-1`,
     );

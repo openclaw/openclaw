@@ -143,11 +143,18 @@ export function parseOpenRouterOAuthCallbackInput(
   }
 
   const parseParams = (params: URLSearchParams): OpenRouterOAuthCallbackResult => {
+    const state = requireOpenRouterOAuthState(readString(params.get("state")), expectedState);
+    const error = readString(params.get("error"));
+    if (error) {
+      const description = readString(params.get("error_description"));
+      throw new Error(
+        `OpenRouter OAuth error: ${description ? `${error}: ${description}` : error}`,
+      );
+    }
     const code = readString(params.get("code"));
     if (!code) {
       throw new Error("Missing 'code' parameter in redirect URL.");
     }
-    const state = requireOpenRouterOAuthState(readString(params.get("state")), expectedState);
     return { code, state };
   };
 
@@ -156,7 +163,7 @@ export function parseOpenRouterOAuthCallbackInput(
     return parseParams(url.searchParams);
   } catch (err) {
     if (err instanceof TypeError) {
-      if (trimmed.includes("code=")) {
+      if (trimmed.includes("code=") || trimmed.includes("error=")) {
         return parseParams(new URLSearchParams(trimmed));
       }
       throw new Error("Paste the full OpenRouter redirect URL, not just the code.", {
