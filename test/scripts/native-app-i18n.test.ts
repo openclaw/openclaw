@@ -663,11 +663,10 @@ describe("native app i18n inventory", () => {
       const moved = await syncNativeLocale("sv", movedEntries, {
         glossary: [],
         translationsDir,
-        translate: async () => {
-          throw new Error("source-stable ID churn must reuse translation memory");
-        },
+        translate: async (pending) =>
+          new Map(pending.map((entry) => [entry.id, `moved:${entry.source}`])),
       });
-      expect(moved).toEqual({ changed: true, translated: 0 });
+      expect(moved).toEqual({ changed: true, translated: 4 });
       const movedArtifact = JSON.parse(await readFile(artifactPath, "utf8")) as {
         entries: Array<{ id: string; source: string; translated: string }>;
       };
@@ -675,10 +674,10 @@ describe("native app i18n inventory", () => {
         movedEntries.map((entry) => entry.id),
       );
       expect(movedArtifact.entries.map((entry) => entry.translated)).toEqual([
-        "Hej",
-        "Begärans-ID: \\(requestId)",
-        "${apps.size} totalt, ${visibleApps.size} visas",
-        "Av \\(total) behörigheter har \\(granted) beviljats",
+        "moved:Hello",
+        "moved:Request ID: \\(requestId)",
+        "moved:Showing ${visibleApps.size} of ${apps.size}",
+        "moved:\\(granted) of \\(total) permissions granted",
       ]);
 
       const refreshed = await syncNativeLocale("sv", entries, {

@@ -1526,17 +1526,6 @@ export async function checkNativeLocaleArtifacts(
   );
 }
 
-function choosePreviousTranslation(
-  source: string,
-  entries: readonly { translated: string }[],
-): string | undefined {
-  const first = entries[0]?.translated;
-  if (!first?.trim() || first === source) {
-    return undefined;
-  }
-  return entries.every((entry) => entry.translated === first) ? first : undefined;
-}
-
 export async function syncNativeLocale(
   locale: string,
   entries: NativeI18nEntry[],
@@ -1561,38 +1550,11 @@ export async function syncNativeLocale(
     // The first refresh creates the locale artifact.
   }
   const previousById = new Map(previous.entries.map((entry) => [entry.id, entry]));
-  const previousBySource = new Map<
-    string,
-    Array<{ id: string; source: string; translated: string }>
-  >();
-  for (const entry of previous.entries) {
-    const candidates = previousBySource.get(entry.source) ?? [];
-    candidates.push(entry);
-    previousBySource.set(entry.source, candidates);
-  }
-  const currentIds = new Set(entries.map((entry) => entry.id));
-  const currentSourceCounts = new Map<string, number>();
-  for (const entry of entries) {
-    currentSourceCounts.set(entry.source, (currentSourceCounts.get(entry.source) ?? 0) + 1);
-  }
-  const reusableBySource = new Map(
-    [...previousBySource].map(([source, candidates]) => {
-      const isCompleteIdChurn =
-        candidates.length === currentSourceCounts.get(source) &&
-        candidates.every((candidate) => !currentIds.has(candidate.id));
-      return [
-        source,
-        isCompleteIdChurn ? choosePreviousTranslation(source, candidates) : undefined,
-      ] as const;
-    }),
-  );
   const reusableById = new Map(
     entries.map((entry) => {
       const exact = previousById.get(entry.id);
       const translated =
-        exact?.source === entry.source && exact.translated.trim()
-          ? exact.translated
-          : reusableBySource.get(entry.source);
+        exact?.source === entry.source && exact.translated.trim() ? exact.translated : undefined;
       return [entry.id, translated] as const;
     }),
   );
