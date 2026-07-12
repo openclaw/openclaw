@@ -343,16 +343,16 @@ struct MacNodeRuntimeTests {
 
     @Test func `A2UI host capability refresh uses injected node session refresher`() async {
         let probe = CanvasRefreshProbe()
-        let runtime = MacNodeRuntime(
-            canvasSurfaceUrl: { "http://127.0.0.1:18789/__openclaw__/cap/current-token" },
-            refreshCanvasSurfaceUrl: { await probe.refresh() })
+        let resolver = MacNodeCanvasHostedSurfaceResolver(
+            currentSurfaceURL: { "http://127.0.0.1:18789/__openclaw__/cap/current-token" },
+            refreshSurfaceURL: { await probe.refresh() })
 
-        let current = await runtime.resolveA2UIHostUrlWithCapabilityRefresh()
+        let current = await resolver.resolveA2UIURL()
         #expect(current ==
             "http://127.0.0.1:18789/__openclaw__/cap/current-token/__openclaw__/a2ui/?platform=macos")
         #expect(await probe.calls == 0)
 
-        let refreshed = await runtime.resolveA2UIHostUrlWithCapabilityRefresh(forceRefresh: true)
+        let refreshed = await resolver.resolveA2UIURL(forceRefresh: true)
         #expect(refreshed ==
             "http://127.0.0.1:18789/__openclaw__/cap/refreshed-token/__openclaw__/a2ui/?platform=macos")
         #expect(await probe.calls == 1)
@@ -360,18 +360,18 @@ struct MacNodeRuntimeTests {
 
     @Test func `hosted Canvas commands refresh capability and preserve target components`() async throws {
         let probe = CanvasRefreshProbe()
-        let runtime = MacNodeRuntime(
-            canvasSurfaceUrl: { "http://127.0.0.1:18789/__openclaw__/cap/current-token" },
-            refreshCanvasSurfaceUrl: { await probe.refresh() })
+        let resolver = MacNodeCanvasHostedSurfaceResolver(
+            currentSurfaceURL: { "http://127.0.0.1:18789/__openclaw__/cap/current-token" },
+            refreshSurfaceURL: { await probe.refresh() })
 
-        let resolved = try await runtime.resolveHostedCanvasTargetWithCapabilityRefresh(
+        let resolved = try await resolver.resolveTarget(
             "/__openclaw__/canvas/demo%20page.html?mode=proof#result")
         #expect(resolved?.url.absoluteString ==
             "http://127.0.0.1:18789/__openclaw__/cap/refreshed-token/__openclaw__/canvas/demo%20page.html?mode=proof#result")
         #expect(resolved?.allowsA2UIActions == false)
         #expect(await probe.calls == 1)
 
-        let external = try await runtime.resolveHostedCanvasTargetWithCapabilityRefresh("https://example.com/")
+        let external = try await resolver.resolveTarget("https://example.com/")
         #expect(external == nil)
         #expect(await probe.calls == 1)
     }

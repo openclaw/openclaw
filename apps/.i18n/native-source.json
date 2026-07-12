@@ -20339,7 +20339,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1013,
+      "line": 983,
       "path": "apps/macos/Sources/OpenClaw/NodeMode/MacNodeRuntime.swift",
       "source": "approvalSource requires matching systemRunPlan",
       "surface": "apple",
@@ -20347,7 +20347,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1014,
+      "line": 984,
       "path": "apps/macos/Sources/OpenClaw/NodeMode/MacNodeRuntime.swift",
       "source": "explicit approval requires matching systemRunPlan",
       "surface": "apple",

@@ -22,8 +22,7 @@ actor MacNodeRuntime {
     private let browserControlEnabled: @Sendable () -> Bool
     // Injectable so tests pin the gate instead of racing on process-global UserDefaults.
     private let computerControlEnabled: @Sendable () -> Bool
-    private let canvasSurfaceUrl: @Sendable () async -> String?
-    private let refreshCanvasSurfaceUrl: @Sendable () async -> String?
+    private let canvasHostedSurfaceResolver: MacNodeCanvasHostedSurfaceResolver
     private let codexThreadCatalogEnabled: @Sendable () -> Bool
     private let codexThreadListRequest: @Sendable (String?) async throws -> String
     private let codexThreadTurnsRequest: @Sendable (String?) async throws -> String
@@ -94,8 +93,9 @@ actor MacNodeRuntime {
         self.browserProxyRequest = browserProxyRequest
         self.browserControlEnabled = browserControlEnabled
         self.computerControlEnabled = computerControlEnabled
-        self.canvasSurfaceUrl = canvasSurfaceUrl
-        self.refreshCanvasSurfaceUrl = refreshCanvasSurfaceUrl
+        self.canvasHostedSurfaceResolver = MacNodeCanvasHostedSurfaceResolver(
+            currentSurfaceURL: canvasSurfaceUrl,
+            refreshSurfaceURL: refreshCanvasSurfaceUrl)
         self.codexThreadCatalogEnabled = codexThreadCatalogEnabled
         self.codexThreadListRequest = codexThreadListRequest
         self.codexThreadTurnsRequest = codexThreadTurnsRequest
@@ -233,7 +233,7 @@ extension MacNodeRuntime {
                 OpenClawCanvasPresentParams()
             let urlTrimmed = params.url?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let url = urlTrimmed.isEmpty ? nil : urlTrimmed
-            let hostedTarget = try await self.resolveHostedCanvasTargetWithCapabilityRefresh(url)
+            let hostedTarget = try await self.canvasHostedSurfaceResolver.resolveTarget(url)
             let effectiveURL = hostedTarget?.url.absoluteString ?? url
             let placement = params.placement.map {
                 CanvasPlacement(x: $0.x, y: $0.y, width: $0.width, height: $0.height)
@@ -255,7 +255,7 @@ extension MacNodeRuntime {
             return BridgeInvokeResponse(id: req.id, ok: true)
         case OpenClawCanvasCommand.navigate.rawValue:
             let params = try Self.decodeParams(OpenClawCanvasNavigateParams.self, from: req.paramsJSON)
-            let hostedTarget = try await self.resolveHostedCanvasTargetWithCapabilityRefresh(params.url)
+            let hostedTarget = try await self.canvasHostedSurfaceResolver.resolveTarget(params.url)
             let effectiveURL = hostedTarget?.url.absoluteString ?? params.url
             let sessionKey = self.mainSessionKey
             try await MainActor.run {
@@ -730,7 +730,7 @@ extension MacNodeRuntime {
         if await self.isA2UIReady() {
             return
         }
-        guard let a2uiUrl = await resolveA2UIHostUrlWithCapabilityRefresh() else {
+        guard let a2uiUrl = await self.canvasHostedSurfaceResolver.resolveA2UIURL() else {
             throw NSError(domain: "Canvas", code: 30, userInfo: [
                 NSLocalizedDescriptionKey: "A2UI_HOST_NOT_CONFIGURED: gateway did not advertise canvas host",
             ])
@@ -745,7 +745,7 @@ extension MacNodeRuntime {
         if await self.isA2UIReady(poll: true) {
             return
         }
-        if let refreshedUrl = await resolveA2UIHostUrlWithCapabilityRefresh(forceRefresh: true) {
+        if let refreshedUrl = await self.canvasHostedSurfaceResolver.resolveA2UIURL(forceRefresh: true) {
             _ = try await MainActor.run {
                 try CanvasManager.shared.show(
                     sessionKey: sessionKey,
@@ -758,36 +758,6 @@ extension MacNodeRuntime {
         }
         throw NSError(domain: "Canvas", code: 31, userInfo: [
             NSLocalizedDescriptionKey: "A2UI_HOST_UNAVAILABLE: A2UI host not reachable",
-        ])
-    }
-
-    private func resolveA2UIHostUrl() async -> String? {
-        let canvasSurfaceUrl = await self.canvasSurfaceUrl()
-        return CanvasHostedURLResolver.resolveA2UIURL(surfaceURL: canvasSurfaceUrl)
-    }
-
-    func resolveA2UIHostUrlWithCapabilityRefresh(forceRefresh: Bool = false) async -> String? {
-        if !forceRefresh, let current = await resolveA2UIHostUrl() {
-            return current
-        }
-        let refreshedCanvasSurfaceUrl = await refreshCanvasSurfaceUrl()
-        return CanvasHostedURLResolver.resolveA2UIURL(surfaceURL: refreshedCanvasSurfaceUrl)
-    }
-
-    func resolveHostedCanvasTargetWithCapabilityRefresh(_ target: String?) async throws -> CanvasHostedTarget? {
-        guard let target, CanvasHostedURLResolver.isHostedTarget(target) else { return nil }
-        if let refreshedSurface = await refreshCanvasSurfaceUrl(),
-           let resolved = CanvasHostedURLResolver.resolve(surfaceURL: refreshedSurface, target: target)
-        {
-            return resolved
-        }
-        if let currentSurface = await canvasSurfaceUrl(),
-           let resolved = CanvasHostedURLResolver.resolve(surfaceURL: currentSurface, target: target)
-        {
-            return resolved
-        }
-        throw NSError(domain: "Canvas", code: 32, userInfo: [
-            NSLocalizedDescriptionKey: "CANVAS_HOST_NOT_CONFIGURED: gateway did not advertise canvas host",
         ])
     }
 

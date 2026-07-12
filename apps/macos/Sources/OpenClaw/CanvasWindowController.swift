@@ -312,10 +312,11 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WK
             ])
         }
 
+        let snapshotID = "\(CanvasWindowController.sanitizeSessionKey(self.sessionKey))-\(UUID().uuidString)"
         let path: String = if let outPath, !outPath.isEmpty {
             outPath
         } else {
-            "/tmp/openclaw-canvas-\(CanvasWindowController.sanitizeSessionKey(self.sessionKey))-\(UUID().uuidString).png"
+            "/tmp/openclaw-canvas-\(snapshotID).png"
         }
 
         try png.write(to: URL(fileURLWithPath: path), options: [.atomic])
