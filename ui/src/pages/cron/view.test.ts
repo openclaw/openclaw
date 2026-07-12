@@ -471,6 +471,15 @@ describe("cron view editor", () => {
       form: { ...DEFAULT_CRON_FORM, scheduleKind: "every", everyAmount: "" },
     });
     expect(invalid.querySelector(".cron-schedule-summary")).toBeNull();
+
+    // One-shot summaries render the parsed date/time, not a duration.
+    const once = renderView({
+      createOpen: true,
+      form: { ...DEFAULT_CRON_FORM, scheduleKind: "at", scheduleAt: "2026-07-14T09:00" },
+    });
+    const onceText = once.querySelector(".cron-schedule-summary")?.textContent ?? "";
+    expect(onceText).toContain("Runs once at");
+    expect(onceText).toContain("2026");
   });
 
   it("renders supported delivery options and normalizes stale announce selection", () => {
