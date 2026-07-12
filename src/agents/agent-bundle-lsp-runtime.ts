@@ -204,7 +204,7 @@ function parseContentLength(header: string): number | LspFramingError {
   for (const line of header.split("\r\n")) {
     const separator = line.indexOf(":");
     if (separator === -1) {
-      continue;
+      return new LspFramingError("LSP framing error: header line must contain a colon");
     }
     if (line.slice(0, separator).trim().toLowerCase() === "content-length") {
       values.push(line.slice(separator + 1).trim());
@@ -238,7 +238,8 @@ function parseLspMessages(buffer: Buffer): LspParseResult {
   while (true) {
     const headerEnd = remaining.indexOf(LSP_HEADER_SEPARATOR);
     if (headerEnd === -1) {
-      return remaining.length > MAX_LSP_HEADER_BYTES
+      const maxIncompleteHeaderBytes = MAX_LSP_HEADER_BYTES + LSP_HEADER_SEPARATOR.length - 1;
+      return remaining.length > maxIncompleteHeaderBytes
         ? framingError(messages, `header exceeds ${MAX_LSP_HEADER_BYTES} bytes`)
         : { ok: true, messages, remaining };
     }
