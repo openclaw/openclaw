@@ -1,5 +1,6 @@
 import { extractLeadingHttpStatus } from "../../shared/assistant-error-format.js";
 import type { AssistantMessage } from "../types.js";
+import { classifyRateLimitWindow } from "./rate-limit-window.js";
 
 function buildProviderErrorPattern(patterns: readonly string[]): RegExp {
   return new RegExp(patterns.join("|"), "i");
@@ -9,15 +10,22 @@ const NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN = buildProviderErrorPattern([
   "GoUsageLimitError",
   "FreeUsageLimitError",
   "Monthly usage limit reached",
-  "daily (?:request|usage) limit",
-  "requests? per day",
   "available balance",
   "insufficient_quota",
   "out of budget",
-  "retry after\\s+\\d+\\s*(?:h|hours?|d|days?)",
 ]);
 
 const RETRYABLE_HTTP_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
+const RATE_LIMIT_CONTEXT_PATTERN = buildProviderErrorPattern([
+  "rate.?limit",
+  "too many requests",
+  "resource_exhausted",
+  "daily (?:request|usage) limit",
+  "requests? per day",
+  "tokens? per day",
+  "quota[_ -]?exceeded",
+  "quota exceeded",
+]);
 
 const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
   "overloaded",
@@ -60,7 +68,14 @@ export function isRetryableAssistantError(message: AssistantMessage): boolean {
     return false;
   }
   const status = extractLeadingHttpStatus(errorMessage)?.code;
-  if (status && RETRYABLE_HTTP_STATUS_CODES.has(status)) {
+  if (status && status !== 429 && RETRYABLE_HTTP_STATUS_CODES.has(status)) {
+    return true;
+  }
+  const hasRateLimitContext = status === 429 || RATE_LIMIT_CONTEXT_PATTERN.test(errorMessage);
+  if (hasRateLimitContext && classifyRateLimitWindow(errorMessage).kind === "long") {
+    return false;
+  }
+  if (status === 429) {
     return true;
   }
   return RETRYABLE_PROVIDER_ERROR_PATTERN.test(errorMessage);
