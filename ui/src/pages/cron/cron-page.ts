@@ -13,6 +13,7 @@ import {
   getCronJobPayload,
   getVisibleCronJobs,
   hasCronFormErrors,
+  loadCronFailingCount,
   loadCronJobsPage,
   loadCronModelSuggestions,
   loadCronRuns,
@@ -199,6 +200,7 @@ class CronPage extends OpenClawLightDomElement {
     void this.context.channels.refresh(false);
     await Promise.all([
       this.runCronTask((current) => loadCronStatus(current)),
+      this.runCronTask((current) => loadCronFailingCount(current)),
       this.runCronTask((current) =>
         loadCronJobsPage(current, { tableFilters: options.tableFilters }),
       ),
@@ -377,6 +379,7 @@ class CronPage extends OpenClawLightDomElement {
           basePath: this.context.basePath,
           loading: this.cron.cronLoading,
           status: this.cron.cronStatus,
+          failingCount: this.cron.cronFailingCount,
           jobs: getVisibleCronJobs(this.cron),
           jobsLoadingMore: this.cron.cronJobsLoadingMore,
           jobsTotal: this.cron.cronJobsTotal,

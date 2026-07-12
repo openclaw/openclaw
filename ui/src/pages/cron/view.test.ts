@@ -28,6 +28,7 @@ function createProps(overrides: Partial<CronProps> = {}): CronProps {
     loading: false,
     jobsLoadingMore: false,
     status: null,
+    failingCount: null,
     jobs: [],
     jobsTotal: 0,
     jobsHasMore: false,
@@ -267,12 +268,15 @@ describe("cron view list pane", () => {
     expect(footer.textContent).toContain("1 of 2");
   });
 
-  it("counts only enabled failing jobs in the failing stat", () => {
-    const failing = createJob("job-1", { state: { lastRunStatus: "error" } });
-    const retired = createJob("job-2", { enabled: false, state: { lastRunStatus: "error" } });
-    const container = renderView({ jobs: [failing, retired] });
+  it("shows the global failing count and degrades to n/a when unknown", () => {
+    const container = renderView({ failingCount: 3 });
     const value = getElement(container, ".cron-stat__value--danger", HTMLSpanElement);
-    expect(value.textContent?.trim()).toBe("1");
+    expect(value.textContent?.trim()).toBe("3");
+
+    const unknown = renderView({ failingCount: null });
+    expect(unknown.querySelector(".cron-stat__value--danger")).toBeNull();
+    const stats = getElement(unknown, ".cron-stats", HTMLDivElement);
+    expect(stats.textContent).toContain("n/a");
   });
 
   it("switches between tasks and run history via the list tabs", () => {

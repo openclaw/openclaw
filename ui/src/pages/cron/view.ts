@@ -42,6 +42,7 @@ type CronProps = {
   loading: boolean;
   jobsLoadingMore: boolean;
   status: CronStatus | null;
+  failingCount: number | null;
   jobs: CronJob[];
   jobsTotal: number;
   jobsHasMore: boolean;
@@ -454,9 +455,9 @@ function renderListView(props: CronProps) {
 }
 
 function renderStats(props: CronProps) {
-  // Failing counts only currently listed jobs; with the default 50-job page
-  // that covers realistic setups without inventing a new aggregate RPC.
-  const failing = props.jobs.filter((job) => isCronJobActiveFailure(job)).length;
+  // failingCount is a dedicated unfiltered cron.list total; props.jobs only
+  // holds the current filtered page and must not feed a global stat.
+  const failing = props.failingCount;
   const total = props.status?.jobs ?? Math.max(props.jobsTotal, props.jobs.length);
   return html`
     <div class="cron-stats">
@@ -466,8 +467,12 @@ function renderStats(props: CronProps) {
       </div>
       <div class="cron-stat card">
         <span class="cron-stat__label">${t("cron.stats.failing")}</span>
-        <span class="cron-stat__value ${failing > 0 ? "cron-stat__value--danger" : ""}">
-          ${failing}
+        <span
+          class="cron-stat__value ${typeof failing === "number" && failing > 0
+            ? "cron-stat__value--danger"
+            : ""}"
+        >
+          ${failing ?? t("common.na")}
         </span>
       </div>
       <div class="cron-stat card">

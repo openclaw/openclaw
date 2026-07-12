@@ -222,9 +222,11 @@
 
 /* ── Jobs table ── */
 
+/* No overflow clipping: row action menus drop below the last row and must
+   stay visible. Head/footer sit inside the rounded card border, so nothing
+   paints outside the corners without it. */
 .cron-table {
   padding: 0;
-  overflow: hidden;
 }
 
 .cron-table__head,
