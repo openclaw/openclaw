@@ -90,9 +90,7 @@ function buildSignalSetupPatch(input: {
   httpPort?: string;
 }) {
   const httpPort =
-    input.httpPort !== undefined && input.httpPort !== ""
-      ? Number(input.httpPort)
-      : undefined;
+    input.httpPort !== undefined && input.httpPort !== "" ? Number(input.httpPort) : undefined;
   return {
     ...(input.signalNumber ? { account: input.signalNumber } : {}),
     ...(input.cliPath ? { cliPath: input.cliPath } : {}),
