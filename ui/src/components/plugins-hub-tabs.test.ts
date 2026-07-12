@@ -47,11 +47,13 @@ describe("renderPluginsHubTabs", () => {
   it("selects tabs on click", () => {
     const onSelect = vi.fn();
     const container = mount({ active: "installed", onSelect });
-    container.querySelector<HTMLButtonElement>("#plugins-tab-workshop")?.click();
+    container
+      .querySelector<HTMLButtonElement>("#plugins-tab-workshop")
+      ?.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
     expect(onSelect).toHaveBeenLastCalledWith("workshop");
   });
 
-  it("uses roving focus and arrow-key activation across all hub tabs", () => {
+  it("moves focus with arrow keys without activating cross-route tabs", () => {
     const onSelect = vi.fn();
     const container = mount({ active: "installed", onSelect });
     const installed = container.querySelector<HTMLButtonElement>("#plugins-tab-installed")!;
@@ -61,15 +63,43 @@ describe("renderPluginsHubTabs", () => {
     expect([installed.tabIndex, discover.tabIndex]).toEqual([0, -1]);
     installed.focus();
     installed.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
-    expect(onSelect).toHaveBeenLastCalledWith("discover");
     expect(document.activeElement).toBe(discover);
 
     discover.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }));
-    expect(onSelect).toHaveBeenLastCalledWith("workshop");
     expect(document.activeElement).toBe(workshop);
 
     workshop.dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true }));
-    expect(onSelect).toHaveBeenLastCalledWith("installed");
     expect(document.activeElement).toBe(installed);
+
+    // Manual activation: arrowing never selects; activation stays on
+    // click/Enter so cross-route tabs cannot unmount the strip under focus.
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("hands focus to the destination strip after keyboard activation", () => {
+    const onSelect = vi.fn();
+    const source = mount({ active: "installed", onSelect });
+    // element.click() dispatches with detail 0, matching keyboard activation.
+    source.querySelector<HTMLButtonElement>("#plugins-tab-workshop")?.click();
+    expect(onSelect).toHaveBeenLastCalledWith("workshop");
+
+    source.remove();
+    const destination = mount({ active: "workshop", onSelect: () => undefined });
+    expect(document.activeElement).toBe(
+      destination.querySelector<HTMLButtonElement>("#plugins-tab-workshop"),
+    );
+  });
+
+  it("does not steal focus after mouse activation", () => {
+    const source = mount({ active: "installed", onSelect: () => undefined });
+    source
+      .querySelector<HTMLButtonElement>("#plugins-tab-skills")
+      ?.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
+    source.remove();
+
+    const destination = mount({ active: "skills", onSelect: () => undefined });
+    expect(document.activeElement).not.toBe(
+      destination.querySelector<HTMLButtonElement>("#plugins-tab-skills"),
+    );
   });
 });

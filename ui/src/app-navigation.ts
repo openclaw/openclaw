@@ -26,10 +26,14 @@ export const SIDEBAR_NAV_ROUTES = [
 
 // Routes presented as tabs of the Plugins hub. The sidebar highlights the
 // Plugins entry for all of them, mirroring how config covers settings routes.
-const PLUGINS_HUB_ROUTES: readonly NavigationRouteId[] = ["plugins", "skills", "skill-workshop"];
+const PLUGINS_HUB_ROUTES: ReadonlySet<NavigationRouteId> = new Set([
+  "plugins",
+  "skills",
+  "skill-workshop",
+]);
 
 export function isPluginsHubRoute(routeId: NavigationRouteId): boolean {
-  return PLUGINS_HUB_ROUTES.includes(routeId);
+  return PLUGINS_HUB_ROUTES.has(routeId);
 }
 
 export type SidebarNavRoute = (typeof SIDEBAR_NAV_ROUTES)[number];
