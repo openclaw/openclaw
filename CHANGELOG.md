@@ -28,7 +28,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Discord PluralKit lookup deadlines:** bound member lookups through response-body parsing and inbound preflight cancellation so a stalled PluralKit API cannot hold Discord message processing indefinitely. (#104121) Thanks @Alix-007.
 - **Outbound channel bootstrap:** suppress repeated failed plugin activation for the same channel, config, and registry generation while retrying after config or registry reloads. (#100377) Thanks @xialonglee.
 - **OpenAI Realtime client-secret deadlines:** bound voice and transcription secret acquisition to 30 seconds through the guarded fetch boundary while preserving authentication and bounded response parsing. (#102860) Thanks @Alix-007.
 - **Gateway client watchdog:** keep transport-stall detection active for unbounded and mixed pending requests so dead sockets reject pending requests, reconnect, and never replay rejected requests. (#103407) Thanks @NianJiuZst.
