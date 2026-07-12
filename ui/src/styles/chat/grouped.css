@@ -579,7 +579,7 @@ details.msg-meta:not([open]) .msg-meta__details {
   left: 0;
   z-index: 30;
   width: max-content;
-  max-width: min(28rem, calc(100vw - 32px));
+  max-width: min(36rem, calc(100vw - 32px));
   padding: 3px 7px;
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
