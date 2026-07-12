@@ -2,6 +2,7 @@
 import { createPersistentDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 import { getOptionalSlackRuntime } from "../runtime.js";
 import type { SlackMessageEvent } from "../types.js";
+import { resolveSlackInboundDeliveryId } from "./inbound-delivery-identity.js";
 
 const TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_ENTRIES = 20_000;
@@ -33,21 +34,26 @@ const deliveredMessages = createPersistentDedupeCache<SlackInboundDeliveryRecord
   },
 });
 
-function makeKey(accountId: string, channelId: string, ts: string, teamId?: string): string {
-  return `${accountId}:${teamId ? `${teamId}:` : ""}${channelId}:${ts}`;
+function makeKey(
+  accountId: string,
+  channelId: string,
+  deliveryId: string,
+  teamId?: string,
+): string {
+  return `${accountId}:${teamId ? `${teamId}:` : ""}${channelId}:${deliveryId}`;
 }
 
 export async function hasSlackInboundMessageDelivery(params: {
   accountId: string;
-  channelId: string | undefined;
-  ts: string | undefined;
+  message: SlackMessageEvent;
   teamId?: string;
 }): Promise<boolean> {
-  if (!params.accountId || !params.channelId || !params.ts) {
+  const deliveryId = resolveSlackInboundDeliveryId(params.message);
+  if (!params.accountId || !params.message.channel || !deliveryId) {
     return false;
   }
   return await deliveredMessages.lookup(
-    makeKey(params.accountId, params.channelId, params.ts, params.teamId),
+    makeKey(params.accountId, params.message.channel, deliveryId, params.teamId),
   );
 }
 
@@ -62,10 +68,11 @@ export async function recordSlackInboundMessageDeliveries(params: {
   const deliveredAt = Date.now();
   const keys = new Set<string>();
   for (const message of params.messages) {
-    if (!message.channel || !message.ts) {
+    const deliveryId = resolveSlackInboundDeliveryId(message);
+    if (!message.channel || !deliveryId) {
       continue;
     }
-    keys.add(makeKey(params.accountId, message.channel, message.ts, params.teamId));
+    keys.add(makeKey(params.accountId, message.channel, deliveryId, params.teamId));
   }
   await Promise.all(
     Array.from(keys, (key) =>
