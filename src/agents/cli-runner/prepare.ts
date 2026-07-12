@@ -279,6 +279,9 @@ function buildCliMcpGrantContext(params: {
     agentId: params.agentId,
     sessionId: normalizeOptionalMcpContextValue(params.run.sessionId),
     runId: normalizeOptionalMcpContextValue(params.run.runId),
+    ...(params.run.authorizationSubject
+      ? { authorizationSubject: params.run.authorizationSubject }
+      : {}),
     modelProvider: params.modelProvider,
     modelId: params.modelId,
     messageProvider: resolveCliMcpMessageProvider(params.run),
@@ -1026,6 +1029,7 @@ export async function prepareCliRunContext(
               params.runtimePolicySessionKey,
             ),
             agentId: sessionAgentId,
+            authorizationSubject: params.authorizationSubject,
             messageProvider: resolveCliMcpMessageProvider(params),
             clientCaps: params.clientCaps,
             currentChannelId: params.currentChannelId,

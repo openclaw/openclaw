@@ -9,6 +9,7 @@ import type {
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
+import type { GatewayAuthorizationSubject } from "./authorization/contracts.js";
 import {
   buildMcpToolSchema,
   type McpLoopbackTool,
@@ -37,6 +38,7 @@ type McpLoopbackScopeParams = {
   runtimePolicySessionKey?: string;
   agentId?: string;
   sessionId?: string;
+  authorizationSubject?: GatewayAuthorizationSubject;
   modelProvider?: string;
   modelId?: string;
   yieldContextCacheKey?: string;
@@ -103,6 +105,16 @@ export class McpLoopbackToolCache {
       params.runtimePolicySessionKey ?? "",
       params.agentId ?? "",
       params.sessionId ?? "",
+      params.authorizationSubject?.principal.issuer ?? "",
+      params.authorizationSubject?.principal.subject ?? "",
+      params.authorizationSubject?.principal.kind ?? "",
+      params.authorizationSubject?.domain.id ?? "",
+      params.authorizationSubject?.delegation?.id ?? "",
+      params.authorizationSubject?.delegation?.assignmentId ?? "",
+      params.authorizationSubject?.agentSession?.id ?? "",
+      params.authorizationSubject?.agentSession?.invokingPrincipal.issuer ?? "",
+      params.authorizationSubject?.agentSession?.invokingPrincipal.subject ?? "",
+      params.authorizationSubject?.agentSession?.invokingPrincipal.kind ?? "",
       params.modelProvider ?? "",
       params.modelId ?? "",
       params.yieldContextCacheKey ?? "",
