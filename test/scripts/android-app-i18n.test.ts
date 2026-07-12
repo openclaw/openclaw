@@ -33,8 +33,15 @@ describe("Android app i18n resources", () => {
   });
 
   it("selects duplicate-source translations by frequency then stable text order", () => {
-    expect(selectDeterministicTranslation(["Beta", "Alpha", "Beta"])).toBe("Beta");
-    expect(selectDeterministicTranslation(["Beta", "Alpha"])).toBe("Alpha");
+    expect(selectDeterministicTranslation("Source", ["Beta", "Alpha", "Beta"])).toBe("Beta");
+    expect(selectDeterministicTranslation("Source", ["Beta", "Alpha"])).toBe("Alpha");
+  });
+
+  it("prefers a translated candidate over repeated source fallbacks", () => {
+    expect(selectDeterministicTranslation("Source", ["Source", "Translated", "Source"])).toBe(
+      "Translated",
+    );
+    expect(selectDeterministicTranslation("Source", ["Source", "Source"])).toBe("Source");
   });
 
   it("preserves source argument indexes when a translation reorders interpolations", () => {

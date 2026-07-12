@@ -780,9 +780,11 @@ function findInvalidResourceSyntax(strings: Map<string, ResourceString>): string
     .map(([key]) => key);
 }
 
-export function selectDeterministicTranslation(values: readonly string[]): string {
+export function selectDeterministicTranslation(source: string, values: readonly string[]): string {
+  const translated = values.filter((value) => value !== source);
+  const candidates = translated.length > 0 ? translated : values;
   const counts = new Map<string, number>();
-  for (const value of values) {
+  for (const value of candidates) {
     counts.set(value, (counts.get(value) ?? 0) + 1);
   }
   return (
@@ -922,7 +924,12 @@ async function buildCatalog(): Promise<GeneratedCatalog> {
         continue;
       }
       const translations = artifactTranslationsBySource.get(source) ?? [];
-      const selected = selectDeterministicTranslation(translations);
+      const selected = selectDeterministicTranslation(source, translations);
+      if (selected === source && translations.some((translation) => translation !== source)) {
+        throw new Error(
+          `Android translation selection kept the source despite a translated candidate: ${locale} ${JSON.stringify(source)}`,
+        );
+      }
       const unique = [...new Set(translations)].toSorted(compareText);
       if (unique.length > 1) {
         contradictions.push({ locale, selected, source, translations: unique });
@@ -968,7 +975,8 @@ async function buildCatalog(): Promise<GeneratedCatalog> {
       translatedBySource.set(entry.source, values);
     }
     const translatedItems = assistantItems.map(
-      (source) => selectDeterministicTranslation(translatedBySource.get(source) ?? []) || source,
+      (source) =>
+        selectDeterministicTranslation(source, translatedBySource.get(source) ?? []) || source,
     );
     resources.set(
       path.join(RESOURCE_ROOT, localeDirectory(locale), "assistant.xml"),
