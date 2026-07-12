@@ -19,6 +19,7 @@ type MSTeamsAttachmentLike = {
 type MSTeamsEntityLike = {
   type?: string;
   text?: unknown;
+  messageId?: unknown;
   mentioned?: {
     id?: unknown;
     name?: unknown;
@@ -110,9 +111,11 @@ export function extractMSTeamsQuoteInfo(
     const body = normalizeMSTeamsWhitespace(entity.preview);
     if (body) {
       const senderName = typeof entity.senderName === "string" ? entity.senderName.trim() : "";
+      const id = typeof entity.messageId === "string" ? entity.messageId.trim() : "";
       return {
         sender: senderName || "unknown",
         body,
+        ...(id ? { id } : {}),
         senderId: typeof entity.senderId === "string" ? entity.senderId : undefined,
       };
     }
