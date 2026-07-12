@@ -303,6 +303,25 @@ describe("messageCommand", () => {
     expect(actionCall.params.pollQuestion).toBe("Ship it?");
   });
 
+  it("uses an explicitly selected configured agent for destination session ownership", async () => {
+    testConfig = {
+      agents: { list: [{ id: "main", default: true }, { id: "George" }] },
+    };
+
+    await runMessageCommand({ agent: "GEORGE" });
+
+    expect(readOnlyMessageActionCall().agentId).toBe("george");
+  });
+
+  it("rejects an unknown explicitly selected agent before dispatch", async () => {
+    testConfig = {
+      agents: { list: [{ id: "main", default: true }, { id: "george" }] },
+    };
+
+    await expect(runMessageCommand({ agent: "typo" })).rejects.toThrow('Unknown agent id "typo"');
+    expect(runMessageActionMock).not.toHaveBeenCalled();
+  });
+
   it("includes a stable top-level messageId in JSON output", async () => {
     runMessageActionMock.mockResolvedValueOnce({
       kind: "send",
