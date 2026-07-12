@@ -546,7 +546,12 @@ private fun TalkTranscript(
       items(entries.takeLast(6), key = { it.id }) { entry ->
         TalkTranscriptCard(
           label = if (entry.role == VoiceConversationRole.User) nativeString("You") else nativeString("OpenClaw"),
-          text = if (entry.isStreaming && entry.text.isBlank()) nativeString("Listening response...") else entry.text,
+          text =
+            if (entry.isStreaming && entry.text.isBlank()) {
+              nativeString("Listening response...")
+            } else {
+              entry.localizedSource?.let(::nativeString) ?: entry.text
+            },
           muted = entry.isStreaming,
         )
       }
@@ -1047,7 +1052,7 @@ private fun VoiceTurnCard(entry: VoiceConversationEntry) {
             if (entry.isStreaming && entry.text.isBlank()) {
               nativeString("Listening...")
             } else {
-              entry.text
+              entry.localizedSource?.let(::nativeString) ?: entry.text
             },
           style = ClawTheme.type.body,
           color = ClawTheme.colors.text,

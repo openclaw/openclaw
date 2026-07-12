@@ -4,6 +4,7 @@ import ai.openclaw.app.gateway.DeviceAuthEntry
 import ai.openclaw.app.gateway.DeviceAuthTokenStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.i18n.nativeText
 import android.Manifest
 import android.content.ComponentName
 import android.content.IntentFilter
@@ -321,7 +322,7 @@ class TalkModeManagerTest {
 
     setPrivateField(manager, "realtimeSessionId", "relay-1")
     setMutableStateFlow(manager, "_isEnabled", true)
-    setMutableStateFlow(manager, "_statusText", "Talk failed: Provider rejected the session.")
+    setMutableStateFlow(manager, "_statusText", nativeText("Talk failed: \$message", "Provider rejected the session."))
 
     manager.handleGatewayEvent(
       "talk.event",
@@ -773,7 +774,7 @@ class TalkModeManagerTest {
       setPrivateField(pause, "sessionId", "relay-1")
       setPrivateField(manager, "realtimeSessionId", "relay-1")
       setMutableStateFlow(manager, "_isListening", false)
-      setMutableStateFlow(manager, "_statusText", "Thinking…")
+      setMutableStateFlow(manager, "_statusText", nativeText("Thinking…"))
 
       manager.resumeRealtimeCaptureAfterPushToTalk("capture-1")
 
@@ -829,7 +830,7 @@ class TalkModeManagerTest {
       val pause = readPrivateField(manager, "realtimeCapturePause")!!
       setPrivateField(pause, "restartRelay", true)
       setPrivateField(manager, "stopRequested", true)
-      setMutableStateFlow(manager, "_statusText", "Off")
+      setMutableStateFlow(manager, "_statusText", nativeText("Off"))
 
       manager.resumeRealtimeCaptureAfterPushToTalk("capture-1")
 
@@ -901,7 +902,7 @@ class TalkModeManagerTest {
       setPrivateField(pause, "sessionId", "relay-1")
       setPrivateField(manager, "realtimeSessionId", "relay-1")
       setMutableStateFlow(manager, "_isListening", false)
-      setMutableStateFlow(manager, "_statusText", "Gateway not connected")
+      setMutableStateFlow(manager, "_statusText", nativeText("Gateway not connected"))
 
       manager.resumeRealtimeCaptureAfterPushToTalk("capture-1")
 
