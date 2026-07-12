@@ -83,6 +83,12 @@ An agent can author a real HTML widget with `workspace_widget_scaffold` (or you 
 Sending a prompt into chat from a widget additionally requires a manifest capability, a
 per-invocation confirmation quoting the exact text, and passes a rate limit.
 
+Widgets that declare the `state:persist` capability may keep up to 64 KB of JSON state.
+The iframe sends `workspace:getState` or `workspace:setState` over its document-bound
+bridge; the trusted parent supplies the rendered widget's ID, so child code cannot select
+another widget's record. A set may include the version returned by the last read as
+`expectedVersion`; stale writes fail instead of silently overwriting newer state.
+
 ## CLI
 
 ```sh
@@ -97,8 +103,8 @@ the Control UI does not, because the browser already holds it.
 
 ## Storage
 
-The workspace document, the custom-widget registry, and a 20-entry undo ring live in
-`<stateDir>/workspaces/workspaces.sqlite`. Agent-authored widget assets stay on disk under
+The workspace document, the custom-widget registry, widget state, and a 20-entry undo ring
+live in `<stateDir>/workspaces/workspaces.sqlite`. Agent-authored widget assets stay on disk under
 `<stateDir>/workspaces/widgets/<name>/`, and file-binding data under
 `<stateDir>/workspaces/data/`, because an agent authors those with ordinary file tools and
 the widget route serves their bytes.

@@ -70,7 +70,7 @@ describe("loadWidgetManifestView", () => {
       manifest: {
         entrypoint: "index.html",
         bindings: [{ id: "value", source: "static", value: 1 }],
-        capabilities: ["data:read", "prompt:send"],
+        capabilities: ["data:read", "prompt:send", "state:persist"],
       },
     }));
     const view = await loadWidgetManifestView({ request } as never, "revenue-chart");
@@ -80,7 +80,7 @@ describe("loadWidgetManifestView", () => {
       frameExpiresAt: FRAME_EXPIRES_AT,
       entrypoint: "index.html",
       bindings: { value: { source: "static", value: 1 } },
-      capabilities: ["data:read", "prompt:send"],
+      capabilities: ["data:read", "prompt:send", "state:persist"],
     });
   });
 
@@ -168,6 +168,48 @@ function connectWidgetBridge(params: {
 }
 
 describe("attachWidgetBridge document-bound channel", () => {
+  it("binds state RPCs to the host widget id, never a child-provided id", async () => {
+    const iframe = document.createElement("iframe");
+    document.body.appendChild(iframe);
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ state: { text: "old" }, version: 2 })
+      .mockResolvedValueOnce({ widgetId: "w_custom", version: 3 });
+    const { childPort, detach, posts } = connectWidgetBridge({
+      iframe,
+      manifest: manifest({ capabilities: ["state:persist"] }),
+      context: host({ client: { request } as never }),
+    });
+
+    childPort.postMessage(
+      { v: 1, type: "workspace:getState", requestId: "g1", widgetId: "other" },
+      [],
+    );
+    await vi.waitFor(() => expect(posts).toHaveLength(1));
+    childPort.postMessage(
+      {
+        v: 1,
+        type: "workspace:setState",
+        requestId: "s1",
+        widgetId: "other",
+        state: { text: "new" },
+        expectedVersion: 2,
+      },
+      [],
+    );
+    await vi.waitFor(() => expect(posts).toHaveLength(2));
+
+    expect(request).toHaveBeenNthCalledWith(1, "workspaces.widget.state.get", {
+      widgetId: "w_custom",
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "workspaces.widget.state.set", {
+      widgetId: "w_custom",
+      state: { text: "new" },
+      expectedVersion: 2,
+    });
+    detach();
+  });
+
   it("drops a foreign bootstrap and accepts the iframe's token-bound port", async () => {
     const iframe = document.createElement("iframe");
     const foreign = document.createElement("iframe");

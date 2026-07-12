@@ -28,6 +28,7 @@ import { WidgetAssetTokens } from "./asset-tokens.js";
 import { DEFAULT_WORKSPACE } from "./default-workspace.js";
 import {
   validateWorkspaceDoc,
+  type JsonValue,
   type WorkspaceActor,
   type WorkspaceWidgetRegistryEntry,
   type WorkspaceDoc,
@@ -35,12 +36,21 @@ import {
 
 type WorkspaceMutationOptions = { actor: WorkspaceActor };
 type WorkspaceMutationResult = { doc: WorkspaceDoc; changed: boolean };
+type WidgetStateRecord = {
+  state: JsonValue;
+  version: number;
+  updatedAt: string;
+};
+type WidgetStateWriteOptions = { expectedVersion?: number };
+type WidgetStateWriteResult = { version: number };
 
 const MAX_WORKSPACE_BYTES = 256 * 1024;
+const MAX_WIDGET_STATE_BYTES = 64 * 1024;
 const UNDO_RING_SIZE = 20;
 const DIR_MODE = 0o700;
 const FILE_MODE = 0o600;
 const BUSY_TIMEOUT_MS = 5000;
+const WIDGET_ID_PATTERN = /^[A-Za-z0-9_-]{1,48}$/;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS workspace (
@@ -54,6 +64,13 @@ CREATE TABLE IF NOT EXISTS undo (
   doc TEXT NOT NULL,
   created_ms INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS widget_state (
+  widget_id TEXT PRIMARY KEY,
+  widget_kind TEXT NOT NULL,
+  version INTEGER NOT NULL CHECK (version >= 1),
+  state TEXT NOT NULL,
+  updated_ms INTEGER NOT NULL
+);
 `;
 
 function serializeWorkspaceDoc(doc: WorkspaceDoc): string {
@@ -64,6 +81,66 @@ function assertWorkspaceSize(serialized: string): void {
   if (Buffer.byteLength(serialized, "utf8") > MAX_WORKSPACE_BYTES) {
     throw new Error("workspace document exceeds 256 KB");
   }
+}
+
+function assertWidgetId(widgetId: string): void {
+  if (!WIDGET_ID_PATTERN.test(widgetId)) {
+    throw new Error("widget id is invalid");
+  }
+}
+
+function assertJsonValue(value: unknown, seen = new Set<object>()): asserts value is JsonValue {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean" ||
+    (typeof value === "number" && Number.isFinite(value))
+  ) {
+    return;
+  }
+  if (typeof value !== "object") {
+    throw new Error("widget state must be valid JSON");
+  }
+  if (seen.has(value)) {
+    throw new Error("widget state must be valid JSON");
+  }
+  seen.add(value);
+  try {
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        assertJsonValue(entry, seen);
+      }
+      return;
+    }
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new Error("widget state must be valid JSON");
+    }
+    for (const entry of Object.values(value as Record<string, unknown>)) {
+      assertJsonValue(entry, seen);
+    }
+  } finally {
+    seen.delete(value);
+  }
+}
+
+function serializeWidgetState(value: unknown): string {
+  assertJsonValue(value);
+  const serialized = JSON.stringify(value);
+  if (Buffer.byteLength(serialized, "utf8") > MAX_WIDGET_STATE_BYTES) {
+    throw new Error("widget state exceeds 64 KB");
+  }
+  return serialized;
+}
+
+function widgetKind(doc: WorkspaceDoc, widgetId: string): string | null {
+  for (const tab of doc.tabs) {
+    const widget = tab.widgets.find((entry) => entry.id === widgetId);
+    if (widget) {
+      return widget.kind;
+    }
+  }
+  return null;
 }
 
 /**
@@ -169,6 +246,78 @@ export class WorkspaceStore {
     return this.widgetEntry(name)?.status ?? null;
   }
 
+  /** Reads one widget's opaque state blob without mixing it into the workspace document. */
+  readWidgetState(widgetId: string): WidgetStateRecord | null {
+    assertWidgetId(widgetId);
+    const row = this.db
+      .prepare("SELECT version, state, updated_ms FROM widget_state WHERE widget_id = ?")
+      .get(widgetId) as { version: number; state: string; updated_ms: number } | undefined;
+    if (!row) {
+      return null;
+    }
+    const state: unknown = JSON.parse(row.state);
+    assertJsonValue(state);
+    return {
+      state,
+      version: row.version,
+      updatedAt: new Date(row.updated_ms).toISOString(),
+    };
+  }
+
+  /**
+   * Atomically writes one widget's state. `expectedVersion: 0` means the widget
+   * has never written state; omitting it preserves last-write-wins behavior.
+   */
+  writeWidgetState(
+    widgetId: string,
+    state: JsonValue,
+    options: WidgetStateWriteOptions = {},
+  ): WidgetStateWriteResult {
+    assertWidgetId(widgetId);
+    if (
+      options.expectedVersion !== undefined &&
+      (!Number.isInteger(options.expectedVersion) || options.expectedVersion < 0)
+    ) {
+      throw new Error("expectedVersion must be a non-negative integer");
+    }
+    const serialized = serializeWidgetState(state);
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      // Bind persistence to the current widget identity inside the same write
+      // transaction. Arbitrary IDs cannot create orphan rows, and a removed or
+      // replaced widget cannot inherit another widget's opaque state.
+      this.cached = null;
+      const kind = widgetKind(this.read(), widgetId);
+      if (kind === null) {
+        throw new Error(`workspace widget not found: ${widgetId}`);
+      }
+      const previous = this.db
+        .prepare("SELECT version, widget_kind FROM widget_state WHERE widget_id = ?")
+        .get(widgetId) as { version: number; widget_kind: string } | undefined;
+      if (previous && previous.widget_kind !== kind) {
+        this.db.prepare("DELETE FROM widget_state WHERE widget_id = ?").run(widgetId);
+      }
+      const currentVersion = previous?.widget_kind === kind ? previous.version : 0;
+      if (options.expectedVersion !== undefined && options.expectedVersion !== currentVersion) {
+        throw new Error(
+          `widget state version conflict: expected ${options.expectedVersion}, found ${currentVersion}`,
+        );
+      }
+      const version = currentVersion + 1;
+      this.db
+        .prepare(
+          "INSERT INTO widget_state (widget_id, widget_kind, version, state, updated_ms) VALUES (?, ?, ?, ?, ?) " +
+            "ON CONFLICT(widget_id) DO UPDATE SET widget_kind = excluded.widget_kind, version = excluded.version, state = excluded.state, updated_ms = excluded.updated_ms",
+        )
+        .run(widgetId, kind, version, serialized, Date.now());
+      this.db.exec("COMMIT");
+      return { version };
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
   /**
    * Applies `fn` to a draft of the current document and persists the result.
    * `fn` must be synchronous: it runs inside the write transaction, which is what
@@ -244,6 +393,21 @@ export class WorkspaceStore {
         ...derive(current),
         workspaceVersion: current.workspaceVersion + 1,
       });
+      const nextKinds = new Map(
+        next.tabs.flatMap((tab) => tab.widgets.map((widget) => [widget.id, widget.kind] as const)),
+      );
+      const stateRows = this.db
+        .prepare("SELECT widget_id, widget_kind FROM widget_state")
+        .all() as Array<{
+        widget_id: string;
+        widget_kind: string;
+      }>;
+      const deleteState = this.db.prepare("DELETE FROM widget_state WHERE widget_id = ?");
+      for (const row of stateRows) {
+        if (nextKinds.get(row.widget_id) !== row.widget_kind) {
+          deleteState.run(row.widget_id);
+        }
+      }
       this.commit(next, { snapshot: options.snapshot === false ? null : current });
       this.db.exec("COMMIT");
       return { doc: next, changed: true };
