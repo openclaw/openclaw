@@ -25,7 +25,6 @@ function normalizeStreaming(params: {
   resolvedMode: string;
   aliasOnlyMode?: string;
   resolvedNativeTransport?: unknown;
-  offModeLegacyNotice?: (pathPrefix: string) => string;
 }) {
   const changes: string[] = [];
   const result = normalizeLegacyStreamingAliases({
@@ -84,15 +83,12 @@ describe("normalizeCompatibilityConfigValues preview streaming aliases", () => {
       entry: { streamMode: "off" },
       pathPrefix: "channels.discord",
       resolvedMode: "off",
-      offModeLegacyNotice: (pathPrefix) =>
-        `${pathPrefix}.streaming remains off by default to avoid Discord preview-edit rate limits; set ${pathPrefix}.streaming.mode="partial" to opt in explicitly.`,
     });
 
     expect(res.entry.streaming).toEqual({ mode: "off" });
     expect(getLegacyProperty(res.entry, "streamMode")).toBeUndefined();
     expect(res.changes).toEqual([
       "Moved channels.discord.streamMode → channels.discord.streaming.mode (off).",
-      'channels.discord.streaming remains off by default to avoid Discord preview-edit rate limits; set channels.discord.streaming.mode="partial" to opt in explicitly.',
     ]);
   });
 

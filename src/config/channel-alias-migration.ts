@@ -31,8 +31,6 @@ type StreamingAliasSpec = {
   includePreviewChunk?: boolean;
   /** Channel accepts flat `nativeStreaming`; returns the resolved nativeTransport (Slack). */
   resolveNativeTransport?: (entry: Record<string, unknown>) => unknown;
-  /** Extra doctor note when a legacy streamMode resolves to "off". */
-  offModeNotice?: (pathPrefix: string) => string;
   /**
    * Channel has no streaming mode: only delivery flat aliases migrate, and
    * scalar `streaming` values are plain validation errors (iMessage). The
@@ -128,7 +126,6 @@ export function defineChannelAliasMigration(spec: ChannelAliasMigrationSpec): {
     aliasOnlyMode: streaming.absentObjectDefault,
     includePreviewChunk: streaming.includePreviewChunk,
     resolvedNativeTransport: streaming.resolveNativeTransport?.(entry),
-    offModeLegacyNotice: streaming.offModeNotice,
   });
 
   const normalizeChannelConfig = (params: { cfg: OpenClawConfig; changes?: string[] }) => {

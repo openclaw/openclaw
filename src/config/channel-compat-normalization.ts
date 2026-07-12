@@ -19,7 +19,6 @@ export type LegacyStreamingAliasOptions = {
   aliasOnlyMode?: string;
   includePreviewChunk?: boolean;
   resolvedNativeTransport?: unknown;
-  offModeLegacyNotice?: (pathPrefix: string) => string;
 };
 
 /** Account-level channel config passed to channel-specific doctor migrations. */
@@ -251,13 +250,6 @@ export function normalizeLegacyStreamingAliases(
     streaming.block = block;
   }
   updated.streaming = streaming;
-  if (
-    hadLegacyStreamMode &&
-    params.resolvedMode === "off" &&
-    params.offModeLegacyNotice !== undefined
-  ) {
-    params.changes.push(params.offModeLegacyNotice(params.pathPrefix));
-  }
   return { entry: updated, changed };
 }
 
