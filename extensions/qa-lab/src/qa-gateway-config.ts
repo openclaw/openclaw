@@ -139,6 +139,8 @@ export function buildQaGatewayConfig(params: {
   const allowedOrigins = mergeQaControlUiAllowedOrigins(params.controlUiAllowedOrigins);
   const gatewayModels = provider.buildGatewayModels({
     providerBaseUrl,
+    primaryModel,
+    alternateModel,
     liveProviderConfigs: params.liveProviderConfigs,
   });
 
