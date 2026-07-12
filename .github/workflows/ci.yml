@@ -827,10 +827,6 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build:ci-artifacts
 
-      - name: Check Control UI i18n
-        if: needs.preflight.outputs.run_control_ui_i18n == 'true'
-        run: pnpm ui:i18n:check
-
       - name: Pack built runtime artifacts
         run: tar --posix -cf dist-runtime-build.tar.zst --use-compress-program zstdmt dist dist-runtime packages/*/dist
 
@@ -1059,11 +1055,34 @@ jobs:
           if [[ "$COMPATIBILITY_TARGET" == "true" ]]; then
             # Frozen targets can contain timing-sensitive tests fixed on current main.
             # Give legacy browser fixtures enough headroom on shared hosted runners.
+            # Isolate files because older suites can still leak module mocks between tests.
             # Do not retry whole files: several rely on one-shot mocked browser globals.
-            pnpm --dir ui test --testTimeout=30000
+            pnpm --dir ui test --testTimeout=30000 --isolate
           else
             pnpm --dir ui test
           fi
+
+  control-ui-i18n:
+    permissions:
+      contents: read
+    name: control-ui-i18n
+    needs: [preflight]
+    if: needs.preflight.outputs.run_control_ui_i18n == 'true'
+    # Locale refresh runs separately on main and nightly. Keep drift visible on
+    # automatic runs without blocking unrelated work; release CI stays strict.
+    continue-on-error: ${{ github.event_name != 'workflow_dispatch' }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    timeout-minutes: 10
+    steps:
+      - *linux_node_checkout_step
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.x"
+          install-bun: "false"
+
+      - name: Check Control UI locale parity
+        run: pnpm ui:i18n:check
 
   checks-fast-core:
     permissions:
@@ -1179,13 +1198,58 @@ jobs:
           if (typeof smokePlan.createQaSmokeCiPart === "function") {
             runs = smokePlan.createQaSmokeCiPart(partId).runs;
           } else if (typeof smokePlan.createQaSmokeCiMatrix === "function") {
+            // Legacy planners select the entire profile and can mix long-lived
+            // execution kinds. Reuse the current bounded smoke contract and
+            // isolate each kind so frozen targets cannot pin a profile part.
+            const compatibilityScenarioIds = new Set([
+              "control-ui-chat-flow-playwright",
+              "crestodian-ring-zero-setup",
+              "dreaming-shadow-trial-report",
+              "gateway-smoke",
+              "group-visible-reply-tool",
+              "long-running-release-audit",
+              "luna-thinking-visibility-switch",
+              "matrix-restart-resume",
+              "personal-task-followthrough-status",
+              "plugin-lifecycle-hot-reload",
+              "subagent-completion-direct-fallback",
+              "telegram-commands-command",
+            ]);
             const partIndex = partId === "profile-1" ? 0 : partId === "profile-2" ? 1 : -1;
             if (partIndex < 0) {
               throw new Error(`unknown QA smoke CI profile part: ${partId}`);
             }
-            runs = smokePlan
+            const scenarioCatalog = await import("./extensions/qa-lab/src/scenario-catalog.ts");
+            const scenarioKindById = new Map(
+              scenarioCatalog
+                .readQaScenarioPack()
+                .scenarios.map((scenario) => [scenario.id, scenario.execution.kind]),
+            );
+            const legacyRuns = smokePlan
               .createQaSmokeCiMatrix()
               .include.filter((_, index) => index % 2 === partIndex);
+            runs = legacyRuns.flatMap((run) => {
+              const scenarioIdsByKind = new Map();
+              for (const scenarioId of run.scenario_ids) {
+                if (!compatibilityScenarioIds.has(scenarioId)) {
+                  continue;
+                }
+                const kind = scenarioKindById.get(scenarioId);
+                if (!kind) {
+                  throw new Error(`legacy QA smoke scenario not found: ${scenarioId}`);
+                }
+                const scenarioIds = scenarioIdsByKind.get(kind) ?? [];
+                scenarioIds.push(scenarioId);
+                scenarioIdsByKind.set(kind, scenarioIds);
+              }
+              return [...scenarioIdsByKind.entries()]
+                .toSorted(([left], [right]) => left.localeCompare(right))
+                .map(([kind, scenarioIds]) => ({
+                  ...run,
+                  slug: `${run.slug}-${kind}`,
+                  scenario_ids: scenarioIds,
+                }));
+            });
           } else {
             throw new Error("QA smoke plan does not expose a supported CI planner.");
           }
@@ -1360,9 +1424,11 @@ jobs:
 
       - name: Setup Go for docs i18n
         if: matrix.requires_go == true
+        # The current workflow validates frozen targets whose go.mod may predate this patch pin.
+        # Keep the runner toolchain owned by the workflow while using the target only for cache keys.
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
         with:
-          go-version-file: scripts/docs-i18n/go.mod
+          go-version: "1.25.12"
           cache-dependency-path: scripts/docs-i18n/go.sum
 
       - name: Verify docs i18n Go toolchain
@@ -1677,7 +1743,6 @@ jobs:
         env:
           ADDITIONAL_CHECK_GROUP: ${{ matrix.group }}
           OPENCLAW_ADDITIONAL_BOUNDARY_SHARD: ${{ matrix.boundary_shard || '' }}
-          RUN_CONTROL_UI_I18N: ${{ needs.preflight.outputs.run_control_ui_i18n }}
           OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY: 4
           OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY: 6
         shell: bash
@@ -2259,6 +2324,8 @@ jobs:
     if: needs.preflight.outputs.run_ios_build == 'true'
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'macos-26' || (github.repository == 'openclaw/openclaw' && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
     timeout-minutes: 45
+    env:
+      HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
     steps:
       - *platform_checkout_step
 
@@ -2294,9 +2361,47 @@ jobs:
             echo "$swift_tools_dir" >> "$GITHUB_PATH"
             "$swift_tools_dir/swiftformat" --version
             "$swift_tools_dir/swiftlint" version
+          elif [[ "$HISTORICAL_TARGET" == "true" ]]; then
+            # The generated Xcode project runs SwiftFormat during the build, so
+            # frozen targets must keep the formatter contract they were authored for.
+            brew install xcodegen swiftlint
+            swiftformat_min_version="$(awk '$1 == "--min-version" { print $2; exit }' config/swiftformat)"
+            case "$swiftformat_min_version" in
+              ""|0.61.1)
+                swiftformat_version="0.61.1"
+                swiftformat_checksum="b990400779aceb7d7020796eb9ba814d4480543f671d38fc0ff48cb72f04c584"
+                ;;
+              0.62.1)
+                swiftformat_version="0.62.1"
+                swiftformat_checksum="7cb1cb1fae04932047c7015441c543848e8e60e1572d808d080e0a1f1661114a"
+                ;;
+              *)
+                echo "Unsupported frozen-target SwiftFormat minimum: $swiftformat_min_version" >&2
+                exit 1
+                ;;
+            esac
+            swiftformat_archive="$RUNNER_TEMP/swiftformat-$swiftformat_version.zip"
+            swift_tools_dir="$RUNNER_TEMP/openclaw-legacy-swift-tools"
+            curl --fail --location --silent --show-error --retry 3 \
+              --output "$swiftformat_archive" \
+              "https://github.com/nicklockwood/SwiftFormat/releases/download/$swiftformat_version/swiftformat.zip"
+            if [[ "$(shasum -a 256 "$swiftformat_archive" | awk '{print $1}')" != "$swiftformat_checksum" ]]; then
+              echo "SwiftFormat $swiftformat_version archive checksum mismatch" >&2
+              exit 1
+            fi
+            mkdir -p "$swift_tools_dir"
+            unzip -q "$swiftformat_archive" -d "$swift_tools_dir"
+            chmod +x "$swift_tools_dir/swiftformat"
+            echo "$swift_tools_dir" >> "$GITHUB_PATH"
+            [[ "$("$swift_tools_dir/swiftformat" --version)" == "$swiftformat_version" ]]
+            # Legacy generated Xcode phases prepend Homebrew ahead of GITHUB_PATH.
+            # Point that lookup at the verified binary or the build can bypass the pin.
+            swiftformat_link="$(brew --prefix)/bin/swiftformat"
+            ln -sfn "$swift_tools_dir/swiftformat" "$swiftformat_link"
+            [[ "$("$swiftformat_link" --version)" == "$swiftformat_version" ]]
           else
-            # Frozen release targets before the pinned installer used Homebrew directly.
-            brew install xcodegen swiftlint swiftformat
+            echo "Current CI targets must provide scripts/install-swift-tools.sh." >&2
+            exit 1
           fi
 
       - name: Swift lint
@@ -2461,6 +2566,7 @@ jobs:
       - pnpm-store-warmup
       - build-artifacts
       - checks-ui
+      - control-ui-i18n
       - checks-fast-core
       - checks-fast-plugin-contracts-shard
       - checks-fast-channel-contracts-shard

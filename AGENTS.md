@@ -131,13 +131,20 @@ Skills own workflows; root owns hard policy and routing.
 
 - Use `$openclaw-testing` for test/CI choice and `$crabbox` for remote/full/E2E proof.
 - At task start, if code changes, tests, builds, typechecks, lint fan-out, Docker, packaging, E2E, or live proof are likely, classify source trust and immediately pre-warm the safe Crabbox backend in a background command session. Trusted maintainer code defaults to Blacksmith Testbox; untrusted contributor/fork code uses secretless fork CI or sanitized direct AWS Crabbox under the rule above. Continue inspection/editing while it hydrates; sync the current checkout for every run, reuse the lease, then stop it before handoff.
+- Warm Testbox from the task checkout; lease ownership is checkout-path scoped.
+- Testbox cleanup: `blacksmith testbox stop --id <tbx_id>`; id is not positional.
+- PR review artifacts: keep template enum values; put evidence detail in summaries.
 - Crabbox request means real scenario proof: install/update/call/repro user path; not just copy tests and run them remotely.
 - Visual proof: use Crabbox, set up like a user, then screenshot-verify. No harness/bypass/shortcut unless explicitly asked.
 - Local agent work is limited to lightweight non-test checks such as `git diff --check`, targeted formatting, and cheap static probes. Tests and computationally intensive work default to the selected remote box.
-- In Codex worktrees, direct local `pnpm test*`, `pnpm check*`, `pnpm crabbox:run`, and `scripts/committer` can trigger pnpm dependency reconciliation or install prompts. Prefer `node` wrappers locally and Crabbox/Testbox for pnpm-gated proof.
+- In Codex or linked worktrees, direct local `pnpm test*`, `pnpm check*`, `pnpm crabbox:run`, and `scripts/committer` can trigger pnpm dependency reconciliation or install prompts. Prefer `node` wrappers locally and Crabbox/Testbox for pnpm-gated proof.
+- Crabbox wrapper `stop` has no `--timing-json`; use `node scripts/crabbox-wrapper.mjs stop --provider <provider> --id <id>`.
+- Repo-native PR worktree may omit `node_modules`; run dependency-backed formatter/docs scripts via Testbox or hosted CI.
+- Parallel agents share the checkout; never switch its branch while sibling work runs.
 - Full suites, changed gates, builds, typechecks, lint fan-out, Docker/package/E2E/live/cross-OS proof, or anything computationally intensive: Crabbox/Testbox.
 - If an allowed local fallback fans out or becomes expensive, stop it and move the work to the pre-warmed remote box.
 - Before handoff/push: prove touched surface. Before landing to `main`: issue proof plus appropriate full/broad proof unless scope is clearly narrow.
+- Release-branch full validation: use `node scripts/full-release-validation-at-sha.mjs --sha <exact-sha> --target-ref release/<branch>`; no raw dispatch without `target_context_ref`.
 - Pre-land/pre-commit code changes: mandatory fresh `$autoreview` until no accepted/actionable findings remain. Do not land code on CI, ClawSweeper, prior review comments, or your own manual review alone unless user explicitly opts out or scope is truly trivial/docs-only. If findings want refactor, refactor; no ugly fixes.
 - If proof is blocked, say exactly what is missing and why.
 - Do not land related failing format/lint/type/build/tests. If unrelated on latest `origin/main`, say so with scoped proof.
@@ -152,6 +159,7 @@ Skills own workflows; root owns hard policy and routing.
 - Use `$openclaw-pr-maintainer` immediately for maintainer-side OpenClaw issue/PR review, triage, duplicates, labels, comments, close, land, or evidence. Contributor PR creation/refresh follows the requested contributor workflow; linked refs alone do not require maintainer archive tooling.
 - Issue/PR start: `git status -sb`; if clean, `git pull --ff-only`; if dirty, yell before pull/rebase.
 - PR refs: `gh pr view/diff` or `gh api`, not web search. Prefer `gitcrawl` for maintainer discovery; missing/stale `gitcrawl` falls through to live `gh`, not contributor setup. Verify live with `gh` before mutation.
+- zsh: quote `gh api` endpoints containing `?` or brackets; otherwise glob expansion corrupts the invocation.
 - Bare issue/PR URL/number: inspect live and take the efficient maintainer path; switch branches/refs when useful.
 - No unsolicited PR labels/retitles/rebases/fixups/landing. Comments/reviews ok only for reviewable findings, pre-merge proof, or close/duplicate reason after explicit close/sweep/landing request.
 - Maintainer decision closes the cluster: if deciding reported behavior/proposed fix is not planned, comment+close all directly associated open issues/PRs unless explicitly told to keep one open. Associated means linked PRs/issues, duplicates, companion workaround PRs, and the canonical issue for the rejected behavior.
@@ -179,6 +187,7 @@ Skills own workflows; root owns hard policy and routing.
 - Contributor PRs: parsed context requires authored `What Problem This Solves` and `Evidence` sections. Do not require field-level proof forms; reviewers inspect code, tests, and CI for correctness.
 - PR artifacts/screenshots: attach to PR/comment/external artifact store. Never push screenshots, videos, proof images, or proof assets to OpenClaw or any product repo branch, including temp artifact branches. Use Crabbox artifact publishing plus the manifest URL. Do not commit `.github/pr-assets`.
 - CI polling: exact SHA, relevant checks only, minimal fields. Skip routine noise (`Auto response`, `Labeler`, docs agents, performance/stale). Logs only after failure/completion or concrete need.
+- Trusted-workflow release-branch CI: pass `target_ref` + `release_candidate_ref`; never `release_gate` (requires workflow head == target).
 - Agent PR landing to `main`: use only the repo-native `scripts/pr` wrapper: run `scripts/pr review-init <PR>`, follow its emitted checkout/guard guidance, initialize and complete review artifacts with `scripts/pr review-artifacts-init <PR>`, validate them with `scripts/pr review-validate-artifacts <PR>`, then run `OPENCLAW_TESTBOX=1 scripts/pr prepare-run <PR>` and `scripts/pr merge-run <PR>`. The Testbox flag is mandatory for agents so prepare verifies hosted CI/Testbox on the current head or reuses a patch-identical pre-rebase run green within 24 hours instead of running full gates locally. For owner-approved reviewed fork code without hosted Testbox, use `OPENCLAW_PR_GATES_REMOTE=testbox` instead. Do not rebase only because `main` advanced; merge drift is advisory unless strict drift is explicitly enabled, while GitHub still blocks conflicts. Do not idle on `auto-response` or `check-docs`.
 
 ## Code

@@ -25,7 +25,10 @@ import { isDeliverableMessageChannel } from "../utils/message-channel.js";
 import { cancelActiveCronTaskRun } from "./cron-task-cancel.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
 import { isChildlessNativeSubagentTask } from "./native-subagent-task.js";
-import { isTaskFlowCancellationPending } from "./task-cancellation-state.js";
+import {
+  isProvisionalSubagentKillTask,
+  isTaskFlowCancellationPending,
+} from "./task-cancellation-state.js";
 import {
   formatTaskBlockedFollowupMessage,
   formatTaskStateChangeMessage,
@@ -38,6 +41,7 @@ import {
 } from "./task-executor-policy.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
+  ensureTaskFlowRegistryReady,
   getTaskFlowById,
   syncFlowFromTaskResult,
   updateFlowRecordByIdExpectedRevision,
@@ -211,6 +215,27 @@ function assertParentFlowLinkAllowed(params: {
       flowId,
       status: flow.status,
     });
+  }
+}
+
+function ensureLinkedTaskFlowRegistryReady(task: Pick<TaskRecord, "parentFlowId">): void {
+  if (task.parentFlowId?.trim()) {
+    ensureTaskFlowRegistryReady();
+  }
+}
+
+function ensureTaskCancellationReady(task: TaskRecord): void {
+  const runId = task.runId?.trim();
+  const linkedTasks =
+    runId && (task.runtime === "acp" || task.runtime === "subagent")
+      ? getTasksByRunScope({
+          runId,
+          runtime: task.runtime,
+          sessionKey: task.childSessionKey,
+        })
+      : [task];
+  for (const linkedTask of linkedTasks.length > 0 ? linkedTasks : [task]) {
+    ensureLinkedTaskFlowRegistryReady(linkedTask);
   }
 }
 
@@ -938,6 +963,7 @@ function mergeExistingTaskForCreate(
     notifyPolicy?: TaskNotifyPolicy;
   },
 ): TaskRecord | null {
+  ensureLinkedTaskFlowRegistryReady(existing);
   const patch: Partial<TaskRecord> = {};
   const requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
   const currentDeliveryState = taskDeliveryStates.get(existing.taskId);
@@ -1295,6 +1321,8 @@ function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | nu
     normalizeOptionalString(current.childSessionKey) !==
       normalizeOptionalString(next.childSessionKey);
   const parentFlowIndexChanged = current.parentFlowId?.trim() !== next.parentFlowId?.trim();
+  ensureLinkedTaskFlowRegistryReady(current);
+  ensureLinkedTaskFlowRegistryReady(next);
   // Persist before mutating memory. If the store rejects the write, keep the
   // in-memory mirror at the durable value and report that no mutation applied.
   if (!tryPersistTaskUpsert(next, "update")) {
@@ -2312,6 +2340,7 @@ export async function cancelTaskById(params: {
   }
   const childSessionKey = task.childSessionKey?.trim();
   try {
+    ensureTaskCancellationReady(task);
     // A direct kill is only a provisional terminal projection. Re-read the
     // owning subagent run before promotion so its canonical completion can win.
     if (task.runtime !== "cli") {
@@ -2500,6 +2529,18 @@ export async function cancelTaskById(params: {
   }
 }
 
+export function assertTaskCancellationReadyById(taskId: string): TaskRecord | null {
+  ensureTaskRegistryReady();
+  const task = tasks.get(taskId.trim());
+  if (!task) {
+    return null;
+  }
+  if (!isTerminalTaskStatus(task.status) || isProvisionalSubagentKillTask(task)) {
+    ensureTaskCancellationReady(task);
+  }
+  return cloneTaskRecord(task);
+}
+
 // Callers that provide their own order use this cloned snapshot to avoid paying
 // for listTaskRecords' createdAt sort before immediately discarding that order.
 export function listTaskRecordsUnsorted(): TaskRecord[] {
@@ -2678,6 +2719,7 @@ export function deleteTaskRecordById(taskId: string): boolean {
   if (!current) {
     return false;
   }
+  ensureLinkedTaskFlowRegistryReady(current);
   // Persist the delete before mutating memory, as a single atomic store
   // operation. If persistence fails, leave the in-memory record intact and
   // report that no delete was applied.

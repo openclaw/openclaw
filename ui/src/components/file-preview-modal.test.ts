@@ -1,12 +1,18 @@
 /* @vitest-environment jsdom */
 
-import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
-import type { OpenClawFilePreviewModal } from "./file-preview-modal.ts";
-import "./file-preview-modal.ts";
+import { OpenClawFilePreviewModal } from "./file-preview-modal.ts";
 
 let container: HTMLDivElement;
+
+const FILE_PREVIEW_MODAL_ELEMENT_NAME = `test-openclaw-file-preview-modal-${crypto.randomUUID()}`;
+
+// The non-isolated UI runner resets modules but not customElements. Register
+// the current class graph so locale updates reach the mounted test element.
+class TestFilePreviewModal extends OpenClawFilePreviewModal {}
+
+customElements.define(FILE_PREVIEW_MODAL_ELEMENT_NAME, TestFilePreviewModal);
 
 const files = [
   {
@@ -31,23 +37,13 @@ async function renderPreview(options: RenderPreviewOptions = {}) {
   const query = options.query ?? "";
   const activePath = options.activePath ?? "templates/digest.md";
   const previewFiles = options.previewFiles ?? files;
-  render(
-    html`
-      <openclaw-file-preview-modal
-        .files=${previewFiles}
-        .activePath=${activePath}
-        .query=${query}
-        .contextLabel=${"in morning-catchup"}
-      ></openclaw-file-preview-modal>
-    `,
-    container,
-  );
+  const modal = document.createElement(FILE_PREVIEW_MODAL_ELEMENT_NAME) as OpenClawFilePreviewModal;
+  modal.files = previewFiles;
+  modal.activePath = activePath;
+  modal.query = query;
+  modal.contextLabel = "in morning-catchup";
+  container.append(modal);
 
-  const modal = container.querySelector<OpenClawFilePreviewModal>("openclaw-file-preview-modal");
-  expect(modal).toBeInstanceOf(HTMLElement);
-  if (!modal) {
-    throw new Error("expected file preview modal");
-  }
   await modal.updateComplete;
   await modal.updateComplete;
   return modal;
@@ -65,7 +61,7 @@ describe("openclaw-file-preview-modal", () => {
 
   afterEach(async () => {
     await i18n.setLocale("en");
-    render(nothing, container);
+    container.replaceChildren();
     container.remove();
     vi.restoreAllMocks();
   });
