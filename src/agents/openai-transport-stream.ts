@@ -4121,17 +4121,17 @@ function shouldEmitOpenAICompletionsReasoningForModel(
 function resolveOpenAICompletionsMaxTokens(
   model: OpenAIModeModel,
   options: OpenAICompletionsOptions | undefined,
-): { maxTokens: number | undefined; clampToModelMaxTokens: boolean } {
+): { maxTokens: number | undefined; clampToModelMaxTokens: boolean; isExplicit: boolean } {
   if (options?.maxTokens) {
-    return { maxTokens: options.maxTokens, clampToModelMaxTokens: true };
+    return { maxTokens: options.maxTokens, clampToModelMaxTokens: true, isExplicit: true };
   }
   const paramsMaxTokens = resolveMaxTokensParam(
     (model as { params?: Record<string, unknown> }).params,
   );
   if (paramsMaxTokens) {
-    return { maxTokens: paramsMaxTokens, clampToModelMaxTokens: false };
+    return { maxTokens: paramsMaxTokens, clampToModelMaxTokens: false, isExplicit: true };
   }
-  return { maxTokens: model.maxTokens, clampToModelMaxTokens: false };
+  return { maxTokens: model.maxTokens, clampToModelMaxTokens: false, isExplicit: false };
 }
 
 function resolveOpenAICompletionsModelMaxTokens(model: OpenAIModeModel): number | undefined {
@@ -4784,7 +4784,11 @@ export function buildOpenAICompletionsParams(
     const maxTokenBudget = resolveOpenAICompletionsMaxTokens(model, options);
     const effectiveMaxTokens = maxTokenBudget.maxTokens;
     const effectiveContextTokens = resolveOpenAICompletionsEffectiveContextTokens(model);
+
     let clampedMaxTokens = effectiveMaxTokens;
+    if (!maxTokenBudget.isExplicit && !compatDetection.capabilities.usesExplicitProxyLikeEndpoint) {
+      clampedMaxTokens = undefined;
+    }
     const modelMaxTokens = resolveOpenAICompletionsModelMaxTokens(model);
     if (
       maxTokenBudget.clampToModelMaxTokens &&
