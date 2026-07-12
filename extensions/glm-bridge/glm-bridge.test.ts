@@ -1,12 +1,24 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { AgentHarnessSupportContext } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it } from "vitest";
 import { createClaudeAppServerAgentHarness } from "../claude/harness.js";
 import {
+  CLAUDE_APP_SERVER_CONFIG_KEYS,
+  CLAUDE_DYNAMIC_TOOLS_CONFIG_KEYS,
   claudeAppServerPoolKey,
   DEFAULT_CLAUDE_APP_SERVER_MODEL_PROVIDER,
   resolveClaudeAppServerConfig,
 } from "../claude/src/app-server/config.js";
 import { applyGlmDefaults, DEFAULT_ZAI_BASE_URL } from "./index.js";
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const MANIFEST_PATH = path.resolve(HERE, "openclaw.plugin.json");
+
+type ManifestConfigObject = {
+  properties?: Record<string, ManifestConfigObject>;
+};
 
 /**
  * These tests pin the "GLM reuses the Claude bridge" contract — the entire
@@ -97,5 +109,33 @@ describe("GLM harness supports()", () => {
 
   it("does not support the 'anthropic' provider (that is the Claude extension's)", () => {
     expect(harness.supports(supportCtx("anthropic"))).toMatchObject({ supported: false });
+  });
+});
+
+// GLM-bridge maintains its OWN copy of the appServer/dynamicTools config
+// schema (its manifest is a separate file from extensions/claude's, even
+// though both resolve through the shared resolveClaudeAppServerConfig) — a
+// new key added to CLAUDE_APP_SERVER_CONFIG_KEYS without a matching manifest
+// update here passes typecheck and every claude-side test, then fails at
+// gateway startup with "must not have additional properties" the moment an
+// operator actually sets it for glm-bridge (found the hard way rolling out
+// appServer.queryThreadTimeoutMs). This is the regression guard.
+describe("GLM manifest config alignment", () => {
+  const manifest = JSON.parse(readFileSync(MANIFEST_PATH, "utf8")) as {
+    configSchema: ManifestConfigObject;
+  };
+
+  it("keeps appServer parser keys aligned with the manifest schema", () => {
+    const appServerSchema = manifest.configSchema.properties?.appServer;
+    expect(Object.keys(appServerSchema?.properties ?? {}).toSorted()).toEqual(
+      [...CLAUDE_APP_SERVER_CONFIG_KEYS].toSorted(),
+    );
+  });
+
+  it("keeps dynamicTools parser keys aligned with the manifest schema", () => {
+    const dynamicToolsSchema = manifest.configSchema.properties?.dynamicTools;
+    expect(Object.keys(dynamicToolsSchema?.properties ?? {}).toSorted()).toEqual(
+      [...CLAUDE_DYNAMIC_TOOLS_CONFIG_KEYS].toSorted(),
+    );
   });
 });
