@@ -115,8 +115,7 @@ function runCodexNpmPluginLiveAssertions(params: {
         HOME: path.join(params.root, "home"),
         NODE_OPTIONS: nodeOptionsWithoutExperimentalWarnings(),
         OPENCLAW_STATE_DIR: path.join(params.root, "state"),
-        OPENCLAW_CODEX_NPM_PLUGIN_SESSION_STORE_CONTRACT:
-          params.sessionStoreContract ?? "sqlite",
+        OPENCLAW_CODEX_NPM_PLUGIN_SESSION_STORE_CONTRACT: params.sessionStoreContract ?? "sqlite",
       },
     },
   );
