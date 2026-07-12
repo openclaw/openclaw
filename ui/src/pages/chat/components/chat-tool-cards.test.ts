@@ -756,6 +756,7 @@ describe("tool-cards", () => {
     const observer = {
       root: null,
       rootMargin: "600px 0px",
+      scrollMargin: "0px 0px 0px 0px",
       thresholds: [0],
       disconnect: vi.fn(),
       observe: vi.fn((element: Element) => {
@@ -845,6 +846,7 @@ describe("tool-cards", () => {
     const observer = {
       root: null,
       rootMargin: "600px 0px",
+      scrollMargin: "0px 0px 0px 0px",
       thresholds: [0],
       disconnect: vi.fn(),
       observe: vi.fn((element: Element) => {
@@ -946,6 +948,7 @@ describe("tool-cards", () => {
         const observer = {
           root: null,
           rootMargin: "600px 0px",
+          scrollMargin: "0px 0px 0px 0px",
           thresholds: [0],
           disconnect: vi.fn(),
           observe: vi.fn((element: Element) => {
