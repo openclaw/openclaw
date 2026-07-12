@@ -49,6 +49,10 @@ function folderDisplayName(path: string): string {
 const MENU_ITEM_SELECTOR =
   ".session-menu__item:not(:disabled), .new-session-page__browser-entry:not(:disabled)";
 
+function isAbsolutePath(path: string): boolean {
+  return path.startsWith("/") || path.startsWith("\\") || /^[A-Za-z]:[\\/]/.test(path);
+}
+
 class NewSessionPage extends OpenClawLightDomElement {
   @property({ attribute: false }) data: NewSessionRouteData | undefined;
 
@@ -72,6 +76,9 @@ class NewSessionPage extends OpenClawLightDomElement {
   @state() private browserError: string | null = null;
   @state() private browserListing: FsListDirResult | null = null;
   @state() private browserTarget: BrowserTarget | null = null;
+  // The head input's live value; a typed absolute path stays applicable via
+  // "Use this folder" even when the host cannot list it (no fs.listDir).
+  @state() private browserPathDraft = "";
 
   private openedFor: string | null = null;
   private agentsHydrated = false;
@@ -467,6 +474,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.browserError = null;
     this.browserListing = null;
     this.browserTarget = null;
+    this.browserPathDraft = "";
     const details = this.querySelector<HTMLDetailsElement>(
       ".new-session-page__select--folder[open]",
     );
@@ -481,17 +489,26 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.browserError = null;
     this.browserListing = null;
     this.browserTarget = null;
+    this.browserPathDraft = "";
+  }
+
+  /** The listed directory, or a typed absolute path when listing is
+      unavailable (fs.listDir missing/failing must not block manual entry). */
+  private usableBrowserPath(): string | null {
+    const listed = this.browserListing?.path;
+    if (listed) {
+      return listed;
+    }
+    const draft = this.browserPathDraft.trim();
+    return isAbsolutePath(draft) ? draft : null;
   }
 
   private selectBrowserTarget(target: BrowserTarget) {
     const folder = this.folder.trim();
     const matchesCurrentTarget = target.nodeId === this.execNode;
-    const path =
-      matchesCurrentTarget &&
-      (folder.startsWith("/") || folder.startsWith("\\") || /^[A-Za-z]:[\\/]/.test(folder))
-        ? folder
-        : undefined;
+    const path = matchesCurrentTarget && isAbsolutePath(folder) ? folder : undefined;
     this.browserTarget = target;
+    this.browserPathDraft = path ?? "";
     this.loadBrowser(path);
   }
 
@@ -517,6 +534,9 @@ class NewSessionPage extends OpenClawLightDomElement {
           return;
         }
         this.browserListing = result ?? null;
+        if (result?.path) {
+          this.browserPathDraft = result.path;
+        }
       })
       .catch(() => {
         if (requestId !== this.browserRequestToken) {
@@ -542,6 +562,9 @@ class NewSessionPage extends OpenClawLightDomElement {
     }
     const listing = this.browserListing;
     const target = this.browserTarget;
+    // Hosts can answer fs.listDir with a shapeless payload; a missing entries
+    // array must read as an empty directory, not crash the render.
+    const entries = listing?.entries ?? [];
     return html`
       <div class="new-session-page__browser">
         <div class="new-session-page__browser-head">
@@ -568,12 +591,16 @@ class NewSessionPage extends OpenClawLightDomElement {
                   type="text"
                   aria-label=${t("newSession.folder")}
                   placeholder=${target.label}
-                  .value=${listing?.path ?? ""}
+                  .value=${this.browserPathDraft}
+                  @input=${(event: Event) => {
+                    this.browserPathDraft = (event.target as HTMLInputElement).value;
+                  }}
                   @keydown=${(event: KeyboardEvent) => {
-                    // Manual path entry browses there; "Use this folder" applies it.
+                    // Manual path entry browses there; "Use this folder" applies
+                    // the typed path even when the host cannot list it.
                     if (event.key === "Enter") {
                       event.preventDefault();
-                      const path = (event.target as HTMLInputElement).value.trim();
+                      const path = this.browserPathDraft.trim();
                       this.loadBrowser(path || undefined);
                     }
                   }}
@@ -631,13 +658,13 @@ class NewSessionPage extends OpenClawLightDomElement {
                 )}
               `
             : nothing}
-          ${listing && listing.entries.length === 0 && !this.browserLoading
+          ${listing && entries.length === 0 && !this.browserLoading
             ? html`<div class="new-session-page__browser-empty">
                 ${t("newSession.browserEmpty")}
               </div>`
             : nothing}
           ${target
-            ? (listing?.entries ?? []).map(
+            ? entries.map(
                 (entry) => html`
                   <button
                     type="button"
@@ -659,10 +686,11 @@ class NewSessionPage extends OpenClawLightDomElement {
           <button
             type="button"
             class="new-session-page__browser-use"
-            ?disabled=${!listing || !target}
+            ?disabled=${!target || !this.usableBrowserPath()}
             @click=${() => {
-              if (listing && target) {
-                this.applyFolder(listing.path, target.nodeId);
+              const path = this.usableBrowserPath();
+              if (target && path) {
+                this.applyFolder(path, target.nodeId);
                 this.closeBrowser();
               }
             }}
@@ -874,7 +902,9 @@ class NewSessionPage extends OpenClawLightDomElement {
       <details
         class="new-session-page__select new-session-page__select--folder"
         @toggle=${(event: Event) => {
-          this.handleMenuToggle(event);
+          // Browser state first: handleMenuToggle captures updateComplete for
+          // its focus hook, which must wait for the render these setters
+          // schedule (a bare details-attribute flip schedules none).
           const details = event.currentTarget as HTMLDetailsElement;
           if (details.open) {
             this.browserOpen = true;
@@ -882,6 +912,7 @@ class NewSessionPage extends OpenClawLightDomElement {
           } else if (this.browserOpen) {
             this.closeBrowser();
           }
+          this.handleMenuToggle(event);
         }}
       >
         <summary
