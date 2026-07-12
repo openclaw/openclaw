@@ -459,7 +459,7 @@ describe("renderFilterChips", () => {
       renderFilterChips(
         [],
         [],
-        ["agent:main:telegram:direct:12345😀67890"],
+        ["1234567😀890"],
         [],
         () => {},
         () => {},
@@ -469,8 +469,8 @@ describe("renderFilterChips", () => {
       container,
     );
     const label = container.querySelector(".filter-chip-label")?.textContent ?? "";
+    expect(label).toBe("Session: 1234567…");
     expect(() => encodeURIComponent(label)).not.toThrow();
-    expect(label).toContain("…");
     expect(label).not.toMatch(
       /[\uD800-\uDFFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/,
     );
