@@ -252,6 +252,9 @@ export function parseDurationMs(input: string): number | null {
     // pure-digit string with "d"); tiny positive values can also floor to 0ms.
     return null;
   }
+  if (!Number.isSafeInteger(result)) {
+    return null;
+  }
   return result;
 }
 
