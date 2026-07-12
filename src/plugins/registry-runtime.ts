@@ -610,6 +610,47 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                   },
                 });
               }),
+            resetSessionEntryLifecycle: async (params) =>
+              await runWithPluginScope(async () => {
+                assertStoredSessionEntryOwned({
+                  action: "reset",
+                  sessionKey: params.sessionKey,
+                  ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
+                  ...(params.env !== undefined ? { env: params.env } : {}),
+                  ...(params.storePath !== undefined ? { storePath: params.storePath } : {}),
+                });
+                return await session.resetSessionEntryLifecycle({
+                  ...params,
+                  releasePhysicalOwner: async (context) => {
+                    const locked = resolveLockedSessionHarnessRegistration(
+                      context.sessionKey,
+                      context.entry,
+                      "reset",
+                    );
+                    const registration =
+                      locked && "registration" in locked ? locked.registration : undefined;
+                    if (!locked || locked.ownerPluginId !== pluginId || !registration) {
+                      throw new Error(
+                        `Locked session "${context.sessionKey}" is owned by plugin "${locked?.ownerPluginId ?? "unknown"}", not "${pluginId}".`,
+                      );
+                    }
+                    if (!registration.harness.reset) {
+                      throw new Error(
+                        `Agent harness "${locked.harnessId}" must implement reset before locked sessions can be reset.`,
+                      );
+                    }
+                    await registration.harness.reset({
+                      ...(context.agentId !== undefined ? { agentId: context.agentId } : {}),
+                      reason: context.reason,
+                      ...(context.sessionFile !== undefined
+                        ? { sessionFile: context.sessionFile }
+                        : {}),
+                      sessionId: context.sessionId,
+                      sessionKey: context.sessionKey,
+                    });
+                  },
+                });
+              }),
             upsertSessionEntry: async (params) =>
               await runWithPluginScope(async () => {
                 const before = assertStoredSessionEntryOwned({

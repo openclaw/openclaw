@@ -107,6 +107,16 @@ type PatchSessionEntryParams = SessionStoreReadParams & {
 type ResetSessionEntryLifecycleParams = SessionStoreReadParams & {
   expectedSessionId?: string;
   expectedUpdatedAt?: number;
+  /** Internal owner hook used by plugin runtime wrappers for locked harness sessions. */
+  releasePhysicalOwner?: (context: {
+    agentId?: string;
+    entry: SessionEntry;
+    reason: "reset";
+    sessionFile?: string;
+    sessionId: string;
+    sessionKey: string;
+    storePath: string;
+  }) => Promise<void> | void;
   update: (
     entry: SessionEntry,
     context: {
@@ -159,6 +169,37 @@ class SessionLifecycleResetSkipped extends Error {
     super("session lifecycle reset skipped");
     this.name = "SessionLifecycleResetSkipped";
   }
+}
+
+async function rollbackLifecycleResetReservation(params: {
+  expectedReservedRevision: string;
+  originalEntry: SessionEntry;
+  sessionKey: string;
+  storePath: string;
+}): Promise<void> {
+  await patchAccessorSessionEntry(
+    {
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    },
+    (currentEntry) => {
+      if (
+        currentEntry.sessionId !== params.originalEntry.sessionId ||
+        currentEntry.lifecycleRevision !== params.expectedReservedRevision
+      ) {
+        throw new Error(
+          `session lifecycle reset reservation changed before rollback: ${params.sessionKey}`,
+        );
+      }
+      return {
+        lifecycleRevision: params.originalEntry.lifecycleRevision,
+      };
+    },
+    {
+      preserveActivity: true,
+      requireWriteSuccess: true,
+    },
+  );
 }
 
 function toSessionAccessScope(params: SessionStoreReadParams): SessionAccessScope {
@@ -497,7 +538,68 @@ export async function resetSessionEntryLifecycle(
       if (skipped) {
         return;
       }
+      const resetReservationRevision = `reset:${randomUUID()}`;
+      let originalEntry: SessionEntry | undefined;
+      let physicalOwnerReleased = false;
       try {
+        const reserved = await patchAccessorSessionEntry(
+          {
+            sessionKey: params.sessionKey,
+            storePath,
+          },
+          (currentEntry) => {
+            if (
+              currentEntry.sessionId !== expectedSessionId ||
+              (expectedUpdatedAt !== undefined && currentEntry.updatedAt !== expectedUpdatedAt)
+            ) {
+              throw new SessionLifecycleResetSkipped();
+            }
+            originalEntry = structuredClone(currentEntry);
+            return {
+              lifecycleRevision: resetReservationRevision,
+            };
+          },
+          {
+            preserveActivity: true,
+            requireWriteSuccess: true,
+          },
+        );
+        if (!reserved || !originalEntry) {
+          throw new SessionLifecycleResetSkipped();
+        }
+        if (reserved.modelSelectionLocked === true && reserved.agentHarnessId?.trim()) {
+          if (!params.releasePhysicalOwner) {
+            await rollbackLifecycleResetReservation({
+              expectedReservedRevision: resetReservationRevision,
+              originalEntry,
+              sessionKey: params.sessionKey,
+              storePath,
+            });
+            throw new Error(
+              `locked harness-owned session requires physical owner release before lifecycle reset: ${params.sessionKey}`,
+            );
+          }
+          try {
+            await params.releasePhysicalOwner({
+              ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
+              entry: structuredClone(originalEntry),
+              reason: "reset",
+              ...(originalEntry.sessionFile ? { sessionFile: originalEntry.sessionFile } : {}),
+              sessionId: expectedSessionId,
+              sessionKey: params.sessionKey,
+              storePath,
+            });
+            physicalOwnerReleased = true;
+          } catch (error) {
+            await rollbackLifecycleResetReservation({
+              expectedReservedRevision: resetReservationRevision,
+              originalEntry,
+              sessionKey: params.sessionKey,
+              storePath,
+            });
+            throw error;
+          }
+        }
         const result = await resetAccessorSessionEntryLifecycle({
           ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
           storePath,
@@ -509,6 +611,7 @@ export async function resetSessionEntryLifecycle(
             if (
               !currentEntry ||
               currentEntry.sessionId !== expectedSessionId ||
+              currentEntry.lifecycleRevision !== resetReservationRevision ||
               (expectedUpdatedAt !== undefined && currentEntry.updatedAt !== expectedUpdatedAt)
             ) {
               throw new SessionLifecycleResetSkipped();
@@ -529,6 +632,7 @@ export async function resetSessionEntryLifecycle(
             }
             return {
               ...patch,
+              lifecycleRevision: undefined,
               sessionFile: nextSessionFile,
               sessionId: nextSessionId,
               updatedAt: patch.updatedAt ?? Date.now(),
@@ -538,8 +642,28 @@ export async function resetSessionEntryLifecycle(
         resultEntry = result.nextEntry;
       } catch (err) {
         if (err instanceof SessionLifecycleResetSkipped) {
+          if (physicalOwnerReleased && originalEntry) {
+            await rollbackLifecycleResetReservation({
+              expectedReservedRevision: resetReservationRevision,
+              originalEntry,
+              sessionKey: params.sessionKey,
+              storePath,
+            });
+            throw new Error(
+              `session lifecycle reset skipped after physical owner release: ${params.sessionKey}`,
+              { cause: err },
+            );
+          }
           skipped = true;
           return;
+        }
+        if (physicalOwnerReleased && originalEntry) {
+          await rollbackLifecycleResetReservation({
+            expectedReservedRevision: resetReservationRevision,
+            originalEntry,
+            sessionKey: params.sessionKey,
+            storePath,
+          });
         }
         throw err;
       }

@@ -2,9 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readSessionArchiveContentSync } from "../config/sessions/archive-compression.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
+  replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import * as jsonFiles from "../infra/json-files.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
@@ -646,6 +648,134 @@ describe("session-store-runtime compatibility surface", () => {
     } finally {
       admission.release();
     }
+  });
+
+  it("rejects locked harness lifecycle reset without a physical owner release hook", async () => {
+    const sessionKey = "agent:main:harness:codex:thread";
+    await seedSessionEntry(sessionKey, {
+      agentHarnessId: "codex",
+      lifecycleRevision: "original-revision",
+      modelSelectionLocked: true,
+      sessionId: "locked-old-session",
+      updatedAt: 10,
+    });
+
+    await expect(
+      resetSessionEntryLifecycle({
+        expectedSessionId: "locked-old-session",
+        expectedUpdatedAt: 10,
+        sessionKey,
+        storePath,
+        update: () => ({ updatedAt: 0 }),
+      }),
+    ).rejects.toThrow("requires physical owner release");
+
+    expect(getSessionEntry({ sessionKey, storePath })).toMatchObject({
+      lifecycleRevision: "original-revision",
+      sessionId: "locked-old-session",
+    });
+  });
+
+  it("rolls back the lifecycle reservation when physical owner release fails", async () => {
+    const sessionKey = "agent:main:harness:codex:thread";
+    await seedSessionEntry(sessionKey, {
+      agentHarnessId: "codex",
+      lifecycleRevision: "original-revision",
+      modelSelectionLocked: true,
+      sessionId: "locked-old-session",
+      updatedAt: 10,
+    });
+
+    await expect(
+      resetSessionEntryLifecycle({
+        expectedSessionId: "locked-old-session",
+        expectedUpdatedAt: 10,
+        releasePhysicalOwner: () => {
+          throw new Error("native reset failed");
+        },
+        sessionKey,
+        storePath,
+        update: () => ({ updatedAt: 0 }),
+      }),
+    ).rejects.toThrow("native reset failed");
+
+    expect(getSessionEntry({ sessionKey, storePath })).toMatchObject({
+      lifecycleRevision: "original-revision",
+      sessionId: "locked-old-session",
+    });
+  });
+
+  it("releases locked physical ownership before publishing the replacement session", async () => {
+    const sessionKey = "agent:main:harness:codex:thread";
+    const releaseCalls: Array<{ sessionId: string; lifecycleRevision?: string }> = [];
+    await seedSessionEntry(sessionKey, {
+      agentHarnessId: "codex",
+      lifecycleRevision: "original-revision",
+      modelSelectionLocked: true,
+      sessionId: "locked-old-session",
+      updatedAt: 10,
+    });
+
+    const result = await resetSessionEntryLifecycle({
+      expectedSessionId: "locked-old-session",
+      expectedUpdatedAt: 10,
+      releasePhysicalOwner: (context) => {
+        releaseCalls.push({
+          lifecycleRevision: context.entry.lifecycleRevision,
+          sessionId: context.sessionId,
+        });
+      },
+      sessionKey,
+      storePath,
+      update: () => ({ label: "rotated", updatedAt: 0 }),
+    });
+
+    expect(releaseCalls).toEqual([
+      {
+        lifecycleRevision: "original-revision",
+        sessionId: "locked-old-session",
+      },
+    ]);
+    expect(result).toMatchObject({
+      label: "rotated",
+      updatedAt: 0,
+    });
+    expect(result?.sessionId).not.toBe("locked-old-session");
+    expect(result?.lifecycleRevision).toBeUndefined();
+  });
+
+  it("rejects row changes after physical owner release but before lifecycle finalization", async () => {
+    const sessionKey = "agent:main:harness:codex:thread";
+    await seedSessionEntry(sessionKey, {
+      agentHarnessId: "codex",
+      lifecycleRevision: "original-revision",
+      modelSelectionLocked: true,
+      sessionId: "locked-old-session",
+      updatedAt: 10,
+    });
+
+    await expect(
+      resetSessionEntryLifecycle({
+        expectedSessionId: "locked-old-session",
+        expectedUpdatedAt: 10,
+        releasePhysicalOwner: async () => {
+          const entry = getSessionEntry({ sessionKey, storePath });
+          if (!entry) {
+            throw new Error("expected reserved session entry");
+          }
+          await replaceSessionEntry({ sessionKey, storePath }, { ...entry, updatedAt: 11 });
+        },
+        sessionKey,
+        storePath,
+        update: () => ({ updatedAt: 0 }),
+      }),
+    ).rejects.toThrow("skipped after physical owner release");
+
+    expect(getSessionEntry({ sessionKey, storePath })).toMatchObject({
+      lifecycleRevision: "original-revision",
+      sessionId: "locked-old-session",
+      updatedAt: 11,
+    });
   });
 
   it("accepts pre-model-run maintenance configs through entry patches", async () => {
