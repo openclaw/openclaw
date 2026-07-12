@@ -24,6 +24,27 @@ export function resolvePersistedSessionRuntimeId(
   return normalizeOptionalAgentRuntimeId(entry?.agentHarnessId);
 }
 
+/** Resolves a runtime id only when it can serve the selected provider. */
+export function resolveCompatibleAgentRuntimeForProvider(params: {
+  provider?: string | null;
+  runtime?: string | null;
+  cfg?: OpenClawConfig;
+}): string | undefined {
+  const runtime = normalizeOptionalAgentRuntimeId(params.runtime);
+  if (!runtime || isDefaultAgentRuntimeId(runtime)) {
+    return undefined;
+  }
+  if (runtime === "openclaw") {
+    return runtime;
+  }
+  const provider = params.provider?.trim().toLowerCase() ?? "";
+  // The Codex harness owns both OpenClaw's virtual Codex namespace and canonical OpenAI routes.
+  if (runtime === "codex" && (provider === "codex" || provider === "openai")) {
+    return runtime;
+  }
+  return isCliRuntimeAliasForProvider({ provider, runtime, cfg: params.cfg }) ? runtime : undefined;
+}
+
 /** Resolves a persisted runtime override only when it can serve the selected provider. */
 export function resolveSessionRuntimeOverrideForProvider(params: {
   provider?: string | null;
@@ -32,16 +53,9 @@ export function resolveSessionRuntimeOverrideForProvider(params: {
 }): string | undefined {
   // agentHarnessId records the runtime that produced the existing transcript;
   // it must not override the runtime selected for the next turn.
-  const runtime = normalizeOptionalAgentRuntimeId(params.entry?.agentRuntimeOverride);
-  if (!runtime || isDefaultAgentRuntimeId(runtime)) {
-    return undefined;
-  }
-  if (runtime === "openclaw") {
-    return runtime;
-  }
-  const provider = params.provider?.trim().toLowerCase() ?? "";
-  if (provider === "openai" && runtime === "codex") {
-    return runtime;
-  }
-  return isCliRuntimeAliasForProvider({ provider, runtime, cfg: params.cfg }) ? runtime : undefined;
+  return resolveCompatibleAgentRuntimeForProvider({
+    provider: params.provider,
+    runtime: params.entry?.agentRuntimeOverride,
+    cfg: params.cfg,
+  });
 }
