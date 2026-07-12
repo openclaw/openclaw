@@ -61,7 +61,7 @@ describe("workspaceBrowserFilePath", () => {
 });
 
 describe("openSessionWorkspaceFile", () => {
-  it("opens Markdown in the editable file panel with a Gateway- and pane-scoped draft", async () => {
+  it("opens Markdown with a canonical Gateway- and pane-scoped draft identity", async () => {
     const handleOpenSidebar = vi.fn();
     const getFile = vi.fn().mockResolvedValue({
       sessionKey: "agent:main:current",
@@ -87,7 +87,7 @@ describe("openSessionWorkspaceFile", () => {
       sessions: { getFile },
     } as unknown as SessionWorkspaceHost;
 
-    openSessionWorkspaceFile(state, { path: "README.md" });
+    openSessionWorkspaceFile(state, { path: "readme.md" });
 
     await vi.waitFor(() => expect(handleOpenSidebar).toHaveBeenCalledOnce());
     expect(handleOpenSidebar.mock.calls[0]?.[0]).toMatchObject({

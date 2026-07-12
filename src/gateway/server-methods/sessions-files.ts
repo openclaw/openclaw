@@ -320,6 +320,7 @@ async function toSessionFileEntry(
       return { ...base, missing: true };
     }
     if (read !== "too-large") {
+      entry.workspacePath = read.canonicalPath;
       entry.size = read.stat.size;
       entry.updatedAtMs = toUpdatedAtMs(read.stat.mtimeMs);
       const text = decodeUtf8Strict(read.buffer);
@@ -758,8 +759,8 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
       root: loaded.root,
       file: {
         path: params.path,
-        workspacePath: browserPath,
-        name: displayNameForPath(browserPath),
+        workspacePath: update.canonicalPath,
+        name: displayNameForPath(update.canonicalPath),
         kind: "modified",
         missing: false,
         size: update.stat.size,

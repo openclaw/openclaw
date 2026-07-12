@@ -8,6 +8,7 @@ import { root as fsSafeRoot, FsSafeError, type ReadResult } from "../../infra/fs
 export type WorkspaceRoot = Awaited<ReturnType<typeof fsSafeRoot>>;
 export type WorkspacePathStat = Awaited<ReturnType<WorkspaceRoot["stat"]>>;
 export type WorkspaceDirEntry = WorkspacePathStat & { name: string };
+export type WorkspaceFileReadResult = ReadResult & { canonicalPath: string };
 
 /** Shared preview cap: keeps file payloads comfortably under client WS limits. */
 export const WORKSPACE_PREVIEW_MAX_BYTES = 256 * 1024;
@@ -61,18 +62,22 @@ export async function readWorkspaceFile(
   rootDir: string,
   browserPath: string,
   opts?: { maxBytes?: number },
-): Promise<ReadResult | undefined | "too-large"> {
+): Promise<WorkspaceFileReadResult | undefined | "too-large"> {
   const workspaceRoot = await openWorkspaceRoot(rootDir);
   if (!workspaceRoot) {
     return undefined;
   }
   try {
-    return await workspaceRoot.read(browserPath, {
+    const read = await workspaceRoot.read(browserPath, {
       hardlinks: "reject",
       maxBytes: opts?.maxBytes ?? WORKSPACE_PREVIEW_MAX_BYTES,
       nonBlockingRead: true,
       symlinks: "reject",
     });
+    return {
+      ...read,
+      canonicalPath: path.relative(workspaceRoot.rootReal, read.realPath).split(path.sep).join("/"),
+    };
   } catch (err) {
     if (err instanceof FsSafeError && err.code === "too-large") {
       return "too-large";
@@ -82,7 +87,7 @@ export async function readWorkspaceFile(
 }
 
 export type WorkspaceFileUpdateResult =
-  | { status: "updated"; hash: string; stat: WorkspacePathStat }
+  | { status: "updated"; canonicalPath: string; hash: string; stat: WorkspacePathStat }
   | { status: "conflict"; currentHash: string }
   | { status: "unsafe" };
 
@@ -112,9 +117,9 @@ export async function updateWorkspaceFile(
   if (!workspaceRoot) {
     return { status: "unsafe" };
   }
-  const queueKey = `${workspaceRoot.rootReal}\0${browserPath}`;
-  // Keep the read/hash/write sequence ordered for product writers so two
-  // Control UI saves cannot both accept one stale hash and overwrite each other.
+  const queueKey = workspaceRoot.rootReal;
+  // Serialize by canonical root, not caller spelling. Case and Unicode aliases
+  // can name one physical file, so per-path queues could both accept one hash.
   return await enqueueWorkspaceFileUpdate<WorkspaceFileUpdateResult>(queueKey, async () => {
     let current: ReadResult;
     try {
@@ -144,6 +149,10 @@ export async function updateWorkspaceFile(
     }
     return {
       status: "updated",
+      canonicalPath: path
+        .relative(workspaceRoot.rootReal, current.realPath)
+        .split(path.sep)
+        .join("/"),
       hash: createHash("sha256").update(content, "utf8").digest("hex"),
       stat,
     };

@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sessionsFilesHandlers } from "./sessions-files.js";
+import { updateWorkspaceFile } from "./workspace-fs.js";
 
 const hoisted = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
@@ -309,6 +310,14 @@ describe("sessions.files RPC handlers", () => {
       }),
     );
     expect(browserPreview.file.content).toBe("# Nested read me\n");
+
+    const aliasedPreview = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.get", {
+        sessionKey: "agent:main:main",
+        path: "packages//app/src/readme.md",
+      }),
+    );
+    expect(aliasedPreview.file.workspacePath).toBe("packages/app/src/readme.md");
 
     const parentRelativePreview = expectOkPayload(
       await invokeSessionFilesHandler("sessions.files.get", {
@@ -731,6 +740,27 @@ describe("sessions.files RPC handlers", () => {
       content,
     );
     expect(conflict.details.currentHash).toBe(hashContent(content));
+  });
+
+  it("serializes concurrent saves across lexical aliases", async () => {
+    const original = "export default {};\n";
+    const expectedHash = hashContent(original);
+    const results = await Promise.all([
+      updateWorkspaceFile(
+        workspaceRoot,
+        "ui/vite.config.ts",
+        "export default { first: true };\n",
+        expectedHash,
+      ),
+      updateWorkspaceFile(
+        workspaceRoot,
+        "ui//vite.config.ts",
+        "export default { second: true };\n",
+        expectedHash,
+      ),
+    ]);
+
+    expect(results.map((result) => result.status).toSorted()).toEqual(["conflict", "updated"]);
   });
 
   it("rejects writes to nonexistent files", async () => {
