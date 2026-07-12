@@ -203,7 +203,7 @@ describe("sessions-list-tool", () => {
     });
   });
 
-  it("derives channel from agent-scoped group session keys", async () => {
+  it("derives channels only from structurally valid group session keys", async () => {
     mocks.gatewayCall.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };
       if (request.method === "sessions.list") {
@@ -215,6 +215,26 @@ describe("sessions-list-tool", () => {
               kind: "group",
               sessionId: "sess-slack-thread",
             },
+            {
+              key: "discord:group:ops",
+              kind: "group",
+              sessionId: "sess-discord-group",
+            },
+            {
+              key: "agent:main:matrix:channel:!room:[2001:db8::1]",
+              kind: "group",
+              sessionId: "sess-matrix-room",
+            },
+            {
+              key: "agent:main:agent:plugin:slack:channel:C123",
+              kind: "group",
+              sessionId: "sess-nested-agent",
+            },
+            {
+              key: "agent::slack:channel:C123",
+              kind: "group",
+              sessionId: "sess-malformed-agent",
+            },
           ],
         };
       }
@@ -225,7 +245,13 @@ describe("sessions-list-tool", () => {
     const result = await tool.execute("call-agent-scoped-channel", {});
     const details = getSessionsListDetails(result);
 
-    expect(details.sessions?.[0]?.channel).toBe("slack");
+    expect(details.sessions?.map((session) => session.channel)).toEqual([
+      "slack",
+      "discord",
+      "matrix",
+      "unknown",
+      "unknown",
+    ]);
   });
 
   it("keeps live session setting metadata in sessions_list results", async () => {
