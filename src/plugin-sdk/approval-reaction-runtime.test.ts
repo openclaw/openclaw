@@ -125,6 +125,26 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
     ).toBeNull();
   });
 
+  it("preserves protocol-valid boundary whitespace in typed approval ids", () => {
+    const approvalId = "\uFEFF";
+
+    expect(
+      resolveTypedApprovalReactionTarget({
+        target: {
+          approvalId,
+          approvalKind: "exec",
+          allowedDecisions: ["deny"],
+        },
+        reactionKey: "👎",
+      }),
+    ).toEqual({
+      approvalId,
+      approvalKind: "exec",
+      decision: "deny",
+      normalizedEmoji: "👎",
+    });
+  });
+
   it("preserves deprecated id-based kind inference", () => {
     expect(
       resolveApprovalReactionTarget({

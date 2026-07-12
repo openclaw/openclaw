@@ -3173,6 +3173,11 @@ export const registerTelegramHandlers = ({
         }
 
         logVerbose(`telegram: approval callback not found ${approvalCallback.approvalId}`);
+        if (!pluginApprovalAuthorizedSender) {
+          // Legacy callbacks carry no owner kind. An exec-only reviewer cannot
+          // clear controls that may still belong to a plugin approval.
+          return;
+        }
         await terminalizeApprovalMessage(
           buildTelegramLegacyApprovalTerminalText({
             approvalId: approvalCallback.approvalId,

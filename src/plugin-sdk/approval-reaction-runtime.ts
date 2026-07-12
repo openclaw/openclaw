@@ -215,7 +215,9 @@ function resolveApprovalReactionTargetInternal<TRoute>(params: {
   if (!decision) {
     return null;
   }
-  const approvalId = target.approvalId.trim();
+  // Typed targets already carry canonical protocol identity. Preserve it byte-for-byte;
+  // only the shipped ownerless path retains its historical trimming behavior.
+  const approvalId = params.allowLegacyKindInference ? target.approvalId.trim() : target.approvalId;
   const approvalKind = target.approvalKind;
   if (!approvalId) {
     return null;

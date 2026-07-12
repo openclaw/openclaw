@@ -661,7 +661,7 @@ function listDeliveredIMessageApprovalGuids(params: {
   binding: IMessageApprovalDeliveryBinding;
   results: readonly OutboundDeliveryResult[];
 }): string[] {
-  const messageIds: string[] = [];
+  const deliveries: Array<{ guid: string; visibleText: string }> = [];
   const seen = new Set<string>();
   for (const result of params.results) {
     if (result.channel !== "imessage") {
@@ -671,27 +671,25 @@ function listDeliveredIMessageApprovalGuids(params: {
       typeof result.meta?.imessageMessageGuid === "string"
         ? result.meta.imessageMessageGuid.trim()
         : "";
-    const visibleText =
-      typeof result.meta?.imessageVisibleText === "string"
-        ? result.meta.imessageVisibleText
-        : undefined;
-    if (
-      !guid ||
-      /^\d+$/.test(guid) ||
-      seen.has(guid) ||
-      !visibleApprovalBindingMatches(visibleText, params.binding, { requireReactionHint: true })
-    ) {
+    const visibleText = result.meta?.imessageVisibleText;
+    if (!guid || /^\d+$/.test(guid) || seen.has(guid) || typeof visibleText !== "string") {
       continue;
     }
     seen.add(guid);
-    messageIds.push(guid);
+    deliveries.push({ guid, visibleText });
   }
-  if (messageIds.length === 0 && params.results.some((result) => result.channel === "imessage")) {
-    // Delivered but nothing correlated (e.g. chunked prompt split the hint):
-    // tapbacks are dead for this approval, so leave a trace.
-    reportApprovalBindingCorrelationMismatch(params.binding);
+  // Outbound chunking can split the ID, reaction hint, and command across
+  // messages. Correlate the ordered delivery as one prompt before binding its GUIDs.
+  const visiblePrompt = deliveries.map((delivery) => delivery.visibleText).join("\n");
+  if (
+    !visibleApprovalBindingMatches(visiblePrompt, params.binding, { requireReactionHint: true })
+  ) {
+    if (params.results.some((result) => result.channel === "imessage")) {
+      reportApprovalBindingCorrelationMismatch(params.binding);
+    }
+    return [];
   }
-  return messageIds;
+  return deliveries.map((delivery) => delivery.guid);
 }
 
 /** Bind a typed forwarded approval after iMessage returns the stable tapback GUID. */

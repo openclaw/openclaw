@@ -134,7 +134,7 @@ describe("buildTelegramPresentationButtons", () => {
   });
 
   it("keeps transport-private approval callback prefixes opaque for legacy values", () => {
-    const value = "tga1:e:o:not-a-typed-action";
+    const value = "tga1:e:x:not-a-typed-action";
     const callbackData = buildTelegramOpaqueCallbackData(value);
 
     expect(

@@ -244,6 +244,65 @@ describe("iMessage approval reactions", () => {
     ).resolves.toBeNull();
   });
 
+  it("binds approval reactions when outbound chunking splits the visible prompt", async () => {
+    const payload = addIMessageApprovalReactionHintToStructuredPayload({
+      approvalKind: "exec",
+      payload: buildTypedExecApprovalPendingReplyPayload({
+        approvalId: "exec-chunked-1",
+        approvalSlug: "chunked-1",
+        command: "echo chunked",
+        host: "gateway",
+        allowedDecisions: ["allow-once", "deny"],
+      }),
+    });
+    if (!payload) {
+      throw new Error("Expected typed iMessage approval payload");
+    }
+    const bodyIndex = payload.text.indexOf("Approval required.");
+    if (bodyIndex < 1) {
+      throw new Error("Expected approval body after reaction hint");
+    }
+
+    expect(
+      registerIMessageApprovalReactionTargetForDeliveredPayload({
+        accountId: "default",
+        target: { channel: "imessage", to: "+15551230000" },
+        payload,
+        results: [
+          {
+            channel: "imessage",
+            messageId: "41",
+            meta: {
+              imessageMessageGuid: "p:0/chunked-guid-1",
+              imessageVisibleText: payload.text.slice(0, bodyIndex),
+            },
+          },
+          {
+            channel: "imessage",
+            messageId: "42",
+            meta: {
+              imessageMessageGuid: "p:0/chunked-guid-2",
+              imessageVisibleText: payload.text.slice(bodyIndex),
+            },
+          },
+        ],
+      }),
+    ).toBe(true);
+
+    await expect(
+      resolveIMessageApprovalReactionTargetWithPersistence({
+        accountId: "default",
+        conversation: { handle: "+15551230000" },
+        messageId: "p:0/chunked-guid-1",
+        reactionKey: "👎",
+      }),
+    ).resolves.toEqual({
+      approvalId: "exec-chunked-1",
+      approvalKind: "exec",
+      decision: "deny",
+    });
+  });
+
   it("fails closed when typed metadata and approval actions disagree", () => {
     const buildPayload = () =>
       buildTypedExecApprovalPendingReplyPayload({

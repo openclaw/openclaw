@@ -1845,7 +1845,7 @@ describe("createTelegramBot", () => {
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-approve-target");
   });
 
-  it("terminalizes target-only stale callbacks without claiming a canonical result", async () => {
+  it("preserves ambiguous target-only stale callbacks for another approver", async () => {
     onSpy.mockClear();
     editMessageReplyMarkupSpy.mockClear();
     editMessageTextSpy.mockClear();
@@ -1902,12 +1902,7 @@ describe("createTelegramBot", () => {
     expect(approvalCall.decision).toBe("allow-once");
     expect(approvalCall.senderId).toBe("9");
     expect(resolveExecApprovalSpy).toHaveBeenCalledTimes(1);
-    expect(editMessageTextSpy).toHaveBeenCalledWith(
-      1234,
-      25,
-      expect.stringContaining("Approval is no longer actionable from this button"),
-      { reply_markup: { inline_keyboard: [] } },
-    );
+    expect(editMessageTextSpy).not.toHaveBeenCalled();
     expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
     expect(replySpy).not.toHaveBeenCalled();
     expect(sendMessageSpy).not.toHaveBeenCalled();
@@ -2036,12 +2031,7 @@ describe("createTelegramBot", () => {
     });
     expect(resolveExecApprovalSpy).toHaveBeenCalledTimes(1);
     expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
-    expect(editMessageTextSpy).toHaveBeenCalledWith(
-      1234,
-      24,
-      expect.stringContaining("Approval is no longer actionable from this button"),
-      { reply_markup: { inline_keyboard: [] } },
-    );
+    expect(editMessageTextSpy).not.toHaveBeenCalled();
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-plugin-approve-blocked");
   });
 

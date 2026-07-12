@@ -12,7 +12,7 @@ import {
 } from "openclaw/plugin-sdk/interactive-runtime";
 import {
   buildTelegramApprovalCallbackData,
-  parseTelegramApprovalCallbackData,
+  hasTelegramApprovalCallbackPrefix,
   rewriteTelegramApprovalDecisionAlias,
   sanitizeTelegramCallbackData,
 } from "./approval-callback-data.js";
@@ -71,8 +71,10 @@ function toTelegramInlineButton(
       (parseExecApprovalCommandText(command) ? sanitizeTelegramCallbackData(command) : undefined);
     return callbackData ? { text: button.label, callback_data: callbackData, style } : undefined;
   }
+  // Reserve the full approval prefix, including malformed values, so legacy
+  // plugin callbacks cannot be consumed by the approval handler.
   const needsOpaqueEnvelope =
-    Boolean(button.action) || parseTelegramApprovalCallbackData(action.value) !== null;
+    Boolean(button.action) || hasTelegramApprovalCallbackPrefix(action.value);
   const callbackData = sanitizeTelegramCallbackData(
     needsOpaqueEnvelope ? buildTelegramOpaqueCallbackData(action.value) : action.value,
   );
