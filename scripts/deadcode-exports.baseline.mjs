@@ -3282,7 +3282,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/infra/outbound/outbound-policy.ts: CrossContextPresentationBuilder",
   "src/infra/outbound/outbound-send-service.ts: OutboundGatewayContext",
   "src/infra/outbound/outbound-send-service.ts: OutboundSendContext",
-  "src/infra/outbound/payloads.ts: normalizeOutboundPayloads",
   "src/infra/outbound/payloads.ts: OutboundPayloadMirror",
   "src/infra/outbound/session-binding-normalization.ts: ConversationRefShape",
   "src/infra/outbound/session-binding-service.ts: SessionBindingErrorCode",
