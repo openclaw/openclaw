@@ -731,8 +731,13 @@ class ChatPane extends OpenClawLightDomElement {
         text ?? catalogRawString(item.raw, ["command", "name", "tool", "title", "query"]);
       content = label ? `Tool call\n\n${label}` : "Tool call";
     } else if (item.type === "toolResult") {
+      // Raw aggregated output is only bounded by the transcript read's per-item
+      // byte cap (megabytes), so clamp it to the preview size before rendering.
+      const aggregated = catalogRawString(item.raw, ["aggregatedOutput"]);
       const output =
-        text ?? catalogRawString(item.raw, ["aggregatedOutput"]) ?? catalogRawResult(item.raw);
+        text ??
+        (aggregated ? clampText(aggregated, CATALOG_TOOL_RESULT_PREVIEW_MAX_CHARS) : null) ??
+        catalogRawResult(item.raw);
       content = output ? `Tool result\n\n${output}` : "Tool result";
     }
     if (!content) {

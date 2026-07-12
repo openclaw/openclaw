@@ -387,6 +387,24 @@ describe("chat pane catalog session lifecycle", () => {
     expect(message.content[0]?.text).not.toContain("Unsupported external session item");
   });
 
+  it("clamps oversized aggregated tool output before rendering", () => {
+    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
+
+    const message = pane.catalogItemMessage(
+      {
+        type: "toolResult",
+        raw: { aggregatedOutput: "x".repeat(5000) },
+      } as SessionCatalogTranscriptItem,
+      0,
+    ) as { content: Array<{ text: string }> };
+
+    // The 500-char preview cap keeps a single huge tool result from injecting
+    // megabytes into one chat message; the "Tool result\n\n" prefix adds a bit.
+    expect(message.content[0]?.text.length).toBeLessThan(600);
+    expect(message.content[0]?.text.startsWith("Tool result")).toBe(true);
+  });
+
   it("skips an empty unknown catalog item", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
     const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
