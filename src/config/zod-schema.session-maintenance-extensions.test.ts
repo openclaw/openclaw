@@ -106,4 +106,21 @@ describe("SessionSchema maintenance extensions", () => {
       true,
     );
   });
+
+  it.each(["0h", "0d", "0ms", "0", "0s", "0m"])(
+    "rejects zero-value pruneAfter: %s",
+    (pruneAfter) => {
+      const result = SessionSchema.safeParse({
+        maintenance: { pruneAfter },
+      });
+      expect(result.success).toBe(false);
+      expect(result.error?.issues[0]?.path).toContain("pruneAfter");
+    },
+  );
+
+  it("accepts positive pruneAfter values", () => {
+    expect(SessionSchema.safeParse({ maintenance: { pruneAfter: "30d" } }).success).toBe(true);
+    expect(SessionSchema.safeParse({ maintenance: { pruneAfter: "24h" } }).success).toBe(true);
+    expect(SessionSchema.safeParse({ maintenance: { pruneAfter: "500ms" } }).success).toBe(true);
+  });
 });
