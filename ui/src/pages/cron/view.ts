@@ -29,6 +29,7 @@ import { formatRelativeTimestamp, formatMs } from "../../lib/format.ts";
 import { formatCronSchedule, formatNextRun } from "../../lib/presenter.ts";
 import { searchForSession } from "../../lib/sessions/index.ts";
 import { normalizeStringEntries, uniqueStrings } from "../../lib/string-coerce.ts";
+import { CRON_SUGGESTIONS, suggestionFormPatch } from "./suggestions.ts";
 
 type CronPanelMode = "overview" | "create" | "job";
 
@@ -73,6 +74,7 @@ type CronProps = {
   onFormChange: (patch: Partial<CronFormState>) => void;
   onRefresh: () => void;
   onSubmit: () => void;
+  onSubmitRunNow: () => void;
   onSelectJob: (job: CronJob) => void;
   onOpenCreate: (patch?: Partial<CronFormState>) => void;
   onClosePanel: () => void;
@@ -99,71 +101,6 @@ type CronProps = {
   }) => void | Promise<void>;
   onNavigateToChat?: (sessionKey: string) => void;
 };
-
-// ── Suggestions ──
-// Starter templates shown under the task list; picking one opens the create
-// panel prefilled so the schedule/prompt stay fully editable.
-
-type CronSuggestion = {
-  id: string;
-  iconName: Parameters<typeof icon>[0];
-  titleKey: string;
-  scheduleKey: string;
-  descriptionKey: string;
-  patch: () => Partial<CronFormState>;
-};
-
-const SUGGESTION_BASE: Partial<CronFormState> = {
-  payloadKind: "agentTurn",
-  sessionTarget: "isolated",
-  deliveryMode: "announce",
-  wakeMode: "now",
-  deleteAfterRun: false,
-  enabled: true,
-  scheduleKind: "cron",
-};
-
-export const CRON_SUGGESTIONS: CronSuggestion[] = [
-  {
-    id: "morning-brief",
-    iconName: "sun",
-    titleKey: "cron.suggestions.morningBrief.title",
-    scheduleKey: "cron.suggestions.morningBrief.schedule",
-    descriptionKey: "cron.suggestions.morningBrief.description",
-    patch: () => ({
-      ...SUGGESTION_BASE,
-      name: t("cron.suggestions.morningBrief.title"),
-      payloadText: t("cron.suggestions.morningBrief.prompt"),
-      cronExpr: "0 8 * * 1-5",
-    }),
-  },
-  {
-    id: "weekly-review",
-    iconName: "fileText",
-    titleKey: "cron.suggestions.weeklyReview.title",
-    scheduleKey: "cron.suggestions.weeklyReview.schedule",
-    descriptionKey: "cron.suggestions.weeklyReview.description",
-    patch: () => ({
-      ...SUGGESTION_BASE,
-      name: t("cron.suggestions.weeklyReview.title"),
-      payloadText: t("cron.suggestions.weeklyReview.prompt"),
-      cronExpr: "0 16 * * 5",
-    }),
-  },
-  {
-    id: "follow-ups",
-    iconName: "listChecks",
-    titleKey: "cron.suggestions.followUps.title",
-    scheduleKey: "cron.suggestions.followUps.schedule",
-    descriptionKey: "cron.suggestions.followUps.description",
-    patch: () => ({
-      ...SUGGESTION_BASE,
-      name: t("cron.suggestions.followUps.title"),
-      payloadText: t("cron.suggestions.followUps.prompt"),
-      cronExpr: "0 9 * * 1-5",
-    }),
-  },
-];
 
 // ── Shared option helpers ──
 
@@ -727,17 +664,15 @@ function renderSuggestions(props: CronProps) {
             type="button"
             class="cron-suggestion"
             data-suggestion=${suggestion.id}
-            @click=${() => props.onOpenCreate(suggestion.patch())}
+            @click=${() => props.onOpenCreate(suggestionFormPatch(suggestion))}
           >
-            <span class="cron-suggestion__icon" aria-hidden="true">
-              ${icon(suggestion.iconName)}
-            </span>
+            <span class="cron-suggestion__icon" aria-hidden="true">${suggestion.emoji}</span>
             <span class="cron-suggestion__body">
               <span class="cron-suggestion__title-line">
-                <span class="cron-suggestion__name">${t(suggestion.titleKey)}</span>
+                <span class="cron-suggestion__name">${t(suggestion.nameKey)}</span>
                 <span class="cron-suggestion__schedule">${t(suggestion.scheduleKey)}</span>
               </span>
-              <span class="cron-suggestion__desc">${t(suggestion.descriptionKey)}</span>
+              <span class="cron-suggestion__desc">${t(suggestion.taglineKey)}</span>
             </span>
           </button>
         `,
@@ -926,6 +861,18 @@ function renderEditor(props: CronProps, mode: CronPanelMode) {
                 ? t("cron.form.saveChanges")
                 : t("cron.form.createTask")}
           </button>
+          ${mode === "create"
+            ? html`
+                <button
+                  class="btn"
+                  data-test-id="cron-submit-run"
+                  ?disabled=${props.busy || !props.canSubmit}
+                  @click=${props.onSubmitRunNow}
+                >
+                  ${t("cron.form.createAndRun")}
+                </button>
+              `
+            : nothing}
           <button class="btn" ?disabled=${props.busy} @click=${props.onClosePanel}>
             ${t("cron.form.cancel")}
           </button>

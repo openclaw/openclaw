@@ -131,6 +131,43 @@ afterEach(() => {
 });
 
 describe("CronPage editor state sync", () => {
+  it("create & run now issues cron.run for the job returned by cron.add", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "cron.add") {
+        return { id: "job-fresh" };
+      }
+      if (method === "cron.list") {
+        return { jobs: [], total: 0, offset: 0, hasMore: false };
+      }
+      if (method === "cron.runs") {
+        return { entries: [], total: 0, offset: 0, hasMore: false };
+      }
+      if (method === "models.list") {
+        return { models: [] };
+      }
+      return {};
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const gateway = createGateway(client, true);
+    const page = createPage(createContext(gateway), { render: true });
+
+    await vi.waitFor(() =>
+      expect(page.querySelector('[data-test-id="cron-new-task"]')).not.toBeNull(),
+    );
+    (page.querySelector('[data-suggestion="repoPulse"]') as HTMLButtonElement).click();
+    await vi.waitFor(() =>
+      expect(page.querySelector('[data-test-id="cron-submit-run"]')).not.toBeNull(),
+    );
+    (page.querySelector('[data-test-id="cron-submit-run"]') as HTMLButtonElement).click();
+
+    await vi.waitFor(() => {
+      const methods = request.mock.calls.map((call) => call[0]);
+      expect(methods.indexOf("cron.run")).toBeGreaterThan(methods.indexOf("cron.add"));
+    });
+    expect(request).toHaveBeenCalledWith("cron.run", { id: "job-fresh", mode: "force" });
+    await vi.waitFor(() => expect(page.cron.cronCreateOpen).toBe(false));
+  });
+
   it("syncs form enabled after header pause and resets runs scope after remove", async () => {
     const job = {
       id: "job-1",

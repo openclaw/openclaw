@@ -63,6 +63,7 @@ function createProps(overrides: Partial<CronProps> = {}): CronProps {
     onFormChange: () => undefined,
     onRefresh: () => undefined,
     onSubmit: () => undefined,
+    onSubmitRunNow: () => undefined,
     onSelectJob: () => undefined,
     onOpenCreate: () => undefined,
     onClosePanel: () => undefined,
@@ -203,20 +204,29 @@ describe("cron view list pane", () => {
     getElement(container, '[data-test-id="cron-new-task"]', HTMLButtonElement).click();
     expect(onOpenCreate).toHaveBeenCalledWith();
 
-    const suggestion = getElement(
-      container,
-      '[data-suggestion="morning-brief"]',
-      HTMLButtonElement,
-    );
+    expect(container.querySelectorAll(".cron-suggestion")).toHaveLength(6);
+    const suggestion = getElement(container, '[data-suggestion="repoPulse"]', HTMLButtonElement);
     suggestion.click();
     const patch = onOpenCreate.mock.calls.at(-1)?.[0];
     expect(patch).toMatchObject({
       payloadKind: "agentTurn",
       scheduleKind: "cron",
-      cronExpr: "0 8 * * 1-5",
+      cronExpr: "0 9 * * 1-5",
       deliveryMode: "announce",
+      name: "Repo pulse",
     });
-    expect(String(patch.payloadText)).toContain("morning brief");
+    expect(String(patch.payloadText)).toContain("overnight activity");
+  });
+
+  it("offers Create & run now only in create mode", () => {
+    const onSubmitRunNow = vi.fn();
+    const create = renderView({ createOpen: true, onSubmitRunNow });
+    getElement(create, '[data-test-id="cron-submit-run"]', HTMLButtonElement).click();
+    expect(onSubmitRunNow).toHaveBeenCalledTimes(1);
+
+    const job = createJob("job-1");
+    const editing = renderView({ jobs: [job], editingJobId: "job-1" });
+    expect(editing.querySelector('[data-test-id="cron-submit-run"]')).toBeNull();
   });
 
   it("hides suggestions while any list filter is active", () => {

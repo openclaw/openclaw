@@ -284,10 +284,11 @@ class CronPage extends OpenClawLightDomElement {
     });
   }
 
-  private submitForm() {
+  private submitForm(options: { runNow?: boolean } = {}) {
     void this.runCronTask(async (cronState) => {
       const editingJobId = cronState.cronEditingJobId;
-      if (!(await addCronJob(cronState))) {
+      const result = await addCronJob(cronState);
+      if (!result.saved) {
         return;
       }
       if (editingJobId) {
@@ -298,6 +299,11 @@ class CronPage extends OpenClawLightDomElement {
           startCronEdit(cronState, saved);
         }
         return;
+      }
+      if (options.runNow && result.jobId) {
+        // Create & run now: kick the new task once so the first result arrives
+        // immediately instead of waiting for the first scheduled tick.
+        await runCronJob(cronState, result.jobId, "force");
       }
       cronState.cronCreateOpen = false;
       // Creating from a selected task drops back to overview; recent activity
@@ -408,6 +414,7 @@ class CronPage extends OpenClawLightDomElement {
           onFormChange: (patch) => this.patchForm(patch),
           onRefresh: () => void this.refreshCron({ tableFilters: true }),
           onSubmit: () => this.submitForm(),
+          onSubmitRunNow: () => this.submitForm({ runNow: true }),
           onSelectJob: (job) => this.selectJob(job),
           onOpenCreate: (patch) => this.openCreate(patch),
           onClosePanel: () => this.closePanel(),
@@ -424,7 +431,7 @@ class CronPage extends OpenClawLightDomElement {
               }
             }),
           onRun: (job, mode) =>
-            void this.runCronTask((cronState) => runCronJob(cronState, job, mode ?? "force")),
+            void this.runCronTask((cronState) => runCronJob(cronState, job.id, mode ?? "force")),
           onRemove: (job) =>
             void this.runCronTask(async (cronState) => {
               await removeCronJob(cronState, job);
