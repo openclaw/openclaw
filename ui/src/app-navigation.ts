@@ -1,7 +1,7 @@
 // Control UI app navigation defines sidebar and settings presentation metadata.
 import type { RouteId } from "./app-route-paths.ts";
 import type { IconName } from "./components/icons.ts";
-import { t } from "./i18n/index.ts";
+import { i18n, t } from "./i18n/index.ts";
 import { normalizeLowercaseStringOrEmpty } from "./lib/string-coerce.ts";
 
 export type NavigationRouteId = RouteId;
@@ -86,6 +86,29 @@ export type SettingsSearchBlock = {
   hash: string;
 };
 
+let settingsSearchSegmenterLocale = "";
+let settingsSearchSegmenter: Intl.Segmenter | null = null;
+
+function settingsSearchHasWordPrefix(value: string, query: string): boolean {
+  const locale = i18n.getLocale();
+  if (settingsSearchSegmenterLocale !== locale) {
+    settingsSearchSegmenterLocale = locale;
+    settingsSearchSegmenter =
+      typeof Intl !== "undefined" && "Segmenter" in Intl
+        ? new Intl.Segmenter(locale, { granularity: "word" })
+        : null;
+  }
+  if (!settingsSearchSegmenter) {
+    return value.split(/[^\p{L}\p{N}]+/u).some((word) => word.startsWith(query));
+  }
+  for (const segment of settingsSearchSegmenter.segment(value)) {
+    if (segment.isWordLike !== false && segment.segment.startsWith(query)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function settingsSearchTextMatches(value: string, query: string): boolean {
   const candidate = normalizeLowercaseStringOrEmpty(value);
   const normalizedQuery = normalizeLowercaseStringOrEmpty(query);
@@ -95,7 +118,7 @@ export function settingsSearchTextMatches(value: string, query: string): boolean
   if (normalizedQuery.length > 2) {
     return candidate.includes(normalizedQuery);
   }
-  return candidate.split(/[^\p{L}\p{N}]+/u).some((word) => word.startsWith(normalizedQuery));
+  return settingsSearchHasWordPrefix(candidate, normalizedQuery);
 }
 
 // Grouping feeds the full-page settings sidebar (settings-sidebar.ts).
